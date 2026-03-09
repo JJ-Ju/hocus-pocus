@@ -8,6 +8,7 @@ from typing import Any
 from .core.logging_utils import configure_logging
 from .core.server import HocusPocusRuntime
 from .core.settings import load_settings
+from .version import __version__
 
 _runtime_lock = Lock()
 _runtime: HocusPocusRuntime | None = None
@@ -24,6 +25,7 @@ def start_server(config_path: str | None = None) -> dict[str, Any]:
         runtime = HocusPocusRuntime(settings, logger)
         runtime.start()
         _runtime = runtime
+        logger.getChild("startup").info("HocusPocus MCP %s is running.", __version__)
         return runtime.status(include_secret=True)
 
 
@@ -48,6 +50,7 @@ def server_status() -> dict[str, Any]:
         if _runtime is None:
             settings = load_settings()
             return {
+                "serverVersion": __version__,
                 "running": False,
                 "host": settings.host,
                 "port": settings.port,

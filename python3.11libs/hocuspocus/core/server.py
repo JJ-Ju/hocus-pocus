@@ -150,7 +150,8 @@ class HocusPocusRuntime:
             self._server_thread.start()
             self._running = True
             self.logger.info(
-                "server started on %s with dispatcher mode=%s",
+                "server %s started on %s with dispatcher mode=%s",
+                __version__,
                 self.settings.mcp_url,
                 self.dispatcher.mode,
             )
@@ -177,6 +178,7 @@ class HocusPocusRuntime:
 
     def status(self, *, include_secret: bool = False, include_sensitive: bool = True) -> dict[str, Any]:
         payload = {
+            "serverVersion": __version__,
             "running": self._running,
             "host": self.settings.host,
             "port": self.settings.port,
@@ -199,7 +201,6 @@ class HocusPocusRuntime:
     def health_payload(self) -> dict[str, Any]:
         payload = self.status(include_secret=False, include_sensitive=False)
         payload["protocolVersion"] = PROTOCOL_VERSION
-        payload["serverVersion"] = __version__
         return payload
 
     def authorize(self, header_value: str) -> bool:
