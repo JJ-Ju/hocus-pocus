@@ -2,6 +2,13 @@
 
 HocusPocus is a Houdini-hosted MCP server plugin. The current build is Python-only: it runs inside Houdini, serves a localhost MCP endpoint, and exposes live-scene automation through HOM (`hou`).
 
+Status:
+
+- live Houdini-hosted MCP server works
+- Codex can connect to it over Streamable HTTP
+- core scene/node/parm/viewport automation is implemented
+- worker-plane, panel UI, and native bridge are still pending
+
 This repository does not yet contain an HDK/C++ module, so "build" currently means:
 
 - stage an installable Houdini package layout
@@ -21,6 +28,21 @@ This repository does not yet contain an HDK/C++ module, so "build" currently mea
 - [config/default.toml](C:\Users\jujun\Documents\Source\Houdini\HocusPocus_mcp\config\default.toml): default server settings
 - [toolbar/hocuspocus.shelf](C:\Users\jujun\Documents\Source\Houdini\HocusPocus_mcp\toolbar\hocuspocus.shelf): shelf buttons for start/stop
 - [scripts/build.ps1](C:\Users\jujun\Documents\Source\Houdini\HocusPocus_mcp\scripts\build.ps1): stage/install script
+
+## Quick Start
+
+Build and install into the default Houdini 21.0 package directory:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\build.ps1 -Clean -Install
+```
+
+Then launch Houdini and verify:
+
+```python
+import hocuspocus
+print(hocuspocus.server_status())
+```
 
 ## Build the Houdini Package
 
@@ -222,7 +244,7 @@ If `import hocuspocus` fails inside Houdini:
 If the server starts but a client cannot connect:
 
 - verify Houdini shows the server as running with `hocuspocus.server_status()`
-- check whether port `6969` is already in use
+- check whether port `37219` is already in use
 - verify the client is sending the bearer token
 
 If you want a clean reinstall:
@@ -231,3 +253,7 @@ If you want a clean reinstall:
 2. Delete `%USERPROFILE%\Documents\houdini21.0\packages\HocusPocus`
 3. Delete `%USERPROFILE%\Documents\houdini21.0\packages\hocuspocus.json`
 4. Run the build script again with `-Clean -Install`
+
+## License
+
+This repository is licensed under MIT. See [LICENSE](C:\Users\jujun\Documents\Source\Houdini\HocusPocus_mcp\LICENSE).
