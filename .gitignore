@@ -1,0 +1,4 @@
+.hocuspocus/
+__pycache__/
+*.pyc
+dist/

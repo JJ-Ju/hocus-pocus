@@ -1,0 +1,14 @@
+{
+  "env": [
+    {
+      "HOCUSPOCUS_ROOT": "$HOUDINI_PACKAGE_PATH/../"
+    },
+    {
+      "PYTHONPATH": {
+        "method": "prepend",
+        "value": "$HOCUSPOCUS_ROOT/python3.11libs"
+      }
+    }
+  ],
+  "hpath": "$HOCUSPOCUS_ROOT"
+}

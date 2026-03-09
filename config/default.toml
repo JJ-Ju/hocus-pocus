@@ -1,0 +1,17 @@
+host = "127.0.0.1"
+port = 37219
+mcp_route = "/hocuspocus/mcp"
+health_route = "/hocuspocus/healthz"
+token_mode = "generated"
+token = ""
+auto_start = true
+log_level = "INFO"
+request_timeout_seconds = 30.0
+approved_roots = []
+enable_exec_tools = false
+enable_stdio_bridge = true
+
+[feature_flags]
+python_panel = false
+native_bridge = false
+headless_workers = false
