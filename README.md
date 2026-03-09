@@ -89,6 +89,9 @@ Dynamic resources are available for stable scene inspection:
 - `houdini://nodes/{path}`
 - `houdini://nodes/{path}/parms`
 - `houdini://nodes/{path}/geometry-summary`
+- `houdini://tasks/recent`
+- `houdini://tasks/{task_id}`
+- `houdini://tasks/{task_id}/log`
 
 Path forms:
 
@@ -101,6 +104,13 @@ Safety controls in `config/default.toml`:
 - `allow_scene_edit = false` blocks mutation tools
 - `allow_file_write = false` blocks hip saves and viewport captures
 - `approved_roots = [...]` restricts write paths to approved directories
+
+Long-running workload tools:
+
+- `task.list`
+- `task.cancel`
+- `cook.node`
+- `render.rop`
 
 ## Snapshot Tools
 
@@ -123,6 +133,7 @@ Implemented:
 - live Houdini-hosted MCP server
 - auto-start on Houdini launch
 - scene, node, parm, selection, playbar, camera, and viewport tools
+- task registry resources and non-blocking task submission for cooks/renders
 - viewport snapshot capture
 
 Not implemented yet:

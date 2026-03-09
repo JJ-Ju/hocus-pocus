@@ -13,6 +13,7 @@ from hocuspocus.live.context import OperationCancelledError, RequestContext
 from hocuspocus.live.dispatcher import LiveCommandDispatcher
 from hocuspocus.live.monitor import SceneEventMonitor
 from hocuspocus.live.operations import LiveOperations
+from hocuspocus.live.tasks import LiveTaskManager
 from hocuspocus.version import PROTOCOL_VERSION, SERVER_NAME, __version__
 
 from .audit import AuditLogger
@@ -113,7 +114,14 @@ class HocusPocusRuntime:
         self.resources = ResourceRegistry()
         self.dispatcher = LiveCommandDispatcher(logger)
         self.monitor = SceneEventMonitor(logger)
-        self.operations = LiveOperations(self.dispatcher, self.monitor, settings, logger)
+        self.tasks = LiveTaskManager(self.dispatcher, logger)
+        self.operations = LiveOperations(
+            self.dispatcher,
+            self.monitor,
+            self.tasks,
+            settings,
+            logger,
+        )
         self.operations.register(self.tools, self.resources)
         self.audit = AuditLogger(logger)
         self._default_capabilities = capability_set_from_settings(settings)
@@ -182,6 +190,7 @@ class HocusPocusRuntime:
         if include_sensitive:
             payload["dispatcherMode"] = self.dispatcher.mode
             payload["activeOperations"] = self.dispatcher.operations_snapshot(limit=20)
+            payload["activeTasks"] = self.tasks.snapshots(limit=20)
             payload["monitor"] = self.monitor.snapshot()
             payload["capabilities"] = list(self._default_capabilities)
             payload["readOnly"] = self.settings.read_only

@@ -22,6 +22,7 @@ from hocuspocus.version import __version__
 from .context import RequestContext
 from .dispatcher import LiveCommandDispatcher
 from .monitor import SceneEventMonitor
+from .tasks import LiveTaskManager
 
 try:
     import hou  # type: ignore
@@ -34,11 +35,13 @@ class LiveOperations:
         self,
         dispatcher: LiveCommandDispatcher,
         monitor: SceneEventMonitor,
+        tasks: LiveTaskManager,
         settings: ServerSettings,
         logger: logging.Logger,
     ):
         self._dispatcher = dispatcher
         self._monitor = monitor
+        self._tasks = tasks
         self._settings = settings
         self._logger = logger.getChild("live.operations")
 
@@ -47,6 +50,8 @@ class LiveOperations:
             ("session.info", "Session Info", "Return server, host, and Houdini session information.", {"type": "object", "properties": {}}, {"readOnlyHint": True, "idempotentHint": True}, self.session_info),
             ("session.list_operations", "List Operations", "List recent dispatcher operations and their state.", {"type": "object", "properties": {"limit": {"type": "integer", "default": 50}}}, {"readOnlyHint": True, "idempotentHint": True}, self.session_list_operations),
             ("session.cancel_operation", "Cancel Operation", "Request cancellation for a queued or running operation.", {"type": "object", "properties": {"operation_id": {"type": "string"}}, "required": ["operation_id"]}, {"destructiveHint": True}, self.session_cancel_operation),
+            ("task.list", "List Tasks", "List recent long-running task records.", {"type": "object", "properties": {"limit": {"type": "integer", "default": 50}}}, {"readOnlyHint": True, "idempotentHint": True}, self.task_list),
+            ("task.cancel", "Cancel Task", "Request cancellation for a running or queued task.", {"type": "object", "properties": {"task_id": {"type": "string"}}, "required": ["task_id"]}, {"destructiveHint": True}, self.task_cancel),
             ("scene.get_summary", "Scene Summary", "Return a compact summary of the current hip session.", {"type": "object", "properties": {}}, {"readOnlyHint": True, "idempotentHint": True}, self.scene_get_summary),
             ("scene.new", "New Scene", "Clear the current hip and start a new scene.", {"type": "object", "properties": {}}, {"destructiveHint": True}, self.scene_new),
             ("scene.open_hip", "Open Hip", "Load a hip file into the current session.", {"type": "object", "properties": {"path": {"type": "string"}, "suppress_save_prompt": {"type": "boolean", "default": True}, "ignore_load_warnings": {"type": "boolean", "default": False}}, "required": ["path"]}, {"destructiveHint": True}, self.scene_open_hip),
@@ -74,6 +79,8 @@ class LiveOperations:
             ("selection.set", "Set Selection", "Set the selected node paths.", {"type": "object", "properties": {"paths": {"type": "array", "items": {"type": "string"}}, "clear_existing": {"type": "boolean", "default": True}}, "required": ["paths"]}, {"destructiveHint": True}, self.selection_set),
             ("playbar.get_state", "Get Playbar State", "Return playbar frame and range information.", {"type": "object", "properties": {}}, {"readOnlyHint": True, "idempotentHint": True}, self.playbar_get_state),
             ("playbar.set_frame", "Set Frame", "Set the current frame.", {"type": "object", "properties": {"frame": {"type": "number"}}, "required": ["frame"]}, {"destructiveHint": True}, self.playbar_set_frame),
+            ("cook.node", "Cook Node", "Launch a non-blocking cook task for a Houdini node.", {"type": "object", "properties": {"node_path": {"type": "string"}, "frame_range": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 3}, "force": {"type": "boolean", "default": False}}, "required": ["node_path"]}, {"destructiveHint": True}, self.cook_node),
+            ("render.rop", "Render ROP", "Launch a non-blocking render task for a ROP node.", {"type": "object", "properties": {"node_path": {"type": "string"}, "frame_range": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 3}, "ignore_inputs": {"type": "boolean", "default": False}, "verbose": {"type": "boolean", "default": True}}, "required": ["node_path"]}, {"destructiveHint": True}, self.render_rop),
             ("viewport.get_state", "Get Viewport State", "Return information about the current scene viewer viewport.", {"type": "object", "properties": {}}, {"readOnlyHint": True, "idempotentHint": True}, self.viewport_get_state),
             ("camera.get_active", "Get Active Camera", "Return the active viewport camera or indicate that the viewport is using a perspective view.", {"type": "object", "properties": {}}, {"readOnlyHint": True, "idempotentHint": True}, self.camera_get_active),
             ("viewport.capture", "Capture Viewport", "Capture the current viewport to an image file.", {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}, {"destructiveHint": True}, self.viewport_capture),
@@ -100,6 +107,7 @@ class LiveOperations:
             ("houdini://session/selection", "Selection", "Current node selection.", self.read_selection),
             ("houdini://session/playbar", "Playbar", "Current playbar state.", self.read_playbar),
             ("houdini://session/operations", "Operations", "Recent dispatcher operations and cancellation state.", self.read_operations),
+            ("houdini://tasks/recent", "Recent Tasks", "Recent task records and progress state.", self.read_tasks_recent),
         ]
         for uri, name, description, reader in resource_specs:
             resources.register(
@@ -193,6 +201,7 @@ class LiveOperations:
         display_node = self._safe_method_value(node, "displayNode", None)
         render_node = self._safe_method_value(node, "renderNode", None)
         output_node = self._safe_method_value(node, "outputNode", None)
+        output_nodes = self._safe_method_value(node, "outputNodes", []) or []
         payload = {
             "path": node.path(),
             "name": node.name(),
@@ -213,6 +222,7 @@ class LiveOperations:
             "displayNodePath": display_node.path() if display_node is not None else None,
             "renderNodePath": render_node.path() if render_node is not None else None,
             "outputNodePath": output_node.path() if output_node is not None else None,
+            "outputNodePaths": [item.path() for item in output_nodes if item is not None],
         }
         if include_parms:
             payload["parms"] = [self._parm_summary(parm) for parm in node.parms()]
@@ -277,6 +287,8 @@ class LiveOperations:
             "session.info": (OBSERVE,),
             "session.list_operations": (OBSERVE,),
             "session.cancel_operation": (OBSERVE,),
+            "task.list": (OBSERVE,),
+            "task.cancel": (OBSERVE,),
             "scene.get_summary": (OBSERVE,),
             "scene.new": (EDIT_SCENE,),
             "scene.open_hip": (EDIT_SCENE,),
@@ -304,6 +316,8 @@ class LiveOperations:
             "selection.set": (EDIT_SCENE,),
             "playbar.get_state": (OBSERVE,),
             "playbar.set_frame": (EDIT_SCENE,),
+            "cook.node": (EDIT_SCENE,),
+            "render.rop": (EDIT_SCENE, WRITE_FILES),
             "viewport.get_state": (OBSERVE,),
             "camera.get_active": (OBSERVE,),
             "viewport.capture": (OBSERVE, WRITE_FILES),
@@ -350,6 +364,75 @@ class LiveOperations:
             return None
         return "/" + decoded
 
+    @staticmethod
+    def _dynamic_task_id(uri: str, suffix: str = "") -> str | None:
+        prefix = "houdini://tasks/"
+        if not uri.startswith(prefix):
+            return None
+        raw = uri[len(prefix):].strip("/")
+        if suffix:
+            if not raw.endswith(suffix.strip("/")):
+                return None
+            raw = raw[: -len(suffix.strip("/"))].strip("/")
+        return raw or None
+
+    @staticmethod
+    def _frame_sequence(
+        frame_range: Any,
+        *,
+        default_frame: float,
+    ) -> list[float]:
+        if not frame_range:
+            return [float(default_frame)]
+        if not isinstance(frame_range, (list, tuple)) or len(frame_range) not in {2, 3}:
+            raise JsonRpcError(
+                INVALID_PARAMS,
+                "frame_range must be [start, end] or [start, end, step].",
+            )
+        start = float(frame_range[0])
+        end = float(frame_range[1])
+        step = float(frame_range[2]) if len(frame_range) == 3 else 1.0
+        if step <= 0:
+            raise JsonRpcError(INVALID_PARAMS, "frame_range step must be greater than 0.")
+        frames: list[float] = []
+        current = start
+        epsilon = step * 0.001
+        while current <= end + epsilon:
+            frames.append(round(current, 6))
+            current += step
+        return frames
+
+    def _node_file_parm_paths(self, node: Any) -> list[str]:
+        candidates = [
+            "sopoutput",
+            "picture",
+            "vm_picture",
+            "copoutput",
+            "lopoutput",
+            "output",
+            "filename",
+        ]
+        values: list[str] = []
+        for parm_name in candidates:
+            parm = self._safe_value(lambda parm_name=parm_name: node.parm(parm_name), None)
+            if parm is None:
+                continue
+            raw = self._safe_value(parm.unexpandedString, None) or self._safe_value(parm.evalAsString, None)
+            if not raw:
+                continue
+            value = str(raw).strip()
+            if value and value not in values:
+                values.append(value)
+        return values
+
+    def _validate_render_output_paths(self, node: Any) -> list[str]:
+        hou_module = self._require_hou()
+        validated: list[str] = []
+        for value in self._node_file_parm_paths(node):
+            expanded = self._safe_value(lambda value=value: hou_module.expandString(value), value)
+            validated.append(str(ensure_path_allowed(expanded, self._settings)))
+        return validated
+
     def _geometry_summary_for_node(self, node: Any) -> dict[str, Any]:
         target = node
         display_node = self._safe_method_value(node, "displayNode", None)
@@ -385,6 +468,7 @@ class LiveOperations:
                 "hipFile": None,
                 "sceneRevision": self._monitor.snapshot()["revision"],
                 "activeOperations": self._dispatcher.operations_snapshot(limit=20),
+                "recentTasks": self._tasks.snapshots(limit=10),
                 "conventions": self._conventions_payload(),
             }
 
@@ -405,6 +489,7 @@ class LiveOperations:
             "hipDirty": is_dirty,
             "sceneRevision": self._monitor.snapshot()["revision"],
             "activeOperations": self._dispatcher.operations_snapshot(limit=20),
+            "recentTasks": self._tasks.snapshots(limit=10),
             "conventions": self._conventions_payload(),
         }
 
@@ -439,6 +524,27 @@ class LiveOperations:
             f"Cancellation requested for operation {operation_id}.",
             data,
         )
+
+    def task_list(self, arguments: dict[str, Any], context: RequestContext) -> dict[str, Any]:
+        limit = int(arguments.get("limit", 50))
+        tasks = self._tasks.snapshots(limit=limit)
+        data = {
+            "count": len(tasks),
+            "tasks": tasks,
+        }
+        return self._tool_response("Returned recent task records.", data)
+
+    def task_cancel(self, arguments: dict[str, Any], context: RequestContext) -> dict[str, Any]:
+        task_id = str(arguments.get("task_id", "")).strip()
+        if not task_id:
+            raise JsonRpcError(INVALID_PARAMS, "task_id is required")
+        cancelled = self._tasks.cancel(task_id)
+        data = {
+            "taskId": task_id,
+            "cancelled": cancelled,
+            "task": self._tasks.snapshot(task_id),
+        }
+        return self._tool_response(f"Cancellation requested for task {task_id}.", data)
 
     def _scene_summary_impl(self) -> dict[str, Any]:
         hou_module = hou
@@ -891,6 +997,197 @@ class LiveOperations:
         data = self._call_live(lambda: self._playbar_set_frame_impl(arguments), context)
         return self._tool_response(f"Set current frame to {data['currentFrame']}.", data)
 
+    def _cook_node_frame_impl(self, node_path: str, frame: float, force: bool) -> dict[str, Any]:
+        hou_module = self._require_hou()
+        node = self._require_node_by_path(node_path)
+        node.cook(force=force, frame_range=(frame, frame, 1.0))
+        return {
+            "nodePath": node.path(),
+            "frame": frame,
+            "messages": self._safe_method_value(node, "messages", []),
+            "errors": self._safe_method_value(node, "errors", []),
+            "warnings": self._safe_method_value(node, "warnings", []),
+        }
+
+    def _cook_node_result_impl(self, node_path: str) -> dict[str, Any]:
+        node = self._require_node_by_path(node_path)
+        payload = {
+            "node": self._node_summary(node, include_parms=False),
+            "messages": self._safe_method_value(node, "messages", []),
+            "errors": self._safe_method_value(node, "errors", []),
+            "warnings": self._safe_method_value(node, "warnings", []),
+        }
+        try:
+            payload["geometrySummary"] = self._geometry_summary_for_node(node)
+        except JsonRpcError:
+            payload["geometrySummary"] = None
+        return payload
+
+    def cook_node(self, arguments: dict[str, Any], context: RequestContext) -> dict[str, Any]:
+        hou_module = self._require_hou()
+        node_path = str(arguments.get("node_path", "")).strip()
+        if not node_path:
+            raise JsonRpcError(INVALID_PARAMS, "node_path is required")
+        frames = self._frame_sequence(arguments.get("frame_range"), default_frame=hou_module.frame())
+        force = bool(arguments.get("force", False))
+
+        def runner(controller: Any) -> dict[str, Any]:
+            controller.log(f"Cooking {node_path} across {len(frames)} frame(s).")
+            total = len(frames)
+            for index, frame in enumerate(frames, start=1):
+                controller.raise_if_cancelled()
+                controller.set_progress(
+                    10.0 + ((index - 1) / max(total, 1)) * 80.0,
+                    f"Cooking frame {frame}",
+                )
+                result = controller.run_live(
+                    lambda frame=frame: self._cook_node_frame_impl(node_path, frame, force),
+                    operation_label=f"cook-{index}",
+                    timeout_seconds=max(context.timeout_seconds, 600.0),
+                )
+                if result.get("errors"):
+                    controller.log(
+                        f"Cook frame {frame} reported {len(result['errors'])} error(s).",
+                        level="warning",
+                    )
+            controller.set_progress(95.0, "Collecting cook result")
+            final = controller.run_live(
+                lambda: self._cook_node_result_impl(node_path),
+                operation_label="cook-result",
+                timeout_seconds=max(context.timeout_seconds, 120.0),
+            )
+            final["frames"] = frames
+            return final
+
+        task = self._tasks.submit(
+            task_type="cook.node",
+            title=f"Cook {node_path}",
+            caller_id=context.caller_id,
+            permissions=context.permissions,
+            metadata={"nodePath": node_path, "frames": frames, "force": force},
+            runner=runner,
+        )
+        data = {
+            "task": task,
+            "taskResourceUri": f"houdini://tasks/{task['taskId']}",
+            "taskLogResourceUri": f"houdini://tasks/{task['taskId']}/log",
+        }
+        return self._tool_response(f"Started cook task {task['taskId']} for {node_path}.", data)
+
+    def _render_rop_frame_impl(
+        self,
+        node_path: str,
+        frame: float,
+        ignore_inputs: bool,
+        verbose: bool,
+        controller: Any,
+    ) -> dict[str, Any]:
+        hou_module = self._require_hou()
+        node = self._require_node_by_path(node_path)
+        if not isinstance(node, hou_module.RopNode):
+            raise JsonRpcError(INVALID_PARAMS, f"Node is not a ROP: {node_path}")
+        output_paths = self._validate_render_output_paths(node)
+
+        def on_render_event(*event_args: Any) -> None:
+            if len(event_args) < 2:
+                return
+            event_type = event_args[1]
+            event_name = getattr(event_type, "name", None) or str(event_type)
+            controller.log(f"Render event {event_name} at frame {frame}.")
+
+        self._safe_value(lambda: node.addRenderEventCallback(on_render_event))
+        try:
+            node.render(
+                frame_range=(frame, frame, 1.0),
+                ignore_inputs=ignore_inputs,
+                verbose=verbose,
+            )
+        finally:
+            self._safe_value(lambda: node.removeRenderEventCallback(on_render_event))
+        return {
+            "nodePath": node.path(),
+            "frame": frame,
+            "outputPaths": output_paths,
+            "messages": self._safe_method_value(node, "messages", []),
+            "errors": self._safe_method_value(node, "errors", []),
+            "warnings": self._safe_method_value(node, "warnings", []),
+        }
+
+    def _render_rop_result_impl(self, node_path: str) -> dict[str, Any]:
+        hou_module = self._require_hou()
+        node = self._require_node_by_path(node_path)
+        if not isinstance(node, hou_module.RopNode):
+            raise JsonRpcError(INVALID_PARAMS, f"Node is not a ROP: {node_path}")
+        return {
+            "node": self._node_summary(node, include_parms=False),
+            "outputPaths": self._validate_render_output_paths(node),
+            "messages": self._safe_method_value(node, "messages", []),
+            "errors": self._safe_method_value(node, "errors", []),
+            "warnings": self._safe_method_value(node, "warnings", []),
+        }
+
+    def render_rop(self, arguments: dict[str, Any], context: RequestContext) -> dict[str, Any]:
+        hou_module = self._require_hou()
+        node_path = str(arguments.get("node_path", "")).strip()
+        if not node_path:
+            raise JsonRpcError(INVALID_PARAMS, "node_path is required")
+        frames = self._frame_sequence(arguments.get("frame_range"), default_frame=hou_module.frame())
+        ignore_inputs = bool(arguments.get("ignore_inputs", False))
+        verbose = bool(arguments.get("verbose", True))
+
+        def runner(controller: Any) -> dict[str, Any]:
+            controller.log(f"Rendering {node_path} across {len(frames)} frame(s).")
+            total = len(frames)
+            for index, frame in enumerate(frames, start=1):
+                controller.raise_if_cancelled()
+                controller.set_progress(
+                    10.0 + ((index - 1) / max(total, 1)) * 80.0,
+                    f"Rendering frame {frame}",
+                )
+                result = controller.run_live(
+                    lambda frame=frame: self._render_rop_frame_impl(
+                        node_path,
+                        frame,
+                        ignore_inputs,
+                        verbose,
+                        controller,
+                    ),
+                    operation_label=f"render-{index}",
+                    timeout_seconds=max(context.timeout_seconds, 3600.0),
+                )
+                if result.get("errors"):
+                    controller.log(
+                        f"Render frame {frame} reported {len(result['errors'])} error(s).",
+                        level="warning",
+                    )
+            controller.set_progress(95.0, "Collecting render result")
+            final = controller.run_live(
+                lambda: self._render_rop_result_impl(node_path),
+                operation_label="render-result",
+                timeout_seconds=max(context.timeout_seconds, 120.0),
+            )
+            final["frames"] = frames
+            return final
+
+        task = self._tasks.submit(
+            task_type="render.rop",
+            title=f"Render {node_path}",
+            caller_id=context.caller_id,
+            permissions=context.permissions,
+            metadata={
+                "nodePath": node_path,
+                "frames": frames,
+                "ignoreInputs": ignore_inputs,
+            },
+            runner=runner,
+        )
+        data = {
+            "task": task,
+            "taskResourceUri": f"houdini://tasks/{task['taskId']}",
+            "taskLogResourceUri": f"houdini://tasks/{task['taskId']}/log",
+        }
+        return self._tool_response(f"Started render task {task['taskId']} for {node_path}.", data)
+
     def _viewport_state_impl(self) -> dict[str, Any]:
         hou_module = self._require_ui()
         scene_viewer = self._current_scene_viewer(hou_module)
@@ -972,6 +1269,7 @@ class LiveOperations:
             },
             "monitor": self._monitor.snapshot(),
             "activeOperations": self._dispatcher.operations_snapshot(limit=20),
+            "recentTasks": self._tasks.snapshots(limit=20),
         }
         return self._resource_response("houdini://session/health", data)
 
@@ -986,6 +1284,18 @@ class LiveOperations:
         uri: str,
         context: RequestContext,
     ) -> dict[str, Any] | None:
+        task_log_id = self._dynamic_task_id(uri, "/log")
+        if task_log_id is not None:
+            payload = self._tasks.log_payload(task_log_id)
+            if payload is not None:
+                return self._resource_response(uri, payload)
+
+        task_id = self._dynamic_task_id(uri)
+        if task_id is not None:
+            payload = self._tasks.snapshot(task_id)
+            if payload is not None:
+                return self._resource_response(uri, payload)
+
         geometry_path = self._dynamic_node_uri_to_path(uri, "/geometry-summary")
         if geometry_path is not None:
             return self._resource_response(
@@ -1017,8 +1327,7 @@ class LiveOperations:
             )
         return None
 
-    @staticmethod
-    def resource_templates_payload() -> list[dict[str, Any]]:
+    def resource_templates_payload(self) -> list[dict[str, Any]]:
         return [
             {
                 "uriTemplate": "houdini://nodes/{path}",
@@ -1036,6 +1345,18 @@ class LiveOperations:
                 "uriTemplate": "houdini://nodes/{path}/geometry-summary",
                 "name": "Node Geometry Summary",
                 "description": "Read point/primitive counts, bbox, and group summaries for a node with geometry.",
+                "mimeType": "application/json",
+            },
+            {
+                "uriTemplate": "houdini://tasks/{task_id}",
+                "name": "Task Resource",
+                "description": "Read task state, progress, result, and failure details for a submitted task.",
+                "mimeType": "application/json",
+            },
+            {
+                "uriTemplate": "houdini://tasks/{task_id}/log",
+                "name": "Task Log Resource",
+                "description": "Read recent log lines for a submitted task.",
                 "mimeType": "application/json",
             },
         ]
@@ -1073,4 +1394,10 @@ class LiveOperations:
         return self._resource_response(
             "houdini://session/operations",
             {"operations": self._dispatcher.operations_snapshot(limit=100)},
+        )
+
+    def read_tasks_recent(self, context: RequestContext) -> dict[str, Any]:
+        return self._resource_response(
+            "houdini://tasks/recent",
+            {"tasks": self._tasks.snapshots(limit=100)},
         )

@@ -108,7 +108,7 @@ Manual smoke:
 
 ## M15. Taskified Cooks, Renders, and Progress
 
-Status: not started
+Status: in progress
 
 Goal:
 
@@ -116,12 +116,12 @@ Goal:
 
 Tasks:
 
-- [ ] Add a task registry resource with durable task ids.
+- [x] Add a task registry resource with durable task ids.
 - [ ] Implement `cook.node`.
 - [ ] Implement `render.rop`.
-- [ ] Add progress state and cancellation support for those tasks.
-- [ ] Add recent task log resources.
-- [ ] Add task result summaries and failure reasons.
+- [x] Add progress state and cancellation support for those tasks.
+- [x] Add recent task log resources.
+- [x] Add task result summaries and failure reasons.
 
 Done when:
 
@@ -213,3 +213,4 @@ Those three items improve safety and agent usability the most with the least pro
 - Completed M12 with sanitized health/status payloads, explicit auth-required indicators, and local HTTP validation.
 - Completed M13 with per-tool capability enforcement, approved-root write policy, read-only mode, and JSONL audit logging.
 - Implemented the M14 code path for dynamic node resources and normalized outputs, but left the milestone in progress until those resources are smoke-tested against a live Houdini session.
+- Implemented the M15 task registry, task resources, task logs, and cancellation model, and locally validated those with a transient runtime. `cook.node` and `render.rop` remain in progress until they are smoke-tested against a live Houdini session.
