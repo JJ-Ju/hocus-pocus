@@ -24,7 +24,7 @@ def start_server(config_path: str | None = None) -> dict[str, Any]:
         runtime = HocusPocusRuntime(settings, logger)
         runtime.start()
         _runtime = runtime
-        return runtime.status()
+        return runtime.status(include_secret=True)
 
 
 def stop_server() -> dict[str, Any]:
@@ -52,6 +52,7 @@ def server_status() -> dict[str, Any]:
                 "host": settings.host,
                 "port": settings.port,
                 "mcpUrl": settings.mcp_url,
+                "healthUrl": settings.health_url,
                 "tokenEnabled": settings.token_mode != "disabled",
             }
-        return _runtime.status()
+        return _runtime.status(include_secret=True)

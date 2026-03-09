@@ -59,6 +59,14 @@ If the app asks for headers instead of a token field:
 Authorization: Bearer <your-token>
 ```
 
+The health route is:
+
+```text
+http://127.0.0.1:37219/hocuspocus/healthz
+```
+
+It is intentionally unauthenticated but only returns non-sensitive status. MCP method calls still require the bearer token unless auth is explicitly disabled in config.
+
 ## Houdini Conventions
 
 HocusPocus exposes Houdini orientation notes so agents do not have to guess:
@@ -73,6 +81,26 @@ These conventions are exposed in:
 - `session.info`
 - `scene.get_summary`
 - `houdini://session/conventions`
+
+## Agent Notes
+
+Dynamic resources are available for stable scene inspection:
+
+- `houdini://nodes/{path}`
+- `houdini://nodes/{path}/parms`
+- `houdini://nodes/{path}/geometry-summary`
+
+Path forms:
+
+- slash-separated: `houdini://nodes/obj/geo1`
+- percent-encoded absolute path: `houdini://nodes/%2Fobj%2Fgeo1`
+
+Safety controls in `config/default.toml`:
+
+- `read_only = true` blocks scene edits and file writes
+- `allow_scene_edit = false` blocks mutation tools
+- `allow_file_write = false` blocks hip saves and viewport captures
+- `approved_roots = [...]` restricts write paths to approved directories
 
 ## Snapshot Tools
 

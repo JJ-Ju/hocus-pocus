@@ -6,6 +6,7 @@ import json
 import logging
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote
 
 from hocuspocus.core.jsonrpc import INVALID_PARAMS, JsonRpcError
 from hocuspocus.core.mcp_types import (
@@ -14,6 +15,7 @@ from hocuspocus.core.mcp_types import (
     ToolDefinition,
     ToolRegistry,
 )
+from hocuspocus.core.policy import EDIT_SCENE, OBSERVE, WRITE_FILES, ensure_path_allowed
 from hocuspocus.core.settings import ServerSettings
 from hocuspocus.version import __version__
 
@@ -85,6 +87,7 @@ class LiveOperations:
                     description=description,
                     input_schema=input_schema,
                     annotations=annotations,
+                    required_capabilities=self._tool_capabilities(name),
                     handler=handler,
                 )
             )
@@ -179,6 +182,7 @@ class LiveOperations:
         return {
             "name": parm.name(),
             "path": parm.path(),
+            "nodePath": self._safe_value(lambda: parm.node().path(), None),
             "label": self._safe_value(lambda: parm.parmTemplate().label(), parm.name()),
             "rawValue": self._safe_value(parm.rawValue, None),
             "value": self._safe_value(parm.eval, None),
@@ -186,6 +190,9 @@ class LiveOperations:
         }
 
     def _node_summary(self, node: Any, *, include_parms: bool = False) -> dict[str, Any]:
+        display_node = self._safe_method_value(node, "displayNode", None)
+        render_node = self._safe_method_value(node, "renderNode", None)
+        output_node = self._safe_method_value(node, "outputNode", None)
         payload = {
             "path": node.path(),
             "name": node.name(),
@@ -203,10 +210,47 @@ class LiveOperations:
                 for input_node in self._safe_value(node.inputs, []) or []
             ],
             "childCount": len(self._safe_value(node.children, []) or []),
+            "displayNodePath": display_node.path() if display_node is not None else None,
+            "renderNodePath": render_node.path() if render_node is not None else None,
+            "outputNodePath": output_node.path() if output_node is not None else None,
         }
         if include_parms:
             payload["parms"] = [self._parm_summary(parm) for parm in node.parms()]
         return payload
+
+    def _require_node_by_path(self, node_path: str, *, label: str = "path") -> Any:
+        hou_module = self._require_hou()
+        node_path = str(node_path).strip()
+        if not node_path:
+            raise JsonRpcError(INVALID_PARAMS, f"{label} is required")
+        node = hou_module.node(node_path)
+        if node is None:
+            raise JsonRpcError(
+                INVALID_PARAMS,
+                f"Node not found: {node_path}",
+                {
+                    "path": node_path,
+                    "expectedFormat": "/obj/geo1 or /obj/geo1/node1",
+                },
+            )
+        return node
+
+    def _require_parm_by_path(self, parm_path: str) -> Any:
+        hou_module = self._require_hou()
+        parm_path = str(parm_path).strip()
+        if not parm_path:
+            raise JsonRpcError(INVALID_PARAMS, "parm_path is required")
+        parm = hou_module.parm(parm_path)
+        if parm is None:
+            raise JsonRpcError(
+                INVALID_PARAMS,
+                f"Parameter not found: {parm_path}",
+                {
+                    "parmPath": parm_path,
+                    "expectedFormat": "/obj/geo1/tx or /obj/geo1/node1/parm",
+                },
+            )
+        return parm
 
     def _current_scene_viewer(self, hou_module: Any) -> Any:
         desktop = hou_module.ui.curDesktop()
@@ -228,6 +272,46 @@ class LiveOperations:
         return resolved
 
     @staticmethod
+    def _tool_capabilities(name: str) -> tuple[str, ...]:
+        capability_map = {
+            "session.info": (OBSERVE,),
+            "session.list_operations": (OBSERVE,),
+            "session.cancel_operation": (OBSERVE,),
+            "scene.get_summary": (OBSERVE,),
+            "scene.new": (EDIT_SCENE,),
+            "scene.open_hip": (EDIT_SCENE,),
+            "scene.merge_hip": (EDIT_SCENE,),
+            "scene.save_hip": (EDIT_SCENE, WRITE_FILES),
+            "scene.undo": (EDIT_SCENE,),
+            "scene.redo": (EDIT_SCENE,),
+            "node.list": (OBSERVE,),
+            "node.get": (OBSERVE,),
+            "node.create": (EDIT_SCENE,),
+            "node.delete": (EDIT_SCENE,),
+            "node.rename": (EDIT_SCENE,),
+            "node.connect": (EDIT_SCENE,),
+            "node.disconnect": (EDIT_SCENE,),
+            "node.move": (EDIT_SCENE,),
+            "node.layout": (EDIT_SCENE,),
+            "node.set_flags": (EDIT_SCENE,),
+            "parm.list": (OBSERVE,),
+            "parm.get": (OBSERVE,),
+            "parm.set": (EDIT_SCENE,),
+            "parm.set_expression": (EDIT_SCENE,),
+            "parm.press_button": (EDIT_SCENE,),
+            "parm.revert_to_default": (EDIT_SCENE,),
+            "selection.get": (OBSERVE,),
+            "selection.set": (EDIT_SCENE,),
+            "playbar.get_state": (OBSERVE,),
+            "playbar.set_frame": (EDIT_SCENE,),
+            "viewport.get_state": (OBSERVE,),
+            "camera.get_active": (OBSERVE,),
+            "viewport.capture": (OBSERVE, WRITE_FILES),
+            "snapshot.capture_viewport": (OBSERVE, WRITE_FILES),
+        }
+        return capability_map.get(name, (OBSERVE,))
+
+    @staticmethod
     def _conventions_payload() -> dict[str, Any]:
         return {
             "coordinateSystem": {
@@ -246,6 +330,48 @@ class LiveOperations:
                 "viewport.capture and snapshot.capture_viewport capture the current Houdini viewport to an image path.",
                 "camera.get_active reports whether the viewport is looking through a camera or a perspective view.",
             ],
+        }
+
+    @staticmethod
+    def _dynamic_node_uri_to_path(uri: str, suffix: str = "") -> str | None:
+        prefix = "houdini://nodes/"
+        if not uri.startswith(prefix):
+            return None
+        raw = uri[len(prefix):]
+        if suffix:
+            if not raw.endswith(suffix):
+                return None
+            raw = raw[: -len(suffix)]
+        raw = raw.strip("/")
+        decoded = unquote(raw)
+        if decoded.startswith("/"):
+            return decoded
+        if not decoded:
+            return None
+        return "/" + decoded
+
+    def _geometry_summary_for_node(self, node: Any) -> dict[str, Any]:
+        target = node
+        display_node = self._safe_method_value(node, "displayNode", None)
+        if display_node is not None:
+            target = display_node
+        geometry = self._safe_method_value(target, "geometry", None)
+        if geometry is None:
+            raise JsonRpcError(INVALID_PARAMS, f"Node has no accessible geometry: {node.path()}")
+        bbox = geometry.boundingBox()
+        return {
+            "nodePath": node.path(),
+            "geometryNodePath": target.path(),
+            "pointCount": geometry.intrinsicValue("pointcount"),
+            "primitiveCount": geometry.intrinsicValue("primitivecount"),
+            "vertexCount": geometry.intrinsicValue("vertexcount"),
+            "bboxMin": [bbox.minvec()[0], bbox.minvec()[1], bbox.minvec()[2]],
+            "bboxMax": [bbox.maxvec()[0], bbox.maxvec()[1], bbox.maxvec()[2]],
+            "primitiveGroups": [group.name() for group in geometry.primGroups()],
+            "pointGroups": [group.name() for group in geometry.pointGroups()],
+            "vertexAttributes": [attrib.name() for attrib in geometry.vertexAttribs()],
+            "pointAttributes": [attrib.name() for attrib in geometry.pointAttribs()],
+            "primitiveAttributes": [attrib.name() for attrib in geometry.primAttribs()],
         }
 
     def _session_info_impl(self) -> dict[str, Any]:
@@ -410,13 +536,8 @@ class LiveOperations:
         return self._tool_response(f"Listed {data['count']} nodes.", data)
 
     def _node_get_impl(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        hou_module = self._require_hou()
         path = str(arguments.get("path", "")).strip()
-        if not path:
-            raise JsonRpcError(INVALID_PARAMS, "path is required")
-        node = hou_module.node(path)
-        if node is None:
-            raise JsonRpcError(INVALID_PARAMS, f"Node not found: {path}")
+        node = self._require_node_by_path(path)
         include_parms = bool(arguments.get("include_parms", False))
         return self._node_summary(node, include_parms=include_parms)
 
@@ -464,9 +585,7 @@ class LiveOperations:
         deleted: list[str] = []
         with hou_module.undos.group("HocusPocus: delete nodes"):
             for path in paths:
-                node = hou_module.node(path)
-                if node is None:
-                    raise JsonRpcError(INVALID_PARAMS, f"Node not found: {path}")
+                node = self._require_node_by_path(path)
                 deleted.append(node.path())
                 node.destroy()
         return {"deletedPaths": deleted, "count": len(deleted)}
@@ -482,9 +601,7 @@ class LiveOperations:
         unique_name = bool(arguments.get("unique_name", False))
         if not path or not new_name:
             raise JsonRpcError(INVALID_PARAMS, "path and new_name are required")
-        node = hou_module.node(path)
-        if node is None:
-            raise JsonRpcError(INVALID_PARAMS, f"Node not found: {path}")
+        node = self._require_node_by_path(path)
         with hou_module.undos.group("HocusPocus: rename node"):
             node.setName(new_name, unique_name=unique_name)
         return self._node_summary(node)
@@ -501,10 +618,8 @@ class LiveOperations:
             raise JsonRpcError(INVALID_PARAMS, "source_node_path and dest_node_path are required")
         dest_input_index = int(arguments.get("dest_input_index", 0))
         source_output_index = int(arguments.get("source_output_index", 0))
-        source = hou_module.node(source_path)
-        dest = hou_module.node(dest_path)
-        if source is None or dest is None:
-            raise JsonRpcError(INVALID_PARAMS, "source or destination node not found")
+        source = self._require_node_by_path(source_path, label="source_node_path")
+        dest = self._require_node_by_path(dest_path, label="dest_node_path")
         with hou_module.undos.group("HocusPocus: connect nodes"):
             dest.setInput(dest_input_index, source, output_index=source_output_index)
         return self._node_summary(dest)
@@ -519,11 +634,7 @@ class LiveOperations:
     def _node_disconnect_impl(self, arguments: dict[str, Any]) -> dict[str, Any]:
         hou_module = self._require_hou()
         path = str(arguments.get("path", "")).strip()
-        if not path:
-            raise JsonRpcError(INVALID_PARAMS, "path is required")
-        node = hou_module.node(path)
-        if node is None:
-            raise JsonRpcError(INVALID_PARAMS, f"Node not found: {path}")
+        node = self._require_node_by_path(path)
         input_index = arguments.get("input_index")
         with hou_module.undos.group("HocusPocus: disconnect node"):
             if input_index is None:
@@ -540,9 +651,7 @@ class LiveOperations:
     def _node_move_impl(self, arguments: dict[str, Any]) -> dict[str, Any]:
         hou_module = self._require_hou()
         path = str(arguments.get("path", "")).strip()
-        node = hou_module.node(path)
-        if node is None:
-            raise JsonRpcError(INVALID_PARAMS, f"Node not found: {path}")
+        node = self._require_node_by_path(path)
         x = float(arguments.get("x"))
         y = float(arguments.get("y"))
         with hou_module.undos.group("HocusPocus: move node"):
@@ -579,9 +688,7 @@ class LiveOperations:
     def _node_set_flags_impl(self, arguments: dict[str, Any]) -> dict[str, Any]:
         hou_module = self._require_hou()
         path = str(arguments.get("path", "")).strip()
-        node = hou_module.node(path)
-        if node is None:
-            raise JsonRpcError(INVALID_PARAMS, f"Node not found: {path}")
+        node = self._require_node_by_path(path)
         with hou_module.undos.group("HocusPocus: set node flags"):
             if "bypass" in arguments:
                 node.bypass(bool(arguments["bypass"]))
@@ -598,13 +705,8 @@ class LiveOperations:
         return self._tool_response(f"Updated flags on {data['path']}.", data)
 
     def _parm_list_impl(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        hou_module = self._require_hou()
         node_path = str(arguments.get("node_path", "")).strip()
-        if not node_path:
-            raise JsonRpcError(INVALID_PARAMS, "node_path is required")
-        node = hou_module.node(node_path)
-        if node is None:
-            raise JsonRpcError(INVALID_PARAMS, f"Node not found: {node_path}")
+        node = self._require_node_by_path(node_path, label="node_path")
         parms = [self._parm_summary(parm) for parm in node.parms()]
         return {"nodePath": node.path(), "count": len(parms), "parms": parms}
 
@@ -613,13 +715,8 @@ class LiveOperations:
         return self._tool_response(f"Listed {data['count']} parameters.", data)
 
     def _parm_get_impl(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        hou_module = self._require_hou()
         parm_path = str(arguments.get("parm_path", "")).strip()
-        if not parm_path:
-            raise JsonRpcError(INVALID_PARAMS, "parm_path is required")
-        parm = hou_module.parm(parm_path)
-        if parm is None:
-            raise JsonRpcError(INVALID_PARAMS, f"Parameter not found: {parm_path}")
+        parm = self._require_parm_by_path(parm_path)
         return self._parm_summary(parm)
 
     def parm_get(self, arguments: dict[str, Any], context: RequestContext) -> dict[str, Any]:
@@ -631,22 +728,15 @@ class LiveOperations:
         parm_path = arguments.get("parm_path")
         if not parm_path:
             raise JsonRpcError(INVALID_PARAMS, "parm_path is required")
-        parm = hou_module.parm(str(parm_path))
-        if parm is None:
-            raise JsonRpcError(INVALID_PARAMS, f"Parameter not found: {parm_path}")
-
+        parm = self._require_parm_by_path(str(parm_path))
         value = arguments.get("value")
         with hou_module.undos.group(f"HocusPocus: set {parm_path}"):
             parm.set(value)
-
-        return {
-            "parmPath": parm.path(),
-            "value": parm.eval(),
-        }
+        return self._parm_summary(parm)
 
     def parm_set(self, arguments: dict[str, Any], context: RequestContext) -> dict[str, Any]:
         data = self._call_live(lambda: self._parm_set_impl(arguments), context)
-        return self._tool_response(f"Set parameter {data['parmPath']}.", data)
+        return self._tool_response(f"Set parameter {data['path']}.", data)
 
     def _parm_set_expression_impl(self, arguments: dict[str, Any]) -> dict[str, Any]:
         hou_module = self._require_hou()
@@ -655,9 +745,7 @@ class LiveOperations:
         language_name = str(arguments.get("language", "hscript")).strip().lower()
         if not parm_path or not expression:
             raise JsonRpcError(INVALID_PARAMS, "parm_path and expression are required")
-        parm = hou_module.parm(parm_path)
-        if parm is None:
-            raise JsonRpcError(INVALID_PARAMS, f"Parameter not found: {parm_path}")
+        parm = self._require_parm_by_path(parm_path)
         language = (
             hou_module.exprLanguage.Python
             if language_name == "python"
@@ -674,11 +762,7 @@ class LiveOperations:
     def _parm_press_button_impl(self, arguments: dict[str, Any]) -> dict[str, Any]:
         hou_module = self._require_hou()
         parm_path = str(arguments.get("parm_path", "")).strip()
-        if not parm_path:
-            raise JsonRpcError(INVALID_PARAMS, "parm_path is required")
-        parm = hou_module.parm(parm_path)
-        if parm is None:
-            raise JsonRpcError(INVALID_PARAMS, f"Parameter not found: {parm_path}")
+        parm = self._require_parm_by_path(parm_path)
         with hou_module.undos.group(f"HocusPocus: press {parm_path}"):
             parm.pressButton()
         return self._parm_summary(parm)
@@ -690,11 +774,7 @@ class LiveOperations:
     def _parm_revert_to_default_impl(self, arguments: dict[str, Any]) -> dict[str, Any]:
         hou_module = self._require_hou()
         parm_path = str(arguments.get("parm_path", "")).strip()
-        if not parm_path:
-            raise JsonRpcError(INVALID_PARAMS, "parm_path is required")
-        parm = hou_module.parm(parm_path)
-        if parm is None:
-            raise JsonRpcError(INVALID_PARAMS, f"Parameter not found: {parm_path}")
+        parm = self._require_parm_by_path(parm_path)
         with hou_module.undos.group(f"HocusPocus: revert {parm_path}"):
             parm.revertToDefaults()
         return self._parm_summary(parm)
@@ -713,12 +793,15 @@ class LiveOperations:
         save_to_recent = bool(arguments.get("save_to_recent_files", True))
         with hou_module.undos.disabler():
             if path:
-                resolved = str(Path(path))
+                resolved = str(ensure_path_allowed(path, self._settings))
                 hou_module.hipFile.save(
                     file_name=resolved,
                     save_to_recent_files=save_to_recent,
                 )
             else:
+                current_path = hou_module.hipFile.path()
+                if current_path:
+                    ensure_path_allowed(current_path, self._settings)
                 hou_module.hipFile.save(save_to_recent_files=save_to_recent)
                 resolved = hou_module.hipFile.path()
         return {
@@ -768,9 +851,7 @@ class LiveOperations:
             hou_module.clearAllSelected()
         selected: list[str] = []
         for path in paths:
-            node = hou_module.node(path)
-            if node is None:
-                raise JsonRpcError(INVALID_PARAMS, f"Node not found: {path}")
+            node = self._require_node_by_path(path)
             node.setSelected(True, clear_all_selected=False)
             selected.append(node.path())
         return {"selectedNodes": selected}
@@ -854,6 +935,7 @@ class LiveOperations:
         output_path = str(arguments.get("path", "")).strip()
         if not output_path:
             raise JsonRpcError(INVALID_PARAMS, "path is required")
+        output_path = str(ensure_path_allowed(output_path, self._settings))
         scene_viewer = self._current_scene_viewer(hou_module)
         viewport = scene_viewer.curViewport()
         viewport.saveViewToImage(output_path)
@@ -898,6 +980,76 @@ class LiveOperations:
             "houdini://session/conventions",
             self._conventions_payload(),
         )
+
+    def read_dynamic_resource(
+        self,
+        uri: str,
+        context: RequestContext,
+    ) -> dict[str, Any] | None:
+        geometry_path = self._dynamic_node_uri_to_path(uri, "/geometry-summary")
+        if geometry_path is not None:
+            return self._resource_response(
+                uri,
+                self._call_live(
+                    lambda: self._node_geometry_resource_impl(geometry_path),
+                    context,
+                ),
+            )
+
+        parms_path = self._dynamic_node_uri_to_path(uri, "/parms")
+        if parms_path is not None:
+            return self._resource_response(
+                uri,
+                self._call_live(
+                    lambda: self._node_parms_resource_impl(parms_path),
+                    context,
+                ),
+            )
+
+        node_path = self._dynamic_node_uri_to_path(uri)
+        if node_path is not None:
+            return self._resource_response(
+                uri,
+                self._call_live(
+                    lambda: self._node_resource_impl(node_path),
+                    context,
+                ),
+            )
+        return None
+
+    @staticmethod
+    def resource_templates_payload() -> list[dict[str, Any]]:
+        return [
+            {
+                "uriTemplate": "houdini://nodes/{path}",
+                "name": "Node Resource",
+                "description": "Read summary information for a node. Path may be slash-separated or percent-encoded.",
+                "mimeType": "application/json",
+            },
+            {
+                "uriTemplate": "houdini://nodes/{path}/parms",
+                "name": "Node Parm Resource",
+                "description": "Read parameter summaries for a node.",
+                "mimeType": "application/json",
+            },
+            {
+                "uriTemplate": "houdini://nodes/{path}/geometry-summary",
+                "name": "Node Geometry Summary",
+                "description": "Read point/primitive counts, bbox, and group summaries for a node with geometry.",
+                "mimeType": "application/json",
+            },
+        ]
+
+    def _node_resource_impl(self, node_path: str) -> dict[str, Any]:
+        node = self._require_node_by_path(node_path)
+        return self._node_summary(node, include_parms=False)
+
+    def _node_parms_resource_impl(self, node_path: str) -> dict[str, Any]:
+        return self._parm_list_impl({"node_path": node_path})
+
+    def _node_geometry_resource_impl(self, node_path: str) -> dict[str, Any]:
+        node = self._require_node_by_path(node_path)
+        return self._geometry_summary_for_node(node)
 
     def read_scene_summary(self, context: RequestContext) -> dict[str, Any]:
         return self._resource_response(

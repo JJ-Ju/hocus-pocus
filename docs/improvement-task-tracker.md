@@ -21,7 +21,7 @@ Tracking rule:
 
 ## M12. Auth and Health Hardening
 
-Status: not started
+Status: complete
 
 Goal:
 
@@ -29,11 +29,11 @@ Goal:
 
 Tasks:
 
-- [ ] Remove bearer token exposure from all normal status and health payloads.
-- [ ] Decide whether health requires auth or returns only non-sensitive data.
-- [ ] Ensure no unauthenticated route exposes connection secrets or sensitive scene metadata.
-- [ ] Add a clear “auth disabled” indicator when token auth is turned off intentionally.
-- [ ] Validate that Codex app and manual HTTP clients still connect cleanly after the changes.
+- [x] Remove bearer token exposure from all normal status and health payloads.
+- [x] Decide whether health requires auth or returns only non-sensitive data.
+- [x] Ensure no unauthenticated route exposes connection secrets or sensitive scene metadata.
+- [x] Add a clear “auth disabled” indicator when token auth is turned off intentionally.
+- [x] Validate that Codex app and manual HTTP clients still connect cleanly after the changes.
 
 Done when:
 
@@ -49,7 +49,7 @@ Manual smoke:
 
 ## M13. Safety Enforcement and Audit
 
-Status: not started
+Status: complete
 
 Goal:
 
@@ -57,12 +57,12 @@ Goal:
 
 Tasks:
 
-- [ ] Add a capability requirement map for each tool.
-- [ ] Enforce tool capabilities from request context and server config.
-- [ ] Enforce approved-root restrictions for file-writing tools such as hip save and viewport capture.
-- [ ] Add a read-only mode that blocks scene mutations.
-- [ ] Add structured JSONL audit logging for tool calls and file writes.
-- [ ] Include operation id, tool name, caller id, arguments summary/hash, and result in audit records.
+- [x] Add a capability requirement map for each tool.
+- [x] Enforce tool capabilities from request context and server config.
+- [x] Enforce approved-root restrictions for file-writing tools such as hip save and viewport capture.
+- [x] Add a read-only mode that blocks scene mutations.
+- [x] Add structured JSONL audit logging for tool calls and file writes.
+- [x] Include operation id, tool name, caller id, arguments summary/hash, and result in audit records.
 
 Done when:
 
@@ -78,7 +78,7 @@ Manual smoke:
 
 ## M14. Dynamic Resources and Interface Normalization
 
-Status: not started
+Status: in progress
 
 Goal:
 
@@ -89,10 +89,10 @@ Tasks:
 - [ ] Add node-path-addressable resources such as `houdini://nodes/<path>`.
 - [ ] Add parameter resources such as `houdini://nodes/<path>/parms`.
 - [ ] Add geometry summary resources such as `houdini://nodes/<path>/geometry-summary`.
-- [ ] Normalize write-tool outputs so they align with corresponding read-tool summaries.
-- [ ] Add explicit URI/path encoding rules for dynamic resource lookup.
-- [ ] Expose display/output node state where relevant.
-- [ ] Add richer error messages when a node or parm path is invalid.
+- [x] Normalize write-tool outputs so they align with corresponding read-tool summaries.
+- [x] Add explicit URI/path encoding rules for dynamic resource lookup.
+- [x] Expose display/output node state where relevant.
+- [x] Add richer error messages when a node or parm path is invalid.
 
 Done when:
 
@@ -210,3 +210,6 @@ Those three items improve safety and agent usability the most with the least pro
 
 - Created the improvement roadmap from the current codebase review.
 - Created a concrete task tracker for the next server improvement phase.
+- Completed M12 with sanitized health/status payloads, explicit auth-required indicators, and local HTTP validation.
+- Completed M13 with per-tool capability enforcement, approved-root write policy, read-only mode, and JSONL audit logging.
+- Implemented the M14 code path for dynamic node resources and normalized outputs, but left the milestone in progress until those resources are smoke-tested against a live Houdini session.

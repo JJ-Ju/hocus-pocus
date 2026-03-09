@@ -27,6 +27,9 @@ class ServerSettings:
     auto_start: bool = False
     log_level: str = "INFO"
     request_timeout_seconds: float = 30.0
+    read_only: bool = False
+    allow_scene_edit: bool = True
+    allow_file_write: bool = True
     approved_roots: list[str] = field(default_factory=list)
     enable_exec_tools: bool = False
     enable_stdio_bridge: bool = True
@@ -106,6 +109,9 @@ def load_settings(config_path: str | Path | None = None) -> ServerSettings:
         auto_start=bool(payload.get("auto_start", False)),
         log_level=str(payload.get("log_level", "INFO")),
         request_timeout_seconds=float(payload.get("request_timeout_seconds", 30.0)),
+        read_only=bool(payload.get("read_only", False)),
+        allow_scene_edit=bool(payload.get("allow_scene_edit", True)),
+        allow_file_write=bool(payload.get("allow_file_write", True)),
         approved_roots=[str(item) for item in payload.get("approved_roots", [])],
         enable_exec_tools=bool(payload.get("enable_exec_tools", False)),
         enable_stdio_bridge=bool(payload.get("enable_stdio_bridge", True)),
@@ -123,6 +129,9 @@ def load_settings(config_path: str | Path | None = None) -> ServerSettings:
         "auto_start": os.environ.get("HOCUSPOCUS_AUTO_START"),
         "log_level": os.environ.get("HOCUSPOCUS_LOG_LEVEL"),
         "request_timeout_seconds": os.environ.get("HOCUSPOCUS_REQUEST_TIMEOUT_SECONDS"),
+        "read_only": os.environ.get("HOCUSPOCUS_READ_ONLY"),
+        "allow_scene_edit": os.environ.get("HOCUSPOCUS_ALLOW_SCENE_EDIT"),
+        "allow_file_write": os.environ.get("HOCUSPOCUS_ALLOW_FILE_WRITE"),
         "enable_exec_tools": os.environ.get("HOCUSPOCUS_ENABLE_EXEC_TOOLS"),
         "enable_stdio_bridge": os.environ.get("HOCUSPOCUS_ENABLE_STDIO_BRIDGE"),
     }
@@ -134,7 +143,14 @@ def load_settings(config_path: str | Path | None = None) -> ServerSettings:
             setattr(settings, key, int(value))
         elif key == "request_timeout_seconds":
             setattr(settings, key, float(value))
-        elif key in {"auto_start", "enable_exec_tools", "enable_stdio_bridge"}:
+        elif key in {
+            "auto_start",
+            "read_only",
+            "allow_scene_edit",
+            "allow_file_write",
+            "enable_exec_tools",
+            "enable_stdio_bridge",
+        }:
             setattr(settings, key, _coerce_bool(value))
         else:
             setattr(settings, key, value)
