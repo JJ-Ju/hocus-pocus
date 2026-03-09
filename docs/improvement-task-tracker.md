@@ -1,0 +1,212 @@
+# HocusPocus Improvement Task Tracker
+
+Status: active
+
+Source roadmap: `docs/improvement-roadmap.md`
+
+Branch: `codex/develop`
+
+Tracking rule:
+
+- only mark tasks complete when code exists and the behavior is manually validated
+
+## 1. Milestones
+
+1. M12 Auth and health hardening
+2. M13 Safety enforcement and audit
+3. M14 Dynamic resources and interface normalization
+4. M15 Taskified cooks, renders, and progress
+5. M16 Higher-level agent primitives
+6. M17 Operations module refactor
+
+## M12. Auth and Health Hardening
+
+Status: not started
+
+Goal:
+
+- remove auth flaws and make status endpoints safe by default
+
+Tasks:
+
+- [ ] Remove bearer token exposure from all normal status and health payloads.
+- [ ] Decide whether health requires auth or returns only non-sensitive data.
+- [ ] Ensure no unauthenticated route exposes connection secrets or sensitive scene metadata.
+- [ ] Add a clear “auth disabled” indicator when token auth is turned off intentionally.
+- [ ] Validate that Codex app and manual HTTP clients still connect cleanly after the changes.
+
+Done when:
+
+- unauthenticated requests cannot discover the bearer token
+- health/status data is intentionally scoped and non-sensitive
+- existing clients can still connect with the documented token flow
+
+Manual smoke:
+
+- request health without auth
+- request MCP methods with and without auth
+- verify no token is present in any unauthenticated payload
+
+## M13. Safety Enforcement and Audit
+
+Status: not started
+
+Goal:
+
+- enforce the safety model that currently exists mostly as configuration intent
+
+Tasks:
+
+- [ ] Add a capability requirement map for each tool.
+- [ ] Enforce tool capabilities from request context and server config.
+- [ ] Enforce approved-root restrictions for file-writing tools such as hip save and viewport capture.
+- [ ] Add a read-only mode that blocks scene mutations.
+- [ ] Add structured JSONL audit logging for tool calls and file writes.
+- [ ] Include operation id, tool name, caller id, arguments summary/hash, and result in audit records.
+
+Done when:
+
+- destructive tools can be blocked centrally
+- file outputs cannot escape configured roots unless explicitly allowed
+- every tool call leaves an audit record
+
+Manual smoke:
+
+- attempt blocked save/capture paths
+- enable an allowed root and verify the same write succeeds
+- inspect the generated audit log
+
+## M14. Dynamic Resources and Interface Normalization
+
+Status: not started
+
+Goal:
+
+- make the MCP surface easier for agents to explore and chain
+
+Tasks:
+
+- [ ] Add node-path-addressable resources such as `houdini://nodes/<path>`.
+- [ ] Add parameter resources such as `houdini://nodes/<path>/parms`.
+- [ ] Add geometry summary resources such as `houdini://nodes/<path>/geometry-summary`.
+- [ ] Normalize write-tool outputs so they align with corresponding read-tool summaries.
+- [ ] Add explicit URI/path encoding rules for dynamic resource lookup.
+- [ ] Expose display/output node state where relevant.
+- [ ] Add richer error messages when a node or parm path is invalid.
+
+Done when:
+
+- an agent can inspect nodes and parms through resources instead of repeated tool calls
+- write tools return enough structured state to avoid immediate follow-up reads
+- resource lookup is stable and documented
+
+Manual smoke:
+
+- read a node resource for an object node and a SOP node
+- read the associated parm resource
+- compare `node.get` and `node.create` output shapes for consistency
+
+## M15. Taskified Cooks, Renders, and Progress
+
+Status: not started
+
+Goal:
+
+- support real Houdini workloads beyond graph editing
+
+Tasks:
+
+- [ ] Add a task registry resource with durable task ids.
+- [ ] Implement `cook.node`.
+- [ ] Implement `render.rop`.
+- [ ] Add progress state and cancellation support for those tasks.
+- [ ] Add recent task log resources.
+- [ ] Add task result summaries and failure reasons.
+
+Done when:
+
+- a client can launch a cook or render without blocking the request lifecycle
+- progress and cancellation are visible through MCP
+- task state remains inspectable after completion
+
+Manual smoke:
+
+- launch a node cook
+- launch a small render
+- cancel one run and allow another to finish
+
+## M16. Higher-Level Agent Primitives
+
+Status: not started
+
+Goal:
+
+- reduce the number of brittle low-level tool calls agents need for common work
+
+Tasks:
+
+- [ ] Add a batch or transaction tool for grouped node edits.
+- [ ] Add a geometry summary tool or resource for bbox, counts, groups, and materials.
+- [ ] Add a scene helper for creating a turntable camera.
+- [ ] Add a snapshot helper that can write to a managed temp location when no path is supplied.
+- [ ] Add one high-level modeling macro as a proof point.
+
+Done when:
+
+- an agent can perform a meaningful multi-step graph edit through one higher-level entry point
+- scene inspection includes geometry-level facts, not just node metadata
+- snapshots are easier to request without manual path management
+
+Manual smoke:
+
+- use the batch/transaction tool to build a small network
+- request a geometry summary
+- capture a viewport snapshot without pre-creating a custom output path
+
+## M17. Operations Module Refactor
+
+Status: not started
+
+Goal:
+
+- reduce maintenance risk from the large all-in-one operations module
+
+Tasks:
+
+- [ ] Split `live/operations.py` into domain modules:
+  - session
+  - scene
+  - node
+  - parm
+  - viewport
+  - resources
+- [ ] Extract shared schema and response helpers.
+- [ ] Keep registration centralized but implementation domain-specific.
+- [ ] Preserve existing tool names and wire compatibility during the refactor.
+
+Done when:
+
+- the code is split by domain without changing public behavior
+- new tools can be added without expanding one monolithic file
+
+Manual smoke:
+
+- rerun the existing live MCP checks after the refactor
+- verify tool names and responses remain stable
+
+## 2. Immediate Next Actions
+
+Recommended next implementation order:
+
+1. M12 Auth and health hardening
+2. M13 Safety enforcement and audit
+3. M14 Dynamic resources and interface normalization
+
+Those three items improve safety and agent usability the most with the least product churn.
+
+## 3. Session Log
+
+### 2026-03-09
+
+- Created the improvement roadmap from the current codebase review.
+- Created a concrete task tracker for the next server improvement phase.
