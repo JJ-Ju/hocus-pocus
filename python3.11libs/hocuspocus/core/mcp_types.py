@@ -18,6 +18,7 @@ class ToolDefinition:
     description: str
     input_schema: dict[str, Any]
     annotations: dict[str, Any]
+    required_capabilities: tuple[str, ...]
     handler: ToolHandler
 
     def as_payload(self) -> dict[str, Any]:
@@ -27,6 +28,7 @@ class ToolDefinition:
             "description": self.description,
             "inputSchema": self.input_schema,
             "annotations": self.annotations,
+            "requiredCapabilities": list(self.required_capabilities),
         }
 
 

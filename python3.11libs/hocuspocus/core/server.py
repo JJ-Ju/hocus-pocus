@@ -13,8 +13,10 @@ from hocuspocus.live.context import OperationCancelledError, RequestContext
 from hocuspocus.live.dispatcher import LiveCommandDispatcher
 from hocuspocus.live.monitor import SceneEventMonitor
 from hocuspocus.live.operations import LiveOperations
+from hocuspocus.live.tasks import LiveTaskManager
 from hocuspocus.version import PROTOCOL_VERSION, SERVER_NAME, __version__
 
+from .audit import AuditLogger
 from .jsonrpc import (
     INTERNAL_ERROR,
     INVALID_PARAMS,
@@ -27,6 +29,7 @@ from .jsonrpc import (
     success_response,
 )
 from .mcp_types import ResourceRegistry, ToolRegistry
+from .policy import capability_set_from_settings, require_capabilities
 from .settings import ServerSettings
 
 
@@ -111,8 +114,17 @@ class HocusPocusRuntime:
         self.resources = ResourceRegistry()
         self.dispatcher = LiveCommandDispatcher(logger)
         self.monitor = SceneEventMonitor(logger)
-        self.operations = LiveOperations(self.dispatcher, self.monitor, settings, logger)
+        self.tasks = LiveTaskManager(self.dispatcher, logger)
+        self.operations = LiveOperations(
+            self.dispatcher,
+            self.monitor,
+            self.tasks,
+            settings,
+            logger,
+        )
         self.operations.register(self.tools, self.resources)
+        self.audit = AuditLogger(logger)
+        self._default_capabilities = capability_set_from_settings(settings)
         self._token = settings.resolved_token()
         self._server: RuntimeHTTPServer | None = None
         self._server_thread: threading.Thread | None = None
@@ -138,7 +150,8 @@ class HocusPocusRuntime:
             self._server_thread.start()
             self._running = True
             self.logger.info(
-                "server started on %s with dispatcher mode=%s",
+                "server %s started on %s with dispatcher mode=%s",
+                __version__,
                 self.settings.mcp_url,
                 self.dispatcher.mode,
             )
@@ -163,24 +176,31 @@ class HocusPocusRuntime:
         self.stop()
         self.start()
 
-    def status(self) -> dict[str, Any]:
-        return {
+    def status(self, *, include_secret: bool = False, include_sensitive: bool = True) -> dict[str, Any]:
+        payload = {
+            "serverVersion": __version__,
             "running": self._running,
             "host": self.settings.host,
             "port": self.settings.port,
             "mcpUrl": self.settings.mcp_url,
             "healthUrl": self.settings.health_url,
             "tokenEnabled": self.settings.token_mode != "disabled",
-            "token": self._token if self.settings.token_mode != "disabled" else "",
-            "dispatcherMode": self.dispatcher.mode,
-            "activeOperations": self.dispatcher.operations_snapshot(limit=20),
-            "monitor": self.monitor.snapshot(),
+            "authRequired": self.settings.token_mode != "disabled",
         }
+        if include_secret and self.settings.token_mode != "disabled":
+            payload["token"] = self._token
+        if include_sensitive:
+            payload["dispatcherMode"] = self.dispatcher.mode
+            payload["activeOperations"] = self.dispatcher.operations_snapshot(limit=20)
+            payload["activeTasks"] = self.tasks.snapshots(limit=20)
+            payload["monitor"] = self.monitor.snapshot()
+            payload["capabilities"] = list(self._default_capabilities)
+            payload["readOnly"] = self.settings.read_only
+        return payload
 
     def health_payload(self) -> dict[str, Any]:
-        payload = self.status()
+        payload = self.status(include_secret=False, include_sensitive=False)
         payload["protocolVersion"] = PROTOCOL_VERSION
-        payload["serverVersion"] = __version__
         return payload
 
     def authorize(self, header_value: str) -> bool:
@@ -259,6 +279,7 @@ class HocusPocusRuntime:
             operation_id = RequestContext().operation_id
         return RequestContext(
             caller_id=caller,
+            permissions=self._default_capabilities,
             timeout_seconds=timeout_seconds,
             metadata=metadata,
             operation_id=operation_id,
@@ -283,17 +304,23 @@ class HocusPocusRuntime:
             tool = self.tools.get(name)
             if tool is None:
                 raise JsonRpcError(METHOD_NOT_FOUND, f"Unknown tool: {name}")
-            return tool.handler(arguments, context)
+            return self._call_tool(tool, arguments, context)
         if method == "resources/list":
-            return {"resources": self.resources.list_payload()}
+            return {
+                "resources": self.resources.list_payload(),
+                "resourceTemplates": self.operations.resource_templates_payload(),
+            }
         if method == "resources/read":
             uri = params.get("uri")
             if not isinstance(uri, str):
                 raise JsonRpcError(INVALID_PARAMS, "Resource read requires a string uri.")
             resource = self.resources.get(uri)
-            if resource is None:
-                raise JsonRpcError(METHOD_NOT_FOUND, f"Unknown resource: {uri}")
-            return resource.reader(context)
+            if resource is not None:
+                return resource.reader(context)
+            dynamic = self.operations.read_dynamic_resource(uri, context)
+            if dynamic is not None:
+                return dynamic
+            raise JsonRpcError(METHOD_NOT_FOUND, f"Unknown resource: {uri}")
         if method == "notifications/cancelled":
             request_id_value = params.get("requestId")
             operation_id_value = params.get("operationId")
@@ -314,6 +341,46 @@ class HocusPocusRuntime:
             return None
 
         raise JsonRpcError(METHOD_NOT_FOUND, f"Unknown method: {method}")
+
+    def _call_tool(
+        self,
+        tool: Any,
+        arguments: dict[str, Any],
+        context: RequestContext,
+    ) -> dict[str, Any]:
+        try:
+            require_capabilities(context.permissions, tool.required_capabilities)
+            result = tool.handler(arguments, context)
+        except JsonRpcError as exc:
+            self.audit.log_tool_call(
+                operation_id=context.operation_id,
+                caller_id=context.caller_id,
+                tool_name=tool.name,
+                arguments=arguments,
+                success=False,
+                error=exc.to_payload(),
+            )
+            raise
+        except Exception as exc:
+            self.audit.log_tool_call(
+                operation_id=context.operation_id,
+                caller_id=context.caller_id,
+                tool_name=tool.name,
+                arguments=arguments,
+                success=False,
+                error={"message": str(exc)},
+            )
+            raise
+
+        self.audit.log_tool_call(
+            operation_id=context.operation_id,
+            caller_id=context.caller_id,
+            tool_name=tool.name,
+            arguments=arguments,
+            success=True,
+            result=result,
+        )
+        return result
 
     def _initialize_payload(self) -> dict[str, Any]:
         return {

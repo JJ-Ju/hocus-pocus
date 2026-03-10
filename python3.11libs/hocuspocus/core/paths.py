@@ -50,6 +50,14 @@ def runtime_dir() -> Path:
     return ensure_directory(state_root() / "hocuspocus" / "runtime")
 
 
+def output_dir() -> Path:
+    return ensure_directory(state_root() / "hocuspocus" / "output")
+
+
+def snapshot_dir() -> Path:
+    return ensure_directory(output_dir() / "snapshots")
+
+
 def runtime_token_path() -> Path:
     return runtime_dir() / "token.txt"
 
