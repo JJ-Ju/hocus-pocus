@@ -213,6 +213,8 @@ class OperationBaseMixin:
             "dependency.scan_scene": (OBSERVE,),
             "dependency.repath": (EDIT_SCENE,),
             "cache.get_topology": (OBSERVE,),
+            "package.preview_scene": (OBSERVE,),
+            "package.create_scene_package": (WRITE_FILES,),
             "node.list": (OBSERVE,),
             "node.get": (OBSERVE,),
             "node.create": (EDIT_SCENE,),

@@ -102,7 +102,7 @@ Manual smoke:
 
 ## P4-M4. Scene Packaging and Archival
 
-Status: not started
+Status: complete
 
 Goal:
 
@@ -110,10 +110,10 @@ Goal:
 
 Tasks:
 
-- [ ] Implement scene dependency collection previews.
-- [ ] Implement package/archive execution to a validated destination.
-- [ ] Include dry-run mode and collected-file reporting.
-- [ ] Reuse dependency-scan results instead of re-discovering files ad hoc.
+- [x] Implement scene dependency collection previews.
+- [x] Implement package/archive execution to a validated destination.
+- [x] Include dry-run mode and collected-file reporting.
+- [x] Reuse dependency-scan results instead of re-discovering files ad hoc.
 
 Done when:
 
@@ -200,3 +200,6 @@ These are the highest-value production workflow gaps after phase 3.
 - Completed `P4-M2` with whole-scene dependency scanning, dependency resources, cache topology summaries, and safe dependency repath tools with dry-run and live apply coverage.
 - Completed `P4-M3` with render graph inspection, render output/AOV inspection, render preflight, a render-graph resource, and a three-point light rig helper.
 - Live-validated the new dependency and render helpers on a disposable geometry and Geometry ROP setup under `/obj/p4_dep_geo1` and `/out/p4_dep_geo_rop1`, including a blocking preflight failure for a missing SOP path and successful creation of an object-light three-point rig.
+- Completed `P4-M4` with scene-package preview and package creation tools, plus a default package-preview resource for whole-scene collection checks.
+- Fixed package collection to skip directories explicitly so only real files are copied into archives or package directories.
+- Live-validated packaging on a disposable file-SOP dependency under `/obj/p4_pack_geo1`, including preview, dry-run, zip-package creation, and directory-package creation with manifest output.

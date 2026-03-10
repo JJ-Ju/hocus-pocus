@@ -24,6 +24,7 @@ from .ops.high_level import HighLevelOperationsMixin
 from .ops.material import MaterialOperationsMixin
 from .ops.node import NodeOperationsMixin
 from .ops.parm import ParmOperationsMixin
+from .ops.package_ops import PackageOperationsMixin
 from .ops.pdg_ops import PdgOperationsMixin
 from .ops.render_ops import RenderOperationsMixin
 from .ops.resources import ResourceOperationsMixin
@@ -48,6 +49,7 @@ class LiveOperations(
     ExportOperationsMixin,
     GraphOperationsMixin,
     HdaOperationsMixin,
+    PackageOperationsMixin,
     PdgOperationsMixin,
     UsdOperationsMixin,
     ValidationOperationsMixin,
@@ -100,6 +102,8 @@ class LiveOperations(
             ("dependency.scan_scene", "Scan Scene Dependencies", "Scan scene file references and classify them as input, output, USD, or cache dependencies. Missing files and policy issues are reported explicitly.", {"type": "object", "properties": {"root_path": {"type": "string"}}}, {"readOnlyHint": True, "idempotentHint": True}, self.dependency_scan_scene),
             ("dependency.repath", "Repath Dependencies", "Rewrite file-reference parm values by exact match or prefix match. Use `dry_run = true` to preview changes before mutating the scene.", {"type": "object", "properties": {"old_path": {"type": "string"}, "new_path": {"type": "string"}, "match_mode": {"type": "string", "enum": ["exact", "prefix"], "default": "exact"}, "root_path": {"type": "string"}, "dry_run": {"type": "boolean", "default": False}}, "required": ["old_path", "new_path"]}, {"destructiveHint": True}, self.dependency_repath),
             ("cache.get_topology", "Get Cache Topology", "Summarize common cache-producing or cache-consuming nodes such as File Cache, file, and geometry-output nodes. Use this before packaging or publish work.", {"type": "object", "properties": {"root_path": {"type": "string"}}}, {"readOnlyHint": True, "idempotentHint": True}, self.cache_get_topology),
+            ("package.preview_scene", "Preview Scene Package", "Preview which files would be collected into a scene package or archive. This reuses the dependency-scan surface and reports both collected and skipped files.", {"type": "object", "properties": {"root_path": {"type": "string"}, "include_hip": {"type": "boolean", "default": True}, "include_outputs": {"type": "boolean", "default": False}, "existing_only": {"type": "boolean", "default": True}, "dependency_scan": {"type": "object"}}}, {"readOnlyHint": True, "idempotentHint": True}, self.package_preview_scene),
+            ("package.create_scene_package", "Create Scene Package", "Create a scene package as a zip archive or directory tree at a validated destination. Set `dry_run = true` to preview the package without writing files.", {"type": "object", "properties": {"destination_path": {"type": "string"}, "package_name": {"type": "string"}, "mode": {"type": "string", "enum": ["zip", "directory"], "default": "zip"}, "dry_run": {"type": "boolean", "default": False}, "root_path": {"type": "string"}, "include_hip": {"type": "boolean", "default": True}, "include_outputs": {"type": "boolean", "default": False}, "existing_only": {"type": "boolean", "default": True}, "dependency_scan": {"type": "object"}}}, {"destructiveHint": True}, self.package_create_scene_package),
             ("node.list", "List Nodes", "List child nodes under a network path, optionally recursively. Use this for graph discovery when you know the parent network but not the child names.", {"type": "object", "properties": {"parent_path": {"type": "string", "default": "/obj"}, "recursive": {"type": "boolean", "default": False}, "max_items": {"type": "integer", "default": 200}}}, {"readOnlyHint": True, "idempotentHint": True}, self.node_list),
             ("node.get", "Get Node", "Return summary information for a single node, including flags, inputs, display/render/output node pointers, and optionally parameter summaries. This is the primary structured node read tool.", {"type": "object", "properties": {"path": {"type": "string"}, "include_parms": {"type": "boolean", "default": False}}, "required": ["path"]}, {"readOnlyHint": True, "idempotentHint": True}, self.node_get),
             ("node.create", "Create Node", "Create a Houdini node under a parent network and return the created node summary. The result includes the final resolved node path, which may differ from the requested name if Houdini renames it.", {"type": "object", "properties": {"parent_path": {"type": "string", "default": "/obj"}, "node_type_name": {"type": "string"}, "node_name": {"type": "string"}, "run_init_scripts": {"type": "boolean", "default": True}, "load_contents": {"type": "boolean", "default": True}}, "required": ["node_type_name"]}, {"destructiveHint": True}, self.node_create),
@@ -231,6 +235,8 @@ class LiveOperations(
             "dependency.scan_scene": "Dependency list plus summary counts for missing files, policy issues, outputs, and caches.",
             "dependency.repath": "Changed, failed, and skipped dependency repath records.",
             "cache.get_topology": "Cache node summaries with mode, file paths, and existing cache outputs.",
+            "package.preview_scene": "Package preview with collected entries, skipped entries, and dependency summary reuse.",
+            "package.create_scene_package": "Created or dry-run scene package result with destination, written paths, and collected entries.",
             "node.get": "Single normalized node summary, optionally including parameter summaries.",
             "node.create": "Created node summary with final resolved path and flag state.",
             "node.delete": "Counts plus separate deleted and skipped path arrays.",
@@ -375,6 +381,18 @@ class LiveOperations(
                     "arguments": {"old_path": "C:/show/tex", "new_path": "D:/mirror/tex", "match_mode": "prefix", "root_path": "/obj/asset1", "dry_run": True},
                 }
             ],
+            "package.preview_scene": [
+                {
+                    "description": "Preview a package for the whole scene without collecting output files.",
+                    "arguments": {"include_hip": True, "include_outputs": False, "existing_only": True},
+                }
+            ],
+            "package.create_scene_package": [
+                {
+                    "description": "Create a zip package for the current scene under the managed package output directory.",
+                    "arguments": {"package_name": "scene_package", "mode": "zip", "include_hip": True, "include_outputs": False},
+                }
+            ],
             "export.alembic": [
                 {
                     "description": "Export a SOP output to Alembic using a managed export path.",
@@ -473,6 +491,7 @@ class LiveOperations(
             "houdini://graph/index": "Graph-cache metadata including revision, counts, and refresh timing.",
             "houdini://dependencies/scene": "Whole-scene dependency scan across file-reference parms with missing-file and policy flags.",
             "houdini://caches/topology": "Cache topology summary for common cache-producing or cache-consuming nodes.",
+            "houdini://packages/preview": "Scene-package preview with collected and skipped files using default packaging rules.",
             "houdini://scene/events": "Recent monitor events with sequence numbers, revisions, and timestamps.",
             "houdini://session/selection": "Current selected node paths.",
             "houdini://session/playbar": "Current frame, FPS, and playbar ranges.",
@@ -498,6 +517,9 @@ class LiveOperations(
             ],
             "houdini://caches/topology": [
                 {"description": "Inspect common cache nodes and their file paths."}
+            ],
+            "houdini://packages/preview": [
+                {"description": "Inspect what would be packaged before writing an archive or directory package."}
             ],
             "houdini://scene/events": [
                 {"description": "Read recent scene monitor events without polling individual state resources."}

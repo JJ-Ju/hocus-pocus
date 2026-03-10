@@ -46,6 +46,8 @@ class ResourceOperationsMixin:
             return self.read_scene_dependencies(context)
         if uri == "houdini://caches/topology":
             return self.read_cache_topology(context)
+        if uri == "houdini://packages/preview":
+            return self.read_package_preview(context)
         if uri == "houdini://scene/events":
             return self.read_scene_events(context)
         if uri.startswith("houdini://renders/graph/"):
@@ -185,6 +187,19 @@ class ResourceOperationsMixin:
                     {
                         "description": "Inspect scene caches before packaging or publish steps.",
                         "uri": "houdini://caches/topology",
+                    }
+                ],
+            },
+            {
+                "uriTemplate": "houdini://packages/preview",
+                "name": "Scene Package Preview",
+                "description": "Read a package preview for the current whole scene using the default package-preview rules.",
+                "mimeType": "application/json",
+                "payloadSummary": "Collected and skipped package entries plus dependency-summary counts for packaging decisions.",
+                "examples": [
+                    {
+                        "description": "Inspect what would be packaged before writing a zip or directory package.",
+                        "uri": "houdini://packages/preview",
                     }
                 ],
             },
