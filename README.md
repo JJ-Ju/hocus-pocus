@@ -71,6 +71,10 @@ Current server surface includes:
 
 For the fuller manual, see [HocusPocus Manual](C:\Users\jujun\Documents\Source\Houdini\HocusPocus_mcp\docs\user-manual.md).
 
+For compatibility and release rules, see [Compatibility Policy](C:\Users\jujun\Documents\Source\Houdini\HocusPocus_mcp\docs\compatibility-policy.md) and [Release Validation](C:\Users\jujun\Documents\Source\Houdini\HocusPocus_mcp\docs\release-validation.md).
+
+For agent usage patterns, see [Agent Workflows](C:\Users\jujun\Documents\Source\Houdini\HocusPocus_mcp\docs\agent-workflows.md).
+
 For engineering state, see [Improvement Tracker](C:\Users\jujun\Documents\Source\Houdini\HocusPocus_mcp\docs\improvement-task-tracker.md).
 
 ## License

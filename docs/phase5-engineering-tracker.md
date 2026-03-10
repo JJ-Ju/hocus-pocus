@@ -20,7 +20,7 @@ Tracking rule:
 
 ## P5-M1. Contracts, Docs, and Regression Smokes
 
-Status: not started
+Status: in progress
 
 Goal:
 
@@ -28,11 +28,11 @@ Goal:
 
 Tasks:
 
-- [ ] Publish a compatibility policy for Houdini `21.x`, MCP protocol assumptions, and breaking-change expectations.
-- [ ] Add canonical workflow docs for common agent tasks such as scene inspection, graph planning, render validation, packaging, and PDG control.
+- [x] Publish a compatibility policy for Houdini `21.x`, MCP protocol assumptions, and breaking-change expectations.
+- [x] Add canonical workflow docs for common agent tasks such as scene inspection, graph planning, render validation, packaging, and PDG control.
 - [ ] Normalize high-value tool contracts with explicit output schemas, examples, and failure notes where still missing.
-- [ ] Add an end-to-end smoke harness for the Houdini-hosted server covering live mutation, tasks, graph reads, and exports.
-- [ ] Document release validation gates so installed builds and committed builds stay aligned.
+- [x] Add an end-to-end smoke harness for the Houdini-hosted server covering live mutation, tasks, graph reads, and exports.
+- [x] Document release validation gates so installed builds and committed builds stay aligned.
 
 Done when:
 
@@ -171,3 +171,6 @@ These are the highest-value usability and trust improvements after the completed
 - Created the phase-five roadmap around productization, contracts, operator UX, event streaming, and runtime maturity.
 - Explicitly deferred bespoke asset-building helpers and macros to phase 6 so phase 5 can stay focused on platform usability and trust.
 - Created the phase-five engineering tracker with milestone-level tasks, done criteria, and manual smoke gates.
+- Added compatibility, agent-workflow, and release-validation docs as the first concrete `P5-M1` deliverables.
+- Added a reusable live smoke script at `scripts/smoke_live_server.ps1` to replace improvised per-session MCP validation calls.
+- Ran the new live smoke script successfully against the active Houdini-hosted server, covering health, tool discovery, live node mutation, graph resource reads, and packaging preview.
