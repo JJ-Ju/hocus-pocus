@@ -55,11 +55,11 @@ Goal:
 
 Tasks:
 
-- [ ] Add named policy profiles such as `safe`, `local-dev`, and `pipeline`.
-- [ ] Surface active policy profile and effective permissions through status and resource payloads.
-- [ ] Normalize machine-readable error families for validation, policy, auth, runtime, and unsupported-operation failures.
-- [ ] Ensure major tools return consistent error payload structure with stable fields.
-- [ ] Improve operator-facing health or diagnostics output for policy and auth state.
+- [x] Add named policy profiles such as `safe`, `local-dev`, and `pipeline`.
+- [x] Surface active policy profile and effective permissions through status and resource payloads.
+- [x] Normalize machine-readable error families for validation, policy, auth, runtime, and unsupported-operation failures.
+- [x] Ensure major tools return consistent error payload structure with stable fields.
+- [x] Improve operator-facing health or diagnostics output for policy and auth state.
 
 Done when:
 
@@ -181,3 +181,4 @@ These are the highest-value usability and trust improvements after the completed
 - Added an initial panel-terminal design doc to keep future embedded agent or terminal launch work staged behind policy and runtime-safety constraints.
 - Live-validated `P5-M2` against a restarted Houdini session by checking health and `session.info` policy payloads, `houdini://session/policy`, normalized auth failures, and `tools/list` metadata carrying `failureNotes`.
 - `P5-M3` is implemented and installed, but still needs one manual in-Houdini UI check that the `Open HocusPocus` shelf tool opens and updates the operator panel as expected.
+- Manual testing showed the panel launch path can return successfully without presenting a visible UI, so the panel entry points are hidden for now while the underlying code remains in the repo for a future revisit.

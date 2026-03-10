@@ -71,28 +71,6 @@ Auth:
 - otherwise use:
   `Authorization: Bearer <your-token>`
 
-## 4.5 In-Houdini Operator Panel
-
-Open the `HocusPocus` shelf and click `Open HocusPocus`.
-
-The panel shows:
-
-- server status
-- endpoint and token availability
-- recent tasks
-- recent scene events
-- recent server log lines
-
-Quick actions:
-
-- start
-- stop
-- restart
-- copy endpoint
-- copy token
-
-The terminal or embedded-agent workflow is intentionally staged. See [Panel Terminal Design](C:\Users\jujun\Documents\Source\Houdini\HocusPocus_mcp\docs\panel-terminal-design.md).
-
 ## 4. Houdini Conventions
 
 HocusPocus exposes orientation notes so agents do not have to guess:
@@ -329,6 +307,8 @@ Common families:
 - `runtime`
 - `unsupported`
 - `cancelled`
+
+The in-Houdini operator panel remains experimental and is currently hidden from the default UI surface pending a later revisit.
 
 Task, tool, and file activity is also recorded in the runtime audit log.
 

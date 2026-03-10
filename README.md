@@ -31,8 +31,6 @@ Expected:
 - `serverVersion: 0.9.0`
 - `mcpUrl: http://127.0.0.1:37219/hocuspocus/mcp`
 
-You can also open the in-Houdini operator panel from the `HocusPocus` shelf with `Open HocusPocus`.
-
 ## Connect Codex on Windows
 
 Add a custom MCP server in the Codex app with:
@@ -69,7 +67,6 @@ Current server surface includes:
 - material creation and assignment tools
 - higher-level tools such as batch graph edits, turntable camera creation, managed snapshots, geometry summaries, and a house blockout macro
 - named policy profiles with effective-policy reporting in status and resources
-- an in-Houdini operator panel with status, recent tasks, recent events, and log visibility
 
 ## Docs
 

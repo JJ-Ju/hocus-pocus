@@ -1,16 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <shelfDocument>
   <toolshelf name="hocuspocus" label="HocusPocus">
-    <memberTool name="hocuspocus_open_panel"/>
     <memberTool name="hocuspocus_start_server"/>
     <memberTool name="hocuspocus_stop_server"/>
   </toolshelf>
-  <tool name="hocuspocus_open_panel" label="Open HocusPocus" icon="MISC_python">
-    <script scriptType="python"><![CDATA[
-import hocuspocus
-hocuspocus.show_panel()
-]]></script>
-  </tool>
   <tool name="hocuspocus_start_server" label="Start HocusPocus" icon="BUTTONS_play">
     <script scriptType="python"><![CDATA[
 import hocuspocus.startup as startup

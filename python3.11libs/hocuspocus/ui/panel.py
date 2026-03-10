@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any
 
 try:  # pragma: no cover - exercised inside Houdini
@@ -18,6 +19,7 @@ except ImportError:  # pragma: no cover
 from hocuspocus import startup
 
 _PANEL_INSTANCE: "HocusPocusPanel | None" = None
+_LOGGER = logging.getLogger("hocuspocus.ui.panel")
 
 
 class HocusPocusPanel(QtWidgets.QDialog):
@@ -25,6 +27,8 @@ class HocusPocusPanel(QtWidgets.QDialog):
         super().__init__(parent)
         self.setWindowTitle("HocusPocus")
         self.resize(960, 760)
+        self.setAttribute(QtCore.Qt.WA_DeleteOnClose, True)
+        self.setWindowFlag(QtCore.Qt.Window, True)
         self._build_ui()
         self._timer = QtCore.QTimer(self)
         self._timer.setInterval(2000)
@@ -143,7 +147,20 @@ class HocusPocusPanel(QtWidgets.QDialog):
         super().closeEvent(event)
 
 
-def show_panel() -> HocusPocusPanel:
+def _report_panel_error(exc: Exception) -> None:
+    _LOGGER.exception("failed to open HocusPocus panel", exc_info=exc)
+    if hou is not None and hou.isUIAvailable():
+        try:
+            hou.ui.displayMessage(
+                "HocusPocus panel failed to open.\n"
+                f"{type(exc).__name__}: {exc}",
+                severity=hou.severityType.Error,
+            )
+        except Exception:
+            pass
+
+
+def _open_or_raise_panel() -> HocusPocusPanel:
     global _PANEL_INSTANCE
     if _PANEL_INSTANCE is not None:
         _PANEL_INSTANCE.show()
@@ -152,12 +169,23 @@ def show_panel() -> HocusPocusPanel:
         _PANEL_INSTANCE.refresh()
         return _PANEL_INSTANCE
 
-    parent = None
-    if hou is not None and hou.isUIAvailable():
-        try:
-            parent = hou.qt.mainWindow()
-        except Exception:
-            parent = None
-    _PANEL_INSTANCE = HocusPocusPanel(parent)
+    _PANEL_INSTANCE = HocusPocusPanel(None)
     _PANEL_INSTANCE.show()
+    _PANEL_INSTANCE.raise_()
+    _PANEL_INSTANCE.activateWindow()
     return _PANEL_INSTANCE
+
+
+def show_panel() -> dict[str, object]:
+    app = QtWidgets.QApplication.instance()
+    if app is None:
+        raise RuntimeError("No Qt application is available for the HocusPocus panel.")
+
+    def _deferred_open() -> None:
+        try:
+            _open_or_raise_panel()
+        except Exception as exc:  # pragma: no cover - exercised in Houdini UI
+            _report_panel_error(exc)
+
+    QtCore.QTimer.singleShot(0, _deferred_open)
+    return {"scheduled": True}
