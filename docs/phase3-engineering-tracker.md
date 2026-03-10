@@ -129,7 +129,7 @@ Manual smoke:
 
 ## P3-M5. PDG/TOPs Automation
 
-Status: not started
+Status: complete
 
 Goal:
 
@@ -137,12 +137,12 @@ Goal:
 
 Tasks:
 
-- [ ] Implement `pdg.list_graphs`.
-- [ ] Implement `pdg.cook`.
-- [ ] Implement `pdg.get_workitems`.
-- [ ] Implement `pdg.cancel`.
-- [ ] Implement `pdg.get_results`.
-- [ ] Represent PDG status and outputs in task-friendly payloads.
+- [x] Implement `pdg.list_graphs`.
+- [x] Implement `pdg.cook`.
+- [x] Implement `pdg.get_workitems`.
+- [x] Implement `pdg.cancel`.
+- [x] Implement `pdg.get_results`.
+- [x] Represent PDG status and outputs in task-friendly payloads.
 
 Done when:
 
@@ -156,7 +156,7 @@ Manual smoke:
 
 ## P3-M6. LOP/USD Authoring
 
-Status: not started
+Status: complete
 
 Goal:
 
@@ -164,12 +164,12 @@ Goal:
 
 Tasks:
 
-- [ ] Implement `lop.create_node`.
-- [ ] Implement `usd.assign_material`.
-- [ ] Implement `usd.set_variant`.
-- [ ] Implement `usd.add_reference`.
-- [ ] Implement `usd.create_layer_break`.
-- [ ] Add USD-aware summaries for authored nodes and affected prim paths.
+- [x] Implement `lop.create_node`.
+- [x] Implement `usd.assign_material`.
+- [x] Implement `usd.set_variant`.
+- [x] Implement `usd.add_reference`.
+- [x] Implement `usd.create_layer_break`.
+- [x] Add USD-aware summaries for authored nodes and affected prim paths.
 
 Done when:
 
@@ -183,7 +183,7 @@ Manual smoke:
 
 ## P3-M7. Event Streaming and Validation
 
-Status: not started
+Status: complete
 
 Goal:
 
@@ -191,11 +191,11 @@ Goal:
 
 Tasks:
 
-- [ ] Add event/subscription support where transport and runtime make it feasible.
-- [ ] Implement `scene.validate`.
-- [ ] Implement `graph.check_errors`.
-- [ ] Implement `parm.find_broken_refs`.
-- [ ] Add validation notes for render, export, and USD graph readiness.
+- [x] Add event/subscription support where transport and runtime make it feasible.
+- [x] Implement `scene.validate`.
+- [x] Implement `graph.check_errors`.
+- [x] Implement `parm.find_broken_refs`.
+- [x] Add validation notes for render, export, and USD graph readiness.
 
 Done when:
 
@@ -211,11 +211,9 @@ Manual smoke:
 
 Recommended next implementation order:
 
-1. P3-M5 PDG/TOPs automation
-2. P3-M6 LOP/USD authoring
-3. P3-M7 Event streaming and validation
+Phase 3 is complete.
 
-These are the next major capability areas now that the graph/query/diff foundation is in place.
+The next work should be organized as a new phase.
 
 ## 3. Session Log
 
@@ -241,3 +239,17 @@ These are the next major capability areas now that the graph/query/diff foundati
   - `scene.diff` and `graph.diff_subgraph` report created nodes, changed nodes, changed parms, and structural edge deltas
   - `graph.plan_edit` simulates batch-style graph edits without mutation
   - `graph.apply_patch` supports `dry_run = true` and transactional execution through the live batch-edit path
+- Implemented and live-validated P3-M5 against Houdini 21.0:
+  - `pdg.list_graphs` discovers TOP networks
+  - `pdg.cook` runs as a non-blocking task with task outcome and work-item state history
+  - `pdg.get_workitems` and `pdg.get_results` expose work-item state and result-data payloads
+  - a simple `genericgenerator` TOP graph cooked to `CookedSuccess` work items through MCP
+- Implemented and live-validated P3-M6 against Houdini 21.0:
+  - `lop.create_node` created a Solaris cube node under `/stage`
+  - `usd.assign_material`, `usd.set_variant`, `usd.add_reference`, and `usd.create_layer_break` each authored the expected Solaris nodes and parameters
+  - authored node summaries expose the key prim, material, reference, and layer-save parameters
+- Implemented and live-validated P3-M7 against Houdini 21.0:
+  - `scene.events_recent` and `houdini://scene/events` provide a lightweight event feed over the current HTTP transport
+  - `parm.find_broken_refs` detects missing absolute parameter references
+  - `graph.check_errors` surfaces graph-local broken references
+  - `scene.validate` summarizes broken references, USD save-path issues, and output-path policy issues

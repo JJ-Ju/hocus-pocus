@@ -390,6 +390,8 @@ class HocusPocusRuntime:
             "node.",
             "parm.",
             "material.",
+            "lop.",
+            "usd.",
         )
         if tool_name.startswith(prefixes):
             return True

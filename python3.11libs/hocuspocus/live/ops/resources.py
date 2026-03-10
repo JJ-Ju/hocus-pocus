@@ -42,6 +42,8 @@ class ResourceOperationsMixin:
             return self.read_graph_scene(context)
         if uri == "houdini://graph/index":
             return self.read_graph_index(context)
+        if uri == "houdini://scene/events":
+            return self.read_scene_events(context)
         if uri.startswith("houdini://graph/subgraph/"):
             raw = uri[len("houdini://graph/subgraph/") :].strip("/")
             if raw:
@@ -147,6 +149,19 @@ class ResourceOperationsMixin:
                     {
                         "description": "Inspect graph-cache health and size.",
                         "uri": "houdini://graph/index",
+                    }
+                ],
+            },
+            {
+                "uriTemplate": "houdini://scene/events",
+                "name": "Scene Events",
+                "description": "Read recent scene-monitor events as a lightweight event feed over the current HTTP transport.",
+                "mimeType": "application/json",
+                "payloadSummary": "Recent event entries with sequence numbers, revisions, event names, and timestamps.",
+                "examples": [
+                    {
+                        "description": "Read recent live scene events.",
+                        "uri": "houdini://scene/events",
                     }
                 ],
             },
