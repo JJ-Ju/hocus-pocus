@@ -1,13 +1,6 @@
 # HocusPocus
 
-HocusPocus is a Houdini 21.x MCP server that runs inside Houdini and exposes live scene automation to agent clients like Codex.
-
-The intended experience is:
-
-1. install it once
-2. launch Houdini
-3. the server auto-starts
-4. connect your agent
+HocusPocus is a Houdini 21.x MCP server that runs inside Houdini and auto-starts with the application. It is designed to be a one-install, connect-your-agent workflow.
 
 ## Install
 
@@ -17,17 +10,15 @@ From the repo root:
 powershell -ExecutionPolicy Bypass -File .\scripts\build.ps1 -Clean -Install
 ```
 
-That installs HocusPocus into the default Houdini 21.0 package directory:
+That installs the package into:
 
 ```text
 %USERPROFILE%\Documents\houdini21.0\packages\
 ```
 
-Auto-start is enabled by default. After install, launching Houdini should also start the MCP server automatically.
+## Verify
 
-## Verify in Houdini
-
-In Houdini's Python shell:
+Launch Houdini. In Houdini's Python shell:
 
 ```python
 import hocuspocus
@@ -37,11 +28,12 @@ print(hocuspocus.server_status())
 Expected:
 
 - `running: True`
+- `serverVersion: 0.9.0`
 - `mcpUrl: http://127.0.0.1:37219/hocuspocus/mcp`
 
 ## Connect Codex on Windows
 
-In the Codex app, add a custom MCP server with:
+Add a custom MCP server in the Codex app with:
 
 - Transport: `Streamable HTTP`
 - Name: `houdini`
@@ -65,102 +57,20 @@ The health route is:
 http://127.0.0.1:37219/hocuspocus/healthz
 ```
 
-It is intentionally unauthenticated but only returns non-sensitive status. MCP method calls still require the bearer token unless auth is explicitly disabled in config.
+## Included
 
-## Houdini Conventions
+Current server surface includes:
 
-HocusPocus exposes Houdini orientation notes so agents do not have to guess:
+- live scene, node, parm, selection, playbar, camera, and viewport tools
+- dynamic node and task resources
+- non-blocking cook/render tasks with polling and cancellation
+- higher-level tools such as batch graph edits, turntable camera creation, managed snapshots, geometry summaries, and a house blockout macro
 
-- `Y` is up
-- `XZ` is the ground plane
-- `X` is left-right
-- `Z` is front-back / depth
+## Docs
 
-These conventions are exposed in:
+For the fuller manual, see [HocusPocus Manual](C:\Users\jujun\Documents\Source\Houdini\HocusPocus_mcp\docs\user-manual.md).
 
-- `session.info`
-- `scene.get_summary`
-- `houdini://session/conventions`
-
-## Agent Notes
-
-Dynamic resources are available for stable scene inspection:
-
-- `houdini://nodes/{path}`
-- `houdini://nodes/{path}/parms`
-- `houdini://nodes/{path}/geometry-summary`
-- `houdini://tasks/recent`
-- `houdini://tasks/{task_id}`
-- `houdini://tasks/{task_id}/log`
-
-Path forms:
-
-- slash-separated: `houdini://nodes/obj/geo1`
-- percent-encoded absolute path: `houdini://nodes/%2Fobj%2Fgeo1`
-
-Safety controls in `config/default.toml`:
-
-- `read_only = true` blocks scene edits and file writes
-- `allow_scene_edit = false` blocks mutation tools
-- `allow_file_write = false` blocks hip saves and viewport captures
-- `approved_roots = [...]` restricts write paths to approved directories
-
-Long-running workload tools:
-
-- `task.list`
-- `task.cancel`
-- `cook.node`
-- `render.rop`
-
-## Snapshot Tools
-
-Useful visual tools:
-
-- `camera.get_active`
-- `viewport.capture`
-- `snapshot.capture_viewport`
-
-Example snapshot path:
-
-```text
-C:/Users/<you>/Documents/houdini21.0/viewport_snapshot.png
-```
-
-## Current Scope
-
-Implemented:
-
-- live Houdini-hosted MCP server
-- auto-start on Houdini launch
-- scene, node, parm, selection, playbar, camera, and viewport tools
-- task registry resources and non-blocking task submission for cooks/renders
-- viewport snapshot capture
-
-Not implemented yet:
-
-- HDK/native bridge
-- Python Panel chat UI
-- embedded terminal
-- HAPI/HARS worker plane
-
-## Troubleshooting
-
-If `import hocuspocus` fails in Houdini:
-
-- reinstall with the build script
-- restart Houdini
-
-If the server is not running on launch:
-
-- run `import hocuspocus; print(hocuspocus.server_status())`
-- confirm the installed config exists at:
-  `%USERPROFILE%\Documents\houdini21.0\packages\HocusPocus\config\default.toml`
-
-If Codex cannot connect:
-
-- confirm Houdini reports `running: True`
-- confirm the URL is `http://127.0.0.1:37219/hocuspocus/mcp`
-- confirm the bearer token matches the token file
+For engineering state, see [Improvement Tracker](C:\Users\jujun\Documents\Source\Houdini\HocusPocus_mcp\docs\improvement-task-tracker.md).
 
 ## License
 
