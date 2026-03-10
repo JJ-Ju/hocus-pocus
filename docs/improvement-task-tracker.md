@@ -78,7 +78,7 @@ Manual smoke:
 
 ## M14. Dynamic Resources and Interface Normalization
 
-Status: in progress
+Status: complete
 
 Goal:
 
@@ -86,9 +86,9 @@ Goal:
 
 Tasks:
 
-- [ ] Add node-path-addressable resources such as `houdini://nodes/<path>`.
-- [ ] Add parameter resources such as `houdini://nodes/<path>/parms`.
-- [ ] Add geometry summary resources such as `houdini://nodes/<path>/geometry-summary`.
+- [x] Add node-path-addressable resources such as `houdini://nodes/<path>`.
+- [x] Add parameter resources such as `houdini://nodes/<path>/parms`.
+- [x] Add geometry summary resources such as `houdini://nodes/<path>/geometry-summary`.
 - [x] Normalize write-tool outputs so they align with corresponding read-tool summaries.
 - [x] Add explicit URI/path encoding rules for dynamic resource lookup.
 - [x] Expose display/output node state where relevant.
@@ -108,7 +108,7 @@ Manual smoke:
 
 ## M15. Taskified Cooks, Renders, and Progress
 
-Status: in progress
+Status: complete
 
 Goal:
 
@@ -117,8 +117,8 @@ Goal:
 Tasks:
 
 - [x] Add a task registry resource with durable task ids.
-- [ ] Implement `cook.node`.
-- [ ] Implement `render.rop`.
+- [x] Implement `cook.node`.
+- [x] Implement `render.rop`.
 - [x] Add progress state and cancellation support for those tasks.
 - [x] Add recent task log resources.
 - [x] Add task result summaries and failure reasons.
@@ -137,7 +137,7 @@ Manual smoke:
 
 ## M16. Higher-Level Agent Primitives
 
-Status: not started
+Status: complete
 
 Goal:
 
@@ -145,11 +145,11 @@ Goal:
 
 Tasks:
 
-- [ ] Add a batch or transaction tool for grouped node edits.
-- [ ] Add a geometry summary tool or resource for bbox, counts, groups, and materials.
-- [ ] Add a scene helper for creating a turntable camera.
-- [ ] Add a snapshot helper that can write to a managed temp location when no path is supplied.
-- [ ] Add one high-level modeling macro as a proof point.
+- [x] Add a batch or transaction tool for grouped node edits.
+- [x] Add a geometry summary tool or resource for bbox, counts, groups, and materials.
+- [x] Add a scene helper for creating a turntable camera.
+- [x] Add a snapshot helper that can write to a managed temp location when no path is supplied.
+- [x] Add one high-level modeling macro as a proof point.
 
 Done when:
 
@@ -165,7 +165,7 @@ Manual smoke:
 
 ## M17. Operations Module Refactor
 
-Status: not started
+Status: complete
 
 Goal:
 
@@ -173,16 +173,16 @@ Goal:
 
 Tasks:
 
-- [ ] Split `live/operations.py` into domain modules:
+- [x] Split `live/operations.py` into domain modules:
   - session
   - scene
   - node
   - parm
   - viewport
   - resources
-- [ ] Extract shared schema and response helpers.
-- [ ] Keep registration centralized but implementation domain-specific.
-- [ ] Preserve existing tool names and wire compatibility during the refactor.
+- [x] Extract shared schema and response helpers.
+- [x] Keep registration centralized but implementation domain-specific.
+- [x] Preserve existing tool names and wire compatibility during the refactor.
 
 Done when:
 
@@ -214,3 +214,8 @@ Those three items improve safety and agent usability the most with the least pro
 - Completed M13 with per-tool capability enforcement, approved-root write policy, read-only mode, and JSONL audit logging.
 - Implemented the M14 code path for dynamic node resources and normalized outputs, but left the milestone in progress until those resources are smoke-tested against a live Houdini session.
 - Implemented the M15 task registry, task resources, task logs, and cancellation model, and locally validated those with a transient runtime. `cook.node` and `render.rop` remain in progress until they are smoke-tested against a live Houdini session.
+- Live-validated M14 against Houdini 21.0 with real object/SOP node resources, parm resources, and geometry-summary resources.
+- Live-validated successful `cook.node` and `render.rop` task execution against Houdini 21.0, including task polling, recent-task resources, task logs, and a Geometry ROP writing a `.bgeo.sc` output.
+- Live-validated render-task cancellation against Houdini 21.0. A long render was cancelled mid-run, the task entered `cancelled`, and partial frame outputs remained on disk as expected.
+- Completed M16 with live validation of `graph.batch_edit`, `geometry.get_summary`, `scene.create_turntable_camera`, managed-path `snapshot.capture_viewport`, and `model.create_house_blockout`.
+- Completed M17 by splitting the monolithic live operations implementation into domain mixins under `python3.11libs/hocuspocus/live/ops/` while preserving the public MCP surface.
