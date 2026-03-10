@@ -103,6 +103,9 @@ class SceneEventMonitor:
             self._last_event = event_name
             self._last_event_time = time.time()
 
+    def mark_dirty(self, event_name: str) -> None:
+        self._bump(event_name)
+
     def _on_hip_event(self, event_type: Any) -> None:
         self._bump(f"hip:{event_type}")
 

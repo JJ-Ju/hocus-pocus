@@ -13,9 +13,11 @@ from hocuspocus.core.mcp_types import (
 from hocuspocus.core.settings import ServerSettings
 
 from .dispatcher import LiveCommandDispatcher
+from .graph_cache import LiveSceneGraphCache
 from .monitor import SceneEventMonitor
 from .ops.base import OperationBaseMixin
 from .ops.export import ExportOperationsMixin
+from .ops.graph import GraphOperationsMixin
 from .ops.high_level import HighLevelOperationsMixin
 from .ops.material import MaterialOperationsMixin
 from .ops.node import NodeOperationsMixin
@@ -37,6 +39,7 @@ class LiveOperations(
     MaterialOperationsMixin,
     TaskExecutionOperationsMixin,
     ExportOperationsMixin,
+    GraphOperationsMixin,
     ViewportOperationsMixin,
     HighLevelOperationsMixin,
     ResourceOperationsMixin,
@@ -53,6 +56,7 @@ class LiveOperations(
         self._monitor = monitor
         self._tasks = tasks
         self._settings = settings
+        self._graph = LiveSceneGraphCache(logger)
         self._logger = logger.getChild("live.operations")
 
     def register(self, tools: ToolRegistry, resources: ResourceRegistry) -> None:
@@ -80,7 +84,16 @@ class LiveOperations(
             ("node.move", "Move Node", "Move a node in network-editor space by setting its graph position. This changes the node tile position, not the 3D transform.", {"type": "object", "properties": {"path": {"type": "string"}, "x": {"type": "number"}, "y": {"type": "number"}}, "required": ["path", "x", "y"]}, {"destructiveHint": True}, self.node_move),
             ("node.layout", "Layout Nodes", "Auto-layout child nodes under a network and return the resulting child listing. If `child_paths` is omitted, all child nodes under the parent are laid out.", {"type": "object", "properties": {"parent_path": {"type": "string", "default": "/obj"}, "child_paths": {"type": "array", "items": {"type": "string"}}}}, {"destructiveHint": True}, self.node_layout),
             ("node.set_flags", "Set Node Flags", "Set common node flags such as bypass, display, render, and template, then return the updated node summary. Flag support depends on the underlying Houdini node type.", {"type": "object", "properties": {"path": {"type": "string"}, "bypass": {"type": "boolean"}, "display": {"type": "boolean"}, "render": {"type": "boolean"}, "template": {"type": "boolean"}}, "required": ["path"]}, {"destructiveHint": True}, self.node_set_flags),
+            ("graph.query", "Query Graph", "Query the indexed scene graph by path prefix, root path, node type, category, flag, name fragment, or material assignment. This is the main structured graph search tool for agents.", {"type": "object", "properties": {"root_path": {"type": "string"}, "path_prefix": {"type": "string"}, "node_type_name": {"type": "string"}, "category": {"type": "string"}, "name_contains": {"type": "string"}, "material_path": {"type": "string"}, "flag_name": {"type": "string"}, "flag_value": {"type": "boolean"}, "limit": {"type": "integer", "default": 200}}}, {"readOnlyHint": True, "idempotentHint": True}, self.graph_query),
+            ("graph.find_upstream", "Find Upstream", "Traverse upstream structural input edges from a starting node path using the indexed scene graph. Use this to understand what feeds a node.", {"type": "object", "properties": {"path": {"type": "string"}, "max_depth": {"type": "integer", "default": 20}}, "required": ["path"]}, {"readOnlyHint": True, "idempotentHint": True}, self.graph_find_upstream),
+            ("graph.find_downstream", "Find Downstream", "Traverse downstream structural input edges from a starting node path using the indexed scene graph. Use this to understand what a node drives.", {"type": "object", "properties": {"path": {"type": "string"}, "max_depth": {"type": "integer", "default": 20}}, "required": ["path"]}, {"readOnlyHint": True, "idempotentHint": True}, self.graph_find_downstream),
+            ("graph.find_by_type", "Find Nodes By Type", "Return indexed graph nodes that match a Houdini node type name, optionally under a root path.", {"type": "object", "properties": {"node_type_name": {"type": "string"}, "root_path": {"type": "string"}, "limit": {"type": "integer", "default": 200}}, "required": ["node_type_name"]}, {"readOnlyHint": True, "idempotentHint": True}, self.graph_find_by_type),
+            ("graph.find_by_flag", "Find Nodes By Flag", "Return indexed graph nodes that match a named Houdini flag such as `display`, `render`, `bypass`, or `template`.", {"type": "object", "properties": {"flag_name": {"type": "string"}, "flag_value": {"type": "boolean", "default": True}, "root_path": {"type": "string"}, "limit": {"type": "integer", "default": 200}}, "required": ["flag_name"]}, {"readOnlyHint": True, "idempotentHint": True}, self.graph_find_by_flag),
             ("graph.batch_edit", "Batch Graph Edit", "Apply a grouped set of node, parm, flag, move, connect, and layout operations in one live request and one undo block. Later operations may reference earlier results via `$ref:<id>` and `$ref:<id>/suffix`; set `transactional = true` to roll back the whole batch on failure.", {"type": "object", "properties": {"label": {"type": "string"}, "transactional": {"type": "boolean", "default": False}, "operations": {"type": "array", "items": {"type": "object"}}}, "required": ["operations"]}, {"destructiveHint": True}, self.graph_batch_edit),
+            ("scene.diff", "Diff Scene Graph", "Diff the current indexed scene graph against a previously captured baseline graph snapshot. Use this to compare before and after states outside the live undo stack.", {"type": "object", "properties": {"baseline": {"type": "object"}}, "required": ["baseline"]}, {"readOnlyHint": True, "idempotentHint": True}, self.scene_diff),
+            ("graph.diff_subgraph", "Diff Subgraph", "Diff a current rooted subgraph against a previously captured baseline subgraph snapshot.", {"type": "object", "properties": {"root_path": {"type": "string"}, "baseline": {"type": "object"}}, "required": ["root_path", "baseline"]}, {"readOnlyHint": True, "idempotentHint": True}, self.graph_diff_subgraph),
+            ("graph.plan_edit", "Plan Graph Edit", "Simulate a grouped graph patch against the current indexed scene graph and return the predicted diff without mutating Houdini. This uses the same operation shapes as `graph.batch_edit`.", {"type": "object", "properties": {"operations": {"type": "array", "items": {"type": "object"}}}, "required": ["operations"]}, {"readOnlyHint": True, "idempotentHint": True}, self.graph_plan_edit),
+            ("graph.apply_patch", "Apply Graph Patch", "Apply a graph patch using the current batch-edit execution path. Set `dry_run = true` to return only the predicted plan and diff.", {"type": "object", "properties": {"operations": {"type": "array", "items": {"type": "object"}}, "patch": {"type": "object"}, "transactional": {"type": "boolean", "default": True}, "dry_run": {"type": "boolean", "default": False}, "label": {"type": "string"}}, "required": []}, {"destructiveHint": True}, self.graph_apply_patch),
             ("parm.list", "List Parameters", "List all parameters on a node and return normalized parameter summaries. Use this when you know the node path but not the parm names.", {"type": "object", "properties": {"node_path": {"type": "string"}}, "required": ["node_path"]}, {"readOnlyHint": True, "idempotentHint": True}, self.parm_list),
             ("parm.get", "Get Parameter", "Return metadata and value information for a single parameter path. This is the primary structured parameter read tool.", {"type": "object", "properties": {"parm_path": {"type": "string"}}, "required": ["parm_path"]}, {"readOnlyHint": True, "idempotentHint": True}, self.parm_get),
             ("parm.set", "Set Parameter", "Set a parameter value and return the updated parameter summary. This works for standard value assignment, not expression assignment.", {"type": "object", "properties": {"parm_path": {"type": "string"}, "value": {}}, "required": ["parm_path", "value"]}, {"destructiveHint": True}, self.parm_set),
@@ -126,6 +139,8 @@ class LiveOperations(
             ("houdini://session/health", "Session Health", "Current dispatcher and monitor status.", self.read_session_health),
             ("houdini://session/conventions", "Session Conventions", "Houdini coordinate-system and snapshot conventions for this server.", self.read_session_conventions),
             ("houdini://session/scene-summary", "Scene Summary", "Current scene summary.", self.read_scene_summary),
+            ("houdini://graph/scene", "Scene Graph", "Indexed whole-scene graph snapshot.", self.read_graph_scene),
+            ("houdini://graph/index", "Graph Index", "Indexed scene-graph cache metadata and revision state.", self.read_graph_index),
             ("houdini://session/selection", "Selection", "Current node selection.", self.read_selection),
             ("houdini://session/playbar", "Playbar", "Current playbar state.", self.read_playbar),
             ("houdini://session/operations", "Operations", "Recent dispatcher operations and cancellation state.", self.read_operations),
@@ -153,7 +168,16 @@ class LiveOperations(
             "node.get": "Single normalized node summary, optionally including parameter summaries.",
             "node.create": "Created node summary with final resolved path and flag state.",
             "node.delete": "Counts plus separate deleted and skipped path arrays.",
+            "graph.query": "List of indexed graph nodes that match structural filters.",
+            "graph.find_upstream": "Traversal result with the starting node, upstream nodes, and traversed edges.",
+            "graph.find_downstream": "Traversal result with the starting node, downstream nodes, and traversed edges.",
+            "graph.find_by_type": "List of indexed graph nodes that match a type name.",
+            "graph.find_by_flag": "List of indexed graph nodes that match a flag value.",
             "graph.batch_edit": "Batch result with refs, per-step results, and failure metadata when the batch errors.",
+            "scene.diff": "Graph diff between a baseline scene snapshot and the current scene graph.",
+            "graph.diff_subgraph": "Graph diff between a baseline subgraph snapshot and the current rooted subgraph.",
+            "graph.plan_edit": "Predicted graph diff, planned refs, and simulated results for a patch without mutation.",
+            "graph.apply_patch": "Predicted plan plus actual batch execution result and post-apply revision.",
             "parm.get": "Single normalized parameter summary including raw value, evaluated value, and expression.",
             "material.create": "Created material summary plus applied and skipped material property names.",
             "material.update": "Updated material summary plus applied and skipped material property names.",
@@ -189,6 +213,37 @@ class LiveOperations(
                             {"type": "create_node", "id": "out", "parent_path": "$ref:geo", "node_type_name": "null", "node_name": "OUT"},
                             {"type": "connect", "source_node_path": "$ref:box", "dest_node_path": "$ref:out"},
                             {"type": "set_flags", "path": "$ref:out", "display": True, "render": True},
+                        ],
+                    },
+                }
+            ],
+            "graph.query": [
+                {
+                    "description": "Find display-flagged null nodes under a geometry object.",
+                    "arguments": {"root_path": "/obj/geo1", "node_type_name": "null", "flag_name": "display", "flag_value": True},
+                }
+            ],
+            "graph.plan_edit": [
+                {
+                    "description": "Preview a simple SOP chain before applying it.",
+                    "arguments": {
+                        "operations": [
+                            {"type": "create_node", "id": "geo", "parent_path": "/obj", "node_type_name": "geo", "node_name": "planned_geo1"},
+                            {"type": "create_node", "id": "box", "parent_path": "$ref:geo", "node_type_name": "box", "node_name": "box1"},
+                            {"type": "create_node", "id": "out", "parent_path": "$ref:geo", "node_type_name": "null", "node_name": "OUT"},
+                            {"type": "connect", "source_node_path": "$ref:box", "dest_node_path": "$ref:out"},
+                        ],
+                    },
+                }
+            ],
+            "graph.apply_patch": [
+                {
+                    "description": "Apply a transactional graph patch after previewing it.",
+                    "arguments": {
+                        "transactional": True,
+                        "operations": [
+                            {"type": "create_node", "id": "geo", "parent_path": "/obj", "node_type_name": "geo", "node_name": "patched_geo1"},
+                            {"type": "create_node", "id": "box", "parent_path": "$ref:geo", "node_type_name": "box", "node_name": "box1"},
                         ],
                     },
                 }
@@ -257,6 +312,8 @@ class LiveOperations(
             "houdini://session/health": "Dispatcher, monitor, and recent-task health snapshot.",
             "houdini://session/conventions": "Coordinate-system and snapshot behavior notes for agent planning.",
             "houdini://session/scene-summary": "Compact scene summary with hip state, frame, and selection.",
+            "houdini://graph/scene": "Whole-scene graph snapshot with indexed nodes, parms, edges, and material assignments.",
+            "houdini://graph/index": "Graph-cache metadata including revision, counts, and refresh timing.",
             "houdini://session/selection": "Current selected node paths.",
             "houdini://session/playbar": "Current frame, FPS, and playbar ranges.",
             "houdini://session/operations": "Recent request-scoped operation records.",
@@ -272,6 +329,9 @@ class LiveOperations(
             ],
             "houdini://session/info": [
                 {"description": "Read top-level session state before planning graph edits or viewport captures."}
+            ],
+            "houdini://graph/scene": [
+                {"description": "Load the current indexed scene graph as a single resource snapshot."}
             ],
         }
         return examples.get(uri, [])

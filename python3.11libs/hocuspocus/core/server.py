@@ -380,7 +380,30 @@ class HocusPocusRuntime:
             success=True,
             result=result,
         )
+        if self._should_bump_graph_revision(tool.name):
+            self.monitor.mark_dirty(f"tool:{tool.name}")
         return result
+
+    @staticmethod
+    def _should_bump_graph_revision(tool_name: str) -> bool:
+        prefixes = (
+            "node.",
+            "parm.",
+            "material.",
+        )
+        if tool_name.startswith(prefixes):
+            return True
+        return tool_name in {
+            "scene.new",
+            "scene.open_hip",
+            "scene.merge_hip",
+            "scene.undo",
+            "scene.redo",
+            "scene.create_turntable_camera",
+            "graph.batch_edit",
+            "graph.apply_patch",
+            "model.create_house_blockout",
+        }
 
     def _initialize_payload(self) -> dict[str, Any]:
         return {

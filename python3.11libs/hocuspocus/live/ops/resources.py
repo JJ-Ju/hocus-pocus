@@ -21,6 +21,7 @@ class ResourceOperationsMixin:
                 "tokenMode": self._settings.token_mode,
             },
             "monitor": self._monitor.snapshot(),
+            "graph": self._graph.stats(),
             "activeOperations": self._dispatcher.operations_snapshot(limit=20),
             "recentTasks": self._tasks.snapshots(limit=20),
         }
@@ -37,6 +38,47 @@ class ResourceOperationsMixin:
         uri: str,
         context: RequestContext,
     ) -> dict[str, object] | None:
+        if uri == "houdini://graph/scene":
+            return self.read_graph_scene(context)
+        if uri == "houdini://graph/index":
+            return self.read_graph_index(context)
+        if uri.startswith("houdini://graph/subgraph/"):
+            raw = uri[len("houdini://graph/subgraph/") :].strip("/")
+            if raw:
+                root_path = self._dynamic_node_uri_to_path(f"houdini://nodes/{raw}")
+                if root_path is not None:
+                    return self._resource_response(
+                        uri,
+                        self._call_live(
+                            lambda root_path=root_path: self._graph_subgraph_payload(self._graph_snapshot(), root_path),
+                            context,
+                        ),
+                    )
+        if uri.startswith("houdini://graph/dependencies/"):
+            raw = uri[len("houdini://graph/dependencies/") :].strip("/")
+            if raw:
+                node_path = self._dynamic_node_uri_to_path(f"houdini://nodes/{raw}")
+                if node_path is not None:
+                    return self._resource_response(
+                        uri,
+                        self._call_live(
+                            lambda node_path=node_path: self._graph_dependency_payload(self._graph_snapshot(), node_path),
+                            context,
+                        ),
+                    )
+        if uri.startswith("houdini://graph/references/"):
+            raw = uri[len("houdini://graph/references/") :].strip("/")
+            if raw:
+                node_path = self._dynamic_node_uri_to_path(f"houdini://nodes/{raw}")
+                if node_path is not None:
+                    return self._resource_response(
+                        uri,
+                        self._call_live(
+                            lambda node_path=node_path: self._graph_reference_payload(self._graph_snapshot(), node_path),
+                            context,
+                        ),
+                    )
+
         task_log_id = self._dynamic_task_id(uri, "/log")
         if task_log_id is not None:
             payload = self._tasks.log_payload(task_log_id)
@@ -82,6 +124,71 @@ class ResourceOperationsMixin:
 
     def resource_templates_payload(self) -> list[dict[str, object]]:
         return [
+            {
+                "uriTemplate": "houdini://graph/scene",
+                "name": "Scene Graph Snapshot",
+                "description": "Read the indexed whole-scene graph snapshot, including nodes, parms, edges, material assignments, and parameter references.",
+                "mimeType": "application/json",
+                "payloadSummary": "Whole-scene graph snapshot with normalized nodes, parameter summaries, graph edges, and graph stats.",
+                "examples": [
+                    {
+                        "description": "Load the current indexed scene graph in one read.",
+                        "uri": "houdini://graph/scene",
+                    }
+                ],
+            },
+            {
+                "uriTemplate": "houdini://graph/index",
+                "name": "Scene Graph Index",
+                "description": "Read cache and revision metadata for the in-memory indexed scene graph.",
+                "mimeType": "application/json",
+                "payloadSummary": "Graph-cache stats such as revision, node count, parm count, edge count, and last refresh timing.",
+                "examples": [
+                    {
+                        "description": "Inspect graph-cache health and size.",
+                        "uri": "houdini://graph/index",
+                    }
+                ],
+            },
+            {
+                "uriTemplate": "houdini://graph/subgraph/{path}",
+                "name": "Subgraph Snapshot",
+                "description": "Read a subgraph snapshot rooted at a Houdini path. `{path}` uses the same slash-separated or percent-encoded path rules as node resources.",
+                "mimeType": "application/json",
+                "payloadSummary": "Rooted subgraph snapshot with descendant nodes, parm summaries, and internal edges.",
+                "examples": [
+                    {
+                        "description": "Read the full SOP subgraph under a geometry object.",
+                        "uri": "houdini://graph/subgraph/obj/geo1",
+                    }
+                ],
+            },
+            {
+                "uriTemplate": "houdini://graph/dependencies/{path}",
+                "name": "Node Dependencies",
+                "description": "Read structural and parameter-reference edges touching a specific node path.",
+                "mimeType": "application/json",
+                "payloadSummary": "Node summary plus incoming, outgoing, material, and parameter-reference edges related to the node.",
+                "examples": [
+                    {
+                        "description": "Inspect dependencies for an output SOP.",
+                        "uri": "houdini://graph/dependencies/obj/geo1/OUT",
+                    }
+                ],
+            },
+            {
+                "uriTemplate": "houdini://graph/references/{path}",
+                "name": "Node Parm References",
+                "description": "Read parameter-expression references owned by a node.",
+                "mimeType": "application/json",
+                "payloadSummary": "Parameter summaries for parms on the node that reference other parameters or absolute parm paths.",
+                "examples": [
+                    {
+                        "description": "Inspect parameter references for a rig controller.",
+                        "uri": "houdini://graph/references/obj/geo1",
+                    }
+                ],
+            },
             {
                 "uriTemplate": "houdini://nodes/{path}",
                 "name": "Node Resource",
