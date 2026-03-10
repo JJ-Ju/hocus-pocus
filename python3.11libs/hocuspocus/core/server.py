@@ -390,6 +390,7 @@ class HocusPocusRuntime:
             "node.",
             "parm.",
             "material.",
+            "hda.",
             "lop.",
             "usd.",
         )

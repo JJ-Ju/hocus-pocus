@@ -20,6 +20,11 @@ try:
 except ImportError:  # pragma: no cover - exercised outside Houdini
     hou = None  # type: ignore
 
+try:
+    import hdefereval  # type: ignore
+except ImportError:  # pragma: no cover - exercised outside graphical Houdini
+    hdefereval = None  # type: ignore
+
 
 class DispatchMode(str, Enum):
     UI_CALLBACK = "ui_callback"
@@ -117,10 +122,11 @@ class LiveCommandDispatcher:
         )
         self._record_new_operation(context, command.enqueued_at)
 
-        self._queue.put(command)
-
         if self._mode == DispatchMode.UI_CALLBACK:
-            self._schedule_pump()
+            self._submit_ui_command(command)
+            return future
+
+        self._queue.put(command)
         return future
 
     def call(self, callback: Callable[[], Any], context: RequestContext) -> Any:
@@ -216,6 +222,36 @@ class LiveCommandDispatcher:
             if command is None:
                 break
             self._execute(command)
+
+    def _submit_ui_command(self, command: QueuedCommand) -> None:
+        worker = threading.Thread(
+            target=self._run_ui_command,
+            args=(command,),
+            name=f"HocusPocusUI:{command.context.operation_id}",
+            daemon=True,
+        )
+        worker.start()
+
+    def _run_ui_command(self, command: QueuedCommand) -> None:
+        if command.future.cancelled() or command.context.is_cancelled():
+            self._finish_operation(command.context.operation_id, OperationState.CANCELLED)
+            command.future.cancel()
+            return
+
+        if hdefereval is None or hou is None:
+            self._execute(command)
+            return
+
+        try:
+            hdefereval.executeInMainThreadWithResult(self._execute, command)
+        except Exception as exc:
+            if not command.future.done():
+                self._finish_operation(
+                    command.context.operation_id,
+                    OperationState.FAILED,
+                    error=str(exc),
+                )
+                command.future.set_exception(exc)
 
     def _execute(self, command: QueuedCommand) -> None:
         if command.future.cancelled() or command.context.is_cancelled():

@@ -21,7 +21,7 @@ Tracking rule:
 
 ## P4-M1. HDA and Asset Workflows
 
-Status: not started
+Status: complete
 
 Goal:
 
@@ -29,11 +29,11 @@ Goal:
 
 Tasks:
 
-- [ ] Implement HDA definition inspection for node instances and library definitions.
-- [ ] Implement HDA library listing and active-definition resolution.
-- [ ] Implement parm-promotion and interface inspection helpers.
-- [ ] Add install/uninstall or enable/disable library controls where safe.
-- [ ] Return stable summaries for asset definitions, sections, versions, and instance relationships.
+- [x] Implement HDA definition inspection for node instances and library definitions.
+- [x] Implement HDA library listing and active-definition resolution.
+- [x] Implement parm-promotion and interface inspection helpers.
+- [x] Add install/uninstall or enable/disable library controls where safe.
+- [x] Return stable summaries for asset definitions, sections, versions, and instance relationships.
 
 Done when:
 
@@ -194,3 +194,6 @@ These are the highest-value production workflow gaps after phase 3.
 - Created the phase-four roadmap around asset, dependency, render, packaging, Solaris, and PDG production workflows.
 - Chose HDA workflows and dependency discovery as the highest-value next slice after the completed scene-graph and PDG/Solaris foundations from phase 3.
 - Created the phase-four engineering tracker with milestone-level tasks, done criteria, and manual smoke gates.
+- Completed `P4-M1` with HDA library inspection, definition/instance/interface reads, library install/reload controls, digital-asset creation from a live node, parm promotion, and definition version updates.
+- Fixed the live UI-thread dispatcher path to use `hdefereval.executeInMainThreadWithResult(...)` in graphical Houdini so asset-authoring operations no longer time out behind `postEventCallback` queue stalls.
+- Live-validated the HDA flow on a disposable object asset saved to `C:/Users/jujun/Documents/houdini21.0/hocuspocus/output/hdas/p4_hda_test.hda`, including tuple-aware parm promotion and persistent internal channel references after relocking the asset definition.

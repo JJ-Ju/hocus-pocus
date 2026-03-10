@@ -18,6 +18,7 @@ from .monitor import SceneEventMonitor
 from .ops.base import OperationBaseMixin
 from .ops.export import ExportOperationsMixin
 from .ops.graph import GraphOperationsMixin
+from .ops.hda_ops import HdaOperationsMixin
 from .ops.high_level import HighLevelOperationsMixin
 from .ops.material import MaterialOperationsMixin
 from .ops.node import NodeOperationsMixin
@@ -43,6 +44,7 @@ class LiveOperations(
     TaskExecutionOperationsMixin,
     ExportOperationsMixin,
     GraphOperationsMixin,
+    HdaOperationsMixin,
     PdgOperationsMixin,
     UsdOperationsMixin,
     ValidationOperationsMixin,
@@ -80,6 +82,17 @@ class LiveOperations(
             ("scene.undo", "Undo", "Undo the last Houdini operation in the current session. This affects the live undo stack immediately.", {"type": "object", "properties": {}}, {"destructiveHint": True}, self.scene_undo),
             ("scene.redo", "Redo", "Redo the last undone Houdini operation in the current session. This affects the live undo stack immediately.", {"type": "object", "properties": {}}, {"destructiveHint": True}, self.scene_redo),
             ("scene.create_turntable_camera", "Create Turntable Camera", "Create a target null, rig null, and camera for a simple orbit shot under `/obj`. If `target_path` resolves to geometry, the orbit distance is derived from that geometry's bounds.", {"type": "object", "properties": {"target_path": {"type": "string"}, "frame_range": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 3}, "camera_name": {"type": "string", "default": "turntable_cam"}, "distance_multiplier": {"type": "number", "default": 2.5}}}, {"destructiveHint": True}, self.scene_create_turntable_camera),
+            ("hda.list_libraries", "List HDA Libraries", "List installed HDA library files and the first set of definitions they contain. Use this as the top-level discovery read for HDA workflows.", {"type": "object", "properties": {}}, {"readOnlyHint": True, "idempotentHint": True}, self.hda_list_libraries),
+            ("hda.list_definitions", "List HDA Definitions", "List HDA definitions from a specific library file or from all currently loaded HDA libraries.", {"type": "object", "properties": {"library_file_path": {"type": "string"}}}, {"readOnlyHint": True, "idempotentHint": True}, self.hda_list_definitions),
+            ("hda.get_definition", "Get HDA Definition", "Return metadata, sections, and parm-interface structure for a specific HDA definition resolved by node type name, library file, or HDA instance path.", {"type": "object", "properties": {"node_type_name": {"type": "string"}, "library_file_path": {"type": "string"}, "node_path": {"type": "string"}, "include_sections": {"type": "boolean", "default": True}}}, {"readOnlyHint": True, "idempotentHint": True}, self.hda_get_definition),
+            ("hda.get_instance", "Get HDA Instance", "Return HDA instance metadata, current-definition status, spare-parm count, and the effective parm interface for a live node instance.", {"type": "object", "properties": {"node_path": {"type": "string"}}, "required": ["node_path"]}, {"readOnlyHint": True, "idempotentHint": True}, self.hda_get_instance),
+            ("hda.get_interface", "Get HDA Interface", "Return the parm interface for either a live HDA instance or a resolved HDA definition.", {"type": "object", "properties": {"node_path": {"type": "string"}, "node_type_name": {"type": "string"}, "library_file_path": {"type": "string"}}}, {"readOnlyHint": True, "idempotentHint": True}, self.hda_get_interface),
+            ("hda.install_library", "Install HDA Library", "Install an HDA library file into the current Houdini session from a policy-approved path.", {"type": "object", "properties": {"library_file_path": {"type": "string"}, "force_use_assets": {"type": "boolean", "default": False}}, "required": ["library_file_path"]}, {"destructiveHint": True}, self.hda_install_library),
+            ("hda.uninstall_library", "Uninstall HDA Library", "Uninstall an HDA library file from the current Houdini session.", {"type": "object", "properties": {"library_file_path": {"type": "string"}}, "required": ["library_file_path"]}, {"destructiveHint": True}, self.hda_uninstall_library),
+            ("hda.reload_library", "Reload HDA Library", "Reload an installed HDA library file from disk.", {"type": "object", "properties": {"library_file_path": {"type": "string"}}, "required": ["library_file_path"]}, {"destructiveHint": True}, self.hda_reload_library),
+            ("hda.create_from_subnet", "Create HDA From Subnet", "Turn a subnet-like node into a digital asset saved to a policy-approved HDA file path and return both the new instance and definition summaries.", {"type": "object", "properties": {"node_path": {"type": "string"}, "asset_name": {"type": "string"}, "hda_file_path": {"type": "string"}, "description": {"type": "string"}, "version": {"type": "string"}, "install_path": {"type": "string"}}, "required": ["node_path", "asset_name", "hda_file_path"]}, {"destructiveHint": True}, self.hda_create_from_subnet),
+            ("hda.promote_parm", "Promote HDA Parm", "Promote an internal parm from an HDA instance into the definition interface and optionally wire the internal parm to reference the promoted parm.", {"type": "object", "properties": {"instance_path": {"type": "string"}, "source_parm_path": {"type": "string"}, "promoted_name": {"type": "string"}, "promoted_label": {"type": "string"}, "folder_label": {"type": "string"}, "create_reference": {"type": "boolean", "default": True}}, "required": ["instance_path", "source_parm_path"]}, {"destructiveHint": True}, self.hda_promote_parm),
+            ("hda.set_definition_version", "Set HDA Definition Version", "Update the version string on a resolved HDA definition.", {"type": "object", "properties": {"node_type_name": {"type": "string"}, "library_file_path": {"type": "string"}, "node_path": {"type": "string"}, "version": {"type": "string"}}, "required": ["version"]}, {"destructiveHint": True}, self.hda_set_definition_version),
             ("node.list", "List Nodes", "List child nodes under a network path, optionally recursively. Use this for graph discovery when you know the parent network but not the child names.", {"type": "object", "properties": {"parent_path": {"type": "string", "default": "/obj"}, "recursive": {"type": "boolean", "default": False}, "max_items": {"type": "integer", "default": 200}}}, {"readOnlyHint": True, "idempotentHint": True}, self.node_list),
             ("node.get", "Get Node", "Return summary information for a single node, including flags, inputs, display/render/output node pointers, and optionally parameter summaries. This is the primary structured node read tool.", {"type": "object", "properties": {"path": {"type": "string"}, "include_parms": {"type": "boolean", "default": False}}, "required": ["path"]}, {"readOnlyHint": True, "idempotentHint": True}, self.node_get),
             ("node.create", "Create Node", "Create a Houdini node under a parent network and return the created node summary. The result includes the final resolved node path, which may differ from the requested name if Houdini renames it.", {"type": "object", "properties": {"parent_path": {"type": "string", "default": "/obj"}, "node_type_name": {"type": "string"}, "node_name": {"type": "string"}, "run_init_scripts": {"type": "boolean", "default": True}, "load_contents": {"type": "boolean", "default": True}}, "required": ["node_type_name"]}, {"destructiveHint": True}, self.node_create),
@@ -191,6 +204,17 @@ class LiveOperations(
             "pdg.get_workitems": "List of PDG work-item summaries for a graph or TOP node.",
             "pdg.cancel": "Cancellation acknowledgement plus the latest PDG graph state summary.",
             "pdg.get_results": "List of PDG result-data records grouped by work item.",
+            "hda.list_libraries": "List of loaded HDA library files and the first set of definition names they contain.",
+            "hda.list_definitions": "List of HDA definitions with library path, version, section counts, and interface summary.",
+            "hda.get_definition": "Single HDA definition summary with library path, sections, and parm interface data.",
+            "hda.get_instance": "HDA instance summary with node data, definition linkage, and effective interface data.",
+            "hda.get_interface": "Parm interface summary for an HDA instance or definition.",
+            "hda.install_library": "Installed-library acknowledgement with resolved library path.",
+            "hda.uninstall_library": "Uninstalled-library acknowledgement with resolved library path.",
+            "hda.reload_library": "Reloaded-library acknowledgement with resolved library path.",
+            "hda.create_from_subnet": "Created HDA instance summary plus the new HDA definition summary.",
+            "hda.promote_parm": "Updated HDA instance summary plus the promoted parm path and source parm path.",
+            "hda.set_definition_version": "Updated HDA definition summary with the new version string.",
             "node.get": "Single normalized node summary, optionally including parameter summaries.",
             "node.create": "Created node summary with final resolved path and flag state.",
             "node.delete": "Counts plus separate deleted and skipped path arrays.",
@@ -305,6 +329,18 @@ class LiveOperations(
                 {
                     "description": "Inspect work items on a TOP graph.",
                     "arguments": {"graph_path": "/obj/topnet1", "limit": 50},
+                }
+            ],
+            "hda.get_definition": [
+                {
+                    "description": "Inspect an installed definition by type name.",
+                    "arguments": {"node_type_name": "alembicarchive", "include_sections": True},
+                }
+            ],
+            "hda.create_from_subnet": [
+                {
+                    "description": "Create a test digital asset from a subnet.",
+                    "arguments": {"node_path": "/obj/subnet1", "asset_name": "test::asset::1.0", "hda_file_path": "C:/tmp/test_asset.hda"},
                 }
             ],
             "export.alembic": [
