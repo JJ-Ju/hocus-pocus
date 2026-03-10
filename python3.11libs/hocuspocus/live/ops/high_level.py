@@ -35,34 +35,92 @@ class HighLevelOperationsMixin:
         operations = arguments.get("operations")
         if not isinstance(operations, list) or not operations:
             raise JsonRpcError(INVALID_PARAMS, "operations must be a non-empty array.")
+        transactional = bool(arguments.get("transactional", False))
         refs: dict[str, str] = {}
         results: list[dict[str, Any]] = []
         label = str(arguments.get("label", "batch edit")).strip() or "batch edit"
-        with hou_module.undos.group(f"HocusPocus: {label}"):
-            for index, raw_op in enumerate(operations):
-                if not isinstance(raw_op, dict):
-                    raise JsonRpcError(INVALID_PARAMS, f"Operation at index {index} must be an object.")
-                op_type = str(raw_op.get("type", "")).strip()
-                op_id = str(raw_op.get("id", "")).strip()
-                resolved = self._batch_resolve(raw_op, refs)
-                if op_type == "create_node":
-                    result = self._node_create_impl(resolved)
-                    if op_id:
-                        refs[op_id] = result["path"]
-                elif op_type == "connect":
-                    result = self._node_connect_impl(resolved)
-                elif op_type == "set_parm":
-                    result = self._parm_set_impl(resolved)
-                elif op_type == "set_flags":
-                    result = self._node_set_flags_impl(resolved)
-                elif op_type == "move_node":
-                    result = self._node_move_impl(resolved)
-                elif op_type == "layout":
-                    result = self._node_layout_impl(resolved)
-                else:
-                    raise JsonRpcError(INVALID_PARAMS, f"Unsupported batch operation type: {op_type}")
-                results.append({"index": index, "type": op_type, "result": result})
-        return {"count": len(results), "refs": refs, "results": results}
+        failed_index: int | None = None
+        failed_type: str | None = None
+
+        try:
+            with hou_module.undos.group(f"HocusPocus: {label}"):
+                for index, raw_op in enumerate(operations):
+                    if not isinstance(raw_op, dict):
+                        raise JsonRpcError(INVALID_PARAMS, f"Operation at index {index} must be an object.")
+                    op_type = str(raw_op.get("type", "")).strip()
+                    op_id = str(raw_op.get("id", "")).strip()
+                    failed_index = index
+                    failed_type = op_type
+                    resolved = self._batch_resolve(raw_op, refs)
+                    if op_type == "create_node":
+                        result = self._node_create_impl(resolved)
+                        if op_id:
+                            refs[op_id] = result["path"]
+                    elif op_type == "connect":
+                        result = self._node_connect_impl(resolved)
+                    elif op_type == "set_parm":
+                        result = self._parm_set_impl(resolved)
+                    elif op_type == "set_flags":
+                        result = self._node_set_flags_impl(resolved)
+                    elif op_type == "move_node":
+                        result = self._node_move_impl(resolved)
+                    elif op_type == "layout":
+                        result = self._node_layout_impl(resolved)
+                    else:
+                        raise JsonRpcError(INVALID_PARAMS, f"Unsupported batch operation type: {op_type}")
+                    results.append({"index": index, "type": op_type, "result": result})
+        except JsonRpcError as exc:
+            rolled_back = False
+            if transactional and results:
+                try:
+                    hou_module.undos.undo()
+                    rolled_back = True
+                except Exception:
+                    self._logger.exception("failed to roll back transactional batch edit")
+            raise JsonRpcError(
+                -32020,
+                "Batch edit failed.",
+                {
+                    "transactional": transactional,
+                    "rolledBack": rolled_back,
+                    "failedIndex": failed_index,
+                    "failedType": failed_type,
+                    "completedCount": len(results),
+                    "refs": refs,
+                    "completedResults": results,
+                    "originalError": exc.to_payload(),
+                },
+            ) from exc
+        except Exception as exc:
+            rolled_back = False
+            if transactional and results:
+                try:
+                    hou_module.undos.undo()
+                    rolled_back = True
+                except Exception:
+                    self._logger.exception("failed to roll back transactional batch edit")
+            raise JsonRpcError(
+                -32020,
+                "Batch edit failed.",
+                {
+                    "transactional": transactional,
+                    "rolledBack": rolled_back,
+                    "failedIndex": failed_index,
+                    "failedType": failed_type,
+                    "completedCount": len(results),
+                    "refs": refs,
+                    "completedResults": results,
+                    "originalError": {"message": str(exc)},
+                },
+            ) from exc
+
+        return {
+            "count": len(results),
+            "refs": refs,
+            "results": results,
+            "transactional": transactional,
+            "rolledBack": False,
+        }
 
     def graph_batch_edit(
         self,

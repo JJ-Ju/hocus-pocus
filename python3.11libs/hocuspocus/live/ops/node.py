@@ -77,17 +77,36 @@ class NodeOperationsMixin:
     def _node_delete_impl(self, arguments: dict[str, Any]) -> dict[str, Any]:
         hou_module = self._require_hou()
         paths = self._resolve_nodes_argument(arguments)
+        ignore_missing = bool(arguments.get("ignore_missing", False))
         deleted: list[str] = []
+        skipped: list[str] = []
         with hou_module.undos.group("HocusPocus: delete nodes"):
             for path in paths:
-                node = self._require_node_by_path(path)
+                node = hou_module.node(str(path))
+                if node is None:
+                    if ignore_missing:
+                        skipped.append(str(path))
+                        continue
+                    node = self._require_node_by_path(path)
                 deleted.append(node.path())
                 node.destroy()
-        return {"deletedPaths": deleted, "count": len(deleted)}
+        return {
+            "deletedPaths": deleted,
+            "skippedPaths": skipped,
+            "countDeleted": len(deleted),
+            "countSkipped": len(skipped),
+            "countRequested": len(paths),
+            "ignoreMissing": ignore_missing,
+        }
 
     def node_delete(self, arguments: dict[str, Any], context: RequestContext) -> dict[str, Any]:
         data = self._call_live(lambda: self._node_delete_impl(arguments), context)
-        return self._tool_response(f"Deleted {data['count']} nodes.", data)
+        if data["countSkipped"]:
+            return self._tool_response(
+                f"Deleted {data['countDeleted']} node(s) and skipped {data['countSkipped']} missing path(s).",
+                data,
+            )
+        return self._tool_response(f"Deleted {data['countDeleted']} node(s).", data)
 
     def _node_rename_impl(self, arguments: dict[str, Any]) -> dict[str, Any]:
         hou_module = self._require_hou()

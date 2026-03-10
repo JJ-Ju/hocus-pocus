@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 from typing import Any
 from urllib.parse import unquote
+from uuid import uuid4
 
 from hocuspocus.core import paths as core_paths
 from hocuspocus.core.jsonrpc import INVALID_PARAMS, JsonRpcError
@@ -376,9 +378,6 @@ class OperationBaseMixin:
         }
 
     def _managed_snapshot_path(self, stem: str = "viewport") -> Path:
-        timestamp = self._safe_value(lambda: int(self._require_hou().time() * 1000), None)
-        if timestamp is None:
-            import time
-
-            timestamp = int(time.time() * 1000)
-        return core_paths.snapshot_dir() / f"{stem}_{timestamp}.png"
+        timestamp_ms = int(time.time() * 1000)
+        suffix = uuid4().hex[:8]
+        return core_paths.snapshot_dir() / f"{stem}_{timestamp_ms}_{suffix}.png"
