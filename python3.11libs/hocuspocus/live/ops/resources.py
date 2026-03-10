@@ -85,31 +85,31 @@ class ResourceOperationsMixin:
             {
                 "uriTemplate": "houdini://nodes/{path}",
                 "name": "Node Resource",
-                "description": "Read summary information for a node. Path may be slash-separated or percent-encoded.",
+                "description": "Read a normalized node summary by Houdini path. `{path}` may be slash-separated like `obj/geo1` or percent-encoded like `%2Fobj%2Fgeo1`.",
                 "mimeType": "application/json",
             },
             {
                 "uriTemplate": "houdini://nodes/{path}/parms",
                 "name": "Node Parm Resource",
-                "description": "Read parameter summaries for a node.",
+                "description": "Read normalized parameter summaries for a node. Use the same `{path}` encoding rules as the base node resource.",
                 "mimeType": "application/json",
             },
             {
                 "uriTemplate": "houdini://nodes/{path}/geometry-summary",
                 "name": "Node Geometry Summary",
-                "description": "Read point/primitive counts, bbox, group, and material summaries for a node with geometry.",
+                "description": "Read point, primitive, bbox, group, attribute, and material summaries for a node with cooked geometry. The resource follows display-node resolution when applicable.",
                 "mimeType": "application/json",
             },
             {
                 "uriTemplate": "houdini://tasks/{task_id}",
                 "name": "Task Resource",
-                "description": "Read task state, progress, result, and failure details for a submitted task.",
+                "description": "Read task state, progress, result, and failure details for a submitted long-running task such as a cook or render.",
                 "mimeType": "application/json",
             },
             {
                 "uriTemplate": "houdini://tasks/{task_id}/log",
                 "name": "Task Log Resource",
-                "description": "Read recent log lines for a submitted task.",
+                "description": "Read recent log lines for a submitted task. Use this alongside the task resource when polling cooks and renders.",
                 "mimeType": "application/json",
             },
         ]
