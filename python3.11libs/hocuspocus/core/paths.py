@@ -62,6 +62,10 @@ def snapshot_dir() -> Path:
     return ensure_directory(output_dir() / "snapshots")
 
 
+def package_dir() -> Path:
+    return ensure_directory(output_dir() / "packages")
+
+
 def runtime_token_path() -> Path:
     return runtime_dir() / "token.txt"
 

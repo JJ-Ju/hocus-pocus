@@ -49,9 +49,9 @@ class UsdOperationsMixin:
                 source = self._require_node_by_path(input_node_path, label="input_node_path")
                 node.setInput(input_index, source)
             try:
-                parent.layoutChildren(items=(node,))
+                self._place_node_on_grid(parent, node)
             except Exception:
-                self._logger.debug("failed to layout lop node", exc_info=True)
+                self._logger.debug("failed to place lop node on grid", exc_info=True)
         return self._lop_summary(node)
 
     def lop_create_node(self, arguments: dict[str, Any], context: RequestContext) -> dict[str, Any]:
@@ -75,6 +75,7 @@ class UsdOperationsMixin:
                 node.setInput(0, source)
             node.parm("primpattern1").set(prim_pattern)
             node.parm("matspecpath1").set(material_path)
+            self._place_node_on_grid(parent, node)
         return self._lop_summary(node)
 
     def usd_assign_material(self, arguments: dict[str, Any], context: RequestContext) -> dict[str, Any]:
@@ -100,6 +101,7 @@ class UsdOperationsMixin:
             node.parm("primpattern1").set(prim_pattern)
             node.parm("variantset1").set(variant_set)
             node.parm("variantname1").set(variant_name)
+            self._place_node_on_grid(parent, node)
         return self._lop_summary(node)
 
     def usd_set_variant(self, arguments: dict[str, Any], context: RequestContext) -> dict[str, Any]:
@@ -126,6 +128,7 @@ class UsdOperationsMixin:
             node.parm("filepath1").set(file_path)
             if reference_prim_path:
                 node.parm("refprimpath").set(reference_prim_path)
+            self._place_node_on_grid(parent, node)
         return self._lop_summary(node)
 
     def usd_add_reference(self, arguments: dict[str, Any], context: RequestContext) -> dict[str, Any]:
@@ -145,16 +148,14 @@ class UsdOperationsMixin:
             if input_node_path:
                 upstream = self._require_node_by_path(input_node_path, label="input_node_path")
                 layer_break.setInput(0, upstream)
+            self._place_node_on_grid(parent, layer_break)
             configure = None
             if save_path:
                 configure = parent.createNode("configurelayer", node_name=f"{node_name}_configure")
                 configure.setInput(0, layer_break)
                 configure.parm("setsavepath").set(True)
                 configure.parm("savepath").set(save_path)
-            try:
-                parent.layoutChildren(items=tuple(item for item in (layer_break, configure) if item is not None))
-            except Exception:
-                self._logger.debug("failed to layout layer break nodes", exc_info=True)
+                self._place_node_on_grid(parent, configure)
         return {
             "layerBreakNode": self._lop_summary(layer_break),
             "configureLayerNode": self._lop_summary(configure) if configure is not None else None,

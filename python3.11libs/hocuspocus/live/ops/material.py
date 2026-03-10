@@ -46,9 +46,9 @@ class MaterialOperationsMixin:
 
         changes = self._material_apply_properties(node, arguments)
         try:
-            parent.layoutChildren(items=(node,))
+            self._place_node_on_grid(parent, node)
         except Exception:
-            self._logger.debug("failed to layout material node", exc_info=True)
+            self._logger.debug("failed to place material node on grid", exc_info=True)
         data = self._material_summary(node)
         data.update(changes)
         data["materialTypeName"] = created_type
