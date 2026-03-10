@@ -44,8 +44,20 @@ class TaskExecutionOperationsMixin:
         force = bool(arguments.get("force", False))
 
         def runner(controller: Any) -> dict[str, Any]:
+            controller.add_recovery_note(
+                "Cook cancellation is cooperative. Cancellation is checked between frame cooks, so a long single-frame cook may run until the active cook call returns."
+            )
+            controller.set_outcome(
+                {
+                    "completedFrames": [],
+                    "remainingFrames": frames,
+                    "partialOutputsPossible": False,
+                    "cancellationSemantics": "between_frames_cooperative",
+                }
+            )
             controller.log(f"Cooking {node_path} across {len(frames)} frame(s).")
             total = len(frames)
+            completed_frames: list[float] = []
             for index, frame in enumerate(frames, start=1):
                 controller.raise_if_cancelled()
                 controller.set_progress(
@@ -62,6 +74,13 @@ class TaskExecutionOperationsMixin:
                         f"Cook frame {frame} reported {len(result['errors'])} error(s).",
                         level="warning",
                     )
+                completed_frames.append(frame)
+                controller.update_outcome(
+                    {
+                        "completedFrames": completed_frames[:],
+                        "remainingFrames": frames[index:],
+                    }
+                )
             controller.set_progress(95.0, "Collecting cook result")
             final = controller.run_live(
                 lambda: self._cook_node_result_impl(node_path),
@@ -123,6 +142,7 @@ class TaskExecutionOperationsMixin:
             "nodePath": node.path(),
             "frame": frame,
             "outputPaths": output_paths,
+            "existingOutputPaths": self._existing_render_outputs_for_frame(node, frame),
             "messages": self._safe_method_value(node, "messages", []),
             "errors": self._safe_method_value(node, "errors", []),
             "warnings": self._safe_method_value(node, "warnings", []),
@@ -151,8 +171,26 @@ class TaskExecutionOperationsMixin:
         verbose = bool(arguments.get("verbose", True))
 
         def runner(controller: Any) -> dict[str, Any]:
+            controller.add_recovery_note(
+                "Render cancellation is cooperative. Cancellation is checked between frame renders, so a long single-frame render may run until the active render call returns."
+            )
+            controller.set_outcome(
+                {
+                    "expectedOutputPaths": self._call_live(
+                        lambda: self._validate_render_output_paths(self._require_node_by_path(node_path)),
+                        context,
+                    ),
+                    "producedOutputPaths": [],
+                    "completedFrames": [],
+                    "remainingFrames": frames,
+                    "partialOutputsPossible": True,
+                    "cancellationSemantics": "between_frames_cooperative",
+                }
+            )
             controller.log(f"Rendering {node_path} across {len(frames)} frame(s).")
             total = len(frames)
+            completed_frames: list[float] = []
+            produced_outputs: list[str] = []
             for index, frame in enumerate(frames, start=1):
                 controller.raise_if_cancelled()
                 controller.set_progress(
@@ -175,6 +213,17 @@ class TaskExecutionOperationsMixin:
                         f"Render frame {frame} reported {len(result['errors'])} error(s).",
                         level="warning",
                     )
+                completed_frames.append(frame)
+                for output_path in result.get("existingOutputPaths", []):
+                    if output_path not in produced_outputs:
+                        produced_outputs.append(output_path)
+                controller.update_outcome(
+                    {
+                        "completedFrames": completed_frames[:],
+                        "remainingFrames": frames[index:],
+                        "producedOutputPaths": produced_outputs[:],
+                    }
+                )
             controller.set_progress(95.0, "Collecting render result")
             final = controller.run_live(
                 lambda: self._render_rop_result_impl(node_path),

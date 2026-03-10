@@ -15,6 +15,7 @@ from hocuspocus.core.settings import ServerSettings
 from .dispatcher import LiveCommandDispatcher
 from .monitor import SceneEventMonitor
 from .ops.base import OperationBaseMixin
+from .ops.export import ExportOperationsMixin
 from .ops.high_level import HighLevelOperationsMixin
 from .ops.material import MaterialOperationsMixin
 from .ops.node import NodeOperationsMixin
@@ -35,6 +36,7 @@ class LiveOperations(
     ParmOperationsMixin,
     MaterialOperationsMixin,
     TaskExecutionOperationsMixin,
+    ExportOperationsMixin,
     ViewportOperationsMixin,
     HighLevelOperationsMixin,
     ResourceOperationsMixin,
@@ -94,6 +96,8 @@ class LiveOperations(
             ("playbar.set_frame", "Set Frame", "Set the current Houdini frame and return the updated playbar state. This mutates the live session time.", {"type": "object", "properties": {"frame": {"type": "number"}}, "required": ["frame"]}, {"destructiveHint": True}, self.playbar_set_frame),
             ("cook.node", "Cook Node", "Start a non-blocking cook task for a Houdini node and return a task handle immediately. Poll `houdini://tasks/{task_id}` and `houdini://tasks/{task_id}/log` for progress and result data.", {"type": "object", "properties": {"node_path": {"type": "string"}, "frame_range": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 3}, "force": {"type": "boolean", "default": False}}, "required": ["node_path"]}, {"destructiveHint": True}, self.cook_node),
             ("render.rop", "Render ROP", "Start a non-blocking render task for a ROP node and return a task handle immediately. Output paths are validated against server write policy before the render starts.", {"type": "object", "properties": {"node_path": {"type": "string"}, "frame_range": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 3}, "ignore_inputs": {"type": "boolean", "default": False}, "verbose": {"type": "boolean", "default": True}}, "required": ["node_path"]}, {"destructiveHint": True}, self.render_rop),
+            ("export.alembic", "Export Alembic", "Start a non-blocking Alembic export task for a SOP node or a geometry object with a display SOP. If `path` is omitted, HocusPocus writes to a managed export path under its output directory.", {"type": "object", "properties": {"source_node_path": {"type": "string"}, "path": {"type": "string"}, "frame_range": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 3}, "root_path": {"type": "string", "default": "/obj"}}, "required": ["source_node_path"]}, {"destructiveHint": True}, self.export_alembic),
+            ("export.usd", "Export USD", "Start a non-blocking USD export task for a LOP node. If `path` is omitted, HocusPocus writes to a managed export path under its output directory.", {"type": "object", "properties": {"node_path": {"type": "string"}, "path": {"type": "string"}, "frame_range": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 3}}, "required": ["node_path"]}, {"destructiveHint": True}, self.export_usd),
             ("geometry.get_summary", "Geometry Summary", "Return geometry facts for a node with cooked geometry, including counts, bbox, groups, attributes, and discovered material paths. This is the fastest geometry-level reasoning tool for agents.", {"type": "object", "properties": {"node_path": {"type": "string"}}, "required": ["node_path"]}, {"readOnlyHint": True, "idempotentHint": True}, self.geometry_get_summary),
             ("model.create_house_blockout", "Create House Blockout", "Create a simple house blockout network under an object Geometry node and return the house and output node summaries. This is a proof-point high-level modeling macro rather than a general-purpose builder.", {"type": "object", "properties": {"parent_path": {"type": "string", "default": "/obj"}, "node_name": {"type": "string", "default": "house_blockout1"}}}, {"destructiveHint": True}, self.model_create_house_blockout),
             ("viewport.get_state", "Get Viewport State", "Return scene viewer, viewport, and current camera information for the active viewport. Use this before snapshot or camera-sensitive operations.", {"type": "object", "properties": {}}, {"readOnlyHint": True, "idempotentHint": True}, self.viewport_get_state),
@@ -156,6 +160,8 @@ class LiveOperations(
             "material.assign": "Assignment result with target node, assignment owner node, material summary, and geometry summary when available.",
             "cook.node": "Immediate task handle for a non-blocking cook plus task resource URIs.",
             "render.rop": "Immediate task handle for a non-blocking render plus task resource URIs.",
+            "export.alembic": "Immediate task handle for a non-blocking Alembic export plus task resource URIs.",
+            "export.usd": "Immediate task handle for a non-blocking USD export plus task resource URIs.",
             "geometry.get_summary": "Geometry counts, bbox, groups, attributes, discovered material paths, and object-level material path when present.",
             "scene.create_turntable_camera": "Camera, rig, and target node summaries plus the animated frame range.",
             "snapshot.capture_viewport": "Viewport image path, viewport name, and whether the output path was managed by the server.",
@@ -165,7 +171,7 @@ class LiveOperations(
 
     @staticmethod
     def _tool_execution_hint(name: str) -> str:
-        if name in {"cook.node", "render.rop"}:
+        if name in {"cook.node", "render.rop", "export.alembic", "export.usd"}:
             return "non_blocking_task"
         return "blocking"
 
@@ -197,6 +203,18 @@ class LiveOperations(
                 {
                     "description": "Render a Geometry ROP over a frame range.",
                     "arguments": {"node_path": "/out/geo_rop1", "frame_range": [1, 24], "ignore_inputs": False, "verbose": True},
+                }
+            ],
+            "export.alembic": [
+                {
+                    "description": "Export a SOP output to Alembic using a managed export path.",
+                    "arguments": {"source_node_path": "/obj/geo1/OUT", "frame_range": [1, 24]},
+                }
+            ],
+            "export.usd": [
+                {
+                    "description": "Export a LOP node to USD using a managed export path.",
+                    "arguments": {"node_path": "/stage/usd_rop_source1", "frame_range": [1, 24]},
                 }
             ],
             "material.create": [

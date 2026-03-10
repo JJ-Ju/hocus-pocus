@@ -127,6 +127,8 @@ These are exposed through:
 - `task.cancel`
 - `cook.node`
 - `render.rop`
+- `export.alembic`
+- `export.usd`
 
 ### Higher-level tools
 
@@ -215,13 +217,25 @@ It can size the orbit using geometry bounds from a target node.
 
 `model.create_house_blockout` is a proof-point high-level modeling macro. It creates a simple house network under `/obj` with a displayable `OUT_house`.
 
-## 8. Tasks, Cooks, and Renders
+### Managed exports
 
-`cook.node` and `render.rop` return task handles instead of blocking until completion.
+`export.alembic` and `export.usd` can be called with no explicit `path`. In that case, HocusPocus writes to a managed location under:
+
+```text
+%USERPROFILE%\Documents\houdini21.0\hocuspocus\output\exports\
+```
+
+`export.alembic` is intended for SOP geometry sources. `export.usd` is intended for LOP nodes under `/stage`.
+
+Some LOP networks can still fail export if they rely on internally generated layer save paths. If that happens, try exporting from a simpler native LOP source or adjust the source network so authored layers resolve to valid output locations.
+
+## 8. Tasks, Cooks, Renders, and Exports
+
+`cook.node`, `render.rop`, `export.alembic`, and `export.usd` return task handles instead of blocking until completion.
 
 Useful task flow:
 
-1. call `cook.node` or `render.rop`
+1. call `cook.node`, `render.rop`, `export.alembic`, or `export.usd`
 2. read `houdini://tasks/{task_id}`
 3. read `houdini://tasks/{task_id}/log`
 4. call `task.cancel` if needed
@@ -234,8 +248,19 @@ Task state includes:
 - `cancelRequested`
 - `result`
 - `error`
+- `outcome`
+- `recoveryNotes`
 
-Render cancellation is cooperative. If cancellation happens mid-run, partial outputs may already exist on disk.
+Task `outcome` now makes partial progress easier to reason about. Depending on task type, it may include:
+
+- `expectedOutputPaths`
+- `existingOutputPaths`
+- `producedOutputPaths`
+- `completedFrames`
+- `remainingFrames`
+- `cancellationSemantics`
+
+Render and export cancellation are cooperative. If cancellation happens mid-run, partial outputs may already exist on disk.
 
 ## 9. Safety and Policy
 
@@ -265,6 +290,8 @@ Common runtime locations:
   `%USERPROFILE%\Documents\houdini21.0\hocuspocus\runtime\`
 - snapshots:
   `%USERPROFILE%\Documents\houdini21.0\hocuspocus\output\snapshots\`
+- exports:
+  `%USERPROFILE%\Documents\houdini21.0\hocuspocus\output\exports\`
 - render/test outputs:
   `%USERPROFILE%\Documents\houdini21.0\hocuspocus\output\`
 

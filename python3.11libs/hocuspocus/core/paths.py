@@ -54,6 +54,10 @@ def output_dir() -> Path:
     return ensure_directory(state_root() / "hocuspocus" / "output")
 
 
+def export_dir() -> Path:
+    return ensure_directory(output_dir() / "exports")
+
+
 def snapshot_dir() -> Path:
     return ensure_directory(output_dir() / "snapshots")
 

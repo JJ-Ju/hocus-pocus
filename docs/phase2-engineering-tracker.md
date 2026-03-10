@@ -1,6 +1,6 @@
 # HocusPocus Phase 2 Engineering Tracker
 
-Status: active
+Status: complete
 
 Source roadmap: `docs/phase2roadmap.md`
 
@@ -127,7 +127,7 @@ Manual smoke:
 
 ## P2-M5. Export Workflows
 
-Status: not started
+Status: complete
 
 Goal:
 
@@ -135,10 +135,10 @@ Goal:
 
 Tasks:
 
-- [ ] Implement `export.alembic`.
-- [ ] Implement `export.usd`.
-- [ ] Validate export output paths against approved roots and write policy.
-- [ ] Return durable task or result metadata suitable for follow-up automation.
+- [x] Implement `export.alembic`.
+- [x] Implement `export.usd`.
+- [x] Validate export output paths against approved roots and write policy.
+- [x] Return durable task or result metadata suitable for follow-up automation.
 
 Done when:
 
@@ -152,7 +152,7 @@ Manual smoke:
 
 ## P2-M6. Task Behavior Improvements
 
-Status: not started
+Status: complete
 
 Goal:
 
@@ -160,10 +160,10 @@ Goal:
 
 Tasks:
 
-- [ ] Investigate and implement deeper render interruption where Houdini APIs allow it.
-- [ ] Distinguish partial-output outcomes more clearly in task results.
-- [ ] Add task cleanup/recovery notes to logs or result payloads.
-- [ ] Tighten cancellation semantics documentation for long single-frame work.
+- [x] Investigate and implement deeper render interruption where Houdini APIs allow it.
+- [x] Distinguish partial-output outcomes more clearly in task results.
+- [x] Add task cleanup/recovery notes to logs or result payloads.
+- [x] Tighten cancellation semantics documentation for long single-frame work.
 
 Done when:
 
@@ -176,13 +176,7 @@ Manual smoke:
 
 ## 2. Immediate Next Actions
 
-Recommended next implementation order:
-
-1. P2-M1 Reliability and idempotence
-2. P2-M2 Transactional graph editing
-3. P2-M3 Tool metadata and output hints
-
-These give the highest agent-ergonomics return with the least product churn.
+Phase 2 is complete.
 
 ## 3. Session Log
 
@@ -210,3 +204,11 @@ These give the highest agent-ergonomics return with the least product churn.
   - updated the material via `material.update`
   - assigned it to `/obj/p2_m4_geo1/OUT` via `material.assign`
   - `geometry.get_summary` now reports both `materialPaths` and `objectMaterialPath`
+- Implemented and live-validated P2-M5 against Houdini 21.0:
+  - `export.alembic` succeeded against `/obj/p2_export_geo1/OUT` and wrote a managed `.abc` export under the HocusPocus export output directory
+  - `export.usd` succeeded against `/stage/p2_usd_cube1` and wrote a managed `.usd` export under the HocusPocus export output directory
+  - export tasks report managed output paths, validated output paths, and task resource URIs
+- Implemented and live-validated P2-M6 against Houdini 21.0:
+  - task payloads now include `outcome` and `recoveryNotes`
+  - a cancelled long `render.rop` task reported produced output files, completed frames, remaining frames, and cancellation semantics
+  - deeper mid-call interruption remains limited by Houdini API behavior, so cancellation semantics are now documented explicitly in task outcomes and notes

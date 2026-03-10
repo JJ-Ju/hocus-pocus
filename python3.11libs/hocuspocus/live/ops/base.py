@@ -222,6 +222,8 @@ class OperationBaseMixin:
             "playbar.set_frame": (EDIT_SCENE,),
             "cook.node": (EDIT_SCENE,),
             "render.rop": (EDIT_SCENE, WRITE_FILES),
+            "export.alembic": (EDIT_SCENE, WRITE_FILES),
+            "export.usd": (EDIT_SCENE, WRITE_FILES),
             "geometry.get_summary": (OBSERVE,),
             "material.create": (EDIT_SCENE,),
             "material.update": (EDIT_SCENE,),
@@ -344,6 +346,21 @@ class OperationBaseMixin:
             validated.append(str(ensure_path_allowed(expanded, self._settings)))
         return validated
 
+    def _existing_render_outputs_for_frame(self, node: Any, frame: float) -> list[str]:
+        hou_module = self._require_hou()
+        existing: list[str] = []
+        for value in self._node_file_parm_paths(node):
+            expanded = self._safe_value(
+                lambda value=value, frame=frame: hou_module.expandStringAtFrame(value, frame),
+                value,
+            )
+            if not expanded:
+                continue
+            validated = ensure_path_allowed(str(expanded), self._settings)
+            if validated.exists():
+                existing.append(str(validated))
+        return existing
+
     def _material_paths_from_geometry(self, geometry: Any) -> list[str]:
         material_paths: list[str] = []
         attrib = self._safe_value(lambda: geometry.findPrimAttrib("shop_materialpath"), None)
@@ -457,3 +474,9 @@ class OperationBaseMixin:
         timestamp_ms = int(time.time() * 1000)
         suffix = uuid4().hex[:8]
         return core_paths.snapshot_dir() / f"{stem}_{timestamp_ms}_{suffix}.png"
+
+    def _managed_export_path(self, stem: str, suffix: str) -> Path:
+        timestamp_ms = int(time.time() * 1000)
+        unique = uuid4().hex[:8]
+        normalized_suffix = suffix if suffix.startswith(".") else f".{suffix}"
+        return core_paths.export_dir() / f"{stem}_{timestamp_ms}_{unique}{normalized_suffix}"

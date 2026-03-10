@@ -11,6 +11,10 @@ from uuid import uuid4
 class OperationCancelledError(RuntimeError):
     """Raised when a live operation is cancelled."""
 
+    def __init__(self, message: str, payload: dict[str, Any] | None = None):
+        super().__init__(message)
+        self.payload = dict(payload or {})
+
 
 @dataclass(slots=True)
 class RequestContext:
