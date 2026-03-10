@@ -229,6 +229,9 @@ class SceneOperationsMixin:
             target = obj.createNode("null", node_name=f"{camera_name}_target")
             rig = obj.createNode("null", node_name=f"{camera_name}_rig")
             camera = obj.createNode("cam", node_name=camera_name)
+            self._place_node_on_grid(obj, target)
+            self._place_node_on_grid(obj, rig)
+            self._place_node_on_grid(obj, camera)
             target.parmTuple("t").set(center)
             rig.parmTuple("t").set(center)
             camera.setInput(0, rig)
@@ -248,7 +251,6 @@ class SceneOperationsMixin:
                     key_end.setFrame(end_frame)
                     key_end.setValue(360.0)
                     angle_parm.setKeyframe(key_end)
-            obj.layoutChildren(items=(target, rig, camera))
 
         return {
             "camera": self._node_summary(camera),

@@ -238,6 +238,10 @@ class RenderOperationsMixin:
             key = self._create_light_node(obj, key_name)
             fill = self._create_light_node(obj, fill_name)
             rim = self._create_light_node(obj, rim_name)
+            self._place_node_on_grid(obj, target)
+            self._place_node_on_grid(obj, key)
+            self._place_node_on_grid(obj, fill)
+            self._place_node_on_grid(obj, rim)
 
             target.parmTuple("t").set((0.0, 1.5, 0.0))
             key.parmTuple("t").set((6.0, 5.0, 6.0))
@@ -265,8 +269,6 @@ class RenderOperationsMixin:
                     color_parm = self._safe_value(lambda light=light: light.parmTuple("light_colorr"), None)
                 if color_parm is not None and len(color_parm) >= 3:
                     color_parm.set(color)
-
-            obj.layoutChildren(items=(target, key, fill, rim))
 
         return {
             "target": self._node_summary(target, include_parms=False),

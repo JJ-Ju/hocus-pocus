@@ -64,9 +64,9 @@ class NodeOperationsMixin:
             node.setUserData("hpmcp.created_by", "hocuspocus")
             node.setUserData("hpmcp.operation_id", "tool:node.create")
             try:
-                parent.layoutChildren(items=(node,))
+                self._place_node_on_grid(parent, node)
             except Exception:
-                self._logger.debug("failed to layout node", exc_info=True)
+                self._logger.debug("failed to place node on grid", exc_info=True)
 
         return self._node_summary(node)
 
@@ -80,6 +80,7 @@ class NodeOperationsMixin:
         ignore_missing = bool(arguments.get("ignore_missing", False))
         deleted: list[str] = []
         skipped: list[str] = []
+        touched_parents: set[str] = set()
         with hou_module.undos.group("HocusPocus: delete nodes"):
             for path in paths:
                 node = hou_module.node(str(path))
@@ -89,7 +90,15 @@ class NodeOperationsMixin:
                         continue
                     node = self._require_node_by_path(path)
                 deleted.append(node.path())
+                parent = self._safe_value(node.parent, None)
+                if parent is not None:
+                    touched_parents.add(parent.path())
+                self._clear_node_grid_cell(node)
                 node.destroy()
+            for parent_path in sorted(touched_parents):
+                parent = hou_module.node(parent_path)
+                if parent is not None:
+                    self._sync_grid_state_for_parent(parent)
         return {
             "deletedPaths": deleted,
             "skippedPaths": skipped,
@@ -168,8 +177,36 @@ class NodeOperationsMixin:
         node = self._require_node_by_path(path)
         x = float(arguments.get("x"))
         y = float(arguments.get("y"))
+        target_cell = self._grid_cell_for_position((x, y))
+        if target_cell is None:
+            raise JsonRpcError(
+                INVALID_PARAMS,
+                "Requested node position is outside the managed grid bounds.",
+                {"x": x, "y": y, "gridWidth": self._GRID_WIDTH, "gridHeight": self._GRID_HEIGHT},
+            )
         with hou_module.undos.group("HocusPocus: move node"):
-            node.setPosition(hou_module.Vector2((x, y)))
+            parent = self._safe_value(node.parent, None)
+            if parent is not None:
+                state = self._sync_grid_state_for_parent(parent)
+                current_cell = self._node_grid_cell(node)
+                if current_cell is not None:
+                    self._grid_set_cell(state, current_cell[0], current_cell[1], None)
+                occupant = self._grid_cell_value(state, target_cell[0], target_cell[1])
+                if occupant not in {None, node.path()}:
+                    raise JsonRpcError(
+                        INVALID_PARAMS,
+                        "Requested grid cell is already occupied.",
+                        {"column": target_cell[0], "row": target_cell[1], "occupiedBy": occupant},
+                    )
+                self._grid_set_cell(state, target_cell[0], target_cell[1], node.path())
+                self._set_node_grid_cell(node, target_cell[0], target_cell[1])
+                node.setPosition(self._position_for_grid_cell(target_cell[0], target_cell[1]))
+                self._save_grid_state(parent, state)
+            else:
+                node.setPosition(hou_module.Vector2((x, y)))
+            parent = self._safe_value(node.parent, None)
+            if parent is not None:
+                self._sync_grid_state_for_parent(parent)
         return self._node_summary(node)
 
     def node_move(self, arguments: dict[str, Any], context: RequestContext) -> dict[str, Any]:
@@ -190,9 +227,31 @@ class NodeOperationsMixin:
                 if child is None:
                     raise JsonRpcError(INVALID_PARAMS, f"Node not found: {child_path}")
                 items.append(child)
-            parent.layoutChildren(items=tuple(items))
+            state = self._sync_grid_state_for_parent(parent)
+            item_paths = {child.path() for child in items}
+            for row in range(self._GRID_HEIGHT):
+                for column in range(self._GRID_WIDTH):
+                    if self._grid_cell_value(state, column, row) in item_paths:
+                        self._grid_set_cell(state, column, row, None)
+            for child in items:
+                free_cell = self._grid_first_free_cell(state)
+                if free_cell is None:
+                    raise JsonRpcError(INVALID_PARAMS, "No free grid cells remain in this network.")
+                self._grid_set_cell(state, free_cell[0], free_cell[1], child.path())
+                self._set_node_grid_cell(child, free_cell[0], free_cell[1])
+                child.setPosition(self._position_for_grid_cell(free_cell[0], free_cell[1]))
+            self._save_grid_state(parent, state)
         else:
-            parent.layoutChildren()
+            state = self._empty_grid_state()
+            for child in sorted(parent.children(), key=lambda item: item.path()):
+                free_cell = self._grid_first_free_cell(state)
+                if free_cell is None:
+                    raise JsonRpcError(INVALID_PARAMS, "No free grid cells remain in this network.")
+                self._grid_set_cell(state, free_cell[0], free_cell[1], child.path())
+                self._set_node_grid_cell(child, free_cell[0], free_cell[1])
+                child.setPosition(self._position_for_grid_cell(free_cell[0], free_cell[1]))
+            self._save_grid_state(parent, state)
+        self._sync_grid_state_for_parent(parent)
         return self._node_list_impl({"parent_path": parent_path, "recursive": False, "max_items": 500})
 
     def node_layout(self, arguments: dict[str, Any], context: RequestContext) -> dict[str, Any]:

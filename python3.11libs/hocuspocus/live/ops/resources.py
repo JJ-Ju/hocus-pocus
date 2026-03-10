@@ -48,6 +48,18 @@ class ResourceOperationsMixin:
             return self.read_cache_topology(context)
         if uri == "houdini://packages/preview":
             return self.read_package_preview(context)
+        if uri.startswith("houdini://usd/stage/"):
+            raw = uri[len("houdini://usd/stage/") :].strip("/")
+            if raw:
+                node_path = self._dynamic_node_uri_to_path(f"houdini://nodes/{raw}")
+                if node_path is not None:
+                    return self.read_usd_stage_summary(node_path, context)
+        if uri.startswith("houdini://pdg/graph/"):
+            raw = uri[len("houdini://pdg/graph/") :].strip("/")
+            if raw:
+                node_path = self._dynamic_node_uri_to_path(f"houdini://nodes/{raw}")
+                if node_path is not None:
+                    return self.read_pdg_graph_state(node_path, context)
         if uri == "houdini://scene/events":
             return self.read_scene_events(context)
         if uri.startswith("houdini://renders/graph/"):
@@ -200,6 +212,32 @@ class ResourceOperationsMixin:
                     {
                         "description": "Inspect what would be packaged before writing a zip or directory package.",
                         "uri": "houdini://packages/preview",
+                    }
+                ],
+            },
+            {
+                "uriTemplate": "houdini://usd/stage/{path}",
+                "name": "USD Stage Summary",
+                "description": "Read a composed USD stage summary for a LOP node path. `{path}` uses the same slash-separated or percent-encoded path rules as node resources.",
+                "mimeType": "application/json",
+                "payloadSummary": "Composed USD stage summary including layers, default prim, prim count, and prim-path sample.",
+                "examples": [
+                    {
+                        "description": "Inspect a Solaris stage at a LOP output node.",
+                        "uri": "houdini://usd/stage/stage/layerbreak1",
+                    }
+                ],
+            },
+            {
+                "uriTemplate": "houdini://pdg/graph/{path}",
+                "name": "PDG Graph State",
+                "description": "Read graph summary plus work-item state for a TOP network path. `{path}` uses the same slash-separated or percent-encoded path rules as node resources.",
+                "mimeType": "application/json",
+                "payloadSummary": "PDG graph summary with work-item states for the TOP network.",
+                "examples": [
+                    {
+                        "description": "Inspect a TOP network graph state resource.",
+                        "uri": "houdini://pdg/graph/tasks/topnet1",
                     }
                 ],
             },

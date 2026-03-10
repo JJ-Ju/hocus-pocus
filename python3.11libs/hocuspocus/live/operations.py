@@ -25,6 +25,7 @@ from .ops.material import MaterialOperationsMixin
 from .ops.node import NodeOperationsMixin
 from .ops.parm import ParmOperationsMixin
 from .ops.package_ops import PackageOperationsMixin
+from .ops.pdg_prod_ops import PdgProductionOperationsMixin
 from .ops.pdg_ops import PdgOperationsMixin
 from .ops.render_ops import RenderOperationsMixin
 from .ops.resources import ResourceOperationsMixin
@@ -32,6 +33,7 @@ from .ops.scene import SceneOperationsMixin
 from .ops.session import SessionOperationsMixin
 from .ops.tasks_ops import TaskExecutionOperationsMixin
 from .ops.usd_ops import UsdOperationsMixin
+from .ops.usd_stage_ops import UsdStageOperationsMixin
 from .ops.validation import ValidationOperationsMixin
 from .ops.viewport import ViewportOperationsMixin
 from .tasks import LiveTaskManager
@@ -51,7 +53,9 @@ class LiveOperations(
     HdaOperationsMixin,
     PackageOperationsMixin,
     PdgOperationsMixin,
+    PdgProductionOperationsMixin,
     UsdOperationsMixin,
+    UsdStageOperationsMixin,
     ValidationOperationsMixin,
     ViewportOperationsMixin,
     RenderOperationsMixin,
@@ -151,12 +155,20 @@ class LiveOperations(
             ("usd.set_variant", "Set USD Variant", "Create a Set Variant LOP for a prim pattern, variant set, and variant name.", {"type": "object", "properties": {"parent_path": {"type": "string", "default": "/stage"}, "input_node_path": {"type": "string"}, "prim_pattern": {"type": "string"}, "variant_set": {"type": "string"}, "variant_name": {"type": "string"}, "node_name": {"type": "string", "default": "setvariant1"}}, "required": ["prim_pattern", "variant_set", "variant_name"]}, {"destructiveHint": True}, self.usd_set_variant),
             ("usd.add_reference", "Add USD Reference", "Create a Reference LOP and author a file reference at a prim path.", {"type": "object", "properties": {"parent_path": {"type": "string", "default": "/stage"}, "input_node_path": {"type": "string"}, "prim_path": {"type": "string"}, "file_path": {"type": "string"}, "reference_prim_path": {"type": "string"}, "node_name": {"type": "string", "default": "reference1"}}, "required": ["prim_path", "file_path"]}, {"destructiveHint": True}, self.usd_add_reference),
             ("usd.create_layer_break", "Create USD Layer Break", "Create a Layer Break LOP and, when `save_path` is provided, a Configure Layer LOP with an authored save path.", {"type": "object", "properties": {"parent_path": {"type": "string", "default": "/stage"}, "input_node_path": {"type": "string"}, "save_path": {"type": "string"}, "node_name": {"type": "string", "default": "layerbreak1"}}}, {"destructiveHint": True}, self.usd_create_layer_break),
+            ("usd.stage_summary", "USD Stage Summary", "Inspect the composed USD stage at a LOP node, including root/session layers, used layers, default prim, and a prim-path sample.", {"type": "object", "properties": {"node_path": {"type": "string"}}, "required": ["node_path"]}, {"readOnlyHint": True, "idempotentHint": True}, self.usd_stage_summary),
+            ("usd.inspect_prim", "Inspect USD Prim", "Inspect a single USD prim at a LOP node, including references, variant sets, child prims, and bound material information.", {"type": "object", "properties": {"node_path": {"type": "string"}, "prim_path": {"type": "string"}}, "required": ["node_path", "prim_path"]}, {"readOnlyHint": True, "idempotentHint": True}, self.usd_inspect_prim),
+            ("usd.inspect_material_bindings", "Inspect USD Material Bindings", "Inspect bound USD materials under a root prim path on a composed stage.", {"type": "object", "properties": {"node_path": {"type": "string"}, "root_prim_path": {"type": "string", "default": "/"}} , "required": ["node_path"]}, {"readOnlyHint": True, "idempotentHint": True}, self.usd_inspect_material_bindings),
+            ("usd.validate_stage", "Validate USD Stage", "Validate composed USD stage references and Solaris save-path policy issues for a LOP node.", {"type": "object", "properties": {"node_path": {"type": "string"}}, "required": ["node_path"]}, {"readOnlyHint": True, "idempotentHint": True}, self.usd_validate_stage),
             ("geometry.get_summary", "Geometry Summary", "Return geometry facts for a node with cooked geometry, including counts, bbox, groups, attributes, and discovered material paths. This is the fastest geometry-level reasoning tool for agents.", {"type": "object", "properties": {"node_path": {"type": "string"}}, "required": ["node_path"]}, {"readOnlyHint": True, "idempotentHint": True}, self.geometry_get_summary),
             ("model.create_house_blockout", "Create House Blockout", "Create a simple house blockout network under an object Geometry node and return the house and output node summaries. This is a proof-point high-level modeling macro rather than a general-purpose builder.", {"type": "object", "properties": {"parent_path": {"type": "string", "default": "/obj"}, "node_name": {"type": "string", "default": "house_blockout1"}}}, {"destructiveHint": True}, self.model_create_house_blockout),
             ("render.inspect_graph", "Inspect Render Graph", "Inspect a ROP node and its upstream ROP input chain, including output paths, frame-range parms, and node-reference parms. Use this before render preflight or task launch.", {"type": "object", "properties": {"node_path": {"type": "string"}, "max_depth": {"type": "integer", "default": 20}}, "required": ["node_path"]}, {"readOnlyHint": True, "idempotentHint": True}, self.render_inspect_graph),
             ("render.inspect_outputs", "Inspect Render Outputs", "Inspect a render node's file-output parms and AOV or image-plane parms where the node type exposes them. This is the main output-introspection read tool for renders.", {"type": "object", "properties": {"node_path": {"type": "string"}}, "required": ["node_path"]}, {"readOnlyHint": True, "idempotentHint": True}, self.render_inspect_outputs),
             ("render.preflight", "Preflight Render", "Run a render preflight over a ROP chain, checking output-path policy, missing file dependencies, and broken node-reference parms before render launch.", {"type": "object", "properties": {"node_path": {"type": "string"}, "max_depth": {"type": "integer", "default": 20}}, "required": ["node_path"]}, {"readOnlyHint": True, "idempotentHint": True}, self.render_preflight),
             ("lookdev.create_three_point_light_rig", "Create Three Point Light Rig", "Create a simple three-point object-light rig and target null under `/obj` for lookdev or turntable work.", {"type": "object", "properties": {"rig_name": {"type": "string", "default": "lookdev_rig"}, "target_name": {"type": "string"}, "key_name": {"type": "string"}, "fill_name": {"type": "string"}, "rim_name": {"type": "string"}}}, {"destructiveHint": True}, self.lookdev_create_three_point_light_rig),
+            ("pdg.inspect_schedulers", "Inspect PDG Schedulers", "Inspect scheduler nodes under a TOP network, including working directory and scheduler type information.", {"type": "object", "properties": {"graph_path": {"type": "string"}}, "required": ["graph_path"]}, {"readOnlyHint": True, "idempotentHint": True}, self.pdg_inspect_schedulers),
+            ("pdg.get_workitem_logs", "Get PDG Work Item Logs", "Return stored log messages for PDG work items on a TOP graph or a specific TOP node.", {"type": "object", "properties": {"graph_path": {"type": "string"}, "node_path": {"type": "string"}, "work_item_ids": {"type": "array", "items": {"type": "integer"}}, "limit": {"type": "integer", "default": 200}}, "required": ["graph_path"]}, {"readOnlyHint": True, "idempotentHint": True}, self.pdg_get_workitem_logs),
+            ("pdg.retry_workitems", "Retry PDG Work", "Dirty a PDG graph or specific TOP node so work can be retried, and optionally restart graph execution.", {"type": "object", "properties": {"graph_path": {"type": "string"}, "node_path": {"type": "string"}, "execute": {"type": "boolean", "default": False}}, "required": ["graph_path"]}, {"destructiveHint": True}, self.pdg_retry_workitems),
+            ("pdg.get_graph_state", "Get PDG Graph State", "Return graph summary plus expanded work-item state for a TOP network.", {"type": "object", "properties": {"graph_path": {"type": "string"}, "limit": {"type": "integer", "default": 500}}, "required": ["graph_path"]}, {"readOnlyHint": True, "idempotentHint": True}, self.pdg_get_graph_state),
             ("scene.validate", "Validate Scene", "Run a high-signal validation pass over broken parameter references, USD save-path policy issues, and output-path policy issues.", {"type": "object", "properties": {}}, {"readOnlyHint": True, "idempotentHint": True}, self.scene_validate),
             ("graph.check_errors", "Check Graph Errors", "Check the indexed scene graph for broken parameter references and missing material assignments, optionally within a root path.", {"type": "object", "properties": {"root_path": {"type": "string"}}}, {"readOnlyHint": True, "idempotentHint": True}, self.graph_check_errors),
             ("parm.find_broken_refs", "Find Broken Parameter References", "Return broken absolute parameter references discovered in parameter expressions and channel references.", {"type": "object", "properties": {"root_path": {"type": "string"}}}, {"readOnlyHint": True, "idempotentHint": True}, self.parm_find_broken_refs),
@@ -191,6 +203,7 @@ class LiveOperations(
             ("houdini://graph/index", "Graph Index", "Indexed scene-graph cache metadata and revision state.", self.read_graph_index),
             ("houdini://dependencies/scene", "Scene Dependencies", "Whole-scene dependency scan across file parms.", self.read_scene_dependencies),
             ("houdini://caches/topology", "Cache Topology", "Current cache-node topology summary.", self.read_cache_topology),
+            ("houdini://packages/preview", "Scene Package Preview", "Default whole-scene package preview.", self.read_package_preview),
             ("houdini://scene/events", "Scene Events", "Recent scene monitor events and revision history.", self.read_scene_events),
             ("houdini://session/selection", "Selection", "Current node selection.", self.read_selection),
             ("houdini://session/playbar", "Playbar", "Current playbar state.", self.read_playbar),
@@ -263,12 +276,20 @@ class LiveOperations(
             "usd.set_variant": "Created Set Variant LOP summary with authored prim pattern, variant set, and variant name.",
             "usd.add_reference": "Created Reference LOP summary with authored prim path, file path, and referenced prim path.",
             "usd.create_layer_break": "Created Layer Break LOP summary and optional Configure Layer summary.",
+            "usd.stage_summary": "Composed USD stage summary with layers, default prim, prim count, and prim-path sample.",
+            "usd.inspect_prim": "Single USD prim summary with references, variants, child prims, and bound material info.",
+            "usd.inspect_material_bindings": "List of composed material bindings under a USD prim subtree.",
+            "usd.validate_stage": "USD stage diagnostics covering missing reference files and save-path policy issues.",
             "geometry.get_summary": "Geometry counts, bbox, groups, attributes, discovered material paths, and object-level material path when present.",
             "scene.create_turntable_camera": "Camera, rig, and target node summaries plus the animated frame range.",
             "render.inspect_graph": "Render-chain nodes, edges, output paths, frame-range parms, and node-reference summaries.",
             "render.inspect_outputs": "File-output parm details, validated output paths, and AOV or image-plane data when supported.",
             "render.preflight": "Render readiness result with blocking issues, graph snapshot, and per-issue details.",
             "lookdev.create_three_point_light_rig": "Target node summary plus summaries for the created key, fill, and rim lights.",
+            "pdg.inspect_schedulers": "Scheduler node summaries with working directory and scheduler type info.",
+            "pdg.get_workitem_logs": "PDG work-item log payloads grouped by work item.",
+            "pdg.retry_workitems": "PDG dirty/retry acknowledgement plus refreshed graph summary.",
+            "pdg.get_graph_state": "Graph summary plus expanded work-item state for a TOP network.",
             "scene.validate": "Validation summary plus issues for broken parm refs, USD save-path issues, and output-path policy issues.",
             "graph.check_errors": "Indexed graph issues such as broken parameter references and missing material assignments.",
             "parm.find_broken_refs": "Broken absolute parameter references grouped by parm path.",
@@ -429,6 +450,30 @@ class LiveOperations(
                     "arguments": {"parent_path": "/stage", "prim_path": "/World/ref1", "file_path": "C:/tmp/example.usd"},
                 }
             ],
+            "usd.stage_summary": [
+                {
+                    "description": "Inspect the composed stage at a LOP output node.",
+                    "arguments": {"node_path": "/stage/layerbreak1"},
+                }
+            ],
+            "usd.inspect_prim": [
+                {
+                    "description": "Inspect a single prim on a composed stage.",
+                    "arguments": {"node_path": "/stage/layerbreak1", "prim_path": "/World/cube1"},
+                }
+            ],
+            "usd.inspect_material_bindings": [
+                {
+                    "description": "Inspect composed material bindings under `/World`.",
+                    "arguments": {"node_path": "/stage/layerbreak1", "root_prim_path": "/World"},
+                }
+            ],
+            "usd.validate_stage": [
+                {
+                    "description": "Validate reference files and save-path policy on a Solaris stage.",
+                    "arguments": {"node_path": "/stage/layerbreak1"},
+                }
+            ],
             "scene.validate": [
                 {
                     "description": "Run a full scene validation pass.",
@@ -465,6 +510,30 @@ class LiveOperations(
                     "arguments": {"node_path": "/out/geo_rop1"},
                 }
             ],
+            "pdg.inspect_schedulers": [
+                {
+                    "description": "Inspect schedulers under a TOP network.",
+                    "arguments": {"graph_path": "/tasks/topnet1"},
+                }
+            ],
+            "pdg.get_workitem_logs": [
+                {
+                    "description": "Inspect work-item logs for a TOP network.",
+                    "arguments": {"graph_path": "/tasks/topnet1", "limit": 50},
+                }
+            ],
+            "pdg.retry_workitems": [
+                {
+                    "description": "Dirty a TOP network so its work can be retried, and restart execution.",
+                    "arguments": {"graph_path": "/tasks/topnet1", "execute": True},
+                }
+            ],
+            "pdg.get_graph_state": [
+                {
+                    "description": "Read graph summary plus work-item state for a TOP network.",
+                    "arguments": {"graph_path": "/tasks/topnet1", "limit": 200},
+                }
+            ],
             "lookdev.create_three_point_light_rig": [
                 {
                     "description": "Create a basic three-point light setup for a lookdev or turntable scene.",
@@ -492,6 +561,8 @@ class LiveOperations(
             "houdini://dependencies/scene": "Whole-scene dependency scan across file-reference parms with missing-file and policy flags.",
             "houdini://caches/topology": "Cache topology summary for common cache-producing or cache-consuming nodes.",
             "houdini://packages/preview": "Scene-package preview with collected and skipped files using default packaging rules.",
+            "houdini://usd/stage/index": "Dynamic USD stage summaries are available through the usd stage resources.",
+            "houdini://pdg/graph/index": "Dynamic PDG graph state resources are available through the pdg graph resources.",
             "houdini://scene/events": "Recent monitor events with sequence numbers, revisions, and timestamps.",
             "houdini://session/selection": "Current selected node paths.",
             "houdini://session/playbar": "Current frame, FPS, and playbar ranges.",
@@ -520,6 +591,12 @@ class LiveOperations(
             ],
             "houdini://packages/preview": [
                 {"description": "Inspect what would be packaged before writing an archive or directory package."}
+            ],
+            "houdini://usd/stage/index": [
+                {"description": "Use the dynamic USD stage resources to inspect Solaris stage state."}
+            ],
+            "houdini://pdg/graph/index": [
+                {"description": "Use the dynamic PDG graph resources to inspect scheduler and work-item state."}
             ],
             "houdini://scene/events": [
                 {"description": "Read recent scene monitor events without polling individual state resources."}

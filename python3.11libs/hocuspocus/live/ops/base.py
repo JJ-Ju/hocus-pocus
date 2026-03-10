@@ -22,6 +22,14 @@ except ImportError:  # pragma: no cover - exercised outside Houdini
 
 
 class OperationBaseMixin:
+    _GRID_WIDTH = 12
+    _GRID_HEIGHT = 64
+    _GRID_SPACING_X = 3.25
+    _GRID_SPACING_Y = 1.85
+    _GRID_STATE_KEY = "hpmcp.grid.state"
+    _GRID_NODE_COL_KEY = "hpmcp.grid.col"
+    _GRID_NODE_ROW_KEY = "hpmcp.grid.row"
+
     def _call_live(self, callback: Any, context: RequestContext) -> dict[str, Any]:
         return self._dispatcher.call(callback, context)
 
@@ -125,6 +133,7 @@ class OperationBaseMixin:
             "renderNodePath": render_node.path() if render_node is not None else None,
             "outputNodePath": output_node.path() if output_node is not None else None,
             "outputNodePaths": [item.path() for item in output_nodes if item is not None],
+            "gridCell": self._node_grid_cell(node),
         }
         if include_parms:
             payload["parms"] = [self._parm_summary(parm) for parm in node.parms()]
@@ -259,6 +268,10 @@ class OperationBaseMixin:
             "usd.set_variant": (EDIT_SCENE,),
             "usd.add_reference": (EDIT_SCENE,),
             "usd.create_layer_break": (EDIT_SCENE,),
+            "usd.stage_summary": (OBSERVE,),
+            "usd.inspect_prim": (OBSERVE,),
+            "usd.inspect_material_bindings": (OBSERVE,),
+            "usd.validate_stage": (OBSERVE,),
             "geometry.get_summary": (OBSERVE,),
             "material.create": (EDIT_SCENE,),
             "material.update": (EDIT_SCENE,),
@@ -268,6 +281,10 @@ class OperationBaseMixin:
             "render.inspect_outputs": (OBSERVE,),
             "render.preflight": (OBSERVE,),
             "lookdev.create_three_point_light_rig": (EDIT_SCENE,),
+            "pdg.inspect_schedulers": (OBSERVE,),
+            "pdg.get_workitem_logs": (OBSERVE,),
+            "pdg.retry_workitems": (EDIT_SCENE,),
+            "pdg.get_graph_state": (OBSERVE,),
             "scene.validate": (OBSERVE,),
             "graph.check_errors": (OBSERVE,),
             "parm.find_broken_refs": (OBSERVE,),
@@ -512,6 +529,149 @@ class OperationBaseMixin:
             }),
             "objectMaterialPath": self._material_path_for_node(node),
         }
+
+    def _grid_cell_for_position(self, position: Any) -> tuple[int, int] | None:
+        try:
+            x_value = float(position[0])
+            y_value = float(position[1])
+        except Exception:
+            return None
+        column = int(round(x_value / self._GRID_SPACING_X))
+        row = int(round(-y_value / self._GRID_SPACING_Y))
+        if column < 0 or row < 0 or column >= self._GRID_WIDTH or row >= self._GRID_HEIGHT:
+            return None
+        return (column, row)
+
+    def _node_grid_cell(self, node: Any) -> list[int] | None:
+        col = self._safe_value(lambda: node.userData(self._GRID_NODE_COL_KEY), None)
+        row = self._safe_value(lambda: node.userData(self._GRID_NODE_ROW_KEY), None)
+        if col is None or row is None:
+            inferred = self._grid_cell_for_position(self._safe_value(node.position, None))
+            return [inferred[0], inferred[1]] if inferred is not None else None
+        try:
+            return [int(col), int(row)]
+        except Exception:
+            inferred = self._grid_cell_for_position(self._safe_value(node.position, None))
+            return [inferred[0], inferred[1]] if inferred is not None else None
+
+    def _set_node_grid_cell(self, node: Any, column: int, row: int) -> None:
+        node.setUserData(self._GRID_NODE_COL_KEY, str(column))
+        node.setUserData(self._GRID_NODE_ROW_KEY, str(row))
+
+    def _clear_node_grid_cell(self, node: Any) -> None:
+        self._safe_value(lambda: node.destroyUserData(self._GRID_NODE_COL_KEY))
+        self._safe_value(lambda: node.destroyUserData(self._GRID_NODE_ROW_KEY))
+
+    def _empty_grid_state(self) -> dict[str, Any]:
+        return {
+            "width": self._GRID_WIDTH,
+            "height": self._GRID_HEIGHT,
+            "cells": [[None for _ in range(self._GRID_WIDTH)] for _ in range(self._GRID_HEIGHT)],
+        }
+
+    def _load_grid_state(self, parent: Any) -> dict[str, Any]:
+        raw = self._safe_value(lambda: parent.userData(self._GRID_STATE_KEY), "") or ""
+        if raw:
+            try:
+                payload = json.loads(raw)
+                if (
+                    int(payload.get("width", 0)) == self._GRID_WIDTH
+                    and int(payload.get("height", 0)) == self._GRID_HEIGHT
+                    and isinstance(payload.get("cells"), list)
+                    and len(payload["cells"]) == self._GRID_HEIGHT
+                ):
+                    return payload
+            except Exception:
+                pass
+        return self._empty_grid_state()
+
+    def _save_grid_state(self, parent: Any, state: dict[str, Any]) -> None:
+        parent.setUserData(self._GRID_STATE_KEY, json.dumps(state, ensure_ascii=True, separators=(",", ":")))
+
+    def _grid_cell_value(self, state: dict[str, Any], column: int, row: int) -> Any:
+        return state["cells"][row][column]
+
+    def _grid_set_cell(self, state: dict[str, Any], column: int, row: int, value: str | None) -> None:
+        state["cells"][row][column] = value
+
+    def _grid_first_free_cell(self, state: dict[str, Any]) -> tuple[int, int] | None:
+        for row in range(self._GRID_HEIGHT):
+            for column in range(self._GRID_WIDTH):
+                if self._grid_cell_value(state, column, row) is None:
+                    return (column, row)
+        return None
+
+    def _grid_rebuild_state(self, parent: Any) -> dict[str, Any]:
+        state = self._empty_grid_state()
+        pending: list[Any] = []
+        for child in self._safe_value(parent.children, []) or []:
+            grid_cell = self._node_grid_cell(child)
+            if grid_cell is None:
+                pending.append(child)
+                continue
+            column, row = grid_cell
+            if not (0 <= column < self._GRID_WIDTH and 0 <= row < self._GRID_HEIGHT):
+                pending.append(child)
+                continue
+            if self._grid_cell_value(state, column, row) is None:
+                self._grid_set_cell(state, column, row, child.path())
+                self._set_node_grid_cell(child, column, row)
+            else:
+                pending.append(child)
+
+        for child in pending:
+            inferred = self._grid_cell_for_position(self._safe_value(child.position, None))
+            if inferred is not None and self._grid_cell_value(state, inferred[0], inferred[1]) is None:
+                self._grid_set_cell(state, inferred[0], inferred[1], child.path())
+                self._set_node_grid_cell(child, inferred[0], inferred[1])
+                continue
+            free_cell = self._grid_first_free_cell(state)
+            if free_cell is None:
+                break
+            self._grid_set_cell(state, free_cell[0], free_cell[1], child.path())
+            self._set_node_grid_cell(child, free_cell[0], free_cell[1])
+
+        self._save_grid_state(parent, state)
+        return state
+
+    def _sync_grid_state_for_parent(self, parent: Any) -> dict[str, Any]:
+        if not self._safe_value(parent.isNetwork, False):
+            return self._empty_grid_state()
+        return self._grid_rebuild_state(parent)
+
+    def _position_for_grid_cell(self, column: int, row: int) -> Any:
+        hou_module = self._require_hou()
+        return hou_module.Vector2((column * self._GRID_SPACING_X, -row * self._GRID_SPACING_Y))
+
+    def _place_node_on_grid(self, parent: Any, node: Any, *, preferred_cell: tuple[int, int] | None = None) -> None:
+        if not self._safe_value(parent.isNetwork, False):
+            return
+        state = self._sync_grid_state_for_parent(parent)
+        column: int | None = None
+        row: int | None = None
+        if preferred_cell is not None:
+            if self._grid_cell_value(state, preferred_cell[0], preferred_cell[1]) in {None, node.path()}:
+                column, row = preferred_cell
+            else:
+                raise JsonRpcError(
+                    INVALID_PARAMS,
+                    "Requested grid cell is already occupied.",
+                    {
+                        "column": preferred_cell[0],
+                        "row": preferred_cell[1],
+                        "occupiedBy": self._grid_cell_value(state, preferred_cell[0], preferred_cell[1]),
+                    },
+                )
+        else:
+            free_cell = self._grid_first_free_cell(state)
+            if free_cell is None:
+                raise JsonRpcError(INVALID_PARAMS, "No free grid cells remain in this network.")
+            column, row = free_cell
+
+        self._grid_set_cell(state, column, row, node.path())
+        self._set_node_grid_cell(node, column, row)
+        node.setPosition(self._position_for_grid_cell(column, row))
+        self._save_grid_state(parent, state)
 
     def _managed_snapshot_path(self, stem: str = "viewport") -> Path:
         timestamp_ms = int(time.time() * 1000)

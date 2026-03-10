@@ -127,7 +127,7 @@ Manual smoke:
 
 ## P4-M5. Solaris Production Workflows
 
-Status: not started
+Status: complete
 
 Goal:
 
@@ -135,11 +135,11 @@ Goal:
 
 Tasks:
 
-- [ ] Implement stage or layer-stack summaries.
-- [ ] Implement prim-query helpers for authored prim paths and references.
-- [ ] Implement material-binding inspection.
-- [ ] Add variant/reference diagnostics and save-path validation summaries.
-- [ ] Add Solaris resources that complement the existing graph resources.
+- [x] Implement stage or layer-stack summaries.
+- [x] Implement prim-query helpers for authored prim paths and references.
+- [x] Implement material-binding inspection.
+- [x] Add variant/reference diagnostics and save-path validation summaries.
+- [x] Add Solaris resources that complement the existing graph resources.
 
 Done when:
 
@@ -153,7 +153,7 @@ Manual smoke:
 
 ## P4-M6. PDG Production Orchestration
 
-Status: not started
+Status: complete
 
 Goal:
 
@@ -161,11 +161,11 @@ Goal:
 
 Tasks:
 
-- [ ] Add scheduler inspection and scheduler-aware summaries.
-- [ ] Add work-item log retrieval where APIs allow it.
-- [ ] Implement retry or requeue controls where PDG APIs support them safely.
-- [ ] Add stronger node-level cook/result summaries.
-- [ ] Add PDG resources for graph state, work items, and logs.
+- [x] Add scheduler inspection and scheduler-aware summaries.
+- [x] Add work-item log retrieval where APIs allow it.
+- [x] Implement retry or requeue controls where PDG APIs support them safely.
+- [x] Add stronger node-level cook/result summaries.
+- [x] Add PDG resources for graph state, work items, and logs.
 
 Done when:
 
@@ -179,13 +179,13 @@ Manual smoke:
 
 ## 2. Immediate Next Actions
 
+Phase 4 is complete.
+
 Recommended next implementation order:
 
-1. P4-M1 HDA and asset workflows
-2. P4-M2 Dependency and cache discovery
-3. P4-M3 Render graph and lookdev helpers
-
-These are the highest-value production workflow gaps after phase 3.
+1. Merge the phase-four branch and keep the installed package aligned with the committed branch state.
+2. Fold the automatic grid-placement refinements into the next public release notes because they materially improve day-to-day agent usability.
+3. Plan the next production slice around deeper render or asset-pipeline workflows if more coverage is needed.
 
 ## 3. Session Log
 
@@ -203,3 +203,8 @@ These are the highest-value production workflow gaps after phase 3.
 - Completed `P4-M4` with scene-package preview and package creation tools, plus a default package-preview resource for whole-scene collection checks.
 - Fixed package collection to skip directories explicitly so only real files are copied into archives or package directories.
 - Live-validated packaging on a disposable file-SOP dependency under `/obj/p4_pack_geo1`, including preview, dry-run, zip-package creation, and directory-package creation with manifest output.
+- Completed `P4-M5` with Solaris production inspection and validation tools, including `usd.stage_summary`, `usd.inspect_prim`, `usd.inspect_material_bindings`, `usd.validate_stage`, and the `houdini://usd/stage/{path}` resource.
+- Fixed `usd.inspect_material_bindings` to traverse the composed stage safely and filter by prim-path prefix instead of traversing from a brittle candidate prim handle.
+- Live-validated the Solaris production workflow on `/stage/p4_stage_layerbreak1`, including stage summary, prim inspection for `/usd_ref_test`, material-binding inspection under `/p4_stage_cube1`, stage validation, and dynamic resource reads.
+- Completed `P4-M6` with PDG production orchestration tools, including scheduler inspection, work-item log retrieval, retry or redirty controls, graph-state inspection, and the `houdini://pdg/graph/{path}` resource.
+- Live-validated the PDG production workflow on `/tasks/p4_topnet1`, including scheduler inspection, graph-state reads, empty-log handling on a simple generator, safe retry or dirty behavior, and PDG resource reads.
