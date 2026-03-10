@@ -48,7 +48,7 @@ Manual smoke:
 
 ## P4-M2. Dependency and Cache Discovery
 
-Status: not started
+Status: complete
 
 Goal:
 
@@ -56,11 +56,11 @@ Goal:
 
 Tasks:
 
-- [ ] Implement a scene dependency scan across file parms, USD references, and render/export nodes.
-- [ ] Detect missing files and non-approved output/input paths.
-- [ ] Implement safe dependency repath tools.
-- [ ] Add cache topology summaries for common file-cache patterns.
-- [ ] Add dependency resources suitable for whole-scene reporting.
+- [x] Implement a scene dependency scan across file parms, USD references, and render/export nodes.
+- [x] Detect missing files and non-approved output/input paths.
+- [x] Implement safe dependency repath tools.
+- [x] Add cache topology summaries for common file-cache patterns.
+- [x] Add dependency resources suitable for whole-scene reporting.
 
 Done when:
 
@@ -75,7 +75,7 @@ Manual smoke:
 
 ## P4-M3. Render Graph and Lookdev Helpers
 
-Status: not started
+Status: complete
 
 Goal:
 
@@ -83,11 +83,11 @@ Goal:
 
 Tasks:
 
-- [ ] Implement render graph inspection for ROP chains and their upstream dependencies.
-- [ ] Add render output and AOV inspection helpers where node types support it.
-- [ ] Add camera/light/lookdev helper tools for common shot setup.
-- [ ] Add render preflight validation that catches output-path and dependency issues before launch.
-- [ ] Add render resources or summaries that pair well with existing task payloads.
+- [x] Implement render graph inspection for ROP chains and their upstream dependencies.
+- [x] Add render output and AOV inspection helpers where node types support it.
+- [x] Add camera/light/lookdev helper tools for common shot setup.
+- [x] Add render preflight validation that catches output-path and dependency issues before launch.
+- [x] Add render resources or summaries that pair well with existing task payloads.
 
 Done when:
 
@@ -197,3 +197,6 @@ These are the highest-value production workflow gaps after phase 3.
 - Completed `P4-M1` with HDA library inspection, definition/instance/interface reads, library install/reload controls, digital-asset creation from a live node, parm promotion, and definition version updates.
 - Fixed the live UI-thread dispatcher path to use `hdefereval.executeInMainThreadWithResult(...)` in graphical Houdini so asset-authoring operations no longer time out behind `postEventCallback` queue stalls.
 - Live-validated the HDA flow on a disposable object asset saved to `C:/Users/jujun/Documents/houdini21.0/hocuspocus/output/hdas/p4_hda_test.hda`, including tuple-aware parm promotion and persistent internal channel references after relocking the asset definition.
+- Completed `P4-M2` with whole-scene dependency scanning, dependency resources, cache topology summaries, and safe dependency repath tools with dry-run and live apply coverage.
+- Completed `P4-M3` with render graph inspection, render output/AOV inspection, render preflight, a render-graph resource, and a three-point light rig helper.
+- Live-validated the new dependency and render helpers on a disposable geometry and Geometry ROP setup under `/obj/p4_dep_geo1` and `/out/p4_dep_geo_rop1`, including a blocking preflight failure for a missing SOP path and successful creation of an object-light three-point rig.

@@ -42,8 +42,18 @@ class ResourceOperationsMixin:
             return self.read_graph_scene(context)
         if uri == "houdini://graph/index":
             return self.read_graph_index(context)
+        if uri == "houdini://dependencies/scene":
+            return self.read_scene_dependencies(context)
+        if uri == "houdini://caches/topology":
+            return self.read_cache_topology(context)
         if uri == "houdini://scene/events":
             return self.read_scene_events(context)
+        if uri.startswith("houdini://renders/graph/"):
+            raw = uri[len("houdini://renders/graph/") :].strip("/")
+            if raw:
+                node_path = self._dynamic_node_uri_to_path(f"houdini://nodes/{raw}")
+                if node_path is not None:
+                    return self.read_render_graph(node_path, context)
         if uri.startswith("houdini://graph/subgraph/"):
             raw = uri[len("houdini://graph/subgraph/") :].strip("/")
             if raw:
@@ -153,6 +163,32 @@ class ResourceOperationsMixin:
                 ],
             },
             {
+                "uriTemplate": "houdini://dependencies/scene",
+                "name": "Scene Dependencies",
+                "description": "Read the current whole-scene dependency scan across file parms, USD references, cache paths, and output paths.",
+                "mimeType": "application/json",
+                "payloadSummary": "Whole-scene dependency list with classification, missing-file flags, and path-policy results.",
+                "examples": [
+                    {
+                        "description": "Read the current dependency scan for packaging or repath planning.",
+                        "uri": "houdini://dependencies/scene",
+                    }
+                ],
+            },
+            {
+                "uriTemplate": "houdini://caches/topology",
+                "name": "Cache Topology",
+                "description": "Read the current cache-node topology summary for common cache-oriented nodes.",
+                "mimeType": "application/json",
+                "payloadSummary": "Cache-node list with file paths, existing outputs, and read/write cache mode.",
+                "examples": [
+                    {
+                        "description": "Inspect scene caches before packaging or publish steps.",
+                        "uri": "houdini://caches/topology",
+                    }
+                ],
+            },
+            {
                 "uriTemplate": "houdini://scene/events",
                 "name": "Scene Events",
                 "description": "Read recent scene-monitor events as a lightweight event feed over the current HTTP transport.",
@@ -201,6 +237,19 @@ class ResourceOperationsMixin:
                     {
                         "description": "Inspect parameter references for a rig controller.",
                         "uri": "houdini://graph/references/obj/geo1",
+                    }
+                ],
+            },
+            {
+                "uriTemplate": "houdini://renders/graph/{path}",
+                "name": "Render Graph",
+                "description": "Read a render-graph inspection payload rooted at a specific ROP node path. `{path}` uses the same slash-separated or percent-encoded path rules as node resources.",
+                "mimeType": "application/json",
+                "payloadSummary": "ROP-chain nodes, edges, output paths, frame-range parms, and node-reference summaries.",
+                "examples": [
+                    {
+                        "description": "Inspect the graph driving a render node.",
+                        "uri": "houdini://renders/graph/out/geo_rop1",
                     }
                 ],
             },

@@ -16,6 +16,7 @@ from .dispatcher import LiveCommandDispatcher
 from .graph_cache import LiveSceneGraphCache
 from .monitor import SceneEventMonitor
 from .ops.base import OperationBaseMixin
+from .ops.dependency_ops import DependencyOperationsMixin
 from .ops.export import ExportOperationsMixin
 from .ops.graph import GraphOperationsMixin
 from .ops.hda_ops import HdaOperationsMixin
@@ -24,6 +25,7 @@ from .ops.material import MaterialOperationsMixin
 from .ops.node import NodeOperationsMixin
 from .ops.parm import ParmOperationsMixin
 from .ops.pdg_ops import PdgOperationsMixin
+from .ops.render_ops import RenderOperationsMixin
 from .ops.resources import ResourceOperationsMixin
 from .ops.scene import SceneOperationsMixin
 from .ops.session import SessionOperationsMixin
@@ -36,6 +38,7 @@ from .tasks import LiveTaskManager
 
 class LiveOperations(
     OperationBaseMixin,
+    DependencyOperationsMixin,
     SessionOperationsMixin,
     SceneOperationsMixin,
     NodeOperationsMixin,
@@ -49,6 +52,7 @@ class LiveOperations(
     UsdOperationsMixin,
     ValidationOperationsMixin,
     ViewportOperationsMixin,
+    RenderOperationsMixin,
     HighLevelOperationsMixin,
     ResourceOperationsMixin,
 ):
@@ -93,6 +97,9 @@ class LiveOperations(
             ("hda.create_from_subnet", "Create HDA From Subnet", "Turn a subnet-like node into a digital asset saved to a policy-approved HDA file path and return both the new instance and definition summaries.", {"type": "object", "properties": {"node_path": {"type": "string"}, "asset_name": {"type": "string"}, "hda_file_path": {"type": "string"}, "description": {"type": "string"}, "version": {"type": "string"}, "install_path": {"type": "string"}}, "required": ["node_path", "asset_name", "hda_file_path"]}, {"destructiveHint": True}, self.hda_create_from_subnet),
             ("hda.promote_parm", "Promote HDA Parm", "Promote an internal parm from an HDA instance into the definition interface and optionally wire the internal parm to reference the promoted parm.", {"type": "object", "properties": {"instance_path": {"type": "string"}, "source_parm_path": {"type": "string"}, "promoted_name": {"type": "string"}, "promoted_label": {"type": "string"}, "folder_label": {"type": "string"}, "create_reference": {"type": "boolean", "default": True}}, "required": ["instance_path", "source_parm_path"]}, {"destructiveHint": True}, self.hda_promote_parm),
             ("hda.set_definition_version", "Set HDA Definition Version", "Update the version string on a resolved HDA definition.", {"type": "object", "properties": {"node_type_name": {"type": "string"}, "library_file_path": {"type": "string"}, "node_path": {"type": "string"}, "version": {"type": "string"}}, "required": ["version"]}, {"destructiveHint": True}, self.hda_set_definition_version),
+            ("dependency.scan_scene", "Scan Scene Dependencies", "Scan scene file references and classify them as input, output, USD, or cache dependencies. Missing files and policy issues are reported explicitly.", {"type": "object", "properties": {"root_path": {"type": "string"}}}, {"readOnlyHint": True, "idempotentHint": True}, self.dependency_scan_scene),
+            ("dependency.repath", "Repath Dependencies", "Rewrite file-reference parm values by exact match or prefix match. Use `dry_run = true` to preview changes before mutating the scene.", {"type": "object", "properties": {"old_path": {"type": "string"}, "new_path": {"type": "string"}, "match_mode": {"type": "string", "enum": ["exact", "prefix"], "default": "exact"}, "root_path": {"type": "string"}, "dry_run": {"type": "boolean", "default": False}}, "required": ["old_path", "new_path"]}, {"destructiveHint": True}, self.dependency_repath),
+            ("cache.get_topology", "Get Cache Topology", "Summarize common cache-producing or cache-consuming nodes such as File Cache, file, and geometry-output nodes. Use this before packaging or publish work.", {"type": "object", "properties": {"root_path": {"type": "string"}}}, {"readOnlyHint": True, "idempotentHint": True}, self.cache_get_topology),
             ("node.list", "List Nodes", "List child nodes under a network path, optionally recursively. Use this for graph discovery when you know the parent network but not the child names.", {"type": "object", "properties": {"parent_path": {"type": "string", "default": "/obj"}, "recursive": {"type": "boolean", "default": False}, "max_items": {"type": "integer", "default": 200}}}, {"readOnlyHint": True, "idempotentHint": True}, self.node_list),
             ("node.get", "Get Node", "Return summary information for a single node, including flags, inputs, display/render/output node pointers, and optionally parameter summaries. This is the primary structured node read tool.", {"type": "object", "properties": {"path": {"type": "string"}, "include_parms": {"type": "boolean", "default": False}}, "required": ["path"]}, {"readOnlyHint": True, "idempotentHint": True}, self.node_get),
             ("node.create", "Create Node", "Create a Houdini node under a parent network and return the created node summary. The result includes the final resolved node path, which may differ from the requested name if Houdini renames it.", {"type": "object", "properties": {"parent_path": {"type": "string", "default": "/obj"}, "node_type_name": {"type": "string"}, "node_name": {"type": "string"}, "run_init_scripts": {"type": "boolean", "default": True}, "load_contents": {"type": "boolean", "default": True}}, "required": ["node_type_name"]}, {"destructiveHint": True}, self.node_create),
@@ -142,6 +149,10 @@ class LiveOperations(
             ("usd.create_layer_break", "Create USD Layer Break", "Create a Layer Break LOP and, when `save_path` is provided, a Configure Layer LOP with an authored save path.", {"type": "object", "properties": {"parent_path": {"type": "string", "default": "/stage"}, "input_node_path": {"type": "string"}, "save_path": {"type": "string"}, "node_name": {"type": "string", "default": "layerbreak1"}}}, {"destructiveHint": True}, self.usd_create_layer_break),
             ("geometry.get_summary", "Geometry Summary", "Return geometry facts for a node with cooked geometry, including counts, bbox, groups, attributes, and discovered material paths. This is the fastest geometry-level reasoning tool for agents.", {"type": "object", "properties": {"node_path": {"type": "string"}}, "required": ["node_path"]}, {"readOnlyHint": True, "idempotentHint": True}, self.geometry_get_summary),
             ("model.create_house_blockout", "Create House Blockout", "Create a simple house blockout network under an object Geometry node and return the house and output node summaries. This is a proof-point high-level modeling macro rather than a general-purpose builder.", {"type": "object", "properties": {"parent_path": {"type": "string", "default": "/obj"}, "node_name": {"type": "string", "default": "house_blockout1"}}}, {"destructiveHint": True}, self.model_create_house_blockout),
+            ("render.inspect_graph", "Inspect Render Graph", "Inspect a ROP node and its upstream ROP input chain, including output paths, frame-range parms, and node-reference parms. Use this before render preflight or task launch.", {"type": "object", "properties": {"node_path": {"type": "string"}, "max_depth": {"type": "integer", "default": 20}}, "required": ["node_path"]}, {"readOnlyHint": True, "idempotentHint": True}, self.render_inspect_graph),
+            ("render.inspect_outputs", "Inspect Render Outputs", "Inspect a render node's file-output parms and AOV or image-plane parms where the node type exposes them. This is the main output-introspection read tool for renders.", {"type": "object", "properties": {"node_path": {"type": "string"}}, "required": ["node_path"]}, {"readOnlyHint": True, "idempotentHint": True}, self.render_inspect_outputs),
+            ("render.preflight", "Preflight Render", "Run a render preflight over a ROP chain, checking output-path policy, missing file dependencies, and broken node-reference parms before render launch.", {"type": "object", "properties": {"node_path": {"type": "string"}, "max_depth": {"type": "integer", "default": 20}}, "required": ["node_path"]}, {"readOnlyHint": True, "idempotentHint": True}, self.render_preflight),
+            ("lookdev.create_three_point_light_rig", "Create Three Point Light Rig", "Create a simple three-point object-light rig and target null under `/obj` for lookdev or turntable work.", {"type": "object", "properties": {"rig_name": {"type": "string", "default": "lookdev_rig"}, "target_name": {"type": "string"}, "key_name": {"type": "string"}, "fill_name": {"type": "string"}, "rim_name": {"type": "string"}}}, {"destructiveHint": True}, self.lookdev_create_three_point_light_rig),
             ("scene.validate", "Validate Scene", "Run a high-signal validation pass over broken parameter references, USD save-path policy issues, and output-path policy issues.", {"type": "object", "properties": {}}, {"readOnlyHint": True, "idempotentHint": True}, self.scene_validate),
             ("graph.check_errors", "Check Graph Errors", "Check the indexed scene graph for broken parameter references and missing material assignments, optionally within a root path.", {"type": "object", "properties": {"root_path": {"type": "string"}}}, {"readOnlyHint": True, "idempotentHint": True}, self.graph_check_errors),
             ("parm.find_broken_refs", "Find Broken Parameter References", "Return broken absolute parameter references discovered in parameter expressions and channel references.", {"type": "object", "properties": {"root_path": {"type": "string"}}}, {"readOnlyHint": True, "idempotentHint": True}, self.parm_find_broken_refs),
@@ -174,6 +185,8 @@ class LiveOperations(
             ("houdini://session/scene-summary", "Scene Summary", "Current scene summary.", self.read_scene_summary),
             ("houdini://graph/scene", "Scene Graph", "Indexed whole-scene graph snapshot.", self.read_graph_scene),
             ("houdini://graph/index", "Graph Index", "Indexed scene-graph cache metadata and revision state.", self.read_graph_index),
+            ("houdini://dependencies/scene", "Scene Dependencies", "Whole-scene dependency scan across file parms.", self.read_scene_dependencies),
+            ("houdini://caches/topology", "Cache Topology", "Current cache-node topology summary.", self.read_cache_topology),
             ("houdini://scene/events", "Scene Events", "Recent scene monitor events and revision history.", self.read_scene_events),
             ("houdini://session/selection", "Selection", "Current node selection.", self.read_selection),
             ("houdini://session/playbar", "Playbar", "Current playbar state.", self.read_playbar),
@@ -215,6 +228,9 @@ class LiveOperations(
             "hda.create_from_subnet": "Created HDA instance summary plus the new HDA definition summary.",
             "hda.promote_parm": "Updated HDA instance summary plus the promoted parm path and source parm path.",
             "hda.set_definition_version": "Updated HDA definition summary with the new version string.",
+            "dependency.scan_scene": "Dependency list plus summary counts for missing files, policy issues, outputs, and caches.",
+            "dependency.repath": "Changed, failed, and skipped dependency repath records.",
+            "cache.get_topology": "Cache node summaries with mode, file paths, and existing cache outputs.",
             "node.get": "Single normalized node summary, optionally including parameter summaries.",
             "node.create": "Created node summary with final resolved path and flag state.",
             "node.delete": "Counts plus separate deleted and skipped path arrays.",
@@ -243,6 +259,10 @@ class LiveOperations(
             "usd.create_layer_break": "Created Layer Break LOP summary and optional Configure Layer summary.",
             "geometry.get_summary": "Geometry counts, bbox, groups, attributes, discovered material paths, and object-level material path when present.",
             "scene.create_turntable_camera": "Camera, rig, and target node summaries plus the animated frame range.",
+            "render.inspect_graph": "Render-chain nodes, edges, output paths, frame-range parms, and node-reference summaries.",
+            "render.inspect_outputs": "File-output parm details, validated output paths, and AOV or image-plane data when supported.",
+            "render.preflight": "Render readiness result with blocking issues, graph snapshot, and per-issue details.",
+            "lookdev.create_three_point_light_rig": "Target node summary plus summaries for the created key, fill, and rim lights.",
             "scene.validate": "Validation summary plus issues for broken parm refs, USD save-path issues, and output-path policy issues.",
             "graph.check_errors": "Indexed graph issues such as broken parameter references and missing material assignments.",
             "parm.find_broken_refs": "Broken absolute parameter references grouped by parm path.",
@@ -343,6 +363,18 @@ class LiveOperations(
                     "arguments": {"node_path": "/obj/subnet1", "asset_name": "test::asset::1.0", "hda_file_path": "C:/tmp/test_asset.hda"},
                 }
             ],
+            "dependency.scan_scene": [
+                {
+                    "description": "Scan the whole scene for file and cache dependencies.",
+                    "arguments": {},
+                }
+            ],
+            "dependency.repath": [
+                {
+                    "description": "Preview a prefix-based texture repath under `/obj/asset1`.",
+                    "arguments": {"old_path": "C:/show/tex", "new_path": "D:/mirror/tex", "match_mode": "prefix", "root_path": "/obj/asset1", "dry_run": True},
+                }
+            ],
             "export.alembic": [
                 {
                     "description": "Export a SOP output to Alembic using a managed export path.",
@@ -403,6 +435,24 @@ class LiveOperations(
                     "arguments": {"target_path": "/obj/geo1/OUT", "camera_name": "turntable_cam", "frame_range": [1, 120]},
                 }
             ],
+            "render.inspect_graph": [
+                {
+                    "description": "Inspect the ROP input chain feeding a render node.",
+                    "arguments": {"node_path": "/out/geo_rop1", "max_depth": 10},
+                }
+            ],
+            "render.preflight": [
+                {
+                    "description": "Preflight a render node before launching a render task.",
+                    "arguments": {"node_path": "/out/geo_rop1"},
+                }
+            ],
+            "lookdev.create_three_point_light_rig": [
+                {
+                    "description": "Create a basic three-point light setup for a lookdev or turntable scene.",
+                    "arguments": {"rig_name": "lookdev_rig"},
+                }
+            ],
             "model.create_house_blockout": [
                 {
                     "description": "Create a simple house blockout under `/obj`.",
@@ -421,6 +471,8 @@ class LiveOperations(
             "houdini://session/scene-summary": "Compact scene summary with hip state, frame, and selection.",
             "houdini://graph/scene": "Whole-scene graph snapshot with indexed nodes, parms, edges, and material assignments.",
             "houdini://graph/index": "Graph-cache metadata including revision, counts, and refresh timing.",
+            "houdini://dependencies/scene": "Whole-scene dependency scan across file-reference parms with missing-file and policy flags.",
+            "houdini://caches/topology": "Cache topology summary for common cache-producing or cache-consuming nodes.",
             "houdini://scene/events": "Recent monitor events with sequence numbers, revisions, and timestamps.",
             "houdini://session/selection": "Current selected node paths.",
             "houdini://session/playbar": "Current frame, FPS, and playbar ranges.",
@@ -440,6 +492,12 @@ class LiveOperations(
             ],
             "houdini://graph/scene": [
                 {"description": "Load the current indexed scene graph as a single resource snapshot."}
+            ],
+            "houdini://dependencies/scene": [
+                {"description": "Read the latest whole-scene dependency scan without rescanning manually."}
+            ],
+            "houdini://caches/topology": [
+                {"description": "Inspect common cache nodes and their file paths."}
             ],
             "houdini://scene/events": [
                 {"description": "Read recent scene monitor events without polling individual state resources."}
