@@ -22,6 +22,7 @@ class ToolDefinition:
     handler: ToolHandler
     output_summary: str = ""
     execution_hint: str = ""
+    failure_notes: list[str] = field(default_factory=list)
     examples: list[dict[str, Any]] = field(default_factory=list)
 
     def as_payload(self) -> dict[str, Any]:
@@ -37,6 +38,8 @@ class ToolDefinition:
             payload["outputSummary"] = self.output_summary
         if self.execution_hint:
             payload["executionHint"] = self.execution_hint
+        if self.failure_notes:
+            payload["failureNotes"] = self.failure_notes
         if self.examples:
             payload["examples"] = self.examples
         return payload

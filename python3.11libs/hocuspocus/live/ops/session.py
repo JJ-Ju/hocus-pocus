@@ -12,6 +12,10 @@ from .base import hou
 
 class SessionOperationsMixin:
     def _session_info_impl(self) -> dict[str, Any]:
+        policy = {
+            "effectivePolicy": self._settings.effective_policy_payload(),
+            "availableProfiles": self._settings.available_policy_profiles_payload(),
+        }
         hou_module = hou
         if hou_module is None:
             return {
@@ -25,6 +29,7 @@ class SessionOperationsMixin:
                 "activeOperations": self._dispatcher.operations_snapshot(limit=20),
                 "recentTasks": self._tasks.snapshots(limit=10),
                 "conventions": self._conventions_payload(),
+                "policy": policy,
             }
 
         hip_path = None
@@ -47,6 +52,7 @@ class SessionOperationsMixin:
             "activeOperations": self._dispatcher.operations_snapshot(limit=20),
             "recentTasks": self._tasks.snapshots(limit=10),
             "conventions": self._conventions_payload(),
+            "policy": policy,
         }
 
     def session_info(self, arguments: dict[str, Any], context: RequestContext) -> dict[str, Any]:

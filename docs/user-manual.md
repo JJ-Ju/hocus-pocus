@@ -34,6 +34,8 @@ Typical output includes:
 - `healthUrl`
 - `tokenEnabled`
 - `dispatcherMode`
+- `policyProfile`
+- `effectivePolicy`
 
 The current default MCP endpoint is:
 
@@ -266,10 +268,17 @@ Render and export cancellation are cooperative. If cancellation happens mid-run,
 
 Relevant config in `config/default.toml`:
 
+- `policy_profile = "local-dev"`
 - `read_only = true`
 - `allow_scene_edit = false`
 - `allow_file_write = false`
 - `approved_roots = [...]`
+
+Named profiles:
+
+- `safe`
+- `local-dev`
+- `pipeline`
 
 Effects:
 
@@ -277,6 +286,29 @@ Effects:
 - `allow_scene_edit` blocks edit-capable tools
 - `allow_file_write` blocks hip saves, snapshots, and render output validation
 - `approved_roots` restricts file output paths to approved directories
+
+Useful status and resource surfaces:
+
+- `server_status()`
+- `houdini://session/policy`
+- `houdini://session/health`
+
+Error payloads now include stable machine-readable fields:
+
+- `data.errorFamily`
+- `data.retryable`
+
+Common families:
+
+- `request`
+- `validation`
+- `policy`
+- `auth`
+- `runtime`
+- `unsupported`
+- `cancelled`
+
+The in-Houdini operator panel remains experimental and is currently hidden from the default UI surface pending a later revisit.
 
 Task, tool, and file activity is also recorded in the runtime audit log.
 

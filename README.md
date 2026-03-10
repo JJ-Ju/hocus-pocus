@@ -66,10 +66,15 @@ Current server surface includes:
 - non-blocking cook, render, and export tasks with polling and cancellation
 - material creation and assignment tools
 - higher-level tools such as batch graph edits, turntable camera creation, managed snapshots, geometry summaries, and a house blockout macro
+- named policy profiles with effective-policy reporting in status and resources
 
 ## Docs
 
 For the fuller manual, see [HocusPocus Manual](C:\Users\jujun\Documents\Source\Houdini\HocusPocus_mcp\docs\user-manual.md).
+
+For compatibility and release rules, see [Compatibility Policy](C:\Users\jujun\Documents\Source\Houdini\HocusPocus_mcp\docs\compatibility-policy.md) and [Release Validation](C:\Users\jujun\Documents\Source\Houdini\HocusPocus_mcp\docs\release-validation.md).
+
+For agent usage patterns, see [Agent Workflows](C:\Users\jujun\Documents\Source\Houdini\HocusPocus_mcp\docs\agent-workflows.md).
 
 For engineering state, see [Improvement Tracker](C:\Users\jujun\Documents\Source\Houdini\HocusPocus_mcp\docs\improvement-task-tracker.md).
 

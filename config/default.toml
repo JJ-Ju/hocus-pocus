@@ -7,12 +7,7 @@ token = ""
 auto_start = true
 log_level = "INFO"
 request_timeout_seconds = 30.0
-read_only = false
-allow_scene_edit = true
-allow_file_write = true
-approved_roots = []
-enable_exec_tools = false
-enable_stdio_bridge = true
+policy_profile = "local-dev"
 
 [feature_flags]
 python_panel = false
