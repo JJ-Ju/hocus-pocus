@@ -16,6 +16,7 @@ from .dispatcher import LiveCommandDispatcher
 from .graph_cache import LiveSceneGraphCache
 from .monitor import SceneEventMonitor
 from .ops.base import OperationBaseMixin
+from .ops.building_ops import BuildingOperationsMixin
 from .ops.dependency_ops import DependencyOperationsMixin
 from .ops.export import ExportOperationsMixin
 from .ops.graph import GraphOperationsMixin
@@ -41,6 +42,7 @@ from .tasks import LiveTaskManager
 
 class LiveOperations(
     OperationBaseMixin,
+    BuildingOperationsMixin,
     DependencyOperationsMixin,
     SessionOperationsMixin,
     SceneOperationsMixin,
@@ -160,6 +162,9 @@ class LiveOperations(
             ("usd.inspect_material_bindings", "Inspect USD Material Bindings", "Inspect bound USD materials under a root prim path on a composed stage.", {"type": "object", "properties": {"node_path": {"type": "string"}, "root_prim_path": {"type": "string", "default": "/"}} , "required": ["node_path"]}, {"readOnlyHint": True, "idempotentHint": True}, self.usd_inspect_material_bindings),
             ("usd.validate_stage", "Validate USD Stage", "Validate composed USD stage references and Solaris save-path policy issues for a LOP node.", {"type": "object", "properties": {"node_path": {"type": "string"}}, "required": ["node_path"]}, {"readOnlyHint": True, "idempotentHint": True}, self.usd_validate_stage),
             ("geometry.get_summary", "Geometry Summary", "Return geometry facts for a node with cooked geometry, including counts, bbox, groups, attributes, and discovered material paths. This is the fastest geometry-level reasoning tool for agents.", {"type": "object", "properties": {"node_path": {"type": "string"}}, "required": ["node_path"]}, {"readOnlyHint": True, "idempotentHint": True}, self.geometry_get_summary),
+            ("building.generate_massing", "Generate Building Massing", "Create a stepped tower massing under `/obj` with a displayable SOP output and stable refs for later semantic building tools.", {"type": "object", "properties": {"parent_path": {"type": "string", "default": "/obj"}, "node_name": {"type": "string", "default": "tower_massing1"}, "width": {"type": "number", "default": 12.0}, "depth": {"type": "number", "default": 10.0}, "height": {"type": "number", "default": 60.0}, "podium_height": {"type": "number"}, "upper_setback_ratio": {"type": "number", "default": 0.78}, "top_setback_ratio": {"type": "number", "default": 0.58}, "bevel_radius": {"type": "number", "default": 0.18}}}, {"destructiveHint": True}, self.building_generate_massing),
+            ("building.add_structural_bands", "Add Structural Bands", "Add horizontal façade bands around a generated building network using the current building bounds and reconnect the live output automatically.", {"type": "object", "properties": {"building_path": {"type": "string"}, "count": {"type": "integer", "default": 3}, "band_height": {"type": "number", "default": 0.55}, "overhang_ratio": {"type": "number", "default": 1.06}, "start_ratio": {"type": "number", "default": 0.18}, "end_ratio": {"type": "number", "default": 0.86}}, "required": ["building_path"]}, {"destructiveHint": True}, self.building_add_structural_bands),
+            ("building.add_rooftop_mech", "Add Rooftop Mechanical", "Add rooftop mechanical boxes to a generated building network using the current roof footprint and reconnect the live output automatically.", {"type": "object", "properties": {"building_path": {"type": "string"}, "unit_count": {"type": "integer", "default": 3}, "unit_height": {"type": "number", "default": 1.8}, "footprint_ratio": {"type": "number", "default": 0.2}, "setback_ratio": {"type": "number", "default": 0.16}}, "required": ["building_path"]}, {"destructiveHint": True}, self.building_add_rooftop_mech),
             ("model.create_house_blockout", "Create House Blockout", "Create a simple house blockout network under an object Geometry node and return the house and output node summaries. This is a proof-point high-level modeling macro rather than a general-purpose builder.", {"type": "object", "properties": {"parent_path": {"type": "string", "default": "/obj"}, "node_name": {"type": "string", "default": "house_blockout1"}}}, {"destructiveHint": True}, self.model_create_house_blockout),
             ("render.inspect_graph", "Inspect Render Graph", "Inspect a ROP node and its upstream ROP input chain, including output paths, frame-range parms, and node-reference parms. Use this before render preflight or task launch.", {"type": "object", "properties": {"node_path": {"type": "string"}, "max_depth": {"type": "integer", "default": 20}}, "required": ["node_path"]}, {"readOnlyHint": True, "idempotentHint": True}, self.render_inspect_graph),
             ("render.inspect_outputs", "Inspect Render Outputs", "Inspect a render node's file-output parms and AOV or image-plane parms where the node type exposes them. This is the main output-introspection read tool for renders.", {"type": "object", "properties": {"node_path": {"type": "string"}}, "required": ["node_path"]}, {"readOnlyHint": True, "idempotentHint": True}, self.render_inspect_outputs),
@@ -283,6 +288,9 @@ class LiveOperations(
             "usd.inspect_material_bindings": "List of composed material bindings under a USD prim subtree.",
             "usd.validate_stage": "USD stage diagnostics covering missing reference files and save-path policy issues.",
             "geometry.get_summary": "Geometry counts, bbox, groups, attributes, discovered material paths, and object-level material path when present.",
+            "building.generate_massing": "Building object summary, output summary, geometry summary, and stable building refs for later semantic building tools.",
+            "building.add_structural_bands": "Updated building summary plus created façade-band node paths and current output geometry facts.",
+            "building.add_rooftop_mech": "Updated building summary plus created rooftop-mechanical node paths and current output geometry facts.",
             "scene.create_turntable_camera": "Camera, rig, and target node summaries plus the animated frame range.",
             "render.inspect_graph": "Render-chain nodes, edges, output paths, frame-range parms, and node-reference summaries.",
             "render.inspect_outputs": "File-output parm details, validated output paths, and AOV or image-plane data when supported.",
@@ -330,6 +338,16 @@ class LiveOperations(
             ],
             "snapshot.capture_viewport": [
                 "Viewport capture can fail with `errorFamily = runtime` if no compatible Scene Viewer is available in the current UI context.",
+            ],
+            "building.generate_massing": [
+                "The parent path must resolve to a network under which a geometry object can be created.",
+                "Setback ratios outside the accepted range return `errorFamily = validation`.",
+            ],
+            "building.add_structural_bands": [
+                "The target must be a HocusPocus-generated building network created by `building.generate_massing`.",
+            ],
+            "building.add_rooftop_mech": [
+                "The target must be a HocusPocus-generated building network created by `building.generate_massing`.",
             ],
             "render.rop": [
                 "Returns a task immediately; render-time failures appear on the task resource with `errorFamily = runtime`.",
@@ -547,6 +565,24 @@ class LiveOperations(
                 {
                     "description": "Capture the current viewport to a managed output path.",
                     "arguments": {},
+                }
+            ],
+            "building.generate_massing": [
+                {
+                    "description": "Create a stepped sci-fi tower massing under `/obj`.",
+                    "arguments": {"parent_path": "/obj", "node_name": "tower_alpha1", "width": 14.0, "depth": 11.0, "height": 72.0, "upper_setback_ratio": 0.76, "top_setback_ratio": 0.54},
+                }
+            ],
+            "building.add_structural_bands": [
+                {
+                    "description": "Add four façade bands to a generated tower.",
+                    "arguments": {"building_path": "/obj/tower_alpha1", "count": 4, "band_height": 0.45},
+                }
+            ],
+            "building.add_rooftop_mech": [
+                {
+                    "description": "Add rooftop mechanical boxes to a generated tower.",
+                    "arguments": {"building_path": "/obj/tower_alpha1", "unit_count": 4, "unit_height": 2.0},
                 }
             ],
             "scene.create_turntable_camera": [
