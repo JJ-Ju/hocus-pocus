@@ -75,7 +75,7 @@ Manual smoke:
 
 ## P2-M3. Tool Metadata and Output Hints
 
-Status: not started
+Status: complete
 
 Goal:
 
@@ -83,11 +83,11 @@ Goal:
 
 Tasks:
 
-- [ ] Add output-shape hints for major tools.
-- [ ] Add example payloads for key higher-level and task tools.
-- [ ] Add explicit blocking vs non-blocking annotations where relevant.
-- [ ] Improve cleanup/idempotence notes where behavior is intentionally best-effort.
-- [ ] Ensure resource templates describe payload conventions cleanly.
+- [x] Add output-shape hints for major tools.
+- [x] Add example payloads for key higher-level and task tools.
+- [x] Add explicit blocking vs non-blocking annotations where relevant.
+- [x] Improve cleanup/idempotence notes where behavior is intentionally best-effort.
+- [x] Ensure resource templates describe payload conventions cleanly.
 
 Done when:
 
@@ -101,7 +101,7 @@ Manual smoke:
 
 ## P2-M4. Materials and Assignments
 
-Status: not started
+Status: complete
 
 Goal:
 
@@ -109,10 +109,10 @@ Goal:
 
 Tasks:
 
-- [ ] Add material creation/update tools for common Houdini material workflows.
-- [ ] Add material assignment tools for relevant node contexts.
-- [ ] Return material-aware summaries from creation and assignment tools.
-- [ ] Extend geometry summaries where useful for authored material state.
+- [x] Add material creation/update tools for common Houdini material workflows.
+- [x] Add material assignment tools for relevant node contexts.
+- [x] Return material-aware summaries from creation and assignment tools.
+- [x] Extend geometry summaries where useful for authored material state.
 
 Done when:
 
@@ -201,3 +201,12 @@ These give the highest agent-ergonomics return with the least product churn.
 - Live-validated P2-M2 against Houdini 21.0:
   - non-transactional batches leave earlier edits behind after a late failure
   - transactional batches roll back created nodes on failure and report `rolledBack = true`
+- Implemented and live-validated P2-M3 against Houdini 21.0:
+  - `tools/list` now exposes `outputSummary`, `executionHint`, and `examples`
+  - `resources/list` resource templates now expose `payloadSummary` and `examples`
+  - blocking vs non-blocking semantics are explicit for task-backed tools such as `render.rop`
+- Implemented and live-validated P2-M4 against Houdini 21.0:
+  - created `/mat/p2_m4_wall_mat` via `material.create`
+  - updated the material via `material.update`
+  - assigned it to `/obj/p2_m4_geo1/OUT` via `material.assign`
+  - `geometry.get_summary` now reports both `materialPaths` and `objectMaterialPath`

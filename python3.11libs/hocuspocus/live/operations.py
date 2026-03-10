@@ -16,6 +16,7 @@ from .dispatcher import LiveCommandDispatcher
 from .monitor import SceneEventMonitor
 from .ops.base import OperationBaseMixin
 from .ops.high_level import HighLevelOperationsMixin
+from .ops.material import MaterialOperationsMixin
 from .ops.node import NodeOperationsMixin
 from .ops.parm import ParmOperationsMixin
 from .ops.resources import ResourceOperationsMixin
@@ -32,6 +33,7 @@ class LiveOperations(
     SceneOperationsMixin,
     NodeOperationsMixin,
     ParmOperationsMixin,
+    MaterialOperationsMixin,
     TaskExecutionOperationsMixin,
     ViewportOperationsMixin,
     HighLevelOperationsMixin,
@@ -83,6 +85,9 @@ class LiveOperations(
             ("parm.set_expression", "Set Parameter Expression", "Set an HScript or Python expression on a parameter and return the updated parameter summary. Use `language = python` to force Python expression mode.", {"type": "object", "properties": {"parm_path": {"type": "string"}, "expression": {"type": "string"}, "language": {"type": "string", "default": "hscript"}}, "required": ["parm_path", "expression"]}, {"destructiveHint": True}, self.parm_set_expression),
             ("parm.press_button", "Press Button", "Press a button parameter and return the resulting parameter summary. Use this for operator actions implemented as button parms.", {"type": "object", "properties": {"parm_path": {"type": "string"}}, "required": ["parm_path"]}, {"destructiveHint": True}, self.parm_press_button),
             ("parm.revert_to_default", "Revert Parameter", "Revert a parameter to its default value and return the updated parameter summary. This is useful for clearing previous edits or expressions.", {"type": "object", "properties": {"parm_path": {"type": "string"}}, "required": ["parm_path"]}, {"destructiveHint": True}, self.parm_revert_to_default),
+            ("material.create", "Create Material", "Create a material node, defaulting to a Principled Shader under `/mat`, and optionally apply common lookdev properties such as base color, roughness, and metallic. This is the quickest way to create a usable material without manually building the network.", {"type": "object", "properties": {"parent_path": {"type": "string", "default": "/mat"}, "material_type_name": {"type": "string"}, "node_name": {"type": "string"}, "base_color": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3}, "roughness": {"type": "number"}, "metallic": {"type": "number"}, "emission_color": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3}, "emission_intensity": {"type": "number"}, "opacity": {"type": "number"}}}, {"destructiveHint": True}, self.material_create),
+            ("material.update", "Update Material", "Update common lookdev properties on an existing material node and return the updated material summary. Unsupported properties are reported as skipped rather than causing a silent partial write.", {"type": "object", "properties": {"material_path": {"type": "string"}, "base_color": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3}, "roughness": {"type": "number"}, "metallic": {"type": "number"}, "emission_color": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3}, "emission_intensity": {"type": "number"}, "opacity": {"type": "number"}}, "required": ["material_path"]}, {"destructiveHint": True}, self.material_update),
+            ("material.assign", "Assign Material", "Assign a material to a target node by resolving the nearest owner with a `shop_materialpath` parameter. For SOP targets inside a geometry object, this assigns at the object-material level and returns the affected owner node.", {"type": "object", "properties": {"target_node_path": {"type": "string"}, "material_path": {"type": "string"}}, "required": ["target_node_path", "material_path"]}, {"destructiveHint": True}, self.material_assign),
             ("selection.get", "Get Selection", "Return the currently selected node paths in the live Houdini session. This reads scene state only and does not affect the selection.", {"type": "object", "properties": {}}, {"readOnlyHint": True, "idempotentHint": True}, self.selection_get),
             ("selection.set", "Set Selection", "Set the selected node paths in the live Houdini session. If `clear_existing` is true, the previous node selection is cleared first.", {"type": "object", "properties": {"paths": {"type": "array", "items": {"type": "string"}}, "clear_existing": {"type": "boolean", "default": True}}, "required": ["paths"]}, {"destructiveHint": True}, self.selection_set),
             ("playbar.get_state", "Get Playbar State", "Return current frame, FPS, and playbar ranges from the live Houdini session. This is useful for frame-aware task planning.", {"type": "object", "properties": {}}, {"readOnlyHint": True, "idempotentHint": True}, self.playbar_get_state),
@@ -106,6 +111,9 @@ class LiveOperations(
                     annotations=annotations,
                     required_capabilities=self._tool_capabilities(name),
                     handler=handler,
+                    output_summary=self._tool_output_summary(name),
+                    execution_hint=self._tool_execution_hint(name),
+                    examples=self._tool_examples(name),
                 )
             )
 
@@ -127,5 +135,125 @@ class LiveOperations(
                     description=description,
                     mime_type="application/json",
                     reader=reader,
+                    payload_summary=self._resource_payload_summary(uri),
+                    examples=self._resource_examples(uri),
                 )
             )
+
+    @staticmethod
+    def _tool_output_summary(name: str) -> str:
+        summaries = {
+            "session.info": "Structured session status with version, hip state, active operations, recent tasks, and conventions.",
+            "task.list": "List of task records with ids, states, progress, and metadata.",
+            "task.cancel": "Task cancellation acknowledgement plus the latest known task snapshot.",
+            "node.get": "Single normalized node summary, optionally including parameter summaries.",
+            "node.create": "Created node summary with final resolved path and flag state.",
+            "node.delete": "Counts plus separate deleted and skipped path arrays.",
+            "graph.batch_edit": "Batch result with refs, per-step results, and failure metadata when the batch errors.",
+            "parm.get": "Single normalized parameter summary including raw value, evaluated value, and expression.",
+            "material.create": "Created material summary plus applied and skipped material property names.",
+            "material.update": "Updated material summary plus applied and skipped material property names.",
+            "material.assign": "Assignment result with target node, assignment owner node, material summary, and geometry summary when available.",
+            "cook.node": "Immediate task handle for a non-blocking cook plus task resource URIs.",
+            "render.rop": "Immediate task handle for a non-blocking render plus task resource URIs.",
+            "geometry.get_summary": "Geometry counts, bbox, groups, attributes, discovered material paths, and object-level material path when present.",
+            "scene.create_turntable_camera": "Camera, rig, and target node summaries plus the animated frame range.",
+            "snapshot.capture_viewport": "Viewport image path, viewport name, and whether the output path was managed by the server.",
+            "model.create_house_blockout": "House object summary, output node summary, and named refs for created subnodes.",
+        }
+        return summaries.get(name, "")
+
+    @staticmethod
+    def _tool_execution_hint(name: str) -> str:
+        if name in {"cook.node", "render.rop"}:
+            return "non_blocking_task"
+        return "blocking"
+
+    @staticmethod
+    def _tool_examples(name: str) -> list[dict[str, object]]:
+        examples = {
+            "graph.batch_edit": [
+                {
+                    "description": "Create and wire a small SOP chain with transactional rollback.",
+                    "arguments": {
+                        "transactional": True,
+                        "operations": [
+                            {"type": "create_node", "id": "geo", "parent_path": "/obj", "node_type_name": "geo", "node_name": "batch_geo1"},
+                            {"type": "create_node", "id": "box", "parent_path": "$ref:geo", "node_type_name": "box", "node_name": "box1"},
+                            {"type": "create_node", "id": "out", "parent_path": "$ref:geo", "node_type_name": "null", "node_name": "OUT"},
+                            {"type": "connect", "source_node_path": "$ref:box", "dest_node_path": "$ref:out"},
+                            {"type": "set_flags", "path": "$ref:out", "display": True, "render": True},
+                        ],
+                    },
+                }
+            ],
+            "cook.node": [
+                {
+                    "description": "Cook a displayable SOP output over a single frame.",
+                    "arguments": {"node_path": "/obj/geo1/OUT", "frame_range": [1, 1], "force": True},
+                }
+            ],
+            "render.rop": [
+                {
+                    "description": "Render a Geometry ROP over a frame range.",
+                    "arguments": {"node_path": "/out/geo_rop1", "frame_range": [1, 24], "ignore_inputs": False, "verbose": True},
+                }
+            ],
+            "material.create": [
+                {
+                    "description": "Create a principled material with a warm base color.",
+                    "arguments": {"node_name": "wall_mat", "base_color": [0.8, 0.7, 0.6], "roughness": 0.45},
+                }
+            ],
+            "material.assign": [
+                {
+                    "description": "Assign a material to a geometry object or SOP-owned object material parm.",
+                    "arguments": {"target_node_path": "/obj/geo1/OUT", "material_path": "/mat/wall_mat"},
+                }
+            ],
+            "snapshot.capture_viewport": [
+                {
+                    "description": "Capture the current viewport to a managed output path.",
+                    "arguments": {},
+                }
+            ],
+            "scene.create_turntable_camera": [
+                {
+                    "description": "Create a turntable rig around a displayable SOP output.",
+                    "arguments": {"target_path": "/obj/geo1/OUT", "camera_name": "turntable_cam", "frame_range": [1, 120]},
+                }
+            ],
+            "model.create_house_blockout": [
+                {
+                    "description": "Create a simple house blockout under `/obj`.",
+                    "arguments": {"parent_path": "/obj", "node_name": "house_blockout1"},
+                }
+            ],
+        }
+        return examples.get(name, [])
+
+    @staticmethod
+    def _resource_payload_summary(uri: str) -> str:
+        summaries = {
+            "houdini://session/info": "Session-wide status payload with version, active operations, recent tasks, and conventions.",
+            "houdini://session/health": "Dispatcher, monitor, and recent-task health snapshot.",
+            "houdini://session/conventions": "Coordinate-system and snapshot behavior notes for agent planning.",
+            "houdini://session/scene-summary": "Compact scene summary with hip state, frame, and selection.",
+            "houdini://session/selection": "Current selected node paths.",
+            "houdini://session/playbar": "Current frame, FPS, and playbar ranges.",
+            "houdini://session/operations": "Recent request-scoped operation records.",
+            "houdini://tasks/recent": "Recent task records for cooks, renders, and other long-running work.",
+        }
+        return summaries.get(uri, "")
+
+    @staticmethod
+    def _resource_examples(uri: str) -> list[dict[str, object]]:
+        examples = {
+            "houdini://tasks/recent": [
+                {"description": "Inspect recent cook and render task state after launching non-blocking work."}
+            ],
+            "houdini://session/info": [
+                {"description": "Read top-level session state before planning graph edits or viewport captures."}
+            ],
+        }
+        return examples.get(uri, [])

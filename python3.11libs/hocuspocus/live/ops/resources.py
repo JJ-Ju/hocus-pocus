@@ -87,30 +87,69 @@ class ResourceOperationsMixin:
                 "name": "Node Resource",
                 "description": "Read a normalized node summary by Houdini path. `{path}` may be slash-separated like `obj/geo1` or percent-encoded like `%2Fobj%2Fgeo1`.",
                 "mimeType": "application/json",
+                "payloadSummary": "Single normalized node summary with flags, wiring, parent path, and display or render node pointers when relevant.",
+                "examples": [
+                    {
+                        "description": "Read an object node by slash-separated path.",
+                        "uri": "houdini://nodes/obj/geo1",
+                    },
+                    {
+                        "description": "Read a SOP node by percent-encoded absolute path.",
+                        "uri": "houdini://nodes/%2Fobj%2Fgeo1%2FOUT",
+                    },
+                ],
             },
             {
                 "uriTemplate": "houdini://nodes/{path}/parms",
                 "name": "Node Parm Resource",
                 "description": "Read normalized parameter summaries for a node. Use the same `{path}` encoding rules as the base node resource.",
                 "mimeType": "application/json",
+                "payloadSummary": "Parameter list payload with one normalized parameter summary per parm on the resolved node.",
+                "examples": [
+                    {
+                        "description": "Read all parameters for a display node.",
+                        "uri": "houdini://nodes/obj/geo1/OUT/parms",
+                    }
+                ],
             },
             {
                 "uriTemplate": "houdini://nodes/{path}/geometry-summary",
                 "name": "Node Geometry Summary",
                 "description": "Read point, primitive, bbox, group, attribute, and material summaries for a node with cooked geometry. The resource follows display-node resolution when applicable.",
                 "mimeType": "application/json",
+                "payloadSummary": "Geometry facts for the resolved node, including counts, bbox, group names, attributes, and discovered material paths.",
+                "examples": [
+                    {
+                        "description": "Inspect cooked geometry facts for an output SOP.",
+                        "uri": "houdini://nodes/obj/geo1/OUT/geometry-summary",
+                    }
+                ],
             },
             {
                 "uriTemplate": "houdini://tasks/{task_id}",
                 "name": "Task Resource",
                 "description": "Read task state, progress, result, and failure details for a submitted long-running task such as a cook or render.",
                 "mimeType": "application/json",
+                "payloadSummary": "Single task snapshot with id, state, progress, timing, result, and error information.",
+                "examples": [
+                    {
+                        "description": "Poll a running cook or render task.",
+                        "uri": "houdini://tasks/0123456789abcdef",
+                    }
+                ],
             },
             {
                 "uriTemplate": "houdini://tasks/{task_id}/log",
                 "name": "Task Log Resource",
                 "description": "Read recent log lines for a submitted task. Use this alongside the task resource when polling cooks and renders.",
                 "mimeType": "application/json",
+                "payloadSummary": "Task log payload with recent timestamped log lines emitted by the task runner.",
+                "examples": [
+                    {
+                        "description": "Fetch the task log while polling a render.",
+                        "uri": "houdini://tasks/0123456789abcdef/log",
+                    }
+                ],
             },
         ]
 

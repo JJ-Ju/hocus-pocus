@@ -223,6 +223,9 @@ class OperationBaseMixin:
             "cook.node": (EDIT_SCENE,),
             "render.rop": (EDIT_SCENE, WRITE_FILES),
             "geometry.get_summary": (OBSERVE,),
+            "material.create": (EDIT_SCENE,),
+            "material.update": (EDIT_SCENE,),
+            "material.assign": (EDIT_SCENE,),
             "model.create_house_blockout": (EDIT_SCENE,),
             "viewport.get_state": (OBSERVE,),
             "camera.get_active": (OBSERVE,),
@@ -352,6 +355,75 @@ class OperationBaseMixin:
                 material_paths.append(value)
         return material_paths
 
+    def _material_owner_for_node(self, node: Any) -> Any | None:
+        current = node
+        while current is not None:
+            parm = self._safe_value(lambda current=current: current.parm("shop_materialpath"), None)
+            if parm is not None:
+                return current
+            current = self._safe_value(current.parent, None)
+        return None
+
+    def _material_path_for_node(self, node: Any) -> str | None:
+        owner = self._material_owner_for_node(node)
+        if owner is None:
+            return None
+        parm = owner.parm("shop_materialpath")
+        if parm is None:
+            return None
+        value = self._safe_value(parm.evalAsString, None)
+        if not value:
+            return None
+        return str(value)
+
+    def _material_summary(self, node: Any) -> dict[str, Any]:
+        payload = self._node_summary(node, include_parms=False)
+        payload["materialPath"] = node.path()
+        payload["baseColor"] = self._safe_value(lambda: list(node.parmTuple("basecolor").eval()), None)
+        payload["roughness"] = self._safe_value(lambda: node.parm("rough").eval(), None)
+        payload["metallic"] = self._safe_value(lambda: node.parm("metallic").eval(), None)
+        payload["emissionColor"] = self._safe_value(lambda: list(node.parmTuple("emitcolor").eval()), None)
+        payload["emissionIntensity"] = self._safe_value(lambda: node.parm("emitint").eval(), None)
+        payload["opacity"] = self._safe_value(lambda: node.parm("opac").eval(), None)
+        return payload
+
+    def _material_apply_properties(self, node: Any, arguments: dict[str, Any]) -> dict[str, Any]:
+        applied: list[str] = []
+        skipped: list[str] = []
+
+        def set_tuple(parm_name: str, values: Any, expected: int) -> None:
+            parm_tuple = self._safe_value(lambda: node.parmTuple(parm_name), None)
+            if parm_tuple is None:
+                skipped.append(parm_name)
+                return
+            if not isinstance(values, (list, tuple)) or len(values) != expected:
+                raise JsonRpcError(INVALID_PARAMS, f"{parm_name} must be a {expected}-item array.")
+            parm_tuple.set(tuple(float(item) for item in values))
+            applied.append(parm_name)
+
+        def set_scalar(parm_name: str, value: Any) -> None:
+            parm = self._safe_value(lambda: node.parm(parm_name), None)
+            if parm is None:
+                skipped.append(parm_name)
+                return
+            parm.set(value)
+            applied.append(parm_name)
+
+        if "base_color" in arguments:
+            set_tuple("basecolor", arguments["base_color"], 3)
+        if "roughness" in arguments:
+            set_scalar("rough", float(arguments["roughness"]))
+        if "metallic" in arguments:
+            set_scalar("metallic", float(arguments["metallic"]))
+        if "emission_color" in arguments:
+            set_tuple("emitcolor", arguments["emission_color"], 3)
+        if "emission_intensity" in arguments:
+            set_scalar("emitint", float(arguments["emission_intensity"]))
+        if "opacity" in arguments:
+            set_scalar("opac", float(arguments["opacity"]))
+
+        return {"appliedProperties": applied, "skippedProperties": skipped}
+
     def _geometry_summary_for_node(self, node: Any) -> dict[str, Any]:
         target = node
         display_node = self._safe_method_value(node, "displayNode", None)
@@ -374,7 +446,11 @@ class OperationBaseMixin:
             "vertexAttributes": [attrib.name() for attrib in geometry.vertexAttribs()],
             "pointAttributes": [attrib.name() for attrib in geometry.pointAttribs()],
             "primitiveAttributes": [attrib.name() for attrib in geometry.primAttribs()],
-            "materialPaths": self._material_paths_from_geometry(geometry),
+            "materialPaths": sorted({
+                *self._material_paths_from_geometry(geometry),
+                *([self._material_path_for_node(node)] if self._material_path_for_node(node) else []),
+            }),
+            "objectMaterialPath": self._material_path_for_node(node),
         }
 
     def _managed_snapshot_path(self, stem: str = "viewport") -> Path:
