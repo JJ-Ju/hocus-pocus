@@ -15,6 +15,49 @@ try:
 except ModuleNotFoundError:  # pragma: no cover - local Python 3.10 fallback
     import tomli as tomllib  # type: ignore[no-redef]
 
+DEFAULT_POLICY_PROFILE = "local-dev"
+
+
+def available_policy_profiles() -> dict[str, dict[str, Any]]:
+    output_root = str(paths.output_dir())
+    return {
+        "safe": {
+            "description": "Read-only profile for cautious local inspection.",
+            "read_only": True,
+            "allow_scene_edit": False,
+            "allow_file_write": False,
+            "enable_exec_tools": False,
+            "enable_stdio_bridge": True,
+            "approved_roots": [],
+        },
+        "local-dev": {
+            "description": "Default local development profile with scene and file edits enabled.",
+            "read_only": False,
+            "allow_scene_edit": True,
+            "allow_file_write": True,
+            "enable_exec_tools": False,
+            "enable_stdio_bridge": True,
+            "approved_roots": [],
+        },
+        "pipeline": {
+            "description": "Pipeline-friendly profile with writes limited to managed output roots by default.",
+            "read_only": False,
+            "allow_scene_edit": True,
+            "allow_file_write": True,
+            "enable_exec_tools": False,
+            "enable_stdio_bridge": True,
+            "approved_roots": [output_root],
+        },
+    }
+
+
+def resolve_policy_profile(name: str | None) -> tuple[str, dict[str, Any]]:
+    profiles = available_policy_profiles()
+    candidate = str(name or DEFAULT_POLICY_PROFILE).strip() or DEFAULT_POLICY_PROFILE
+    if candidate not in profiles:
+        candidate = DEFAULT_POLICY_PROFILE
+    return candidate, dict(profiles[candidate])
+
 
 @dataclass(slots=True)
 class ServerSettings:
@@ -27,6 +70,8 @@ class ServerSettings:
     auto_start: bool = False
     log_level: str = "INFO"
     request_timeout_seconds: float = 30.0
+    policy_profile: str = DEFAULT_POLICY_PROFILE
+    policy_profile_source: str = "default"
     read_only: bool = False
     allow_scene_edit: bool = True
     allow_file_write: bool = True
@@ -69,6 +114,37 @@ class ServerSettings:
     def normalized_health_route(self) -> str:
         return _normalize_route(self.health_route, "/hocuspocus/healthz")
 
+    def effective_policy_payload(self) -> dict[str, Any]:
+        return {
+            "profile": self.policy_profile,
+            "profileSource": self.policy_profile_source,
+            "readOnly": self.read_only,
+            "allowSceneEdit": self.allow_scene_edit and not self.read_only,
+            "allowFileWrite": self.allow_file_write and not self.read_only,
+            "enableExecTools": self.enable_exec_tools,
+            "enableStdioBridge": self.enable_stdio_bridge,
+            "approvedRoots": list(self.approved_roots),
+        }
+
+    def available_policy_profiles_payload(self) -> list[dict[str, Any]]:
+        payload: list[dict[str, Any]] = []
+        for name, profile in available_policy_profiles().items():
+            payload.append(
+                {
+                    "name": name,
+                    "description": profile["description"],
+                    "effectivePolicy": {
+                        "readOnly": bool(profile["read_only"]),
+                        "allowSceneEdit": bool(profile["allow_scene_edit"] and not profile["read_only"]),
+                        "allowFileWrite": bool(profile["allow_file_write"] and not profile["read_only"]),
+                        "enableExecTools": bool(profile["enable_exec_tools"]),
+                        "enableStdioBridge": bool(profile["enable_stdio_bridge"]),
+                        "approvedRoots": list(profile["approved_roots"]),
+                    },
+                }
+            )
+        return payload
+
 
 def _normalize_route(value: str, default: str) -> str:
     route = str(value or "").strip()
@@ -93,6 +169,14 @@ def _coerce_bool(value: str) -> bool:
 def load_settings(config_path: str | Path | None = None) -> ServerSettings:
     path = Path(config_path) if config_path else paths.config_path()
     payload = _load_toml(path)
+    policy_overrides = payload.get("policy_overrides", {})
+    if not isinstance(policy_overrides, dict):
+        policy_overrides = {}
+    env_profile = os.environ.get("HOCUSPOCUS_POLICY_PROFILE")
+    profile_explicit = "policy_profile" in payload or env_profile is not None
+    profile_name, profile_defaults = resolve_policy_profile(
+        env_profile if env_profile is not None else payload.get("policy_profile")
+    )
 
     feature_flags = {
         key: bool(value)
@@ -109,15 +193,44 @@ def load_settings(config_path: str | Path | None = None) -> ServerSettings:
         auto_start=bool(payload.get("auto_start", False)),
         log_level=str(payload.get("log_level", "INFO")),
         request_timeout_seconds=float(payload.get("request_timeout_seconds", 30.0)),
-        read_only=bool(payload.get("read_only", False)),
-        allow_scene_edit=bool(payload.get("allow_scene_edit", True)),
-        allow_file_write=bool(payload.get("allow_file_write", True)),
-        approved_roots=[str(item) for item in payload.get("approved_roots", [])],
-        enable_exec_tools=bool(payload.get("enable_exec_tools", False)),
-        enable_stdio_bridge=bool(payload.get("enable_stdio_bridge", True)),
+        policy_profile=profile_name,
+        policy_profile_source="environment" if env_profile is not None else ("config" if profile_explicit else "default"),
+        read_only=bool(profile_defaults["read_only"]),
+        allow_scene_edit=bool(profile_defaults["allow_scene_edit"]),
+        allow_file_write=bool(profile_defaults["allow_file_write"]),
+        approved_roots=[str(item) for item in profile_defaults["approved_roots"]],
+        enable_exec_tools=bool(profile_defaults["enable_exec_tools"]),
+        enable_stdio_bridge=bool(profile_defaults["enable_stdio_bridge"]),
         feature_flags=feature_flags,
         config_path=str(path),
     )
+
+    if not profile_explicit:
+        if "read_only" in payload:
+            settings.read_only = bool(payload["read_only"])
+        if "allow_scene_edit" in payload:
+            settings.allow_scene_edit = bool(payload["allow_scene_edit"])
+        if "allow_file_write" in payload:
+            settings.allow_file_write = bool(payload["allow_file_write"])
+        if "approved_roots" in payload:
+            settings.approved_roots = [str(item) for item in payload.get("approved_roots", [])]
+        if "enable_exec_tools" in payload:
+            settings.enable_exec_tools = bool(payload["enable_exec_tools"])
+        if "enable_stdio_bridge" in payload:
+            settings.enable_stdio_bridge = bool(payload["enable_stdio_bridge"])
+
+    if "read_only" in policy_overrides:
+        settings.read_only = bool(policy_overrides["read_only"])
+    if "allow_scene_edit" in policy_overrides:
+        settings.allow_scene_edit = bool(policy_overrides["allow_scene_edit"])
+    if "allow_file_write" in policy_overrides:
+        settings.allow_file_write = bool(policy_overrides["allow_file_write"])
+    if "approved_roots" in policy_overrides:
+        settings.approved_roots = [str(item) for item in policy_overrides.get("approved_roots", [])]
+    if "enable_exec_tools" in policy_overrides:
+        settings.enable_exec_tools = bool(policy_overrides["enable_exec_tools"])
+    if "enable_stdio_bridge" in policy_overrides:
+        settings.enable_stdio_bridge = bool(policy_overrides["enable_stdio_bridge"])
 
     env_overrides: dict[str, Any] = {
         "host": os.environ.get("HOCUSPOCUS_HOST"),

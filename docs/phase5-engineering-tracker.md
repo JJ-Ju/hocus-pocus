@@ -20,7 +20,7 @@ Tracking rule:
 
 ## P5-M1. Contracts, Docs, and Regression Smokes
 
-Status: in progress
+Status: complete
 
 Goal:
 
@@ -30,7 +30,7 @@ Tasks:
 
 - [x] Publish a compatibility policy for Houdini `21.x`, MCP protocol assumptions, and breaking-change expectations.
 - [x] Add canonical workflow docs for common agent tasks such as scene inspection, graph planning, render validation, packaging, and PDG control.
-- [ ] Normalize high-value tool contracts with explicit output schemas, examples, and failure notes where still missing.
+- [x] Normalize high-value tool contracts with explicit output schemas, examples, and failure notes where still missing.
 - [x] Add an end-to-end smoke harness for the Houdini-hosted server covering live mutation, tasks, graph reads, and exports.
 - [x] Document release validation gates so installed builds and committed builds stay aligned.
 
@@ -47,7 +47,7 @@ Manual smoke:
 
 ## P5-M2. Policy Profiles and Error Normalization
 
-Status: not started
+Status: complete
 
 Goal:
 
@@ -74,7 +74,7 @@ Manual smoke:
 
 ## P5-M3. In-Houdini Panel and Operator UX
 
-Status: not started
+Status: in progress
 
 Goal:
 
@@ -174,3 +174,10 @@ These are the highest-value usability and trust improvements after the completed
 - Added compatibility, agent-workflow, and release-validation docs as the first concrete `P5-M1` deliverables.
 - Added a reusable live smoke script at `scripts/smoke_live_server.ps1` to replace improvised per-session MCP validation calls.
 - Ran the new live smoke script successfully against the active Houdini-hosted server, covering health, tool discovery, live node mutation, graph resource reads, and packaging preview.
+- Completed the remaining `P5-M1` contract cleanup by adding explicit failure notes to high-value tool metadata.
+- Implemented named policy profiles (`safe`, `local-dev`, `pipeline`) with effective-policy reporting in server status and session resources.
+- Normalized JSON-RPC error payloads with stable `data.errorFamily` and `data.retryable` fields, and returned structured JSON for auth failures on the MCP route.
+- Added the first `P5-M3` operator panel as a Qt dialog with status, tasks, events, logs, and quick actions exposed from the Houdini shelf.
+- Added an initial panel-terminal design doc to keep future embedded agent or terminal launch work staged behind policy and runtime-safety constraints.
+- Live-validated `P5-M2` against a restarted Houdini session by checking health and `session.info` policy payloads, `houdini://session/policy`, normalized auth failures, and `tools/list` metadata carrying `failureNotes`.
+- `P5-M3` is implemented and installed, but still needs one manual in-Houdini UI check that the `Open HocusPocus` shelf tool opens and updates the operator panel as expected.

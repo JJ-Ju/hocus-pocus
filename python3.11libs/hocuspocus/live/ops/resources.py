@@ -15,6 +15,15 @@ class ResourceOperationsMixin:
     def read_session_health(self, context: RequestContext) -> dict[str, object]:
         data = {
             "dispatcherMode": self._dispatcher.mode,
+            "auth": {
+                "tokenMode": self._settings.token_mode,
+                "tokenEnabled": self._settings.token_mode != "disabled",
+                "authRequired": self._settings.token_mode != "disabled",
+            },
+            "policy": {
+                "effectivePolicy": self._settings.effective_policy_payload(),
+                "availableProfiles": self._settings.available_policy_profiles_payload(),
+            },
             "settings": {
                 "host": self._settings.host,
                 "port": self._settings.port,
@@ -26,6 +35,15 @@ class ResourceOperationsMixin:
             "recentTasks": self._tasks.snapshots(limit=20),
         }
         return self._resource_response("houdini://session/health", data)
+
+    def read_session_policy(self, context: RequestContext) -> dict[str, object]:
+        return self._resource_response(
+            "houdini://session/policy",
+            {
+                "effectivePolicy": self._settings.effective_policy_payload(),
+                "availableProfiles": self._settings.available_policy_profiles_payload(),
+            },
+        )
 
     def read_session_conventions(self, context: RequestContext) -> dict[str, object]:
         return self._resource_response(

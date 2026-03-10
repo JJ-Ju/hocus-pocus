@@ -34,6 +34,8 @@ Typical output includes:
 - `healthUrl`
 - `tokenEnabled`
 - `dispatcherMode`
+- `policyProfile`
+- `effectivePolicy`
 
 The current default MCP endpoint is:
 
@@ -68,6 +70,28 @@ Auth:
 - paste the token directly if the client supports bearer-token input
 - otherwise use:
   `Authorization: Bearer <your-token>`
+
+## 4.5 In-Houdini Operator Panel
+
+Open the `HocusPocus` shelf and click `Open HocusPocus`.
+
+The panel shows:
+
+- server status
+- endpoint and token availability
+- recent tasks
+- recent scene events
+- recent server log lines
+
+Quick actions:
+
+- start
+- stop
+- restart
+- copy endpoint
+- copy token
+
+The terminal or embedded-agent workflow is intentionally staged. See [Panel Terminal Design](C:\Users\jujun\Documents\Source\Houdini\HocusPocus_mcp\docs\panel-terminal-design.md).
 
 ## 4. Houdini Conventions
 
@@ -266,10 +290,17 @@ Render and export cancellation are cooperative. If cancellation happens mid-run,
 
 Relevant config in `config/default.toml`:
 
+- `policy_profile = "local-dev"`
 - `read_only = true`
 - `allow_scene_edit = false`
 - `allow_file_write = false`
 - `approved_roots = [...]`
+
+Named profiles:
+
+- `safe`
+- `local-dev`
+- `pipeline`
 
 Effects:
 
@@ -277,6 +308,27 @@ Effects:
 - `allow_scene_edit` blocks edit-capable tools
 - `allow_file_write` blocks hip saves, snapshots, and render output validation
 - `approved_roots` restricts file output paths to approved directories
+
+Useful status and resource surfaces:
+
+- `server_status()`
+- `houdini://session/policy`
+- `houdini://session/health`
+
+Error payloads now include stable machine-readable fields:
+
+- `data.errorFamily`
+- `data.retryable`
+
+Common families:
+
+- `request`
+- `validation`
+- `policy`
+- `auth`
+- `runtime`
+- `unsupported`
+- `cancelled`
 
 Task, tool, and file activity is also recorded in the runtime audit log.
 

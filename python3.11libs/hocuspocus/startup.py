@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from collections import deque
 from threading import Lock
 from typing import Any
 
 from .core.logging_utils import configure_logging
+from .core import paths
 from .core.server import HocusPocusRuntime
 from .core.settings import load_settings
 from .version import __version__
@@ -57,5 +59,39 @@ def server_status() -> dict[str, Any]:
                 "mcpUrl": settings.mcp_url,
                 "healthUrl": settings.health_url,
                 "tokenEnabled": settings.token_mode != "disabled",
+                "policyProfile": settings.policy_profile,
+                "policyProfileSource": settings.policy_profile_source,
+                "effectivePolicy": settings.effective_policy_payload(),
+                "availablePolicyProfiles": settings.available_policy_profiles_payload(),
             }
         return _runtime.status(include_secret=True)
+
+
+def panel_snapshot(
+    *,
+    task_limit: int = 10,
+    event_limit: int = 20,
+    log_line_limit: int = 40,
+) -> dict[str, Any]:
+    status = server_status()
+    tasks: list[dict[str, Any]] = []
+    events: dict[str, Any] = {"count": 0, "latestSequence": 0, "events": []}
+    logs: list[str] = []
+    with _runtime_lock:
+        runtime = _runtime
+        if runtime is not None:
+            tasks = runtime.tasks.snapshots(limit=task_limit)
+            events = runtime.monitor.recent_events(limit=event_limit)
+    log_path = paths.server_log_path()
+    if log_path.exists():
+        lines = deque(maxlen=log_line_limit)
+        with log_path.open("r", encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                lines.append(line.rstrip())
+        logs = list(lines)
+    return {
+        "status": status,
+        "tasks": tasks,
+        "events": events,
+        "logs": logs,
+    }

@@ -15,6 +15,8 @@ RUN_CODE = "run_code"
 LAUNCH_PROCESSES = "launch_processes"
 USE_NETWORK = "use_network"
 SUBMIT_FARM_JOBS = "submit_farm_jobs"
+POLICY_DENIED_ERROR = -32010
+PATH_POLICY_ERROR = -32011
 
 
 def capability_set_from_settings(settings: ServerSettings) -> tuple[str, ...]:
@@ -36,9 +38,11 @@ def require_capabilities(
     missing = [item for item in required if item not in granted_set]
     if missing:
         raise JsonRpcError(
-            -32010,
+            POLICY_DENIED_ERROR,
             "Permission denied.",
             {"missingCapabilities": missing},
+            family="policy",
+            retryable=False,
         )
 
 
@@ -46,9 +50,11 @@ def ensure_path_allowed(path: str | Path, settings: ServerSettings) -> Path:
     resolved = Path(path).expanduser().resolve(strict=False)
     if not settings.allow_file_write or settings.read_only:
         raise JsonRpcError(
-            -32010,
+            POLICY_DENIED_ERROR,
             "File writes are disabled by server policy.",
             {"path": str(resolved)},
+            family="policy",
+            retryable=False,
         )
 
     if not settings.approved_roots:
@@ -66,10 +72,12 @@ def ensure_path_allowed(path: str | Path, settings: ServerSettings) -> Path:
             continue
 
     raise JsonRpcError(
-        -32011,
+        PATH_POLICY_ERROR,
         "Path is outside approved roots.",
         {
             "path": str(resolved),
             "approvedRoots": [str(root) for root in approved],
         },
+        family="policy",
+        retryable=False,
     )

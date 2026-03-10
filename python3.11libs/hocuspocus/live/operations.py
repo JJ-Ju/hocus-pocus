@@ -190,6 +190,7 @@ class LiveOperations(
                     handler=handler,
                     output_summary=self._tool_output_summary(name),
                     execution_hint=self._tool_execution_hint(name),
+                    failure_notes=self._tool_failure_notes(name),
                     examples=self._tool_examples(name),
                 )
             )
@@ -197,6 +198,7 @@ class LiveOperations(
         resource_specs = [
             ("houdini://session/info", "Session Info", "Current session metadata and server state.", self.read_session_info),
             ("houdini://session/health", "Session Health", "Current dispatcher and monitor status.", self.read_session_health),
+            ("houdini://session/policy", "Session Policy", "Active policy profile, effective permissions, and profile presets.", self.read_session_policy),
             ("houdini://session/conventions", "Session Conventions", "Houdini coordinate-system and snapshot conventions for this server.", self.read_session_conventions),
             ("houdini://session/scene-summary", "Scene Summary", "Current scene summary.", self.read_scene_summary),
             ("houdini://graph/scene", "Scene Graph", "Indexed whole-scene graph snapshot.", self.read_graph_scene),
@@ -304,6 +306,61 @@ class LiveOperations(
         if name in {"cook.node", "render.rop", "export.alembic", "export.usd", "pdg.cook"}:
             return "non_blocking_task"
         return "blocking"
+
+    @staticmethod
+    def _tool_failure_notes(name: str) -> list[str]:
+        notes = {
+            "graph.batch_edit": [
+                "Validation failures return `errorFamily = validation` with the failing operation index.",
+                "Transactional mode reports `rolledBack` and may still fail if Houdini rejects rollback steps.",
+            ],
+            "graph.apply_patch": [
+                "Transactional mode reports rollback state when apply fails after partial progress.",
+                "Validation errors in referenced paths or parms return `errorFamily = validation`.",
+            ],
+            "node.create": [
+                "Creation may fail with `errorFamily = validation` when the parent path is not a network.",
+                "The returned path may differ from the requested name if Houdini resolves a naming conflict.",
+            ],
+            "node.delete": [
+                "Missing nodes return `errorFamily = validation` unless `ignore_missing = true`.",
+            ],
+            "scene.save_hip": [
+                "Blocked save paths return `errorFamily = policy` when file writes are disabled or outside approved roots.",
+            ],
+            "snapshot.capture_viewport": [
+                "Viewport capture can fail with `errorFamily = runtime` if no compatible Scene Viewer is available in the current UI context.",
+            ],
+            "render.rop": [
+                "Returns a task immediately; render-time failures appear on the task resource with `errorFamily = runtime`.",
+                "Cancelled renders may leave partial outputs on disk.",
+            ],
+            "export.alembic": [
+                "Policy-blocked output paths return `errorFamily = policy` before task launch.",
+            ],
+            "export.usd": [
+                "Some Solaris graphs can still fail at export time if authored layers resolve to invalid or unavailable paths.",
+            ],
+            "dependency.repath": [
+                "Set `dry_run = true` first when repathing broad prefixes to avoid unintended mass edits.",
+            ],
+            "package.create_scene_package": [
+                "Destination and collected output paths are validated against write policy before packaging begins.",
+            ],
+            "usd.inspect_material_bindings": [
+                "Invalid prim roots return `errorFamily = validation` when the requested prim path is not present on the composed stage.",
+            ],
+            "usd.validate_stage": [
+                "Validation reports issues in-band; only stage-access failures should surface as request errors.",
+            ],
+            "pdg.retry_workitems": [
+                "The tool dirties supported PDG work; actual re-execution depends on the `execute` flag and scheduler state.",
+            ],
+            "hda.promote_parm": [
+                "Parm promotion on locked or unsupported assets may fail with `errorFamily = runtime` if Houdini refuses definition edits.",
+            ],
+        }
+        return notes.get(name, [])
 
     @staticmethod
     def _tool_examples(name: str) -> list[dict[str, object]]:
@@ -554,6 +611,7 @@ class LiveOperations(
         summaries = {
             "houdini://session/info": "Session-wide status payload with version, active operations, recent tasks, and conventions.",
             "houdini://session/health": "Dispatcher, monitor, and recent-task health snapshot.",
+            "houdini://session/policy": "Active policy profile, effective permissions, approved roots, and available profiles.",
             "houdini://session/conventions": "Coordinate-system and snapshot behavior notes for agent planning.",
             "houdini://session/scene-summary": "Compact scene summary with hip state, frame, and selection.",
             "houdini://graph/scene": "Whole-scene graph snapshot with indexed nodes, parms, edges, and material assignments.",
@@ -579,6 +637,9 @@ class LiveOperations(
             ],
             "houdini://session/info": [
                 {"description": "Read top-level session state before planning graph edits or viewport captures."}
+            ],
+            "houdini://session/policy": [
+                {"description": "Inspect the active policy profile and effective write or edit permissions."}
             ],
             "houdini://graph/scene": [
                 {"description": "Load the current indexed scene graph as a single resource snapshot."}

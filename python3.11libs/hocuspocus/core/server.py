@@ -65,7 +65,19 @@ class RuntimeRequestHandler(BaseHTTPRequestHandler):
             return
 
         if not self._runtime().authorize(self.headers.get("Authorization", "")):
-            self.send_error(HTTPStatus.UNAUTHORIZED)
+            self._write_json(
+                HTTPStatus.UNAUTHORIZED,
+                error_response(
+                    None,
+                    JsonRpcError(
+                        -32001,
+                        "Unauthorized.",
+                        {"authRequired": True},
+                        family="auth",
+                        retryable=False,
+                    ),
+                ),
+            )
             return
 
         content_length = int(self.headers.get("Content-Length", "0"))
@@ -186,6 +198,10 @@ class HocusPocusRuntime:
             "healthUrl": self.settings.health_url,
             "tokenEnabled": self.settings.token_mode != "disabled",
             "authRequired": self.settings.token_mode != "disabled",
+            "policyProfile": self.settings.policy_profile,
+            "policyProfileSource": self.settings.policy_profile_source,
+            "effectivePolicy": self.settings.effective_policy_payload(),
+            "availablePolicyProfiles": self.settings.available_policy_profiles_payload(),
         }
         if include_secret and self.settings.token_mode != "disabled":
             payload["token"] = self._token
