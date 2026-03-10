@@ -21,7 +21,7 @@ Tracking rule:
 
 ## P2-M1. Reliability and Idempotence
 
-Status: in progress
+Status: complete
 
 Goal:
 
@@ -29,11 +29,11 @@ Goal:
 
 Tasks:
 
-- [ ] Replace managed snapshot filenames with wall-clock or UUID-backed unique paths.
-- [ ] Ensure managed snapshot paths do not overwrite previous captures from the same scene/frame.
-- [ ] Add `ignore_missing` support to `node.delete`.
-- [ ] Keep `node.delete` strict by default and quiet only when `ignore_missing = true`.
-- [ ] Improve delete result payloads so skipped and deleted paths are distinct.
+- [x] Replace managed snapshot filenames with wall-clock or UUID-backed unique paths.
+- [x] Ensure managed snapshot paths do not overwrite previous captures from the same scene/frame.
+- [x] Add `ignore_missing` support to `node.delete`.
+- [x] Keep `node.delete` strict by default and quiet only when `ignore_missing = true`.
+- [x] Improve delete result payloads so skipped and deleted paths are distinct.
 
 Done when:
 
@@ -48,7 +48,7 @@ Manual smoke:
 
 ## P2-M2. Transactional Graph Editing
 
-Status: in progress
+Status: complete
 
 Goal:
 
@@ -56,11 +56,11 @@ Goal:
 
 Tasks:
 
-- [ ] Add `transactional` support to `graph.batch_edit`.
-- [ ] Roll back all edits in the batch when a transactional batch fails.
-- [ ] Return the failed step index, type, and error payload in the result.
-- [ ] Keep current non-transactional behavior available for best-effort batches.
-- [ ] Document rollback semantics in tool metadata.
+- [x] Add `transactional` support to `graph.batch_edit`.
+- [x] Roll back all edits in the batch when a transactional batch fails.
+- [x] Return the failed step index, type, and error payload in the result.
+- [x] Keep current non-transactional behavior available for best-effort batches.
+- [x] Document rollback semantics in tool metadata.
 
 Done when:
 
@@ -195,3 +195,9 @@ These give the highest agent-ergonomics return with the least product churn.
   - `node.delete` supports `ignore_missing` and distinguishes deleted vs skipped paths
   - `graph.batch_edit` now accepts `transactional = true` and reports rollback metadata on failure
 - Verified the phase-two slice compiles, but live Houdini validation is still pending.
+- Live-validated P2-M1 against Houdini 21.0:
+  - managed snapshots now produce distinct files for repeated captures
+  - `node.delete` remains strict by default and becomes idempotent with `ignore_missing = true`
+- Live-validated P2-M2 against Houdini 21.0:
+  - non-transactional batches leave earlier edits behind after a late failure
+  - transactional batches roll back created nodes on failure and report `rolledBack = true`
