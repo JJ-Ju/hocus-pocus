@@ -18,8 +18,10 @@ class SceneEventMonitor:
         self._logger = logger.getChild("live.monitor")
         self._lock = threading.Lock()
         self._revision = 0
+        self._event_sequence = 0
         self._last_event = "startup"
         self._last_event_time = time.time()
+        self._recent_events: list[dict[str, Any]] = []
         self._callbacks_installed = False
         self._hip_callback_installed = False
         self._playbar_callback_installed = False
@@ -100,8 +102,22 @@ class SceneEventMonitor:
     def _bump(self, event_name: str) -> None:
         with self._lock:
             self._revision += 1
+            self._event_sequence += 1
             self._last_event = event_name
             self._last_event_time = time.time()
+            self._recent_events.append(
+                {
+                    "sequence": self._event_sequence,
+                    "revision": self._revision,
+                    "event": event_name,
+                    "timestamp": self._last_event_time,
+                }
+            )
+            if len(self._recent_events) > 500:
+                self._recent_events = self._recent_events[-500:]
+
+    def mark_dirty(self, event_name: str) -> None:
+        self._bump(event_name)
 
     def _on_hip_event(self, event_type: Any) -> None:
         self._bump(f"hip:{event_type}")
@@ -152,6 +168,7 @@ class SceneEventMonitor:
         with self._lock:
             return {
                 "revision": self._revision,
+                "eventSequence": self._event_sequence,
                 "lastEvent": self._last_event,
                 "lastEventTime": self._last_event_time,
                 "callbacksInstalled": self._callbacks_installed,
@@ -159,4 +176,22 @@ class SceneEventMonitor:
                 "playbarCallbackInstalled": self._playbar_callback_installed,
                 "playbarRetryRegistered": self._playbar_retry_registered,
                 "selectionCallbackInstalled": self._selection_callback_installed,
+            }
+
+    def recent_events(
+        self,
+        *,
+        limit: int = 100,
+        after_sequence: int | None = None,
+    ) -> dict[str, Any]:
+        with self._lock:
+            events = list(self._recent_events)
+            if after_sequence is not None:
+                events = [item for item in events if item["sequence"] > after_sequence]
+            if limit > 0:
+                events = events[-limit:]
+            return {
+                "count": len(events),
+                "latestSequence": self._event_sequence,
+                "events": events,
             }

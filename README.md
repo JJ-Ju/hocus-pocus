@@ -63,7 +63,8 @@ Current server surface includes:
 
 - live scene, node, parm, selection, playbar, camera, and viewport tools
 - dynamic node and task resources
-- non-blocking cook/render tasks with polling and cancellation
+- non-blocking cook, render, and export tasks with polling and cancellation
+- material creation and assignment tools
 - higher-level tools such as batch graph edits, turntable camera creation, managed snapshots, geometry summaries, and a house blockout macro
 
 ## Docs

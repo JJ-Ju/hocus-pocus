@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 from typing import Any
 from urllib.parse import unquote
+from uuid import uuid4
 
 from hocuspocus.core import paths as core_paths
 from hocuspocus.core.jsonrpc import INVALID_PARAMS, JsonRpcError
@@ -207,7 +209,16 @@ class OperationBaseMixin:
             "node.move": (EDIT_SCENE,),
             "node.layout": (EDIT_SCENE,),
             "node.set_flags": (EDIT_SCENE,),
+            "graph.query": (OBSERVE,),
+            "graph.find_upstream": (OBSERVE,),
+            "graph.find_downstream": (OBSERVE,),
+            "graph.find_by_type": (OBSERVE,),
+            "graph.find_by_flag": (OBSERVE,),
             "graph.batch_edit": (EDIT_SCENE,),
+            "scene.diff": (OBSERVE,),
+            "graph.diff_subgraph": (OBSERVE,),
+            "graph.plan_edit": (OBSERVE,),
+            "graph.apply_patch": (EDIT_SCENE,),
             "parm.list": (OBSERVE,),
             "parm.get": (OBSERVE,),
             "parm.set": (EDIT_SCENE,),
@@ -218,10 +229,29 @@ class OperationBaseMixin:
             "selection.set": (EDIT_SCENE,),
             "playbar.get_state": (OBSERVE,),
             "playbar.set_frame": (EDIT_SCENE,),
+            "pdg.list_graphs": (OBSERVE,),
+            "pdg.cook": (EDIT_SCENE,),
+            "pdg.get_workitems": (OBSERVE,),
+            "pdg.cancel": (EDIT_SCENE,),
+            "pdg.get_results": (OBSERVE,),
             "cook.node": (EDIT_SCENE,),
             "render.rop": (EDIT_SCENE, WRITE_FILES),
+            "export.alembic": (EDIT_SCENE, WRITE_FILES),
+            "export.usd": (EDIT_SCENE, WRITE_FILES),
+            "lop.create_node": (EDIT_SCENE,),
+            "usd.assign_material": (EDIT_SCENE,),
+            "usd.set_variant": (EDIT_SCENE,),
+            "usd.add_reference": (EDIT_SCENE,),
+            "usd.create_layer_break": (EDIT_SCENE,),
             "geometry.get_summary": (OBSERVE,),
+            "material.create": (EDIT_SCENE,),
+            "material.update": (EDIT_SCENE,),
+            "material.assign": (EDIT_SCENE,),
             "model.create_house_blockout": (EDIT_SCENE,),
+            "scene.validate": (OBSERVE,),
+            "graph.check_errors": (OBSERVE,),
+            "parm.find_broken_refs": (OBSERVE,),
+            "scene.events_recent": (OBSERVE,),
             "viewport.get_state": (OBSERVE,),
             "camera.get_active": (OBSERVE,),
             "viewport.capture": (OBSERVE, WRITE_FILES),
@@ -339,6 +369,21 @@ class OperationBaseMixin:
             validated.append(str(ensure_path_allowed(expanded, self._settings)))
         return validated
 
+    def _existing_render_outputs_for_frame(self, node: Any, frame: float) -> list[str]:
+        hou_module = self._require_hou()
+        existing: list[str] = []
+        for value in self._node_file_parm_paths(node):
+            expanded = self._safe_value(
+                lambda value=value, frame=frame: hou_module.expandStringAtFrame(value, frame),
+                value,
+            )
+            if not expanded:
+                continue
+            validated = ensure_path_allowed(str(expanded), self._settings)
+            if validated.exists():
+                existing.append(str(validated))
+        return existing
+
     def _material_paths_from_geometry(self, geometry: Any) -> list[str]:
         material_paths: list[str] = []
         attrib = self._safe_value(lambda: geometry.findPrimAttrib("shop_materialpath"), None)
@@ -349,6 +394,75 @@ class OperationBaseMixin:
             if isinstance(value, str) and value and value not in material_paths:
                 material_paths.append(value)
         return material_paths
+
+    def _material_owner_for_node(self, node: Any) -> Any | None:
+        current = node
+        while current is not None:
+            parm = self._safe_value(lambda current=current: current.parm("shop_materialpath"), None)
+            if parm is not None:
+                return current
+            current = self._safe_value(current.parent, None)
+        return None
+
+    def _material_path_for_node(self, node: Any) -> str | None:
+        owner = self._material_owner_for_node(node)
+        if owner is None:
+            return None
+        parm = owner.parm("shop_materialpath")
+        if parm is None:
+            return None
+        value = self._safe_value(parm.evalAsString, None)
+        if not value:
+            return None
+        return str(value)
+
+    def _material_summary(self, node: Any) -> dict[str, Any]:
+        payload = self._node_summary(node, include_parms=False)
+        payload["materialPath"] = node.path()
+        payload["baseColor"] = self._safe_value(lambda: list(node.parmTuple("basecolor").eval()), None)
+        payload["roughness"] = self._safe_value(lambda: node.parm("rough").eval(), None)
+        payload["metallic"] = self._safe_value(lambda: node.parm("metallic").eval(), None)
+        payload["emissionColor"] = self._safe_value(lambda: list(node.parmTuple("emitcolor").eval()), None)
+        payload["emissionIntensity"] = self._safe_value(lambda: node.parm("emitint").eval(), None)
+        payload["opacity"] = self._safe_value(lambda: node.parm("opac").eval(), None)
+        return payload
+
+    def _material_apply_properties(self, node: Any, arguments: dict[str, Any]) -> dict[str, Any]:
+        applied: list[str] = []
+        skipped: list[str] = []
+
+        def set_tuple(parm_name: str, values: Any, expected: int) -> None:
+            parm_tuple = self._safe_value(lambda: node.parmTuple(parm_name), None)
+            if parm_tuple is None:
+                skipped.append(parm_name)
+                return
+            if not isinstance(values, (list, tuple)) or len(values) != expected:
+                raise JsonRpcError(INVALID_PARAMS, f"{parm_name} must be a {expected}-item array.")
+            parm_tuple.set(tuple(float(item) for item in values))
+            applied.append(parm_name)
+
+        def set_scalar(parm_name: str, value: Any) -> None:
+            parm = self._safe_value(lambda: node.parm(parm_name), None)
+            if parm is None:
+                skipped.append(parm_name)
+                return
+            parm.set(value)
+            applied.append(parm_name)
+
+        if "base_color" in arguments:
+            set_tuple("basecolor", arguments["base_color"], 3)
+        if "roughness" in arguments:
+            set_scalar("rough", float(arguments["roughness"]))
+        if "metallic" in arguments:
+            set_scalar("metallic", float(arguments["metallic"]))
+        if "emission_color" in arguments:
+            set_tuple("emitcolor", arguments["emission_color"], 3)
+        if "emission_intensity" in arguments:
+            set_scalar("emitint", float(arguments["emission_intensity"]))
+        if "opacity" in arguments:
+            set_scalar("opac", float(arguments["opacity"]))
+
+        return {"appliedProperties": applied, "skippedProperties": skipped}
 
     def _geometry_summary_for_node(self, node: Any) -> dict[str, Any]:
         target = node
@@ -372,13 +486,20 @@ class OperationBaseMixin:
             "vertexAttributes": [attrib.name() for attrib in geometry.vertexAttribs()],
             "pointAttributes": [attrib.name() for attrib in geometry.pointAttribs()],
             "primitiveAttributes": [attrib.name() for attrib in geometry.primAttribs()],
-            "materialPaths": self._material_paths_from_geometry(geometry),
+            "materialPaths": sorted({
+                *self._material_paths_from_geometry(geometry),
+                *([self._material_path_for_node(node)] if self._material_path_for_node(node) else []),
+            }),
+            "objectMaterialPath": self._material_path_for_node(node),
         }
 
     def _managed_snapshot_path(self, stem: str = "viewport") -> Path:
-        timestamp = self._safe_value(lambda: int(self._require_hou().time() * 1000), None)
-        if timestamp is None:
-            import time
+        timestamp_ms = int(time.time() * 1000)
+        suffix = uuid4().hex[:8]
+        return core_paths.snapshot_dir() / f"{stem}_{timestamp_ms}_{suffix}.png"
 
-            timestamp = int(time.time() * 1000)
-        return core_paths.snapshot_dir() / f"{stem}_{timestamp}.png"
+    def _managed_export_path(self, stem: str, suffix: str) -> Path:
+        timestamp_ms = int(time.time() * 1000)
+        unique = uuid4().hex[:8]
+        normalized_suffix = suffix if suffix.startswith(".") else f".{suffix}"
+        return core_paths.export_dir() / f"{stem}_{timestamp_ms}_{unique}{normalized_suffix}"

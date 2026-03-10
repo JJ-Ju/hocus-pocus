@@ -10,6 +10,20 @@ from ..context import RequestContext
 
 
 class HighLevelOperationsMixin:
+    def _rollback_batch_actions(
+        self,
+        rollback_actions: list[tuple[str, Any]],
+    ) -> bool:
+        rolled_back = True
+        while rollback_actions:
+            action_name, action = rollback_actions.pop()
+            try:
+                action()
+            except Exception:
+                rolled_back = False
+                self._logger.exception("failed rollback action %s", action_name)
+        return rolled_back
+
     def _batch_resolve(self, value: Any, refs: dict[str, str]) -> Any:
         if isinstance(value, str) and value.startswith("$ref:"):
             ref_expr = value[5:]
@@ -35,34 +49,158 @@ class HighLevelOperationsMixin:
         operations = arguments.get("operations")
         if not isinstance(operations, list) or not operations:
             raise JsonRpcError(INVALID_PARAMS, "operations must be a non-empty array.")
+        transactional = bool(arguments.get("transactional", False))
         refs: dict[str, str] = {}
         results: list[dict[str, Any]] = []
+        rollback_actions: list[tuple[str, Any]] = []
         label = str(arguments.get("label", "batch edit")).strip() or "batch edit"
-        with hou_module.undos.group(f"HocusPocus: {label}"):
-            for index, raw_op in enumerate(operations):
-                if not isinstance(raw_op, dict):
-                    raise JsonRpcError(INVALID_PARAMS, f"Operation at index {index} must be an object.")
-                op_type = str(raw_op.get("type", "")).strip()
-                op_id = str(raw_op.get("id", "")).strip()
-                resolved = self._batch_resolve(raw_op, refs)
-                if op_type == "create_node":
-                    result = self._node_create_impl(resolved)
-                    if op_id:
-                        refs[op_id] = result["path"]
-                elif op_type == "connect":
-                    result = self._node_connect_impl(resolved)
-                elif op_type == "set_parm":
-                    result = self._parm_set_impl(resolved)
-                elif op_type == "set_flags":
-                    result = self._node_set_flags_impl(resolved)
-                elif op_type == "move_node":
-                    result = self._node_move_impl(resolved)
-                elif op_type == "layout":
-                    result = self._node_layout_impl(resolved)
-                else:
-                    raise JsonRpcError(INVALID_PARAMS, f"Unsupported batch operation type: {op_type}")
-                results.append({"index": index, "type": op_type, "result": result})
-        return {"count": len(results), "refs": refs, "results": results}
+        failed_index: int | None = None
+        failed_type: str | None = None
+
+        try:
+            with hou_module.undos.group(f"HocusPocus: {label}"):
+                for index, raw_op in enumerate(operations):
+                    if not isinstance(raw_op, dict):
+                        raise JsonRpcError(INVALID_PARAMS, f"Operation at index {index} must be an object.")
+                    op_type = str(raw_op.get("type", "")).strip()
+                    op_id = str(raw_op.get("id", "")).strip()
+                    failed_index = index
+                    failed_type = op_type
+                    resolved = self._batch_resolve(raw_op, refs)
+                    if op_type == "create_node":
+                        result = self._node_create_impl(resolved)
+                        if op_id:
+                            refs[op_id] = result["path"]
+                        if transactional:
+                            created_path = result["path"]
+                            rollback_actions.append(
+                                (
+                                    "destroy_node",
+                                    lambda created_path=created_path: self._safe_value(
+                                        lambda: self._require_node_by_path(created_path).destroy()
+                                    ),
+                                )
+                            )
+                    elif op_type == "connect":
+                        dest = self._require_node_by_path(
+                            str(resolved.get("dest_node_path", "")),
+                            label="dest_node_path",
+                        )
+                        dest_input_index = int(resolved.get("dest_input_index", 0))
+                        previous_input = None
+                        previous_output_index = 0
+                        input_connections = self._safe_value(dest.inputConnections, []) or []
+                        if dest_input_index < len(input_connections):
+                            connection = input_connections[dest_input_index]
+                            previous_input = connection.inputNode()
+                            previous_output_index = connection.outputIndex()
+                        result = self._node_connect_impl(resolved)
+                        if transactional:
+                            rollback_actions.append(
+                                (
+                                    "restore_connection",
+                                    lambda dest=dest, dest_input_index=dest_input_index, previous_input=previous_input, previous_output_index=previous_output_index: dest.setInput(dest_input_index, previous_input, output_index=previous_output_index) if previous_input is not None else dest.setInput(dest_input_index, None),
+                                )
+                            )
+                    elif op_type == "set_parm":
+                        parm = self._require_parm_by_path(str(resolved.get("parm_path", "")))
+                        previous_expression = self._safe_value(parm.expression, None)
+                        previous_expression_language = self._safe_value(parm.expressionLanguage, None)
+                        previous_value = self._safe_value(parm.eval, None)
+                        result = self._parm_set_impl(resolved)
+                        if transactional:
+                            def restore_parm(parm=parm, previous_expression=previous_expression, previous_expression_language=previous_expression_language, previous_value=previous_value) -> None:
+                                if previous_expression is not None and previous_expression_language is not None:
+                                    parm.setExpression(previous_expression, language=previous_expression_language)
+                                else:
+                                    parm.set(previous_value)
+                            rollback_actions.append(("restore_parm", restore_parm))
+                    elif op_type == "set_flags":
+                        node = self._require_node_by_path(str(resolved.get("path", "")))
+                        previous_flags = self._node_flags(node)
+                        result = self._node_set_flags_impl(resolved)
+                        if transactional:
+                            def restore_flags(node=node, previous_flags=previous_flags) -> None:
+                                if previous_flags["bypass"] is not None:
+                                    node.bypass(bool(previous_flags["bypass"]))
+                                if previous_flags["display"] is not None:
+                                    self._safe_value(lambda: node.setDisplayFlag(bool(previous_flags["display"])))
+                                if previous_flags["render"] is not None:
+                                    self._safe_value(lambda: node.setRenderFlag(bool(previous_flags["render"])))
+                                if previous_flags["template"] is not None:
+                                    self._safe_value(lambda: node.setTemplateFlag(bool(previous_flags["template"])))
+                            rollback_actions.append(("restore_flags", restore_flags))
+                    elif op_type == "move_node":
+                        node = self._require_node_by_path(str(resolved.get("path", "")))
+                        previous_position = self._safe_value(node.position, None)
+                        result = self._node_move_impl(resolved)
+                        if transactional and previous_position is not None:
+                            rollback_actions.append(
+                                (
+                                    "restore_position",
+                                    lambda node=node, previous_position=previous_position: node.setPosition(previous_position),
+                                )
+                            )
+                    elif op_type == "layout":
+                        parent_path = str(resolved.get("parent_path", "/obj"))
+                        parent = self._require_node_by_path(parent_path, label="parent_path")
+                        previous_positions = {
+                            child.path(): self._safe_value(child.position, None)
+                            for child in parent.children()
+                        }
+                        result = self._node_layout_impl(resolved)
+                        if transactional:
+                            def restore_layout(previous_positions=previous_positions) -> None:
+                                for child_path, position in previous_positions.items():
+                                    if position is None:
+                                        continue
+                                    child = hou_module.node(child_path)
+                                    if child is not None:
+                                        child.setPosition(position)
+                            rollback_actions.append(("restore_layout", restore_layout))
+                    else:
+                        raise JsonRpcError(INVALID_PARAMS, f"Unsupported batch operation type: {op_type}")
+                    results.append({"index": index, "type": op_type, "result": result})
+        except JsonRpcError as exc:
+            rolled_back = self._rollback_batch_actions(rollback_actions) if transactional else False
+            raise JsonRpcError(
+                -32020,
+                "Batch edit failed.",
+                {
+                    "transactional": transactional,
+                    "rolledBack": rolled_back,
+                    "failedIndex": failed_index,
+                    "failedType": failed_type,
+                    "completedCount": len(results),
+                    "refs": refs,
+                    "completedResults": results,
+                    "originalError": exc.to_payload(),
+                },
+            ) from exc
+        except Exception as exc:
+            rolled_back = self._rollback_batch_actions(rollback_actions) if transactional else False
+            raise JsonRpcError(
+                -32020,
+                "Batch edit failed.",
+                {
+                    "transactional": transactional,
+                    "rolledBack": rolled_back,
+                    "failedIndex": failed_index,
+                    "failedType": failed_type,
+                    "completedCount": len(results),
+                    "refs": refs,
+                    "completedResults": results,
+                    "originalError": {"message": str(exc)},
+                },
+            ) from exc
+
+        return {
+            "count": len(results),
+            "refs": refs,
+            "results": results,
+            "transactional": transactional,
+            "rolledBack": False,
+        }
 
     def graph_batch_edit(
         self,

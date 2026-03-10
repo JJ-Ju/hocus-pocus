@@ -11,6 +11,8 @@ from enum import Enum
 from queue import Empty, Queue
 from typing import Any, Callable
 
+from hocuspocus.core.jsonrpc import JsonRpcError
+
 from .context import OperationCancelledError, RequestContext
 
 try:
@@ -239,6 +241,19 @@ class LiveCommandDispatcher:
                 error=str(exc),
             )
             command.future.set_exception(exc)
+            return
+        except JsonRpcError as exc:
+            self._finish_operation(
+                command.context.operation_id,
+                OperationState.FAILED,
+                error=str(exc),
+            )
+            command.future.set_exception(exc)
+            self._logger.info(
+                "operation %s failed with request error: %s",
+                command.context.operation_id,
+                exc,
+            )
             return
         except Exception as exc:
             self._finish_operation(

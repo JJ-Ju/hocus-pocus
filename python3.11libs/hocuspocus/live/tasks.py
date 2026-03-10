@@ -49,6 +49,8 @@ class TaskRecord:
     active_operation_id: str | None = None
     result: dict[str, Any] | None = None
     error: dict[str, Any] | None = None
+    outcome: dict[str, Any] | None = None
+    recovery_notes: list[str] = field(default_factory=list)
     logs: list[TaskLogEntry] = field(default_factory=list)
     cancel_event: threading.Event = field(default_factory=threading.Event)
 
@@ -63,6 +65,15 @@ class TaskController:
 
     def set_progress(self, value: float, message: str | None = None) -> None:
         self._manager._set_progress(self.task_id, value, message)
+
+    def set_outcome(self, payload: dict[str, Any]) -> None:
+        self._manager._set_outcome(self.task_id, payload)
+
+    def update_outcome(self, payload: dict[str, Any]) -> None:
+        self._manager._update_outcome(self.task_id, payload)
+
+    def add_recovery_note(self, note: str) -> None:
+        self._manager._add_recovery_note(self.task_id, note)
 
     def is_cancelled(self) -> bool:
         record = self._manager._record(self.task_id)
@@ -211,6 +222,8 @@ class LiveTaskManager:
                 record.state = TaskState.CANCELLED
                 record.finished_at = time.time()
                 record.error = {"message": str(exc)}
+                if exc.payload:
+                    record.error["details"] = exc.payload
                 record.progress_message = "Cancelled"
             controller.log(str(exc), level="warning")
         except Exception as exc:
@@ -276,6 +289,31 @@ class LiveTaskManager:
             if record is not None and record.active_operation_id == operation_id:
                 record.active_operation_id = None
 
+    def _set_outcome(self, task_id: str, payload: dict[str, Any]) -> None:
+        with self._lock:
+            record = self._tasks.get(task_id)
+            if record is None:
+                return
+            record.outcome = dict(payload)
+
+    def _update_outcome(self, task_id: str, payload: dict[str, Any]) -> None:
+        with self._lock:
+            record = self._tasks.get(task_id)
+            if record is None:
+                return
+            base = dict(record.outcome or {})
+            base.update(payload)
+            record.outcome = base
+
+    def _add_recovery_note(self, task_id: str, note: str) -> None:
+        with self._lock:
+            record = self._tasks.get(task_id)
+            if record is None:
+                return
+            if note not in record.recovery_notes:
+                record.recovery_notes.append(note)
+        self._append_log(task_id, "info", f"Recovery note: {note}")
+
     def _prune_history_locked(self) -> None:
         if len(self._tasks) <= 200:
             return
@@ -310,4 +348,6 @@ class LiveTaskManager:
             "metadata": record.metadata,
             "result": record.result,
             "error": record.error,
+            "outcome": record.outcome,
+            "recoveryNotes": record.recovery_notes,
         }

@@ -20,9 +20,12 @@ class ToolDefinition:
     annotations: dict[str, Any]
     required_capabilities: tuple[str, ...]
     handler: ToolHandler
+    output_summary: str = ""
+    execution_hint: str = ""
+    examples: list[dict[str, Any]] = field(default_factory=list)
 
     def as_payload(self) -> dict[str, Any]:
-        return {
+        payload = {
             "name": self.name,
             "title": self.title,
             "description": self.description,
@@ -30,6 +33,13 @@ class ToolDefinition:
             "annotations": self.annotations,
             "requiredCapabilities": list(self.required_capabilities),
         }
+        if self.output_summary:
+            payload["outputSummary"] = self.output_summary
+        if self.execution_hint:
+            payload["executionHint"] = self.execution_hint
+        if self.examples:
+            payload["examples"] = self.examples
+        return payload
 
 
 @dataclass(slots=True)
@@ -39,14 +49,21 @@ class ResourceDefinition:
     description: str
     mime_type: str
     reader: ResourceReader
+    payload_summary: str = ""
+    examples: list[dict[str, Any]] = field(default_factory=list)
 
     def as_payload(self) -> dict[str, Any]:
-        return {
+        payload = {
             "uri": self.uri,
             "name": self.name,
             "description": self.description,
             "mimeType": self.mime_type,
         }
+        if self.payload_summary:
+            payload["payloadSummary"] = self.payload_summary
+        if self.examples:
+            payload["examples"] = self.examples
+        return payload
 
 
 @dataclass(slots=True)
