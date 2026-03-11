@@ -93,7 +93,7 @@ class LiveOperations(
             ("scene.save_hip", "Save Hip", "Save the current scene to the existing hip path or to a new explicit path. Output paths are validated against server write policy and approved roots before saving.", {"type": "object", "properties": {"path": {"type": "string"}, "save_to_recent_files": {"type": "boolean", "default": True}}}, {"destructiveHint": True}, self.scene_save_hip),
             ("scene.undo", "Undo", "Undo the last Houdini operation in the current session. This affects the live undo stack immediately.", {"type": "object", "properties": {}}, {"destructiveHint": True}, self.scene_undo),
             ("scene.redo", "Redo", "Redo the last undone Houdini operation in the current session. This affects the live undo stack immediately.", {"type": "object", "properties": {}}, {"destructiveHint": True}, self.scene_redo),
-            ("scene.create_turntable_camera", "Create Turntable Camera", "Create a target null, rig null, and camera for a simple orbit shot under `/obj`. If `target_path` resolves to geometry, the orbit distance is derived from that geometry's bounds.", {"type": "object", "properties": {"target_path": {"type": "string"}, "frame_range": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 3}, "camera_name": {"type": "string", "default": "turntable_cam"}, "distance_multiplier": {"type": "number", "default": 2.5}}}, {"destructiveHint": True}, self.scene_create_turntable_camera),
+            ("scene.create_turntable_camera", "Create Turntable Camera", "Create a target null, rig null, and camera for a simple orbit shot under `/obj`. If `target_path` resolves to geometry, the orbit distance is derived from shared bbox-fit logic so camera and light helpers target assets consistently.", {"type": "object", "properties": {"target_path": {"type": "string"}, "frame_range": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 3}, "camera_name": {"type": "string", "default": "turntable_cam"}, "distance_multiplier": {"type": "number", "default": 2.5}, "activate_viewport_camera": {"type": "boolean", "default": False}}}, {"destructiveHint": True}, self.scene_create_turntable_camera),
             ("hda.list_libraries", "List HDA Libraries", "List installed HDA library files and the first set of definitions they contain. Use this as the top-level discovery read for HDA workflows.", {"type": "object", "properties": {}}, {"readOnlyHint": True, "idempotentHint": True}, self.hda_list_libraries),
             ("hda.list_definitions", "List HDA Definitions", "List HDA definitions from a specific library file or from all currently loaded HDA libraries.", {"type": "object", "properties": {"library_file_path": {"type": "string"}}}, {"readOnlyHint": True, "idempotentHint": True}, self.hda_list_definitions),
             ("hda.get_definition", "Get HDA Definition", "Return metadata, sections, and parm-interface structure for a specific HDA definition resolved by node type name, library file, or HDA instance path.", {"type": "object", "properties": {"node_type_name": {"type": "string"}, "library_file_path": {"type": "string"}, "node_path": {"type": "string"}, "include_sections": {"type": "boolean", "default": True}}}, {"readOnlyHint": True, "idempotentHint": True}, self.hda_get_definition),
@@ -130,7 +130,7 @@ class LiveOperations(
             ("graph.diff_subgraph", "Diff Subgraph", "Diff a current rooted subgraph against a previously captured baseline subgraph snapshot.", {"type": "object", "properties": {"root_path": {"type": "string"}, "baseline": {"type": "object"}}, "required": ["root_path", "baseline"]}, {"readOnlyHint": True, "idempotentHint": True}, self.graph_diff_subgraph),
             ("graph.plan_edit", "Plan Graph Edit", "Simulate a grouped graph patch against the current indexed scene graph and return the predicted diff without mutating Houdini. This uses the same operation shapes as `graph.batch_edit`.", {"type": "object", "properties": {"operations": {"type": "array", "items": {"type": "object"}}}, "required": ["operations"]}, {"readOnlyHint": True, "idempotentHint": True}, self.graph_plan_edit),
             ("graph.apply_patch", "Apply Graph Patch", "Apply a graph patch using the current batch-edit execution path. Set `dry_run = true` to return only the predicted plan and diff.", {"type": "object", "properties": {"operations": {"type": "array", "items": {"type": "object"}}, "patch": {"type": "object"}, "transactional": {"type": "boolean", "default": True}, "dry_run": {"type": "boolean", "default": False}, "label": {"type": "string"}}, "required": []}, {"destructiveHint": True}, self.graph_apply_patch),
-            ("parm.list", "List Parameters", "List all parameters on a node and return normalized parameter summaries. Use this when you know the node path but not the parm names.", {"type": "object", "properties": {"node_path": {"type": "string"}}, "required": ["node_path"]}, {"readOnlyHint": True, "idempotentHint": True}, self.parm_list),
+            ("parm.list", "List Parameters", "List parameters on a node and return normalized parameter summaries. Use filters and pagination for heavy nodes so introspection stays bounded.", {"type": "object", "properties": {"node_path": {"type": "string"}, "name_prefix": {"type": "string"}, "name_contains": {"type": "string"}, "limit": {"type": "integer", "default": 250}, "offset": {"type": "integer", "default": 0}}, "required": ["node_path"]}, {"readOnlyHint": True, "idempotentHint": True}, self.parm_list),
             ("parm.get", "Get Parameter", "Return metadata and value information for a single parameter path. This is the primary structured parameter read tool.", {"type": "object", "properties": {"parm_path": {"type": "string"}}, "required": ["parm_path"]}, {"readOnlyHint": True, "idempotentHint": True}, self.parm_get),
             ("parm.set", "Set Parameter", "Set a parameter value and return the updated parameter summary. This works for standard value assignment, not expression assignment.", {"type": "object", "properties": {"parm_path": {"type": "string"}, "value": {}}, "required": ["parm_path", "value"]}, {"destructiveHint": True}, self.parm_set),
             ("parm.set_expression", "Set Parameter Expression", "Set an HScript or Python expression on a parameter and return the updated parameter summary. Use `language = python` to force Python expression mode.", {"type": "object", "properties": {"parm_path": {"type": "string"}, "expression": {"type": "string"}, "language": {"type": "string", "default": "hscript"}}, "required": ["parm_path", "expression"]}, {"destructiveHint": True}, self.parm_set_expression),
@@ -165,7 +165,7 @@ class LiveOperations(
             ("render.inspect_graph", "Inspect Render Graph", "Inspect a ROP node and its upstream ROP input chain, including output paths, frame-range parms, and node-reference parms. Use this before render preflight or task launch.", {"type": "object", "properties": {"node_path": {"type": "string"}, "max_depth": {"type": "integer", "default": 20}}, "required": ["node_path"]}, {"readOnlyHint": True, "idempotentHint": True}, self.render_inspect_graph),
             ("render.inspect_outputs", "Inspect Render Outputs", "Inspect a render node's file-output parms and AOV or image-plane parms where the node type exposes them. This is the main output-introspection read tool for renders.", {"type": "object", "properties": {"node_path": {"type": "string"}}, "required": ["node_path"]}, {"readOnlyHint": True, "idempotentHint": True}, self.render_inspect_outputs),
             ("render.preflight", "Preflight Render", "Run a render preflight over a ROP chain, checking output-path policy, missing file dependencies, and broken node-reference parms before render launch.", {"type": "object", "properties": {"node_path": {"type": "string"}, "max_depth": {"type": "integer", "default": 20}}, "required": ["node_path"]}, {"readOnlyHint": True, "idempotentHint": True}, self.render_preflight),
-            ("lookdev.create_three_point_light_rig", "Create Three Point Light Rig", "Create a simple three-point object-light rig and target null under `/obj` for lookdev or turntable work.", {"type": "object", "properties": {"rig_name": {"type": "string", "default": "lookdev_rig"}, "target_name": {"type": "string"}, "key_name": {"type": "string"}, "fill_name": {"type": "string"}, "rim_name": {"type": "string"}}}, {"destructiveHint": True}, self.lookdev_create_three_point_light_rig),
+            ("lookdev.create_three_point_light_rig", "Create Three Point Light Rig", "Create a scale-aware three-point light rig under `/obj`. If `target_path` resolves to geometry, the helper reuses the same bbox-fit logic as the turntable camera and defaults to distant-style lighting for large exterior assets.", {"type": "object", "properties": {"target_path": {"type": "string"}, "rig_name": {"type": "string", "default": "lookdev_rig"}, "target_name": {"type": "string"}, "key_name": {"type": "string"}, "fill_name": {"type": "string"}, "rim_name": {"type": "string"}}}, {"destructiveHint": True}, self.lookdev_create_three_point_light_rig),
             ("pdg.inspect_schedulers", "Inspect PDG Schedulers", "Inspect scheduler nodes under a TOP network, including working directory and scheduler type information.", {"type": "object", "properties": {"graph_path": {"type": "string"}}, "required": ["graph_path"]}, {"readOnlyHint": True, "idempotentHint": True}, self.pdg_inspect_schedulers),
             ("pdg.get_workitem_logs", "Get PDG Work Item Logs", "Return stored log messages for PDG work items on a TOP graph or a specific TOP node.", {"type": "object", "properties": {"graph_path": {"type": "string"}, "node_path": {"type": "string"}, "work_item_ids": {"type": "array", "items": {"type": "integer"}}, "limit": {"type": "integer", "default": 200}}, "required": ["graph_path"]}, {"readOnlyHint": True, "idempotentHint": True}, self.pdg_get_workitem_logs),
             ("pdg.retry_workitems", "Retry PDG Work", "Dirty a PDG graph or specific TOP node so work can be retried, and optionally restart graph execution.", {"type": "object", "properties": {"graph_path": {"type": "string"}, "node_path": {"type": "string"}, "execute": {"type": "boolean", "default": False}}, "required": ["graph_path"]}, {"destructiveHint": True}, self.pdg_retry_workitems),
@@ -284,11 +284,11 @@ class LiveOperations(
             "usd.inspect_material_bindings": "List of composed material bindings under a USD prim subtree.",
             "usd.validate_stage": "USD stage diagnostics covering missing reference files and save-path policy issues.",
             "geometry.get_summary": "Geometry counts, bbox, groups, attributes, discovered material paths, and object-level material path when present.",
-            "scene.create_turntable_camera": "Camera, rig, and target node summaries plus the animated frame range.",
+            "scene.create_turntable_camera": "Camera, rig, and target node summaries plus frame range, target-fit data, and whether the viewport camera was activated.",
             "render.inspect_graph": "Render-chain nodes, edges, output paths, frame-range parms, and node-reference summaries.",
             "render.inspect_outputs": "File-output parm details, validated output paths, and AOV or image-plane data when supported.",
             "render.preflight": "Render readiness result with blocking issues, graph snapshot, and per-issue details.",
-            "lookdev.create_three_point_light_rig": "Target node summary plus summaries for the created key, fill, and rim lights.",
+            "lookdev.create_three_point_light_rig": "Target node summary plus authored light types, target-fit data, distances, placement mode, and warnings for the created key, fill, and rim lights.",
             "pdg.inspect_schedulers": "Scheduler node summaries with working directory and scheduler type info.",
             "pdg.get_workitem_logs": "PDG work-item log payloads grouped by work item.",
             "pdg.retry_workitems": "PDG dirty/retry acknowledgement plus refreshed graph summary.",
@@ -325,8 +325,14 @@ class LiveOperations(
             "node.delete": [
                 "Missing nodes return `errorFamily = validation` unless `ignore_missing = true`.",
             ],
+            "parm.list": [
+                "Use `name_prefix`, `name_contains`, `limit`, and `offset` to keep heavy parm listings bounded.",
+            ],
             "scene.save_hip": [
                 "Blocked save paths return `errorFamily = policy` when file writes are disabled or outside approved roots.",
+            ],
+            "scene.create_turntable_camera": [
+                "The helper does not activate the viewport camera unless `activate_viewport_camera = true` is requested.",
             ],
             "snapshot.capture_viewport": [
                 "Viewport capture can fail with `errorFamily = runtime` if no compatible Scene Viewer is available in the current UI context.",
@@ -359,6 +365,10 @@ class LiveOperations(
             "hda.promote_parm": [
                 "Parm promotion on locked or unsupported assets may fail with `errorFamily = runtime` if Houdini refuses definition edits.",
             ],
+            "lookdev.create_three_point_light_rig": [
+                "The helper chooses light type from inferred asset scale; inspect `placementMode` and `lights[].lightType` in the response.",
+                "Large exterior assets default to distant-style lighting instead of point lights.",
+            ],
         }
         return notes.get(name, [])
 
@@ -384,6 +394,12 @@ class LiveOperations(
                 {
                     "description": "Find display-flagged null nodes under a geometry object.",
                     "arguments": {"root_path": "/obj/geo1", "node_type_name": "null", "flag_name": "display", "flag_value": True},
+                }
+            ],
+            "parm.list": [
+                {
+                    "description": "Inspect only light-related parms on a heavy light object.",
+                    "arguments": {"node_path": "/obj/lookdev_rig_key", "name_prefix": "light_", "limit": 80, "offset": 0},
                 }
             ],
             "graph.plan_edit": [
@@ -552,7 +568,7 @@ class LiveOperations(
             "scene.create_turntable_camera": [
                 {
                     "description": "Create a turntable rig around a displayable SOP output.",
-                    "arguments": {"target_path": "/obj/geo1/OUT", "camera_name": "turntable_cam", "frame_range": [1, 120]},
+                    "arguments": {"target_path": "/obj/geo1/OUT", "camera_name": "turntable_cam", "frame_range": [1, 120], "activate_viewport_camera": True},
                 }
             ],
             "render.inspect_graph": [
@@ -593,8 +609,8 @@ class LiveOperations(
             ],
             "lookdev.create_three_point_light_rig": [
                 {
-                    "description": "Create a basic three-point light setup for a lookdev or turntable scene.",
-                    "arguments": {"rig_name": "lookdev_rig"},
+                    "description": "Create a scale-aware three-point light setup for a large exterior asset.",
+                    "arguments": {"rig_name": "lookdev_rig", "target_path": "/obj/tower1/OUT"},
                 }
             ],
         }

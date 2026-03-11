@@ -13,8 +13,42 @@ class ParmOperationsMixin:
     def _parm_list_impl(self, arguments: dict[str, Any]) -> dict[str, Any]:
         node_path = str(arguments.get("node_path", "")).strip()
         node = self._require_node_by_path(node_path, label="node_path")
-        parms = [self._parm_summary(parm) for parm in node.parms()]
-        return {"nodePath": node.path(), "count": len(parms), "parms": parms}
+        name_prefix = str(arguments.get("name_prefix", "")).strip().lower()
+        name_contains = str(arguments.get("name_contains", "")).strip().lower()
+        limit = int(arguments.get("limit", 250))
+        offset = int(arguments.get("offset", 0))
+        if limit <= 0:
+            raise JsonRpcError(INVALID_PARAMS, "limit must be greater than 0")
+        if offset < 0:
+            raise JsonRpcError(INVALID_PARAMS, "offset must be greater than or equal to 0")
+
+        filtered = []
+        for parm in node.parms():
+            parm_name = self._safe_value(parm.name, "") or ""
+            parm_label = self._safe_value(lambda: parm.parmTemplate().label(), "") or ""
+            haystacks = (parm_name.lower(), parm_label.lower())
+            if name_prefix and not any(item.startswith(name_prefix) for item in haystacks):
+                continue
+            if name_contains and not any(name_contains in item for item in haystacks):
+                continue
+            filtered.append(parm)
+
+        total_count = len(filtered)
+        window = filtered[offset: offset + limit]
+        parms = [self._parm_summary(parm) for parm in window]
+        return {
+            "nodePath": node.path(),
+            "count": len(parms),
+            "totalCount": total_count,
+            "offset": offset,
+            "limit": limit,
+            "hasMore": (offset + len(parms)) < total_count,
+            "filters": {
+                "namePrefix": name_prefix or None,
+                "nameContains": name_contains or None,
+            },
+            "parms": parms,
+        }
 
     def parm_list(self, arguments: dict[str, Any], context: RequestContext) -> dict[str, Any]:
         data = self._call_live(lambda: self._parm_list_impl(arguments), context)
