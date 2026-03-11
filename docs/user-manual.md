@@ -71,6 +71,12 @@ Auth:
 - otherwise use:
   `Authorization: Bearer <your-token>`
 
+Important validation note:
+
+- these settings are documented for the Codex app
+- the implemented validation in this repo has proven the Houdini MCP server over its Streamable HTTP JSON-RPC transport
+- it has not proven native Codex runtime tool exposure from inside this agent runtime
+
 ## 4. Houdini Conventions
 
 HocusPocus exposes orientation notes so agents do not have to guess:
@@ -345,6 +351,7 @@ If Codex cannot connect:
 - verify Houdini reports `running: True`
 - verify the URL is `http://127.0.0.1:37219/hocuspocus/mcp`
 - verify the token matches `token.txt`
+- if the server responds over HTTP but Codex still does not surface tools, treat that as an app-side MCP wiring issue rather than a Houdini server failure
 
 If a snapshot or render path is rejected:
 

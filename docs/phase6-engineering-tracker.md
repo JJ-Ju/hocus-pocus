@@ -26,6 +26,8 @@ Status: in progress
 Goal:
 
 - let agents author tower, façade, and hard-surface building forms through semantic tools instead of low-level node planning
+- enforce a system-first approach where tools build reusable procedural generator graphs instead of large counts of explicitly placed mesh nodes
+- ensure the resulting tools behave like generator scaffolds that agents can shape into different architectural styles, not fixed hardcoded outputs
 
 Tasks:
 
@@ -34,19 +36,25 @@ Tasks:
 - [x] Implement at least two follow-up building authoring helpers such as façade bands, windows, or rooftop mechanical detail.
 - [x] Return stable building summaries with key node refs, output paths, and high-level authored parameters.
 - [x] Live-validate a disposable building network in Houdini.
+- [ ] Refactor the building toolkit toward compact procedural graph patterns instead of explicit repeated mesh-node placement.
 - [ ] Improve façade articulation beyond simple stacked massing and box detail.
+- [ ] Introduce true building assembly systems such as envelope, slab, core, and façade modules that behave like a generator rather than direct geometry placement.
+- [ ] Reframe building helpers as editable procedural scaffolds so the same system can be steered toward different architectural languages instead of a single canned tower outcome.
 
 Done when:
 
 - an agent can create a procedural tower blockout through semantic tools
 - the generated network is inspectable and editable with the underlying node tools
 - repeated runs return stable refs and summaries
+- the resulting graph is recognizably a procedural building system rather than a large pile of hand-authored repeated SOP boxes
+- the system exposes enough rule structure that an agent could plausibly steer it toward divergent architectural styles rather than only reproducing one fixed look
 
 Manual smoke:
 
 - generate a disposable tower under `/obj`
 - add at least one façade or rooftop pass
 - verify the display node updates and the network remains editable
+- verify repeated style or authoring passes reuse or replace prior generated systems instead of continuously appending more explicit mesh nodes
 
 ## P6-M2. Material and Lookdev Authoring Macros
 
@@ -186,3 +194,5 @@ These are the highest-value agent-authoring improvements after the completed pla
 - Wired the building tools into MCP metadata with output summaries, examples, and failure notes.
 - Live-validated the first building slice in Houdini on `/obj/tower_alpha1`, including tower massing, structural bands, rooftop mechanical detail, output geometry summary, and editable SOP-network structure.
 - The next `P6-M1` slice should improve façade articulation so generated towers move beyond stacked box forms.
+- Clarified the broader phase-six rule: the agent should be building procedural systems in Houdini, not directly generating large counts of explicit mesh nodes. Future slices should therefore favor copy, repeat, scatter, attribute, and parameter-driven graph logic over one-box-per-feature authoring.
+- Clarified that even example generators should be treated as generator scaffolds and procedural grammar starting points, not as fixed baked asset rules.

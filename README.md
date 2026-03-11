@@ -16,6 +16,13 @@ That installs the package into:
 %USERPROFILE%\Documents\houdini21.0\packages\
 ```
 
+During install, the script also:
+
+- provisions a stable HocusPocus bearer token into the installed config
+- sets the user environment variable `HOCUSPOCUS_TOKEN`
+
+So the normal local setup does not require copying tokens by hand after install.
+
 ## Verify
 
 Launch Houdini. In Houdini's Python shell:
@@ -39,16 +46,16 @@ Add a custom MCP server in the Codex app with:
 - Name: `houdini`
 - URL: `http://127.0.0.1:37219/hocuspocus/mcp`
 
-Use the bearer token from:
+If the app asks for an environment variable name, use:
 
 ```text
-%USERPROFILE%\Documents\houdini21.0\hocuspocus\runtime\token.txt
+HOCUSPOCUS_TOKEN
 ```
 
-If the app asks for headers instead of a token field:
+If the app asks for headers instead of a token field, use:
 
 ```text
-Authorization: Bearer <your-token>
+Authorization: Bearer <value of HOCUSPOCUS_TOKEN>
 ```
 
 The health route is:
@@ -56,6 +63,8 @@ The health route is:
 ```text
 http://127.0.0.1:37219/hocuspocus/healthz
 ```
+
+This repo documents the Codex app connection settings, but the repository validation performed so far has only proven the Houdini-hosted MCP endpoint over its Streamable HTTP transport. It has not proven native Codex runtime tool exposure from inside this agent runtime.
 
 ## Included
 

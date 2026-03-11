@@ -73,6 +73,57 @@ function Build-PackageJson {
     [System.IO.File]::WriteAllText($Path, $content, $utf8NoBom)
 }
 
+function New-StableToken {
+    $bytes = New-Object byte[] 24
+    [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
+    $token = [Convert]::ToBase64String($bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+    return $token
+}
+
+function Provision-InstallToken {
+    param([string]$ConfigPath)
+
+    if (-not (Test-Path $ConfigPath)) {
+        throw "Config file not found: $ConfigPath"
+    }
+
+    $content = Get-Content $ConfigPath -Raw
+    $tokenModeMatch = [regex]::Match($content, '(?m)^token_mode\s*=\s*"([^"]*)"')
+    if (-not $tokenModeMatch.Success) {
+        throw "token_mode not found in $ConfigPath"
+    }
+
+    $tokenMode = $tokenModeMatch.Groups[1].Value
+    if ($tokenMode -eq "disabled") {
+        return @{
+            TokenEnabled = $false
+            Token = ""
+        }
+    }
+
+    $tokenMatch = [regex]::Match($content, '(?m)^token\s*=\s*"([^"]*)"')
+    $token = if ($tokenMatch.Success) { $tokenMatch.Groups[1].Value } else { "" }
+    if (-not $token) {
+        $token = New-StableToken
+    }
+
+    $content = [regex]::Replace($content, '(?m)^token_mode\s*=\s*"([^"]*)"', 'token_mode = "static"')
+    if ($tokenMatch.Success) {
+        $escapedToken = $token.Replace('\', '\\')
+        $content = [regex]::Replace($content, '(?m)^token\s*=\s*"([^"]*)"', "token = `"$escapedToken`"")
+    } else {
+        $content += [Environment]::NewLine + "token = `"$token`"" + [Environment]::NewLine
+    }
+
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($ConfigPath, $content, $utf8NoBom)
+
+    return @{
+        TokenEnabled = $true
+        Token = $token
+    }
+}
+
 if ($Clean -and (Test-Path $resolvedOutputDir)) {
     Write-Step "Cleaning existing output at $resolvedOutputDir"
     Remove-Item -Recurse -Force $resolvedOutputDir
@@ -116,14 +167,29 @@ if ($Install) {
         Remove-Item -Recurse -Force $installedPluginDir
     }
 
+    $stagedConfigPath = Join-Path $stagingRoot "config\default.toml"
+    $tokenInfo = Provision-InstallToken -ConfigPath $stagedConfigPath
+
     Copy-Item -Path $stagingRoot -Destination $installedPluginDir -Recurse -Force
     Copy-Item -Path $packageFilePath -Destination (Join-Path $packagesDir "hocuspocus.json") -Force
+
+    if ($tokenInfo.TokenEnabled) {
+        $env:HOCUSPOCUS_TOKEN = $tokenInfo.Token
+        [Environment]::SetEnvironmentVariable("HOCUSPOCUS_TOKEN", $tokenInfo.Token, "User")
+    }
 
     Write-Host ""
     Write-Host "Installed to:"
     Write-Host "  $installedPluginDir"
     Write-Host "Package file:"
     Write-Host "  $(Join-Path $packagesDir 'hocuspocus.json')"
+    if ($tokenInfo.TokenEnabled) {
+        Write-Host "Configured auth token:"
+        Write-Host "  HOCUSPOCUS_TOKEN (user environment variable)"
+    } else {
+        Write-Host "Configured auth token:"
+        Write-Host "  disabled"
+    }
 } else {
     Write-Host ""
     Write-Host "Staged package:"

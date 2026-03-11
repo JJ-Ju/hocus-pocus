@@ -8,13 +8,19 @@ import threading
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
+from urllib.parse import urlparse
 
 from hocuspocus.live.context import OperationCancelledError, RequestContext
 from hocuspocus.live.dispatcher import LiveCommandDispatcher
 from hocuspocus.live.monitor import SceneEventMonitor
 from hocuspocus.live.operations import LiveOperations
 from hocuspocus.live.tasks import LiveTaskManager
-from hocuspocus.version import PROTOCOL_VERSION, SERVER_NAME, __version__
+from hocuspocus.version import (
+    PROTOCOL_VERSION,
+    SERVER_NAME,
+    SUPPORTED_PROTOCOL_VERSIONS,
+    __version__,
+)
 
 from .audit import AuditLogger
 from .jsonrpc import (
@@ -39,7 +45,7 @@ def _json_dumps(payload: Any) -> bytes:
 
 class RuntimeRequestHandler(BaseHTTPRequestHandler):
     server_version = "HocusPocusMCP/0.1"
-    protocol_version = "HTTP/1.0"
+    protocol_version = "HTTP/1.1"
 
     def _runtime(self) -> "HocusPocusRuntime":
         return self.server.runtime  # type: ignore[attr-defined]
@@ -48,6 +54,26 @@ class RuntimeRequestHandler(BaseHTTPRequestHandler):
         return self._runtime().logger.getChild("http")
 
     def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
+        if self.path == self._runtime().settings.normalized_mcp_route:
+            if not self._runtime().authorize(self.headers.get("Authorization", "")):
+                self._write_plain(
+                    HTTPStatus.UNAUTHORIZED,
+                    "Unauthorized.\n",
+                )
+                return
+            if not self._runtime().origin_allowed(self.headers.get("Origin")):
+                self._write_plain(
+                    HTTPStatus.FORBIDDEN,
+                    "Origin not allowed.\n",
+                )
+                return
+            self.send_response(HTTPStatus.METHOD_NOT_ALLOWED)
+            self.send_header("Allow", "POST")
+            self.send_header("Content-Length", "0")
+            self.send_header("Connection", "close")
+            self.send_header("MCP-Protocol-Version", PROTOCOL_VERSION)
+            self.end_headers()
+            return
         if self.path == self._runtime().settings.normalized_health_route:
             body = _json_dumps(self._runtime().health_payload())
             self.send_response(HTTPStatus.OK)
@@ -62,6 +88,10 @@ class RuntimeRequestHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
         if self.path != self._runtime().settings.normalized_mcp_route:
             self.send_error(HTTPStatus.NOT_FOUND)
+            return
+
+        if not self._runtime().origin_allowed(self.headers.get("Origin")):
+            self._write_plain(HTTPStatus.FORBIDDEN, "Origin not allowed.\n")
             return
 
         if not self._runtime().authorize(self.headers.get("Authorization", "")):
@@ -91,11 +121,17 @@ class RuntimeRequestHandler(BaseHTTPRequestHandler):
             )
             return
 
+        protocol_error = self._runtime().validate_protocol_header(self.headers, payload)
+        if protocol_error is not None:
+            self._write_plain(HTTPStatus.BAD_REQUEST, protocol_error + "\n")
+            return
+
         response = self._runtime().handle_request(payload)
         if response is None:
             self.send_response(HTTPStatus.ACCEPTED)
             self.send_header("Content-Length", "0")
             self.send_header("Connection", "close")
+            self.send_header("MCP-Protocol-Version", PROTOCOL_VERSION)
             self.end_headers()
             return
         self._write_json(HTTPStatus.OK, response)
@@ -106,6 +142,17 @@ class RuntimeRequestHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Connection", "close")
+        self.send_header("MCP-Protocol-Version", PROTOCOL_VERSION)
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _write_plain(self, status: HTTPStatus, message: str) -> None:
+        body = message.encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Connection", "close")
+        self.send_header("MCP-Protocol-Version", PROTOCOL_VERSION)
         self.end_headers()
         self.wfile.write(body)
 
@@ -225,6 +272,35 @@ class HocusPocusRuntime:
         expected = f"Bearer {self._token}"
         return header_value == expected
 
+    def origin_allowed(self, origin_header: str | None) -> bool:
+        if not origin_header:
+            return True
+        try:
+            parsed = urlparse(origin_header)
+        except Exception:
+            return False
+        hostname = (parsed.hostname or "").lower()
+        allowed_hosts = {
+            "127.0.0.1",
+            "localhost",
+            self.settings.host.lower(),
+        }
+        return hostname in allowed_hosts
+
+    def validate_protocol_header(self, headers: Any, payload: Any) -> str | None:
+        protocol_header = str(headers.get("MCP-Protocol-Version", "") or "").strip()
+        if isinstance(payload, dict):
+            method = payload.get("method")
+            if method == "initialize":
+                if protocol_header and protocol_header not in SUPPORTED_PROTOCOL_VERSIONS:
+                    return "Unsupported MCP-Protocol-Version header."
+                return None
+        if not protocol_header:
+            return None
+        if protocol_header not in SUPPORTED_PROTOCOL_VERSIONS:
+            return "Unsupported MCP-Protocol-Version header."
+        return None
+
     def handle_request(self, payload: Any) -> Any:
         if isinstance(payload, list):
             responses = [self._handle_single(item) for item in payload]
@@ -305,7 +381,7 @@ class HocusPocusRuntime:
         context = self._build_context(method, request_id, params)
 
         if method == "initialize":
-            return self._initialize_payload()
+            return self._initialize_payload(params)
         if method == "ping":
             return {}
         if method == "tools/list":
@@ -322,10 +398,9 @@ class HocusPocusRuntime:
                 raise JsonRpcError(METHOD_NOT_FOUND, f"Unknown tool: {name}")
             return self._call_tool(tool, arguments, context)
         if method == "resources/list":
-            return {
-                "resources": self.resources.list_payload(),
-                "resourceTemplates": self.operations.resource_templates_payload(),
-            }
+            return {"resources": self.resources.list_payload()}
+        if method == "resources/templates/list":
+            return {"resourceTemplates": self.operations.resource_templates_payload()}
         if method == "resources/read":
             uri = params.get("uri")
             if not isinstance(uri, str):
@@ -426,9 +501,24 @@ class HocusPocusRuntime:
             "model.create_house_blockout",
         }
 
-    def _initialize_payload(self) -> dict[str, Any]:
+    def _initialize_payload(self, params: dict[str, Any]) -> dict[str, Any]:
+        requested_version = str(params.get("protocolVersion", "") or "").strip()
+        negotiated_version = PROTOCOL_VERSION
+        if requested_version:
+            if requested_version not in SUPPORTED_PROTOCOL_VERSIONS:
+                raise JsonRpcError(
+                    INVALID_PARAMS,
+                    "Unsupported protocol version.",
+                    {
+                        "requestedProtocolVersion": requested_version,
+                        "supportedProtocolVersions": list(SUPPORTED_PROTOCOL_VERSIONS),
+                    },
+                    family="request",
+                    retryable=False,
+                )
+            negotiated_version = requested_version
         return {
-            "protocolVersion": PROTOCOL_VERSION,
+            "protocolVersion": negotiated_version,
             "serverInfo": {
                 "name": SERVER_NAME,
                 "version": __version__,
