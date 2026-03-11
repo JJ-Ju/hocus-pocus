@@ -25,17 +25,16 @@ Status: in progress
 
 Goal:
 
-- let agents author tower, façade, and hard-surface building forms through semantic tools instead of low-level node planning
+- let agents author tower, façade, and hard-surface building forms through system-building primitives and scaffold patterns instead of misleading canned macros
 - enforce a system-first approach where tools build reusable procedural generator graphs instead of large counts of explicitly placed mesh nodes
-- ensure the resulting tools behave like generator scaffolds that agents can shape into different architectural styles, not fixed hardcoded outputs
+- ensure the resulting surface behaves like generator scaffolds that agents can shape into different architectural styles, not fixed hardcoded outputs
 
 Tasks:
 
 - [x] Define the first semantic building tool slice and wire it into the MCP surface.
-- [x] Implement `building.generate_massing`.
-- [x] Implement at least two follow-up building authoring helpers such as façade bands, windows, or rooftop mechanical detail.
-- [x] Return stable building summaries with key node refs, output paths, and high-level authored parameters.
 - [x] Live-validate a disposable building network in Houdini.
+- [ ] Remove misleading canned building macros from the default tool surface.
+- [ ] Replace asset-style building macros with scaffold-oriented helpers that support manual low-level graph authoring through the core toolkit.
 - [ ] Refactor the building toolkit toward compact procedural graph patterns instead of explicit repeated mesh-node placement.
 - [ ] Improve façade articulation beyond simple stacked massing and box detail.
 - [ ] Introduce true building assembly systems such as envelope, slab, core, and façade modules that behave like a generator rather than direct geometry placement.
@@ -43,9 +42,8 @@ Tasks:
 
 Done when:
 
-- an agent can create a procedural tower blockout through semantic tools
+- an agent can create a procedural tower blockout through scaffold-oriented tools and the lower-level node toolkit
 - the generated network is inspectable and editable with the underlying node tools
-- repeated runs return stable refs and summaries
 - the resulting graph is recognizably a procedural building system rather than a large pile of hand-authored repeated SOP boxes
 - the system exposes enough rule structure that an agent could plausibly steer it toward divergent architectural styles rather than only reproducing one fixed look
 

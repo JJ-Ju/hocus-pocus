@@ -6,7 +6,7 @@ Branch: `codex/phase6`
 
 Scope:
 
-- add the domain-specific authoring tools and macros needed for reliable agent-driven asset creation
+- add the domain-specific authoring tools and scaffold patterns needed for reliable agent-driven asset creation
 - move from "powerful generic Houdini automation" to "strong procedural asset and shot authoring"
 - focus on semantic building blocks, reusable procedural kits, and critique loops instead of low-level graph churn
 - treat Houdini as the procedural engine and the agent as the designer of rule graphs, not the direct placer of final geometry
@@ -54,13 +54,11 @@ Problem:
 
 Deliver:
 
-- semantic building generators such as:
-  - `building.generate_massing`
-  - `building.subdivide_facade`
-  - `building.add_window_grid`
-  - `building.add_structural_bands`
-  - `building.add_rooftop_mech`
-  - `building.apply_style_profile`
+- semantic building scaffold tools such as:
+  - façade-subdivision scaffold builders
+  - floor-repetition scaffold builders
+  - rooftop-population scaffold builders
+  - building-grammar and module-vocabulary helpers
 - reusable façade, trim, window, roof, and rooftop component libraries
 - graph templates for skyscraper, tower, industrial, and modular hard-surface patterns
 - parameterized style controls for density, repetition, damage, detail level, and silhouette complexity
@@ -69,9 +67,9 @@ Deliver:
 
 Success looks like:
 
-- an agent can generate a convincing procedural sci-fi tower or city-block building without inventing the network structure from scratch
+- an agent can generate a convincing procedural sci-fi tower or city-block building without inventing the graph structure from scratch
 - repeated builds are structurally coherent and easier to iterate
-- the resulting graphs look like reusable procedural systems, not one-off modeling sessions made from many individually placed meshes
+- the resulting graphs look like reusable procedural systems, not one-off modeling sessions made from many individually placed meshes or misleading canned macros
 
 ## Phase 6B. Material and Lookdev Authoring Macros
 

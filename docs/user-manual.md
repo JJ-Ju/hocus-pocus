@@ -144,7 +144,6 @@ These are exposed through:
 - `geometry.get_summary`
 - `scene.create_turntable_camera`
 - `snapshot.capture_viewport`
-- `model.create_house_blockout`
 
 ## 6. Dynamic Resources
 
@@ -221,9 +220,7 @@ It can size the orbit using geometry bounds from a target node.
 %USERPROFILE%\Documents\houdini21.0\hocuspocus\output\snapshots\
 ```
 
-### House blockout macro
-
-`model.create_house_blockout` is a proof-point high-level modeling macro. It creates a simple house network under `/obj` with a displayable `OUT_house`.
+High-level canned asset macros are intentionally not part of the default tool surface. The current server is meant to help agents build procedural Houdini systems directly from lower-level graph, parm, material, render, Solaris, PDG, packaging, and validation tools.
 
 ### Managed exports
 

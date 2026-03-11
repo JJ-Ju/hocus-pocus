@@ -74,7 +74,8 @@ Current server surface includes:
 - dynamic node and task resources
 - non-blocking cook, render, and export tasks with polling and cancellation
 - material creation and assignment tools
-- higher-level tools such as batch graph edits, turntable camera creation, managed snapshots, geometry summaries, and a house blockout macro
+- graph, validation, dependency, PDG, Solaris, packaging, and HDA tools for building procedural Houdini systems directly
+- higher-level utilities such as batch graph edits, turntable camera creation, managed snapshots, and geometry summaries
 - named policy profiles with effective-policy reporting in status and resources
 
 ## Docs
