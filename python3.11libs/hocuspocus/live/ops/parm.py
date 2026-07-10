@@ -78,6 +78,33 @@ class ParmOperationsMixin:
         data = self._call_live(lambda: self._parm_set_impl(arguments), context)
         return self._tool_response(f"Set parameter {data['path']}.", data)
 
+    def _parm_set_many_impl(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        hou_module = self._require_hou()
+        assignments = arguments.get("assignments", [])
+        if not isinstance(assignments, list) or not assignments:
+            raise JsonRpcError(INVALID_PARAMS, "assignments must be a non-empty array")
+
+        updated = []
+        with hou_module.undos.group("HocusPocus: set many parms"):
+            for index, assignment in enumerate(assignments):
+                if not isinstance(assignment, dict):
+                    raise JsonRpcError(INVALID_PARAMS, "Each assignment must be an object", {"index": index})
+                parm_path = str(assignment.get("parm_path", "")).strip()
+                if not parm_path:
+                    raise JsonRpcError(INVALID_PARAMS, "Each assignment requires parm_path", {"index": index})
+                parm = self._require_parm_by_path(parm_path)
+                parm.set(assignment.get("value"))
+                updated.append(self._parm_summary(parm))
+
+        return {
+            "count": len(updated),
+            "assignments": updated,
+        }
+
+    def parm_set_many(self, arguments: dict[str, Any], context: RequestContext) -> dict[str, Any]:
+        data = self._call_live(lambda: self._parm_set_many_impl(arguments), context)
+        return self._tool_response(f"Set {data['count']} parameters.", data)
+
     def _parm_set_expression_impl(self, arguments: dict[str, Any]) -> dict[str, Any]:
         hou_module = self._require_hou()
         parm_path = str(arguments.get("parm_path", "")).strip()

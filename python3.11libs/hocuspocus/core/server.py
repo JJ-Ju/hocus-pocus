@@ -472,7 +472,14 @@ class HocusPocusRuntime:
             result=result,
         )
         if self._should_bump_graph_revision(tool.name):
-            self.monitor.mark_dirty(f"tool:{tool.name}")
+            scope_path = None
+            dirty_scope_for_tool = getattr(self.operations, "dirty_scope_for_tool", None)
+            if callable(dirty_scope_for_tool):
+                try:
+                    scope_path = dirty_scope_for_tool(tool.name, arguments, result)
+                except Exception:
+                    self.logger.debug("failed to resolve dirty scope for %s", tool.name, exc_info=True)
+            self.monitor.mark_dirty(f"tool:{tool.name}", scope_path=scope_path)
         return result
 
     @staticmethod

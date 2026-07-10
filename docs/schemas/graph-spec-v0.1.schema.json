@@ -1,0 +1,228 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "hocuspocus://schemas/graph-spec/v0.1",
+  "title": "HocusScript GraphSpec Preview v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "kind",
+    "graphSpecVersion",
+    "languageVersion",
+    "name",
+    "target",
+    "category",
+    "mode",
+    "expectedRevision",
+    "ownership",
+    "externalNodes",
+    "nodes",
+    "display",
+    "render",
+    "output",
+    "layout",
+    "span"
+  ],
+  "properties": {
+    "$schema": {
+      "const": "hocuspocus://schemas/graph-spec/v0.1"
+    },
+    "kind": {
+      "const": "graph_spec"
+    },
+    "graphSpecVersion": {
+      "const": "0.1"
+    },
+    "languageVersion": {
+      "type": "string",
+      "minLength": 1
+    },
+    "name": {
+      "$ref": "#/$defs/identifier"
+    },
+    "target": {
+      "oneOf": [
+        {"type": "null"},
+        {"$ref": "#/$defs/absolutePath"}
+      ]
+    },
+    "category": {
+      "oneOf": [
+        {"type": "null"},
+        {"$ref": "#/$defs/identifier"}
+      ]
+    },
+    "mode": {
+      "enum": ["merge", "reconcile"]
+    },
+    "expectedRevision": {
+      "oneOf": [
+        {"type": "null"},
+        {"type": "integer", "minimum": 0}
+      ]
+    },
+    "ownership": {
+      "oneOf": [
+        {"type": "null"},
+        {"type": "string", "minLength": 1}
+      ]
+    },
+    "externalNodes": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/externalNode"}
+    },
+    "nodes": {
+      "type": "array",
+      "maxItems": 10000,
+      "items": {"$ref": "#/$defs/node"}
+    },
+    "display": {"$ref": "#/$defs/nullableIdentifier"},
+    "render": {"$ref": "#/$defs/nullableIdentifier"},
+    "output": {"$ref": "#/$defs/nullableIdentifier"},
+    "layout": {
+      "oneOf": [
+        {"type": "null"},
+        {"const": "auto"}
+      ]
+    },
+    "span": {"$ref": "#/$defs/sourceSpan"}
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+    },
+    "nullableIdentifier": {
+      "oneOf": [
+        {"type": "null"},
+        {"$ref": "#/$defs/identifier"}
+      ]
+    },
+    "absolutePath": {
+      "type": "string",
+      "pattern": "^/"
+    },
+    "sourcePosition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["offset", "line", "column"],
+      "properties": {
+        "offset": {"type": "integer", "minimum": 0},
+        "line": {"type": "integer", "minimum": 1},
+        "column": {"type": "integer", "minimum": 1}
+      }
+    },
+    "sourceSpan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sourceUri", "start", "end"],
+      "properties": {
+        "sourceUri": {"type": "string", "minLength": 1, "maxLength": 1024},
+        "start": {"$ref": "#/$defs/sourcePosition"},
+        "end": {"$ref": "#/$defs/sourcePosition"}
+      }
+    },
+    "literalValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "value", "span"],
+      "properties": {
+        "kind": {"const": "literal"},
+        "value": {
+          "type": ["null", "boolean", "integer", "number", "string"]
+        },
+        "span": {"$ref": "#/$defs/sourceSpan"}
+      }
+    },
+    "arrayValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "items", "span"],
+      "properties": {
+        "kind": {"const": "array"},
+        "items": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/value"}
+        },
+        "span": {"$ref": "#/$defs/sourceSpan"}
+      }
+    },
+    "codeValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "language", "body", "span"],
+      "properties": {
+        "kind": {"const": "code"},
+        "language": {"enum": ["vex", "python", "hscript"]},
+        "body": {"type": "string"},
+        "span": {"$ref": "#/$defs/sourceSpan"}
+      }
+    },
+    "value": {
+      "oneOf": [
+        {"$ref": "#/$defs/literalValue"},
+        {"$ref": "#/$defs/arrayValue"},
+        {"$ref": "#/$defs/codeValue"}
+      ]
+    },
+    "reference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["symbol", "outputIndex", "span"],
+      "properties": {
+        "symbol": {"$ref": "#/$defs/identifier"},
+        "outputIndex": {"type": "integer", "minimum": 0},
+        "span": {"$ref": "#/$defs/sourceSpan"}
+      }
+    },
+    "input": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["index", "source", "span"],
+      "properties": {
+        "index": {"type": "integer", "minimum": 0},
+        "source": {"$ref": "#/$defs/reference"},
+        "span": {"$ref": "#/$defs/sourceSpan"}
+      }
+    },
+    "parm": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "value", "span"],
+      "properties": {
+        "name": {"$ref": "#/$defs/identifier"},
+        "value": {"$ref": "#/$defs/value"},
+        "span": {"$ref": "#/$defs/sourceSpan"}
+      }
+    },
+    "node": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["symbol", "typeName", "inputs", "parms", "span"],
+      "properties": {
+        "symbol": {"$ref": "#/$defs/identifier"},
+        "typeName": {"type": "string", "minLength": 1},
+        "inputs": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/input"}
+        },
+        "parms": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/parm"}
+        },
+        "span": {"$ref": "#/$defs/sourceSpan"}
+      }
+    },
+    "externalNode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["symbol", "path", "adopted", "span"],
+      "properties": {
+        "symbol": {"$ref": "#/$defs/identifier"},
+        "path": {"$ref": "#/$defs/absolutePath"},
+        "adopted": {"type": "boolean"},
+        "span": {"$ref": "#/$defs/sourceSpan"}
+      }
+    }
+  }
+}

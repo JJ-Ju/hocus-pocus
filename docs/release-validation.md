@@ -45,6 +45,20 @@ Required result in a real Houdini `21.x` session:
 - server auto-starts
 - `hocuspocus.server_status()` reports `running: True`
 
+### Gate C1. Offline HocusScript Tests
+
+Run:
+
+```powershell
+python -m unittest discover -s tests -p "test_hocusscript*.py"
+```
+
+Required result:
+
+- lexer, parser, structural compiler, formatter, and preview-tool tests pass
+- preview compilation remains non-mutating and reports `readyForApply = false`
+- deterministic compile and formatter-idempotence tests pass
+
 ### Gate D. Live Smoke
 
 Run the scripted smoke:

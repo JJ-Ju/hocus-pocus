@@ -27,6 +27,9 @@ class SceneEventMonitor:
         self._playbar_callback_installed = False
         self._selection_callback_installed = False
         self._playbar_retry_registered = False
+        self._scene_dirty_revision = 0
+        self._dirty_scopes: dict[str, int] = {}
+        self._listeners: list[Any] = []
 
     def start(self) -> None:
         if hou is None:
@@ -99,25 +102,55 @@ class SceneEventMonitor:
         self._selection_callback_installed = False
         self._playbar_retry_registered = False
 
-    def _bump(self, event_name: str) -> None:
+    def add_listener(self, listener: Any) -> None:
+        with self._lock:
+            if listener not in self._listeners:
+                self._listeners.append(listener)
+
+    def remove_listener(self, listener: Any) -> None:
+        with self._lock:
+            self._listeners = [item for item in self._listeners if item is not listener]
+
+    def _bump(self, event_name: str, scope_path: str | None = None) -> None:
+        payload: dict[str, Any]
         with self._lock:
             self._revision += 1
             self._event_sequence += 1
             self._last_event = event_name
             self._last_event_time = time.time()
+            normalized_scope = str(scope_path).strip() if scope_path else None
+            if normalized_scope:
+                self._dirty_scopes[normalized_scope] = self._revision
+            else:
+                self._scene_dirty_revision = self._revision
+            payload = {
+                "sequence": self._event_sequence,
+                "revision": self._revision,
+                "event": event_name,
+                "timestamp": self._last_event_time,
+                "scopePath": normalized_scope,
+            }
             self._recent_events.append(
-                {
-                    "sequence": self._event_sequence,
-                    "revision": self._revision,
-                    "event": event_name,
-                    "timestamp": self._last_event_time,
-                }
+                payload
             )
             if len(self._recent_events) > 500:
                 self._recent_events = self._recent_events[-500:]
+            listeners = list(self._listeners)
+        for listener in listeners:
+            try:
+                listener(dict(payload))
+            except Exception:
+                self._logger.debug("monitor listener failed", exc_info=True)
 
-    def mark_dirty(self, event_name: str) -> None:
-        self._bump(event_name)
+    def mark_dirty(self, event_name: str, scope_path: str | None = None) -> None:
+        self._bump(event_name, scope_path=scope_path)
+
+    def clear_scope_dirty(self, scope_path: str) -> None:
+        normalized = str(scope_path).strip()
+        if not normalized:
+            return
+        with self._lock:
+            self._dirty_scopes.pop(normalized, None)
 
     def _on_hip_event(self, event_type: Any) -> None:
         self._bump(f"hip:{event_type}")
@@ -176,6 +209,9 @@ class SceneEventMonitor:
                 "playbarCallbackInstalled": self._playbar_callback_installed,
                 "playbarRetryRegistered": self._playbar_retry_registered,
                 "selectionCallbackInstalled": self._selection_callback_installed,
+                "sceneDirtyRevision": self._scene_dirty_revision,
+                "dirtyScopeCount": len(self._dirty_scopes),
+                "dirtyScopes": dict(self._dirty_scopes),
             }
 
     def recent_events(

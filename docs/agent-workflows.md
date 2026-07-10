@@ -8,21 +8,24 @@ Use this order:
 
 1. `session.info`
 2. `scene.get_summary`
-3. `houdini://graph/scene` or `graph.query`
-4. `node.get`, `parm.list`, or `geometry.get_summary` only for targeted detail
+3. `houdini://documents/scene`
+4. `houdini://documents/network/{path}` for the network you care about
+5. `document.query` only when you need targeted search across the current graph surface
+6. `node.get`, `parm.list`, or `geometry.get_summary` only for targeted detail
 
 Preferred pattern:
 
-- start broad with scene or graph summaries
+- start broad with scene and network documents
 - avoid many single-node reads when a graph or resource snapshot will answer the question
 
 ## 2. Plan Before Mutating
 
 Preferred tools:
 
-- `graph.plan_edit`
-- `scene.diff`
-- `graph.diff_subgraph`
+- `document.checkout`
+- `document.validate`
+- `document.diff`
+- `document.apply` with `mode = validate_only`
 
 Use these before:
 
@@ -32,8 +35,7 @@ Use these before:
 
 If the desired result spans multiple changes, prefer:
 
-- `graph.batch_edit`
-- `graph.apply_patch`
+- document checkout plus document apply
 
 over many independent low-level calls.
 
@@ -42,17 +44,22 @@ over many independent low-level calls.
 Use this order:
 
 1. high-level semantic tool if it exists
-2. `graph.batch_edit` for grouped low-level work
-3. low-level node and parm tools only when needed
+2. `document.checkout`
+3. edit the network document JSON
+4. `document.validate`
+5. `document.apply`
+6. low-level node and parm tools only when a workflow is not covered yet
 
 Preferred tools by layer:
 
 - semantic:
   - `scene.create_turntable_camera`
   - `model.create_house_blockout`
-- grouped:
-  - `graph.batch_edit`
-  - `graph.apply_patch`
+- document:
+  - `document.checkout`
+  - `document.validate`
+  - `document.diff`
+  - `document.apply`
 - low-level:
   - `node.create`
   - `node.connect`
@@ -63,6 +70,20 @@ Placement note:
 
 - new node tiles are automatically placed on the managed integer grid
 - agents should not micromanage tile positions unless layout itself matters
+
+### HocusScript structural preview
+
+`document.compile_source` accepts `.hocus` source text and currently performs only offline parsing, structural validation, deterministic formatting, and GraphSpec generation.
+
+Rules for the current preview:
+
+- pass source contents rather than a server-side file path
+- keep `strict = true` for checked-in files so `hocus 0.1;` is required
+- inspect `diagnostics`, `formattedSource`, and `graphSpec`
+- require `readyForDocumentLowering = false` and `readyForApply = false`
+- do not treat a valid structural preview as a Houdini-aware or applyable plan
+
+Catalog resolution, network-document lowering, and immutable plan application remain gated by the HocusScript roadmap.
 
 ## 4. Handle Long-Running Work
 
@@ -87,11 +108,13 @@ Do not assume partial outputs are absent after cancellation.
 
 Prefer resources when you want state snapshots:
 
+- `houdini://documents/scene`
+- `houdini://documents/network/{path}`
+- `houdini://documents/checkouts/{checkout_id}`
+- `houdini://documents/diagnostics/{checkout_id}`
 - `houdini://nodes/{path}`
 - `houdini://nodes/{path}/parms`
 - `houdini://nodes/{path}/geometry-summary`
-- `houdini://graph/scene`
-- `houdini://graph/subgraph/{path}`
 - `houdini://tasks/recent`
 - `houdini://scene/events`
 - `houdini://usd/stage/{path}`

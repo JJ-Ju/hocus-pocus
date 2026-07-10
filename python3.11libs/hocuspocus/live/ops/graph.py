@@ -277,7 +277,12 @@ class GraphOperationsMixin:
         return self._json_safe_graph_value({"count": len(matches), "revision": snapshot.get("revision"), "nodes": matches})
 
     def graph_query(self, arguments: dict[str, Any], context: RequestContext) -> dict[str, Any]:
-        data = self._call_live(lambda: self._graph_query_impl(arguments), context)
+        document_query = self._call_live(lambda: self._document_query_impl(arguments), context)
+        data = {
+            "count": document_query["count"],
+            "revision": document_query["documentRevision"],
+            "nodes": [item["node"] | {"rootPath": item["rootPath"], "documentUri": item["documentUri"]} for item in document_query["matches"]],
+        }
         return self._tool_response(f"Matched {data['count']} graph node(s).", data)
 
     def _graph_bfs_impl(self, start_path: str, *, direction: str, max_depth: int) -> dict[str, Any]:
@@ -617,6 +622,8 @@ class GraphOperationsMixin:
         return self._tool_response("Planned a graph patch against the current scene graph.", data)
 
     def graph_apply_patch(self, arguments: dict[str, Any], context: RequestContext) -> dict[str, Any]:
+        if arguments.get("document") is not None or arguments.get("checkout_id") is not None:
+            return self.document_apply(arguments, context)
         operations = arguments.get("operations")
         patch = arguments.get("patch")
         transactional = bool(arguments.get("transactional", True))
@@ -638,7 +645,6 @@ class GraphOperationsMixin:
             },
             context,
         )
-        self._monitor.mark_dirty("tool:graph.apply_patch")
         after_snapshot = self._call_live(self._graph_snapshot, context)
         return self._tool_response(
             "Applied graph patch operations.",

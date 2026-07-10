@@ -31,6 +31,7 @@ class ResourceOperationsMixin:
             },
             "monitor": self._monitor.snapshot(),
             "graph": self._graph.stats(),
+            "graphStore": self._graph_store.stats(),
             "activeOperations": self._dispatcher.operations_snapshot(limit=20),
             "recentTasks": self._tasks.snapshots(limit=20),
         }
@@ -56,6 +57,24 @@ class ResourceOperationsMixin:
         uri: str,
         context: RequestContext,
     ) -> dict[str, object] | None:
+        if uri == "houdini://documents/scene":
+            return self.read_document_scene(context)
+        if uri == "houdini://documents/schema/network-document/v1":
+            return self.read_document_schema(context)
+        if uri.startswith("houdini://documents/network/"):
+            raw = uri[len("houdini://documents/network/") :].strip("/")
+            if raw:
+                node_path = self._dynamic_node_uri_to_path(f"houdini://nodes/{raw}")
+                if node_path is not None:
+                    return self.read_document_network(node_path, context)
+        if uri.startswith("houdini://documents/checkouts/"):
+            checkout_id = uri[len("houdini://documents/checkouts/") :].strip("/")
+            if checkout_id:
+                return self.read_document_checkout(checkout_id, context)
+        if uri.startswith("houdini://documents/diagnostics/"):
+            checkout_id = uri[len("houdini://documents/diagnostics/") :].strip("/")
+            if checkout_id:
+                return self.read_document_diagnostics(checkout_id, context)
         if uri == "houdini://graph/scene":
             return self.read_graph_scene(context)
         if uri == "houdini://graph/index":
@@ -168,6 +187,71 @@ class ResourceOperationsMixin:
 
     def resource_templates_payload(self) -> list[dict[str, object]]:
         return [
+            {
+                "uriTemplate": "houdini://documents/scene",
+                "name": "Scene Document",
+                "description": "Read the scene manifest over root document-capable Houdini networks.",
+                "mimeType": "application/json",
+                "payloadSummary": "Scene document with root network document links plus hip and graph metadata.",
+                "examples": [
+                    {
+                        "description": "Read the scene manifest before choosing a network document to edit.",
+                        "uri": "houdini://documents/scene",
+                    }
+                ],
+            },
+            {
+                "uriTemplate": "houdini://documents/network/{path}",
+                "name": "Network Document",
+                "description": "Read a canonical network document for a Houdini network or subnetwork path. `{path}` uses the same slash-separated or percent-encoded path rules as node resources.",
+                "mimeType": "application/json",
+                "payloadSummary": "Canonical network document with nodes, edges, parameter bindings, code blobs, and diagnostics.",
+                "examples": [
+                    {
+                        "description": "Read a SOP network document for a geometry object.",
+                        "uri": "houdini://documents/network/obj/geo1",
+                    }
+                ],
+            },
+            {
+                "uriTemplate": "houdini://documents/schema/network-document/v1",
+                "name": "Network Document Schema v1",
+                "description": "Read the locked machine-readable schema for the first-wave network document contract.",
+                "mimeType": "application/json",
+                "payloadSummary": "JSON Schema for `hocuspocus://schemas/network-document/v1`.",
+                "examples": [
+                    {
+                        "description": "Inspect the locked schema before generating or editing a network document.",
+                        "uri": "houdini://documents/schema/network-document/v1",
+                    }
+                ],
+            },
+            {
+                "uriTemplate": "houdini://documents/checkouts/{checkout_id}",
+                "name": "Checkout Document",
+                "description": "Read the current working document stored for a checkout created by `document.checkout`.",
+                "mimeType": "application/json",
+                "payloadSummary": "Working network document payload for a checkout id.",
+                "examples": [
+                    {
+                        "description": "Read the working document for a checkout after editing it offline.",
+                        "uri": "houdini://documents/checkouts/01234567-89ab-cdef-0123-456789abcdef",
+                    }
+                ],
+            },
+            {
+                "uriTemplate": "houdini://documents/diagnostics/{checkout_id}",
+                "name": "Checkout Diagnostics",
+                "description": "Read the latest validation or apply diagnostics stored for a checkout.",
+                "mimeType": "application/json",
+                "payloadSummary": "Diagnostic report payload for a checkout id.",
+                "examples": [
+                    {
+                        "description": "Read validation diagnostics for a checkout after calling `document.validate`.",
+                        "uri": "houdini://documents/diagnostics/01234567-89ab-cdef-0123-456789abcdef",
+                    }
+                ],
+            },
             {
                 "uriTemplate": "houdini://graph/scene",
                 "name": "Scene Graph Snapshot",

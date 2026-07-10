@@ -71,6 +71,24 @@ class OperationBaseMixin:
         }
 
     @staticmethod
+    def _resource_response_text(
+        uri: str,
+        payload: dict[str, Any],
+        *,
+        indent: int | None = None,
+        sort_keys: bool = False,
+    ) -> dict[str, Any]:
+        return {
+            "contents": [
+                {
+                    "uri": uri,
+                    "mimeType": "application/json",
+                    "text": json.dumps(payload, ensure_ascii=True, indent=indent, sort_keys=sort_keys),
+                }
+            ]
+        }
+
+    @staticmethod
     def _safe_value(getter: Any, default: Any = None) -> Any:
         try:
             return getter()
@@ -259,6 +277,63 @@ class OperationBaseMixin:
         return resolved
 
     @staticmethod
+    def _guess_document_scope_path(candidate: Any) -> str | None:
+        raw = str(candidate or "").strip()
+        if not raw.startswith("/"):
+            return None
+        segments = [item for item in raw.split("/") if item]
+        if not segments:
+            return None
+        first = segments[0]
+        if first == "obj":
+            if len(segments) >= 2:
+                return f"/obj/{segments[1]}"
+            return "/obj"
+        if first in {"stage", "mat", "tasks", "out"}:
+            return f"/{first}"
+        return f"/{first}"
+
+    def dirty_scope_for_tool(
+        self,
+        tool_name: str,
+        arguments: dict[str, Any],
+        result: dict[str, Any] | None = None,
+    ) -> str | None:
+        if tool_name in {"scene.new", "scene.open_hip", "scene.merge_hip", "scene.undo", "scene.redo"}:
+            return None
+        candidate_keys = (
+            "root_path",
+            "node_path",
+            "path",
+            "parent_path",
+            "dest_node_path",
+            "source_node_path",
+            "target_node_path",
+            "input_node_path",
+            "graph_path",
+            "instance_path",
+            "source_parm_path",
+            "parm_path",
+            "material_path",
+        )
+        for key in candidate_keys:
+            scope = self._guess_document_scope_path(arguments.get(key))
+            if scope is not None:
+                return scope
+        structured = result.get("structuredContent") if isinstance(result, dict) else None
+        if isinstance(structured, dict):
+            for key in ("rootPath", "path", "nodePath", "targetPath"):
+                scope = self._guess_document_scope_path(structured.get(key))
+                if scope is not None:
+                    return scope
+            house_node = structured.get("houseNode")
+            if isinstance(house_node, dict):
+                scope = self._guess_document_scope_path(house_node.get("path"))
+                if scope is not None:
+                    return scope
+        return None
+
+    @staticmethod
     def _tool_capabilities(name: str) -> tuple[str, ...]:
         capability_map = {
             "session.info": (OBSERVE,),
@@ -290,6 +365,10 @@ class OperationBaseMixin:
             "cache.get_topology": (OBSERVE,),
             "package.preview_scene": (OBSERVE,),
             "package.create_scene_package": (WRITE_FILES,),
+            "node_types.list_groups": (OBSERVE,),
+            "node_types.list": (OBSERVE,),
+            "node_types.get_info": (OBSERVE,),
+            "node_types.list_compatible": (OBSERVE,),
             "node.list": (OBSERVE,),
             "node.get": (OBSERVE,),
             "node.create": (EDIT_SCENE,),
@@ -310,9 +389,18 @@ class OperationBaseMixin:
             "graph.diff_subgraph": (OBSERVE,),
             "graph.plan_edit": (OBSERVE,),
             "graph.apply_patch": (EDIT_SCENE,),
+            "document.checkout": (OBSERVE,),
+            "document.validate": (OBSERVE,),
+            "document.diff": (OBSERVE,),
+            "document.apply": (EDIT_SCENE,),
+            "document.discard_checkout": (OBSERVE,),
+            "document.query": (OBSERVE,),
+            "document.sync_from_houdini": (OBSERVE,),
+            "document.compile_source": (OBSERVE,),
             "parm.list": (OBSERVE,),
             "parm.get": (OBSERVE,),
             "parm.set": (EDIT_SCENE,),
+            "parm.set_many": (EDIT_SCENE,),
             "parm.set_expression": (EDIT_SCENE,),
             "parm.press_button": (EDIT_SCENE,),
             "parm.revert_to_default": (EDIT_SCENE,),

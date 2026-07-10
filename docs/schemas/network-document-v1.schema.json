@@ -1,0 +1,445 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "hocuspocus://schemas/network-document/v1",
+  "title": "HocusPocus Network Document v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "kind",
+    "documentId",
+    "documentRevision",
+    "rootPath",
+    "category",
+    "nodes",
+    "edges",
+    "parameterBindings",
+    "codeBlobs",
+    "diagnostics"
+  ],
+  "properties": {
+    "$schema": {
+      "const": "hocuspocus://schemas/network-document/v1"
+    },
+    "kind": {
+      "const": "network_document"
+    },
+    "documentId": {
+      "type": "string",
+      "pattern": "^network:"
+    },
+    "documentRevision": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "baselineLiveRevision": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "lastSyncedLiveRevision": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "rootPath": {
+      "$ref": "#/$defs/absolutePath"
+    },
+    "category": {
+      "type": "string",
+      "minLength": 1
+    },
+    "parentDocumentId": {
+      "type": "string"
+    },
+    "metadata": {
+      "$ref": "#/$defs/freeformObject"
+    },
+    "nodes": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/node"
+      }
+    },
+    "ports": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/port"
+      }
+    },
+    "edges": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/edge"
+      }
+    },
+    "parameterBindings": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/parameterBinding"
+      }
+    },
+    "codeBlobs": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/codeBlob"
+      }
+    },
+    "diagnostics": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/diagnostic"
+      }
+    }
+  },
+  "$defs": {
+    "uid": {
+      "type": "string",
+      "minLength": 1
+    },
+    "absolutePath": {
+      "type": "string",
+      "pattern": "^/"
+    },
+    "freeformObject": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "position": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": {
+            "type": "number"
+          }
+        }
+      ]
+    },
+    "nodeFlags": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "display",
+        "render",
+        "bypass",
+        "template"
+      ],
+      "properties": {
+        "display": {
+          "type": "boolean"
+        },
+        "render": {
+          "type": "boolean"
+        },
+        "bypass": {
+          "type": "boolean"
+        },
+        "template": {
+          "type": "boolean"
+        }
+      }
+    },
+    "node": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "uid",
+        "name",
+        "typeName",
+        "category",
+        "path",
+        "parentPath",
+        "isNetwork",
+        "flags",
+        "metadata"
+      ],
+      "properties": {
+        "uid": {
+          "$ref": "#/$defs/uid"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "typeName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "category": {
+          "type": "string",
+          "minLength": 1
+        },
+        "path": {
+          "$ref": "#/$defs/absolutePath"
+        },
+        "parentPath": {
+          "$ref": "#/$defs/absolutePath"
+        },
+        "isNetwork": {
+          "type": "boolean"
+        },
+        "position": {
+          "$ref": "#/$defs/position"
+        },
+        "flags": {
+          "$ref": "#/$defs/nodeFlags"
+        },
+        "subnetworkDocumentId": {
+          "type": "string"
+        },
+        "definitionRef": {
+          "$ref": "#/$defs/freeformObject"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "metadata": {
+          "$ref": "#/$defs/freeformObject"
+        }
+      }
+    },
+    "port": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "uid",
+        "nodeUid",
+        "direction",
+        "name",
+        "index",
+        "kind"
+      ],
+      "properties": {
+        "uid": {
+          "$ref": "#/$defs/uid"
+        },
+        "nodeUid": {
+          "$ref": "#/$defs/uid"
+        },
+        "direction": {
+          "type": "string",
+          "enum": [
+            "input",
+            "output"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "index": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "kind": {
+          "type": "string",
+          "minLength": 1
+        },
+        "metadata": {
+          "$ref": "#/$defs/freeformObject"
+        }
+      }
+    },
+    "edgeEndpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "nodeUid"
+      ],
+      "properties": {
+        "nodeUid": {
+          "$ref": "#/$defs/uid"
+        },
+        "portIndex": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "portName": {
+          "type": "string"
+        },
+        "parmName": {
+          "type": "string"
+        }
+      }
+    },
+    "edge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "uid",
+        "kind",
+        "from",
+        "to"
+      ],
+      "properties": {
+        "uid": {
+          "$ref": "#/$defs/uid"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "data",
+            "parameter_reference",
+            "material_binding",
+            "display_flag",
+            "render_flag",
+            "output_flag",
+            "dependency"
+          ]
+        },
+        "from": {
+          "$ref": "#/$defs/edgeEndpoint"
+        },
+        "to": {
+          "$ref": "#/$defs/edgeEndpoint"
+        },
+        "metadata": {
+          "$ref": "#/$defs/freeformObject"
+        }
+      }
+    },
+    "parameterBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "uid",
+        "nodeUid",
+        "parmName",
+        "valueMode"
+      ],
+      "properties": {
+        "uid": {
+          "$ref": "#/$defs/uid"
+        },
+        "nodeUid": {
+          "$ref": "#/$defs/uid"
+        },
+        "parmName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "valueMode": {
+          "type": "string",
+          "enum": [
+            "literal",
+            "expression",
+            "channel_reference",
+            "code_reference",
+            "ramp",
+            "multiparm"
+          ]
+        },
+        "value": {},
+        "expression": {
+          "type": "string"
+        },
+        "expressionLanguage": {
+          "type": "string"
+        },
+        "channelReference": {
+          "type": "string"
+        },
+        "codeBlobUid": {
+          "$ref": "#/$defs/uid"
+        },
+        "metadata": {
+          "$ref": "#/$defs/freeformObject"
+        }
+      }
+    },
+    "codeBlobTarget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "nodeUid"
+      ],
+      "properties": {
+        "nodeUid": {
+          "$ref": "#/$defs/uid"
+        },
+        "parmName": {
+          "type": "string"
+        },
+        "bindingUid": {
+          "$ref": "#/$defs/uid"
+        }
+      }
+    },
+    "codeBlob": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "uid",
+        "language",
+        "target",
+        "body"
+      ],
+      "properties": {
+        "uid": {
+          "$ref": "#/$defs/uid"
+        },
+        "language": {
+          "type": "string",
+          "enum": [
+            "vex",
+            "python",
+            "hscript"
+          ]
+        },
+        "target": {
+          "$ref": "#/$defs/codeBlobTarget"
+        },
+        "body": {
+          "type": "string"
+        },
+        "metadata": {
+          "$ref": "#/$defs/freeformObject"
+        }
+      }
+    },
+    "diagnostic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "severity",
+        "code",
+        "message"
+      ],
+      "properties": {
+        "severity": {
+          "type": "string",
+          "enum": [
+            "info",
+            "warning",
+            "error"
+          ]
+        },
+        "code": {
+          "type": "string",
+          "minLength": 1
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1
+        },
+        "jsonPointer": {
+          "type": "string"
+        },
+        "path": {
+          "$ref": "#/$defs/absolutePath"
+        },
+        "entityUid": {
+          "$ref": "#/$defs/uid"
+        },
+        "details": {
+          "$ref": "#/$defs/freeformObject"
+        }
+      }
+    }
+  }
+}

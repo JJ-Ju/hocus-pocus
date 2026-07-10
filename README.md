@@ -86,6 +86,8 @@ For compatibility and release rules, see [Compatibility Policy](C:\Users\jujun\D
 
 For agent usage patterns, see [Agent Workflows](C:\Users\jujun\Documents\Source\Houdini\HocusPocus_mcp\docs\agent-workflows.md).
 
+For the experimental text authoring frontend, see [HocusScript Spec](C:\Users\jujun\Documents\Source\Houdini\HocusPocus_mcp\docs\hocusscript-spec.md), [Roadmap](C:\Users\jujun\Documents\Source\Houdini\HocusPocus_mcp\docs\hocusscript-roadmap.md), and [Task Tracker](C:\Users\jujun\Documents\Source\Houdini\HocusPocus_mcp\docs\hocusscript-task-tracker.md).
+
 For engineering state, see [Improvement Tracker](C:\Users\jujun\Documents\Source\Houdini\HocusPocus_mcp\docs\improvement-task-tracker.md).
 
 ## License
