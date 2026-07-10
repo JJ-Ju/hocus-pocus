@@ -135,6 +135,87 @@ Default compiler limits:
 
 The server MAY configure lower limits and MUST return a structured limit diagnostic.
 
+### 5.1 Project Directory and File-Backed Sources
+
+Users MUST be able to choose the filesystem directory that contains each HocusScript project. A project is a compiler/filesystem context, not DSL syntax. Multiple projects may be registered simultaneously; normal requests refer to an opaque runtime `project_id` rather than mutating one process-global current directory.
+
+Example server configuration:
+
+```toml
+[hocusscript]
+default_project = "city"
+allow_runtime_projects = true
+
+[hocusscript.projects.city]
+root = "D:/houdini-projects/city"
+manifest = "hocus.project.toml"
+```
+
+The convenience environment override is `HOCUSPOCUS_HOCUSCRIPT_PROJECT_DIRECTORY`, with optional `HOCUSPOCUS_HOCUSCRIPT_PROJECT_ID`. A Houdini settings UI MAY register trusted projects and select a default. Persistent user choices belong in the Houdini user-preference config or an explicit config path, not the repository's shipped `config/default.toml`.
+
+Effective project selection precedence is:
+
+1. explicit request `project_id`
+2. environment-selected project/root
+3. configured `[hocusscript].default_project`
+4. unset
+
+Config-relative roots resolve against the loaded configuration file's directory. Environment, UI, and runtime MCP roots MUST be absolute. A request that provides conflicting project ID/root selections is rejected. The compiler MUST NOT silently fall back to process CWD, repository checkout, hip-file directory, `$HIP`, or user home. A file-backed operation without an effective project is a typed `project_required` error. Inline source compilation remains available without a project.
+
+Project rules:
+
+- Project roots resolve to canonical absolute directories.
+- `hocus.project.toml` defines a stable project UID/name, relative source/module directories, catalog policy, lock policy, formatting, and project metadata. It never selects a parent directory. `source_directories` defaults to `["."]` when omitted.
+- `hocus.lock.json` records schema/compiler constraints, catalog fingerprint, external module URI/version/digest, and transitive dependency digests without absolute machine paths or secrets.
+- `source_path`, lockfiles, generated catalogs, and export destinations are project-relative. Request source/output paths MUST be relative `.hocus` paths; absolute, traversal, UNC/device, and alternate-drive escapes are rejected unless the registered approved root itself is that share/device context.
+- Canonical containment checks occur after resolving symlinks/junctions for every read and write.
+- Selecting a project grants no general filesystem authority and never widens `approved_roots`. Runtime registration is disabled unless policy explicitly allows it, and the canonical root must satisfy the project-source allowlist/approved-root policy.
+- File-backed source/import reads require a distinct `read_files`/project-source-read capability; `observe` alone is insufficient. Formatting in place, export, directory creation, or lock/catalog updates additionally require file-write capability.
+- Read authorization uses a read-aware containment helper; the existing write-oriented path check is not sufficient by itself. Empty approved-root semantics MUST be explicit per policy profile rather than accidentally meaning unrestricted reads.
+- Directory creation is opt-in. Read/compile operations never create the project directory or files.
+- A canonical root maps to one project UID; aliases are allowed, conflicting duplicate UIDs are rejected. Plans bind project UID, source URI/digest, manifest digest, lock digest, catalog/compiler/module inputs, and current policy, then recheck them before apply.
+- The physical root never participates in durable node UID derivation. Relocating a project does not recreate managed nodes.
+
+Stable source URIs use the project identity and relative path rather than the machine-specific absolute directory:
+
+```text
+hocus-project://city-environment/hocus/rocks.hocus
+```
+
+Moving the whole project directory therefore does not change semantic identities when the stable manifest project UID, relative paths, source contents, and lockfiles are unchanged. Opaque runtime `project_id` values may change when a server restarts or a root is reopened.
+
+Project management tools:
+
+- `document.open_project {root}` registers a runtime project only when policy allows the canonical root.
+- `document.list_projects` and `document.get_project` return opaque runtime ID, stable manifest UID, root URI, source directories, manifest/lock status, and policy result without listing unrelated files.
+- Persistent registration/default changes occur through trusted local UI/config or a separate capability-gated configuration operation; compile never changes defaults.
+
+`document.compile_file` reads one project-relative file:
+
+```json
+{
+  "project_id": "project_7f2d",
+  "source_path": "hocus/rocks.hocus",
+  "strict": true
+}
+```
+
+`document.compile_source` remains the unsaved-buffer/inline form and may bind the buffer to a registered project-relative path:
+
+```json
+{
+  "source": "hocus 0.1; graph ...",
+  "source_name": "untitled-rocks",
+  "project_id": "project_7f2d",
+  "source_path": "hocus/rocks.hocus",
+  "strict": true
+}
+```
+
+Without project binding, inline source uses a `hocus-memory://` URI and is preview-only. It cannot produce an applyable plan because its durable ownership/provenance identity is incomplete.
+
+Project-relative export writes use `{project_id, destination_path}`. The default is no overwrite. Replacing an existing file requires its expected digest, writes through a same-directory temporary file and atomic replace, rejects symlink final targets, and returns source URI/path/digest. Semantic export may still return text without file-write capability.
+
 ## 6. Version 0.1 Grammar
 
 The normative initial grammar is:
@@ -412,6 +493,8 @@ Input:
 {
   "source": "hocus 0.1; graph ...",
   "source_name": "rocks.hocus",
+  "project_id": null,
+  "source_path": null,
   "strict": true,
   "expected_document_revision": 42,
   "catalog_fingerprint": "sha256:...",
@@ -442,7 +525,13 @@ The fully resolved compiler returns:
 
 Compilation never mutates Houdini.
 
-### 14.2 `document.apply_plan`
+For `document.compile_source`, `source` is required; optional `project_id` plus `source_path` binds an unsaved buffer to durable project-relative provenance. Without that binding it remains `hocus-memory://` preview source and cannot yield an applyable plan.
+
+### 14.2 `document.compile_file`
+
+`document.compile_file` accepts `project_id`, project-relative `source_path`, and the same strict/revision/catalog options as source compilation. It requires project-source read capability, reads exactly one contained `.hocus` entry file, resolves imports through the project manifest/lock, and otherwise returns the same staged compile result. It never accepts an absolute source path or a raw project root.
+
+### 14.3 `document.apply_plan`
 
 Input contains only:
 
@@ -487,7 +576,7 @@ Modules MUST NOT provide:
 - unbounded loops or recursion
 - hidden mutation
 
-Imports resolve only inside approved roots. Paths are canonicalized with symlink-aware containment checks. Module URIs, versions, and content hashes are recorded in the plan.
+Imports first resolve relative to the importing source file, then through ordered project `source_directories`/module roots. Every result must remain inside the effective project directory and approved roots. Paths are canonicalized with symlink-aware containment checks. Module URIs, project ID, versions, and content hashes are recorded in the plan.
 
 ## 17. Formatting, Export, and Round-Trip
 
@@ -506,6 +595,7 @@ Imports resolve only inside approved roots. Paths are canonicalized with symlink
 - Plan application requires scene-edit capability.
 - Code installation requires `run_code`.
 - File outputs and module imports obey approved roots.
+- Project-directory selection is explicit, request-safe, and never grants access outside that directory or widens approved roots.
 - Network module resolution, if ever supported, requires a distinct network capability and produces a locked local artifact.
 - Compilation and expansion enforce resource limits and cancellation.
 - Diagnostics, lockfiles, source maps, and audit logs must not contain secrets or bearer tokens.

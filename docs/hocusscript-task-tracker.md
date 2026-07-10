@@ -168,6 +168,29 @@ HS1 exit evidence:
 
 HS1 remains in progress until the unchecked parser-recovery, statement-span, code-offset, complete-coverage, golden-fixture, and local-command tasks pass.
 
+## 4A. HS1P: Project Workspace and Source I/O
+
+Status: pending
+
+Dependencies: HS1 path/source identity contract
+Houdini required: no for registry/path tests; UI integration later
+
+- [ ] Add `ProjectContext` with opaque runtime ID, stable manifest UID, canonical root, relative source/module directories, and project-relative source URIs.
+- [ ] Add named/default projects to user-preference config; do not persist user roots into shipped `config/default.toml`.
+- [ ] Add `HOCUSPOCUS_HOCUSCRIPT_PROJECT_DIRECTORY` and optional project-ID environment resolution with documented precedence.
+- [ ] Add policy-gated `document.open_project`, plus `document.list_projects` and `document.get_project`.
+- [ ] Avoid one mutable process-global current project; support simultaneous projects and concurrent-client isolation.
+- [ ] Reject conflicting project ID/root selection and implicit CWD, repository, `$HIP`, or home fallback.
+- [ ] Define and validate `hocus.project.toml` and `hocus.lock.json` schemas.
+- [ ] Add stable `hocus-project://` and preview-only `hocus-memory://` URI generation.
+- [ ] Add a distinct project-source `read_files` capability and read-aware approved-root policy.
+- [ ] Add canonical containment with traversal, case, alternate-drive, UNC/device, symlink, and junction checks.
+- [ ] Add `document.compile_file` for contained project-relative `.hocus` entry files.
+- [ ] Let `document.compile_source` bind an unsaved buffer to `project_id` plus project-relative `source_path`.
+- [ ] Ensure physical project roots do not participate in durable node UID derivation or portable provenance.
+- [ ] Bind future plans to project/source/manifest/lock/compiler/catalog/module digests.
+- [ ] Add project relocation, nested/duplicate root, conflicting UID, multi-client, and missing/stale lock tests.
+
 ## 5. HS2: Catalog and Semantic Resolver
 
 Status: pending
@@ -218,6 +241,7 @@ Houdini required: yes for live baseline tests
 - [ ] Carry source maps into nodes, bindings, edges, code blobs, and plan operations.
 - [ ] Produce document validation, diff, destructive summary, and preview plan.
 - [ ] Upgrade `document.compile_source` from structural preview to resolved document and candidate-plan preview.
+- [ ] Bind file-backed previews to project ID, manifest/lock digests, and stable project-relative source URIs.
 - [ ] Add explicit input and output JSON Schemas.
 - [ ] Keep large artifacts in resources with stable URIs.
 - [ ] Verify compile never mutates Houdini.
@@ -256,6 +280,11 @@ Houdini required: yes for export
 
 - [ ] Add `document.format_source`.
 - [ ] Add `document.export_source`.
+- [ ] Export only to canonical relative paths under the effective project directory.
+- [ ] Add explicit create-directory behavior guarded by file-write policy.
+- [ ] Default to no overwrite; require `expected_digest` for replacement and use same-directory temporary plus atomic replace.
+- [ ] Reject symlink final targets and return canonical source URI/path/digest.
+- [ ] Add Houdini settings UI for selecting the session default project directory.
 - [ ] Export durable IDs and ownership metadata.
 - [ ] Define opaque-preserve versus rejection rules for unsupported constructs.
 - [ ] Add semantic export/recompile golden and live tests.
@@ -275,6 +304,10 @@ Houdini required: module compiler no; live module fixtures yes
 - [ ] Define typed module parameters and exports.
 - [ ] Implement hygienic deterministic expansion.
 - [ ] Implement approved-root static imports.
+- [ ] Resolve imports relative to the importing file and ordered project source/module directories.
+- [ ] Add project identity, source-directory, module-root, catalog-lock, and module-lock fields to `hocus.project.toml`, with canonical lock state in `hocus.lock.json`.
+- [ ] Require manifest-declared, separately approved and locked aliases for cross-project imports.
+- [ ] Add explicit lock verify/update modes; make lock writes atomic, diff-visible, and capability-gated.
 - [ ] Add module manifests, versions, content hashes, and lockfile.
 - [ ] Preserve expansion stacks in source maps and diagnostics.
 - [ ] Enforce module depth, node count, code size, and recursion limits.
@@ -335,6 +368,7 @@ Houdini required: yes
 - [ ] Add parser/compiler performance budgets.
 - [ ] Add 1k-node and 10k-node fixtures.
 - [ ] Add hostile-source and import-security tests.
+- [ ] Add project precedence, unset/default/project-ID selection, multi-client isolation, relocation, traversal, case, alternate-drive, UNC/device, symlink/junction, and approved-root tests.
 - [ ] Add previous-language/compiler-version golden fixtures.
 - [ ] Add graph-store upgrade/downgrade fixtures.
 - [ ] Report committed, installed, and running-module alignment for each live validation.
@@ -346,6 +380,7 @@ Houdini required: yes
 - [ ] Decide record/object literal syntax.
 - [ ] Decide channel-reference and expression syntax.
 - [ ] Decide module package URI and lockfile formats.
+- [ ] Decide whether persistent project registration is config/UI-only or also exposed through an explicit capability-gated MCP configuration tool.
 - [ ] Decide syntax for explicit per-field `preserve_live` and `source_wins` annotations; the default reject-on-conflict policy is locked.
 - [ ] Decide quoted/reserved parameter-token syntax such as `parm["input"]`.
 - [ ] Decide confirmation thresholds for destructive plans.
