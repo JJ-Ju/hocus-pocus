@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "hocuspocus://schemas/document-preview-bundle-input/v1",
+  "title": "HocusScript Document Preview Bundle Input v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["bundle"],
+  "properties": {
+    "bundle": {
+      "type": "object",
+      "description": "A canonical resolved compiled-bundle v0.2 object. The operation applies the shared strict bundle decoder before consulting Houdini state."
+    }
+  }
+}

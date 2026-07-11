@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import ast
 import copy
+import hashlib
+import hmac
 import json
+import re
 import time
 from pathlib import Path
 from typing import Any
@@ -17,6 +20,14 @@ from ..context import RequestContext
 
 
 class DocumentOperationsMixin:
+    _DOCUMENT_NODE_UID_KEY = "hpmcp.uid"
+    _DOCUMENT_NODE_OWNER_KEY = "hpmcp.owner"
+    _DOCUMENT_NODE_SOURCE_KEY = "hpmcp.source_uri"
+    _DOCUMENT_NODE_GRAPH_KEY = "hpmcp.graph"
+    _DOCUMENT_NODE_COMPILER_KEY = "hpmcp.compiler_version"
+    _DOCUMENT_NODE_PROVENANCE_KEY = "hpmcp.provenance"
+    _DOCUMENT_NODE_PROVENANCE_DIGEST_KEY = "hpmcp.provenance_sha256"
+    _MAX_NODE_PROVENANCE_BYTES = 16 * 1024
     _NETWORK_DOCUMENT_SCHEMA_URI = "hocuspocus://schemas/network-document/v1"
     _SCENE_DOCUMENT_SCHEMA_URI = "hocuspocus://schemas/scene-document/v1"
     _DOCUMENT_SCHEMA_RESOURCE_URI = "houdini://documents/schema/network-document/v1"
@@ -40,31 +51,318 @@ class DocumentOperationsMixin:
             return json.load(handle)
 
     @staticmethod
+    def _document_json_pointer(path: tuple[str | int, ...]) -> str:
+        if not path:
+            return ""
+        return "/" + "/".join(str(item).replace("~", "~0").replace("/", "~1") for item in path)
+
+    @staticmethod
+    def _document_schema_type_matches(value: Any, expected: str) -> bool:
+        if expected == "null":
+            return value is None
+        if expected == "boolean":
+            return isinstance(value, bool)
+        if expected == "integer":
+            return isinstance(value, int) and not isinstance(value, bool)
+        if expected == "number":
+            return isinstance(value, (int, float)) and not isinstance(value, bool)
+        if expected == "string":
+            return isinstance(value, str)
+        if expected == "array":
+            return isinstance(value, list)
+        if expected == "object":
+            return isinstance(value, dict)
+        return True
+
+    def _document_schema_errors(
+        self,
+        value: Any,
+        schema: dict[str, Any],
+        root_schema: dict[str, Any],
+        path: tuple[str | int, ...] = (),
+    ) -> list[dict[str, Any]]:
+        """Validate the locked document schema without a Houdini-side dependency.
+
+        This intentionally implements only the Draft 2020-12 vocabulary used by
+        the checked-in network-document schema. Keeping the schema authoritative
+        prevents the hand-written semantic checks below from drifting on shape.
+        """
+        if "$ref" in schema:
+            reference = schema["$ref"]
+            if not isinstance(reference, str) or not reference.startswith("#/$defs/"):
+                return [{"path": path, "message": f"Unsupported schema reference: {reference}"}]
+            resolved = root_schema.get("$defs", {}).get(reference.removeprefix("#/$defs/"))
+            if not isinstance(resolved, dict):
+                return [{"path": path, "message": f"Unresolved schema reference: {reference}"}]
+            return self._document_schema_errors(value, resolved, root_schema, path)
+
+        errors: list[dict[str, Any]] = []
+        for branch in schema.get("allOf", []):
+            if isinstance(branch, dict):
+                errors.extend(self._document_schema_errors(value, branch, root_schema, path))
+        condition = schema.get("if")
+        if isinstance(condition, dict):
+            matches = not self._document_schema_errors(value, condition, root_schema, path)
+            selected = schema.get("then" if matches else "else")
+            if isinstance(selected, dict):
+                errors.extend(self._document_schema_errors(value, selected, root_schema, path))
+        if "const" in schema and value != schema["const"]:
+            errors.append({"path": path, "message": f"must equal {schema['const']!r}"})
+        if "enum" in schema and value not in schema["enum"]:
+            errors.append({"path": path, "message": f"must be one of {schema['enum']!r}"})
+        if "anyOf" in schema:
+            branches = [
+                self._document_schema_errors(value, branch, root_schema, path)
+                for branch in schema["anyOf"]
+                if isinstance(branch, dict)
+            ]
+            if not branches or all(branch for branch in branches):
+                errors.append({"path": path, "message": "does not match any allowed schema form"})
+                return errors
+
+        expected_type = schema.get("type")
+        if isinstance(expected_type, str) and not self._document_schema_type_matches(value, expected_type):
+            errors.append({"path": path, "message": f"must be of type {expected_type}"})
+            return errors
+
+        if isinstance(value, dict):
+            properties = schema.get("properties", {})
+            for required in schema.get("required", []):
+                if required not in value:
+                    errors.append({"path": path + (required,), "message": "is required"})
+            if schema.get("additionalProperties") is False:
+                for key in value:
+                    if key not in properties:
+                        errors.append({"path": path + (key,), "message": "is not an allowed property"})
+            for key, child in value.items():
+                child_schema = properties.get(key)
+                if isinstance(child_schema, dict):
+                    errors.extend(self._document_schema_errors(child, child_schema, root_schema, path + (key,)))
+        elif isinstance(value, list):
+            minimum = schema.get("minItems")
+            maximum = schema.get("maxItems")
+            if isinstance(minimum, int) and len(value) < minimum:
+                errors.append({"path": path, "message": f"must contain at least {minimum} items"})
+            if isinstance(maximum, int) and len(value) > maximum:
+                errors.append({"path": path, "message": f"must contain at most {maximum} items"})
+            item_schema = schema.get("items")
+            if isinstance(item_schema, dict):
+                for index, child in enumerate(value):
+                    errors.extend(self._document_schema_errors(child, item_schema, root_schema, path + (index,)))
+        elif isinstance(value, str):
+            minimum = schema.get("minLength")
+            maximum = schema.get("maxLength")
+            if isinstance(minimum, int) and len(value) < minimum:
+                errors.append({"path": path, "message": f"must contain at least {minimum} characters"})
+            if isinstance(maximum, int) and len(value) > maximum:
+                errors.append({"path": path, "message": f"must contain at most {maximum} characters"})
+            pattern = schema.get("pattern")
+            if isinstance(pattern, str) and re.search(pattern, value) is None:
+                errors.append({"path": path, "message": f"must match pattern {pattern!r}"})
+        elif isinstance(value, (int, float)) and not isinstance(value, bool):
+            minimum = schema.get("minimum")
+            maximum = schema.get("maximum")
+            if isinstance(minimum, (int, float)) and value < minimum:
+                errors.append({"path": path, "message": f"must be at least {minimum}"})
+            if isinstance(maximum, (int, float)) and value > maximum:
+                errors.append({"path": path, "message": f"must be at most {maximum}"})
+        return errors
+
+    def _document_schema_diagnostics(self, document: dict[str, Any]) -> list[dict[str, Any]]:
+        schema = self._document_schema_payload()
+        return [
+            {
+                "severity": "error",
+                "code": "document.schema_violation",
+                "message": error["message"],
+                "jsonPointer": self._document_json_pointer(error["path"]),
+            }
+            for error in self._document_schema_errors(document, schema, schema)
+        ]
+
+    @staticmethod
+    def _document_clean_diagnostics(diagnostics: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Omit absent optional fields so emitted diagnostics satisfy the schema."""
+        return [
+            {key: value for key, value in diagnostic.items() if value is not None}
+            for diagnostic in diagnostics
+        ]
+
+    @staticmethod
     def _document_node_uid(path: str) -> str:
         return f"node:{path}"
 
     @staticmethod
-    def _document_binding_uid(parm_path: str) -> str:
-        return f"parm:{parm_path}"
+    def _document_binding_uid(node_uid: str, parm_name: str) -> str:
+        return f"binding:{node_uid}:{parm_name}"
 
     @staticmethod
-    def _document_code_blob_uid(parm_path: str) -> str:
-        return f"code:{parm_path}"
+    def _document_code_blob_uid(node_uid: str, parm_name: str) -> str:
+        return f"code:{node_uid}:{parm_name}"
 
-    def _document_live_node_uid(self, path: str) -> str:
+    @staticmethod
+    def _document_port_uid(node_uid: str, direction: str, index: int) -> str:
+        return f"port:{node_uid}:{direction}:{index}"
+
+    def _document_live_node_identity(self, path: str) -> tuple[str, str]:
         path = str(path or "").strip()
         if not path:
-            return ""
+            return "", "missing"
         try:
             hou_module = self._require_hou()
             node = hou_module.node(path)
             if node is not None:
+                persistent_uid = str(
+                    self._safe_value(lambda: node.userData(self._DOCUMENT_NODE_UID_KEY), "") or ""
+                ).strip()
+                if persistent_uid:
+                    return persistent_uid, "persistent_user_data"
                 session_id = self._safe_value(node.sessionId, None)
                 if session_id is not None:
-                    return f"node-session:{session_id}"
+                    return f"node-session:{session_id}", "session_fallback"
         except Exception:
             pass
-        return self._document_node_uid(path)
+        return self._document_node_uid(path), "path_fallback"
+
+    def _document_live_node_uid(self, path: str) -> str:
+        return self._document_live_node_identity(path)[0]
+
+    def _document_live_node_provenance(
+        self,
+        node: Any,
+        persistent_uid: str,
+        identity_mode: str,
+    ) -> dict[str, Any] | None:
+        if identity_mode != "persistent_user_data":
+            return None
+        raw = str(self._safe_value(lambda: node.userData(self._DOCUMENT_NODE_PROVENANCE_KEY), "") or "")
+        declared = str(
+            self._safe_value(lambda: node.userData(self._DOCUMENT_NODE_PROVENANCE_DIGEST_KEY), "") or ""
+        ).strip()
+        if not raw or len(raw.encode("utf-8")) > self._MAX_NODE_PROVENANCE_BYTES:
+            return None
+        actual = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+        if len(declared) != 64 or not hmac.compare_digest(declared, actual):
+            return None
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(payload, dict) or set(payload) != {"version", "uid", "hocus"}:
+            return None
+        hocus = payload.get("hocus")
+        if payload.get("version") != 1 or payload.get("uid") != persistent_uid or not isinstance(hocus, dict):
+            return None
+        source_uri = hocus.get("sourceUri")
+        if not isinstance(source_uri, str) or not source_uri or not isinstance(hocus.get("jsonPointer"), str):
+            return None
+        if not self._document_provenance_span_valid(hocus.get("span"), source_uri):
+            return None
+        for key in ("projectUid", "sourceDigest", "bundleDigest", "compilerVersion", "graphName", "symbol"):
+            if not isinstance(hocus.get(key), str) or not hocus[key] or len(hocus[key]) > 1024:
+                return None
+        if not re.fullmatch(r"sha256:[0-9a-f]{64}", hocus["sourceDigest"]):
+            return None
+        if not re.fullmatch(r"sha256:[0-9a-f]{64}", hocus["bundleDigest"]):
+            return None
+        mirrors = (
+            (self._DOCUMENT_NODE_OWNER_KEY, hocus.get("ownership")),
+            (self._DOCUMENT_NODE_SOURCE_KEY, hocus.get("sourceUri")),
+            (self._DOCUMENT_NODE_GRAPH_KEY, hocus.get("graphName")),
+            (self._DOCUMENT_NODE_COMPILER_KEY, hocus.get("compilerVersion")),
+        )
+        for key, expected in mirrors:
+            normalized = str(expected or "").strip()
+            stored = str(self._safe_value(lambda key=key: node.userData(key), "") or "").strip()
+            if normalized and stored != normalized:
+                return None
+        return copy.deepcopy(hocus)
+
+    @staticmethod
+    def _document_provenance_span_valid(value: Any, source_uri: str) -> bool:
+        if not isinstance(value, dict) or value.get("sourceUri") != source_uri:
+            return False
+        positions = []
+        for key in ("start", "end"):
+            position = value.get(key)
+            if not isinstance(position, dict) or set(position) != {"line", "column", "offset"}:
+                return False
+            line, column, offset = position["line"], position["column"], position["offset"]
+            if (
+                type(line) is not int or line < 1
+                or type(column) is not int or column < 1
+                or type(offset) is not int or offset < 0
+            ):
+                return False
+            positions.append((offset, line, column))
+        return positions[0] <= positions[1]
+
+    def _document_stamp_live_node_uid(self, path: str, uid: Any) -> None:
+        persistent_uid = str(uid or "").strip()
+        if not path or not persistent_uid:
+            return
+        self._require_node_by_path(path).setUserData(self._DOCUMENT_NODE_UID_KEY, persistent_uid)
+
+    def _document_stamp_live_node_metadata(self, path: str, node_payload: dict[str, Any]) -> None:
+        self._document_stamp_live_node_uid(path, node_payload.get("uid"))
+        metadata = node_payload.get("metadata")
+        hocus = metadata.get("hocus") if isinstance(metadata, dict) else None
+        if not isinstance(hocus, dict):
+            return
+        node = self._require_node_by_path(path)
+        values = (
+            (self._DOCUMENT_NODE_OWNER_KEY, hocus.get("ownership")),
+            (self._DOCUMENT_NODE_SOURCE_KEY, hocus.get("sourceUri")),
+            (self._DOCUMENT_NODE_GRAPH_KEY, hocus.get("graphName")),
+            (self._DOCUMENT_NODE_COMPILER_KEY, hocus.get("compilerVersion")),
+        )
+        for key, value in values:
+            normalized = str(value or "").strip()
+            if normalized:
+                node.setUserData(key, normalized)
+        provenance = {
+            "version": 1,
+            "uid": str(node_payload.get("uid", "")).strip(),
+            "hocus": copy.deepcopy(hocus),
+        }
+        encoded = json.dumps(provenance, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+        if len(encoded.encode("utf-8")) > self._MAX_NODE_PROVENANCE_BYTES:
+            raise JsonRpcError(INVALID_PARAMS, "Managed node provenance exceeds the bounded user-data limit.")
+        node.setUserData(self._DOCUMENT_NODE_PROVENANCE_KEY, encoded)
+        node.setUserData(
+            self._DOCUMENT_NODE_PROVENANCE_DIGEST_KEY,
+            hashlib.sha256(encoded.encode("utf-8")).hexdigest(),
+        )
+
+    def _document_live_input_connections(self, dest_path: str) -> list[dict[str, Any]]:
+        """Read connection objects without reducing them to input-node paths."""
+        try:
+            node = self._require_hou().node(dest_path)
+            if node is None:
+                return []
+            connections = self._safe_value(node.inputConnections, []) or []
+        except Exception:
+            return []
+        payloads: list[dict[str, Any]] = []
+        for ordinal, connection in enumerate(connections):
+            source = self._safe_value(connection.inputNode, None)
+            source_path = self._safe_value(source.path, None) if source is not None else None
+            if not source_path:
+                continue
+            payloads.append(
+                {
+                    "sourcePath": str(source_path),
+                    "destPath": dest_path,
+                    "inputIndex": int(self._safe_value(connection.inputIndex, 0) or 0),
+                    # HOM names these from the connection direction: inputName is
+                    # the upstream node's output, outputName is the downstream input.
+                    "inputName": self._safe_value(connection.outputName, None),
+                    "outputIndex": int(self._safe_value(connection.outputIndex, 0) or 0),
+                    "outputName": self._safe_value(connection.inputName, None),
+                    "connectionOrder": ordinal,
+                }
+            )
+        return sorted(payloads, key=lambda item: (item["inputIndex"], item["connectionOrder"]))
 
     @staticmethod
     def _document_metadata(document: dict[str, Any]) -> dict[str, Any]:
@@ -202,12 +500,12 @@ class DocumentOperationsMixin:
         if body is None:
             body = parm.get("value", "")
         return {
-            "uid": self._document_code_blob_uid(parm_path),
+            "uid": self._document_code_blob_uid(node_uid, str(parm.get("name", ""))),
             "language": language,
             "target": {
                 "nodeUid": node_uid,
                 "parmName": parm.get("name"),
-                "bindingUid": self._document_binding_uid(parm_path),
+                "bindingUid": self._document_binding_uid(node_uid, str(parm.get("name", ""))),
             },
             "body": "" if body is None else str(body),
             "metadata": {"sourceParmPath": parm_path},
@@ -216,7 +514,7 @@ class DocumentOperationsMixin:
     def _document_binding_for_parm(self, parm: dict[str, Any], node_uid: str, code_blob_uid: str | None) -> dict[str, Any]:
         value_mode = self._document_value_mode_for_parm(parm)
         payload = {
-            "uid": self._document_binding_uid(str(parm.get("path", ""))),
+            "uid": self._document_binding_uid(node_uid, str(parm.get("name", ""))),
             "nodeUid": node_uid,
             "parmName": parm.get("name"),
             "valueMode": value_mode,
@@ -243,16 +541,19 @@ class DocumentOperationsMixin:
         nodes: list[dict[str, Any]] = []
         node_paths: set[str] = set()
         node_uid_by_path: dict[str, str] = {}
+        paths_by_node_uid: dict[str, list[str]] = {}
         for node in subgraph.get("nodes", []):
             path = str(node.get("path", "")).strip()
             if not path:
                 continue
             node_paths.add(path)
-            node_uid = self._document_live_node_uid(path)
+            node_uid, identity_mode = self._document_live_node_identity(path)
+            paths_by_node_uid.setdefault(node_uid, []).append(path)
+            live_node = self._safe_value(lambda path=path: self._require_hou().node(path), None)
             metadata = {
                 "graphPath": path,
                 "childCount": node.get("childCount", 0),
-                "identityMode": "path_derived",
+                "identityMode": identity_mode,
                 "inputs": copy.deepcopy(node.get("inputs", [])),
                 "displayNodePath": node.get("displayNodePath"),
                 "renderNodePath": node.get("renderNodePath"),
@@ -263,6 +564,10 @@ class DocumentOperationsMixin:
             }
             if path == root_path:
                 metadata["isDocumentRoot"] = True
+            if live_node is not None:
+                hocus_provenance = self._document_live_node_provenance(live_node, node_uid, identity_mode)
+                if hocus_provenance is not None:
+                    metadata["hocus"] = hocus_provenance
             payload = {
                 "uid": node_uid,
                 "name": node.get("name"),
@@ -297,21 +602,78 @@ class DocumentOperationsMixin:
             bindings.append(self._document_binding_for_parm(parm, node_uid, code_blob_uid))
 
         edges: list[dict[str, Any]] = []
-        for edge in subgraph.get("edges", []):
-            kind = str(edge.get("kind", "")).strip()
-            source_path = str(edge.get("from", "")).strip()
-            dest_path = str(edge.get("to", "")).strip()
-            if kind != "input" or source_path not in node_paths or dest_path not in node_paths:
-                continue
-            edges.append(
-                {
-                    "uid": f"edge:data:{dest_path}:{int(edge.get('inputIndex', 0))}",
-                    "kind": "data",
-                    "from": {"nodeUid": node_uid_by_path.get(source_path, self._document_node_uid(source_path)), "portIndex": 0},
-                    "to": {"nodeUid": node_uid_by_path.get(dest_path, self._document_node_uid(dest_path)), "portIndex": int(edge.get("inputIndex", 0))},
-                    "metadata": {"sourcePath": source_path, "destPath": dest_path},
+        ports_by_key: dict[tuple[str, str, int], dict[str, Any]] = {}
+        for dest_path in sorted(node_paths):
+            for connection in self._document_live_input_connections(dest_path):
+                source_path = connection["sourcePath"]
+                if source_path not in node_paths:
+                    continue
+                source_endpoint: dict[str, Any] = {
+                    "nodeUid": node_uid_by_path[source_path],
+                    "portIndex": connection["outputIndex"],
                 }
-            )
+                dest_endpoint: dict[str, Any] = {
+                    "nodeUid": node_uid_by_path[dest_path],
+                    "portIndex": connection["inputIndex"],
+                }
+                if connection.get("outputName") is not None:
+                    source_endpoint["portName"] = str(connection["outputName"])
+                if connection.get("inputName") is not None:
+                    dest_endpoint["portName"] = str(connection["inputName"])
+                edges.append(
+                    {
+                        "uid": f"edge:data:{node_uid_by_path[dest_path]}:{connection['inputIndex']}",
+                        "kind": "data",
+                        "from": source_endpoint,
+                        "to": dest_endpoint,
+                        "metadata": {
+                            "sourcePath": source_path,
+                            "destPath": dest_path,
+                            "connectionOrder": connection["connectionOrder"],
+                        },
+                    }
+                )
+                for direction, node_uid, index, name in (
+                    ("output", node_uid_by_path[source_path], connection["outputIndex"], connection.get("outputName")),
+                    ("input", node_uid_by_path[dest_path], connection["inputIndex"], connection.get("inputName")),
+                ):
+                    key = (node_uid, direction, index)
+                    ports_by_key[key] = {
+                        "uid": self._document_port_uid(node_uid, direction, index),
+                        "nodeUid": node_uid,
+                        "direction": direction,
+                        "name": str(name or ""),
+                        "index": index,
+                        "kind": "data",
+                        "metadata": {},
+                    }
+
+        root_snapshot = next(
+            (item for item in subgraph.get("nodes", []) if str(item.get("path", "")).strip() == root_path),
+            None,
+        )
+        output_path = str((root_snapshot or {}).get("outputNodePath") or "").strip()
+        if output_path in node_uid_by_path:
+            root_uid = node_uid_by_path[root_path]
+            edges.append({
+                "uid": f"edge:output:{root_uid}",
+                "kind": "output_flag",
+                "from": {"nodeUid": node_uid_by_path[output_path]},
+                "to": {"nodeUid": root_uid},
+                "metadata": {"sourcePath": output_path, "destPath": root_path},
+            })
+
+        identity_diagnostics = [
+            {
+                "severity": "error",
+                "code": "node.uid.live_duplicate",
+                "message": f"Persistent node uid is present on multiple live nodes: {uid}",
+                "entityUid": uid,
+                "details": {"paths": sorted(paths)},
+            }
+            for uid, paths in sorted(paths_by_node_uid.items())
+            if uid and len(paths) > 1
+        ]
 
         document = {
             "$schema": self._NETWORK_DOCUMENT_SCHEMA_URI,
@@ -325,15 +687,18 @@ class DocumentOperationsMixin:
             "metadata": {
                 "graphRevision": snapshot.get("revision"),
                 "graphStats": subgraph.get("stats", {}),
-                "identityMode": "path_derived",
+                "identityMode": "persistent_user_data",
             },
             "nodes": sorted(nodes, key=lambda item: item["path"]),
+            "ports": sorted(ports_by_key.values(), key=lambda item: item["uid"]),
             "edges": sorted(edges, key=lambda item: item["uid"]),
             "parameterBindings": sorted(bindings, key=lambda item: item["uid"]),
             "codeBlobs": sorted(code_blobs, key=lambda item: item["uid"]),
-            "diagnostics": [],
+            "diagnostics": identity_diagnostics,
         }
-        document["diagnostics"] = self._document_validate_network_document(document)
+        document["diagnostics"] = self._document_clean_diagnostics(
+            document["diagnostics"] + self._document_validate_network_document(document)
+        )
         return document
 
     def _document_live_scene_payload(self, snapshot: dict[str, Any]) -> dict[str, Any]:
@@ -467,7 +832,7 @@ class DocumentOperationsMixin:
         return diagnostics
 
     def _document_validate_network_document(self, document: dict[str, Any]) -> list[dict[str, Any]]:
-        diagnostics: list[dict[str, Any]] = []
+        diagnostics: list[dict[str, Any]] = self._document_schema_diagnostics(document)
         required = (
             "$schema",
             "kind",
@@ -872,6 +1237,20 @@ class DocumentOperationsMixin:
                         "details": {"received": binding.get("valueMode")},
                     }
                 )
+            if value_mode == "literal" and isinstance(binding.get("value"), (list, dict)):
+                diagnostics.append(
+                    {
+                        "severity": "error",
+                        "code": "binding.compound_value.unsupported",
+                        "message": "Tuple, ramp, and multiparm values are not supported as a single network-document binding; bind tuple components separately using scalar literal bindings.",
+                        "jsonPointer": f"/parameterBindings/{index}/value",
+                        "entityUid": binding_uid or None,
+                        "details": {
+                            "policy": "scalar_component_bindings",
+                            "receivedType": "array" if isinstance(binding.get("value"), list) else "object",
+                        },
+                    }
+                )
             if value_mode == "expression" and not str(binding.get("expression") or "").strip():
                 diagnostics.append(
                     {
@@ -960,6 +1339,7 @@ class DocumentOperationsMixin:
                         }
                     )
 
+        data_destinations: set[tuple[str, int]] = set()
         for index, edge in enumerate(document.get("edges", [])):
             if not isinstance(edge, dict):
                 diagnostics.append(
@@ -984,6 +1364,35 @@ class DocumentOperationsMixin:
                         }
                     )
             kind = str(edge.get("kind", "")).strip()
+            if kind == "data":
+                for side in ("from", "to"):
+                    endpoint = edge.get(side) or {}
+                    if "portIndex" not in endpoint:
+                        diagnostics.append(
+                            {
+                                "severity": "error",
+                                "code": "edge.port_index.missing",
+                                "message": "Data edge endpoints require an explicit portIndex.",
+                                "jsonPointer": f"/edges/{index}/{side}/portIndex",
+                                "entityUid": str(edge.get("uid", "")).strip() or None,
+                            }
+                        )
+                dest = edge.get("to") or {}
+                dest_uid = str(dest.get("nodeUid", "")).strip()
+                if dest_uid and "portIndex" in dest:
+                    destination = (dest_uid, int(dest["portIndex"]))
+                    if destination in data_destinations:
+                        diagnostics.append(
+                            {
+                                "severity": "error",
+                                "code": "edge.destination.duplicate",
+                                "message": "Only one data edge may target a destination input index.",
+                                "jsonPointer": f"/edges/{index}/to/portIndex",
+                                "entityUid": str(edge.get("uid", "")).strip() or None,
+                                "details": {"nodeUid": dest_uid, "portIndex": destination[1]},
+                            }
+                        )
+                    data_destinations.add(destination)
             if kind and kind != "data":
                 diagnostics.append(
                     {
@@ -1088,6 +1497,27 @@ class DocumentOperationsMixin:
             inputs.setdefault(dest_uid, {})[dest_index] = source_uid or None
         return inputs
 
+    @staticmethod
+    def _document_data_connection_map(document: dict[str, Any]) -> dict[str, dict[int, dict[str, Any]]]:
+        connections: dict[str, dict[int, dict[str, Any]]] = {}
+        for edge in document.get("edges", []):
+            if not isinstance(edge, dict) or str(edge.get("kind")) != "data":
+                continue
+            source = edge.get("from") or {}
+            dest = edge.get("to") or {}
+            dest_uid = str(dest.get("nodeUid", "")).strip()
+            if not dest_uid:
+                continue
+            dest_index = int(dest.get("portIndex", 0))
+            connections.setdefault(dest_uid, {})[dest_index] = {
+                "sourceUid": str(source.get("nodeUid", "")).strip() or None,
+                "sourceOutputIndex": int(source.get("portIndex", 0)),
+                "sourceOutputName": source.get("portName"),
+                "destInputName": dest.get("portName"),
+                "connectionOrder": int((edge.get("metadata") or {}).get("connectionOrder", dest_index)),
+            }
+        return connections
+
     def _document_data_edge_map(self, document: dict[str, Any]) -> dict[str, dict[int, str | None]]:
         node_uid_to_path = {
             str(node.get("uid", "")).strip(): str(node.get("path", "")).strip()
@@ -1151,6 +1581,8 @@ class DocumentOperationsMixin:
         after_nodes = self._document_nodes_by_uid(after)
         before_bindings = self._document_bindings_by_key(before)
         after_bindings = self._document_bindings_by_key(after)
+        before_code_blobs = self._document_code_blobs_by_uid(before)
+        after_code_blobs = self._document_code_blobs_by_uid(after)
         before_edges = {json.dumps(edge, sort_keys=True): edge for edge in before.get("edges", []) if isinstance(edge, dict)}
         after_edges = {json.dumps(edge, sort_keys=True): edge for edge in after.get("edges", []) if isinstance(edge, dict)}
 
@@ -1208,6 +1640,23 @@ class DocumentOperationsMixin:
 
         created_edges = [after_edges[key] for key in sorted(set(after_edges) - set(before_edges))]
         deleted_edges = [before_edges[key] for key in sorted(set(before_edges) - set(after_edges))]
+        changed_code_blobs: list[dict[str, Any]] = []
+        for uid in sorted(set(before_code_blobs) | set(after_code_blobs)):
+            before_blob = before_code_blobs.get(uid)
+            after_blob = after_code_blobs.get(uid)
+            if before_blob is None:
+                changed_code_blobs.append({"changeType": "created", "after": after_blob})
+                continue
+            if after_blob is None:
+                changed_code_blobs.append({"changeType": "deleted", "before": before_blob})
+                continue
+            changes = {
+                field: {"before": before_blob.get(field), "after": after_blob.get(field)}
+                for field in ("language", "target", "body")
+                if before_blob.get(field) != after_blob.get(field)
+            }
+            if changes:
+                changed_code_blobs.append({"changeType": "updated", "codeBlobUid": uid, "changes": changes})
         return {
             "summary": {
                 "createdNodeCount": len(created_nodes),
@@ -1217,6 +1666,7 @@ class DocumentOperationsMixin:
                 "reparentedNodeCount": reparented_node_count,
                 "retypedNodeCount": retyped_node_count,
                 "changedBindingCount": len(changed_bindings),
+                "changedCodeBlobCount": len(changed_code_blobs),
                 "createdEdgeCount": len(created_edges),
                 "deletedEdgeCount": len(deleted_edges),
             },
@@ -1224,9 +1674,38 @@ class DocumentOperationsMixin:
             "deletedNodes": deleted_nodes,
             "changedNodes": changed_nodes,
             "changedParameterBindings": changed_bindings,
+            "changedCodeBlobs": changed_code_blobs,
             "createdEdges": created_edges,
             "deletedEdges": deleted_edges,
         }
+
+    def _document_verification_diff_payload(self, authored: dict[str, Any], live: dict[str, Any]) -> dict[str, Any]:
+        """Compare live state only against parameter values authored by the source.
+
+        Network documents imported from Houdini contain every observed parameter,
+        while a lowered source document intentionally contains only authored
+        bindings. Unauthored live/default values are therefore outside the
+        verification contract and must not appear as residual changes.
+        """
+        authored_keys = set(self._document_bindings_by_key(authored))
+        authored_code_blob_uids = {
+            str(binding.get("codeBlobUid", "")).strip()
+            for binding in authored.get("parameterBindings", [])
+            if isinstance(binding, dict) and str(binding.get("codeBlobUid", "")).strip()
+        }
+        projected_live = copy.deepcopy(live)
+        projected_live["parameterBindings"] = [
+            binding
+            for binding in live.get("parameterBindings", [])
+            if isinstance(binding, dict)
+            and (str(binding.get("nodeUid", "")).strip(), str(binding.get("parmName", "")).strip()) in authored_keys
+        ]
+        projected_live["codeBlobs"] = [
+            blob
+            for blob in live.get("codeBlobs", [])
+            if isinstance(blob, dict) and str(blob.get("uid", "")).strip() in authored_code_blob_uids
+        ]
+        return self._document_diff_payload(authored, projected_live)
 
     def _document_diff_impl(self, arguments: dict[str, Any]) -> dict[str, Any]:
         payload = self._document_checkout_target(arguments)
@@ -1343,6 +1822,7 @@ class DocumentOperationsMixin:
         )
         if created.get("path") != target_path:
             created = self._node_rename_impl({"path": created["path"], "new_name": node_name, "unique_name": False})
+        self._document_stamp_live_node_metadata(str(created.get("path", "")).strip(), node)
         return created
 
     def _document_reparent_live_node(
@@ -1383,6 +1863,26 @@ class DocumentOperationsMixin:
         if not node_path or not parm_name:
             raise JsonRpcError(INVALID_PARAMS, "Could not resolve the live parm target for a document apply operation.")
         return f"{node_path}/{parm_name}"
+
+    @staticmethod
+    def _document_entity_ownership(entity: dict[str, Any]) -> str | None:
+        metadata = entity.get("metadata")
+        hocus = metadata.get("hocus") if isinstance(metadata, dict) else None
+        ownership = hocus.get("ownership") if isinstance(hocus, dict) else None
+        normalized = str(ownership or "").strip()
+        return normalized or None
+
+    def _document_reconcile_ownerships(self, document: dict[str, Any]) -> set[str]:
+        metadata = document.get("metadata")
+        preview = metadata.get("hocusPreview") if isinstance(metadata, dict) else None
+        preview_ownership = preview.get("ownership") if isinstance(preview, dict) else None
+        explicit_ownership = metadata.get("reconcileOwnership") if isinstance(metadata, dict) else None
+        requested = {
+            str(value).strip()
+            for value in (preview_ownership, explicit_ownership)
+            if str(value or "").strip()
+        }
+        return requested if len(requested) == 1 else set()
 
     def _document_build_apply_plan(
         self,
@@ -1479,15 +1979,19 @@ class DocumentOperationsMixin:
                     }
                 )
 
-        baseline_inputs = self._document_data_edge_uid_map(baseline)
-        target_inputs = self._document_data_edge_uid_map(target)
+        baseline_inputs = self._document_data_connection_map(baseline)
+        target_inputs = self._document_data_connection_map(target)
         baseline_code_blobs = self._document_code_blobs_by_uid(baseline)
         force_connection_dest_uids = {
             dest_uid
             for dest_uid, desired in target_inputs.items()
             if dest_uid in create_uids
             or dest_uid in structural_changed_uids
-            or any(source_uid in structural_changed_uids for source_uid in desired.values() if source_uid)
+            or any(
+                connection.get("sourceUid") in structural_changed_uids
+                for connection in desired.values()
+                if connection.get("sourceUid")
+            )
         }
         connection_changes: list[dict[str, Any]] = []
         if mode == "reconcile":
@@ -1498,8 +2002,9 @@ class DocumentOperationsMixin:
             current = baseline_inputs.get(dest_uid, {})
             desired = target_inputs.get(dest_uid, {})
             if mode == "merge":
-                for index, source_uid in sorted(desired.items()):
-                    if dest_uid in force_connection_dest_uids or current.get(index) != source_uid:
+                for index, connection in sorted(desired.items()):
+                    if dest_uid in force_connection_dest_uids or current.get(index) != connection:
+                        source_uid = connection.get("sourceUid")
                         connection_changes.append(
                             {
                                 "destUid": dest_uid,
@@ -1507,13 +2012,15 @@ class DocumentOperationsMixin:
                                 "inputIndex": index,
                                 "sourceUid": source_uid,
                                 "sourcePath": str(target_nodes_by_uid.get(source_uid, {}).get("path", "")).strip() if source_uid else None,
+                                **{key: connection.get(key) for key in ("sourceOutputIndex", "sourceOutputName", "destInputName", "connectionOrder")},
                             }
                         )
                 continue
             max_index = max(list(current.keys()) + list(desired.keys()), default=-1)
             for index in range(max_index + 1):
                 if dest_uid in force_connection_dest_uids or current.get(index) != desired.get(index):
-                    source_uid = desired.get(index)
+                    connection = desired.get(index)
+                    source_uid = connection.get("sourceUid") if connection else None
                     connection_changes.append(
                         {
                             "destUid": dest_uid,
@@ -1521,6 +2028,11 @@ class DocumentOperationsMixin:
                             "inputIndex": index,
                             "sourceUid": source_uid,
                             "sourcePath": str(target_nodes_by_uid.get(source_uid, {}).get("path", "")).strip() if source_uid else None,
+                            **(
+                                {key: connection.get(key) for key in ("sourceOutputIndex", "sourceOutputName", "destInputName", "connectionOrder")}
+                                if connection
+                                else {"sourceOutputIndex": 0, "sourceOutputName": None, "destInputName": None, "connectionOrder": index}
+                            ),
                         }
                     )
 
@@ -1532,6 +2044,18 @@ class DocumentOperationsMixin:
         expression_updates: list[dict[str, Any]] = []
         code_blob_installs: list[dict[str, Any]] = []
         forced_binding_uids = set(create_uids)
+
+        identity_updates = [
+            {
+                "uid": uid,
+                "path": str(target_node.get("path", "")).strip(),
+                "metadata": copy.deepcopy(target_node.get("metadata", {})),
+            }
+            for uid, target_node in sorted(target_nodes_by_uid.items())
+            if uid in baseline_nodes_by_uid
+            and str(((target_node.get("metadata") or {}).get("hocus") or {}).get("entityKind", "")) == "adopted_node"
+            and str((baseline_nodes_by_uid[uid].get("metadata") or {}).get("identityMode", "")) != "persistent_user_data"
+        ]
 
         def _binding_sort_key(item: tuple[tuple[str, str], dict[str, Any]]) -> tuple[str, str]:
             node_uid, parm_name = item[0]
@@ -1598,23 +2122,9 @@ class DocumentOperationsMixin:
                 )
                 continue
 
-        if mode == "reconcile":
-            for (node_uid, parm_name), binding in sorted(
-                baseline_bindings.items(),
-                key=lambda item: (str(baseline_nodes_by_uid.get(item[0][0], {}).get("path", "")), item[0][1]),
-            ):
-                if (node_uid, parm_name) in target_bindings:
-                    continue
-                if node_uid not in target_nodes_by_uid or node_uid in forced_binding_uids:
-                    continue
-                parameter_resets.append(
-                    {
-                        "bindingUid": str(binding.get("uid", "")).strip(),
-                        "nodeUid": node_uid,
-                        "nodePath": str(target_nodes_by_uid[node_uid].get("path", "")).strip(),
-                        "parmName": parm_name,
-                    }
-                )
+        # Parameter bindings are sparse authored intent in every apply mode.
+        # Omission means preserve live/default state; a future explicit reset
+        # value form may populate parameterResets without overloading omission.
 
         node_updates: list[dict[str, Any]] = []
         for uid, target_node in sorted(target_nodes_by_uid.items(), key=lambda item: str(item[1].get("path", ""))):
@@ -1640,8 +2150,9 @@ class DocumentOperationsMixin:
             for uid in sorted(replace_root_uids, key=lambda item: str(baseline_nodes_by_uid[item].get("path", "")).count("/"), reverse=True)
         ]
         delete_nodes: list[dict[str, Any]] = []
+        protected_delete_nodes: list[dict[str, Any]] = []
         if mode == "reconcile":
-            delete_candidates = [
+            omitted_candidates = [
                 {"uid": uid, "currentPath": str(node.get("path", "")).strip()}
                 for uid, node in baseline_nodes_by_uid.items()
                 if uid != root_uid
@@ -1652,6 +2163,13 @@ class DocumentOperationsMixin:
                     for prefix in replace_before_paths
                 )
             ]
+            reconcile_ownerships = self._document_reconcile_ownerships(target)
+            delete_candidates = [
+                item
+                for item in omitted_candidates
+                if self._document_entity_ownership(baseline_nodes_by_uid[item["uid"]]) in reconcile_ownerships
+            ]
+            protected_delete_nodes = [item for item in omitted_candidates if item not in delete_candidates]
             pruned_delete_paths = self._document_prune_descendant_paths([item["currentPath"] for item in delete_candidates])
             delete_nodes = [next(item for item in delete_candidates if item["currentPath"] == path) for path in pruned_delete_paths]
 
@@ -1667,8 +2185,10 @@ class DocumentOperationsMixin:
             "parameterAssignments": parameter_assignments,
             "expressionUpdates": expression_updates,
             "codeBlobInstalls": code_blob_installs,
+            "identityUpdates": identity_updates,
             "nodeUpdates": node_updates,
             "deleteNodes": delete_nodes,
+            "protectedDeleteNodes": protected_delete_nodes,
             "summary": {
                 "replaceNodeCount": len(replace_nodes),
                 "createNetworkContainerCount": len(create_networks),
@@ -1680,14 +2200,27 @@ class DocumentOperationsMixin:
                 "parameterAssignmentCount": len(parameter_assignments),
                 "expressionUpdateCount": len(expression_updates),
                 "codeBlobInstallCount": len(code_blob_installs),
+                "identityUpdateCount": len(identity_updates),
                 "nodeUpdateCount": len(node_updates),
                 "deleteNodeCount": len(delete_nodes),
+                "protectedDeleteNodeCount": len(protected_delete_nodes),
             },
         }
 
     def _document_execute_apply_plan(self, plan: dict[str, Any], baseline: dict[str, Any]) -> list[dict[str, Any]]:
         state = self._document_apply_state(baseline)
         executed: list[dict[str, Any]] = []
+
+        for update in plan.get("identityUpdates", []):
+            current_path = self._document_apply_state_current_path(
+                state,
+                str(update.get("uid", "")).strip(),
+                str(update.get("path", "")).strip(),
+            )
+            if not current_path:
+                continue
+            self._document_stamp_live_node_metadata(current_path, update)
+            executed.append({"type": "stamp_node_uid", "uid": update.get("uid"), "path": current_path})
 
         for operation in plan.get("replaceNodes", []):
             current_path = self._document_apply_state_current_path(state, str(operation.get("uid", "")).strip(), str(operation.get("currentPath", "")).strip())
@@ -1754,6 +2287,7 @@ class DocumentOperationsMixin:
                         "source_node_path": source_path,
                         "dest_node_path": dest_path,
                         "dest_input_index": change["inputIndex"],
+                        "source_output_index": change.get("sourceOutputIndex", 0),
                     }
                 )
                 executed.append(
@@ -1764,6 +2298,10 @@ class DocumentOperationsMixin:
                         "destUid": change.get("destUid"),
                         "destPath": dest_path,
                         "inputIndex": change["inputIndex"],
+                        "inputName": change.get("destInputName"),
+                        "outputIndex": change.get("sourceOutputIndex", 0),
+                        "outputName": change.get("sourceOutputName"),
+                        "connectionOrder": change.get("connectionOrder"),
                     }
                 )
             else:
@@ -1878,6 +2416,36 @@ class DocumentOperationsMixin:
         diff = self._document_diff_payload(baseline_document, target_document)
         plan = self._document_build_apply_plan(baseline_document, target_document, mode=mode)
         compile_ms = round((time.time() - compile_started) * 1000.0, 3)
+        if mode == "reconcile" and plan.get("protectedDeleteNodes"):
+            protected = plan["protectedDeleteNodes"]
+            diagnostics = diagnostics + [
+                {
+                    "severity": "error",
+                    "code": "reconcile.delete_unowned",
+                    "message": "Reconcile cannot delete nodes outside the target document's explicit ownership namespace.",
+                    "path": root_path,
+                    "details": {
+                        "protectedNodeCount": len(protected),
+                        "protectedNodes": protected,
+                    },
+                }
+            ]
+            diagnostics = self._document_clean_diagnostics(diagnostics)
+            if checkout_id:
+                self._documents.set_diagnostics(checkout_id, diagnostics)
+            return {
+                "checkoutId": checkout_id,
+                "applied": False,
+                "mode": mode,
+                "valid": False,
+                "diagnostics": diagnostics,
+                "diagnosticCount": len(diagnostics),
+                "baselineDocumentRevision": baseline_document.get("documentRevision"),
+                "targetDocumentRevision": target_document.get("documentRevision"),
+                "diff": diff,
+                "plan": plan,
+                "timingsMs": {"compile": compile_ms, "execute": 0.0, "verify": 0.0, "rollback": 0.0},
+            }
         if mode == "validate_only":
             return {
                 "checkoutId": checkout_id,
@@ -1913,7 +2481,7 @@ class DocumentOperationsMixin:
             self._monitor.mark_dirty("tool:document.apply", scope_path=root_path)
             verify_started = time.time()
             refreshed = self._document_current_network_payload(root_path, force_sync=True)
-            verification = self._document_diff_payload(target_document, refreshed)
+            verification = self._document_verification_diff_payload(target_document, refreshed)
             verify_ms = round((time.time() - verify_started) * 1000.0, 3)
             verified = self._document_diff_is_clean(verification)
             if not verified:

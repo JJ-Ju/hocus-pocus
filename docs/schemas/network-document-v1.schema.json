@@ -301,7 +301,21 @@
         "metadata": {
           "$ref": "#/$defs/freeformObject"
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "required": ["kind"],
+            "properties": {"kind": {"const": "data"}}
+          },
+          "then": {
+            "properties": {
+              "from": {"required": ["portIndex"]},
+              "to": {"required": ["portIndex"]}
+            }
+          }
+        }
+      ]
     },
     "parameterBinding": {
       "type": "object",
@@ -329,20 +343,27 @@
             "literal",
             "expression",
             "channel_reference",
-            "code_reference",
-            "ramp",
-            "multiparm"
+            "code_reference"
           ]
         },
-        "value": {},
+        "value": {
+          "anyOf": [
+            {"type": "null"},
+            {"type": "boolean"},
+            {"type": "number"},
+            {"type": "string"}
+          ]
+        },
         "expression": {
-          "type": "string"
+          "type": "string",
+          "minLength": 1
         },
         "expressionLanguage": {
           "type": "string"
         },
         "channelReference": {
-          "type": "string"
+          "type": "string",
+          "minLength": 1
         },
         "codeBlobUid": {
           "$ref": "#/$defs/uid"
@@ -350,7 +371,42 @@
         "metadata": {
           "$ref": "#/$defs/freeformObject"
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "required": ["valueMode"],
+            "properties": {"valueMode": {"const": "literal"}}
+          },
+          "then": {"required": ["value"]}
+        },
+        {
+          "if": {
+            "required": ["valueMode"],
+            "properties": {"valueMode": {"const": "expression"}}
+          },
+          "then": {"required": ["expression"]}
+        },
+        {
+          "if": {
+            "required": ["valueMode"],
+            "properties": {"valueMode": {"const": "channel_reference"}}
+          },
+          "then": {
+            "anyOf": [
+              {"required": ["channelReference"]},
+              {"required": ["expression"]}
+            ]
+          }
+        },
+        {
+          "if": {
+            "required": ["valueMode"],
+            "properties": {"valueMode": {"const": "code_reference"}}
+          },
+          "then": {"required": ["codeBlobUid"]}
+        }
+      ]
     },
     "codeBlobTarget": {
       "type": "object",

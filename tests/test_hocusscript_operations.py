@@ -47,7 +47,7 @@ class HocusScriptOperationsTests(unittest.TestCase):
                 RequestContext(),
             )
 
-    def test_production_registry_and_capability_include_compile_source(self) -> None:
+    def test_production_registry_and_capabilities_include_hocusscript_previews(self) -> None:
         self.assertIn(HocusScriptOperationsMixin, LiveOperations.__mro__)
         operations = LiveOperations.__new__(LiveOperations)
         tools = ToolRegistry()
@@ -57,11 +57,29 @@ class HocusScriptOperationsTests(unittest.TestCase):
         self.assertIsNotNone(tool)
         self.assertEqual(tool.required_capabilities, ("observe",))
         self.assertTrue(tool.listed)
+        preview_tool = tools.get("document.preview_bundle")
+        self.assertIsNotNone(preview_tool)
+        self.assertEqual(preview_tool.required_capabilities, ("observe",))
+        self.assertTrue(preview_tool.annotations["readOnlyHint"])
         schema_resource = resources.get("houdini://documents/schema/graph-spec/v0.1")
         self.assertIsNotNone(schema_resource)
         response = schema_resource.reader(RequestContext())
         schema = json.loads(response["contents"][0]["text"])
         self.assertEqual(schema["$id"], "hocuspocus://schemas/graph-spec/v0.1")
+        for uri, schema_id in (
+            (
+                "houdini://documents/schema/preview-bundle-input/v1",
+                "hocuspocus://schemas/document-preview-bundle-input/v1",
+            ),
+            (
+                "houdini://documents/schema/preview-bundle-output/v1",
+                "hocuspocus://schemas/document-preview-bundle-output/v1",
+            ),
+        ):
+            resource = resources.get(uri)
+            self.assertIsNotNone(resource)
+            payload = json.loads(resource.reader(RequestContext())["contents"][0]["text"])
+            self.assertEqual(payload["$id"], schema_id)
 
 
 if __name__ == "__main__":

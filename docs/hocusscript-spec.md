@@ -400,6 +400,8 @@ graph rocks {
 - Variadic inputs preserve explicit ordering and gaps.
 - A connection is legal only if the catalog declares compatible categories and ports.
 - An implementation MUST NOT collapse nonzero source outputs to output zero.
+- The graph `output` directive lowers to an explicit network-document `output_flag` edge and `set_output` candidate operation; it is not hidden in metadata. HS4 must provide a network-family adapter or block apply where Houdini exposes no safe setter.
+- `layout = auto` uses the deterministic `hocus-grid-v1` document layout for authored mutable nodes, so previewed positions are explicit and verification does not depend on Houdini UI auto-layout behavior.
 
 ### 8.7 Parameters
 
@@ -410,6 +412,8 @@ graph rocks {
 - Button parameters, callbacks, and other actions are not ordinary assignments.
 
 The AST and GraphSpec reserve first-class forms for tuples, ramps, multiparms, expressions, channel references, keyframes, time samples, units, and resets. Unsupported forms MUST produce diagnostics rather than be approximated or discarded.
+
+Network-document v1 carries scalar literal bindings. HocusScript `0.1` scalar component assignments lower directly. Whole-tuple assignments currently stop with `HOCUS708` because compiled-bundle v0.2 does not retain the ordered component-token mapping required for safe expansion. Ramp and multiparm assignments are rejected by both schema and runtime. A later compatible bundle/schema version must carry the missing structure before enabling those forms.
 
 ### 8.8 Code Blocks
 
@@ -466,7 +470,7 @@ Every compiler-managed entity MUST have a durable UID independent of Houdini ses
 
 - Explicit IDs are reserved through future `@id("...")` syntax.
 - Default IDs derive from ownership namespace, graph identity, module instance path, and local symbol.
-- Managed Houdini nodes are stamped with at least `hpmcp.uid`, `hpmcp.owner`, source URI, graph/module identity, and compiler version.
+- Managed Houdini nodes created by an apply, and live nodes explicitly adopted into compiler ownership, are stamped with at least `hpmcp.uid`, `hpmcp.owner`, source URI, graph/module identity, and compiler version. Read-only import and bundle preview never stamp artist nodes; they prefer an existing persistent UID and otherwise use a non-persistent session/path fallback until explicit adoption.
 - Duplicate UIDs caused by copy/paste are detected and repaired only through an explicit conflict policy.
 - IDs survive rename, reparent, save/reload, and ordinary source formatting changes.
 
@@ -545,10 +549,7 @@ Input:
 {
   "source": "hocus 0.1; graph ...",
   "source_name": "rocks.hocus",
-  "strict": true,
-  "expected_document_revision": 42,
-  "catalog_fingerprint": "sha256:...",
-  "warnings_as_errors": false
+  "strict": true
 }
 ```
 
@@ -571,9 +572,13 @@ Compilation never mutates Houdini.
 
 For `document.compile_source`, `source` is required and provenance is `hocus-memory://`; it cannot read a path or create an applyable plan. Durable project provenance comes from the offline compiler bundle.
 
-### 14.2 Future `document.preview_bundle` and `document.plan_bundle`
+### 14.2 `document.preview_bundle` and future `document.plan_bundle`
 
-HS3 `document.preview_bundle` accepts a canonical compiled-bundle object, passes it through the shared strict decoder, then performs live catalog resolution and diff preview without filesystem access or mutation. It is not registered during HS1P because bundle integrity validation alone is not a Houdini-aware preview. Imports are resolved by the offline compiler when the active language version supports them.
+HS3 `document.preview_bundle` accepts a canonical compiled-bundle v0.2 object, passes it through the shared strict decoder, rehydrates GraphSpec, and freshly re-resolves the graph against the current live catalog. The fresh semantic result must exactly match the bundle selections; a recomputed content hash does not make forged selections trustworthy. The operation then overlays the complete live network-document baseline, validates the resulting document, and returns a deterministic diff, destructive summary, source maps, and a non-applyable candidate plan.
+
+The MCP operation accepts content, not paths. It never reads DSL/project source files and never mutates Houdini. Live catalog provenance may inspect the installed Houdini/HDA/package environment. Preview artifacts up to the configured memory limit are content-addressed at `houdini://documents/previews/{preview_id}`; payloads larger than the inline threshold are returned only through that resource. Per-artifact and aggregate byte budgets plus LRU/TTL eviction bound Houdini-process memory.
+
+Bundle catalog drift, semantic-selection drift, document-revision drift, schema errors, unsafe ownership/collision conditions, unsupported values, or missing source provenance produce blocking diagnostics and no candidate plan. Imports remain an offline compiler responsibility when the active language version supports them.
 
 `document.plan_bundle` stores an immutable plan only after catalog, ownership, policy, revision, and fidelity gates pass. A bundle containing preview-only workspace provenance cannot produce a stored plan.
 

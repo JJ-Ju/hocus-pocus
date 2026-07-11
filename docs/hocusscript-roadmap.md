@@ -192,6 +192,8 @@ Exit criteria:
 - compile produces no applyable plan while any blocking diagnostic exists
 - bundle previews bind stable project-relative source URIs and manifest/lock digests rather than machine-specific absolute paths
 
+Implementation status (2026-07-11): complete for the HS3 SOP/network-document v1 slice. The pure lowerer, live preview tool, schema resources, persistent identity path, exact connectors, sparse verification, ownership-safe reconcile, content-addressed artifacts, and node-level dirty-scope monitoring are implemented. Offline tests and the checked-in H21.0.729 live preview/monitor smokes are passing. Broader family/value parity remains HS7; immutable plan persistence/apply remains HS4.
+
 ## 8. HS4: Immutable Plan and Guarded Apply
 
 Objectives:
@@ -394,3 +396,21 @@ Catalog v1 records exact indexed connectors and preserves stable names/types whe
 Status: open
 
 The live provider records package JSON and Labs evidence from explicit directories, `HOUDINI_PACKAGE_DIR`, user preferences, versioned `HSITE`, and `$HFS/packages`, and it rejects normalized package-ID collisions. Houdini can additionally compose dynamic package paths and precedence rules. Before package provenance is used as a production publish or clean-machine reproducibility gate, enumerate the complete effective search/load order, fingerprint precedence and shadowing, and add multi-root live fixtures. Operator/HDA fingerprints remain authoritative for semantic resolution while this provenance enrichment is open.
+
+### HS-BLOCK-004: Unordered/Variadic Input Index Semantics
+
+Status: open
+
+Houdini may compact sparse requested indices on unordered inputs; for example, a request for Merge input 5 can reimport as physical input 0. HS3 preserves and verifies exact physical input/output indices and rejects drift rather than silently accepting a different graph. Before the language claims portable sparse variadic addressing, define whether DSL indices mean physical HOM slots or logical connection ordinals, version that rule in catalog connector metadata, and add live round-trip fixtures for unordered SOP/VOP inputs.
+
+### HS-BLOCK-005: Whole-Tuple Component Mapping in Portable Bundles
+
+Status: open
+
+Catalog resolution knows tuple component tokens, but compiled-bundle v0.2 parameter selections do not retain the ordered component-token mapping required to expand a whole-tuple assignment into scalar network-document bindings. HS3 emits blocking `HOCUS708`; scalar component assignments work. Add the mapping in a compatible semantic/bundle version, bind it into the bundle hash/schema, and add relocation plus live round-trip tests before enabling whole-tuple lowering.
+
+### HS-BLOCK-006: Explicit Source Entity IDs Across Symbol Renames
+
+Status: open
+
+Default deterministic entity IDs include graph/source/local-symbol identity. They survive project relocation and ordinary formatting, but a source symbol rename intentionally changes the derived UID. Before claiming identity continuity across symbol renames, add explicit source entity IDs (for example a future `@id` form), define conflict/migration behavior, preserve them through export/modules, and test rename/reparent/save/reload/copy cases. Path and session IDs must not be used as a substitute.

@@ -13,8 +13,15 @@ from .catalog import (
 )
 from .compiler import SUPPORTED_LANGUAGE_VERSIONS, compile_source, validate_graph
 from .diagnostics import Diagnostic, SourcePosition, SourceSpan
+from .document_lowering import (
+    DOCUMENT_SCHEMA_URI,
+    PREVIEW_VERSION,
+    DocumentLoweringError,
+    DocumentPreview,
+    lower_bundle_to_document,
+)
 from .formatter import format_graph
-from .model import COMPILER_VERSION, GRAPH_SPEC_VERSION, CompileResult, GraphSpec
+from .model import COMPILER_VERSION, GRAPH_SPEC_VERSION, CompileResult, GraphSpec, graph_spec_from_dict
 from .project import ProjectContext, ProjectError, compile_path
 from .semantic import (
     CatalogConstraint,
@@ -42,11 +49,15 @@ __all__ = [
     "ConnectionSelection",
     "DeferredCheck",
     "Diagnostic",
+    "DOCUMENT_SCHEMA_URI",
+    "DocumentLoweringError",
+    "DocumentPreview",
     "FakeCatalogProvider",
     "GraphSpec",
     "GRAPH_SPEC_VERSION",
     "ProjectContext",
     "ProjectError",
+    "PREVIEW_VERSION",
     "SUPPORTED_LANGUAGE_VERSIONS",
     "SourcePosition",
     "SourceSpan",
@@ -60,6 +71,8 @@ __all__ = [
     "decode_compiled_bundle",
     "decode_catalog_snapshot",
     "format_graph",
+    "graph_spec_from_dict",
+    "lower_bundle_to_document",
     "resolve_graph",
     "validate_graph",
 ]

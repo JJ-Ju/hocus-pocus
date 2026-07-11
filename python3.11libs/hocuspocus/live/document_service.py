@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import copy
+import hashlib
+import json
 import logging
 import threading
 import time
@@ -24,12 +26,105 @@ class DocumentCheckoutRecord:
     updated_at: float
 
 
+@dataclass(slots=True)
+class PreviewArtifactRecord:
+    preview_id: str
+    payload: dict[str, Any]
+    created_at: float
+    last_accessed_at: float
+    byte_length: int
+
+
+class PreviewArtifactError(ValueError):
+    pass
+
+
 class LiveDocumentService:
+    _MAX_PREVIEW_ARTIFACTS = 64
+    _PREVIEW_TTL_SECONDS = 60 * 60
+    _MAX_PREVIEW_ARTIFACT_BYTES = 32 * 1024 * 1024
+    _MAX_PREVIEW_TOTAL_BYTES = 128 * 1024 * 1024
+
     def __init__(self, logger: logging.Logger, store: Any | None = None):
         self._logger = logger.getChild("live.documents")
         self._store = store
         self._lock = threading.Lock()
         self._checkouts: dict[str, DocumentCheckoutRecord] = {}
+        self._previews: dict[str, PreviewArtifactRecord] = {}
+
+    @staticmethod
+    def _preview_encoding(payload: dict[str, Any]) -> tuple[str, int]:
+        canonical = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+        encoded = canonical.encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest(), len(encoded)
+
+    def _prune_previews_locked(self, now: float, *, incoming_bytes: int = 0) -> None:
+        expired = [
+            preview_id
+            for preview_id, record in self._previews.items()
+            if now - record.last_accessed_at > self._PREVIEW_TTL_SECONDS
+        ]
+        for preview_id in expired:
+            self._previews.pop(preview_id, None)
+        def over_budget() -> bool:
+            count_limit = self._MAX_PREVIEW_ARTIFACTS - (1 if incoming_bytes else 0)
+            return (
+                len(self._previews) > count_limit
+                or sum(item.byte_length for item in self._previews.values()) + incoming_bytes
+                > self._MAX_PREVIEW_TOTAL_BYTES
+            )
+
+        while self._previews and over_budget():
+            oldest = min(self._previews.values(), key=lambda item: (item.last_accessed_at, item.preview_id))
+            self._previews.pop(oldest.preview_id, None)
+
+    def store_preview_artifact(self, payload: dict[str, Any]) -> dict[str, Any]:
+        preview_id, byte_length = self._preview_encoding(payload)
+        if byte_length > self._MAX_PREVIEW_ARTIFACT_BYTES:
+            raise PreviewArtifactError(
+                f"Preview artifact is {byte_length} bytes; the per-artifact limit is "
+                f"{self._MAX_PREVIEW_ARTIFACT_BYTES} bytes."
+            )
+        detached = copy.deepcopy(payload)
+        now = time.time()
+        with self._lock:
+            record = self._previews.get(preview_id)
+            if record is None:
+                self._prune_previews_locked(now, incoming_bytes=byte_length)
+                if byte_length > self._MAX_PREVIEW_TOTAL_BYTES:
+                    raise PreviewArtifactError(
+                        f"Preview artifact exceeds the {self._MAX_PREVIEW_TOTAL_BYTES}-byte aggregate limit."
+                    )
+                record = PreviewArtifactRecord(preview_id, detached, now, now, byte_length)
+                self._previews[preview_id] = record
+            else:
+                record.last_accessed_at = now
+        return {
+            "previewId": preview_id,
+            "resourceUri": f"houdini://documents/previews/{preview_id}",
+            "contentDigest": f"sha256:{preview_id}",
+            "byteLength": byte_length,
+        }
+
+    def preview_artifact(self, preview_id: str) -> dict[str, Any] | None:
+        now = time.time()
+        with self._lock:
+            self._prune_previews_locked(now)
+            record = self._previews.get(preview_id)
+            if record is None:
+                return None
+            record.last_accessed_at = now
+            return copy.deepcopy(record.payload)
+
+    def preview_artifact_stats(self) -> dict[str, int]:
+        with self._lock:
+            self._prune_previews_locked(time.time())
+            return {
+                "count": len(self._previews),
+                "totalBytes": sum(item.byte_length for item in self._previews.values()),
+                "maxArtifactBytes": self._MAX_PREVIEW_ARTIFACT_BYTES,
+                "maxTotalBytes": self._MAX_PREVIEW_TOTAL_BYTES,
+            }
 
     def _persist_record(self, record: DocumentCheckoutRecord) -> None:
         if self._store is None:

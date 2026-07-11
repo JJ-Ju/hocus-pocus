@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from .diagnostics import CodeOffsetMap, Diagnostic, SourceSpan
+from .diagnostics import CodeOffsetMap, Diagnostic, SourcePosition, SourceSpan
 
 GRAPH_SPEC_VERSION = "0.1"
 COMPILER_VERSION = "0.2.0"
@@ -203,6 +203,72 @@ class GraphSpec:
                 for key, value in sorted(self.field_spans.items())
             },
         }
+
+
+def graph_spec_from_dict(value: dict[str, Any]) -> GraphSpec:
+    """Rehydrate a GraphSpec that already crossed the strict bundle boundary."""
+
+    def position(item: dict[str, Any]) -> SourcePosition:
+        return SourcePosition(offset=item["offset"], line=item["line"], column=item["column"])
+
+    def span(item: dict[str, Any]) -> SourceSpan:
+        return SourceSpan(item["sourceUri"], position(item["start"]), position(item["end"]))
+
+    def field_spans(item: dict[str, Any]) -> dict[str, SourceSpan]:
+        return {key: span(child) for key, child in item.get("fieldSpans", {}).items()}
+
+    def decoded_value(item: dict[str, Any]) -> Any:
+        kind = item["kind"]
+        if kind == "literal":
+            return LiteralValue(item["value"], span(item["span"]))
+        if kind == "array":
+            return ArrayValue([decoded_value(child) for child in item["items"]], span(item["span"]))
+        body_span = span(item["bodySpan"]) if "bodySpan" in item else None
+        offset_map = None
+        if "offsetMap" in item:
+            encoded = item["offsetMap"]
+            offset_map = CodeOffsetMap(
+                encoded["bodyLength"],
+                tuple((point["bodyOffset"], point["sourceOffset"]) for point in encoded["checkpoints"]),
+            )
+        return CodeValue(item["language"], item["body"], span(item["span"]), body_span, offset_map)
+
+    external_nodes = [
+        ExternalNodeSpec(
+            item["symbol"], item["path"], item["adopted"], span(item["span"]), field_spans(item)
+        )
+        for item in value["externalNodes"]
+    ]
+    nodes = []
+    for item in value["nodes"]:
+        inputs = [
+            InputSpec(
+                child["index"],
+                NodeReference(
+                    child["source"]["symbol"],
+                    child["source"]["outputIndex"],
+                    span(child["source"]["span"]),
+                    field_spans(child["source"]),
+                ),
+                span(child["span"]),
+                field_spans(child),
+            )
+            for child in item["inputs"]
+        ]
+        parms = [
+            ParmSpec(
+                child["name"], decoded_value(child["value"]), span(child["span"]), field_spans(child)
+            )
+            for child in item["parms"]
+        ]
+        nodes.append(NodeSpec(
+            item["symbol"], item["typeName"], inputs, parms, span(item["span"]), field_spans(item)
+        ))
+    return GraphSpec(
+        value["languageVersion"], value["name"], value["target"], value["category"], value["mode"],
+        value["expectedRevision"], value["ownership"], external_nodes, nodes, value["display"],
+        value["render"], value["output"], value["layout"], span(value["span"]), field_spans(value),
+    )
 
 
 @dataclass(slots=True)

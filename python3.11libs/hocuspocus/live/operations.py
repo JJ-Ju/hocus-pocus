@@ -153,6 +153,7 @@ class LiveOperations(
             ("document.query", "Query Documents", "Query the current document-backed graph surface without materializing a full network document.", {"type": "object", "properties": {"root_path": {"type": "string"}, "path_prefix": {"type": "string"}, "node_type_name": {"type": "string"}, "category": {"type": "string"}, "name_contains": {"type": "string"}, "material_path": {"type": "string"}, "flag_name": {"type": "string"}, "flag_value": {"type": "boolean"}, "limit": {"type": "integer", "default": 200}}}, {"readOnlyHint": True, "idempotentHint": True}, self.document_query),
             ("document.sync_from_houdini", "Sync Documents From Houdini", "Force a document refresh from the live Houdini scene for a network root or for the whole scene manifest.", {"type": "object", "properties": {"root_path": {"type": "string"}}}, {"readOnlyHint": True, "idempotentHint": True}, self.document_sync_from_houdini),
             ("document.compile_source", "Compile HocusScript Source", "Parse, structurally validate, and canonically format HocusScript source without mutating Houdini. The initial implementation returns a span-bearing structural GraphSpec preview only; catalog resolution, network-document lowering, immutable planning, and apply remain disabled until their safety gates are complete.", {"type": "object", "additionalProperties": False, "properties": {"source": {"type": "string", "maxLength": 1048576}, "source_name": {"type": "string", "maxLength": 1024, "default": "<mcp-source>"}, "strict": {"type": "boolean", "default": True}}, "required": ["source"]}, {"readOnlyHint": True, "idempotentHint": True}, self.document_compile_source),
+            ("document.preview_bundle", "Preview HocusScript Bundle", "Strictly decode a portable resolved HocusScript bundle, verify its catalog pin against live Houdini, lower it over the current network-document baseline, and return a deterministic diff plus preview-only candidate plan without mutating Houdini or reading DSL project files.", {"type": "object", "additionalProperties": False, "properties": {"bundle": {"type": "object"}}, "required": ["bundle"]}, {"readOnlyHint": True, "idempotentHint": True}, self.document_preview_bundle),
             ("parm.list", "List Parameters", "List parameters on a node and return normalized parameter summaries. Use filters and pagination for heavy nodes so introspection stays bounded.", {"type": "object", "properties": {"node_path": {"type": "string"}, "name_prefix": {"type": "string"}, "name_contains": {"type": "string"}, "limit": {"type": "integer", "default": 250}, "offset": {"type": "integer", "default": 0}}, "required": ["node_path"]}, {"readOnlyHint": True, "idempotentHint": True}, self.parm_list),
             ("parm.get", "Get Parameter", "Return metadata and value information for a single parameter path. This is the primary structured parameter read tool.", {"type": "object", "properties": {"parm_path": {"type": "string"}}, "required": ["parm_path"]}, {"readOnlyHint": True, "idempotentHint": True}, self.parm_get),
             ("parm.set", "Set Parameter", "Set a parameter value and return the updated parameter summary. This works for standard value assignment, not expression assignment.", {"type": "object", "properties": {"parm_path": {"type": "string"}, "value": {}}, "required": ["parm_path", "value"]}, {"destructiveHint": True}, self.parm_set),
@@ -259,6 +260,8 @@ class LiveOperations(
             ("houdini://documents/scene", "Scene Document", "Scene manifest over root document-capable Houdini networks.", self.read_document_scene),
             ("houdini://documents/schema/network-document/v1", "Network Document Schema v1", "Locked machine-readable schema for the first-wave network document contract.", self.read_document_schema),
             ("houdini://documents/schema/graph-spec/v0.1", "GraphSpec Schema v0.1", "Machine-readable schema for the preview HocusScript GraphSpec contract.", self.read_graph_spec_schema),
+            ("houdini://documents/schema/preview-bundle-input/v1", "Document Preview Bundle Input Schema v1", "Machine-readable input schema for document.preview_bundle.", self.read_preview_bundle_input_schema),
+            ("houdini://documents/schema/preview-bundle-output/v1", "Document Preview Bundle Output Schema v1", "Machine-readable output schema for document.preview_bundle.", self.read_preview_bundle_output_schema),
             ("houdini://graph/scene", "Scene Graph", "Indexed whole-scene graph snapshot.", self.read_graph_scene),
             ("houdini://graph/index", "Graph Index", "Indexed scene-graph cache metadata and revision state.", self.read_graph_index),
             ("houdini://dependencies/scene", "Scene Dependencies", "Whole-scene dependency scan across file parms.", self.read_scene_dependencies),
@@ -331,6 +334,7 @@ class LiveOperations(
             "document.query": "Matched document-oriented graph nodes with their owning network-document URIs.",
             "document.sync_from_houdini": "Refreshed scene or network document projected from the current live Houdini state.",
             "document.compile_source": "Compiler and GraphSpec versions, source digest, structured diagnostics, canonical formatting, and a span-bearing GraphSpec preview.",
+            "document.preview_bundle": "Live catalog resolution, canonical target document, deterministic diff and destructive summary, preview-only candidate plan, diagnostics, and a content-addressed preview resource.",
             "node_types.list_groups": "Curated node-type discovery groups for the supported Houdini categories, including counts and priorities.",
             "node_types.list": "Compact node-type records with labels, groups, aliases, tags, and input-count hints.",
             "node_types.get_info": "Focused node-type metadata with category, aliases, tags, input info, and key parameter summaries.",
@@ -394,6 +398,11 @@ class LiveOperations(
             "document.apply": [
                 "This first implementation slice applies network documents by compiling against the current live graph snapshot.",
                 "Verification compares the refreshed live document against the requested target document and reports residual differences in-band.",
+            ],
+            "document.preview_bundle": [
+                "The bundle must pass the strict compiled-bundle v0.2 decoder and carry portable project provenance.",
+                "Catalog, document-revision, ownership, collision, or schema drift blocks the candidate plan without mutating Houdini.",
+                "Large preview payloads are returned through a content-addressed resource URI instead of being duplicated inline.",
             ],
             "node.create": [
                 "Creation may fail with `errorFamily = validation` when the parent path is not a network.",
@@ -586,6 +595,12 @@ class LiveOperations(
                 {
                     "description": "Force a fresh document projection for a live SOP network.",
                     "arguments": {"root_path": "/obj/geo1"},
+                }
+            ],
+            "document.preview_bundle": [
+                {
+                    "description": "Preview an offline-compiled, content-addressed HocusScript bundle against the current live network baseline.",
+                    "arguments": {"bundle": {"kind": "hocus_compiled_bundle", "bundleVersion": "0.2", "bundleDigest": "sha256:..."}},
                 }
             ],
             "cook.node": [
@@ -787,6 +802,8 @@ class LiveOperations(
             "houdini://session/scene-summary": "Compact scene summary with hip state, frame, and selection.",
             "houdini://documents/scene": "Scene manifest over root network documents plus hip and graph metadata.",
             "houdini://documents/schema/network-document/v1": "Locked machine-readable schema for the first-wave network document contract.",
+            "houdini://documents/schema/preview-bundle-input/v1": "Strict MCP input contract for document.preview_bundle.",
+            "houdini://documents/schema/preview-bundle-output/v1": "Structured preview result contract including catalog resolution, diagnostics, and artifact references.",
             "houdini://graph/scene": "Whole-scene graph snapshot with indexed nodes, parms, edges, and material assignments.",
             "houdini://graph/index": "Graph-cache metadata including revision, counts, and refresh timing.",
             "houdini://dependencies/scene": "Whole-scene dependency scan across file-reference parms with missing-file and policy flags.",
@@ -819,6 +836,12 @@ class LiveOperations(
             ],
             "houdini://documents/schema/network-document/v1": [
                 {"description": "Read the locked network-document JSON schema used by the document resources and tools."}
+            ],
+            "houdini://documents/schema/preview-bundle-input/v1": [
+                {"description": "Inspect the exact input boundary before passing an offline compiled bundle to Houdini."}
+            ],
+            "houdini://documents/schema/preview-bundle-output/v1": [
+                {"description": "Inspect the preview result and content-addressed artifact-reference contract."}
             ],
             "houdini://graph/scene": [
                 {"description": "Load the current indexed scene graph as a single resource snapshot."}

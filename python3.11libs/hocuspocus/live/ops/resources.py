@@ -75,6 +75,10 @@ class ResourceOperationsMixin:
             checkout_id = uri[len("houdini://documents/diagnostics/") :].strip("/")
             if checkout_id:
                 return self.read_document_diagnostics(checkout_id, context)
+        if uri.startswith("houdini://documents/previews/"):
+            preview_id = uri[len("houdini://documents/previews/") :].strip("/")
+            if preview_id:
+                return self.read_document_preview(preview_id, context)
         if uri == "houdini://graph/scene":
             return self.read_graph_scene(context)
         if uri == "houdini://graph/index":
@@ -249,6 +253,19 @@ class ResourceOperationsMixin:
                     {
                         "description": "Read validation diagnostics for a checkout after calling `document.validate`.",
                         "uri": "houdini://documents/diagnostics/01234567-89ab-cdef-0123-456789abcdef",
+                    }
+                ],
+            },
+            {
+                "uriTemplate": "houdini://documents/previews/{preview_id}",
+                "name": "HocusScript Document Preview",
+                "description": "Read a content-addressed HS3 document preview artifact produced by `document.preview_bundle`.",
+                "mimeType": "application/json",
+                "payloadSummary": "Canonical document, diff, destructive summary, preview-only candidate plan, provenance, source maps, and diagnostics.",
+                "examples": [
+                    {
+                        "description": "Read a large preview artifact by the URI returned from document.preview_bundle.",
+                        "uri": "houdini://documents/previews/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
                     }
                 ],
             },

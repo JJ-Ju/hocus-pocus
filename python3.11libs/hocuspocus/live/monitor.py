@@ -26,10 +26,12 @@ class SceneEventMonitor:
         self._hip_callback_installed = False
         self._playbar_callback_installed = False
         self._selection_callback_installed = False
+        self._node_callbacks_installed = False
         self._playbar_retry_registered = False
         self._scene_dirty_revision = 0
         self._dirty_scopes: dict[str, int] = {}
         self._listeners: list[Any] = []
+        self._observed_nodes: dict[int, Any] = {}
 
     def start(self) -> None:
         if hou is None:
@@ -57,13 +59,17 @@ class SceneEventMonitor:
             except Exception:
                 self._logger.warning("selection callbacks unavailable in this context", exc_info=True)
 
+        if self._install_node_callbacks():
+            installed_any = True
+
         self._callbacks_installed = installed_any
         if installed_any:
             self._logger.info(
-                "scene callbacks installed hip=%s playbar=%s selection=%s",
+                "scene callbacks installed hip=%s playbar=%s selection=%s nodes=%s",
                 self._hip_callback_installed,
                 self._playbar_callback_installed,
                 self._selection_callback_installed,
+                self._node_callbacks_installed,
             )
         else:
             self._logger.warning("no scene callbacks could be installed")
@@ -96,10 +102,18 @@ class SceneEventMonitor:
             except Exception:
                 self._logger.debug("selection callback removal failed", exc_info=True)
 
+        for node in list(self._observed_nodes.values()):
+            try:
+                node.removeEventCallback(self._on_node_event)
+            except Exception:
+                self._logger.debug("node callback removal failed", exc_info=True)
+        self._observed_nodes.clear()
+
         self._callbacks_installed = False
         self._hip_callback_installed = False
         self._playbar_callback_installed = False
         self._selection_callback_installed = False
+        self._node_callbacks_installed = False
         self._playbar_retry_registered = False
 
     def add_listener(self, listener: Any) -> None:
@@ -161,6 +175,108 @@ class SceneEventMonitor:
     def _on_selection_event(self, selection: Any) -> None:
         self._bump("selection:changed")
 
+    @staticmethod
+    def _node_scope_path(node: Any) -> str | None:
+        try:
+            path = str(node.path()).strip()
+        except Exception:
+            return None
+        parts = [part for part in path.split("/") if part]
+        if not parts:
+            return None
+        if parts[0] == "obj" and len(parts) >= 2:
+            return "/obj/" + parts[1]
+        if parts[0] in {"mat", "stage", "tasks", "out", "ch", "img"}:
+            return "/" + parts[0]
+        return "/" + parts[0]
+
+    @staticmethod
+    def _node_key(node: Any) -> int:
+        try:
+            return int(node.sessionId())
+        except Exception:
+            return id(node)
+
+    @staticmethod
+    def _node_event_types() -> tuple[Any, ...]:
+        if hou is None:
+            return ()
+        names = (
+            "AppearanceChanged",
+            "BeingDeleted",
+            "ChildCreated",
+            "ChildDeleted",
+            "ChildReordered",
+            "CustomDataChanged",
+            "FlagChanged",
+            "IndirectInputCreated",
+            "IndirectInputDeleted",
+            "IndirectInputRewired",
+            "InputRewired",
+            "NameChanged",
+            "ParmTupleAnimated",
+            "ParmTupleChanged",
+            "ParmTupleChannelChanged",
+            "PositionChanged",
+            "SpareParmTemplatesChanged",
+        )
+        event_type = getattr(hou, "nodeEventType", None)
+        return tuple(value for name in names if (value := getattr(event_type, name, None)) is not None)
+
+    def _observe_node(self, node: Any) -> None:
+        key = self._node_key(node)
+        if key in self._observed_nodes:
+            return
+        event_types = self._node_event_types()
+        if not event_types:
+            return
+        try:
+            node.addEventCallback(event_types, self._on_node_event)
+        except Exception:
+            self._logger.debug("unable to observe node events", exc_info=True)
+            return
+        self._observed_nodes[key] = node
+
+    def _observe_subtree(self, node: Any) -> None:
+        self._observe_node(node)
+        try:
+            descendants = node.allSubChildren()
+        except Exception:
+            descendants = ()
+        for descendant in descendants:
+            self._observe_node(descendant)
+
+    def _install_node_callbacks(self) -> bool:
+        if hou is None or self._node_callbacks_installed:
+            return self._node_callbacks_installed
+        try:
+            root = hou.node("/")
+            if root is None:
+                return False
+            self._observe_subtree(root)
+            self._node_callbacks_installed = bool(self._observed_nodes)
+            if self._node_callbacks_installed:
+                self._logger.info("node callbacks installed count=%s", len(self._observed_nodes))
+            return self._node_callbacks_installed
+        except Exception:
+            self._logger.warning("node callbacks unavailable in this context", exc_info=True)
+            return False
+
+    def _on_node_event(self, node: Any, event_type: Any, **kwargs: Any) -> None:
+        event_name = str(event_type)
+        try:
+            event_name = str(event_type.name())
+        except Exception:
+            pass
+        if event_name.endswith("ChildCreated"):
+            child = kwargs.get("child_node") or kwargs.get("child")
+            if child is not None:
+                self._observe_subtree(child)
+        scope_path = self._node_scope_path(node)
+        self._bump(f"node:{event_name}", scope_path=scope_path)
+        if event_name.endswith("BeingDeleted"):
+            self._observed_nodes.pop(self._node_key(node), None)
+
     def _install_playbar_callback(self) -> bool:
         if hou is None or self._playbar_callback_installed:
             return self._playbar_callback_installed
@@ -209,6 +325,8 @@ class SceneEventMonitor:
                 "playbarCallbackInstalled": self._playbar_callback_installed,
                 "playbarRetryRegistered": self._playbar_retry_registered,
                 "selectionCallbackInstalled": self._selection_callback_installed,
+                "nodeCallbacksInstalled": self._node_callbacks_installed,
+                "observedNodeCount": len(self._observed_nodes),
                 "sceneDirtyRevision": self._scene_dirty_revision,
                 "dirtyScopeCount": len(self._dirty_scopes),
                 "dirtyScopes": dict(self._dirty_scopes),

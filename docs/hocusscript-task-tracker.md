@@ -15,8 +15,8 @@ Roadmap: `docs/hocusscript-roadmap.md`
 
 ## 2. Current Slice
 
-Current milestone: HS2 catalog and semantic resolver complete; HS3 document fidelity corrections next
-Current scope: pinned offline semantics plus live catalog snapshots; no document lowering or apply
+Current milestone: HS3 document lowering and live preview complete; HS4 immutable planning and guarded apply next
+Current scope: strict portable bundles lower against a freshly verified live catalog/baseline into non-applyable candidate plans
 Live mutation: prohibited
 
 Initial implementation acceptance command:
@@ -225,36 +225,45 @@ HS2 exit evidence (2026-07-11):
 
 ## 6. HS3: Document Lowering and Preview
 
-Status: blocked by document fidelity prerequisites
+Status: complete for SOP/network-document v1; broader family/value parity remains HS7 and immutable apply remains HS4
 
 Dependencies: HS2 and DG corrective work
 Houdini required: yes for live baseline tests
 
 ### Required document corrections
 
-- [ ] Stamp created/adopted nodes with persistent `hpmcp.uid`.
-- [ ] Prefer persistent UID during import and detect duplicate copied UIDs.
-- [ ] Preserve exact source output index/name in import, plan, execute, and verify.
-- [ ] Preserve exact destination input index/name and variadic ordering.
-- [ ] Align runtime validation with the published JSON Schema.
-- [ ] Define and implement sparse authored-parameter verification.
-- [ ] Implement or explicitly reject tuple/ramp/multiparm lowering.
-- [ ] Make reconcile ownership-aware before any source-driven delete.
-- [ ] Add node-level live edit tracking and scope coalescing.
+- [x] Stamp created/adopted nodes with persistent `hpmcp.uid` and ownership/source/compiler metadata only on explicit mutation paths; keep import/preview read-only.
+- [x] Prefer persistent UID during import and detect duplicate copied UIDs.
+- [x] Preserve exact source output index/name in import, plan, execute, and verify.
+- [x] Preserve exact destination input index/name and variadic ordering; keep sparse unordered-input compaction policy in HS-BLOCK-004.
+- [x] Align runtime validation with the published JSON Schema, including conditional binding payloads and data-edge indexes.
+- [x] Define and implement sparse authored-parameter verification.
+- [x] Support scalar component lowering and explicitly reject whole tuples (`HOCUS708`), ramps, and multiparms until HS-BLOCK-005 is resolved.
+- [x] Make reconcile ownership-aware before any source-driven delete.
+- [x] Add node-level live edit tracking and scope coalescing.
 
 ### Lowering and MCP preview
 
-- [ ] Lower resolved GraphSpec into canonical network-document v1.
-- [ ] Overlay complete baseline state for merge.
-- [ ] Generate deterministic UIDs and ownership/source metadata.
-- [ ] Carry source maps into nodes, bindings, edges, code blobs, and plan operations.
-- [ ] Produce document validation, diff, destructive summary, and preview plan.
-- [ ] Add `document.preview_bundle` for resolved document and candidate-plan preview; keep `document.compile_source` structural-only.
-- [ ] Bind bundle previews to stable project-relative source URIs and manifest/lock/source/dependency digests.
-- [ ] Add explicit input and output JSON Schemas.
-- [ ] Keep large artifacts in resources with stable URIs.
-- [ ] Verify compile never mutates Houdini.
-- [ ] Add fake-baseline and live SOP preview tests.
+- [x] Lower resolved GraphSpec into canonical network-document v1.
+- [x] Overlay complete baseline state for merge.
+- [x] Generate deterministic UIDs and ownership/source metadata.
+- [x] Carry source maps into nodes, bindings, edges, code blobs, and plan operations.
+- [x] Produce document validation, diff, destructive summary, and preview plan.
+- [x] Add `document.preview_bundle` for resolved document and candidate-plan preview; keep `document.compile_source` structural-only.
+- [x] Bind bundle previews to stable project-relative source URIs and manifest/lock/source/dependency digests.
+- [x] Add explicit input and output JSON Schemas and MCP schema resources.
+- [x] Keep large artifacts in bounded content-addressed resources with stable URIs.
+- [x] Verify compile/preview never mutates Houdini.
+- [x] Add fake-baseline and live SOP preview tests.
+
+HS3 exit evidence (2026-07-11):
+
+- offline suite: 155 repository tests; 11 Draft 2020-12 schemas; pure HocusScript package remains `hou`-free
+- strict trust boundary: live GraphSpec re-resolution must exactly match bundled semantic selections; adversarial rehashed selection tests block with `HOCUS722`
+- deterministic round trip: canonical node/binding/code/edge/port identities avoid duplicate bindings and destination edges after live reimport
+- H21.0.729 live preview: actual live importer, integrity-checked persistent provenance, an imported SOP connection/ports, and a deferred adopted external resolved against full live catalog `sha256:b6743cfd1bfe24ce708deab89277eb7d4006669ea8294ba6d97cfc973b78ebca`; deterministic candidate plan `sha256:419f16f4ca47ff35826e1409e3111cca3d1f3536e8c549859eec70d40279b428`, eight operations, and verified `houdiniMutation=false`
+- H21.0.729 live monitor: 12 observed nodes, seven node events coalesced to the disposable SOP network scope
+- reproducible commands: `scripts/smoke_hocusscript_preview.py` and `scripts/smoke_scene_event_monitor.py`
 
 ## 7. HS4: Immutable Plan and Guarded Apply
 

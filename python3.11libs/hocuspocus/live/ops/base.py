@@ -397,6 +397,7 @@ class OperationBaseMixin:
             "document.query": (OBSERVE,),
             "document.sync_from_houdini": (OBSERVE,),
             "document.compile_source": (OBSERVE,),
+            "document.preview_bundle": (OBSERVE,),
             "parm.list": (OBSERVE,),
             "parm.get": (OBSERVE,),
             "parm.set": (EDIT_SCENE,),
