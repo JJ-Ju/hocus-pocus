@@ -161,7 +161,7 @@ Houdini required: no
 
 HS1 exit evidence:
 
-- latest full acceptance command: 48 tests passed on 2026-07-11
+- latest full acceptance command: 61 tests passed on 2026-07-11
 - repeated compiles produce byte-identical normalized GraphSpec
 - static search confirms no `hou` import in the language package
 - no MCP or local path can mutate Houdini through the HS1 code
@@ -175,20 +175,20 @@ Status: in progress
 Dependencies: HS1 path/source identity contract
 Houdini required: no
 
-- [x] Add offline `ProjectContext` with stable manifest UID, canonical root, relative source/module directories, and project-relative source URIs.
+- [x] Add offline `ProjectContext` with stable manifest UID, canonical root, relative source directories, and project-relative source URIs.
 - [x] Let native CLI/editor configuration select the project directory explicitly; keep it out of Houdini MCP settings and registries.
 - [x] Add `compile_path()` with bounded UTF-8 reads and canonical project containment.
 - [x] Add native `check`, `format`, and `compile` CLI commands.
-- [ ] Define and validate `hocus.project.toml` and `hocus.lock.json` schemas.
+- [x] Define and validate strict structural `hocus.project.toml` and `hocus.lock.json` v1 schemas.
 - [x] Add stable `hocus-project://`, preview-only `hocus-workspace://`, and `hocus-memory://` URI generation.
-- [ ] Add canonical containment with traversal, case, alternate-drive, UNC/device, symlink, and junction checks.
+- [ ] Eliminate path check/open TOCTOU with descriptor/handle-based reads; retain traversal, case, alternate-drive, UNC/device, symlink, and junction regression coverage.
 - [x] Add canonical compiled-bundle model and deterministic JSON/digest serialization.
 - [x] Include GraphSpec, embedded source-map contract, source/dependency digests, compiler/language/schema versions, manifest/lock/catalog constraint fields, and graph-derived capability requirements.
 - [x] Keep `document.compile_source` as an unsaved-buffer convenience endpoint with no path-reading behavior.
 - [x] Add strict external compiled-bundle decoding, validation, and content-boundary tests without filesystem access.
 - [x] Ensure physical project roots do not participate in portable compiled-bundle provenance and identity.
 - [x] Define the complete portable bundle provenance input fields: project/source/manifest/lock/compiler/catalog/module digests.
-- [ ] Add unit and cross-platform project relocation, traversal, conflicting UID, invalid UTF-8, oversized source, deterministic bundle, and missing/stale lock tests.
+- [x] Add unit tests for project relocation, traversal, same-UID divergent provenance, invalid UTF-8, oversized source, deterministic bundle, and missing/stale locks.
 
 ## 5. HS2: Catalog and Semantic Resolver
 
@@ -375,7 +375,7 @@ Houdini required: yes
 - [ ] Decide canonical tuple and unit syntax.
 - [ ] Decide record/object literal syntax.
 - [ ] Decide channel-reference and expression syntax.
-- [ ] Decide module package URI and lockfile formats.
+- [ ] Decide module package URI and the HS6 module-lock schema that extends structural lock v1.
 - [x] Keep project-directory selection in native compiler/editor configuration; do not expose an MCP project registry.
 - [ ] Decide syntax for explicit per-field `preserve_live` and `source_wins` annotations; the default reject-on-conflict policy is locked.
 - [ ] Decide quoted/reserved parameter-token syntax such as `parm["input"]`.

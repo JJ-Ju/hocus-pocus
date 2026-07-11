@@ -111,6 +111,7 @@ Objectives:
 - accept the project root explicitly from CLI/editor configuration; do not put project roots in Houdini MCP configuration
 - implement canonical project/source URIs without absolute physical roots in portable provenance
 - enforce bounded UTF-8 reads plus traversal, alternate-drive, UNC/device, case, symlink, and junction containment rules
+- before privileged or service-hosted project reads, replace pathname check-then-open with descriptor/handle-based containment and file-identity verification on each supported platform
 - define a canonical compiled-bundle schema with GraphSpec, source maps, source/dependency digests, manifest/lock/catalog constraints, capabilities, and version fields
 - compute bundle identity over deterministic canonical JSON
 - retain `document.compile_source` only as an unsaved-buffer compatibility endpoint
@@ -373,3 +374,11 @@ Code implemented but awaiting live Houdini validation remains explicitly `implem
 - 1k-node compile under 2 seconds against a warm catalog target
 - documented performance targets before 10k-node claims
 - reproducible production fixture with numeric and visual reports
+
+## 16. Roadmap Backlog and Major Issues
+
+### HS-BLOCK-001: Descriptor-Safe Native Project Reads
+
+Status: open
+
+Canonical path resolution blocks ordinary traversal and symlink/junction escapes, but pathname check-then-open still permits a narrow reparse-point swap race between validation and file open. Before project reads are used from a privileged, multi-user, or service-hosted process, implement descriptor/handle-based opens, verify the final object identity and containment from the opened handle, and add Windows junction plus POSIX symlink race tests. Native same-user CLI operation may continue while this remains explicitly gated; Houdini MCP still performs no project-file reads.

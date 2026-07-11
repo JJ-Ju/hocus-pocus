@@ -39,7 +39,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     if not args.project:
         parser.error("--project or HOCUS_PROJECT_DIRECTORY is required")
     try:
-        result = compile_path(args.source, project_directory=args.project, strict=not args.no_strict)
+        result = compile_path(
+            args.source,
+            project_directory=args.project,
+            strict=not args.no_strict,
+            validate_lock=args.command != "format",
+        )
         if args.command == "check":
             if args.json:
                 print(json.dumps(result.to_dict(), ensure_ascii=False, indent=2, sort_keys=True))

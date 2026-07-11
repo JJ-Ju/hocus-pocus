@@ -151,9 +151,9 @@ native editor or agent filesystem
 Project rules:
 
 - The offline compiler receives an explicit project directory and resolves it to a canonical absolute directory. It does not infer a project from the Houdini hip file, `$HIP`, the package repository, or the Houdini MCP process.
-- `hocus.project.toml` defines `schema_version`, a stable project `uid`, an optional display `name`, relative `source_directories`, catalog constraints, lock policy, formatting, and project metadata. `source_directories` defaults to `["."]`.
+- `hocus.project.toml` v1 defines `schema_version`, a stable project `uid`, an optional display `name`, normalized relative `source_directories`, language version, and whether the structural lock is optional or required. Unknown v1 fields are rejected. `source_directories` defaults to `["."]`.
 - The project UID uses lowercase ASCII letters, digits, dots, and hyphens, starts with a letter or digit, and is at most 128 characters.
-- `hocus.lock.json` records schema/compiler constraints, catalog fingerprint, external module URI/version/digest, and transitive dependency digests without absolute machine paths or secrets.
+- `hocus.lock.json` v1 binds the project UID, exact manifest digest, and language version. Its `catalog` value is `null` and `modules` is empty until HS2/HS6 lock those formats; later schemas extend rather than silently reinterpret v1. Check/compile always validate existing locks, required missing locks fail, and stale locks block portable compilation. Pure formatting does not consume or rewrite the lock and remains available for repair workflows.
 - Source paths and import paths are project-relative and contained after canonical resolution. Absolute source paths MAY be accepted by a native CLI for ergonomics only after proving containment in the explicit project directory.
 - Source and export-source files use the `.hocus` suffix. Manifest, lock, catalog, and compiled-bundle files use their own declared formats.
 - The physical project root never participates in durable source or node identity. A canonical source URI uses the manifest UID plus percent-encoded project-relative path, for example `hocus-project://city-environment/hocus/rocks.hocus`.
@@ -168,8 +168,31 @@ schema_version = 1
 [project]
 uid = "city-environment"
 name = "City Environment"
-source_directories = ["hocus", "modules"]
+source_directories = ["hocus"]
+
+[language]
+version = "0.1"
+
+[lock]
+policy = "required"
 ```
+
+Initial lock shape:
+
+```json
+{
+  "$schema": "hocuspocus://schemas/hocus-lock/v1",
+  "kind": "hocus_project_lock",
+  "schemaVersion": 1,
+  "projectUid": "city-environment",
+  "manifestDigest": "sha256:...",
+  "languageVersion": "0.1",
+  "catalog": null,
+  "modules": []
+}
+```
+
+The manifest digest covers the exact bounded manifest bytes. The lock digest covers canonical JSON with sorted keys, so lock whitespace and key order do not create false bundle drift. Lock updates are explicit future native CLI operations and are never performed by compile or MCP.
 
 The offline compiler emits a deterministic, content-addressed compiled bundle containing at least:
 
