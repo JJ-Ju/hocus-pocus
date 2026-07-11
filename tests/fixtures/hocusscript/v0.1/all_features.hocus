@@ -1,0 +1,34 @@
+// Every HocusScript 0.1 syntax production and optional spelling.
+hocus "0.1";
+
+graph all_features {
+  /* Singleton statements accept the optional equals spelling. */
+  target = "/obj/geo1";
+  category = Sop;
+  mode = reconcile;
+  expect = 7;
+  ownership = "tests.all_features";
+
+  existing readonly = "/obj/geo1/READ_ONLY";
+  adopt managed = "/obj/geo1/MANAGED";
+
+  node source: null {
+    empty = [];
+    trailing = [1,];
+    scalars = [-2, 3.5e1, true, false, null, "text"];
+    python_code = python`return 1`;
+    hscript_code = hscript`$F + 1`;
+  }
+
+  node sink: "attribwrangle" {
+    input[0] = source;
+    input[1] = source.out[2];
+    input[2] = managed.output[0];
+    vex_code = vex`a\`b`;
+  }
+
+  display = sink;
+  render = sink;
+  output = sink;
+  layout = auto;
+}

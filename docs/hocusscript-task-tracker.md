@@ -78,7 +78,7 @@ HS0 exit evidence:
 
 ## 4. HS1: Offline Language Foundation
 
-Status: in progress
+Status: complete
 
 Dependencies: HS0 grammar and diagnostics contract
 Houdini required: no
@@ -92,9 +92,9 @@ Houdini required: no
 - [x] Add serializable GraphSpec model.
 - [x] Add machine-readable GraphSpec v0.1 schema and MCP schema resource.
 - [x] Ensure the package never imports `hou`.
-- [ ] Split the parser-owned syntax AST from normalized GraphSpec before semantic resolution.
-- [ ] Retain individual spans for version, target, category, mode, revision, ownership, and flag/layout statements.
-- [ ] Retain embedded code body-start and escape-aware offset maps.
+- [x] Split the parser-owned syntax AST from normalized GraphSpec before semantic resolution.
+- [x] Retain and serialize individual spans for version, target, category, mode, revision, ownership, and flag/layout statements.
+- [x] Retain and serialize embedded code body spans and compact escape-aware offset maps.
 
 ### Lexer
 
@@ -105,7 +105,7 @@ Houdini required: no
 - [x] Enforce source, token, and literal-size limits.
 - [x] Enforce value-nesting depth.
 - [x] Enforce diagnostic count and emit a truncation diagnostic.
-- [ ] Add parser recovery for multiple independent syntax errors.
+- [x] Add scope-aware parser recovery for multiple independent syntax errors.
 
 ### Parser
 
@@ -151,22 +151,22 @@ Houdini required: no
 - [x] Add `tests/test_hocusscript_parser.py`.
 - [x] Add `tests/test_hocusscript_compiler.py`.
 - [x] Add `tests/test_hocusscript_operations.py`.
-- [ ] Cover every `0.1` grammar production.
+- [x] Cover every `0.1` grammar production through the all-features fixture and focused unit tests.
 - [x] Cover comments, escapes, negative/exponent numbers, arrays, and tagged code.
 - [x] Assert exact source spans.
 - [x] Assert duplicate and missing-reference diagnostics.
 - [x] Assert deterministic GraphSpec and source hashes.
 - [x] Assert hostile text does not import or execute host code.
-- [ ] Add golden source -> GraphSpec fixtures.
+- [x] Add checked-in valid source -> GraphSpec and invalid recovery diagnostic golden fixtures.
 
 HS1 exit evidence:
 
-- latest full acceptance command: 61 tests passed on 2026-07-11
+- latest full acceptance command: 69 tests passed on 2026-07-11
 - repeated compiles produce byte-identical normalized GraphSpec
 - static search confirms no `hou` import in the language package
 - no MCP or local path can mutate Houdini through the HS1 code
 
-HS1 remains in progress until the unchecked parser-recovery, statement-span, code-offset, complete-coverage, and golden-fixture tasks pass.
+HS1 exit evidence is complete for the offline `0.1` language foundation. Later semantic catalog, document, and live-Houdini behavior remains gated by HS2+.
 
 ## 4A. HS1P: Native Project Compiler and Bundles
 

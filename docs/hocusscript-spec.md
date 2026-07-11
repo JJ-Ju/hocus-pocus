@@ -90,11 +90,12 @@ GraphSpec preview version `0.1` uses schema URI `hocuspocus://schemas/graph-spec
   "render": null,
   "output": null,
   "layout": "auto",
-  "span": {}
+  "span": {},
+  "fieldSpans": {"name": {}, "target": {}, "mode": {}, "layout": {}}
 }
 ```
 
-Nodes contain ordered `inputs` and `parms`; external nodes declare `symbol`, `path`, and `adopted`. The completed model carries spans on literals, arrays, code, references, statements, and entities. Preview `0.1` currently carries spans on graph entities, references, assignments, and values while a separate syntax AST and singleton-statement spans remain HS1 work.
+The source-faithful syntax AST is separate from normalized GraphSpec and preserves statement order, optional spellings, quoted forms, and trailing commas. Nodes contain ordered `inputs` and `parms`; external nodes declare `symbol`, `path`, and `adopted`. GraphSpec carries entity/value spans plus `fieldSpans` for authored singleton scalars. Tagged code additionally carries its exact body span and a compact escape-aware offset map so later diagnostics can translate decoded code offsets back to `.hocus` source offsets.
 
 Canonical GraphSpec serialization uses UTF-8, sorted object keys when hashed, source order for declaration arrays, explicit nulls, finite JSON numbers, and no insignificant whitespace in the hashed form. Compiler responses declare both `compilerVersion` and `graphSpecVersion`. Incompatible shape changes require a new GraphSpec version and schema URI.
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import copy
 import sys
 import unittest
 from pathlib import Path
@@ -126,7 +127,7 @@ graph demo {
 
     def test_versions_are_explicit_in_preview_payload(self) -> None:
         payload = compile_source(VALID_SOURCE, "rocks.hocus").to_dict()
-        self.assertEqual(payload["compilerVersion"], "0.1.0")
+        self.assertEqual(payload["compilerVersion"], "0.1.1")
         self.assertEqual(payload["graphSpecVersion"], "0.1")
         self.assertEqual(payload["graphSpec"]["$schema"], "hocuspocus://schemas/graph-spec/v0.1")
         self.assertEqual(payload["diagnostics"], [])
@@ -135,6 +136,16 @@ graph demo {
         schema = json.loads((ROOT / "docs" / "schemas" / "graph-spec-v0.1.schema.json").read_text(encoding="utf-8"))
         self.assertEqual(schema["$id"], payload["graphSpec"]["$schema"])
         self.assertTrue(set(schema["required"]).issubset(payload["graphSpec"].keys()))
+        try:
+            from jsonschema import Draft202012Validator
+        except ImportError:
+            Draft202012Validator = None
+        if Draft202012Validator is not None:
+            validator = Draft202012Validator(schema)
+            validator.validate(payload["graphSpec"])
+            only_body_span = copy.deepcopy(payload["graphSpec"])
+            del only_body_span["nodes"][1]["parms"][0]["value"]["offsetMap"]
+            self.assertTrue(list(validator.iter_errors(only_body_span)))
 
     def test_empty_ownership_and_node_type_are_rejected(self) -> None:
         result = compile_source(

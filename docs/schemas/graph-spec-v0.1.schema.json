@@ -85,7 +85,25 @@
         {"const": "auto"}
       ]
     },
-    "span": {"$ref": "#/$defs/sourceSpan"}
+    "span": {"$ref": "#/$defs/sourceSpan"},
+    "fieldSpans": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "languageVersion": {"$ref": "#/$defs/sourceSpan"},
+        "name": {"$ref": "#/$defs/sourceSpan"},
+        "target": {"$ref": "#/$defs/sourceSpan"},
+        "category": {"$ref": "#/$defs/sourceSpan"},
+        "mode": {"$ref": "#/$defs/sourceSpan"},
+        "expectedRevision": {"$ref": "#/$defs/sourceSpan"},
+        "ownership": {"$ref": "#/$defs/sourceSpan"},
+        "display": {"$ref": "#/$defs/sourceSpan"},
+        "render": {"$ref": "#/$defs/sourceSpan"},
+        "output": {"$ref": "#/$defs/sourceSpan"},
+        "layout": {"$ref": "#/$defs/sourceSpan"}
+      }
+    }
   },
   "$defs": {
     "identifier": {
@@ -151,11 +169,37 @@
       "type": "object",
       "additionalProperties": false,
       "required": ["kind", "language", "body", "span"],
+      "dependentRequired": {
+        "bodySpan": ["offsetMap"],
+        "offsetMap": ["bodySpan"]
+      },
       "properties": {
         "kind": {"const": "code"},
         "language": {"enum": ["vex", "python", "hscript"]},
         "body": {"type": "string"},
-        "span": {"$ref": "#/$defs/sourceSpan"}
+        "span": {"$ref": "#/$defs/sourceSpan"},
+        "bodySpan": {"$ref": "#/$defs/sourceSpan"},
+        "offsetMap": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["bodyLength", "checkpoints"],
+          "properties": {
+            "bodyLength": {"type": "integer", "minimum": 0},
+            "checkpoints": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["bodyOffset", "sourceOffset"],
+                "properties": {
+                  "bodyOffset": {"type": "integer", "minimum": 0},
+                  "sourceOffset": {"type": "integer", "minimum": 0}
+                }
+              }
+            }
+          }
+        }
       }
     },
     "value": {

@@ -8,7 +8,7 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-from .diagnostics import Diagnostic, HocusSourceError, SourcePosition, SourceSpan
+from .diagnostics import CodeOffsetMap, Diagnostic, HocusSourceError, SourcePosition, SourceSpan
 
 _IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 _NUMBER = re.compile(r"-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?")
@@ -32,6 +32,8 @@ class Token:
     value: Any
     lexeme: str
     span: SourceSpan
+    body_span: SourceSpan | None = None
+    code_offset_map: CodeOffsetMap | None = None
 
 
 class Lexer:
@@ -195,14 +197,20 @@ class Lexer:
 
     def _code_token(self, start: SourcePosition) -> Token:
         self._advance()
+        body_start = self._position()
         body: list[str] = []
+        checkpoints: list[tuple[int, int]] = [(0, body_start.offset)]
         while self._index < len(self._source):
             if self._source.startswith("\\`", self._index):
                 body.append("`")
                 self._advance(2)
+                checkpoints.append((len(body), self._index))
                 continue
             char = self._source[self._index]
             if char == "`":
+                body_end = self._position()
+                if checkpoints[-1] != (len(body), body_end.offset):
+                    checkpoints.append((len(body), body_end.offset))
                 self._advance()
                 value = "".join(body)
                 if len(value.encode("utf-8")) > self._max_code_bytes:
@@ -211,7 +219,14 @@ class Lexer:
                         f"Embedded code exceeds the {self._max_code_bytes}-byte limit.",
                         start=start,
                     )
-                return Token("CODE", value, value, self._span(start))
+                return Token(
+                    "CODE",
+                    value,
+                    value,
+                    self._span(start),
+                    body_span=SourceSpan(self._source_name, body_start, body_end),
+                    code_offset_map=CodeOffsetMap(len(body), tuple(checkpoints)),
+                )
             body.append(char)
             self._advance()
         self._error("HOCUS009", "Unterminated embedded code template.", start=start)

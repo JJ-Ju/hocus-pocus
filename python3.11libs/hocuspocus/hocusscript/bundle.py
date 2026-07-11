@@ -41,7 +41,7 @@ _BUNDLE_KEYS = {
 }
 _GRAPH_KEYS = {
     "$schema", "kind", "graphSpecVersion", "languageVersion", "name", "target", "category", "mode",
-    "expectedRevision", "ownership", "externalNodes", "nodes", "display", "render", "output", "layout", "span",
+    "expectedRevision", "ownership", "externalNodes", "nodes", "display", "render", "output", "layout", "span", "fieldSpans",
 }
 
 
@@ -197,6 +197,7 @@ def decode_compiled_bundle(value: Any) -> CompiledBundle:
     if not isinstance(nodes, list) or len(nodes) > 10_000:
         raise BundleValidationError("HOCUS515", "graphSpec.nodes must be an array with at most 10000 entries.")
     _validate_graph_spec(graph_spec)
+    _validate_declared_source_uris(graph_spec, {entry["uri"], *dependency_uris})
 
     capabilities = payload.get("requiredCapabilities")
     expected_capabilities = _required_capabilities(graph_spec)
@@ -246,6 +247,15 @@ def _validate_graph_spec(graph: dict[str, Any]) -> None:
     ):
         raise BundleValidationError("HOCUS520", "graphSpec.expectedRevision must be a nonnegative integer or null.")
     _validate_span(graph["span"], "graphSpec.span")
+    field_spans = graph["fieldSpans"]
+    allowed_field_spans = {
+        "languageVersion", "name", "target", "category", "mode", "expectedRevision", "ownership",
+        "display", "render", "output", "layout",
+    }
+    if not isinstance(field_spans, dict) or "name" not in field_spans or set(field_spans) - allowed_field_spans:
+        raise BundleValidationError("HOCUS520", "graphSpec.fieldSpans has an invalid shape.")
+    for key, span in field_spans.items():
+        _validate_span(span, f"graphSpec.fieldSpans.{key}")
     external_nodes = graph["externalNodes"]
     if not isinstance(external_nodes, list) or len(external_nodes) > 10_000:
         raise BundleValidationError("HOCUS520", "graphSpec.externalNodes must be a bounded array.")
@@ -319,12 +329,47 @@ def _validate_value(value: Any, label: str) -> None:
             _validate_value(item, f"{label}.items[{index}]")
         _validate_span(value["span"], f"{label}.span")
         return
-    if kind == "code" and set(value) == {"kind", "language", "body", "span"}:
-        if not isinstance(value["language"], str) or not isinstance(value["body"], str):
-            raise BundleValidationError("HOCUS520", f"{label} code language and body must be strings.")
+    if kind == "code" and set(value) in (
+        {"kind", "language", "body", "span"},
+        {"kind", "language", "body", "span", "bodySpan", "offsetMap"},
+    ):
+        if value["language"] not in {"vex", "python", "hscript"} or not isinstance(value["body"], str):
+            raise BundleValidationError("HOCUS520", f"{label} code language must be vex/python/hscript and body must be a string.")
         _validate_span(value["span"], f"{label}.span")
+        if "bodySpan" in value:
+            _validate_span(value["bodySpan"], f"{label}.bodySpan")
+            _validate_code_offset_map(value["offsetMap"], value["body"], value["bodySpan"], label)
         return
     raise BundleValidationError("HOCUS520", f"{label} has an invalid typed value shape.")
+
+
+def _validate_code_offset_map(value: Any, body: str, body_span: dict[str, Any], label: str) -> None:
+    if not isinstance(value, dict) or set(value) != {"bodyLength", "checkpoints"}:
+        raise BundleValidationError("HOCUS520", f"{label}.offsetMap has an invalid shape.")
+    if type(value["bodyLength"]) is not int or value["bodyLength"] != len(body):
+        raise BundleValidationError("HOCUS520", f"{label}.offsetMap body length is inconsistent.")
+    checkpoints = value["checkpoints"]
+    if not isinstance(checkpoints, list) or not checkpoints:
+        raise BundleValidationError("HOCUS520", f"{label}.offsetMap checkpoints must be non-empty.")
+    previous = (-1, -1)
+    normalized: list[tuple[int, int]] = []
+    for checkpoint in checkpoints:
+        if not isinstance(checkpoint, dict) or set(checkpoint) != {"bodyOffset", "sourceOffset"}:
+            raise BundleValidationError("HOCUS520", f"{label}.offsetMap checkpoint has an invalid shape.")
+        pair = (checkpoint["bodyOffset"], checkpoint["sourceOffset"])
+        if any(type(item) is not int or item < 0 for item in pair):
+            raise BundleValidationError("HOCUS520", f"{label}.offsetMap checkpoints must be monotonic integers.")
+        if previous != (-1, -1):
+            body_delta = pair[0] - previous[0]
+            source_delta = pair[1] - previous[1]
+            if body_delta <= 0 or source_delta < body_delta:
+                raise BundleValidationError("HOCUS520", f"{label}.offsetMap checkpoints are not physically possible.")
+        previous = pair
+        normalized.append(pair)
+    expected_start = body_span["start"]["offset"]
+    expected_end = body_span["end"]["offset"]
+    if normalized[0] != (0, expected_start) or normalized[-1] != (len(body), expected_end):
+        raise BundleValidationError("HOCUS520", f"{label}.offsetMap endpoints are inconsistent with bodySpan.")
 
 
 def _validate_span(value: Any, label: str) -> None:
@@ -340,6 +385,26 @@ def _validate_span(value: Any, label: str) -> None:
             raise BundleValidationError("HOCUS520", f"{label}.{endpoint} values must be integers.")
         if position["offset"] < 0 or position["line"] < 1 or position["column"] < 1:
             raise BundleValidationError("HOCUS520", f"{label}.{endpoint} values are out of range.")
+    start = value["start"]
+    end = value["end"]
+    if end["offset"] < start["offset"] or (end["line"], end["column"]) < (start["line"], start["column"]):
+        raise BundleValidationError("HOCUS520", f"{label} end precedes its start.")
+
+
+def _validate_declared_source_uris(value: Any, allowed: set[str]) -> None:
+    stack = [value]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, dict):
+            if {"sourceUri", "start", "end"}.issubset(item) and item["sourceUri"] not in allowed:
+                raise BundleValidationError(
+                    "HOCUS520",
+                    "GraphSpec source span references an undeclared source URI.",
+                    details={"sourceUri": item["sourceUri"]},
+                )
+            stack.extend(item.values())
+        elif isinstance(item, list):
+            stack.extend(item)
 
 
 def _required_capabilities(graph_spec: dict[str, Any]) -> list[str]:

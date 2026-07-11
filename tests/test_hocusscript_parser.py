@@ -11,6 +11,7 @@ from hocuspocus.hocusscript import compile_source
 from hocuspocus.hocusscript.diagnostics import HocusSourceError
 from hocuspocus.hocusscript.lexer import Lexer
 from hocuspocus.hocusscript.parser import Parser
+from hocuspocus.hocusscript.syntax import ArrayExpr, ModeStmt, NodeDecl, RevisionStmt, SyntaxSource, TargetStmt
 
 
 VALID_SOURCE = '''hocus 0.1;
@@ -40,6 +41,24 @@ graph rocks {
 
 
 class HocusScriptParserTests(unittest.TestCase):
+    def test_parser_emits_source_faithful_syntax_before_lowering(self) -> None:
+        syntax = Parser(Lexer(VALID_SOURCE, "rocks.hocus").tokenize()).parse()
+        self.assertIsInstance(syntax, SyntaxSource)
+        assert syntax.version is not None
+        self.assertEqual(syntax.version.value, "0.1")
+        target = next(item for item in syntax.graph.statements if isinstance(item, TargetStmt))
+        mode = next(item for item in syntax.graph.statements if isinstance(item, ModeStmt))
+        revision = next(item for item in syntax.graph.statements if isinstance(item, RevisionStmt))
+        node = next(item for item in syntax.graph.statements if isinstance(item, NodeDecl))
+        self.assertFalse(target.had_equal)
+        self.assertFalse(mode.had_equal)
+        self.assertTrue(revision.had_revision_keyword)
+        self.assertFalse(revision.had_equal)
+        self.assertTrue(node.type_quoted)
+        values_parm = next(item for item in node.statements if getattr(item, "name", None) == "values")
+        self.assertIsInstance(values_parm.value, ArrayExpr)
+        self.assertFalse(values_parm.value.trailing_comma)
+
     def test_complete_preview_grammar(self) -> None:
         result = compile_source(VALID_SOURCE, "rocks.hocus")
         self.assertTrue(result.valid, [item.to_dict() for item in result.diagnostics])
@@ -53,6 +72,21 @@ class HocusScriptParserTests(unittest.TestCase):
         self.assertEqual([item.value for item in values.items], [1, 2.5, True, None, "x"])
         self.assertEqual(values.span.start.line, 13)
         self.assertEqual(graph.span.start.line, 3)
+        self.assertEqual(graph.field_spans["target"].start.line, 4)
+        self.assertEqual(graph.field_spans["expectedRevision"].start.line, 7)
+        self.assertEqual(graph.to_dict()["fieldSpans"]["target"]["start"]["line"], 4)
+        code = graph.nodes[1].parms[0].value
+        self.assertEqual(code.body_span.start.line, 17)
+        self.assertEqual(code.offset_map.source_offset(0), code.body_span.start.offset)
+        serialized_code = code.to_dict()
+        self.assertEqual(serialized_code["bodySpan"]["start"]["line"], 17)
+        self.assertEqual(serialized_code["offsetMap"]["bodyLength"], len(code.body))
+
+    def test_structural_diagnostic_uses_scalar_value_span(self) -> None:
+        source = 'hocus 0.1; graph demo { target "relative"; }'
+        result = compile_source(source, "field-span.hocus")
+        diagnostic = next(item for item in result.diagnostics if item.code == "HOCUS302")
+        self.assertEqual(diagnostic.span.start.offset, source.index('"relative"'))
 
     def test_missing_semicolon_is_parse_error(self) -> None:
         source = 'hocus 0.1; graph demo { target "/obj/geo1" }'
@@ -100,6 +134,56 @@ class HocusScriptParserTests(unittest.TestCase):
         result = compile_source(source, "deep.hocus")
         self.assertFalse(result.valid)
         self.assertEqual(result.diagnostics[0].code, "HOCUS246")
+
+    def test_parser_recovers_multiple_graph_and_node_statement_errors(self) -> None:
+        source = '''hocus 0.1;
+graph demo {
+  target 12;
+  category "bad";
+  node x: "null" {
+    first = ;
+    second = ;
+    good = 1;
+  }
+  mode merge;
+}
+'''
+        result = compile_source(source, "recover.hocus")
+        codes = [item.code for item in result.diagnostics]
+        self.assertFalse(result.valid)
+        self.assertIn("HOCUS207", codes)
+        self.assertIn("HOCUS208", codes)
+        self.assertGreaterEqual(codes.count("HOCUS243"), 2)
+        assert result.graph_spec is not None
+        self.assertEqual(result.graph_spec.mode, "merge")
+        self.assertEqual([parm.name for parm in result.graph_spec.nodes[0].parms], ["good"])
+
+    def test_missing_semicolon_recovery_preserves_next_statement(self) -> None:
+        source = 'hocus 0.1; graph demo { target "/obj/geo1" mode merge; ownership "owner"; }'
+        result = compile_source(source, "semicolon.hocus")
+        self.assertFalse(result.valid)
+        self.assertIn("HOCUS245", {item.code for item in result.diagnostics})
+        assert result.graph_spec is not None
+        self.assertEqual(result.graph_spec.mode, "merge")
+        self.assertEqual(result.graph_spec.ownership, "owner")
+
+    def test_malformed_node_header_recovery_skips_balanced_node_body(self) -> None:
+        source = '''hocus 0.1;
+graph demo {
+  target "/obj/geo1";
+  node bad: { value = 1; }
+  mode merge;
+  ownership "owner";
+}
+'''
+        result = compile_source(source, "node-recovery.hocus")
+        self.assertFalse(result.valid)
+        self.assertIn("HOCUS224", {item.code for item in result.diagnostics})
+        self.assertNotIn("HOCUS203", {item.code for item in result.diagnostics})
+        assert result.graph_spec is not None
+        self.assertEqual(result.graph_spec.target, "/obj/geo1")
+        self.assertEqual(result.graph_spec.mode, "merge")
+        self.assertEqual(result.graph_spec.ownership, "owner")
 
 
 if __name__ == "__main__":

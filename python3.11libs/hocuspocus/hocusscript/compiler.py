@@ -9,6 +9,7 @@ from urllib.parse import quote
 from .diagnostics import Diagnostic, HocusSourceError, SourcePosition, SourceSpan, sort_diagnostics
 from .formatter import format_graph
 from .lexer import Lexer
+from .lowering import lower_syntax
 from .model import CompileResult, GraphSpec, NodeSpec
 from .parser import Parser
 
@@ -34,6 +35,10 @@ def _diagnostic(
         span,
         details=details or {},
     )
+
+
+def _field_span(graph: GraphSpec, name: str) -> SourceSpan:
+    return graph.field_spans.get(name, graph.span)
 
 
 def _duplicates(values: Iterable[tuple[str, SourceSpan]]) -> Iterable[tuple[str, SourceSpan]]:
@@ -108,22 +113,22 @@ def validate_graph(
             _diagnostic(
                 "HOCUS102",
                 f"Unsupported HocusScript language version: {graph.language_version}.",
-                graph.span,
+                _field_span(graph, "languageVersion"),
                 details={"supportedVersions": sorted(SUPPORTED_LANGUAGE_VERSIONS)},
             )
         )
     if graph.target is None:
         collector.add(_diagnostic("HOCUS301", "Graph target is required.", graph.span))
     elif not _is_canonical_houdini_path(graph.target):
-        collector.add(_diagnostic("HOCUS302", "Graph target must be a canonical absolute Houdini path.", graph.span))
+        collector.add(_diagnostic("HOCUS302", "Graph target must be a canonical absolute Houdini path.", _field_span(graph, "target")))
     if graph.mode not in {"merge", "reconcile"}:
-        collector.add(_diagnostic("HOCUS303", "Graph mode must be merge or reconcile.", graph.span))
+        collector.add(_diagnostic("HOCUS303", "Graph mode must be merge or reconcile.", _field_span(graph, "mode")))
     if graph.expected_revision is not None and graph.expected_revision < 0:
-        collector.add(_diagnostic("HOCUS304", "Expected revision must be nonnegative.", graph.span))
+        collector.add(_diagnostic("HOCUS304", "Expected revision must be nonnegative.", _field_span(graph, "expectedRevision")))
     if graph.mode == "reconcile" and not graph.ownership:
-        collector.add(_diagnostic("HOCUS305", "Reconcile mode requires an ownership namespace.", graph.span))
+        collector.add(_diagnostic("HOCUS305", "Reconcile mode requires an ownership namespace.", _field_span(graph, "mode")))
     if graph.ownership is not None and not graph.ownership.strip():
-        collector.add(_diagnostic("HOCUS319", "Ownership namespace must not be empty.", graph.span))
+        collector.add(_diagnostic("HOCUS319", "Ownership namespace must not be empty.", _field_span(graph, "ownership")))
     if len(graph.nodes) > max_nodes:
         collector.add(
             _diagnostic(
@@ -171,7 +176,7 @@ def validate_graph(
                 _diagnostic(
                     "HOCUS315",
                     f"Unknown {field_name} symbol: {symbol}.",
-                    graph.span,
+                    _field_span(graph, field_name),
                     details={"symbol": symbol, "knownSymbolCount": len(symbols)},
                 )
             )
@@ -180,12 +185,12 @@ def validate_graph(
                 _diagnostic(
                     "HOCUS318",
                     f"The read-only existing symbol '{symbol}' cannot be selected as {field_name}; use adopt for managed mutation.",
-                    graph.span,
+                    _field_span(graph, field_name),
                     details={"symbol": symbol, "directive": field_name},
                 )
             )
     if graph.layout is not None and graph.layout != "auto":
-        collector.add(_diagnostic("HOCUS316", "HocusScript 0.1 supports only layout = auto.", graph.span))
+        collector.add(_diagnostic("HOCUS316", "HocusScript 0.1 supports only layout = auto.", _field_span(graph, "layout")))
     return collector.finish()
 
 
@@ -284,19 +289,19 @@ def compile_source(
     digest = hashlib.sha256(source_bytes).hexdigest()
     diagnostics: list[Diagnostic] = []
     graph: GraphSpec | None = None
+    parser: Parser | None = None
     try:
         tokens = Lexer(source, diagnostic_source).tokenize()
         parser = Parser(tokens)
-        graph = parser.parse()
+        syntax = parser.parse()
+        graph = lower_syntax(syntax)
         diagnostics.extend(parser.diagnostics)
-        if strict:
-            for item in diagnostics:
-                if item.code == "HOCUS101":
-                    item.severity = "error"
-                    item.message = "Missing required 'hocus 0.1;' language header."
-        remaining_diagnostics = max(1, max_diagnostics - len(diagnostics))
-        diagnostics.extend(validate_graph(graph, max_diagnostics=remaining_diagnostics))
+        if not any(item.severity == "error" for item in diagnostics):
+            remaining_diagnostics = max(1, max_diagnostics - len(diagnostics))
+            diagnostics.extend(validate_graph(graph, max_diagnostics=remaining_diagnostics))
     except HocusSourceError as exc:
+        if parser is not None:
+            diagnostics.extend(parser.diagnostics)
         diagnostics.append(exc.diagnostic)
     except RecursionError:
         position = SourcePosition(0, 1, 1)
@@ -309,6 +314,12 @@ def compile_source(
                 SourceSpan(diagnostic_source, position, position),
             )
         )
+
+    if strict:
+        for item in diagnostics:
+            if item.code == "HOCUS101":
+                item.severity = "error"
+                item.message = "Missing required 'hocus 0.1;' language header."
 
     truncation_diagnostics = [item for item in diagnostics if item.code == "HOCUS019"]
     diagnostics = sort_diagnostics([item for item in diagnostics if item.code != "HOCUS019"])

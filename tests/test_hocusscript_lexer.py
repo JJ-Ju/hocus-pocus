@@ -40,6 +40,13 @@ hocus 0.1;
             if item.kind == "CODE"
         )
         self.assertEqual(token.value, "a`b")
+        assert token.body_span is not None
+        assert token.code_offset_map is not None
+        self.assertEqual((token.body_span.start.offset, token.body_span.end.offset), (4, 8))
+        self.assertEqual(
+            [token.code_offset_map.source_offset(index) for index in range(4)],
+            [4, 5, 7, 8],
+        )
 
     def test_json_string_escapes_decode_deterministically(self) -> None:
         token = next(

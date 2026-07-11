@@ -42,6 +42,13 @@ class HocusScriptProjectTests(unittest.TestCase):
         (root / "hocus.lock.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
         return payload
 
+    @staticmethod
+    def _rehash_bundle(payload: dict) -> None:
+        unsigned = dict(payload)
+        unsigned.pop("bundleDigest", None)
+        canonical = json.dumps(unsigned, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+        payload["bundleDigest"] = "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
     def test_native_file_compile_uses_stable_project_uri(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -131,13 +138,46 @@ class HocusScriptProjectTests(unittest.TestCase):
             (root / "demo.hocus").write_text(VALID_SOURCE, encoding="utf-8")
             payload = CompiledBundle.from_result(compile_path("demo.hocus", project_directory=root)).to_dict()
             payload["graphSpec"]["name"] = 42
-            unsigned = dict(payload)
-            del unsigned["bundleDigest"]
-            canonical = json.dumps(unsigned, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
-            payload["bundleDigest"] = "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+            self._rehash_bundle(payload)
             with self.assertRaises(BundleValidationError) as captured:
                 decode_compiled_bundle(payload)
             self.assertEqual(captured.exception.code, "HOCUS520")
+
+    def test_external_bundle_rejects_invalid_code_language_and_offset_map(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "hocus.project.toml").write_text('schema_version = 1\n[project]\nuid = "code-map"\n', encoding="utf-8")
+            (root / "demo.hocus").write_text(VALID_SOURCE, encoding="utf-8")
+            original = CompiledBundle.from_result(compile_path("demo.hocus", project_directory=root)).to_dict()
+
+            invalid_language = json.loads(json.dumps(original))
+            invalid_language["graphSpec"]["nodes"][1]["parms"][0]["value"]["language"] = "javascript"
+            self._rehash_bundle(invalid_language)
+            with self.assertRaises(BundleValidationError) as language_error:
+                decode_compiled_bundle(invalid_language)
+            self.assertEqual(language_error.exception.code, "HOCUS520")
+
+            invalid_map = json.loads(json.dumps(original))
+            code = invalid_map["graphSpec"]["nodes"][1]["parms"][0]["value"]
+            code["offsetMap"]["checkpoints"][1]["sourceOffset"] = code["offsetMap"]["checkpoints"][0]["sourceOffset"]
+            self._rehash_bundle(invalid_map)
+            with self.assertRaises(BundleValidationError) as map_error:
+                decode_compiled_bundle(invalid_map)
+            self.assertEqual(map_error.exception.code, "HOCUS520")
+
+            foreign_span = json.loads(json.dumps(original))
+            foreign_span["graphSpec"]["span"]["sourceUri"] = "hocus-project://other/foreign.hocus"
+            self._rehash_bundle(foreign_span)
+            with self.assertRaises(BundleValidationError) as span_error:
+                decode_compiled_bundle(foreign_span)
+            self.assertEqual(span_error.exception.code, "HOCUS520")
+
+            inverted_span = json.loads(json.dumps(original))
+            inverted_span["graphSpec"]["span"]["end"]["offset"] = 0
+            self._rehash_bundle(inverted_span)
+            with self.assertRaises(BundleValidationError) as inverted_error:
+                decode_compiled_bundle(inverted_span)
+            self.assertEqual(inverted_error.exception.code, "HOCUS520")
 
     def test_external_bundle_rejects_nonfinite_numbers_before_digest(self) -> None:
         with self.assertRaises(BundleValidationError) as captured:

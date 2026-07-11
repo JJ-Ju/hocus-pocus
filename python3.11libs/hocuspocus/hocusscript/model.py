@@ -5,10 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from .diagnostics import Diagnostic, SourceSpan
+from .diagnostics import CodeOffsetMap, Diagnostic, SourceSpan
 
 GRAPH_SPEC_VERSION = "0.1"
-COMPILER_VERSION = "0.1.0"
+COMPILER_VERSION = "0.1.1"
 
 
 def _value_to_dict(value: Any) -> Any:
@@ -48,14 +48,21 @@ class CodeValue:
     language: str
     body: str
     span: SourceSpan
+    body_span: SourceSpan | None = None
+    offset_map: CodeOffsetMap | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "kind": "code",
             "language": self.language,
             "body": self.body,
             "span": self.span.to_dict(),
         }
+        if self.body_span is not None:
+            payload["bodySpan"] = self.body_span.to_dict()
+        if self.offset_map is not None:
+            payload["offsetMap"] = self.offset_map.to_dict()
+        return payload
 
 
 @dataclass(slots=True)
@@ -150,6 +157,7 @@ class GraphSpec:
     output: str | None
     layout: str | None
     span: SourceSpan
+    field_spans: dict[str, SourceSpan] = field(default_factory=dict, repr=False)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -170,6 +178,10 @@ class GraphSpec:
             "output": self.output,
             "layout": self.layout,
             "span": self.span.to_dict(),
+            "fieldSpans": {
+                key: value.to_dict()
+                for key, value in sorted(self.field_spans.items())
+            },
         }
 
 
