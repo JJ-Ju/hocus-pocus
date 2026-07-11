@@ -21,8 +21,23 @@ from hocuspocus.hocusscript import (
     decode_compiled_bundle,
 )
 from hocuspocus.hocusscript.cli import _atomic_write, main
+from hocuspocus.hocusscript.catalog import decode_catalog_snapshot
 from hocuspocus.hocusscript.project import MAX_MANIFEST_BYTES
 from test_hocusscript_parser import VALID_SOURCE
+
+SEMANTIC_SOURCE = '''hocus 0.1;
+graph semantic_demo {
+  target = "/obj/geo1";
+  category = Sop;
+  node source: "sop::null" {}
+  node axis: "labs::sop::axis_align::2.0" {
+    input[0] = source;
+    method = "axis";
+    size = [1, 2, 3];
+    snippet = vex`@P *= 2;`;
+  }
+}
+'''
 
 
 class HocusScriptProjectTests(unittest.TestCase):
@@ -49,6 +64,39 @@ class HocusScriptProjectTests(unittest.TestCase):
         canonical = json.dumps(unsigned, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
         payload["bundleDigest"] = "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
+    @staticmethod
+    def _write_v2_project(root: Path) -> tuple[bytes, dict]:
+        manifest = (
+            b'schema_version = 2\n[project]\nuid = "catalog-project"\n'
+            b'[lock]\npolicy = "required"\npath = "pins/hocus.lock.json"\n'
+            b'[catalog]\npath = "catalogs/houdini.json"\n'
+        )
+        (root / "hocus.project.toml").write_bytes(manifest)
+        catalog_bytes = (ROOT / "tests" / "fixtures" / "hocusscript" / "catalog" / "catalog-v1.json").read_bytes()
+        catalog_path = root / "catalogs" / "houdini.json"
+        catalog_path.parent.mkdir(parents=True, exist_ok=True)
+        catalog_path.write_bytes(catalog_bytes)
+        catalog = decode_catalog_snapshot(catalog_bytes)
+        payload = {
+            "$schema": "hocuspocus://schemas/hocus-lock/v2",
+            "kind": "hocus_project_lock",
+            "schemaVersion": 2,
+            "projectUid": "catalog-project",
+            "manifestDigest": "sha256:" + hashlib.sha256(manifest).hexdigest(),
+            "languageVersion": "0.1",
+            "catalog": {
+                "schemaVersion": 1,
+                "path": "catalogs/houdini.json",
+                "contentDigest": "sha256:" + hashlib.sha256(catalog_bytes).hexdigest(),
+                "fingerprint": catalog.fingerprint,
+            },
+            "modules": [],
+        }
+        lock_path = root / "pins" / "hocus.lock.json"
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        lock_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        return manifest, payload
+
     def test_native_file_compile_uses_stable_project_uri(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -67,6 +115,162 @@ class HocusScriptProjectTests(unittest.TestCase):
             self.assertEqual(result.project_uid, "city-environment")
             self.assertEqual(result.source_kind, "project_file")
             self.assertTrue(result.project_manifest_digest.startswith("sha256:"))
+
+    def test_v2_project_loads_an_exact_project_contained_catalog_pin(self) -> None:
+        contexts = []
+        for _ in range(2):
+            with tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                self._write_v2_project(root)
+                context = ProjectContext.load(root)
+                self.assertEqual(context.manifest_version, 2)
+                self.assertEqual(context.catalog_relative_path, "catalogs/houdini.json")
+                self.assertEqual(context.lock_path, (root / "pins" / "hocus.lock.json").resolve())
+                self.assertEqual(context.catalog_path, (root / "catalogs" / "houdini.json").resolve())
+                self.assertIsNotNone(context.catalog)
+                self.assertEqual(context.catalog_fingerprint, context.catalog.fingerprint)
+                contexts.append((context.catalog_content_digest, context.catalog_fingerprint, context.lock_digest))
+        self.assertEqual(contexts[0], contexts[1])
+
+    def test_v2_project_compile_runs_pinned_semantic_resolution(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self._write_v2_project(root)
+            (root / "demo.hocus").write_text(SEMANTIC_SOURCE, encoding="utf-8")
+
+            result = compile_path("demo.hocus", project_directory=root)
+
+            self.assertTrue(result.valid, [item.to_dict() for item in result.diagnostics])
+            self.assertIsNotNone(result.semantic_result)
+            self.assertEqual(result.catalog_fingerprint, result.semantic_result.catalog_fingerprint)
+            self.assertEqual(result.semantic_result.required_capabilities, ("edit_scene", "run_code"))
+            self.assertEqual(len(result.semantic_result.operator_selections), 2)
+            self.assertTrue(result.to_dict()["readyForDocumentLowering"])
+
+            bundle = CompiledBundle.from_result(result)
+            self.assertEqual(bundle.payload["bundleVersion"], "0.2")
+            self.assertEqual(bundle.payload["catalogConstraints"]["fingerprint"], result.catalog_fingerprint)
+            self.assertEqual(bundle.payload["semanticResolution"]["catalogFingerprint"], result.catalog_fingerprint)
+            self.assertEqual(decode_compiled_bundle(bundle.to_dict()).digest, bundle.digest)
+
+    def test_v2_semantic_bundle_is_relocation_deterministic_and_schema_valid(self) -> None:
+        bundles = []
+        for _ in range(2):
+            with tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                self._write_v2_project(root)
+                (root / "demo.hocus").write_text(SEMANTIC_SOURCE, encoding="utf-8")
+                bundles.append(CompiledBundle.from_result(compile_path("demo.hocus", project_directory=root)))
+        self.assertEqual(bundles[0].digest, bundles[1].digest)
+        self.assertEqual(bundles[0].to_json(), bundles[1].to_json())
+        try:
+            from jsonschema import Draft202012Validator
+        except ImportError:
+            return
+        schema = json.loads((ROOT / "docs" / "schemas" / "compiled-bundle-v0.2.schema.json").read_text(encoding="utf-8"))
+        graph_schema = json.loads((ROOT / "docs" / "schemas" / "graph-spec-v0.1.schema.json").read_text(encoding="utf-8"))
+        schema["properties"]["graphSpec"] = graph_schema
+        Draft202012Validator(schema).validate(bundles[0].to_dict())
+
+        tampered = bundles[0].to_dict()
+        tampered["catalogConstraints"]["fingerprint"] = "sha256:" + ("0" * 64)
+        self._rehash_bundle(tampered)
+        with self.assertRaises(BundleValidationError) as captured:
+            decode_compiled_bundle(tampered)
+        self.assertEqual(captured.exception.code, "HOCUS521")
+
+        tamper_cases = (
+            (lambda payload: payload.update(projectLockDigest=None), "HOCUS509"),
+            (lambda payload: payload["semanticResolution"]["operatorSelections"][0].update(nodeIndex=-99), "HOCUS521"),
+            (lambda payload: payload["semanticResolution"]["operatorSelections"].pop(), "HOCUS521"),
+            (lambda payload: payload["semanticResolution"].update(readyForDocumentLowering=False), "HOCUS521"),
+            (lambda payload: payload.update(compilerVersion="0.1.1"), "HOCUS507"),
+            (lambda payload: payload["graphSpec"].update(target="relative"), "HOCUS520"),
+            (lambda payload: payload["graphSpec"].update(layout="evil"), "HOCUS520"),
+            (lambda payload: payload["graphSpec"].update(name="not valid"), "HOCUS520"),
+        )
+        for mutation, code in tamper_cases:
+            with self.subTest(code=code):
+                payload = bundles[0].to_dict()
+                mutation(payload)
+                self._rehash_bundle(payload)
+                with self.assertRaises(BundleValidationError) as captured:
+                    decode_compiled_bundle(payload)
+                self.assertEqual(captured.exception.code, code)
+
+    def test_v2_semantic_bundle_preserves_external_deferred_readiness(self) -> None:
+        source = '''hocus 0.1;
+graph deferred_demo {
+  target = "/obj/geo1";
+  category = Sop;
+  existing live = "/obj/geo1/live";
+  node axis: "labs::sop::axis_align::2.0" {
+    input[0] = live;
+    method = "axis";
+  }
+}
+'''
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self._write_v2_project(root)
+            (root / "demo.hocus").write_text(source, encoding="utf-8")
+            result = compile_path("demo.hocus", project_directory=root)
+            self.assertTrue(result.valid)
+            self.assertFalse(result.semantic_result.ready_for_document_lowering)
+            self.assertEqual([item.code for item in result.semantic_result.diagnostics], ["HOCUS643"])
+            bundle = CompiledBundle.from_result(result)
+            self.assertFalse(bundle.payload["semanticResolution"]["readyForDocumentLowering"])
+            self.assertEqual(len(bundle.payload["semanticResolution"]["deferredChecks"]), 1)
+            self.assertEqual(decode_compiled_bundle(bundle.to_dict()).digest, bundle.digest)
+
+    def test_v2_project_rejects_catalog_content_and_fingerprint_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            _, lock = self._write_v2_project(root)
+            catalog_path = root / "catalogs" / "houdini.json"
+            catalog_path.write_bytes(catalog_path.read_bytes() + b"\n")
+            with self.assertRaises(ProjectError) as content_drift:
+                ProjectContext.load(root)
+            self.assertEqual(content_drift.exception.code, "HOCUS433")
+
+            self._write_v2_project(root)
+            lock["catalog"]["fingerprint"] = "sha256:" + ("0" * 64)
+            (root / "pins" / "hocus.lock.json").write_text(json.dumps(lock), encoding="utf-8")
+            with self.assertRaises(ProjectError) as fingerprint_drift:
+                ProjectContext.load(root)
+            self.assertEqual(fingerprint_drift.exception.code, "HOCUS435")
+
+    def test_v2_project_rejects_uncontained_catalog_and_lock_paths(self) -> None:
+        manifests = (
+            'schema_version = 2\n[project]\nuid = "bad-path"\n[catalog]\npath = "../catalog.json"\n',
+            'schema_version = 2\n[project]\nuid = "bad-path"\n[lock]\npath = "C:/lock.json"\n[catalog]\npath = "catalog.json"\n',
+            'schema_version = 2\n[project]\nuid = "bad-path"\n[catalog]\npath = "catalog.json"\n',
+            'schema_version = 2\n[project]\nuid = "bad-path"\n[lock]\npolicy = "optional"\npath = "lock.json"\n[catalog]\npath = "catalog.json"\n',
+        )
+        for manifest in manifests:
+            with self.subTest(manifest=manifest), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                (root / "hocus.project.toml").write_text(manifest, encoding="utf-8")
+                with self.assertRaises(ProjectError) as captured:
+                    ProjectContext.load(root)
+                self.assertEqual(captured.exception.code, "HOCUS405")
+
+    def test_v2_unlocked_format_preview_never_claims_portable_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "hocus.project.toml").write_text(
+                'schema_version = 2\n[project]\nuid = "repair"\n'
+                '[lock]\npolicy = "required"\npath = "pins/hocus.lock.json"\n'
+                '[catalog]\npath = "catalogs/houdini.json"\n',
+                encoding="utf-8",
+            )
+            (root / "demo.hocus").write_text(VALID_SOURCE, encoding="utf-8")
+            result = compile_path("demo.hocus", project_directory=root, validate_lock=False)
+            self.assertTrue(result.valid)
+            self.assertEqual(result.source_kind, "workspace_file")
+            self.assertIsNone(result.project_uid)
+            self.assertIsNone(result.catalog_fingerprint)
+            self.assertFalse(CompiledBundle.from_result(result).payload["portable"])
 
     def test_project_relocation_preserves_bundle_identity(self) -> None:
         bundles = []
@@ -374,7 +578,12 @@ class HocusScriptProjectTests(unittest.TestCase):
             from jsonschema import Draft202012Validator
         except ImportError:
             Draft202012Validator = None
-        for name in ("hocus-project-v1.schema.json", "hocus-lock-v1.schema.json"):
+        for name in (
+            "hocus-project-v1.schema.json",
+            "hocus-lock-v1.schema.json",
+            "hocus-project-v2.schema.json",
+            "hocus-lock-v2.schema.json",
+        ):
             schema = json.loads((ROOT / "docs" / "schemas" / name).read_text(encoding="utf-8"))
             self.assertEqual(schema["$schema"], "https://json-schema.org/draft/2020-12/schema")
             self.assertTrue(schema["$id"].startswith("hocuspocus://schemas/"))
@@ -393,6 +602,46 @@ class HocusScriptProjectTests(unittest.TestCase):
                     )
                 )
                 self.assertTrue(errors, source_directory)
+
+            project_v2_schema = json.loads((ROOT / "docs" / "schemas" / "hocus-project-v2.schema.json").read_text(encoding="utf-8"))
+            project_v2 = Draft202012Validator(project_v2_schema)
+            valid_project = {
+                "schema_version": 2,
+                "project": {"uid": "valid", "name": "Valid Project", "source_directories": ["."]},
+                "lock": {"policy": "required", "path": "pins/hocus.lock.json"},
+                "catalog": {"path": "catalogs/houdini.json"},
+            }
+            project_v2.validate(valid_project)
+            for invalid in (
+                {**valid_project, "project": {**valid_project["project"], "name": " padded "}},
+                {**valid_project, "catalog": {"path": "catalogs/houdini.JSON"}},
+                {**valid_project, "lock": {"path": "pins/lock.toml"}},
+                {key: value for key, value in valid_project.items() if key != "lock"},
+                {**valid_project, "lock": {"policy": "optional", "path": "pins/hocus.lock.json"}},
+            ):
+                self.assertTrue(list(project_v2.iter_errors(invalid)), invalid)
+
+            lock_v2_schema = json.loads((ROOT / "docs" / "schemas" / "hocus-lock-v2.schema.json").read_text(encoding="utf-8"))
+            lock_v2 = Draft202012Validator(lock_v2_schema)
+            digest = "sha256:" + ("0" * 64)
+            valid_lock = {
+                "$schema": "hocuspocus://schemas/hocus-lock/v2",
+                "kind": "hocus_project_lock",
+                "schemaVersion": 2,
+                "projectUid": "valid",
+                "manifestDigest": digest,
+                "languageVersion": "0.1",
+                "catalog": {"schemaVersion": 1, "path": "catalogs/houdini.json", "contentDigest": digest, "fingerprint": digest},
+                "modules": [],
+            }
+            lock_v2.validate(valid_lock)
+            for invalid in (
+                {**valid_lock, "schemaVersion": 1},
+                {**valid_lock, "catalog": {**valid_lock["catalog"], "path": "../escape.json"}},
+                {**valid_lock, "catalog": {**valid_lock["catalog"], "fingerprint": "bad"}},
+                {**valid_lock, "unknown": True},
+            ):
+                self.assertTrue(list(lock_v2.iter_errors(invalid)), invalid)
 
     def test_manifest_free_check_is_preview_only(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

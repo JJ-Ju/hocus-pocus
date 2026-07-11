@@ -99,6 +99,8 @@ class ReferenceExpr:
     explicit_output: bool
     port_keyword: str | None
     span: SourceSpan
+    symbol_span: SourceSpan
+    output_index_span: SourceSpan
 
 
 @dataclass(frozen=True, slots=True)

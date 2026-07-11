@@ -15,6 +15,175 @@ from typing import Any
 from hocuspocus.core import paths as core_paths
 
 
+class GraphStoreSchemaError(RuntimeError):
+    """Raised when a graph-store database cannot be migrated safely."""
+
+
+class _ClosingConnection(sqlite3.Connection):
+    """SQLite connection whose context manager also releases the file handle."""
+
+    def __exit__(self, exc_type: Any, exc_value: Any, traceback: Any) -> bool:
+        try:
+            return bool(super().__exit__(exc_type, exc_value, traceback))
+        finally:
+            self.close()
+
+
+_MIGRATION_1_SQL = """
+CREATE TABLE IF NOT EXISTS documents (
+    document_id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL,
+    root_path TEXT,
+    latest_revision INTEGER NOT NULL,
+    live_revision INTEGER,
+    content_hash TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    source TEXT NOT NULL,
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_documents_root_path ON documents(root_path);
+CREATE TABLE IF NOT EXISTS document_versions (
+    version_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    document_id TEXT NOT NULL,
+    document_revision INTEGER NOT NULL,
+    live_revision INTEGER,
+    content_hash TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    source TEXT NOT NULL,
+    created_at REAL NOT NULL,
+    UNIQUE(document_id, document_revision)
+);
+CREATE INDEX IF NOT EXISTS idx_document_versions_document
+    ON document_versions(document_id, document_revision);
+CREATE TABLE IF NOT EXISTS nodes (
+    document_id TEXT NOT NULL,
+    document_revision INTEGER NOT NULL,
+    root_path TEXT,
+    node_uid TEXT NOT NULL,
+    path TEXT NOT NULL,
+    name TEXT,
+    type_name TEXT,
+    category TEXT,
+    parent_path TEXT,
+    is_network INTEGER NOT NULL DEFAULT 0,
+    flags_json TEXT NOT NULL,
+    material_path TEXT,
+    metadata_json TEXT NOT NULL,
+    PRIMARY KEY(document_id, node_uid)
+);
+CREATE INDEX IF NOT EXISTS idx_nodes_path ON nodes(path);
+CREATE INDEX IF NOT EXISTS idx_nodes_type ON nodes(type_name);
+CREATE INDEX IF NOT EXISTS idx_nodes_category ON nodes(category);
+CREATE INDEX IF NOT EXISTS idx_nodes_root_path ON nodes(root_path);
+CREATE TABLE IF NOT EXISTS edges (
+    document_id TEXT NOT NULL,
+    document_revision INTEGER NOT NULL,
+    edge_uid TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    from_node_uid TEXT,
+    to_node_uid TEXT,
+    from_json TEXT NOT NULL,
+    to_json TEXT NOT NULL,
+    metadata_json TEXT NOT NULL,
+    PRIMARY KEY(document_id, edge_uid)
+);
+CREATE TABLE IF NOT EXISTS parameter_bindings (
+    document_id TEXT NOT NULL,
+    document_revision INTEGER NOT NULL,
+    binding_uid TEXT NOT NULL,
+    node_uid TEXT NOT NULL,
+    parm_name TEXT NOT NULL,
+    value_mode TEXT NOT NULL,
+    value_json TEXT,
+    expression TEXT,
+    expression_language TEXT,
+    channel_reference TEXT,
+    code_blob_uid TEXT,
+    metadata_json TEXT NOT NULL,
+    PRIMARY KEY(document_id, binding_uid)
+);
+CREATE INDEX IF NOT EXISTS idx_parameter_bindings_node
+    ON parameter_bindings(node_uid, parm_name);
+CREATE TABLE IF NOT EXISTS code_blobs (
+    document_id TEXT NOT NULL,
+    document_revision INTEGER NOT NULL,
+    code_blob_uid TEXT NOT NULL,
+    language TEXT NOT NULL,
+    target_json TEXT NOT NULL,
+    body TEXT NOT NULL,
+    metadata_json TEXT NOT NULL,
+    PRIMARY KEY(document_id, code_blob_uid)
+);
+CREATE TABLE IF NOT EXISTS checkouts (
+    checkout_id TEXT PRIMARY KEY,
+    document_id TEXT NOT NULL,
+    document_kind TEXT NOT NULL,
+    root_path TEXT,
+    baseline_document_json TEXT NOT NULL,
+    working_document_json TEXT NOT NULL,
+    diagnostics_json TEXT NOT NULL,
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_checkouts_document ON checkouts(document_id);
+CREATE TABLE IF NOT EXISTS apply_commits (
+    apply_commit_id TEXT PRIMARY KEY,
+    document_id TEXT NOT NULL,
+    root_path TEXT,
+    baseline_document_revision INTEGER,
+    applied_document_revision INTEGER,
+    mode TEXT NOT NULL,
+    verified INTEGER NOT NULL DEFAULT 0,
+    summary_json TEXT NOT NULL,
+    created_at REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS live_sync_state (
+    scope_key TEXT PRIMARY KEY,
+    dirty INTEGER NOT NULL DEFAULT 1,
+    last_event TEXT,
+    last_marked_revision INTEGER,
+    last_synced_live_revision INTEGER,
+    updated_at REAL NOT NULL
+);
+"""
+
+_MIGRATION_2_SQL = """
+CREATE TABLE apply_operation_audit (
+    audit_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    apply_commit_id TEXT NOT NULL,
+    phase TEXT NOT NULL,
+    operation_index INTEGER,
+    operation_type TEXT,
+    status TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    created_at REAL NOT NULL
+);
+CREATE INDEX idx_apply_operation_audit_commit
+    ON apply_operation_audit(apply_commit_id, operation_index);
+"""
+
+_MIGRATIONS = (
+    (1, "initial_graph_store", _MIGRATION_1_SQL),
+    (2, "apply_operation_audit", _MIGRATION_2_SQL),
+)
+_CURRENT_SCHEMA_VERSION = _MIGRATIONS[-1][0]
+_VERSIONED_TABLE = "graph_store_migrations"
+_V1_TABLES = frozenset(
+    {
+        "documents",
+        "document_versions",
+        "nodes",
+        "edges",
+        "parameter_bindings",
+        "code_blobs",
+        "checkouts",
+        "apply_commits",
+        "live_sync_state",
+    }
+)
+
+
 class LiveGraphStore:
     _GLOBAL_SCOPE_KEY = "scene:/"
 
@@ -29,167 +198,285 @@ class LiveGraphStore:
         self._ensure_schema()
 
     def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(str(self._db_path), timeout=30.0)
+        connection = sqlite3.connect(
+            str(self._db_path),
+            timeout=30.0,
+            factory=_ClosingConnection,
+        )
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA journal_mode=WAL")
         connection.execute("PRAGMA foreign_keys=ON")
         return connection
 
-    def _ensure_schema(self) -> None:
-        with self._connect() as connection:
-            connection.executescript(
+    @staticmethod
+    def _migration_checksum(sql: str) -> str:
+        return hashlib.sha256(sql.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _execute_migration_sql(connection: sqlite3.Connection, sql: str) -> None:
+        statement = ""
+        for line in sql.splitlines(keepends=True):
+            statement += line
+            if sqlite3.complete_statement(statement):
+                connection.execute(statement.strip())
+                statement = ""
+        if statement.strip():
+            raise GraphStoreSchemaError("Graph-store migration contains incomplete SQL.")
+
+    @staticmethod
+    def _table_names(connection: sqlite3.Connection) -> set[str]:
+        rows = connection.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        ).fetchall()
+        return {
+            str(row["name"])
+            for row in rows
+            if str(row["name"]) != "sqlite_sequence"
+        }
+
+    @staticmethod
+    def _quoted_identifier(value: str) -> str:
+        return '"' + value.replace('"', '""') + '"'
+
+    @classmethod
+    def _table_signature(
+        cls,
+        connection: sqlite3.Connection,
+        table: str,
+    ) -> tuple[tuple[Any, ...], ...]:
+        quoted = cls._quoted_identifier(table)
+        rows = connection.execute(f"PRAGMA table_info({quoted})").fetchall()
+        return tuple(
+            (
+                str(row["name"]),
+                str(row["type"]).upper(),
+                int(row["notnull"]),
+                row["dflt_value"],
+                int(row["pk"]),
+            )
+            for row in rows
+        )
+
+    @classmethod
+    def _index_signature(
+        cls,
+        connection: sqlite3.Connection,
+        table: str,
+    ) -> tuple[tuple[Any, ...], ...]:
+        quoted = cls._quoted_identifier(table)
+        indexes = []
+        for row in connection.execute(f"PRAGMA index_list({quoted})").fetchall():
+            name = str(row["name"])
+            index_name = cls._quoted_identifier(name)
+            columns = tuple(
+                str(item["name"])
+                for item in connection.execute(f"PRAGMA index_info({index_name})").fetchall()
+            )
+            origin = str(row["origin"])
+            stable_name = name if origin == "c" else None
+            indexes.append(
+                (
+                    stable_name,
+                    int(row["unique"]),
+                    origin,
+                    int(row["partial"]),
+                    columns,
+                )
+            )
+        return tuple(sorted(indexes, key=repr))
+
+    @classmethod
+    def _schema_signatures(
+        cls,
+        connection: sqlite3.Connection,
+    ) -> dict[str, tuple[tuple[tuple[Any, ...], ...], tuple[tuple[Any, ...], ...]]]:
+        return {
+            table: (
+                cls._table_signature(connection, table),
+                cls._index_signature(connection, table),
+            )
+            for table in sorted(cls._table_names(connection))
+        }
+
+    def _expected_schema_signatures(
+        self,
+        version: int,
+    ) -> dict[str, tuple[tuple[tuple[Any, ...], ...], tuple[tuple[Any, ...], ...]]]:
+        reference = sqlite3.connect(":memory:")
+        reference.row_factory = sqlite3.Row
+        try:
+            reference.execute(
                 """
-                CREATE TABLE IF NOT EXISTS documents (
-                    document_id TEXT PRIMARY KEY,
-                    kind TEXT NOT NULL,
-                    root_path TEXT,
-                    latest_revision INTEGER NOT NULL,
-                    live_revision INTEGER,
-                    content_hash TEXT NOT NULL,
-                    payload_json TEXT NOT NULL,
-                    source TEXT NOT NULL,
-                    created_at REAL NOT NULL,
-                    updated_at REAL NOT NULL
-                );
-
-                CREATE INDEX IF NOT EXISTS idx_documents_root_path
-                    ON documents(root_path);
-
-                CREATE TABLE IF NOT EXISTS document_versions (
-                    version_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    document_id TEXT NOT NULL,
-                    document_revision INTEGER NOT NULL,
-                    live_revision INTEGER,
-                    content_hash TEXT NOT NULL,
-                    payload_json TEXT NOT NULL,
-                    source TEXT NOT NULL,
-                    created_at REAL NOT NULL,
-                    UNIQUE(document_id, document_revision)
-                );
-
-                CREATE INDEX IF NOT EXISTS idx_document_versions_document
-                    ON document_versions(document_id, document_revision);
-
-                CREATE TABLE IF NOT EXISTS nodes (
-                    document_id TEXT NOT NULL,
-                    document_revision INTEGER NOT NULL,
-                    root_path TEXT,
-                    node_uid TEXT NOT NULL,
-                    path TEXT NOT NULL,
-                    name TEXT,
-                    type_name TEXT,
-                    category TEXT,
-                    parent_path TEXT,
-                    is_network INTEGER NOT NULL DEFAULT 0,
-                    flags_json TEXT NOT NULL,
-                    material_path TEXT,
-                    metadata_json TEXT NOT NULL,
-                    PRIMARY KEY(document_id, node_uid)
-                );
-
-                CREATE INDEX IF NOT EXISTS idx_nodes_path
-                    ON nodes(path);
-                CREATE INDEX IF NOT EXISTS idx_nodes_type
-                    ON nodes(type_name);
-                CREATE INDEX IF NOT EXISTS idx_nodes_category
-                    ON nodes(category);
-                CREATE INDEX IF NOT EXISTS idx_nodes_root_path
-                    ON nodes(root_path);
-
-                CREATE TABLE IF NOT EXISTS edges (
-                    document_id TEXT NOT NULL,
-                    document_revision INTEGER NOT NULL,
-                    edge_uid TEXT NOT NULL,
-                    kind TEXT NOT NULL,
-                    from_node_uid TEXT,
-                    to_node_uid TEXT,
-                    from_json TEXT NOT NULL,
-                    to_json TEXT NOT NULL,
-                    metadata_json TEXT NOT NULL,
-                    PRIMARY KEY(document_id, edge_uid)
-                );
-
-                CREATE TABLE IF NOT EXISTS parameter_bindings (
-                    document_id TEXT NOT NULL,
-                    document_revision INTEGER NOT NULL,
-                    binding_uid TEXT NOT NULL,
-                    node_uid TEXT NOT NULL,
-                    parm_name TEXT NOT NULL,
-                    value_mode TEXT NOT NULL,
-                    value_json TEXT,
-                    expression TEXT,
-                    expression_language TEXT,
-                    channel_reference TEXT,
-                    code_blob_uid TEXT,
-                    metadata_json TEXT NOT NULL,
-                    PRIMARY KEY(document_id, binding_uid)
-                );
-
-                CREATE INDEX IF NOT EXISTS idx_parameter_bindings_node
-                    ON parameter_bindings(node_uid, parm_name);
-
-                CREATE TABLE IF NOT EXISTS code_blobs (
-                    document_id TEXT NOT NULL,
-                    document_revision INTEGER NOT NULL,
-                    code_blob_uid TEXT NOT NULL,
-                    language TEXT NOT NULL,
-                    target_json TEXT NOT NULL,
-                    body TEXT NOT NULL,
-                    metadata_json TEXT NOT NULL,
-                    PRIMARY KEY(document_id, code_blob_uid)
-                );
-
-                CREATE TABLE IF NOT EXISTS checkouts (
-                    checkout_id TEXT PRIMARY KEY,
-                    document_id TEXT NOT NULL,
-                    document_kind TEXT NOT NULL,
-                    root_path TEXT,
-                    baseline_document_json TEXT NOT NULL,
-                    working_document_json TEXT NOT NULL,
-                    diagnostics_json TEXT NOT NULL,
-                    created_at REAL NOT NULL,
-                    updated_at REAL NOT NULL
-                );
-
-                CREATE INDEX IF NOT EXISTS idx_checkouts_document
-                    ON checkouts(document_id);
-
-                CREATE TABLE IF NOT EXISTS apply_commits (
-                    apply_commit_id TEXT PRIMARY KEY,
-                    document_id TEXT NOT NULL,
-                    root_path TEXT,
-                    baseline_document_revision INTEGER,
-                    applied_document_revision INTEGER,
-                    mode TEXT NOT NULL,
-                    verified INTEGER NOT NULL DEFAULT 0,
-                    summary_json TEXT NOT NULL,
-                    created_at REAL NOT NULL
-                );
-
-                CREATE TABLE IF NOT EXISTS apply_operation_audit (
-                    audit_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    apply_commit_id TEXT NOT NULL,
-                    phase TEXT NOT NULL,
-                    operation_index INTEGER,
-                    operation_type TEXT,
-                    status TEXT NOT NULL,
-                    payload_json TEXT NOT NULL,
-                    created_at REAL NOT NULL
-                );
-
-                CREATE INDEX IF NOT EXISTS idx_apply_operation_audit_commit
-                    ON apply_operation_audit(apply_commit_id, operation_index);
-
-                CREATE TABLE IF NOT EXISTS live_sync_state (
-                    scope_key TEXT PRIMARY KEY,
-                    dirty INTEGER NOT NULL DEFAULT 1,
-                    last_event TEXT,
-                    last_marked_revision INTEGER,
-                    last_synced_live_revision INTEGER,
-                    updated_at REAL NOT NULL
-                );
+                CREATE TABLE graph_store_migrations (
+                    version INTEGER PRIMARY KEY CHECK(version > 0),
+                    name TEXT NOT NULL,
+                    checksum TEXT NOT NULL,
+                    applied_at REAL NOT NULL
+                )
                 """
             )
+            for _, _, sql in _MIGRATIONS[:version]:
+                self._execute_migration_sql(reference, sql)
+            return self._schema_signatures(reference)
+        finally:
+            reference.close()
+
+    def _record_migration(
+        self,
+        connection: sqlite3.Connection,
+        version: int,
+        name: str,
+        sql: str,
+    ) -> None:
+        connection.execute(
+            """
+            INSERT INTO graph_store_migrations (
+                version, name, checksum, applied_at
+            ) VALUES (?, ?, ?, ?)
+            """,
+            (version, name, self._migration_checksum(sql), time.time()),
+        )
+
+    def _adopt_legacy_schema(
+        self,
+        connection: sqlite3.Connection,
+        tables_before_ledger: set[str],
+    ) -> int:
+        v2_tables = _V1_TABLES | {"apply_operation_audit"}
+        if tables_before_ledger == _V1_TABLES:
+            self._record_migration(connection, *_MIGRATIONS[0])
+            return 1
+        if tables_before_ledger == v2_tables:
+            for migration in _MIGRATIONS:
+                self._record_migration(connection, *migration)
+            return _CURRENT_SCHEMA_VERSION
+        unexpected = sorted(tables_before_ledger - v2_tables)
+        missing = sorted(_V1_TABLES - tables_before_ledger)
+        details: list[str] = []
+        if missing:
+            details.append(f"missing tables: {', '.join(missing)}")
+        if unexpected:
+            details.append(f"unexpected tables: {', '.join(unexpected)}")
+        detail = "; ".join(details) or "schema does not match a supported legacy version"
+        raise GraphStoreSchemaError(
+            "Cannot safely adopt unversioned graph-store database: " + detail
+        )
+
+    def _validate_migration_ledger(
+        self,
+        rows: list[sqlite3.Row],
+    ) -> int:
+        if len(rows) > len(_MIGRATIONS):
+            raise GraphStoreSchemaError(
+                f"Graph-store schema is newer than supported version {_CURRENT_SCHEMA_VERSION}."
+            )
+        for index, row in enumerate(rows):
+            expected_version, expected_name, expected_sql = _MIGRATIONS[index]
+            version = int(row["version"])
+            name = str(row["name"])
+            checksum = str(row["checksum"])
+            expected_checksum = self._migration_checksum(expected_sql)
+            if version != expected_version:
+                raise GraphStoreSchemaError(
+                    "Graph-store migration ledger is not contiguous: "
+                    f"expected version {expected_version}, found {version}."
+                )
+            if name != expected_name or checksum != expected_checksum:
+                raise GraphStoreSchemaError(
+                    f"Graph-store migration {version} does not match this build."
+                )
+        return len(rows)
+
+    def _validate_schema_shape(
+        self,
+        connection: sqlite3.Connection,
+        version: int,
+    ) -> None:
+        expected = {_VERSIONED_TABLE}
+        if version >= 1:
+            expected.update(_V1_TABLES)
+        if version >= 2:
+            expected.add("apply_operation_audit")
+        actual = self._table_names(connection)
+        if actual != expected:
+            missing = sorted(expected - actual)
+            unexpected = sorted(actual - expected)
+            details: list[str] = []
+            if missing:
+                details.append(f"missing tables: {', '.join(missing)}")
+            if unexpected:
+                details.append(f"unexpected tables: {', '.join(unexpected)}")
+            raise GraphStoreSchemaError(
+                f"Graph-store schema version {version} has an invalid shape: "
+                + "; ".join(details)
+            )
+        expected_signatures = self._expected_schema_signatures(version)
+        actual_signatures = self._schema_signatures(connection)
+        for table in sorted(expected):
+            if actual_signatures[table] != expected_signatures[table]:
+                raise GraphStoreSchemaError(
+                    f"Graph-store schema version {version} has an invalid "
+                    f"column or index signature for table {table}."
+                )
+
+    def _ensure_schema(self) -> None:
+        with self._connect() as connection:
+            tables_before_ledger = self._table_names(connection)
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                connection.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS graph_store_migrations (
+                        version INTEGER PRIMARY KEY CHECK(version > 0),
+                        name TEXT NOT NULL,
+                        checksum TEXT NOT NULL,
+                        applied_at REAL NOT NULL
+                    )
+                    """
+                )
+                rows = connection.execute(
+                    """
+                    SELECT version, name, checksum, applied_at
+                    FROM graph_store_migrations
+                    ORDER BY version
+                    """
+                ).fetchall()
+                if rows:
+                    current_version = self._validate_migration_ledger(rows)
+                elif tables_before_ledger:
+                    current_version = self._adopt_legacy_schema(
+                        connection, tables_before_ledger
+                    )
+                else:
+                    current_version = 0
+
+                self._validate_schema_shape(connection, current_version)
+
+                user_version = int(
+                    connection.execute("PRAGMA user_version").fetchone()[0]
+                )
+                if user_version > _CURRENT_SCHEMA_VERSION:
+                    raise GraphStoreSchemaError(
+                        f"Graph-store schema version {user_version} is newer than "
+                        f"supported version {_CURRENT_SCHEMA_VERSION}."
+                    )
+                if user_version not in (0, current_version):
+                    raise GraphStoreSchemaError(
+                        "Graph-store user_version disagrees with its migration ledger: "
+                        f"{user_version} != {current_version}."
+                    )
+
+                for version, name, sql in _MIGRATIONS[current_version:]:
+                    self._execute_migration_sql(connection, sql)
+                    self._record_migration(connection, version, name, sql)
+                    current_version = version
+
+                self._validate_schema_shape(connection, current_version)
+                connection.execute(f"PRAGMA user_version={current_version}")
+                connection.commit()
+            except Exception:
+                connection.rollback()
+                raise
 
     @staticmethod
     def _stable_json(payload: Any) -> str:
@@ -230,6 +517,10 @@ class LiveGraphStore:
 
     def stats(self) -> dict[str, Any]:
         with self._connect() as connection:
+            schema_version = int(connection.execute("PRAGMA user_version").fetchone()[0])
+            migration_count = connection.execute(
+                "SELECT COUNT(*) AS count FROM graph_store_migrations"
+            ).fetchone()["count"]
             documents = connection.execute("SELECT COUNT(*) AS count FROM documents").fetchone()["count"]
             versions = connection.execute("SELECT COUNT(*) AS count FROM document_versions").fetchone()["count"]
             nodes = connection.execute("SELECT COUNT(*) AS count FROM nodes").fetchone()["count"]
@@ -242,6 +533,8 @@ class LiveGraphStore:
             misses = self._cache_misses
         return {
             "dbPath": str(self._db_path),
+            "schemaVersion": schema_version,
+            "migrationCount": int(migration_count),
             "documentCount": int(documents),
             "versionCount": int(versions),
             "nodeIndexCount": int(nodes),

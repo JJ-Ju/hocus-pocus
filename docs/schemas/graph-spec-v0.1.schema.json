@@ -216,7 +216,8 @@
       "properties": {
         "symbol": {"$ref": "#/$defs/identifier"},
         "outputIndex": {"type": "integer", "minimum": 0},
-        "span": {"$ref": "#/$defs/sourceSpan"}
+        "span": {"$ref": "#/$defs/sourceSpan"},
+        "fieldSpans": {"$ref": "#/$defs/referenceFieldSpans"}
       }
     },
     "input": {
@@ -226,7 +227,8 @@
       "properties": {
         "index": {"type": "integer", "minimum": 0},
         "source": {"$ref": "#/$defs/reference"},
-        "span": {"$ref": "#/$defs/sourceSpan"}
+        "span": {"$ref": "#/$defs/sourceSpan"},
+        "fieldSpans": {"$ref": "#/$defs/inputFieldSpans"}
       }
     },
     "parm": {
@@ -236,7 +238,8 @@
       "properties": {
         "name": {"$ref": "#/$defs/identifier"},
         "value": {"$ref": "#/$defs/value"},
-        "span": {"$ref": "#/$defs/sourceSpan"}
+        "span": {"$ref": "#/$defs/sourceSpan"},
+        "fieldSpans": {"$ref": "#/$defs/parmFieldSpans"}
       }
     },
     "node": {
@@ -254,7 +257,8 @@
           "type": "array",
           "items": {"$ref": "#/$defs/parm"}
         },
-        "span": {"$ref": "#/$defs/sourceSpan"}
+        "span": {"$ref": "#/$defs/sourceSpan"},
+        "fieldSpans": {"$ref": "#/$defs/nodeFieldSpans"}
       }
     },
     "externalNode": {
@@ -265,8 +269,30 @@
         "symbol": {"$ref": "#/$defs/identifier"},
         "path": {"$ref": "#/$defs/absolutePath"},
         "adopted": {"type": "boolean"},
-        "span": {"$ref": "#/$defs/sourceSpan"}
+        "span": {"$ref": "#/$defs/sourceSpan"},
+        "fieldSpans": {"$ref": "#/$defs/externalFieldSpans"}
       }
+    },
+    "referenceFieldSpans": {
+      "type": "object", "additionalProperties": false,
+      "required": ["symbol", "outputIndex"],
+      "properties": {"symbol": {"$ref": "#/$defs/sourceSpan"}, "outputIndex": {"$ref": "#/$defs/sourceSpan"}}
+    },
+    "inputFieldSpans": {
+      "type": "object", "additionalProperties": false, "required": ["index"],
+      "properties": {"index": {"$ref": "#/$defs/sourceSpan"}}
+    },
+    "parmFieldSpans": {
+      "type": "object", "additionalProperties": false, "required": ["name"],
+      "properties": {"name": {"$ref": "#/$defs/sourceSpan"}}
+    },
+    "nodeFieldSpans": {
+      "type": "object", "additionalProperties": false, "required": ["symbol", "typeName"],
+      "properties": {"symbol": {"$ref": "#/$defs/sourceSpan"}, "typeName": {"$ref": "#/$defs/sourceSpan"}}
+    },
+    "externalFieldSpans": {
+      "type": "object", "additionalProperties": false, "required": ["symbol", "path"],
+      "properties": {"symbol": {"$ref": "#/$defs/sourceSpan"}, "path": {"$ref": "#/$defs/sourceSpan"}}
     }
   }
 }

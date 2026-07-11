@@ -15,8 +15,8 @@ Roadmap: `docs/hocusscript-roadmap.md`
 
 ## 2. Current Slice
 
-Current milestone: HS1 offline language foundation
-Current scope: preview-only parser/compiler frontend
+Current milestone: HS2 catalog and semantic resolver complete; HS3 document fidelity corrections next
+Current scope: pinned offline semantics plus live catalog snapshots; no document lowering or apply
 Live mutation: prohibited
 
 Initial implementation acceptance command:
@@ -192,26 +192,36 @@ Houdini required: no
 
 ## 5. HS2: Catalog and Semantic Resolver
 
-Status: pending
+Status: complete for the v1 catalog and HocusScript 0.1 semantic surface; named/typed live connector enrichment remains tracked as HS-BLOCK-002
 
 Dependencies: HS1, versioned catalog schema
 Houdini required: fake provider no; live provider yes
 
-- [ ] Add real graph-store schema versioning and migration fixtures.
-- [ ] Define catalog-provider protocol.
-- [ ] Add fake and snapshot catalog providers.
-- [ ] Add live Houdini catalog provider.
-- [ ] Record Houdini build, platform, categories, operators, HDAs, packages, and Labs data.
-- [ ] Record parm tokens, tuples, defaults, ranges, menus, tags, and code surfaces.
-- [ ] Record indexed/named input and output connectors.
-- [ ] Add canonical catalog fingerprint.
-- [ ] Resolve exact and fully qualified operator definitions.
-- [ ] Reject ambiguity and silent upgrades.
-- [ ] Add spelling suggestions and source fix-its.
-- [ ] Resolve scalar/tuple/menu/code parameter semantics.
-- [ ] Compute required capabilities, including `run_code`.
-- [ ] Add fake-catalog ambiguity, drift, HDA, tuple, menu, and port tests.
-- [ ] Add live catalog fingerprint smoke procedure.
+- [x] Add real graph-store schema versioning and migration fixtures.
+- [x] Define catalog-provider protocol.
+- [x] Add fake and snapshot catalog providers.
+- [x] Add live Houdini catalog provider.
+- [x] Record Houdini build, platform, categories, operators, HDAs, packages, and Labs data.
+- [x] Record parm tokens, tuples, defaults, ranges, menus, tags, and code surfaces.
+- [x] Record indexed/named input and output connectors, retaining null optional names/types when HOM does not expose them without instantiation.
+- [x] Add canonical catalog fingerprint.
+- [x] Resolve exact and fully qualified operator definitions.
+- [x] Reject ambiguity and silent upgrades.
+- [x] Add spelling suggestions and source fix-its.
+- [x] Resolve scalar/tuple/menu/code parameter semantics.
+- [x] Compute required capabilities, including `run_code`.
+- [x] Add fake-catalog ambiguity, drift, HDA, tuple, menu, and port tests.
+- [x] Add live catalog fingerprint smoke procedure.
+
+HS2 exit evidence (2026-07-11):
+
+- offline suite: 110 repository tests including catalog, semantic, bundle v0.2, project lock v2, migration, and live-provider adapter coverage
+- real Houdini: 21.0.729 on `windows-x86_64-cl19.42`
+- unchanged full captures: 5,156 operators and byte-identical fingerprint `sha256:534a71cee3aa2bb35aeb804a62f4831f97a6433683ed7fc8fcaeea5780f6ca4d`
+- meaningful live change: temporary `hocus::catalog_smoke::1.0` HDA with `smoke_scale` increased the catalog to 5,157 operators and changed the fingerprint to `sha256:c82d7f417f2a40a76349d25e7c6b1ce562364b5e8791245f66d64fce65ebfc05`
+- live output remained project-contained through manifest v2 `catalog.path`; generated 44 MB smoke snapshots were not committed
+- unsupported executable surfaces such as OpenCL remain cataloged as `code/unsupported` and cannot be silently authored by HocusScript 0.1
+- procedure: `docs/hocusscript-live-catalog-smoke.md`
 
 ## 6. HS3: Document Lowering and Preview
 

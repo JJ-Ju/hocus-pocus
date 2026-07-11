@@ -155,6 +155,8 @@ Project rules:
 - `hocus.project.toml` v1 defines `schema_version`, a stable project `uid`, an optional display `name`, normalized relative `source_directories`, language version, and whether the structural lock is optional or required. Unknown v1 fields are rejected. `source_directories` defaults to `["."]`.
 - The project UID uses lowercase ASCII letters, digits, dots, and hyphens, starts with a letter or digit, and is at most 128 characters.
 - `hocus.lock.json` v1 binds the project UID, exact manifest digest, and language version. Its `catalog` value is `null` and `modules` is empty until HS2/HS6 lock those formats; later schemas extend rather than silently reinterpret v1. Check/compile always validate existing locks, required missing locks fail, and stale locks block portable compilation. Pure formatting does not consume or rewrite the lock and remains available for repair workflows.
+- `hocus.project.toml` v2 adds explicit project-relative JSON paths for the required lock and catalog snapshot and requires `lock.policy = "required"`. Both are resolved inside the user-selected project directory after canonical containment; neither is inferred from CWD, `$HIP`, Houdini packages, or an MCP registry. `validate_lock = false` remains a workspace-only formatting/repair path and cannot claim portable identity.
+- `hocus.lock.json` v2 pins catalog schema version, project-relative path, exact content digest, and authenticated catalog fingerprint. Manifest v2 pairs only with lock v2; v1 remains immutable and continues to require `catalog: null`.
 - Source paths and import paths are project-relative and contained after canonical resolution. Absolute source paths MAY be accepted by a native CLI for ergonomics only after proving containment in the explicit project directory.
 - Source and export-source files use the `.hocus` suffix. Manifest, lock, catalog, and compiled-bundle files use their own declared formats.
 - The physical project root never participates in durable source or node identity. A canonical source URI uses the manifest UID plus percent-encoded project-relative path, for example `hocus-project://city-environment/hocus/rocks.hocus`.
@@ -193,9 +195,54 @@ Initial lock shape:
 }
 ```
 
+Catalog-pinned project shape:
+
+```toml
+schema_version = 2
+
+[project]
+uid = "city-environment"
+source_directories = ["hocus"]
+
+[language]
+version = "0.1"
+
+[lock]
+policy = "required"
+path = "pins/hocus.lock.json"
+
+[catalog]
+path = "catalogs/houdini-21.0.json"
+```
+
+```json
+{
+  "$schema": "hocuspocus://schemas/hocus-lock/v2",
+  "kind": "hocus_project_lock",
+  "schemaVersion": 2,
+  "projectUid": "city-environment",
+  "manifestDigest": "sha256:...",
+  "languageVersion": "0.1",
+  "catalog": {
+    "schemaVersion": 1,
+    "path": "catalogs/houdini-21.0.json",
+    "contentDigest": "sha256:...",
+    "fingerprint": "sha256:..."
+  },
+  "modules": []
+}
+```
+
 The manifest digest covers the exact bounded manifest bytes. The lock digest covers canonical JSON with sorted keys, so lock whitespace and key order do not create false bundle drift. Lock updates are explicit future native CLI operations and are never performed by compile or MCP.
 
-The offline compiler emits a deterministic, content-addressed compiled bundle containing at least:
+The offline compiler emits deterministic, content-addressed bundles. Structural bundle v0.1 remains the compatibility format for unpinned v1 and memory/workspace results. Semantic bundle v0.2 additionally requires:
+
+- an exact catalog schema/fingerprint/content-digest constraint
+- deterministic operator, parameter, and connection selections keyed by GraphSpec JSON pointers
+- deferred external-baseline checks and document-lowering readiness
+- the catalog-verified capability manifest
+
+Both formats contain at least:
 
 - bundle, language, compiler, GraphSpec, and source-map versions
 - stable project UID and manifest/lock digests when available
@@ -370,6 +417,7 @@ The AST and GraphSpec reserve first-class forms for tuples, ramps, multiparms, e
 - Compilation MAY syntax-check code without executing it.
 - Installing or changing code requires the `run_code` capability in addition to scene-edit capability.
 - Code blocks retain their source offset so embedded diagnostics map to the `.hocus` file.
+- Catalog code surfaces outside the language `0.1` tags, including OpenCL or unknown executable editors, are recorded as `code/unsupported`. They remain fingerprinted but reject assignment; they are never downgraded to ordinary strings or allowed to bypass `run_code`.
 
 ## 9. Planned Type System
 
@@ -389,10 +437,10 @@ Language `0.1` exposes only scalars, arrays, node references, indexed ports, and
 
 ## 10. Catalog Contract
 
-A catalog snapshot MUST include:
+A catalog v1 snapshot is strict, bounded, canonical JSON. Its fingerprint is SHA-256 over the canonical payload with only `catalogFingerprint` omitted. Enumeration order does not affect identity; every resolution-affecting build, package, HDA, parameter, menu, code-surface, connector, and locked/editable field does. A catalog snapshot MUST include:
 
 - Houdini product, build, platform, and relevant feature flags
-- node category and fully qualified operator name
+- node category and exact opaque Houdini operator type name
 - operator namespace and definition version
 - HDA library identity and content digest
 - parameter tokens, tuple shapes, types, defaults, ranges, menus, tags, and code-surface classification
@@ -403,12 +451,14 @@ A catalog snapshot MUST include:
 
 Catalog resolution rules:
 
-1. An exact fully qualified match wins.
+1. An exact Houdini operator type-name match wins inside the selected category.
 2. An alias or unqualified name must resolve to one compatible definition.
 3. Ambiguity is an error with ordered candidates and a fix-it.
 4. Compilation records the selected definitions and catalog fingerprint.
 5. Apply rechecks the fingerprint and refuses silent drift.
 6. Offline compilation uses a pinned catalog snapshot and lockfile.
+
+Category is a separate identity dimension: two definitions may both have the exact Houdini name `null` in different categories. A graph-level `category` constrains all node resolution. When no graph category is present, the explicit string selector `"Sop/null"` selects catalog category `Sop` plus exact Houdini type `null`; the selected definition still records `qualifiedName = "null"`. Category selectors never rewrite Houdini type names or create version fallback.
 
 ## 11. Identity and Ownership Metadata
 

@@ -1,0 +1,15 @@
+schema_version = 2
+
+[project]
+uid = "live-catalog-smoke"
+source_directories = ["."]
+
+[language]
+version = "0.1"
+
+[lock]
+policy = "required"
+path = "hocus.lock.json"
+
+[catalog]
+path = "generated/catalog-v1.json"

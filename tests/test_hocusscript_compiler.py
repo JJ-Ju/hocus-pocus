@@ -127,7 +127,7 @@ graph demo {
 
     def test_versions_are_explicit_in_preview_payload(self) -> None:
         payload = compile_source(VALID_SOURCE, "rocks.hocus").to_dict()
-        self.assertEqual(payload["compilerVersion"], "0.1.1")
+        self.assertEqual(payload["compilerVersion"], "0.2.0")
         self.assertEqual(payload["graphSpecVersion"], "0.1")
         self.assertEqual(payload["graphSpec"]["$schema"], "hocuspocus://schemas/graph-spec/v0.1")
         self.assertEqual(payload["diagnostics"], [])

@@ -70,7 +70,13 @@ def lower_syntax(source: SyntaxSource) -> GraphSpec:
             field_spans["ownership"] = statement.value_span
         elif isinstance(statement, ExternalDecl):
             external_nodes.append(
-                ExternalNodeSpec(statement.symbol, statement.path, statement.adopted, statement.span)
+                ExternalNodeSpec(
+                    statement.symbol,
+                    statement.path,
+                    statement.adopted,
+                    statement.span,
+                    {"symbol": statement.symbol_span, "path": statement.path_span},
+                )
             )
         elif isinstance(statement, NodeDecl):
             nodes.append(_lower_node(statement))
@@ -117,13 +123,27 @@ def _lower_node(node: NodeDecl) -> NodeSpec:
                         statement.source.symbol,
                         statement.source.output_index,
                         statement.source.span,
+                        {
+                            "symbol": statement.source.symbol_span,
+                            "outputIndex": statement.source.output_index_span,
+                        },
                     ),
                     statement.span,
+                    {"index": statement.index_span},
                 )
             )
         elif isinstance(statement, ParmStmt):
-            parms.append(ParmSpec(statement.name, _lower_value(statement.value), statement.span))
-    return NodeSpec(node.symbol, node.type_name, inputs, parms, node.span)
+            parms.append(
+                ParmSpec(statement.name, _lower_value(statement.value), statement.span, {"name": statement.name_span})
+            )
+    return NodeSpec(
+        node.symbol,
+        node.type_name,
+        inputs,
+        parms,
+        node.span,
+        {"symbol": node.symbol_span, "typeName": node.type_span},
+    )
 
 
 def _lower_value(value: ValueExpr):

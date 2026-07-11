@@ -1,0 +1,155 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "hocuspocus://schemas/catalog/v1",
+  "title": "HocusScript Houdini Catalog v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["$schema", "kind", "catalogVersion", "catalogFingerprint", "houdini", "categories", "operators", "packages"],
+  "properties": {
+    "$schema": {"const": "hocuspocus://schemas/catalog/v1"},
+    "kind": {"const": "hocus_catalog"},
+    "catalogVersion": {"const": 1},
+    "catalogFingerprint": {"$ref": "#/$defs/digest"},
+    "houdini": {"$ref": "#/$defs/houdini"},
+    "categories": {"type": "array", "maxItems": 1024, "items": {"$ref": "#/$defs/category"}},
+    "operators": {"type": "array", "maxItems": 100000, "items": {"$ref": "#/$defs/operator"}},
+    "packages": {"type": "array", "maxItems": 10000, "items": {"$ref": "#/$defs/package"}}
+  },
+  "$defs": {
+    "nonEmpty": {"type": "string", "minLength": 1, "maxLength": 4096},
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "stringSet": {"type": "array", "uniqueItems": true, "maxItems": 4096, "items": {"$ref": "#/$defs/nonEmpty"}},
+    "tags": {
+      "type": "object",
+      "maxProperties": 256,
+      "propertyNames": {"minLength": 1, "maxLength": 4096},
+      "additionalProperties": {"$ref": "#/$defs/nonEmpty"}
+    },
+    "houdini": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["product", "version", "build", "platform", "featureFlags"],
+      "properties": {
+        "product": {"$ref": "#/$defs/nonEmpty"},
+        "version": {"$ref": "#/$defs/nonEmpty"},
+        "build": {"$ref": "#/$defs/nonEmpty"},
+        "platform": {"$ref": "#/$defs/nonEmpty"},
+        "featureFlags": {"$ref": "#/$defs/stringSet"}
+      }
+    },
+    "category": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "label", "networkFamily"],
+      "properties": {
+        "name": {"$ref": "#/$defs/nonEmpty"},
+        "label": {"$ref": "#/$defs/nonEmpty"},
+        "networkFamily": {"$ref": "#/$defs/nonEmpty"}
+      }
+    },
+    "package": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "version", "kind", "contentDigest", "tags"],
+      "properties": {
+        "id": {"$ref": "#/$defs/nonEmpty"},
+        "name": {"$ref": "#/$defs/nonEmpty"},
+        "version": {"$ref": "#/$defs/nonEmpty"},
+        "kind": {"enum": ["package", "labs"]},
+        "contentDigest": {"oneOf": [{"$ref": "#/$defs/digest"}, {"type": "null"}]},
+        "tags": {"$ref": "#/$defs/tags"}
+      }
+    },
+    "hdaLibrary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["identity", "contentDigest", "assetName", "assetVersion"],
+      "properties": {
+        "identity": {"$ref": "#/$defs/nonEmpty"},
+        "contentDigest": {"$ref": "#/$defs/digest"},
+        "assetName": {"$ref": "#/$defs/nonEmpty"},
+        "assetVersion": {"oneOf": [{"$ref": "#/$defs/nonEmpty"}, {"type": "null"}]}
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "packageId", "hdaLibrary"],
+      "properties": {
+        "kind": {"enum": ["builtin", "hda", "package", "labs"]},
+        "packageId": {"oneOf": [{"$ref": "#/$defs/nonEmpty"}, {"type": "null"}]},
+        "hdaLibrary": {"oneOf": [{"$ref": "#/$defs/hdaLibrary"}, {"type": "null"}]}
+      }
+    },
+    "menuItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["token", "label"],
+      "properties": {"token": {"$ref": "#/$defs/nonEmpty"}, "label": {"$ref": "#/$defs/nonEmpty"}}
+    },
+    "range": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["min", "max", "minInclusive", "maxInclusive"],
+      "properties": {
+        "min": {"type": ["number", "null"]},
+        "max": {"type": ["number", "null"]},
+        "minInclusive": {"type": "boolean"},
+        "maxInclusive": {"type": "boolean"}
+      }
+    },
+    "parameter": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["token", "label", "type", "tupleSize", "tupleNames", "default", "range", "menu", "tags", "codeSurface", "assignable"],
+      "properties": {
+        "token": {"$ref": "#/$defs/nonEmpty"},
+        "label": {"$ref": "#/$defs/nonEmpty"},
+        "type": {"enum": ["bool", "int", "float", "string", "tuple", "menu", "code", "button", "node_path", "parm_path", "file_path", "usd_prim_path", "asset_reference", "ramp", "multiparm"]},
+        "tupleSize": {"type": "integer", "minimum": 1, "maximum": 1024},
+        "tupleNames": {"$ref": "#/$defs/stringSet"},
+        "default": {},
+        "range": {"oneOf": [{"$ref": "#/$defs/range"}, {"type": "null"}]},
+        "menu": {"type": "array", "maxItems": 10000, "items": {"$ref": "#/$defs/menuItem"}},
+        "tags": {"$ref": "#/$defs/tags"},
+        "codeSurface": {"enum": ["none", "python", "vex", "hscript", "unsupported"]},
+        "assignable": {"type": "boolean"}
+      }
+    },
+    "connector": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["index", "name", "label", "cardinality", "dataTypes", "categories"],
+      "properties": {
+        "index": {"type": ["integer", "null"], "minimum": 0},
+        "name": {"oneOf": [{"$ref": "#/$defs/nonEmpty"}, {"type": "null"}]},
+        "label": {"$ref": "#/$defs/nonEmpty"},
+        "cardinality": {"enum": ["one", "optional", "many"]},
+        "dataTypes": {"$ref": "#/$defs/stringSet"},
+        "categories": {"$ref": "#/$defs/stringSet"}
+      },
+      "anyOf": [{"required": ["index"], "properties": {"index": {"type": "integer"}}}, {"required": ["name"], "properties": {"name": {"type": "string"}}}]
+    },
+    "operator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["qualifiedName", "name", "namespace", "version", "category", "aliases", "source", "parameters", "inputs", "outputs", "spareParameterPolicy", "locked", "editable", "networkFamilies"],
+      "properties": {
+        "qualifiedName": {"$ref": "#/$defs/nonEmpty"},
+        "name": {"$ref": "#/$defs/nonEmpty"},
+        "namespace": {"oneOf": [{"$ref": "#/$defs/nonEmpty"}, {"type": "null"}]},
+        "version": {"oneOf": [{"$ref": "#/$defs/nonEmpty"}, {"type": "null"}]},
+        "category": {"$ref": "#/$defs/nonEmpty"},
+        "aliases": {"$ref": "#/$defs/stringSet"},
+        "source": {"$ref": "#/$defs/source"},
+        "parameters": {"type": "array", "maxItems": 100000, "items": {"$ref": "#/$defs/parameter"}},
+        "inputs": {"type": "array", "maxItems": 10000, "items": {"$ref": "#/$defs/connector"}},
+        "outputs": {"type": "array", "maxItems": 10000, "items": {"$ref": "#/$defs/connector"}},
+        "spareParameterPolicy": {"enum": ["forbidden", "declared_only", "allowed"]},
+        "locked": {"type": "boolean"},
+        "editable": {"type": "boolean"},
+        "networkFamilies": {"$ref": "#/$defs/stringSet"}
+      }
+    }
+  }
+}

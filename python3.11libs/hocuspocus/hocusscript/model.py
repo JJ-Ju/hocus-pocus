@@ -8,7 +8,7 @@ from typing import Any
 from .diagnostics import CodeOffsetMap, Diagnostic, SourceSpan
 
 GRAPH_SPEC_VERSION = "0.1"
-COMPILER_VERSION = "0.1.1"
+COMPILER_VERSION = "0.2.0"
 
 
 def _value_to_dict(value: Any) -> Any:
@@ -70,13 +70,17 @@ class NodeReference:
     symbol: str
     output_index: int
     span: SourceSpan
+    field_spans: dict[str, SourceSpan] = field(default_factory=dict, repr=False)
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "symbol": self.symbol,
             "outputIndex": self.output_index,
             "span": self.span.to_dict(),
         }
+        if self.field_spans:
+            payload["fieldSpans"] = {key: value.to_dict() for key, value in sorted(self.field_spans.items())}
+        return payload
 
 
 @dataclass(slots=True)
@@ -84,13 +88,17 @@ class InputSpec:
     index: int
     source: NodeReference
     span: SourceSpan
+    field_spans: dict[str, SourceSpan] = field(default_factory=dict, repr=False)
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "index": self.index,
             "source": self.source.to_dict(),
             "span": self.span.to_dict(),
         }
+        if self.field_spans:
+            payload["fieldSpans"] = {key: value.to_dict() for key, value in sorted(self.field_spans.items())}
+        return payload
 
 
 @dataclass(slots=True)
@@ -98,13 +106,17 @@ class ParmSpec:
     name: str
     value: Any
     span: SourceSpan
+    field_spans: dict[str, SourceSpan] = field(default_factory=dict, repr=False)
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "name": self.name,
             "value": _value_to_dict(self.value),
             "span": self.span.to_dict(),
         }
+        if self.field_spans:
+            payload["fieldSpans"] = {key: value.to_dict() for key, value in sorted(self.field_spans.items())}
+        return payload
 
 
 @dataclass(slots=True)
@@ -114,15 +126,19 @@ class NodeSpec:
     inputs: list[InputSpec]
     parms: list[ParmSpec]
     span: SourceSpan
+    field_spans: dict[str, SourceSpan] = field(default_factory=dict, repr=False)
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "symbol": self.symbol,
             "typeName": self.type_name,
             "inputs": [item.to_dict() for item in self.inputs],
             "parms": [item.to_dict() for item in self.parms],
             "span": self.span.to_dict(),
         }
+        if self.field_spans:
+            payload["fieldSpans"] = {key: value.to_dict() for key, value in sorted(self.field_spans.items())}
+        return payload
 
 
 @dataclass(slots=True)
@@ -131,14 +147,18 @@ class ExternalNodeSpec:
     path: str
     adopted: bool
     span: SourceSpan
+    field_spans: dict[str, SourceSpan] = field(default_factory=dict, repr=False)
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "symbol": self.symbol,
             "path": self.path,
             "adopted": self.adopted,
             "span": self.span.to_dict(),
         }
+        if self.field_spans:
+            payload["fieldSpans"] = {key: value.to_dict() for key, value in sorted(self.field_spans.items())}
+        return payload
 
 
 @dataclass(slots=True)
@@ -196,14 +216,18 @@ class CompileResult:
     project_uid: str | None = None
     project_manifest_digest: str | None = None
     project_lock_digest: str | None = None
+    catalog_content_digest: str | None = None
+    catalog_fingerprint: str | None = None
+    semantic_result: Any | None = None
     native_source_path: str | None = field(default=None, repr=False)
     diagnostics: list[Diagnostic] = field(default_factory=list)
     graph_spec: GraphSpec | None = None
     formatted_source: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
+        semantic = self.semantic_result.to_dict() if self.semantic_result is not None else None
         return {
-            "stage": "structural",
+            "stage": "semantic" if semantic is not None else "structural",
             "compilerVersion": COMPILER_VERSION,
             "graphSpecVersion": GRAPH_SPEC_VERSION,
             "sourceName": self.source_name,
@@ -213,12 +237,17 @@ class CompileResult:
             "projectUid": self.project_uid,
             "projectManifestDigest": self.project_manifest_digest,
             "projectLockDigest": self.project_lock_digest,
+            "catalogContentDigest": self.catalog_content_digest,
+            "catalogFingerprint": self.catalog_fingerprint,
             "languageVersion": self.language_version,
             "valid": self.valid,
             "diagnosticCount": len(self.diagnostics),
             "diagnostics": [item.to_dict() for item in self.diagnostics],
             "graphSpec": self.graph_spec.to_dict() if self.graph_spec is not None else None,
             "formattedSource": self.formatted_source,
-            "readyForDocumentLowering": False,
+            "semanticResolution": semantic,
+            "readyForDocumentLowering": bool(
+                semantic is not None and semantic.get("readyForDocumentLowering", False)
+            ),
             "readyForApply": False,
         }

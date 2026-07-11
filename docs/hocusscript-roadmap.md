@@ -382,3 +382,15 @@ Code implemented but awaiting live Houdini validation remains explicitly `implem
 Status: open
 
 Canonical path resolution blocks ordinary traversal and symlink/junction escapes, but pathname check-then-open still permits a narrow reparse-point swap race between validation and file open. Before project reads are used from a privileged, multi-user, or service-hosted process, implement descriptor/handle-based opens, verify the final object identity and containment from the opened handle, and add Windows junction plus POSIX symlink race tests. Native same-user CLI operation may continue while this remains explicitly gated; Houdini MCP still performs no project-file reads.
+
+### HS-BLOCK-002: Non-Mutating Live Named/Typed Connector Fidelity
+
+Status: open
+
+Catalog v1 records exact indexed connectors and preserves stable names/types when the provider supplies them. Generic `hou.NodeType` does not expose the instance-level input/output name, label, and VOP data-type APIs for many real definitions. The live provider therefore emits honest null/empty optional metadata rather than creating nodes or fabricating names. Before HS3/HS7 claims named-port or typed-port fidelity for those operators, implement an audited non-mutating metadata source or a disposable isolated-node introspection strategy with init scripts disabled, per-family tests, cleanup verification, and an explicit completeness marker. Indexed-port semantic resolution may continue; missing names/types are not treated as proof of compatibility.
+
+### HS-BLOCK-003: Complete Houdini Package Search Provenance
+
+Status: open
+
+The live provider records package JSON and Labs evidence from explicit directories, `HOUDINI_PACKAGE_DIR`, user preferences, versioned `HSITE`, and `$HFS/packages`, and it rejects normalized package-ID collisions. Houdini can additionally compose dynamic package paths and precedence rules. Before package provenance is used as a production publish or clean-machine reproducibility gate, enumerate the complete effective search/load order, fingerprint precedence and shadowing, and add multi-root live fixtures. Operator/HDA fingerprints remain authoritative for semantic resolution while this provenance enrichment is open.

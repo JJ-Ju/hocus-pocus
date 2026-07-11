@@ -229,6 +229,7 @@ class Parser:
     def _parse_reference(self) -> ReferenceExpr:
         symbol = self._expect("IDENT", "HOCUS232", "Expected a node symbol.")
         output_index = 0
+        output_span = symbol.span
         end = symbol
         explicit_output = False
         port_keyword: str | None = None
@@ -243,6 +244,7 @@ class Parser:
             if not isinstance(output.value, int):
                 self._error("HOCUS237", "Output index must be an integer.", token=output)
             output_index = output.value
+            output_span = output.span
             end = self._expect("RBRACKET", "HOCUS238", "Expected ']' after the output index.")
         return ReferenceExpr(
             str(symbol.value),
@@ -250,6 +252,8 @@ class Parser:
             explicit_output,
             port_keyword,
             self._joined_span(symbol, end),
+            symbol.span,
+            output_span,
         )
 
     def _parse_parm(self) -> ParmStmt:

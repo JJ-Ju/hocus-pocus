@@ -68,6 +68,10 @@ class Diagnostic:
     notes: list[str] = field(default_factory=list)
     fixes: list[dict[str, Any]] = field(default_factory=list)
     details: dict[str, Any] = field(default_factory=dict)
+    expansion_stack: list[dict[str, Any]] = field(default_factory=list)
+    json_pointer: str | None = None
+    entity_uid: str | None = None
+    houdini_path: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -79,10 +83,10 @@ class Diagnostic:
             "notes": self.notes,
             "fixes": self.fixes,
             "details": self.details,
-            "expansionStack": [],
-            "jsonPointer": None,
-            "entityUid": None,
-            "houdiniPath": None,
+            "expansionStack": self.expansion_stack,
+            "jsonPointer": self.json_pointer,
+            "entityUid": self.entity_uid,
+            "houdiniPath": self.houdini_path,
         }
         if self.span is not None:
             payload["sourceUri"] = self.span.source_name
