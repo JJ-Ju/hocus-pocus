@@ -17,7 +17,8 @@ This is an incremental extension of the document graph architecture, not a paral
 - Default to merge and require ownership for reconcile.
 - Preserve or reject unsupported constructs; never silently approximate them.
 - Separate structural graph state from cooks, renders, exports, button presses, and publishing.
-- Never infer a filesystem workspace from process CWD, the repository, `$HIP`, or user home; file-backed work uses an explicit user-selected project directory.
+- Treat `.hocus` as ordinary code: native editor/agent filesystem tools own file I/O, while the offline compiler receives an explicit user-selected project directory.
+- Keep Houdini MCP content-based; it consumes compiled bundles and never needs general project-file access.
 - Treat offline automated tests and live-Houdini tests as separate required gates.
 - Mark code-only, live-validated, and production-validated states distinctly.
 
@@ -27,9 +28,9 @@ This is an incremental extension of the document graph architecture, not a paral
 | --- | --- | --- |
 | HS0 | Contract and risk lock | Language, IR, safety, and production contracts agreed |
 | HS1 | Offline language foundation | `.hocus` parses, validates, formats, and emits GraphSpec |
-| HS1P | Project workspace and source I/O | Users select safe project roots; file compile has stable project-relative identity |
+| HS1P | Native project compiler and bundles | Native `.hocus` files compile from an explicit project root into deterministic portable bundles |
 | HS2 | Catalog and semantic resolver | GraphSpec resolves against Houdini/HDA catalog snapshots |
-| HS3 | Document lowering and preview | Source produces canonical document, diff, and deterministic preview plan |
+| HS3 | Document lowering and preview | A compiled bundle produces a canonical document, diff, and deterministic preview plan |
 | HS4 | Immutable plan and guarded apply | Compiled plans apply with revision, ownership, and policy checks |
 | HS5 | Export, formatter, and editor loop | Live networks export to source; editor workflows become practical |
 | HS6 | Modules and studio libraries | Typed reusable modules expand deterministically |
@@ -65,10 +66,10 @@ Objectives:
 - support the complete `0.1` preview grammar
 - reject executable TypeScript/JavaScript constructs
 - enforce source, token, depth, node, code, and diagnostic limits
-- add a `ProjectContext` contract with a user-configurable project root, relative source directories, opaque runtime IDs, stable manifest UIDs, and deterministic source URIs
-- load named/default projects from configuration/environment while requests select an opaque `project_id`; raw runtime roots go through policy-gated `document.open_project`
-- add canonical containment and symlink/junction escape checks without reading or writing project files yet
-- add an offline command or import surface for agent/editor use
+- add an offline `ProjectContext` with an explicit user-configurable root, stable manifest UID, relative source directories, and deterministic source URIs
+- add native `compile_path`/format/check library and CLI surfaces without importing `hou`
+- add canonical project containment and bounded UTF-8 reads in the offline compiler
+- serialize deterministic content-addressed structural bundles for later MCP preview/planning
 
 Supported syntax:
 
@@ -95,43 +96,41 @@ Exit criteria:
 - diagnostics contain stable codes and exact source spans
 - no language package module imports `hou`
 - unsupported language features fail explicitly
-- inline compilation works without a project directory, while file-backed requests fail clearly when the directory is unset or unsafe
-- project selection never falls back to CWD, `$HIP`, the repository, home, or another client's request-scoped selection
+- inline compilation works without a project directory, while native file compilation receives an explicit project root
+- relocating a manifested project preserves canonical source identity
 - no Houdini mutation is possible through this phase
 
-## 5A. HS1P: Project Workspace and Source I/O
+## 5A. HS1P: Native Project Compiler and Bundles
 
 This is an early gate before catalog resolution or file-backed document lowering.
 
 Objectives:
 
-- add user-preference/config and environment support for named HocusScript projects and a configured default
-- add a multi-project registry with `document.open_project`, `document.list_projects`, and `document.get_project`
-- use opaque runtime project IDs plus stable manifest project UIDs; avoid a mutable process-global current project
 - define and validate `hocus.project.toml` and `hocus.lock.json`
+- implement offline `ProjectContext`, `compile_path`, check, format, and compile commands
+- accept the project root explicitly from CLI/editor configuration; do not put project roots in Houdini MCP configuration
 - implement canonical project/source URIs without absolute physical roots in portable provenance
-- add a distinct project-source read capability and read-aware containment policy
-- add `document.compile_file` for project-relative `.hocus` entry files
-- allow `document.compile_source` to bind an unsaved buffer to `project_id` plus project-relative `source_path`
-- enforce traversal, alternate-drive, UNC/device, case, symlink, and junction containment rules
-- bind plans to project UID, source URI/digest, manifest/lock digests, catalog/compiler/module inputs, and policy
+- enforce bounded UTF-8 reads plus traversal, alternate-drive, UNC/device, case, symlink, and junction containment rules
+- define a canonical compiled-bundle schema with GraphSpec, source maps, source/dependency digests, manifest/lock/catalog constraints, capabilities, and version fields
+- compute bundle identity over deterministic canonical JSON
+- retain `document.compile_source` only as an unsaved-buffer compatibility endpoint
+- define content-only `document.preview_bundle` and later `document.plan_bundle` MCP handoff contracts
 
 Testing:
 
-- configuration/environment/default precedence and typed missing-project failures
-- runtime registration policy and approved-root containment
-- simultaneous projects and concurrent-client isolation
-- nested/duplicate/conflicting roots and project UIDs
+- explicit CLI/editor project selection and typed missing-project failures
+- nested roots, traversal, conflicting project UIDs, invalid manifest, invalid UTF-8, and oversized source tests
 - project relocation with stable source/entity identity
-- file-read denial, path traversal, symlink/junction escape, UNC/device, and case-normalization tests
-- unsaved memory source versus project-bound buffer behavior
+- deterministic bundle JSON/digest and changed-input tests
+- CLI exit-code, stdout/stderr, format, and no-`hou` import tests
+- unsaved memory source versus portable manifested-bundle behavior
 
 Exit criteria:
 
-- a user can select one or more project directories without editing shipped package defaults
-- file compile reads only contained `.hocus` files from an explicitly registered/selected project
-- inline memory source remains non-file-backed and non-applyable unless bound to project-relative provenance
-- no project selection broadens filesystem policy or leaks across clients
+- an agent edits `.hocus` with normal workspace tools and invokes the offline compiler with an explicit project directory
+- native file compile reads only contained `.hocus` files and emits no machine-specific paths in portable output
+- inline memory source and manifest-free checks remain preview-only
+- Houdini MCP does not register project roots or read project files
 - moving a project root preserves stable project/source identity when manifest UID, relative paths, content, and locks are unchanged
 
 ## 6. HS2: Catalog and Semantic Resolver
@@ -150,7 +149,7 @@ Prerequisites:
 - catalog schema and fingerprint algorithm
 - versioned graph-store migrations rather than bootstrap-only `CREATE IF NOT EXISTS`
 - approved-root policy for catalog and future module artifacts
-- project-directory configuration, project manifest identity, and project-relative catalog/lock locations
+- offline project manifest identity, compiled-bundle schema, and project-relative catalog/lock locations
 
 Exit criteria:
 
@@ -167,10 +166,10 @@ Objectives:
 - overlay the full live baseline for merge semantics
 - implement ownership metadata and durable source/entity mapping
 - produce canonical document validation, diff, destructive summary, and deterministic ordered preview plan
-- upgrade the existing structural `document.compile_source` preview to catalog-resolved document lowering and candidate-plan preview
-- add `document.compile_file` for registered-project, project-relative `.hocus` files
-- let `document.compile_source` optionally bind an unsaved buffer to `project_id` plus project-relative `source_path`
-- add project list/get information for effective root, selection source, runtime ID, stable UID, source directories, manifest/lock state, and policy diagnostics
+- add `document.preview_bundle` for content-addressed offline compiler output
+- retain the existing structural `document.compile_source` as a compatibility path for unsaved buffers only
+- resolve bundle GraphSpec against the live catalog and produce document lowering plus candidate-plan preview
+- report source/dependency/manifest/lock/catalog provenance without accepting filesystem paths
 - return large artifacts through resource URIs when appropriate
 
 Blocking document work:
@@ -190,7 +189,7 @@ Exit criteria:
 - merge preserves unspecified live state
 - reconcile affects only compiler-owned state
 - compile produces no applyable plan while any blocking diagnostic exists
-- file-backed previews bind stable project-relative source URIs and manifest/lock digests rather than machine-specific absolute paths
+- bundle previews bind stable project-relative source URIs and manifest/lock digests rather than machine-specific absolute paths
 
 ## 8. HS4: Immutable Plan and Guarded Apply
 
@@ -221,8 +220,7 @@ Objectives:
 
 - expose canonical formatter and syntax/diagnostic JSON interfaces
 - implement `document.export_source` for supported live networks
-- let users choose an export path relative to the effective project directory and create directories only through explicit file-write operations
-- add settings/UI support for selecting the session default project directory without changing request-scoped projects
+- return export source text plus durable provenance; native editor/CLI tooling chooses and writes the destination `.hocus` file
 - preserve durable IDs during export and recompile
 - provide catalog-backed completion data
 - add CLI/editor integration, with LSP as a later deliverable
@@ -242,7 +240,7 @@ Objectives:
 
 - typed module parameters and exports
 - hygienic deterministic expansion
-- approved-root static imports
+- offline, project-contained static imports
 - resolve imports relative to the importing file and ordered project source/module directories
 - transitive lockfiles and content hashes
 - bounded compile-time conditionals and iteration only after limits are proven
@@ -322,7 +320,7 @@ Exit criteria:
 - live Houdini GUI and headless matrices
 - save/reload and external-edit races
 - performance and payload budgets
-- project-directory precedence, unset/default/request-scoped selection, multi-client isolation, relocation, traversal, symlink/junction escape, and approved-root tests
+- explicit native project selection, relocation, traversal, symlink/junction escape, bundle portability, and offline/MCP boundary tests
 
 ### Compatibility
 

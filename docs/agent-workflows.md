@@ -73,7 +73,18 @@ Placement note:
 
 ### HocusScript structural preview
 
-`document.compile_source` accepts `.hocus` source text and currently performs only offline parsing, structural validation, deterministic formatting, and GraphSpec generation.
+Prefer editing `.hocus` as a normal native workspace file and use the offline CLI/library:
+
+```powershell
+$env:PYTHONPATH = "python3.11libs"
+python -m hocuspocus.hocusscript check hocus/asset.hocus --project D:/show/project
+python -m hocuspocus.hocusscript format hocus/asset.hocus --project D:/show/project --write
+python -m hocuspocus.hocusscript compile hocus/asset.hocus --project D:/show/project -o asset.bundle.json
+```
+
+The project path belongs to the native compiler/editor surface. The resulting content-addressed bundle—not a server-side path—is the planned input to Houdini preview and apply tools.
+
+`document.compile_source` remains available for unsaved source text and currently performs only parsing, structural validation, deterministic formatting, and GraphSpec generation.
 
 Rules for the current preview:
 
@@ -83,7 +94,7 @@ Rules for the current preview:
 - require `readyForDocumentLowering = false` and `readyForApply = false`
 - do not treat a valid structural preview as a Houdini-aware or applyable plan
 
-Catalog resolution, network-document lowering, and immutable plan application remain gated by the HocusScript roadmap.
+Catalog resolution, bundle preview, network-document lowering, and immutable plan application remain gated by the HocusScript roadmap.
 
 ## 4. Handle Long-Running Work
 

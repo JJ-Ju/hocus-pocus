@@ -179,6 +179,12 @@ class CompileResult:
     source_digest: str
     language_version: str | None
     valid: bool
+    source_uri: str | None = None
+    source_kind: str = "memory"
+    project_uid: str | None = None
+    project_manifest_digest: str | None = None
+    project_lock_digest: str | None = None
+    native_source_path: str | None = field(default=None, repr=False)
     diagnostics: list[Diagnostic] = field(default_factory=list)
     graph_spec: GraphSpec | None = None
     formatted_source: str | None = None
@@ -189,7 +195,12 @@ class CompileResult:
             "compilerVersion": COMPILER_VERSION,
             "graphSpecVersion": GRAPH_SPEC_VERSION,
             "sourceName": self.source_name,
+            "sourceUri": self.source_uri or self.source_name,
+            "sourceKind": self.source_kind,
             "sourceDigest": self.source_digest,
+            "projectUid": self.project_uid,
+            "projectManifestDigest": self.project_manifest_digest,
+            "projectLockDigest": self.project_lock_digest,
             "languageVersion": self.language_version,
             "valid": self.valid,
             "diagnosticCount": len(self.diagnostics),

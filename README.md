@@ -78,6 +78,19 @@ Current server surface includes:
 - higher-level utilities such as batch graph edits, turntable camera creation, managed snapshots, and geometry summaries
 - named policy profiles with effective-policy reporting in status and resources
 
+## HocusScript Native Workflow
+
+Treat `.hocus` as ordinary source code: edit it with normal workspace tools, keep it in Git, and run the offline compiler outside Houdini.
+
+```powershell
+$env:PYTHONPATH = "python3.11libs"
+python -m hocuspocus.hocusscript check assets/rocks.hocus --project D:/houdini-projects/city
+python -m hocuspocus.hocusscript format assets/rocks.hocus --project D:/houdini-projects/city --write
+python -m hocuspocus.hocusscript compile assets/rocks.hocus --project D:/houdini-projects/city -o rocks.bundle.json
+```
+
+The compiled bundle is the future content-based handoff to Houdini MCP; the MCP does not need to read or edit the project files.
+
 ## Docs
 
 For the fuller manual, see [HocusPocus Manual](C:\Users\jujun\Documents\Source\Houdini\HocusPocus_mcp\docs\user-manual.md).

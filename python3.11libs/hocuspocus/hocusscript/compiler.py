@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 from typing import Iterable
+from urllib.parse import quote
 
 from .diagnostics import Diagnostic, HocusSourceError, SourcePosition, SourceSpan, sort_diagnostics
 from .formatter import format_graph
@@ -201,6 +202,7 @@ def compile_source(
     source: str,
     source_name: str = "<memory>",
     *,
+    source_uri: str | None = None,
     strict: bool = True,
     max_diagnostics: int = MAX_DIAGNOSTICS,
 ) -> CompileResult:
@@ -214,6 +216,13 @@ def compile_source(
         raise TypeError("strict must be a boolean")
     if not isinstance(max_diagnostics, int) or max_diagnostics < 1:
         raise TypeError("max_diagnostics must be a positive integer")
+    if source_uri is not None and (not isinstance(source_uri, str) or not source_uri.strip()):
+        raise TypeError("source_uri must be a non-empty string when provided")
+    diagnostic_source = (
+        source_uri.strip()
+        if source_uri is not None
+        else f"hocus-memory:///{quote(source_name, safe='/-._~')}"
+    )
     if len(source) > MAX_SOURCE_BYTES:
         position = SourcePosition(0, 1, 1)
         diagnostic = Diagnostic(
@@ -221,10 +230,11 @@ def compile_source(
             "HOCUS001",
             "lex",
             f"Source exceeds the {MAX_SOURCE_BYTES}-byte limit.",
-            SourceSpan(source_name, position, position),
+            SourceSpan(diagnostic_source, position, position),
         )
         return CompileResult(
             source_name=source_name,
+            source_uri=diagnostic_source,
             source_digest="sha256:source-too-large",
             language_version=None,
             valid=False,
@@ -244,10 +254,11 @@ def compile_source(
             "HOCUS010",
             "lex",
             "Source contains an invalid Unicode scalar value.",
-            SourceSpan(source_name, start, end),
+            SourceSpan(diagnostic_source, start, end),
         )
         return CompileResult(
             source_name=source_name,
+            source_uri=diagnostic_source,
             source_digest="sha256:invalid-unicode",
             language_version=None,
             valid=False,
@@ -260,10 +271,11 @@ def compile_source(
             "HOCUS001",
             "lex",
             f"Source exceeds the {MAX_SOURCE_BYTES}-byte limit.",
-            SourceSpan(source_name, position, position),
+            SourceSpan(diagnostic_source, position, position),
         )
         return CompileResult(
             source_name=source_name,
+            source_uri=diagnostic_source,
             source_digest="sha256:source-too-large",
             language_version=None,
             valid=False,
@@ -273,7 +285,7 @@ def compile_source(
     diagnostics: list[Diagnostic] = []
     graph: GraphSpec | None = None
     try:
-        tokens = Lexer(source, source_name).tokenize()
+        tokens = Lexer(source, diagnostic_source).tokenize()
         parser = Parser(tokens)
         graph = parser.parse()
         diagnostics.extend(parser.diagnostics)
@@ -294,7 +306,7 @@ def compile_source(
                 "HOCUS246",
                 "parse",
                 "Source nesting exceeded the parser safety limit.",
-                SourceSpan(source_name, position, position),
+                SourceSpan(diagnostic_source, position, position),
             )
         )
 
@@ -305,7 +317,7 @@ def compile_source(
         omitted = len(diagnostics) - (max_diagnostics - 1)
         diagnostics = diagnostics[: max_diagnostics - 1]
         span = graph.span if graph is not None else SourceSpan(
-            source_name,
+            diagnostic_source,
             SourcePosition(0, 1, 1),
             SourcePosition(0, 1, 1),
         )
@@ -322,6 +334,7 @@ def compile_source(
     valid = graph is not None and not any(item.severity == "error" for item in diagnostics)
     return CompileResult(
         source_name=source_name,
+        source_uri=diagnostic_source,
         source_digest=f"sha256:{digest}",
         language_version=graph.language_version if graph is not None else None,
         valid=valid,

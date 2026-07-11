@@ -130,6 +130,8 @@ graph demo {
         self.assertEqual(payload["graphSpecVersion"], "0.1")
         self.assertEqual(payload["graphSpec"]["$schema"], "hocuspocus://schemas/graph-spec/v0.1")
         self.assertEqual(payload["diagnostics"], [])
+        self.assertEqual(payload["sourceUri"], "hocus-memory:///rocks.hocus")
+        self.assertEqual(payload["sourceKind"], "memory")
         schema = json.loads((ROOT / "docs" / "schemas" / "graph-spec-v0.1.schema.json").read_text(encoding="utf-8"))
         self.assertEqual(schema["$id"], payload["graphSpec"]["$schema"])
         self.assertTrue(set(schema["required"]).issubset(payload["graphSpec"].keys()))
