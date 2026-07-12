@@ -255,13 +255,33 @@ def lower_bundle_to_document(
             generated_by_symbol[item["symbol"]]
             for item in graph["nodes"]
             if item["symbol"] in generated_by_symbol
-        ] + [
-            external_by_symbol[item["symbol"]]
-            for item in graph["externalNodes"]
-            if item["adopted"] and item["symbol"] in external_by_symbol
         ]
-        for index, node in enumerate(layout_nodes):
-            node["position"] = [float((index % 4) * 3), float(-(index // 4) * 2)]
+        layout_uids = {node["uid"] for node in layout_nodes}
+        occupied: set[tuple[int, int]] = set()
+        for existing in document["nodes"]:
+            if existing.get("uid") in layout_uids:
+                continue
+            position = existing.get("position")
+            if not isinstance(position, list) or len(position) != 2:
+                continue
+            column = int(round(float(position[0]) / 3.25))
+            row = int(round(-float(position[1]) / 1.85))
+            if 0 <= column < 12 and 0 <= row < 64:
+                occupied.add((column, row))
+        free_cells = [
+            (column, row)
+            for row in range(64)
+            for column in range(12)
+            if (column, row) not in occupied
+        ]
+        if len(layout_nodes) > len(free_cells):
+            diagnostics.append(_diagnostic(
+                "HOCUS714",
+                "Automatic layout exceeds the bounded 12 by 64 managed network grid.",
+                "/layout",
+            ))
+        for node, (column, row) in zip(layout_nodes, free_cells):
+            node["position"] = [float(column * 3.25), float(-row * 1.85)]
             source_map_entities[node["uid"]] = _source_map(payload, "/layout", layout_span)
 
     parm_selections = {

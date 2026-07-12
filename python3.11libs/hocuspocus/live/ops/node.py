@@ -189,7 +189,10 @@ class NodeOperationsMixin:
             if parent is not None:
                 state = self._sync_grid_state_for_parent(parent)
                 current_cell = self._node_grid_cell(node)
-                if current_cell is not None:
+                if (
+                    current_cell is not None
+                    and self._grid_cell_value(state, current_cell[0], current_cell[1]) == node.path()
+                ):
                     self._grid_set_cell(state, current_cell[0], current_cell[1], None)
                 occupant = self._grid_cell_value(state, target_cell[0], target_cell[1])
                 if occupant not in {None, node.path()}:
@@ -264,7 +267,7 @@ class NodeOperationsMixin:
         node = self._require_node_by_path(path)
         with hou_module.undos.group("HocusPocus: set node flags"):
             if "bypass" in arguments:
-                node.bypass(bool(arguments["bypass"]))
+                self._safe_value(lambda: node.bypass(bool(arguments["bypass"])))
             if "display" in arguments:
                 self._safe_value(lambda: node.setDisplayFlag(bool(arguments["display"])))
             if "render" in arguments:

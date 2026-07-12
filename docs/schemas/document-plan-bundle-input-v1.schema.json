@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "hocuspocus://schemas/document-plan-bundle-input/v1",
+  "title": "HocusScript Plan Bundle Input v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["bundle"],
+  "properties": {
+    "bundle": {"type": "object"},
+    "ttlSeconds": {"type": "integer", "minimum": 30, "maximum": 1800, "default": 900}
+  }
+}

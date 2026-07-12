@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "hocuspocus://schemas/document-plan-bundle-output/v1",
+  "title": "HocusScript Plan Bundle Output v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["stage", "planVersion", "readyForApply", "planId", "planHash", "expiresAt", "resourceUri", "confirmationRequired", "baseline", "summary"],
+  "properties": {
+    "stage": {"const": "document_plan"},
+    "planVersion": {"const": "1.0"},
+    "readyForApply": {"const": true},
+    "planId": {"type": "string", "format": "uuid"},
+    "planHash": {"$ref": "#/$defs/digest"},
+    "expiresAt": {"type": "number"},
+    "resourceUri": {"type": "string", "pattern": "^houdini://documents/plans/[0-9a-f-]{36}$"},
+    "confirmationRequired": {"type": "boolean"},
+    "confirmationToken": {"type": "string", "minLength": 32},
+    "baseline": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["documentRevision", "liveRevision"],
+      "properties": {
+        "documentRevision": {"type": "integer", "minimum": 0},
+        "liveRevision": {"type": "integer", "minimum": 0}
+      }
+    },
+    "summary": {"type": "object"}
+  },
+  "$defs": {"digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}}
+}

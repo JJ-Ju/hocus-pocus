@@ -64,6 +64,9 @@ class _FakeLiveNode:
         self.set_user_data_calls.append((key, value))
         self._user_data[key] = value
 
+    def destroyUserData(self, key: str):
+        self._user_data.pop(key, None)
+
     def inputConnections(self):
         return list(self._connections)
 
@@ -307,6 +310,88 @@ class DocumentFidelityTests(unittest.TestCase):
         ordinary_diff = self.operations._document_diff_payload(authored, refreshed)
         self.assertEqual(ordinary_diff["summary"]["changedBindingCount"], 1)
 
+    def test_flag_only_update_does_not_reapply_unchanged_colliding_position(self) -> None:
+        baseline = _document([])
+        child = {
+            **_node("artist", "/obj/geo1/artist"),
+            "name": "artist",
+            "parentPath": "/obj/geo1",
+            "position": [0.0, 0.0],
+        }
+        baseline["nodes"].append(child)
+        target = copy.deepcopy(baseline)
+        target["nodes"][-1]["flags"]["display"] = True
+
+        plan = self.operations._document_build_apply_plan(baseline, target, mode="merge")
+
+        self.assertEqual(len(plan["nodeUpdates"]), 1)
+        self.assertIn("flags", plan["nodeUpdates"][0])
+        self.assertNotIn("position", plan["nodeUpdates"][0])
+
+    def test_verification_detects_hocus_ownership_and_provenance_drift(self) -> None:
+        authored = _document([])
+        managed = {
+            **_node("managed", "/obj/geo1/managed"),
+            "name": "managed",
+            "parentPath": "/obj/geo1",
+            "metadata": {"hocus": {
+                "version": 1, "entityKind": "node", "projectUid": "city",
+                "sourceUri": "hocus-project://city/asset.hocus",
+                "sourceDigest": "sha256:" + "1" * 64,
+                "bundleDigest": "sha256:" + "2" * 64,
+                "compilerVersion": "0.2.0", "languageVersion": "0.1",
+                "graphName": "asset", "symbol": "managed", "ownership": "studio.city",
+                "jsonPointer": "/nodes/0",
+                "span": {
+                    "sourceUri": "hocus-project://city/asset.hocus",
+                    "start": {"line": 1, "column": 1, "offset": 0},
+                    "end": {"line": 1, "column": 2, "offset": 1},
+                },
+            }},
+        }
+        authored["nodes"].append(managed)
+        live = copy.deepcopy(authored)
+        live["nodes"][-1]["metadata"]["hocus"]["ownership"] = "studio.other"
+
+        verification = self.operations._document_verification_diff_payload(authored, live)
+
+        self.assertEqual(verification["summary"]["changedNodeCount"], 1)
+        self.assertIn("hocusProvenance", verification["changedNodes"][0]["changes"])
+
+        unmanaged = copy.deepcopy(authored)
+        unmanaged["nodes"][-1]["metadata"].pop("hocus")
+        residual = self.operations._document_verification_diff_payload(unmanaged, authored)
+        self.assertEqual(residual["summary"]["changedNodeCount"], 1)
+        self.assertIsNone(residual["changedNodes"][0]["changes"]["hocusProvenance"]["before"])
+
+    def test_output_edge_change_normalizes_to_explicit_sop_adapter(self) -> None:
+        baseline = _document([])
+        target = copy.deepcopy(baseline)
+        for uid in ("a", "b"):
+            node = {
+                **_node(uid, f"/obj/geo1/{uid}"),
+                "name": uid,
+                "parentPath": "/obj/geo1",
+            }
+            baseline["nodes"].append(copy.deepcopy(node))
+            target["nodes"].append(copy.deepcopy(node))
+        baseline["nodes"][-2]["flags"]["display"] = True
+        target["nodes"][-1]["flags"]["display"] = True
+        baseline["edges"] = [{
+            "uid": "edge:output:root", "kind": "output_flag",
+            "from": {"nodeUid": "a"}, "to": {"nodeUid": "root"}, "metadata": {},
+        }]
+        target["edges"] = [{
+            "uid": "edge:output:root", "kind": "output_flag",
+            "from": {"nodeUid": "b"}, "to": {"nodeUid": "root"}, "metadata": {},
+        }]
+
+        plan = self.operations._document_build_apply_plan(baseline, target, mode="merge")
+
+        self.assertEqual(plan["outputChange"]["beforeSourceUid"], "a")
+        self.assertEqual(plan["outputChange"]["sourceUid"], "b")
+        self.assertEqual(plan["outputGuard"]["targetDisplayUids"], ["b"])
+
     def test_reconcile_deletes_only_nodes_in_the_explicit_ownership_namespace(self) -> None:
         owned = {
             **_node("owned", "/obj/geo1/owned"),
@@ -459,6 +544,35 @@ class DocumentFidelityTests(unittest.TestCase):
         )
         self.assertIn(("hpmcp.owner", "studio.rocks"), adopted.set_user_data_calls)
         self.assertEqual(executed[0]["type"], "stamp_node_uid")
+
+        inverse = operations._document_build_apply_plan(target, baseline, mode="merge")
+        self.assertEqual(inverse["identityClears"], [{
+            "uid": "node:/obj/geo1/artist", "path": "/obj/geo1/artist",
+        }])
+        inverse_executed = operations._document_execute_apply_plan(inverse, target)
+        self.assertEqual(inverse_executed[0]["type"], "clear_node_identity")
+        self.assertIsNone(adopted.userData("hpmcp.uid"))
+        self.assertIsNone(adopted.userData("hpmcp.provenance"))
+
+    def test_adoption_refreshes_stale_provenance_on_already_persistent_uid(self) -> None:
+        baseline = _connected_document([])
+        baseline["nodes"].append({
+            **_node("persistent", "/obj/geo1/live"),
+            "name": "live", "parentPath": "/obj/geo1",
+            "metadata": {
+                "identityMode": "persistent_user_data",
+                "hocus": {"entityKind": "node", "ownership": "studio.old"},
+            },
+        })
+        target = copy.deepcopy(baseline)
+        target["nodes"][-1]["metadata"]["hocus"] = {
+            "entityKind": "adopted_node", "ownership": "studio.new"
+        }
+
+        plan = self.operations._document_build_apply_plan(baseline, target, mode="merge")
+
+        self.assertEqual(plan["identityUpdates"][0]["uid"], "persistent")
+        self.assertEqual(plan["summary"]["identityUpdateCount"], 1)
 
     def test_document_created_nodes_are_stamped_with_authored_uid(self) -> None:
         operations = _LiveDocumentHarness([_FakeLiveNode("/obj/geo1", "root")])

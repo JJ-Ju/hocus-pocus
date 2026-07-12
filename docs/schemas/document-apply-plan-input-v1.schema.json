@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "hocuspocus://schemas/document-apply-plan-input/v1",
+  "title": "HocusScript Apply Plan Input v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["planId", "planHash", "expectedDocumentRevision", "expectedLiveRevision", "idempotencyKey"],
+  "properties": {
+    "planId": {"type": "string", "format": "uuid"},
+    "planHash": {"$ref": "#/$defs/digest"},
+    "expectedDocumentRevision": {"type": "integer", "minimum": 0},
+    "expectedLiveRevision": {"type": "integer", "minimum": 0},
+    "confirmationToken": {"type": "string", "minLength": 32},
+    "idempotencyKey": {"type": "string", "minLength": 8, "maxLength": 256}
+  },
+  "$defs": {"digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}}
+}

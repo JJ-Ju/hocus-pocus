@@ -178,11 +178,14 @@ class HocusScriptDocumentLoweringTests(unittest.TestCase):
         self.assertEqual(len(binding_keys), len(second.document["parameterBindings"]))
 
     def test_auto_layout_lowers_to_deterministic_node_positions(self) -> None:
-        first = lower_bundle_to_document(_bundle(extra="layout = auto;"), _baseline())
-        second = lower_bundle_to_document(_bundle(extra="layout = auto;"), _baseline())
+        occupied = _node("artist", "artist", "/obj/geo1/artist")
+        occupied["position"] = [0.0, 0.0]
+        first = lower_bundle_to_document(_bundle(extra="layout = auto;"), _baseline(extras=(occupied,)))
+        second = lower_bundle_to_document(_bundle(extra="layout = auto;"), _baseline(extras=(occupied,)))
         positions = {item["name"]: item["position"] for item in first.document["nodes"]}
-        self.assertEqual(positions["source"], [0.0, 0.0])
-        self.assertEqual(positions["sink"], [3.0, 0.0])
+        self.assertEqual(positions["artist"], [0.0, 0.0])
+        self.assertEqual(positions["source"], [3.25, 0.0])
+        self.assertEqual(positions["sink"], [6.5, 0.0])
         self.assertEqual(first.to_dict(), second.to_dict())
 
     def test_changed_input_and_output_edges_emit_reconnect_operations(self) -> None:

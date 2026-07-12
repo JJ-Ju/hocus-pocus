@@ -79,6 +79,10 @@ class ResourceOperationsMixin:
             preview_id = uri[len("houdini://documents/previews/") :].strip("/")
             if preview_id:
                 return self.read_document_preview(preview_id, context)
+        if uri.startswith("houdini://documents/plans/"):
+            plan_id = uri[len("houdini://documents/plans/") :].strip("/")
+            if plan_id:
+                return self.read_apply_plan(plan_id, context)
         if uri == "houdini://graph/scene":
             return self.read_graph_scene(context)
         if uri == "houdini://graph/index":
@@ -268,6 +272,14 @@ class ResourceOperationsMixin:
                         "uri": "houdini://documents/previews/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
                     }
                 ],
+            },
+            {
+                "uriTemplate": "houdini://documents/plans/{plan_id}",
+                "name": "Immutable HocusScript Apply Plan",
+                "description": "Read a stored, integrity-checked HS4 apply plan by the URI returned from document.plan_bundle.",
+                "mimeType": "application/json",
+                "payloadSummary": "Versioned apply plan envelope, guards, normalized operations, inverse plan, and expiry without the confirmation secret.",
+                "examples": [{"description": "Inspect a stored plan before guarded apply.", "uri": "houdini://documents/plans/01234567-89ab-cdef-0123-456789abcdef"}],
             },
             {
                 "uriTemplate": "houdini://graph/scene",

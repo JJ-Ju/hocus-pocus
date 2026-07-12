@@ -572,7 +572,7 @@ Compilation never mutates Houdini.
 
 For `document.compile_source`, `source` is required and provenance is `hocus-memory://`; it cannot read a path or create an applyable plan. Durable project provenance comes from the offline compiler bundle.
 
-### 14.2 `document.preview_bundle` and future `document.plan_bundle`
+### 14.2 `document.preview_bundle` and `document.plan_bundle`
 
 HS3 `document.preview_bundle` accepts a canonical compiled-bundle v0.2 object, passes it through the shared strict decoder, rehydrates GraphSpec, and freshly re-resolves the graph against the current live catalog. The fresh semantic result must exactly match the bundle selections; a recomputed content hash does not make forged selections trustworthy. The operation then overlays the complete live network-document baseline, validates the resulting document, and returns a deterministic diff, destructive summary, source maps, and a non-applyable candidate plan.
 
@@ -580,7 +580,9 @@ The MCP operation accepts content, not paths. It never reads DSL/project source 
 
 Bundle catalog drift, semantic-selection drift, document-revision drift, schema errors, unsafe ownership/collision conditions, unsupported values, or missing source provenance produce blocking diagnostics and no candidate plan. Imports remain an offline compiler responsibility when the active language version supports them.
 
-`document.plan_bundle` stores an immutable plan only after catalog, ownership, policy, revision, and fidelity gates pass. A bundle containing preview-only workspace provenance cannot produce a stored plan.
+HS4 `document.plan_bundle` reruns the same strict live trust gates, normalizes the verified target into the executable SOP operation groups, rejects unknown or irreversible actions, captures the exact baseline and inverse plan, and persists a `hocus_apply_plan` v1 envelope. The envelope has an independent hash domain from the HS3 candidate plan and binds its UUID, TTL, process/hip session epoch, source/bundle/compiler/GraphSpec/project manifest and lock identities, catalog fingerprint/content digest, effective policy fingerprint, capabilities, ownership, target scope, baseline document/live revisions and digest, target document, confirmation policy, normalized operations, and inverse plan. The SQLite record is insert-only; mutable apply lifecycle state is stored separately. A bundle containing preview-only workspace provenance cannot produce a stored plan.
+
+Plans are available at `houdini://documents/plans/{plan_id}` and are bounded by count, per-plan size, aggregate size, TTL, and LRU retention in the live cache. `document.discard_plan` removes the cache entry and durably claims the persisted plan as aborted so it cannot be applied after a restart.
 
 ### 14.3 `document.apply_plan`
 
@@ -591,7 +593,7 @@ Input contains only:
 - optional confirmation token
 - idempotency key
 
-Apply MUST:
+The implemented guarded apply:
 
 1. acquire a target-network write lease
 2. validate plan identity, TTL, session, catalog, revisions, ownership, policy, and capabilities
@@ -602,16 +604,19 @@ Apply MUST:
 7. commit the document/store revision and audit record
 8. return a true success or true typed failure
 
+The plan is never rebuilt from source. A freshly normalized operation set is computed only as a validation oracle and must byte-match the stored execution plan; the stored plan remains the sole execution authority. Hocus-generated preview documents are rejected by legacy `document.apply`, and any code-blob installation dynamically requires `run_code` in addition to `edit_scene`.
+
 Large plans MAY become cancellable tasks.
 
 ## 15. Rollback and Recovery
 
 - Apply plans exclude irreversible actions.
 - A pre-apply scoped snapshot and inverse plan are recorded.
-- Failure triggers guarded inverse execution or an apply-owned undo record.
+- Failure first uses the uniquely labelled apply-owned Houdini undo record; the stored structural inverse is a secondary recovery attempt.
 - Rollback is reimported and verified.
 - A failed rollback returns `partial_or_unknown`, quarantines the scope, and requires explicit resync or recovery.
-- Store commits use pending, committed, and aborted states.
+- Store commits use pending, committed, aborted, and `partial_or_unknown` states; the last state quarantines overlapping parent/child scopes.
+- Startup/lazy recovery treats durable pending and `partial_or_unknown` commits as quarantined. `document.recover_scope` force-reimports under the same scope lease and releases quarantine only when live state classifies exactly as the stored baseline or verified target; any third state remains quarantined.
 - Client timeout and retry behavior are controlled by idempotency keys.
 - The implementation MUST NOT claim general atomicity while relying only on an unqualified global undo.
 

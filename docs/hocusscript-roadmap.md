@@ -196,6 +196,8 @@ Implementation status (2026-07-11): complete for the HS3 SOP/network-document v1
 
 ## 8. HS4: Immutable Plan and Guarded Apply
 
+Implementation status (2026-07-11): complete for the guarded SOP/network-document v1 slice. Immutable plan v1 schemas, bounded live retention, insert-only SQLite plan persistence, durable lifecycle/audit events, scope leases, dynamic capability and confirmation gates, idempotent replay, cancellation checkpoints, typed failures, apply-owned rollback, structural inverse capture/identity clearing, symmetric provenance verification, quarantine, and explicit baseline/target recovery classification are implemented. The H21.0.729 disposable live matrix passes real apply/verification plus rollback after all nine executor checkpoints and four lifecycle stages. Unsupported network families, opaque network-container replacement/deletion, and broader value parity remain explicitly blocked for HS7.
+
 Objectives:
 
 - persist immutable plans with TTL, plan hash, source digest, session, catalog, ownership, baseline revisions, capabilities, and ordered operations

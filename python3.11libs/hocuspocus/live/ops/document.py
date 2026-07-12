@@ -10,7 +10,7 @@ import json
 import re
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from uuid import uuid4
 
 from hocuspocus.core import paths as core_paths
@@ -334,6 +334,19 @@ class DocumentOperationsMixin:
             hashlib.sha256(encoded.encode("utf-8")).hexdigest(),
         )
 
+    def _document_clear_live_node_metadata(self, path: str) -> None:
+        node = self._require_node_by_path(path)
+        for key in (
+            self._DOCUMENT_NODE_UID_KEY,
+            self._DOCUMENT_NODE_OWNER_KEY,
+            self._DOCUMENT_NODE_SOURCE_KEY,
+            self._DOCUMENT_NODE_GRAPH_KEY,
+            self._DOCUMENT_NODE_COMPILER_KEY,
+            self._DOCUMENT_NODE_PROVENANCE_KEY,
+            self._DOCUMENT_NODE_PROVENANCE_DIGEST_KEY,
+        ):
+            self._safe_value(lambda key=key: node.destroyUserData(key), None)
+
     def _document_live_input_connections(self, dest_path: str) -> list[dict[str, Any]]:
         """Read connection objects without reducing them to input-node paths."""
         try:
@@ -652,7 +665,11 @@ class DocumentOperationsMixin:
             (item for item in subgraph.get("nodes", []) if str(item.get("path", "")).strip() == root_path),
             None,
         )
-        output_path = str((root_snapshot or {}).get("outputNodePath") or "").strip()
+        output_path = str(
+            (root_snapshot or {}).get("outputNodePath")
+            or (root_snapshot or {}).get("displayNodePath")
+            or ""
+        ).strip()
         if output_path in node_uid_by_path:
             root_uid = node_uid_by_path[root_path]
             edges.append({
@@ -1693,6 +1710,7 @@ class DocumentOperationsMixin:
             for binding in authored.get("parameterBindings", [])
             if isinstance(binding, dict) and str(binding.get("codeBlobUid", "")).strip()
         }
+        projected_authored = copy.deepcopy(authored)
         projected_live = copy.deepcopy(live)
         projected_live["parameterBindings"] = [
             binding
@@ -1705,7 +1723,83 @@ class DocumentOperationsMixin:
             for blob in live.get("codeBlobs", [])
             if isinstance(blob, dict) and str(blob.get("uid", "")).strip() in authored_code_blob_uids
         ]
-        return self._document_diff_payload(authored, projected_live)
+
+        def edge_contract(edge: dict[str, Any], template: dict[str, Any] | None = None) -> dict[str, Any]:
+            reference = template or edge
+            result: dict[str, Any] = {
+                "uid": edge.get("uid"),
+                "kind": edge.get("kind"),
+                "from": {},
+                "to": {},
+                "metadata": {},
+            }
+            for endpoint_name in ("from", "to"):
+                actual = edge.get(endpoint_name) if isinstance(edge.get(endpoint_name), dict) else {}
+                expected = reference.get(endpoint_name) if isinstance(reference.get(endpoint_name), dict) else {}
+                endpoint = result[endpoint_name]
+                for field in ("nodeUid", "portIndex"):
+                    if field in expected:
+                        endpoint[field] = actual.get(field)
+                if "portName" in expected:
+                    endpoint["portName"] = actual.get("portName")
+            expected_metadata = reference.get("metadata") if isinstance(reference.get("metadata"), dict) else {}
+            if "connectionOrder" in expected_metadata:
+                actual_metadata = edge.get("metadata") if isinstance(edge.get("metadata"), dict) else {}
+                result["metadata"]["connectionOrder"] = actual_metadata.get("connectionOrder")
+            return result
+
+        authored_edges = {
+            str(edge.get("uid", "")): edge
+            for edge in authored.get("edges", [])
+            if isinstance(edge, dict) and str(edge.get("uid", ""))
+        }
+        projected_authored["edges"] = [edge_contract(edge) for edge in authored_edges.values()]
+        projected_live["edges"] = [
+            edge_contract(edge, authored_edges.get(str(edge.get("uid", ""))))
+            for edge in live.get("edges", [])
+            if isinstance(edge, dict)
+        ]
+        diff = self._document_diff_payload(projected_authored, projected_live)
+        live_nodes = self._document_nodes_by_uid(live)
+        provenance_fields = (
+            "version", "entityKind", "projectUid", "sourceUri", "sourceDigest",
+            "bundleDigest", "compilerVersion", "languageVersion", "graphName",
+            "symbol", "ownership", "jsonPointer", "span",
+        )
+        changed_by_uid = {item.get("uid"): item for item in diff["changedNodes"]}
+        for uid, expected_node in self._document_nodes_by_uid(authored).items():
+            expected_metadata = expected_node.get("metadata") if isinstance(expected_node.get("metadata"), dict) else {}
+            expected_hocus = expected_metadata.get("hocus") if isinstance(expected_metadata.get("hocus"), dict) else None
+            actual_node = live_nodes.get(uid, {})
+            actual_metadata = actual_node.get("metadata") if isinstance(actual_node.get("metadata"), dict) else {}
+            actual_hocus = actual_metadata.get("hocus") if isinstance(actual_metadata.get("hocus"), dict) else None
+            if expected_hocus is None and actual_hocus is None:
+                continue
+            expected_contract = (
+                {field: copy.deepcopy(expected_hocus.get(field)) for field in provenance_fields}
+                if expected_hocus is not None else None
+            )
+            actual_contract = (
+                {field: copy.deepcopy(actual_hocus.get(field)) for field in provenance_fields}
+                if actual_hocus is not None else None
+            )
+            if expected_contract == actual_contract:
+                continue
+            change = {"before": expected_contract, "after": actual_contract}
+            existing = changed_by_uid.get(uid)
+            if existing is None:
+                existing = {
+                    "uid": uid,
+                    "beforePath": expected_node.get("path"),
+                    "afterPath": actual_node.get("path"),
+                    "changes": {},
+                }
+                diff["changedNodes"].append(existing)
+                changed_by_uid[uid] = existing
+            existing["changes"]["hocusProvenance"] = change
+        diff["changedNodes"].sort(key=lambda item: str(item.get("afterPath", "")))
+        diff["summary"]["changedNodeCount"] = len(diff["changedNodes"])
+        return diff
 
     def _document_diff_impl(self, arguments: dict[str, Any]) -> dict[str, Any]:
         payload = self._document_checkout_target(arguments)
@@ -1855,6 +1949,12 @@ class DocumentOperationsMixin:
         if desired_name and moved_node.name() != desired_name:
             moved_node.setName(desired_name, unique_name=False)
         return self._node_summary(moved_node)
+
+    def _document_move_live_node(self, path: str, position: list[float]) -> None:
+        """Set an authored document position without mutating global grid bookkeeping."""
+        node = self._require_node_by_path(path)
+        hou_module = self._require_hou()
+        node.setPosition(hou_module.Vector2((float(position[0]), float(position[1]))))
 
     def _document_binding_parm_path(self, state: dict[str, Any], entry: dict[str, Any]) -> str:
         node_uid = str(entry.get("nodeUid", "")).strip()
@@ -2054,7 +2154,21 @@ class DocumentOperationsMixin:
             for uid, target_node in sorted(target_nodes_by_uid.items())
             if uid in baseline_nodes_by_uid
             and str(((target_node.get("metadata") or {}).get("hocus") or {}).get("entityKind", "")) == "adopted_node"
-            and str((baseline_nodes_by_uid[uid].get("metadata") or {}).get("identityMode", "")) != "persistent_user_data"
+            and (
+                str((baseline_nodes_by_uid[uid].get("metadata") or {}).get("identityMode", "")) != "persistent_user_data"
+                or (baseline_nodes_by_uid[uid].get("metadata") or {}).get("hocus")
+                != (target_node.get("metadata") or {}).get("hocus")
+            )
+        ]
+        identity_clears = [
+            {
+                "uid": uid,
+                "path": str(target_node.get("path", "")).strip(),
+            }
+            for uid, target_node in sorted(target_nodes_by_uid.items())
+            if uid in baseline_nodes_by_uid
+            and isinstance((baseline_nodes_by_uid[uid].get("metadata") or {}).get("hocus"), dict)
+            and not isinstance((target_node.get("metadata") or {}).get("hocus"), dict)
         ]
 
         def _binding_sort_key(item: tuple[tuple[str, str], dict[str, Any]]) -> tuple[str, str]:
@@ -2138,8 +2252,49 @@ class DocumentOperationsMixin:
                 if flags or position is not None:
                     node_updates.append({"uid": uid, "path": target_node.get("path"), "flags": flags, "position": position})
                 continue
-            if baseline_node is not None and (baseline_node.get("flags") != target_node.get("flags") or baseline_node.get("position") != target_node.get("position")):
-                node_updates.append({"uid": uid, "path": target_node.get("path"), "flags": flags, "position": position})
+            if baseline_node is not None:
+                update: dict[str, Any] = {"uid": uid, "path": target_node.get("path")}
+                if baseline_node.get("flags") != target_node.get("flags"):
+                    update["flags"] = flags
+                if baseline_node.get("position") != target_node.get("position"):
+                    update["position"] = position
+                if len(update) > 2:
+                    node_updates.append(update)
+
+        def output_source_uid(document: dict[str, Any]) -> str | None:
+            for edge in document.get("edges", []):
+                if not isinstance(edge, dict) or edge.get("kind") != "output_flag":
+                    continue
+                destination = edge.get("to") if isinstance(edge.get("to"), dict) else {}
+                if destination.get("nodeUid") == root_uid:
+                    source = edge.get("from") if isinstance(edge.get("from"), dict) else {}
+                    return str(source.get("nodeUid", "")).strip() or None
+            return None
+
+        baseline_output_uid = output_source_uid(baseline)
+        target_output_uid = output_source_uid(target)
+        target_display_uids = sorted(
+            uid for uid, node in target_nodes_by_uid.items()
+            if uid != root_uid and bool((node.get("flags") or {}).get("display", False))
+        )
+        output_guard = {
+            "sourceUid": target_output_uid,
+            "targetDisplayUids": target_display_uids,
+        }
+        output_change = None
+        if baseline_output_uid != target_output_uid:
+            output_change = {
+                "rootUid": root_uid,
+                "rootPath": root_path,
+                "beforeSourceUid": baseline_output_uid,
+                "sourceUid": target_output_uid,
+                "sourcePath": (
+                    str(target_nodes_by_uid.get(target_output_uid, {}).get("path", "")).strip()
+                    if target_output_uid
+                    else None
+                ),
+                "targetDisplayUids": target_display_uids,
+            }
 
         replace_nodes = [
             {
@@ -2175,6 +2330,15 @@ class DocumentOperationsMixin:
 
         return {
             "networkFamily": self._document_network_family(root_path, target.get("category")),
+            "rootNodeGuard": (
+                {
+                    "uid": root_uid,
+                    "path": root_path,
+                    "flags": copy.deepcopy(target_nodes_by_uid[root_uid].get("flags", {})),
+                }
+                if root_uid in target_nodes_by_uid and any(update.get("flags") for update in node_updates)
+                else None
+            ),
             "replaceNodes": replace_nodes,
             "createNetworkContainers": create_networks,
             "createNodes": create_leaf_nodes,
@@ -2186,7 +2350,10 @@ class DocumentOperationsMixin:
             "expressionUpdates": expression_updates,
             "codeBlobInstalls": code_blob_installs,
             "identityUpdates": identity_updates,
+            "identityClears": identity_clears,
             "nodeUpdates": node_updates,
+            "outputGuard": output_guard,
+            "outputChange": output_change,
             "deleteNodes": delete_nodes,
             "protectedDeleteNodes": protected_delete_nodes,
             "summary": {
@@ -2201,17 +2368,30 @@ class DocumentOperationsMixin:
                 "expressionUpdateCount": len(expression_updates),
                 "codeBlobInstallCount": len(code_blob_installs),
                 "identityUpdateCount": len(identity_updates),
+                "identityClearCount": len(identity_clears),
                 "nodeUpdateCount": len(node_updates),
+                "outputChangeCount": 1 if output_change is not None else 0,
                 "deleteNodeCount": len(delete_nodes),
                 "protectedDeleteNodeCount": len(protected_delete_nodes),
             },
         }
 
-    def _document_execute_apply_plan(self, plan: dict[str, Any], baseline: dict[str, Any]) -> list[dict[str, Any]]:
+    def _document_execute_apply_plan(
+        self,
+        plan: dict[str, Any],
+        baseline: dict[str, Any],
+        *,
+        checkpoint: Callable[[], None] | None = None,
+    ) -> list[dict[str, Any]]:
         state = self._document_apply_state(baseline)
         executed: list[dict[str, Any]] = []
 
+        def check_cancelled() -> None:
+            if checkpoint is not None:
+                checkpoint()
+
         for update in plan.get("identityUpdates", []):
+            check_cancelled()
             current_path = self._document_apply_state_current_path(
                 state,
                 str(update.get("uid", "")).strip(),
@@ -2222,7 +2402,18 @@ class DocumentOperationsMixin:
             self._document_stamp_live_node_metadata(current_path, update)
             executed.append({"type": "stamp_node_uid", "uid": update.get("uid"), "path": current_path})
 
+        for update in plan.get("identityClears", []):
+            check_cancelled()
+            current_path = self._document_apply_state_current_path(
+                state, str(update.get("uid", "")).strip(), str(update.get("path", "")).strip()
+            )
+            if not current_path:
+                continue
+            self._document_clear_live_node_metadata(current_path)
+            executed.append({"type": "clear_node_identity", "uid": update.get("uid"), "path": current_path})
+
         for operation in plan.get("replaceNodes", []):
+            check_cancelled()
             current_path = self._document_apply_state_current_path(state, str(operation.get("uid", "")).strip(), str(operation.get("currentPath", "")).strip())
             if current_path:
                 self._node_delete_impl({"path": current_path, "ignore_missing": True})
@@ -2234,11 +2425,13 @@ class DocumentOperationsMixin:
 
         for group_name in ("createNetworkContainers", "createNodes"):
             for node in plan.get(group_name, []):
+                check_cancelled()
                 created = self._document_create_live_node(node)
                 self._document_apply_state_register(state, str(node.get("uid", "")).strip(), str(created.get("path", "")).strip())
                 executed.append({"type": "create_node", "uid": node.get("uid"), "path": created.get("path"), "nodeTypeName": created.get("typeName")})
 
         for operation in plan.get("renameNodes", []):
+            check_cancelled()
             current_path = self._document_apply_state_current_path(state, str(operation.get("uid", "")).strip(), str(operation.get("currentPath", "")).strip())
             if not current_path:
                 continue
@@ -2248,6 +2441,7 @@ class DocumentOperationsMixin:
             executed.append({"type": "rename_node", "uid": operation.get("uid"), "fromPath": current_path, "path": new_path})
 
         for operation in plan.get("reparentNodes", []):
+            check_cancelled()
             current_path = self._document_apply_state_current_path(state, str(operation.get("uid", "")).strip(), str(operation.get("currentPath", "")).strip())
             if not current_path:
                 continue
@@ -2269,6 +2463,7 @@ class DocumentOperationsMixin:
             )
 
         for change in plan.get("connectionChanges", []):
+            check_cancelled()
             dest_path = self._document_apply_state_current_path(
                 state,
                 str(change.get("destUid", "")).strip(),
@@ -2309,6 +2504,7 @@ class DocumentOperationsMixin:
                 executed.append({"type": "disconnect", "destUid": change.get("destUid"), "destPath": dest_path, "inputIndex": change["inputIndex"]})
 
         for reset in plan.get("parameterResets", []):
+            check_cancelled()
             parm_path = self._document_binding_parm_path(state, reset)
             self._parm_revert_to_default_impl({"parm_path": parm_path})
             executed.append({"type": "revert_parm", "bindingUid": reset.get("bindingUid"), "parmPath": parm_path})
@@ -2318,10 +2514,12 @@ class DocumentOperationsMixin:
             for update in plan.get("parameterAssignments", [])
         ]
         if assignments:
+            check_cancelled()
             self._parm_set_many_impl({"assignments": assignments})
             executed.append({"type": "set_many_parms", "count": len(assignments)})
 
         for update in plan.get("expressionUpdates", []):
+            check_cancelled()
             parm_path = self._document_binding_parm_path(state, update)
             self._parm_set_expression_impl(
                 {
@@ -2333,6 +2531,7 @@ class DocumentOperationsMixin:
             executed.append({"type": "set_expression", "bindingUid": update.get("bindingUid"), "parmPath": parm_path})
 
         for update in plan.get("codeBlobInstalls", []):
+            check_cancelled()
             parm_path = self._document_binding_parm_path(state, update)
             self._parm_set_impl({"parm_path": parm_path, "value": update.get("body")})
             executed.append(
@@ -2347,6 +2546,7 @@ class DocumentOperationsMixin:
             )
 
         for update in plan.get("nodeUpdates", []):
+            check_cancelled()
             current_path = self._document_apply_state_current_path(state, str(update.get("uid", "")).strip(), str(update.get("path", "")).strip())
             if not current_path:
                 continue
@@ -2364,21 +2564,79 @@ class DocumentOperationsMixin:
                 executed.append({"type": "set_flags", "uid": update.get("uid"), "path": current_path})
             position = update.get("position")
             if isinstance(position, list) and len(position) == 2:
-                self._node_move_impl({"path": current_path, "x": float(position[0]), "y": float(position[1])})
+                self._document_move_live_node(current_path, position)
                 executed.append({"type": "move_node", "uid": update.get("uid"), "path": current_path})
 
+        output_change = plan.get("outputChange")
+        if isinstance(output_change, dict):
+            check_cancelled()
+            source_uid = str(output_change.get("sourceUid", "")).strip()
+            source_path = self._document_apply_state_current_path(
+                state, source_uid, output_change.get("sourcePath")
+            ) if source_uid else None
+            if source_path:
+                self._node_set_flags_impl({"path": source_path, "display": True})
+                executed.append({
+                    "type": "set_output", "rootPath": output_change.get("rootPath"),
+                    "sourceUid": source_uid, "sourcePath": source_path,
+                })
+            else:
+                executed.append({"type": "clear_output", "rootPath": output_change.get("rootPath")})
+
+        root_guard = plan.get("rootNodeGuard")
+        if isinstance(root_guard, dict) and root_guard.get("path"):
+            check_cancelled()
+            flags = root_guard.get("flags") or {}
+            self._node_set_flags_impl(
+                {
+                    "path": root_guard["path"],
+                    "bypass": bool(flags.get("bypass", False)),
+                    "display": bool(flags.get("display", False)),
+                    "render": bool(flags.get("render", False)),
+                    "template": bool(flags.get("template", False)),
+                }
+            )
+            executed.append({"type": "restore_root_flags", "uid": root_guard.get("uid"), "path": root_guard["path"]})
+
         for operation in plan.get("deleteNodes", []):
+            check_cancelled()
             current_path = self._document_apply_state_current_path(state, str(operation.get("uid", "")).strip(), str(operation.get("currentPath", "")).strip())
             if not current_path:
                 continue
             self._node_delete_impl({"path": current_path, "ignore_missing": True})
             self._document_apply_state_remove_prefix(state, current_path)
             executed.append({"type": "delete_node", "uid": operation.get("uid"), "path": current_path})
+        check_cancelled()
         return executed
 
-    def _document_apply_impl(self, arguments: dict[str, Any]) -> dict[str, Any]:
+    def _document_apply_impl(
+        self,
+        arguments: dict[str, Any],
+        context: RequestContext | None = None,
+    ) -> dict[str, Any]:
         payload = self._document_checkout_target(arguments)
         target_document = payload["document"]
+        metadata = target_document.get("metadata")
+        has_hocus_entities = any(
+            isinstance(item, dict)
+            and (
+                isinstance((item.get("metadata") or {}).get("hocus"), dict)
+                or str(item.get("uid", "")).startswith(("hocus-", "binding:hocus-", "code:hocus-"))
+                or str(item.get("nodeUid", "")).startswith("hocus-")
+                or str((item.get("from") or {}).get("nodeUid", "")).startswith("hocus-")
+                or str((item.get("to") or {}).get("nodeUid", "")).startswith("hocus-")
+            )
+            for field in ("nodes", "ports", "edges", "parameterBindings", "codeBlobs")
+            for item in target_document.get(field, [])
+        )
+        if (
+            isinstance(metadata, dict) and isinstance(metadata.get("hocusPreview"), dict)
+        ) or has_hocus_entities:
+            raise JsonRpcError(
+                INVALID_PARAMS,
+                "HocusScript-generated documents must be applied through document.plan_bundle and document.apply_plan.",
+                {"diagnosticCode": "HOCUS758"},
+            )
         diagnostics = self._document_validate_network_document(target_document)
         checkout_id = payload["checkoutId"]
         if checkout_id:
@@ -2400,6 +2658,9 @@ class DocumentOperationsMixin:
         root_path = str(target_document.get("rootPath", "")).strip()
         if not root_path:
             raise JsonRpcError(INVALID_PARAMS, "target document must include rootPath.")
+        assert_not_quarantined = getattr(self, "_hocus_assert_not_quarantined", None)
+        if callable(assert_not_quarantined):
+            assert_not_quarantined(root_path)
         baseline_document = self._document_current_network_payload(root_path)
         expected_revision = arguments.get("expected_document_revision", target_document.get("documentRevision"))
         if expected_revision is not None and int(expected_revision) != int(baseline_document.get("documentRevision", -1)):
@@ -2415,6 +2676,9 @@ class DocumentOperationsMixin:
         compile_started = time.time()
         diff = self._document_diff_payload(baseline_document, target_document)
         plan = self._document_build_apply_plan(baseline_document, target_document, mode=mode)
+        if plan.get("codeBlobInstalls") and context is not None:
+            from hocuspocus.core.policy import RUN_CODE, require_capabilities
+            require_capabilities(context.permissions, (RUN_CODE,))
         compile_ms = round((time.time() - compile_started) * 1000.0, 3)
         if mode == "reconcile" and plan.get("protectedDeleteNodes"):
             protected = plan["protectedDeleteNodes"]
@@ -2593,7 +2857,7 @@ class DocumentOperationsMixin:
         }
 
     def document_apply(self, arguments: dict[str, Any], context: RequestContext) -> dict[str, Any]:
-        data = self._call_live(lambda: self._document_apply_impl(arguments), context)
+        data = self._call_live(lambda: self._document_apply_impl(arguments, context), context)
         if not data.get("valid", False):
             return self._tool_response(f"Document apply blocked by {data['diagnosticCount']} diagnostic(s).", data)
         if data.get("error"):

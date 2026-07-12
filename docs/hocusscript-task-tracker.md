@@ -15,7 +15,7 @@ Roadmap: `docs/hocusscript-roadmap.md`
 
 ## 2. Current Slice
 
-Current milestone: HS3 document lowering and live preview complete; HS4 immutable planning and guarded apply next
+Current milestone: HS4 immutable planning and guarded SOP apply complete; HS5 export and editor workflow next
 Current scope: strict portable bundles lower against a freshly verified live catalog/baseline into non-applyable candidate plans
 Live mutation: prohibited
 
@@ -225,7 +225,7 @@ HS2 exit evidence (2026-07-11):
 
 ## 6. HS3: Document Lowering and Preview
 
-Status: complete for SOP/network-document v1; broader family/value parity remains HS7 and immutable apply remains HS4
+Status: complete for SOP/network-document v1; guarded immutable SOP apply is complete in HS4 and broader family/value parity remains HS7
 
 Dependencies: HS2 and DG corrective work
 Houdini required: yes for live baseline tests
@@ -267,27 +267,33 @@ HS3 exit evidence (2026-07-11):
 
 ## 7. HS4: Immutable Plan and Guarded Apply
 
-Status: pending
+Status: complete for the guarded SOP/network-document v1 slice; broader family/value parity remains HS7
 
 Dependencies: HS3 live validation
 Houdini required: yes
 
-- [ ] Add apply-plan schema and version.
-- [ ] Persist immutable plans with TTL and hash.
-- [ ] Bind plans to source, compiler, catalog, session, ownership, and baseline revisions.
-- [ ] Add plan resource and discard operation.
-- [ ] Implement network-scope write leases.
-- [ ] Implement `document.apply_plan` without recompilation.
-- [ ] Recheck plan hash, catalog, revisions, ownership, policy, and capabilities.
-- [ ] Require `run_code` for code changes.
-- [ ] Add idempotency keys and cancellation checkpoints.
-- [ ] Exclude irreversible actions from structural apply.
-- [ ] Generate/store inverse plans and pre-apply scoped snapshots.
-- [ ] Verify apply and rollback outcomes.
-- [ ] Add pending/committed/aborted/quarantined commit states.
-- [ ] Return true typed failures for unsuccessful apply.
-- [ ] Test stale, expired, tampered, wrong-session, and wrong-catalog plans.
-- [ ] Test failure and rollback after every apply stage.
+- [x] Add apply-plan schema and version.
+- [x] Persist immutable plans with TTL and hash.
+- [x] Bind plans to source, compiler, catalog, session, ownership, and baseline revisions.
+- [x] Add plan resource and durably revoking discard operation.
+- [x] Implement overlapping parent/child network-scope write leases.
+- [x] Implement `document.apply_plan` without source recompilation.
+- [x] Recheck plan hash, catalog, revisions/digest, ownership-normalized operations, policy, and capabilities.
+- [x] Require `run_code` for code changes.
+- [x] Add idempotency keys and cancellation checkpoints.
+- [x] Exclude unknown, unsupported-family, opaque-container, and irreversible actions from structural apply.
+- [x] Generate/store inverse plans and pre-apply scoped snapshots.
+- [x] Verify apply and rollback outcomes against reimported network documents.
+- [x] Add pending/committed/aborted/partial-or-unknown lifecycle states and overlapping-scope quarantine.
+- [x] Return true typed failures for unsuccessful apply.
+- [x] Test stale, expired, tampered, wrong-session, wrong-policy/capability, and wrong-catalog plans.
+- [x] Test rollback after all nine executor checkpoints and after pending, execute, verify, and pre-commit lifecycle stages.
+
+HS4 exit evidence (2026-07-11):
+
+- offline suite: 183 repository tests and 15 valid Draft 2020-12 schemas; guarded-plan tests cover durable tamper detection, leases, idempotency, confirmation, dynamic `run_code`, revision/catalog/session/policy drift, rollback, quarantine, recovery, and legacy bypass rejection
+- H21.0.729 live guarded apply: catalog `sha256:b6743cfd1bfe24ce708deab89277eb7d4006669ea8294ba6d97cfc973b78ebca`; nine executor checkpoints and four lifecycle-stage failures each restored the exact pre-apply SOP document; final plan `sha256:2f7c7212896a7c62c2bb7037fe11ffb8c2b2c41ddeedf65b1c01842aede7e5f6` applied, reimported, verified, and replayed idempotently
+- reproducible command: `scripts/smoke_hocusscript_apply.py`
 
 ## 8. HS5: Export and Editor Workflow
 
@@ -398,7 +404,7 @@ Houdini required: yes
 - [x] Keep project-directory selection in native compiler/editor configuration; do not expose an MCP project registry.
 - [ ] Decide syntax for explicit per-field `preserve_live` and `source_wins` annotations; the default reject-on-conflict policy is locked.
 - [ ] Decide quoted/reserved parameter-token syntax such as `parm["input"]`.
-- [ ] Decide confirmation thresholds for destructive plans.
+- [x] Use confirmation for adoption/ownership transfer, deletion/replacement, disconnect/output clearing, and code installation; retain future studio-policy threshold tuning as configuration work.
 - [ ] Decide which graph-editor-only artifacts are source-managed.
 
 ## 14. Cross-Review Record
