@@ -47,18 +47,7 @@ def resolve_project_module_dag(
     and rejects symlink/junction/reparse components; it is not a hostile multi-user
     filesystem sandbox.
     """
-    if project_directory is None or isinstance(project_directory, str) and not project_directory.strip():
-        raise ProjectError("HOCUS460", "An explicit project_directory is required.")
-    try:
-        project_text = fspath(project_directory)
-    except TypeError as exc:
-        raise ProjectError("HOCUS460", "project_directory must be an explicit string path.") from exc
-    if not isinstance(project_text, str) or not project_text.strip():
-        raise ProjectError("HOCUS460", "project_directory must be an explicit string path.")
-    if isinstance(project_text, str) and project_text.casefold().startswith(
-        ("\\\\?\\", "\\\\.\\", "\\??\\", "\\\\?\\globalroot")
-    ):
-        raise ProjectError("HOCUS460", "Windows device-namespace project roots are forbidden.")
+    project_text = _validate_project_directory(project_directory)
     authored_entry = entry_source_path
     try:
         entry_source_path = fspath(entry_source_path)
@@ -80,9 +69,9 @@ def resolve_project_module_dag(
     selected_limits = limits or ResolvedModuleLimits()
     _validate_limits(selected_limits)
     _cancel(cancelled)
-    context = ProjectContext.load(project_directory, validate_lock=True)
+    context = ProjectContext.load(project_text, validate_lock=True)
     _cancel(cancelled)
-    verification = verify_project_lock(project_directory)
+    verification = verify_project_lock(project_text)
     _cancel(cancelled)
     if (
         context.manifest_version != 3 or context.language_version != "0.2"
@@ -248,6 +237,20 @@ def _canonical_file(path: Path, root: Path, label: str) -> Path:
         raise ProjectError("HOCUS460", f"{label.capitalize()} must be a contained regular file.",
                            details={"path": str(resolved)})
     return resolved
+
+
+def _validate_project_directory(value: str | PathLike[str]) -> str:
+    if value is None or isinstance(value, str) and not value.strip():
+        raise ProjectError("HOCUS460", "An explicit project_directory is required.")
+    try:
+        text = fspath(value)
+    except TypeError as exc:
+        raise ProjectError("HOCUS460", "project_directory must be an explicit string path.") from exc
+    if not isinstance(text, str) or not text.strip():
+        raise ProjectError("HOCUS460", "project_directory must be an explicit string path.")
+    if text.casefold().startswith(("\\\\?\\", "\\\\.\\", "\\??\\")):
+        raise ProjectError("HOCUS460", "Windows device-namespace project roots are forbidden.")
+    return text
 
 
 def _lexically_occupied(path: Path) -> bool:

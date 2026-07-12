@@ -43,6 +43,8 @@ from .expander import (
     validate_module_interfaces,
 )
 from .formatter import format_graph, format_syntax
+from .lock_update import update_project_module_lock
+from .lock_update_result import ModuleLockUpdateEntry, ModuleLockUpdateResult
 from .exporter import ExportDiagnostic, NetworkDocumentExport, export_network_document
 from .model import (
     COMPILER_VERSION,
@@ -169,6 +171,8 @@ __all__ = [
     "ExternalLibraryAlias",
     "LockVerificationResult",
     "ModuleLockRecord",
+    "ModuleLockUpdateEntry",
+    "ModuleLockUpdateResult",
     "ModuleManifest",
     "ModuleResolutionError",
     "ModuleSourceEnvelope",
@@ -209,6 +213,7 @@ __all__ = [
     "validate_module_interfaces",
     "validate_resolved_module_dag",
     "update_project_lock",
+    "update_project_module_lock",
     "verify_project_lock",
     "ExportStmt",
     "ImportDecl",

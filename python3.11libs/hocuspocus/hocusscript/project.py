@@ -522,6 +522,98 @@ def _require_empty_module_scaffold(modules: Iterable[ModuleLockRecord | dict[str
         )
 
 
+def _publish_derived_module_lock(
+    project_directory: str | Path,
+    *,
+    expected_lock_digest: str | None,
+    derive: Callable[[ProjectContext], tuple[tuple[ModuleLockRecord, ...], Callable[[], None]]],
+    build_result: Callable[[str | None, LockVerificationResult | None, LockVerificationResult, str, str], Any],
+) -> Any:
+    """Publish internally derived records through the existing guarded lock path."""
+    initial = ProjectContext.load(project_directory, validate_lock=False)
+    if (
+        initial.manifest_version != 3 or initial.uid is None or initial.manifest_digest is None
+        or initial.lock_path is None or initial.catalog_path is None
+        or initial.catalog_relative_path is None
+    ):
+        raise ProjectError("HOCUS452", "Derived module locks require a portable schema v3 project.")
+    with _exclusive_update_lease(initial.lock_path):
+        project = ProjectContext.load(project_directory, validate_lock=False)
+        if (
+            project.uid != initial.uid or project.manifest_digest != initial.manifest_digest
+            or project.lock_path != initial.lock_path or project.catalog_path is None
+            or project.catalog_relative_path is None
+        ):
+            raise ProjectError("HOCUS453", "Project configuration changed before lock update.")
+        initial_lock_digest = _check_expected_lock(
+            project.lock_path, project.root, expected_lock_digest
+        )
+        if initial_lock_digest is None:
+            before = None
+        else:
+            try:
+                before = verify_project_lock(project.root)
+            except ProjectError:
+                # Exact expected-digest authority may repair a stale prior lock;
+                # the receipt marks its structural diff unavailable.
+                before = None
+        modules, before_publish = derive(project)
+        if any(item.external_alias is not None or item.project_uid != project.uid for item in modules):
+            raise ProjectError("HOCUS451", "Derived lock publication accepts same-project modules only.")
+        _require_metadata_file(project.catalog_path, project.root, "Catalog snapshot")
+        catalog_raw = _read_bounded_stable(
+            project.catalog_path, MAX_CATALOG_BYTES, "HOCUS432", "Catalog snapshot"
+        )
+        catalog_digest = _digest(catalog_raw)
+        try:
+            catalog = decode_catalog_snapshot(catalog_raw)
+        except CatalogValidationError as exc:
+            raise ProjectError("HOCUS434", f"Invalid catalog snapshot: {exc.message}") from exc
+        payload_modules = [item.to_dict() for item in modules]
+        # Reuse the strict lock decoder before anything can be published.
+        validated = _validate_module_locks(
+            payload_modules, project_uid=project.uid, external_aliases=project.external_aliases
+        )
+        if validated != modules:
+            raise ProjectError("HOCUS451", "Derived module records are not canonical.")
+        payload = {
+            "$schema": LOCK_SCHEMA_URI_V3, "kind": "hocus_project_lock", "schemaVersion": 3,
+            "projectUid": project.uid, "manifestDigest": project.manifest_digest,
+            "languageVersion": "0.2",
+            "catalog": {
+                "schemaVersion": 1, "path": project.catalog_relative_path,
+                "contentDigest": catalog_digest, "fingerprint": catalog.fingerprint,
+            },
+            "modules": payload_modules,
+        }
+        canonical = json.dumps(
+            payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True, allow_nan=False
+        ).encode("utf-8")
+        encoded = (json.dumps(
+            payload, ensure_ascii=False, indent=2, sort_keys=True, allow_nan=False
+        ) + "\n").encode("utf-8")
+        if len(encoded) > MAX_LOCK_BYTES_V3:
+            raise ProjectError("HOCUS410", "Generated project lock exceeds the lock byte limit.")
+        lock_digest = _digest(canonical)
+        verified = LockVerificationResult(
+            project.uid, project.manifest_digest, lock_digest, modules,
+        )
+        result = build_result(
+            initial_lock_digest, before, verified, catalog_digest, catalog.fingerprint,
+        )
+        _atomic_write_lock(
+            project.lock_path, encoded, expected_lock_digest=expected_lock_digest,
+            before_publish=lambda: (
+                before_publish(),
+                _recheck_update_inputs(
+                    project, catalog_digest=catalog_digest,
+                    initial_lock_digest=initial_lock_digest,
+                ),
+            ),
+        )
+        return result
+
+
 @contextmanager
 def _exclusive_update_lease(lock_path: Path) -> Iterable[None]:
     try:
