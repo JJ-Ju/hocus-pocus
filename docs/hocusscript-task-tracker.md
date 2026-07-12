@@ -324,7 +324,7 @@ Verification:
 
 ## 9. HS6: Modules and Studio Libraries
 
-Status: Batches A-C complete for the read-only same-project lane; bundle, semantic, external-library, and live integration remain pending
+Status: Batches A-D complete for the native same-project language, resolution, expansion, and lock-update lane; bundle, semantic, external-library, and live integration remain pending
 
 Dependencies: HS5, import security design
 Houdini required: module compiler no; live module fixtures yes
@@ -343,8 +343,9 @@ Houdini required: module compiler no; live module fixtures yes
 - [x] Resolve imports relative to the importing file and ordered project module directories without implicit discovery.
 - [x] Bind structurally validated project identity, source/module directories, catalog lock, and module-lock fields into the same-project native resolver; approved external-alias roots remain pending.
 - [ ] Require manifest-declared, separately approved and locked aliases for cross-project imports.
-- [ ] Enable resolver-derived nonempty lock updates; retain atomic, expected-digest, explicit-write gates.
-- [ ] Add module manifests, versions, content hashes, and lockfile.
+- [x] Enable resolver-derived nonempty same-project lock updates; retain atomic, expected-digest, explicit-write gates.
+- [x] Add same-project module source/interface/transitive content hashes and resolver-derived lockfile records.
+- [ ] Add external-library module manifests, versions, approved roots, and transitively complete lock records.
 - [x] Preserve bounded interned expansion stacks in expansion source maps.
 - [ ] Attach those shared expansion stacks to compiler diagnostics during resolved compiler integration.
 - [x] Enforce import/instance depth, instance/node/source-map/interface limits, exact GraphSpec validation, and zero recursion in the pure content lane; aggregate source/code enforcement remains split between resolver and syntax contracts.
@@ -374,6 +375,13 @@ Batch C delivered evidence:
 - `compile_project_module_graph` deterministically composes that sealed DAG through expansion and returns dependency-first canonical module sources, formatted entry source, resolved set, GraphSpec `0.3`, expansion map, project/lock/policy/content digests, and bounded diagnostics without host paths
 - empty verified module closures remain valid, `compile_source` remains `0.1`-only with `HOCUS102`, and the native result is ready only for later catalog semantic resolution—not bundle publication, document lowering, live preview, or apply
 - resolver, compiler, project-v3, and full offline gates pass (10/10, 2/2, 11/11, and 282/282); independent P0/P1 review is clean for the documented same-user CLI/editor boundary, while `HS-BLOCK-001` continues to prohibit privileged, multi-user, or service-hosted pathname reads
+
+Batch D delivered evidence:
+
+- `update_project_module_lock` derives canonical same-project module records only from exact contained entry/import source bytes, exact typed interfaces, dependency-first transitive digests, and the same ordered-root resolver policy used by compilation; arbitrary public nonempty caller records remain rejected with `HOCUS456`
+- an exclusive cooperating-writer lease encloses exact expected-lock authority, bounded multi-entry union derivation, sealed DAG validation and expansion for every entry, final source/root-winner/project/catalog/lock rechecks, and atomic no-overwrite/replace publication; no fallible read occurs after successful publication
+- the immutable receipt is host-path-free and binds canonical entry URIs/source digests, prior/new lock digests, catalog identity, canonical modules, and structural diff availability; stale old locks can be repaired without trusting their records
+- focused lock-update/receipt/project-v3 gates pass (10/10, 2/2, and 11/11), including stale-lock repair, final metadata-drift ordering, nested-alias fail-closed behavior, and cleanup on cancellation/publication failure; the full offline suite passes 294/294, and independent P0/P1 review is clean for the same-user boundary; the remaining platform locking, durability, and descriptor-safe pathname limits stay recorded in `HS-BLOCK-001`
 
 ## 10. HS7: Fidelity Matrix
 

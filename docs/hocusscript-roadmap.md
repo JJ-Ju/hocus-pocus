@@ -260,6 +260,8 @@ Language-core status (Batch B, 2026-07-11): complete and still offline-only. The
 
 Native integration status (Batch C, 2026-07-11): the explicit read-only `resolve_project_module_dag` and `compile_project_module_graph` APIs now compose a user-selected v3 project directory, verified lock, same-project relative/ordered-module-root resolution, sealed expansion, canonical formatted entry/module inspection, and deterministic digest-bearing GraphSpec `0.3` output. The result retains portable URIs only and is ready for later catalog semantic resolution, not document lowering or apply. `compile_source` remains `0.1`-only; MCP remains content-only; external aliases, lock writes, bundle `0.3`, CLI version dispatch, editor navigation, catalog resolution, and live acceptance remain disabled.
 
+Lock-update status (Batch D, 2026-07-11): the explicit native `update_project_module_lock` API now derives nonempty same-project v3 lock records from caller-selected entry files and their exact contained import closures. A cooperating-writer lease covers expected-digest authority, bounded resolution, source/interface/transitive digest derivation, sealed DAG validation and expansion, final source/root-winner/project/catalog rechecks, and atomic publication. Multi-entry updates are deterministic and union shared dependencies once; stale prior locks can be repaired without trusting their module records, and the host-path-free receipt reports exact entry and lock identities. The public caller-record `update_project_lock` API remains empty-only, compile remains verify-only, and MCP never reads or writes project files. External aliases remain disabled; crash-stale lease recovery, directory durability, noncooperating-writer CAS, and descriptor-safe privileged reads remain under `HS-BLOCK-001`.
+
 Objectives:
 
 - typed module parameters and exports
@@ -284,7 +286,7 @@ Implementation sequence:
 1. preserve the `0.1` lane and add version-dispatched `0.2` source-unit parsing and formatting
 2. implement same-project literal imports, ordered module roots, typed interfaces, cycle rejection, and a pure resolver session
 3. implement hygienic expansion, shared budgets/cancellation, stable instance identity, `expansion-map-v1`, and expansion inspection
-4. bind the manifest/lock v3 and bundle `0.3` scaffolds to resolver-derived `resolved-module-set-v1`; then enable verified nonempty lock updates
+4. bind the manifest/lock v3 and bundle `0.3` scaffolds to resolver-derived `resolved-module-set-v1`; verified same-project nonempty lock updates are complete, while semantic bundle production remains pending
 5. make semantic resolution, document provenance, and default UIDs consume module origins and instance paths
 6. add native project-aware completion/navigation while keeping MCP content-only
 7. enable external aliases only with declaration, separate root approval, module manifests, complete locks, and hostile-path coverage
