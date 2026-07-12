@@ -324,7 +324,7 @@ Verification:
 
 ## 9. HS6: Modules and Studio Libraries
 
-Status: Batches A-F1 complete for the native same-project language, resolution, expansion, lock-update, semantic, portable bundle, and CLI lane; project-aware editor, external-library, document, and live integration remain pending
+Status: Batches A-F2 complete for the native same-project language, resolution, expansion, lock-update, semantic, portable bundle, CLI, and project-aware editor lane; external-library, document, and live integration remain pending
 
 Dependencies: HS5, import security design
 Houdini required: module compiler no; live module fixtures yes
@@ -355,6 +355,9 @@ Houdini required: module compiler no; live module fixtures yes
 - [x] Seal exact catalog pins into the resolver/compiler handoff, run pinned GraphSpec `0.3` semantic resolution, and produce deterministic portable Bundle `0.3` through a one-shot native API and strict decoder.
 - [x] Dispatch native `check`, lock-independent `format`, and one-shot `compile` for manifest-selected language `0.2`; expose resolver-derived `hocus lock --update` without adding an MCP file surface.
 - [x] Add bounded guarded artifact output with exclusive create, exact raw-digest replacement, atomic publication, portable receipts, and typed stdout/stderr/exit behavior.
+- [x] Add saved-file and unsaved-buffer native project-aware completion with exact lock/interface verification and portable pinned results.
+- [x] Add native project-aware go-to-definition for module imports/aliases, parameters, local symbols, and instance exports.
+- [x] Keep editor project/file access native-only; do not register project roots, editor schemas, or file-reading behavior in MCP.
 - [ ] Close `HS-BLOCK-008` diagnostic/URI parity and fresh-live-semantic gates before enabling Bundle `0.3` document lowering or live preview.
 - [ ] Add reviewed studio-module contract and provenance tests.
 
@@ -402,6 +405,14 @@ Batch F1 delivered evidence:
 - native artifact publication validates and bounds UTF-8 before filesystem access, preserves replacement mode, verifies/fsyncs a same-directory temporary, exclusively links creates or final-digest-checks replacements, and performs only best-effort non-masking cleanup after publication; the noncooperating-writer and directory-fsync limits remain under `HS-BLOCK-001`
 - machine stdout contains only requested source/JSON/bundle/portable receipts, typed diagnostics use stderr, syntax-invalid `check --json` preserves parser spans without leaking host paths, and the staged `python -m hocuspocus.hocusscript` entrypoint runs without `hou`
 - focused CLI/formatter/artifact/semantic and legacy project regressions pass, and the full offline suite passes 334/334; independent review findings for invalid JSON output consistency, silent `--no-strict`, output path wording, and exception-detail host paths were fixed and re-tested
+
+Batch F2 delivered evidence:
+
+- `complete_path`, `complete_project_source`, `definition_path`, and `definition_project_source` require an explicit project directory plus project-relative `.hocus` path and return host-path-free source, project, manifest, lock, catalog, and resolver-policy identities
+- saved subjects and every imported module are bounded, canonical, stable, exact-lock/interface verified, and final-rechecked; dirty buffers remain read-only and explicitly report matching, modified, or unlocked lock state
+- import-path/name, module-alias, argument, parameter, and export completion plus module/alias/parameter/symbol/export definitions share the compiler's first-winner resolution policy without executing or expanding modules
+- module file/aggregate source/result limits, early cancellation, canonical-URI deduplication, lexical masking, hostile path/symlink/shadowing, dependency drift, and metadata race failures are covered; strict output schemas reject nonportable or noncanonical URIs and remain intentionally unregistered from MCP
+- independent review found no remaining P0/P1 issue after aggregate-budget, canonical-URI cache, dirty-subject, duplicate-item, portable-detail, definition traversal, and URI-schema hardening fixes; the focused editor/schema/resolver/compiler/CLI gate passes 37/37 and the full repository suite passes 351/351
 
 ## 10. HS7: Fidelity Matrix
 

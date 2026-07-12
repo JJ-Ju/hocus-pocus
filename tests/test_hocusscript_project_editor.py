@@ -7,7 +7,6 @@ import unittest
 from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
-from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -213,6 +212,52 @@ class ProjectEditorTests(unittest.TestCase):
             (root / "src/occupied.hocus").mkdir()
             with self.assertRaises(ProjectError):
                 complete_project_source(root, "src/occupied.hocus", source, 0)
+
+    def test_saved_cancellation_precedes_project_and_subject_reads(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            _valid_project(root)
+            with patch(
+                "hocuspocus.hocusscript.project_editor.ProjectContext.load",
+                side_effect=AssertionError("project read must not run"),
+            ), self.assertRaises(ProjectError) as cancelled:
+                complete_path(root, "src/main.hocus", 0, cancelled=lambda: True)
+            self.assertEqual(cancelled.exception.code, "HOCUS465")
+
+    def test_module_aggregate_budget_and_uri_alias_deduplication(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            _valid_project(root)
+            module_bytes = (root / "modules-b/root.hocus").read_bytes()
+            source = (
+                'hocus 0.2; import { Root as A } from "root.hocus"; '
+                'import { Root as B } from "../modules-b/root.hocus"; '
+                'graph Main { use r @id("r") = A(); use s @id("s") = B(); }'
+            )
+            exact_once = len(source.encode("utf-8")) + len(module_bytes)
+            deduped_limits = replace(
+                ResolvedModuleLimits(), aggregate_source_bytes=exact_once,
+            )
+            with patch(
+                "hocuspocus.hocusscript.project_editor.ResolvedModuleLimits",
+                return_value=deduped_limits,
+            ):
+                result = complete_project_source(
+                    root, "src/main.hocus", source, source.index("A();") + 1,
+                )
+            self.assertEqual([item.label for item in result.items], ["A"])
+
+            too_small = replace(
+                ResolvedModuleLimits(), aggregate_source_bytes=exact_once - 1,
+            )
+            with patch(
+                "hocuspocus.hocusscript.project_editor.ResolvedModuleLimits",
+                return_value=too_small,
+            ), self.assertRaises(ProjectError) as bounded:
+                complete_project_source(
+                    root, "src/main.hocus", source, source.index("A();") + 1,
+                )
+            self.assertEqual(bounded.exception.code, "HOCUS464")
 
     def test_duplicate_dirty_imports_do_not_duplicate_completion_items(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

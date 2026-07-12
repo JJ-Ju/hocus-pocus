@@ -321,6 +321,7 @@ def complete_path(
     limit: int = MAX_PROJECT_EDITOR_ITEMS,
     cancelled: Callable[[], bool] | None = None,
 ) -> ProjectCompletionResult:
+    _check_cancelled(cancelled)
     relative_input = _relative_path_text(current_path)
     context = ProjectContext.load(project_directory, validate_lock=True)
     relative = _current_relative_path(context, relative_input)
@@ -352,6 +353,7 @@ def definition_path(
     *,
     cancelled: Callable[[], bool] | None = None,
 ) -> ProjectDefinitionResult:
+    _check_cancelled(cancelled)
     relative_input = _relative_path_text(current_path)
     context = ProjectContext.load(project_directory, validate_lock=True)
     relative = _current_relative_path(context, relative_input)
@@ -737,6 +739,23 @@ def _source_bytes(source: str) -> bytes:
     if len(raw) > ResolvedModuleLimits().source_bytes_per_file:
         raise ProjectError("HOCUS464", "Editor source exceeds sourceBytesPerFile.")
     return raw
+
+
+def _check_cancelled(cancelled: Callable[[], bool] | None) -> None:
+    if cancelled is None:
+        return
+    try:
+        value = cancelled()
+    except Exception as exc:
+        raise ProjectError(
+            "HOCUS465",
+            "Project editor cancellation callback failed.",
+            details={"errorType": type(exc).__name__},
+        ) from exc
+    if type(value) is not bool:
+        raise ProjectError("HOCUS465", "Project editor cancellation callback must return bool.")
+    if value:
+        raise ProjectError("HOCUS465", "Project editor request was cancelled.")
 
 
 def _validate_request(source: str, offset: int, limit: int) -> None:
