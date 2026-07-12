@@ -180,8 +180,35 @@ class ModuleSemanticCompileTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             _native_project(root)  # `box` is intentionally absent from the pinned catalog.
-            with self.assertRaises(ValueError):
-                compile_project_module_bundle(root, "src/main.hocus")
+            with patch(
+                "hocuspocus.hocusscript.bundle._bundle_from_module_semantic",
+                side_effect=AssertionError("private factory must not receive invalid semantics"),
+            ):
+                with self.assertRaises(ModuleSemanticCompileError) as captured:
+                    compile_project_module_bundle(root, "src/main.hocus")
+            self.assertEqual(captured.exception.code, "HOCUS482")
+            self.assertEqual(
+                captured.exception.message,
+                "Module semantic resolution is invalid; bundle creation is blocked.",
+            )
+            self.assertEqual(captured.exception.details, {
+                "diagnosticCount": 1,
+                "errorCount": 1,
+                "errorCodes": ["HOCUS622"],
+            })
+
+    def test_one_shot_bundle_does_not_translate_private_factory_failures(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            _valid_semantic_project(root)
+            with patch(
+                "hocuspocus.hocusscript.bundle._bundle_from_module_semantic",
+                side_effect=ValueError("private invariant failure"),
+            ):
+                with self.assertRaises(ValueError) as captured:
+                    compile_project_module_bundle(root, "src/main.hocus")
+            self.assertIs(type(captured.exception), ValueError)
+            self.assertEqual(str(captured.exception), "private invariant failure")
 
     def test_direct_construction_and_replace_forgery_are_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

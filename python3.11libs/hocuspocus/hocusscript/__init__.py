@@ -69,6 +69,11 @@ from .module_compiler import (
     ModuleProjectCompileResult,
     compile_project_module_graph,
 )
+from .module_format import (
+    ModuleProjectFormatError,
+    ModuleProjectFormatResult,
+    format_project_module_path,
+)
 from .module_semantic import (
     ModuleSemanticCompileError,
     ModuleSemanticCompileResult,
@@ -169,6 +174,8 @@ __all__ = [
     "ModuleExpansionError",
     "ModuleProjectCompileError",
     "ModuleProjectCompileResult",
+    "ModuleProjectFormatError",
+    "ModuleProjectFormatResult",
     "ModuleSemanticCompileError",
     "ModuleSemanticCompileResult",
     "RelatedOrigin",
@@ -207,6 +214,7 @@ __all__ = [
     "decode_module_manifest",
     "format_graph",
     "format_source",
+    "format_project_module_path",
     "export_network_document",
     "expand_module_graph",
     "expand_resolved_module_dag",

@@ -7,14 +7,31 @@ import hashlib
 import json
 import os
 import sys
-import tempfile
 from pathlib import Path
 from typing import Sequence
 
-from .bundle import CompiledBundle
-from .compiler import compile_source
+from .bundle import (
+    MAX_MODULE_BUNDLE_BYTES,
+    BundleValidationError,
+    CompiledBundle,
+)
+from .compiler import MAX_SOURCE_BYTES, compile_source
+from .expander import ModuleExpansionError
 from .exporter import MAX_EXPORT_RESPONSE_BYTES
+from .lock_update import update_project_module_lock
+from .module_compiler import ModuleProjectCompileError
+from .module_format import (
+    ModuleProjectFormatError,
+    format_project_module_path,
+)
+from .module_semantic import (
+    ModuleSemanticCompileError,
+    compile_project_module_bundle,
+    compile_project_module_semantic,
+)
+from .native_artifact import NativeArtifactError, publish_text_artifact
 from .project import ProjectContext, ProjectError, compile_path
+from .resolved_modules import ModuleResolutionError
 from .semantic import CatalogConstraint, resolve_graph
 
 MAX_EXPORT_HANDOFF_BYTES = MAX_EXPORT_RESPONSE_BYTES
@@ -25,16 +42,41 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
     for name in ("check", "format", "compile"):
         command = subparsers.add_parser(name)
-        command.add_argument("source", help="A .hocus path relative to --project, or a contained absolute path.")
+        command.add_argument(
+            "source",
+            help="A project-relative .hocus path (legacy 0.1 also accepts a contained absolute path).",
+        )
         command.add_argument(
             "--project",
             default=os.environ.get("HOCUS_PROJECT_DIRECTORY"),
             help="Explicit HocusScript project directory (or HOCUS_PROJECT_DIRECTORY).",
         )
-        command.add_argument("--no-strict", action="store_true", help="Allow a missing language header as a warning.")
+        command.add_argument(
+            "--no-strict",
+            action="store_true",
+            help="Legacy language 0.1 only: allow a missing language header as a warning.",
+        )
     subparsers.choices["check"].add_argument("--json", action="store_true", help="Emit the structural result as JSON.")
     subparsers.choices["format"].add_argument("--write", action="store_true", help="Replace the source file atomically.")
     subparsers.choices["compile"].add_argument("-o", "--output", help="Write pretty bundle JSON to this native path.")
+    subparsers.choices["compile"].add_argument(
+        "--expected-output-digest",
+        help="Exact raw SHA-256 digest required to replace an existing output file.",
+    )
+    lock = subparsers.add_parser(
+        "lock", help="Explicitly derive and atomically update a HocusScript 0.2 module lock.",
+    )
+    lock.add_argument("entries", nargs="+", help="Project-relative graph entry .hocus files.")
+    lock.add_argument("--update", action="store_true", help="Derive and publish the complete selected entry closures.")
+    lock.add_argument(
+        "--project",
+        default=os.environ.get("HOCUS_PROJECT_DIRECTORY"),
+        help="Explicit HocusScript project directory (or HOCUS_PROJECT_DIRECTORY).",
+    )
+    lock.add_argument(
+        "--expected-lock-digest",
+        help="Exact current canonical lock digest required for replacement.",
+    )
     handoff = subparsers.add_parser(
         "write-export",
         help="Validate a document.export_source JSON handoff and write its source natively.",
@@ -58,9 +100,27 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if not args.project:
         parser.error("--project or HOCUS_PROJECT_DIRECTORY is required")
+    if args.command == "compile" and args.expected_output_digest and not args.output:
+        parser.error("--expected-output-digest requires --output")
+    if args.command == "lock" and not args.update:
+        parser.error("lock currently requires --update")
     try:
         if args.command == "write-export":
             return _write_export_handoff(args.handoff, args.destination, args.project, args.expected_digest)
+        if args.command == "lock":
+            result = update_project_module_lock(
+                args.project,
+                args.entries,
+                allow_write=True,
+                expected_lock_digest=args.expected_lock_digest,
+            )
+            sys.stdout.write(json.dumps(
+                result.to_dict(), ensure_ascii=False, indent=2, sort_keys=True,
+            ) + "\n")
+            return 0
+        project = ProjectContext.load(args.project, validate_lock=False)
+        if project.manifest_version == 3 or project.language_version == "0.2":
+            return _run_module_command(args)
         result = compile_path(
             args.source,
             project_directory=args.project,
@@ -90,13 +150,108 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 1
         output = bundle.to_json(pretty=True)
         if args.output:
-            _atomic_write(Path(args.output).expanduser().resolve(), output)
+            _atomic_write(
+                Path(args.output).expanduser().resolve(),
+                output,
+                expected_digest=args.expected_output_digest,
+                max_bytes=MAX_MODULE_BUNDLE_BYTES,
+            )
         else:
             sys.stdout.write(output)
         return 0
-    except ProjectError as exc:
+    except _CLI_ERRORS as exc:
+        if args.command == "check" and args.json:
+            sys.stdout.write(json.dumps(
+                _module_check_error_payload(exc),
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+            ) + "\n")
+            return 1
         print(f"{exc.code}: {exc.message}", file=sys.stderr)
         return 1
+
+
+_CLI_ERRORS = (
+    ProjectError,
+    ModuleResolutionError,
+    ModuleExpansionError,
+    ModuleProjectCompileError,
+    ModuleProjectFormatError,
+    ModuleSemanticCompileError,
+    BundleValidationError,
+    NativeArtifactError,
+)
+
+
+def _run_module_command(args: argparse.Namespace) -> int:
+    if args.no_strict:
+        raise ProjectError(
+            "HOCUS460",
+            "--no-strict is a language 0.1 compatibility option; language 0.2 headers are mandatory.",
+        )
+    if args.command == "format":
+        result = format_project_module_path(args.project, args.source)
+        if not result.valid or result.formatted_source is None:
+            _print_diagnostics(result.to_dict())
+            return 1
+        if args.write:
+            _atomic_write(
+                Path(result.native_source_path),
+                result.formatted_source,
+                expected_digest=result.source_digest,
+                max_bytes=MAX_SOURCE_BYTES,
+            )
+        else:
+            sys.stdout.write(result.formatted_source)
+        return 0
+    if args.command == "check":
+        result = compile_project_module_semantic(args.project, args.source)
+        if args.json:
+            sys.stdout.write(result.to_json(pretty=True))
+        else:
+            _print_diagnostics(result.semantic)
+        return 0 if result.valid else 1
+    bundle = compile_project_module_bundle(args.project, args.source)
+    output = bundle.to_json(pretty=True)
+    if args.output:
+        _atomic_write(
+            Path(args.output).expanduser().resolve(),
+            output,
+            expected_digest=args.expected_output_digest,
+            max_bytes=MAX_MODULE_BUNDLE_BYTES,
+        )
+    else:
+        sys.stdout.write(output)
+    return 0
+
+
+def _module_check_error_payload(exc) -> dict:
+    details = dict(getattr(exc, "details", {}) or {})
+    diagnostic = details.get("diagnostic")
+    if not isinstance(diagnostic, dict):
+        diagnostic = {
+            "severity": "error",
+            "code": exc.code,
+            "phase": "project",
+            "message": exc.message,
+            # Project/native exception details may contain diagnostic-only host
+            # paths. Machine-readable check output is deliberately portable.
+            "details": {},
+        }
+        source_uri = details.get("sourceUri")
+        if isinstance(source_uri, str) and source_uri.startswith((
+            "hocus-project://", "hocus-module://", "hocus-workspace:///", "hocus-memory:///",
+        )):
+            diagnostic["sourceUri"] = source_uri
+    return {
+        "stage": "semantic",
+        "valid": False,
+        "readyForBundle": False,
+        "readyForDocumentLowering": False,
+        "readyForApply": False,
+        "diagnostics": [diagnostic],
+    }
 
 
 def _print_diagnostics(payload: dict) -> None:
@@ -105,65 +260,31 @@ def _print_diagnostics(payload: dict) -> None:
         span = diagnostic.get("span", {}).get("start", {})
         line = span.get("line", 1)
         column = span.get("column", 1)
-        print(f"{location}:{line}:{column}: {diagnostic['severity']} {diagnostic['code']}: {diagnostic['message']}")
-
-
-def _atomic_write(path: Path, text: str, *, expected_digest: str | None = None) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if expected_digest is None and path.exists():
-        raise ProjectError(
-            "HOCUS440",
-            "Destination already exists; pass its exact --expected-digest to replace it.",
-            details={"path": str(path)},
+        print(
+            f"{location}:{line}:{column}: {diagnostic['severity']} {diagnostic['code']}: {diagnostic['message']}",
+            file=sys.stderr,
         )
-    if expected_digest is not None:
-        try:
-            current_digest = f"sha256:{hashlib.sha256(path.read_bytes()).hexdigest()}"
-        except OSError as exc:
-            raise ProjectError("HOCUS418", f"Could not re-read source before replacement: {exc}") from exc
-        if current_digest != expected_digest:
-            raise ProjectError(
-                "HOCUS418",
-                "Source changed after compilation; refusing to overwrite it.",
-                details={"expectedDigest": expected_digest, "actualDigest": current_digest},
-            )
-    original_mode = path.stat().st_mode if path.exists() else None
-    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
-    temporary = Path(temporary_name)
+
+
+def _atomic_write(
+    path: Path,
+    text: str,
+    *,
+    expected_digest: str | None = None,
+    max_bytes: int = MAX_MODULE_BUNDLE_BYTES,
+) -> None:
     try:
-        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as handle:
-            handle.write(text)
-            handle.flush()
-            os.fsync(handle.fileno())
-        if original_mode is not None:
-            os.chmod(temporary, original_mode)
-        if expected_digest is None:
-            try:
-                # Same-directory hard-link publication is atomic and fails if the
-                # destination appeared after the preflight check.
-                os.link(temporary, path)
-            except FileExistsError as exc:
-                raise ProjectError(
-                    "HOCUS440",
-                    "Destination was created concurrently; refusing to overwrite it.",
-                    details={"path": str(path)},
-                ) from exc
-            except OSError as exc:
-                raise ProjectError("HOCUS447", f"Could not publish destination atomically: {exc}") from exc
-            temporary.unlink()
+        publish_text_artifact(
+            path, text, expected_digest=expected_digest, max_bytes=max_bytes,
+        )
+    except NativeArtifactError as exc:
+        if exc.code == "HOCUS491":
+            code = "HOCUS440" if expected_digest is None else "HOCUS418"
+        elif exc.code == "HOCUS490" and expected_digest is not None:
+            code = "HOCUS418"
         else:
-            # Recheck immediately before replacement to narrow the check/replace race.
-            current_digest = f"sha256:{hashlib.sha256(path.read_bytes()).hexdigest()}"
-            if current_digest != expected_digest:
-                raise ProjectError(
-                    "HOCUS418",
-                    "Destination changed during replacement; refusing to overwrite it.",
-                    details={"expectedDigest": expected_digest, "actualDigest": current_digest},
-                )
-            os.replace(temporary, path)
-    finally:
-        if temporary.exists():
-            temporary.unlink()
+            code = "HOCUS447"
+        raise ProjectError(code, exc.message, details=exc.details) from exc
 
 
 def _write_export_handoff(
@@ -252,7 +373,7 @@ def _write_export_handoff(
                 details={"diagnostics": [item.to_dict() for item in semantic.diagnostics]},
             )
     _atomic_write(output_path, source, expected_digest=expected_digest)
-    print(json.dumps({"path": str(output_path), "sourceUri": source_uri, "sourceDigest": actual_source_digest}, sort_keys=True))
+    print(json.dumps({"sourceUri": source_uri, "sourceDigest": actual_source_digest}, sort_keys=True))
     return 0
 
 

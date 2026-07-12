@@ -756,11 +756,16 @@ graph deferred_demo {
                 }),
                 encoding="utf-8",
             )
-            with redirect_stdout(StringIO()), redirect_stderr(StringIO()):
+            created_output = StringIO()
+            with redirect_stdout(created_output), redirect_stderr(StringIO()):
                 created = main([
                     "write-export", str(handoff), "exported.hocus", "--project", str(root),
                 ])
             self.assertEqual(created, 0)
+            created_receipt = json.loads(created_output.getvalue())
+            self.assertEqual(created_receipt["sourceDigest"], source_digest)
+            self.assertNotIn("path", created_receipt)
+            self.assertNotIn(str(root), created_output.getvalue())
             destination = root / "exported.hocus"
             self.assertEqual(destination.read_text(encoding="utf-8"), source_text)
 

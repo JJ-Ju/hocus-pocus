@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 import hashlib
 import json
 from os import PathLike
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any, Callable, Mapping
 
 from .model import MODULE_GRAPH_SPEC_VERSION, MODULE_LANGUAGE_VERSION, ExpansionOrigin, graph_spec_from_dict
 from .module_compiler import (
@@ -37,10 +37,17 @@ class _SemanticInvariant:
 class ModuleSemanticCompileError(ValueError):
     """Typed failure at the native module semantic integration boundary."""
 
-    def __init__(self, code: str, message: str):
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        details: Mapping[str, Any] | None = None,
+    ):
         super().__init__(message)
         self.code = code
         self.message = message
+        self.details = dict(details or {})
 
 
 @dataclass(frozen=True, slots=True)
@@ -219,6 +226,20 @@ def compile_project_module_bundle(
         cancelled=cancelled,
     )
     _checkpoint(cancelled)
+    if not semantic.valid:
+        errors = tuple(
+            item for item in semantic.semantic_result.diagnostics
+            if item.severity == "error"
+        )
+        raise ModuleSemanticCompileError(
+            "HOCUS482",
+            "Module semantic resolution is invalid; bundle creation is blocked.",
+            details={
+                "diagnosticCount": len(semantic.semantic_result.diagnostics),
+                "errorCount": len(errors),
+                "errorCodes": sorted({item.code for item in errors}),
+            },
+        )
     from .bundle import _bundle_from_module_semantic
     bundle = _bundle_from_module_semantic(semantic)
     _checkpoint(cancelled)

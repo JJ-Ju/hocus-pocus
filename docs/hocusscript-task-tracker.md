@@ -324,7 +324,7 @@ Verification:
 
 ## 9. HS6: Modules and Studio Libraries
 
-Status: Batches A-E complete for the native same-project language, resolution, expansion, lock-update, semantic, and portable bundle lane; CLI/editor, external-library, document, and live integration remain pending
+Status: Batches A-F1 complete for the native same-project language, resolution, expansion, lock-update, semantic, portable bundle, and CLI lane; project-aware editor, external-library, document, and live integration remain pending
 
 Dependencies: HS5, import security design
 Houdini required: module compiler no; live module fixtures yes
@@ -353,6 +353,8 @@ Houdini required: module compiler no; live module fixtures yes
 - [ ] Implement bounded deterministic conditionals/iteration after fixed expansion budgets have production evidence; they are outside the initial `0.2` core and recursion remains forbidden.
 - [x] Expose deterministic expanded GraphSpec `0.3`, expansion maps, resolved sets, formatted sources, and digests through the native typed result before semantic/apply integration.
 - [x] Seal exact catalog pins into the resolver/compiler handoff, run pinned GraphSpec `0.3` semantic resolution, and produce deterministic portable Bundle `0.3` through a one-shot native API and strict decoder.
+- [x] Dispatch native `check`, lock-independent `format`, and one-shot `compile` for manifest-selected language `0.2`; expose resolver-derived `hocus lock --update` without adding an MCP file surface.
+- [x] Add bounded guarded artifact output with exclusive create, exact raw-digest replacement, atomic publication, portable receipts, and typed stdout/stderr/exit behavior.
 - [ ] Close `HS-BLOCK-008` diagnostic/URI parity and fresh-live-semantic gates before enabling Bundle `0.3` document lowering or live preview.
 - [ ] Add reviewed studio-module contract and provenance tests.
 
@@ -392,6 +394,14 @@ Batch E delivered evidence:
 - the public one-shot `compile_project_module_bundle` accepts only an explicit project directory and entry path; it emits portable Bundle `0.3` with exact URI-sorted dependency records, resolved module set, expansion source maps, semantic selections, catalog constraints, capabilities, and project/lock provenance, then self-validates through the content-only decoder
 - the decoder and schema reject rehashed graph/resolved-set/selection/provenance tampering, host-path diagnostic URIs, incoherent or out-of-origin spans, duplicated expansion frames, and offline live entity/Houdini-path claims; relocation is byte-identical and document lowering remains explicitly blocked with `HOCUS700`
 - focused semantic/bundle/module/live-boundary gates pass, and the full offline suite passes 310/310; independent review found and verified fixes for the same-process attestation overclaim and diagnostic portability gap, while live/MCP bundle acceptance remains disabled
+
+Batch F1 delivered evidence:
+
+- existing `check`, `format`, and `compile` dispatch by manifest version: the `0.1` path remains compatible, while `0.2` check uses exact locked semantic compilation, format handles one graph/module file without reading the lock, and compile emits the deterministic one-shot Bundle `0.3`
+- `hocus lock --update` delegates directly to resolver-derived nonempty lock publication with explicit command authority and exact expected-lock replacement; compile/check/format never update locks and no MCP tool or project registry was added
+- native artifact publication validates and bounds UTF-8 before filesystem access, preserves replacement mode, verifies/fsyncs a same-directory temporary, exclusively links creates or final-digest-checks replacements, and performs only best-effort non-masking cleanup after publication; the noncooperating-writer and directory-fsync limits remain under `HS-BLOCK-001`
+- machine stdout contains only requested source/JSON/bundle/portable receipts, typed diagnostics use stderr, syntax-invalid `check --json` preserves parser spans without leaking host paths, and the staged `python -m hocuspocus.hocusscript` entrypoint runs without `hou`
+- focused CLI/formatter/artifact/semantic and legacy project regressions pass, and the full offline suite passes 334/334; independent review findings for invalid JSON output consistency, silent `--no-strict`, output path wording, and exception-detail host paths were fixed and re-tested
 
 ## 10. HS7: Fidelity Matrix
 

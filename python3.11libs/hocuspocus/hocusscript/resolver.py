@@ -334,10 +334,18 @@ def _read_source(path: Path, limits: ResolvedModuleLimits, cancelled) -> bytes:
 
 def _parse(source: bytes, uri: str, *, graph: bool):
     try:
-        syntax = parse_syntax(source.decode("utf-8"), uri)
-    except (UnicodeDecodeError, HocusSourceError) as exc:
+        text = source.decode("utf-8")
+    except UnicodeDecodeError as exc:
         raise ProjectError("HOCUS466", "Native HocusScript source failed strict 0.2 parsing.",
-                           details={"sourceUri": uri}) from exc
+                           details={"sourceUri": uri, "start": exc.start, "end": exc.end}) from exc
+    try:
+        syntax = parse_syntax(text, uri)
+    except HocusSourceError as exc:
+        raise ProjectError(
+            "HOCUS466",
+            "Native HocusScript source failed strict 0.2 parsing.",
+            details={"sourceUri": uri, "diagnostic": exc.diagnostic.to_dict()},
+        ) from exc
     expected = syntax.graph is not None and syntax.module is None if graph else (
         syntax.module is not None and syntax.graph is None
     )
