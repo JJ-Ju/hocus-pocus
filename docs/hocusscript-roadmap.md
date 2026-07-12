@@ -268,6 +268,8 @@ Native CLI status (Batch F1, 2026-07-11): manifest-driven `check`, `format`, and
 
 Native editor status (Batch F2, 2026-07-12): saved-file and unsaved-buffer completion plus go-to-definition now use an explicit project directory, project-relative subject path, the shared resolver winner policy, and exact verified lock/module interfaces. Results bind manifest, lock, catalog, resolver-policy, subject-source, and portable URI identities; distinguish matching, modified, and unlocked subjects; and never write project state. Completion covers import paths/names, imported module aliases, named parameters, module parameters, and instance exports; definitions cover imported modules/aliases, parameters, local symbols, and exports. Requests enforce source/module/aggregate/result limits, cancellation before saved reads, canonical containment, stable subject/module bytes, final winner/project/catalog rechecks, and URI-based module deduplication. Strict unregistered native result schemas and hostile path/comment/string/race tests are included. The MCP completion endpoint remains content-only and unchanged; external aliases and live Bundle `0.3` acceptance remain disabled.
 
+External authority status (Batch G1, 2026-07-12): the native `inspect_external_module_roots` API now validates a caller-supplied exact alias/root mapping against one pinned v3 project without enabling resolution. It rejects missing/unknown/duplicate-library approvals, noncanonical or network/device paths, project/root overlap, reparse components, casing aliases, nonregular manifests, identity races, malformed or mismatched module manifests, lock conflicts, and pin drift. The host-path-free result binds sorted library UID/version/raw-manifest/entry pins to the exact project, lock, and catalog, with a strict standalone schema and deterministic relocation-stable digest. Optional unpinned manifests remain inspection-only and private roots are never persisted or returned. External source reads, lock derivation/publication, compilation, editor resolution, CLI flags, MCP, and live behavior remain disabled until the following G2-G5 slices.
+
 Objectives:
 
 - typed module parameters and exports
@@ -295,7 +297,7 @@ Implementation sequence:
 4. bind the manifest/lock v3 and bundle `0.3` scaffolds to resolver-derived `resolved-module-set-v1`; verified same-project nonempty lock updates and native semantic bundle production are complete
 5. make document provenance and default UIDs consume the already-resolved module origins and instance paths
 6. add native project-aware completion/navigation while keeping MCP content-only
-7. enable external aliases only with declaration, separate root approval, module manifests, complete locks, and hostile-path coverage
+7. enable external aliases only through staged gates: G1 explicit root/manifest inspection; G2 read-only complete mixed-root lock planning; G3 leased atomic external-record publication; G4 shared compiler/editor resolution; G5 explicit CLI `--module-root alias=absolute-path` wiring, while MCP remains content-only
 8. implement bounded deterministic conditionals and iteration after fixed expansion budgets have production evidence; recursion remains forbidden
 
 The safe first coding slice is same-project static imports with typed scalar/`node_output` parameters and exports. It excludes external packages, conditionals, iteration, and recursion.

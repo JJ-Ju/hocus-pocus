@@ -15,8 +15,8 @@ Roadmap: `docs/hocusscript-roadmap.md`
 
 ## 2. Current Slice
 
-Current milestone: HS6 modules and studio libraries in progress; locked contracts and the pure language/expansion core are complete
-Current scope: implement native, explicit-project-directory import resolution and transitive lock binding without weakening the content-only Houdini MCP boundary
+Current milestone: HS6 modules and studio libraries in progress; native same-project language/compiler/editor work and the external-root inspection boundary are complete
+Current scope: derive and publish complete mixed project/library lock closures from explicit per-call alias roots without weakening the content-only Houdini MCP boundary
 Live mutation: available only through the completed HS4 guarded `document.apply_plan` path; HS5 format/completion/export tools are observational
 
 Initial implementation acceptance command:
@@ -324,7 +324,7 @@ Verification:
 
 ## 9. HS6: Modules and Studio Libraries
 
-Status: Batches A-F2 complete for the native same-project language, resolution, expansion, lock-update, semantic, portable bundle, CLI, and project-aware editor lane; external-library, document, and live integration remain pending
+Status: Batches A-G1 complete for the native same-project language, resolution, expansion, lock-update, semantic, portable bundle, CLI, project-aware editor, and external-root inspection lane; mixed-root resolution, document, and live integration remain pending
 
 Dependencies: HS5, import security design
 Houdini required: module compiler no; live module fixtures yes
@@ -358,6 +358,7 @@ Houdini required: module compiler no; live module fixtures yes
 - [x] Add saved-file and unsaved-buffer native project-aware completion with exact lock/interface verification and portable pinned results.
 - [x] Add native project-aware go-to-definition for module imports/aliases, parameters, local symbols, and instance exports.
 - [x] Keep editor project/file access native-only; do not register project roots, editor schemas, or file-reading behavior in MCP.
+- [x] Add explicit per-call external-root/module-manifest inspection with portable pins and no source reads, persistence, resolution authority, writes, CLI/MCP surface, or Houdini dependency.
 - [ ] Close `HS-BLOCK-008` diagnostic/URI parity and fresh-live-semantic gates before enabling Bundle `0.3` document lowering or live preview.
 - [ ] Add reviewed studio-module contract and provenance tests.
 
@@ -413,6 +414,14 @@ Batch F2 delivered evidence:
 - import-path/name, module-alias, argument, parameter, and export completion plus module/alias/parameter/symbol/export definitions share the compiler's first-winner resolution policy without executing or expanding modules
 - module file/aggregate source/result limits, early cancellation, canonical-URI deduplication, lexical masking, hostile path/symlink/shadowing, dependency drift, and metadata race failures are covered; strict output schemas reject nonportable or noncanonical URIs and remain intentionally unregistered from MCP
 - independent review found no remaining P0/P1 issue after aggregate-budget, canonical-URI cache, dirty-subject, duplicate-item, portable-detail, definition traversal, and URI-schema hardening fixes; the focused editor/schema/resolver/compiler/CLI gate passes 37/37 and the full repository suite passes 351/351
+
+Batch G1 delivered evidence:
+
+- `inspect_external_module_roots` requires one explicit pinned v3 project plus an exact per-call alias-to-absolute-root mapping; it performs no discovery, caching, persistence, source reads, lock writes, compilation, editor lookup, MCP registration, or Houdini import
+- every root is canonical, local, distinct, outside the project, and free of symlink/junction/reparse components; root and manifest native identities, exact raw manifest bytes, project/lock/catalog pins, aliases, and existing external lock claims are final-rechecked before return
+- module manifests are bounded stable reads and must match UID, strict SemVer, language `0.2`, sorted portable entry modules, and the optional declared raw digest; unpinned observations cannot be reused as resolution-ready private authority
+- the strict host-path-free inspection schema and domain-separated digest bind only portable sorted project/library pins and remain relocation-stable; current resolver/compiler/editor/lock-update behavior continues to reject `@alias`
+- focused external-root/schema/module-manifest/project-v3 gates pass 27/27 and the full repository suite passes 364/364; independent P0/P1 review is clean after hostile `PathLike` sanitization, exact-string validation, same-byte identity-race checks, and empty-library schema/runtime alignment
 
 ## 10. HS7: Fidelity Matrix
 

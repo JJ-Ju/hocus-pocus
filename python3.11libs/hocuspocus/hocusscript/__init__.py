@@ -46,6 +46,13 @@ from .formatter import format_graph, format_syntax
 from .lock_update import update_project_module_lock
 from .lock_update_result import ModuleLockUpdateEntry, ModuleLockUpdateResult
 from .exporter import ExportDiagnostic, NetworkDocumentExport, export_network_document
+from .external_roots import (
+    EXTERNAL_ROOTS_INSPECTION_KIND,
+    EXTERNAL_ROOTS_INSPECTION_SCHEMA_URI,
+    ExternalLibraryRootPin,
+    ExternalModuleRootsInspection,
+    inspect_external_module_roots,
+)
 from .model import (
     COMPILER_VERSION,
     EXPANSION_MAP_VERSION,
@@ -168,6 +175,10 @@ __all__ = [
     "EditorCheckResult",
     "EditorFormatResult",
     "ExportDiagnostic",
+    "EXTERNAL_ROOTS_INSPECTION_KIND",
+    "EXTERNAL_ROOTS_INSPECTION_SCHEMA_URI",
+    "ExternalLibraryRootPin",
+    "ExternalModuleRootsInspection",
     "ExpansionFrame",
     "ExpansionMap",
     "ExpansionOrigin",
@@ -236,6 +247,7 @@ __all__ = [
     "format_source",
     "format_project_module_path",
     "export_network_document",
+    "inspect_external_module_roots",
     "expand_module_graph",
     "expand_resolved_module_dag",
     "graph_spec_from_dict",
