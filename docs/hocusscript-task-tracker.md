@@ -318,31 +318,46 @@ Houdini required: yes for export
 Verification:
 
 - full offline suite: 216 tests passed after final response-budget review
-- schemas: all 19 Draft 2020-12 schemas valid, including legacy/current GraphSpec and strict HS5 format/completion/export outputs
+- schemas: all repository Draft 2020-12 schemas valid at the HS5 checkpoint, including legacy/current GraphSpec and strict format/completion/export outputs
 - H21.0.729 actual registered endpoint over the unmodified force-synced document: repeated export byte-identical; exact-catalog compile/resolve/lower semantic equivalence; unsupported bypass blocked with `HOCUS805`; no filesystem writes
 - reproducible command: `scripts/smoke_hocusscript_export.py`
 
 ## 9. HS6: Modules and Studio Libraries
 
-Status: pending
+Status: Batch A contract and safe non-executing scaffolds complete; parser/resolver/expansion pending
 
 Dependencies: HS5, import security design
 Houdini required: module compiler no; live module fixtures yes
 
-- [ ] Define typed module parameters and exports.
+- [x] Lock language `0.2` / compiler `0.4.0` / GraphSpec `0.3` / bundle `0.3` without reinterpreting `0.1`.
+- [x] Define one root graph/module per file, literal imports, named `use` instances, and exact `bool`/`int`/`float`/`string`/`node_output` parameters and exports.
+- [x] Require a durable `@id` seed on every `use`; define module-local node/use `@id` as namespaced seeds, durable nested instance-ID paths, reserved generated symbols, and rename-stable expanded identity.
+- [x] Define `expansion-map-v1`, `resolved-module-set-v1`, digest-keyed interned expansion stacks shared by mappings/diagnostics, and aggregate limits.
+- [x] Define same-project-first resolution plus manifest-declared, separately approved, transitively locked external aliases.
+- [x] Add strict v3 manifest/lock and module-manifest structural decoders, version-gated GraphSpec/bundle scaffolds, and MCP resources for GraphSpec `0.3`, `expansion-map-v1`, and `resolved-module-set-v1` without enabling language `0.2` compilation or live preview.
+- [x] Unify strict SemVer 2.0, including pre-release and build metadata, across module manifest, project alias, lock, resolved-set, and bundle schemas.
+- [x] Add read-only v3 lock verification and explicit empty-module lock create/update scaffolding; reject nonempty updates until the resolver derives the records.
+- [ ] Implement typed module parameters and exports.
 - [ ] Implement hygienic deterministic expansion.
 - [ ] Implement offline project-contained static imports.
 - [ ] Resolve imports relative to the importing file and ordered project source/module directories.
-- [ ] Add project identity, source-directory, module-root, catalog-lock, and module-lock fields to `hocus.project.toml`, with canonical lock state in `hocus.lock.json`.
+- [x] Add structurally validated project identity, source/module directories, logical aliases, catalog lock, and module-lock fields to v3 contracts; resolver binding remains pending.
 - [ ] Require manifest-declared, separately approved and locked aliases for cross-project imports.
-- [ ] Add explicit lock verify/update modes; make lock writes atomic, diff-visible, and capability-gated.
+- [ ] Enable resolver-derived nonempty lock updates; retain atomic, expected-digest, explicit-write gates.
 - [ ] Add module manifests, versions, content hashes, and lockfile.
 - [ ] Preserve expansion stacks in source maps and diagnostics.
 - [ ] Enforce module depth, node count, code size, and recursion limits.
 - [ ] Reject dynamic imports and implicit host/environment access.
-- [ ] Add bounded conditionals/iteration only with deterministic semantics.
+- [ ] Implement bounded deterministic conditionals/iteration after fixed expansion budgets have production evidence; they are outside the initial `0.2` core and recursion remains forbidden.
 - [ ] Expose expanded graphs before apply.
 - [ ] Add reviewed studio-module contract and provenance tests.
+
+Batch A delivered evidence:
+
+- all 241 offline tests pass; language `0.2` source compilation, project compilation, nonempty lock updates, and live bundle preview remain explicitly blocked
+- all 26 Draft 2020-12 schemas meta-validate; strict SemVer 2.0 positive/negative fixtures agree across five HS6 schemas
+- registered GraphSpec `0.3`, `expansion-map-v1`, and `resolved-module-set-v1` resources return their canonical IDs, and GraphSpec's external `$ref` resolves to the registered expansion-map contract
+- legacy v1/v2 project, lock, compiler, GraphSpec, and bundle tests remain green without migration writes
 
 ## 10. HS7: Fidelity Matrix
 
@@ -407,7 +422,7 @@ Houdini required: yes
 - [ ] Decide canonical tuple and unit syntax.
 - [ ] Decide record/object literal syntax.
 - [ ] Decide channel-reference and expression syntax.
-- [ ] Decide module package URI and the HS6 module-lock schema that extends structural lock v1.
+- [x] Use `hocus-project://<project-uid>/<path>` for local modules and `hocus-module://<library-uid>/<path>` for approved external libraries; add manifest/lock v3 rather than reinterpreting v1/v2.
 - [x] Keep project-directory selection in native compiler/editor configuration; do not expose an MCP project registry.
 - [ ] Decide syntax for explicit per-field `preserve_live` and `source_wins` annotations; the default reject-on-conflict policy is locked.
 - [ ] Decide quoted/reserved parameter-token syntax such as `parm["input"]`.

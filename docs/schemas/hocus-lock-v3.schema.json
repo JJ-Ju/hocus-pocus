@@ -1,0 +1,109 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "hocuspocus://schemas/hocus-lock/v3",
+  "title": "hocus.lock.json v3",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema", "kind", "schemaVersion", "projectUid", "manifestDigest",
+    "languageVersion", "catalog", "modules"
+  ],
+  "properties": {
+    "$schema": {"const": "hocuspocus://schemas/hocus-lock/v3"},
+    "kind": {"const": "hocus_project_lock"},
+    "schemaVersion": {"const": 3},
+    "projectUid": {"$ref": "#/$defs/projectUid"},
+    "manifestDigest": {"$ref": "#/$defs/digest"},
+    "languageVersion": {"const": "0.2"},
+    "catalog": {"$ref": "#/$defs/catalog"},
+    "modules": {
+      "type": "array", "maxItems": 4096,
+      "items": {"$ref": "#/$defs/module"}
+    }
+  },
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "projectUid": {"type": "string", "pattern": "^[a-z0-9][a-z0-9.-]{0,127}$"},
+    "relativePath": {
+      "type": "string", "minLength": 1, "maxLength": 1024,
+      "pattern": "^(?=\\S)(?!.*\\s$)(?!/)(?!.*(?:^|/)\\.\\.?(?:/|$))(?!.*\\\\)(?!.*:)(?!.*//)(?!.*(?:^|/)[^/]*[ .](?:/|$))(?!.*(?:^|/)(?:[Cc][Oo][Nn]|[Pp][Rr][Nn]|[Aa][Uu][Xx]|[Nn][Uu][Ll]|[Cc][Oo][Mm][1-9]|[Ll][Pp][Tt][1-9])(?:\\.[^/]*)?(?:/|$))[^/]+(?:/[^/]+)*$"
+    },
+    "jsonFile": {"allOf": [{"$ref": "#/$defs/relativePath"}, {"pattern": "\\.json$"}]},
+    "hocusFile": {"allOf": [{"$ref": "#/$defs/relativePath"}, {"pattern": "\\.hocus$"}]},
+    "moduleUri": {
+      "type": "string", "minLength": 24, "maxLength": 8192,
+      "pattern": "^hocus-(?:project|module)://[a-z0-9][a-z0-9.-]{0,127}/[^?#]+\\.hocus$"
+    },
+    "catalog": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schemaVersion", "path", "contentDigest", "fingerprint"],
+      "properties": {
+        "schemaVersion": {"const": 1},
+        "path": {"$ref": "#/$defs/jsonFile"},
+        "contentDigest": {"$ref": "#/$defs/digest"},
+        "fingerprint": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "module": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "moduleUri", "projectUid", "libraryUid", "libraryVersion", "moduleManifestDigest",
+        "languageVersion", "sourcePath", "contentDigest", "interfaceDigest", "transitiveDigest",
+        "dependencies", "externalAlias"
+      ],
+      "properties": {
+        "moduleUri": {"$ref": "#/$defs/moduleUri"},
+        "projectUid": {"oneOf": [{"$ref": "#/$defs/projectUid"}, {"type": "null"}]},
+        "libraryUid": {"oneOf": [{"$ref": "#/$defs/projectUid"}, {"type": "null"}]},
+        "libraryVersion": {
+          "oneOf": [
+            {
+              "type": "string",
+              "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$"
+            },
+            {"type": "null"}
+          ]
+        },
+        "moduleManifestDigest": {"oneOf": [{"$ref": "#/$defs/digest"}, {"type": "null"}]},
+        "languageVersion": {"const": "0.2"},
+        "sourcePath": {"$ref": "#/$defs/hocusFile"},
+        "contentDigest": {"$ref": "#/$defs/digest"},
+        "interfaceDigest": {"$ref": "#/$defs/digest"},
+        "transitiveDigest": {"$ref": "#/$defs/digest"},
+        "dependencies": {
+          "type": "array", "maxItems": 4096, "uniqueItems": true,
+          "items": {"$ref": "#/$defs/moduleUri"}
+        },
+        "externalAlias": {
+          "oneOf": [
+            {"type": "null"},
+            {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,63}$"}
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"externalAlias": {"type": "null"}}, "required": ["externalAlias"]},
+          "then": {
+            "properties": {
+              "moduleUri": {"pattern": "^hocus-project://"},
+              "projectUid": {"$ref": "#/$defs/projectUid"},
+              "libraryUid": {"type": "null"},
+              "libraryVersion": {"type": "null"},
+              "moduleManifestDigest": {"type": "null"}
+            }
+          },
+          "else": {
+            "properties": {
+              "moduleUri": {"pattern": "^hocus-module://"},
+              "projectUid": {"type": "null"},
+              "libraryUid": {"$ref": "#/$defs/projectUid"},
+              "libraryVersion": {"type": "string"},
+              "moduleManifestDigest": {"$ref": "#/$defs/digest"}
+            }
+          }
+        }
+      ]
+    }
+  }
+}

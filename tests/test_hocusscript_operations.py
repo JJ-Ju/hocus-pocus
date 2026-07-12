@@ -120,6 +120,34 @@ class HocusScriptOperationsTests(unittest.TestCase):
         self.assertIsNotNone(legacy_resource)
         legacy_schema = json.loads(legacy_resource.reader(RequestContext())["contents"][0]["text"])
         self.assertEqual(legacy_schema["$id"], "hocuspocus://schemas/graph-spec/v0.1")
+        module_resource = resources.get("houdini://documents/schema/graph-spec/v0.3")
+        self.assertIsNotNone(module_resource)
+        module_schema = json.loads(module_resource.reader(RequestContext())["contents"][0]["text"])
+        self.assertEqual(module_schema["$id"], "hocuspocus://schemas/graph-spec/v0.3")
+        for uri, schema_id in (
+            (
+                "houdini://documents/schema/expansion-map/v1",
+                "hocuspocus://schemas/expansion-map/v1",
+            ),
+            (
+                "houdini://documents/schema/resolved-module-set/v1",
+                "hocuspocus://schemas/resolved-module-set/v1",
+            ),
+        ):
+            contract_resource = resources.get(uri)
+            self.assertIsNotNone(contract_resource)
+            contract_schema = json.loads(
+                contract_resource.reader(RequestContext())["contents"][0]["text"]
+            )
+            self.assertEqual(contract_schema["$id"], schema_id)
+        expansion_resource = resources.get("houdini://documents/schema/expansion-map/v1")
+        expansion_schema = json.loads(
+            expansion_resource.reader(RequestContext())["contents"][0]["text"]
+        )
+        self.assertEqual(
+            module_schema["properties"]["expansionMap"]["$ref"],
+            expansion_schema["$id"],
+        )
         for uri, schema_id in (
             (
                 "houdini://documents/schema/format-source-output/v1",

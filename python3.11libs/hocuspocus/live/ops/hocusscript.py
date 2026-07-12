@@ -40,6 +40,9 @@ from ..context import RequestContext
 
 class HocusScriptOperationsMixin:
     _GRAPH_SPEC_SCHEMA_RESOURCE_URI = "houdini://documents/schema/graph-spec/v0.2"
+    _MODULE_GRAPH_SPEC_SCHEMA_RESOURCE_URI = "houdini://documents/schema/graph-spec/v0.3"
+    _EXPANSION_MAP_SCHEMA_RESOURCE_URI = "houdini://documents/schema/expansion-map/v1"
+    _RESOLVED_MODULE_SET_SCHEMA_RESOURCE_URI = "houdini://documents/schema/resolved-module-set/v1"
     _LEGACY_GRAPH_SPEC_SCHEMA_RESOURCE_URI = "houdini://documents/schema/graph-spec/v0.1"
     _FORMAT_OUTPUT_SCHEMA_RESOURCE_URI = "houdini://documents/schema/format-source-output/v1"
     _COMPLETE_OUTPUT_SCHEMA_RESOURCE_URI = "houdini://documents/schema/complete-source-output/v1"
@@ -1198,6 +1201,24 @@ class HocusScriptOperationsMixin:
         del context
         return self._read_hocusscript_schema(
             "graph-spec-v0.1.schema.json", self._LEGACY_GRAPH_SPEC_SCHEMA_RESOURCE_URI
+        )
+
+    def read_module_graph_spec_schema(self, context: RequestContext) -> dict[str, Any]:
+        del context
+        return self._read_hocusscript_schema(
+            "graph-spec-v0.3.schema.json", self._MODULE_GRAPH_SPEC_SCHEMA_RESOURCE_URI
+        )
+
+    def read_expansion_map_schema(self, context: RequestContext) -> dict[str, Any]:
+        del context
+        return self._read_hocusscript_schema(
+            "expansion-map-v1.schema.json", self._EXPANSION_MAP_SCHEMA_RESOURCE_URI
+        )
+
+    def read_resolved_module_set_schema(self, context: RequestContext) -> dict[str, Any]:
+        del context
+        return self._read_hocusscript_schema(
+            "resolved-module-set-v1.schema.json", self._RESOLVED_MODULE_SET_SCHEMA_RESOURCE_URI
         )
 
     def _read_hocusscript_schema(self, filename: str, uri: str) -> dict[str, Any]:

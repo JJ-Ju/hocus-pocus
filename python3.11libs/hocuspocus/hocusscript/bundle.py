@@ -9,12 +9,16 @@ import math
 import re
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import quote
 
 from .compiler import SUPPORTED_LANGUAGE_VERSIONS
 from .model import (
     COMPILER_VERSION,
     EXPLICIT_NODE_ID_PATTERN,
     GRAPH_SPEC_VERSION,
+    MODULE_COMPILER_VERSION,
+    MODULE_GRAPH_SPEC_VERSION,
+    MODULE_LANGUAGE_VERSION,
     LEGACY_COMPILER_VERSION,
     LEGACY_GRAPH_SPEC_VERSION,
     CompileResult,
@@ -22,13 +26,29 @@ from .model import (
 
 BUNDLE_VERSION = "0.2"
 LEGACY_BUNDLE_VERSION = "0.1"
+MODULE_BUNDLE_VERSION = "0.3"
 MAX_BUNDLE_BYTES = 8 * 1024 * 1024
+MAX_MODULE_BUNDLE_BYTES = 32 * 1024 * 1024
 MAX_BUNDLE_DEPTH = 128
 MAX_BUNDLE_VALUES = 250_000
+MAX_MODULE_BUNDLE_VALUES = 2_000_000
 MAX_DEPENDENCIES = 4096
 _DIGEST_PATTERN = re.compile(r"^sha256:[0-9a-f]{64}$")
 _PROJECT_UID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9.-]{0,127}$")
 _IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_MODULE_ALIAS_PATTERN = re.compile(r"^[a-z][a-z0-9-]{0,63}$")
+_SEMVER_PATTERN = re.compile(
+    r"^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)"
+    r"(?:-(?:(?:0|[1-9][0-9]*)|(?:[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))"
+    r"(?:\.(?:(?:0|[1-9][0-9]*)|(?:[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)))*)?"
+    r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$"
+)
+_MODULE_URI_PATTERN = re.compile(
+    r"^hocus-(project|module)://([a-z0-9][a-z0-9.-]{0,127})/(.+)$"
+)
+_JSON_POINTER_PATTERN = re.compile(r"^(?:/(?:[^~/]|~0|~1)*)*$")
+_TRANSITIVE_DIGEST_DOMAIN = "hocus-module-transitive-v1"
+_EXPANSION_STACK_DIGEST_DOMAIN = "hocus-expansion-stack-v1"
 _BUNDLE_KEYS_V01 = {
     "$schema",
     "kind",
@@ -49,6 +69,7 @@ _BUNDLE_KEYS_V01 = {
     "graphSpec",
 }
 _BUNDLE_KEYS_V02 = {*_BUNDLE_KEYS_V01, "semanticResolution"}
+_BUNDLE_KEYS_V03 = {*_BUNDLE_KEYS_V02, "resolvedModuleSet"}
 _GRAPH_KEYS = {
     "$schema", "kind", "graphSpecVersion", "languageVersion", "name", "target", "category", "mode",
     "expectedRevision", "ownership", "externalNodes", "nodes", "display", "render", "output", "layout", "span", "fieldSpans",
@@ -149,11 +170,18 @@ def decode_compiled_bundle(value: Any) -> CompiledBundle:
 
     if not isinstance(value, dict):
         raise BundleValidationError("HOCUS500", "Compiled bundle must be a JSON object.")
-    _validate_complexity(value)
     bundle_version = value.get("bundleVersion")
-    expected_keys = _BUNDLE_KEYS_V02 if bundle_version == BUNDLE_VERSION else _BUNDLE_KEYS_V01
+    _validate_complexity(
+        value,
+        max_values=(MAX_MODULE_BUNDLE_VALUES if bundle_version == MODULE_BUNDLE_VERSION else MAX_BUNDLE_VALUES),
+    )
+    expected_keys = {
+        LEGACY_BUNDLE_VERSION: _BUNDLE_KEYS_V01,
+        BUNDLE_VERSION: _BUNDLE_KEYS_V02,
+        MODULE_BUNDLE_VERSION: _BUNDLE_KEYS_V03,
+    }.get(bundle_version, set())
     keys = set(value)
-    if bundle_version not in {LEGACY_BUNDLE_VERSION, BUNDLE_VERSION} or keys != expected_keys:
+    if bundle_version not in {LEGACY_BUNDLE_VERSION, BUNDLE_VERSION, MODULE_BUNDLE_VERSION} or keys != expected_keys:
         raise BundleValidationError(
             "HOCUS501",
             "Compiled bundle has missing or unknown top-level fields.",
@@ -166,8 +194,9 @@ def decode_compiled_bundle(value: Any) -> CompiledBundle:
         canonical = _canonical_json(payload)
     except (TypeError, ValueError) as exc:
         raise BundleValidationError("HOCUS503", f"Compiled bundle is not canonicalizable JSON: {exc}") from exc
-    if len(canonical.encode("utf-8")) > MAX_BUNDLE_BYTES:
-        raise BundleValidationError("HOCUS504", f"Compiled bundle exceeds the {MAX_BUNDLE_BYTES}-byte limit.")
+    max_bundle_bytes = MAX_MODULE_BUNDLE_BYTES if bundle_version == MODULE_BUNDLE_VERSION else MAX_BUNDLE_BYTES
+    if len(canonical.encode("utf-8")) > max_bundle_bytes:
+        raise BundleValidationError("HOCUS504", f"Compiled bundle exceeds the {max_bundle_bytes}-byte limit.")
     actual_digest = f"sha256:{hashlib.sha256(canonical.encode('utf-8')).hexdigest()}"
     if not hmac.compare_digest(declared_digest, actual_digest):
         raise BundleValidationError(
@@ -182,17 +211,26 @@ def decode_compiled_bundle(value: Any) -> CompiledBundle:
     compiler_version = payload.get("compilerVersion")
     graph_spec_version = payload.get("graphSpecVersion")
     compatible_contracts = {
-        (LEGACY_COMPILER_VERSION, LEGACY_GRAPH_SPEC_VERSION),
-        (COMPILER_VERSION, GRAPH_SPEC_VERSION),
-    }
-    if bundle_version == LEGACY_BUNDLE_VERSION:
-        compatible_contracts.add(("0.1.1", LEGACY_GRAPH_SPEC_VERSION))
+        LEGACY_BUNDLE_VERSION: {
+            ("0.1.1", LEGACY_GRAPH_SPEC_VERSION),
+            (LEGACY_COMPILER_VERSION, LEGACY_GRAPH_SPEC_VERSION),
+            (COMPILER_VERSION, GRAPH_SPEC_VERSION),
+        },
+        BUNDLE_VERSION: {
+            (LEGACY_COMPILER_VERSION, LEGACY_GRAPH_SPEC_VERSION),
+            (COMPILER_VERSION, GRAPH_SPEC_VERSION),
+        },
+        MODULE_BUNDLE_VERSION: {(MODULE_COMPILER_VERSION, MODULE_GRAPH_SPEC_VERSION)},
+    }[bundle_version]
     if (compiler_version, graph_spec_version) not in compatible_contracts:
         raise BundleValidationError(
             "HOCUS507", "Compiled bundle compiler and GraphSpec versions are not a supported pair."
         )
     language_version = payload.get("languageVersion")
-    if language_version not in SUPPORTED_LANGUAGE_VERSIONS:
+    expected_language_versions = (
+        {MODULE_LANGUAGE_VERSION} if bundle_version == MODULE_BUNDLE_VERSION else SUPPORTED_LANGUAGE_VERSIONS
+    )
+    if language_version not in expected_language_versions:
         raise BundleValidationError("HOCUS507", "Compiled bundle language version is unsupported.")
 
     portable = payload.get("portable")
@@ -209,8 +247,10 @@ def decode_compiled_bundle(value: Any) -> CompiledBundle:
         raise BundleValidationError("HOCUS509", "Preview-only bundles cannot claim portable project identity.")
     if lock_digest is not None:
         _require_digest(lock_digest, "projectLockDigest", "HOCUS509")
-    if bundle_version == BUNDLE_VERSION and portable and lock_digest is None:
+    if bundle_version in {BUNDLE_VERSION, MODULE_BUNDLE_VERSION} and portable and lock_digest is None:
         raise BundleValidationError("HOCUS509", "Portable semantic bundles require projectLockDigest.")
+    if bundle_version == MODULE_BUNDLE_VERSION and not portable:
+        raise BundleValidationError("HOCUS509", "Bundle v0.3 module graphs must be portable.")
     if not portable and lock_digest is not None:
         raise BundleValidationError("HOCUS509", "Preview-only bundles cannot claim a project lock digest.")
 
@@ -231,6 +271,18 @@ def decode_compiled_bundle(value: Any) -> CompiledBundle:
             raise BundleValidationError("HOCUS512", "Dependency source URIs must be unique.", details={"uri": normalized["uri"]})
         dependency_uris.add(normalized["uri"])
 
+    module_dependencies: list[dict[str, Any]] = []
+    module_limits: dict[str, int] | None = None
+    if bundle_version == MODULE_BUNDLE_VERSION:
+        module_dependencies, module_limits = _validate_resolved_module_set(
+            payload.get("resolvedModuleSet"),
+            sources=dependencies,
+            project_uid=project_uid,
+            entry_source_uri=entry["uri"],
+            project_manifest_digest=manifest_digest,
+            project_lock_digest=lock_digest,
+        )
+
     catalog_constraints = payload.get("catalogConstraints")
     if bundle_version == LEGACY_BUNDLE_VERSION:
         if catalog_constraints != {}:
@@ -249,7 +301,13 @@ def decode_compiled_bundle(value: Any) -> CompiledBundle:
     nodes = graph_spec.get("nodes")
     if not isinstance(nodes, list) or len(nodes) > 10_000:
         raise BundleValidationError("HOCUS515", "graphSpec.nodes must be an array with at most 10000 entries.")
-    _validate_graph_spec(graph_spec, graph_spec_version=graph_spec_version)
+    _validate_graph_spec(
+        graph_spec,
+        graph_spec_version=graph_spec_version,
+        module_dependencies={item["uri"]: item for item in module_dependencies},
+        entry_source_uri=entry["uri"],
+        module_limits=module_limits,
+    )
     _validate_declared_source_uris(graph_spec, {entry["uri"], *dependency_uris})
 
     capabilities = payload.get("requiredCapabilities")
@@ -260,24 +318,38 @@ def decode_compiled_bundle(value: Any) -> CompiledBundle:
             "requiredCapabilities does not match the GraphSpec content.",
             details={"expected": expected_capabilities, "actual": capabilities},
         )
-    if bundle_version == BUNDLE_VERSION:
+    if bundle_version in {BUNDLE_VERSION, MODULE_BUNDLE_VERSION}:
         semantic = _validate_semantic_resolution(
             payload.get("semanticResolution"), catalog_constraints, graph_spec
         )
+        if module_limits is not None and len(semantic["diagnostics"]) > module_limits["diagnostics"]:
+            raise BundleValidationError("HOCUS521", "Semantic diagnostics exceed resolved module limits.")
         if semantic["requiredCapabilities"] != capabilities:
             raise BundleValidationError(
                 "HOCUS516",
                 "Semantic capability manifest does not match requiredCapabilities.",
             )
     source_maps = payload.get("sourceMaps")
-    if not isinstance(source_maps, dict) or set(source_maps) != {"format", "entrySourceUri", "embeddedInGraphSpec"}:
-        raise BundleValidationError("HOCUS517", "sourceMaps has an invalid shape.")
-    if source_maps != {
-        "format": "graph-spec-spans-v0.1",
-        "entrySourceUri": entry["uri"],
-        "embeddedInGraphSpec": True,
-    }:
-        raise BundleValidationError("HOCUS517", "sourceMaps is inconsistent with the entry source.")
+    if bundle_version == MODULE_BUNDLE_VERSION:
+        expansion_map = graph_spec["expansionMap"]
+        expansion_digest = "sha256:" + hashlib.sha256(
+            _canonical_json(expansion_map).encode("utf-8")
+        ).hexdigest()
+        expected_source_maps = {
+            "format": "graph-spec-expansion-v1",
+            "entrySourceUri": entry["uri"],
+            "embeddedInGraphSpec": True,
+            "expansionMapVersion": 1,
+            "expansionMapDigest": expansion_digest,
+        }
+    else:
+        expected_source_maps = {
+            "format": "graph-spec-spans-v0.1",
+            "entrySourceUri": entry["uri"],
+            "embeddedInGraphSpec": True,
+        }
+    if not isinstance(source_maps, dict) or source_maps != expected_source_maps:
+        raise BundleValidationError("HOCUS517", "sourceMaps is inconsistent with the bundle contract.")
     return CompiledBundle(canonical, declared_digest)
 
 
@@ -292,6 +364,213 @@ def _validate_source(value: Any, label: str, *, allow_kinds: set[str]) -> dict[s
         raise BundleValidationError("HOCUS518", f"{label}.kind is invalid.")
     digest = _require_digest(value.get("digest"), f"{label}.digest", "HOCUS518")
     return {"uri": uri, "digest": digest, "kind": kind}
+
+
+def _validate_resolved_module_set(
+    value: Any,
+    *,
+    sources: list[Any],
+    project_uid: str | None,
+    entry_source_uri: str,
+    project_manifest_digest: str | None,
+    project_lock_digest: str | None,
+) -> tuple[list[dict[str, Any]], dict[str, int]]:
+    keys = {
+        "$schema", "kind", "schemaVersion", "languageVersion", "projectUid",
+        "entrySourceUri", "projectManifestDigest", "projectLockDigest",
+        "resolverPolicyDigest", "limits", "modules",
+    }
+    if not isinstance(value, dict) or set(value) != keys:
+        raise BundleValidationError("HOCUS512", "resolvedModuleSet has an invalid shape.")
+    if (
+        value["$schema"] != "hocuspocus://schemas/resolved-module-set/v1"
+        or value["kind"] != "hocus_resolved_module_set"
+        or value["schemaVersion"] != 1
+        or value["languageVersion"] != MODULE_LANGUAGE_VERSION
+        or value["projectUid"] != project_uid
+        or value["entrySourceUri"] != entry_source_uri
+        or value["projectManifestDigest"] != project_manifest_digest
+        or value["projectLockDigest"] != project_lock_digest
+    ):
+        raise BundleValidationError("HOCUS512", "resolvedModuleSet envelope conflicts with its bundle.")
+    _require_digest(value["resolverPolicyDigest"], "resolvedModuleSet.resolverPolicyDigest", "HOCUS512")
+    limits = _validate_resolved_limits(value["limits"])
+    modules = _validate_module_dependencies(
+        value["modules"], sources, project_uid=project_uid or "", import_depth=limits["importDepth"]
+    )
+    if len(modules) > limits["moduleFiles"]:
+        raise BundleValidationError("HOCUS512", "Resolved modules exceed the declared moduleFiles limit.")
+    return modules, limits
+
+
+def _validate_resolved_limits(value: Any) -> dict[str, int]:
+    maxima = {
+        "sourceBytesPerFile": 1_048_576,
+        "aggregateSourceBytes": 8_388_608,
+        "moduleFiles": 4096,
+        "importDepth": 64,
+        "instanceDepth": 64,
+        "instances": 4096,
+        "parametersPerModule": 256,
+        "exportsPerModule": 256,
+        "expandedNodes": 10_000,
+        "aggregateCodeBytes": 4_194_304,
+        "sourceMapEntries": 100_000,
+        "diagnostics": 500,
+    }
+    if not isinstance(value, dict) or set(value) != set(maxima):
+        raise BundleValidationError("HOCUS512", "resolvedModuleSet.limits has an invalid shape.")
+    if any(type(value[key]) is not int or not 1 <= value[key] <= maximum for key, maximum in maxima.items()):
+        raise BundleValidationError("HOCUS512", "resolvedModuleSet.limits exceeds the v1 contract.")
+    return dict(value)
+
+
+def _validate_module_dependencies(
+    value: Any, sources: list[Any], *, project_uid: str, import_depth: int,
+) -> list[dict[str, Any]]:
+    if not isinstance(value, list) or len(value) > MAX_DEPENDENCIES:
+        raise BundleValidationError("HOCUS512", "resolvedModuleSet.modules must be a bounded array.")
+    expected = {
+        (item.get("uri"), item.get("digest"))
+        for item in sources
+        if isinstance(item, dict) and item.get("kind") == "module"
+    }
+    source_pairs = [
+        (item.get("uri"), item.get("digest"))
+        for item in sources
+        if isinstance(item, dict) and item.get("kind") == "module"
+    ]
+    if source_pairs != sorted(source_pairs):
+        raise BundleValidationError("HOCUS512", "Module source dependencies must be sorted by URI.")
+    decoded: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for index, item in enumerate(value):
+        label = f"moduleDependencies[{index}]"
+        if not isinstance(item, dict) or set(item) != {
+            "uri", "moduleName", "relativePath", "origin", "ownerUid", "alias", "version",
+            "moduleManifestDigest", "sourceDigest", "interfaceDigest", "transitiveDigest",
+            "dependencies", "languageVersion",
+        }:
+            raise BundleValidationError("HOCUS512", f"{label} has an invalid shape.")
+        uri = item["uri"]
+        if not isinstance(uri, str) or len(uri) > 4096 or uri in seen:
+            raise BundleValidationError("HOCUS512", f"{label}.uri must be a unique canonical module URI.")
+        uri_match = _MODULE_URI_PATTERN.fullmatch(uri)
+        if uri_match is None:
+            raise BundleValidationError("HOCUS512", f"{label}.uri must be a unique canonical module URI.")
+        seen.add(uri)
+        source_digest = _require_digest(item["sourceDigest"], f"{label}.sourceDigest", "HOCUS512")
+        interface_digest = _require_digest(
+            item["interfaceDigest"], f"{label}.interfaceDigest", "HOCUS512"
+        )
+        transitive_digest = _require_digest(
+            item["transitiveDigest"], f"{label}.transitiveDigest", "HOCUS512"
+        )
+        if item["languageVersion"] != MODULE_LANGUAGE_VERSION:
+            raise BundleValidationError("HOCUS512", f"{label}.languageVersion is unsupported.")
+        if (
+            not isinstance(item["moduleName"], str)
+            or len(item["moduleName"]) > 128
+            or not _IDENTIFIER_PATTERN.fullmatch(item["moduleName"])
+        ):
+            raise BundleValidationError("HOCUS512", f"{label}.moduleName is invalid.")
+        relative_path = item["relativePath"]
+        if (
+            not isinstance(relative_path, str) or not relative_path.endswith(".hocus")
+            or relative_path.startswith(("/", "\\")) or "\\" in relative_path
+            or any(part in {"", ".", ".."} for part in relative_path.split("/"))
+        ):
+            raise BundleValidationError("HOCUS512", f"{label}.relativePath is invalid.")
+        if not isinstance(item["ownerUid"], str) or not _PROJECT_UID_PATTERN.fullmatch(item["ownerUid"]):
+            raise BundleValidationError("HOCUS512", f"{label}.ownerUid is invalid.")
+        origin = item["origin"]
+        scheme, authority, uri_path = uri_match.groups()
+        if uri_path != quote(relative_path, safe="/-._~") or authority != item["ownerUid"]:
+            raise BundleValidationError("HOCUS512", f"{label} URI does not match ownerUid/relativePath.")
+        if origin == "project":
+            if scheme != "project" or authority != project_uid or any(
+                item[field] is not None for field in ("alias", "version", "moduleManifestDigest")
+            ):
+                raise BundleValidationError("HOCUS512", f"{label} has invalid project provenance.")
+        elif origin == "external_library":
+            if (
+                scheme != "module"
+                or not isinstance(item["alias"], str)
+                or not _MODULE_ALIAS_PATTERN.fullmatch(item["alias"])
+                or not isinstance(item["version"], str)
+                or not _SEMVER_PATTERN.fullmatch(item["version"])
+            ):
+                raise BundleValidationError("HOCUS512", f"{label} has invalid external provenance.")
+            _require_digest(item["moduleManifestDigest"], f"{label}.moduleManifestDigest", "HOCUS512")
+        else:
+            raise BundleValidationError("HOCUS512", f"{label}.origin is invalid.")
+        child_uris = item["dependencies"]
+        if (
+            not isinstance(child_uris, list) or len(child_uris) > MAX_DEPENDENCIES
+            or child_uris != sorted(set(child_uris))
+            or any(not isinstance(child, str) or _MODULE_URI_PATTERN.fullmatch(child) is None for child in child_uris)
+            or uri in child_uris
+        ):
+            raise BundleValidationError("HOCUS512", f"{label}.dependencies must be sorted unique URIs.")
+        decoded.append(dict(item))
+    if [(item["uri"], item["sourceDigest"]) for item in decoded] != sorted(expected):
+        raise BundleValidationError(
+            "HOCUS512", "Resolved modules must exactly match sorted module source dependencies."
+        )
+    known_uris = {item["uri"] for item in decoded}
+    if any(child not in known_uris for item in decoded for child in item["dependencies"]):
+        raise BundleValidationError("HOCUS512", "Resolved modules contain an unresolved dependency URI.")
+    _validate_module_dag_and_digests(decoded, max_depth=import_depth)
+    return decoded
+
+
+def _module_transitive_digest(item: dict[str, Any], by_uri: dict[str, dict[str, Any]]) -> str:
+    """Hash the locked bottom-up module closure in the hocus-module-transitive-v1 domain."""
+
+    payload = {
+        "domain": _TRANSITIVE_DIGEST_DOMAIN,
+        "uri": item["uri"],
+        "sourceDigest": item["sourceDigest"],
+        "interfaceDigest": item["interfaceDigest"],
+        "dependencies": [
+            {"uri": uri, "transitiveDigest": by_uri[uri]["transitiveDigest"]}
+            for uri in item["dependencies"]
+        ],
+    }
+    return "sha256:" + hashlib.sha256(_canonical_json(payload).encode("utf-8")).hexdigest()
+
+
+def _validate_module_dag_and_digests(items: list[dict[str, Any]], *, max_depth: int) -> None:
+    by_uri = {item["uri"]: item for item in items}
+    unresolved = {uri: len(item["dependencies"]) for uri, item in by_uri.items()}
+    parents: dict[str, list[str]] = {uri: [] for uri in by_uri}
+    for uri, item in by_uri.items():
+        for child in item["dependencies"]:
+            parents[child].append(uri)
+    ready = sorted(uri for uri, count in unresolved.items() if count == 0)
+    depths: dict[str, int] = {}
+    processed = 0
+    while ready:
+        uri = ready.pop(0)
+        item = by_uri[uri]
+        depth = 1 + max((depths[child] for child in item["dependencies"]), default=0)
+        if depth > max_depth:
+            raise BundleValidationError("HOCUS512", "Resolved module import depth exceeds its declared limit.")
+        depths[uri] = depth
+        expected = _module_transitive_digest(item, by_uri)
+        if not hmac.compare_digest(item["transitiveDigest"], expected):
+            raise BundleValidationError(
+                "HOCUS512", f"Resolved module transitiveDigest is invalid for {uri}.",
+                details={"uri": uri, "expectedDigest": expected},
+            )
+        processed += 1
+        for parent in sorted(parents[uri]):
+            unresolved[parent] -= 1
+            if unresolved[parent] == 0:
+                ready.append(parent)
+        ready.sort()
+    if processed != len(items):
+        raise BundleValidationError("HOCUS512", "Resolved module dependency graph contains a cycle.")
 
 
 def _validate_catalog_constraints(value: Any) -> dict[str, Any]:
@@ -506,8 +785,187 @@ def _require_nullable_semantic_string(value: Any, label: str) -> None:
         raise BundleValidationError("HOCUS521", f"{label} is invalid.")
 
 
-def _validate_graph_spec(graph: dict[str, Any], *, graph_spec_version: str) -> None:
-    if set(graph) != _GRAPH_KEYS:
+def _validate_expansion_map(
+    value: Any, module_dependencies: dict[str, dict[str, Any]], entry_source_uri: str,
+    graph: dict[str, Any], limits: dict[str, int],
+) -> None:
+    required = {"$schema", "kind", "schemaVersion", "graphSpecVersion", "entrySourceUri", "stacks", "mappings"}
+    if not isinstance(value, dict) or set(value) != required:
+        raise BundleValidationError("HOCUS520", "graphSpec.expansionMap has an invalid shape.")
+    if (
+        value["$schema"] != "hocuspocus://schemas/expansion-map/v1"
+        or value["kind"] != "hocus_expansion_map" or value["schemaVersion"] != 1
+        or value["graphSpecVersion"] != MODULE_GRAPH_SPEC_VERSION
+        or value["entrySourceUri"] != entry_source_uri
+    ):
+        raise BundleValidationError("HOCUS520", "graphSpec.expansionMap envelope is inconsistent.")
+    stacks = value["stacks"]
+    if not isinstance(stacks, list) or len(stacks) > 10_000:
+        raise BundleValidationError("HOCUS520", "graphSpec.expansionMap.stacks must be bounded.")
+    stack_ids: list[str] = []
+    for stack_index, stack in enumerate(stacks):
+        stack_label = f"graphSpec.expansionMap.stacks[{stack_index}]"
+        if not isinstance(stack, dict) or set(stack) != {"stackId", "frames"}:
+            raise BundleValidationError("HOCUS520", f"{stack_label} has an invalid shape.")
+        frames = stack["frames"]
+        if not isinstance(frames, list) or not 1 <= len(frames) <= 64:
+            raise BundleValidationError("HOCUS520", f"{stack_label}.frames must contain 1 to 64 frames.")
+        for frame_index, frame in enumerate(frames):
+            frame_label = f"{stack_label}.frames[{frame_index}]"
+            if not isinstance(frame, dict) or set(frame) != {
+                "moduleUri", "sourceDigest", "moduleName", "instanceSymbol",
+                "instanceIdPath", "importSpan", "useSpan",
+            }:
+                raise BundleValidationError("HOCUS520", f"{frame_label} has an invalid shape.")
+            uri = frame["moduleUri"]
+            source_digest = _require_digest(frame["sourceDigest"], f"{frame_label}.sourceDigest", "HOCUS520")
+            module = module_dependencies.get(uri) if isinstance(uri, str) else None
+            if module is None or module["sourceDigest"] != source_digest:
+                raise BundleValidationError("HOCUS520", f"{frame_label} does not match a locked module.")
+            for field in ("moduleName", "instanceSymbol"):
+                if not isinstance(frame[field], str) or not _IDENTIFIER_PATTERN.fullmatch(frame[field]):
+                    raise BundleValidationError("HOCUS520", f"{frame_label}.{field} is invalid.")
+            if frame["moduleName"] != module["moduleName"]:
+                raise BundleValidationError("HOCUS520", f"{frame_label}.moduleName conflicts with the resolved module.")
+            instance_path = frame["instanceIdPath"]
+            if (
+                not isinstance(instance_path, list) or len(instance_path) > 64
+                or any(not isinstance(item, str) or not EXPLICIT_NODE_ID_PATTERN.fullmatch(item)
+                       for item in instance_path)
+            ):
+                raise BundleValidationError("HOCUS520", f"{frame_label}.instanceIdPath is invalid.")
+            if frame["importSpan"] is not None:
+                _validate_span(frame["importSpan"], f"{frame_label}.importSpan")
+            _validate_span(frame["useSpan"], f"{frame_label}.useSpan")
+        stack_id = _require_digest(stack["stackId"], f"{stack_label}.stackId", "HOCUS520")
+        stack_payload = {"domain": _EXPANSION_STACK_DIGEST_DOMAIN, "frames": frames}
+        expected_stack_id = "sha256:" + hashlib.sha256(
+            _canonical_json(stack_payload).encode("utf-8")
+        ).hexdigest()
+        if stack_id != expected_stack_id:
+            raise BundleValidationError("HOCUS520", f"{stack_label}.stackId does not match frames.")
+        stack_ids.append(stack_id)
+    if stack_ids != sorted(set(stack_ids)):
+        raise BundleValidationError("HOCUS520", "Expansion stacks must be uniquely sorted by stackId.")
+
+    mappings = value["mappings"]
+    if not isinstance(mappings, list) or len(mappings) > limits["sourceMapEntries"]:
+        raise BundleValidationError("HOCUS520", "graphSpec.expansionMap.mappings must be bounded.")
+    pointers: list[str] = []
+    origin_ids: set[str] = set()
+    for index, mapping in enumerate(mappings):
+        label = f"graphSpec.expansionMap.mappings[{index}]"
+        keys = {
+            "originId", "generatedPointer", "originKind", "primarySpan", "relatedOrigins",
+            "stackId",
+        }
+        if not isinstance(mapping, dict) or set(mapping) != keys:
+            raise BundleValidationError("HOCUS520", f"{label} has an invalid shape.")
+        origin_id = _require_digest(mapping["originId"], f"{label}.originId", "HOCUS520")
+        pointer = mapping["generatedPointer"]
+        if (
+            not isinstance(pointer, str)
+            or len(pointer) > 8192
+            or _JSON_POINTER_PATTERN.fullmatch(pointer) is None
+            or not _json_pointer_resolves(graph, pointer)
+        ):
+            raise BundleValidationError("HOCUS520", f"{label}.generatedPointer is invalid.")
+        if mapping["originKind"] not in {"definition", "argument", "export", "synthetic"}:
+            raise BundleValidationError("HOCUS520", f"{label}.originKind is invalid.")
+        _validate_span(mapping["primarySpan"], f"{label}.primarySpan")
+        related = mapping["relatedOrigins"]
+        if not isinstance(related, list) or len(related) > 16:
+            raise BundleValidationError("HOCUS520", f"{label}.relatedOrigins must be bounded.")
+        for related_index, item in enumerate(related):
+            related_label = f"{label}.relatedOrigins[{related_index}]"
+            if not isinstance(item, dict) or set(item) != {"role", "span"} or item["role"] not in {
+                "definition", "parameter_declaration", "argument", "export", "instance",
+            }:
+                raise BundleValidationError("HOCUS520", f"{related_label} is invalid.")
+            _validate_span(item["span"], f"{related_label}.span")
+        if mapping["stackId"] is not None and mapping["stackId"] not in stack_ids:
+            raise BundleValidationError("HOCUS520", f"{label}.stackId references an unknown stack.")
+        origin_payload = {key: mapping[key] for key in sorted(mapping) if key != "originId"}
+        expected_origin_id = "sha256:" + hashlib.sha256(
+            _canonical_json(origin_payload).encode("utf-8")
+        ).hexdigest()
+        if origin_id != expected_origin_id or origin_id in origin_ids:
+            raise BundleValidationError("HOCUS520", f"{label}.originId is invalid or duplicated.")
+        origin_ids.add(origin_id)
+        pointers.append(pointer)
+    if pointers != sorted(set(pointers)):
+        raise BundleValidationError("HOCUS520", "Expansion mappings must be uniquely sorted by generatedPointer.")
+    required_pointers = _required_expansion_pointers(graph)
+    if pointers != sorted(required_pointers):
+        raise BundleValidationError(
+            "HOCUS520", "Expansion mappings do not exactly cover the GraphSpec v0.3 origin surface.",
+            details={
+                "missing": sorted(required_pointers - set(pointers)),
+                "unknown": sorted(set(pointers) - required_pointers),
+            },
+        )
+    referenced_stacks = {mapping["stackId"] for mapping in mappings if mapping["stackId"] is not None}
+    if referenced_stacks != set(stack_ids):
+        raise BundleValidationError("HOCUS520", "Expansion stacks must be referenced exactly once or more.")
+    instance_paths = {
+        tuple(frame["instanceIdPath"])
+        for stack in stacks
+        for frame in stack["frames"]
+    }
+    if len(instance_paths) > limits["instances"]:
+        raise BundleValidationError("HOCUS520", "Expansion instances exceed resolved module limits.")
+    if any(len(path) > limits["instanceDepth"] for path in instance_paths):
+        raise BundleValidationError("HOCUS520", "Expansion instance depth exceeds resolved module limits.")
+
+
+def _json_pointer_resolves(value: Any, pointer: str) -> bool:
+    current = value
+    if pointer == "":
+        return True
+    for encoded in pointer[1:].split("/"):
+        token = encoded.replace("~1", "/").replace("~0", "~")
+        if isinstance(current, dict):
+            if token not in current:
+                return False
+            current = current[token]
+        elif isinstance(current, list):
+            if not token.isdigit() or (token != "0" and token.startswith("0")):
+                return False
+            index = int(token)
+            if index >= len(current):
+                return False
+            current = current[index]
+        else:
+            return False
+    return True
+
+
+def _required_expansion_pointers(graph: dict[str, Any]) -> set[str]:
+    """Return the exact expansion-map-v1 origin surface for GraphSpec 0.3."""
+
+    pointers = {""}
+    pointers.update(f"/externalNodes/{index}" for index, _ in enumerate(graph["externalNodes"]))
+    for node_index, node in enumerate(graph["nodes"]):
+        prefix = f"/nodes/{node_index}"
+        pointers.add(prefix)
+        pointers.update(f"{prefix}/inputs/{index}" for index, _ in enumerate(node["inputs"]))
+        pointers.update(f"{prefix}/parms/{index}" for index, _ in enumerate(node["parms"]))
+    for field in ("display", "render", "output", "layout"):
+        if graph[field] is not None:
+            pointers.add(f"/{field}")
+    return pointers
+
+
+def _validate_graph_spec(
+    graph: dict[str, Any], *, graph_spec_version: str,
+    module_dependencies: dict[str, dict[str, Any]] | None = None,
+    entry_source_uri: str | None = None,
+    module_limits: dict[str, int] | None = None,
+) -> None:
+    expected_graph_keys = set(_GRAPH_KEYS)
+    if graph_spec_version == MODULE_GRAPH_SPEC_VERSION:
+        expected_graph_keys.add("expansionMap")
+    if set(graph) != expected_graph_keys:
         raise BundleValidationError("HOCUS520", "graphSpec has missing or unknown fields.")
     if not isinstance(graph["name"], str) or not _IDENTIFIER_PATTERN.fullmatch(graph["name"]):
         raise BundleValidationError("HOCUS520", "graphSpec.name must be a HocusScript identifier.")
@@ -575,7 +1033,7 @@ def _validate_graph_spec(graph: dict[str, Any], *, graph_spec_version: str) -> N
         label = f"graphSpec.nodes[{index}]"
         required_node_keys = {"symbol", "typeName", "inputs", "parms", "span"}
         optional_node_keys = {"fieldSpans"}
-        if graph_spec_version == GRAPH_SPEC_VERSION:
+        if graph_spec_version in {GRAPH_SPEC_VERSION, MODULE_GRAPH_SPEC_VERSION}:
             optional_node_keys.add("explicitId")
         if (
             not isinstance(node, dict)
@@ -626,6 +1084,36 @@ def _validate_graph_spec(graph: dict[str, Any], *, graph_spec_version: str) -> N
             raise BundleValidationError("HOCUS520", f"graphSpec.{directive} references an unknown symbol.")
         if symbol is not None and symbol not in mutable_symbols:
             raise BundleValidationError("HOCUS520", f"graphSpec.{directive} targets a read-only existing symbol.")
+    if graph_spec_version == MODULE_GRAPH_SPEC_VERSION:
+        limits = module_limits or {
+            "expandedNodes": 10_000, "sourceMapEntries": 100_000,
+            "instances": 4096, "instanceDepth": 64, "aggregateCodeBytes": 4_194_304,
+        }
+        if len(graph["nodes"]) > limits["expandedNodes"]:
+            raise BundleValidationError("HOCUS520", "Expanded nodes exceed resolved module limits.")
+        code_bytes = sum(
+            len(value["body"].encode("utf-8"))
+            for node in graph["nodes"]
+            for parm in node["parms"]
+            for value in _walk_graph_values(parm["value"])
+            if isinstance(value, dict) and value.get("kind") == "code"
+        )
+        if code_bytes > limits["aggregateCodeBytes"]:
+            raise BundleValidationError("HOCUS520", "Expanded code exceeds resolved module limits.")
+        _validate_expansion_map(
+            graph["expansionMap"], module_dependencies or {}, entry_source_uri or "", graph, limits
+        )
+
+
+def _walk_graph_values(value: Any):
+    stack = [value]
+    while stack:
+        item = stack.pop()
+        yield item
+        if isinstance(item, dict):
+            stack.extend(item.values())
+        elif isinstance(item, list):
+            stack.extend(item)
 
 
 def _is_canonical_houdini_path(path: str) -> bool:
@@ -798,13 +1286,13 @@ def _required_capabilities(graph_spec: dict[str, Any]) -> list[str]:
     return sorted(capabilities)
 
 
-def _validate_complexity(value: Any) -> None:
+def _validate_complexity(value: Any, *, max_values: int = MAX_BUNDLE_VALUES) -> None:
     count = 0
     stack: list[tuple[Any, int]] = [(value, 0)]
     while stack:
         item, depth = stack.pop()
         count += 1
-        if count > MAX_BUNDLE_VALUES or depth > MAX_BUNDLE_DEPTH:
+        if count > max_values or depth > MAX_BUNDLE_DEPTH:
             raise BundleValidationError("HOCUS519", "Compiled bundle exceeds structural complexity limits.")
         if isinstance(item, float) and not math.isfinite(item):
             raise BundleValidationError("HOCUS519", "Compiled bundle contains a non-finite number.")

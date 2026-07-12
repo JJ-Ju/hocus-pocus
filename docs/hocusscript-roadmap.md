@@ -252,6 +252,10 @@ Delivered evidence:
 
 ## 10. HS6: Modules and Studio Libraries
 
+Contract status (Batch A, 2026-07-11): locked. HS6 uses language `0.2`, compiler `0.4.0`, GraphSpec `0.3`, and bundle `0.3`; `0.1` remains unchanged. The contract fixes one root graph/module per file, literal imports, `bool`/`int`/`float`/`string`/`node_output` parameters and exports, named `use` instances with mandatory durable `@id` seeds, namespaced module-local identity seeds, aggregate limits, interned expansion stacks, native-only resolution, and separately approved external aliases. `expansion-map-v1` and `resolved-module-set-v1` are standalone strict contracts; GraphSpec `0.3` embeds the exact expansion-map contract.
+
+Safe Batch A scaffolds include strict v3 manifest/lock and module-manifest decoding, version-gated GraphSpec/bundle trust-boundary shapes, standalone schema resources, read-only lock verification, and empty-module lock create/update with explicit write authority. Language `0.2` parsing/compilation/live preview remain disabled. Nonempty lock updates remain disabled until the resolver derives and verifies module content, interfaces, transitive hashes, aliases, and approvals. Module versions use one strict SemVer 2.0 grammar including build metadata across all contracts.
+
 Objectives:
 
 - typed module parameters and exports
@@ -269,7 +273,20 @@ Exit criteria:
 - dynamic imports, implicit environment reads, network access, reflection, and unbounded expansion are impossible
 - module upgrades are explicit and diff-visible
 - the same project can be relocated without changing semantic IDs when its stable manifest UID, relative paths, content, and lockfiles are unchanged
-- expanded graphs remain inspectable and editable
+- expanded graphs remain inspectable; original module files remain the editable authority
+
+Implementation sequence:
+
+1. preserve the `0.1` lane and add version-dispatched `0.2` source-unit parsing and formatting
+2. implement same-project literal imports, ordered module roots, typed interfaces, cycle rejection, and a pure resolver session
+3. implement hygienic expansion, shared budgets/cancellation, stable instance identity, `expansion-map-v1`, and expansion inspection
+4. bind the manifest/lock v3 and bundle `0.3` scaffolds to resolver-derived `resolved-module-set-v1`; then enable verified nonempty lock updates
+5. make semantic resolution, document provenance, and default UIDs consume module origins and instance paths
+6. add native project-aware completion/navigation while keeping MCP content-only
+7. enable external aliases only with declaration, separate root approval, module manifests, complete locks, and hostile-path coverage
+8. implement bounded deterministic conditionals and iteration after fixed expansion budgets have production evidence; recursion remains forbidden
+
+The safe first coding slice is same-project static imports with typed scalar/`node_output` parameters and exports. It excludes external packages, conditionals, iteration, and recursion.
 
 ## 11. HS7: Network-Family and Value Parity
 
@@ -397,6 +414,8 @@ Code implemented but awaiting live Houdini validation remains explicitly `implem
 Status: open
 
 Canonical path resolution blocks ordinary traversal and symlink/junction escapes, but pathname check-then-open still permits a narrow reparse-point swap race between validation and file open. Before project reads are used from a privileged, multi-user, or service-hosted process, implement descriptor/handle-based opens, verify the final object identity and containment from the opened handle, and add Windows junction plus POSIX symlink race tests. Native same-user CLI operation may continue while this remains explicitly gated; Houdini MCP still performs no project-file reads.
+
+The v3 empty-lock writer now uses an exclusive sibling update lease, exact digest rechecks immediately before atomic publication, and no-overwrite creation. This serializes cooperating Hocus writers but is not a filesystem-native compare-and-swap against an arbitrary non-cooperating writer in the final recheck/replace window. A process crash can also leave a stale lease requiring manual recovery. Platform handle-based locking, stale-lease ownership/recovery, and adversarial raw-writer race tests remain part of this blocker before multi-user/service-hosted lock updates are enabled.
 
 ### HS-BLOCK-002: Non-Mutating Live Named/Typed Connector Fidelity
 

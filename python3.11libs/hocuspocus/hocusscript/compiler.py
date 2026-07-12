@@ -310,9 +310,19 @@ def compile_source(
         tokens = Lexer(source, diagnostic_source).tokenize()
         parser = Parser(tokens)
         syntax = parser.parse()
-        graph = lower_syntax(syntax)
         diagnostics.extend(parser.diagnostics)
-        if not any(item.severity == "error" for item in diagnostics):
+        parsed_version = syntax.version.value if syntax.version is not None else "0.1"
+        if parsed_version not in SUPPORTED_LANGUAGE_VERSIONS:
+            version_span = syntax.version.value_span if syntax.version is not None else syntax.span
+            diagnostics.append(_diagnostic(
+                "HOCUS102",
+                f"Unsupported HocusScript language version: {parsed_version}.",
+                version_span,
+                details={"supportedVersions": sorted(SUPPORTED_LANGUAGE_VERSIONS)},
+            ))
+        else:
+            graph = lower_syntax(syntax)
+        if graph is not None and not any(item.severity == "error" for item in diagnostics):
             remaining_diagnostics = max(1, max_diagnostics - len(diagnostics))
             diagnostics.extend(validate_graph(graph, max_diagnostics=remaining_diagnostics))
     except HocusSourceError as exc:

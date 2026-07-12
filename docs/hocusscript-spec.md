@@ -542,6 +542,15 @@ Separate versions exist for the language, compiler, GraphSpec, document schema, 
 
 Major language versions may break syntax or semantics. Minor versions are backward compatible. Unsupported newer syntax is rejected rather than guessed. A future `hocus migrate` command will perform explicit source upgrades.
 
+HS6 adds a new lane; it does not reinterpret any `0.1` artifact:
+
+| Language | Compiler | GraphSpec | Compiled bundle | Meaning |
+| --- | --- | --- | --- | --- |
+| `0.1` | `0.3.0` | `0.2` | `0.1`/`0.2` | Existing single-file graph lane |
+| `0.2` | `0.4.0` | `0.3` | `0.3` | Static modules, typed expansion, and transitive module provenance |
+
+Compiler `0.4.0` MUST retain the existing `0.1` parser and emit GraphSpec `0.2`; it emits GraphSpec `0.3` and bundle `0.3` only for language `0.2`. Decoders reject mixed pairs rather than upgrading them implicitly. Portable language `0.2` compilation requires future project manifest/lock v3; v1 and v2 remain immutable.
+
 ## 14. Compile and Apply Contract
 
 ### 14.1 `document.compile_source`
@@ -642,7 +651,82 @@ The native `hocus write-export` command owns the filesystem handoff. It accepts 
 
 ## 16. Modules and Imports
 
-Modules are planned for a later language minor. They will provide typed parameters, hygienic local symbols, explicit exports, pure deterministic expansion, bounded expansion, source maps through expansion, and a transitive lockfile.
+Language `0.2` adds pure compile-time modules. A source file contains exactly one root `graph` or one root `module`, preceded by its `hocus 0.2;` header and zero or more literal imports. Imports, module declarations, and instances never execute host-language code.
+
+```hocus
+hocus 0.2;
+import { Noise as StudioNoise } from "@studio/noise.hocus";
+
+graph asset {
+  target "/obj/asset";
+  category Sop;
+  mode merge;
+  node source: "box" {}
+  use noise @id("asset-noise") = StudioNoise(source = source.output[0], scale = 2.0);
+  node result: "null" { input[0] = noise.result; }
+  output = result;
+}
+```
+
+```hocus
+hocus 0.2;
+
+module Noise(
+  source: node_output,
+  scale: float = 1.0,
+) exports (
+  result: node_output,
+  effectiveScale: float,
+) {
+  node noise @id("noise-node"): "mountain" {
+    input[0] = param.source;
+    height = param.scale;
+  }
+  export result = noise.output[0];
+  export effectiveScale = param.scale;
+}
+```
+
+The `0.2` type set is exactly `bool`, `int`, `float`, `string`, and `node_output`. Parameters and exports use the same types. Arguments are named, required unless a literal default is declared, and must match exactly; there are no implicit numeric conversions, nullable values, spreads, overloads, generics, arrays, or parameterized code blocks in this lane. `node_output` is the only graph-handle type. Scalar references may appear only where a scalar value is legal. Export expressions are literals, `param.<name>`, a local node output, or a nested instance export of the declared type.
+
+Imports have the single static form `import { ExportedName as LocalName } from "literal.hocus";`; `as LocalName` MAY be omitted. Specifiers require an exact `.hocus` suffix and never infer extensions or index files. `ExportedName` must equal the imported file's one module declaration. Every instance uses `use local @id("durable-seed") = ModuleName(name = value, ...);`; its bounded seed follows the node-ID lexical pattern and is unique within its enclosing graph/module. Nodes and instances share one local symbol namespace. Modules cannot declare a target, mode, ownership, external/adopt reference, or graph flag. A module-local node/use `@id` is only a namespaced identity seed, never a direct network-document UID; node seeds are optional and fall back to the local symbol, while every `use` seed is mandatory. Conditionals, iteration, and recursion are not part of the initial `0.2` core.
+
+Resolution is deterministic and native-only:
+
+1. `./` and `../` specifiers resolve relative to the importing file after canonical containment checks.
+2. Non-relative local specifiers search ordered manifest `module_directories`; the first match is selected and locked. Adding an earlier match makes verification stale and requires an explicit lock update.
+3. `@alias/path.hocus` resolves only through a manifest-declared alias. The alias declares expected external library UID and version; its physical root comes from a separate explicit CLI/editor approval such as `--module-root alias=path`. Host paths never enter portable artifacts.
+4. Every file remains inside the project or separately approved alias root after symlink/junction-aware canonicalization. Absolute imports, dynamic strings, environment lookup, network fetches, and implicit Houdini/package searches are rejected.
+
+Local module files use `hocus-project://<project-uid>/<relative-path>`; approved external libraries use `hocus-module://<library-uid>/<relative-path>`. Lexical import aliases and instance symbols are not identity. Stable module identity is canonical URI plus declared name. Expanded identity derives from graph identity, the ordered nested instance-`@id` seed path, module URI, and the local node/use `@id` seed or symbol fallback. A `use` symbol may therefore be renamed without replacing its expanded entities when its seed is unchanged. Argument values do not change identity. Generated symbols use a reserved collision-proof encoding; authored `__hocus_` symbols are forbidden.
+
+Expansion is pure, after import/interface validation and before catalog resolution. It produces flat GraphSpec `0.3`, strict `resolved-module-set-v1`, and strict `expansion-map-v1`. GraphSpec `0.3` embeds that exact standalone expansion-map object rather than defining a second projection. The expanded graph is inspectable as JSON or normalized generated source, but module files remain the editable authority; editing generated expansion is not a source round trip.
+
+Every generated GraphSpec pointer has a primary source span and nullable `stackId`. `expansion-map-v1` interns ordered expansion stacks in one top-level `stacks` array; mappings never repeat frames. A stack ID is SHA-256 over domain `hocus-expansion-stack-v1` plus the canonical frame array. Stacks are sorted and unique by `stackId`; every non-null mapping reference resolves exactly once, and unreferenced stacks are forbidden. Each frame identifies module URI and source digest, module name, instance symbol, durable instance-ID path, import span when applicable, and `use` span. A null `stackId` means the entry source has no module-expansion frame. Substituted arguments point primarily to the call-site argument and retain the parameter declaration as related origin. Diagnostics resolve and reuse the same interned frames. Document lowering consumes per-entity module URI, source digest, durable instance-ID path, and origin rather than hardcoding the entry source.
+
+Portable manifest/lock v3 is a new schema pair. Manifest v3 adds ordered `module_directories` and logical aliases without approved host roots. External roots contain `hocus.module.toml` v1 with stable library UID, strict SemVer 2.0 version (including optional pre-release and build metadata), supported language versions, and allowed entry modules. The same SemVer grammar applies to manifest aliases, lock records, resolved module sets, and bundle module dependencies. Lock v3 preserves the v2 catalog pin and records every transitive module by canonical URI, source and interface digests, project/library identity, version and module-manifest digest when applicable, resolved alias when applicable, and sorted dependency URIs. Ordering is by module URI. Compile is verify-only. Lock verification and an empty-module create/update scaffold may ship in Batch A, but any nonempty module update is rejected until the resolver derives every record from actual contained/approved source. The eventual `hocus lock --update` is explicit, capability-gated, expected-digest guarded, and atomic; compile and MCP never write locks.
+
+Bundle `0.3` embeds the resolved module set and expansion map, lists every module source in `dependencies`, and binds them into its hash. The live MCP consumes only that bundle and never resolves paths or reads the project.
+
+The live schema resource surface registers GraphSpec `0.3`, `expansion-map-v1`, and `resolved-module-set-v1` separately. A client can therefore resolve GraphSpec's external expansion-map `$ref` without filesystem access; publishing GraphSpec `0.3` without its referenced standalone schema is invalid.
+
+Native `complete_path`/editor completion uses the same `ProjectContext`, resolver policy, and locked module interfaces as compilation. It completes literal import paths, exported module names, parameter names/types, required arguments, and instance exports without executing or expanding modules. The content-only MCP completion endpoint does not read project files; it remains catalog/source-local unless a future call supplies a separate bounded module-interface snapshot.
+
+| HS6 limit | Default |
+| --- | ---: |
+| Source bytes per file | 1 MiB |
+| Aggregate transitive source bytes | 8 MiB |
+| Resolved module files | 4,096 |
+| Import depth | 64 |
+| Module-instance depth | 64 |
+| Module instances | 4,096 |
+| Parameters or exports per module | 256 each |
+| Expanded nodes | 10,000 |
+| Aggregate embedded code | 4 MiB |
+| Expansion/source-map entries | 100,000 |
+| Diagnostics | 500 |
+
+Import and instantiation cycles are rejected; recursion has a limit of zero. Cancellation is checked between reads, interface validation, each instance, and GraphSpec emission. Implementations MAY configure lower limits but never higher limits at an untrusted live boundary.
 
 Modules MUST NOT provide:
 
@@ -652,7 +736,7 @@ Modules MUST NOT provide:
 - unbounded loops or recursion
 - hidden mutation
 
-Imports first resolve relative to the importing source file, then through ordered project `source_directories`/module roots. Every native compiler result must remain inside the explicit project directory unless a manifest-declared external module is independently locked. Paths are canonicalized with symlink-aware containment checks. Module URIs, stable project UID, versions, and content hashes are recorded in the bundle and plan.
+Same-project modules are the first implementation slice. External aliases may be enabled only when separate approval, library manifest, transitive lock, containment, and hostile-path gates land together.
 
 ## 17. Formatting, Export, and Round-Trip
 

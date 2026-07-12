@@ -1,6 +1,9 @@
 """Offline HocusScript parsing, validation, and formatting."""
 
-from .bundle import BUNDLE_VERSION, BundleValidationError, CompiledBundle, decode_compiled_bundle
+from .bundle import (
+    BUNDLE_VERSION, MODULE_BUNDLE_VERSION, BundleValidationError, CompiledBundle,
+    decode_compiled_bundle,
+)
 from .catalog import (
     CATALOG_SCHEMA_URI,
     CATALOG_VERSION,
@@ -31,8 +34,34 @@ from .editor import (
 )
 from .formatter import format_graph
 from .exporter import ExportDiagnostic, NetworkDocumentExport, export_network_document
-from .model import COMPILER_VERSION, GRAPH_SPEC_VERSION, CompileResult, GraphSpec, graph_spec_from_dict
-from .project import ProjectContext, ProjectError, compile_path
+from .model import (
+    COMPILER_VERSION,
+    EXPANSION_MAP_VERSION,
+    GRAPH_SPEC_VERSION,
+    MODULE_COMPILER_VERSION,
+    MODULE_GRAPH_SPEC_VERSION,
+    MODULE_LANGUAGE_VERSION,
+    CompileResult,
+    ExpansionFrame,
+    ExpansionMap,
+    ExpansionOrigin,
+    ExpansionStack,
+    GraphSpec,
+    ModuleDependency,
+    RelatedOrigin,
+    graph_spec_from_dict,
+)
+from .modules import MODULE_MANIFEST_SCHEMA_URI, ModuleManifest, decode_module_manifest
+from .project import (
+    ExternalLibraryAlias,
+    LockVerificationResult,
+    ModuleLockRecord,
+    ProjectContext,
+    ProjectError,
+    compile_path,
+    update_project_lock,
+    verify_project_lock,
+)
 from .semantic import (
     CatalogConstraint,
     ConnectionSelection,
@@ -46,6 +75,7 @@ from .semantic import (
 
 __all__ = [
     "BUNDLE_VERSION",
+    "MODULE_BUNDLE_VERSION",
     "BundleValidationError",
     "CATALOG_SCHEMA_URI",
     "CATALOG_VERSION",
@@ -56,6 +86,10 @@ __all__ = [
     "CompletionItem",
     "CompletionResult",
     "COMPILER_VERSION",
+    "MODULE_COMPILER_VERSION",
+    "MODULE_GRAPH_SPEC_VERSION",
+    "MODULE_LANGUAGE_VERSION",
+    "EXPANSION_MAP_VERSION",
     "CompiledBundle",
     "CatalogConstraint",
     "ConnectionSelection",
@@ -67,6 +101,10 @@ __all__ = [
     "EditorCheckResult",
     "EditorFormatResult",
     "ExportDiagnostic",
+    "ExpansionFrame",
+    "ExpansionMap",
+    "ExpansionOrigin",
+    "ExpansionStack",
     "FakeCatalogProvider",
     "GraphSpec",
     "GRAPH_SPEC_VERSION",
@@ -74,10 +112,17 @@ __all__ = [
     "ProjectError",
     "PREVIEW_VERSION",
     "NetworkDocumentExport",
+    "ModuleDependency",
+    "RelatedOrigin",
     "SUPPORTED_LANGUAGE_VERSIONS",
     "SourcePosition",
     "SourceSpan",
     "ExternalNodeBinding",
+    "ExternalLibraryAlias",
+    "LockVerificationResult",
+    "ModuleLockRecord",
+    "ModuleManifest",
+    "MODULE_MANIFEST_SCHEMA_URI",
     "OperatorSelection",
     "ParameterSelection",
     "SemanticResult",
@@ -88,6 +133,7 @@ __all__ = [
     "complete_source",
     "decode_compiled_bundle",
     "decode_catalog_snapshot",
+    "decode_module_manifest",
     "format_graph",
     "format_source",
     "export_network_document",
@@ -95,4 +141,6 @@ __all__ = [
     "lower_bundle_to_document",
     "resolve_graph",
     "validate_graph",
+    "update_project_lock",
+    "verify_project_lock",
 ]
