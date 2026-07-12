@@ -9,7 +9,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "python3.11libs"))
 
-from hocuspocus.hocusscript import compile_source, update_project_lock
+from hocuspocus.hocusscript import ProjectContext, compile_source, update_project_lock
 from hocuspocus.hocusscript.module_compiler import compile_project_module_graph
 from hocuspocus.hocusscript.resolved_modules import (
     ModuleResolutionError, module_interface_digest, module_source_digest,
@@ -106,6 +106,11 @@ class HocusScriptModuleCompilerTests(unittest.TestCase):
             second = compile_project_module_graph(root, "src/main.hocus")
             self.assertEqual(first.to_dict(), second.to_dict())
             self.assertEqual(first.compile_digest, second.compile_digest)
+            context = ProjectContext.load(root)
+            self.assertEqual(first.catalog_content_digest, context.catalog_content_digest)
+            self.assertEqual(first.catalog_fingerprint, context.catalog_fingerprint)
+            self.assertEqual(first.to_dict()["catalogContentDigest"], context.catalog_content_digest)
+            self.assertEqual(first.to_dict()["catalogFingerprint"], context.catalog_fingerprint)
             self.assertEqual([item.uri.rsplit("/", 1)[-1] for item in first.modules],
                              ["leaf.hocus", "root.hocus"])
             self.assertEqual(first.graph_spec.graph_spec_version, "0.3")

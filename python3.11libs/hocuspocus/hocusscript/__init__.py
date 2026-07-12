@@ -69,6 +69,12 @@ from .module_compiler import (
     ModuleProjectCompileResult,
     compile_project_module_graph,
 )
+from .module_semantic import (
+    ModuleSemanticCompileError,
+    ModuleSemanticCompileResult,
+    compile_project_module_bundle,
+    compile_project_module_semantic,
+)
 from .modules import MODULE_MANIFEST_SCHEMA_URI, ModuleManifest, decode_module_manifest
 from .project import (
     ExternalLibraryAlias,
@@ -163,6 +169,8 @@ __all__ = [
     "ModuleExpansionError",
     "ModuleProjectCompileError",
     "ModuleProjectCompileResult",
+    "ModuleSemanticCompileError",
+    "ModuleSemanticCompileResult",
     "RelatedOrigin",
     "SUPPORTED_LANGUAGE_VERSIONS",
     "SourcePosition",
@@ -188,6 +196,8 @@ __all__ = [
     "SnapshotCatalogProvider",
     "compile_path",
     "compile_project_module_graph",
+    "compile_project_module_bundle",
+    "compile_project_module_semantic",
     "canonical_module_uri",
     "compile_source",
     "check_source",

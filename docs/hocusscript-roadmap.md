@@ -262,6 +262,8 @@ Native integration status (Batch C, 2026-07-11): the explicit read-only `resolve
 
 Lock-update status (Batch D, 2026-07-11): the explicit native `update_project_module_lock` API now derives nonempty same-project v3 lock records from caller-selected entry files and their exact contained import closures. A cooperating-writer lease covers expected-digest authority, bounded resolution, source/interface/transitive digest derivation, sealed DAG validation and expansion, final source/root-winner/project/catalog rechecks, and atomic publication. Multi-entry updates are deterministic and union shared dependencies once; stale prior locks can be repaired without trusting their module records, and the host-path-free receipt reports exact entry and lock identities. The public caller-record `update_project_lock` API remains empty-only, compile remains verify-only, and MCP never reads or writes project files. External aliases remain disabled; crash-stale lease recovery, directory durability, noncooperating-writer CAS, and descriptor-safe privileged reads remain under `HS-BLOCK-001`.
 
+Semantic bundle status (Batch E, 2026-07-11): the resolver handoff and native compile result now seal the exact verified catalog content digest and fingerprint alongside project/lock/module inputs. The one-shot `compile_project_module_bundle(project_directory, entry_source_path)` API internally performs sealed expansion, reloads and compares the exact v3 project/lock/catalog snapshot, resolves GraphSpec `0.3` against that catalog, maps diagnostics to interned expansion origin/stack IDs, and constructs a deterministic portable bundle `0.3` only through the strict external decoder. Bundle dependencies exactly mirror the URI-sorted resolved module set; source-map, graph, semantic, catalog, project, lock, and module identities are cross-validated. Diagnostic source locations must use canonical project/module URIs and contained origin spans, cannot duplicate expansion frames, and cannot claim live entity/Houdini paths. Relocation preserves bundle identity. This remains native/offline: bundle `0.3` document lowering, live preview/apply, CLI dispatch, project-aware editor navigation, and external aliases are still fail-closed.
+
 Objectives:
 
 - typed module parameters and exports
@@ -286,8 +288,8 @@ Implementation sequence:
 1. preserve the `0.1` lane and add version-dispatched `0.2` source-unit parsing and formatting
 2. implement same-project literal imports, ordered module roots, typed interfaces, cycle rejection, and a pure resolver session
 3. implement hygienic expansion, shared budgets/cancellation, stable instance identity, `expansion-map-v1`, and expansion inspection
-4. bind the manifest/lock v3 and bundle `0.3` scaffolds to resolver-derived `resolved-module-set-v1`; verified same-project nonempty lock updates are complete, while semantic bundle production remains pending
-5. make semantic resolution, document provenance, and default UIDs consume module origins and instance paths
+4. bind the manifest/lock v3 and bundle `0.3` scaffolds to resolver-derived `resolved-module-set-v1`; verified same-project nonempty lock updates and native semantic bundle production are complete
+5. make document provenance and default UIDs consume the already-resolved module origins and instance paths
 6. add native project-aware completion/navigation while keeping MCP content-only
 7. enable external aliases only with declaration, separate root approval, module manifests, complete locks, and hostile-path coverage
 8. implement bounded deterministic conditionals and iteration after fixed expansion budgets have production evidence; recursion remains forbidden
@@ -458,3 +460,9 @@ Optional `@id("...")` source identity now maps directly to persistent network-do
 Status: resolved in HS5 independent review
 
 The first export smoke used a normalized projection and therefore did not prove the registered endpoint against actual root category/default parameter state. The corrected implementation accepts `/obj` as the SOP container while requiring `persistent_user_data` identity for the root anchor and every exported child. Signed per-node `managedFields` survive Houdini user data; live reimport reconstructs ownership on derived bindings, code blobs, data edges, and output edges. Root/default/artist-owned fields are omitted from source and enumerated as `preservedState`, so they remain baseline-preserved merge state rather than being silently promoted to portable source ownership. The final H21.0.729 smoke calls the registered handler over the unmodified force-synced document.
+
+### HS-BLOCK-008: Bundle 0.3 Diagnostic and URI Parity Before Live Acceptance
+
+Status: open; blocks Bundle `0.3` live preview/document lowering, not native offline production
+
+The strict Bundle `0.3` decoder now rejects host-path diagnostic URIs, invalid or out-of-origin spans, duplicated expansion frames, and offline live-path/entity claims. It can authenticate that a diagnostic span is structurally coherent and contained by its expansion origin, but source bytes are intentionally absent from the content-only bundle, so it cannot reconstruct arbitrary interior multiline offset/line/column relationships from bytes. Its URI decoder also enforces canonical percent encoding and traversal/absolute-path rejection but does not yet share every native portability rule, including Unicode NFC and all Windows-reserved path segments. Before enabling live Bundle `0.3` acceptance, either bind diagnostics to exact GraphSpec field spans or explicitly treat their locations as untrusted display hints, unify URI validation with the native portable-path contract, add rehashed hostile fixtures, and freshly re-resolve all semantic selections against the live catalog. The current native one-shot producer already derives these fields from validated project sources, and live/document lowering remains fail-closed with `HOCUS700` while this gate is open.

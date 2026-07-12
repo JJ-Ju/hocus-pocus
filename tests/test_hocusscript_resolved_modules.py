@@ -103,6 +103,28 @@ def _validate(fixtures, *, roots=None, lock_records=None, entry=None, entry_impo
 
 
 class ResolvedModuleDagTests(unittest.TestCase):
+    def test_catalog_pins_are_paired_strict_and_sealed_but_optional_for_pure_callers(self) -> None:
+        leaf = _module("Leaf")
+        unpinned = _validate((leaf,), roots=(leaf,))
+        self.assertIsNone(unpinned.catalog_content_digest)
+        self.assertIsNone(unpinned.catalog_fingerprint)
+        fingerprint = "sha256:" + "b" * 64
+        pinned = _validate(
+            (leaf,), roots=(leaf,),
+            catalog_content_digest=DIGEST, catalog_fingerprint=fingerprint,
+        )
+        self.assertEqual(pinned.catalog_content_digest, DIGEST)
+        self.assertEqual(pinned.catalog_fingerprint, fingerprint)
+        self.assertNotEqual(pinned.handoff_digest, unpinned.handoff_digest)
+        for kwargs in (
+            {"catalog_content_digest": DIGEST},
+            {"catalog_fingerprint": fingerprint},
+            {"catalog_content_digest": "bad", "catalog_fingerprint": fingerprint},
+        ):
+            with self.subTest(kwargs=kwargs), self.assertRaises(ModuleResolutionError) as rejected:
+                _validate((leaf,), roots=(leaf,), **kwargs)
+            self.assertEqual(rejected.exception.code, "HOCUS461")
+
     def test_verified_reachable_dag_is_exact_sorted_and_schema_valid(self) -> None:
         alpha, zulu = _module("Alpha"), _module("Zulu")
         root = _module("Root", (zulu, alpha))

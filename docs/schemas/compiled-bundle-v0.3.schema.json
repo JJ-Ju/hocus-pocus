@@ -191,19 +191,56 @@
     },
     "semanticDiagnostic": {
       "type": "object",
-      "required": ["severity", "code", "phase", "message"],
+      "additionalProperties": false,
+      "required": [
+        "severity", "code", "phase", "message", "jsonPointer", "originId", "stackId",
+        "related", "expansionStack", "entityUid", "houdiniPath"
+      ],
       "properties": {
         "severity": {"enum": ["info", "warning"]},
         "code": {"type": "string", "minLength": 1},
         "phase": {"type": "string", "minLength": 1},
         "message": {"type": "string", "minLength": 1},
-        "jsonPointer": {"type": ["string", "null"]},
-        "sourceUri": {"type": "string", "minLength": 1},
-        "span": {"type": "object"},
-        "related": {"type": "array"},
+        "jsonPointer": {
+          "type": ["string", "null"],
+          "maxLength": 8192,
+          "pattern": "^(?:/(?:[^~/]|~0|~1)*)*$"
+        },
+        "originId": {"anyOf": [{"$ref": "#/$defs/digest"}, {"type": "null"}]},
+        "stackId": {"anyOf": [{"$ref": "#/$defs/digest"}, {"type": "null"}]},
+        "sourceUri": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096,
+          "pattern": "^hocus-(?:project|module)://[a-z0-9][a-z0-9.-]{0,127}/(?!/)(?!\\.{1,2}(?:/|$))(?!.*\\/\\.{1,2}(?:/|$))(?!.*\\\\)(?!.*:).+\\.hocus$"
+        },
+        "span": {"$ref": "#/$defs/diagnosticSpan"},
+        "related": {"type": "array", "maxItems": 0},
         "notes": {"type": "array"},
         "fixes": {"type": "array"},
-        "details": {"type": "object"}
+        "details": {"type": "object"},
+        "expansionStack": {"type": "array", "maxItems": 0},
+        "entityUid": {"type": "null"},
+        "houdiniPath": {"type": "null"}
+      }
+    },
+    "sourcePosition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["offset", "line", "column"],
+      "properties": {
+        "offset": {"type": "integer", "minimum": 0},
+        "line": {"type": "integer", "minimum": 1},
+        "column": {"type": "integer", "minimum": 1}
+      }
+    },
+    "diagnosticSpan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["start", "end"],
+      "properties": {
+        "start": {"$ref": "#/$defs/sourcePosition"},
+        "end": {"$ref": "#/$defs/sourcePosition"}
       }
     }
   }

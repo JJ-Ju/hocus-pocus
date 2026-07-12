@@ -53,6 +53,8 @@ class ModuleProjectCompileResult:
     project_uid: str
     project_manifest_digest: str
     project_lock_digest: str
+    catalog_content_digest: str
+    catalog_fingerprint: str
     resolver_policy_digest: str
     entry_source_uri: str
     entry_source_digest: str
@@ -86,6 +88,8 @@ class ModuleProjectCompileResult:
             "projectUid": self.project_uid,
             "projectManifestDigest": self.project_manifest_digest,
             "projectLockDigest": self.project_lock_digest,
+            "catalogContentDigest": self.catalog_content_digest,
+            "catalogFingerprint": self.catalog_fingerprint,
             "resolverPolicyDigest": self.resolver_policy_digest,
             "entrySourceUri": self.entry_source_uri,
             "entrySourceDigest": self.entry_source_digest,
@@ -158,12 +162,16 @@ def compile_project_module_graph(
     resolved_set_digest = _digest_text(dag.resolved_module_set_json)
     graph_digest = _digest_json(graph_dict)
     expansion_digest = _digest_json(expansion_dict)
+    if dag.catalog_content_digest is None or dag.catalog_fingerprint is None:
+        raise ModuleProjectCompileError("HOCUS460", "Native module compilation requires sealed catalog pins.")
     core = {
         "domain": "hocus-module-compile-result-v1",
         "compilerVersion": MODULE_COMPILER_VERSION,
         "projectUid": dag.resolved_module_set["projectUid"],
         "projectManifestDigest": dag.resolved_module_set["projectManifestDigest"],
         "projectLockDigest": dag.resolved_module_set["projectLockDigest"],
+        "catalogContentDigest": dag.catalog_content_digest,
+        "catalogFingerprint": dag.catalog_fingerprint,
         "resolverPolicyDigest": dag.resolved_module_set["resolverPolicyDigest"],
         "entrySourceUri": dag.entry_source_uri,
         "entrySourceDigest": dag.entry_source_digest,
@@ -178,6 +186,8 @@ def compile_project_module_graph(
         dag.resolved_module_set["projectUid"],
         dag.resolved_module_set["projectManifestDigest"],
         dag.resolved_module_set["projectLockDigest"],
+        dag.catalog_content_digest,
+        dag.catalog_fingerprint,
         dag.resolved_module_set["resolverPolicyDigest"],
         dag.entry_source_uri,
         dag.entry_source_digest, formatted_entry, _digest_text(formatted_entry),

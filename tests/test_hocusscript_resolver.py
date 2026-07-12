@@ -15,6 +15,7 @@ sys.path.insert(0, str(ROOT / "python3.11libs"))
 
 from hocuspocus.hocusscript.catalog import decode_catalog_snapshot
 from hocuspocus.hocusscript.project import ProjectError
+from hocuspocus.hocusscript.project import ProjectContext
 from hocuspocus.hocusscript.resolved_modules import (
     ModuleResolutionError, ResolvedModuleLimits, module_interface_digest, module_source_digest,
     module_transitive_digest,
@@ -112,7 +113,12 @@ class NativeResolverTests(unittest.TestCase):
             _valid_project(second)
             one = resolve_project_module_dag(first, "src/main.hocus")
             two = resolve_project_module_dag(second, Path("src/main.hocus"))
+            context = ProjectContext.load(first)
+            self.assertEqual(one.catalog_content_digest, context.catalog_content_digest)
+            self.assertEqual(one.catalog_fingerprint, context.catalog_fingerprint)
             self.assertEqual(one.resolved_module_set, two.resolved_module_set)
+            self.assertEqual(one.catalog_content_digest, two.catalog_content_digest)
+            self.assertEqual(one.catalog_fingerprint, two.catalog_fingerprint)
             self.assertEqual(one.ordered_uris, (
                 f"hocus-project://{UID}/modules-b/leaf.hocus",
                 f"hocus-project://{UID}/modules-b/root.hocus",

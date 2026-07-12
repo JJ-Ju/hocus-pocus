@@ -299,6 +299,8 @@ def expand_resolved_module_dag(
         entry_imports=dag.entry_imports,
         ordered_modules=dag.ordered_modules,
         resolved_module_set_json=dag.resolved_module_set_json,
+        catalog_content_digest=dag.catalog_content_digest,
+        catalog_fingerprint=dag.catalog_fingerprint,
     )
     if (
         not isinstance(dag.handoff_digest, str)

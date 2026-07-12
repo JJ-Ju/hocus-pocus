@@ -324,7 +324,7 @@ Verification:
 
 ## 9. HS6: Modules and Studio Libraries
 
-Status: Batches A-D complete for the native same-project language, resolution, expansion, and lock-update lane; bundle, semantic, external-library, and live integration remain pending
+Status: Batches A-E complete for the native same-project language, resolution, expansion, lock-update, semantic, and portable bundle lane; CLI/editor, external-library, document, and live integration remain pending
 
 Dependencies: HS5, import security design
 Houdini required: module compiler no; live module fixtures yes
@@ -347,11 +347,13 @@ Houdini required: module compiler no; live module fixtures yes
 - [x] Add same-project module source/interface/transitive content hashes and resolver-derived lockfile records.
 - [ ] Add external-library module manifests, versions, approved roots, and transitively complete lock records.
 - [x] Preserve bounded interned expansion stacks in expansion source maps.
-- [ ] Attach those shared expansion stacks to compiler diagnostics during resolved compiler integration.
+- [x] Attach semantic compiler diagnostics to shared expansion origin/stack IDs without duplicating interned frames; require portable contained source locations in Bundle `0.3`.
 - [x] Enforce import/instance depth, instance/node/source-map/interface limits, exact GraphSpec validation, and zero recursion in the pure content lane; aggregate source/code enforcement remains split between resolver and syntax contracts.
 - [x] Reject dynamic imports and keep the parser/resolver/expander free of host, filesystem, environment, network, clock, and random access.
 - [ ] Implement bounded deterministic conditionals/iteration after fixed expansion budgets have production evidence; they are outside the initial `0.2` core and recursion remains forbidden.
 - [x] Expose deterministic expanded GraphSpec `0.3`, expansion maps, resolved sets, formatted sources, and digests through the native typed result before semantic/apply integration.
+- [x] Seal exact catalog pins into the resolver/compiler handoff, run pinned GraphSpec `0.3` semantic resolution, and produce deterministic portable Bundle `0.3` through a one-shot native API and strict decoder.
+- [ ] Close `HS-BLOCK-008` diagnostic/URI parity and fresh-live-semantic gates before enabling Bundle `0.3` document lowering or live preview.
 - [ ] Add reviewed studio-module contract and provenance tests.
 
 Batch A delivered evidence:
@@ -382,6 +384,14 @@ Batch D delivered evidence:
 - an exclusive cooperating-writer lease encloses exact expected-lock authority, bounded multi-entry union derivation, sealed DAG validation and expansion for every entry, final source/root-winner/project/catalog/lock rechecks, and atomic no-overwrite/replace publication; no fallible read occurs after successful publication
 - the immutable receipt is host-path-free and binds canonical entry URIs/source digests, prior/new lock digests, catalog identity, canonical modules, and structural diff availability; stale old locks can be repaired without trusting their records
 - focused lock-update/receipt/project-v3 gates pass (10/10, 2/2, and 11/11), including stale-lock repair, final metadata-drift ordering, nested-alias fail-closed behavior, and cleanup on cancellation/publication failure; the full offline suite passes 294/294, and independent P0/P1 review is clean for the same-user boundary; the remaining platform locking, durability, and descriptor-safe pathname limits stay recorded in `HS-BLOCK-001`
+
+Batch E delivered evidence:
+
+- exact catalog content/fingerprint pins are paired, digest-validated, sealed into `hocus-resolved-dag-handoff-v1`, reverified by expansion, exposed by the host-path-free native compile result, and included in its compile digest
+- `compile_project_module_semantic` internally reloads the exact project/lock/catalog snapshot, supports only language `0.2` plus GraphSpec `0.3`, derives catalog selections without caller-supplied snapshots or selections, and maps every diagnostic to the exact/longest enclosing expansion origin and interned stack ID
+- the public one-shot `compile_project_module_bundle` accepts only an explicit project directory and entry path; it emits portable Bundle `0.3` with exact URI-sorted dependency records, resolved module set, expansion source maps, semantic selections, catalog constraints, capabilities, and project/lock provenance, then self-validates through the content-only decoder
+- the decoder and schema reject rehashed graph/resolved-set/selection/provenance tampering, host-path diagnostic URIs, incoherent or out-of-origin spans, duplicated expansion frames, and offline live entity/Houdini-path claims; relocation is byte-identical and document lowering remains explicitly blocked with `HOCUS700`
+- focused semantic/bundle/module/live-boundary gates pass, and the full offline suite passes 310/310; independent review found and verified fixes for the same-process attestation overclaim and diagnostic portability gap, while live/MCP bundle acceptance remains disabled
 
 ## 10. HS7: Fidelity Matrix
 

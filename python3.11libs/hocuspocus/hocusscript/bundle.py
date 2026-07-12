@@ -9,7 +9,7 @@ import math
 import re
 from dataclasses import dataclass
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 
 from .compiler import SUPPORTED_LANGUAGE_VERSIONS
 from .model import (
@@ -163,6 +163,92 @@ class CompiledBundle:
         if pretty:
             return json.dumps(self.to_dict(), ensure_ascii=False, indent=2, sort_keys=True) + "\n"
         return _canonical_json(self.to_dict())
+
+
+def _bundle_from_module_semantic(result: Any) -> CompiledBundle:
+    """Assemble Bundle v0.3 from the one-shot compiler's private handoff.
+
+    The exact-type and digest checks are internal invariants against accidental
+    integration drift. They are not an authorization or process trust boundary;
+    the strict content decoder remains the final bundle authority.
+    """
+
+    from .module_semantic import ModuleSemanticCompileResult
+
+    if type(result) is not ModuleSemanticCompileResult:
+        raise TypeError("Bundle v0.3 requires an exact ModuleSemanticCompileResult.")
+    compiled = result.compile_result
+    graph_spec = json.loads(compiled.graph_spec_json)
+    resolved_module_set = json.loads(compiled.resolved_module_set_json)
+    semantic = json.loads(result.semantic_json)
+    if not isinstance(semantic, dict):
+        raise ValueError("Bundle v0.3 requires a canonical semantic resolution object.")
+    canonical_semantic = _canonical_json(semantic)
+    semantic_digest = "sha256:" + hashlib.sha256(canonical_semantic.encode("utf-8")).hexdigest()
+    semantic_core = json.loads(result.semantic_json)
+    for diagnostic in semantic_core.get("diagnostics", []):
+        diagnostic.pop("originId", None)
+        diagnostic.pop("stackId", None)
+    graph_digest = "sha256:" + hashlib.sha256(_canonical_json(graph_spec).encode("utf-8")).hexdigest()
+    resolved_set_digest = "sha256:" + hashlib.sha256(
+        _canonical_json(resolved_module_set).encode("utf-8")
+    ).hexdigest()
+    expansion_digest = "sha256:" + hashlib.sha256(
+        _canonical_json(graph_spec["expansionMap"]).encode("utf-8")
+    ).hexdigest()
+    if (
+        not result.valid
+        or result.semantic_json != canonical_semantic
+        or not hmac.compare_digest(result.semantic_digest, semantic_digest)
+        or semantic_core != result.semantic_result.to_dict()
+        or compiled.graph_spec_json != _canonical_json(graph_spec)
+        or not hmac.compare_digest(compiled.graph_spec_digest, graph_digest)
+        or compiled.resolved_module_set_json != _canonical_json(resolved_module_set)
+        or not hmac.compare_digest(compiled.resolved_module_set_digest, resolved_set_digest)
+        or not hmac.compare_digest(compiled.expansion_map_digest, expansion_digest)
+    ):
+        raise ValueError("Bundle v0.3 requires a sealed canonical module-semantic result.")
+    dependencies = [
+        {"uri": item["uri"], "digest": item["sourceDigest"], "kind": "module"}
+        for item in sorted(resolved_module_set["modules"], key=lambda item: item["uri"])
+    ]
+    payload: dict[str, Any] = {
+        "$schema": "hocuspocus://schemas/compiled-bundle/v0.3",
+        "kind": "hocus_compiled_bundle",
+        "bundleVersion": MODULE_BUNDLE_VERSION,
+        "compilerVersion": MODULE_COMPILER_VERSION,
+        "graphSpecVersion": MODULE_GRAPH_SPEC_VERSION,
+        "languageVersion": MODULE_LANGUAGE_VERSION,
+        "portable": True,
+        "projectUid": compiled.project_uid,
+        "projectManifestDigest": compiled.project_manifest_digest,
+        "projectLockDigest": compiled.project_lock_digest,
+        "entrySource": {
+            "uri": compiled.entry_source_uri,
+            "digest": compiled.entry_source_digest,
+            "kind": "project_file",
+        },
+        "dependencies": dependencies,
+        "catalogConstraints": {
+            "schemaVersion": 1,
+            "fingerprint": compiled.catalog_fingerprint,
+            "contentDigest": compiled.catalog_content_digest,
+        },
+        "requiredCapabilities": semantic.get("requiredCapabilities"),
+        "sourceMaps": {
+            "format": "graph-spec-expansion-v1",
+            "entrySourceUri": compiled.entry_source_uri,
+            "embeddedInGraphSpec": True,
+            "expansionMapVersion": 1,
+            "expansionMapDigest": expansion_digest,
+        },
+        "graphSpec": graph_spec,
+        "semanticResolution": semantic,
+        "resolvedModuleSet": resolved_module_set,
+    }
+    canonical = _canonical_json(payload)
+    digest = "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    return decode_compiled_bundle({**payload, "bundleDigest": digest})
 
 
 def decode_compiled_bundle(value: Any) -> CompiledBundle:
@@ -320,7 +406,8 @@ def decode_compiled_bundle(value: Any) -> CompiledBundle:
         )
     if bundle_version in {BUNDLE_VERSION, MODULE_BUNDLE_VERSION}:
         semantic = _validate_semantic_resolution(
-            payload.get("semanticResolution"), catalog_constraints, graph_spec
+            payload.get("semanticResolution"), catalog_constraints, graph_spec,
+            require_module_provenance=bundle_version == MODULE_BUNDLE_VERSION,
         )
         if module_limits is not None and len(semantic["diagnostics"]) > module_limits["diagnostics"]:
             raise BundleValidationError("HOCUS521", "Semantic diagnostics exceed resolved module limits.")
@@ -585,7 +672,8 @@ def _validate_catalog_constraints(value: Any) -> dict[str, Any]:
 
 
 def _validate_semantic_resolution(
-    value: Any, constraint: dict[str, Any], graph: dict[str, Any]
+    value: Any, constraint: dict[str, Any], graph: dict[str, Any],
+    *, require_module_provenance: bool = False,
 ) -> dict[str, Any]:
     keys = {
         "stage", "valid", "readyForDocumentLowering", "catalogFingerprint", "diagnostics",
@@ -623,6 +711,8 @@ def _validate_semantic_resolution(
             or not diagnostic["message"]
         ):
             raise BundleValidationError("HOCUS521", "Semantic diagnostic records are malformed.")
+        if require_module_provenance:
+            _validate_semantic_diagnostic_provenance(diagnostic, graph)
     selection_shapes = {
         "operatorSelections": {
             "nodeSymbol", "nodeIndex", "jsonPointer", "category", "qualifiedName", "namespace",
@@ -766,6 +856,162 @@ def _validate_semantic_resolution(
     if value["readyForDocumentLowering"] != ready:
         raise BundleValidationError("HOCUS521", "Semantic document-lowering readiness is inconsistent with deferred checks.")
     return value
+
+
+def _validate_semantic_diagnostic_provenance(
+    diagnostic: dict[str, Any], graph: dict[str, Any],
+) -> None:
+    """Bind a module diagnostic to the canonical enclosing expansion origin."""
+
+    allowed = {
+        "severity", "code", "phase", "message", "jsonPointer", "originId", "stackId",
+        "sourceUri", "span", "related", "notes", "fixes", "details", "expansionStack",
+        "entityUid", "houdiniPath",
+    }
+    required = {
+        "jsonPointer", "originId", "stackId", "related", "expansionStack",
+        "entityUid", "houdiniPath",
+    }
+    if (
+        not required.issubset(diagnostic)
+        or set(diagnostic) - allowed
+    ):
+        raise BundleValidationError(
+            "HOCUS521", "Bundle v0.3 semantic diagnostics have an invalid provenance shape."
+        )
+    if diagnostic["expansionStack"] != [] or diagnostic["related"] != []:
+        raise BundleValidationError(
+            "HOCUS521", "Bundle v0.3 diagnostics cannot embed expansion frames or related source records."
+        )
+    if diagnostic["entityUid"] is not None or diagnostic["houdiniPath"] is not None:
+        raise BundleValidationError(
+            "HOCUS521", "Offline Bundle v0.3 diagnostics cannot claim live entity or Houdini paths."
+        )
+    pointer = diagnostic.get("jsonPointer")
+    if pointer is not None and (
+        not isinstance(pointer, str)
+        or len(pointer) > 8192
+        or _JSON_POINTER_PATTERN.fullmatch(pointer) is None
+        or not _json_pointer_resolves(graph, pointer)
+    ):
+        raise BundleValidationError("HOCUS521", "Semantic diagnostic jsonPointer is invalid.")
+    mapping = _enclosing_expansion_mapping(pointer, graph["expansionMap"]["mappings"])
+    expected_origin = mapping["originId"] if mapping is not None else None
+    expected_stack = mapping["stackId"] if mapping is not None else None
+    origin_id = diagnostic["originId"]
+    stack_id = diagnostic["stackId"]
+    if origin_id is not None:
+        _require_digest(origin_id, "semantic diagnostic originId", "HOCUS521")
+    if stack_id is not None:
+        _require_digest(stack_id, "semantic diagnostic stackId", "HOCUS521")
+    if origin_id != expected_origin or stack_id != expected_stack:
+        raise BundleValidationError(
+            "HOCUS521",
+            "Semantic diagnostic provenance does not match its enclosing expansion mapping.",
+            details={
+                "jsonPointer": pointer,
+                "expectedOriginId": expected_origin,
+                "expectedStackId": expected_stack,
+            },
+        )
+    if mapping is None:
+        if "sourceUri" in diagnostic or "span" in diagnostic:
+            raise BundleValidationError(
+                "HOCUS521", "Diagnostics without an expansion origin cannot claim source locations."
+            )
+        return
+    source_uri = diagnostic.get("sourceUri")
+    span = diagnostic.get("span")
+    primary = mapping["primarySpan"]
+    if (
+        source_uri != primary["sourceUri"]
+        or not _is_canonical_portable_source_uri(source_uri)
+        or not _diagnostic_span_is_strictly_contained(span, primary)
+    ):
+        raise BundleValidationError(
+            "HOCUS521", "Semantic diagnostic source location is not portable or contained in its origin."
+        )
+
+
+def _enclosing_expansion_mapping(
+    pointer: str | None, mappings: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    if pointer is None:
+        return None
+    matches = [
+        mapping for mapping in mappings
+        if mapping["generatedPointer"] == pointer
+        or mapping["generatedPointer"] == ""
+        or pointer.startswith(mapping["generatedPointer"] + "/")
+    ]
+    return max(matches, key=lambda item: len(item["generatedPointer"]), default=None)
+
+
+def _is_canonical_portable_source_uri(value: Any) -> bool:
+    if not isinstance(value, str) or len(value) > 4096:
+        return False
+    match = _MODULE_URI_PATTERN.fullmatch(value)
+    if match is None:
+        return False
+    encoded_path = match.group(3)
+    try:
+        decoded_path = unquote(encoded_path, errors="strict")
+    except (UnicodeDecodeError, ValueError):
+        return False
+    return (
+        quote(decoded_path, safe="/-._~") == encoded_path
+        and decoded_path.endswith(".hocus")
+        and not decoded_path.startswith("/")
+        and "\\" not in decoded_path
+        and ":" not in decoded_path
+        and all(part not in {"", ".", ".."} for part in decoded_path.split("/"))
+    )
+
+
+def _diagnostic_span_is_strictly_contained(value: Any, primary: dict[str, Any]) -> bool:
+    if not isinstance(value, dict) or set(value) != {"start", "end"}:
+        return False
+    for endpoint in ("start", "end"):
+        position = value[endpoint]
+        if not isinstance(position, dict) or set(position) != {"offset", "line", "column"}:
+            return False
+        if any(type(position[key]) is not int for key in position):
+            return False
+        if position["offset"] < 0 or position["line"] < 1 or position["column"] < 1:
+            return False
+    start, end = value["start"], value["end"]
+    primary_start, primary_end = primary["start"], primary["end"]
+    if not (
+        primary_start["offset"] <= start["offset"] < end["offset"] <= primary_end["offset"]
+        and (primary_start["line"], primary_start["column"])
+        <= (start["line"], start["column"])
+        < (end["line"], end["column"])
+        <= (primary_end["line"], primary_end["column"])
+    ):
+        return False
+    if start["offset"] == primary_start["offset"] and (
+        start["line"], start["column"]
+    ) != (primary_start["line"], primary_start["column"]):
+        return False
+    if end["offset"] == primary_end["offset"] and (
+        end["line"], end["column"]
+    ) != (primary_end["line"], primary_end["column"]):
+        return False
+    if start["line"] == primary_start["line"] and (
+        start["offset"] - primary_start["offset"]
+        != start["column"] - primary_start["column"]
+    ):
+        return False
+    if end["line"] == primary_end["line"] and (
+        primary_end["offset"] - end["offset"]
+        != primary_end["column"] - end["column"]
+    ):
+        return False
+    if start["line"] == end["line"] and (
+        end["column"] - start["column"] != end["offset"] - start["offset"]
+    ):
+        return False
+    return True
 
 
 def _require_semantic_index(value: Any, label: str, *, expected: int | None = None) -> int:

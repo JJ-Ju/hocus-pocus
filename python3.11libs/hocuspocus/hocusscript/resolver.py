@@ -207,6 +207,8 @@ def resolve_project_module_dag(
         "casePolicy": "portable",
         "linkPolicy": "reject_reparse",
     }
+    if context.catalog_content_digest is None or context.catalog_fingerprint is None:
+        raise ProjectError("HOCUS452", "Native module resolution requires exact verified catalog pins.")
     for importer, specifier, selected in decisions:
         _cancel(cancelled)
         if select_target(importer, specifier) != selected:
@@ -223,6 +225,8 @@ def resolve_project_module_dag(
         entry_imports=tuple(entry_imports),
         resolver_policy=policy,
         resolver_policy_digest=module_interface_digest(policy),
+        catalog_content_digest=context.catalog_content_digest,
+        catalog_fingerprint=context.catalog_fingerprint,
         limits=selected_limits,
         cancelled=cancelled,
     )

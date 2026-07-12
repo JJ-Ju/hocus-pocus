@@ -112,6 +112,8 @@ class ResolvedModuleDag:
     entry_source_digest: str
     entry_syntax: SyntaxSource
     entry_imports: tuple[ResolvedImport, ...]
+    catalog_content_digest: str | None
+    catalog_fingerprint: str | None
     handoff_digest: str
 
     @property
@@ -148,6 +150,8 @@ def validate_resolved_module_dag(
     entry_imports: Iterable[ResolvedImport],
     resolver_policy: Mapping[str, Any],
     resolver_policy_digest: str,
+    catalog_content_digest: str | None = None,
+    catalog_fingerprint: str | None = None,
     limits: ResolvedModuleLimits | None = None,
     cancelled: Callable[[], bool] | None = None,
 ) -> ResolvedModuleDag:
@@ -176,6 +180,11 @@ def validate_resolved_module_dag(
     expected_policy_digest = _digest(policy_json.encode("utf-8"))
     if resolver_policy_digest != expected_policy_digest:
         _fail("HOCUS461", "resolver_policy_digest does not match resolver_policy.")
+    if (catalog_content_digest is None) != (catalog_fingerprint is None):
+        _fail("HOCUS461", "Catalog content digest and fingerprint must be supplied together.")
+    if catalog_content_digest is not None:
+        _require_digest(catalog_content_digest, "catalog_content_digest")
+        _require_digest(catalog_fingerprint, "catalog_fingerprint")
 
     entry_syntax = _parse_exact_source(entry_source, entry_source_uri, selected_limits, root="graph")
     aggregate_bytes = len(entry_source)
@@ -286,12 +295,16 @@ def validate_resolved_module_dag(
         entry_digest,
         entry_syntax,
         supplied_entry_imports,
+        catalog_content_digest,
+        catalog_fingerprint,
         _resolved_dag_handoff_digest(
             entry_source_uri=entry_source_uri,
             entry_source_digest=entry_digest,
             entry_imports=supplied_entry_imports,
             ordered_modules=ordered_records,
             resolved_module_set_json=module_set_json,
+            catalog_content_digest=catalog_content_digest,
+            catalog_fingerprint=catalog_fingerprint,
         ),
     )
 
@@ -307,6 +320,8 @@ def _resolved_dag_handoff_digest(
     entry_imports: tuple[ResolvedImport, ...],
     ordered_modules: tuple[ResolvedModuleRecord, ...],
     resolved_module_set_json: str,
+    catalog_content_digest: str | None,
+    catalog_fingerprint: str | None,
 ) -> str:
     """Seal every resolver-selected entry and nested import edge for expansion."""
 
@@ -326,6 +341,10 @@ def _resolved_dag_handoff_digest(
         "entryImports": [encoded_import(item) for item in entry_imports],
         "resolvedModuleSet": json.loads(resolved_module_set_json),
         "resolvedModuleSetDigest": _digest(resolved_module_set_json.encode("utf-8")),
+        "catalogPins": {
+            "contentDigest": catalog_content_digest,
+            "fingerprint": catalog_fingerprint,
+        },
         "modules": [
             {
                 "dependency": record.dependency.to_dict(),
