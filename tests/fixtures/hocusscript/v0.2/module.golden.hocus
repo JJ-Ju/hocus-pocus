@@ -1,0 +1,21 @@
+hocus 0.2;
+
+import { Noise as StudioNoise } from "@studio/noise.hocus";
+
+module Build(
+  source: node_output,
+  enabled: bool = true,
+  count: int = 2,
+  label: string = "asset",
+) exports (
+  result: node_output,
+  scale: float,
+) {
+  node noise @id("noise-node"): "mountain" {
+    input[0] = param.source;
+    height = 2.5;
+  }
+  use detail @id("detail-use") = StudioNoise(source = noise.output[0], scale = 2.0);
+  export result = detail.result;
+  export scale = 2.0;
+}

@@ -15,8 +15,8 @@ Roadmap: `docs/hocusscript-roadmap.md`
 
 ## 2. Current Slice
 
-Current milestone: HS5 export/editor workflow complete; HS6 modules and studio libraries next
-Current scope: design the offline, project-contained module/import and transitive-lock contracts without weakening the native project-directory or content-only MCP boundary
+Current milestone: HS6 modules and studio libraries in progress; locked contracts and the pure language/expansion core are complete
+Current scope: implement native, explicit-project-directory import resolution and transitive lock binding without weakening the content-only Houdini MCP boundary
 Live mutation: available only through the completed HS4 guarded `document.apply_plan` path; HS5 format/completion/export tools are observational
 
 Initial implementation acceptance command:
@@ -324,7 +324,7 @@ Verification:
 
 ## 9. HS6: Modules and Studio Libraries
 
-Status: Batch A contract and safe non-executing scaffolds complete; parser/resolver/expansion pending
+Status: Batches A-B complete; language core and pure content expansion are implemented, native project resolution remains pending
 
 Dependencies: HS5, import security design
 Houdini required: module compiler no; live module fixtures yes
@@ -337,17 +337,18 @@ Houdini required: module compiler no; live module fixtures yes
 - [x] Add strict v3 manifest/lock and module-manifest structural decoders, version-gated GraphSpec/bundle scaffolds, and MCP resources for GraphSpec `0.3`, `expansion-map-v1`, and `resolved-module-set-v1` without enabling language `0.2` compilation or live preview.
 - [x] Unify strict SemVer 2.0, including pre-release and build metadata, across module manifest, project alias, lock, resolved-set, and bundle schemas.
 - [x] Add read-only v3 lock verification and explicit empty-module lock create/update scaffolding; reject nonempty updates until the resolver derives the records.
-- [ ] Implement typed module parameters and exports.
-- [ ] Implement hygienic deterministic expansion.
+- [x] Implement typed module parameters and exports.
+- [x] Implement hygienic deterministic expansion.
 - [ ] Implement offline project-contained static imports.
 - [ ] Resolve imports relative to the importing file and ordered project source/module directories.
 - [x] Add structurally validated project identity, source/module directories, logical aliases, catalog lock, and module-lock fields to v3 contracts; resolver binding remains pending.
 - [ ] Require manifest-declared, separately approved and locked aliases for cross-project imports.
 - [ ] Enable resolver-derived nonempty lock updates; retain atomic, expected-digest, explicit-write gates.
 - [ ] Add module manifests, versions, content hashes, and lockfile.
-- [ ] Preserve expansion stacks in source maps and diagnostics.
-- [ ] Enforce module depth, node count, code size, and recursion limits.
-- [ ] Reject dynamic imports and implicit host/environment access.
+- [x] Preserve bounded interned expansion stacks in expansion source maps.
+- [ ] Attach those shared expansion stacks to compiler diagnostics during resolved compiler integration.
+- [x] Enforce import/instance depth, instance/node/source-map/interface limits, exact GraphSpec validation, and zero recursion in the pure content lane; aggregate source/code enforcement remains split between resolver and syntax contracts.
+- [x] Reject dynamic imports and keep the parser/resolver/expander free of host, filesystem, environment, network, clock, and random access.
 - [ ] Implement bounded deterministic conditionals/iteration after fixed expansion budgets have production evidence; they are outside the initial `0.2` core and recursion remains forbidden.
 - [ ] Expose expanded graphs before apply.
 - [ ] Add reviewed studio-module contract and provenance tests.
@@ -358,6 +359,15 @@ Batch A delivered evidence:
 - all 26 Draft 2020-12 schemas meta-validate; strict SemVer 2.0 positive/negative fixtures agree across five HS6 schemas
 - registered GraphSpec `0.3`, `expansion-map-v1`, and `resolved-module-set-v1` resources return their canonical IDs, and GraphSpec's external `$ref` resolves to the registered expansion-map contract
 - legacy v1/v2 project, lock, compiler, GraphSpec, and bundle tests remain green without migration writes
+
+Batch B delivered evidence:
+
+- version-dispatched `0.2` parsing and canonical formatting cover graph/module roots, literal imports, exact typed parameters/defaults/exports, named `use` arguments, mandatory durable instance IDs, source spans, recovery, and reserved generated symbols while `compile_source` remains gated with `HOCUS102`
+- the pure content validator parses exact UTF-8 entry/module bytes, derives interfaces, binds imports to exact source spans, requires matching verified v3 lock records, rejects supplied modules outside the entry closure, enforces canonical portable project URIs and bounded DAGs, verifies bottom-up transitive digests, retains the immutable entry bytes/digest/AST/import envelope, seals all entry/nested import targets and canonical resolved-set content/digest with an internal `hocus-resolved-dag-handoff-v1` digest outside the portable schema, and emits canonical URI-sorted `resolved-module-set-v1`; external libraries remain fail-closed pending separate root approval
+- the pure hygienic expander enforces exact types, shared symbol and identity-seed namespaces, bounded cancellation-safe expansion, rename-stable generated identities, strict origin coverage, interned stacks, and final GraphSpec `0.3` decoder/schema compatibility
+- the end-to-end offline composition test validates source-derived records against a verified v3 lock and exact entry closure, expands only the immutable entry retained by that DAG, rejects mismatched same-URI entry bytes/AST, and round-trips strict GraphSpec `0.3`
+- the resolver-to-expander handoff seal covers the entry, every ordered nested import target, and the canonical resolved-set limits/projection; target swaps, stale-seal limit widening, and module substitutions fail before expansion, and all 270 offline tests pass
+- native project-directory reads, relative/ordered-root path resolution, external-root approval, resolver-derived lock writes, bundle `0.3` publication, and live preview remain blocked for the next batches
 
 ## 10. HS7: Fidelity Matrix
 

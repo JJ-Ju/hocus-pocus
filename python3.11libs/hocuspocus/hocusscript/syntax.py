@@ -1,4 +1,4 @@
-"""Source-faithful syntax tree for HocusScript 0.1."""
+"""Source-faithful syntax trees for version-dispatched HocusScript source."""
 
 from __future__ import annotations
 
@@ -104,9 +104,30 @@ class ReferenceExpr:
 
 
 @dataclass(frozen=True, slots=True)
+class ParamRefExpr:
+    name: str
+    span: SourceSpan
+    name_span: SourceSpan
+
+
+@dataclass(frozen=True, slots=True)
+class SymbolRefExpr:
+    symbol: str
+    member: str
+    output_index: int | None
+    span: SourceSpan
+    symbol_span: SourceSpan
+    member_span: SourceSpan
+    output_index_span: SourceSpan | None
+
+
+ModuleExpr: TypeAlias = LiteralExpr | ParamRefExpr | SymbolRefExpr
+
+
+@dataclass(frozen=True, slots=True)
 class InputStmt:
     index: int
-    source: ReferenceExpr
+    source: ReferenceExpr | ParamRefExpr | SymbolRefExpr
     span: SourceSpan
     index_span: SourceSpan
 
@@ -114,7 +135,7 @@ class InputStmt:
 @dataclass(frozen=True, slots=True)
 class ParmStmt:
     name: str
-    value: ValueExpr
+    value: ValueExpr | ModuleExpr
     span: SourceSpan
     name_span: SourceSpan
 
@@ -133,6 +154,78 @@ class NodeDecl:
     symbol_span: SourceSpan
     explicit_id_span: SourceSpan | None
     type_span: SourceSpan
+
+
+@dataclass(frozen=True, slots=True)
+class NamedArgument:
+    name: str
+    value: ModuleExpr
+    span: SourceSpan
+    name_span: SourceSpan
+
+
+@dataclass(frozen=True, slots=True)
+class UseDecl:
+    symbol: str
+    explicit_id: str
+    module_name: str
+    arguments: tuple[NamedArgument, ...]
+    span: SourceSpan
+    symbol_span: SourceSpan
+    explicit_id_span: SourceSpan
+    module_name_span: SourceSpan
+
+
+@dataclass(frozen=True, slots=True)
+class ExportStmt:
+    name: str
+    value: ModuleExpr
+    span: SourceSpan
+    name_span: SourceSpan
+
+
+@dataclass(frozen=True, slots=True)
+class ModuleParamDecl:
+    name: str
+    type_name: str
+    default: ModuleExpr | None
+    span: SourceSpan
+    name_span: SourceSpan
+    type_span: SourceSpan
+    default_span: SourceSpan | None
+
+
+@dataclass(frozen=True, slots=True)
+class ModuleExportDecl:
+    name: str
+    type_name: str
+    span: SourceSpan
+    name_span: SourceSpan
+    type_span: SourceSpan
+
+
+ModuleStmt: TypeAlias = NodeDecl | UseDecl | ExportStmt
+
+
+@dataclass(frozen=True, slots=True)
+class ModuleDecl:
+    name: str
+    parameters: tuple[ModuleParamDecl, ...]
+    exports: tuple[ModuleExportDecl, ...]
+    statements: tuple[ModuleStmt, ...]
+    span: SourceSpan
+    name_span: SourceSpan
+
+
+@dataclass(frozen=True, slots=True)
+class ImportDecl:
+    imported_name: str
+    local_name: str
+    specifier: str
+    span: SourceSpan
+    imported_name_span: SourceSpan
+    local_name_span: SourceSpan
+    specifier_span: SourceSpan
 
 
 @dataclass(frozen=True, slots=True)
@@ -158,6 +251,7 @@ GraphStmt: TypeAlias = (
     | OwnershipStmt
     | ExternalDecl
     | NodeDecl
+    | UseDecl
     | FlagStmt
     | LayoutStmt
 )
@@ -174,5 +268,14 @@ class GraphDecl:
 @dataclass(frozen=True, slots=True)
 class SyntaxSource:
     version: VersionDecl | None
-    graph: GraphDecl
+    graph: GraphDecl | None
     span: SourceSpan
+    imports: tuple[ImportDecl, ...] = ()
+    module: ModuleDecl | None = None
+
+    @property
+    def root(self) -> GraphDecl | ModuleDecl:
+        root = self.graph if self.graph is not None else self.module
+        if root is None:
+            raise RuntimeError("syntax source has no root declaration")
+        return root

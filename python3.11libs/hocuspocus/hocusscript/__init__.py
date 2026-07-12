@@ -32,7 +32,17 @@ from .editor import (
     complete_source,
     format_source,
 )
-from .formatter import format_graph
+from .expander import (
+    ExpansionLimits,
+    ModuleExpansionError,
+    ResolvedModuleUnit,
+    expand_module_graph,
+    expand_resolved_module_dag,
+    resolved_import_map,
+    resolved_units_from_dag,
+    validate_module_interfaces,
+)
+from .formatter import format_graph, format_syntax
 from .exporter import ExportDiagnostic, NetworkDocumentExport, export_network_document
 from .model import (
     COMPILER_VERSION,
@@ -62,6 +72,20 @@ from .project import (
     update_project_lock,
     verify_project_lock,
 )
+from .parser import parse_syntax
+from .resolved_modules import (
+    ModuleResolutionError,
+    ModuleSourceEnvelope,
+    ResolvedImport,
+    ResolvedModuleDag,
+    ResolvedModuleLimits,
+    ResolvedModuleRecord,
+    canonical_module_uri,
+    module_interface_digest,
+    module_source_digest,
+    module_transitive_digest,
+    validate_resolved_module_dag,
+)
 from .semantic import (
     CatalogConstraint,
     ConnectionSelection,
@@ -71,6 +95,18 @@ from .semantic import (
     ParameterSelection,
     SemanticResult,
     resolve_graph,
+)
+from .syntax import (
+    ExportStmt,
+    ImportDecl,
+    ModuleDecl,
+    ModuleExportDecl,
+    ModuleParamDecl,
+    NamedArgument,
+    ParamRefExpr,
+    SymbolRefExpr,
+    SyntaxSource,
+    UseDecl,
 )
 
 __all__ = [
@@ -105,6 +141,7 @@ __all__ = [
     "ExpansionMap",
     "ExpansionOrigin",
     "ExpansionStack",
+    "ExpansionLimits",
     "FakeCatalogProvider",
     "GraphSpec",
     "GRAPH_SPEC_VERSION",
@@ -113,6 +150,7 @@ __all__ = [
     "PREVIEW_VERSION",
     "NetworkDocumentExport",
     "ModuleDependency",
+    "ModuleExpansionError",
     "RelatedOrigin",
     "SUPPORTED_LANGUAGE_VERSIONS",
     "SourcePosition",
@@ -122,12 +160,20 @@ __all__ = [
     "LockVerificationResult",
     "ModuleLockRecord",
     "ModuleManifest",
+    "ModuleResolutionError",
+    "ModuleSourceEnvelope",
     "MODULE_MANIFEST_SCHEMA_URI",
     "OperatorSelection",
     "ParameterSelection",
     "SemanticResult",
+    "ResolvedImport",
+    "ResolvedModuleDag",
+    "ResolvedModuleLimits",
+    "ResolvedModuleRecord",
+    "ResolvedModuleUnit",
     "SnapshotCatalogProvider",
     "compile_path",
+    "canonical_module_uri",
     "compile_source",
     "check_source",
     "complete_source",
@@ -137,10 +183,31 @@ __all__ = [
     "format_graph",
     "format_source",
     "export_network_document",
+    "expand_module_graph",
+    "expand_resolved_module_dag",
     "graph_spec_from_dict",
     "lower_bundle_to_document",
+    "module_interface_digest",
+    "module_source_digest",
+    "module_transitive_digest",
     "resolve_graph",
+    "resolved_import_map",
+    "resolved_units_from_dag",
     "validate_graph",
+    "validate_module_interfaces",
+    "validate_resolved_module_dag",
     "update_project_lock",
     "verify_project_lock",
+    "ExportStmt",
+    "ImportDecl",
+    "ModuleDecl",
+    "ModuleExportDecl",
+    "ModuleParamDecl",
+    "NamedArgument",
+    "ParamRefExpr",
+    "SymbolRefExpr",
+    "SyntaxSource",
+    "UseDecl",
+    "format_syntax",
+    "parse_syntax",
 ]
