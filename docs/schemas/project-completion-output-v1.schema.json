@@ -1,0 +1,97 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "hocuspocus://schemas/project-completion-output/v1",
+  "title": "HocusScript Native Project Completion Output v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "interfaceVersion", "offsetEncoding", "sourceUri", "sourceDigest",
+    "subjectLockState", "offset", "context", "pins", "isIncomplete", "items"
+  ],
+  "properties": {
+    "interfaceVersion": {"const": "1.0"},
+    "offsetEncoding": {"const": "unicode_code_points"},
+    "sourceUri": {"$ref": "#/$defs/projectUri"},
+    "sourceDigest": {"$ref": "#/$defs/digest"},
+    "subjectLockState": {"enum": ["matching", "modified", "unlocked"]},
+    "offset": {"type": "integer", "minimum": 0, "maximum": 1048576},
+    "context": {
+      "enum": [
+        "language_version", "import_path", "imported_module_name", "use_module",
+        "named_argument", "parameter_name", "instance_export", "none"
+      ]
+    },
+    "pins": {"$ref": "#/$defs/projectPins"},
+    "isIncomplete": {"type": "boolean"},
+    "items": {
+      "type": "array",
+      "maxItems": 200,
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/completionItem"}
+    }
+  },
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "projectUri": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 8192,
+      "pattern": "^hocus-project://[a-z0-9][a-z0-9.-]{0,127}/(?!(?:\\.|\\.\\.)(?:/|$))(?:[A-Za-z0-9._~-]|%(?!(?:[01][0-9A-F]|2[D-F]|3[0-9A]|4[1-9A-F]|5[0-9ACF]|6[1-9A-F]|7[0-9AEF]))[0-9A-F]{2})+(?:/(?!(?:\\.|\\.\\.)(?:/|$))(?:[A-Za-z0-9._~-]|%(?!(?:[01][0-9A-F]|2[D-F]|3[0-9A]|4[1-9A-F]|5[0-9ACF]|6[1-9A-F]|7[0-9AEF]))[0-9A-F]{2})+)*\\.hocus$"
+    },
+    "projectPins": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "projectUid", "manifestDigest", "lockDigest", "catalogContentDigest",
+        "catalogFingerprint", "resolverPolicyDigest"
+      ],
+      "properties": {
+        "projectUid": {"type": "string", "pattern": "^[a-z0-9][a-z0-9.-]{0,127}$"},
+        "manifestDigest": {"$ref": "#/$defs/digest"},
+        "lockDigest": {"$ref": "#/$defs/digest"},
+        "catalogContentDigest": {"$ref": "#/$defs/digest"},
+        "catalogFingerprint": {"$ref": "#/$defs/digest"},
+        "resolverPolicyDigest": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "position": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["offset", "line", "column"],
+      "properties": {
+        "offset": {"type": "integer", "minimum": 0, "maximum": 1048576},
+        "line": {"type": "integer", "minimum": 1, "maximum": 1048577},
+        "column": {"type": "integer", "minimum": 1, "maximum": 1048577}
+      }
+    },
+    "sourceSpan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sourceUri", "start", "end"],
+      "properties": {
+        "sourceUri": {"$ref": "#/$defs/projectUri"},
+        "start": {"$ref": "#/$defs/position"},
+        "end": {"$ref": "#/$defs/position"}
+      }
+    },
+    "completionItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "label", "kind", "insertText", "replacementSpan", "detail", "required",
+        "type", "default", "sortText"
+      ],
+      "properties": {
+        "label": {"type": "string", "minLength": 1, "maxLength": 4096},
+        "kind": {"enum": ["value", "module_path", "module", "parameter", "export"]},
+        "insertText": {"type": "string", "maxLength": 262144},
+        "replacementSpan": {"$ref": "#/$defs/sourceSpan"},
+        "detail": {"type": ["string", "null"], "maxLength": 16384},
+        "required": {"type": ["boolean", "null"]},
+        "type": {"enum": ["bool", "int", "float", "string", "node_output", null]},
+        "default": {"type": ["boolean", "integer", "number", "string", "null"]},
+        "sortText": {"type": "string", "minLength": 1, "maxLength": 4096}
+      }
+    }
+  }
+}

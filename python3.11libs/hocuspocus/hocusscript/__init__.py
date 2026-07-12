@@ -91,6 +91,17 @@ from .project import (
     update_project_lock,
     verify_project_lock,
 )
+from .project_editor import (
+    ProjectCompletionItem,
+    ProjectCompletionResult,
+    ProjectDefinitionItem,
+    ProjectDefinitionResult,
+    ProjectEditorPins,
+    complete_path,
+    complete_project_source,
+    definition_path,
+    definition_project_source,
+)
 from .parser import parse_syntax
 from .resolved_modules import (
     ModuleResolutionError,
@@ -168,6 +179,11 @@ __all__ = [
     "GRAPH_SPEC_VERSION",
     "ProjectContext",
     "ProjectError",
+    "ProjectEditorPins",
+    "ProjectCompletionItem",
+    "ProjectCompletionResult",
+    "ProjectDefinitionItem",
+    "ProjectDefinitionResult",
     "PREVIEW_VERSION",
     "NetworkDocumentExport",
     "ModuleDependency",
@@ -209,9 +225,13 @@ __all__ = [
     "compile_source",
     "check_source",
     "complete_source",
+    "complete_path",
+    "complete_project_source",
     "decode_compiled_bundle",
     "decode_catalog_snapshot",
     "decode_module_manifest",
+    "definition_path",
+    "definition_project_source",
     "format_graph",
     "format_source",
     "format_project_module_path",

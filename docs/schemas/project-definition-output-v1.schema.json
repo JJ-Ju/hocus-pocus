@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "hocuspocus://schemas/project-definition-output/v1",
+  "title": "HocusScript Native Project Definition Output v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "interfaceVersion", "offsetEncoding", "sourceUri", "sourceDigest",
+    "subjectLockState", "offset", "pins", "items"
+  ],
+  "properties": {
+    "interfaceVersion": {"const": "1.0"},
+    "offsetEncoding": {"const": "unicode_code_points"},
+    "sourceUri": {"$ref": "#/$defs/projectUri"},
+    "sourceDigest": {"$ref": "#/$defs/digest"},
+    "subjectLockState": {"enum": ["matching", "modified", "unlocked"]},
+    "offset": {"type": "integer", "minimum": 0, "maximum": 1048576},
+    "pins": {"$ref": "#/$defs/projectPins"},
+    "items": {
+      "type": "array",
+      "maxItems": 1,
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/definitionItem"}
+    }
+  },
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "projectUri": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 8192,
+      "pattern": "^hocus-project://[a-z0-9][a-z0-9.-]{0,127}/(?!(?:\\.|\\.\\.)(?:/|$))(?:[A-Za-z0-9._~-]|%(?!(?:[01][0-9A-F]|2[D-F]|3[0-9A]|4[1-9A-F]|5[0-9ACF]|6[1-9A-F]|7[0-9AEF]))[0-9A-F]{2})+(?:/(?!(?:\\.|\\.\\.)(?:/|$))(?:[A-Za-z0-9._~-]|%(?!(?:[01][0-9A-F]|2[D-F]|3[0-9A]|4[1-9A-F]|5[0-9ACF]|6[1-9A-F]|7[0-9AEF]))[0-9A-F]{2})+)*\\.hocus$"
+    },
+    "projectPins": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "projectUid", "manifestDigest", "lockDigest", "catalogContentDigest",
+        "catalogFingerprint", "resolverPolicyDigest"
+      ],
+      "properties": {
+        "projectUid": {"type": "string", "pattern": "^[a-z0-9][a-z0-9.-]{0,127}$"},
+        "manifestDigest": {"$ref": "#/$defs/digest"},
+        "lockDigest": {"$ref": "#/$defs/digest"},
+        "catalogContentDigest": {"$ref": "#/$defs/digest"},
+        "catalogFingerprint": {"$ref": "#/$defs/digest"},
+        "resolverPolicyDigest": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "position": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["offset", "line", "column"],
+      "properties": {
+        "offset": {"type": "integer", "minimum": 0, "maximum": 1048576},
+        "line": {"type": "integer", "minimum": 1, "maximum": 1048577},
+        "column": {"type": "integer", "minimum": 1, "maximum": 1048577}
+      }
+    },
+    "sourceSpan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sourceUri", "start", "end"],
+      "properties": {
+        "sourceUri": {"$ref": "#/$defs/projectUri"},
+        "start": {"$ref": "#/$defs/position"},
+        "end": {"$ref": "#/$defs/position"}
+      }
+    },
+    "definitionItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "kind", "sourceUri", "sourceDigest", "span"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1, "maxLength": 4096},
+        "kind": {"enum": ["module", "import_alias", "parameter", "symbol", "export"]},
+        "sourceUri": {"$ref": "#/$defs/projectUri"},
+        "sourceDigest": {"$ref": "#/$defs/digest"},
+        "span": {"$ref": "#/$defs/sourceSpan"}
+      }
+    }
+  }
+}

@@ -107,24 +107,7 @@ def resolve_project_module_dag(
         _require_exact_windows_casing(root / authored_root, root)
 
     def select_target(importer: Path, specifier: str) -> Path:
-        if specifier.startswith(("./", "../")):
-            candidate = importer.parent / specifier
-            _reject_reparse_components(candidate, root)
-            _require_exact_windows_casing(candidate, root)
-            target = _canonical_file(candidate, root, "relative module import")
-            return target
-        for directory in context.module_directories:
-            _cancel(cancelled)
-            candidate = directory / specifier
-            if _lexically_occupied(candidate):
-                _reject_reparse_components(candidate, root)
-                _require_exact_windows_casing(candidate, root)
-                target = _canonical_file(candidate, root, "bare module import")
-                if not _is_contained(target, directory.resolve(strict=True)):
-                    raise ProjectError("HOCUS460", "Bare module import escapes its configured module directory.")
-                return target
-        raise ProjectError("HOCUS462", "Bare module import was not found in ordered module_directories.",
-                           details={"specifier": specifier})
+        return _select_project_module_target(context, importer, specifier, cancelled=cancelled)
 
     def resolve_import(importer: Path, declaration) -> tuple[ResolvedImport, ModuleLockRecord, Path]:
         specifier = declaration.specifier
@@ -195,18 +178,7 @@ def resolve_project_module_dag(
     for target_lock, target_path in entry_targets:
         visit(target_lock, target_path, 1)
 
-    module_directories = list(context.module_directory_paths)
-    policy = {
-        "schemaVersion": 1,
-        "kind": "native_project_v1",
-        "projectMode": "same_project_only",
-        "relativeResolution": "importer_relative_project_contained",
-        "moduleDirectories": module_directories,
-        "bareResolution": "ordered_first_occupied_fail_closed",
-        "externalAliases": False,
-        "casePolicy": "portable",
-        "linkPolicy": "reject_reparse",
-    }
+    policy = _project_module_resolver_policy(context)
     if context.catalog_content_digest is None or context.catalog_fingerprint is None:
         raise ProjectError("HOCUS452", "Native module resolution requires exact verified catalog pins.")
     for importer, specifier, selected in decisions:
@@ -241,6 +213,60 @@ def _canonical_file(path: Path, root: Path, label: str) -> Path:
         raise ProjectError("HOCUS460", f"{label.capitalize()} must be a contained regular file.",
                            details={"path": str(resolved)})
     return resolved
+
+
+def _select_project_module_target(
+    context: ProjectContext,
+    importer: Path,
+    specifier: str,
+    *,
+    cancelled: Callable[[], bool] | None = None,
+) -> Path:
+    """Select one same-project module with the compiler's exact winner policy."""
+    if not isinstance(context, ProjectContext) or context.manifest_version != 3:
+        raise ProjectError("HOCUS452", "Module selection requires a schema v3 project context.")
+    if not isinstance(importer, Path) or not isinstance(specifier, str):
+        raise ProjectError("HOCUS460", "Module selection inputs are invalid.")
+    if not is_literal_import_specifier(specifier) or specifier.startswith("@"):
+        raise ProjectError("HOCUS460", "External or nonportable imports are disabled.")
+    root = context.root
+    if specifier.startswith(("./", "../")):
+        candidate = importer.parent / specifier
+        _reject_reparse_components(candidate, root)
+        _require_exact_windows_casing(candidate, root)
+        return _canonical_file(candidate, root, "relative module import")
+    for directory in context.module_directories:
+        _cancel(cancelled)
+        candidate = directory / specifier
+        if _lexically_occupied(candidate):
+            _reject_reparse_components(candidate, root)
+            _require_exact_windows_casing(candidate, root)
+            target = _canonical_file(candidate, root, "bare module import")
+            if not _is_contained(target, directory.resolve(strict=True)):
+                raise ProjectError("HOCUS460", "Bare module import escapes its configured module directory.")
+            return target
+    raise ProjectError(
+        "HOCUS462",
+        "Bare module import was not found in ordered module_directories.",
+        details={"specifier": specifier},
+    )
+
+
+def _project_module_resolver_policy(context: ProjectContext) -> dict[str, object]:
+    """Return the exact portable resolver policy shared by compiler and editor."""
+    if not isinstance(context, ProjectContext) or context.manifest_version != 3:
+        raise ProjectError("HOCUS452", "Resolver policy requires a schema v3 project context.")
+    return {
+        "schemaVersion": 1,
+        "kind": "native_project_v1",
+        "projectMode": "same_project_only",
+        "relativeResolution": "importer_relative_project_contained",
+        "moduleDirectories": list(context.module_directory_paths),
+        "bareResolution": "ordered_first_occupied_fail_closed",
+        "externalAliases": False,
+        "casePolicy": "portable",
+        "linkPolicy": "reject_reparse",
+    }
 
 
 def _validate_project_directory(value: str | PathLike[str]) -> str:
