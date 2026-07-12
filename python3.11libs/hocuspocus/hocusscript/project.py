@@ -160,6 +160,7 @@ class ProjectContext:
     catalog_fingerprint: str | None = None
     catalog: CatalogSnapshot | None = None
     module_directories: tuple[Path, ...] = ()
+    module_directory_paths: tuple[str, ...] = ()
     external_aliases: tuple[ExternalLibraryAlias, ...] = ()
     locked_modules: tuple[ModuleLockRecord, ...] = ()
 
@@ -312,6 +313,7 @@ class ProjectContext:
             catalog_fingerprint=catalog_fingerprint,
             catalog=catalog_snapshot,
             module_directories=tuple(module_directories),
+            module_directory_paths=tuple(module_values),
             external_aliases=external_aliases,
             locked_modules=tuple(locked_modules),
         )

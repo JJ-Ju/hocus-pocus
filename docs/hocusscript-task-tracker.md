@@ -324,7 +324,7 @@ Verification:
 
 ## 9. HS6: Modules and Studio Libraries
 
-Status: Batches A-B complete; language core and pure content expansion are implemented, native project resolution remains pending
+Status: Batches A-C complete for the read-only same-project lane; bundle, semantic, external-library, and live integration remain pending
 
 Dependencies: HS5, import security design
 Houdini required: module compiler no; live module fixtures yes
@@ -339,9 +339,9 @@ Houdini required: module compiler no; live module fixtures yes
 - [x] Add read-only v3 lock verification and explicit empty-module lock create/update scaffolding; reject nonempty updates until the resolver derives the records.
 - [x] Implement typed module parameters and exports.
 - [x] Implement hygienic deterministic expansion.
-- [ ] Implement offline project-contained static imports.
-- [ ] Resolve imports relative to the importing file and ordered project source/module directories.
-- [x] Add structurally validated project identity, source/module directories, logical aliases, catalog lock, and module-lock fields to v3 contracts; resolver binding remains pending.
+- [x] Implement offline project-contained static imports through an explicit native project compiler API.
+- [x] Resolve imports relative to the importing file and ordered project module directories without implicit discovery.
+- [x] Bind structurally validated project identity, source/module directories, catalog lock, and module-lock fields into the same-project native resolver; approved external-alias roots remain pending.
 - [ ] Require manifest-declared, separately approved and locked aliases for cross-project imports.
 - [ ] Enable resolver-derived nonempty lock updates; retain atomic, expected-digest, explicit-write gates.
 - [ ] Add module manifests, versions, content hashes, and lockfile.
@@ -350,7 +350,7 @@ Houdini required: module compiler no; live module fixtures yes
 - [x] Enforce import/instance depth, instance/node/source-map/interface limits, exact GraphSpec validation, and zero recursion in the pure content lane; aggregate source/code enforcement remains split between resolver and syntax contracts.
 - [x] Reject dynamic imports and keep the parser/resolver/expander free of host, filesystem, environment, network, clock, and random access.
 - [ ] Implement bounded deterministic conditionals/iteration after fixed expansion budgets have production evidence; they are outside the initial `0.2` core and recursion remains forbidden.
-- [ ] Expose expanded graphs before apply.
+- [x] Expose deterministic expanded GraphSpec `0.3`, expansion maps, resolved sets, formatted sources, and digests through the native typed result before semantic/apply integration.
 - [ ] Add reviewed studio-module contract and provenance tests.
 
 Batch A delivered evidence:
@@ -366,8 +366,14 @@ Batch B delivered evidence:
 - the pure content validator parses exact UTF-8 entry/module bytes, derives interfaces, binds imports to exact source spans, requires matching verified v3 lock records, rejects supplied modules outside the entry closure, enforces canonical portable project URIs and bounded DAGs, verifies bottom-up transitive digests, retains the immutable entry bytes/digest/AST/import envelope, seals all entry/nested import targets and canonical resolved-set content/digest with an internal `hocus-resolved-dag-handoff-v1` digest outside the portable schema, and emits canonical URI-sorted `resolved-module-set-v1`; external libraries remain fail-closed pending separate root approval
 - the pure hygienic expander enforces exact types, shared symbol and identity-seed namespaces, bounded cancellation-safe expansion, rename-stable generated identities, strict origin coverage, interned stacks, and final GraphSpec `0.3` decoder/schema compatibility
 - the end-to-end offline composition test validates source-derived records against a verified v3 lock and exact entry closure, expands only the immutable entry retained by that DAG, rejects mismatched same-URI entry bytes/AST, and round-trips strict GraphSpec `0.3`
-- the resolver-to-expander handoff seal covers the entry, every ordered nested import target, and the canonical resolved-set limits/projection; target swaps, stale-seal limit widening, and module substitutions fail before expansion, and all 270 offline tests pass
-- native project-directory reads, relative/ordered-root path resolution, external-root approval, resolver-derived lock writes, bundle `0.3` publication, and live preview remain blocked for the next batches
+- the resolver-to-expander handoff seal covers the entry, every ordered nested import target, and the canonical resolved-set limits/projection; target swaps, stale-seal limit widening, and module substitutions fail before expansion
+
+Batch C delivered evidence:
+
+- explicit read-only native resolution requires a caller-selected v3 project directory and entry path, verified lock records, contained stable files, and same-project literal imports; it never discovers projects, writes locks, resolves external aliases, or imports Houdini
+- `compile_project_module_graph` deterministically composes that sealed DAG through expansion and returns dependency-first canonical module sources, formatted entry source, resolved set, GraphSpec `0.3`, expansion map, project/lock/policy/content digests, and bounded diagnostics without host paths
+- empty verified module closures remain valid, `compile_source` remains `0.1`-only with `HOCUS102`, and the native result is ready only for later catalog semantic resolution—not bundle publication, document lowering, live preview, or apply
+- resolver, compiler, project-v3, and full offline gates pass (10/10, 2/2, 11/11, and 282/282); independent P0/P1 review is clean for the documented same-user CLI/editor boundary, while `HS-BLOCK-001` continues to prohibit privileged, multi-user, or service-hosted pathname reads
 
 ## 10. HS7: Fidelity Matrix
 

@@ -61,6 +61,12 @@ from .model import (
     RelatedOrigin,
     graph_spec_from_dict,
 )
+from .module_compiler import (
+    FormattedModuleSource,
+    ModuleProjectCompileError,
+    ModuleProjectCompileResult,
+    compile_project_module_graph,
+)
 from .modules import MODULE_MANIFEST_SCHEMA_URI, ModuleManifest, decode_module_manifest
 from .project import (
     ExternalLibraryAlias,
@@ -86,6 +92,7 @@ from .resolved_modules import (
     module_transitive_digest,
     validate_resolved_module_dag,
 )
+from .resolver import resolve_project_module_dag
 from .semantic import (
     CatalogConstraint,
     ConnectionSelection,
@@ -142,6 +149,7 @@ __all__ = [
     "ExpansionOrigin",
     "ExpansionStack",
     "ExpansionLimits",
+    "FormattedModuleSource",
     "FakeCatalogProvider",
     "GraphSpec",
     "GRAPH_SPEC_VERSION",
@@ -151,6 +159,8 @@ __all__ = [
     "NetworkDocumentExport",
     "ModuleDependency",
     "ModuleExpansionError",
+    "ModuleProjectCompileError",
+    "ModuleProjectCompileResult",
     "RelatedOrigin",
     "SUPPORTED_LANGUAGE_VERSIONS",
     "SourcePosition",
@@ -173,6 +183,7 @@ __all__ = [
     "ResolvedModuleUnit",
     "SnapshotCatalogProvider",
     "compile_path",
+    "compile_project_module_graph",
     "canonical_module_uri",
     "compile_source",
     "check_source",
@@ -191,6 +202,7 @@ __all__ = [
     "module_source_digest",
     "module_transitive_digest",
     "resolve_graph",
+    "resolve_project_module_dag",
     "resolved_import_map",
     "resolved_units_from_dag",
     "validate_graph",
