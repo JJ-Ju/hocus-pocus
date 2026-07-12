@@ -14,6 +14,9 @@ _IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 _NUMBER = re.compile(r"-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?")
 
 _PUNCTUATION = {
+    "@": "AT",
+    "(": "LPAREN",
+    ")": "RPAREN",
     "{": "LBRACE",
     "}": "RBRACE",
     "[": "LBRACKET",

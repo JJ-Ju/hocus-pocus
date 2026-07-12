@@ -182,16 +182,32 @@ def lower_bundle_to_document(
     generated_by_symbol: dict[str, dict[str, Any]] = {}
     for index, node_spec in enumerate(graph["nodes"]):
         symbol = node_spec["symbol"]
-        uid = _uid("node", payload, graph["name"], symbol)
+        uid = node_spec.get("explicitId") or _uid("node", payload, graph["name"], symbol)
         path = f"{target.rstrip('/')}/{symbol}"
-        collision = nodes_by_path.get(path)
         previous = nodes_by_uid.get(uid)
+        previous_path_to_release: str | None = None
+        if previous is not None and previous.get("path") != path:
+            if node_spec.get("explicitId") is None or not _managed_explicit_rename_candidate(
+                previous, payload, graph, ownership
+            ):
+                diagnostics.append(_diagnostic(
+                    "HOCUS706",
+                    f"Node ID '{uid}' belongs to a different path without matching managed provenance.",
+                    f"/graphSpec/nodes/{index}/explicitId", path, entity_uid=uid,
+                ))
+                continue
+            previous_path_to_release = str(previous.get("path", ""))
+        collision = nodes_by_path.get(path)
         if collision is not None and collision.get("uid") != uid:
             diagnostics.append(_diagnostic(
                 "HOCUS706", f"Authored path '{path}' collides with a differently-owned baseline node.",
                 f"/graphSpec/nodes/{index}/symbol", path, entity_uid=collision.get("uid"),
             ))
             continue
+        if previous_path_to_release is not None:
+            # Release only after the destination gate passes.  A blocked rename must
+            # leave the old path occupied for every later declaration in this graph.
+            nodes_by_path.pop(previous_path_to_release, None)
 
         selection = operator_selection[symbol]
         flags = copy.deepcopy(previous.get("flags")) if previous is not None else _default_flags()
@@ -408,6 +424,32 @@ def lower_bundle_to_document(
             _replace_edge(document["edges"], output_edge)
             source_map_entities[output_uid] = _source_map(payload, "/output", output_span)
 
+    # Persist the exact source-managed field projection with each node. Houdini
+    # stores this signed node provenance, allowing a later live reimport/export
+    # to distinguish source-owned fields from defaults and artist overrides.
+    parameters_by_node: dict[int, list[str]] = {}
+    for selection in semantic["parameterSelections"]:
+        token = selection["authoredToken"] if selection["componentIndex"] is not None else selection["parameterToken"]
+        parameters_by_node.setdefault(selection["nodeIndex"], []).append(token)
+    for node_index, node_spec in enumerate(graph["nodes"]):
+        generated = generated_by_symbol.get(node_spec["symbol"])
+        metadata = generated.get("metadata") if isinstance(generated, dict) else None
+        hocus = metadata.get("hocus") if isinstance(metadata, dict) else None
+        if not isinstance(hocus, dict):
+            continue
+        node_uid = str(generated["uid"])
+        hocus["managedFields"] = {
+            "type": True,
+            "inputs": sorted(item["index"] for item in node_spec["inputs"]),
+            "parameters": sorted(parameters_by_node.get(node_index, [])),
+            "flags": {
+                **({"display": graph.get("display") == node_spec["symbol"]} if graph.get("display") is not None else {}),
+                **({"render": graph.get("render") == node_spec["symbol"]} if graph.get("render") is not None else {}),
+                **({"output": graph.get("output") == node_spec["symbol"]} if graph.get("output") is not None else {}),
+            },
+            "nodeUid": node_uid,
+        }
+
     _canonicalize_document(document)
     preliminary_diff = _document_diff(baseline, document)
     if preliminary_diff["summary"]["totalChangeCount"]:
@@ -539,6 +581,43 @@ def _entity_metadata(payload: dict[str, Any], bundle_digest: str, graph: dict[st
         "languageVersion": payload["languageVersion"], "graphName": graph["name"], "symbol": symbol,
         "ownership": ownership, "jsonPointer": pointer, "span": copy.deepcopy(span),
     }}
+
+
+def _managed_explicit_rename_candidate(
+    previous: dict[str, Any],
+    payload: dict[str, Any],
+    graph: dict[str, Any],
+    ownership: str | None,
+) -> bool:
+    """Prove an explicit-ID path change is a managed rename, never adoption.
+
+    Source URI and symbol deliberately may change.  Project, graph, ownership, entity
+    kind, and complete compiler provenance must still identify the baseline node as a
+    prior Hocus-authored revision of this graph.
+    """
+
+    metadata = previous.get("metadata")
+    hocus = metadata.get("hocus") if isinstance(metadata, dict) else None
+    if not isinstance(hocus, dict):
+        return False
+    required_strings = (
+        "sourceUri", "sourceDigest", "bundleDigest", "compilerVersion",
+        "languageVersion", "graphName", "symbol", "jsonPointer",
+    )
+    if any(not isinstance(hocus.get(key), str) or not hocus.get(key) for key in required_strings):
+        return False
+    if not isinstance(hocus.get("span"), dict):
+        return False
+    if not str(hocus["sourceDigest"]).startswith("sha256:") or not str(hocus["bundleDigest"]).startswith("sha256:"):
+        return False
+    return (
+        hocus.get("entityKind") == "node"
+        and hocus.get("projectUid") == payload.get("projectUid")
+        and hocus.get("graphName") == graph.get("name")
+        and hocus.get("ownership") == ownership
+        and hocus.get("symbol") == previous.get("name")
+        and str(hocus.get("jsonPointer", "")).startswith("/nodes/")
+    )
 
 
 def _source_map(payload: dict[str, Any], pointer: str, span: Any) -> dict[str, Any]:

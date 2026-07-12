@@ -1,0 +1,217 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "hocuspocus://schemas/document-export-source-output/v1",
+  "title": "HocusScript Export Source Output v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "stage", "exportVersion", "languageVersion", "valid", "source", "diagnostics", "provenance"
+  ],
+  "properties": {
+    "stage": {"const": "source_export"},
+    "exportVersion": {"const": "1.0"},
+    "languageVersion": {"const": "0.1"},
+    "valid": {"type": "boolean"},
+    "source": {
+      "oneOf": [
+        {"type": "string", "maxLength": 1048576},
+        {"type": "null"}
+      ]
+    },
+    "diagnostics": {
+      "type": "array",
+      "maxItems": 500,
+      "items": {"$ref": "#/$defs/exportDiagnostic"}
+    },
+    "provenance": {"$ref": "#/$defs/provenance"}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"valid": {"const": true}}, "required": ["valid"]},
+      "then": {
+        "properties": {
+          "source": {"type": "string", "minLength": 1},
+          "provenance": {
+            "required": ["documentId", "documentRevision", "rootPath"],
+            "properties": {
+              "documentId": {"type": "string", "minLength": 1},
+              "documentRevision": {"type": "integer", "minimum": 0},
+              "rootPath": {"type": "string", "pattern": "^/"},
+              "sourceDigest": {"$ref": "#/$defs/digest"}
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "source": {"type": "null"},
+          "diagnostics": {"minItems": 1},
+          "provenance": {"properties": {"sourceDigest": {"type": "null"}}}
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "exportDiagnostic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["severity", "code", "message", "jsonPointer"],
+      "properties": {
+        "severity": {"enum": ["error", "warning", "info"]},
+        "code": {"type": "string", "minLength": 1, "maxLength": 128},
+        "message": {"type": "string", "minLength": 1, "maxLength": 16384},
+        "jsonPointer": {"type": "string", "maxLength": 8192},
+        "entityUid": {"type": "string", "minLength": 1, "maxLength": 1024},
+        "details": {"type": "object"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"code": {"const": "HOCUS819"}}, "required": ["code"]},
+          "then": {
+            "required": ["details"],
+            "properties": {
+              "details": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["omittedCount", "limit"],
+                "properties": {
+                  "omittedCount": {"type": "integer", "minimum": 1},
+                  "limit": {"const": 500}
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "hocusProvenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "entityKind": {"type": "string", "minLength": 1, "maxLength": 128},
+        "ownership": {"type": "string", "minLength": 1, "maxLength": 1024},
+        "projectUid": {"type": "string", "minLength": 1, "maxLength": 1024},
+        "sourceUri": {"type": "string", "minLength": 1, "maxLength": 8192},
+        "sourceDigest": {"$ref": "#/$defs/digest"},
+        "bundleDigest": {"$ref": "#/$defs/digest"},
+        "graphName": {"type": "string", "minLength": 1, "maxLength": 1024},
+        "symbol": {"type": "string", "minLength": 1, "maxLength": 1024},
+        "jsonPointer": {"type": "string", "maxLength": 8192}
+      },
+      "minProperties": 1
+    },
+    "entityIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {
+        "kind": {"enum": ["node", "port", "edge", "parameter_binding", "code_blob"]},
+        "path": {"type": "string", "minLength": 1, "maxLength": 8192},
+        "name": {"type": "string", "minLength": 1, "maxLength": 1024},
+        "nodeUid": {"type": "string", "minLength": 1, "maxLength": 1024},
+        "parmName": {"type": "string", "minLength": 1, "maxLength": 1024},
+        "hocus": {"$ref": "#/$defs/hocusProvenance"}
+      }
+    },
+    "managedFields": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["symbol", "type", "inputs", "parameters", "flags", "preservedFields"],
+      "properties": {
+        "symbol": {"type": "string", "minLength": 1, "maxLength": 1024},
+        "type": {"const": true},
+        "inputs": {
+          "type": "array", "maxItems": 4096, "uniqueItems": true,
+          "items": {"type": "integer", "minimum": 0}
+        },
+        "parameters": {
+          "type": "array", "maxItems": 65536, "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1, "maxLength": 1024}
+        },
+        "flags": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "display": {"type": "boolean"},
+            "render": {"type": "boolean"},
+            "output": {"type": "boolean"}
+          }
+        },
+        "preservedFields": {
+          "type": "array", "maxItems": 128, "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1, "maxLength": 128}
+        }
+      }
+    },
+    "preservedState": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "field", "reason"],
+      "properties": {
+        "kind": {"enum": ["node_flag", "edge", "parameter_binding", "code_blob"]},
+        "uid": {"type": "string", "minLength": 1, "maxLength": 1024},
+        "nodeUid": {"type": "string", "minLength": 1, "maxLength": 1024},
+        "field": {"type": "string", "minLength": 1, "maxLength": 1024},
+        "reason": {"enum": ["root_container_state", "artist_or_default_not_source_managed"]}
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "format", "identityMode", "inlineIdentitySyntaxAvailable", "entities",
+        "managedFields", "preservedState", "ownershipNamespaces", "catalogFingerprint", "sourceDigest"
+      ],
+      "properties": {
+        "format": {"const": "hocus-export-provenance-v0.1"},
+        "identityMode": {"const": "explicit_id_and_sidecar"},
+        "inlineIdentitySyntaxAvailable": {"const": true},
+        "documentId": {
+          "oneOf": [
+            {"type": "string", "minLength": 1, "maxLength": 8192},
+            {"type": "null"}
+          ]
+        },
+        "documentRevision": {
+          "oneOf": [
+            {"type": "integer", "minimum": 0},
+            {"type": "null"}
+          ]
+        },
+        "rootPath": {
+          "oneOf": [
+            {"type": "string", "pattern": "^/", "maxLength": 8192},
+            {"type": "null"}
+          ]
+        },
+        "entities": {
+          "type": "object",
+          "maxProperties": 100000,
+          "propertyNames": {"type": "string", "minLength": 1, "maxLength": 1024},
+          "additionalProperties": {"$ref": "#/$defs/entityIdentity"}
+        },
+        "managedFields": {
+          "type": "object",
+          "maxProperties": 100000,
+          "propertyNames": {"type": "string", "minLength": 1, "maxLength": 1024},
+          "additionalProperties": {"$ref": "#/$defs/managedFields"}
+        },
+        "preservedState": {
+          "type": "array", "maxItems": 100000,
+          "items": {"$ref": "#/$defs/preservedState"}
+        },
+        "ownershipNamespaces": {
+          "type": "array", "maxItems": 10000, "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1, "maxLength": 1024}
+        },
+        "catalogFingerprint": {
+          "oneOf": [{"$ref": "#/$defs/digest"}, {"type": "null"}]
+        },
+        "sourceDigest": {
+          "oneOf": [{"$ref": "#/$defs/digest"}, {"type": "null"}]
+        }
+      }
+    }
+  }
+}

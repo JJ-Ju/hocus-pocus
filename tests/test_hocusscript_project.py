@@ -168,7 +168,7 @@ class HocusScriptProjectTests(unittest.TestCase):
         except ImportError:
             return
         schema = json.loads((ROOT / "docs" / "schemas" / "compiled-bundle-v0.2.schema.json").read_text(encoding="utf-8"))
-        graph_schema = json.loads((ROOT / "docs" / "schemas" / "graph-spec-v0.1.schema.json").read_text(encoding="utf-8"))
+        graph_schema = json.loads((ROOT / "docs" / "schemas" / "graph-spec-v0.2.schema.json").read_text(encoding="utf-8"))
         schema["properties"]["graphSpec"] = graph_schema
         Draft202012Validator(schema).validate(bundles[0].to_dict())
 
@@ -735,6 +735,59 @@ graph deferred_demo {
                 _atomic_write(source, "formatted", expected_digest=expected)
             self.assertEqual(captured.exception.code, "HOCUS418")
             self.assertEqual(source.read_text(encoding="utf-8"), "artist change")
+
+    def test_cli_write_export_requires_native_no_overwrite_or_expected_digest(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source_text = 'hocus 0.1;\n\ngraph exported {\n  target "/obj/geo1";\n  category Sop;\n  mode merge;\n}\n'
+            source_digest = "sha256:" + hashlib.sha256(source_text.encode("utf-8")).hexdigest()
+            handoff = root / "handoff.json"
+            handoff.write_text(
+                json.dumps({
+                    "stage": "source_export",
+                    "exportVersion": "1.0",
+                    "languageVersion": "0.1",
+                    "valid": True,
+                    "source": source_text,
+                    "provenance": {
+                        "format": "hocus-export-provenance-v0.1",
+                        "sourceDigest": source_digest,
+                    },
+                }),
+                encoding="utf-8",
+            )
+            with redirect_stdout(StringIO()), redirect_stderr(StringIO()):
+                created = main([
+                    "write-export", str(handoff), "exported.hocus", "--project", str(root),
+                ])
+            self.assertEqual(created, 0)
+            destination = root / "exported.hocus"
+            self.assertEqual(destination.read_text(encoding="utf-8"), source_text)
+
+            errors = StringIO()
+            with redirect_stdout(StringIO()), redirect_stderr(errors):
+                refused = main([
+                    "write-export", str(handoff), "exported.hocus", "--project", str(root),
+                ])
+            self.assertEqual(refused, 1)
+            self.assertIn("HOCUS440", errors.getvalue())
+
+            current_digest = "sha256:" + hashlib.sha256(destination.read_bytes()).hexdigest()
+            with redirect_stdout(StringIO()), redirect_stderr(StringIO()):
+                replaced = main([
+                    "write-export", str(handoff), "exported.hocus", "--project", str(root),
+                    "--expected-digest", current_digest,
+                ])
+            self.assertEqual(replaced, 0)
+
+    def test_atomic_write_create_is_exclusive(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            destination = Path(temporary) / "existing.hocus"
+            destination.write_text("artist", encoding="utf-8")
+            with self.assertRaises(ProjectError) as captured:
+                _atomic_write(destination, "generated")
+            self.assertEqual(captured.exception.code, "HOCUS440")
+            self.assertEqual(destination.read_text(encoding="utf-8"), "artist")
 
 
 if __name__ == "__main__":

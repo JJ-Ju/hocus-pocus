@@ -265,6 +265,8 @@ class DocumentOperationsMixin:
             return None
         if not re.fullmatch(r"sha256:[0-9a-f]{64}", hocus["bundleDigest"]):
             return None
+        if not self._document_managed_fields_valid(hocus.get("managedFields"), persistent_uid):
+            return None
         mirrors = (
             (self._DOCUMENT_NODE_OWNER_KEY, hocus.get("ownership")),
             (self._DOCUMENT_NODE_SOURCE_KEY, hocus.get("sourceUri")),
@@ -277,6 +279,27 @@ class DocumentOperationsMixin:
             if normalized and stored != normalized:
                 return None
         return copy.deepcopy(hocus)
+
+    @staticmethod
+    def _document_managed_fields_valid(value: Any, persistent_uid: str) -> bool:
+        if value is None:
+            return True
+        if not isinstance(value, dict) or set(value) != {"type", "inputs", "parameters", "flags", "nodeUid"}:
+            return False
+        if value.get("type") is not True or value.get("nodeUid") != persistent_uid:
+            return False
+        inputs, parameters, flags = value.get("inputs"), value.get("parameters"), value.get("flags")
+        if not isinstance(inputs, list) or len(inputs) > 4096 or len(set(inputs)) != len(inputs):
+            return False
+        if any(type(item) is not int or item < 0 for item in inputs):
+            return False
+        if not isinstance(parameters, list) or len(parameters) > 65536 or len(set(parameters)) != len(parameters):
+            return False
+        if any(not isinstance(item, str) or re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", item) is None for item in parameters):
+            return False
+        if not isinstance(flags, dict) or not set(flags) <= {"display", "render", "output"}:
+            return False
+        return all(type(item) is bool for item in flags.values())
 
     @staticmethod
     def _document_provenance_span_valid(value: Any, source_uri: str) -> bool:
@@ -555,6 +578,7 @@ class DocumentOperationsMixin:
         node_paths: set[str] = set()
         node_uid_by_path: dict[str, str] = {}
         paths_by_node_uid: dict[str, list[str]] = {}
+        hocus_by_node_uid: dict[str, dict[str, Any]] = {}
         for node in subgraph.get("nodes", []):
             path = str(node.get("path", "")).strip()
             if not path:
@@ -581,6 +605,7 @@ class DocumentOperationsMixin:
                 hocus_provenance = self._document_live_node_provenance(live_node, node_uid, identity_mode)
                 if hocus_provenance is not None:
                     metadata["hocus"] = hocus_provenance
+                    hocus_by_node_uid[node_uid] = hocus_provenance
             payload = {
                 "uid": node_uid,
                 "name": node.get("name"),
@@ -605,6 +630,20 @@ class DocumentOperationsMixin:
 
         code_blobs: list[dict[str, Any]] = []
         bindings: list[dict[str, Any]] = []
+
+        def derived_hocus(node_uid: str, entity_kind: str) -> dict[str, Any] | None:
+            node_hocus = hocus_by_node_uid.get(node_uid)
+            if not isinstance(node_hocus, dict):
+                return None
+            return {
+                key: copy.deepcopy(value)
+                for key, value in node_hocus.items()
+                if key in {
+                    "ownership", "projectUid", "sourceUri", "sourceDigest", "bundleDigest",
+                    "compilerVersion", "graphName", "symbol",
+                }
+            } | {"entityKind": entity_kind}
+
         for parm in subgraph.get("parms", []):
             node_uid = node_uid_by_path.get(str(parm.get("nodePath", "")).strip(), self._document_node_uid(str(parm.get("nodePath", "")).strip()))
             code_blob = self._document_code_blob_for_parm(parm, node_uid)
@@ -612,7 +651,16 @@ class DocumentOperationsMixin:
             if code_blob is not None:
                 code_blobs.append(code_blob)
                 code_blob_uid = code_blob["uid"]
-            bindings.append(self._document_binding_for_parm(parm, node_uid, code_blob_uid))
+            binding = self._document_binding_for_parm(parm, node_uid, code_blob_uid)
+            manifest = hocus_by_node_uid.get(node_uid, {}).get("managedFields")
+            managed_parameters = manifest.get("parameters", []) if isinstance(manifest, dict) else []
+            if str(binding.get("parmName", "")) in managed_parameters:
+                binding_hocus = derived_hocus(node_uid, "parameter_binding")
+                if binding_hocus is not None:
+                    binding["metadata"]["hocus"] = binding_hocus
+                    if code_blob is not None:
+                        code_blob["metadata"]["hocus"] = derived_hocus(node_uid, "code_blob")
+            bindings.append(binding)
 
         edges: list[dict[str, Any]] = []
         ports_by_key: dict[tuple[str, str, int], dict[str, Any]] = {}
@@ -633,8 +681,7 @@ class DocumentOperationsMixin:
                     source_endpoint["portName"] = str(connection["outputName"])
                 if connection.get("inputName") is not None:
                     dest_endpoint["portName"] = str(connection["inputName"])
-                edges.append(
-                    {
+                edge = {
                         "uid": f"edge:data:{node_uid_by_path[dest_path]}:{connection['inputIndex']}",
                         "kind": "data",
                         "from": source_endpoint,
@@ -645,7 +692,14 @@ class DocumentOperationsMixin:
                             "connectionOrder": connection["connectionOrder"],
                         },
                     }
-                )
+                dest_uid = node_uid_by_path[dest_path]
+                manifest = hocus_by_node_uid.get(dest_uid, {}).get("managedFields")
+                managed_inputs = manifest.get("inputs", []) if isinstance(manifest, dict) else []
+                if connection["inputIndex"] in managed_inputs:
+                    edge_hocus = derived_hocus(dest_uid, "edge")
+                    if edge_hocus is not None:
+                        edge["metadata"]["hocus"] = edge_hocus
+                edges.append(edge)
                 for direction, node_uid, index, name in (
                     ("output", node_uid_by_path[source_path], connection["outputIndex"], connection.get("outputName")),
                     ("input", node_uid_by_path[dest_path], connection["inputIndex"], connection.get("inputName")),
@@ -672,13 +726,21 @@ class DocumentOperationsMixin:
         ).strip()
         if output_path in node_uid_by_path:
             root_uid = node_uid_by_path[root_path]
-            edges.append({
+            output_uid = node_uid_by_path[output_path]
+            output_edge = {
                 "uid": f"edge:output:{root_uid}",
                 "kind": "output_flag",
-                "from": {"nodeUid": node_uid_by_path[output_path]},
+                "from": {"nodeUid": output_uid},
                 "to": {"nodeUid": root_uid},
                 "metadata": {"sourcePath": output_path, "destPath": root_path},
-            })
+            }
+            manifest = hocus_by_node_uid.get(output_uid, {}).get("managedFields")
+            managed_flags = manifest.get("flags", {}) if isinstance(manifest, dict) else {}
+            if managed_flags.get("output") is True:
+                output_hocus = derived_hocus(output_uid, "output_flag")
+                if output_hocus is not None:
+                    output_edge["metadata"]["hocus"] = output_hocus
+            edges.append(output_edge)
 
         identity_diagnostics = [
             {

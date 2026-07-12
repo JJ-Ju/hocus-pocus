@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import re
 from typing import Any
 
 from .diagnostics import CodeOffsetMap, Diagnostic, SourcePosition, SourceSpan
 
-GRAPH_SPEC_VERSION = "0.1"
-COMPILER_VERSION = "0.2.0"
+LEGACY_GRAPH_SPEC_VERSION = "0.1"
+GRAPH_SPEC_VERSION = "0.2"
+LEGACY_COMPILER_VERSION = "0.2.0"
+COMPILER_VERSION = "0.3.0"
+EXPLICIT_NODE_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 
 
 def _value_to_dict(value: Any) -> Any:
@@ -127,6 +131,7 @@ class NodeSpec:
     parms: list[ParmSpec]
     span: SourceSpan
     field_spans: dict[str, SourceSpan] = field(default_factory=dict, repr=False)
+    explicit_id: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         payload = {
@@ -136,6 +141,8 @@ class NodeSpec:
             "parms": [item.to_dict() for item in self.parms],
             "span": self.span.to_dict(),
         }
+        if self.explicit_id is not None:
+            payload["explicitId"] = self.explicit_id
         if self.field_spans:
             payload["fieldSpans"] = {key: value.to_dict() for key, value in sorted(self.field_spans.items())}
         return payload
@@ -181,7 +188,7 @@ class GraphSpec:
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "$schema": "hocuspocus://schemas/graph-spec/v0.1",
+            "$schema": f"hocuspocus://schemas/graph-spec/v{GRAPH_SPEC_VERSION}",
             "kind": "graph_spec",
             "graphSpecVersion": GRAPH_SPEC_VERSION,
             "languageVersion": self.language_version,
@@ -262,7 +269,8 @@ def graph_spec_from_dict(value: dict[str, Any]) -> GraphSpec:
             for child in item["parms"]
         ]
         nodes.append(NodeSpec(
-            item["symbol"], item["typeName"], inputs, parms, span(item["span"]), field_spans(item)
+            item["symbol"], item["typeName"], inputs, parms, span(item["span"]),
+            field_spans(item), item.get("explicitId"),
         ))
     return GraphSpec(
         value["languageVersion"], value["name"], value["target"], value["category"], value["mode"],

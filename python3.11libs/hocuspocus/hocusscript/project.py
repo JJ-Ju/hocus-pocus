@@ -198,15 +198,21 @@ class ProjectContext:
         )
 
     def resolve_source(self, source_path: str | Path) -> Path:
+        resolved = self.resolve_source_destination(source_path)
+        if not resolved.exists():
+            raise ProjectError("HOCUS413", "HocusScript source file does not exist.", details={"path": str(source_path)})
+        if not resolved.is_file():
+            raise ProjectError("HOCUS414", "HocusScript source path is not a regular file.", details={"path": str(source_path)})
+        return resolved
+
+    def resolve_source_destination(self, source_path: str | Path) -> Path:
+        """Resolve an existing or new native source path inside configured project roots."""
+
         candidate = Path(source_path).expanduser()
         resolved = candidate.resolve(strict=False) if candidate.is_absolute() else (self.root / candidate).resolve(strict=False)
         _require_contained(resolved, self.root, "HOCUS411", "Source path escapes the project root.")
         if resolved.suffix.lower() != ".hocus":
             raise ProjectError("HOCUS412", "HocusScript source files must use the .hocus suffix.", details={"path": str(source_path)})
-        if not resolved.exists():
-            raise ProjectError("HOCUS413", "HocusScript source file does not exist.", details={"path": str(source_path)})
-        if not resolved.is_file():
-            raise ProjectError("HOCUS414", "HocusScript source path is not a regular file.", details={"path": str(source_path)})
         if not any(_is_contained(resolved, source_root) for source_root in self.source_directories):
             raise ProjectError("HOCUS415", "Source file is outside the configured source directories.", details={"path": str(source_path)})
         return resolved

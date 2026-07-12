@@ -136,13 +136,17 @@ def _lower_node(node: NodeDecl) -> NodeSpec:
             parms.append(
                 ParmSpec(statement.name, _lower_value(statement.value), statement.span, {"name": statement.name_span})
             )
+    field_spans = {"symbol": node.symbol_span, "typeName": node.type_span}
+    if node.explicit_id_span is not None:
+        field_spans["explicitId"] = node.explicit_id_span
     return NodeSpec(
         node.symbol,
         node.type_name,
         inputs,
         parms,
         node.span,
-        {"symbol": node.symbol_span, "typeName": node.type_span},
+        field_spans,
+        node.explicit_id,
     )
 
 

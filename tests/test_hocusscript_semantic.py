@@ -239,7 +239,7 @@ class HocusScriptSemanticTests(unittest.TestCase):
         self.assertEqual(node["inputs"][0]["fieldSpans"]["index"]["start"]["offset"], source.index("2"))
         self.assertEqual(node["inputs"][0]["source"]["fieldSpans"]["outputIndex"]["start"]["offset"],
                          source.index("1", source.index("output")))
-        schema = json.loads((ROOT / "docs" / "schemas" / "graph-spec-v0.1.schema.json").read_text(encoding="utf-8"))
+        schema = json.loads((ROOT / "docs" / "schemas" / "graph-spec-v0.2.schema.json").read_text(encoding="utf-8"))
         try:
             from jsonschema import Draft202012Validator
         except ImportError:

@@ -15,9 +15,9 @@ Roadmap: `docs/hocusscript-roadmap.md`
 
 ## 2. Current Slice
 
-Current milestone: HS4 immutable planning and guarded SOP apply complete; HS5 export and editor workflow next
-Current scope: strict portable bundles lower against a freshly verified live catalog/baseline into non-applyable candidate plans
-Live mutation: prohibited
+Current milestone: HS5 export/editor workflow complete; HS6 modules and studio libraries next
+Current scope: design the offline, project-contained module/import and transitive-lock contracts without weakening the native project-directory or content-only MCP boundary
+Live mutation: available only through the completed HS4 guarded `document.apply_plan` path; HS5 format/completion/export tools are observational
 
 Initial implementation acceptance command:
 
@@ -90,7 +90,7 @@ Houdini required: no
 - [x] Add source spans to implemented graph entities, references, assignments, and values.
 - [x] Add stable structured diagnostic codes and deterministic sorting.
 - [x] Add serializable GraphSpec model.
-- [x] Add machine-readable GraphSpec v0.1 schema and MCP schema resource.
+- [x] Retain decode-only GraphSpec v0.1 and publish current GraphSpec v0.2 schemas and MCP resources with an explicit compiler/version compatibility matrix.
 - [x] Ensure the package never imports `hou`.
 - [x] Split the parser-owned syntax AST from normalized GraphSpec before semantic resolution.
 - [x] Retain and serialize individual spans for version, target, category, mode, revision, ownership, and flag/layout statements.
@@ -297,23 +297,30 @@ HS4 exit evidence (2026-07-11):
 
 ## 8. HS5: Export and Editor Workflow
 
-Status: pending
+Status: complete
 
 Dependencies: HS4 for the full edit/apply/review loop; parse/format/export work may begin after HS3
 Houdini required: yes for export
 
-- [ ] Add `document.format_source`.
-- [ ] Add `document.export_source`.
-- [ ] Return export source text and provenance without writing a project file from MCP.
-- [ ] Complete the native export/recompile round trip with no-overwrite and expected-digest replacement safeguards.
-- [ ] Export durable IDs and ownership metadata.
-- [ ] Define opaque-preserve versus rejection rules for unsupported constructs.
-- [ ] Add semantic export/recompile golden and live tests.
-- [ ] Add catalog-backed completion endpoint.
+- [x] Add `document.format_source`.
+- [x] Add `document.export_source`.
+- [x] Return export source text and provenance without writing a project file from MCP.
+- [x] Complete the native export/recompile round trip with no-overwrite and expected-digest replacement safeguards.
+- [x] Export durable IDs and ownership metadata.
+- [x] Define fail-closed rejection rules for unsupported constructs; HocusScript 0.1 has no opaque syntax.
+- [x] Add semantic export/recompile golden and live tests.
+- [x] Add catalog-backed completion endpoint.
 - [x] Add local structural check/format/compile CLI workflow.
-- [ ] Add syntax highlighting/editor grammar.
-- [ ] Add LSP only after diagnostic and completion contracts stabilize.
-- [ ] Update manual and agent workflows to prefer `.hocus` source.
+- [x] Add syntax highlighting/editor grammar.
+- [x] Defer LSP until the versioned diagnostic and completion contracts have downstream use and stabilize.
+- [x] Update manual and agent workflows to prefer `.hocus` source.
+
+Verification:
+
+- full offline suite: 216 tests passed after final response-budget review
+- schemas: all 19 Draft 2020-12 schemas valid, including legacy/current GraphSpec and strict HS5 format/completion/export outputs
+- H21.0.729 actual registered endpoint over the unmodified force-synced document: repeated export byte-identical; exact-catalog compile/resolve/lower semantic equivalence; unsupported bypass blocked with `HOCUS805`; no filesystem writes
+- reproducible command: `scripts/smoke_hocusscript_export.py`
 
 ## 9. HS6: Modules and Studio Libraries
 
@@ -396,7 +403,7 @@ Houdini required: yes
 
 ## 13. Open Decisions
 
-- [ ] Decide the final explicit-ID syntax before language `0.2`.
+- [x] Use optional `node symbol @id("stable-uid"): type` syntax with bounded unique IDs; retain deterministic defaults when omitted.
 - [ ] Decide canonical tuple and unit syntax.
 - [ ] Decide record/object literal syntax.
 - [ ] Decide channel-reference and expression syntax.

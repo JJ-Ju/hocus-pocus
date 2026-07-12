@@ -51,7 +51,8 @@ def format_graph(graph: GraphSpec) -> str:
 
     for node in graph.nodes:
         lines.append("")
-        lines.append(f"  node {node.symbol}: {_format_value(node.type_name)} {{")
+        identity = f" @id({_format_value(node.explicit_id)})" if node.explicit_id is not None else ""
+        lines.append(f"  node {node.symbol}{identity}: {_format_value(node.type_name)} {{")
         for input_spec in node.inputs:
             lines.append(f"    input[{input_spec.index}] = {_format_reference(input_spec.source)};")
         for parm in node.parms:

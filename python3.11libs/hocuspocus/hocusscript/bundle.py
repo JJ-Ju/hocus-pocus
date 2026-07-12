@@ -11,7 +11,14 @@ from dataclasses import dataclass
 from typing import Any
 
 from .compiler import SUPPORTED_LANGUAGE_VERSIONS
-from .model import COMPILER_VERSION, GRAPH_SPEC_VERSION, CompileResult
+from .model import (
+    COMPILER_VERSION,
+    EXPLICIT_NODE_ID_PATTERN,
+    GRAPH_SPEC_VERSION,
+    LEGACY_COMPILER_VERSION,
+    LEGACY_GRAPH_SPEC_VERSION,
+    CompileResult,
+)
 
 BUNDLE_VERSION = "0.2"
 LEGACY_BUNDLE_VERSION = "0.1"
@@ -172,14 +179,18 @@ def decode_compiled_bundle(value: Any) -> CompiledBundle:
     expected_schema = f"hocuspocus://schemas/compiled-bundle/v{bundle_version}"
     _require_equal(payload, "$schema", expected_schema, "HOCUS506")
     _require_equal(payload, "kind", "hocus_compiled_bundle", "HOCUS506")
-    supported_compilers = (
-        {"0.1.1", COMPILER_VERSION}
-        if bundle_version == LEGACY_BUNDLE_VERSION
-        else {COMPILER_VERSION}
-    )
-    if payload.get("compilerVersion") not in supported_compilers:
-        raise BundleValidationError("HOCUS507", "Compiled bundle compiler version is unsupported.")
-    _require_equal(payload, "graphSpecVersion", GRAPH_SPEC_VERSION, "HOCUS507")
+    compiler_version = payload.get("compilerVersion")
+    graph_spec_version = payload.get("graphSpecVersion")
+    compatible_contracts = {
+        (LEGACY_COMPILER_VERSION, LEGACY_GRAPH_SPEC_VERSION),
+        (COMPILER_VERSION, GRAPH_SPEC_VERSION),
+    }
+    if bundle_version == LEGACY_BUNDLE_VERSION:
+        compatible_contracts.add(("0.1.1", LEGACY_GRAPH_SPEC_VERSION))
+    if (compiler_version, graph_spec_version) not in compatible_contracts:
+        raise BundleValidationError(
+            "HOCUS507", "Compiled bundle compiler and GraphSpec versions are not a supported pair."
+        )
     language_version = payload.get("languageVersion")
     if language_version not in SUPPORTED_LANGUAGE_VERSIONS:
         raise BundleValidationError("HOCUS507", "Compiled bundle language version is unsupported.")
@@ -229,14 +240,16 @@ def decode_compiled_bundle(value: Any) -> CompiledBundle:
     graph_spec = payload.get("graphSpec")
     if not isinstance(graph_spec, dict):
         raise BundleValidationError("HOCUS514", "graphSpec must be an object.")
-    _require_equal(graph_spec, "$schema", "hocuspocus://schemas/graph-spec/v0.1", "HOCUS514")
+    _require_equal(
+        graph_spec, "$schema", f"hocuspocus://schemas/graph-spec/v{graph_spec_version}", "HOCUS514"
+    )
     _require_equal(graph_spec, "kind", "graph_spec", "HOCUS514")
-    _require_equal(graph_spec, "graphSpecVersion", GRAPH_SPEC_VERSION, "HOCUS514")
+    _require_equal(graph_spec, "graphSpecVersion", graph_spec_version, "HOCUS514")
     _require_equal(graph_spec, "languageVersion", language_version, "HOCUS514")
     nodes = graph_spec.get("nodes")
     if not isinstance(nodes, list) or len(nodes) > 10_000:
         raise BundleValidationError("HOCUS515", "graphSpec.nodes must be an array with at most 10000 entries.")
-    _validate_graph_spec(graph_spec)
+    _validate_graph_spec(graph_spec, graph_spec_version=graph_spec_version)
     _validate_declared_source_uris(graph_spec, {entry["uri"], *dependency_uris})
 
     capabilities = payload.get("requiredCapabilities")
@@ -493,7 +506,7 @@ def _require_nullable_semantic_string(value: Any, label: str) -> None:
         raise BundleValidationError("HOCUS521", f"{label} is invalid.")
 
 
-def _validate_graph_spec(graph: dict[str, Any]) -> None:
+def _validate_graph_spec(graph: dict[str, Any], *, graph_spec_version: str) -> None:
     if set(graph) != _GRAPH_KEYS:
         raise BundleValidationError("HOCUS520", "graphSpec has missing or unknown fields.")
     if not isinstance(graph["name"], str) or not _IDENTIFIER_PATTERN.fullmatch(graph["name"]):
@@ -557,21 +570,39 @@ def _validate_graph_spec(graph: dict[str, Any]) -> None:
             mutable_symbols.add(external["symbol"])
         _validate_span(external["span"], f"{label}.span")
         _validate_optional_field_spans(external, label, {"symbol", "path"})
+    explicit_ids: set[str] = set()
     for index, node in enumerate(graph["nodes"]):
         label = f"graphSpec.nodes[{index}]"
-        if not isinstance(node, dict) or set(node) not in (
-            {"symbol", "typeName", "inputs", "parms", "span"},
-            {"symbol", "typeName", "inputs", "parms", "span", "fieldSpans"},
+        required_node_keys = {"symbol", "typeName", "inputs", "parms", "span"}
+        optional_node_keys = {"fieldSpans"}
+        if graph_spec_version == GRAPH_SPEC_VERSION:
+            optional_node_keys.add("explicitId")
+        if (
+            not isinstance(node, dict)
+            or not required_node_keys.issubset(node)
+            or set(node) - required_node_keys - optional_node_keys
         ):
             raise BundleValidationError("HOCUS520", f"{label} has an invalid shape.")
         _validate_symbol(node["symbol"], symbols, label)
         mutable_symbols.add(node["symbol"])
+        explicit_id = node.get("explicitId")
+        if graph_spec_version == LEGACY_GRAPH_SPEC_VERSION and explicit_id is not None:
+            raise BundleValidationError("HOCUS520", f"{label}.explicitId requires GraphSpec v0.2.")
+        if explicit_id is not None:
+            if not isinstance(explicit_id, str) or not EXPLICIT_NODE_ID_PATTERN.fullmatch(explicit_id):
+                raise BundleValidationError("HOCUS520", f"{label}.explicitId is invalid.")
+            if explicit_id in explicit_ids:
+                raise BundleValidationError("HOCUS520", f"{label}.explicitId must be unique.")
+            explicit_ids.add(explicit_id)
         if not isinstance(node["typeName"], str) or not node["typeName"].strip() or len(node["typeName"]) > 4096:
             raise BundleValidationError("HOCUS520", f"{label}.typeName must be a non-empty string.")
         if not isinstance(node["inputs"], list) or not isinstance(node["parms"], list):
             raise BundleValidationError("HOCUS520", f"{label} inputs and parms must be arrays.")
         _validate_span(node["span"], f"{label}.span")
-        _validate_optional_field_spans(node, label, {"symbol", "typeName"})
+        expected_spans = {"symbol", "typeName"}
+        if explicit_id is not None:
+            expected_spans.add("explicitId")
+        _validate_optional_field_spans(node, label, expected_spans)
         input_identities: set[int] = set()
         for input_index, input_spec in enumerate(node["inputs"]):
             _validate_input(input_spec, f"{label}.inputs[{input_index}]")

@@ -30,6 +30,54 @@ class HocusScriptCompilerTests(unittest.TestCase):
         self.assertTrue(second.valid, [item.to_dict() for item in second.diagnostics])
         self.assertEqual(first.formatted_source, second.formatted_source)
 
+    def test_explicit_node_ids_round_trip_and_omitted_ids_remain_optional(self) -> None:
+        source = '''hocus 0.1;
+graph demo {
+  target "/obj/geo1";
+  node source @id("asset.rock:source-01"): "box" {}
+  node output: "null" { input[0] = source; }
+}
+'''
+        first = compile_source(source, "identity.hocus")
+        self.assertTrue(first.valid, [item.to_dict() for item in first.diagnostics])
+        assert first.graph_spec is not None and first.formatted_source is not None
+        self.assertEqual(first.graph_spec.nodes[0].explicit_id, "asset.rock:source-01")
+        self.assertIsNone(first.graph_spec.nodes[1].explicit_id)
+        payload = first.graph_spec.to_dict()
+        self.assertEqual(payload["nodes"][0]["explicitId"], "asset.rock:source-01")
+        self.assertNotIn("explicitId", payload["nodes"][1])
+        self.assertIn('node source @id("asset.rock:source-01"):', first.formatted_source)
+        second = compile_source(first.formatted_source, "identity.hocus")
+        self.assertTrue(second.valid, [item.to_dict() for item in second.diagnostics])
+        self.assertEqual(first.formatted_source, second.formatted_source)
+
+        schema = json.loads((ROOT / "docs" / "schemas" / "graph-spec-v0.2.schema.json").read_text("utf-8"))
+        try:
+            from jsonschema import Draft202012Validator
+        except ImportError:
+            return
+        Draft202012Validator(schema).validate(payload)
+        legacy_payload = copy.deepcopy(payload)
+        legacy_payload["$schema"] = "hocuspocus://schemas/graph-spec/v0.1"
+        legacy_payload["graphSpecVersion"] = "0.1"
+        legacy_schema = json.loads(
+            (ROOT / "docs" / "schemas" / "graph-spec-v0.1.schema.json").read_text("utf-8")
+        )
+        self.assertTrue(list(Draft202012Validator(legacy_schema).iter_errors(legacy_payload)))
+
+    def test_invalid_and_duplicate_explicit_node_ids_are_rejected(self) -> None:
+        invalid = compile_source(
+            'hocus 0.1; graph demo { target "/obj/geo1"; node x @id("bad/id"): "null" {} }',
+            "invalid-id.hocus",
+        )
+        duplicate = compile_source(
+            'hocus 0.1; graph demo { target "/obj/geo1"; '
+            'node x @id("stable-01"): "null" {} node y @id("stable-01"): "null" {} }',
+            "duplicate-id.hocus",
+        )
+        self.assertIn("HOCUS321", {item.code for item in invalid.diagnostics})
+        self.assertIn("HOCUS322", {item.code for item in duplicate.diagnostics})
+
     def test_duplicate_symbols_and_unknown_refs_are_diagnostics(self) -> None:
         source = '''hocus 0.1;
 graph demo {
@@ -127,13 +175,13 @@ graph demo {
 
     def test_versions_are_explicit_in_preview_payload(self) -> None:
         payload = compile_source(VALID_SOURCE, "rocks.hocus").to_dict()
-        self.assertEqual(payload["compilerVersion"], "0.2.0")
-        self.assertEqual(payload["graphSpecVersion"], "0.1")
-        self.assertEqual(payload["graphSpec"]["$schema"], "hocuspocus://schemas/graph-spec/v0.1")
+        self.assertEqual(payload["compilerVersion"], "0.3.0")
+        self.assertEqual(payload["graphSpecVersion"], "0.2")
+        self.assertEqual(payload["graphSpec"]["$schema"], "hocuspocus://schemas/graph-spec/v0.2")
         self.assertEqual(payload["diagnostics"], [])
         self.assertEqual(payload["sourceUri"], "hocus-memory:///rocks.hocus")
         self.assertEqual(payload["sourceKind"], "memory")
-        schema = json.loads((ROOT / "docs" / "schemas" / "graph-spec-v0.1.schema.json").read_text(encoding="utf-8"))
+        schema = json.loads((ROOT / "docs" / "schemas" / "graph-spec-v0.2.schema.json").read_text(encoding="utf-8"))
         self.assertEqual(schema["$id"], payload["graphSpec"]["$schema"])
         self.assertTrue(set(schema["required"]).issubset(payload["graphSpec"].keys()))
         try:

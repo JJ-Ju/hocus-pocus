@@ -222,6 +222,25 @@ It can size the orbit using geometry bounds from a target node.
 
 High-level canned asset macros are intentionally not part of the default tool surface. The current server is meant to help agents build procedural Houdini systems directly from lower-level graph, parm, material, render, Solaris, PDG, packaging, and validation tools.
 
+### HocusScript source workflow
+
+`.hocus` files are ordinary native project files. Select their project directory explicitly in the offline CLI or editor; Houdini MCP does not read that directory.
+
+```powershell
+$env:PYTHONPATH = "python3.11libs"
+python -m hocuspocus.hocusscript check hocus/asset.hocus --project D:/show/project
+python -m hocuspocus.hocusscript format hocus/asset.hocus --project D:/show/project --write
+python -m hocuspocus.hocusscript compile hocus/asset.hocus --project D:/show/project -o asset.bundle.json
+```
+
+For the reverse direction, `document.export_source` accepts only a Houdini `root_path` and optional graph name. A supported flat SOP network returns canonical text and durable provenance; an unsupported network returns `source = null` and bounded deterministic blockers, with exact overflow accounting. Save the JSON response and create a project-contained file natively:
+
+```powershell
+python -m hocuspocus.hocusscript write-export export-response.json hocus/exported.hocus --project D:/show/project
+```
+
+The command refuses to overwrite an existing file unless its exact current digest is supplied with `--expected-digest`. `document.format_source` and `document.complete_source` support unsaved editor buffers without filesystem access.
+
 ### Managed exports
 
 `export.alembic` and `export.usd` can be called with no explicit `path`. In that case, HocusPocus writes to a managed location under:

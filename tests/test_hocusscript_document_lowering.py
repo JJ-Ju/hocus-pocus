@@ -15,6 +15,7 @@ from hocuspocus.hocusscript import (
     CompiledBundle,
     DocumentLoweringError,
     compile_source,
+    decode_compiled_bundle,
     lower_bundle_to_document,
     graph_spec_from_dict,
     resolve_graph,
@@ -56,16 +57,21 @@ def _provider() -> FakeCatalogProvider:
     )
 
 
-def _bundle(*, mode: str = "merge", extra: str = "") -> CompiledBundle:
+def _bundle(
+    *, mode: str = "merge", extra: str = "", source_id: str | None = None,
+    sink_id: str | None = None, source_symbol: str = "source", sink_symbol: str = "sink",
+    source_uri: str = "hocus-project://city/assets/rocks.hocus",
+) -> CompiledBundle:
     provider = _provider()
-    source_uri = "hocus-project://city/assets/rocks.hocus"
     ownership = ' ownership "studio.environment.rocks";' if mode == "reconcile" else ""
+    source_identity = f' @id("{source_id}")' if source_id is not None else ""
+    sink_identity = f' @id("{sink_id}")' if sink_id is not None else ""
     source = f'''hocus 0.1;
 graph rocks {{
   target "/obj/geo1"; category Sop; mode {mode};{ownership}
-  node source: "acme::source::1.0" {{ sx = 2; }}
-  node sink: sink {{ input[0] = source.output[1]; snippet = vex`@P *= 2;`; }}
-  display = sink; render = sink; output = sink; {extra}
+  node {source_symbol}{source_identity}: "acme::source::1.0" {{ sx = 2; }}
+  node {sink_symbol}{sink_identity}: sink {{ input[0] = {source_symbol}.output[1]; snippet = vex`@P *= 2;`; }}
+  display = {sink_symbol}; render = {sink_symbol}; output = {sink_symbol}; {extra}
 }}
 '''
     result = compile_source(source, "assets/rocks.hocus", source_uri=source_uri)
@@ -124,6 +130,16 @@ class HocusScriptDocumentLoweringTests(unittest.TestCase):
         nodes = {item["name"]: item for item in first.document["nodes"]}
         self.assertEqual(nodes["source"]["typeName"], "acme::source::1.0")
         self.assertTrue(nodes["sink"]["flags"]["display"])
+        self.assertEqual(nodes["source"]["metadata"]["hocus"]["managedFields"], {
+            "type": True, "inputs": [], "parameters": ["sx"],
+            "flags": {"display": False, "render": False, "output": False},
+            "nodeUid": nodes["source"]["uid"],
+        })
+        self.assertEqual(nodes["sink"]["metadata"]["hocus"]["managedFields"], {
+            "type": True, "inputs": [0], "parameters": ["snippet"],
+            "flags": {"display": True, "render": True, "output": True},
+            "nodeUid": nodes["sink"]["uid"],
+        })
         edge = next(item for item in first.document["edges"] if item["kind"] == "data")
         self.assertEqual(edge["from"]["portIndex"], 1)
         self.assertEqual(edge["from"]["portName"], "points")
@@ -151,6 +167,130 @@ class HocusScriptDocumentLoweringTests(unittest.TestCase):
             return
         schema = json.loads((ROOT / "docs" / "schemas" / "network-document-v1.schema.json").read_text("utf-8"))
         Draft202012Validator(schema).validate(first.document)
+
+    def test_explicit_node_ids_select_document_uids_and_defaults_stay_deterministic(self) -> None:
+        explicit = lower_bundle_to_document(
+            _bundle(source_id="asset.rock:source-01", sink_id="asset.rock:sink-01"),
+            _baseline(),
+        )
+        explicit_nodes = {item["name"]: item for item in explicit.document["nodes"]}
+        self.assertEqual(explicit_nodes["source"]["uid"], "asset.rock:source-01")
+        self.assertEqual(explicit_nodes["sink"]["uid"], "asset.rock:sink-01")
+
+        first_default = lower_bundle_to_document(_bundle(), _baseline())
+        second_default = lower_bundle_to_document(_bundle(), _baseline())
+        first_uids = {item["name"]: item["uid"] for item in first_default.document["nodes"]}
+        second_uids = {item["name"]: item["uid"] for item in second_default.document["nodes"]}
+        self.assertEqual(first_uids, second_uids)
+        self.assertTrue(first_uids["source"].startswith("hocus-node:"))
+
+    def test_explicit_node_ids_survive_source_symbol_renames(self) -> None:
+        before = lower_bundle_to_document(
+            _bundle(source_id="asset.rock:source-01", sink_id="asset.rock:sink-01"),
+            _baseline(),
+        )
+        after = lower_bundle_to_document(
+            _bundle(
+                source_id="asset.rock:source-01",
+                sink_id="asset.rock:sink-01",
+                source_symbol="renamed_source",
+                source_uri="hocus-project://city/relocated/rocks.hocus",
+            ),
+            before.document,
+        )
+        self.assertTrue(after.valid, after.diagnostics)
+        nodes = {item["uid"]: item for item in after.document["nodes"]}
+        self.assertEqual(nodes["asset.rock:source-01"]["path"], "/obj/geo1/renamed_source")
+        self.assertEqual(nodes["asset.rock:source-01"]["metadata"]["hocus"]["sourceUri"],
+                         "hocus-project://city/relocated/rocks.hocus")
+        self.assertEqual(after.diff["createdNodes"], [])
+        self.assertEqual(after.diff["deletedNodes"], [])
+        renamed = next(item for item in after.diff["changedNodes"]
+                       if item["uid"] == "asset.rock:source-01")
+        self.assertEqual(renamed["before"]["path"], "/obj/geo1/source")
+        self.assertEqual(renamed["after"]["path"], "/obj/geo1/renamed_source")
+        operation = next(item for item in after.candidate_plan["operations"]
+                         if item["entityUid"] == "asset.rock:source-01")
+        self.assertEqual(operation["action"], "rename_node")
+
+    def test_managed_explicit_rename_still_obeys_destination_collision_gate(self) -> None:
+        before = lower_bundle_to_document(
+            _bundle(source_id="asset.rock:source-01", sink_id="asset.rock:sink-01"), _baseline()
+        ).document
+        before["nodes"].append(_node("artist-destination", "renamed_source", "/obj/geo1/renamed_source"))
+        after = lower_bundle_to_document(
+            _bundle(source_id="asset.rock:source-01", sink_id="asset.rock:sink-01",
+                    source_symbol="renamed_source"),
+            before,
+        )
+        self.assertFalse(after.valid)
+        self.assertIsNone(after.candidate_plan)
+        self.assertIn("HOCUS706", {item["code"] for item in after.diagnostics})
+
+    def test_explicit_node_id_cannot_alias_a_different_baseline_path(self) -> None:
+        collision = _node("asset.rock:source-01", "artist", "/obj/geo1/artist")
+        preview = lower_bundle_to_document(
+            _bundle(source_id="asset.rock:source-01"),
+            _baseline(extras=(collision,)),
+        )
+        self.assertFalse(preview.valid)
+        self.assertIsNone(preview.candidate_plan)
+        self.assertIn("HOCUS706", {item["code"] for item in preview.diagnostics})
+
+    def test_bundle_boundary_rejects_invalid_and_duplicate_explicit_node_ids(self) -> None:
+        def rehash(payload):
+            unsigned = copy.deepcopy(payload)
+            unsigned.pop("bundleDigest")
+            payload["bundleDigest"] = _digest(
+                json.dumps(unsigned, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+            )
+
+        invalid = _bundle(source_id="asset.rock:source-01", sink_id="asset.rock:sink-01").to_dict()
+        invalid["graphSpec"]["nodes"][0]["explicitId"] = "bad/id"
+        rehash(invalid)
+        with self.assertRaises(BundleValidationError) as invalid_error:
+            decode_compiled_bundle(invalid)
+        self.assertEqual(invalid_error.exception.code, "HOCUS520")
+
+        duplicate = _bundle(source_id="asset.rock:source-01", sink_id="asset.rock:sink-01").to_dict()
+        duplicate["graphSpec"]["nodes"][1]["explicitId"] = "asset.rock:source-01"
+        rehash(duplicate)
+        with self.assertRaises(BundleValidationError) as duplicate_error:
+            decode_compiled_bundle(duplicate)
+        self.assertEqual(duplicate_error.exception.code, "HOCUS520")
+
+    def test_bundle_version_pairs_decode_only_explicitly_safe_graphspec_contracts(self) -> None:
+        def rehash(payload):
+            unsigned = copy.deepcopy(payload)
+            unsigned.pop("bundleDigest")
+            payload["bundleDigest"] = _digest(
+                json.dumps(unsigned, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+            )
+
+        safe_legacy = _bundle().to_dict()
+        safe_legacy["compilerVersion"] = "0.2.0"
+        safe_legacy["graphSpecVersion"] = "0.1"
+        safe_legacy["graphSpec"]["$schema"] = "hocuspocus://schemas/graph-spec/v0.1"
+        safe_legacy["graphSpec"]["graphSpecVersion"] = "0.1"
+        rehash(safe_legacy)
+        self.assertEqual(decode_compiled_bundle(safe_legacy).payload["graphSpecVersion"], "0.1")
+
+        mixed = _bundle(source_id="asset.rock:source-01").to_dict()
+        mixed["compilerVersion"] = "0.2.0"
+        rehash(mixed)
+        with self.assertRaises(BundleValidationError) as mixed_error:
+            decode_compiled_bundle(mixed)
+        self.assertEqual(mixed_error.exception.code, "HOCUS507")
+
+        smuggled = _bundle(source_id="asset.rock:source-01").to_dict()
+        smuggled["compilerVersion"] = "0.2.0"
+        smuggled["graphSpecVersion"] = "0.1"
+        smuggled["graphSpec"]["$schema"] = "hocuspocus://schemas/graph-spec/v0.1"
+        smuggled["graphSpec"]["graphSpecVersion"] = "0.1"
+        rehash(smuggled)
+        with self.assertRaises(BundleValidationError) as smuggled_error:
+            decode_compiled_bundle(smuggled)
+        self.assertEqual(smuggled_error.exception.code, "HOCUS520")
 
     def test_live_round_trip_does_not_duplicate_or_reapply_authored_state(self) -> None:
         bundle = _bundle()

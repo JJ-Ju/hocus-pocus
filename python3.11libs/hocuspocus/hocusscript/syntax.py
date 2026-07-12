@@ -125,11 +125,13 @@ NodeStmt: TypeAlias = InputStmt | ParmStmt
 @dataclass(frozen=True, slots=True)
 class NodeDecl:
     symbol: str
+    explicit_id: str | None
     type_name: str
     type_quoted: bool
     statements: tuple[NodeStmt, ...]
     span: SourceSpan
     symbol_span: SourceSpan
+    explicit_id_span: SourceSpan | None
     type_span: SourceSpan
 
 

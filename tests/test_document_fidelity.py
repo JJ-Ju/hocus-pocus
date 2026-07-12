@@ -449,26 +449,46 @@ class DocumentFidelityTests(unittest.TestCase):
 
     def test_managed_provenance_round_trips_and_authorizes_same_owner_reconcile(self) -> None:
         root = _FakeLiveNode("/obj/geo1", "root")
+        source = _FakeLiveNode("/obj/geo1/source", "source-uid")
         managed = _FakeLiveNode("/obj/geo1/managed")
-        operations = _LiveDocumentHarness([root, managed])
+        managed._connections = [_FakeConnection(source, 0, 1, "input", "points")]
+        operations = _LiveDocumentHarness([root, source, managed])
+        hocus = _managed_hocus("studio.rocks")
+        hocus["managedFields"] = {
+            "type": True, "inputs": [0], "parameters": ["snippet"], "flags": {}, "nodeUid": "managed-uid",
+        }
         payload = {
             **_node("managed-uid", "/obj/geo1/managed"),
-            "metadata": {"hocus": _managed_hocus("studio.rocks")},
+            "metadata": {"hocus": hocus},
         }
         operations._document_stamp_live_node_metadata(managed.path(), payload)
         snapshot = {
             "revision": 9,
             "stats": {},
-            "parms": [],
+            "parms": [{
+                "path": "/obj/geo1/managed/snippet", "nodePath": managed.path(), "name": "snippet",
+                "label": "Snippet", "templateType": "string", "rawValue": "@P *= 2;",
+                "value": "@P *= 2;", "expression": None, "referencePaths": [], "language": "vex",
+            }],
             "edges": [],
             "nodes": [
                 {"path": root.path(), "name": "geo1", "typeName": "geo", "category": "Object", "parentPath": "/obj", "isNetwork": True},
+                {"path": source.path(), "name": "source", "typeName": "box", "category": "Sop", "parentPath": root.path(), "isNetwork": False},
                 {"path": managed.path(), "name": "managed", "typeName": "null", "category": "Sop", "parentPath": root.path(), "isNetwork": False},
             ],
         }
         imported = operations._document_live_network_payload(snapshot, root.path())
         imported_managed = next(item for item in imported["nodes"] if item["uid"] == "managed-uid")
-        self.assertEqual(imported_managed["metadata"]["hocus"], _managed_hocus("studio.rocks"))
+        self.assertEqual(imported_managed["metadata"]["hocus"], hocus)
+        derived = [
+            *imported["parameterBindings"], *imported["codeBlobs"],
+            *(item for item in imported["edges"] if item["kind"] == "data"),
+        ]
+        self.assertEqual({item["metadata"]["hocus"]["ownership"] for item in derived}, {"studio.rocks"})
+        self.assertEqual(
+            {item["metadata"]["hocus"]["entityKind"] for item in derived},
+            {"parameter_binding", "code_blob", "edge"},
+        )
 
         target = copy.deepcopy(imported)
         target["nodes"] = [item for item in target["nodes"] if item["uid"] != "managed-uid"]

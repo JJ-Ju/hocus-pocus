@@ -70,13 +70,13 @@ The parsed representation. Every declaration, statement, expression, and referen
 
 A compact, normalized, source-mapped graph intent model. It contains symbolic identities and authored values but not live Houdini mutation instructions.
 
-GraphSpec preview version `0.1` uses schema URI `hocuspocus://schemas/graph-spec/v0.1` and this logical shape:
+GraphSpec version `0.2` uses schema URI `hocuspocus://schemas/graph-spec/v0.2`. It is the first contract that can carry an optional durable managed-node `explicitId`:
 
 ```json
 {
-  "$schema": "hocuspocus://schemas/graph-spec/v0.1",
+  "$schema": "hocuspocus://schemas/graph-spec/v0.2",
   "kind": "graph_spec",
-  "graphSpecVersion": "0.1",
+  "graphSpecVersion": "0.2",
   "languageVersion": "0.1",
   "name": "rocks",
   "target": "/obj/geo1",
@@ -95,7 +95,9 @@ GraphSpec preview version `0.1` uses schema URI `hocuspocus://schemas/graph-spec
 }
 ```
 
-The source-faithful syntax AST is separate from normalized GraphSpec and preserves statement order, optional spellings, quoted forms, and trailing commas. Nodes contain ordered `inputs` and `parms`; external nodes declare `symbol`, `path`, and `adopted`. GraphSpec carries entity/value spans plus `fieldSpans` for authored singleton scalars. Tagged code additionally carries its exact body span and a compact escape-aware offset map so later diagnostics can translate decoded code offsets back to `.hocus` source offsets.
+The source-faithful syntax AST is separate from normalized GraphSpec and preserves statement order, optional spellings, quoted forms, and trailing commas. Nodes contain ordered `inputs` and `parms`, plus optional `explicitId`; external nodes declare `symbol`, `path`, and `adopted`. GraphSpec carries entity/value spans plus `fieldSpans` for authored singleton scalars. Tagged code additionally carries its exact body span and a compact escape-aware offset map so later diagnostics can translate decoded code offsets back to `.hocus` source offsets.
+
+GraphSpec `0.1` remains a decode-only legacy contract and MUST reject `explicitId`. Compiler `0.2.0` pairs only with GraphSpec `0.1`; compiler `0.3.0` pairs only with GraphSpec `0.2`. Bundle decoders may accept those explicit historical pairs, plus compiler `0.1.1`/GraphSpec `0.1` only in legacy structural bundle `0.1`; they MUST reject mixed pairs or an `explicitId` smuggled into a `0.1` payload.
 
 Canonical GraphSpec serialization uses UTF-8, sorted object keys when hashed, source order for declaration arrays, explicit nulls, finite JSON numbers, and no insignificant whitespace in the hashed form. Compiler responses declare both `compilerVersion` and `graphSpecVersion`. Incompatible shape changes require a new GraphSpec version and schema URI.
 
@@ -258,8 +260,8 @@ The Houdini boundary is content-based. The shared standard-library `decode_compi
 MCP progression:
 
 - `document.compile_source` remains an optional compatibility/convenience endpoint for unsaved source text. It never accepts a project directory or reads a path.
-- HS3 `document.preview_bundle` will accept compiled bundle content through `decode_compiled_bundle()`, resolve it against the current Houdini catalog/baseline, and return a non-mutating diff and candidate plan.
-- `document.plan_bundle` MAY persist an immutable guarded plan after all HS4 gates pass.
+- `document.preview_bundle` accepts compiled bundle content through `decode_compiled_bundle()`, resolves it against the current Houdini catalog/baseline, and returns a non-mutating diff and candidate plan.
+- `document.plan_bundle` persists an immutable guarded plan only after all HS4 gates pass.
 - `document.apply_plan` accepts only a stored plan identity, not source paths or arbitrary source text.
 - `document.export_source` returns source text plus provenance. The native editor/CLI owns writing it to a chosen `.hocus` file.
 
@@ -468,7 +470,8 @@ Category is a separate identity dimension: two definitions may both have the exa
 
 Every compiler-managed entity MUST have a durable UID independent of Houdini session ID, name, and path.
 
-- Explicit IDs are reserved through future `@id("...")` syntax.
+- A managed node may carry an explicit durable ID as `node symbol @id("stable-uid"): "type" { ... }`. The ID must match `^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`, is unique inside the graph, survives export destination and symbol changes, and maps directly to the network-document node UID.
+- Reusing an explicit ID at a new node path is a rename only when the baseline entity carries complete Hocus provenance matching the current project, graph, ownership namespace, entity kind, and prior symbol. Source URI and symbol may change after that proof. A destination occupied by another UID still blocks, and a UID-only artist entity is never implicitly adopted; it requires the explicit `adopt` workflow.
 - Default IDs derive from ownership namespace, graph identity, module instance path, and local symbol.
 - Managed Houdini nodes created by an apply, and live nodes explicitly adopted into compiler ownership, are stamped with at least `hpmcp.uid`, `hpmcp.owner`, source URI, graph/module identity, and compiler version. Read-only import and bundle preview never stamp artist nodes; they prefer an existing persistent UID and otherwise use a non-persistent session/path fallback until explicit adoption.
 - Duplicate UIDs caused by copy/paste are detected and repaired only through an explicit conflict policy.
@@ -608,6 +611,23 @@ The plan is never rebuilt from source. A freshly normalized operation set is com
 
 Large plans MAY become cancellable tasks.
 
+### 14.4 HS5 editor and export interfaces
+
+`document.format_source` and `document.complete_source` accept unsaved text only. They never accept or infer a project directory. Formatting returns canonical source only when parsing and structural validation succeed. Completion uses the current live catalog, is deterministically ordered and bounded to 200 items, and returns an exact replacement span. All source offsets in the HS5 JSON contracts are Unicode code-point offsets, matching Python string indexing; an LSP adapter must explicitly translate to and from UTF-16 positions.
+
+`document.export_source` accepts a live `root_path` and optional graph identifier, never a physical destination. It force-refreshes the selected network document, preflights the entire supported projection, verifies emitted source by recompiling against the exact live catalog fingerprint, and returns either:
+
+- canonical source plus source digest, persistent entity identities, managed fields, ownership namespaces, catalog fingerprint, root path, and document identity/revision; or
+- `source = null` plus a deterministically ordered blocker list bounded to 500 entries; overflow retains 499 blockers and a final `HOCUS819` sentinel with the exact omitted count.
+
+The serialized export result and native `write-export` handoff share a 16 MiB UTF-8 budget. An otherwise valid result that exceeds it fails closed with `HOCUS820`, minimal provenance, and no source; clients should narrow the network scope rather than bypass the handoff contract.
+
+Exported source is a baseline-preserving merge projection, not an implicit claim over every representable Houdini value. The root container anchors target/output identity but is not emitted as a DSL node. The root and every exported child require persistent user-data identity. Only parameters, input slots, and flags named by valid signed node `managedFields` provenance are portable source-owned fields. Root, default, and artist-owned state is omitted from source and enumerated in `provenance.preservedState`; recompiling/lowering against the captured baseline preserves it exactly. Moving such source to a clean baseline does not recreate preserved state, and tooling must surface that provenance rather than imply clean-rebuild equivalence.
+
+HS5 export is deliberately fail-closed. Its supported subset is one flat SOP network containing persistent unique node UIDs, exact catalog-resolvable operator types, indexed data connections, finite scalar/menu literals (including representable scalar tuple-component tokens), supported VEX/Python/HScript code bindings, and representable display/render/output state. It rejects nested networks, cross-network edges, unsupported edge/port kinds, bypass/template state, expressions and channel references, animation/keyframes, whole-tuple values, ramps, multiparms, spare parameters, unsupported code, invalid identifiers, orphan entities, mixed/incomplete ownership, duplicate/nonpersistent IDs, and any state it cannot reproduce exactly. HocusScript 0.1 has no opaque syntax, so nothing may be silently omitted or approximated.
+
+The native `hocus write-export` command owns the filesystem handoff. It accepts the same bounded export response emitted by MCP, requires an explicit `--project` (or explicit editor setting/environment equivalent), resolves a project-contained `.hocus` destination through configured source directories, validates the handoff digest and recompiles before writing, creates exclusively by default, and permits replacement only with the destination's exact expected digest. Houdini MCP never reads or writes the DSL project.
+
 ## 15. Rollback and Recovery
 
 - Apply plans exclude irreversible actions.
@@ -637,10 +657,10 @@ Imports first resolve relative to the importing source file, then through ordere
 ## 17. Formatting, Export, and Round-Trip
 
 - The formatter emits canonical whitespace, ordering, quoting, and LF newlines.
-- Language `0.1` accepts comments, but the initial token stream discards trivia and canonical formatting does not preserve comments. A comment-preserving concrete syntax tree is a later HS5 deliverable.
+- Language `0.1` accepts comments, but the canonical normalized formatter intentionally discards trivia and does not preserve comments. A distinct source-preserving formatter requires a trivia-preserving concrete syntax tree and is deferred beyond the HS5 canonical-format contract.
 - Formatting is idempotent.
 - Live graphs can be exported to normalized HocusScript when all relevant constructs are supported.
-- Unsupported entities are rejected or represented explicitly as opaque preserved constructs; they are never silently dropped.
+- HocusScript `0.1` has no opaque construct. Any unsupported entity blocks the whole export; blockers are reported deterministically up to the fixed limit, with exact overflow accounting, and unsupported state is never silently dropped.
 - The semantic guarantee is `compile(export(network))` equivalence for supported features.
 - Exact preservation of arbitrary original formatting and comments is not required for initial live export.
 

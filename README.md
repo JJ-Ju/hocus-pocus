@@ -87,9 +87,10 @@ $env:PYTHONPATH = "python3.11libs"
 python -m hocuspocus.hocusscript check assets/rocks.hocus --project D:/houdini-projects/city
 python -m hocuspocus.hocusscript format assets/rocks.hocus --project D:/houdini-projects/city --write
 python -m hocuspocus.hocusscript compile assets/rocks.hocus --project D:/houdini-projects/city -o rocks.bundle.json
+python -m hocuspocus.hocusscript write-export export-response.json assets/exported.hocus --project D:/houdini-projects/city
 ```
 
-The compiled bundle is the future content-based handoff to Houdini MCP; the MCP does not need to read or edit the project files.
+The compiled bundle is the content-based handoff to Houdini MCP. `document.export_source` performs the reverse handoff by returning canonical source plus provenance; the native `write-export` command creates the chosen project file with no-overwrite safeguards. The MCP never reads or edits project files.
 
 ## Docs
 

@@ -17,7 +17,7 @@
     "bundleVersion": {"const": "0.2"},
     "bundleDigest": {"$ref": "#/$defs/digest"},
     "compilerVersion": {"type": "string", "minLength": 1},
-    "graphSpecVersion": {"const": "0.1"},
+    "graphSpecVersion": {"enum": ["0.1", "0.2"]},
     "languageVersion": {"const": "0.1"},
     "portable": {"type": "boolean"},
     "projectUid": {"type": ["string", "null"], "pattern": "^[a-z0-9][a-z0-9.-]{0,127}$"},
@@ -46,10 +46,29 @@
         "embeddedInGraphSpec": {"const": true}
       }
     },
-    "graphSpec": {"$ref": "hocuspocus://schemas/graph-spec/v0.1"},
+    "graphSpec": {
+      "oneOf": [
+        {"$ref": "hocuspocus://schemas/graph-spec/v0.1"},
+        {"$ref": "hocuspocus://schemas/graph-spec/v0.2"}
+      ]
+    },
     "semanticResolution": {"$ref": "#/$defs/semanticResolution"}
   },
   "allOf": [
+    {
+      "if": {"properties": {"graphSpecVersion": {"const": "0.1"}}},
+      "then": {"properties": {
+        "compilerVersion": {"const": "0.2.0"},
+        "graphSpec": {"$ref": "hocuspocus://schemas/graph-spec/v0.1"}
+      }}
+    },
+    {
+      "if": {"properties": {"graphSpecVersion": {"const": "0.2"}}},
+      "then": {"properties": {
+        "compilerVersion": {"const": "0.3.0"},
+        "graphSpec": {"$ref": "hocuspocus://schemas/graph-spec/v0.2"}
+      }}
+    },
     {
       "if": {"properties": {"portable": {"const": true}}},
       "then": {

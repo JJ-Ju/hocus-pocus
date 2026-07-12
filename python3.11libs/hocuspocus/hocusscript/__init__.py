@@ -20,7 +20,17 @@ from .document_lowering import (
     DocumentPreview,
     lower_bundle_to_document,
 )
+from .editor import (
+    CompletionItem,
+    CompletionResult,
+    EditorCheckResult,
+    EditorFormatResult,
+    check_source,
+    complete_source,
+    format_source,
+)
 from .formatter import format_graph
+from .exporter import ExportDiagnostic, NetworkDocumentExport, export_network_document
 from .model import COMPILER_VERSION, GRAPH_SPEC_VERSION, CompileResult, GraphSpec, graph_spec_from_dict
 from .project import ProjectContext, ProjectError, compile_path
 from .semantic import (
@@ -43,6 +53,8 @@ __all__ = [
     "CatalogSnapshot",
     "CatalogValidationError",
     "CompileResult",
+    "CompletionItem",
+    "CompletionResult",
     "COMPILER_VERSION",
     "CompiledBundle",
     "CatalogConstraint",
@@ -52,12 +64,16 @@ __all__ = [
     "DOCUMENT_SCHEMA_URI",
     "DocumentLoweringError",
     "DocumentPreview",
+    "EditorCheckResult",
+    "EditorFormatResult",
+    "ExportDiagnostic",
     "FakeCatalogProvider",
     "GraphSpec",
     "GRAPH_SPEC_VERSION",
     "ProjectContext",
     "ProjectError",
     "PREVIEW_VERSION",
+    "NetworkDocumentExport",
     "SUPPORTED_LANGUAGE_VERSIONS",
     "SourcePosition",
     "SourceSpan",
@@ -68,9 +84,13 @@ __all__ = [
     "SnapshotCatalogProvider",
     "compile_path",
     "compile_source",
+    "check_source",
+    "complete_source",
     "decode_compiled_bundle",
     "decode_catalog_snapshot",
     "format_graph",
+    "format_source",
+    "export_network_document",
     "graph_spec_from_dict",
     "lower_bundle_to_document",
     "resolve_graph",

@@ -221,6 +221,8 @@ Exit criteria:
 
 ## 9. HS5: Export, Formatter, and Editor Loop
 
+Status: complete (independent review fixes plus actual H21.0.729 registered-endpoint verification)
+
 Objectives:
 
 - expose canonical formatter and syntax/diagnostic JSON interfaces
@@ -238,6 +240,15 @@ Exit criteria:
 - unsupported constructs are explicit and lossless or block export
 - agents can use a `.hocus` file without manually authoring network-document JSON
 - editor diagnostics point to exact source spans
+
+Delivered evidence:
+
+- `document.format_source`, `document.complete_source`, and `document.export_source` are bounded observational MCP interfaces with strict versioned output schemas
+- native `hocus write-export` requires the explicit project directory, creates exclusively by default, and replaces only against an expected digest
+- `@id("...")` carries persistent network-document node identity across export destination and symbol changes; provenance records ownership and managed fields
+- unsupported HocusScript 0.1 constructs block the entire export with typed diagnostics and no partial source
+- offline editor/export/schema/compiler suites pass; the actual registered `document.export_source` H21.0.729 smoke used the unmodified force-synced network document and produced byte-identical repeated exports, exact-catalog compile/resolve/lower equivalence, an explicit unsupported-state blocker, and no filesystem writes
+- TextMate syntax highlighting ships now; LSP remains intentionally deferred until these JSON contracts have downstream use and can be stabilized without premature protocol coupling
 
 ## 10. HS6: Modules and Studio Libraries
 
@@ -413,6 +424,12 @@ Catalog resolution knows tuple component tokens, but compiled-bundle v0.2 parame
 
 ### HS-BLOCK-006: Explicit Source Entity IDs Across Symbol Renames
 
-Status: open
+Status: resolved in HS5
 
-Default deterministic entity IDs include graph/source/local-symbol identity. They survive project relocation and ordinary formatting, but a source symbol rename intentionally changes the derived UID. Before claiming identity continuity across symbol renames, add explicit source entity IDs (for example a future `@id` form), define conflict/migration behavior, preserve them through export/modules, and test rename/reparent/save/reload/copy cases. Path and session IDs must not be used as a substitute.
+Optional `@id("...")` source identity now maps directly to persistent network-document node UIDs and survives source-symbol and export-destination changes. Duplicate, invalid, or path-colliding explicit IDs block structurally; omitted IDs retain deterministic graph/source/local-symbol derivation. Compiler, bundle, schema, lowering, exporter, golden, symbol-rename, collision, and live round-trip coverage preserve the rule that path and session IDs are not substitutes for durable identity.
+
+### HS-BLOCK-007: Real Live Export Identity and Managed-Field Reconstruction
+
+Status: resolved in HS5 independent review
+
+The first export smoke used a normalized projection and therefore did not prove the registered endpoint against actual root category/default parameter state. The corrected implementation accepts `/obj` as the SOP container while requiring `persistent_user_data` identity for the root anchor and every exported child. Signed per-node `managedFields` survive Houdini user data; live reimport reconstructs ownership on derived bindings, code blobs, data edges, and output edges. Root/default/artist-owned fields are omitted from source and enumerated as `preservedState`, so they remain baseline-preserved merge state rather than being silently promoted to portable source ownership. The final H21.0.729 smoke calls the registered handler over the unmodified force-synced document.

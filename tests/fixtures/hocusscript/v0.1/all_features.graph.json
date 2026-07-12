@@ -1,5 +1,5 @@
 {
-  "$schema": "hocuspocus://schemas/graph-spec/v0.1",
+  "$schema": "hocuspocus://schemas/graph-spec/v0.2",
   "category": "Sop",
   "display": "sink",
   "expectedRevision": 7,
@@ -7,7 +7,7 @@
     {"adopted": false, "path": "/obj/geo1/READ_ONLY", "symbol": "readonly"},
     {"adopted": true, "path": "/obj/geo1/MANAGED", "symbol": "managed"}
   ],
-  "graphSpecVersion": "0.1",
+  "graphSpecVersion": "0.2",
   "kind": "graph_spec",
   "languageVersion": "0.1",
   "layout": "auto",

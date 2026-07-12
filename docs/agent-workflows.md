@@ -71,7 +71,7 @@ Placement note:
 - new node tiles are automatically placed on the managed integer grid
 - agents should not micromanage tile positions unless layout itself matters
 
-### HocusScript structural preview
+### HocusScript native edit/apply loop
 
 Prefer editing `.hocus` as a normal native workspace file and use the offline CLI/library:
 
@@ -82,9 +82,26 @@ python -m hocuspocus.hocusscript format hocus/asset.hocus --project D:/show/proj
 python -m hocuspocus.hocusscript compile hocus/asset.hocus --project D:/show/project -o asset.bundle.json
 ```
 
-The project path belongs to the native compiler/editor surface. The resulting content-addressed bundle—not a server-side path—is the planned input to Houdini preview and apply tools.
+The project path belongs to the native compiler/editor surface. The MCP receives source or bundle content, never a project path.
 
-`document.compile_source` remains available for unsaved source text and currently performs only parsing, structural validation, deterministic formatting, and GraphSpec generation.
+For a supported live SOP network, call `document.export_source` with `root_path`. Save the returned JSON response outside Houdini and let the native CLI validate and create the selected project file:
+
+```powershell
+python -m hocuspocus.hocusscript write-export export-response.json hocus/asset.hocus --project D:/show/project
+```
+
+Creation is exclusive. To intentionally replace an existing file, pass its current `sha256:...` digest as `--expected-digest`. Never use a guessed digest or ask Houdini MCP to write the file.
+
+The complete loop is:
+
+1. edit the native `.hocus` file
+2. run `check`, `format`, and `compile` against the explicitly selected project
+3. send bundle content to `document.preview_bundle` and inspect the diff
+4. call `document.plan_bundle`, then `document.apply_plan` with its guarded identity/revisions
+5. cook and capture the resulting asset
+6. revise the same source file and repeat
+
+`document.compile_source`, `document.format_source`, and `document.complete_source` remain content-only unsaved-buffer conveniences. Completion is backed by the live catalog; none of these tools reads project files.
 
 Rules for the current preview:
 
@@ -94,7 +111,7 @@ Rules for the current preview:
 - require `readyForDocumentLowering = false` and `readyForApply = false`
 - do not treat a valid structural preview as a Houdini-aware or applyable plan
 
-Catalog resolution, bundle preview, network-document lowering, and immutable plan application remain gated by the HocusScript roadmap.
+An export with `valid = false` is intentionally all-or-nothing: `source` is null and blockers are deterministically reported up to the fixed limit; `HOCUS819` records the exact overflow count. Do not delete or approximate blockers to force a round trip.
 
 ## 4. Handle Long-Running Work
 

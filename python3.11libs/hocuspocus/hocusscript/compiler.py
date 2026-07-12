@@ -10,7 +10,7 @@ from .diagnostics import Diagnostic, HocusSourceError, SourcePosition, SourceSpa
 from .formatter import format_graph
 from .lexer import Lexer
 from .lowering import lower_syntax
-from .model import CompileResult, GraphSpec, NodeSpec
+from .model import CompileResult, EXPLICIT_NODE_ID_PATTERN, GraphSpec, NodeSpec
 from .parser import Parser
 
 SUPPORTED_LANGUAGE_VERSIONS = {"0.1"}
@@ -143,6 +143,22 @@ def validate_graph(
     for symbol, span in _duplicates(symbol_spans):
         collector.add(_diagnostic("HOCUS306", f"Duplicate graph symbol: {symbol}.", span))
     symbols = {symbol for symbol, _ in symbol_spans}
+
+    explicit_id_spans = [
+        (node.explicit_id, node.field_spans.get("explicitId", node.span))
+        for node in graph.nodes
+        if node.explicit_id is not None
+    ]
+    for node in graph.nodes:
+        if node.explicit_id is not None and not EXPLICIT_NODE_ID_PATTERN.fullmatch(node.explicit_id):
+            collector.add(_diagnostic(
+                "HOCUS321",
+                "Explicit node IDs must match [A-Za-z0-9][A-Za-z0-9._:-]{0,127}.",
+                node.field_spans.get("explicitId", node.span),
+                details={"explicitId": node.explicit_id},
+            ))
+    for explicit_id, span in _duplicates(explicit_id_spans):
+        collector.add(_diagnostic("HOCUS322", f"Duplicate explicit node ID: {explicit_id}.", span))
 
     if graph.target is not None:
         prefix = graph.target.rstrip("/") + "/"

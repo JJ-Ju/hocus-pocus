@@ -185,6 +185,17 @@ class Parser:
     def _parse_node(self) -> NodeDecl:
         start = self._advance()
         symbol = self._expect("IDENT", "HOCUS222", "Expected a node symbol.")
+        explicit_id: str | None = None
+        explicit_id_span: SourceSpan | None = None
+        if self._match("AT") is not None:
+            annotation = self._expect("IDENT", "HOCUS247", "Expected 'id' after '@'.")
+            if annotation.value != "id":
+                self._error("HOCUS248", "Only the @id annotation is supported on node declarations.", token=annotation)
+            self._expect("LPAREN", "HOCUS249", "Expected '(' after @id.")
+            value = self._expect("STRING", "HOCUS250", "Expected a quoted durable node ID.")
+            explicit_id = str(value.value)
+            explicit_id_span = value.span
+            self._expect("RPAREN", "HOCUS251", "Expected ')' after the durable node ID.")
         self._expect("COLON", "HOCUS223", "Expected ':' after the node symbol.")
         type_token = self._current()
         if type_token.kind not in {"IDENT", "STRING"}:
@@ -206,11 +217,13 @@ class Parser:
         end = self._expect("RBRACE", "HOCUS226", "Expected '}' to close the node.")
         return NodeDecl(
             str(symbol.value),
+            explicit_id,
             str(type_token.value),
             type_token.kind == "STRING",
             tuple(statements),
             self._joined_span(start, end),
             symbol.span,
+            explicit_id_span,
             type_token.span,
         )
 

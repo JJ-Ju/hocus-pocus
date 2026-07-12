@@ -21,11 +21,15 @@ from hocuspocus.hocusscript import (
     DocumentLoweringError,
     ExternalNodeBinding,
     compile_source,
+    complete_source,
     decode_compiled_bundle,
+    export_network_document,
+    format_source as editor_format_source,
     graph_spec_from_dict,
     lower_bundle_to_document,
     resolve_graph,
 )
+from hocuspocus.hocusscript.compiler import MAX_SOURCE_BYTES
 
 from ..catalog_provider import LiveHoudiniCatalogProvider
 from ..document_service import ApplyPlanError, PreviewArtifactError
@@ -35,7 +39,11 @@ from ..context import RequestContext
 
 
 class HocusScriptOperationsMixin:
-    _GRAPH_SPEC_SCHEMA_RESOURCE_URI = "houdini://documents/schema/graph-spec/v0.1"
+    _GRAPH_SPEC_SCHEMA_RESOURCE_URI = "houdini://documents/schema/graph-spec/v0.2"
+    _LEGACY_GRAPH_SPEC_SCHEMA_RESOURCE_URI = "houdini://documents/schema/graph-spec/v0.1"
+    _FORMAT_OUTPUT_SCHEMA_RESOURCE_URI = "houdini://documents/schema/format-source-output/v1"
+    _COMPLETE_OUTPUT_SCHEMA_RESOURCE_URI = "houdini://documents/schema/complete-source-output/v1"
+    _EXPORT_OUTPUT_SCHEMA_RESOURCE_URI = "houdini://documents/schema/export-source-output/v1"
     _PREVIEW_INPUT_SCHEMA_RESOURCE_URI = "houdini://documents/schema/preview-bundle-input/v1"
     _PREVIEW_OUTPUT_SCHEMA_RESOURCE_URI = "houdini://documents/schema/preview-bundle-output/v1"
     _PLAN_INPUT_SCHEMA_RESOURCE_URI = "houdini://documents/schema/plan-bundle-input/v1"
@@ -45,6 +53,20 @@ class HocusScriptOperationsMixin:
     _MAX_INLINE_PREVIEW_BYTES = 128 * 1024
     _APPLY_PLAN_VERSION = "1.0"
     _APPLY_ERROR = -32040
+
+    @staticmethod
+    def _validate_editor_source_bytes(source: str) -> None:
+        try:
+            byte_length = len(source.encode("utf-8"))
+        except UnicodeEncodeError as exc:
+            raise JsonRpcError(
+                INVALID_PARAMS, "source must contain only valid Unicode scalar values."
+            ) from exc
+        if byte_length > MAX_SOURCE_BYTES:
+            raise JsonRpcError(
+                INVALID_PARAMS,
+                f"source must not exceed {MAX_SOURCE_BYTES} UTF-8 bytes.",
+            )
 
     def document_compile_source(
         self,
@@ -68,6 +90,97 @@ class HocusScriptOperationsMixin:
             summary = "Compiled HocusScript through the structural preview stage without mutating Houdini."
         else:
             summary = f"HocusScript structural compilation reported {result['diagnosticCount']} diagnostic(s)."
+        return self._tool_response(summary, result)
+
+    def document_format_source(
+        self,
+        arguments: dict[str, Any],
+        context: RequestContext,
+    ) -> dict[str, Any]:
+        del context
+        source = arguments.get("source")
+        source_name = arguments.get("source_name", "<mcp-source>")
+        strict = arguments.get("strict", True)
+        if not isinstance(source, str):
+            raise JsonRpcError(INVALID_PARAMS, "source must be a string.")
+        self._validate_editor_source_bytes(source)
+        if not isinstance(source_name, str) or not source_name.strip() or len(source_name) > 1024:
+            raise JsonRpcError(INVALID_PARAMS, "source_name must be a non-empty string of at most 1024 characters.")
+        if not isinstance(strict, bool):
+            raise JsonRpcError(INVALID_PARAMS, "strict must be a boolean when provided.")
+        try:
+            result = editor_format_source(source, source_name.strip(), strict=strict).to_dict()
+        except (TypeError, ValueError) as exc:
+            raise JsonRpcError(INVALID_PARAMS, str(exc)) from exc
+        summary = (
+            "Formatted valid HocusScript source without filesystem or Houdini mutation."
+            if result["valid"]
+            else f"HocusScript formatting blocked on {result['diagnosticCount']} diagnostic(s)."
+        )
+        return self._tool_response(summary, result)
+
+    def document_complete_source(
+        self,
+        arguments: dict[str, Any],
+        context: RequestContext,
+    ) -> dict[str, Any]:
+        del context
+        source = arguments.get("source")
+        offset = arguments.get("offset")
+        source_name = arguments.get("source_name", "<mcp-source>")
+        limit = arguments.get("limit", 100)
+        if not isinstance(source, str):
+            raise JsonRpcError(INVALID_PARAMS, "source must be a string.")
+        self._validate_editor_source_bytes(source)
+        if isinstance(offset, bool) or not isinstance(offset, int) or not 0 <= offset <= len(source):
+            raise JsonRpcError(INVALID_PARAMS, "offset must be a Python/Unicode source offset within source.")
+        if not isinstance(source_name, str) or not source_name.strip() or len(source_name) > 1024:
+            raise JsonRpcError(INVALID_PARAMS, "source_name must be a non-empty string of at most 1024 characters.")
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 200:
+            raise JsonRpcError(INVALID_PARAMS, "limit must be an integer between 1 and 200.")
+        catalog = self._document_preview_live_catalog()
+        try:
+            result = complete_source(
+                source,
+                offset,
+                catalog,
+                source_name=source_name.strip(),
+                limit=limit,
+            ).to_dict()
+        except (TypeError, ValueError) as exc:
+            raise JsonRpcError(INVALID_PARAMS, str(exc)) from exc
+        return self._tool_response(
+            f"Returned {len(result['items'])} deterministic catalog-backed completion item(s).",
+            result,
+        )
+
+    def document_export_source(
+        self,
+        arguments: dict[str, Any],
+        context: RequestContext,
+    ) -> dict[str, Any]:
+        root_path = arguments.get("root_path")
+        graph_name = arguments.get("graph_name")
+        if not isinstance(root_path, str) or not root_path.startswith("/"):
+            raise JsonRpcError(INVALID_PARAMS, "root_path must be an absolute Houdini node path.")
+        if graph_name is not None and (not isinstance(graph_name, str) or not graph_name.strip()):
+            raise JsonRpcError(INVALID_PARAMS, "graph_name must be a non-empty identifier when provided.")
+
+        def export() -> dict[str, Any]:
+            document = self._document_current_network_payload(root_path, force_sync=True)
+            catalog = self._document_preview_live_catalog()
+            return export_network_document(
+                document,
+                graph_name=graph_name.strip() if isinstance(graph_name, str) else None,
+                catalog=catalog,
+            ).to_dict()
+
+        result = self._call_live(export, context)
+        summary = (
+            "Exported a complete, exact-catalog HocusScript source handoff without writing project files."
+            if result["valid"]
+            else f"HocusScript export blocked on {len(result['diagnostics'])} unsupported or unsafe construct(s)."
+        )
         return self._tool_response(summary, result)
 
     def _document_preview_live_catalog(self):
@@ -1079,10 +1192,13 @@ class HocusScriptOperationsMixin:
 
     def read_graph_spec_schema(self, context: RequestContext) -> dict[str, Any]:
         del context
-        path = core_paths.package_root() / "docs" / "schemas" / "graph-spec-v0.1.schema.json"
-        with path.open("r", encoding="utf-8") as handle:
-            payload = json.load(handle)
-        return self._resource_response(self._GRAPH_SPEC_SCHEMA_RESOURCE_URI, payload)
+        return self._read_hocusscript_schema("graph-spec-v0.2.schema.json", self._GRAPH_SPEC_SCHEMA_RESOURCE_URI)
+
+    def read_legacy_graph_spec_schema(self, context: RequestContext) -> dict[str, Any]:
+        del context
+        return self._read_hocusscript_schema(
+            "graph-spec-v0.1.schema.json", self._LEGACY_GRAPH_SPEC_SCHEMA_RESOURCE_URI
+        )
 
     def _read_hocusscript_schema(self, filename: str, uri: str) -> dict[str, Any]:
         path = core_paths.package_root() / "docs" / "schemas" / filename
@@ -1095,6 +1211,27 @@ class HocusScriptOperationsMixin:
         return self._read_hocusscript_schema(
             "document-preview-bundle-input-v1.schema.json",
             self._PREVIEW_INPUT_SCHEMA_RESOURCE_URI,
+        )
+
+    def read_format_source_output_schema(self, context: RequestContext) -> dict[str, Any]:
+        del context
+        return self._read_hocusscript_schema(
+            "document-format-source-output-v1.schema.json",
+            self._FORMAT_OUTPUT_SCHEMA_RESOURCE_URI,
+        )
+
+    def read_complete_source_output_schema(self, context: RequestContext) -> dict[str, Any]:
+        del context
+        return self._read_hocusscript_schema(
+            "document-complete-source-output-v1.schema.json",
+            self._COMPLETE_OUTPUT_SCHEMA_RESOURCE_URI,
+        )
+
+    def read_export_source_output_schema(self, context: RequestContext) -> dict[str, Any]:
+        del context
+        return self._read_hocusscript_schema(
+            "document-export-source-output-v1.schema.json",
+            self._EXPORT_OUTPUT_SCHEMA_RESOURCE_URI,
         )
 
     def read_preview_bundle_output_schema(self, context: RequestContext) -> dict[str, Any]:
