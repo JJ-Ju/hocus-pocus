@@ -15,8 +15,8 @@ Roadmap: `docs/hocusscript-roadmap.md`
 
 ## 2. Current Slice
 
-Current milestone: HS6 modules and studio libraries in progress; Batches A-G2 are complete through read-only mixed-root lock planning
-Current scope: G3 independently rederives and atomically publishes complete mixed project/library lock closures under the same-user writer lease without weakening the content-only Houdini MCP boundary
+Current milestone: HS6 modules and studio libraries in progress; Batches A-G3 are complete through guarded mixed-root lock publication
+Current scope: G4 resolves published external records for the compiler, editor, and bundle producer from exact per-call roots without weakening the content-only Houdini MCP boundary
 Live mutation: available only through the completed HS4 guarded `document.apply_plan` path; HS5 format/completion/export tools are observational
 
 Initial implementation acceptance command:
@@ -324,7 +324,7 @@ Verification:
 
 ## 9. HS6: Modules and Studio Libraries
 
-Status: Batches A-G2 complete for the native same-project language, resolution, expansion, lock-update, semantic, portable bundle, CLI, project-aware editor, external-root inspection, and read-only mixed-root planning lane; external-record publication and external-alias compiler/editor/CLI/bundle/document/live integration remain pending, while MCP remains content-only
+Status: Batches A-G3 complete for the native same-project lane plus external-root inspection, read-only mixed-root planning, and guarded external-record publication; external-alias compiler/editor/bundle consumption, CLI root flags, document, and live integration remain pending, while MCP remains content-only
 
 Dependencies: HS5, import security design
 Houdini required: module compiler no; live module fixtures yes
@@ -346,7 +346,11 @@ Houdini required: module compiler no; live module fixtures yes
 - [x] Enable resolver-derived nonempty same-project lock updates; retain atomic, expected-digest, explicit-write gates.
 - [x] Add same-project module source/interface/transitive content hashes and resolver-derived lockfile records.
 - [x] Derive exact, transitively complete prospective external-library records and an exact current-lock diff without writing.
-- [ ] Publish exact external-library records only after G3 independently rederives them under the writer lease; never trust a caller-supplied plan as publication authority.
+- [x] Publish exact external-library records only after G3 independently rederives them under the writer lease; never trust a caller-supplied plan, plan digest, prospective payload, or module records as publication authority.
+- [x] Require explicit write authority, one valid existing lock, and its exact digest; strict-validate the canonical payload and prebuild the portable receipt before atomic replacement, with verified no-op behavior when unchanged.
+- [x] Add a strict unregistered `mixed-module-lock-update-v1` receipt schema binding prior/new lock, catalog, root-inspection, resolver-policy, entry, module, and exact diff identities without host paths.
+- [ ] Resolve published external records in compiler/editor/bundle paths from explicit roots revalidated on every G4 call.
+- [ ] Add G5 CLI `--module-root alias=absolute-path` wiring without adding an MCP project/root/file surface.
 - [x] Preserve bounded interned expansion stacks in expansion source maps.
 - [x] Attach semantic compiler diagnostics to shared expansion origin/stack IDs without duplicating interned frames; require portable contained source locations in Bundle `0.3`.
 - [x] Enforce import/instance depth, instance/node/source-map/interface limits, exact GraphSpec validation, and zero recursion in the pure content lane; aggregate source/code enforcement remains split between resolver and syntax contracts.
@@ -421,16 +425,25 @@ Batch G1 delivered evidence:
 - `inspect_external_module_roots` requires one explicit pinned v3 project plus an exact per-call alias-to-absolute-root mapping; it performs no discovery, caching, persistence, source reads, lock writes, compilation, editor lookup, MCP registration, or Houdini import
 - every root is canonical, local, distinct, outside the project, and free of symlink/junction/reparse components; root and manifest native identities, exact raw manifest bytes, project/lock/catalog pins, aliases, and existing external lock claims are final-rechecked before return
 - module manifests are bounded stable reads and must match UID, strict SemVer, language `0.2`, sorted portable entry modules, and the optional declared raw digest; unpinned observations cannot be reused as resolution-ready private authority
-- the strict host-path-free inspection schema and domain-separated digest bind only portable sorted project/library pins and remain relocation-stable; current resolver/compiler/editor/lock-update behavior continues to reject `@alias`
+- the strict host-path-free inspection schema and domain-separated digest bind only portable sorted project/library pins and remain relocation-stable; at the G1 checkpoint, resolver/compiler/editor/lock-update behavior rejected `@alias`, while G2 planning and G3 publication are delivered below
 - focused external-root/schema/module-manifest/project-v3 gates pass 27/27 and the full repository suite passes 364/364; independent P0/P1 review is clean after hostile `PathLike` sanitization, exact-string validation, same-byte identity-race checks, and empty-library schema/runtime alignment
 
 Batch G2 delivered evidence:
 
 - `plan_project_module_lock` accepts only an explicit project directory, nonempty project-relative entry paths, and an exact per-call alias-to-root mapping; all manifests must already be pinned by the project, and no private root or native identity enters the portable result
-- mixed closure derivation enforces manifest entry gates, relative same-library containment, explicit separately approved cross-library aliases, no external bare imports or library-to-project edges, exact imported names, bounded cycles/depth/files/bytes, cancellation, and strict semantic expansion for every entry
+- mixed closure derivation enforces manifest entry gates, relative same-library containment, explicit separately approved cross-library aliases, no external bare imports or library-to-project edges, exact imported names, bounded cycles/depth/files/bytes, cancellation, and strict expansion validation for every entry
 - prospective v3 records contain exact canonical source/interface/transitive digests and provenance, dependencies are complete, the current-lock diff is exact, and the strict result/schema bind project, manifest, lock, catalog, root-inspection, resolver-policy, plan, and prospective-lock identities without host paths
 - source bytes, native identities, resolver winners, project/lock/catalog metadata, roots, and manifests are final-rechecked; planning acquires no lease, performs no write or publication, and leaves compiler, editor, CLI, MCP, bundle, document, and live behavior unchanged
-- focused planner/schema/external-root/resolver gates pass 32/32, the broader G2 and adjacent security gate passes 57/57, and the full repository suite passes 375/375; independent P0/P1 review is clean after regressions for visiting ancestors in `moduleFiles`, semantic invalidity, canonical diff URIs, and control characters in portable source paths; G3 remains required to rederive under its lease
+- focused planner/schema/external-root/resolver gates pass 32/32, the broader G2 and adjacent security gate passes 57/57, and the full repository suite passes 375/375; independent P0/P1 review is clean after regressions for visiting ancestors in `moduleFiles`, semantic invalidity, canonical diff URIs, and control characters in portable source paths; at the G2 checkpoint G3 remained required to rederive under its lease, and it is delivered below
+
+Batch G3 delivered evidence:
+
+- `update_project_mixed_module_lock` is a separate native-only API requiring exact `allow_write=True`, a valid existing language-0.2 v3 lock and its exact digest, nonempty project-relative entries, and the exact per-call alias-root mapping; it accepts no plan, plan digest, prospective payload, inspection session, or caller-authored module records, and neither CLI nor MCP exposes it
+- after the exclusive sibling lease is held and the current lock digest is verified, the writer independently invokes the private mixed-root derivation core, reruns G1 root/manifest validation, derives the complete exact-byte closure, validates every entry through expansion, strict-decodes canonical records, enforces the lock byte bound, and constructs the frozen result before publication
+- immediately before atomic replacement, retained evidence rechecks project/lock/catalog metadata, roots and module manifests, entry/module bytes and native identities, and every resolver winner; the atomic writer then performs its immediate expected-digest check, while a canonical unchanged result performs the same checks and returns without creating a temporary or rewriting the lock
+- the strict unregistered `mixed-module-lock-update-v1` receipt and runtime invariants bind prior/new lock, catalog, root-inspection, resolver-policy, sorted entries/modules, exact provenance, complete dependencies, and exact added/removed/changed sets without native paths; relocation yields identical receipts and lock bytes
+- default denial, malformed/stale/invalid locks, lease contention, semantic and limit failures, cancellation, source/root/manifest/project/catalog/lock/winner races, forced result-construction failure, replacement failure, no-op inode/mtime preservation, cleanup, advisory-planner isolation, and legacy resolver/writer isolation all preserve the active lock boundary; the older same-project writer also now rejects a deep chain at admission instead of over-reading past `moduleFiles`
+- focused G3 gates pass 14/14, the G3/G2/G1/same-project/resolver regression gate passes 57/57, the independent security gate passes 72/72, and the full repository suite passes 390/390; independent P0/P1 review is clean, with same-user locking limits, the descriptor-safe-read gap, stale-lease recovery, directory durability, and noncooperating-writer limits remaining under `HS-BLOCK-001`
 
 ## 10. HS7: Fidelity Matrix
 

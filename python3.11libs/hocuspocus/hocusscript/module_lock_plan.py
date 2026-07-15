@@ -95,6 +95,37 @@ class _Decision:
     selected: _Target
 
 
+@dataclass(frozen=True, slots=True)
+class _MixedModuleLockDerivation:
+    project_uid: str
+    manifest_digest: str
+    current_lock_digest: str
+    catalog_path: str
+    catalog_content_digest: str
+    catalog_fingerprint: str
+    external_roots_inspection_digest: str
+    resolver_policy_digest: str
+    entries: tuple[ModuleLockUpdateEntry, ...]
+    current_modules: tuple[ModuleLockRecord, ...]
+    modules: tuple[ModuleLockRecord, ...]
+    recheck: Callable[[], None]
+
+    def plan_result(self) -> ModuleLockPlanResult:
+        return _build_module_lock_plan_result(
+            project_uid=self.project_uid,
+            manifest_digest=self.manifest_digest,
+            current_lock_digest=self.current_lock_digest,
+            catalog_path=self.catalog_path,
+            catalog_content_digest=self.catalog_content_digest,
+            catalog_fingerprint=self.catalog_fingerprint,
+            external_roots_inspection_digest=self.external_roots_inspection_digest,
+            resolver_policy_digest=self.resolver_policy_digest,
+            entries=self.entries,
+            current_modules=self.current_modules,
+            modules=self.modules,
+        )
+
+
 def plan_project_module_lock(
     project_directory: str | PathLike[str],
     entry_source_paths: Iterable[str | PathLike[str]],
@@ -104,6 +135,25 @@ def plan_project_module_lock(
     cancelled: Callable[[], bool] | None = None,
 ) -> ModuleLockPlanResult:
     """Derive a prospective mixed-root lock without acquiring a lease or writing."""
+
+    return _derive_mixed_module_lock(
+        project_directory,
+        entry_source_paths,
+        module_roots,
+        limits=limits,
+        cancelled=cancelled,
+    ).plan_result()
+
+
+def _derive_mixed_module_lock(
+    project_directory: str | PathLike[str],
+    entry_source_paths: Iterable[str | PathLike[str]],
+    module_roots: Mapping[str, str | PathLike[str]],
+    *,
+    limits: ResolvedModuleLimits | None = None,
+    cancelled: Callable[[], bool] | None = None,
+) -> _MixedModuleLockDerivation:
+    """Retain one exact mixed-root derivation and its final recheck closure."""
 
     selected_limits = limits or ResolvedModuleLimits()
     _validate_limits(selected_limits)
@@ -282,25 +332,39 @@ def plan_project_module_lock(
     _validate_entry_expansions(
         entries, scanned, records, selected_limits, cancelled,
     )
-    _recheck_plan_inputs(context, roots, entries, scanned, decisions, select, selected_limits, cancelled)
+    def recheck() -> None:
+        _recheck_plan_inputs(
+            context,
+            roots,
+            entries,
+            scanned,
+            decisions,
+            select,
+            selected_limits,
+            cancelled,
+        )
+
+    recheck()
     policy = _mixed_resolver_policy(context, roots)
     policy_digest = module_interface_digest(policy)
-    result = _build_module_lock_plan_result(
-        project_uid=context.uid,
-        manifest_digest=context.manifest_digest or "",
-        current_lock_digest=context.lock_digest,
-        catalog_path=context.catalog_relative_path,
-        catalog_content_digest=context.catalog_content_digest,
-        catalog_fingerprint=context.catalog_fingerprint,
-        external_roots_inspection_digest=roots.inspection.inspection_digest,
-        resolver_policy_digest=policy_digest,
-        entries=tuple(
+    derivation = _MixedModuleLockDerivation(
+        context.uid,
+        context.manifest_digest or "",
+        context.lock_digest,
+        context.catalog_relative_path,
+        context.catalog_content_digest,
+        context.catalog_fingerprint,
+        roots.inspection.inspection_digest,
+        policy_digest,
+        tuple(
             ModuleLockUpdateEntry(item.uri, module_source_digest(item.source))
             for item in entries
         ),
-        current_modules=context.locked_modules,
-        modules=records,
+        context.locked_modules,
+        records,
+        recheck,
     )
+    result = derivation.plan_result()
     # Match the writer's bounded pretty-JSON lock limit without publishing it.
     import json
     from .module_lock_plan_result import _prospective_lock_payload
@@ -310,7 +374,7 @@ def plan_project_module_lock(
     ) + "\n").encode("utf-8")
     if len(encoded) > MAX_LOCK_BYTES_V3:
         raise ProjectError("HOCUS410", "Prospective project lock exceeds the lock byte limit.")
-    return result
+    return derivation
 
 
 def _external_target(root: _ValidatedExternalRoot, relative: str) -> _Target:
@@ -464,26 +528,29 @@ def _recheck_plan_inputs(context, roots, entries, scanned, decisions, select, li
         or refreshed.external_aliases != context.external_aliases
         or refreshed.locked_modules != context.locked_modules
     ):
-        raise ProjectError("HOCUS428", "Project, lock, catalog, or resolver policy changed during planning.")
+        raise ProjectError(
+            "HOCUS428",
+            "Project, lock, catalog, or resolver policy changed during mixed-root derivation.",
+        )
     _recheck_external_roots(context, roots, cancelled)
     for entry in entries:
         _cancel(cancelled)
         if _canonical_entry(refreshed, entry.relative) != entry.path:
-            raise ProjectError("HOCUS428", "Entry source identity changed during planning.")
+            raise ProjectError("HOCUS428", "Entry source identity changed during mixed-root derivation.")
         if _native_identity(entry.path, "entry source") != entry.identity:
-            raise ProjectError("HOCUS428", "Entry source object changed during planning.")
+            raise ProjectError("HOCUS428", "Entry source object changed during mixed-root derivation.")
         if _read_source(entry.path, limits, cancelled) != entry.source:
-            raise ProjectError("HOCUS428", "Entry source bytes changed during planning.")
+            raise ProjectError("HOCUS428", "Entry source bytes changed during mixed-root derivation.")
     for item in scanned.values():
         _cancel(cancelled)
         current, identity = _read_target(item.target, limits, cancelled)
         if identity != item.identity or current != item.source:
-            raise ProjectError("HOCUS428", "Module source changed during planning.")
+            raise ProjectError("HOCUS428", "Module source changed during mixed-root derivation.")
     initial_count = len(decisions)
     for decision in tuple(decisions):
         _cancel(cancelled)
         if select(decision.importer, decision.importer_path, decision.specifier) != decision.selected:
-            raise ProjectError("HOCUS428", "Import winner changed during planning.")
+            raise ProjectError("HOCUS428", "Import winner changed during mixed-root derivation.")
     del decisions[initial_count:]
 
 

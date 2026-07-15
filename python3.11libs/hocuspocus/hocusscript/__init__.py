@@ -87,6 +87,12 @@ from .module_lock_plan_result import (
     MODULE_LOCK_PLAN_SCHEMA_URI,
     ModuleLockPlanResult,
 )
+from .mixed_lock_update import update_project_mixed_module_lock
+from .mixed_lock_update_result import (
+    MIXED_MODULE_LOCK_UPDATE_KIND,
+    MIXED_MODULE_LOCK_UPDATE_SCHEMA_URI,
+    MixedModuleLockUpdateResult,
+)
 from .module_semantic import (
     ModuleSemanticCompileError,
     ModuleSemanticCompileResult,
@@ -224,6 +230,9 @@ __all__ = [
     "MODULE_LOCK_PLAN_KIND",
     "MODULE_LOCK_PLAN_SCHEMA_URI",
     "ModuleLockPlanResult",
+    "MIXED_MODULE_LOCK_UPDATE_KIND",
+    "MIXED_MODULE_LOCK_UPDATE_SCHEMA_URI",
+    "MixedModuleLockUpdateResult",
     "ModuleManifest",
     "ModuleResolutionError",
     "ModuleSourceEnvelope",
@@ -273,6 +282,7 @@ __all__ = [
     "validate_module_interfaces",
     "validate_resolved_module_dag",
     "update_project_lock",
+    "update_project_mixed_module_lock",
     "update_project_module_lock",
     "verify_project_lock",
     "ExportStmt",

@@ -529,7 +529,53 @@ def _publish_derived_module_lock(
     derive: Callable[[ProjectContext], tuple[tuple[ModuleLockRecord, ...], Callable[[], None]]],
     build_result: Callable[[str | None, LockVerificationResult | None, LockVerificationResult, str, str], Any],
 ) -> Any:
-    """Publish internally derived records through the existing guarded lock path."""
+    """Publish internally derived same-project records through the guarded path."""
+
+    return _publish_derived_lock(
+        project_directory,
+        expected_lock_digest=expected_lock_digest,
+        derive=derive,
+        build_result=build_result,
+        allow_external=False,
+        require_valid_current=False,
+        skip_unchanged=False,
+    )
+
+
+def _publish_derived_mixed_module_lock(
+    project_directory: str | Path,
+    *,
+    expected_lock_digest: str,
+    derive: Callable[[ProjectContext], tuple[tuple[ModuleLockRecord, ...], Callable[[], None]]],
+    build_result: Callable[[str, LockVerificationResult, LockVerificationResult, str, str], Any],
+) -> Any:
+    """Publish independently derived mixed-root records under the guarded lease."""
+
+    return _publish_derived_lock(
+        project_directory,
+        expected_lock_digest=expected_lock_digest,
+        derive=derive,
+        build_result=build_result,
+        allow_external=True,
+        require_valid_current=True,
+        skip_unchanged=True,
+    )
+
+
+def _publish_derived_lock(
+    project_directory: str | Path,
+    *,
+    expected_lock_digest: str | None,
+    derive: Callable[[ProjectContext], tuple[tuple[ModuleLockRecord, ...], Callable[[], None]]],
+    build_result: Callable[[str | None, LockVerificationResult | None, LockVerificationResult, str, str], Any],
+    allow_external: bool,
+    require_valid_current: bool,
+    skip_unchanged: bool,
+) -> Any:
+    """Common private publisher with a fixed caller-selected record policy."""
+    policy = (allow_external, require_valid_current, skip_unchanged)
+    if policy not in ((False, False, False), (True, True, True)):
+        raise RuntimeError("Unsupported derived-lock publication policy")
     initial = ProjectContext.load(project_directory, validate_lock=False)
     if (
         initial.manifest_version != 3 or initial.uid is None or initial.manifest_digest is None
@@ -554,11 +600,18 @@ def _publish_derived_module_lock(
             try:
                 before = verify_project_lock(project.root)
             except ProjectError:
+                if require_valid_current:
+                    raise
                 # Exact expected-digest authority may repair a stale prior lock;
                 # the receipt marks its structural diff unavailable.
                 before = None
+        if require_valid_current and (initial_lock_digest is None or before is None):
+            raise ProjectError("HOCUS453", "Mixed module lock publication requires a valid current lock.")
         modules, before_publish = derive(project)
-        if any(item.external_alias is not None or item.project_uid != project.uid for item in modules):
+        if not allow_external and any(
+            item.external_alias is not None or item.project_uid != project.uid
+            for item in modules
+        ):
             raise ProjectError("HOCUS451", "Derived lock publication accepts same-project modules only.")
         _require_metadata_file(project.catalog_path, project.root, "Catalog snapshot")
         catalog_raw = _read_bounded_stable(
@@ -601,16 +654,24 @@ def _publish_derived_module_lock(
         result = build_result(
             initial_lock_digest, before, verified, catalog_digest, catalog.fingerprint,
         )
-        _atomic_write_lock(
-            project.lock_path, encoded, expected_lock_digest=expected_lock_digest,
-            before_publish=lambda: (
-                before_publish(),
-                _recheck_update_inputs(
-                    project, catalog_digest=catalog_digest,
-                    initial_lock_digest=initial_lock_digest,
-                ),
-            ),
-        )
+
+        def final_recheck() -> None:
+            before_publish()
+            _recheck_update_inputs(
+                project,
+                catalog_digest=catalog_digest,
+                initial_lock_digest=initial_lock_digest,
+            )
+
+        if skip_unchanged and initial_lock_digest == lock_digest:
+            final_recheck()
+        else:
+            _atomic_write_lock(
+                project.lock_path,
+                encoded,
+                expected_lock_digest=expected_lock_digest,
+                before_publish=final_recheck,
+            )
         return result
 
 

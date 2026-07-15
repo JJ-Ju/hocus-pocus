@@ -13,7 +13,7 @@ sys.path.insert(0, str(ROOT / "python3.11libs"))
 
 from hocuspocus.hocusscript.lock_update import update_project_module_lock
 from hocuspocus.hocusscript.project import ProjectError, verify_project_lock
-from hocuspocus.hocusscript.resolved_modules import ModuleResolutionError
+from hocuspocus.hocusscript.resolved_modules import ModuleResolutionError, ResolvedModuleLimits
 from test_hocusscript_resolver import _valid_project
 
 
@@ -190,6 +190,24 @@ class DerivedModuleLockUpdateTests(unittest.TestCase):
                         expected_lock_digest=digest,
                     )
                 self.assertEqual(lock.read_bytes(), original)
+
+    def test_module_file_limit_counts_visiting_ancestors_before_overread(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            _updatable_project(root)
+            lock = root / "pins/hocus.lock.json"
+            original = lock.read_bytes()
+            digest = verify_project_lock(root).lock_digest
+            with self.assertRaises(ModuleResolutionError) as rejected:
+                update_project_module_lock(
+                    root,
+                    ["src/main.hocus"],
+                    allow_write=True,
+                    expected_lock_digest=digest,
+                    limits=ResolvedModuleLimits(module_files=1),
+                )
+            self.assertEqual(rejected.exception.code, "HOCUS464")
+            self.assertEqual(lock.read_bytes(), original)
 
     def test_nested_external_alias_fails_closed_without_external_path_resolution(self) -> None:
         from hocuspocus.hocusscript import lock_update as lock_update_module

@@ -161,7 +161,7 @@ def _derive_under_lease(project, entry_paths, limits, cancelled):
             raise ModuleResolutionError("HOCUS463", "Derived module imports contain a cycle.")
         if states.get(uri) == "done":
             return uri
-        if len(scanned) >= limits.module_files or depth > limits.import_depth:
+        if len(states) >= limits.module_files or depth > limits.import_depth:
             raise ModuleResolutionError("HOCUS464", "Derived module closure exceeds its limits.")
         key = _portable_path_key(relative)
         if key in portable and portable[key] != uri:
