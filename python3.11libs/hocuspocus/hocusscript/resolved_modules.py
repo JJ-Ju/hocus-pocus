@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import posixpath
 import re
 from dataclasses import dataclass
 from itertools import islice
@@ -15,10 +16,14 @@ from .diagnostics import HocusSourceError, SourceSpan
 from .model import MODULE_LANGUAGE_VERSION, ModuleDependency
 from .module_paths import is_literal_import_specifier, is_relative_hocus_path
 from .parser import parse_syntax
+from .modules import MAX_MODULE_ENTRIES
 from .project import (
     LockVerificationResult,
+    MAX_EXTERNAL_ALIASES,
+    MAX_PROJECT_DIRECTORIES,
     ModuleLockRecord,
     ProjectError,
+    SEMANTIC_VERSION_PATTERN,
     _portable_path_key,
     _validate_relative_artifact_path,
 )
@@ -28,6 +33,7 @@ from .syntax import LiteralExpr, SyntaxSource
 _DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _UID = re.compile(r"^[a-z0-9][a-z0-9.-]{0,127}$")
+_ALIAS = re.compile(r"^[a-z][a-z0-9-]{0,63}$")
 _MODULE_URI = re.compile(r"^hocus-(project|module)://([a-z0-9][a-z0-9.-]{0,127})/(.+)$")
 _TRANSITIVE_DOMAIN = "hocus-module-transitive-v1"
 _MAX_INTERFACE_BYTES = 256 * 1024
@@ -161,6 +167,70 @@ def validate_resolved_module_dag(
     discovers projects, writes locks, resolves catalogs, or imports Houdini.
     """
 
+    return _validate_resolved_module_dag_common(
+        modules,
+        lock_verification=lock_verification,
+        entry_source_uri=entry_source_uri,
+        entry_source=entry_source,
+        entry_imports=entry_imports,
+        resolver_policy=resolver_policy,
+        resolver_policy_digest=resolver_policy_digest,
+        catalog_content_digest=catalog_content_digest,
+        catalog_fingerprint=catalog_fingerprint,
+        limits=limits,
+        cancelled=cancelled,
+        mixed=False,
+    )
+
+
+def _validate_resolved_mixed_module_dag(
+    modules: Iterable[ModuleSourceEnvelope],
+    *,
+    lock_verification: LockVerificationResult,
+    entry_source_uri: str,
+    entry_source: bytes,
+    entry_imports: Iterable[ResolvedImport],
+    resolver_policy: Mapping[str, Any],
+    resolver_policy_digest: str,
+    catalog_content_digest: str | None = None,
+    catalog_fingerprint: str | None = None,
+    limits: ResolvedModuleLimits | None = None,
+    cancelled: Callable[[], bool] | None = None,
+) -> ResolvedModuleDag:
+    """Validate a privately resolved exact mixed-root DAG without path access."""
+
+    return _validate_resolved_module_dag_common(
+        modules,
+        lock_verification=lock_verification,
+        entry_source_uri=entry_source_uri,
+        entry_source=entry_source,
+        entry_imports=entry_imports,
+        resolver_policy=resolver_policy,
+        resolver_policy_digest=resolver_policy_digest,
+        catalog_content_digest=catalog_content_digest,
+        catalog_fingerprint=catalog_fingerprint,
+        limits=limits,
+        cancelled=cancelled,
+        mixed=True,
+    )
+
+
+def _validate_resolved_module_dag_common(
+    modules: Iterable[ModuleSourceEnvelope],
+    *,
+    lock_verification: LockVerificationResult,
+    entry_source_uri: str,
+    entry_source: bytes,
+    entry_imports: Iterable[ResolvedImport],
+    resolver_policy: Mapping[str, Any],
+    resolver_policy_digest: str,
+    catalog_content_digest: str | None,
+    catalog_fingerprint: str | None,
+    limits: ResolvedModuleLimits | None,
+    cancelled: Callable[[], bool] | None,
+    mixed: bool,
+) -> ResolvedModuleDag:
+
     selected_limits = limits or ResolvedModuleLimits()
     _validate_limits(selected_limits)
     _checkpoint(cancelled)
@@ -180,6 +250,7 @@ def validate_resolved_module_dag(
     expected_policy_digest = _digest(policy_json.encode("utf-8"))
     if resolver_policy_digest != expected_policy_digest:
         _fail("HOCUS461", "resolver_policy_digest does not match resolver_policy.")
+    mixed_pins = _validate_mixed_policy(resolver_policy) if mixed else {}
     if (catalog_content_digest is None) != (catalog_fingerprint is None):
         _fail("HOCUS461", "Catalog content digest and fingerprint must be supplied together.")
     if catalog_content_digest is not None:
@@ -198,7 +269,9 @@ def validate_resolved_module_dag(
     supplied = _take_bounded(modules, selected_limits.module_files, "modules", cancelled)
     lock_records = _validated_lock_records(lock_verification, selected_limits, cancelled)
     by_uri: dict[str, ResolvedModuleRecord] = {}
-    portable_paths: set[tuple[str, str]] = {(project_uid, _portable_path_key(entry_identity[2]))}
+    portable_paths: set[tuple[str, str]] = {
+        (f"project:{project_uid}", _portable_path_key(entry_identity[2]))
+    }
     for index, envelope in enumerate(supplied):
         _checkpoint(cancelled)
         if not isinstance(envelope, ModuleSourceEnvelope):
@@ -208,11 +281,22 @@ def validate_resolved_module_dag(
         lock_record = lock_records.get(envelope.uri)
         if lock_record is None:
             _fail("HOCUS462", "Supplied module is absent from the verified lock.", uri=envelope.uri)
-        if lock_record.external_alias is not None:
+        if lock_record.external_alias is not None and not mixed:
             _fail("HOCUS460", "External module aliases remain disabled in Batch B.", uri=envelope.uri)
-        record = _validate_module(envelope, lock_record, project_uid, selected_limits, cancelled)
+        record = _validate_module(
+            envelope,
+            lock_record,
+            project_uid,
+            selected_limits,
+            cancelled,
+            mixed=mixed,
+            mixed_pins=mixed_pins,
+        )
         uri = record.dependency.uri
-        path_key = (record.dependency.owner_uid, _portable_path_key(record.dependency.relative_path))
+        path_key = (
+            f"{record.dependency.origin}:{record.dependency.owner_uid}",
+            _portable_path_key(record.dependency.relative_path),
+        )
         if uri in by_uri or path_key in portable_paths:
             _fail("HOCUS462", "Module URIs and paths must be portably unique.", uri=uri)
         by_uri[uri] = record
@@ -243,10 +327,18 @@ def validate_resolved_module_dag(
                 _fail("HOCUS462", "Literal import names and specifiers must be unique within a module.", uri=uri)
             local_names.add(item.local_name)
             specifiers.add(item.specifier)
-            if item.specifier.startswith("@"):
+            if item.specifier.startswith("@") and not mixed:
                 _fail("HOCUS460", "External module aliases remain disabled in Batch B.", uri=uri)
+            if mixed:
+                _validate_mixed_import_edge(record.dependency, item, target, mixed_pins)
 
-    entry_targets = _validate_entry_imports(supplied_entry_imports, by_uri, cancelled)
+    entry_targets = _validate_entry_imports(
+        supplied_entry_imports,
+        by_uri,
+        cancelled,
+        mixed=mixed,
+        mixed_pins=mixed_pins,
+    )
     reachable: set[str] = set()
     pending = list(reversed(sorted(entry_targets)))
     while pending:
@@ -402,22 +494,50 @@ def _validate_module(
     value: ModuleSourceEnvelope, locked: ModuleLockRecord, project_uid: str,
     limits: ResolvedModuleLimits,
     cancelled: Callable[[], bool] | None,
+    *,
+    mixed: bool,
+    mixed_pins: Mapping[str, Mapping[str, Any]],
 ) -> ResolvedModuleRecord:
     if locked.module_uri != value.uri:
         _fail("HOCUS462", "Envelope URI does not match its verified lock record.", uri=value.uri)
     identity = canonical_module_uri(locked.module_uri)
-    if identity != ("project", project_uid, locked.source_path):
-        _fail("HOCUS460", "Verified local module identity is invalid.", uri=value.uri)
     try:
         _validate_relative_artifact_path(locked.source_path, "locked module sourcePath", code="HOCUS460")
     except ProjectError as exc:
         _fail("HOCUS460", "Verified module sourcePath is not portable.", uri=value.uri)
-    if (
-        locked.project_uid != project_uid or locked.library_uid is not None
-        or locked.library_version is not None or locked.module_manifest_digest is not None
-        or locked.external_alias is not None or locked.language_version != MODULE_LANGUAGE_VERSION
-    ):
-        _fail("HOCUS460", "Verified module provenance is invalid for Batch B.", uri=value.uri)
+    if locked.external_alias is None:
+        if (
+            identity != ("project", project_uid, locked.source_path)
+            or locked.project_uid != project_uid
+            or locked.library_uid is not None
+            or locked.library_version is not None
+            or locked.module_manifest_digest is not None
+            or locked.language_version != MODULE_LANGUAGE_VERSION
+        ):
+            _fail("HOCUS460", "Verified local module provenance is invalid.", uri=value.uri)
+        origin = "project"
+        owner_uid = project_uid
+        alias = None
+        version = None
+        manifest_digest = None
+    else:
+        pin = mixed_pins.get(locked.external_alias) if mixed else None
+        if (
+            pin is None
+            or not isinstance(locked.library_uid, str)
+            or identity != ("module", locked.library_uid, locked.source_path)
+            or locked.project_uid is not None
+            or locked.library_uid != pin.get("libraryUid")
+            or locked.library_version != pin.get("libraryVersion")
+            or locked.module_manifest_digest != pin.get("moduleManifestDigest")
+            or locked.language_version != MODULE_LANGUAGE_VERSION
+        ):
+            _fail("HOCUS460", "Verified external module provenance is invalid.", uri=value.uri)
+        origin = "external_library"
+        owner_uid = locked.library_uid
+        alias = locked.external_alias
+        version = locked.library_version
+        manifest_digest = locked.module_manifest_digest
     syntax = _parse_exact_source(value.source, value.uri, limits, root="module")
     assert syntax.module is not None
     module_name = syntax.module.name
@@ -448,8 +568,8 @@ def _validate_module(
         _fail("HOCUS464", "Module imports exceed moduleFiles.", uri=value.uri)
     _validate_import_correspondence(syntax, value.imports, value.uri)
     dependency = ModuleDependency(
-        locked.module_uri, module_name, locked.source_path, "project", project_uid,
-        None, None, None, locked.content_digest, locked.interface_digest,
+        locked.module_uri, module_name, locked.source_path, origin, owner_uid,
+        alias, version, manifest_digest, locked.content_digest, locked.interface_digest,
         locked.transitive_digest, locked.dependencies, locked.language_version,
     )
     return ResolvedModuleRecord(dependency, value.source, interface_json, value.imports)
@@ -538,22 +658,175 @@ def _validated_lock_records(
     return records
 
 
+def _validate_mixed_policy(value: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
+    expected_keys = {
+        "schemaVersion", "kind", "projectMode", "projectPolicy",
+        "externalLibraries", "projectExternalResolution",
+        "externalRelativeResolution", "externalCrossLibraryResolution",
+        "externalBareResolution", "externalToProject", "casePolicy", "linkPolicy",
+    }
+    if (
+        not isinstance(value, Mapping)
+        or set(value) != expected_keys
+        or type(value.get("schemaVersion")) is not int
+        or value.get("schemaVersion") != 1
+        or value.get("kind") != "native_mixed_roots_v1"
+        or value.get("projectMode") != "project_and_explicit_external_roots"
+        or not _is_valid_project_policy(value.get("projectPolicy"))
+        or value.get("projectExternalResolution") != "alias_entry_modules_only"
+        or value.get("externalRelativeResolution") != "same_library_only"
+        or value.get("externalCrossLibraryResolution") != "alias_entry_modules_only"
+        or value.get("externalBareResolution") != "disabled"
+        or value.get("externalToProject") is not False
+        or value.get("casePolicy") != "portable"
+        or value.get("linkPolicy") != "reject_reparse"
+    ):
+        _fail("HOCUS460", "Mixed resolver policy is invalid.")
+    libraries = value.get("externalLibraries")
+    if (
+        not isinstance(libraries, list)
+        or not libraries
+        or len(libraries) > MAX_EXTERNAL_ALIASES
+    ):
+        _fail("HOCUS460", "Mixed resolver policy libraries are invalid.")
+    pins: dict[str, Mapping[str, Any]] = {}
+    library_uids: set[str] = set()
+    for item in libraries:
+        if not isinstance(item, Mapping) or set(item) != {
+            "alias", "libraryUid", "libraryVersion", "moduleManifestDigest", "entryModules",
+        }:
+            _fail("HOCUS460", "Mixed resolver policy library pin is invalid.")
+        alias = item.get("alias")
+        library_uid = item.get("libraryUid")
+        entries = item.get("entryModules")
+        if (
+            not isinstance(alias, str)
+            or _ALIAS.fullmatch(alias) is None
+            or alias in pins
+            or not isinstance(library_uid, str)
+            or _UID.fullmatch(library_uid) is None
+            or library_uid in library_uids
+            or not isinstance(item.get("libraryVersion"), str)
+            or SEMANTIC_VERSION_PATTERN.fullmatch(item["libraryVersion"]) is None
+            or not isinstance(item.get("moduleManifestDigest"), str)
+            or _DIGEST.fullmatch(item["moduleManifestDigest"]) is None
+            or not isinstance(entries, list)
+            or not entries
+            or len(entries) > MAX_MODULE_ENTRIES
+            or entries != sorted(set(entries))
+            or any(not isinstance(entry, str) or not is_relative_hocus_path(entry) for entry in entries)
+        ):
+            _fail("HOCUS460", "Mixed resolver policy library pin is invalid.")
+        pins[alias] = item
+        library_uids.add(library_uid)
+    if tuple(pins) != tuple(sorted(pins)):
+        _fail("HOCUS460", "Mixed resolver policy library pins must be alias-sorted.")
+    return pins
+
+
+def _is_valid_project_policy(value: Any) -> bool:
+    if not isinstance(value, Mapping) or set(value) != {
+        "schemaVersion", "kind", "projectMode", "relativeResolution",
+        "moduleDirectories", "bareResolution", "externalAliases",
+        "casePolicy", "linkPolicy",
+    }:
+        return False
+    directories = value.get("moduleDirectories")
+    if (
+        type(value.get("schemaVersion")) is not int
+        or value.get("schemaVersion") != 1
+        or value.get("kind") != "native_project_v1"
+        or value.get("projectMode") != "same_project_only"
+        or value.get("relativeResolution") != "importer_relative_project_contained"
+        or value.get("bareResolution") != "ordered_first_occupied_fail_closed"
+        or value.get("externalAliases") is not False
+        or value.get("casePolicy") != "portable"
+        or value.get("linkPolicy") != "reject_reparse"
+        or not isinstance(directories, list)
+        or len(directories) > MAX_PROJECT_DIRECTORIES
+    ):
+        return False
+    portable: set[str] = set()
+    for directory in directories:
+        if directory == ".":
+            key = "."
+        else:
+            try:
+                _validate_relative_artifact_path(
+                    directory, "module directory", code="HOCUS460",
+                )
+            except ProjectError:
+                return False
+            key = _portable_path_key(directory)
+        if key in portable:
+            return False
+        portable.add(key)
+    return True
+
+
+def _validate_mixed_import_edge(
+    importer: ModuleDependency | None,
+    resolved: ResolvedImport,
+    target: ModuleDependency,
+    pins: Mapping[str, Mapping[str, Any]],
+) -> None:
+    specifier = resolved.specifier
+    alias: str | None = None
+    if specifier.startswith("@"):
+        alias, separator, tail = specifier[1:].partition("/")
+        pin = pins.get(alias)
+        if not separator or pin is None or tail not in pin["entryModules"]:
+            _fail("HOCUS460", "Mixed alias imports must target approved manifest entries.")
+        if target.origin != "external_library" or target.alias != alias:
+            _fail("HOCUS462", "Mixed alias import target conflicts with its library pin.")
+        if target.relative_path != tail:
+            _fail("HOCUS462", "Mixed alias import path conflicts with its target.")
+    importer_origin = "project" if importer is None else importer.origin
+    if importer_origin == "project":
+        if target.origin == "external_library" and alias is None:
+            _fail("HOCUS460", "Project-to-library imports require an explicit alias entry.")
+        if target.origin == "project" and alias is not None:
+            _fail("HOCUS460", "Project alias imports cannot target project modules.")
+        return
+    if importer is None or importer.origin != "external_library":
+        _fail("HOCUS460", "Mixed import owner provenance is invalid.")
+    if target.origin == "project":
+        _fail("HOCUS460", "External libraries cannot import project modules.")
+    if target.origin != "external_library":
+        _fail("HOCUS460", "External import target provenance is invalid.")
+    if target.owner_uid == importer.owner_uid:
+        if alias is not None or not specifier.startswith(("./", "../")):
+            _fail("HOCUS460", "Same-library imports must use explicit relative paths.")
+        relative = posixpath.normpath(
+            posixpath.join(posixpath.dirname(importer.relative_path), specifier)
+        )
+        if not is_relative_hocus_path(relative) or relative != target.relative_path:
+            _fail("HOCUS462", "Same-library relative import conflicts with its target.")
+    elif alias is None or alias == importer.alias:
+        _fail("HOCUS460", "Cross-library imports require a different explicit alias entry.")
+
+
 def _validate_entry_imports(
     imports: tuple[ResolvedImport, ...], by_uri: Mapping[str, ResolvedModuleRecord],
     cancelled: Callable[[], bool] | None,
+    *,
+    mixed: bool,
+    mixed_pins: Mapping[str, Mapping[str, Any]],
 ) -> tuple[str, ...]:
     targets: list[str] = []
     names: set[str] = set()
     specifiers: set[str] = set()
     for item in imports:
         _checkpoint(cancelled)
-        if item.specifier.startswith("@"):
+        if item.specifier.startswith("@") and not mixed:
             _fail("HOCUS460", "External module aliases remain disabled in Batch B.")
         target = by_uri.get(item.target_uri)
         if target is None:
             _fail("HOCUS462", "Entry import targets a missing supplied module.", target=item.target_uri)
         if item.imported_name != target.dependency.module_name:
             _fail("HOCUS462", "Entry imported name conflicts with target module.", target=item.target_uri)
+        if mixed:
+            _validate_mixed_import_edge(None, item, target.dependency, mixed_pins)
         if item.local_name in names or item.specifier in specifiers:
             _fail("HOCUS462", "Entry import aliases and specifiers must be unique.")
         names.add(item.local_name)

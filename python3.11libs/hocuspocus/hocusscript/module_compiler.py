@@ -6,7 +6,7 @@ import hashlib
 import json
 from dataclasses import dataclass
 from os import PathLike
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 
 from .diagnostics import Diagnostic
 from .expander import ExpansionLimits, expand_resolved_module_dag
@@ -15,7 +15,8 @@ from .model import (
     MODULE_COMPILER_VERSION, MODULE_GRAPH_SPEC_VERSION, MODULE_LANGUAGE_VERSION,
     GraphSpec, graph_spec_from_dict,
 )
-from .resolved_modules import ResolvedModuleLimits
+from .mixed_resolution import _resolve_project_mixed_module_session
+from .resolved_modules import ResolvedModuleDag, ResolvedModuleLimits
 from .resolver import resolve_project_module_dag
 
 MAX_MODULE_COMPILE_RESULT_BYTES = 48 * 1024 * 1024
@@ -136,6 +137,58 @@ def compile_project_module_graph(
     dag = resolve_project_module_dag(
         project_directory, entry_source_path, limits=limits, cancelled=cancelled,
     )
+    return _compile_resolved_module_dag(dag, limits=limits, cancelled=cancelled)
+
+
+def compile_project_mixed_module_graph(
+    project_directory: str | PathLike[str],
+    entry_source_path: str | PathLike[str],
+    module_roots: Mapping[str, str | PathLike[str]],
+    *,
+    limits: ResolvedModuleLimits | None = None,
+    cancelled: Callable[[], bool] | None = None,
+) -> ModuleProjectCompileResult:
+    """Compile an entry against its exact G3-published mixed-root lock closure."""
+
+    result, recheck = _compile_project_mixed_module_graph_session(
+        project_directory,
+        entry_source_path,
+        module_roots,
+        limits=limits,
+        cancelled=cancelled,
+    )
+    recheck()
+    return result
+
+
+def _compile_project_mixed_module_graph_session(
+    project_directory: str | PathLike[str],
+    entry_source_path: str | PathLike[str],
+    module_roots: Mapping[str, str | PathLike[str]],
+    *,
+    limits: ResolvedModuleLimits | None = None,
+    cancelled: Callable[[], bool] | None = None,
+) -> tuple[ModuleProjectCompileResult, Callable[[], None]]:
+    session = _resolve_project_mixed_module_session(
+        project_directory,
+        entry_source_path,
+        module_roots,
+        limits=limits,
+        cancelled=cancelled,
+    )
+    result = _compile_resolved_module_dag(
+        session.dag, limits=limits, cancelled=cancelled,
+    )
+    session.recheck()
+    return result, session.recheck
+
+
+def _compile_resolved_module_dag(
+    dag: ResolvedModuleDag,
+    *,
+    limits: ResolvedModuleLimits | None,
+    cancelled: Callable[[], bool] | None,
+) -> ModuleProjectCompileResult:
     selected_limits = limits or ResolvedModuleLimits()
     expansion_limits = ExpansionLimits.from_resolved(selected_limits)
     graph_spec = expand_resolved_module_dag(

@@ -15,8 +15,8 @@ Roadmap: `docs/hocusscript-roadmap.md`
 
 ## 2. Current Slice
 
-Current milestone: HS6 modules and studio libraries in progress; Batches A-G3 are complete through guarded mixed-root lock publication
-Current scope: G4 resolves published external records for the compiler, editor, and bundle producer from exact per-call roots without weakening the content-only Houdini MCP boundary
+Current milestone: HS6 modules and studio libraries in progress; Batches A-G4 are complete through separate exact-root native compiler/editor/bundle consumption
+Current scope: G5 adds explicit CLI `--module-root alias=absolute-path` wiring without weakening the content-only Houdini MCP boundary; document/live Bundle `0.3` consumption remains blocked under `HS-BLOCK-008`
 Live mutation: available only through the completed HS4 guarded `document.apply_plan` path; HS5 format/completion/export tools are observational
 
 Initial implementation acceptance command:
@@ -324,7 +324,7 @@ Verification:
 
 ## 9. HS6: Modules and Studio Libraries
 
-Status: Batches A-G3 complete for the native same-project lane plus external-root inspection, read-only mixed-root planning, and guarded external-record publication; external-alias compiler/editor/bundle consumption, CLI root flags, document, and live integration remain pending, while MCP remains content-only
+Status: Batches A-G4 complete for the native same-project lane plus external-root inspection, read-only mixed-root planning, guarded external-record publication, and separate exact-root compiler/editor/bundle consumption; G5 CLI root flags, document, and live integration remain pending, while MCP remains content-only
 
 Dependencies: HS5, import security design
 Houdini required: module compiler no; live module fixtures yes
@@ -341,7 +341,7 @@ Houdini required: module compiler no; live module fixtures yes
 - [x] Implement hygienic deterministic expansion.
 - [x] Implement offline project-contained static imports through an explicit native project compiler API.
 - [x] Resolve imports relative to the importing file and ordered project module directories without implicit discovery.
-- [x] Bind structurally validated project identity, source/module directories, catalog lock, and module-lock fields into the same-project native resolver; compiler/editor consumption of approved external aliases remains pending.
+- [x] Bind structurally validated project identity, source/module directories, catalog lock, and module-lock fields into the same-project native resolver; keep that legacy resolver isolated when separate mixed-root compiler/editor consumers are added.
 - [x] Require manifest-declared, separately approved aliases with pre-pinned module-manifest digests and manifest entry gates for read-only mixed-root planning.
 - [x] Enable resolver-derived nonempty same-project lock updates; retain atomic, expected-digest, explicit-write gates.
 - [x] Add same-project module source/interface/transitive content hashes and resolver-derived lockfile records.
@@ -349,7 +349,8 @@ Houdini required: module compiler no; live module fixtures yes
 - [x] Publish exact external-library records only after G3 independently rederives them under the writer lease; never trust a caller-supplied plan, plan digest, prospective payload, or module records as publication authority.
 - [x] Require explicit write authority, one valid existing lock, and its exact digest; strict-validate the canonical payload and prebuild the portable receipt before atomic replacement, with verified no-op behavior when unchanged.
 - [x] Add a strict unregistered `mixed-module-lock-update-v1` receipt schema binding prior/new lock, catalog, root-inspection, resolver-policy, entry, module, and exact diff identities without host paths.
-- [ ] Resolve published external records in compiler/editor/bundle paths from explicit roots revalidated on every G4 call.
+- [x] Resolve published external records through separate compiler/semantic/bundle APIs from mandatory exact roots revalidated on every G4 call; retain final project/lock/catalog/root/manifest/source/winner rechecks and emit only portable host-path-free artifacts.
+- [x] Add separate mixed saved-file/dirty-buffer completion and definition APIs with mandatory keyword-only `module_roots`, project-local subjects, verified external dependency completion/navigation, and unchanged fail-closed same-project editor behavior.
 - [ ] Add G5 CLI `--module-root alias=absolute-path` wiring without adding an MCP project/root/file surface.
 - [x] Preserve bounded interned expansion stacks in expansion source maps.
 - [x] Attach semantic compiler diagnostics to shared expansion origin/stack IDs without duplicating interned frames; require portable contained source locations in Bundle `0.3`.
@@ -444,6 +445,14 @@ Batch G3 delivered evidence:
 - the strict unregistered `mixed-module-lock-update-v1` receipt and runtime invariants bind prior/new lock, catalog, root-inspection, resolver-policy, sorted entries/modules, exact provenance, complete dependencies, and exact added/removed/changed sets without native paths; relocation yields identical receipts and lock bytes
 - default denial, malformed/stale/invalid locks, lease contention, semantic and limit failures, cancellation, source/root/manifest/project/catalog/lock/winner races, forced result-construction failure, replacement failure, no-op inode/mtime preservation, cleanup, advisory-planner isolation, and legacy resolver/writer isolation all preserve the active lock boundary; the older same-project writer also now rejects a deep chain at admission instead of over-reading past `moduleFiles`
 - focused G3 gates pass 14/14, the G3/G2/G1/same-project/resolver regression gate passes 57/57, the independent security gate passes 72/72, and the full repository suite passes 390/390; independent P0/P1 review is clean, with same-user locking limits, the descriptor-safe-read gap, stale-lease recovery, directory durability, and noncooperating-writer limits remaining under `HS-BLOCK-001`
+
+Batch G4 delivered evidence:
+
+- separate mixed graph, semantic, and Bundle `0.3` producers require the complete exact per-call alias-root mapping, verify only the current G3-published records, retain authority through construction, and perform final project/lock/catalog/root/manifest/source/winner rechecks before returning portable host-path-free results
+- separate `complete_mixed_path`, `complete_mixed_project_source`, `definition_mixed_path`, and `definition_mixed_project_source` APIs require keyword-only `module_roots`; subjects remain project-local while verified external dependencies contribute completion and definition targets through portable module URIs
+- legacy same-project compiler, semantic, bundle, resolver, and editor surfaces remain unchanged and fail closed on external aliases; G4 adds no CLI/MCP file surface, and document/live Bundle `0.3` consumption remains blocked under `HS-BLOCK-008`
+- focused mixed compiler/bundle/editor, strict-validator, and legacy-isolation gates pass 28/28; the independent mixed/resolver/compiler/semantic security gate passes 47/47, including mutation-injection rejection after graph, semantic, bundle, and saved-editor result construction
+- the full repository suite passes 405/405 under both pytest and unittest discovery, the HocusScript-only discovery gate passes 349/349, and compileall, diff-check, no-`hou` import, relocation/path-leak checks, and independent P0/P1 review are clean; the existing same-user pathname/descriptor limits remain under `HS-BLOCK-001`
 
 ## 10. HS7: Fidelity Matrix
 

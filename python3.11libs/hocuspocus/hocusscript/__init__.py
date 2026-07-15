@@ -74,6 +74,7 @@ from .module_compiler import (
     FormattedModuleSource,
     ModuleProjectCompileError,
     ModuleProjectCompileResult,
+    compile_project_mixed_module_graph,
     compile_project_module_graph,
 )
 from .module_format import (
@@ -93,9 +94,17 @@ from .mixed_lock_update_result import (
     MIXED_MODULE_LOCK_UPDATE_SCHEMA_URI,
     MixedModuleLockUpdateResult,
 )
+from .mixed_project_editor import (
+    complete_mixed_path,
+    complete_mixed_project_source,
+    definition_mixed_path,
+    definition_mixed_project_source,
+)
 from .module_semantic import (
     ModuleSemanticCompileError,
     ModuleSemanticCompileResult,
+    compile_project_mixed_module_bundle,
+    compile_project_mixed_module_semantic,
     compile_project_module_bundle,
     compile_project_module_semantic,
 )
@@ -247,6 +256,9 @@ __all__ = [
     "ResolvedModuleUnit",
     "SnapshotCatalogProvider",
     "compile_path",
+    "compile_project_mixed_module_graph",
+    "compile_project_mixed_module_bundle",
+    "compile_project_mixed_module_semantic",
     "compile_project_module_graph",
     "compile_project_module_bundle",
     "compile_project_module_semantic",
@@ -254,12 +266,16 @@ __all__ = [
     "compile_source",
     "check_source",
     "complete_source",
+    "complete_mixed_path",
+    "complete_mixed_project_source",
     "complete_path",
     "complete_project_source",
     "decode_compiled_bundle",
     "decode_catalog_snapshot",
     "decode_module_manifest",
     "definition_path",
+    "definition_mixed_path",
+    "definition_mixed_project_source",
     "definition_project_source",
     "format_graph",
     "format_source",

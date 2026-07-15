@@ -12,6 +12,7 @@ from .model import MODULE_GRAPH_SPEC_VERSION, MODULE_LANGUAGE_VERSION, Expansion
 from .module_compiler import (
     MAX_MODULE_COMPILE_RESULT_BYTES,
     ModuleProjectCompileResult,
+    _compile_project_mixed_module_graph_session,
     compile_project_module_graph,
 )
 from .project import ProjectContext
@@ -154,6 +155,61 @@ def compile_project_module_semantic(
     compiled = compile_project_module_graph(
         project_directory, entry_source_path, limits=limits, cancelled=cancelled,
     )
+    return _compile_module_semantic(
+        project_directory, compiled, cancelled=cancelled,
+    )
+
+
+def compile_project_mixed_module_semantic(
+    project_directory: str | PathLike[str],
+    entry_source_path: str | PathLike[str],
+    module_roots: Mapping[str, str | PathLike[str]],
+    *,
+    limits: ResolvedModuleLimits | None = None,
+    cancelled: Callable[[], bool] | None = None,
+) -> ModuleSemanticCompileResult:
+    """Compile and resolve one exact G3-published mixed-root entry."""
+
+    result, recheck = _compile_project_mixed_module_semantic_session(
+        project_directory,
+        entry_source_path,
+        module_roots,
+        limits=limits,
+        cancelled=cancelled,
+    )
+    recheck()
+    return result
+
+
+def _compile_project_mixed_module_semantic_session(
+    project_directory: str | PathLike[str],
+    entry_source_path: str | PathLike[str],
+    module_roots: Mapping[str, str | PathLike[str]],
+    *,
+    limits: ResolvedModuleLimits | None = None,
+    cancelled: Callable[[], bool] | None = None,
+) -> tuple[ModuleSemanticCompileResult, Callable[[], None]]:
+    _checkpoint(cancelled)
+    compiled, recheck = _compile_project_mixed_module_graph_session(
+        project_directory,
+        entry_source_path,
+        module_roots,
+        limits=limits,
+        cancelled=cancelled,
+    )
+    result = _compile_module_semantic(
+        project_directory, compiled, cancelled=cancelled,
+    )
+    recheck()
+    return result, recheck
+
+
+def _compile_module_semantic(
+    project_directory: str | PathLike[str],
+    compiled: ModuleProjectCompileResult,
+    *,
+    cancelled: Callable[[], bool] | None,
+) -> ModuleSemanticCompileResult:
     _checkpoint(cancelled)
     project = ProjectContext.load(project_directory, validate_lock=True)
     _checkpoint(cancelled)
@@ -225,6 +281,36 @@ def compile_project_module_bundle(
         limits=limits,
         cancelled=cancelled,
     )
+    return _bundle_from_semantic(semantic, cancelled=cancelled)
+
+
+def compile_project_mixed_module_bundle(
+    project_directory: str | PathLike[str],
+    entry_source_path: str | PathLike[str],
+    module_roots: Mapping[str, str | PathLike[str]],
+    *,
+    limits: ResolvedModuleLimits | None = None,
+    cancelled: Callable[[], bool] | None = None,
+) -> "CompiledBundle":
+    """Compile one exact G3-published mixed-root entry into a pinned bundle."""
+
+    semantic, recheck = _compile_project_mixed_module_semantic_session(
+        project_directory,
+        entry_source_path,
+        module_roots,
+        limits=limits,
+        cancelled=cancelled,
+    )
+    bundle = _bundle_from_semantic(semantic, cancelled=cancelled)
+    recheck()
+    return bundle
+
+
+def _bundle_from_semantic(
+    semantic: ModuleSemanticCompileResult,
+    *,
+    cancelled: Callable[[], bool] | None,
+) -> "CompiledBundle":
     _checkpoint(cancelled)
     if not semantic.valid:
         errors = tuple(
