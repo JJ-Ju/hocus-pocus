@@ -31,9 +31,11 @@ PROJECT_LOCK_NAME = "hocus.lock.json"
 PROJECT_SCHEMA_URI = "hocuspocus://schemas/hocus-project/v1"
 PROJECT_SCHEMA_URI_V2 = "hocuspocus://schemas/hocus-project/v2"
 PROJECT_SCHEMA_URI_V3 = "hocuspocus://schemas/hocus-project/v3"
+PROJECT_SCHEMA_URI_V4 = "hocuspocus://schemas/hocus-project/v4"
 LOCK_SCHEMA_URI = "hocuspocus://schemas/hocus-lock/v1"
 LOCK_SCHEMA_URI_V2 = "hocuspocus://schemas/hocus-lock/v2"
 LOCK_SCHEMA_URI_V3 = "hocuspocus://schemas/hocus-lock/v3"
+LOCK_SCHEMA_URI_V4 = "hocuspocus://schemas/hocus-lock/v4"
 MAX_MANIFEST_BYTES = 256 * 1024
 MAX_LOCK_BYTES_V3 = 16 * 1024 * 1024
 MAX_PROJECT_DIRECTORIES = 64
@@ -360,16 +362,16 @@ def compile_path(
     """Compile one native .hocus file inside an explicitly selected project."""
 
     preview = ProjectContext.load(project_directory, validate_lock=False)
-    if preview.manifest_version == 3 or preview.language_version == "0.2":
+    if preview.manifest_version in {3, 4} or preview.language_version in {"0.2", "0.3"}:
         raise ProjectError(
             "HOCUS456",
-            "HocusScript 0.2 project compilation remains disabled until the HS6 resolver batch.",
+            "HocusScript 0.2/0.3 project compilation remains disabled until a compatible resolver/compiler batch.",
         )
     project = ProjectContext.load(project_directory, validate_lock=validate_lock)
-    if project.language_version == "0.2":
+    if project.language_version in {"0.2", "0.3"}:
         raise ProjectError(
             "HOCUS456",
-            "HocusScript 0.2 project compilation remains disabled until the HS6 resolver batch.",
+            "HocusScript 0.2/0.3 project compilation remains disabled until a compatible resolver/compiler batch.",
         )
     resolved = project.resolve_source(source_path)
     if validate_lock:
@@ -408,9 +410,10 @@ def compile_path(
 
 def verify_project_lock(project_directory: str | Path) -> LockVerificationResult:
     """Explicitly verify a v3 lock without changing project or lock files."""
-    project = ProjectContext.load(project_directory, validate_lock=True)
-    if project.manifest_version != 3:
+    preview = ProjectContext.load(project_directory, validate_lock=False)
+    if preview.manifest_version != 3:
         raise ProjectError("HOCUS452", "Module lock verification requires a schema v3 project.")
+    project = ProjectContext.load(project_directory, validate_lock=True)
     if project.uid is None or project.manifest_digest is None or project.lock_digest is None:
         raise ProjectError("HOCUS452", "Schema v3 project lock verification is incomplete.")
     return LockVerificationResult(
@@ -820,17 +823,17 @@ def _validate_manifest(
         raise ProjectError("HOCUS405", f"{PROJECT_MANIFEST_NAME} has unknown top-level fields.")
     schema_version = payload.get("schema_version")
     allowed_top_level = {"schema_version", "project", "language", "lock"}
-    if schema_version in {2, 3}:
+    if schema_version in {2, 3, 4}:
         allowed_top_level.add("catalog")
-    if schema_version == 3:
+    if schema_version in {3, 4}:
         allowed_top_level.add("external_aliases")
     if set(payload) - allowed_top_level:
         raise ProjectError("HOCUS405", f"{PROJECT_MANIFEST_NAME} has unknown top-level fields.")
-    if type(schema_version) is not int or schema_version not in {1, 2, 3} or not isinstance(payload.get("project"), dict):
-        raise ProjectError("HOCUS405", f"{PROJECT_MANIFEST_NAME} requires schema_version = 1, 2, or 3 and a [project] table.")
+    if type(schema_version) is not int or schema_version not in {1, 2, 3, 4} or not isinstance(payload.get("project"), dict):
+        raise ProjectError("HOCUS405", f"{PROJECT_MANIFEST_NAME} requires schema_version = 1, 2, 3, or 4 and a [project] table.")
     project = payload["project"]
     project_fields = {"uid", "name", "source_directories"}
-    if schema_version == 3:
+    if schema_version in {3, 4}:
         project_fields.add("module_directories")
     _require_table_fields(project, project_fields, "project")
     uid = project.get("uid")
@@ -847,15 +850,17 @@ def _validate_manifest(
         ):
             raise ProjectError("HOCUS407", "Project name must be a bounded non-empty string without control characters.")
     _validate_source_directory_values(project.get("source_directories", ["."]))
-    if schema_version == 3:
+    if schema_version in {3, 4}:
         _validate_module_directory_values(project.get("module_directories", []))
     language = payload.get("language", {})
     lock = payload.get("lock", {})
     _require_table_fields(language, {"version"}, "language")
-    _require_table_fields(lock, {"policy", "path"} if schema_version in {2, 3} else {"policy"}, "lock")
+    _require_table_fields(lock, {"policy", "path"} if schema_version in {2, 3, 4} else {"policy"}, "lock")
     version = language.get("version", "0.1")
     if schema_version == 3:
         version_valid = version == "0.2"
+    elif schema_version == 4:
+        version_valid = version == "0.3"
     else:
         version_valid = isinstance(version, str) and version in SUPPORTED_LANGUAGE_VERSIONS
     if not version_valid:
@@ -863,16 +868,16 @@ def _validate_manifest(
     policy = lock.get("policy", "optional")
     if not isinstance(policy, str) or policy not in {"optional", "required"}:
         raise ProjectError("HOCUS405", "lock.policy must be optional or required.")
-    if schema_version in {2, 3} and policy != "required":
+    if schema_version in {2, 3, 4} and policy != "required":
         raise ProjectError("HOCUS405", f"Manifest schema v{schema_version} requires lock.policy = required.")
-    if schema_version in {2, 3} and "path" not in lock:
+    if schema_version in {2, 3, 4} and "path" not in lock:
         raise ProjectError("HOCUS405", f"Manifest schema v{schema_version} requires lock.path.")
     if "path" in lock:
         _validate_relative_artifact_path(lock["path"], "lock.path")
         if not lock["path"].endswith(".json"):
             raise ProjectError("HOCUS405", "lock.path must identify a .json file.")
     catalog: dict[str, Any] | None = None
-    if schema_version in {2, 3}:
+    if schema_version in {2, 3, 4}:
         catalog = payload.get("catalog")
         _require_table_fields(catalog, {"path"}, "catalog")
         if "path" not in catalog:
@@ -883,7 +888,7 @@ def _validate_manifest(
         if catalog["path"].casefold() == lock.get("path", PROJECT_LOCK_NAME).casefold():
             raise ProjectError("HOCUS405", "catalog.path and lock.path must be different files.")
     aliases: dict[str, dict[str, Any]] = {}
-    if schema_version == 3:
+    if schema_version in {3, 4}:
         raw_aliases = payload.get("external_aliases", {})
         if not isinstance(raw_aliases, dict) or len(raw_aliases) > MAX_EXTERNAL_ALIASES:
             raise ProjectError("HOCUS450", "external_aliases must be a bounded table.")
@@ -1029,7 +1034,7 @@ def _load_lock(
     catalog_relative_path: str | None,
     external_aliases: tuple[ExternalLibraryAlias, ...] = (),
 ) -> tuple[str, dict[str, Any] | None, tuple[ModuleLockRecord, ...]]:
-    lock_limit = MAX_LOCK_BYTES_V3 if manifest_version == 3 else MAX_MANIFEST_BYTES
+    lock_limit = MAX_LOCK_BYTES_V3 if manifest_version in {3, 4} else MAX_MANIFEST_BYTES
     raw = _read_bounded(path, lock_limit, "HOCUS410", "Project lock")
     try:
         payload = json.loads(
@@ -1043,16 +1048,17 @@ def _load_lock(
         raise ProjectError("HOCUS422", f"Invalid {PROJECT_LOCK_NAME}: {exc}") from exc
     _validate_json_complexity(
         payload,
-        max_values=MAX_LOCK_METADATA_VALUES_V3 if manifest_version == 3 else MAX_METADATA_VALUES,
+        max_values=MAX_LOCK_METADATA_VALUES_V3 if manifest_version in {3, 4} else MAX_METADATA_VALUES,
     )
     expected_keys = {"$schema", "kind", "schemaVersion", "projectUid", "manifestDigest", "languageVersion", "catalog", "modules"}
     if not isinstance(payload, dict) or set(payload) != expected_keys:
         raise ProjectError("HOCUS422", f"{PROJECT_LOCK_NAME} has missing or unknown fields.")
-    expected_lock_version = manifest_version if manifest_version in {2, 3} else 1
+    expected_lock_version = manifest_version if manifest_version in {2, 3, 4} else 1
     expected_schema_uri = {
         1: LOCK_SCHEMA_URI,
         2: LOCK_SCHEMA_URI_V2,
         3: LOCK_SCHEMA_URI_V3,
+        4: LOCK_SCHEMA_URI_V4,
     }[expected_lock_version]
     if (
         payload["$schema"] != expected_schema_uri
@@ -1065,12 +1071,15 @@ def _load_lock(
         raise ProjectError("HOCUS422", "Lock projectUid is invalid.")
     if not isinstance(payload["manifestDigest"], str) or not DIGEST_PATTERN.fullmatch(payload["manifestDigest"]):
         raise ProjectError("HOCUS422", "Lock manifestDigest must be a lowercase SHA-256 digest.")
-    lock_language_valid = (
-        payload["languageVersion"] == "0.2"
-        if expected_lock_version == 3
-        else isinstance(payload["languageVersion"], str)
-        and payload["languageVersion"] in SUPPORTED_LANGUAGE_VERSIONS
-    )
+    if expected_lock_version == 3:
+        lock_language_valid = payload["languageVersion"] == "0.2"
+    elif expected_lock_version == 4:
+        lock_language_valid = payload["languageVersion"] == "0.3"
+    else:
+        lock_language_valid = (
+            isinstance(payload["languageVersion"], str)
+            and payload["languageVersion"] in SUPPORTED_LANGUAGE_VERSIONS
+        )
     if not lock_language_valid:
         raise ProjectError("HOCUS422", "Lock languageVersion is unsupported.")
     stale: dict[str, Any] = {}
@@ -1091,7 +1100,10 @@ def _load_lock(
     else:
         catalog_constraint = _validate_catalog_lock(payload["catalog"], catalog_relative_path)
         modules = _validate_module_locks(
-            payload["modules"], project_uid=project_uid, external_aliases=external_aliases
+            payload["modules"],
+            project_uid=project_uid,
+            external_aliases=external_aliases,
+            expected_language_version="0.3" if expected_lock_version == 4 else "0.2",
         )
     canonical = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True, allow_nan=False).encode("utf-8")
     return _digest(canonical), catalog_constraint, modules
@@ -1121,6 +1133,7 @@ def _validate_module_locks(
     *,
     project_uid: str,
     external_aliases: tuple[ExternalLibraryAlias, ...],
+    expected_language_version: str = "0.2",
 ) -> tuple[ModuleLockRecord, ...]:
     if not isinstance(value, list) or len(value) > MAX_LOCKED_MODULES:
         raise ProjectError("HOCUS451", "Lock v3 modules must be a bounded array.")
@@ -1180,8 +1193,11 @@ def _validate_module_locks(
                     f"{pointer} conflicts with another version or manifest of the same library UID.",
                 )
             library_identities[alias_record.library_uid] = library_identity
-        if item["languageVersion"] != "0.2":
-            raise ProjectError("HOCUS451", f"{pointer}.languageVersion must be 0.2.")
+        if item["languageVersion"] != expected_language_version:
+            raise ProjectError(
+                "HOCUS451",
+                f"{pointer}.languageVersion must be {expected_language_version}.",
+            )
         if item["moduleUri"] != expected_uri or expected_uri in seen_uris:
             raise ProjectError("HOCUS451", f"{pointer}.moduleUri is noncanonical or duplicated.")
         owner = ("project", project_uid) if alias is None else ("library", item["libraryUid"])

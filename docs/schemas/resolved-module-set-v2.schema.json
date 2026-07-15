@@ -1,0 +1,123 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "hocuspocus://schemas/resolved-module-set/v2",
+  "title": "HocusScript Resolved Module Set v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema", "kind", "schemaVersion", "languageVersion", "projectUid", "entrySourceUri",
+    "projectManifestDigest", "projectLockDigest", "resolverPolicyDigest", "limits", "modules"
+  ],
+  "properties": {
+    "$schema": {"const": "hocuspocus://schemas/resolved-module-set/v2"},
+    "kind": {"const": "hocus_resolved_module_set"},
+    "schemaVersion": {"const": 2},
+    "languageVersion": {"const": "0.3"},
+    "projectUid": {"$ref": "#/$defs/uid"},
+    "entrySourceUri": {"$ref": "#/$defs/sourceUri"},
+    "projectManifestDigest": {"$ref": "#/$defs/digest"},
+    "projectLockDigest": {"$ref": "#/$defs/digest"},
+    "resolverPolicyDigest": {"$ref": "#/$defs/digest"},
+    "limits": {"$ref": "#/$defs/limits"},
+    "modules": {
+      "type": "array",
+      "maxItems": 4096,
+      "items": {"$ref": "#/$defs/module"}
+    }
+  },
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "semanticVersion": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$"
+    },
+    "uid": {"type": "string", "pattern": "^[a-z0-9][a-z0-9.-]{0,127}$"},
+    "sourceUri": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 8192,
+      "pattern": "^hocus-(?:project|module)://[a-z0-9][a-z0-9.-]{0,127}/(?!/)(?!\\.{1,2}(?:/|$))(?!.*\\/\\.{1,2}(?:/|$))(?!.*//)(?!.*[?#\\\\:])[^/]+(?:/[^/]+)*\\.hocus$"
+    },
+    "relativeSource": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.?(?:/|$))(?!.*\\\\)(?!.*:)(?!.*//)[^/]+(?:/[^/]+)*\\.hocus$"
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sourceBytesPerFile", "aggregateSourceBytes", "moduleFiles", "importDepth",
+        "instanceDepth", "instances", "parametersPerModule", "exportsPerModule",
+        "expandedNodes", "aggregateCodeBytes", "sourceMapEntries", "diagnostics",
+        "perFoldIterations", "aggregateIterations"
+      ],
+      "properties": {
+        "sourceBytesPerFile": {"type": "integer", "minimum": 1, "maximum": 1048576},
+        "aggregateSourceBytes": {"type": "integer", "minimum": 1, "maximum": 8388608},
+        "moduleFiles": {"type": "integer", "minimum": 1, "maximum": 4096},
+        "importDepth": {"type": "integer", "minimum": 1, "maximum": 64},
+        "instanceDepth": {"type": "integer", "minimum": 1, "maximum": 64},
+        "instances": {"type": "integer", "minimum": 1, "maximum": 4096},
+        "parametersPerModule": {"type": "integer", "minimum": 1, "maximum": 256},
+        "exportsPerModule": {"type": "integer", "minimum": 1, "maximum": 256},
+        "expandedNodes": {"type": "integer", "minimum": 1, "maximum": 10000},
+        "aggregateCodeBytes": {"type": "integer", "minimum": 1, "maximum": 4194304},
+        "sourceMapEntries": {"type": "integer", "minimum": 1, "maximum": 100000},
+        "diagnostics": {"type": "integer", "minimum": 1, "maximum": 500},
+        "perFoldIterations": {"type": "integer", "minimum": 1, "maximum": 4096},
+        "aggregateIterations": {"type": "integer", "minimum": 1, "maximum": 100000}
+      }
+    },
+    "module": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "uri", "moduleName", "relativePath", "origin", "ownerUid", "alias", "version",
+        "moduleManifestDigest", "sourceDigest", "interfaceDigest", "transitiveDigest", "dependencies", "languageVersion"
+      ],
+      "properties": {
+        "uri": {"$ref": "#/$defs/sourceUri"},
+        "moduleName": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$", "maxLength": 128},
+        "relativePath": {"$ref": "#/$defs/relativeSource"},
+        "origin": {"enum": ["project", "external_library"]},
+        "ownerUid": {"$ref": "#/$defs/uid"},
+        "alias": {"oneOf": [{"type": "string", "pattern": "^[a-z][a-z0-9-]{0,63}$"}, {"type": "null"}]},
+        "version": {"oneOf": [{"$ref": "#/$defs/semanticVersion"}, {"type": "null"}]},
+        "moduleManifestDigest": {"oneOf": [{"$ref": "#/$defs/digest"}, {"type": "null"}]},
+        "sourceDigest": {"$ref": "#/$defs/digest"},
+        "interfaceDigest": {"$ref": "#/$defs/digest"},
+        "transitiveDigest": {"$ref": "#/$defs/digest"},
+        "languageVersion": {"const": "0.3"},
+        "dependencies": {
+          "type": "array",
+          "maxItems": 4096,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/sourceUri"}
+        }
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"origin": {"const": "project"}}, "required": ["origin"]},
+          "then": {
+            "properties": {
+              "uri": {"type": "string", "pattern": "^hocus-project://"},
+              "alias": {"type": "null"},
+              "version": {"type": "null"},
+              "moduleManifestDigest": {"type": "null"}
+            }
+          },
+          "else": {
+            "properties": {
+              "uri": {"type": "string", "pattern": "^hocus-module://"},
+              "alias": {"type": "string"},
+              "version": {"type": "string"},
+              "moduleManifestDigest": {"$ref": "#/$defs/digest"}
+            }
+          }
+        }
+      ]
+    }
+  }
+}

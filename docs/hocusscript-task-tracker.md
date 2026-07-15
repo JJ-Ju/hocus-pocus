@@ -15,8 +15,8 @@ Roadmap: `docs/hocusscript-roadmap.md`
 
 ## 2. Current Slice
 
-Current milestone: HS6 modules and studio libraries in progress; Batches A-G5 and H0 are complete, with H1 versioned language-`0.3` carriers next
-Current scope: language `0.2` is frozen; proposed `0.3` exact conditional/fold syntax plus its isolated bounded AST/parser/recovery/formatter frontend are complete. H1-H4 project carriers, semantics, native integration, and adversarial/full verification remain pending; document/live Bundle `0.3` consumption remains blocked under `HS-BLOCK-008`, and MCP remains content-only with no `.hocus` file/project/root surface
+Current milestone: HS6 modules and studio libraries in progress; Batches A-G5 and H0-H1 are complete, with H2 language-`0.3` validation and expansion next
+Current scope: language `0.2` is frozen; language `0.3` has its exact conditional/fold frontend plus strict decode-only v4/v2/`0.4` carrier lane. H2-H4 semantics, native integration, and adversarial/full qualification remain pending; every `0.3` compiler/resolver/writer/CLI/editor/document/live consumer stays disabled, and MCP remains content-only with no `.hocus` file/project/root surface
 Live mutation: available only through the completed HS4 guarded `document.apply_plan` path; HS5 format/completion/export tools are observational
 
 Initial implementation acceptance command:
@@ -324,7 +324,7 @@ Verification:
 
 ## 9. HS6: Modules and Studio Libraries
 
-Status: Batches A-G5 complete for the native `0.2` lane; H0 freezes `0.2`, locks proposed language-`0.3` typed control, and completes the isolated bounded frontend. H1-H4 and document/live integration remain pending, while MCP remains content-only
+Status: Batches A-G5 complete for the native `0.2` lane; H0-H1 complete the isolated language-`0.3` frontend and strict decode-only carrier family. H2-H4 and document/live integration remain pending, while MCP remains content-only
 
 Dependencies: HS5, import security design
 Houdini required: module compiler no; live module fixtures yes
@@ -358,7 +358,7 @@ Houdini required: module compiler no; live module fixtures yes
 - [x] Reject dynamic imports and keep the parser/resolver/expander free of host, filesystem, environment, network, clock, and random access.
 - [x] H0 contract: freeze language `0.2` and lock proposed `0.3` typed expression-producing `if ... outputs` and bounded `for ... range(...) carry` fold syntax, including exact yields/types, lexical scope, both-path and zero-body validation, mandatory durable IDs, domain-separated identity, fixed budgets, zero-count behavior, and no recursion.
 - [x] H0 frontend: implement the isolated version-dispatched `0.3` frozen AST, bounded parser with brace-aware recovery and aggregate limits, canonical formatter with version/AST isolation, and focused frontend tests without enabling project compilation or any MCP file/root surface.
-- [ ] H1 versioned carriers: assign and add new compiler, project/lock, resolved-set, bundle, compatibility-matrix, strict decoder, and JSON Schema scaffolds; reject unsupported/mixed pairs and keep compiler/CLI/editor project dispatch disabled.
+- [x] H1 versioned carriers: assign language `0.3` / compiler `0.5.0` / project-lock v4 / external-module v2 / resolved-set v2 / expansion-map v2 / GraphSpec `0.4` / bundle `0.4`; add the exact compatibility matrix, strict bounded decoders, and seven Draft 2020-12 schemas; reject unsupported/mixed pairs and keep compiler/resolver/writer/CLI/editor/document/live dispatch disabled.
 - [ ] H2 validator/expander: statically validate both conditional branches and every fold body including zero-count folds; implement exact evaluation, lexical hygiene, composable typed results, domain-separated branch/index identity, bounded provenance, cancellation, per-fold/aggregate iteration budgets, and all existing expansion budgets.
 - [ ] H3 compiler/CLI/editor integration: enable the new version only through verified native project resolver/compiler/lock and manifest-selected check/format/compile plus project-aware completion/navigation; preserve explicit user-selected project/module roots, legacy isolation, and content-only MCP behavior.
 - [ ] H4 adversarial/full verification: cover malformed recovery, unreachable invalid branches, zero and boundary counts, aggregate exhaustion, nesting/shadowing, cancellation, rename/branch/index identity, provenance, relocation, hostile roots, artifact tampering, `0.1`/`0.2` isolation, full repository tests, and independent P0/P1 review.
@@ -478,6 +478,16 @@ Batch H0 delivered evidence:
 - the focused frontend/legacy gate passes 48/48; the completed full repository passes 430/430 under both pytest and unittest discovery, compileall passes, all original P1 findings are fixed with regressions, and the post-fix independent P0/P1 review is clean
 - H0 success must remain syntax-only: project/lock/resolved-set/bundle/schema version enablement belongs to H1, semantic validation/expansion belongs to H2, compiler/CLI/editor integration belongs to H3, and adversarial/full verification belongs to H4
 - no H batch may add an MCP command or resource that reads, writes, lists, watches, resolves, completes, or registers `.hocus` files, projects, or roots
+
+Batch H1 delivered evidence:
+
+- the compatibility registry contains two disjoint, exact rows: the frozen language-`0.2` production lane and the language-`0.3` / compiler-`0.5.0` observational lane; a mixed field from either row rejects rather than upgrading
+- strict v4 project/lock and v2 external-module manifest decoding pairs only with language `0.3`; production lock writers, resolver verification, and native project compilation reject v4 before lock access or mutation
+- seven new Draft 2020-12 schemas cover project v4, lock v4, external module v2, resolved-module-set v2, expansion-map v2, GraphSpec `0.4`, and bundle `0.4`; the schemas meta-validate and accept only the exact new carriers
+- the content-only decoders enforce duplicate/non-finite rejection, canonical ordering, bounded iteration limits, control-stack references/provenance, complete version identities, and cross-carrier digests while returning no execution authority
+- the focused H1 carrier gate passes 15/15, the adjacent legacy compiler/project/module/CLI/editor isolation gate passes 76/76, and the final full repository passes 445/445 under both pytest and unittest discovery; every repository schema meta-validates, and compileall, diff-check, and the live-resource registration boundary pass
+- no new live schema resource or MCP project/file/root operation is registered; H1 does not enable semantic expansion, compiler/resolver dispatch, CLI/editor use, document lowering, or live Houdini consumption
+- independent review found and verified fixes for legacy `write-export` bypassing manifest routing, incomplete semantic/capability validation, noncanonical and unbound provenance, unauthenticated stack/origin/DAG identities, underdeclared resolved budgets, distinct-instance counting, and hostile JSON exception escapes; the final P0/P1 re-review is clean
 
 ## 10. HS7: Fidelity Matrix
 

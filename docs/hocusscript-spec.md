@@ -548,10 +548,11 @@ HS6 adds a new lane; it does not reinterpret any `0.1` artifact:
 | --- | --- | --- | --- | --- |
 | `0.1` | `0.3.0` | `0.2` | `0.1`/`0.2` | Existing single-file graph lane |
 | `0.2` | `0.4.0` | `0.3` | `0.3` | Static modules, typed expansion, and transitive module provenance |
+| `0.3` | `0.5.0` | `0.4` | `0.4` | Typed compile-time control; H1 decode-only carrier lane |
 
 Compiler `0.4.0` MUST retain the existing `0.1` parser and emit GraphSpec `0.2`; it emits GraphSpec `0.3` and bundle `0.3` only for language `0.2`. Decoders reject mixed pairs rather than upgrading them implicitly. Portable language `0.2` compilation requires project manifest/lock v3; the implemented v1 and v2 contracts remain immutable.
 
-Language `0.2` is frozen at the static module feature set in this table. The typed compile-time control contract below is proposed as language `0.3`; it MUST NOT be accepted under a `hocus 0.2;` header or inserted into the `0.2` compiler, lock, resolved-set, or bundle contracts. H0 provides isolated `0.3` parsing and canonical formatting, but `0.3` has no trusted project-compile compatibility row until H1 assigns and implements new compiler, project/lock, resolved-set, bundle, and schema versions. Until that H1 gate closes, native project check/compile/lock dispatch and every content decoder reject `0.3` artifacts.
+Language `0.2` is frozen at the static module feature set in this table. Typed compile-time control belongs only to language `0.3`; it MUST NOT be accepted under a `hocus 0.2;` header or inserted into the `0.2` compiler, lock, resolved-set, expansion-map, GraphSpec, or bundle contracts. H1 assigns a parallel, exact compatibility row and provides strict read-only carrier decoders and schemas. That row is not execution authority: native compiler, resolver, check/compile/format/lock CLI, editor, document, and live MCP dispatch remain disabled until their named later gates. Decoders reject every mixed tuple rather than upgrading or inferring versions.
 
 ## 14. Compile and Apply Contract
 
@@ -791,7 +792,22 @@ The construct is a fold rather than a collection because the language has no run
 
 The proposed `0.3` budgets add a 4,096-iteration hard maximum per fold and a 100,000 aggregate iteration-evaluation limit per compilation. Before entering a fold, expansion rejects a count exceeding either the per-fold maximum or the remaining aggregate iteration budget. Every branch evaluation, fold iteration, declaration, generated node, embedded-code byte, diagnostic, origin mapping, and nested module instance also consumes its existing applicable budget; passing the iteration admission check never reserves or bypasses those limits. Cancellation is checked before each condition, before fold admission, before each iteration, and before every yield commit.
 
-This is compile-time source semantics only. H0 does not add project reads, root registration, lock writes, compiler/CLI/editor dispatch, bundle acceptance, document lowering, or live Houdini behavior. No MCP tool reads, writes, lists, watches, resolves, completes, or otherwise operates on `.hocus` files or project/module roots; `.hocus` remains ordinary code edited through native filesystem/editor surfaces, and any later Houdini handoff remains compiled content-only. Unbounded loops and recursion remain forbidden. Explicitly bounded deterministic compile-time recursion remains deferred to a separate reviewed syntax, termination, identity, provenance, and budget contract and is not part of language `0.3`.
+H1 freezes the language-`0.3` carrier family as one indivisible tuple:
+
+| Carrier | Exact H1 version |
+| --- | --- |
+| Language / compiler | `0.3` / `0.5.0` |
+| Project manifest / project lock | v4 / v4 |
+| External module manifest / module interface | v2 / unchanged v1 |
+| Resolver policy / resolved module set | unchanged v1 / v2 |
+| Expansion map / GraphSpec | v2 / `0.4` |
+| Compiled bundle | `0.4` |
+
+Project manifest/lock v4 and external module manifest v2 pair exactly with language `0.3`; the existing v1-v3 carriers remain immutable. Resolved-module-set v2 adds `perFoldIterations` with a maximum of 4,096 and `aggregateIterations` with a maximum of 100,000 to the existing bounded limit record. Expansion-map v2 adds an interned top-level `controlStacks` table. Every origin mapping has a nullable `controlStackId`; referenced stacks contain ordered `if` branch or `for` iteration frames carrying the durable control symbol/seed, declaration and selection spans, and yield spans. A control-stack ID is SHA-256 over domain `hocus-control-stack-v1` plus the canonical frame array; existing module-stack IDs retain domain `hocus-expansion-stack-v1`. Control-related origin roles are `control_declaration`, `condition`, `fold_count`, `carry_initializer`, and `yield`. GraphSpec `0.4` embeds that exact v2 expansion map. Bundle `0.4` binds the exact compiler/language/GraphSpec/resolved-set/expansion-map tuple and its digests.
+
+All H1 carrier decoders are strict, bounded, duplicate-key/non-finite rejecting, and observational. They accept only the complete row above, validate canonical ordering, cross-carrier identities, source-map and bundle digests, and reject mixed or historical versions. Project/module file decoding is available only to inspect the new manifest and lock shapes; it does not authorize resolution, compilation, formatting, lock publication, editor services, document lowering, or live use. H1 schemas are offline files and are deliberately not registered as live MCP resources. H2 owns control semantic validation and expansion; H3 owns compiler/resolver/CLI/editor dispatch; H4 owns adversarial and full-support qualification.
+
+This remains compile-time source semantics only. No MCP tool reads, writes, lists, watches, resolves, completes, or otherwise operates on `.hocus` files or project/module roots; `.hocus` remains ordinary code edited through native filesystem/editor surfaces, and any later Houdini handoff remains compiled content-only. Unbounded loops and recursion remain forbidden. Explicitly bounded deterministic compile-time recursion remains deferred to a separate reviewed syntax, termination, identity, provenance, and budget contract and is not part of language `0.3`.
 
 | HS6 limit | Default |
 | --- | ---: |

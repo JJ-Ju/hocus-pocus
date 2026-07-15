@@ -399,6 +399,12 @@ def _write_export_handoff(
     project_directory: str,
     expected_digest: str | None,
 ) -> int:
+    preview = ProjectContext.load(project_directory, validate_lock=False)
+    if preview.manifest_version == 4 or preview.language_version == "0.3":
+        raise ProjectError(
+            "HOCUS456",
+            "HocusScript 0.3 export publication remains disabled until its native integration batch.",
+        )
     raw = sys.stdin.buffer.read(MAX_EXPORT_HANDOFF_BYTES + 1) if handoff_path == "-" else _read_handoff(Path(handoff_path))
     if len(raw) > MAX_EXPORT_HANDOFF_BYTES:
         raise ProjectError("HOCUS441", "Export handoff exceeds the native size limit.")

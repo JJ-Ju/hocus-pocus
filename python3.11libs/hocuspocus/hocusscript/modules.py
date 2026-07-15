@@ -22,6 +22,7 @@ from .project import (
 )
 
 MODULE_MANIFEST_SCHEMA_URI = "hocuspocus://schemas/hocus-module/v1"
+MODULE_MANIFEST_SCHEMA_URI_V2 = "hocuspocus://schemas/hocus-module/v2"
 MAX_MODULE_MANIFEST_BYTES = 256 * 1024
 MAX_MODULE_ENTRIES = 4096
 
@@ -33,10 +34,11 @@ class ModuleManifest:
     language_version: str
     entry_modules: tuple[str, ...]
     manifest_digest: str
+    schema_version: int = 1
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "schema_version": 1,
+            "schema_version": self.schema_version,
             "library": {"uid": self.library_uid, "version": self.version},
             "language": {"version": self.language_version},
             "entry_modules": list(self.entry_modules),
@@ -44,7 +46,7 @@ class ModuleManifest:
 
 
 def decode_module_manifest(content: str | bytes | bytearray | Mapping[str, Any]) -> ModuleManifest:
-    """Strictly decode hocus.module.toml v1 without resolving a filesystem root."""
+    """Strictly decode hocus.module.toml v1/v2 without resolving a filesystem root."""
     if isinstance(content, Mapping):
         payload = dict(content)
         try:
@@ -69,8 +71,9 @@ def decode_module_manifest(content: str | bytes | bytearray | Mapping[str, Any])
         "schema_version", "library", "language", "entry_modules"
     }:
         raise ProjectError("HOCUS457", "Module manifest has missing or unknown fields.")
-    if payload["schema_version"] != 1 or type(payload["schema_version"]) is not int:
-        raise ProjectError("HOCUS457", "Module manifest schema_version must be 1.")
+    schema_version = payload["schema_version"]
+    if type(schema_version) is not int or schema_version not in {1, 2}:
+        raise ProjectError("HOCUS457", "Module manifest schema_version must be 1 or 2.")
     library, language = payload["library"], payload["language"]
     if not isinstance(library, dict) or set(library) != {"uid", "version"}:
         raise ProjectError("HOCUS457", "Module manifest [library] is malformed.")
@@ -81,8 +84,12 @@ def decode_module_manifest(content: str | bytes | bytearray | Mapping[str, Any])
         raise ProjectError("HOCUS457", "Module library uid is invalid.")
     if not isinstance(version, str) or not SEMANTIC_VERSION_PATTERN.fullmatch(version):
         raise ProjectError("HOCUS457", "Module library version must be a semantic version.")
-    if language_version != "0.2":
-        raise ProjectError("HOCUS457", "Module manifest language version must be 0.2.")
+    expected_language_version = "0.2" if schema_version == 1 else "0.3"
+    if language_version != expected_language_version:
+        raise ProjectError(
+            "HOCUS457",
+            f"Module manifest schema v{schema_version} language version must be {expected_language_version}.",
+        )
     entries = payload["entry_modules"]
     if not isinstance(entries, list) or not entries or len(entries) > MAX_MODULE_ENTRIES:
         raise ProjectError("HOCUS457", "entry_modules must be a non-empty bounded array.")
@@ -93,7 +100,14 @@ def decode_module_manifest(content: str | bytes | bytearray | Mapping[str, Any])
         normalized.append(_portable_path_key(path))
     if len(set(normalized)) != len(normalized) or entries != sorted(entries):
         raise ProjectError("HOCUS457", "Entry modules must be sorted and unique after case normalization.")
-    return ModuleManifest(uid, version, language_version, tuple(entries), _digest(raw))
+    return ModuleManifest(
+        library_uid=uid,
+        version=version,
+        language_version=language_version,
+        entry_modules=tuple(entries),
+        manifest_digest=_digest(raw),
+        schema_version=schema_version,
+    )
 
 
 def _module_path(value: str) -> bool:
