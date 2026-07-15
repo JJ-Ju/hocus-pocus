@@ -15,8 +15,8 @@ Roadmap: `docs/hocusscript-roadmap.md`
 
 ## 2. Current Slice
 
-Current milestone: HS6 modules and studio libraries in progress; native same-project language/compiler/editor work and the external-root inspection boundary are complete
-Current scope: derive and publish complete mixed project/library lock closures from explicit per-call alias roots without weakening the content-only Houdini MCP boundary
+Current milestone: HS6 modules and studio libraries in progress; Batches A-G2 are complete through read-only mixed-root lock planning
+Current scope: G3 independently rederives and atomically publishes complete mixed project/library lock closures under the same-user writer lease without weakening the content-only Houdini MCP boundary
 Live mutation: available only through the completed HS4 guarded `document.apply_plan` path; HS5 format/completion/export tools are observational
 
 Initial implementation acceptance command:
@@ -324,7 +324,7 @@ Verification:
 
 ## 9. HS6: Modules and Studio Libraries
 
-Status: Batches A-G1 complete for the native same-project language, resolution, expansion, lock-update, semantic, portable bundle, CLI, project-aware editor, and external-root inspection lane; mixed-root resolution, document, and live integration remain pending
+Status: Batches A-G2 complete for the native same-project language, resolution, expansion, lock-update, semantic, portable bundle, CLI, project-aware editor, external-root inspection, and read-only mixed-root planning lane; external-record publication and external-alias compiler/editor/CLI/bundle/document/live integration remain pending, while MCP remains content-only
 
 Dependencies: HS5, import security design
 Houdini required: module compiler no; live module fixtures yes
@@ -341,11 +341,12 @@ Houdini required: module compiler no; live module fixtures yes
 - [x] Implement hygienic deterministic expansion.
 - [x] Implement offline project-contained static imports through an explicit native project compiler API.
 - [x] Resolve imports relative to the importing file and ordered project module directories without implicit discovery.
-- [x] Bind structurally validated project identity, source/module directories, catalog lock, and module-lock fields into the same-project native resolver; approved external-alias roots remain pending.
-- [ ] Require manifest-declared, separately approved and locked aliases for cross-project imports.
+- [x] Bind structurally validated project identity, source/module directories, catalog lock, and module-lock fields into the same-project native resolver; compiler/editor consumption of approved external aliases remains pending.
+- [x] Require manifest-declared, separately approved aliases with pre-pinned module-manifest digests and manifest entry gates for read-only mixed-root planning.
 - [x] Enable resolver-derived nonempty same-project lock updates; retain atomic, expected-digest, explicit-write gates.
 - [x] Add same-project module source/interface/transitive content hashes and resolver-derived lockfile records.
-- [ ] Add external-library module manifests, versions, approved roots, and transitively complete lock records.
+- [x] Derive exact, transitively complete prospective external-library records and an exact current-lock diff without writing.
+- [ ] Publish exact external-library records only after G3 independently rederives them under the writer lease; never trust a caller-supplied plan as publication authority.
 - [x] Preserve bounded interned expansion stacks in expansion source maps.
 - [x] Attach semantic compiler diagnostics to shared expansion origin/stack IDs without duplicating interned frames; require portable contained source locations in Bundle `0.3`.
 - [x] Enforce import/instance depth, instance/node/source-map/interface limits, exact GraphSpec validation, and zero recursion in the pure content lane; aggregate source/code enforcement remains split between resolver and syntax contracts.
@@ -422,6 +423,14 @@ Batch G1 delivered evidence:
 - module manifests are bounded stable reads and must match UID, strict SemVer, language `0.2`, sorted portable entry modules, and the optional declared raw digest; unpinned observations cannot be reused as resolution-ready private authority
 - the strict host-path-free inspection schema and domain-separated digest bind only portable sorted project/library pins and remain relocation-stable; current resolver/compiler/editor/lock-update behavior continues to reject `@alias`
 - focused external-root/schema/module-manifest/project-v3 gates pass 27/27 and the full repository suite passes 364/364; independent P0/P1 review is clean after hostile `PathLike` sanitization, exact-string validation, same-byte identity-race checks, and empty-library schema/runtime alignment
+
+Batch G2 delivered evidence:
+
+- `plan_project_module_lock` accepts only an explicit project directory, nonempty project-relative entry paths, and an exact per-call alias-to-root mapping; all manifests must already be pinned by the project, and no private root or native identity enters the portable result
+- mixed closure derivation enforces manifest entry gates, relative same-library containment, explicit separately approved cross-library aliases, no external bare imports or library-to-project edges, exact imported names, bounded cycles/depth/files/bytes, cancellation, and strict semantic expansion for every entry
+- prospective v3 records contain exact canonical source/interface/transitive digests and provenance, dependencies are complete, the current-lock diff is exact, and the strict result/schema bind project, manifest, lock, catalog, root-inspection, resolver-policy, plan, and prospective-lock identities without host paths
+- source bytes, native identities, resolver winners, project/lock/catalog metadata, roots, and manifests are final-rechecked; planning acquires no lease, performs no write or publication, and leaves compiler, editor, CLI, MCP, bundle, document, and live behavior unchanged
+- focused planner/schema/external-root/resolver gates pass 32/32, the broader G2 and adjacent security gate passes 57/57, and the full repository suite passes 375/375; independent P0/P1 review is clean after regressions for visiting ancestors in `moduleFiles`, semantic invalidity, canonical diff URIs, and control characters in portable source paths; G3 remains required to rederive under its lease
 
 ## 10. HS7: Fidelity Matrix
 

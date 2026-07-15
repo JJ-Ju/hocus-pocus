@@ -81,6 +81,12 @@ from .module_format import (
     ModuleProjectFormatResult,
     format_project_module_path,
 )
+from .module_lock_plan import plan_project_module_lock
+from .module_lock_plan_result import (
+    MODULE_LOCK_PLAN_KIND,
+    MODULE_LOCK_PLAN_SCHEMA_URI,
+    ModuleLockPlanResult,
+)
 from .module_semantic import (
     ModuleSemanticCompileError,
     ModuleSemanticCompileResult,
@@ -215,6 +221,9 @@ __all__ = [
     "ModuleLockRecord",
     "ModuleLockUpdateEntry",
     "ModuleLockUpdateResult",
+    "MODULE_LOCK_PLAN_KIND",
+    "MODULE_LOCK_PLAN_SCHEMA_URI",
+    "ModuleLockPlanResult",
     "ModuleManifest",
     "ModuleResolutionError",
     "ModuleSourceEnvelope",
@@ -255,6 +264,7 @@ __all__ = [
     "module_interface_digest",
     "module_source_digest",
     "module_transitive_digest",
+    "plan_project_module_lock",
     "resolve_graph",
     "resolve_project_module_dag",
     "resolved_import_map",
