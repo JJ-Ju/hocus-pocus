@@ -19,6 +19,7 @@ from .compiler import MAX_SOURCE_BYTES, compile_source
 from .expander import ModuleExpansionError
 from .exporter import MAX_EXPORT_RESPONSE_BYTES
 from .lock_update import update_project_module_lock
+from .mixed_lock_update import update_project_mixed_module_lock
 from .module_compiler import ModuleProjectCompileError
 from .module_format import (
     ModuleProjectFormatError,
@@ -26,11 +27,14 @@ from .module_format import (
 )
 from .module_semantic import (
     ModuleSemanticCompileError,
+    compile_project_mixed_module_bundle,
+    compile_project_mixed_module_semantic,
     compile_project_module_bundle,
     compile_project_module_semantic,
 )
+from .module_paths import ALIAS_PATTERN
 from .native_artifact import NativeArtifactError, publish_text_artifact
-from .project import ProjectContext, ProjectError, compile_path
+from .project import MAX_EXTERNAL_ALIASES, ProjectContext, ProjectError, compile_path
 from .resolved_modules import ModuleResolutionError
 from .semantic import CatalogConstraint, resolve_graph
 
@@ -38,10 +42,14 @@ MAX_EXPORT_HANDOFF_BYTES = MAX_EXPORT_RESPONSE_BYTES
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="hocus", description="Check, format, and compile native HocusScript files.")
+    parser = argparse.ArgumentParser(
+        prog="hocus",
+        description="Check, format, compile, and lock native HocusScript projects.",
+        allow_abbrev=False,
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
     for name in ("check", "format", "compile"):
-        command = subparsers.add_parser(name)
+        command = subparsers.add_parser(name, allow_abbrev=False)
         command.add_argument(
             "source",
             help="A project-relative .hocus path (legacy 0.1 also accepts a contained absolute path).",
@@ -56,7 +64,20 @@ def build_parser() -> argparse.ArgumentParser:
             action="store_true",
             help="Legacy language 0.1 only: allow a missing language header as a warning.",
         )
-    subparsers.choices["check"].add_argument("--json", action="store_true", help="Emit the structural result as JSON.")
+    subparsers.choices["check"].add_argument(
+        "--json", action="store_true", help="Emit the machine-readable check result as JSON.",
+    )
+    for name in ("check", "compile"):
+        subparsers.choices[name].add_argument(
+            "--module-root",
+            action="append",
+            default=[],
+            metavar="ALIAS=ABSOLUTE_PATH",
+            help=(
+                "Approve one manifest-declared alias=absolute-path root for this call; "
+                "repeat to provide the complete exact alias mapping."
+            ),
+        )
     subparsers.choices["format"].add_argument("--write", action="store_true", help="Replace the source file atomically.")
     subparsers.choices["compile"].add_argument("-o", "--output", help="Write pretty bundle JSON to this native path.")
     subparsers.choices["compile"].add_argument(
@@ -64,7 +85,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="Exact raw SHA-256 digest required to replace an existing output file.",
     )
     lock = subparsers.add_parser(
-        "lock", help="Explicitly derive and atomically update a HocusScript 0.2 module lock.",
+        "lock",
+        help="Explicitly derive and atomically update a HocusScript 0.2 module lock.",
+        allow_abbrev=False,
     )
     lock.add_argument("entries", nargs="+", help="Project-relative graph entry .hocus files.")
     lock.add_argument("--update", action="store_true", help="Derive and publish the complete selected entry closures.")
@@ -77,9 +100,20 @@ def build_parser() -> argparse.ArgumentParser:
         "--expected-lock-digest",
         help="Exact current canonical lock digest required for replacement.",
     )
+    lock.add_argument(
+        "--module-root",
+        action="append",
+        default=[],
+        metavar="ALIAS=ABSOLUTE_PATH",
+        help=(
+            "Approve one manifest-declared alias=absolute-path root for this update; "
+            "repeat to provide the complete exact alias mapping."
+        ),
+    )
     handoff = subparsers.add_parser(
         "write-export",
         help="Validate a document.export_source JSON handoff and write its source natively.",
+        allow_abbrev=False,
     )
     handoff.add_argument("handoff", help="Export JSON path, or - to read JSON from stdin.")
     handoff.add_argument("destination", help="A project-contained .hocus destination.")
@@ -97,7 +131,25 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
-    args = parser.parse_args(argv)
+    raw_arguments = list(sys.argv[1:] if argv is None else argv)
+    module_root_options = [
+        value.partition("=")[0]
+        for value in raw_arguments
+        if isinstance(value, str) and value.startswith("--")
+        and len(value.partition("=")[0]) > 2
+        and (
+            value.partition("=")[0].startswith("--module-root")
+            or "--module-root".startswith(value.partition("=")[0])
+        )
+    ]
+    supported_root_command = bool(
+        raw_arguments and raw_arguments[0] in {"check", "compile", "lock"}
+    )
+    if any(value != "--module-root" for value in module_root_options):
+        parser.error("external roots require the exact --module-root option spelling")
+    if module_root_options and not supported_root_command:
+        parser.error("--module-root is available only for check, compile, and lock --update")
+    args = parser.parse_args(raw_arguments)
     if not args.project:
         parser.error("--project or HOCUS_PROJECT_DIRECTORY is required")
     if args.command == "compile" and args.expected_output_digest and not args.output:
@@ -105,22 +157,37 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "lock" and not args.update:
         parser.error("lock currently requires --update")
     try:
+        module_roots = _parse_module_roots(getattr(args, "module_root", ()))
         if args.command == "write-export":
             return _write_export_handoff(args.handoff, args.destination, args.project, args.expected_digest)
         if args.command == "lock":
-            result = update_project_module_lock(
-                args.project,
-                args.entries,
-                allow_write=True,
-                expected_lock_digest=args.expected_lock_digest,
-            )
+            if module_roots:
+                result = update_project_mixed_module_lock(
+                    args.project,
+                    args.entries,
+                    module_roots,
+                    allow_write=True,
+                    expected_lock_digest=args.expected_lock_digest,
+                )
+            else:
+                result = update_project_module_lock(
+                    args.project,
+                    args.entries,
+                    allow_write=True,
+                    expected_lock_digest=args.expected_lock_digest,
+                )
             sys.stdout.write(json.dumps(
                 result.to_dict(), ensure_ascii=False, indent=2, sort_keys=True,
             ) + "\n")
             return 0
         project = ProjectContext.load(args.project, validate_lock=False)
         if project.manifest_version == 3 or project.language_version == "0.2":
-            return _run_module_command(args)
+            return _run_module_command(args, module_roots)
+        if module_roots:
+            raise ProjectError(
+                "HOCUS460",
+                "--module-root requires a language 0.2 schema v3 project.",
+            )
         result = compile_path(
             args.source,
             project_directory=args.project,
@@ -184,7 +251,10 @@ _CLI_ERRORS = (
 )
 
 
-def _run_module_command(args: argparse.Namespace) -> int:
+def _run_module_command(
+    args: argparse.Namespace,
+    module_roots: dict[str, str],
+) -> int:
     if args.no_strict:
         raise ProjectError(
             "HOCUS460",
@@ -206,13 +276,25 @@ def _run_module_command(args: argparse.Namespace) -> int:
             sys.stdout.write(result.formatted_source)
         return 0
     if args.command == "check":
-        result = compile_project_module_semantic(args.project, args.source)
+        result = (
+            compile_project_mixed_module_semantic(
+                args.project, args.source, module_roots,
+            )
+            if module_roots else
+            compile_project_module_semantic(args.project, args.source)
+        )
         if args.json:
             sys.stdout.write(result.to_json(pretty=True))
         else:
             _print_diagnostics(result.semantic)
         return 0 if result.valid else 1
-    bundle = compile_project_module_bundle(args.project, args.source)
+    bundle = (
+        compile_project_mixed_module_bundle(
+            args.project, args.source, module_roots,
+        )
+        if module_roots else
+        compile_project_module_bundle(args.project, args.source)
+    )
     output = bundle.to_json(pretty=True)
     if args.output:
         _atomic_write(
@@ -224,6 +306,30 @@ def _run_module_command(args: argparse.Namespace) -> int:
     else:
         sys.stdout.write(output)
     return 0
+
+
+def _parse_module_roots(values: Sequence[str]) -> dict[str, str]:
+    if not isinstance(values, (list, tuple)) or len(values) > MAX_EXTERNAL_ALIASES:
+        raise ProjectError("HOCUS458", "--module-root values exceed the alias limit.")
+    roots: dict[str, str] = {}
+    for value in values:
+        if not isinstance(value, str):
+            raise ProjectError("HOCUS458", "--module-root must use alias=absolute-path.")
+        alias, separator, path = value.partition("=")
+        if (
+            not separator
+            or ALIAS_PATTERN.fullmatch(alias) is None
+            or not path
+            or path != path.strip()
+            or not Path(path).is_absolute()
+            or alias in roots
+        ):
+            raise ProjectError(
+                "HOCUS458",
+                "--module-root must use one unique alias=absolute-path value per alias.",
+            )
+        roots[alias] = path
+    return roots
 
 
 def _module_check_error_payload(exc) -> dict:

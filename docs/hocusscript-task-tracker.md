@@ -15,8 +15,8 @@ Roadmap: `docs/hocusscript-roadmap.md`
 
 ## 2. Current Slice
 
-Current milestone: HS6 modules and studio libraries in progress; Batches A-G4 are complete through separate exact-root native compiler/editor/bundle consumption
-Current scope: G5 adds explicit CLI `--module-root alias=absolute-path` wiring without weakening the content-only Houdini MCP boundary; document/live Bundle `0.3` consumption remains blocked under `HS-BLOCK-008`
+Current milestone: HS6 modules and studio libraries in progress; Batches A-G5 are complete through explicit exact-root native compiler/editor/bundle and CLI consumption
+Current scope: external-root CLI dispatch is complete without weakening the content-only Houdini MCP boundary; document/live Bundle `0.3` consumption remains blocked under `HS-BLOCK-008`, and bounded conditionals/iteration plus the reviewed studio-module contract remain pending
 Live mutation: available only through the completed HS4 guarded `document.apply_plan` path; HS5 format/completion/export tools are observational
 
 Initial implementation acceptance command:
@@ -324,7 +324,7 @@ Verification:
 
 ## 9. HS6: Modules and Studio Libraries
 
-Status: Batches A-G4 complete for the native same-project lane plus external-root inspection, read-only mixed-root planning, guarded external-record publication, and separate exact-root compiler/editor/bundle consumption; G5 CLI root flags, document, and live integration remain pending, while MCP remains content-only
+Status: Batches A-G5 complete for the native same-project lane plus external-root inspection, read-only mixed-root planning, guarded external-record publication, separate exact-root compiler/editor/bundle consumption, and explicit exact-root CLI dispatch; document and live integration remain pending, while MCP remains content-only
 
 Dependencies: HS5, import security design
 Houdini required: module compiler no; live module fixtures yes
@@ -351,7 +351,7 @@ Houdini required: module compiler no; live module fixtures yes
 - [x] Add a strict unregistered `mixed-module-lock-update-v1` receipt schema binding prior/new lock, catalog, root-inspection, resolver-policy, entry, module, and exact diff identities without host paths.
 - [x] Resolve published external records through separate compiler/semantic/bundle APIs from mandatory exact roots revalidated on every G4 call; retain final project/lock/catalog/root/manifest/source/winner rechecks and emit only portable host-path-free artifacts.
 - [x] Add separate mixed saved-file/dirty-buffer completion and definition APIs with mandatory keyword-only `module_roots`, project-local subjects, verified external dependency completion/navigation, and unchanged fail-closed same-project editor behavior.
-- [ ] Add G5 CLI `--module-root alias=absolute-path` wiring without adding an MCP project/root/file surface.
+- [x] Add G5 repeatable CLI `--module-root ALIAS=ABSOLUTE_PATH` dispatch on `check`, `compile`, and `lock --update` only, without adding an MCP project/root/file surface.
 - [x] Preserve bounded interned expansion stacks in expansion source maps.
 - [x] Attach semantic compiler diagnostics to shared expansion origin/stack IDs without duplicating interned frames; require portable contained source locations in Bundle `0.3`.
 - [x] Enforce import/instance depth, instance/node/source-map/interface limits, exact GraphSpec validation, and zero recursion in the pure content lane; aggregate source/code enforcement remains split between resolver and syntax contracts.
@@ -453,6 +453,16 @@ Batch G4 delivered evidence:
 - legacy same-project compiler, semantic, bundle, resolver, and editor surfaces remain unchanged and fail closed on external aliases; G4 adds no CLI/MCP file surface, and document/live Bundle `0.3` consumption remains blocked under `HS-BLOCK-008`
 - focused mixed compiler/bundle/editor, strict-validator, and legacy-isolation gates pass 28/28; the independent mixed/resolver/compiler/semantic security gate passes 47/47, including mutation-injection rejection after graph, semantic, bundle, and saved-editor result construction
 - the full repository suite passes 405/405 under both pytest and unittest discovery, the HocusScript-only discovery gate passes 349/349, and compileall, diff-check, no-`hou` import, relocation/path-leak checks, and independent P0/P1 review are clean; the existing same-user pathname/descriptor limits remain under `HS-BLOCK-001`
+
+Batch G5 delivered evidence:
+
+- repeatable `--module-root ALIAS=ABSOLUTE_PATH` is accepted only by `check`, `compile`, and `lock --update`; supplied roots dispatch to the separate mixed semantic, bundle, and guarded lock-publication APIs, while omission preserves all same-project behavior
+- every mixed CLI invocation supplies the complete exact declared root mapping again; duplicate aliases are rejected before mapping construction, the first `=` separates alias from path, and malformed, relative, missing, or extra roots fail closed without inference from lock data
+- roots are never loaded from an environment variable, home/environment-expanded, cached, persisted, or emitted in portable JSON, bundles, receipts, or typed diagnostics; paths containing spaces remain supported when the `ALIAS=ABSOLUTE_PATH` argument is quoted
+- mixed lock publication requires one valid existing v3 lock and its exact `--expected-lock-digest`; syntax-only `format`, language-`0.1` `write-export`, and language `0.1` do not silently accept module roots
+- mixed editor completion/navigation remains a native Python API surface rather than a CLI or MCP command; MCP remains content-only and document/live Bundle `0.3` consumption remains blocked under `HS-BLOCK-008`
+- focused mixed/legacy CLI and MCP-boundary gates pass 23/23, the broader independent CLI/lock/artifact/MCP gate passes 52/52, and exact plus abbreviated forbidden-option regressions prevent dispatch and physical-root echo
+- the full repository suite passes 413/413 under both pytest and unittest discovery, the HocusScript-only gate passes 357/357, and compileall, diff-check, no-`hou` import, guarded output replacement, path-free success/failure output, and independent P0/P1 review are clean
 
 ## 10. HS7: Fidelity Matrix
 

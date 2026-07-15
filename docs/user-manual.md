@@ -233,6 +233,23 @@ python -m hocuspocus.hocusscript format hocus/asset.hocus --project D:/show/proj
 python -m hocuspocus.hocusscript compile hocus/asset.hocus --project D:/show/project -o asset.bundle.json
 ```
 
+For a language-`0.2` project with manifest-declared external libraries, repeat `--module-root ALIAS=ABSOLUTE_PATH` on every mixed-root `lock --update`, `check`, and `compile` invocation. The options must exactly cover all declared aliases, including aliases not reached by the selected entry. Quote the complete `ALIAS=ABSOLUTE_PATH` argument when a path contains spaces:
+
+```powershell
+$project = "D:/show/project"
+$studio = "studio=D:/Studio Libraries/Hocus"
+$materials = "materials=E:/Shared Hocus/Materials"
+$lockDigest = "sha256:<exact-current-lock-digest>"
+
+python -m hocuspocus.hocusscript lock hocus/asset.hocus --update --project $project --expected-lock-digest $lockDigest --module-root $studio --module-root $materials
+python -m hocuspocus.hocusscript check hocus/asset.hocus --project $project --module-root $studio --module-root $materials
+python -m hocuspocus.hocusscript compile hocus/asset.hocus --project $project --module-root $studio --module-root $materials -o asset.bundle.json
+```
+
+Mixed lock publication requires one valid existing v3 lock and its exact current digest; it does not bootstrap a missing or structurally invalid lock. Physical module roots are per-call authority only: the CLI does not read them from an environment variable, expand home or environment syntax, infer them from the lock, cache them, or persist them. Omitting all root options preserves same-project resolution. `format` remains lock-independent and does not accept `--module-root`; `write-export` remains a language-`0.1` content handoff and does not accept it either.
+
+External-aware completion and go-to-definition are native Python editor-integration APIs (`complete_mixed_*` and `definition_mixed_*`) whose `module_roots` mapping is mandatory per request. There is no HocusScript editor CLI command and no MCP project/root/file surface. `document.complete_source` remains content-only and cannot inspect native projects or external roots.
+
 For the reverse direction, `document.export_source` accepts only a Houdini `root_path` and optional graph name. A supported flat SOP network returns canonical text and durable provenance; an unsupported network returns `source = null` and bounded deterministic blockers, with exact overflow accounting. Save the JSON response and create a project-contained file natively:
 
 ```powershell

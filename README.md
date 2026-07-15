@@ -90,7 +90,18 @@ python -m hocuspocus.hocusscript compile assets/rocks.hocus --project D:/houdini
 python -m hocuspocus.hocusscript write-export export-response.json assets/exported.hocus --project D:/houdini-projects/city
 ```
 
-The compiled bundle is the content-based handoff to Houdini MCP. `document.export_source` performs the reverse handoff by returning canonical source plus provenance; the native `write-export` command creates the chosen project file with no-overwrite safeguards. The MCP never reads or edits project files.
+Language-`0.2` external libraries use explicit per-call roots on `lock --update`, `check`, and `compile` only. Repeat the option for the complete manifest-declared mapping and quote values whose absolute paths contain spaces:
+
+```powershell
+$studio = "studio=D:/Studio Libraries/Hocus"
+python -m hocuspocus.hocusscript lock assets/rocks.hocus --update --project D:/houdini-projects/city --expected-lock-digest "sha256:<exact-current-lock-digest>" --module-root $studio
+python -m hocuspocus.hocusscript check assets/rocks.hocus --project D:/houdini-projects/city --module-root $studio
+python -m hocuspocus.hocusscript compile assets/rocks.hocus --project D:/houdini-projects/city --module-root $studio -o rocks.bundle.json
+```
+
+Module roots are not inferred, persisted, environment-backed, or accepted by `format`/`write-export`. External-aware completion and definition remain native Python editor APIs rather than CLI or MCP commands.
+
+The compiled bundle is the content-based handoff to Houdini MCP. `document.export_source` performs the reverse handoff by returning canonical source plus provenance; the native `write-export` command creates the chosen project file with no-overwrite safeguards. The MCP never reads or edits project files or external roots, and Bundle `0.3` document lowering/live consumption remain blocked under `HS-BLOCK-008`.
 
 ## Docs
 

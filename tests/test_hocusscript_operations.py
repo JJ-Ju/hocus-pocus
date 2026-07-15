@@ -148,6 +148,30 @@ class HocusScriptOperationsTests(unittest.TestCase):
             module_schema["properties"]["expansionMap"]["$ref"],
             expansion_schema["$id"],
         )
+        for forbidden in (
+            "document.open_project",
+            "document.compile_file",
+            "document.update_module_lock",
+            "document.inspect_module_roots",
+        ):
+            self.assertIsNone(tools.get(forbidden))
+        for tool_name in (
+            "document.compile_source",
+            "document.format_source",
+            "document.complete_source",
+            "document.preview_bundle",
+            "document.plan_bundle",
+        ):
+            definition = tools.get(tool_name)
+            self.assertIsNotNone(definition)
+            rendered_schema = json.dumps(definition.input_schema, sort_keys=True)
+            self.assertNotIn("module_root", rendered_schema)
+            self.assertNotIn("moduleRoot", rendered_schema)
+            self.assertNotIn("project_directory", rendered_schema)
+        for uri in resources.resources:
+            self.assertNotIn("external-module-roots", uri)
+            self.assertNotIn("mixed", uri)
+            self.assertNotIn("project-editor", uri)
         for uri, schema_id in (
             (
                 "houdini://documents/schema/format-source-output/v1",

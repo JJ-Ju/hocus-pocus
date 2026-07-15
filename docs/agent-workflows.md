@@ -84,6 +84,18 @@ python -m hocuspocus.hocusscript compile hocus/asset.hocus --project D:/show/pro
 
 The project path belongs to the native compiler/editor surface. The MCP receives source or bundle content, never a project path.
 
+For a language-`0.2` project with external aliases, pass the complete exact alias/root mapping again to each mixed-root lock, check, or compile request. Repeat `--module-root`; quote the whole value when the absolute path contains spaces:
+
+```powershell
+$studio = "studio=D:/Studio Libraries/Hocus"
+$materials = "materials=E:/Shared Hocus/Materials"
+python -m hocuspocus.hocusscript lock hocus/asset.hocus --update --project D:/show/project --expected-lock-digest "sha256:<exact-current-lock-digest>" --module-root $studio --module-root $materials
+python -m hocuspocus.hocusscript check hocus/asset.hocus --project D:/show/project --module-root $studio --module-root $materials
+python -m hocuspocus.hocusscript compile hocus/asset.hocus --project D:/show/project --module-root $studio --module-root $materials -o asset.bundle.json
+```
+
+Do not infer roots from lock records, create a module-root environment variable, expand `~` or environment syntax, or persist the mapping. Mixed lock publication requires a valid existing v3 lock and its exact digest. `format` and `write-export` do not accept module roots. External-aware completion and go-to-definition remain native Python `complete_mixed_*` and `definition_mixed_*` APIs for editor integrations; there is no editor CLI or MCP root/file surface.
+
 For a supported live SOP network, call `document.export_source` with `root_path`. Save the returned JSON response outside Houdini and let the native CLI validate and create the selected project file:
 
 ```powershell
@@ -101,7 +113,7 @@ The complete loop is:
 5. cook and capture the resulting asset
 6. revise the same source file and repeat
 
-`document.compile_source`, `document.format_source`, and `document.complete_source` remain content-only unsaved-buffer conveniences. Completion is backed by the live catalog; none of these tools reads project files.
+`document.compile_source`, `document.format_source`, and `document.complete_source` remain content-only unsaved-buffer conveniences. Completion is backed by the live catalog; none of these tools reads project files or external module roots. Bundle `0.3` document lowering and live consumption remain blocked under `HS-BLOCK-008`.
 
 Rules for the current preview:
 
