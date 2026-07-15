@@ -11,6 +11,7 @@ from .syntax import (
     ExportStmt,
     ExternalDecl,
     FlagStmt,
+    ForDecl,
     GraphDecl,
     InputStmt,
     LayoutStmt,
@@ -19,6 +20,7 @@ from .syntax import (
     ModuleDecl,
     NodeDecl,
     OwnershipStmt,
+    IfDecl,
     ParamRefExpr,
     ParmStmt,
     RevisionStmt,
@@ -26,6 +28,7 @@ from .syntax import (
     SyntaxSource,
     TargetStmt,
     UseDecl,
+    YieldStmt,
 )
 
 
@@ -134,6 +137,47 @@ def _format_use(statement: UseDecl, indent: str) -> str:
     )
 
 
+def _format_control_statement(statement: Any, indent: str) -> list[str]:
+    if isinstance(statement, NodeDecl):
+        return _format_syntax_node(statement, indent)
+    if isinstance(statement, UseDecl):
+        return [_format_use(statement, indent)]
+    if isinstance(statement, YieldStmt):
+        return [
+            f"{indent}yield {statement.name} = {_format_syntax_expr(statement.value)};"
+        ]
+    if isinstance(statement, IfDecl):
+        outputs = ", ".join(
+            f"{item.name}: {item.type_name}" for item in statement.outputs
+        )
+        lines = [
+            f"{indent}if {statement.symbol} @id({_format_value(statement.explicit_id)}) "
+            f"({_format_syntax_expr(statement.condition)}) outputs ({outputs}) {{"
+        ]
+        for item in statement.then_body:
+            lines.extend(_format_control_statement(item, indent + "  "))
+        lines.append(f"{indent}}} else {{")
+        for item in statement.else_body:
+            lines.extend(_format_control_statement(item, indent + "  "))
+        lines.append(f"{indent}}}")
+        return lines
+    if isinstance(statement, ForDecl):
+        carries = ", ".join(
+            f"{item.name}: {item.type_name} = {_format_syntax_expr(item.initial)}"
+            for item in statement.carries
+        )
+        lines = [
+            f"{indent}for {statement.symbol} @id({_format_value(statement.explicit_id)}) "
+            f"({statement.iterator} in range({_format_syntax_expr(statement.count)})) "
+            f"carry ({carries}) {{"
+        ]
+        for item in statement.body:
+            lines.extend(_format_control_statement(item, indent + "  "))
+        lines.append(f"{indent}}}")
+        return lines
+    raise TypeError(f"unsupported control statement: {type(statement).__name__}")
+
+
 def _format_v02_graph(graph: GraphDecl) -> list[str]:
     lines = [f"graph {graph.name} {{"]
     for statement in graph.statements:
@@ -154,6 +198,8 @@ def _format_v02_graph(graph: GraphDecl) -> list[str]:
             lines.extend(_format_syntax_node(statement, "  "))
         elif isinstance(statement, UseDecl):
             lines.append(_format_use(statement, "  "))
+        elif isinstance(statement, (IfDecl, ForDecl)):
+            lines.extend(_format_control_statement(statement, "  "))
         elif isinstance(statement, FlagStmt):
             lines.append(f"  {statement.name} = {statement.symbol};")
         elif isinstance(statement, LayoutStmt):
@@ -181,6 +227,8 @@ def _format_v02_module(module: ModuleDecl) -> list[str]:
             lines.extend(_format_syntax_node(statement, "  "))
         elif isinstance(statement, UseDecl):
             lines.append(_format_use(statement, "  "))
+        elif isinstance(statement, (IfDecl, ForDecl)):
+            lines.extend(_format_control_statement(statement, "  "))
         elif isinstance(statement, ExportStmt):
             lines.append(f"  export {statement.name} = {_format_syntax_expr(statement.value)};")
         else:  # pragma: no cover - closed syntax union
@@ -189,14 +237,41 @@ def _format_v02_module(module: ModuleDecl) -> list[str]:
     return lines
 
 
+def _validate_control_ast(
+    statements: tuple[Any, ...], *, version: str, in_control: bool = False
+) -> None:
+    for statement in statements:
+        if isinstance(statement, YieldStmt):
+            if version != "0.3":
+                raise ValueError("language 0.2 syntax cannot contain language 0.3 controls")
+            if not in_control:
+                raise ValueError("yield statements are valid only inside language 0.3 controls")
+        elif isinstance(statement, IfDecl):
+            if version != "0.3":
+                raise ValueError("language 0.2 syntax cannot contain language 0.3 controls")
+            _validate_control_ast(statement.then_body, version=version, in_control=True)
+            _validate_control_ast(statement.else_body, version=version, in_control=True)
+        elif isinstance(statement, ForDecl):
+            if version != "0.3":
+                raise ValueError("language 0.2 syntax cannot contain language 0.3 controls")
+            _validate_control_ast(statement.body, version=version, in_control=True)
+
+
 def format_syntax(source: SyntaxSource) -> str:
-    """Canonical-format a parsed source without enabling language 0.2 compilation."""
+    """Canonical-format parsed language 0.2 or 0.3 source without compiling it."""
     version = source.version.value if source.version is not None else "0.1"
-    if version != "0.2":
+    if version not in {"0.2", "0.3"}:
         from .lowering import lower_syntax
 
         return format_graph(lower_syntax(source))
-    lines = ["hocus 0.2;"]
+    root_statements = (
+        source.graph.statements
+        if source.graph is not None
+        else source.module.statements if source.module is not None else ()
+    )
+    _validate_control_ast(root_statements, version=version)
+
+    lines = [f"hocus {version};"]
     if source.imports:
         lines.append("")
         for declaration in source.imports:
@@ -214,5 +289,5 @@ def format_syntax(source: SyntaxSource) -> str:
     elif source.module is not None:
         lines.extend(_format_v02_module(source.module))
     else:
-        raise ValueError("language 0.2 source has no root declaration")
+        raise ValueError(f"language {version} source has no root declaration")
     return "\n".join(lines) + "\n"

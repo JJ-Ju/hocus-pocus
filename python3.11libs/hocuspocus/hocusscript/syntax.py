@@ -185,6 +185,66 @@ class ExportStmt:
 
 
 @dataclass(frozen=True, slots=True)
+class ControlOutputDecl:
+    name: str
+    type_name: str
+    span: SourceSpan
+    name_span: SourceSpan
+    type_span: SourceSpan
+
+
+@dataclass(frozen=True, slots=True)
+class CarryDecl:
+    name: str
+    type_name: str
+    initial: ModuleExpr
+    span: SourceSpan
+    name_span: SourceSpan
+    type_span: SourceSpan
+    initial_span: SourceSpan
+
+
+@dataclass(frozen=True, slots=True)
+class YieldStmt:
+    name: str
+    value: ModuleExpr
+    span: SourceSpan
+    name_span: SourceSpan
+
+
+@dataclass(frozen=True, slots=True)
+class IfDecl:
+    symbol: str
+    explicit_id: str
+    condition: ModuleExpr
+    outputs: tuple[ControlOutputDecl, ...]
+    then_body: tuple["ControlStmt", ...]
+    else_body: tuple["ControlStmt", ...]
+    span: SourceSpan
+    symbol_span: SourceSpan
+    explicit_id_span: SourceSpan
+    condition_span: SourceSpan
+
+
+@dataclass(frozen=True, slots=True)
+class ForDecl:
+    symbol: str
+    explicit_id: str
+    iterator: str
+    count: ModuleExpr
+    carries: tuple[CarryDecl, ...]
+    body: tuple["ControlStmt", ...]
+    span: SourceSpan
+    symbol_span: SourceSpan
+    explicit_id_span: SourceSpan
+    iterator_span: SourceSpan
+    count_span: SourceSpan
+
+
+ControlStmt: TypeAlias = NodeDecl | UseDecl | IfDecl | ForDecl | YieldStmt
+
+
+@dataclass(frozen=True, slots=True)
 class ModuleParamDecl:
     name: str
     type_name: str
@@ -204,7 +264,7 @@ class ModuleExportDecl:
     type_span: SourceSpan
 
 
-ModuleStmt: TypeAlias = NodeDecl | UseDecl | ExportStmt
+ModuleStmt: TypeAlias = NodeDecl | UseDecl | IfDecl | ForDecl | ExportStmt
 
 
 @dataclass(frozen=True, slots=True)
@@ -252,6 +312,8 @@ GraphStmt: TypeAlias = (
     | ExternalDecl
     | NodeDecl
     | UseDecl
+    | IfDecl
+    | ForDecl
     | FlagStmt
     | LayoutStmt
 )

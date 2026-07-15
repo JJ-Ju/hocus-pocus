@@ -551,6 +551,8 @@ HS6 adds a new lane; it does not reinterpret any `0.1` artifact:
 
 Compiler `0.4.0` MUST retain the existing `0.1` parser and emit GraphSpec `0.2`; it emits GraphSpec `0.3` and bundle `0.3` only for language `0.2`. Decoders reject mixed pairs rather than upgrading them implicitly. Portable language `0.2` compilation requires project manifest/lock v3; the implemented v1 and v2 contracts remain immutable.
 
+Language `0.2` is frozen at the static module feature set in this table. The typed compile-time control contract below is proposed as language `0.3`; it MUST NOT be accepted under a `hocus 0.2;` header or inserted into the `0.2` compiler, lock, resolved-set, or bundle contracts. H0 provides isolated `0.3` parsing and canonical formatting, but `0.3` has no trusted project-compile compatibility row until H1 assigns and implements new compiler, project/lock, resolved-set, bundle, and schema versions. Until that H1 gate closes, native project check/compile/lock dispatch and every content decoder reject `0.3` artifacts.
+
 ## 14. Compile and Apply Contract
 
 ### 14.1 `document.compile_source`
@@ -695,7 +697,7 @@ module Noise(
 
 The `0.2` type set is exactly `bool`, `int`, `float`, `string`, and `node_output`. Parameters and exports use the same types. Arguments are named, required unless a literal default is declared, and must match exactly; there are no implicit numeric conversions, nullable values, spreads, overloads, generics, arrays, or parameterized code blocks in this lane. `node_output` is the only graph-handle type. Scalar references may appear only where a scalar value is legal. Export expressions are literals, `param.<name>`, a local node output, or a nested instance export of the declared type.
 
-Imports have the single static form `import { ExportedName as LocalName } from "literal.hocus";`; `as LocalName` MAY be omitted. Specifiers require an exact `.hocus` suffix and never infer extensions or index files. `ExportedName` must equal the imported file's one module declaration. Every instance uses `use local @id("durable-seed") = ModuleName(name = value, ...);`; its bounded seed follows the node-ID lexical pattern and is unique within its enclosing graph/module. Nodes and instances share one local symbol namespace. Modules cannot declare a target, mode, ownership, external/adopt reference, or graph flag. A module-local node/use `@id` is only a namespaced identity seed, never a direct network-document UID; node seeds are optional and fall back to the local symbol, while every `use` seed is mandatory. Conditionals, iteration, and recursion are not part of the initial `0.2` core.
+Imports have the single static form `import { ExportedName as LocalName } from "literal.hocus";`; `as LocalName` MAY be omitted. Specifiers require an exact `.hocus` suffix and never infer extensions or index files. `ExportedName` must equal the imported file's one module declaration. Every instance uses `use local @id("durable-seed") = ModuleName(name = value, ...);`; its bounded seed follows the node-ID lexical pattern and is unique within its enclosing graph/module. Nodes and instances share one local symbol namespace. Modules cannot declare a target, mode, ownership, external/adopt reference, or graph flag. A module-local node/use `@id` is only a namespaced identity seed, never a direct network-document UID; node seeds are optional and fall back to the local symbol, while every `use` seed is mandatory. Conditionals, iteration, and recursion are not part of language `0.2`, and that version is now frozen. Bounded deterministic conditionals and iteration use the proposed language `0.3` contract below. Unbounded recursion remains forbidden; explicitly bounded deterministic compile-time recursion is deferred until it has its own reviewed syntax, termination proof, identity rules, provenance, and expansion-budget contract.
 
 Resolution is deterministic and native-only:
 
@@ -732,6 +734,65 @@ G4 adds separate `complete_mixed_path`, `complete_mixed_project_source`, `defini
 
 G5 adds the explicit repeatable CLI `--module-root ALIAS=ABSOLUTE_PATH` dispatch described above, but no editor command. Mixed saved-file and dirty-buffer completion/navigation remain Python APIs for native editor integrations, with mandatory keyword-only `module_roots`; they are not `hocus` subcommands. G5 adds no MCP project/root/file surface, document lowering, or live behavior. Houdini MCP continues to accept compiled content rather than reading a project or external root, and Bundle `0.3` document lowering/live consumption remain blocked by `HS-BLOCK-008` and its fresh live-semantic gates.
 
+### Proposed language `0.3`: typed compile-time control
+
+Language `0.3` source units use the exact `hocus 0.3;` header and otherwise retain the `0.2` root, type set, static import, exact typing, hygiene, capability, and host-isolation rules. They add two expression-producing control declarations. They do not add a general statement loop, a collection type, mutation, truthiness, arithmetic, comparison, callable code, or host-language execution.
+
+The conditional form is exactly:
+
+```hocus
+if choice @id("lod-choice") (param.useDetailed) outputs (
+  result: node_output,
+  selectedScale: float,
+) {
+  node detailed @id("detailed"): "subdivide" {
+    input[0] = param.source;
+  }
+  yield result = detailed.output[0];
+  yield selectedScale = param.detailScale;
+} else {
+  node simple @id("simple"): "null" {
+    input[0] = param.source;
+  }
+  yield result = simple.output[0];
+  yield selectedScale = param.proxyScale;
+}
+
+node result: "null" { input[0] = choice.result; }
+```
+
+Its grammar is `if SYMBOL @id("SEED") (BOOL_EXPR) outputs (NAME: TYPE, ...) { BODY; yield ...; } else { BODY; yield ...; }`. The symbol and durable seed are mandatory. `BOOL_EXPR` is an existing scalar expression whose exact static type is `bool`; there is no truthiness conversion. `else` and a nonempty typed `outputs` list are mandatory. Each branch is a lexical child scope and MUST yield every declared output exactly once, with no undeclared or duplicate yield and with exact type equality. Both branches are parsed, name-resolved, type-checked, limit-checked, and capability-checked even when the condition is compile-time known. Only the selected branch expands, and the declaration exposes only its fixed typed members as `choice.<member>` after the declaration.
+
+The iteration form is a bounded fold, exactly:
+
+```hocus
+for series @id("refine-series") (i in range(param.passes)) carry (
+  result: node_output = param.source,
+) {
+  node step @id("step"): "subdivide" {
+    input[0] = carry.result;
+    iterations = iter.i;
+  }
+  yield result = step.output[0];
+}
+
+node result: "null" { input[0] = series.result; }
+```
+
+Its grammar is `for SYMBOL @id("SEED") (ITERATOR in range(COUNT_EXPR)) carry (NAME: TYPE = EXPR, ...) { BODY; yield ...; }`. The symbol, durable seed, iterator, `range(...)`, and nonempty typed `carry` list are mandatory. `COUNT_EXPR` is an existing scalar expression whose exact static type is `int`; its evaluated value MUST be an exact nonnegative integer, no greater than the fixed per-fold maximum of 4,096 and no greater than the remaining aggregate iteration budget. `range(n)` means the deterministic half-open sequence `0, 1, ..., n - 1`; no other range form, step, reverse order, break, continue, filtering, or parallel ordering exists.
+
+Carry initializers are evaluated once in the enclosing lexical scope, in declaration order, before the first iteration; they cannot reference `iter`, `carry`, or the fold's result symbol. For iteration `i`, `iter.<iterator>` is the exact `int` index and `carry.<name>` is the previous iteration's value, or the initializer value for `i == 0`. The body is a lexical child scope and MUST yield every carry member exactly once with no undeclared or duplicate yield and exact type equality. The yielded values become the next iteration's carry. The body is parsed, name-resolved, type-checked, limit-checked, and capability-checked even when the count is zero. A zero-count fold expands no body entities and returns the initializer values unchanged. After the fold, only its fixed typed members are visible as `series.<member>`.
+
+Control bodies accept `node`, `use`, nested `if`, and nested `for` declarations followed by their required yields. Imports, root metadata, `existing`, `adopt`, graph flags, layout/output selection, and module `export` statements cannot appear inside a control body; the enclosing root consumes the control result instead. Body-local symbols do not escape except through declared yields. `iter.<iterator>` and `carry.<name>` are legal only in the owning fold body, including its nested child control bodies; an inner fold shadows only its own distinct iterator and carry bindings. Existing expressions plus those two loop-qualified references are the complete new expression surface. In general, a control result is referenced as `SYMBOL.member`; it is an ordinary exactly typed expression and may feed a node, module argument, export, yield, or later control expression, so controls compose without widening the type system.
+
+Every control `@id` seed shares the enclosing declaration identity-seed namespace and MUST be unique there. Selected conditional entities extend the enclosing durable identity path using the domain `hocus-control-if-branch-v1`, the control seed, and the selected branch tag; fold entities extend it using `hocus-control-for-index-v1`, the control seed, and the canonical nonnegative iteration index. These domains are distinct from module-instance and authored-node identity domains. A result-symbol, iterator, or body-local rename cannot change generated entity identity when the durable seeds and structural nesting are unchanged. Switching a branch or index necessarily selects a different domain-separated identity path. Every generated entity and substituted value retains the control declaration, selected branch or iteration index, yield, and enclosing module stack in bounded expansion provenance.
+
+The construct is a fold rather than a collection because the language has no runtime collection value and GraphSpec has no collection carrier. A collection-producing loop would require a new list type, indexing and ordering semantics, retained values proportional to the count, and new module/bundle/GraphSpec contracts. A fold keeps a fixed statically typed result shape independent of count, gives zero iterations a total deterministic meaning, and permits each iteration's temporary lexical scope to be released after its carry and provenance are committed. It can still generate repeated graph structure while remaining chargeable to fixed expansion budgets.
+
+The proposed `0.3` budgets add a 4,096-iteration hard maximum per fold and a 100,000 aggregate iteration-evaluation limit per compilation. Before entering a fold, expansion rejects a count exceeding either the per-fold maximum or the remaining aggregate iteration budget. Every branch evaluation, fold iteration, declaration, generated node, embedded-code byte, diagnostic, origin mapping, and nested module instance also consumes its existing applicable budget; passing the iteration admission check never reserves or bypasses those limits. Cancellation is checked before each condition, before fold admission, before each iteration, and before every yield commit.
+
+This is compile-time source semantics only. H0 does not add project reads, root registration, lock writes, compiler/CLI/editor dispatch, bundle acceptance, document lowering, or live Houdini behavior. No MCP tool reads, writes, lists, watches, resolves, completes, or otherwise operates on `.hocus` files or project/module roots; `.hocus` remains ordinary code edited through native filesystem/editor surfaces, and any later Houdini handoff remains compiled content-only. Unbounded loops and recursion remain forbidden. Explicitly bounded deterministic compile-time recursion remains deferred to a separate reviewed syntax, termination, identity, provenance, and budget contract and is not part of language `0.3`.
+
 | HS6 limit | Default |
 | --- | ---: |
 | Source bytes per file | 1 MiB |
@@ -746,7 +807,7 @@ G5 adds the explicit repeatable CLI `--module-root ALIAS=ABSOLUTE_PATH` dispatch
 | Expansion/source-map entries | 100,000 |
 | Diagnostics | 500 |
 
-Import and instantiation cycles are rejected; recursion has a limit of zero. Cancellation is checked between reads, interface validation, each instance, and GraphSpec emission. Implementations MAY configure lower limits but never higher limits at an untrusted live boundary.
+Import cycles are rejected. The current `0.2` implementation also rejects instantiation cycles, so recursive expansion remains unavailable in this version. Any future recursive construct must be explicitly compile-time bounded, deterministically terminating, identity-stable, and charged against instance-depth, instance, expanded-node, aggregate-code, and source-map budgets; unbounded recursion remains permanently forbidden. Cancellation is checked between reads, interface validation, each instance, and GraphSpec emission. Implementations MAY configure lower limits but never higher limits at an untrusted live boundary.
 
 Modules MUST NOT provide:
 

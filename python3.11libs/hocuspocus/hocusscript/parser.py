@@ -10,7 +10,9 @@ from .module_paths import is_literal_import_specifier
 from .syntax import (
     ArrayExpr,
     CategoryStmt,
+    CarryDecl,
     CodeExpr,
+    ControlOutputDecl,
     ExternalDecl,
     FlagStmt,
     GraphDecl,
@@ -37,6 +39,9 @@ from .syntax import (
     VersionDecl,
     UseDecl,
     ExportStmt,
+    ForDecl,
+    IfDecl,
+    YieldStmt,
 )
 
 
@@ -55,6 +60,8 @@ class Parser:
         max_imports: int = 4_096,
         max_instances: int = 4_096,
         max_interface_items: int = 256,
+        max_control_depth: int = 16,
+        max_control_items: int = 256,
     ):
         self._tokens = tokens
         self._index = 0
@@ -63,6 +70,11 @@ class Parser:
         self._max_imports = max_imports
         self._max_instances = max_instances
         self._max_interface_items = max_interface_items
+        self._max_control_depth = max_control_depth
+        self._max_control_items = max_control_items
+        self._control_items = 0
+        self._v03_node_count = 0
+        self._v03_instance_count = 0
         self._language_version = "0.1"
         self.diagnostics: list[Diagnostic] = []
 
@@ -93,7 +105,7 @@ class Parser:
                 )
             )
 
-        if version is not None and version.value == "0.2":
+        if version is not None and version.value in {"0.2", "0.3"}:
             return self._parse_v02_source(version)
 
         graph = self._parse_graph()
@@ -116,8 +128,15 @@ class Parser:
             graph = None
             root_span = module.span
         else:
-            self._error("HOCUS260", "Language 0.2 requires exactly one graph or module root declaration.")
-        self._expect("EOF", "HOCUS260", "Language 0.2 source supports exactly one root declaration.")
+            self._error(
+                "HOCUS260",
+                f"Language {self._language_version} requires exactly one graph or module root declaration.",
+            )
+        self._expect(
+            "EOF",
+            "HOCUS260",
+            f"Language {self._language_version} source supports exactly one root declaration.",
+        )
         return SyntaxSource(
             version,
             graph,
@@ -167,28 +186,52 @@ class Parser:
         node_count = 0
         instance_count = 0
         while self._current().kind not in {"RBRACE", "EOF"}:
+            statement_index = self._index
+            statement_kind = self._current().value if self._current().kind == "IDENT" else None
             try:
                 if self._is_ident("node"):
-                    if node_count >= self._max_nodes:
+                    if self._language_version == "0.3":
+                        self._claim_v03_node()
+                    elif node_count >= self._max_nodes:
                         self._error("HOCUS314", f"Module exceeds the {self._max_nodes}-node limit.")
                     statements.append(self._parse_node())
                     node_count += 1
                 elif self._is_ident("use"):
-                    if instance_count >= self._max_instances:
+                    if self._language_version == "0.3":
+                        self._claim_v03_instance()
+                    elif instance_count >= self._max_instances:
                         self._error("HOCUS271", f"Module exceeds the {self._max_instances}-instance limit.")
                     statements.append(self._parse_use())
                     instance_count += 1
+                elif self._language_version == "0.3" and (
+                    self._is_ident("if") or self._is_ident("for")
+                ):
+                    statements.append(self._parse_control(depth=1))
                 elif self._is_ident("export"):
                     statements.append(self._parse_export())
                 else:
                     self._error(
                         "HOCUS269",
-                        "Modules support only node, use, and export statements.",
+                        (
+                            "Modules support only node, use, and export statements."
+                            if self._language_version == "0.2"
+                            else "Modules support only node, use, control, and export statements."
+                        ),
                     )
             except HocusSourceError as exc:
-                if exc.diagnostic.code in {"HOCUS226", "HOCUS314", "HOCUS246"}:
+                if exc.diagnostic.code in {"HOCUS226", "HOCUS314", "HOCUS246"} or self._is_resource_limit(
+                    exc.diagnostic
+                ) or (
+                    self._language_version == "0.2"
+                    and exc.diagnostic.code == "HOCUS269"
+                    and (self._is_ident("if") or self._is_ident("for"))
+                ):
                     raise
                 self.diagnostics.append(exc.diagnostic)
+                if self._language_version == "0.3" and statement_kind in {"if", "for"}:
+                    self._index = statement_index
+                    self._synchronize_control_declaration()
+                    continue
                 if exc.diagnostic.code in {"HOCUS222", "HOCUS223", "HOCUS224", "HOCUS225", "HOCUS300"}:
                     self._synchronize_node_declaration()
                 else:
@@ -220,7 +263,9 @@ class Parser:
                 )
             start = self._expect_authored_ident("HOCUS272", "Expected an interface name.")
             self._expect("COLON", "HOCUS273", "Expected ':' after the interface name.")
-            type_token = self._expect("IDENT", "HOCUS274", "Expected a HocusScript 0.2 type name.")
+            type_token = self._expect(
+                "IDENT", "HOCUS274", f"Expected a HocusScript {self._language_version} type name."
+            )
             if type_token.value not in _TYPE_NAMES:
                 self._error(
                     "HOCUS275",
@@ -269,7 +314,9 @@ class Parser:
     def _parse_use(self) -> UseDecl:
         start = self._advance()
         symbol = self._expect_authored_ident("HOCUS278", "Expected a local use symbol.")
-        self._expect("AT", "HOCUS279", "Every language 0.2 use declaration requires @id.")
+        self._expect(
+            "AT", "HOCUS279", f"Every language {self._language_version} use declaration requires @id."
+        )
         annotation = self._expect("IDENT", "HOCUS279", "Expected id after '@'.")
         if annotation.value != "id":
             self._error("HOCUS279", "Only @id is supported on use declarations.", token=annotation)
@@ -321,10 +368,232 @@ class Parser:
         end = self._statement_end()
         return ExportStmt(str(name.value), value, self._joined_span(start, end), name.span)
 
+    def _parse_control(self, *, depth: int) -> IfDecl | ForDecl:
+        if self._language_version != "0.3":
+            self._error("HOCUS315", "Compile-time controls require language 0.3.")
+        if depth > self._max_control_depth:
+            self._error(
+                "HOCUS323",
+                f"Control nesting exceeds the {self._max_control_depth}-level limit.",
+            )
+        if self._control_items >= self._max_control_items:
+            self._error(
+                "HOCUS323",
+                f"Source exceeds the {self._max_control_items}-control-item limit.",
+            )
+        self._control_items += 1
+        if self._is_ident("if"):
+            return self._parse_if(depth=depth)
+        if self._is_ident("for"):
+            return self._parse_for(depth=depth)
+        self._error("HOCUS315", "Expected an if or for compile-time control.")
+        raise AssertionError("unreachable")
+
+    def _parse_control_identity(self) -> tuple[Token, Token]:
+        symbol = self._expect_authored_ident("HOCUS315", "Expected a control symbol.")
+        self._expect("AT", "HOCUS316", "Every control requires an explicit @id.")
+        annotation = self._expect("IDENT", "HOCUS316", "Expected id after '@'.")
+        if annotation.value != "id":
+            self._error("HOCUS316", "Only @id is supported on controls.", token=annotation)
+        self._expect("LPAREN", "HOCUS316", "Expected '(' after @id.")
+        seed = self._expect("STRING", "HOCUS316", "Expected a quoted durable control ID.")
+        if not _ID_SEED.fullmatch(str(seed.value)):
+            self._error(
+                "HOCUS316",
+                "Control IDs must match [A-Za-z0-9][A-Za-z0-9._:-]{0,127}.",
+                token=seed,
+            )
+        self._expect("RPAREN", "HOCUS316", "Expected ')' after the durable control ID.")
+        return symbol, seed
+
+    def _parse_control_outputs(self) -> tuple[ControlOutputDecl, ...]:
+        self._expect_ident("outputs", "HOCUS318", "Expected an outputs interface.")
+        self._expect("LPAREN", "HOCUS318", "Expected '(' after outputs.")
+        outputs: list[ControlOutputDecl] = []
+        if self._match("RPAREN") is not None:
+            self._error("HOCUS318", "Control outputs require at least one declaration.")
+        while True:
+            if len(outputs) >= self._max_interface_items:
+                self._error(
+                    "HOCUS318",
+                    f"Control outputs are limited to {self._max_interface_items} declarations.",
+                )
+            name = self._expect_authored_ident("HOCUS318", "Expected a control output name.")
+            self._expect("COLON", "HOCUS318", "Expected ':' after the control output name.")
+            type_token = self._expect("IDENT", "HOCUS318", "Expected a control output type.")
+            if type_token.value not in _TYPE_NAMES:
+                self._error(
+                    "HOCUS318",
+                    "Control output type must be bool, int, float, string, or node_output.",
+                    token=type_token,
+                )
+            outputs.append(
+                ControlOutputDecl(
+                    str(name.value),
+                    str(type_token.value),
+                    SourceSpan(name.span.source_name, name.span.start, type_token.span.end),
+                    name.span,
+                    type_token.span,
+                )
+            )
+            if self._match("COMMA") is None:
+                self._expect("RPAREN", "HOCUS318", "Expected ')' after control outputs.")
+                return tuple(outputs)
+            if self._match("RPAREN") is not None:
+                return tuple(outputs)
+
+    def _parse_control_body(self, *, depth: int) -> tuple[tuple[object, ...], Token]:
+        self._expect("LBRACE", "HOCUS319", "Expected '{' before the control body.")
+        statements: list[object] = []
+        while self._current().kind not in {"RBRACE", "EOF"}:
+            statement_index = self._index
+            statement_kind = self._current().value if self._current().kind == "IDENT" else None
+            try:
+                if self._is_ident("node"):
+                    self._claim_v03_node()
+                    statements.append(self._parse_node())
+                elif self._is_ident("use"):
+                    self._claim_v03_instance()
+                    statements.append(self._parse_use())
+                elif self._is_ident("if") or self._is_ident("for"):
+                    statements.append(self._parse_control(depth=depth + 1))
+                elif self._is_ident("yield"):
+                    statements.append(self._parse_yield())
+                else:
+                    self._error(
+                        "HOCUS319",
+                        "Control bodies support only node, use, if, for, and yield statements.",
+                    )
+            except HocusSourceError as exc:
+                if self._is_resource_limit(exc.diagnostic):
+                    raise
+                self.diagnostics.append(exc.diagnostic)
+                if statement_kind in {"if", "for"}:
+                    self._index = statement_index
+                    self._synchronize_control_declaration()
+                elif exc.diagnostic.code in {"HOCUS222", "HOCUS223", "HOCUS224", "HOCUS225", "HOCUS300"}:
+                    self._synchronize_node_declaration()
+                else:
+                    self._synchronize_statement(scope="control", preserve_current=True)
+        end = self._expect("RBRACE", "HOCUS319", "Expected '}' to close the control body.")
+        return tuple(statements), end
+
+    def _claim_v03_node(self) -> None:
+        if self._v03_node_count >= self._max_nodes:
+            self._error(
+                "HOCUS314",
+                f"Language 0.3 source exceeds the {self._max_nodes}-node limit.",
+            )
+        self._v03_node_count += 1
+
+    def _claim_v03_instance(self) -> None:
+        if self._v03_instance_count >= self._max_instances:
+            self._error(
+                "HOCUS271",
+                f"Language 0.3 source exceeds the {self._max_instances}-instance limit.",
+            )
+        self._v03_instance_count += 1
+
+    def _parse_yield(self) -> YieldStmt:
+        start = self._advance()
+        name = self._expect_authored_ident("HOCUS323", "Expected an output name after yield.")
+        self._expect("EQUAL", "HOCUS323", "Expected '=' after the yielded output name.")
+        value = self._parse_module_expr()
+        end = self._expect("SEMICOLON", "HOCUS323", "Expected ';' after yield.")
+        return YieldStmt(str(name.value), value, self._joined_span(start, end), name.span)
+
+    def _parse_if(self, *, depth: int) -> IfDecl:
+        start = self._advance()
+        symbol, seed = self._parse_control_identity()
+        self._expect("LPAREN", "HOCUS317", "Expected '(' before the if condition.")
+        condition = self._parse_module_expr()
+        self._expect("RPAREN", "HOCUS317", "Expected ')' after the if condition.")
+        outputs = self._parse_control_outputs()
+        then_body, _then_end = self._parse_control_body(depth=depth)
+        self._expect_ident("else", "HOCUS320", "Every if control requires an else branch.")
+        else_body, end = self._parse_control_body(depth=depth)
+        return IfDecl(
+            str(symbol.value),
+            str(seed.value),
+            condition,
+            outputs,
+            then_body,  # type: ignore[arg-type]
+            else_body,  # type: ignore[arg-type]
+            self._joined_span(start, end),
+            symbol.span,
+            seed.span,
+            condition.span,
+        )
+
+    def _parse_for(self, *, depth: int) -> ForDecl:
+        start = self._advance()
+        symbol, seed = self._parse_control_identity()
+        self._expect("LPAREN", "HOCUS321", "Expected '(' before the for iterator.")
+        iterator = self._expect_authored_ident("HOCUS321", "Expected a for iterator name.")
+        self._expect_ident("in", "HOCUS321", "Expected 'in' after the for iterator.")
+        self._expect_ident("range", "HOCUS321", "For controls require range(EXPR).")
+        self._expect("LPAREN", "HOCUS321", "Expected '(' after range.")
+        count = self._parse_module_expr()
+        self._expect("RPAREN", "HOCUS321", "Expected ')' after the range expression.")
+        self._expect("RPAREN", "HOCUS321", "Expected ')' after the for iterator.")
+        self._expect_ident("carry", "HOCUS322", "Expected a carry interface.")
+        self._expect("LPAREN", "HOCUS322", "Expected '(' after carry.")
+        carries: list[CarryDecl] = []
+        if self._match("RPAREN") is None:
+            while True:
+                if len(carries) >= self._max_interface_items:
+                    self._error(
+                        "HOCUS322",
+                        f"For carries are limited to {self._max_interface_items} declarations.",
+                    )
+                name = self._expect_authored_ident("HOCUS322", "Expected a carry name.")
+                self._expect("COLON", "HOCUS322", "Expected ':' after the carry name.")
+                type_token = self._expect("IDENT", "HOCUS322", "Expected a carry type.")
+                if type_token.value not in _TYPE_NAMES:
+                    self._error(
+                        "HOCUS322",
+                        "Carry type must be bool, int, float, string, or node_output.",
+                        token=type_token,
+                    )
+                self._expect("EQUAL", "HOCUS322", "Every carry requires an initial value.")
+                initial = self._parse_module_expr()
+                carries.append(
+                    CarryDecl(
+                        str(name.value),
+                        str(type_token.value),
+                        initial,
+                        SourceSpan(name.span.source_name, name.span.start, initial.span.end),
+                        name.span,
+                        type_token.span,
+                        initial.span,
+                    )
+                )
+                if self._match("COMMA") is None:
+                    self._expect("RPAREN", "HOCUS322", "Expected ')' after carries.")
+                    break
+                if self._match("RPAREN") is not None:
+                    break
+        if not carries:
+            self._error("HOCUS322", "For controls require at least one carry declaration.")
+        body, end = self._parse_control_body(depth=depth)
+        return ForDecl(
+            str(symbol.value),
+            str(seed.value),
+            str(iterator.value),
+            count,
+            tuple(carries),
+            body,  # type: ignore[arg-type]
+            self._joined_span(start, end),
+            symbol.span,
+            seed.span,
+            iterator.span,
+            count.span,
+        )
+
     def _parse_graph(self) -> GraphDecl:
         start = self._expect_ident("graph", "HOCUS204", "Expected a graph declaration.")
         name = self._expect("IDENT", "HOCUS205", "Expected a graph name.")
-        if self._language_version == "0.2":
+        if self._uses_module_syntax():
             self._reject_reserved_symbol(name)
         self._expect("LBRACE", "HOCUS206", "Expected '{' after the graph name.")
         statements = []
@@ -333,6 +602,8 @@ class Parser:
         instance_count = 0
 
         while self._current().kind not in {"RBRACE", "EOF"}:
+            statement_index = self._index
+            statement_kind = self._current().value if self._current().kind == "IDENT" else None
             try:
                 if self._is_ident("target"):
                     self._claim_singleton("target", seen_singletons)
@@ -352,15 +623,23 @@ class Parser:
                 elif self._is_ident("existing") or self._is_ident("adopt"):
                     statements.append(self._parse_external())
                 elif self._is_ident("node"):
-                    if node_count >= self._max_nodes:
+                    if self._language_version == "0.3":
+                        self._claim_v03_node()
+                    elif node_count >= self._max_nodes:
                         self._error("HOCUS314", f"Graph exceeds the {self._max_nodes}-node limit.")
                     statements.append(self._parse_node())
                     node_count += 1
-                elif self._language_version == "0.2" and self._is_ident("use"):
-                    if instance_count >= self._max_instances:
+                elif self._uses_module_syntax() and self._is_ident("use"):
+                    if self._language_version == "0.3":
+                        self._claim_v03_instance()
+                    elif instance_count >= self._max_instances:
                         self._error("HOCUS271", f"Graph exceeds the {self._max_instances}-instance limit.")
                     statements.append(self._parse_use())
                     instance_count += 1
+                elif self._language_version == "0.3" and (
+                    self._is_ident("if") or self._is_ident("for")
+                ):
+                    statements.append(self._parse_control(depth=1))
                 elif self._is_ident("display") or self._is_ident("render") or self._is_ident("output"):
                     key = str(self._current().value)
                     self._claim_singleton(key, seen_singletons)
@@ -372,16 +651,29 @@ class Parser:
                     message = (
                         "Unknown graph statement. HocusScript 0.1 does not execute TypeScript or JavaScript constructs."
                         if self._language_version == "0.1"
-                        else "Unknown graph statement. HocusScript 0.2 does not execute host-language constructs."
+                        else (
+                            f"Unknown graph statement. HocusScript {self._language_version} "
+                            "does not execute host-language constructs."
+                        )
                     )
                     self._error(
                         "HOCUS217",
                         message,
                     )
             except HocusSourceError as exc:
-                if exc.diagnostic.code in {"HOCUS226", "HOCUS314", "HOCUS246"}:
+                if exc.diagnostic.code in {"HOCUS226", "HOCUS314", "HOCUS246"} or self._is_resource_limit(
+                    exc.diagnostic
+                ) or (
+                    self._language_version == "0.2"
+                    and exc.diagnostic.code == "HOCUS217"
+                    and (self._is_ident("if") or self._is_ident("for"))
+                ):
                     raise
                 self.diagnostics.append(exc.diagnostic)
+                if self._language_version == "0.3" and statement_kind in {"if", "for"}:
+                    self._index = statement_index
+                    self._synchronize_control_declaration()
+                    continue
                 if exc.diagnostic.code in {"HOCUS222", "HOCUS223", "HOCUS224", "HOCUS225", "HOCUS300"}:
                     self._synchronize_node_declaration()
                 else:
@@ -438,7 +730,7 @@ class Parser:
         start = self._advance()
         adopted = start.value == "adopt"
         symbol = self._expect("IDENT", "HOCUS219", "Expected a symbol for the external node.")
-        if self._language_version == "0.2":
+        if self._uses_module_syntax():
             self._reject_reserved_symbol(symbol)
         self._expect("EQUAL", "HOCUS220", "Expected '=' in an external node declaration.")
         path = self._expect("STRING", "HOCUS221", "Expected a quoted Houdini path.")
@@ -455,7 +747,7 @@ class Parser:
     def _parse_node(self) -> NodeDecl:
         start = self._advance()
         symbol = self._expect("IDENT", "HOCUS222", "Expected a node symbol.")
-        if self._language_version == "0.2":
+        if self._uses_module_syntax():
             self._reject_reserved_symbol(symbol)
         explicit_id: str | None = None
         explicit_id_span: SourceSpan | None = None
@@ -467,7 +759,7 @@ class Parser:
             value = self._expect("STRING", "HOCUS250", "Expected a quoted durable node ID.")
             explicit_id = str(value.value)
             explicit_id_span = value.span
-            if self._language_version == "0.2" and not _ID_SEED.fullmatch(explicit_id):
+            if self._uses_module_syntax() and not _ID_SEED.fullmatch(explicit_id):
                 self._error(
                     "HOCUS281",
                     "Node IDs must match [A-Za-z0-9][A-Za-z0-9._:-]{0,127}.",
@@ -485,11 +777,11 @@ class Parser:
             try:
                 if self._is_ident("input"):
                     statements.append(
-                        self._parse_module_input() if self._language_version == "0.2" else self._parse_input()
+                        self._parse_module_input() if self._uses_module_syntax() else self._parse_input()
                     )
                 else:
                     statements.append(
-                        self._parse_module_parm() if self._language_version == "0.2" else self._parse_parm()
+                        self._parse_module_parm() if self._uses_module_syntax() else self._parse_parm()
                     )
             except HocusSourceError as exc:
                 if exc.diagnostic.code == "HOCUS246":
@@ -632,7 +924,7 @@ class Parser:
             return LiteralExpr(token.value == "true", token.span)
         self._error(
             "HOCUS291",
-            "Language 0.2 defaults must be bool, int, float, or string literals.",
+            f"Language {self._language_version} defaults must be bool, int, float, or string literals.",
         )
         raise AssertionError("unreachable")
 
@@ -684,7 +976,7 @@ class Parser:
         key = str(start.value)
         self._expect("EQUAL", "HOCUS213", f"Expected '=' after {key}.")
         symbol = self._expect("IDENT", "HOCUS214", f"Expected a symbol after {key} =.")
-        if self._language_version == "0.2":
+        if self._uses_module_syntax():
             self._reject_reserved_symbol(symbol)
         end = self._statement_end()
         return FlagStmt(key, str(symbol.value), self._joined_span(start, end), symbol.span)
@@ -740,21 +1032,77 @@ class Parser:
                 return
             self._advance()
 
+    def _synchronize_control_declaration(self) -> None:
+        """Skip one malformed control from its keyword through its bounded bodies."""
+
+        kind = str(self._current().value) if self._current().kind == "IDENT" else ""
+        self._advance()
+        body_count = 0
+        while self._current().kind != "EOF":
+            if self._current().kind == "RBRACE":
+                return
+            if self._current().kind == "SEMICOLON":
+                self._advance()
+                return
+            if self._current().kind != "LBRACE":
+                if body_count == 0 and self._is_statement_start("control"):
+                    return
+                self._advance()
+                continue
+            self._consume_balanced_block()
+            body_count += 1
+            if kind != "if" or body_count >= 2:
+                return
+            if self._is_ident("else"):
+                self._advance()
+                if self._current().kind != "LBRACE":
+                    return
+                continue
+            return
+
+    def _consume_balanced_block(self) -> None:
+        depth = 0
+        while self._current().kind != "EOF":
+            if self._current().kind == "LBRACE":
+                depth += 1
+            elif self._current().kind == "RBRACE":
+                depth -= 1
+            self._advance()
+            if depth == 0:
+                return
+
+    @staticmethod
+    def _is_resource_limit(diagnostic: Diagnostic) -> bool:
+        if diagnostic.code in {"HOCUS226", "HOCUS246", "HOCUS314"}:
+            return True
+        return diagnostic.code in {"HOCUS271", "HOCUS318", "HOCUS322", "HOCUS323"} and any(
+            marker in diagnostic.message for marker in ("limit", "limited to", "exceeds")
+        )
+
     def _is_statement_start(self, scope: str) -> bool:
         token = self._current()
         if token.kind != "IDENT":
             return False
         if scope == "node":
             return True
+        if scope == "control":
+            return token.value in {"node", "use", "if", "for", "yield"}
         if scope == "module":
-            return token.value in {"node", "use", "export"}
+            return token.value in {"node", "use", "export"} or (
+                self._language_version == "0.3" and token.value in {"if", "for"}
+            )
         starts = {
             "target", "category", "mode", "expect", "ownership", "existing", "adopt", "node",
             "display", "render", "output", "layout",
         }
         return token.value in starts or (
-            self._language_version == "0.2" and token.value == "use"
+            self._uses_module_syntax() and token.value == "use"
+        ) or (
+            self._language_version == "0.3" and token.value in {"if", "for"}
         )
+
+    def _uses_module_syntax(self) -> bool:
+        return self._language_version in {"0.2", "0.3"}
 
     def _expect_authored_ident(self, code: str, message: str) -> Token:
         token = self._expect("IDENT", code, message)
@@ -765,7 +1113,7 @@ class Parser:
         if str(token.value).startswith(_RESERVED_SYMBOL_PREFIX):
             self._error(
                 "HOCUS300",
-                "Authored language 0.2 names cannot use the reserved __hocus_ prefix.",
+                f"Authored language {self._language_version} names cannot use the reserved __hocus_ prefix.",
                 token=token,
             )
 

@@ -278,6 +278,8 @@ External consumer status (Batch G4, 2026-07-14): complete. Separate native `comp
 
 External CLI status (Batch G5, 2026-07-14): complete. The native `check`, `compile`, and `lock --update` commands accept repeatable `--module-root ALIAS=ABSOLUTE_PATH`; supplying roots dispatches only to the separate G4 semantic/bundle consumers or G3 mixed lock publisher, while omission preserves the same-project paths. Each mixed invocation must supply the complete exact declared alias mapping again. Duplicate, malformed, relative, missing, or extra roots fail closed; roots are not sourced from environment variables, expanded, inferred from lock data, cached, persisted, or emitted. Mixed lock publication requires the exact current lock digest. Syntax-only `format` and language-`0.1` `write-export` do not accept module roots, and language `0.1` rejects rather than ignores the option. Mixed editor completion/navigation remains available only through native Python APIs and no CLI editor command was added. MCP remains content-only, and Bundle `0.3` document lowering/live consumption remain blocked under `HS-BLOCK-008`. The focused CLI/MCP gate passes 23/23, the full suite passes 413/413 under both runners, the HocusScript-only gate passes 357/357, and independent P0/P1 review is clean after exact and abbreviated forbidden-option path-leak regressions were added.
 
+Typed-control status (Batch H0, 2026-07-15): complete for the isolated frontend and contract. Language `0.2` is frozen, while typed expression-producing conditionals and bounded fold iteration belong to proposed language `0.3`. The exact `if ... outputs` and `for ... range(...) carry` grammar, exact typing, mandatory durable IDs, lexical yields, both-path/zero-body static validation, zero-count behavior, domain-separated branch/index identity, fixed iteration budgets, and continued prohibition on unbounded recursion are specified. The version-dispatched frozen AST, bounded parser with brace-aware recovery and aggregate control/node/use limits, and canonical formatter are implemented; forged `0.2` ASTs cannot emit `0.3` controls. Project compilation and every versioned trust-boundary carrier stay disabled until H1. No MCP file/project/root surface is introduced. The focused frontend/legacy gate passes 48/48, the full repository passes 430/430 under both pytest and unittest discovery, and the post-fix P0/P1 review is clean.
+
 Objectives:
 
 - typed module parameters and exports
@@ -285,7 +287,7 @@ Objectives:
 - offline, project-contained static imports
 - resolve imports relative to the importing file and ordered project source/module directories
 - transitive lockfiles and content hashes
-- bounded compile-time conditionals and iteration only after limits are proven
+- language-`0.3` typed expression-producing conditionals and bounded fold iteration under fixed limits
 - expansion source maps and inspectable expanded graphs
 - reviewed studio module/HDA contracts and provenance
 
@@ -306,9 +308,16 @@ Implementation sequence:
 5. make document provenance and default UIDs consume the already-resolved module origins and instance paths
 6. add native project-aware completion/navigation while keeping MCP content-only
 7. enable external aliases only through staged gates: G1 explicit root/manifest inspection, G2 read-only complete mixed-root lock planning, G3 leased atomic external-record publication, G4 separate exact-root compiler/editor/bundle consumption, and G5 explicit repeatable CLI `--module-root ALIAS=ABSOLUTE_PATH` dispatch are complete, while MCP remains content-only
-8. implement bounded deterministic conditionals and iteration after fixed expansion budgets have production evidence; recursion remains forbidden
+8. deliver proposed language `0.3` control through separately reviewable H sub-batches:
+   - H0 contract/frontend: freeze `0.2`; lock `if SYMBOL @id(...) (...) outputs (...) { ... yield ... } else { ... }` and `for SYMBOL @id(...) (ITERATOR in range(...)) carry (...) { ... yield ... }`; implement isolated AST/parser/formatter/recovery only, with completion dependent on focused frontend verification
+   - H1 versioned carriers: assign and scaffold new compiler, project/lock, resolved-set, bundle, compatibility-matrix, and schema versions; reject every mixed or unsupported pairing and keep project/CLI/MCP dispatch disabled
+   - H2 semantics: add whole-body static validation, exact evaluation, fold expansion, lexical hygiene, domain-separated identity, bounded provenance, cancellation, and all iteration plus existing expansion budgets
+   - H3 native integration: enable verified project resolver/compiler/lock, CLI check/format/compile, and project-aware editor completion/navigation only through the new version lane; retain explicit user-selected project/module roots and the content-only MCP boundary
+   - H4 adversarial/full verification: add malformed/recovery, hidden-branch, zero-count, boundary/aggregate budget, cancellation, identity stability, nesting, provenance, relocation, hostile-root, artifact-tamper, legacy-isolation, and full repository gates before declaring `0.3` supported
 
-The safe first coding slice is same-project static imports with typed scalar/`node_output` parameters and exports. It excludes external packages, conditionals, iteration, and recursion.
+Unbounded recursion remains permanently forbidden. Explicitly bounded deterministic compile-time recursion is deferred to a separate reviewed contract covering syntax, termination, identity, provenance, and budgets; it is not part of H0-H4.
+
+The historical safe `0.2` slice was same-project static imports with typed scalar/`node_output` parameters and exports; it is complete through G5 and remains frozen. The current safe H0 slice is syntax-only `0.3` parsing and canonical formatting. It excludes resolver/lock/bundle reinterpretation, semantic expansion, compiler/CLI/editor enablement, MCP file access, document/live consumption, and recursion until their named gates close.
 
 ## 11. HS7: Network-Family and Value Parity
 
