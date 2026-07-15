@@ -72,6 +72,8 @@ from .expander import (
     resolved_units_from_dag,
     validate_module_interfaces,
 )
+from .control_expander import expand_control_graph
+from .control_semantic import ControlExpansionLimits, validate_control_program
 from .formatter import format_graph, format_syntax
 from .lock_update import update_project_module_lock
 from .lock_update_result import ModuleLockUpdateEntry, ModuleLockUpdateResult
@@ -224,6 +226,7 @@ __all__ = [
     "CompileResult",
     "CompletionItem",
     "CompletionResult",
+    "ControlExpansionLimits",
     "COMPILER_VERSION",
     "MODULE_COMPILER_VERSION",
     "MODULE_GRAPH_SPEC_VERSION",
@@ -331,6 +334,7 @@ __all__ = [
     "export_network_document",
     "inspect_external_module_roots",
     "expand_module_graph",
+    "expand_control_graph",
     "expand_resolved_module_dag",
     "graph_spec_from_dict",
     "lower_bundle_to_document",
@@ -353,6 +357,7 @@ __all__ = [
     "resolved_units_from_dag",
     "validate_graph",
     "validate_module_interfaces",
+    "validate_control_program",
     "validate_resolved_module_dag",
     "update_project_lock",
     "update_project_mixed_module_lock",
