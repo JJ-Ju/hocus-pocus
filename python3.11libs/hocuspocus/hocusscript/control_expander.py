@@ -24,7 +24,7 @@ from .model import (
 from .resolved_modules import ResolvedImport, canonical_module_uri
 from .syntax import (
     ArrayExpr, CategoryStmt, CodeExpr, ExportStmt, ExternalDecl, FlagStmt,
-    ForDecl, GraphDecl, IfDecl, InputStmt, LayoutStmt, LiteralExpr, ModeStmt, NodeDecl,
+    ForDecl, IfDecl, InputStmt, LayoutStmt, LiteralExpr, ModeStmt, NodeDecl,
     OwnershipStmt, ParamRefExpr, ParmStmt, RevisionStmt, SymbolRefExpr,
     SyntaxSource, TargetStmt, UseDecl, YieldStmt,
 )

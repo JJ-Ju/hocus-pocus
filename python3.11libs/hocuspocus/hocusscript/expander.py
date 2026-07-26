@@ -17,7 +17,7 @@ from .model import (
 )
 from .syntax import (
     CategoryStmt, ExportStmt, ExternalDecl, FlagStmt, GraphDecl, InputStmt,
-    LayoutStmt, LiteralExpr, ModeStmt, ModuleDecl, ModuleExportDecl,
+    LayoutStmt, LiteralExpr, ModeStmt, ModuleDecl,
     ModuleParamDecl, NodeDecl, OwnershipStmt, ParamRefExpr, ParmStmt,
     RevisionStmt, SymbolRefExpr, SyntaxSource, TargetStmt, UseDecl,
 )

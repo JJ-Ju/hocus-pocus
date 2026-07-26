@@ -531,7 +531,6 @@ class DocumentOperationsMixin:
         language = "python" if "python" in parm_name else "vex"
         if parm_name in {"prescript", "postscript", "script"}:
             language = "hscript"
-        node_path = str(parm.get("nodePath", "")).strip()
         body = parm.get("rawValue")
         if body is None:
             body = parm.get("value", "")

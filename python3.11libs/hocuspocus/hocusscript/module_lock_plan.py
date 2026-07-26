@@ -9,7 +9,6 @@ from typing import Callable, Iterable, Mapping
 from urllib.parse import quote
 
 from .external_roots import (
-    _ValidatedExternalModuleRoots,
     _ValidatedExternalRoot,
     _native_identity,
     _recheck as _recheck_external_roots,

@@ -453,8 +453,6 @@ class HocusScriptDocumentLoweringTests(unittest.TestCase):
         self.assertIn("artist-source", {item["uid"] for item in preview.document["nodes"]})
 
     def test_whole_tuple_is_precisely_blocked_instead_of_emitting_list_binding(self) -> None:
-        bundle = _bundle(extra="")
-        payload = bundle.to_dict()
         source_uri = "hocus-project://city/assets/tuple.hocus"
         source = '''hocus 0.1; graph rocks { target "/obj/geo1"; category Sop;
           node source: "acme::source::1.0" { scale = [2, 3, 4]; }

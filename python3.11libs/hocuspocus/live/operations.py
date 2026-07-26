@@ -212,14 +212,14 @@ class LiveOperations(
             ("viewport.capture", "Capture Viewport", "Capture the current scene viewer viewport to an image file. If `path` is omitted, HocusPocus writes to a managed snapshot path and returns it.", {"type": "object", "properties": {"path": {"type": "string"}}}, {"destructiveHint": True}, self.viewport_capture),
             ("snapshot.capture_viewport", "Capture Viewport Snapshot", "Capture the current scene viewer viewport to an explicit path or a managed snapshot path. Managed snapshots are written under the server snapshot output directory and returned in the result.", {"type": "object", "properties": {"path": {"type": "string"}}}, {"destructiveHint": True}, self.snapshot_capture_viewport),
         ]
-        for name, title, description, input_schema, annotations, handler in tool_specs:
+        for name, title, description, input_schema, tool_annotations, handler in tool_specs:
             tools.register(
                 ToolDefinition(
                     name=name,
                     title=title,
                     description=description,
                     input_schema=input_schema,
-                    annotations=annotations,
+                    annotations=tool_annotations,
                     required_capabilities=self._tool_capabilities(name),
                     handler=handler,
                     output_summary=self._tool_output_summary(name),

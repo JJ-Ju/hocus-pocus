@@ -546,11 +546,11 @@ def _validate_module_dependencies(
         if uri_match is None:
             raise BundleValidationError("HOCUS512", f"{label}.uri must be a unique canonical module URI.")
         seen.add(uri)
-        source_digest = _require_digest(item["sourceDigest"], f"{label}.sourceDigest", "HOCUS512")
-        interface_digest = _require_digest(
+        _require_digest(item["sourceDigest"], f"{label}.sourceDigest", "HOCUS512")
+        _require_digest(
             item["interfaceDigest"], f"{label}.interfaceDigest", "HOCUS512"
         )
-        transitive_digest = _require_digest(
+        _require_digest(
             item["transitiveDigest"], f"{label}.transitiveDigest", "HOCUS512"
         )
         if item["languageVersion"] != MODULE_LANGUAGE_VERSION:

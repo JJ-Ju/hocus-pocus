@@ -38,6 +38,18 @@ Expected:
 - `serverVersion: 0.9.0`
 - `mcpUrl: http://127.0.0.1:37219/hocuspocus/mcp`
 
+## Develop
+
+Use the fast correctness gate and the narrowest relevant behavior smoke while iterating:
+
+```powershell
+python -m pip install -r requirements-lint.txt
+powershell -ExecutionPolicy Bypass -File .\scripts\lint.ps1
+python .\tests\test_hocusscript_v03_expander.py -q
+```
+
+The full release suite is intentionally not the default inner loop. See `docs/release-validation.md` for qualification gates.
+
 ## Connect Codex on Windows
 
 Add a custom MCP server in the Codex app with:

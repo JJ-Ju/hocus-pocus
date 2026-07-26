@@ -342,7 +342,6 @@ class HocusScriptExpanderTests(unittest.TestCase):
           node first @id("same"): "box" {}
           node same: "null" {}
         }'''
-        entry = parse_syntax(source, ENTRY_URI)
         with self.assertRaises(ModuleExpansionError) as captured:
             expand_module_graph(
                 entry_source=source.encode("utf-8"), entry_uri=ENTRY_URI,
@@ -358,7 +357,6 @@ class HocusScriptExpanderTests(unittest.TestCase):
             '''hocus 0.2; graph g { node n: "box" {} }''',
         )
         for source in cases:
-            entry = parse_syntax(source, ENTRY_URI)
             with self.subTest(source=source), self.assertRaises(ModuleExpansionError):
                 expand_module_graph(
                     entry_source=source.encode("utf-8"), entry_uri=ENTRY_URI,
@@ -381,7 +379,6 @@ class HocusScriptExpanderTests(unittest.TestCase):
         self.assertEqual(captured.exception.code, "HOCUS467")
         # Empty interface sets have no checkpoint; entry expansion always checks cancellation.
         entry_source = 'hocus 0.2; graph g { target "/obj/g"; }'
-        entry = parse_syntax(entry_source, ENTRY_URI)
         with self.assertRaises(ModuleExpansionError) as captured:
             expand_module_graph(
                 entry_source=entry_source.encode("utf-8"), entry_uri=ENTRY_URI,

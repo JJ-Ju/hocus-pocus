@@ -503,7 +503,7 @@ def _validate_module(
     identity = canonical_module_uri(locked.module_uri)
     try:
         _validate_relative_artifact_path(locked.source_path, "locked module sourcePath", code="HOCUS460")
-    except ProjectError as exc:
+    except ProjectError:
         _fail("HOCUS460", "Verified module sourcePath is not portable.", uri=value.uri)
     if locked.external_alias is None:
         if (

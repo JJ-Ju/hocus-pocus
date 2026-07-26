@@ -8,7 +8,7 @@ from typing import Any
 from hocuspocus.core.jsonrpc import INVALID_PARAMS, JsonRpcError
 from hocuspocus.core.policy import ensure_path_allowed
 
-from ..context import OperationCancelledError, RequestContext
+from ..context import RequestContext
 
 
 class ExportOperationsMixin:
@@ -71,7 +71,7 @@ class ExportOperationsMixin:
         frames: list[float],
         root_path: str,
     ) -> dict[str, Any]:
-        hou_module = self._require_hou()
+        self._require_hou()
         source = self._require_node_by_path(source_node_path, label="source_node_path")
         export_node = self._create_temp_export_node("alembic", "hp_export_alembic")
         try:

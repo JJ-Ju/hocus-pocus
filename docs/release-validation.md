@@ -1,6 +1,6 @@
 # HocusPocus Release Validation
 
-This document defines the minimum validation gates for a build to be treated as aligned, installable, and releasable.
+This document defines the minimum validation gates for a build to be treated as aligned, installable, and releasable. These are qualification gates, not the normal active-development loop; during implementation, run Ruff plus the narrowest relevant behavior or user-workflow smoke.
 
 ## 1. Build Alignment Rule
 
@@ -25,16 +25,18 @@ Required result:
 - staged package created successfully
 - installed package updated successfully
 
-### Gate B. Compile
+### Gate B. Lint and Compile
 
 Run:
 
 ```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\lint.ps1
 python -m compileall python3.11libs\hocuspocus
 ```
 
 Required result:
 
+- Ruff reports no correctness violations
 - no compile failures
 
 ### Gate C. Startup
