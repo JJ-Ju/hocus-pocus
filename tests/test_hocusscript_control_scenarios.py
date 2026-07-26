@@ -7,6 +7,7 @@ import sys
 import tempfile
 import unittest
 from contextlib import contextmanager
+from dataclasses import replace
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -21,6 +22,7 @@ from hocuspocus.hocusscript import (
     format_syntax,
     parse_syntax,
     resolve_graph,
+    validate_control_catalog_program,
 )
 from hocuspocus.hocusscript.catalog import (
     CategoryDefinition,
@@ -278,6 +280,31 @@ graph ControlGraph {{
     )
 
 
+def _identity_symbols(
+    *,
+    control_symbol: str = "choice",
+    branch: str = "true",
+    iterator: str = "i",
+    node_symbol: str = "piece",
+    count: int = 2,
+) -> list[str]:
+    graph = _expand(
+        f'''
+  if {control_symbol} @id("branch-id") ({branch}) outputs (value: int) {{
+    for series @id("fold-id") ({iterator} in range({count})) carry (value: int = 0) {{
+      node {node_symbol} @id("node-id"): "null" {{ index = iter.{iterator}; }}
+      yield value = iter.{iterator};
+    }}
+    yield value = series.value;
+  }} else {{
+    node fallback @id("node-id"): "null" {{ index = 0; }}
+    yield value = 0;
+  }}
+'''
+    )
+    return [node["symbol"] for node in graph["nodes"]]
+
+
 class HocusScriptControlScenarios(unittest.TestCase):
     def test_mcp_editor_surface_compiles_and_formats_without_scene_access(self) -> None:
         operations = _EditorOperations()
@@ -392,6 +419,16 @@ module Repeat(flag: bool = true, count: int = 2) exports (out: int) {
         self.assertFalse(legacy.valid)
         self.assertEqual(legacy.diagnostics[0].code, "HOCUS102")
 
+        with self.assertRaises(ModuleExpansionError) as malformed:
+            _expand(
+                '''
+  if broken @id("broken") (true) outputs (value: int) {
+    yield value = 1;
+  }
+'''
+            )
+        self.assertEqual(malformed.exception.code, "HOCUS460")
+
     def test_semantics_validate_the_whole_control_program(self) -> None:
         valid = '''hocus 0.3;
 graph G {
@@ -410,6 +447,103 @@ graph G {
         with self.assertRaises(ModuleExpansionError) as captured:
             validate_control_program(parse_syntax(invalid, "invalid.hocus"), {}, {})
         self.assertEqual(captured.exception.code, "HOCUS471")
+
+        for count, code in ((-1, "HOCUS475"), (4097, "HOCUS464")):
+            hidden_count = valid.replace(
+                "yield out = 2;",
+                f'''for hidden @id("hidden") (i in range({count})) carry (value: int = 0) {{
+      yield value = iter.i;
+    }}
+    yield out = hidden.value;''',
+            )
+            with self.assertRaises(ModuleExpansionError) as hidden:
+                validate_control_program(
+                    parse_syntax(hidden_count, "hidden-count.hocus"), {}, {}
+                )
+            self.assertEqual(hidden.exception.code, code)
+
+        nested = valid.replace(
+            "yield out = 1;",
+            '''if nested @id("nested") (true) outputs (value: int) {
+      yield value = 1;
+    } else {
+      yield value = 2;
+    }
+    yield out = nested.value;''',
+        )
+        with self.assertRaises(ModuleExpansionError) as depth:
+            validate_control_program(
+                parse_syntax(nested, "nested.hocus"),
+                {},
+                {},
+                limits=ControlExpansionLimits(instance_depth=1),
+            )
+        self.assertEqual(depth.exception.code, "HOCUS464")
+
+        graph_ast = parse_syntax(
+            'hocus 0.3; graph G { target = "/obj"; category = Sop; }',
+            "forged.hocus",
+        )
+        module_ast = parse_syntax(
+            "hocus 0.3; module M() exports (value: int) { export value = 1; }",
+            "module.hocus",
+        )
+        forged = replace(
+            graph_ast,
+            graph=replace(
+                graph_ast.graph,
+                statements=(
+                    *graph_ast.graph.statements,
+                    module_ast.module.statements[-1],
+                ),
+            ),
+        )
+        with self.assertRaises(ModuleExpansionError) as malformed:
+            validate_control_program(forged, {}, {})
+        self.assertEqual(malformed.exception.code, "HOCUS479")
+
+        category = graph_ast.graph.statements[1]
+        duplicated = replace(
+            graph_ast,
+            graph=replace(
+                graph_ast.graph,
+                statements=(*graph_ast.graph.statements, category),
+            ),
+        )
+        with self.assertRaises(ModuleExpansionError) as duplicate:
+            validate_control_program(duplicated, {}, {})
+        self.assertEqual(duplicate.exception.code, "HOCUS473")
+
+        valid_ast = parse_syntax(valid, "forged-node.hocus")
+        node = valid_ast.graph.statements[-1]
+        for symbol in (7, "not valid!"):
+            hostile_ast = replace(
+                valid_ast,
+                graph=replace(
+                    valid_ast.graph,
+                    statements=(
+                        *valid_ast.graph.statements[:-1],
+                        replace(node, symbol=symbol),
+                    ),
+                ),
+            )
+            with self.assertRaises(ModuleExpansionError) as hostile:
+                validate_control_program(hostile_ast, {}, {})
+            self.assertEqual(hostile.exception.code, "HOCUS473")
+
+        invalid_category = replace(
+            graph_ast,
+            graph=replace(
+                graph_ast.graph,
+                statements=(
+                    graph_ast.graph.statements[0],
+                    replace(category, value="not valid!"),
+                ),
+            ),
+        )
+        with self.assertRaises(ModuleExpansionError) as hostile_category:
+            validate_control_program(invalid_category, {}, {})
+        self.assertEqual(hostile_category.exception.code, "HOCUS479")
 
     def test_expansion_executes_if_and_for_into_a_canonical_graph(self) -> None:
         graph = _expand(
@@ -436,6 +570,69 @@ graph G {
         self.assertTrue(graph["expansionMap"]["mappings"])
         self.assertTrue(graph["expansionMap"]["controlStacks"])
 
+        zero = _expand(
+            '''
+  for series @id("zero") (i in range(0)) carry (value: int = 7) {
+    node hidden @id("hidden"): "null" { index = iter.i; }
+    yield value = iter.i;
+  }
+  node result @id("zero-result"): "null" { final = series.value; }
+'''
+        )
+        self.assertEqual(len(zero["nodes"]), 1)
+        self.assertEqual(zero["nodes"][0]["parms"][0]["value"]["value"], 7)
+        self.assertFalse(zero["expansionMap"]["controlStacks"])
+        zero_mapping = next(
+            item
+            for item in zero["expansionMap"]["mappings"]
+            if item["generatedPointer"] == "/nodes/0/parms/0"
+        )
+        self.assertEqual(
+            [item["role"] for item in zero_mapping["relatedOrigins"]],
+            ["control_declaration", "fold_count", "carry_initializer"],
+        )
+
+        shadowed = _expand(
+            '''
+  for outer @id("outer") (i in range(2)) carry (value: int = 5) {
+    for inner @id("inner") (i in range(1)) carry (value: int = carry.value) {
+      node step @id("step"): "null" { inner_index = iter.i; previous = carry.value; }
+      yield value = iter.i;
+    }
+    node after @id("after"): "null" {
+      outer_index = iter.i;
+      previous = carry.value;
+      nested = inner.value;
+    }
+    yield value = iter.i;
+  }
+'''
+        )
+        values = [
+            [parm["value"]["value"] for parm in node["parms"]]
+            for node in shadowed["nodes"]
+        ]
+        self.assertEqual(values, [[0, 5], [0, 5, 0], [0, 0], [1, 0, 0]])
+        self.assertEqual(
+            sorted({
+                len(item["frames"])
+                for item in shadowed["expansionMap"]["controlStacks"]
+            }),
+            [1, 2],
+        )
+
+        base_ids = _identity_symbols()
+        self.assertEqual(
+            base_ids,
+            _identity_symbols(
+                control_symbol="renamed",
+                iterator="j",
+                node_symbol="renamed_node",
+            ),
+        )
+        self.assertNotEqual(base_ids, _identity_symbols(branch="false"))
+        self.assertEqual(base_ids, _identity_symbols(count=3)[:2])
+
     def test_expansion_stops_at_public_limits_or_cancellation(self) -> None:
         body = '''
   for series @id("series") (i in range(3)) carry (value: int = 0) {
@@ -447,9 +644,91 @@ graph G {
             _expand(body, limits=ControlExpansionLimits(aggregate_iterations=2))
         self.assertEqual(limited.exception.code, "HOCUS464")
 
+        boundary = _expand(
+            body,
+            limits=ControlExpansionLimits(
+                per_fold_iterations=3,
+                aggregate_iterations=3,
+            ),
+        )
+        self.assertEqual(len(boundary["nodes"]), 3)
+
+        exhausted = body + body.replace("series", "again").replace('"step"', '"again-step"')
+        with self.assertRaises(ModuleExpansionError) as aggregate:
+            _expand(
+                exhausted,
+                limits=ControlExpansionLimits(
+                    per_fold_iterations=3,
+                    aggregate_iterations=5,
+                ),
+            )
+        self.assertEqual(aggregate.exception.code, "HOCUS464")
+
         with self.assertRaises(ModuleExpansionError) as cancelled:
             _expand(body, cancellation=lambda: True)
         self.assertEqual(cancelled.exception.code, "HOCUS499")
+
+        catalog_source = parse_syntax(
+            'hocus 0.3; graph G { target "/obj/g"; category Sop; node n: "missing" {} }',
+            "catalog-cancel.hocus",
+        )
+        base_catalog = _catalog_provider().catalog
+        operators = tuple(
+            replace(
+                base_catalog.operators[0],
+                qualified_name=f"operator{i}",
+                name=f"operator{i}",
+                aliases=("shared",),
+            )
+            for i in range(256)
+        )
+        large_catalog = FakeCatalogProvider.create(
+            categories=base_catalog.categories,
+            operators=operators,
+        ).catalog
+        checkpoints = [0]
+
+        def cancel_during_operator_scan() -> bool:
+            checkpoints[0] += 1
+            return checkpoints[0] >= 24
+
+        with self.assertRaises(ModuleExpansionError) as catalog_cancelled:
+            validate_control_catalog_program(
+                catalog_source,
+                {},
+                {},
+                large_catalog,
+                expected_catalog_fingerprint=large_catalog.fingerprint,
+                cancellation=cancel_during_operator_scan,
+            )
+        self.assertEqual(catalog_cancelled.exception.code, "HOCUS499")
+
+        checkpoints[0] = 0
+        ambiguous_source = parse_syntax(
+            'hocus 0.3; graph G { target "/obj/g"; category Sop; node n: shared {} }',
+            "catalog-ambiguous-cancel.hocus",
+        )
+        with self.assertRaises(ModuleExpansionError) as ambiguity_cancelled:
+            validate_control_catalog_program(
+                ambiguous_source,
+                {},
+                {},
+                large_catalog,
+                expected_catalog_fingerprint=large_catalog.fingerprint,
+                cancellation=cancel_during_operator_scan,
+            )
+        self.assertEqual(ambiguity_cancelled.exception.code, "HOCUS499")
+
+        checks = [0]
+
+        def cancel_during_expansion() -> bool:
+            checks[0] += 1
+            return checks[0] >= 30
+
+        with self.assertRaises(ModuleExpansionError) as cancelled_late:
+            _expand(body, cancellation=cancel_during_expansion)
+        self.assertEqual(cancelled_late.exception.code, "HOCUS499")
+        self.assertGreater(checks[0], 1)
 
 
 if __name__ == "__main__":

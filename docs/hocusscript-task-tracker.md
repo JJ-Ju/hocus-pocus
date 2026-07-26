@@ -20,8 +20,8 @@ Roadmap: `docs/hocusscript-roadmap.md`
 
 ## 2. Current Slice
 
-Current milestone: HS6 modules and studio libraries in progress; Batches A-G5 and H0-H3 are complete, H4 qualification is next, H5 document/live integration follows, and H6 project-scoped MCP access is planned
-Current scope: H3 completes the explicit user-selected project-directory lane for local and external language-`0.3` projects. H4 qualifies it; H5 enables frozen Bundle `0.3` and authenticated Bundle `0.4` through exact-version document preview/plan/apply paths; H6 lets users explicitly approve the directories where ordinary `*.hocus` files live so MCP agents can read, edit, build, and navigate those same files without receiving general filesystem authority
+Current milestone: HS6 modules and studio libraries in progress; Batches A-G5 and H0-H4 are complete, H5 document/live integration is next, and H6 project-scoped MCP access is planned
+Current scope: H4 has qualified the explicit user-selected local/external language-`0.3` project lane. H5 next enables frozen Bundle `0.3` and authenticated Bundle `0.4` through exact-version document preview/plan/apply paths; H6 then lets users explicitly approve the directories where ordinary `*.hocus` files live so MCP agents can read, edit, build, and navigate those same files without receiving general filesystem authority
 Live mutation: available only through the completed HS4 guarded `document.apply_plan` path; HS5 format/completion/export tools are observational
 Current test catalogue: 34 public workflow scenarios in four files; lint enforces the repository-wide ceiling of 50
 Current structural gate: every checked file is at or below 1,200 lines and every Python function passes the configured complexity limits
@@ -327,7 +327,7 @@ Verification:
 
 ## 9. HS6: Modules and Studio Libraries
 
-Status: Batches A-G5 complete for the native `0.2` lane; H0-H3 complete the language-`0.3` frontend, carriers, semantics, and native project integration. H4 qualification, H5 document/live integration, and H6 project-scoped MCP source access remain pending
+Status: Batches A-G5 complete for the native `0.2` lane; H0-H4 complete the language-`0.3` frontend, carriers, semantics, native project integration, and adversarial qualification. H5 document/live integration and H6 project-scoped MCP source access remain pending
 
 Dependencies: HS5, import security design
 Houdini required: module compiler no; live module fixtures yes
@@ -367,7 +367,11 @@ Houdini required: module compiler no; live module fixtures yes
   - [x] H3A same-project compiler/CLI: resolve verified v4 local closures into resolved-set v2; validate hidden and selected authored nodes against the pinned catalog; produce authenticated GraphSpec/Bundle `0.4`; dispatch native format/check/compile; retain final project/lock/catalog/source rechecks and the content-only MCP boundary.
   - [x] H3B lock writer: derive and atomically publish v4 local module records under explicit authority and optimistic digest/lease checks; validation precedes publication.
   - [x] H3C external/editor: consume only explicit per-call module-manifest-v2 roots; compile and publish mixed closures; add nested control-scope completion/navigation for saved and dirty project files without adding MCP filesystem access.
-- [ ] H4 adversarial/full verification: cover malformed recovery, unreachable invalid branches, zero and boundary counts, aggregate exhaustion, nesting/shadowing, cancellation, rename/branch/index identity, provenance, relocation, hostile roots, artifact tampering, `0.1`/`0.2` isolation, full repository tests, and independent P0/P1 review.
+- [x] H4 adversarial/full verification: cover malformed recovery, unreachable invalid branches, zero and boundary counts, aggregate exhaustion, nesting/shadowing, cancellation, rename/branch/index identity, provenance, relocation, hostile roots, artifact tampering, `0.1`/`0.2` isolation, full repository tests, and independent P0/P1 review.
+  - [x] H4A control admission/expansion: reject malformed and hostile AST fields with typed failures; validate hidden bodies and literal fold bounds; prove zero/boundary/aggregate behavior, nesting/shadowing, late cancellation, stable identities, and bounded provenance.
+  - [x] H4B project authority: prove local/mixed relocation, stale source/catalog/lock/winner rejection, cancellation, lease contention, root alias/symlink/identity-swap rejection, CLI bootstrap recovery, and host-path-free output.
+  - [x] H4C carrier/legacy: strict-decode GraphSpec `0.4`, expansion-map v2, resolved-set v2, and Bundle `0.4`; reject rehashed nested tampering, malformed spans/nodes, noncanonical JSON, and mixed versions while preserving `0.1`/`0.2`.
+  - [x] H4D qualification: pass the clean build/install, all 34 public workflows, Ruff complexity `12`/branch `15`, compileall, diff check, 50-test ceiling, 1,200-line limit, and independent P0/P1 re-review.
 - [ ] H5 Bundle `0.3`/`0.4` document/live integration: enable the frozen module carrier and typed-control carrier through distinct exact-version paths in the existing content-based preview/plan/apply pipeline only after `HS-BLOCK-008` closes.
   - [ ] H5A trust boundary: unify portable URI validation, authenticate or downgrade diagnostic locations, validate module/control provenance, enable frozen Bundle `0.3` and Bundle `0.4` without coercion, freshly re-resolve live semantics, and register GraphSpec `0.4`, expansion-map v2, resolved-module-set v2, and Bundle `0.4` schemas as one compatibility unit.
   - [ ] H5B lowering: lower GraphSpec `0.4`, expansion-map v2, selected control frames, module stacks, stable generated identities, capabilities, ownership, and source mappings into canonical network documents.
@@ -518,6 +522,16 @@ Batch H2 delivered evidence:
 - per-fold and aggregate iteration admission, a per-iteration nested-fold guard, expanded node/instance/depth/code/source-map limits, and cancellation before conditions, fold admission, iterations, declarations, and yield commits fail closed with typed HocusScript errors
 - H2 behavior now lives in the eight-scenario control suite alongside its actual preview/plan/apply boundary; the separate implementation-detail catalogues were deleted
 - active development uses Ruff and one relevant scenario file; the repository-wide ceiling is 50 tests and duplicate runner execution is prohibited
+
+Batch H4 delivered evidence:
+
+- forged/recovered graph, module, node, identifier, seed, category, count, and value shapes fail through typed HocusScript boundaries instead of being ignored or escaping as Python exceptions
+- whole-body admission covers unreachable invalid nodes and literal fold counts; zero-count, exact boundary, aggregate exhaustion, nested lexical shadowing, rename/branch/index identity, and bounded module/control provenance remain deterministic
+- cancellation now reaches carry initialization, yield commit, expansion-map construction, catalog parameter scanning, large operator matching/suggestion scans, and bounded ambiguity materialization
+- local and mixed language-`0.3` projects remain byte-identical after relocation and reject stale source/catalog/lock/winner state, held leases, noncanonical/overlapping/symlinked/swapped roots, and unauthorized bootstrap replacement without leaking host paths
+- strict GraphSpec `0.4` decoding reuses the established flat structural validator before control provenance checks; all four control carriers reject rehashed nested tampering, noncanonical JSON, and mixed historical fields
+- no public test method was added: the authoring/control/project scenario files retain 8/8/10 workflows and the repository remains at 34/50; the clean build/install, full suite, lint/complexity, compileall, diff check, and 1,200-line gates pass
+- independent P0/P1 review found and verified fixes for hostile AST admission, cancellation through worst-case catalog ambiguity paths, bounded control-lane diagnostics, raw-root canonicality, and legacy diagnostic isolation; final re-review is clean
 
 ## 10. HS7: Fidelity Matrix
 

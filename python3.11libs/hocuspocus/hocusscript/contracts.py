@@ -295,6 +295,12 @@ def decode_control_graph_spec_envelope(
             resolved_limits["aggregateIterations"] if resolved_limits is not None else 100_000
         ),
     )
+    try:
+        from .bundle_graph_validation import BundleValidationError, validate_graph_spec
+        structural_graph = {key: value for key, value in graph.items() if key != "expansionMap"}
+        validate_graph_spec(structural_graph, graph_spec_version="0.2")
+    except (BundleValidationError, KeyError, TypeError, ValueError) as exc:
+        _fail("HOCUS491", f"GraphSpec 0.4 graph structure is invalid: {exc}")
     _validate_expansion_surface(graph)
     if resolved_limits is not None:
         code_bytes = _graph_code_bytes(graph)
@@ -1174,27 +1180,20 @@ def _source_record(value: Any, label: str, kinds: set[str]) -> dict[str, str]:
     return {"uri": uri, "digest": digest, "kind": value["kind"]}
 
 
-def _fail(
-    code: str, message: str, *, details: Mapping[str, Any] | None = None,
-) -> None:
+def _fail(code: str, message: str, *, details: Mapping[str, Any] | None = None) -> None:
     raise CarrierContractError(code, message, details=details)
 
 
-__all__ = [
-    "CARRIER_CONTRACTS", "CARRIER_CONTRACTS_BY_BUNDLE", "CARRIER_CONTRACTS_BY_COMPILER",
-    "CARRIER_CONTRACTS_BY_EXPANSION_MAP", "CARRIER_CONTRACTS_BY_GRAPH_SPEC",
-    "CARRIER_CONTRACTS_BY_LANGUAGE", "CARRIER_CONTRACTS_BY_MODULE_MANIFEST",
-    "CARRIER_CONTRACTS_BY_PROJECT_LOCK", "CARRIER_CONTRACTS_BY_PROJECT_MANIFEST",
-    "CARRIER_CONTRACTS_BY_RESOLVED_MODULE_SET", "CONTROL_CARRIER_CONTRACT",
-    "CONTROL_BUNDLE_VERSION", "CONTROL_COMPILER_VERSION", "CONTROL_EXPANSION_MAP_VERSION",
-    "CONTROL_GRAPH_SPEC_VERSION", "CONTROL_LANGUAGE_VERSION", "CONTROL_MODULE_MANIFEST_VERSION",
-    "CONTROL_PROJECT_LOCK_VERSION", "CONTROL_PROJECT_MANIFEST_VERSION",
-    "CONTROL_RESOLVED_MODULE_SET_VERSION", "CONTROL_RESOLVED_LIMIT_MAXIMA",
-    "STATIC_CARRIER_CONTRACT", "CarrierContract", "CarrierContractError",
-    "contract_for_bundle", "contract_for_compiler", "contract_for_expansion_map",
-    "contract_for_graph_spec", "contract_for_language", "contract_for_module_manifest",
-    "contract_for_project_lock", "contract_for_project_manifest",
-    "contract_for_resolved_module_set", "decode_control_bundle_envelope",
-    "decode_control_expansion_map_envelope", "decode_control_graph_spec_envelope",
-    "decode_control_resolved_module_set_envelope", "require_carrier_contract",
-]
+__all__ = """
+CARRIER_CONTRACTS CARRIER_CONTRACTS_BY_BUNDLE CARRIER_CONTRACTS_BY_COMPILER CARRIER_CONTRACTS_BY_EXPANSION_MAP
+CARRIER_CONTRACTS_BY_GRAPH_SPEC CARRIER_CONTRACTS_BY_LANGUAGE CARRIER_CONTRACTS_BY_MODULE_MANIFEST
+CARRIER_CONTRACTS_BY_PROJECT_LOCK CARRIER_CONTRACTS_BY_PROJECT_MANIFEST CARRIER_CONTRACTS_BY_RESOLVED_MODULE_SET
+CarrierContract CarrierContractError contract_for_bundle contract_for_compiler contract_for_expansion_map
+contract_for_graph_spec contract_for_language contract_for_module_manifest contract_for_project_lock
+contract_for_project_manifest contract_for_resolved_module_set CONTROL_BUNDLE_VERSION CONTROL_CARRIER_CONTRACT
+CONTROL_COMPILER_VERSION CONTROL_EXPANSION_MAP_VERSION CONTROL_GRAPH_SPEC_VERSION CONTROL_LANGUAGE_VERSION
+CONTROL_MODULE_MANIFEST_VERSION CONTROL_PROJECT_LOCK_VERSION CONTROL_PROJECT_MANIFEST_VERSION
+CONTROL_RESOLVED_LIMIT_MAXIMA CONTROL_RESOLVED_MODULE_SET_VERSION decode_control_bundle_envelope
+decode_control_expansion_map_envelope decode_control_graph_spec_envelope decode_control_resolved_module_set_envelope
+require_carrier_contract STATIC_CARRIER_CONTRACT
+""".split()

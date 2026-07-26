@@ -346,29 +346,35 @@ def _bounded_authored_roots(
         _cancel(cancelled)
         if type(alias) is not str or ALIAS_PATTERN.fullmatch(alias) is None or alias in output:
             raise ProjectError("HOCUS458", "module_roots contains an invalid or duplicate alias.")
-        try:
-            raw = fspath(authored)
-        except Exception as exc:
-            raise ProjectError("HOCUS458", "External root paths must be explicit strings.") from exc
-        if (
-            type(raw) is not str
-            or not raw
-            or "\x00" in raw
-            or raw != raw.strip()
-            or raw.startswith("~")
-        ):
-            raise ProjectError("HOCUS458", "External root paths must be explicit absolute paths.")
-        if raw.startswith(("\\\\", "//")):
-            raise ProjectError("HOCUS458", "UNC and device-namespace external roots are forbidden.")
-        if raw.casefold().startswith(("\\\\?\\", "\\\\.\\", "\\??\\")):
-            raise ProjectError("HOCUS458", "Windows device-namespace external roots are forbidden.")
-        path = Path(raw)
-        if not path.is_absolute() or path.drive and not path.root:
-            raise ProjectError("HOCUS458", "External root paths must be absolute.")
-        if Path(os.path.abspath(path)) != path:
-            raise ProjectError("HOCUS458", "External root paths must be lexically canonical.")
-        output[alias] = path
+        output[alias] = _authored_root_path(authored)
     return output
+
+
+def _authored_root_path(authored: str | PathLike[str]) -> Path:
+    try:
+        raw = fspath(authored)
+    except Exception as exc:
+        raise ProjectError("HOCUS458", "External root paths must be explicit strings.") from exc
+    if (
+        type(raw) is not str
+        or not raw
+        or "\x00" in raw
+        or raw != raw.strip()
+        or raw.startswith("~")
+    ):
+        raise ProjectError("HOCUS458", "External root paths must be explicit absolute paths.")
+    if raw.startswith(("\\\\", "//")):
+        raise ProjectError("HOCUS458", "UNC and device-namespace external roots are forbidden.")
+    if raw.casefold().startswith(("\\\\?\\", "\\\\.\\", "\\??\\")):
+        raise ProjectError("HOCUS458", "Windows device-namespace external roots are forbidden.")
+    if os.path.normpath(raw) != raw:
+        raise ProjectError("HOCUS458", "External root paths must be lexically canonical.")
+    path = Path(raw)
+    if not path.is_absolute() or path.drive and not path.root:
+        raise ProjectError("HOCUS458", "External root paths must be absolute.")
+    if Path(os.path.abspath(path)) != path:
+        raise ProjectError("HOCUS458", "External root paths must be lexically canonical.")
+    return path
 
 
 def _canonical_external_root(authored: Path) -> tuple[Path, tuple[int, int, int]]:

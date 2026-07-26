@@ -326,13 +326,15 @@ Implementation sequence:
    - H1 versioned carriers (complete): assign and scaffold compiler `0.5.0`, project/lock v4, external module manifest v2, resolved-set v2, expansion-map v2, GraphSpec `0.4`, bundle `0.4`, the exact compatibility matrix, strict decoders, and offline schemas; reject every mixed or unsupported pairing and keep compiler/resolver/writer/CLI/editor/document/live MCP dispatch disabled
    - H2 semantics (complete): add whole-body static validation, exact evaluation, fold expansion, lexical hygiene, domain-separated identity, bounded provenance, cancellation, and all iteration plus existing expansion budgets
    - H3 native integration (complete): enable verified local/mixed project resolver/compiler/lock, CLI check/format/compile, and control-aware editor completion/navigation only through the new version lane; retain explicit user-selected project/module roots and the content-only MCP boundary
-   - H4 adversarial/full verification: add malformed/recovery, hidden-branch, zero-count, boundary/aggregate budget, cancellation, identity stability, nesting, provenance, relocation, hostile-root, artifact-tamper, legacy-isolation, and full repository gates before declaring `0.3` supported
+   - H4 adversarial/full verification (complete): cover malformed/recovery, hidden-branch, zero-count, boundary/aggregate budget, cancellation, identity stability, nesting, provenance, relocation, hostile-root, artifact-tamper, legacy-isolation, and full repository gates before declaring `0.3` supported
    - H5 document/live integration: close the Bundle `0.3`/`0.4` diagnostic and URI blocker; lower GraphSpec `0.4` plus module/control provenance into canonical network documents; freshly re-resolve against the live catalog; enable preview, immutable plan, guarded apply, rollback, verification, and export/recompile parity
    - H6 project-scoped MCP workspace: let the user approve and configure project directories and read-only external roots; expose bounded project-relative source read/edit/build/navigation operations; preserve exact-digest writes, native-file authority, bundle-based Houdini mutation, and explicit revocation
 
+H4 qualification status (2026-07-26): complete. The existing authoring, control, and project workflow scenarios now cover strict carrier tampering, malformed/recovered and forged ASTs, hidden invalid bodies, zero/boundary/aggregate folds, nesting/shadowing, late cancellation including large catalog scans and ambiguity materialization, durable identity/provenance, local/mixed relocation, hostile roots, stale authority, and frozen legacy behavior without increasing the 34-scenario catalogue. Qualification fixed GraphSpec `0.4` structural decoding, hostile AST typed failures, control admission/cancellation gaps, bounded cancellable ambiguity diagnostics, and raw external-root canonicality. The clean build/install, 34-workflow suite, Ruff complexity, compileall, diff check, 50-scenario ceiling, and 1,200-line gate pass; independent P0/P1 re-review is clean.
+
 ### H5: Bundle 0.3/0.4 Document and Live Integration
 
-Status: planned after H4
+Status: next; H4 complete
 
 Dependencies: H4 qualification, HS3 document lowering, HS4 immutable plan/apply, `HS-BLOCK-008`
 Houdini required: yes

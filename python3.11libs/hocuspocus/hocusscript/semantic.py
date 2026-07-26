@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import json
 import re
+from bisect import insort
 from dataclasses import dataclass
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 from .catalog import CatalogProvider, CatalogSnapshot, ConnectorDefinition, OperatorDefinition, ParameterDefinition
 from .diagnostics import Diagnostic, SourceSpan, sort_diagnostics
@@ -335,13 +336,13 @@ def _resolve_external_operator(
 
 def _resolve_operator(
     node: NodeSpec, node_index: int, category: str | None, catalog: CatalogSnapshot,
-    diagnostics: list[Diagnostic],
+    diagnostics: list[Diagnostic], checkpoint: Callable[[], None] | None = None,
 ) -> OperatorDefinition | None:
     selector = node.type_name
     selector_category: str | None = None
     if "/" in selector:
         possible_category, possible_name = selector.split("/", 1)
-        if possible_category in {item.name for item in catalog.categories} and possible_name:
+        if possible_category in _catalog_category_names(catalog, checkpoint) and possible_name:
             selector_category, selector = possible_category, possible_name
     if category is not None and selector_category is not None and selector_category != category:
         span = node.field_spans.get("typeName", node.span)
@@ -354,52 +355,146 @@ def _resolve_operator(
         ))
         return None
     effective_category = category or selector_category
-    candidates = [item for item in catalog.operators if effective_category is None or item.category == effective_category]
-    exact = [item for item in candidates if item.qualified_name == selector]
+    candidates, exact, aliases, unqualified = _operator_matches(
+        catalog, effective_category, selector, checkpoint,
+    )
     if len(exact) == 1:
         return exact[0]
-    aliases = [item for item in candidates if selector in item.aliases]
     if len(aliases) == 1:
         return aliases[0]
     if "::" not in selector:
-        unqualified = [item for item in candidates if item.name == selector]
         if len(unqualified) == 1:
             return unqualified[0]
         if len(unqualified) > 1:
             aliases = unqualified
     if len(aliases) > 1:
-        _ambiguous_operator(node, node_index, aliases, diagnostics)
+        _ambiguous_operator(
+            node, node_index, aliases, diagnostics, checkpoint=checkpoint,
+        )
         return None
     span = node.field_spans.get("typeName", node.span)
     pointer = f"/nodes/{node_index}/typeName"
-    names = sorted(
-        item.qualified_name if effective_category is not None else f"{item.category}/{item.qualified_name}"
-        for item in candidates
-    )
+    names = _operator_candidate_names(candidates, effective_category, checkpoint)
     code = "HOCUS624" if "::" in selector else "HOCUS622"
     message = (
         f"Exact operator '{node.type_name}' is unavailable; version or namespace fallback is forbidden."
         if code == "HOCUS624" else f"Unknown operator '{node.type_name}'."
     )
-    diagnostics.append(_unknown_with_fixes(code, message, node.type_name, names, span, pointer, quote=True))
+    diagnostics.append(_unknown_with_fixes(
+        code, message, node.type_name, names, span, pointer,
+        quote=True, checkpoint=checkpoint,
+    ))
     return None
 
 
+def _catalog_category_names(
+    catalog: CatalogSnapshot,
+    checkpoint: Callable[[], None] | None,
+) -> set[str]:
+    names: set[str] = set()
+    for index, category in enumerate(catalog.categories):
+        _periodic_checkpoint(checkpoint, index)
+        names.add(category.name)
+    return names
+
+
+def _operator_matches(
+    catalog: CatalogSnapshot,
+    effective_category: str | None,
+    selector: str,
+    checkpoint: Callable[[], None] | None,
+) -> tuple[
+    list[OperatorDefinition],
+    list[OperatorDefinition],
+    list[OperatorDefinition],
+    list[OperatorDefinition],
+]:
+    candidates, exact, aliases, unqualified = [], [], [], []
+    for index, operator in enumerate(catalog.operators):
+        _periodic_checkpoint(checkpoint, index)
+        if effective_category is not None and operator.category != effective_category:
+            continue
+        candidates.append(operator)
+        if operator.qualified_name == selector:
+            exact.append(operator)
+        if selector in operator.aliases:
+            aliases.append(operator)
+        if "::" not in selector and operator.name == selector:
+            unqualified.append(operator)
+    return candidates, exact, aliases, unqualified
+
+
+def _operator_candidate_names(
+    candidates: list[OperatorDefinition],
+    effective_category: str | None,
+    checkpoint: Callable[[], None] | None,
+) -> list[str]:
+    names: list[str] = []
+    for index, operator in enumerate(candidates):
+        _periodic_checkpoint(checkpoint, index)
+        names.append(
+            operator.qualified_name
+            if effective_category is not None
+            else f"{operator.category}/{operator.qualified_name}"
+        )
+    return sorted(names)
+
+
 def _ambiguous_operator(
-    node: NodeSpec, node_index: int, candidates: list[OperatorDefinition], diagnostics: list[Diagnostic],
+    node: NodeSpec,
+    node_index: int,
+    candidates: list[OperatorDefinition],
+    diagnostics: list[Diagnostic],
+    *,
+    checkpoint: Callable[[], None] | None = None,
 ) -> None:
-    cross_category = len({item.category for item in candidates}) > 1
-    ordered = sorted({
-        f"{item.category}/{item.qualified_name}" if cross_category else item.qualified_name
-        for item in candidates
-    })
     span = node.field_spans.get("typeName", node.span)
+    if checkpoint is None:
+        cross_category = len({item.category for item in candidates}) > 1
+        ordered = sorted({
+            f"{item.category}/{item.qualified_name}"
+            if cross_category
+            else item.qualified_name
+            for item in candidates
+        })
+        details = {"candidates": ordered}
+    else:
+        ordered, candidate_count = _bounded_ambiguous_names(candidates, checkpoint)
+        details = {
+            "candidateCount": candidate_count,
+            "candidates": ordered,
+            "truncated": candidate_count > len(ordered),
+        }
     diagnostics.append(Diagnostic(
         "error", "HOCUS623", "semantic", f"Operator '{node.type_name}' is ambiguous.", span,
         related=[{"message": name} for name in ordered],
         fixes=[_replacement_fix(f"Use {name}", span, json.dumps(name)) for name in ordered[:5]],
-        details={"candidates": ordered}, json_pointer=f"/nodes/{node_index}/typeName",
+        details=details,
+        json_pointer=f"/nodes/{node_index}/typeName",
     ))
+
+
+def _bounded_ambiguous_names(
+    candidates: list[OperatorDefinition],
+    checkpoint: Callable[[], None] | None,
+    *,
+    limit: int = 256,
+) -> tuple[list[str], int]:
+    identities: set[tuple[str, str]] = set()
+    categories: set[str] = set()
+    for index, operator in enumerate(candidates):
+        _periodic_checkpoint(checkpoint, index)
+        identities.add((operator.category, operator.qualified_name))
+        categories.add(operator.category)
+    cross_category = len(categories) > 1
+    ordered: list[str] = []
+    for index, (category, name) in enumerate(identities):
+        _periodic_checkpoint(checkpoint, index)
+        rendered = f"{category}/{name}" if cross_category else name
+        insort(ordered, rendered)
+        if len(ordered) > limit:
+            ordered.pop()
+    return ordered, len(identities)
 
 
 def _operator_selection(node: NodeSpec, index: int, operator: OperatorDefinition) -> OperatorSelection:
@@ -768,9 +863,9 @@ def _ports_compatible(
 
 def _unknown_with_fixes(
     code: str, message: str, authored: str, candidates: list[str], span: SourceSpan,
-    pointer: str, *, quote: bool,
+    pointer: str, *, quote: bool, checkpoint: Callable[[], None] | None = None,
 ) -> Diagnostic:
-    suggestions = _suggest(authored, candidates)
+    suggestions = _suggest(authored, candidates, checkpoint=checkpoint)
     fixes = []
     for candidate in suggestions:
         if quote or _IDENTIFIER.fullmatch(candidate):
@@ -788,13 +883,24 @@ def _replacement_fix(title: str, span: SourceSpan, replacement: str) -> dict[str
     }]}
 
 
-def _suggest(authored: str, candidates: list[str], limit: int = 5) -> list[str]:
+def _suggest(
+    authored: str,
+    candidates: list[str],
+    limit: int = 5,
+    *,
+    checkpoint: Callable[[], None] | None = None,
+) -> list[str]:
     if not authored or len(authored) > 256:
         return []
     normalized = authored.casefold()
     threshold = 1 if len(normalized) <= 4 else 2 if len(normalized) <= 12 else 3
     shortlist: list[tuple[int, int, int, str]] = []
-    for candidate in set(candidates):
+    seen: set[str] = set()
+    for index, candidate in enumerate(candidates):
+        _periodic_checkpoint(checkpoint, index)
+        if candidate in seen:
+            continue
+        seen.add(candidate)
         if not candidate or len(candidate) > 256:
             continue
         current = candidate.casefold()
@@ -811,6 +917,14 @@ def _suggest(authored: str, candidates: list[str], limit: int = 5) -> list[str]:
         if len(shortlist) > 512:
             shortlist = sorted(shortlist)[:256]
     return [item[3] for item in sorted(shortlist)[:limit]]
+
+
+def _periodic_checkpoint(
+    checkpoint: Callable[[], None] | None,
+    index: int,
+) -> None:
+    if checkpoint is not None and index % 64 == 0:
+        checkpoint()
 
 
 def _edit_distance_bounded(left: str, right: str, maximum: int) -> int | None:

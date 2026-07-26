@@ -7,6 +7,7 @@ surfaces after their separate trust-boundary work is complete.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping
 
@@ -24,6 +25,7 @@ from .expander import (
 )
 from .syntax import (
     ArrayExpr,
+    CategoryStmt,
     CodeExpr,
     ExportStmt,
     ExternalDecl,
@@ -50,6 +52,8 @@ from .syntax import (
 
 
 _SPECIAL_REFERENCE_ROOTS = frozenset({"param", "iter", "carry"})
+_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_IDENTITY_SEED = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 
 
 @dataclass(frozen=True, slots=True)
@@ -162,20 +166,27 @@ def validate_control_program(
             "HOCUS460", "Control validation requires one HocusScript 0.3 graph entry.", entry.span
         )
 
-    state = _ValidationState(
-        modules, limits, cancellation, _node_parameter_observer,
-    )
-    state.checkpoint(entry.span)
-    _validate_module_mapping(modules, entry.span)
-    _validate_modules(modules, state)
-    _validate_import_dag(modules, limits.import_depth, state)
-    _validate_entry_imports(entry, entry_imports, modules, state)
-    _require_complete_closure(entry_imports, modules, entry.span, state)
+    try:
+        state = _ValidationState(
+            modules, limits, cancellation, _node_parameter_observer,
+        )
+        state.checkpoint(entry.span)
+        _validate_module_mapping(modules, entry.span)
+        _validate_modules(modules, state)
+        _validate_import_dag(modules, limits.import_depth, state)
+        _validate_entry_imports(entry, entry_imports, modules, state)
+        _require_complete_closure(entry_imports, modules, entry.span, state)
 
-    graph = entry.graph
-    _validate_graph_directives(graph, state)
-    scope = _Scope()
-    _validate_graph_body(graph, entry_imports, scope, state)
+        graph = entry.graph
+        _validate_graph_directives(graph, state)
+        scope = _Scope()
+        _validate_graph_body(graph, entry_imports, scope, state)
+    except ModuleExpansionError:
+        raise
+    except (AttributeError, KeyError, TypeError, ValueError) as exc:
+        raise ModuleExpansionError(
+            "HOCUS479", "Control syntax tree contains malformed field values.", entry.span
+        ) from exc
 
 
 def _validate_module_mapping(modules: Mapping[str, ResolvedModuleUnit], span: Any) -> None:
@@ -192,6 +203,8 @@ def _validate_module_mapping(modules: Mapping[str, ResolvedModuleUnit], span: An
 
 
 def _validate_graph_directives(graph: GraphDecl, state: _ValidationState) -> None:
+    _require_authored_name(graph.name, graph.name_span)
+    _validate_graph_statement_shape(graph, state)
     directives, flags = _collect_graph_directives(graph)
     target = _validate_graph_options(graph, directives)
     known, mutable = _validate_graph_externals(graph, target, state)
@@ -203,6 +216,7 @@ def _collect_graph_directives(
 ) -> tuple[dict[str, list[Any]], dict[str, list[FlagStmt]]]:
     directive_types = {
         "target": TargetStmt,
+        "category": CategoryStmt,
         "mode": ModeStmt,
         "revision": RevisionStmt,
         "ownership": OwnershipStmt,
@@ -226,6 +240,7 @@ def _collect_graph_directives(
 
 def _validate_graph_options(graph: GraphDecl, directives: Mapping[str, list[Any]]) -> str:
     targets = directives["target"]
+    categories = directives["category"]
     modes = directives["mode"]
     revisions = directives["revision"]
     ownerships = directives["ownership"]
@@ -236,6 +251,13 @@ def _validate_graph_options(graph: GraphDecl, directives: Mapping[str, list[Any]
             targets[0].span if targets else graph.span,
         )
     target = targets[0].value
+    if categories and (
+        type(categories[0].value) is not str
+        or _IDENTIFIER.fullmatch(categories[0].value) is None
+    ):
+        raise ModuleExpansionError(
+            "HOCUS479", "Graph category must be a bounded identifier.", categories[0].span
+        )
     mode = modes[0].value if modes else "merge"
     if mode not in {"merge", "reconcile"}:
         raise ModuleExpansionError(
@@ -262,6 +284,35 @@ def _validate_graph_options(graph: GraphDecl, directives: Mapping[str, list[Any]
             "HOCUS316", "Language 0.3 supports only layout = auto.", layouts[0].span
         )
     return target
+
+
+def _validate_graph_statement_shape(
+    graph: GraphDecl,
+    state: _ValidationState,
+) -> None:
+    allowed = (
+        TargetStmt,
+        CategoryStmt,
+        ModeStmt,
+        RevisionStmt,
+        OwnershipStmt,
+        LayoutStmt,
+        ExternalDecl,
+        FlagStmt,
+        NodeDecl,
+        UseDecl,
+        IfDecl,
+        ForDecl,
+    )
+    for statement in graph.statements:
+        state.checkpoint(statement.span)
+        if not isinstance(statement, allowed) or (
+            isinstance(statement, FlagStmt)
+            and statement.name not in {"display", "render", "output"}
+        ):
+            raise ModuleExpansionError(
+                "HOCUS479", "Unsupported statement in a control graph.", statement.span
+            )
 
 
 def _validate_graph_externals(
@@ -340,6 +391,7 @@ def _validate_modules(
                 "HOCUS460", "Resolved control modules must use HocusScript 0.3.", syntax.span
             )
         module = syntax.module
+        _require_authored_name(module.name, module.name_span)
         if (
             len(module.parameters) > state.limits.parameters_per_module
             or len(module.exports) > state.limits.exports_per_module
@@ -411,6 +463,8 @@ def _validate_import_envelope(
     declared: dict[str, Any] = {}
     for declaration in syntax.imports:
         state.checkpoint(declaration.span)
+        _require_authored_name(declaration.imported_name, declaration.imported_name_span)
+        _require_authored_name(declaration.local_name, declaration.local_name_span)
         if declaration.local_name in declared:
             raise ModuleExpansionError(
                 "HOCUS463", "Duplicate local import aliases are forbidden.", declaration.span
@@ -510,6 +564,12 @@ def _validate_module_body(
     scope: _Scope,
     state: _ValidationState,
 ) -> None:
+    for statement in module.statements:
+        state.checkpoint(statement.span)
+        if not isinstance(statement, (NodeDecl, UseDecl, IfDecl, ForDecl, ExportStmt)):
+            raise ModuleExpansionError(
+                "HOCUS479", "Unsupported statement in a control module.", statement.span
+            )
     declarations = tuple(
         statement
         for statement in module.statements
@@ -549,6 +609,7 @@ def _validate_control_body(
     expected_yields: Mapping[str, str],
     state: _ValidationState,
     owner_span: Any,
+    control_depth: int,
 ) -> None:
     declarations = tuple(
         statement
@@ -590,7 +651,9 @@ def _validate_control_body(
                 raise ModuleExpansionError(
                     "HOCUS479", "Control yields must be the trailing statements in their body.", statement.span
                 )
-            _validate_declaration(statement, imports, scope, state)
+            _validate_declaration(
+                statement, imports, scope, state, control_depth=control_depth
+            )
     if set(yielded) != set(expected_yields):
         raise ModuleExpansionError(
             "HOCUS479", "Control yields do not exactly match the declared interface.",
@@ -603,9 +666,13 @@ def _validate_declarations(
     imports: Mapping[str, Any],
     scope: _Scope,
     state: _ValidationState,
+    *,
+    control_depth: int = 0,
 ) -> None:
     for statement in statements:
-        _validate_declaration(statement, imports, scope, state)
+        _validate_declaration(
+            statement, imports, scope, state, control_depth=control_depth
+        )
 
 
 def _validate_declaration(
@@ -613,6 +680,8 @@ def _validate_declaration(
     imports: Mapping[str, Any],
     scope: _Scope,
     state: _ValidationState,
+    *,
+    control_depth: int = 0,
 ) -> None:
     state.claim_declaration(statement.span)
     if isinstance(statement, NodeDecl):
@@ -626,20 +695,32 @@ def _validate_declaration(
     if isinstance(statement, IfDecl):
         scope.nodes.pop(statement.symbol, None)
         scope.uses.pop(statement.symbol, None)
-        scope.controls[statement.symbol] = _validate_if(statement, imports, scope, state)
+        scope.controls[statement.symbol] = _validate_if(
+            statement, imports, scope, state, control_depth + 1
+        )
         return
     if isinstance(statement, ForDecl):
         scope.nodes.pop(statement.symbol, None)
         scope.uses.pop(statement.symbol, None)
-        scope.controls[statement.symbol] = _validate_for(statement, imports, scope, state)
+        scope.controls[statement.symbol] = _validate_for(
+            statement, imports, scope, state, control_depth + 1
+        )
         return
     raise ModuleExpansionError("HOCUS479", "Unsupported control declaration.", statement.span)
 
 
 def _validate_node(node: NodeDecl, scope: _Scope, state: _ValidationState) -> None:
+    _require_unambiguous_name(node.symbol, node.symbol_span)
+    if node.explicit_id is not None:
+        _require_identity_seed(node.explicit_id, node.explicit_id_span or node.symbol_span)
+    if type(node.type_name) is not str:
+        raise ModuleExpansionError(
+            "HOCUS477", "Node operator type must be a string.", node.type_span
+        )
     _validate_node_shape(node)
     parameter_types: list[str] = []
     for child in node.statements:
+        state.checkpoint(child.span)
         if isinstance(child, InputStmt):
             actual = _infer_expr_type(child.source, scope)
             if actual != "node_output":
@@ -658,6 +739,10 @@ def _validate_node(node: NodeDecl, scope: _Scope, state: _ValidationState) -> No
                         "HOCUS470", "node_output cannot be assigned to a scalar parameter.", child.value.span
                     )
                 parameter_types.append(actual)
+        else:
+            raise ModuleExpansionError(
+                "HOCUS479", "Unsupported statement in a control node.", child.span
+            )
     if state.node_parameter_observer is not None:
         state.node_parameter_observer(node, tuple(parameter_types))
 
@@ -772,14 +857,34 @@ def _validate_if(
     imports: Mapping[str, Any],
     scope: _Scope,
     state: _ValidationState,
+    control_depth: int,
 ) -> dict[str, str]:
-    outputs = _control_interface(control.outputs, "conditional output", control.span)
+    _validate_control_depth(control_depth, control.span, state)
+    outputs = _control_interface(
+        control.outputs, "conditional output", control.span, state
+    )
     state.checkpoint(control.condition_span)
     actual = _infer_expr_type(control.condition, scope)
     if actual != "bool":
         _type_mismatch("bool", actual, control.condition_span)
-    _validate_control_body(control.then_body, imports, scope, outputs, state, control.span)
-    _validate_control_body(control.else_body, imports, scope, outputs, state, control.span)
+    _validate_control_body(
+        control.then_body,
+        imports,
+        scope,
+        outputs,
+        state,
+        control.span,
+        control_depth,
+    )
+    _validate_control_body(
+        control.else_body,
+        imports,
+        scope,
+        outputs,
+        state,
+        control.span,
+        control_depth,
+    )
     return outputs
 
 
@@ -788,12 +893,25 @@ def _validate_for(
     imports: Mapping[str, Any],
     scope: _Scope,
     state: _ValidationState,
+    control_depth: int,
 ) -> dict[str, str]:
-    carries = _control_interface(control.carries, "fold carry", control.span)
+    _validate_control_depth(control_depth, control.span, state)
+    carries = _control_interface(control.carries, "fold carry", control.span, state)
     state.checkpoint(control.count_span)
     actual_count = _infer_expr_type(control.count, scope)
     if actual_count != "int":
         _type_mismatch("int", actual_count, control.count_span)
+    if isinstance(control.count, LiteralExpr):
+        if control.count.value < 0:
+            raise ModuleExpansionError(
+                "HOCUS475",
+                "Fold count must evaluate to an exact nonnegative int.",
+                control.count_span,
+            )
+        if control.count.value > state.limits.per_fold_iterations:
+            raise ModuleExpansionError(
+                "HOCUS464", "Fold exceeds perFoldIterations.", control.count_span
+            )
     # Initializers all use the enclosing scope. A prior carry declaration is
     # intentionally not visible to a later initializer.
     for declaration in control.carries:
@@ -804,17 +922,46 @@ def _validate_for(
     body_scope = scope.child()
     body_scope.iterators[control.iterator] = "int"
     body_scope.carries.update(carries)
-    _validate_control_body(control.body, imports, body_scope, carries, state, control.span)
+    _validate_control_body(
+        control.body,
+        imports,
+        body_scope,
+        carries,
+        state,
+        control.span,
+        control_depth,
+    )
     return carries
 
 
-def _control_interface(items: tuple[Any, ...], label: str, owner_span: Any) -> dict[str, str]:
+def _validate_control_depth(
+    depth: int,
+    span: Any,
+    state: _ValidationState,
+) -> None:
+    if depth > min(16, state.limits.instance_depth):
+        raise ModuleExpansionError(
+            "HOCUS464", "Control nesting exceeds its depth limit.", span
+        )
+
+
+def _control_interface(
+    items: tuple[Any, ...],
+    label: str,
+    owner_span: Any,
+    state: _ValidationState,
+) -> dict[str, str]:
     if not items:
         raise ModuleExpansionError(
             "HOCUS479", f"{label.capitalize()} interface must not be empty.", owner_span
         )
+    if len(items) > 256:
+        raise ModuleExpansionError(
+            "HOCUS464", f"{label.capitalize()} interface exceeds 256 declarations.", owner_span
+        )
     result: dict[str, str] = {}
     for item in items:
+        state.checkpoint(item.span)
         if item.name in result:
             raise ModuleExpansionError(
                 "HOCUS473", f"Duplicate {label}: {item.name}.", item.span
@@ -895,6 +1042,12 @@ def _scan_block_names(
             )
         symbols.add(symbol)
         if seed is not None:
+            _require_identity_seed(
+                seed,
+                statement.explicit_id_span
+                if getattr(statement, "explicit_id_span", None) is not None
+                else symbol_span,
+            )
             if seed in seeds:
                 raise ModuleExpansionError(
                     "HOCUS473", f"Duplicate effective declaration identity seed: {seed}.", statement.span
@@ -929,9 +1082,20 @@ def _require_unambiguous_name(name: str, span: Any) -> None:
 
 
 def _require_authored_name(name: str, span: Any) -> None:
+    if type(name) is not str or _IDENTIFIER.fullmatch(name) is None:
+        raise ModuleExpansionError(
+            "HOCUS473", "Authored symbol must be a HocusScript identifier.", span
+        )
     if name.startswith("__hocus_"):
         raise ModuleExpansionError(
             "HOCUS476", "Authored symbol uses reserved prefix __hocus_.", span
+        )
+
+
+def _require_identity_seed(seed: Any, span: Any) -> None:
+    if type(seed) is not str or _IDENTITY_SEED.fullmatch(seed) is None:
+        raise ModuleExpansionError(
+            "HOCUS465", "Durable declaration identity seed is invalid.", span
         )
 
 

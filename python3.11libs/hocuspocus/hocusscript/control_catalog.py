@@ -332,7 +332,9 @@ def _visit_node(node: NodeDecl, category: str | None, state: _State) -> None:
         category,
         state.catalog,
         semantic_diagnostics,
+        checkpoint=lambda: state.checkpoint(node.type_span),
     )
+    state.checkpoint(node.type_span)
     for diagnostic in semantic_diagnostics:
         state.add(_freeze_semantic_diagnostic(diagnostic))
     if operator is None:
@@ -355,8 +357,7 @@ def _validate_parameters(
     operator: OperatorDefinition,
     state: _State,
 ) -> None:
-    roots = {item.token: item for item in operator.parameters}
-    components = _parameter_components(operator)
+    roots, components = _parameter_definitions(operator, node, state)
     writes: dict[str, set[int] | None] = {}
     parms = [item for item in node.statements if isinstance(item, ParmStmt)]
     for parm_index, parm in enumerate(parms):
@@ -379,14 +380,22 @@ def _validate_parameters(
         )
 
 
-def _parameter_components(
+def _parameter_definitions(
     operator: OperatorDefinition,
-) -> dict[str, list[tuple[ParameterDefinition, int]]]:
+    node: NodeDecl,
+    state: _State,
+) -> tuple[
+    dict[str, ParameterDefinition],
+    dict[str, list[tuple[ParameterDefinition, int]]],
+]:
+    roots: dict[str, ParameterDefinition] = {}
     components: dict[str, list[tuple[ParameterDefinition, int]]] = {}
     for definition in operator.parameters:
+        state.checkpoint(node.type_span)
+        roots[definition.token] = definition
         for index, token in enumerate(definition.tuple_names):
             components.setdefault(token, []).append((definition, index))
-    return components
+    return roots, components
 
 
 def _parameter_target(

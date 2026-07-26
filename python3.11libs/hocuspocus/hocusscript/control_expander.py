@@ -511,6 +511,7 @@ def _evaluate_if(
     result: dict[str, _Bound] = {}
     for declaration in control.outputs:
         bound, yield_statement = values[declaration.name]
+        state.checkpoint(yield_statement.span)
         result[declaration.name] = replace(
             bound,
             related=_bounded_related((
@@ -548,6 +549,7 @@ def _evaluate_for(
 
     carries: dict[str, _Bound] = {}
     for declaration in control.carries:
+        state.checkpoint(declaration.initial_span)
         bound = _resolve_expr(declaration.initial, scope)
         carries[declaration.name] = replace(
             bound,
@@ -963,6 +965,7 @@ def _build_control_expansion_map(
     control_stacks: dict[str, dict[str, Any]] = {}
 
     def add(pointer: str, origin: _Origin) -> None:
+        state.checkpoint(origin.span)
         if len(mappings) >= state.limits.source_map_entries:
             raise ModuleExpansionError(
                 "HOCUS464", "Expanded graph exceeds the source-map limit.", origin.span,

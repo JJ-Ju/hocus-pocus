@@ -16,14 +16,21 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "python3.11libs"))
 
 from hocuspocus.hocusscript import (
-    CompiledBundle,
     CatalogValidationError,
+    CarrierContractError,
+    CompiledBundle,
+    ControlResolverLimits,
     ResolvedModuleUnit,
     SnapshotCatalogProvider,
     check_source,
     compile_source,
     complete_source,
     decode_catalog_snapshot,
+    decode_control_bundle_envelope,
+    decode_control_expansion_map_envelope,
+    decode_control_graph_spec_envelope,
+    decode_control_resolved_module_set_envelope,
+    expand_control_graph,
     expand_module_graph,
     export_network_document,
     format_source,
@@ -31,6 +38,7 @@ from hocuspocus.hocusscript import (
     graph_spec_from_dict,
     lower_bundle_to_document,
     parse_syntax,
+    require_carrier_contract,
     resolve_graph,
 )
 from hocuspocus.hocusscript.catalog import (
@@ -42,10 +50,13 @@ from hocuspocus.hocusscript.catalog import (
     OperatorDefinition,
     ParameterDefinition,
 )
+from hocuspocus.hocusscript.control_artifact import _compile_control_bundle
+from hocuspocus.hocusscript.lexer import Lexer
 from hocuspocus.hocusscript.native_artifact import (
     NativeArtifactError,
     publish_text_artifact,
 )
+from hocuspocus.hocusscript.parser import Parser
 
 
 FIXTURES = ROOT / "tests" / "fixtures" / "hocusscript"
@@ -187,6 +198,68 @@ def _compiled_bundle(*, mode: str = "merge") -> CompiledBundle:
     return CompiledBundle.from_result(result)
 
 
+def _control_bundle() -> dict:
+    source = '''hocus 0.3;
+graph control_asset {
+  target "/obj/control_asset";
+  category Sop;
+  if choice @id("choice") (true) outputs (result: node_output) {
+    node detailed @id("detailed"): "acme::source::1.0" {}
+    yield result = detailed.output[0];
+  } else {
+    node fallback @id("fallback"): "acme::source::1.0" {}
+    yield result = fallback.output[0];
+  }
+  node sink_node @id("sink"): sink { input[0] = choice.result; }
+  output = sink_node;
+}
+'''
+    graph = expand_control_graph(source.encode("utf-8"), ENTRY_URI, {}, {})
+    provider = _provider()
+    limits = ControlResolverLimits().to_dict()
+    resolved = {
+        "$schema": "hocuspocus://schemas/resolved-module-set/v2",
+        "kind": "hocus_resolved_module_set",
+        "schemaVersion": 2,
+        "languageVersion": "0.3",
+        "projectUid": "city",
+        "entrySourceUri": ENTRY_URI,
+        "projectManifestDigest": _digest("control-manifest"),
+        "projectLockDigest": _digest("control-lock"),
+        "resolverPolicyDigest": _digest("control-policy"),
+        "limits": limits,
+        "modules": [],
+    }
+    return _compile_control_bundle(
+        graph,
+        resolved,
+        entry_source_digest=_digest(source),
+        catalog=provider,
+        catalog_content_digest=_digest(provider.catalog.to_json()),
+        catalog_fingerprint=provider.catalog.fingerprint,
+        admitted_required_capabilities=("edit_scene",),
+    ).to_dict()
+
+
+def _tampered_control_bundle(payload: dict, path: tuple[str | int, ...], value) -> dict:
+    tampered = copy.deepcopy(payload)
+    cursor = tampered
+    for part in path[:-1]:
+        cursor = cursor[part]
+    cursor[path[-1]] = value
+    unsigned = dict(tampered)
+    unsigned.pop("bundleDigest")
+    encoded = json.dumps(
+        unsigned,
+        allow_nan=False,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    tampered["bundleDigest"] = _digest(encoded)
+    return tampered
+
+
 def _document_node(uid: str, name: str, *, root: bool = False) -> dict:
     path = "/obj/geo1" if root else f"/obj/geo1/{name}"
     return {
@@ -294,6 +367,63 @@ class HocusScriptAuthoringScenarios(unittest.TestCase):
                 self.assertFalse(result.valid)
                 self.assertIn(expected_code, {item.code for item in result.diagnostics})
                 self.assertIsNone(result.formatted_source)
+
+        malformed_control = '''hocus 0.3;
+graph demo {
+  target "/obj/demo";
+  if broken @id() (true) outputs (result: node_output) {
+    node nested: "null" {}
+    yield result = nested.output[0];
+  }
+  node after: "null" {}
+}
+'''
+        parser = Parser(Lexer(malformed_control, "broken-control.hocus").tokenize())
+        recovered = parser.parse()
+        self.assertEqual([item.code for item in parser.diagnostics], ["HOCUS316"])
+        self.assertIn(
+            "after",
+            {getattr(item, "symbol", None) for item in recovered.graph.statements},
+        )
+
+        bundle = _control_bundle()
+        graph, resolved = bundle["graphSpec"], bundle["resolvedModuleSet"]
+        self.assertEqual(decode_control_bundle_envelope(bundle), bundle)
+        self.assertEqual(decode_control_graph_spec_envelope(graph), graph)
+        self.assertEqual(decode_control_expansion_map_envelope(graph["expansionMap"]), graph["expansionMap"])
+        self.assertEqual(decode_control_resolved_module_set_envelope(resolved), resolved)
+
+        tampering = (
+            (("languageVersion",), "0.2", "HOCUS494"),
+            (("resolvedModuleSet", "schemaVersion"), 1, "HOCUS493"),
+            (("graphSpec", "nodes", 0, "typeName"), 7, "HOCUS491"),
+            (("graphSpec", "expansionMap", "schemaVersion"), 1, "HOCUS492"),
+            (("sourceMaps", "expansionMapVersion"), 1, "HOCUS494"),
+        )
+        for path, value, code in tampering:
+            with self.subTest(path=path):
+                with self.assertRaises(CarrierContractError) as captured:
+                    decode_control_bundle_envelope(
+                        _tampered_control_bundle(bundle, path, value)
+                    )
+                self.assertEqual(captured.exception.code, code)
+
+        with self.assertRaises(CarrierContractError) as noncanonical:
+            decode_control_bundle_envelope(json.dumps(bundle, indent=2))
+        self.assertEqual(noncanonical.exception.code, "HOCUS494")
+        with self.assertRaises(CarrierContractError) as mixed:
+            require_carrier_contract(
+                language_version="0.2",
+                compiler_version="0.5.0",
+                graph_spec_version="0.4",
+                expansion_map_version=2,
+                resolved_module_set_version=2,
+                project_manifest_version=2,
+                project_lock_version=2,
+                module_manifest_version=2,
+                bundle_version="0.4",
+            )
+        self.assertEqual(mixed.exception.code, "HOCUS490")
 
     def test_v02_module_can_be_formatted_and_expanded_into_a_graph(self) -> None:
         module_source = '''hocus 0.2;
