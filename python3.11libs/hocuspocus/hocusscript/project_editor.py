@@ -892,6 +892,9 @@ def _prefix(source: str, offset: int) -> tuple[str, int]:
 
 def _context_prefix(source: str, offset: int, context: str) -> tuple[str, int]:
     before = source[:offset]
+    if context == "language_version":
+        match = re.search(r"[0-9.]*$", before)
+        return (match.group(0), match.start()) if match else ("", offset)
     if context in {"parameter_name", "instance_export"}:
         match = re.search(r"[A-Za-z_][A-Za-z0-9_]*$", before)
         return (match.group(0), match.start()) if match else ("", offset)

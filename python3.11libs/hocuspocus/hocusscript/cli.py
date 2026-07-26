@@ -27,6 +27,7 @@ from .control_mixed_lock_update import update_project_mixed_control_lock
 from .expander import ModuleExpansionError
 from .exporter import MAX_EXPORT_RESPONSE_BYTES
 from .lock_update import update_project_module_lock
+from .lock_update_result import ModuleLockUpdateResult
 from .mixed_lock_update import update_project_mixed_module_lock
 from .module_compiler import ModuleProjectCompileError
 from .module_format import (
@@ -42,7 +43,14 @@ from .module_semantic import (
 )
 from .module_paths import ALIAS_PATTERN
 from .native_artifact import NativeArtifactError, publish_text_artifact
-from .project import MAX_EXTERNAL_ALIASES, ProjectContext, ProjectError, compile_path
+from .project import (
+    MAX_EXTERNAL_ALIASES,
+    ProjectContext,
+    ProjectError,
+    compile_path,
+    update_project_lock,
+    verify_project_lock,
+)
 from .resolved_modules import ModuleResolutionError
 from .semantic import CatalogConstraint, resolve_graph
 
@@ -206,22 +214,7 @@ def _dispatch_command(args: argparse.Namespace) -> int:
 def _run_lock_command(args: argparse.Namespace, module_roots: dict[str, str]) -> int:
     project = ProjectContext.load(args.project, validate_lock=False)
     if (project.manifest_version, project.language_version) == (4, "0.3"):
-        result = (
-            update_project_mixed_control_lock(
-                args.project,
-                args.entries,
-                module_roots,
-                allow_write=True,
-                expected_lock_digest=args.expected_lock_digest,
-            )
-            if module_roots
-            else update_project_control_lock(
-                args.project,
-                args.entries,
-                allow_write=True,
-                expected_lock_digest=args.expected_lock_digest,
-            )
-        )
+        result = _update_control_lock(args, module_roots)
         sys.stdout.write(json.dumps(
             result.to_dict(), ensure_ascii=False, indent=2, sort_keys=True,
         ) + "\n")
@@ -240,6 +233,72 @@ def _run_lock_command(args: argparse.Namespace, module_roots: dict[str, str]) ->
         result.to_dict(), ensure_ascii=False, indent=2, sort_keys=True,
     ) + "\n")
     return 0
+
+
+def _update_control_lock(
+    args: argparse.Namespace,
+    module_roots: dict[str, str],
+) -> ModuleLockUpdateResult:
+    if not module_roots:
+        return update_project_control_lock(
+            args.project,
+            args.entries,
+            allow_write=True,
+            expected_lock_digest=args.expected_lock_digest,
+        )
+    expected_digest = args.expected_lock_digest
+    if expected_digest is None:
+        expected_digest = _bootstrap_control_lock_digest(
+            args.project,
+            module_roots,
+        )
+    return update_project_mixed_control_lock(
+        args.project,
+        args.entries,
+        module_roots,
+        allow_write=True,
+        expected_lock_digest=expected_digest,
+    )
+
+
+def _bootstrap_control_lock_digest(
+    project_directory: str,
+    module_roots: dict[str, str],
+) -> str:
+    """Create or safely reuse only an empty verified v4 lock carrier."""
+
+    project = ProjectContext.load(project_directory, validate_lock=False)
+    declared_aliases = {item.alias for item in project.external_aliases}
+    if (
+        (project.manifest_version, project.language_version) != (4, "0.3")
+        or project.uid is None
+        or project.manifest_digest is None
+        or project.lock_path is None
+        or project.catalog_path is None
+        or not declared_aliases
+        or set(module_roots) != declared_aliases
+    ):
+        raise ProjectError(
+            "HOCUS452",
+            "Mixed control lock bootstrap requires a portable v4 project "
+            "and the complete declared alias root mapping.",
+        )
+    if project.lock_path.exists():
+        verification = verify_project_lock(project_directory)
+        if verification.modules:
+            raise ProjectError(
+                "HOCUS453",
+                "Existing nonempty lock replacement requires its exact current digest.",
+            )
+        return verification.lock_digest
+    # The generic scaffold writer takes the project lease and refuses if a
+    # lock appears concurrently. The returned digest becomes exact authority
+    # for the mixed publication; no caller-visible host path is retained.
+    return update_project_lock(
+        project_directory,
+        (),
+        allow_write=True,
+    ).lock_digest
 
 
 def _run_legacy_command(args: argparse.Namespace) -> int:
