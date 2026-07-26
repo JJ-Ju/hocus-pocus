@@ -113,7 +113,7 @@ The complete loop is:
 5. cook and capture the resulting asset
 6. revise the same source file and repeat
 
-`document.compile_source`, `document.format_source`, and `document.complete_source` remain content-only unsaved-buffer conveniences. Completion is backed by the live catalog; none of these tools reads project files or external module roots. Bundle `0.3` document lowering and live consumption remain blocked under `HS-BLOCK-008`.
+`document.compile_source`, `document.format_source`, and `document.complete_source` remain content-only unsaved-buffer conveniences. Completion is backed by the live catalog; none of these tools currently reads project files or external module roots. Bundle `0.3` document lowering and live consumption remain blocked under `HS-BLOCK-008`. Roadmap H5 adds exact-version Bundle `0.3`/`0.4` document/live handling, while H6 separately adds host-approved project-scoped `source.*` access; neither changes the content-only contract of these `document.*` tools.
 
 Rules for the current preview:
 

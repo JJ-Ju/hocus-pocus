@@ -20,8 +20,8 @@ Roadmap: `docs/hocusscript-roadmap.md`
 
 ## 2. Current Slice
 
-Current milestone: HS6 modules and studio libraries in progress; Batches A-G5 and H0-H3 are complete, and H4 qualification is next
-Current scope: H3 completes the explicit user-selected project-directory lane for local and external language-`0.3` projects: resolver-derived v4 locks, whole-AST pinned catalog admission, Bundle `0.4`, manifest-selected CLI format/check/compile/lock, exact per-call module-manifest-v2 roots, and control-aware saved/dirty completion/navigation. The editing surface remains ordinary `*.hocus` files; document/live consumers stay disabled for `0.3`, and MCP remains content-only with no file/project/root surface
+Current milestone: HS6 modules and studio libraries in progress; Batches A-G5 and H0-H3 are complete, H4 qualification is next, H5 document/live integration follows, and H6 project-scoped MCP access is planned
+Current scope: H3 completes the explicit user-selected project-directory lane for local and external language-`0.3` projects. H4 qualifies it; H5 enables frozen Bundle `0.3` and authenticated Bundle `0.4` through exact-version document preview/plan/apply paths; H6 lets users explicitly approve the directories where ordinary `*.hocus` files live so MCP agents can read, edit, build, and navigate those same files without receiving general filesystem authority
 Live mutation: available only through the completed HS4 guarded `document.apply_plan` path; HS5 format/completion/export tools are observational
 Current test catalogue: 34 public workflow scenarios in four files; lint enforces the repository-wide ceiling of 50
 Current structural gate: every checked file is at or below 1,200 lines and every Python function passes the configured complexity limits
@@ -327,7 +327,7 @@ Verification:
 
 ## 9. HS6: Modules and Studio Libraries
 
-Status: Batches A-G5 complete for the native `0.2` lane; H0-H3 complete the language-`0.3` frontend, carriers, semantics, and native project integration. H4 qualification and document/live integration remain pending, while MCP remains content-only
+Status: Batches A-G5 complete for the native `0.2` lane; H0-H3 complete the language-`0.3` frontend, carriers, semantics, and native project integration. H4 qualification, H5 document/live integration, and H6 project-scoped MCP source access remain pending
 
 Dependencies: HS5, import security design
 Houdini required: module compiler no; live module fixtures yes
@@ -368,16 +368,31 @@ Houdini required: module compiler no; live module fixtures yes
   - [x] H3B lock writer: derive and atomically publish v4 local module records under explicit authority and optimistic digest/lease checks; validation precedes publication.
   - [x] H3C external/editor: consume only explicit per-call module-manifest-v2 roots; compile and publish mixed closures; add nested control-scope completion/navigation for saved and dirty project files without adding MCP filesystem access.
 - [ ] H4 adversarial/full verification: cover malformed recovery, unreachable invalid branches, zero and boundary counts, aggregate exhaustion, nesting/shadowing, cancellation, rename/branch/index identity, provenance, relocation, hostile roots, artifact tampering, `0.1`/`0.2` isolation, full repository tests, and independent P0/P1 review.
-- [ ] Keep unbounded recursion permanently forbidden; defer explicitly bounded deterministic compile-time recursion to a separately reviewed syntax, termination, identity, provenance, and budget contract outside H0-H4.
+- [ ] H5 Bundle `0.3`/`0.4` document/live integration: enable the frozen module carrier and typed-control carrier through distinct exact-version paths in the existing content-based preview/plan/apply pipeline only after `HS-BLOCK-008` closes.
+  - [ ] H5A trust boundary: unify portable URI validation, authenticate or downgrade diagnostic locations, validate module/control provenance, enable frozen Bundle `0.3` and Bundle `0.4` without coercion, freshly re-resolve live semantics, and register GraphSpec `0.4`, expansion-map v2, resolved-module-set v2, and Bundle `0.4` schemas as one compatibility unit.
+  - [ ] H5B lowering: lower GraphSpec `0.4`, expansion-map v2, selected control frames, module stacks, stable generated identities, capabilities, ownership, and source mappings into canonical network documents.
+  - [ ] H5C preview/plan: produce deterministic diffs and immutable plans for frozen Bundle `0.3` and Bundle `0.4` through distinct exact-version paths with exact bundle, catalog, project/lock, target-document, policy, capability, ownership, and revision pins; use exact catalog/HDA fingerprints without claiming complete package-search provenance while `HS-BLOCK-003` is open.
+  - [ ] H5D apply: execute only stored plan identities; enforce confirmation and revision gates; verify realized state; roll back failures; preserve idempotent replay and artist-owned fields.
+  - [ ] H5E live acceptance: prove local and mixed projects with nested controls through preview, plan, apply, save/reload, normalized flat language-`0.1` export, and semantic-equivalence recompile in installed Houdini; any cook smoke is a separately authorized post-apply action; do not claim export reconstructs authored modules/controls; keep `HOCUS700` fail-closed until complete.
+- [ ] H6 opt-in project-scoped MCP source workspace: expose approved HocusScript projects without exposing the general host filesystem or changing bundle-based Houdini mutation.
+  - [ ] H6A authority/configuration: implement server startup/config-file registration and a Houdini approval UI over one canonical registry; issue opaque non-authorizing `projectId` selectors, expose only connection-authorized projects, and recheck connection/session grants server-side on every operation/resource fetch; separate source-read, source-write, generated-lock, and external-read grants; default to read-only/session scope; support explicit persistence, expiry, revocation, annotations, rate limits, and path-free audit records.
+  - [ ] H6B safe reads: close `HS-BLOCK-001`; implement descriptor/handle-based contained stable reads, project-relative list/search/read and MCP resource discovery, UTF-8 and byte limits, portable case/Unicode/reserved-name policy, and reparse/hardlink/UNC/device/traversal rejection.
+  - [ ] H6C guarded edits: create exclusively and patch/replace authored `.hocus` or manifest files only against exact content digests; atomically publish; reject stale, read-only, generated-file, external-root, delete, recursive-move, and blind-overwrite requests; bind grants to an authority-projection digest and require user reapproval instead of writing a manifest change that alters project UID, source/module directories, alias declarations, or catalog/lock locations.
+  - [ ] H6D project services: expose minimal `source.project.describe`, `source.file.search`, `source.file.read`, `source.file.apply_patch`, `source.file.write_export`, `source.project.build`, and `source.project.navigate` operations by composing the existing native compiler/lock/editor/export APIs rather than duplicating resolution; keep generic patching distinct from authenticated export handoff; make build action explicit and require explicit write intent, selected entries, approved complete external mapping, the generated-lock grant, and exact current lock digest for `lock_update`.
+  - [ ] H6E end-to-end workflow: approve a project, discover/read its resources, patch source, check/compile, preview, plan, apply, verify, export, and reconcile the same Git-visible files without returning a physical root.
+  - [ ] H6F hostile/installed acceptance: freeze and test default/hard ceilings for projects, enumeration, search, read batches, patches, payloads, concurrent builds, and audit retention; cover unauthorized paths, stale digests, grant expiry/revocation, concurrent edits, reparse/hardlink/root swaps, scope-widening manifest patches, external writes, restart/persistence, auditability, and live Houdini behavior; require independent P0/P1 review.
+  - [ ] H6N optional post-core notifications: separately grant rate-limited digest-only change events; test coalescing, overflow/resync, revoke/expiry shutdown, cache invalidation, and no source/physical-path leakage.
+- [ ] Keep unbounded recursion permanently forbidden; defer explicitly bounded deterministic compile-time recursion to a separately reviewed syntax, termination, identity, provenance, and budget contract outside H0-H6.
 - [x] Expose deterministic expanded GraphSpec `0.3`, expansion maps, resolved sets, formatted sources, and digests through the native typed result before semantic/apply integration.
 - [x] Seal exact catalog pins into the resolver/compiler handoff, run pinned GraphSpec `0.3` semantic resolution, and produce deterministic portable Bundle `0.3` through a one-shot native API and strict decoder.
 - [x] Dispatch native `check`, lock-independent `format`, and one-shot `compile` for manifest-selected language `0.2`; expose resolver-derived `hocus lock --update` without adding an MCP file surface.
 - [x] Add bounded guarded artifact output with exclusive create, exact raw-digest replacement, atomic publication, portable receipts, and typed stdout/stderr/exit behavior.
 - [x] Add saved-file and unsaved-buffer native project-aware completion with exact lock/interface verification and portable pinned results.
 - [x] Add native project-aware go-to-definition for module imports/aliases, parameters, local symbols, and instance exports.
-- [x] Keep editor project/file access native-only; do not register project roots, editor schemas, or file-reading behavior in MCP.
+- [x] Keep editor project/file access native-only through H4; H6 may add only the separately gated, user-approved project workspace defined above.
 - [x] Add explicit per-call external-root/module-manifest inspection with portable pins and no source reads, persistence, resolution authority, writes, CLI/MCP surface, or Houdini dependency.
-- [ ] Close `HS-BLOCK-008` diagnostic/URI parity and fresh-live-semantic gates before enabling Bundle `0.3` document lowering or live preview.
+- [ ] Close `HS-BLOCK-008` diagnostic/URI parity and fresh-live-semantic gates for Bundle `0.3` and Bundle `0.4` before H5 enables document lowering or live preview.
+- [ ] Close `HS-BLOCK-001` descriptor-safe access and `HS-BLOCK-009` workspace authority before H6 registers any MCP project/file operation.
 - [ ] Add reviewed studio-module contract and provenance tests.
 
 Batch A delivered evidence:
@@ -483,7 +498,7 @@ Batch H0 delivered evidence:
 - a forged `0.2` AST cannot format `0.3` controls; valid `0.3` parses and formats but `compile_source` remains closed with `HOCUS102`
 - the consolidated control scenario covers representative frontend formatting, legacy isolation, validation, and expansion
 - H0 success must remain syntax-only: project/lock/resolved-set/bundle/schema version enablement belongs to H1, semantic validation/expansion belongs to H2, compiler/CLI/editor integration belongs to H3, and adversarial/full verification belongs to H4
-- no H batch may add an MCP command or resource that reads, writes, lists, watches, resolves, completes, or registers `.hocus` files, projects, or roots
+- H0-H4 may not add an MCP command or resource that reads, writes, lists, watches, resolves, completes, or registers `.hocus` files, projects, or roots; H6 is the separately reviewed opt-in authority that may add the bounded operations listed in its contract
 
 Batch H1 delivered evidence:
 
@@ -556,7 +571,9 @@ Houdini required: yes
 - [ ] Add parser/compiler performance budgets.
 - [ ] Add 1k-node and 10k-node fixtures.
 - [ ] Add hostile-source and import-security tests.
-- [ ] Add explicit project selection, relocation, traversal, case, alternate-drive, UNC/device, symlink/junction, bundle portability, and offline/MCP boundary tests.
+- [ ] Add explicit project selection, relocation, traversal, case, alternate-drive, UNC/device, symlink/junction/hardlink, bundle portability, and offline/MCP boundary tests.
+- [ ] Add H5 Bundle `0.3` regression plus Bundle `0.4` local/mixed preview-plan-apply-rollback-save/flat-export qualification with source-mapped control provenance and exact live schema-resource coverage.
+- [ ] Add H6 project-grant, permission separation, expiry/revocation, exact-digest concurrency, scope-widening manifest rejection, generated-file protection, rate-limit, audit, and restart qualification; cover resource invalidation only if optional notifications ship.
 - [ ] Add previous-language/compiler-version golden fixtures.
 - [ ] Add graph-store upgrade/downgrade fixtures.
 - [ ] Report committed, installed, and running-module alignment for each live validation.
@@ -568,7 +585,7 @@ Houdini required: yes
 - [ ] Decide record/object literal syntax.
 - [ ] Decide channel-reference and expression syntax.
 - [x] Use `hocus-project://<project-uid>/<path>` for local modules and `hocus-module://<library-uid>/<path>` for approved external libraries; add manifest/lock v3 rather than reinterpreting v1/v2.
-- [x] Keep project-directory selection in native compiler/editor configuration; do not expose an MCP project registry.
+- [x] Keep native project-directory selection as the primary authoring configuration; add only an opt-in host-approved MCP project registry in H6, identified to agents by opaque `projectId` and never by returned physical roots.
 - [ ] Decide syntax for explicit per-field `preserve_live` and `source_wins` annotations; the default reject-on-conflict policy is locked.
 - [ ] Decide quoted/reserved parameter-token syntax such as `parm["input"]`.
 - [x] Use confirmation for adoption/ownership transfer, deletion/replacement, disconnect/output clearing, and code installation; retain future studio-policy threshold tuning as configuration work.

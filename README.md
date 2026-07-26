@@ -121,7 +121,7 @@ python -m hocuspocus.hocusscript compile assets/rocks.hocus --project D:/houdini
 
 Module roots are not inferred, persisted, environment-backed, or accepted by `format`/`write-export`. External-aware completion and definition remain native Python editor APIs rather than CLI or MCP commands.
 
-The compiled bundle is the content-based handoff to Houdini MCP. `document.export_source` performs the reverse handoff by returning canonical source plus provenance; the native `write-export` command creates the chosen project file with no-overwrite safeguards. The MCP never reads or edits project files or external roots, and Bundle `0.3` document lowering/live consumption remain blocked under `HS-BLOCK-008`.
+The compiled bundle is the content-based handoff to Houdini MCP. `document.export_source` performs the reverse handoff by returning canonical source plus provenance; the native `write-export` command creates the chosen project file with no-overwrite safeguards. Today the MCP does not read or edit project files or external roots, and Bundle `0.3` document lowering/live consumption remain blocked under `HS-BLOCK-008`. Roadmap H5 plans the exact-version Bundle `0.3`/`0.4` live bridge; H6 plans a separate opt-in, user-approved project workspace without changing bundle-based Houdini mutation.
 
 ## Docs
 
