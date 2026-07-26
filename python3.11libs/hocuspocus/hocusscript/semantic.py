@@ -149,116 +149,188 @@ def resolve_graph(
     capabilities = {"edit_scene"}
     if any(isinstance(parm.value, CodeValue) for node in graph.nodes for parm in node.parms):
         capabilities.add("run_code")
-
-    if constraint is not None and constraint.fingerprint != catalog.fingerprint:
-        diagnostics.append(_diagnostic(
-            "HOCUS605", "Catalog fingerprint differs from the locked semantic input.", graph.span,
-            phase="catalog", pointer="", details={"expected": constraint.fingerprint, "actual": catalog.fingerprint},
-        ))
-
-    category = graph.category
-    category_names = {item.name for item in catalog.categories}
-    if category is not None and category not in category_names:
-        span = graph.field_spans.get("category", graph.span)
-        diagnostics.append(_unknown_with_fixes(
-            "HOCUS620", f"Unknown catalog category '{category}'.", category, sorted(category_names), span,
-            "/category", quote=False,
-        ))
-
-    selected: dict[str, OperatorDefinition] = {}
-    for node_index, node in enumerate(graph.nodes):
-        if category is not None and category not in category_names:
-            continue
-        operator = _resolve_operator(node, node_index, category, catalog, diagnostics)
-        if operator is None:
-            continue
-        selected[node.symbol] = operator
-        operator_selections.append(_operator_selection(node, node_index, operator))
-        _resolve_parameters(node, node_index, operator, diagnostics, parameter_selections, capabilities)
-
-    external_by_symbol = {item.symbol: item for item in graph.external_nodes}
-    for node_index, node in enumerate(graph.nodes):
-        destination = selected.get(node.symbol)
-        if destination is None:
-            continue
-        for input_ordinal, input_spec in enumerate(node.inputs):
-            pointer = f"/nodes/{node_index}/inputs/{input_ordinal}"
-            input_port = _connector_for_index(destination.inputs, input_spec.index)
-            if input_port is None:
-                diagnostics.append(_diagnostic(
-                    "HOCUS640", f"Operator '{destination.qualified_name}' has no input {input_spec.index}.",
-                    input_spec.field_spans.get("index", input_spec.span), pointer=pointer + "/index",
-                    details={"availableIndexes": _connector_indexes(destination.inputs)},
-                ))
-            source_operator = selected.get(input_spec.source.symbol)
-            if source_operator is None and input_spec.source.symbol in external_by_symbol:
-                binding = bindings.get(input_spec.source.symbol)
-                if binding is None:
-                    message = f"Output validation for external symbol '{input_spec.source.symbol}' requires a live baseline binding."
-                    deferred.append(DeferredCheck("external_output", pointer + "/source", input_spec.source.symbol, message))
-                    diagnostics.append(Diagnostic(
-                        "info", "HOCUS643", "semantic", message, input_spec.source.span,
-                        details={"symbol": input_spec.source.symbol}, json_pointer=pointer + "/source",
-                    ))
-                    continue
-                if binding.catalog_fingerprint != catalog.fingerprint:
-                    diagnostics.append(_diagnostic(
-                        "HOCUS605", f"External binding for '{input_spec.source.symbol}' uses a different catalog.",
-                        input_spec.source.span, phase="catalog", pointer=pointer + "/source",
-                        details={"expected": catalog.fingerprint, "actual": binding.catalog_fingerprint},
-                    ))
-                    continue
-                binding_matches = [
-                    item
-                    for item in catalog.operators
-                    if item.qualified_name == binding.operator_qualified_name
-                    and (binding.category is None or item.category == binding.category)
-                ]
-                if len(binding_matches) != 1:
-                    diagnostics.append(_diagnostic(
-                        "HOCUS626",
-                        f"External binding operator '{binding.operator_qualified_name}' does not identify exactly one catalog definition.",
-                        input_spec.source.span, pointer=pointer + "/source",
-                        details={
-                            "category": binding.category,
-                            "candidateCategories": sorted(item.category for item in binding_matches),
-                        },
-                    ))
-                    continue
-                source_operator = binding_matches[0]
-            if source_operator is None:
-                continue  # Structural validation owns unknown graph symbols.
-            output_port = _connector_for_index(source_operator.outputs, input_spec.source.output_index)
-            if output_port is None:
-                diagnostics.append(_diagnostic(
-                    "HOCUS641", f"Operator '{source_operator.qualified_name}' has no output {input_spec.source.output_index}.",
-                    input_spec.source.field_spans.get("outputIndex", input_spec.source.span),
-                    pointer=pointer + "/source/outputIndex",
-                    details={"availableIndexes": _connector_indexes(source_operator.outputs)},
-                ))
-                continue
-            if input_port is None:
-                continue
-            if not _ports_compatible(source_operator, output_port, destination, input_port):
-                diagnostics.append(_diagnostic(
-                    "HOCUS642", "Source output and destination input catalog types are incompatible.", input_spec.span,
-                    pointer=pointer, details={
-                        "sourceOperator": source_operator.qualified_name, "sourceTypes": list(output_port.data_types),
-                        "destinationOperator": destination.qualified_name, "destinationTypes": list(input_port.data_types),
-                    },
-                ))
-                continue
-            connection_selections.append(ConnectionSelection(
-                node.symbol, node_index, input_spec.index, input_port.name, input_spec.source.symbol,
-                input_spec.source.output_index, output_port.name, pointer,
-            ))
-
+    category_names = _validate_catalog_constraint(
+        graph, catalog, constraint, diagnostics,
+    )
+    selected = _select_operators(
+        graph, catalog, category_names, diagnostics,
+        operator_selections, parameter_selections, capabilities,
+    )
+    _resolve_connections(
+        graph, catalog, bindings, selected, diagnostics, deferred,
+        connection_selections,
+    )
     ordered = tuple(sort_diagnostics(diagnostics))
     valid = not any(item.severity == "error" for item in ordered)
     return SemanticResult(
         valid, valid and not deferred, catalog.fingerprint, ordered, tuple(operator_selections),
         tuple(parameter_selections), tuple(connection_selections), tuple(deferred), tuple(sorted(capabilities)),
     )
+
+
+def _validate_catalog_constraint(
+    graph: GraphSpec,
+    catalog: CatalogSnapshot,
+    constraint: CatalogConstraint | None,
+    diagnostics: list[Diagnostic],
+) -> set[str]:
+    if constraint is not None and constraint.fingerprint != catalog.fingerprint:
+        diagnostics.append(_diagnostic(
+            "HOCUS605", "Catalog fingerprint differs from the locked semantic input.", graph.span,
+            phase="catalog", pointer="", details={"expected": constraint.fingerprint, "actual": catalog.fingerprint},
+        ))
+    category_names = {item.name for item in catalog.categories}
+    if graph.category is not None and graph.category not in category_names:
+        span = graph.field_spans.get("category", graph.span)
+        diagnostics.append(_unknown_with_fixes(
+            "HOCUS620", f"Unknown catalog category '{graph.category}'.", graph.category,
+            sorted(category_names), span, "/category", quote=False,
+        ))
+    return category_names
+
+
+def _select_operators(
+    graph: GraphSpec,
+    catalog: CatalogSnapshot,
+    category_names: set[str],
+    diagnostics: list[Diagnostic],
+    operator_selections: list[OperatorSelection],
+    parameter_selections: list[ParameterSelection],
+    capabilities: set[str],
+) -> dict[str, OperatorDefinition]:
+    selected: dict[str, OperatorDefinition] = {}
+    for node_index, node in enumerate(graph.nodes):
+        if graph.category is not None and graph.category not in category_names:
+            continue
+        operator = _resolve_operator(node, node_index, graph.category, catalog, diagnostics)
+        if operator is None:
+            continue
+        selected[node.symbol] = operator
+        operator_selections.append(_operator_selection(node, node_index, operator))
+        _resolve_parameters(node, node_index, operator, diagnostics, parameter_selections, capabilities)
+    return selected
+
+
+def _resolve_connections(
+    graph: GraphSpec,
+    catalog: CatalogSnapshot,
+    bindings: Mapping[str, ExternalNodeBinding],
+    selected: dict[str, OperatorDefinition],
+    diagnostics: list[Diagnostic],
+    deferred: list[DeferredCheck],
+    selections: list[ConnectionSelection],
+) -> None:
+    external_symbols = {item.symbol for item in graph.external_nodes}
+    for node_index, node in enumerate(graph.nodes):
+        destination = selected.get(node.symbol)
+        if destination is None:
+            continue
+        for input_ordinal, input_spec in enumerate(node.inputs):
+            _resolve_connection(
+                node, node_index, input_ordinal, input_spec, destination, catalog,
+                bindings, external_symbols, selected, diagnostics, deferred, selections,
+            )
+
+
+def _resolve_connection(
+    node: NodeSpec,
+    node_index: int,
+    input_ordinal: int,
+    input_spec: Any,
+    destination: OperatorDefinition,
+    catalog: CatalogSnapshot,
+    bindings: Mapping[str, ExternalNodeBinding],
+    external_symbols: set[str],
+    selected: dict[str, OperatorDefinition],
+    diagnostics: list[Diagnostic],
+    deferred: list[DeferredCheck],
+    selections: list[ConnectionSelection],
+) -> None:
+    pointer = f"/nodes/{node_index}/inputs/{input_ordinal}"
+    input_port = _connector_for_index(destination.inputs, input_spec.index)
+    if input_port is None:
+        diagnostics.append(_diagnostic(
+            "HOCUS640", f"Operator '{destination.qualified_name}' has no input {input_spec.index}.",
+            input_spec.field_spans.get("index", input_spec.span), pointer=pointer + "/index",
+            details={"availableIndexes": _connector_indexes(destination.inputs)},
+        ))
+    source_operator = selected.get(input_spec.source.symbol)
+    if source_operator is None and input_spec.source.symbol in external_symbols:
+        source_operator = _resolve_external_operator(
+            input_spec, pointer, catalog, bindings, diagnostics, deferred,
+        )
+    if source_operator is None:
+        return
+    output_port = _connector_for_index(source_operator.outputs, input_spec.source.output_index)
+    if output_port is None:
+        diagnostics.append(_diagnostic(
+            "HOCUS641", f"Operator '{source_operator.qualified_name}' has no output {input_spec.source.output_index}.",
+            input_spec.source.field_spans.get("outputIndex", input_spec.source.span),
+            pointer=pointer + "/source/outputIndex",
+            details={"availableIndexes": _connector_indexes(source_operator.outputs)},
+        ))
+        return
+    if input_port is None:
+        return
+    if not _ports_compatible(source_operator, output_port, destination, input_port):
+        diagnostics.append(_diagnostic(
+            "HOCUS642", "Source output and destination input catalog types are incompatible.",
+            input_spec.span, pointer=pointer, details={
+                "sourceOperator": source_operator.qualified_name,
+                "sourceTypes": list(output_port.data_types),
+                "destinationOperator": destination.qualified_name,
+                "destinationTypes": list(input_port.data_types),
+            },
+        ))
+        return
+    selections.append(ConnectionSelection(
+        node.symbol, node_index, input_spec.index, input_port.name, input_spec.source.symbol,
+        input_spec.source.output_index, output_port.name, pointer,
+    ))
+
+
+def _resolve_external_operator(
+    input_spec: Any,
+    pointer: str,
+    catalog: CatalogSnapshot,
+    bindings: Mapping[str, ExternalNodeBinding],
+    diagnostics: list[Diagnostic],
+    deferred: list[DeferredCheck],
+) -> OperatorDefinition | None:
+    symbol = input_spec.source.symbol
+    binding = bindings.get(symbol)
+    if binding is None:
+        message = f"Output validation for external symbol '{symbol}' requires a live baseline binding."
+        deferred.append(DeferredCheck("external_output", pointer + "/source", symbol, message))
+        diagnostics.append(Diagnostic(
+            "info", "HOCUS643", "semantic", message, input_spec.source.span,
+            details={"symbol": symbol}, json_pointer=pointer + "/source",
+        ))
+        return None
+    if binding.catalog_fingerprint != catalog.fingerprint:
+        diagnostics.append(_diagnostic(
+            "HOCUS605", f"External binding for '{symbol}' uses a different catalog.",
+            input_spec.source.span, phase="catalog", pointer=pointer + "/source",
+            details={"expected": catalog.fingerprint, "actual": binding.catalog_fingerprint},
+        ))
+        return None
+    matches = [
+        item for item in catalog.operators
+        if item.qualified_name == binding.operator_qualified_name
+        and (binding.category is None or item.category == binding.category)
+    ]
+    if len(matches) == 1:
+        return matches[0]
+    diagnostics.append(_diagnostic(
+        "HOCUS626",
+        f"External binding operator '{binding.operator_qualified_name}' does not identify exactly one catalog definition.",
+        input_spec.source.span, pointer=pointer + "/source",
+        details={
+            "category": binding.category,
+            "candidateCategories": sorted(item.category for item in matches),
+        },
+    ))
+    return None
 
 
 def _resolve_operator(

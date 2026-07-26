@@ -207,6 +207,70 @@ class HocusScriptApplyOperationsMixin:
             )
         return reservation_id, apply_commit_id
 
+    def _hocus_assert_apply_baseline(
+        self, current: dict[str, Any], baseline: dict[str, Any]
+    ) -> None:
+        live_revision = int(
+            current.get(
+                "lastSyncedLiveRevision", current.get("baselineLiveRevision", 0)
+            )
+        )
+        drifted = (
+            current.get("documentId") != baseline["documentId"]
+            or current.get("documentRevision") != baseline["documentRevision"]
+            or live_revision != baseline["liveRevision"]
+            or self._hocus_canonical_digest(current) != baseline["digest"]
+        )
+        if drifted:
+            self._hocus_fail(
+                "HOCUS753",
+                "The target network drifted after planning.",
+                family="conflict",
+                retryable=False,
+                currentDocumentRevision=current.get("documentRevision"),
+                currentLiveRevision=live_revision,
+                currentDigest=self._hocus_canonical_digest(current),
+            )
+
+    def _hocus_rollback_apply(
+        self,
+        plan: dict[str, Any],
+        baseline: dict[str, Any],
+        root_path: str,
+        undo_label: str,
+    ) -> tuple[bool, str | None, dict[str, Any] | None]:
+        verification: dict[str, Any] | None = None
+        try:
+            undos = self._require_hou().undos
+            has_label_api = callable(getattr(undos, "undoLabels", None))
+            labels = tuple(undos.undoLabels()) if has_label_api else ()
+            if labels and labels[0] == undo_label:
+                undos.performUndo()
+            elif not has_label_api and callable(getattr(undos, "undo", None)):
+                undos.undo()
+            self._monitor.mark_dirty(
+                "tool:document.apply_plan.rollback", scope_path=root_path
+            )
+            restored = self._document_current_network_payload(root_path, force_sync=True)
+            verification = self._document_verification_diff_payload(
+                baseline["document"], restored
+            )
+            rolled_back = self._document_diff_is_clean(verification)
+            if not rolled_back:
+                self._document_execute_apply_plan(
+                    plan["inversePlan"], plan["targetDocument"], checkpoint=None
+                )
+                restored = self._document_current_network_payload(
+                    root_path, force_sync=True
+                )
+                verification = self._document_verification_diff_payload(
+                    baseline["document"], restored
+                )
+                rolled_back = self._document_diff_is_clean(verification)
+            return rolled_back, None, verification
+        except Exception as exc:
+            return False, str(exc), verification
+
     def _document_apply_plan_impl(
         self,
         arguments: dict[str, Any],
@@ -230,20 +294,7 @@ class HocusScriptApplyOperationsMixin:
         ) as lease:
             self._hocus_assert_not_quarantined(root_path)
             current = self._document_current_network_payload(root_path, force_sync=True)
-            current_live_revision = int(current.get("lastSyncedLiveRevision", current.get("baselineLiveRevision", 0)))
-            if (
-                current.get("documentId") != baseline_guard["documentId"]
-                or current.get("documentRevision") != baseline_guard["documentRevision"]
-                or current_live_revision != baseline_guard["liveRevision"]
-                or self._hocus_canonical_digest(current) != baseline_guard["digest"]
-            ):
-                self._hocus_fail(
-                    "HOCUS753", "The target network drifted after planning.",
-                    family="conflict", retryable=False,
-                    currentDocumentRevision=current.get("documentRevision"),
-                    currentLiveRevision=current_live_revision,
-                    currentDigest=self._hocus_canonical_digest(current),
-                )
+            self._hocus_assert_apply_baseline(current, baseline_guard)
             # Rebuilding is a validation oracle only; the stored execution plan remains authoritative.
             validated = self._document_build_apply_plan(
                 current, plan["targetDocument"], mode=plan["mode"]
@@ -318,34 +369,11 @@ class HocusScriptApplyOperationsMixin:
                 self._documents.discard_apply_plan(plan_id, expected_hash=plan_hash)
                 return result
             except Exception as exc:
-                rolled_back = False
-                rollback_error: str | None = None
-                try:
-                    undos = self._require_hou().undos
-                    has_label_api = callable(getattr(undos, "undoLabels", None))
-                    labels = tuple(undos.undoLabels()) if has_label_api else ()
-                    if labels and labels[0] == undo_label:
-                        undos.performUndo()
-                    elif not has_label_api and callable(getattr(undos, "undo", None)):
-                        # Test doubles and older hosts may expose a direct apply-owned undo method.
-                        undos.undo()
-                    self._monitor.mark_dirty("tool:document.apply_plan.rollback", scope_path=root_path)
-                    restored = self._document_current_network_payload(root_path, force_sync=True)
-                    rollback_verification = self._document_verification_diff_payload(
-                        baseline_guard["document"], restored
+                rolled_back, rollback_error, rollback_verification = (
+                    self._hocus_rollback_apply(
+                        plan, baseline_guard, root_path, undo_label
                     )
-                    rolled_back = self._document_diff_is_clean(rollback_verification)
-                    if not rolled_back:
-                        self._document_execute_apply_plan(
-                            plan["inversePlan"], plan["targetDocument"], checkpoint=None
-                        )
-                        restored = self._document_current_network_payload(root_path, force_sync=True)
-                        rollback_verification = self._document_verification_diff_payload(
-                            baseline_guard["document"], restored
-                        )
-                        rolled_back = self._document_diff_is_clean(rollback_verification)
-                except Exception as rollback_exc:
-                    rollback_error = str(rollback_exc)
+                )
                 state = "aborted" if rolled_back else "partial_or_unknown"
                 durable_terminal = False
                 durable_error: str | None = None

@@ -16,7 +16,7 @@ Roadmap: `docs/hocusscript-roadmap.md`
 - The tests are `unittest`-native. Do not run the same suite again under pytest unless pytest compatibility itself is under test.
 - The entire repository is capped at 50 tests. Tests must exercise public behavior or a complete user workflow; implementation helpers, schema field matrices, duplicated runner coverage, and assertion-count inflation are not accepted.
 - Source, script, config, documentation, and fixture files are capped at 1,200 physical lines.
-- Ruff enforces cyclomatic complexity 25, branches 30, returns 12, arguments 12, and statements 100 per function. No existing file is grandfathered and complexity suppressions do not count as compliance.
+- Ruff enforces cyclomatic complexity 12, branches 15, returns 12, arguments 12, and statements 100 per function. No existing file is grandfathered and complexity suppressions do not count as compliance.
 
 ## 2. Current Slice
 

@@ -255,6 +255,28 @@ def decode_compiled_bundle(value: Any) -> CompiledBundle:
     if not isinstance(value, dict):
         raise BundleValidationError("HOCUS500", "Compiled bundle must be a JSON object.")
     bundle_version = value.get("bundleVersion")
+    _validate_bundle_envelope(value, bundle_version)
+    declared_digest, payload, canonical = _validate_bundle_digest(value, bundle_version)
+    graph_spec_version, language_version = _validate_bundle_contract(
+        payload, bundle_version
+    )
+    (
+        entry, dependency_uris, module_dependencies, module_limits,
+    ) = _validate_bundle_provenance_and_sources(payload, bundle_version)
+    catalog_constraints = _validate_bundle_catalog(payload, bundle_version)
+    graph_spec = _validate_bundle_graph(
+        payload, graph_spec_version, language_version, module_dependencies,
+        entry, dependency_uris, module_limits,
+    )
+    capabilities = _validate_bundle_capabilities(graph_spec, payload)
+    _validate_bundle_semantics(
+        payload, bundle_version, catalog_constraints, graph_spec, capabilities, module_limits
+    )
+    _validate_bundle_source_maps(payload, bundle_version, graph_spec, entry)
+    return CompiledBundle(canonical, declared_digest)
+
+
+def _validate_bundle_envelope(value: dict[str, Any], bundle_version: Any) -> None:
     _validate_complexity(
         value,
         max_values=(MAX_MODULE_BUNDLE_VALUES if bundle_version == MODULE_BUNDLE_VERSION else MAX_BUNDLE_VALUES),
@@ -271,6 +293,12 @@ def decode_compiled_bundle(value: Any) -> CompiledBundle:
             "Compiled bundle has missing or unknown top-level fields.",
             details={"missing": sorted(expected_keys - keys), "unknown": sorted(keys - expected_keys)},
         )
+
+
+def _validate_bundle_digest(
+    value: dict[str, Any],
+    bundle_version: str,
+) -> tuple[str, dict[str, Any], str]:
     declared_digest = _require_digest(value.get("bundleDigest"), "bundleDigest", "HOCUS502")
     payload = dict(value)
     del payload["bundleDigest"]
@@ -288,7 +316,13 @@ def decode_compiled_bundle(value: Any) -> CompiledBundle:
             "Compiled bundle digest does not match its canonical content.",
             details={"declaredDigest": declared_digest, "actualDigest": actual_digest},
         )
+    return declared_digest, payload, canonical
 
+
+def _validate_bundle_contract(
+    payload: dict[str, Any],
+    bundle_version: str,
+) -> tuple[str, str]:
     expected_schema = f"hocuspocus://schemas/compiled-bundle/v{bundle_version}"
     _require_equal(payload, "$schema", expected_schema, "HOCUS506")
     _require_equal(payload, "kind", "hocus_compiled_bundle", "HOCUS506")
@@ -316,17 +350,28 @@ def decode_compiled_bundle(value: Any) -> CompiledBundle:
     )
     if language_version not in expected_language_versions:
         raise BundleValidationError("HOCUS507", "Compiled bundle language version is unsupported.")
+    return graph_spec_version, language_version
 
-    (
-        entry, dependency_uris, module_dependencies, module_limits,
-    ) = _validate_bundle_provenance_and_sources(payload, bundle_version)
 
+def _validate_bundle_catalog(payload: dict[str, Any], bundle_version: str) -> dict[str, Any]:
     catalog_constraints = payload.get("catalogConstraints")
     if bundle_version == LEGACY_BUNDLE_VERSION:
         if catalog_constraints != {}:
             raise BundleValidationError("HOCUS513", "Bundle v0.1 catalogConstraints must be empty.")
     else:
         _validate_catalog_constraints(catalog_constraints)
+    return catalog_constraints
+
+
+def _validate_bundle_graph(
+    payload: dict[str, Any],
+    graph_spec_version: str,
+    language_version: str,
+    module_dependencies: list[dict[str, Any]],
+    entry: dict[str, str],
+    dependency_uris: set[str],
+    module_limits: dict[str, int] | None,
+) -> dict[str, Any]:
     graph_spec = payload.get("graphSpec")
     if not isinstance(graph_spec, dict):
         raise BundleValidationError("HOCUS514", "graphSpec must be an object.")
@@ -347,7 +392,13 @@ def decode_compiled_bundle(value: Any) -> CompiledBundle:
         module_limits=module_limits,
     )
     _validate_declared_source_uris(graph_spec, {entry["uri"], *dependency_uris})
+    return graph_spec
 
+
+def _validate_bundle_capabilities(
+    graph_spec: dict[str, Any],
+    payload: dict[str, Any],
+) -> list[str]:
     capabilities = payload.get("requiredCapabilities")
     expected_capabilities = _required_capabilities(graph_spec)
     if capabilities != expected_capabilities:
@@ -356,6 +407,17 @@ def decode_compiled_bundle(value: Any) -> CompiledBundle:
             "requiredCapabilities does not match the GraphSpec content.",
             details={"expected": expected_capabilities, "actual": capabilities},
         )
+    return capabilities
+
+
+def _validate_bundle_semantics(
+    payload: dict[str, Any],
+    bundle_version: str,
+    catalog_constraints: dict[str, Any],
+    graph_spec: dict[str, Any],
+    capabilities: list[str],
+    module_limits: dict[str, int] | None,
+) -> None:
     if bundle_version in {BUNDLE_VERSION, MODULE_BUNDLE_VERSION}:
         semantic = _validate_semantic_resolution(
             payload.get("semanticResolution"), catalog_constraints, graph_spec,
@@ -368,6 +430,14 @@ def decode_compiled_bundle(value: Any) -> CompiledBundle:
                 "HOCUS516",
                 "Semantic capability manifest does not match requiredCapabilities.",
             )
+
+
+def _validate_bundle_source_maps(
+    payload: dict[str, Any],
+    bundle_version: str,
+    graph_spec: dict[str, Any],
+    entry: dict[str, str],
+) -> None:
     source_maps = payload.get("sourceMaps")
     if bundle_version == MODULE_BUNDLE_VERSION:
         expansion_map = graph_spec["expansionMap"]
@@ -389,7 +459,6 @@ def decode_compiled_bundle(value: Any) -> CompiledBundle:
         }
     if not isinstance(source_maps, dict) or source_maps != expected_source_maps:
         raise BundleValidationError("HOCUS517", "sourceMaps is inconsistent with the bundle contract.")
-    return CompiledBundle(canonical, declared_digest)
 
 
 def _validate_bundle_provenance_and_sources(
@@ -546,11 +615,6 @@ def _validate_module_dependencies(
 ) -> list[dict[str, Any]]:
     if not isinstance(value, list) or len(value) > MAX_DEPENDENCIES:
         raise BundleValidationError("HOCUS512", "resolvedModuleSet.modules must be a bounded array.")
-    expected = {
-        (item.get("uri"), item.get("digest"))
-        for item in sources
-        if isinstance(item, dict) and item.get("kind") == "module"
-    }
     source_pairs = [
         (item.get("uri"), item.get("digest"))
         for item in sources
@@ -561,75 +625,8 @@ def _validate_module_dependencies(
     decoded: list[dict[str, Any]] = []
     seen: set[str] = set()
     for index, item in enumerate(value):
-        label = f"moduleDependencies[{index}]"
-        if not isinstance(item, dict) or set(item) != {
-            "uri", "moduleName", "relativePath", "origin", "ownerUid", "alias", "version",
-            "moduleManifestDigest", "sourceDigest", "interfaceDigest", "transitiveDigest",
-            "dependencies", "languageVersion",
-        }:
-            raise BundleValidationError("HOCUS512", f"{label} has an invalid shape.")
-        uri = item["uri"]
-        if not isinstance(uri, str) or len(uri) > 4096 or uri in seen:
-            raise BundleValidationError("HOCUS512", f"{label}.uri must be a unique canonical module URI.")
-        uri_match = _MODULE_URI_PATTERN.fullmatch(uri)
-        if uri_match is None:
-            raise BundleValidationError("HOCUS512", f"{label}.uri must be a unique canonical module URI.")
-        seen.add(uri)
-        _require_digest(item["sourceDigest"], f"{label}.sourceDigest", "HOCUS512")
-        _require_digest(
-            item["interfaceDigest"], f"{label}.interfaceDigest", "HOCUS512"
-        )
-        _require_digest(
-            item["transitiveDigest"], f"{label}.transitiveDigest", "HOCUS512"
-        )
-        if item["languageVersion"] != MODULE_LANGUAGE_VERSION:
-            raise BundleValidationError("HOCUS512", f"{label}.languageVersion is unsupported.")
-        if (
-            not isinstance(item["moduleName"], str)
-            or len(item["moduleName"]) > 128
-            or not _IDENTIFIER_PATTERN.fullmatch(item["moduleName"])
-        ):
-            raise BundleValidationError("HOCUS512", f"{label}.moduleName is invalid.")
-        relative_path = item["relativePath"]
-        if (
-            not isinstance(relative_path, str) or not relative_path.endswith(".hocus")
-            or relative_path.startswith(("/", "\\")) or "\\" in relative_path
-            or any(part in {"", ".", ".."} for part in relative_path.split("/"))
-        ):
-            raise BundleValidationError("HOCUS512", f"{label}.relativePath is invalid.")
-        if not isinstance(item["ownerUid"], str) or not _PROJECT_UID_PATTERN.fullmatch(item["ownerUid"]):
-            raise BundleValidationError("HOCUS512", f"{label}.ownerUid is invalid.")
-        origin = item["origin"]
-        scheme, authority, uri_path = uri_match.groups()
-        if uri_path != quote(relative_path, safe="/-._~") or authority != item["ownerUid"]:
-            raise BundleValidationError("HOCUS512", f"{label} URI does not match ownerUid/relativePath.")
-        if origin == "project":
-            if scheme != "project" or authority != project_uid or any(
-                item[field] is not None for field in ("alias", "version", "moduleManifestDigest")
-            ):
-                raise BundleValidationError("HOCUS512", f"{label} has invalid project provenance.")
-        elif origin == "external_library":
-            if (
-                scheme != "module"
-                or not isinstance(item["alias"], str)
-                or not _MODULE_ALIAS_PATTERN.fullmatch(item["alias"])
-                or not isinstance(item["version"], str)
-                or not _SEMVER_PATTERN.fullmatch(item["version"])
-            ):
-                raise BundleValidationError("HOCUS512", f"{label} has invalid external provenance.")
-            _require_digest(item["moduleManifestDigest"], f"{label}.moduleManifestDigest", "HOCUS512")
-        else:
-            raise BundleValidationError("HOCUS512", f"{label}.origin is invalid.")
-        child_uris = item["dependencies"]
-        if (
-            not isinstance(child_uris, list) or len(child_uris) > MAX_DEPENDENCIES
-            or child_uris != sorted(set(child_uris))
-            or any(not isinstance(child, str) or _MODULE_URI_PATTERN.fullmatch(child) is None for child in child_uris)
-            or uri in child_uris
-        ):
-            raise BundleValidationError("HOCUS512", f"{label}.dependencies must be sorted unique URIs.")
-        decoded.append(dict(item))
-    if [(item["uri"], item["sourceDigest"]) for item in decoded] != sorted(expected):
+        decoded.append(_validate_module_dependency(item, index, seen, project_uid))
+    if [(item["uri"], item["sourceDigest"]) for item in decoded] != sorted(set(source_pairs)):
         raise BundleValidationError(
             "HOCUS512", "Resolved modules must exactly match sorted module source dependencies."
         )
@@ -638,6 +635,110 @@ def _validate_module_dependencies(
         raise BundleValidationError("HOCUS512", "Resolved modules contain an unresolved dependency URI.")
     _validate_module_dag_and_digests(decoded, max_depth=import_depth)
     return decoded
+
+
+def _validate_module_dependency(
+    item: Any,
+    index: int,
+    seen: set[str],
+    project_uid: str,
+) -> dict[str, Any]:
+    label = f"moduleDependencies[{index}]"
+    expected_keys = {
+        "uri", "moduleName", "relativePath", "origin", "ownerUid", "alias", "version",
+        "moduleManifestDigest", "sourceDigest", "interfaceDigest", "transitiveDigest",
+        "dependencies", "languageVersion",
+    }
+    if not isinstance(item, dict) or set(item) != expected_keys:
+        raise BundleValidationError("HOCUS512", f"{label} has an invalid shape.")
+    uri, uri_match = _validate_module_dependency_identity(item, label, seen)
+    relative_path = _validate_module_dependency_content(item, label)
+    _validate_module_dependency_provenance(item, label, uri_match, relative_path, project_uid)
+    _validate_module_dependency_children(item["dependencies"], label, uri)
+    return dict(item)
+
+
+def _validate_module_dependency_identity(
+    item: dict[str, Any],
+    label: str,
+    seen: set[str],
+) -> tuple[str, Any]:
+    uri = item["uri"]
+    if not isinstance(uri, str) or len(uri) > 4096 or uri in seen:
+        raise BundleValidationError("HOCUS512", f"{label}.uri must be a unique canonical module URI.")
+    uri_match = _MODULE_URI_PATTERN.fullmatch(uri)
+    if uri_match is None:
+        raise BundleValidationError("HOCUS512", f"{label}.uri must be a unique canonical module URI.")
+    seen.add(uri)
+    return uri, uri_match
+
+
+def _validate_module_dependency_content(item: dict[str, Any], label: str) -> str:
+    for field in ("sourceDigest", "interfaceDigest", "transitiveDigest"):
+        _require_digest(item[field], f"{label}.{field}", "HOCUS512")
+    if item["languageVersion"] != MODULE_LANGUAGE_VERSION:
+        raise BundleValidationError("HOCUS512", f"{label}.languageVersion is unsupported.")
+    if (
+        not isinstance(item["moduleName"], str)
+        or len(item["moduleName"]) > 128
+        or not _IDENTIFIER_PATTERN.fullmatch(item["moduleName"])
+    ):
+        raise BundleValidationError("HOCUS512", f"{label}.moduleName is invalid.")
+    relative_path = item["relativePath"]
+    if (
+        not isinstance(relative_path, str)
+        or not relative_path.endswith(".hocus")
+        or relative_path.startswith(("/", "\\"))
+        or "\\" in relative_path
+        or any(part in {"", ".", ".."} for part in relative_path.split("/"))
+    ):
+        raise BundleValidationError("HOCUS512", f"{label}.relativePath is invalid.")
+    if not isinstance(item["ownerUid"], str) or not _PROJECT_UID_PATTERN.fullmatch(item["ownerUid"]):
+        raise BundleValidationError("HOCUS512", f"{label}.ownerUid is invalid.")
+    return relative_path
+
+
+def _validate_module_dependency_provenance(
+    item: dict[str, Any],
+    label: str,
+    uri_match: Any,
+    relative_path: str,
+    project_uid: str,
+) -> None:
+    scheme, authority, uri_path = uri_match.groups()
+    if uri_path != quote(relative_path, safe="/-._~") or authority != item["ownerUid"]:
+        raise BundleValidationError("HOCUS512", f"{label} URI does not match ownerUid/relativePath.")
+    if item["origin"] == "project":
+        if scheme != "project" or authority != project_uid or any(
+            item[field] is not None for field in ("alias", "version", "moduleManifestDigest")
+        ):
+            raise BundleValidationError("HOCUS512", f"{label} has invalid project provenance.")
+        return
+    if item["origin"] != "external_library":
+        raise BundleValidationError("HOCUS512", f"{label}.origin is invalid.")
+    if (
+        scheme != "module"
+        or not isinstance(item["alias"], str)
+        or not _MODULE_ALIAS_PATTERN.fullmatch(item["alias"])
+        or not isinstance(item["version"], str)
+        or not _SEMVER_PATTERN.fullmatch(item["version"])
+    ):
+        raise BundleValidationError("HOCUS512", f"{label} has invalid external provenance.")
+    _require_digest(item["moduleManifestDigest"], f"{label}.moduleManifestDigest", "HOCUS512")
+
+
+def _validate_module_dependency_children(child_uris: Any, label: str, uri: str) -> None:
+    if (
+        not isinstance(child_uris, list)
+        or len(child_uris) > MAX_DEPENDENCIES
+        or child_uris != sorted(set(child_uris))
+        or any(
+            not isinstance(child, str) or _MODULE_URI_PATTERN.fullmatch(child) is None
+            for child in child_uris
+        )
+        or uri in child_uris
+    ):
+        raise BundleValidationError("HOCUS512", f"{label}.dependencies must be sorted unique URIs.")
 
 
 def _module_transitive_digest(item: dict[str, Any], by_uri: dict[str, dict[str, Any]]) -> str:

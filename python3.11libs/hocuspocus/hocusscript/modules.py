@@ -47,6 +47,22 @@ class ModuleManifest:
 
 def decode_module_manifest(content: str | bytes | bytearray | Mapping[str, Any]) -> ModuleManifest:
     """Strictly decode hocus.module.toml v1/v2 without resolving a filesystem root."""
+    payload, raw = _load_module_manifest(content)
+    schema_version, uid, version, language_version = _validate_manifest_header(payload)
+    entries = _validate_manifest_entries(payload["entry_modules"])
+    return ModuleManifest(
+        library_uid=uid,
+        version=version,
+        language_version=language_version,
+        entry_modules=entries,
+        manifest_digest=_digest(raw),
+        schema_version=schema_version,
+    )
+
+
+def _load_module_manifest(
+    content: str | bytes | bytearray | Mapping[str, Any],
+) -> tuple[dict[str, Any], bytes]:
     if isinstance(content, Mapping):
         payload = dict(content)
         try:
@@ -67,6 +83,10 @@ def decode_module_manifest(content: str | bytes | bytearray | Mapping[str, Any])
         raise TypeError("module manifest content must be TOML text, bytes, or a decoded mapping")
     if len(raw) > MAX_MODULE_MANIFEST_BYTES:
         raise ProjectError("HOCUS457", "Module manifest exceeds the byte limit.")
+    return payload, raw
+
+
+def _validate_manifest_header(payload: dict[str, Any]) -> tuple[int, str, str, str]:
     if not isinstance(payload, dict) or set(payload) != {
         "schema_version", "library", "language", "entry_modules"
     }:
@@ -90,7 +110,10 @@ def decode_module_manifest(content: str | bytes | bytearray | Mapping[str, Any])
             "HOCUS457",
             f"Module manifest schema v{schema_version} language version must be {expected_language_version}.",
         )
-    entries = payload["entry_modules"]
+    return schema_version, uid, version, language_version
+
+
+def _validate_manifest_entries(entries: Any) -> tuple[str, ...]:
     if not isinstance(entries, list) or not entries or len(entries) > MAX_MODULE_ENTRIES:
         raise ProjectError("HOCUS457", "entry_modules must be a non-empty bounded array.")
     normalized: list[str] = []
@@ -100,14 +123,7 @@ def decode_module_manifest(content: str | bytes | bytearray | Mapping[str, Any])
         normalized.append(_portable_path_key(path))
     if len(set(normalized)) != len(normalized) or entries != sorted(entries):
         raise ProjectError("HOCUS457", "Entry modules must be sorted and unique after case normalization.")
-    return ModuleManifest(
-        library_uid=uid,
-        version=version,
-        language_version=language_version,
-        entry_modules=tuple(entries),
-        manifest_digest=_digest(raw),
-        schema_version=schema_version,
-    )
+    return tuple(entries)
 
 
 def _module_path(value: str) -> bool:

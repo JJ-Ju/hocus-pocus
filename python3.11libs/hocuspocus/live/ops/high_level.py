@@ -66,98 +66,105 @@ class HighLevelOperationsMixin:
         rollback_actions: list[tuple[str, Any]],
         hou_module: Any,
     ) -> dict[str, Any]:
-        if op_type == "create_node":
-            result = self._node_create_impl(resolved)
-            if op_id:
-                refs[op_id] = result["path"]
-            if transactional:
-                created_path = result["path"]
-                rollback_actions.append(
-                    (
-                        "destroy_node",
-                        lambda created_path=created_path: self._safe_value(
-                            lambda: self._require_node_by_path(created_path).destroy()
-                        ),
-                    )
-                )
-        elif op_type == "connect":
-            dest = self._require_node_by_path(
-                str(resolved.get("dest_node_path", "")),
-                label="dest_node_path",
-            )
-            dest_input_index = int(resolved.get("dest_input_index", 0))
-            previous_input = None
-            previous_output_index = 0
-            input_connections = self._safe_value(dest.inputConnections, []) or []
-            if dest_input_index < len(input_connections):
-                connection = input_connections[dest_input_index]
-                previous_input = connection.inputNode()
-                previous_output_index = connection.outputIndex()
-            result = self._node_connect_impl(resolved)
-            if transactional:
-                rollback_actions.append(
-                    (
-                        "restore_connection",
-                        lambda dest=dest, dest_input_index=dest_input_index, previous_input=previous_input, previous_output_index=previous_output_index: dest.setInput(dest_input_index, previous_input, output_index=previous_output_index) if previous_input is not None else dest.setInput(dest_input_index, None),
-                    )
-                )
-        elif op_type == "set_parm":
-            parm = self._require_parm_by_path(str(resolved.get("parm_path", "")))
-            previous_expression = self._safe_value(parm.expression, None)
-            previous_expression_language = self._safe_value(parm.expressionLanguage, None)
-            previous_value = self._safe_value(parm.eval, None)
-            result = self._parm_set_impl(resolved)
-            if transactional:
-                def restore_parm(parm=parm, previous_expression=previous_expression, previous_expression_language=previous_expression_language, previous_value=previous_value) -> None:
-                    if previous_expression is not None and previous_expression_language is not None:
-                        parm.setExpression(previous_expression, language=previous_expression_language)
-                    else:
-                        parm.set(previous_value)
-                rollback_actions.append(("restore_parm", restore_parm))
-        elif op_type == "set_flags":
-            node = self._require_node_by_path(str(resolved.get("path", "")))
-            previous_flags = self._node_flags(node)
-            result = self._node_set_flags_impl(resolved)
-            if transactional:
-                rollback_actions.append(
-                    (
-                        "restore_flags",
-                        lambda node=node, previous_flags=previous_flags: self._restore_node_flags(
-                            node, previous_flags
-                        ),
-                    )
-                )
-        elif op_type == "move_node":
-            node = self._require_node_by_path(str(resolved.get("path", "")))
-            previous_position = self._safe_value(node.position, None)
-            result = self._node_move_impl(resolved)
-            if transactional and previous_position is not None:
-                rollback_actions.append(
-                    (
-                        "restore_position",
-                        lambda node=node, previous_position=previous_position: node.setPosition(previous_position),
-                    )
-                )
-        elif op_type == "layout":
-            parent_path = str(resolved.get("parent_path", "/obj"))
-            parent = self._require_node_by_path(parent_path, label="parent_path")
-            previous_positions = {
-                child.path(): self._safe_value(child.position, None)
-                for child in parent.children()
-            }
-            result = self._node_layout_impl(resolved)
-            if transactional:
-                def restore_layout(previous_positions=previous_positions) -> None:
-                    for child_path, position in previous_positions.items():
-                        if position is None:
-                            continue
-                        child = hou_module.node(child_path)
-                        if child is not None:
-                            child.setPosition(position)
-                rollback_actions.append(("restore_layout", restore_layout))
-        else:
+        handlers = {
+            "create_node": self._batch_create_node,
+            "connect": self._batch_connect,
+            "set_parm": self._batch_set_parm,
+            "set_flags": self._batch_set_flags,
+            "move_node": self._batch_move_node,
+            "layout": self._batch_layout,
+        }
+        handler = handlers.get(op_type)
+        if handler is None:
             raise JsonRpcError(INVALID_PARAMS, f"Unsupported batch operation type: {op_type}")
+        return handler(
+            resolved, op_id, refs, transactional, rollback_actions, hou_module
+        )
 
+    def _batch_create_node(self, resolved, op_id, refs, transactional, actions, hou_module):
+        result = self._node_create_impl(resolved)
+        if op_id:
+            refs[op_id] = result["path"]
+        if transactional:
+            created_path = result["path"]
+            actions.append(
+                (
+                    "destroy_node",
+                    lambda: self._safe_value(
+                        lambda: self._require_node_by_path(created_path).destroy()
+                    ),
+                )
+            )
+        return result
+
+    def _batch_connect(self, resolved, op_id, refs, transactional, actions, hou_module):
+        dest = self._require_node_by_path(
+            str(resolved.get("dest_node_path", "")), label="dest_node_path"
+        )
+        index = int(resolved.get("dest_input_index", 0))
+        previous_input = None
+        previous_output = 0
+        connections = self._safe_value(dest.inputConnections, []) or []
+        if index < len(connections):
+            previous_input = connections[index].inputNode()
+            previous_output = connections[index].outputIndex()
+        result = self._node_connect_impl(resolved)
+        if transactional:
+            def restore():
+                if previous_input is None:
+                    dest.setInput(index, None)
+                else:
+                    dest.setInput(index, previous_input, output_index=previous_output)
+            actions.append(("restore_connection", restore))
+        return result
+
+    def _batch_set_parm(self, resolved, op_id, refs, transactional, actions, hou_module):
+        parm = self._require_parm_by_path(str(resolved.get("parm_path", "")))
+        expression = self._safe_value(parm.expression, None)
+        language = self._safe_value(parm.expressionLanguage, None)
+        value = self._safe_value(parm.eval, None)
+        result = self._parm_set_impl(resolved)
+        if transactional:
+            def restore():
+                if expression is not None and language is not None:
+                    parm.setExpression(expression, language=language)
+                else:
+                    parm.set(value)
+            actions.append(("restore_parm", restore))
+        return result
+
+    def _batch_set_flags(self, resolved, op_id, refs, transactional, actions, hou_module):
+        node = self._require_node_by_path(str(resolved.get("path", "")))
+        flags = self._node_flags(node)
+        result = self._node_set_flags_impl(resolved)
+        if transactional:
+            actions.append(("restore_flags", lambda: self._restore_node_flags(node, flags)))
+        return result
+
+    def _batch_move_node(self, resolved, op_id, refs, transactional, actions, hou_module):
+        node = self._require_node_by_path(str(resolved.get("path", "")))
+        position = self._safe_value(node.position, None)
+        result = self._node_move_impl(resolved)
+        if transactional and position is not None:
+            actions.append(("restore_position", lambda: node.setPosition(position)))
+        return result
+
+    def _batch_layout(self, resolved, op_id, refs, transactional, actions, hou_module):
+        parent = self._require_node_by_path(
+            str(resolved.get("parent_path", "/obj")), label="parent_path"
+        )
+        positions = {
+            child.path(): self._safe_value(child.position, None)
+            for child in parent.children()
+        }
+        result = self._node_layout_impl(resolved)
+        if transactional:
+            def restore():
+                for path, position in positions.items():
+                    child = hou_module.node(path)
+                    if position is not None and child is not None:
+                        child.setPosition(position)
+            actions.append(("restore_layout", restore))
         return result
 
     def _graph_batch_edit_impl(self, arguments: dict[str, Any]) -> dict[str, Any]:

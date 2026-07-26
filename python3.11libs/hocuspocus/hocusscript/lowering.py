@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from .model import (
     ArrayValue,
     CodeValue,
@@ -37,77 +39,85 @@ def lower_syntax(source: SyntaxSource) -> GraphSpec:
     """Normalize syntax while retaining internal source-field provenance."""
 
     language_version = source.version.value if source.version is not None else "0.1"
-    target: str | None = None
-    category: str | None = None
-    mode = "merge"
-    expected_revision: int | None = None
-    ownership: str | None = None
+    values: dict[str, Any] = {
+        "target": None, "category": None, "mode": "merge",
+        "expected_revision": None, "ownership": None,
+        "display": None, "render": None, "output": None, "layout": None,
+    }
     external_nodes: list[ExternalNodeSpec] = []
     nodes: list[NodeSpec] = []
-    display: str | None = None
-    render: str | None = None
-    output: str | None = None
-    layout: str | None = None
     field_spans = {"name": source.graph.name_span}
     if source.version is not None:
         field_spans["languageVersion"] = source.version.value_span
 
     for statement in source.graph.statements:
-        if isinstance(statement, TargetStmt):
-            target = statement.value
-            field_spans["target"] = statement.value_span
-        elif isinstance(statement, CategoryStmt):
-            category = statement.value
-            field_spans["category"] = statement.value_span
-        elif isinstance(statement, ModeStmt):
-            mode = statement.value
-            field_spans["mode"] = statement.value_span
-        elif isinstance(statement, RevisionStmt):
-            expected_revision = statement.value
-            field_spans["expectedRevision"] = statement.value_span
-        elif isinstance(statement, OwnershipStmt):
-            ownership = statement.value
-            field_spans["ownership"] = statement.value_span
-        elif isinstance(statement, ExternalDecl):
-            external_nodes.append(
-                ExternalNodeSpec(
-                    statement.symbol,
-                    statement.path,
-                    statement.adopted,
-                    statement.span,
-                    {"symbol": statement.symbol_span, "path": statement.path_span},
-                )
-            )
-        elif isinstance(statement, NodeDecl):
-            nodes.append(_lower_node(statement))
-        elif isinstance(statement, FlagStmt):
-            field_spans[statement.name] = statement.value_span
-            if statement.name == "display":
-                display = statement.symbol
-            elif statement.name == "render":
-                render = statement.symbol
-            else:
-                output = statement.symbol
-        elif isinstance(statement, LayoutStmt):
-            layout = statement.value
-            field_spans["layout"] = statement.value_span
+        _lower_graph_statement(statement, values, field_spans, external_nodes, nodes)
 
     return GraphSpec(
         language_version=language_version,
         name=source.graph.name,
-        target=target,
-        category=category,
-        mode=mode,
-        expected_revision=expected_revision,
-        ownership=ownership,
+        target=values["target"],
+        category=values["category"],
+        mode=values["mode"],
+        expected_revision=values["expected_revision"],
+        ownership=values["ownership"],
         external_nodes=external_nodes,
         nodes=nodes,
-        display=display,
-        render=render,
-        output=output,
-        layout=layout,
+        display=values["display"],
+        render=values["render"],
+        output=values["output"],
+        layout=values["layout"],
         span=source.graph.span,
         field_spans=field_spans,
+    )
+
+
+def _lower_graph_statement(
+    statement: Any,
+    values: dict[str, Any],
+    field_spans: dict[str, Any],
+    external_nodes: list[ExternalNodeSpec],
+    nodes: list[NodeSpec],
+) -> None:
+    if isinstance(statement, TargetStmt):
+        _set_graph_value(values, field_spans, "target", statement.value, statement.value_span)
+    elif isinstance(statement, CategoryStmt):
+        _set_graph_value(values, field_spans, "category", statement.value, statement.value_span)
+    elif isinstance(statement, ModeStmt):
+        _set_graph_value(values, field_spans, "mode", statement.value, statement.value_span)
+    elif isinstance(statement, RevisionStmt):
+        _set_graph_value(values, field_spans, "expected_revision", statement.value, statement.value_span, "expectedRevision")
+    elif isinstance(statement, OwnershipStmt):
+        _set_graph_value(values, field_spans, "ownership", statement.value, statement.value_span)
+    elif isinstance(statement, ExternalDecl):
+        external_nodes.append(_lower_external(statement))
+    elif isinstance(statement, NodeDecl):
+        nodes.append(_lower_node(statement))
+    elif isinstance(statement, FlagStmt):
+        _set_graph_value(values, field_spans, statement.name, statement.symbol, statement.value_span)
+    elif isinstance(statement, LayoutStmt):
+        _set_graph_value(values, field_spans, "layout", statement.value, statement.value_span)
+
+
+def _set_graph_value(
+    values: dict[str, Any],
+    field_spans: dict[str, Any],
+    key: str,
+    value: Any,
+    span: Any,
+    field_name: str | None = None,
+) -> None:
+    values[key] = value
+    field_spans[field_name or key] = span
+
+
+def _lower_external(statement: ExternalDecl) -> ExternalNodeSpec:
+    return ExternalNodeSpec(
+        statement.symbol,
+        statement.path,
+        statement.adopted,
+        statement.span,
+        {"symbol": statement.symbol_span, "path": statement.path_span},
     )
 
 

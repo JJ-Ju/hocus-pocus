@@ -58,6 +58,13 @@ def _validate_graph_envelope(graph: dict[str, Any], graph_spec_version: str) -> 
         expected_keys.add("expansionMap")
     if set(graph) != expected_keys:
         raise BundleValidationError("HOCUS520", "graphSpec has missing or unknown fields.")
+    _validate_graph_identity(graph)
+    _validate_graph_options(graph)
+    _validate_graph_revision(graph)
+    _validate_graph_spans(graph)
+
+
+def _validate_graph_identity(graph: dict[str, Any]) -> None:
     if not isinstance(graph["name"], str) or not _IDENTIFIER_PATTERN.fullmatch(graph["name"]):
         raise BundleValidationError("HOCUS520", "graphSpec.name must be a HocusScript identifier.")
     if not isinstance(graph["target"], str) or not _is_canonical_houdini_path(graph["target"]):
@@ -67,6 +74,9 @@ def _validate_graph_envelope(graph: dict[str, Any], graph_spec_version: str) -> 
         not isinstance(category, str) or not _IDENTIFIER_PATTERN.fullmatch(category)
     ):
         raise BundleValidationError("HOCUS520", "graphSpec.category must be an identifier or null.")
+
+
+def _validate_graph_options(graph: dict[str, Any]) -> str | None:
     ownership = graph["ownership"]
     if ownership is not None and (not isinstance(ownership, str) or not ownership.strip()):
         raise BundleValidationError("HOCUS520", "graphSpec.ownership must be a non-empty string or null.")
@@ -77,11 +87,18 @@ def _validate_graph_envelope(graph: dict[str, Any], graph_spec_version: str) -> 
         raise BundleValidationError("HOCUS520", "graphSpec.mode must be merge or reconcile.")
     if graph["mode"] == "reconcile" and ownership is None:
         raise BundleValidationError("HOCUS520", "Reconcile GraphSpecs require ownership.")
+    return ownership
+
+
+def _validate_graph_revision(graph: dict[str, Any]) -> None:
     revision = graph["expectedRevision"]
     if revision is not None and (type(revision) is not int or revision < 0):
         raise BundleValidationError(
             "HOCUS520", "graphSpec.expectedRevision must be a nonnegative integer or null."
         )
+
+
+def _validate_graph_spans(graph: dict[str, Any]) -> None:
     validate_span(graph["span"], "graphSpec.span")
     field_spans = graph["fieldSpans"]
     allowed = {

@@ -10,6 +10,163 @@ from hocuspocus.core.jsonrpc import INVALID_PARAMS, JsonRpcError
 
 
 class DocumentSnapshotOperationsMixin:
+    @staticmethod
+    def _document_derived_hocus(
+        hocus_by_node_uid: dict[str, dict[str, Any]],
+        node_uid: str,
+        entity_kind: str,
+    ) -> dict[str, Any] | None:
+        node_hocus = hocus_by_node_uid.get(node_uid)
+        if not isinstance(node_hocus, dict):
+            return None
+        fields = {
+            "ownership", "projectUid", "sourceUri", "sourceDigest", "bundleDigest",
+            "compilerVersion", "graphName", "symbol",
+        }
+        return {
+            key: copy.deepcopy(value)
+            for key, value in node_hocus.items()
+            if key in fields
+        } | {"entityKind": entity_kind}
+
+    def _document_live_node_payload(
+        self, node: dict[str, Any], root_path: str
+    ) -> tuple[dict[str, Any], str, dict[str, Any] | None]:
+        path = str(node.get("path", "")).strip()
+        node_uid, identity_mode = self._document_live_node_identity(path)
+        live_node = self._safe_value(lambda: self._require_hou().node(path), None)
+        metadata = {
+            "graphPath": path,
+            "childCount": node.get("childCount", 0),
+            "identityMode": identity_mode,
+            "inputs": copy.deepcopy(node.get("inputs", [])),
+            "displayNodePath": node.get("displayNodePath"),
+            "renderNodePath": node.get("renderNodePath"),
+            "outputNodePath": node.get("outputNodePath"),
+            "outputNodePaths": copy.deepcopy(node.get("outputNodePaths", [])),
+            "materialPath": node.get("materialPath"),
+            "fileOutputs": copy.deepcopy(node.get("fileOutputs", [])),
+        }
+        if path == root_path:
+            metadata["isDocumentRoot"] = True
+        provenance = (
+            self._document_live_node_provenance(live_node, node_uid, identity_mode)
+            if live_node is not None
+            else None
+        )
+        if provenance is not None:
+            metadata["hocus"] = provenance
+        payload = {
+            "uid": node_uid,
+            "name": node.get("name"),
+            "typeName": node.get("typeName"),
+            "category": node.get("category"),
+            "path": path,
+            "parentPath": node.get("parentPath"),
+            "isNetwork": bool(node.get("isNetwork", False)),
+            "position": node.get("position"),
+            "flags": {
+                name: bool((node.get("flags") or {}).get(name, False))
+                for name in ("display", "render", "bypass", "template")
+            },
+            "metadata": metadata,
+        }
+        if bool(node.get("isNetwork", False)) and path != root_path:
+            payload["subnetworkDocumentId"] = f"network:{path}"
+        return payload, node_uid, provenance
+
+    def _document_live_bindings_payload(
+        self,
+        parms: list[dict[str, Any]],
+        node_uid_by_path: dict[str, str],
+        hocus_by_node_uid: dict[str, dict[str, Any]],
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        code_blobs: list[dict[str, Any]] = []
+        bindings: list[dict[str, Any]] = []
+        for parm in parms:
+            node_path = str(parm.get("nodePath", "")).strip()
+            node_uid = node_uid_by_path.get(
+                node_path, self._document_node_uid(node_path)
+            )
+            code_blob = self._document_code_blob_for_parm(parm, node_uid)
+            if code_blob is not None:
+                code_blobs.append(code_blob)
+            binding = self._document_binding_for_parm(
+                parm, node_uid, code_blob["uid"] if code_blob is not None else None
+            )
+            manifest = hocus_by_node_uid.get(node_uid, {}).get("managedFields")
+            managed = manifest.get("parameters", []) if isinstance(manifest, dict) else []
+            if str(binding.get("parmName", "")) in managed:
+                hocus = self._document_derived_hocus(
+                    hocus_by_node_uid, node_uid, "parameter_binding"
+                )
+                if hocus is not None:
+                    binding["metadata"]["hocus"] = hocus
+                    if code_blob is not None:
+                        code_blob["metadata"]["hocus"] = self._document_derived_hocus(
+                            hocus_by_node_uid, node_uid, "code_blob"
+                        )
+            bindings.append(binding)
+        return code_blobs, bindings
+
+    def _document_live_edges_payload(
+        self,
+        node_paths: set[str],
+        node_uid_by_path: dict[str, str],
+        hocus_by_node_uid: dict[str, dict[str, Any]],
+    ) -> tuple[list[dict[str, Any]], dict[tuple[str, str, int], dict[str, Any]]]:
+        edges: list[dict[str, Any]] = []
+        ports: dict[tuple[str, str, int], dict[str, Any]] = {}
+        for dest_path in sorted(node_paths):
+            for connection in self._document_live_input_connections(dest_path):
+                source_path = connection["sourcePath"]
+                if source_path not in node_paths:
+                    continue
+                source_uid, dest_uid = (
+                    node_uid_by_path[source_path],
+                    node_uid_by_path[dest_path],
+                )
+                source = {"nodeUid": source_uid, "portIndex": connection["outputIndex"]}
+                dest = {"nodeUid": dest_uid, "portIndex": connection["inputIndex"]}
+                if connection.get("outputName") is not None:
+                    source["portName"] = str(connection["outputName"])
+                if connection.get("inputName") is not None:
+                    dest["portName"] = str(connection["inputName"])
+                edge = {
+                    "uid": f"edge:data:{dest_uid}:{connection['inputIndex']}",
+                    "kind": "data",
+                    "from": source,
+                    "to": dest,
+                    "metadata": {
+                        "sourcePath": source_path,
+                        "destPath": dest_path,
+                        "connectionOrder": connection["connectionOrder"],
+                    },
+                }
+                manifest = hocus_by_node_uid.get(dest_uid, {}).get("managedFields")
+                managed = manifest.get("inputs", []) if isinstance(manifest, dict) else []
+                if connection["inputIndex"] in managed:
+                    hocus = self._document_derived_hocus(
+                        hocus_by_node_uid, dest_uid, "edge"
+                    )
+                    if hocus is not None:
+                        edge["metadata"]["hocus"] = hocus
+                edges.append(edge)
+                for direction, node_uid, index, name in (
+                    ("output", source_uid, connection["outputIndex"], connection.get("outputName")),
+                    ("input", dest_uid, connection["inputIndex"], connection.get("inputName")),
+                ):
+                    ports[(node_uid, direction, index)] = {
+                        "uid": self._document_port_uid(node_uid, direction, index),
+                        "nodeUid": node_uid,
+                        "direction": direction,
+                        "name": str(name or ""),
+                        "index": index,
+                        "kind": "data",
+                        "metadata": {},
+                    }
+        return edges, ports
+
     def _document_live_network_payload(self, snapshot: dict[str, Any], root_path: str) -> dict[str, Any]:
         subgraph = self._graph_subgraph_payload(snapshot, root_path)
         nodes: list[dict[str, Any]] = []
@@ -22,136 +179,21 @@ class DocumentSnapshotOperationsMixin:
             if not path:
                 continue
             node_paths.add(path)
-            node_uid, identity_mode = self._document_live_node_identity(path)
+            payload, node_uid, provenance = self._document_live_node_payload(
+                node, root_path
+            )
             paths_by_node_uid.setdefault(node_uid, []).append(path)
-            live_node = self._safe_value(lambda path=path: self._require_hou().node(path), None)
-            metadata = {
-                "graphPath": path,
-                "childCount": node.get("childCount", 0),
-                "identityMode": identity_mode,
-                "inputs": copy.deepcopy(node.get("inputs", [])),
-                "displayNodePath": node.get("displayNodePath"),
-                "renderNodePath": node.get("renderNodePath"),
-                "outputNodePath": node.get("outputNodePath"),
-                "outputNodePaths": copy.deepcopy(node.get("outputNodePaths", [])),
-                "materialPath": node.get("materialPath"),
-                "fileOutputs": copy.deepcopy(node.get("fileOutputs", [])),
-            }
-            if path == root_path:
-                metadata["isDocumentRoot"] = True
-            if live_node is not None:
-                hocus_provenance = self._document_live_node_provenance(live_node, node_uid, identity_mode)
-                if hocus_provenance is not None:
-                    metadata["hocus"] = hocus_provenance
-                    hocus_by_node_uid[node_uid] = hocus_provenance
-            payload = {
-                "uid": node_uid,
-                "name": node.get("name"),
-                "typeName": node.get("typeName"),
-                "category": node.get("category"),
-                "path": path,
-                "parentPath": node.get("parentPath"),
-                "isNetwork": bool(node.get("isNetwork", False)),
-                "position": node.get("position"),
-                "flags": {
-                    "display": bool((node.get("flags") or {}).get("display", False)),
-                    "render": bool((node.get("flags") or {}).get("render", False)),
-                    "bypass": bool((node.get("flags") or {}).get("bypass", False)),
-                    "template": bool((node.get("flags") or {}).get("template", False)),
-                },
-                "metadata": metadata,
-            }
-            if bool(node.get("isNetwork", False)) and path != root_path:
-                payload["subnetworkDocumentId"] = f"network:{path}"
+            if provenance is not None:
+                hocus_by_node_uid[node_uid] = provenance
             nodes.append(payload)
             node_uid_by_path[path] = node_uid
 
-        code_blobs: list[dict[str, Any]] = []
-        bindings: list[dict[str, Any]] = []
-
-        def derived_hocus(node_uid: str, entity_kind: str) -> dict[str, Any] | None:
-            node_hocus = hocus_by_node_uid.get(node_uid)
-            if not isinstance(node_hocus, dict):
-                return None
-            return {
-                key: copy.deepcopy(value)
-                for key, value in node_hocus.items()
-                if key in {
-                    "ownership", "projectUid", "sourceUri", "sourceDigest", "bundleDigest",
-                    "compilerVersion", "graphName", "symbol",
-                }
-            } | {"entityKind": entity_kind}
-
-        for parm in subgraph.get("parms", []):
-            node_uid = node_uid_by_path.get(str(parm.get("nodePath", "")).strip(), self._document_node_uid(str(parm.get("nodePath", "")).strip()))
-            code_blob = self._document_code_blob_for_parm(parm, node_uid)
-            code_blob_uid = None
-            if code_blob is not None:
-                code_blobs.append(code_blob)
-                code_blob_uid = code_blob["uid"]
-            binding = self._document_binding_for_parm(parm, node_uid, code_blob_uid)
-            manifest = hocus_by_node_uid.get(node_uid, {}).get("managedFields")
-            managed_parameters = manifest.get("parameters", []) if isinstance(manifest, dict) else []
-            if str(binding.get("parmName", "")) in managed_parameters:
-                binding_hocus = derived_hocus(node_uid, "parameter_binding")
-                if binding_hocus is not None:
-                    binding["metadata"]["hocus"] = binding_hocus
-                    if code_blob is not None:
-                        code_blob["metadata"]["hocus"] = derived_hocus(node_uid, "code_blob")
-            bindings.append(binding)
-
-        edges: list[dict[str, Any]] = []
-        ports_by_key: dict[tuple[str, str, int], dict[str, Any]] = {}
-        for dest_path in sorted(node_paths):
-            for connection in self._document_live_input_connections(dest_path):
-                source_path = connection["sourcePath"]
-                if source_path not in node_paths:
-                    continue
-                source_endpoint: dict[str, Any] = {
-                    "nodeUid": node_uid_by_path[source_path],
-                    "portIndex": connection["outputIndex"],
-                }
-                dest_endpoint: dict[str, Any] = {
-                    "nodeUid": node_uid_by_path[dest_path],
-                    "portIndex": connection["inputIndex"],
-                }
-                if connection.get("outputName") is not None:
-                    source_endpoint["portName"] = str(connection["outputName"])
-                if connection.get("inputName") is not None:
-                    dest_endpoint["portName"] = str(connection["inputName"])
-                edge = {
-                        "uid": f"edge:data:{node_uid_by_path[dest_path]}:{connection['inputIndex']}",
-                        "kind": "data",
-                        "from": source_endpoint,
-                        "to": dest_endpoint,
-                        "metadata": {
-                            "sourcePath": source_path,
-                            "destPath": dest_path,
-                            "connectionOrder": connection["connectionOrder"],
-                        },
-                    }
-                dest_uid = node_uid_by_path[dest_path]
-                manifest = hocus_by_node_uid.get(dest_uid, {}).get("managedFields")
-                managed_inputs = manifest.get("inputs", []) if isinstance(manifest, dict) else []
-                if connection["inputIndex"] in managed_inputs:
-                    edge_hocus = derived_hocus(dest_uid, "edge")
-                    if edge_hocus is not None:
-                        edge["metadata"]["hocus"] = edge_hocus
-                edges.append(edge)
-                for direction, node_uid, index, name in (
-                    ("output", node_uid_by_path[source_path], connection["outputIndex"], connection.get("outputName")),
-                    ("input", node_uid_by_path[dest_path], connection["inputIndex"], connection.get("inputName")),
-                ):
-                    key = (node_uid, direction, index)
-                    ports_by_key[key] = {
-                        "uid": self._document_port_uid(node_uid, direction, index),
-                        "nodeUid": node_uid,
-                        "direction": direction,
-                        "name": str(name or ""),
-                        "index": index,
-                        "kind": "data",
-                        "metadata": {},
-                    }
+        code_blobs, bindings = self._document_live_bindings_payload(
+            subgraph.get("parms", []), node_uid_by_path, hocus_by_node_uid
+        )
+        edges, ports_by_key = self._document_live_edges_payload(
+            node_paths, node_uid_by_path, hocus_by_node_uid
+        )
 
         root_snapshot = next(
             (item for item in subgraph.get("nodes", []) if str(item.get("path", "")).strip() == root_path),
@@ -175,7 +217,9 @@ class DocumentSnapshotOperationsMixin:
             manifest = hocus_by_node_uid.get(output_uid, {}).get("managedFields")
             managed_flags = manifest.get("flags", {}) if isinstance(manifest, dict) else {}
             if managed_flags.get("output") is True:
-                output_hocus = derived_hocus(output_uid, "output_flag")
+                output_hocus = self._document_derived_hocus(
+                    hocus_by_node_uid, output_uid, "output_flag"
+                )
                 if output_hocus is not None:
                     output_edge["metadata"]["hocus"] = output_hocus
             edges.append(output_edge)

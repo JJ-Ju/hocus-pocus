@@ -379,59 +379,68 @@ class HocusPocusRuntime:
 
     def _dispatch_method(self, method: str, params: dict[str, Any], request_id: Any) -> Any:
         context = self._build_context(method, request_id, params)
-
-        if method == "initialize":
-            return self._initialize_payload(params)
-        if method == "ping":
-            return {}
-        if method == "tools/list":
-            return {"tools": self.tools.list_payload()}
+        static_handlers = {
+            "initialize": lambda: self._initialize_payload(params),
+            "ping": lambda: {},
+            "tools/list": lambda: {"tools": self.tools.list_payload()},
+            "resources/list": lambda: {"resources": self.resources.list_payload()},
+            "resources/templates/list": lambda: {
+                "resourceTemplates": self.operations.resource_templates_payload()
+            },
+        }
+        handler = static_handlers.get(method)
+        if handler is not None:
+            return handler()
         if method == "tools/call":
-            name = params.get("name")
-            arguments = params.get("arguments", {})
-            if not isinstance(name, str):
-                raise JsonRpcError(INVALID_PARAMS, "Tool call requires a string name.")
-            if not isinstance(arguments, dict):
-                raise JsonRpcError(INVALID_PARAMS, "Tool arguments must be an object.")
-            tool = self.tools.get(name)
-            if tool is None:
-                raise JsonRpcError(METHOD_NOT_FOUND, f"Unknown tool: {name}")
-            return self._call_tool(tool, arguments, context)
-        if method == "resources/list":
-            return {"resources": self.resources.list_payload()}
-        if method == "resources/templates/list":
-            return {"resourceTemplates": self.operations.resource_templates_payload()}
+            return self._dispatch_tool_call(params, context)
         if method == "resources/read":
-            uri = params.get("uri")
-            if not isinstance(uri, str):
-                raise JsonRpcError(INVALID_PARAMS, "Resource read requires a string uri.")
-            resource = self.resources.get(uri)
-            if resource is not None:
-                return resource.reader(context)
-            dynamic = self.operations.read_dynamic_resource(uri, context)
-            if dynamic is not None:
-                return dynamic
-            raise JsonRpcError(METHOD_NOT_FOUND, f"Unknown resource: {uri}")
+            return self._dispatch_resource_read(params, context)
         if method == "notifications/cancelled":
-            request_id_value = params.get("requestId")
-            operation_id_value = params.get("operationId")
-            cancelled = False
-            if request_id_value is not None:
-                cancelled = self.dispatcher.cancel_by_request_id(str(request_id_value))
-            if not cancelled and operation_id_value is not None:
-                cancelled = self.dispatcher.cancel(str(operation_id_value))
-            self.logger.info(
-                "received cancellation notification requestId=%s operationId=%s cancelled=%s",
-                request_id_value,
-                operation_id_value,
-                cancelled,
-            )
-            return None
+            return self._dispatch_cancellation(params)
         if method == "notifications/initialized":
             self.logger.info("client initialized")
             return None
-
         raise JsonRpcError(METHOD_NOT_FOUND, f"Unknown method: {method}")
+
+    def _dispatch_tool_call(self, params: dict[str, Any], context: RequestContext) -> Any:
+        name = params.get("name")
+        arguments = params.get("arguments", {})
+        if not isinstance(name, str):
+            raise JsonRpcError(INVALID_PARAMS, "Tool call requires a string name.")
+        if not isinstance(arguments, dict):
+            raise JsonRpcError(INVALID_PARAMS, "Tool arguments must be an object.")
+        tool = self.tools.get(name)
+        if tool is None:
+            raise JsonRpcError(METHOD_NOT_FOUND, f"Unknown tool: {name}")
+        return self._call_tool(tool, arguments, context)
+
+    def _dispatch_resource_read(self, params: dict[str, Any], context: RequestContext) -> Any:
+        uri = params.get("uri")
+        if not isinstance(uri, str):
+            raise JsonRpcError(INVALID_PARAMS, "Resource read requires a string uri.")
+        resource = self.resources.get(uri)
+        if resource is not None:
+            return resource.reader(context)
+        dynamic = self.operations.read_dynamic_resource(uri, context)
+        if dynamic is not None:
+            return dynamic
+        raise JsonRpcError(METHOD_NOT_FOUND, f"Unknown resource: {uri}")
+
+    def _dispatch_cancellation(self, params: dict[str, Any]) -> None:
+        request_id = params.get("requestId")
+        operation_id = params.get("operationId")
+        cancelled = (
+            request_id is not None
+            and self.dispatcher.cancel_by_request_id(str(request_id))
+        )
+        if not cancelled and operation_id is not None:
+            cancelled = self.dispatcher.cancel(str(operation_id))
+        self.logger.info(
+            "received cancellation notification requestId=%s operationId=%s cancelled=%s",
+            request_id,
+            operation_id,
+            cancelled,
+        )
 
     def _call_tool(
         self,

@@ -273,6 +273,68 @@ def _template_type(template: Any) -> str:
     return template_type
 
 
+def _parameter_menu(template: Any) -> tuple[MenuItem, ...]:
+    tokens = tuple(_text(item) for item in (_safe_call(template, "menuItems", ()) or ()))
+    labels = tuple(_text(item) for item in (_safe_call(template, "menuLabels", ()) or ()))
+    items: list[MenuItem] = []
+    seen: set[str] = set()
+    for index, token in enumerate(tokens):
+        if not token or token in seen:
+            continue
+        seen.add(token)
+        label = labels[index] if index < len(labels) and labels[index] else token
+        items.append(MenuItem(token, label))
+    return tuple(items)
+
+
+def _parameter_tags_with_bounds(template: Any) -> dict[str, str]:
+    tags = _parameter_tags(template)
+    string_type = _enum_name(_safe_call(template, "stringType", ""))
+    if string_type:
+        tags["houdini.stringType"] = string_type
+    for method, strict_method, tag_name in (
+        ("minValue", "minIsStrict", "houdini.uiMin"),
+        ("maxValue", "maxIsStrict", "houdini.uiMax"),
+    ):
+        bound = _safe_call(template, method, None)
+        valid = (
+            isinstance(bound, (int, float))
+            and not isinstance(bound, bool)
+            and math.isfinite(bound)
+            and not bool(_safe_call(template, strict_method, False))
+        )
+        if valid:
+            tags[tag_name] = str(bound)
+    return tags
+
+
+def _normalize_menu_default(
+    default: Any,
+    menu: tuple[MenuItem, ...],
+    size: int,
+    tags: dict[str, str],
+) -> Any:
+    if not menu:
+        return default
+    tokens = {item.token for item in menu}
+    defaults = default if size > 1 and isinstance(default, list) else [default]
+    if size > 1 and len(defaults) != size:
+        defaults = []
+    normalized: list[str] = []
+    for value in defaults:
+        if isinstance(value, str) and value in tokens:
+            normalized.append(value)
+        elif isinstance(value, int) and not isinstance(value, bool) and 0 <= value < len(menu):
+            normalized.append(menu[value].token)
+        else:
+            normalized = []
+            break
+    if normalized and len(normalized) == size:
+        return normalized if size > 1 else normalized[0]
+    tags["hocus.defaultStatus"] = "unresolved-menu-default"
+    return None
+
+
 def _parameter(template: Any, operator_name: str) -> ParameterDefinition | None:
     token = _text(_safe_call(template, "name", None))
     if not token:
@@ -281,32 +343,8 @@ def _parameter(template: Any, operator_name: str) -> ParameterDefinition | None:
     template_type = _template_type(template)
     size = _safe_call(template, "numComponents", 1)
     size = int(size) if isinstance(size, int) and not isinstance(size, bool) and size > 0 else 1
-    menu_tokens = tuple(_text(item) for item in (_safe_call(template, "menuItems", ()) or ()))
-    menu_labels = tuple(_text(item) for item in (_safe_call(template, "menuLabels", ()) or ()))
-    menu_items: list[MenuItem] = []
-    seen_menu_tokens: set[str] = set()
-    for index, item in enumerate(menu_tokens):
-        if not item or item in seen_menu_tokens:
-            continue
-        seen_menu_tokens.add(item)
-        menu_items.append(
-            MenuItem(item, menu_labels[index] if index < len(menu_labels) and menu_labels[index] else item)
-        )
-    menu = tuple(menu_items)
-    tags = _parameter_tags(template)
-    string_type = _enum_name(_safe_call(template, "stringType", ""))
-    if string_type:
-        tags["houdini.stringType"] = string_type
-    for method, tag_name in (("minValue", "houdini.uiMin"), ("maxValue", "houdini.uiMax")):
-        bound = _safe_call(template, method, None)
-        strict_method = "minIsStrict" if method == "minValue" else "maxIsStrict"
-        if (
-            isinstance(bound, (int, float))
-            and not isinstance(bound, bool)
-            and math.isfinite(bound)
-            and not bool(_safe_call(template, strict_method, False))
-        ):
-            tags[tag_name] = str(bound)
+    menu = _parameter_menu(template)
+    tags = _parameter_tags_with_bounds(template)
     value_type = _parameter_type(template_type, token, tags, menu, "none")
     if value_type is None:
         return None
@@ -327,25 +365,7 @@ def _parameter(template: Any, operator_name: str) -> ParameterDefinition | None:
     default = _json_safe(_safe_call(template, "defaultValue", None))
     if isinstance(default, list) and size == 1 and len(default) == 1:
         default = default[0]
-    if menu:
-        menu_tokens = {item.token for item in menu}
-        raw_defaults = default if size > 1 and isinstance(default, list) else [default]
-        if size > 1 and len(raw_defaults) != size:
-            raw_defaults = []
-        normalized_defaults: list[str] = []
-        for raw_default in raw_defaults:
-            if isinstance(raw_default, str) and raw_default in menu_tokens:
-                normalized_defaults.append(raw_default)
-            elif isinstance(raw_default, int) and not isinstance(raw_default, bool) and 0 <= raw_default < len(menu):
-                normalized_defaults.append(menu[raw_default].token)
-            else:
-                normalized_defaults = []
-                break
-        if normalized_defaults and len(normalized_defaults) == size:
-            default = normalized_defaults if size > 1 else normalized_defaults[0]
-        else:
-            default = None
-            tags["hocus.defaultStatus"] = "unresolved-menu-default"
+    default = _normalize_menu_default(default, menu, size, tags)
     if value_type == "tuple":
         if not isinstance(default, list) or len(default) != size:
             default = None

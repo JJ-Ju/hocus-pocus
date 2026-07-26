@@ -390,32 +390,54 @@ def _validate_module_import_graph(
 ) -> None:
     for uri in sorted(by_uri):
         _checkpoint(cancelled)
-        record = by_uri[uri]
-        import_targets = tuple(sorted(item.target_uri for item in record.imports))
-        if import_targets != record.dependency.dependencies:
-            _fail("HOCUS462", "Literal imports do not exactly match locked dependency URIs.", uri=uri)
-        local_names: set[str] = set()
-        specifiers: set[str] = set()
-        if len(record.imports) > limits.module_files:
-            _fail("HOCUS464", "Module imports exceed moduleFiles.", uri=uri)
-        for item in record.imports:
-            _checkpoint(cancelled)
-            if item.target_uri not in by_uri:
-                _fail("HOCUS462", "Literal import targets an unresolved module.", uri=uri, target=item.target_uri)
-            target = by_uri[item.target_uri].dependency
-            if item.imported_name != target.module_name:
-                _fail("HOCUS462", "Imported module name conflicts with the target interface.", uri=uri)
-            if item.local_name in local_names or item.specifier in specifiers:
-                _fail("HOCUS462", "Literal import names and specifiers must be unique within a module.", uri=uri)
-            local_names.add(item.local_name)
-            specifiers.add(item.specifier)
-            if item.specifier.startswith("@") and not mixed:
-                _fail("HOCUS460", "External module aliases remain disabled in Batch B.", uri=uri)
-            if mixed:
-                _validate_mixed_import_edge(record.dependency, item, target, mixed_pins)
+        _validate_module_imports(
+            uri, by_uri[uri], by_uri, limits, cancelled, mixed, mixed_pins
+        )
     entry_targets = _validate_entry_imports(
         entry_imports, by_uri, cancelled, mixed=mixed, mixed_pins=mixed_pins,
     )
+    _validate_module_reachability(by_uri, entry_targets, cancelled)
+
+
+def _validate_module_imports(
+    uri: str,
+    record: ResolvedModuleRecord,
+    by_uri: Mapping[str, ResolvedModuleRecord],
+    limits: ResolvedModuleLimits,
+    cancelled: Callable[[], bool] | None,
+    mixed: bool,
+    mixed_pins: Mapping[str, Mapping[str, Any]],
+) -> None:
+    import_targets = tuple(sorted(item.target_uri for item in record.imports))
+    if import_targets != record.dependency.dependencies:
+        _fail("HOCUS462", "Literal imports do not exactly match locked dependency URIs.", uri=uri)
+    if len(record.imports) > limits.module_files:
+        _fail("HOCUS464", "Module imports exceed moduleFiles.", uri=uri)
+    local_names: set[str] = set()
+    specifiers: set[str] = set()
+    for item in record.imports:
+        _checkpoint(cancelled)
+        target_record = by_uri.get(item.target_uri)
+        if target_record is None:
+            _fail("HOCUS462", "Literal import targets an unresolved module.", uri=uri, target=item.target_uri)
+        target = target_record.dependency
+        if item.imported_name != target.module_name:
+            _fail("HOCUS462", "Imported module name conflicts with the target interface.", uri=uri)
+        if item.local_name in local_names or item.specifier in specifiers:
+            _fail("HOCUS462", "Literal import names and specifiers must be unique within a module.", uri=uri)
+        local_names.add(item.local_name)
+        specifiers.add(item.specifier)
+        if item.specifier.startswith("@") and not mixed:
+            _fail("HOCUS460", "External module aliases remain disabled in Batch B.", uri=uri)
+        if mixed:
+            _validate_mixed_import_edge(record.dependency, item, target, mixed_pins)
+
+
+def _validate_module_reachability(
+    by_uri: Mapping[str, ResolvedModuleRecord],
+    entry_targets: tuple[str, ...],
+    cancelled: Callable[[], bool] | None,
+) -> None:
     reachable: set[str] = set()
     pending = list(reversed(sorted(entry_targets)))
     while pending:
@@ -532,11 +554,32 @@ def _validate_module(
 ) -> ResolvedModuleRecord:
     if locked.module_uri != value.uri:
         _fail("HOCUS462", "Envelope URI does not match its verified lock record.", uri=value.uri)
+    provenance = _validate_locked_module_provenance(
+        locked, value.uri, project_uid, mixed, mixed_pins
+    )
+    origin, owner_uid, alias, version, manifest_digest = provenance
+    syntax, module_name, interface_json = _validate_module_source(value, locked, limits)
+    _validate_locked_dependencies(value, locked, limits, syntax)
+    dependency = ModuleDependency(
+        locked.module_uri, module_name, locked.source_path, origin, owner_uid,
+        alias, version, manifest_digest, locked.content_digest, locked.interface_digest,
+        locked.transitive_digest, locked.dependencies, locked.language_version,
+    )
+    return ResolvedModuleRecord(dependency, value.source, interface_json, value.imports)
+
+
+def _validate_locked_module_provenance(
+    locked: ModuleLockRecord,
+    uri: str,
+    project_uid: str,
+    mixed: bool,
+    mixed_pins: Mapping[str, Mapping[str, Any]],
+) -> tuple[str, str, str | None, str | None, str | None]:
     identity = canonical_module_uri(locked.module_uri)
     try:
         _validate_relative_artifact_path(locked.source_path, "locked module sourcePath", code="HOCUS460")
     except ProjectError:
-        _fail("HOCUS460", "Verified module sourcePath is not portable.", uri=value.uri)
+        _fail("HOCUS460", "Verified module sourcePath is not portable.", uri=uri)
     if locked.external_alias is None:
         if (
             identity != ("project", project_uid, locked.source_path)
@@ -546,30 +589,31 @@ def _validate_module(
             or locked.module_manifest_digest is not None
             or locked.language_version != MODULE_LANGUAGE_VERSION
         ):
-            _fail("HOCUS460", "Verified local module provenance is invalid.", uri=value.uri)
-        origin = "project"
-        owner_uid = project_uid
-        alias = None
-        version = None
-        manifest_digest = None
-    else:
-        pin = mixed_pins.get(locked.external_alias) if mixed else None
-        if (
-            pin is None
-            or not isinstance(locked.library_uid, str)
-            or identity != ("module", locked.library_uid, locked.source_path)
-            or locked.project_uid is not None
-            or locked.library_uid != pin.get("libraryUid")
-            or locked.library_version != pin.get("libraryVersion")
-            or locked.module_manifest_digest != pin.get("moduleManifestDigest")
-            or locked.language_version != MODULE_LANGUAGE_VERSION
-        ):
-            _fail("HOCUS460", "Verified external module provenance is invalid.", uri=value.uri)
-        origin = "external_library"
-        owner_uid = locked.library_uid
-        alias = locked.external_alias
-        version = locked.library_version
-        manifest_digest = locked.module_manifest_digest
+            _fail("HOCUS460", "Verified local module provenance is invalid.", uri=uri)
+        return "project", project_uid, None, None, None
+    pin = mixed_pins.get(locked.external_alias) if mixed else None
+    if (
+        pin is None
+        or not isinstance(locked.library_uid, str)
+        or identity != ("module", locked.library_uid, locked.source_path)
+        or locked.project_uid is not None
+        or locked.library_uid != pin.get("libraryUid")
+        or locked.library_version != pin.get("libraryVersion")
+        or locked.module_manifest_digest != pin.get("moduleManifestDigest")
+        or locked.language_version != MODULE_LANGUAGE_VERSION
+    ):
+        _fail("HOCUS460", "Verified external module provenance is invalid.", uri=uri)
+    return (
+        "external_library", locked.library_uid, locked.external_alias,
+        locked.library_version, locked.module_manifest_digest,
+    )
+
+
+def _validate_module_source(
+    value: ModuleSourceEnvelope,
+    locked: ModuleLockRecord,
+    limits: ResolvedModuleLimits,
+) -> tuple[SyntaxSource, str, str]:
     syntax = _parse_exact_source(value.source, value.uri, limits, root="module")
     assert syntax.module is not None
     module_name = syntax.module.name
@@ -585,6 +629,15 @@ def _validate_module(
     _validate_json_complexity(json.loads(interface_json))
     if _digest(interface_json.encode("utf-8")) != locked.interface_digest:
         _fail("HOCUS461", "Derived interface does not match the verified lock.", uri=value.uri)
+    return syntax, module_name, interface_json
+
+
+def _validate_locked_dependencies(
+    value: ModuleSourceEnvelope,
+    locked: ModuleLockRecord,
+    limits: ResolvedModuleLimits,
+    syntax: SyntaxSource,
+) -> None:
     _require_digest(locked.transitive_digest, "transitive_digest")
     if (
         not isinstance(locked.dependencies, tuple)
@@ -599,12 +652,6 @@ def _validate_module(
     if len(value.imports) > limits.module_files:
         _fail("HOCUS464", "Module imports exceed moduleFiles.", uri=value.uri)
     _validate_import_correspondence(syntax, value.imports, value.uri)
-    dependency = ModuleDependency(
-        locked.module_uri, module_name, locked.source_path, origin, owner_uid,
-        alias, version, manifest_digest, locked.content_digest, locked.interface_digest,
-        locked.transitive_digest, locked.dependencies, locked.language_version,
-    )
-    return ResolvedModuleRecord(dependency, value.source, interface_json, value.imports)
 
 
 def _parse_exact_source(
@@ -803,7 +850,19 @@ def _validate_mixed_import_edge(
     pins: Mapping[str, Mapping[str, Any]],
 ) -> None:
     specifier = resolved.specifier
-    alias: str | None = None
+    alias = _validate_alias_import(specifier, target, pins)
+    importer_origin = "project" if importer is None else importer.origin
+    if importer_origin == "project":
+        _validate_project_import_target(target, alias)
+        return
+    _validate_external_import_target(importer, target, alias, specifier)
+
+
+def _validate_alias_import(
+    specifier: str,
+    target: ModuleDependency,
+    pins: Mapping[str, Mapping[str, Any]],
+) -> str | None:
     if specifier.startswith("@"):
         alias, separator, tail = specifier[1:].partition("/")
         pin = pins.get(alias)
@@ -813,13 +872,26 @@ def _validate_mixed_import_edge(
             _fail("HOCUS462", "Mixed alias import target conflicts with its library pin.")
         if target.relative_path != tail:
             _fail("HOCUS462", "Mixed alias import path conflicts with its target.")
-    importer_origin = "project" if importer is None else importer.origin
-    if importer_origin == "project":
-        if target.origin == "external_library" and alias is None:
-            _fail("HOCUS460", "Project-to-library imports require an explicit alias entry.")
-        if target.origin == "project" and alias is not None:
-            _fail("HOCUS460", "Project alias imports cannot target project modules.")
-        return
+        return alias
+    return None
+
+
+def _validate_project_import_target(
+    target: ModuleDependency,
+    alias: str | None,
+) -> None:
+    if target.origin == "external_library" and alias is None:
+        _fail("HOCUS460", "Project-to-library imports require an explicit alias entry.")
+    if target.origin == "project" and alias is not None:
+        _fail("HOCUS460", "Project alias imports cannot target project modules.")
+
+
+def _validate_external_import_target(
+    importer: ModuleDependency | None,
+    target: ModuleDependency,
+    alias: str | None,
+    specifier: str,
+) -> None:
     if importer is None or importer.origin != "external_library":
         _fail("HOCUS460", "Mixed import owner provenance is invalid.")
     if target.origin == "project":

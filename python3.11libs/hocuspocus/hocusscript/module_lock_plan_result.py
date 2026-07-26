@@ -45,118 +45,13 @@ class ModuleLockPlanResult:
     removed_uris: tuple[str, ...]
     changed_uris: tuple[str, ...]
     plan_digest: str
+
     def __post_init__(self) -> None:
-        if not isinstance(self.project_uid, str) or PROJECT_UID_PATTERN.fullmatch(self.project_uid) is None:
-            raise ProjectError("HOCUS459", "Module lock plan project UID is invalid.")
-        for value in (
-            self.manifest_digest, self.current_lock_digest, self.prospective_lock_digest,
-            self.catalog_content_digest, self.catalog_fingerprint,
-            self.external_roots_inspection_digest, self.resolver_policy_digest,
-            self.plan_digest,
-        ):
-            if not isinstance(value, str) or DIGEST_PATTERN.fullmatch(value) is None:
-                raise ProjectError("HOCUS459", "Module lock plan contains an invalid digest.")
-        _validate_relative_artifact_path(self.catalog_path, "catalogPath", code="HOCUS459")
-        if not self.catalog_path.endswith(".json"):
-            raise ProjectError("HOCUS459", "catalogPath must identify a JSON file.")
-        if (
-            not isinstance(self.entries, tuple)
-            or not self.entries
-            or len(self.entries) > MAX_LOCKED_MODULES
-            or any(type(item) is not ModuleLockUpdateEntry for item in self.entries)
-        ):
-            raise ProjectError("HOCUS459", "Module lock plan entries are invalid.")
-        entry_uris = tuple(item.entry_uri for item in self.entries)
-        if entry_uris != tuple(sorted(set(entry_uris))) or any(
-            canonical_module_uri(uri)[:2] != ("project", self.project_uid) for uri in entry_uris
-        ):
-            raise ProjectError("HOCUS459", "Module lock plan entries must be sorted project URIs.")
-        if (
-            not isinstance(self.modules, tuple)
-            or len(self.modules) > MAX_LOCKED_MODULES
-            or any(type(item) is not ModuleLockRecord for item in self.modules)
-        ):
-            raise ProjectError("HOCUS459", "Module lock plan modules are invalid.")
-        module_uris = tuple(item.module_uri for item in self.modules)
-        if module_uris != tuple(sorted(set(module_uris))):
-            raise ProjectError("HOCUS459", "Module lock plan modules must be URI-sorted and unique.")
-        module_uri_set = set(module_uris)
-        for record in self.modules:
-            identity = canonical_module_uri(record.module_uri)
-            if (
-                identity is None
-                or record.language_version != "0.2"
-                or not is_relative_hocus_path(record.source_path)
-                or identity[2] != record.source_path
-                or any(
-                    not isinstance(value, str) or DIGEST_PATTERN.fullmatch(value) is None
-                    for value in (
-                        record.content_digest,
-                        record.interface_digest,
-                        record.transitive_digest,
-                    )
-                )
-                or not isinstance(record.dependencies, tuple)
-                or len(record.dependencies) > MAX_LOCKED_MODULES
-                or record.dependencies != tuple(sorted(set(record.dependencies)))
-                or record.module_uri in record.dependencies
-                or any(canonical_module_uri(uri) is None for uri in record.dependencies)
-            ):
-                raise ProjectError("HOCUS459", "Module lock plan contains a noncanonical module URI.")
-            if record.external_alias is None:
-                if (
-                    identity[:2] != ("project", self.project_uid)
-                    or record.project_uid != self.project_uid
-                    or any(value is not None for value in (
-                        record.library_uid,
-                        record.library_version,
-                        record.module_manifest_digest,
-                    ))
-                ):
-                    raise ProjectError("HOCUS459", "Local module plan provenance is invalid.")
-            elif (
-                identity[0] != "module"
-                or record.project_uid is not None
-                or identity[1] != record.library_uid
-                or not isinstance(record.library_uid, str)
-                or PROJECT_UID_PATTERN.fullmatch(record.library_uid) is None
-                or not isinstance(record.library_version, str)
-                or SEMANTIC_VERSION_PATTERN.fullmatch(record.library_version) is None
-                or not isinstance(record.module_manifest_digest, str)
-                or DIGEST_PATTERN.fullmatch(record.module_manifest_digest) is None
-                or not isinstance(record.external_alias, str)
-                or ALIAS_PATTERN.fullmatch(record.external_alias) is None
-            ):
-                raise ProjectError("HOCUS459", "External module plan provenance is invalid.")
-        if any(
-            dependency not in module_uri_set
-            for record in self.modules
-            for dependency in record.dependencies
-        ):
-            raise ProjectError("HOCUS459", "Module lock plan dependency closure is incomplete.")
-        if self.diff_available is not True:
-            raise ProjectError("HOCUS459", "G2 lock plans require an exact current-lock diff.")
-        for values in (self.added_uris, self.removed_uris, self.changed_uris):
-            if (
-                not isinstance(values, tuple)
-                or values != tuple(sorted(set(values)))
-                or any(canonical_module_uri(uri) is None for uri in values)
-            ):
-                raise ProjectError("HOCUS459", "Module lock plan diff URIs are invalid.")
-        prospective_uris = module_uri_set
-        added, removed, changed = map(set, (
-            self.added_uris, self.removed_uris, self.changed_uris,
-        ))
-        if (
-            added & removed
-            or added & changed
-            or removed & changed
-            or not added.issubset(prospective_uris)
-            or not changed.issubset(prospective_uris)
-            or removed & prospective_uris
-            or self.changed != bool(added or removed or changed)
-        ):
-            raise ProjectError("HOCUS459", "Module lock plan diff is inconsistent.")
+        _validate_plan_identity(self)
+        _validate_plan_entries(self)
+        module_uris = _validate_plan_modules(self)
+        _validate_plan_dependency_closure(self.modules, set(module_uris))
+        _validate_plan_diff(self, set(module_uris))
         if self.prospective_lock_digest != _prospective_lock_digest(self):
             raise ProjectError("HOCUS459", "Prospective lock digest is inconsistent with the plan.")
         if self.plan_digest != _plan_digest(self._unsigned_dict()):
@@ -191,6 +86,150 @@ class ModuleLockPlanResult:
                 "changedUris": list(self.changed_uris),
             },
         }
+
+
+def _validate_plan_identity(plan: ModuleLockPlanResult) -> None:
+    if not isinstance(plan.project_uid, str) or PROJECT_UID_PATTERN.fullmatch(plan.project_uid) is None:
+        raise ProjectError("HOCUS459", "Module lock plan project UID is invalid.")
+    digests = (
+        plan.manifest_digest, plan.current_lock_digest, plan.prospective_lock_digest,
+        plan.catalog_content_digest, plan.catalog_fingerprint,
+        plan.external_roots_inspection_digest, plan.resolver_policy_digest,
+        plan.plan_digest,
+    )
+    if any(not isinstance(value, str) or DIGEST_PATTERN.fullmatch(value) is None for value in digests):
+        raise ProjectError("HOCUS459", "Module lock plan contains an invalid digest.")
+    _validate_relative_artifact_path(plan.catalog_path, "catalogPath", code="HOCUS459")
+    if not plan.catalog_path.endswith(".json"):
+        raise ProjectError("HOCUS459", "catalogPath must identify a JSON file.")
+
+
+def _validate_plan_entries(plan: ModuleLockPlanResult) -> tuple[str, ...]:
+    if (
+        not isinstance(plan.entries, tuple)
+        or not plan.entries
+        or len(plan.entries) > MAX_LOCKED_MODULES
+        or any(type(item) is not ModuleLockUpdateEntry for item in plan.entries)
+    ):
+        raise ProjectError("HOCUS459", "Module lock plan entries are invalid.")
+    entry_uris = tuple(item.entry_uri for item in plan.entries)
+    if entry_uris != tuple(sorted(set(entry_uris))) or any(
+        canonical_module_uri(uri)[:2] != ("project", plan.project_uid) for uri in entry_uris
+    ):
+        raise ProjectError("HOCUS459", "Module lock plan entries must be sorted project URIs.")
+    return entry_uris
+
+
+def _validate_plan_modules(plan: ModuleLockPlanResult) -> tuple[str, ...]:
+    if (
+        not isinstance(plan.modules, tuple)
+        or len(plan.modules) > MAX_LOCKED_MODULES
+        or any(type(item) is not ModuleLockRecord for item in plan.modules)
+    ):
+        raise ProjectError("HOCUS459", "Module lock plan modules are invalid.")
+    module_uris = tuple(item.module_uri for item in plan.modules)
+    if module_uris != tuple(sorted(set(module_uris))):
+        raise ProjectError("HOCUS459", "Module lock plan modules must be URI-sorted and unique.")
+    for record in plan.modules:
+        _validate_plan_module(record, plan.project_uid)
+    return module_uris
+
+
+def _validate_plan_module(record: ModuleLockRecord, project_uid: str) -> None:
+    identity = canonical_module_uri(record.module_uri)
+    digests = (
+        record.content_digest,
+        record.interface_digest,
+        record.transitive_digest,
+    )
+    invalid_common = (
+        identity is None
+        or record.language_version != "0.2"
+        or not is_relative_hocus_path(record.source_path)
+        or (identity is not None and identity[2] != record.source_path)
+        or any(not isinstance(value, str) or DIGEST_PATTERN.fullmatch(value) is None for value in digests)
+        or not isinstance(record.dependencies, tuple)
+        or len(record.dependencies) > MAX_LOCKED_MODULES
+        or record.dependencies != tuple(sorted(set(record.dependencies)))
+        or record.module_uri in record.dependencies
+        or any(canonical_module_uri(uri) is None for uri in record.dependencies)
+    )
+    if invalid_common:
+        raise ProjectError("HOCUS459", "Module lock plan contains a noncanonical module URI.")
+    if record.external_alias is None:
+        _validate_local_plan_module(record, identity, project_uid)
+    else:
+        _validate_external_plan_module(record, identity)
+
+
+def _validate_local_plan_module(
+    record: ModuleLockRecord,
+    identity: tuple[str, str, str],
+    project_uid: str,
+) -> None:
+    if (
+        identity[:2] != ("project", project_uid)
+        or record.project_uid != project_uid
+        or any(value is not None for value in (
+            record.library_uid,
+            record.library_version,
+            record.module_manifest_digest,
+        ))
+    ):
+        raise ProjectError("HOCUS459", "Local module plan provenance is invalid.")
+
+
+def _validate_external_plan_module(
+    record: ModuleLockRecord,
+    identity: tuple[str, str, str],
+) -> None:
+    if (
+        identity[0] != "module"
+        or record.project_uid is not None
+        or identity[1] != record.library_uid
+        or not isinstance(record.library_uid, str)
+        or PROJECT_UID_PATTERN.fullmatch(record.library_uid) is None
+        or not isinstance(record.library_version, str)
+        or SEMANTIC_VERSION_PATTERN.fullmatch(record.library_version) is None
+        or not isinstance(record.module_manifest_digest, str)
+        or DIGEST_PATTERN.fullmatch(record.module_manifest_digest) is None
+        or not isinstance(record.external_alias, str)
+        or ALIAS_PATTERN.fullmatch(record.external_alias) is None
+    ):
+        raise ProjectError("HOCUS459", "External module plan provenance is invalid.")
+
+
+def _validate_plan_dependency_closure(
+    modules: tuple[ModuleLockRecord, ...],
+    module_uris: set[str],
+) -> None:
+    if any(dependency not in module_uris for record in modules for dependency in record.dependencies):
+        raise ProjectError("HOCUS459", "Module lock plan dependency closure is incomplete.")
+
+
+def _validate_plan_diff(plan: ModuleLockPlanResult, prospective_uris: set[str]) -> None:
+    if plan.diff_available is not True:
+        raise ProjectError("HOCUS459", "G2 lock plans require an exact current-lock diff.")
+    for values in (plan.added_uris, plan.removed_uris, plan.changed_uris):
+        if (
+            not isinstance(values, tuple)
+            or values != tuple(sorted(set(values)))
+            or any(canonical_module_uri(uri) is None for uri in values)
+        ):
+            raise ProjectError("HOCUS459", "Module lock plan diff URIs are invalid.")
+    added, removed, changed = map(set, (
+        plan.added_uris, plan.removed_uris, plan.changed_uris,
+    ))
+    if (
+        added & removed
+        or added & changed
+        or removed & changed
+        or not added.issubset(prospective_uris)
+        or not changed.issubset(prospective_uris)
+        or removed & prospective_uris
+        or plan.changed != bool(added or removed or changed)
+    ):
+        raise ProjectError("HOCUS459", "Module lock plan diff is inconsistent.")
 
     def to_dict(self) -> dict[str, Any]:
         return {**self._unsigned_dict(), "planDigest": self.plan_digest}

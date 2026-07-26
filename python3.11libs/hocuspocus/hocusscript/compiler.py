@@ -108,6 +108,23 @@ def validate_graph(
     max_diagnostics: int = MAX_DIAGNOSTICS,
 ) -> list[Diagnostic]:
     collector = _DiagnosticCollector(max_diagnostics, graph.span)
+    _validate_graph_header(graph, max_nodes, collector)
+    symbols = _validate_graph_symbols(graph, collector)
+    _validate_explicit_ids(graph, collector)
+    _validate_external_nodes(graph, collector)
+    for node in graph.nodes:
+        if not node.type_name.strip():
+            collector.add(_diagnostic("HOCUS320", f"Node '{node.symbol}' must declare a non-empty type name.", node.span))
+        _validate_node(node, symbols, collector)
+    _validate_graph_selections(graph, symbols, collector)
+    if graph.layout is not None and graph.layout != "auto":
+        collector.add(_diagnostic("HOCUS316", "HocusScript 0.1 supports only layout = auto.", _field_span(graph, "layout")))
+    return collector.finish()
+
+
+def _validate_graph_header(
+    graph: GraphSpec, max_nodes: int, collector: _DiagnosticCollector,
+) -> None:
     if graph.language_version not in SUPPORTED_LANGUAGE_VERSIONS:
         collector.add(
             _diagnostic(
@@ -138,12 +155,19 @@ def validate_graph(
             )
         )
 
+
+
+def _validate_graph_symbols(
+    graph: GraphSpec, collector: _DiagnosticCollector,
+) -> set[str]:
     symbol_spans = [(item.symbol, item.span) for item in graph.external_nodes]
     symbol_spans.extend((item.symbol, item.span) for item in graph.nodes)
     for symbol, span in _duplicates(symbol_spans):
         collector.add(_diagnostic("HOCUS306", f"Duplicate graph symbol: {symbol}.", span))
-    symbols = {symbol for symbol, _ in symbol_spans}
+    return {symbol for symbol, _ in symbol_spans}
 
+
+def _validate_explicit_ids(graph: GraphSpec, collector: _DiagnosticCollector) -> None:
     explicit_id_spans = [
         (node.explicit_id, node.field_spans.get("explicitId", node.span))
         for node in graph.nodes
@@ -160,26 +184,28 @@ def validate_graph(
     for explicit_id, span in _duplicates(explicit_id_spans):
         collector.add(_diagnostic("HOCUS322", f"Duplicate explicit node ID: {explicit_id}.", span))
 
-    if graph.target is not None:
-        prefix = graph.target.rstrip("/") + "/"
-        for external in graph.external_nodes:
-            if not _is_canonical_houdini_path(external.path):
-                collector.add(_diagnostic("HOCUS310", "External node paths must be canonical absolute paths.", external.span))
-            elif external.path != graph.target and not external.path.startswith(prefix):
-                collector.add(
-                    _diagnostic(
-                        "HOCUS311",
-                        "External node path is outside the graph target scope.",
-                        external.span,
-                        details={"target": graph.target, "path": external.path},
-                    )
+
+def _validate_external_nodes(graph: GraphSpec, collector: _DiagnosticCollector) -> None:
+    if graph.target is None:
+        return
+    prefix = graph.target.rstrip("/") + "/"
+    for external in graph.external_nodes:
+        if not _is_canonical_houdini_path(external.path):
+            collector.add(_diagnostic("HOCUS310", "External node paths must be canonical absolute paths.", external.span))
+        elif external.path != graph.target and not external.path.startswith(prefix):
+            collector.add(
+                _diagnostic(
+                    "HOCUS311",
+                    "External node path is outside the graph target scope.",
+                    external.span,
+                    details={"target": graph.target, "path": external.path},
                 )
+            )
 
-    for node in graph.nodes:
-        if not node.type_name.strip():
-            collector.add(_diagnostic("HOCUS320", f"Node '{node.symbol}' must declare a non-empty type name.", node.span))
-        _validate_node(node, symbols, collector)
 
+def _validate_graph_selections(
+    graph: GraphSpec, symbols: set[str], collector: _DiagnosticCollector,
+) -> None:
     mutable_symbols = {item.symbol for item in graph.nodes}
     mutable_symbols.update(item.symbol for item in graph.external_nodes if item.adopted)
     for field_name, symbol in (
@@ -205,9 +231,6 @@ def validate_graph(
                     details={"symbol": symbol, "directive": field_name},
                 )
             )
-    if graph.layout is not None and graph.layout != "auto":
-        collector.add(_diagnostic("HOCUS316", "HocusScript 0.1 supports only layout = auto.", _field_span(graph, "layout")))
-    return collector.finish()
 
 
 def _is_canonical_houdini_path(path: str) -> bool:
@@ -227,6 +250,41 @@ def compile_source(
     strict: bool = True,
     max_diagnostics: int = MAX_DIAGNOSTICS,
 ) -> CompileResult:
+    _validate_compile_arguments(source, source_name, source_uri, strict, max_diagnostics)
+    diagnostic_source = _diagnostic_source(source_name, source_uri)
+    source_bytes, failure = _encode_compile_source(source, source_name, diagnostic_source)
+    if failure is not None:
+        return failure
+    assert source_bytes is not None
+    graph, diagnostics = _parse_compile_source(
+        source, diagnostic_source, max_diagnostics,
+    )
+    if strict:
+        _promote_missing_header(diagnostics)
+    diagnostics = _finalize_diagnostics(
+        diagnostics, graph, diagnostic_source, max_diagnostics,
+    )
+    valid = graph is not None and not any(item.severity == "error" for item in diagnostics)
+    digest = hashlib.sha256(source_bytes).hexdigest()
+    return CompileResult(
+        source_name=source_name,
+        source_uri=diagnostic_source,
+        source_digest=f"sha256:{digest}",
+        language_version=graph.language_version if graph is not None else None,
+        valid=valid,
+        diagnostics=diagnostics,
+        graph_spec=graph,
+        formatted_source=format_graph(graph) if valid and graph is not None else None,
+    )
+
+
+def _validate_compile_arguments(
+    source: str,
+    source_name: str,
+    source_uri: str | None,
+    strict: bool,
+    max_diagnostics: int,
+) -> None:
     if not isinstance(source, str):
         raise TypeError("source must be a string")
     if not isinstance(source_name, str) or not source_name.strip():
@@ -239,27 +297,23 @@ def compile_source(
         raise TypeError("max_diagnostics must be a positive integer")
     if source_uri is not None and (not isinstance(source_uri, str) or not source_uri.strip()):
         raise TypeError("source_uri must be a non-empty string when provided")
-    diagnostic_source = (
+
+
+def _diagnostic_source(source_name: str, source_uri: str | None) -> str:
+    return (
         source_uri.strip()
         if source_uri is not None
         else f"hocus-memory:///{quote(source_name, safe='/-._~')}"
     )
+
+
+def _encode_compile_source(
+    source: str, source_name: str, diagnostic_source: str,
+) -> tuple[bytes | None, CompileResult | None]:
     if len(source) > MAX_SOURCE_BYTES:
-        position = SourcePosition(0, 1, 1)
-        diagnostic = Diagnostic(
-            "error",
-            "HOCUS001",
-            "lex",
+        return None, _source_failure(
+            source_name, diagnostic_source, "sha256:source-too-large", "HOCUS001",
             f"Source exceeds the {MAX_SOURCE_BYTES}-byte limit.",
-            SourceSpan(diagnostic_source, position, position),
-        )
-        return CompileResult(
-            source_name=source_name,
-            source_uri=diagnostic_source,
-            source_digest="sha256:source-too-large",
-            language_version=None,
-            valid=False,
-            diagnostics=[diagnostic],
         )
     try:
         source_bytes = source.encode("utf-8")
@@ -270,39 +324,46 @@ def compile_source(
         column = exc.start - last_newline
         start = SourcePosition(exc.start, line, column)
         end = SourcePosition(exc.end, line, column + max(1, exc.end - exc.start))
-        diagnostic = Diagnostic(
-            "error",
-            "HOCUS010",
-            "lex",
-            "Source contains an invalid Unicode scalar value.",
-            SourceSpan(diagnostic_source, start, end),
-        )
-        return CompileResult(
+        return None, CompileResult(
             source_name=source_name,
             source_uri=diagnostic_source,
             source_digest="sha256:invalid-unicode",
             language_version=None,
             valid=False,
-            diagnostics=[diagnostic],
+            diagnostics=[Diagnostic(
+                "error", "HOCUS010", "lex",
+                "Source contains an invalid Unicode scalar value.",
+                SourceSpan(diagnostic_source, start, end),
+            )],
         )
     if len(source_bytes) > MAX_SOURCE_BYTES:
-        position = SourcePosition(0, 1, 1)
-        diagnostic = Diagnostic(
-            "error",
-            "HOCUS001",
-            "lex",
+        return None, _source_failure(
+            source_name, diagnostic_source, "sha256:source-too-large", "HOCUS001",
             f"Source exceeds the {MAX_SOURCE_BYTES}-byte limit.",
+        )
+    return source_bytes, None
+
+
+def _source_failure(
+    source_name: str, diagnostic_source: str, digest: str, code: str, message: str,
+) -> CompileResult:
+    position = SourcePosition(0, 1, 1)
+    return CompileResult(
+        source_name=source_name,
+        source_uri=diagnostic_source,
+        source_digest=digest,
+        language_version=None,
+        valid=False,
+        diagnostics=[Diagnostic(
+            "error", code, "lex", message,
             SourceSpan(diagnostic_source, position, position),
-        )
-        return CompileResult(
-            source_name=source_name,
-            source_uri=diagnostic_source,
-            source_digest="sha256:source-too-large",
-            language_version=None,
-            valid=False,
-            diagnostics=[diagnostic],
-        )
-    digest = hashlib.sha256(source_bytes).hexdigest()
+        )],
+    )
+
+
+def _parse_compile_source(
+    source: str, diagnostic_source: str, max_diagnostics: int,
+) -> tuple[GraphSpec | None, list[Diagnostic]]:
     diagnostics: list[Diagnostic] = []
     graph: GraphSpec | None = None
     parser: Parser | None = None
@@ -341,12 +402,22 @@ def compile_source(
             )
         )
 
-    if strict:
-        for item in diagnostics:
-            if item.code == "HOCUS101":
-                item.severity = "error"
-                item.message = "Missing required 'hocus 0.1;' language header."
+    return graph, diagnostics
 
+
+def _promote_missing_header(diagnostics: list[Diagnostic]) -> None:
+    for item in diagnostics:
+        if item.code == "HOCUS101":
+            item.severity = "error"
+            item.message = "Missing required 'hocus 0.1;' language header."
+
+
+def _finalize_diagnostics(
+    diagnostics: list[Diagnostic],
+    graph: GraphSpec | None,
+    diagnostic_source: str,
+    max_diagnostics: int,
+) -> list[Diagnostic]:
     truncation_diagnostics = [item for item in diagnostics if item.code == "HOCUS019"]
     diagnostics = sort_diagnostics([item for item in diagnostics if item.code != "HOCUS019"])
     diagnostics.extend(truncation_diagnostics)
@@ -368,14 +439,4 @@ def compile_source(
                 details={"omittedCount": omitted, "limit": max_diagnostics},
             )
         )
-    valid = graph is not None and not any(item.severity == "error" for item in diagnostics)
-    return CompileResult(
-        source_name=source_name,
-        source_uri=diagnostic_source,
-        source_digest=f"sha256:{digest}",
-        language_version=graph.language_version if graph is not None else None,
-        valid=valid,
-        diagnostics=diagnostics,
-        graph_spec=graph,
-        formatted_source=format_graph(graph) if valid and graph is not None else None,
-    )
+    return diagnostics

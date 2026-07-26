@@ -161,43 +161,74 @@ def validate_module_interfaces(
 
     for uri in sorted(modules):
         _check_cancel(cancellation, modules[uri].syntax.span)
-        unit = modules[uri]
-        _validate_unit_provenance(uri, unit)
-        module = unit.declaration
-        _reject_reserved(module.name, module.name_span)
-        if len(module.parameters) > limits.parameters_per_module or len(module.exports) > limits.exports_per_module:
-            raise ModuleExpansionError("HOCUS461", "Module interface exceeds declared limits.", module.span)
-        _unique_named(module.parameters, "parameter")
-        _unique_named(module.exports, "export")
-        for parameter in module.parameters:
-            _reject_reserved(parameter.name, parameter.name_span)
-            _require_type(parameter.type_name, parameter.type_span)
-            if parameter.default is not None:
-                if not isinstance(parameter.default, LiteralExpr):
-                    raise ModuleExpansionError("HOCUS462", "Module parameter defaults must be literals.", parameter.default.span)
-                actual = _literal_type(parameter.default.value, parameter.default.span)
-                if actual != parameter.type_name:
-                    _type_mismatch(parameter.type_name, actual, parameter.default.span)
-        for export in module.exports:
-            _reject_reserved(export.name, export.name_span)
-            _require_type(export.type_name, export.type_span)
-        _validate_local_symbols(module)
-        declared_imports = {item.local_name: item for item in unit.syntax.imports}
-        if len(declared_imports) != len(unit.syntax.imports):
-            raise ModuleExpansionError("HOCUS463", "Duplicate local import aliases are forbidden.", unit.syntax.span)
-        if set(declared_imports) != set(unit.imports):
-            raise ModuleExpansionError("HOCUS463", "Resolved imports do not exactly match source imports.", unit.syntax.span)
-        for local_name, resolved_import in sorted(unit.imports.items()):
-            target_uri = _target_uri(resolved_import)
-            _validate_resolved_import(declared_imports[local_name], resolved_import)
-            _reject_reserved(local_name, declared_imports[local_name].local_name_span)
-            target = modules.get(target_uri)
-            if target is None:
-                raise ModuleExpansionError("HOCUS463", "Resolved import targets an unknown module URI.", declared_imports[local_name].span)
-            if declared_imports[local_name].imported_name != target.declaration.name:
-                raise ModuleExpansionError("HOCUS463", "Imported name does not match the target module declaration.", declared_imports[local_name].span)
-        _validate_module_body(unit, modules)
+        _validate_module_interface(uri, modules[uri], modules, limits)
     _validate_import_dag(modules, limits.import_depth)
+
+
+def _validate_module_interface(
+    uri: str,
+    unit: ResolvedModuleUnit,
+    modules: Mapping[str, ResolvedModuleUnit],
+    limits: ExpansionLimits,
+) -> None:
+    _validate_unit_provenance(uri, unit)
+    module = unit.declaration
+    _reject_reserved(module.name, module.name_span)
+    if len(module.parameters) > limits.parameters_per_module or len(module.exports) > limits.exports_per_module:
+        raise ModuleExpansionError("HOCUS461", "Module interface exceeds declared limits.", module.span)
+    _unique_named(module.parameters, "parameter")
+    _unique_named(module.exports, "export")
+    for parameter in module.parameters:
+        _validate_module_parameter(parameter)
+    for export in module.exports:
+        _reject_reserved(export.name, export.name_span)
+        _require_type(export.type_name, export.type_span)
+    _validate_local_symbols(module)
+    _validate_interface_imports(unit, modules)
+    _validate_module_body(unit, modules)
+
+
+def _validate_module_parameter(parameter: ModuleParamDecl) -> None:
+    _reject_reserved(parameter.name, parameter.name_span)
+    _require_type(parameter.type_name, parameter.type_span)
+    if parameter.default is None:
+        return
+    if not isinstance(parameter.default, LiteralExpr):
+        raise ModuleExpansionError(
+            "HOCUS462", "Module parameter defaults must be literals.", parameter.default.span
+        )
+    actual = _literal_type(parameter.default.value, parameter.default.span)
+    if actual != parameter.type_name:
+        _type_mismatch(parameter.type_name, actual, parameter.default.span)
+
+
+def _validate_interface_imports(
+    unit: ResolvedModuleUnit,
+    modules: Mapping[str, ResolvedModuleUnit],
+) -> None:
+    declared = {item.local_name: item for item in unit.syntax.imports}
+    if len(declared) != len(unit.syntax.imports):
+        raise ModuleExpansionError(
+            "HOCUS463", "Duplicate local import aliases are forbidden.", unit.syntax.span
+        )
+    if set(declared) != set(unit.imports):
+        raise ModuleExpansionError(
+            "HOCUS463", "Resolved imports do not exactly match source imports.", unit.syntax.span
+        )
+    for local_name, resolved_import in sorted(unit.imports.items()):
+        declaration = declared[local_name]
+        _validate_resolved_import(declaration, resolved_import)
+        _reject_reserved(local_name, declaration.local_name_span)
+        target = modules.get(_target_uri(resolved_import))
+        if target is None:
+            raise ModuleExpansionError(
+                "HOCUS463", "Resolved import targets an unknown module URI.", declaration.span
+            )
+        if declaration.imported_name != target.declaration.name:
+            raise ModuleExpansionError(
+                "HOCUS463", "Imported name does not match the target module declaration.",
+                declaration.span,
+            )
 
 
 def expand_module_graph(
@@ -360,13 +391,44 @@ def _expand_use(
     )
     next_frames = (*frames, frame)
     arguments = _bind_arguments(use, module.parameters, parameters, local_nodes, local_uses)
-    nested_nodes: dict[str, _Bound] = {
-        statement.symbol: _node_bound(statement, target_uri, next_path, graph_identity)
-        for statement in module.statements if isinstance(statement, NodeDecl)
-    }
+    nested_nodes = _declared_node_bounds(module.statements, target_uri, next_path, graph_identity)
     nested_uses: dict[str, dict[str, _Bound]] = {}
     export_statements: dict[str, ExportStmt] = {}
-    for statement in module.statements:
+    _expand_module_statements(
+        module.statements, unit.imports, modules, next_frames,
+        graph_identity, arguments, nested_nodes, nested_uses, export_statements, state, active,
+    )
+    return _bind_module_exports(module, export_statements, arguments, nested_nodes, nested_uses)
+
+
+def _declared_node_bounds(
+    statements: tuple[Any, ...],
+    module_uri: str,
+    seed_path: tuple[str, ...],
+    graph_identity: str,
+) -> dict[str, _Bound]:
+    return {
+        statement.symbol: _node_bound(statement, module_uri, seed_path, graph_identity)
+        for statement in statements if isinstance(statement, NodeDecl)
+    }
+
+
+def _expand_module_statements(
+    statements: tuple[Any, ...],
+    imports: Mapping[str, Any],
+    modules: Mapping[str, ResolvedModuleUnit],
+    next_frames: tuple[ExpansionFrame, ...],
+    graph_identity: str,
+    arguments: Mapping[str, _Bound],
+    nested_nodes: dict[str, _Bound],
+    nested_uses: dict[str, dict[str, _Bound]],
+    export_statements: dict[str, ExportStmt],
+    state: _State,
+    active: tuple[str, ...],
+) -> None:
+    target_uri = next_frames[-1].module_uri
+    next_path = next_frames[-1].instance_id_path
+    for statement in statements:
         state.checkpoint()
         if isinstance(statement, NodeDecl):
             nested_nodes[statement.symbol] = _emit_node(
@@ -375,7 +437,7 @@ def _expand_use(
             )
         elif isinstance(statement, UseDecl):
             nested_uses[statement.symbol] = _expand_use(
-                statement, unit.imports, modules, next_path,
+                statement, imports, modules, next_path,
                 next_frames, graph_identity, arguments, nested_nodes, nested_uses, state,
                 active=(*active, target_uri),
             )
@@ -383,6 +445,15 @@ def _expand_use(
             if statement.name in export_statements:
                 raise ModuleExpansionError("HOCUS468", f"Duplicate export definition: {statement.name}.", statement.span)
             export_statements[statement.name] = statement
+
+
+def _bind_module_exports(
+    module: Any,
+    export_statements: Mapping[str, ExportStmt],
+    arguments: Mapping[str, _Bound],
+    nested_nodes: Mapping[str, _Bound],
+    nested_uses: Mapping[str, dict[str, _Bound]],
+) -> dict[str, _Bound]:
     declarations = {item.name: item for item in module.exports}
     if set(export_statements) != set(declarations):
         raise ModuleExpansionError("HOCUS468", "Module export definitions do not exactly match its interface.", module.span)
@@ -526,20 +597,46 @@ def _build_graph_spec(
     entry_uri: str, state: _State,
 ) -> GraphSpec:
     graph = entry.graph
-    target = category = ownership = display = render = output = layout = None
-    mode = "merge"
-    revision = None
-    field_spans = {"name": graph.name_span, "languageVersion": entry.version.value_span}
+    fields, field_spans, external_nodes, external_origins = _collect_graph_directives(
+        directives, state.root_symbols, graph.name_span, entry.version.value_span
+    )
+    placeholder = ExpansionMap(entry_uri)
+    spec = GraphSpec(
+        "0.2", graph.name, fields["target"], fields["category"], fields["mode"],
+        fields["revision"], fields["ownership"], external_nodes, nodes, fields["display"],
+        fields["render"], fields["output"], fields["layout"], graph.span, field_spans,
+        MODULE_GRAPH_SPEC_VERSION, placeholder,
+    )
+    spec.expansion_map = _build_expansion_map(
+        entry_uri, graph.span, spec, field_spans, external_origins, state.node_origins
+    )
+    return spec
+
+
+def _collect_graph_directives(
+    directives: list[Any],
+    authored_to_generated: Mapping[str, str],
+    graph_name_span: SourceSpan,
+    version_span: SourceSpan,
+) -> tuple[dict[str, Any], dict[str, SourceSpan], list[ExternalNodeSpec], list[_Origin]]:
+    fields: dict[str, Any] = {
+        "target": None, "category": None, "ownership": None, "display": None,
+        "render": None, "output": None, "layout": None, "mode": "merge", "revision": None,
+    }
+    field_spans = {"name": graph_name_span, "languageVersion": version_span}
     external_nodes: list[ExternalNodeSpec] = []
     external_origins: list[_Origin] = []
-    # Entry directives do not currently select instance exports; node names are remapped by source span.
-    authored_to_generated = state.root_symbols
     for statement in directives:
-        if isinstance(statement, TargetStmt): target, field_spans["target"] = statement.value, statement.value_span
-        elif isinstance(statement, CategoryStmt): category, field_spans["category"] = statement.value, statement.value_span
-        elif isinstance(statement, ModeStmt): mode, field_spans["mode"] = statement.value, statement.value_span
-        elif isinstance(statement, RevisionStmt): revision, field_spans["expectedRevision"] = statement.value, statement.value_span
-        elif isinstance(statement, OwnershipStmt): ownership, field_spans["ownership"] = statement.value, statement.value_span
+        if isinstance(statement, TargetStmt):
+            fields["target"], field_spans["target"] = statement.value, statement.value_span
+        elif isinstance(statement, CategoryStmt):
+            fields["category"], field_spans["category"] = statement.value, statement.value_span
+        elif isinstance(statement, ModeStmt):
+            fields["mode"], field_spans["mode"] = statement.value, statement.value_span
+        elif isinstance(statement, RevisionStmt):
+            fields["revision"], field_spans["expectedRevision"] = statement.value, statement.value_span
+        elif isinstance(statement, OwnershipStmt):
+            fields["ownership"], field_spans["ownership"] = statement.value, statement.value_span
         elif isinstance(statement, ExternalDecl):
             external_nodes.append(ExternalNodeSpec(
                 statement.symbol, statement.path, statement.adopted, statement.span,
@@ -549,16 +646,20 @@ def _build_graph_spec(
         elif isinstance(statement, FlagStmt):
             value = authored_to_generated.get(statement.symbol, statement.symbol)
             field_spans[statement.name] = statement.value_span
-            if statement.name == "display": display = value
-            elif statement.name == "render": render = value
-            else: output = value
-        elif isinstance(statement, LayoutStmt): layout, field_spans["layout"] = statement.value, statement.value_span
-    placeholder = ExpansionMap(entry_uri)
-    spec = GraphSpec(
-        "0.2", graph.name, target, category, mode, revision, ownership, external_nodes,
-        nodes, display, render, output, layout, graph.span, field_spans,
-        MODULE_GRAPH_SPEC_VERSION, placeholder,
-    )
+            fields[statement.name] = value
+        elif isinstance(statement, LayoutStmt):
+            fields["layout"], field_spans["layout"] = statement.value, statement.value_span
+    return fields, field_spans, external_nodes, external_origins
+
+
+def _build_expansion_map(
+    entry_uri: str,
+    graph_span: SourceSpan,
+    spec: GraphSpec,
+    field_spans: Mapping[str, SourceSpan],
+    external_origins: list[_Origin],
+    node_origins: list[tuple[_Origin, list[_Origin], list[_Origin]]],
+) -> ExpansionMap:
     mappings: list[ExpansionOrigin] = []
     stacks: dict[str, ExpansionStack] = {}
 
@@ -577,10 +678,10 @@ def _build_graph_spec(
             _digest(payload), pointer, origin.kind, origin.span, origin.related, stack_id,
         ))
 
-    add("", _Origin(graph.span, ()))
+    add("", _Origin(graph_span, ()))
     for index, origin in enumerate(external_origins):
         add(f"/externalNodes/{index}", origin)
-    for index, (node_origin, input_origins, parm_origins) in enumerate(state.node_origins):
+    for index, (node_origin, input_origins, parm_origins) in enumerate(node_origins):
         add(f"/nodes/{index}", node_origin)
         for child, origin in enumerate(input_origins): add(f"/nodes/{index}/inputs/{child}", origin)
         for child, origin in enumerate(parm_origins): add(f"/nodes/{index}/parms/{child}", origin)
@@ -588,8 +689,7 @@ def _build_graph_spec(
         if getattr(spec, name) is not None:
             add(f"/{name}", _Origin(field_spans[name], ()))
     mappings.sort(key=lambda item: item.generated_pointer)
-    spec.expansion_map = ExpansionMap(entry_uri, tuple(stacks[key] for key in sorted(stacks)), tuple(mappings))
-    return spec
+    return ExpansionMap(entry_uri, tuple(stacks[key] for key in sorted(stacks)), tuple(mappings))
 
 
 def _validate_module_body(unit: ResolvedModuleUnit, modules: Mapping[str, ResolvedModuleUnit]) -> None:

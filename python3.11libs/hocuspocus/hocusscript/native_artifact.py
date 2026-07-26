@@ -64,6 +64,23 @@ def publish_text_artifact(
     Every fallible verification is complete before the atomic publication step.
     """
 
+    content = _encode_artifact(text, expected_digest, max_bytes)
+    content_digest = _digest(content)
+    receipt = NativeArtifactReceipt(content_digest, len(content), expected_digest is not None)
+    destination = _artifact_path(path)
+    original_mode = _replacement_mode(destination, expected_digest)
+    descriptor, temporary = _prepare_temporary(destination)
+    try:
+        _write_and_publish(
+            descriptor, temporary, destination, content, content_digest,
+            expected_digest, original_mode,
+        )
+    finally:
+        _cleanup_temporary(temporary)
+    return receipt
+
+
+def _encode_artifact(text: str, expected_digest: str | None, max_bytes: int) -> bytes:
     if not isinstance(text, str):
         raise NativeArtifactError("HOCUS490", "Native artifact text must be a string.")
     if type(max_bytes) is not int or max_bytes < 1:
@@ -81,100 +98,113 @@ def publish_text_artifact(
         raise NativeArtifactError("HOCUS490", "Native artifact text must be valid UTF-8.") from exc
     if len(content) > max_bytes:
         raise NativeArtifactError(
-            "HOCUS490",
-            "Native artifact exceeds its byte limit.",
+            "HOCUS490", "Native artifact exceeds its byte limit.",
             details={"byteLength": len(content), "maxBytes": max_bytes},
         )
-    content_digest = _digest(content)
-    receipt = NativeArtifactReceipt(content_digest, len(content), expected_digest is not None)
+    return content
 
+
+def _artifact_path(path: str | PathLike[str]) -> Path:
     try:
         raw_path = fspath(path)
         if not isinstance(raw_path, str) or not raw_path:
             raise TypeError
-        destination = Path(raw_path).expanduser()
+        return Path(raw_path).expanduser()
     except (TypeError, ValueError, OSError) as exc:
         raise NativeArtifactError("HOCUS490", "Native artifact path is invalid.") from exc
 
-    original_mode: int | None = None
-    if expected_digest is not None:
-        actual = _read_digest(destination, missing_is_conflict=True)
-        if actual != expected_digest:
-            raise NativeArtifactError(
-                "HOCUS491",
-                "Existing artifact does not match expected_digest.",
-                details={"expectedDigest": expected_digest, "actualDigest": actual},
-            )
-        try:
-            original_mode = stat.S_IMODE(destination.stat().st_mode)
-        except FileNotFoundError as exc:
-            raise NativeArtifactError(
-                "HOCUS491", "Artifact disappeared before replacement."
-            ) from exc
-        except OSError as exc:
-            raise NativeArtifactError("HOCUS492", "Could not inspect existing artifact.") from exc
 
+def _replacement_mode(destination: Path, expected_digest: str | None) -> int | None:
+    if expected_digest is None:
+        return None
+    actual = _read_digest(destination, missing_is_conflict=True)
+    if actual != expected_digest:
+        raise NativeArtifactError(
+            "HOCUS491", "Existing artifact does not match expected_digest.",
+            details={"expectedDigest": expected_digest, "actualDigest": actual},
+        )
+    try:
+        return stat.S_IMODE(destination.stat().st_mode)
+    except FileNotFoundError as exc:
+        raise NativeArtifactError("HOCUS491", "Artifact disappeared before replacement.") from exc
+    except OSError as exc:
+        raise NativeArtifactError("HOCUS492", "Could not inspect existing artifact.") from exc
+
+
+def _prepare_temporary(destination: Path) -> tuple[int, Path]:
     try:
         destination.parent.mkdir(parents=True, exist_ok=True)
-        descriptor, temporary_name = tempfile.mkstemp(
+        descriptor, name = tempfile.mkstemp(
             prefix=f".{destination.name}.", suffix=".tmp", dir=destination.parent,
         )
+        return descriptor, Path(name)
     except OSError as exc:
         raise NativeArtifactError("HOCUS492", "Could not prepare native artifact publication.") from exc
 
-    temporary = Path(temporary_name)
-    published = False
+
+def _write_and_publish(
+    descriptor: int,
+    temporary: Path,
+    destination: Path,
+    content: bytes,
+    content_digest: str,
+    expected_digest: str | None,
+    original_mode: int | None,
+) -> None:
     unowned_descriptor: int | None = descriptor
     try:
-        try:
-            opened = os.fdopen(descriptor, "wb")
-            unowned_descriptor = None
-            with opened as handle:
-                handle.write(content)
-                handle.flush()
-                os.fsync(handle.fileno())
-            if original_mode is not None:
-                os.chmod(temporary, original_mode)
-            if _read_digest(temporary, missing_is_conflict=False) != content_digest:
-                raise NativeArtifactError(
-                    "HOCUS492", "Temporary artifact failed its final content verification."
-                )
-
-            if expected_digest is None:
-                try:
-                    os.link(temporary, destination)
-                except FileExistsError as exc:
-                    raise NativeArtifactError(
-                        "HOCUS491", "Destination already exists; exact replacement authority is required."
-                    ) from exc
-            else:
-                actual = _read_digest(destination, missing_is_conflict=True)
-                if actual != expected_digest:
-                    raise NativeArtifactError(
-                        "HOCUS491",
-                        "Artifact changed immediately before replacement.",
-                        details={"expectedDigest": expected_digest, "actualDigest": actual},
-                    )
-                os.replace(temporary, destination)
-            published = True
-        except NativeArtifactError:
-            raise
-        except OSError as exc:
-            raise NativeArtifactError("HOCUS492", "Could not publish native artifact.") from exc
+        opened = os.fdopen(descriptor, "wb")
+        unowned_descriptor = None
+        with opened as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        if original_mode is not None:
+            os.chmod(temporary, original_mode)
+        if _read_digest(temporary, missing_is_conflict=False) != content_digest:
+            raise NativeArtifactError(
+                "HOCUS492", "Temporary artifact failed its final content verification."
+            )
+        _publish_temporary(temporary, destination, expected_digest)
+    except NativeArtifactError:
+        raise
+    except OSError as exc:
+        raise NativeArtifactError("HOCUS492", "Could not publish native artifact.") from exc
     finally:
         if unowned_descriptor is not None:
             try:
                 os.close(unowned_descriptor)
             except OSError:
                 pass
-        # Publication is already final after link/replace. Cleanup is deliberately
-        # best-effort so it cannot mask a primary failure or invalidate success.
+
+
+def _publish_temporary(
+    temporary: Path, destination: Path, expected_digest: str | None,
+) -> None:
+    if expected_digest is None:
         try:
-            temporary.unlink(missing_ok=True)
-        except OSError:
-            pass
-    assert published
-    return receipt
+            os.link(temporary, destination)
+        except FileExistsError as exc:
+            raise NativeArtifactError(
+                "HOCUS491", "Destination already exists; exact replacement authority is required."
+            ) from exc
+        return
+    actual = _read_digest(destination, missing_is_conflict=True)
+    if actual != expected_digest:
+        raise NativeArtifactError(
+            "HOCUS491", "Artifact changed immediately before replacement.",
+            details={"expectedDigest": expected_digest, "actualDigest": actual},
+        )
+    os.replace(temporary, destination)
+
+
+def _cleanup_temporary(temporary: Path) -> None:
+    # Publication is already final after link/replace. Cleanup is deliberately
+    # best-effort so it cannot mask a primary failure or invalidate success.
+    try:
+        temporary.unlink(missing_ok=True)
+    except OSError:
+        pass
 
 
 def _read_digest(path: Path, *, missing_is_conflict: bool) -> str:

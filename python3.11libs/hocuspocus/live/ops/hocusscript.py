@@ -231,22 +231,8 @@ class HocusScriptOperationsMixin(HocusScriptApplyOperationsMixin, HocusScriptRes
         )
 
     def _document_preview_bundle_impl(self, bundle_value: dict[str, Any]) -> dict[str, Any]:
-        try:
-            bundle = decode_compiled_bundle(bundle_value)
-        except BundleValidationError as exc:
-            raise JsonRpcError(
-                INVALID_PARAMS,
-                exc.message,
-                {"diagnosticCode": exc.code, **exc.details},
-            ) from exc
+        bundle = self._document_decode_preview_bundle(bundle_value)
         payload = bundle.payload
-        if payload.get("bundleVersion") != BUNDLE_VERSION or "semanticResolution" not in payload:
-            raise JsonRpcError(
-                INVALID_PARAMS,
-                "document.preview_bundle requires a resolved compiled bundle v0.2.",
-                {"diagnosticCode": "HOCUS700"},
-            )
-
         target = payload["graphSpec"]["target"]
         baseline = self._document_current_network_payload(target)
         baseline_diagnostics = self._document_validate_network_document(baseline)
@@ -417,6 +403,25 @@ class HocusScriptOperationsMixin(HocusScriptApplyOperationsMixin, HocusScriptRes
             response["preview"] = artifact
         return response
 
+    @staticmethod
+    def _document_decode_preview_bundle(bundle_value: dict[str, Any]):
+        try:
+            bundle = decode_compiled_bundle(bundle_value)
+        except BundleValidationError as exc:
+            raise JsonRpcError(
+                INVALID_PARAMS,
+                exc.message,
+                {"diagnosticCode": exc.code, **exc.details},
+            ) from exc
+        payload = bundle.payload
+        if payload.get("bundleVersion") != BUNDLE_VERSION or "semanticResolution" not in payload:
+            raise JsonRpcError(
+                INVALID_PARAMS,
+                "document.preview_bundle requires a resolved compiled bundle v0.2.",
+                {"diagnosticCode": "HOCUS700"},
+            )
+        return bundle
+
     def document_preview_bundle(
         self,
         arguments: dict[str, Any],
@@ -582,21 +587,38 @@ class HocusScriptOperationsMixin(HocusScriptApplyOperationsMixin, HocusScriptRes
                 operationCount=len(opaque),
             )
 
+    @staticmethod
+    def _document_plan_bundle_input(
+        arguments: dict[str, Any],
+    ):
+        bundle_value = arguments.get("bundle")
+        if not isinstance(bundle_value, dict):
+            raise JsonRpcError(INVALID_PARAMS, "bundle must be a compiled-bundle JSON object.")
+        ttl_seconds = arguments.get("ttlSeconds", 900)
+        if (
+            not isinstance(ttl_seconds, int)
+            or isinstance(ttl_seconds, bool)
+            or not 30 <= ttl_seconds <= 1800
+        ):
+            raise JsonRpcError(
+                INVALID_PARAMS, "ttlSeconds must be an integer from 30 through 1800."
+            )
+        try:
+            decoded = decode_compiled_bundle(bundle_value)
+        except BundleValidationError as exc:
+            raise JsonRpcError(
+                INVALID_PARAMS,
+                exc.message,
+                {"diagnosticCode": exc.code, **exc.details},
+            ) from exc
+        return bundle_value, ttl_seconds, decoded
+
     def _document_plan_bundle_impl(
         self,
         arguments: dict[str, Any],
         context: RequestContext,
     ) -> dict[str, Any]:
-        bundle_value = arguments.get("bundle")
-        if not isinstance(bundle_value, dict):
-            raise JsonRpcError(INVALID_PARAMS, "bundle must be a compiled-bundle JSON object.")
-        ttl_seconds = arguments.get("ttlSeconds", 900)
-        if not isinstance(ttl_seconds, int) or isinstance(ttl_seconds, bool) or not 30 <= ttl_seconds <= 1800:
-            raise JsonRpcError(INVALID_PARAMS, "ttlSeconds must be an integer from 30 through 1800.")
-        try:
-            decoded = decode_compiled_bundle(bundle_value)
-        except BundleValidationError as exc:
-            raise JsonRpcError(INVALID_PARAMS, exc.message, {"diagnosticCode": exc.code, **exc.details}) from exc
+        bundle_value, ttl_seconds, decoded = self._document_plan_bundle_input(arguments)
         payload = decoded.payload
         preview_response = self._document_preview_bundle_impl(bundle_value)
         if not preview_response.get("valid") or not preview_response.get("readyForPlan"):

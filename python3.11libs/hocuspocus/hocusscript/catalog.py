@@ -384,50 +384,10 @@ def canonical_catalog_json(payload: Mapping[str, Any]) -> str:
 
 def decode_catalog_snapshot(content: str | bytes | bytearray | Mapping[str, Any]) -> CatalogSnapshot:
     """Strictly decode and authenticate an untrusted v1 catalog snapshot."""
-    if isinstance(content, Mapping):
-        payload = dict(content)
-        try:
-            encoded_size = len(json.dumps(payload, ensure_ascii=False, allow_nan=False).encode("utf-8"))
-        except RecursionError:
-            _fail("catalog.limit", "Catalog object nesting exceeds the JSON encoder limit.")
-        except (TypeError, ValueError) as error:
-            _fail("catalog.type", f"Catalog object is not valid JSON data: {error}.")
-        if encoded_size > MAX_CATALOG_BYTES:
-            _fail("catalog.limit", "Catalog snapshot exceeds the byte limit.")
-    else:
-        if isinstance(content, (bytes, bytearray)):
-            if len(content) > MAX_CATALOG_BYTES:
-                _fail("catalog.limit", "Catalog snapshot exceeds the byte limit.")
-            try:
-                raw = bytes(content).decode("utf-8")
-            except UnicodeDecodeError as error:
-                _fail("catalog.encoding", f"Catalog snapshot is not valid UTF-8: {error}.")
-        else:
-            raw = content
-        if not isinstance(raw, str):
-            _fail("catalog.type", "Catalog content must be JSON text, bytes, or an object.")
-        if len(raw.encode("utf-8")) > MAX_CATALOG_BYTES:
-            _fail("catalog.limit", "Catalog snapshot exceeds the byte limit.")
-        try:
-            payload = json.loads(raw, object_pairs_hook=_reject_duplicate_keys, parse_constant=_reject_constant)
-        except CatalogValidationError:
-            raise
-        except RecursionError:
-            _fail("catalog.limit", "Catalog JSON nesting exceeds the decoder limit.")
-        except (UnicodeDecodeError, json.JSONDecodeError) as error:
-            _fail("catalog.json", f"Invalid catalog JSON: {error}.")
+    payload = _load_catalog_payload(content)
     _enforce_limits(payload)
-    root = _object(payload, "$", {
-        "$schema", "kind", "catalogVersion", "catalogFingerprint", "houdini", "categories", "operators", "packages"
-    }, {"$schema", "kind", "catalogVersion", "catalogFingerprint", "houdini", "categories", "operators", "packages"})
-    if (root["$schema"] != CATALOG_SCHEMA_URI or root["kind"] != "hocus_catalog"
-            or isinstance(root["catalogVersion"], bool)
-            or not isinstance(root["catalogVersion"], int)
-            or root["catalogVersion"] != CATALOG_VERSION):
-        _fail("catalog.version", "Unsupported catalog schema, kind, or version.")
-    fingerprint = _string(root["catalogFingerprint"], "$.catalogFingerprint")
-    if not _DIGEST.fullmatch(fingerprint or ""):
-        _fail("catalog.digest", "Invalid catalog fingerprint.", "$.catalogFingerprint")
+    root = _catalog_root(payload)
+    fingerprint = _catalog_fingerprint(root)
     snapshot = CatalogSnapshot(
         _decode_houdini(root["houdini"], "$.houdini"),
         _decode_categories(root["categories"], "$.categories"),
@@ -438,6 +398,69 @@ def decode_catalog_snapshot(content: str | bytes | bytearray | Mapping[str, Any]
     if not hmac.compare_digest(fingerprint, snapshot.fingerprint):
         _fail("catalog.fingerprint_mismatch", "Catalog fingerprint does not match canonical content.", "$.catalogFingerprint")
     return snapshot
+
+
+def _load_catalog_payload(
+    content: str | bytes | bytearray | Mapping[str, Any],
+) -> Any:
+    if isinstance(content, Mapping):
+        return _catalog_mapping_payload(content)
+    return _catalog_json_payload(content)
+
+
+def _catalog_mapping_payload(content: Mapping[str, Any]) -> dict[str, Any]:
+    payload = dict(content)
+    try:
+        encoded_size = len(json.dumps(payload, ensure_ascii=False, allow_nan=False).encode("utf-8"))
+    except RecursionError:
+        _fail("catalog.limit", "Catalog object nesting exceeds the JSON encoder limit.")
+    except (TypeError, ValueError) as error:
+        _fail("catalog.type", f"Catalog object is not valid JSON data: {error}.")
+    if encoded_size > MAX_CATALOG_BYTES:
+        _fail("catalog.limit", "Catalog snapshot exceeds the byte limit.")
+    return payload
+
+
+def _catalog_json_payload(content: str | bytes | bytearray) -> Any:
+    raw: Any = content
+    if isinstance(content, (bytes, bytearray)):
+        if len(content) > MAX_CATALOG_BYTES:
+            _fail("catalog.limit", "Catalog snapshot exceeds the byte limit.")
+        try:
+            raw = bytes(content).decode("utf-8")
+        except UnicodeDecodeError as error:
+            _fail("catalog.encoding", f"Catalog snapshot is not valid UTF-8: {error}.")
+    if not isinstance(raw, str):
+        _fail("catalog.type", "Catalog content must be JSON text, bytes, or an object.")
+    if len(raw.encode("utf-8")) > MAX_CATALOG_BYTES:
+        _fail("catalog.limit", "Catalog snapshot exceeds the byte limit.")
+    try:
+        return json.loads(raw, object_pairs_hook=_reject_duplicate_keys, parse_constant=_reject_constant)
+    except CatalogValidationError:
+        raise
+    except RecursionError:
+        _fail("catalog.limit", "Catalog JSON nesting exceeds the decoder limit.")
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        _fail("catalog.json", f"Invalid catalog JSON: {error}.")
+
+
+def _catalog_root(payload: Any) -> dict[str, Any]:
+    root = _object(payload, "$", {
+        "$schema", "kind", "catalogVersion", "catalogFingerprint", "houdini", "categories", "operators", "packages"
+    }, {"$schema", "kind", "catalogVersion", "catalogFingerprint", "houdini", "categories", "operators", "packages"})
+    if (root["$schema"] != CATALOG_SCHEMA_URI or root["kind"] != "hocus_catalog"
+            or isinstance(root["catalogVersion"], bool)
+            or not isinstance(root["catalogVersion"], int)
+            or root["catalogVersion"] != CATALOG_VERSION):
+        _fail("catalog.version", "Unsupported catalog schema, kind, or version.")
+    return root
+
+
+def _catalog_fingerprint(root: Mapping[str, Any]) -> str:
+    fingerprint = _string(root["catalogFingerprint"], "$.catalogFingerprint")
+    if not _DIGEST.fullmatch(fingerprint or ""):
+        _fail("catalog.digest", "Invalid catalog fingerprint.", "$.catalogFingerprint")
+    return fingerprint
 
 
 def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:

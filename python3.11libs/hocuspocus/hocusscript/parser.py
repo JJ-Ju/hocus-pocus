@@ -183,62 +183,17 @@ class Parser:
         exports = self._parse_interface_items(parameter=False)
         self._expect("LBRACE", "HOCUS268", "Expected '{' before the module body.")
         statements = []
-        node_count = 0
-        instance_count = 0
+        counts = {"node": 0, "instance": 0}
         while self._current().kind not in {"RBRACE", "EOF"}:
             statement_index = self._index
             statement_kind = self._current().value if self._current().kind == "IDENT" else None
             try:
-                if self._is_ident("node"):
-                    if self._language_version == "0.3":
-                        self._claim_v03_node()
-                    elif node_count >= self._max_nodes:
-                        self._error("HOCUS314", f"Module exceeds the {self._max_nodes}-node limit.")
-                    statements.append(self._parse_node())
-                    node_count += 1
-                elif self._is_ident("use"):
-                    if self._language_version == "0.3":
-                        self._claim_v03_instance()
-                    elif instance_count >= self._max_instances:
-                        self._error("HOCUS271", f"Module exceeds the {self._max_instances}-instance limit.")
-                    statements.append(self._parse_use())
-                    instance_count += 1
-                elif self._language_version == "0.3" and (
-                    self._is_ident("if") or self._is_ident("for")
-                ):
-                    statements.append(self._parse_control(depth=1))
-                elif self._is_ident("export"):
-                    statements.append(self._parse_export())
-                else:
-                    self._error(
-                        "HOCUS269",
-                        (
-                            "Modules support only node, use, and export statements."
-                            if self._language_version == "0.2"
-                            else "Modules support only node, use, control, and export statements."
-                        ),
-                    )
+                statements.append(self._parse_module_statement(counts))
             except HocusSourceError as exc:
-                if exc.diagnostic.code in {"HOCUS226", "HOCUS314", "HOCUS246"} or self._is_resource_limit(
-                    exc.diagnostic
-                ) or (
-                    self._language_version == "0.2"
-                    and exc.diagnostic.code == "HOCUS269"
-                    and (self._is_ident("if") or self._is_ident("for"))
-                ):
+                if self._module_error_is_fatal(exc):
                     raise
                 self.diagnostics.append(exc.diagnostic)
-                if self._language_version == "0.3" and statement_kind in {"if", "for"}:
-                    self._index = statement_index
-                    self._synchronize_control_declaration()
-                    continue
-                if exc.diagnostic.code in {"HOCUS222", "HOCUS223", "HOCUS224", "HOCUS225", "HOCUS300"}:
-                    self._synchronize_node_declaration()
-                else:
-                    self._synchronize_statement(
-                        scope="module",
-                        preserve_current=exc.diagnostic.code == "HOCUS245",
-                    )
+                self._recover_module_statement(exc, statement_index, statement_kind)
         end = self._expect("RBRACE", "HOCUS270", "Expected '}' to close the module.")
         return ModuleDecl(
             str(name.value),
@@ -248,6 +203,60 @@ class Parser:
             self._joined_span(start, end),
             name.span,
         )
+
+    def _parse_module_statement(self, counts: dict[str, int]):
+        if self._is_ident("node"):
+            if self._language_version == "0.3":
+                self._claim_v03_node()
+            elif counts["node"] >= self._max_nodes:
+                self._error("HOCUS314", f"Module exceeds the {self._max_nodes}-node limit.")
+            statement = self._parse_node()
+            counts["node"] += 1
+            return statement
+        if self._is_ident("use"):
+            if self._language_version == "0.3":
+                self._claim_v03_instance()
+            elif counts["instance"] >= self._max_instances:
+                self._error("HOCUS271", f"Module exceeds the {self._max_instances}-instance limit.")
+            statement = self._parse_use()
+            counts["instance"] += 1
+            return statement
+        if self._language_version == "0.3" and (
+            self._is_ident("if") or self._is_ident("for")
+        ):
+            return self._parse_control(depth=1)
+        if self._is_ident("export"):
+            return self._parse_export()
+        message = (
+            "Modules support only node, use, and export statements."
+            if self._language_version == "0.2"
+            else "Modules support only node, use, control, and export statements."
+        )
+        self._error("HOCUS269", message)
+
+    def _module_error_is_fatal(self, exc: HocusSourceError) -> bool:
+        return (
+            exc.diagnostic.code in {"HOCUS226", "HOCUS314", "HOCUS246"}
+            or self._is_resource_limit(exc.diagnostic)
+            or (
+                self._language_version == "0.2"
+                and exc.diagnostic.code == "HOCUS269"
+                and (self._is_ident("if") or self._is_ident("for"))
+            )
+        )
+
+    def _recover_module_statement(
+        self, exc: HocusSourceError, statement_index: int, statement_kind: object,
+    ) -> None:
+        if self._language_version == "0.3" and statement_kind in {"if", "for"}:
+            self._index = statement_index
+            self._synchronize_control_declaration()
+        elif exc.diagnostic.code in {"HOCUS222", "HOCUS223", "HOCUS224", "HOCUS225", "HOCUS300"}:
+            self._synchronize_node_declaration()
+        else:
+            self._synchronize_statement(
+                scope="module", preserve_current=exc.diagnostic.code == "HOCUS245",
+            )
 
     def _parse_interface_items(
         self, *, parameter: bool
@@ -598,92 +607,113 @@ class Parser:
         self._expect("LBRACE", "HOCUS206", "Expected '{' after the graph name.")
         statements = []
         seen_singletons: set[str] = set()
-        node_count = 0
-        instance_count = 0
+        counts = {"node": 0, "instance": 0}
 
         while self._current().kind not in {"RBRACE", "EOF"}:
             statement_index = self._index
             statement_kind = self._current().value if self._current().kind == "IDENT" else None
             try:
-                if self._is_ident("target"):
-                    self._claim_singleton("target", seen_singletons)
-                    statements.append(self._parse_target())
-                elif self._is_ident("category"):
-                    self._claim_singleton("category", seen_singletons)
-                    statements.append(self._parse_category())
-                elif self._is_ident("mode"):
-                    self._claim_singleton("mode", seen_singletons)
-                    statements.append(self._parse_mode())
-                elif self._is_ident("expect"):
-                    self._claim_singleton("expect", seen_singletons)
-                    statements.append(self._parse_revision())
-                elif self._is_ident("ownership"):
-                    self._claim_singleton("ownership", seen_singletons)
-                    statements.append(self._parse_ownership())
-                elif self._is_ident("existing") or self._is_ident("adopt"):
-                    statements.append(self._parse_external())
-                elif self._is_ident("node"):
-                    if self._language_version == "0.3":
-                        self._claim_v03_node()
-                    elif node_count >= self._max_nodes:
-                        self._error("HOCUS314", f"Graph exceeds the {self._max_nodes}-node limit.")
-                    statements.append(self._parse_node())
-                    node_count += 1
-                elif self._uses_module_syntax() and self._is_ident("use"):
-                    if self._language_version == "0.3":
-                        self._claim_v03_instance()
-                    elif instance_count >= self._max_instances:
-                        self._error("HOCUS271", f"Graph exceeds the {self._max_instances}-instance limit.")
-                    statements.append(self._parse_use())
-                    instance_count += 1
-                elif self._language_version == "0.3" and (
-                    self._is_ident("if") or self._is_ident("for")
-                ):
-                    statements.append(self._parse_control(depth=1))
-                elif self._is_ident("display") or self._is_ident("render") or self._is_ident("output"):
-                    key = str(self._current().value)
-                    self._claim_singleton(key, seen_singletons)
-                    statements.append(self._parse_flag())
-                elif self._is_ident("layout"):
-                    self._claim_singleton("layout", seen_singletons)
-                    statements.append(self._parse_layout())
-                else:
-                    message = (
-                        "Unknown graph statement. HocusScript 0.1 does not execute TypeScript or JavaScript constructs."
-                        if self._language_version == "0.1"
-                        else (
-                            f"Unknown graph statement. HocusScript {self._language_version} "
-                            "does not execute host-language constructs."
-                        )
-                    )
-                    self._error(
-                        "HOCUS217",
-                        message,
-                    )
+                statements.append(self._parse_graph_statement(seen_singletons, counts))
             except HocusSourceError as exc:
-                if exc.diagnostic.code in {"HOCUS226", "HOCUS314", "HOCUS246"} or self._is_resource_limit(
-                    exc.diagnostic
-                ) or (
-                    self._language_version == "0.2"
-                    and exc.diagnostic.code == "HOCUS217"
-                    and (self._is_ident("if") or self._is_ident("for"))
-                ):
+                if self._graph_error_is_fatal(exc):
                     raise
                 self.diagnostics.append(exc.diagnostic)
-                if self._language_version == "0.3" and statement_kind in {"if", "for"}:
-                    self._index = statement_index
-                    self._synchronize_control_declaration()
-                    continue
-                if exc.diagnostic.code in {"HOCUS222", "HOCUS223", "HOCUS224", "HOCUS225", "HOCUS300"}:
-                    self._synchronize_node_declaration()
-                else:
-                    self._synchronize_statement(
-                        scope="graph",
-                        preserve_current=exc.diagnostic.code == "HOCUS245",
-                    )
+                self._recover_graph_statement(exc, statement_index, statement_kind)
 
         end = self._expect("RBRACE", "HOCUS218", "Expected '}' to close the graph.")
         return GraphDecl(str(name.value), tuple(statements), self._joined_span(start, end), name.span)
+
+    def _parse_graph_statement(
+        self, seen_singletons: set[str], counts: dict[str, int],
+    ):
+        directive = self._parse_graph_directive(seen_singletons)
+        if directive is not None:
+            return directive
+        return self._parse_graph_body_statement(seen_singletons, counts)
+
+    def _parse_graph_directive(self, seen_singletons: set[str]):
+        parsers = (
+            ("target", self._parse_target), ("category", self._parse_category),
+            ("mode", self._parse_mode), ("expect", self._parse_revision),
+            ("ownership", self._parse_ownership),
+        )
+        for keyword, parser in parsers:
+            if self._is_ident(keyword):
+                self._claim_singleton(keyword, seen_singletons)
+                return parser()
+        if self._is_ident("existing") or self._is_ident("adopt"):
+            return self._parse_external()
+        return None
+
+    def _parse_graph_body_statement(
+        self, seen_singletons: set[str], counts: dict[str, int],
+    ):
+        if self._is_ident("node"):
+            return self._parse_counted_graph_node(counts)
+        if self._uses_module_syntax() and self._is_ident("use"):
+            return self._parse_counted_graph_use(counts)
+        if self._language_version == "0.3" and (
+            self._is_ident("if") or self._is_ident("for")
+        ):
+            return self._parse_control(depth=1)
+        if self._is_ident("display") or self._is_ident("render") or self._is_ident("output"):
+            key = str(self._current().value)
+            self._claim_singleton(key, seen_singletons)
+            return self._parse_flag()
+        if self._is_ident("layout"):
+            self._claim_singleton("layout", seen_singletons)
+            return self._parse_layout()
+        message = (
+            "Unknown graph statement. HocusScript 0.1 does not execute TypeScript or JavaScript constructs."
+            if self._language_version == "0.1"
+            else (
+                f"Unknown graph statement. HocusScript {self._language_version} "
+                "does not execute host-language constructs."
+            )
+        )
+        self._error("HOCUS217", message)
+
+    def _parse_counted_graph_node(self, counts: dict[str, int]) -> NodeDecl:
+        if self._language_version == "0.3":
+            self._claim_v03_node()
+        elif counts["node"] >= self._max_nodes:
+            self._error("HOCUS314", f"Graph exceeds the {self._max_nodes}-node limit.")
+        statement = self._parse_node()
+        counts["node"] += 1
+        return statement
+
+    def _parse_counted_graph_use(self, counts: dict[str, int]) -> UseDecl:
+        if self._language_version == "0.3":
+            self._claim_v03_instance()
+        elif counts["instance"] >= self._max_instances:
+            self._error("HOCUS271", f"Graph exceeds the {self._max_instances}-instance limit.")
+        statement = self._parse_use()
+        counts["instance"] += 1
+        return statement
+
+    def _graph_error_is_fatal(self, exc: HocusSourceError) -> bool:
+        return (
+            exc.diagnostic.code in {"HOCUS226", "HOCUS314", "HOCUS246"}
+            or self._is_resource_limit(exc.diagnostic)
+            or (
+                self._language_version == "0.2"
+                and exc.diagnostic.code == "HOCUS217"
+                and (self._is_ident("if") or self._is_ident("for"))
+            )
+        )
+
+    def _recover_graph_statement(
+        self, exc: HocusSourceError, statement_index: int, statement_kind: object,
+    ) -> None:
+        if self._language_version == "0.3" and statement_kind in {"if", "for"}:
+            self._index = statement_index
+            self._synchronize_control_declaration()
+        elif exc.diagnostic.code in {"HOCUS222", "HOCUS223", "HOCUS224", "HOCUS225", "HOCUS300"}:
+            self._synchronize_node_declaration()
+        else:
+            self._synchronize_statement(
+                scope="graph", preserve_current=exc.diagnostic.code == "HOCUS245",
+            )
 
     def _parse_target(self) -> TargetStmt:
         start = self._advance()

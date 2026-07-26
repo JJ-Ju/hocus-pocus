@@ -57,6 +57,14 @@ def _format_reference(reference: NodeReference) -> str:
 
 def format_graph(graph: GraphSpec) -> str:
     lines = [f"hocus {graph.language_version};", "", f"graph {graph.name} {{"]
+    _format_graph_header(graph, lines)
+    _format_graph_nodes(graph, lines)
+    _format_graph_flags(graph, lines)
+    lines.append("}")
+    return "\n".join(lines) + "\n"
+
+
+def _format_graph_header(graph: GraphSpec, lines: list[str]) -> None:
     if graph.target is not None:
         lines.append(f"  target {_format_value(graph.target)};")
     if graph.category is not None:
@@ -73,6 +81,8 @@ def format_graph(graph: GraphSpec) -> str:
             keyword = "adopt" if external.adopted else "existing"
             lines.append(f"  {keyword} {external.symbol} = {_format_value(external.path)};")
 
+
+def _format_graph_nodes(graph: GraphSpec, lines: list[str]) -> None:
     for node in graph.nodes:
         lines.append("")
         identity = f" @id({_format_value(node.explicit_id)})" if node.explicit_id is not None else ""
@@ -83,6 +93,8 @@ def format_graph(graph: GraphSpec) -> str:
             lines.append(f"    {parm.name} = {_format_value(parm.value)};")
         lines.append("  }")
 
+
+def _format_graph_flags(graph: GraphSpec, lines: list[str]) -> None:
     if any(value is not None for value in (graph.display, graph.render, graph.output, graph.layout)):
         lines.append("")
     if graph.display is not None:
@@ -93,8 +105,6 @@ def format_graph(graph: GraphSpec) -> str:
         lines.append(f"  output = {graph.output};")
     if graph.layout is not None:
         lines.append(f"  layout = {graph.layout};")
-    lines.append("}")
-    return "\n".join(lines) + "\n"
 
 
 def _format_syntax_expr(value: Any) -> str:
@@ -181,33 +191,40 @@ def _format_control_statement(statement: Any, indent: str) -> list[str]:
 def _format_v02_graph(graph: GraphDecl) -> list[str]:
     lines = [f"graph {graph.name} {{"]
     for statement in graph.statements:
-        if isinstance(statement, TargetStmt):
-            lines.append(f"  target {_format_value(statement.value)};")
-        elif isinstance(statement, CategoryStmt):
-            lines.append(f"  category {statement.value};")
-        elif isinstance(statement, ModeStmt):
-            lines.append(f"  mode {statement.value};")
-        elif isinstance(statement, RevisionStmt):
-            lines.append(f"  expect revision {statement.value};")
-        elif isinstance(statement, OwnershipStmt):
-            lines.append(f"  ownership {_format_value(statement.value)};")
-        elif isinstance(statement, ExternalDecl):
-            keyword = "adopt" if statement.adopted else "existing"
-            lines.append(f"  {keyword} {statement.symbol} = {_format_value(statement.path)};")
-        elif isinstance(statement, NodeDecl):
-            lines.extend(_format_syntax_node(statement, "  "))
-        elif isinstance(statement, UseDecl):
-            lines.append(_format_use(statement, "  "))
-        elif isinstance(statement, (IfDecl, ForDecl)):
-            lines.extend(_format_control_statement(statement, "  "))
-        elif isinstance(statement, FlagStmt):
-            lines.append(f"  {statement.name} = {statement.symbol};")
-        elif isinstance(statement, LayoutStmt):
-            lines.append(f"  layout = {statement.value};")
-        else:  # pragma: no cover - closed syntax union
-            raise TypeError(f"unsupported graph statement: {type(statement).__name__}")
+        lines.extend(_format_v02_graph_statement(statement))
     lines.append("}")
     return lines
+
+
+def _format_v02_graph_statement(statement: Any) -> list[str]:
+    if isinstance(statement, TargetStmt):
+        return [f"  target {_format_value(statement.value)};"]
+    if isinstance(statement, CategoryStmt):
+        return [f"  category {statement.value};"]
+    if isinstance(statement, ModeStmt):
+        return [f"  mode {statement.value};"]
+    if isinstance(statement, RevisionStmt):
+        return [f"  expect revision {statement.value};"]
+    if isinstance(statement, OwnershipStmt):
+        return [f"  ownership {_format_value(statement.value)};"]
+    if isinstance(statement, ExternalDecl):
+        keyword = "adopt" if statement.adopted else "existing"
+        return [f"  {keyword} {statement.symbol} = {_format_value(statement.path)};"]
+    return _format_v02_graph_body_statement(statement)
+
+
+def _format_v02_graph_body_statement(statement: Any) -> list[str]:
+    if isinstance(statement, NodeDecl):
+        return _format_syntax_node(statement, "  ")
+    if isinstance(statement, UseDecl):
+        return [_format_use(statement, "  ")]
+    if isinstance(statement, (IfDecl, ForDecl)):
+        return _format_control_statement(statement, "  ")
+    if isinstance(statement, FlagStmt):
+        return [f"  {statement.name} = {statement.symbol};"]
+    if isinstance(statement, LayoutStmt):
+        return [f"  layout = {statement.value};"]
+    raise TypeError(f"unsupported graph statement: {type(statement).__name__}")
 
 
 def _format_v02_module(module: ModuleDecl) -> list[str]:

@@ -20,10 +20,8 @@ from .graph_store_plans import (
 
 GraphStorePlanError = _GraphStorePlanError
 
-
 class GraphStoreSchemaError(RuntimeError):
     """Raised when a graph-store database cannot be migrated safely."""
-
 
 class _ClosingConnection(sqlite3.Connection):
     """SQLite connection whose context manager also releases the file handle."""
@@ -33,7 +31,6 @@ class _ClosingConnection(sqlite3.Connection):
             return bool(super().__exit__(exc_type, exc_value, traceback))
         finally:
             self.close()
-
 
 _MIGRATION_1_SQL = """
 CREATE TABLE IF NOT EXISTS documents (
@@ -864,17 +861,63 @@ class LiveGraphStore(GraphStorePlanMixin):
                 ),
             )
 
-    def query_nodes(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        limit = int(arguments.get("limit", 200))
-        root_path = str(arguments.get("root_path", "")).strip() or None
-        path_prefix = str(arguments.get("path_prefix", "")).strip() or None
-        node_type_name = str(arguments.get("node_type_name", "")).strip() or None
-        category = str(arguments.get("category", "")).strip() or None
-        name_contains = str(arguments.get("name_contains", "")).strip().lower() or None
-        material_path = str(arguments.get("material_path", "")).strip() or None
-        flag_name = str(arguments.get("flag_name", "")).strip() or None
-        flag_value = arguments.get("flag_value")
+    @staticmethod
+    def _query_node_candidate(row: Any, filters: dict[str, Any]) -> dict[str, Any] | None:
+        path = str(row["path"])
+        flags = json.loads(str(row["flags_json"] or "{}"))
+        rejected = (
+            (filters["root"] and not (path == filters["root"] or path.startswith(f"{filters['root']}/")))
+            or (filters["prefix"] and not path.startswith(filters["prefix"]))
+            or (filters["type"] and str(row["type_name"] or "") != filters["type"])
+            or (filters["category"] and str(row["category"] or "") != filters["category"])
+            or (filters["name"] and filters["name"] not in str(row["name"] or "").lower())
+            or (filters["material"] and str(row["material_path"] or "") != filters["material"])
+            or (filters["flag"] and filters["flag"] not in flags)
+            or (
+                filters["flag"]
+                and filters["flag_value"] is not None
+                and bool(flags.get(filters["flag"])) != bool(filters["flag_value"])
+            )
+        )
+        if rejected:
+            return None
+        return {
+            "uid": row["node_uid"],
+            "path": path,
+            "name": row["name"],
+            "typeName": row["type_name"],
+            "category": row["category"],
+            "parentPath": row["parent_path"],
+            "isNetwork": bool(row["is_network"]),
+            "flags": flags,
+            "metadata": json.loads(str(row["metadata_json"] or "{}")),
+            "rootPath": row["document_root_path"],
+            "liveRevision": int(row["document_live_revision"] or 0),
+        }
 
+    @staticmethod
+    def _prefer_node_candidate(candidate: dict[str, Any], current: dict[str, Any] | None) -> bool:
+        if current is None:
+            return True
+        candidate_revision = int(candidate["liveRevision"])
+        current_revision = int(current.get("liveRevision", 0))
+        return candidate_revision > current_revision or (
+            candidate_revision == current_revision
+            and len(str(candidate["rootPath"] or "")) > len(str(current["rootPath"] or ""))
+        )
+
+    def query_nodes(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        root_path = str(arguments.get("root_path", "")).strip() or None
+        filters = {
+            "root": root_path,
+            "prefix": str(arguments.get("path_prefix", "")).strip() or None,
+            "type": str(arguments.get("node_type_name", "")).strip() or None,
+            "category": str(arguments.get("category", "")).strip() or None,
+            "name": str(arguments.get("name_contains", "")).strip().lower() or None,
+            "material": str(arguments.get("material_path", "")).strip() or None,
+            "flag": str(arguments.get("flag_name", "")).strip() or None,
+            "flag_value": arguments.get("flag_value"),
+        }
         with self._connect() as connection:
             if root_path:
                 rows = connection.execute(
@@ -897,54 +940,16 @@ class LiveGraphStore(GraphStorePlanMixin):
 
         best_by_path: dict[str, dict[str, Any]] = {}
         for row in rows:
-            path = str(row["path"])
-            if root_path and not (path == root_path or path.startswith(f"{root_path}/")):
-                continue
-            if path_prefix and not path.startswith(path_prefix):
-                continue
-            if node_type_name and str(row["type_name"] or "") != node_type_name:
-                continue
-            if category and str(row["category"] or "") != category:
-                continue
-            if name_contains and name_contains not in str(row["name"] or "").lower():
-                continue
-            if material_path and str(row["material_path"] or "") != material_path:
-                continue
-            flags = json.loads(str(row["flags_json"] or "{}"))
-            if flag_name:
-                if flag_name not in flags:
-                    continue
-                if flag_value is not None and bool(flags.get(flag_name)) != bool(flag_value):
-                    continue
-            candidate = {
-                "uid": row["node_uid"],
-                "path": path,
-                "name": row["name"],
-                "typeName": row["type_name"],
-                "category": row["category"],
-                "parentPath": row["parent_path"],
-                "isNetwork": bool(row["is_network"]),
-                "flags": flags,
-                "metadata": json.loads(str(row["metadata_json"] or "{}")),
-                "rootPath": row["document_root_path"],
-                "liveRevision": int(row["document_live_revision"] or 0),
-            }
-            current = best_by_path.get(path)
-            if current is None:
-                best_by_path[path] = candidate
-                continue
-            if int(candidate["liveRevision"]) > int(current.get("liveRevision", 0)):
-                best_by_path[path] = candidate
-                continue
-            if int(candidate["liveRevision"]) == int(current.get("liveRevision", 0)) and len(str(candidate["rootPath"] or "")) > len(str(current["rootPath"] or "")):
-                best_by_path[path] = candidate
+            candidate = self._query_node_candidate(row, filters)
+            if candidate is not None and self._prefer_node_candidate(
+                candidate, best_by_path.get(candidate["path"])
+            ):
+                best_by_path[candidate["path"]] = candidate
 
-        matches = sorted(best_by_path.values(), key=lambda item: item["path"])[:limit]
-        return {
-            "count": len(matches),
-            "matches": matches,
-        }
-
+        matches = sorted(best_by_path.values(), key=lambda item: item["path"])[
+            : int(arguments.get("limit", 200))
+        ]
+        return {"count": len(matches), "matches": matches}
 
     def record_apply_commit(
         self,

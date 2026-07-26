@@ -524,49 +524,73 @@ def _validate_expansion_stacks(
     stack_ids: list[str] = []
     for stack_index, stack in enumerate(stacks):
         stack_label = f"graphSpec.expansionMap.stacks[{stack_index}]"
-        if not isinstance(stack, dict) or set(stack) != {"stackId", "frames"}:
-            raise BundleValidationError("HOCUS520", f"{stack_label} has an invalid shape.")
-        frames = stack["frames"]
-        if not isinstance(frames, list) or not 1 <= len(frames) <= 64:
-            raise BundleValidationError("HOCUS520", f"{stack_label}.frames must contain 1 to 64 frames.")
-        for frame_index, frame in enumerate(frames):
-            frame_label = f"{stack_label}.frames[{frame_index}]"
-            if not isinstance(frame, dict) or set(frame) != {
-                "moduleUri", "sourceDigest", "moduleName", "instanceSymbol",
-                "instanceIdPath", "importSpan", "useSpan",
-            }:
-                raise BundleValidationError("HOCUS520", f"{frame_label} has an invalid shape.")
-            uri = frame["moduleUri"]
-            source_digest = _require_digest(frame["sourceDigest"], f"{frame_label}.sourceDigest", "HOCUS520")
-            module = module_dependencies.get(uri) if isinstance(uri, str) else None
-            if module is None or module["sourceDigest"] != source_digest:
-                raise BundleValidationError("HOCUS520", f"{frame_label} does not match a locked module.")
-            for field in ("moduleName", "instanceSymbol"):
-                if not isinstance(frame[field], str) or not _IDENTIFIER_PATTERN.fullmatch(frame[field]):
-                    raise BundleValidationError("HOCUS520", f"{frame_label}.{field} is invalid.")
-            if frame["moduleName"] != module["moduleName"]:
-                raise BundleValidationError("HOCUS520", f"{frame_label}.moduleName conflicts with the resolved module.")
-            instance_path = frame["instanceIdPath"]
-            if (
-                not isinstance(instance_path, list) or len(instance_path) > 64
-                or any(not isinstance(item, str) or not EXPLICIT_NODE_ID_PATTERN.fullmatch(item)
-                       for item in instance_path)
-            ):
-                raise BundleValidationError("HOCUS520", f"{frame_label}.instanceIdPath is invalid.")
-            if frame["importSpan"] is not None:
-                _validate_span(frame["importSpan"], f"{frame_label}.importSpan")
-            _validate_span(frame["useSpan"], f"{frame_label}.useSpan")
-        stack_id = _require_digest(stack["stackId"], f"{stack_label}.stackId", "HOCUS520")
-        stack_payload = {"domain": _EXPANSION_STACK_DIGEST_DOMAIN, "frames": frames}
-        expected_stack_id = "sha256:" + hashlib.sha256(
-            _canonical_json(stack_payload).encode("utf-8")
-        ).hexdigest()
-        if stack_id != expected_stack_id:
-            raise BundleValidationError("HOCUS520", f"{stack_label}.stackId does not match frames.")
-        stack_ids.append(stack_id)
+        stack_ids.append(_validate_expansion_stack(stack, stack_label, module_dependencies))
     if stack_ids != sorted(set(stack_ids)):
         raise BundleValidationError("HOCUS520", "Expansion stacks must be uniquely sorted by stackId.")
     return stacks, stack_ids
+
+
+def _validate_expansion_stack(
+    stack: Any,
+    label: str,
+    module_dependencies: dict[str, dict[str, Any]],
+) -> str:
+    if not isinstance(stack, dict) or set(stack) != {"stackId", "frames"}:
+        raise BundleValidationError("HOCUS520", f"{label} has an invalid shape.")
+    frames = stack["frames"]
+    if not isinstance(frames, list) or not 1 <= len(frames) <= 64:
+        raise BundleValidationError("HOCUS520", f"{label}.frames must contain 1 to 64 frames.")
+    for frame_index, frame in enumerate(frames):
+        _validate_expansion_frame(
+            frame, f"{label}.frames[{frame_index}]", module_dependencies
+        )
+    stack_id = _require_digest(stack["stackId"], f"{label}.stackId", "HOCUS520")
+    stack_payload = {"domain": _EXPANSION_STACK_DIGEST_DOMAIN, "frames": frames}
+    expected_stack_id = "sha256:" + hashlib.sha256(
+        _canonical_json(stack_payload).encode("utf-8")
+    ).hexdigest()
+    if stack_id != expected_stack_id:
+        raise BundleValidationError("HOCUS520", f"{label}.stackId does not match frames.")
+    return stack_id
+
+
+def _validate_expansion_frame(
+    frame: Any,
+    label: str,
+    module_dependencies: dict[str, dict[str, Any]],
+) -> None:
+    expected_keys = {
+        "moduleUri", "sourceDigest", "moduleName", "instanceSymbol",
+        "instanceIdPath", "importSpan", "useSpan",
+    }
+    if not isinstance(frame, dict) or set(frame) != expected_keys:
+        raise BundleValidationError("HOCUS520", f"{label} has an invalid shape.")
+    uri = frame["moduleUri"]
+    source_digest = _require_digest(frame["sourceDigest"], f"{label}.sourceDigest", "HOCUS520")
+    module = module_dependencies.get(uri) if isinstance(uri, str) else None
+    if module is None or module["sourceDigest"] != source_digest:
+        raise BundleValidationError("HOCUS520", f"{label} does not match a locked module.")
+    for field in ("moduleName", "instanceSymbol"):
+        if not isinstance(frame[field], str) or not _IDENTIFIER_PATTERN.fullmatch(frame[field]):
+            raise BundleValidationError("HOCUS520", f"{label}.{field} is invalid.")
+    if frame["moduleName"] != module["moduleName"]:
+        raise BundleValidationError("HOCUS520", f"{label}.moduleName conflicts with the resolved module.")
+    _validate_instance_path(frame["instanceIdPath"], label)
+    if frame["importSpan"] is not None:
+        _validate_span(frame["importSpan"], f"{label}.importSpan")
+    _validate_span(frame["useSpan"], f"{label}.useSpan")
+
+
+def _validate_instance_path(instance_path: Any, label: str) -> None:
+    if (
+        not isinstance(instance_path, list)
+        or len(instance_path) > 64
+        or any(
+            not isinstance(item, str) or not EXPLICIT_NODE_ID_PATTERN.fullmatch(item)
+            for item in instance_path
+        )
+    ):
+        raise BundleValidationError("HOCUS520", f"{label}.instanceIdPath is invalid.")
 
 
 

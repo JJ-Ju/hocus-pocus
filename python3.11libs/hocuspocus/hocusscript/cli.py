@@ -8,7 +8,7 @@ import json
 import os
 import sys
 from pathlib import Path
-from typing import Sequence
+from typing import Any, Sequence
 
 from .bundle import (
     MAX_MODULE_BUNDLE_BYTES,
@@ -132,6 +132,18 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     raw_arguments = list(sys.argv[1:] if argv is None else argv)
+    _validate_raw_arguments(parser, raw_arguments)
+    args = parser.parse_args(raw_arguments)
+    _validate_parsed_arguments(parser, args)
+    try:
+        return _dispatch_command(args)
+    except _CLI_ERRORS as exc:
+        return _report_cli_error(args, exc)
+
+
+def _validate_raw_arguments(
+    parser: argparse.ArgumentParser, raw_arguments: list[str],
+) -> None:
     module_root_options = [
         value.partition("=")[0]
         for value in raw_arguments
@@ -149,94 +161,106 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error("external roots require the exact --module-root option spelling")
     if module_root_options and not supported_root_command:
         parser.error("--module-root is available only for check, compile, and lock --update")
-    args = parser.parse_args(raw_arguments)
+
+
+def _validate_parsed_arguments(
+    parser: argparse.ArgumentParser, args: argparse.Namespace,
+) -> None:
     if not args.project:
         parser.error("--project or HOCUS_PROJECT_DIRECTORY is required")
     if args.command == "compile" and args.expected_output_digest and not args.output:
         parser.error("--expected-output-digest requires --output")
     if args.command == "lock" and not args.update:
         parser.error("lock currently requires --update")
-    try:
-        module_roots = _parse_module_roots(getattr(args, "module_root", ()))
-        if args.command == "write-export":
-            return _write_export_handoff(args.handoff, args.destination, args.project, args.expected_digest)
-        if args.command == "lock":
-            if module_roots:
-                result = update_project_mixed_module_lock(
-                    args.project,
-                    args.entries,
-                    module_roots,
-                    allow_write=True,
-                    expected_lock_digest=args.expected_lock_digest,
-                )
-            else:
-                result = update_project_module_lock(
-                    args.project,
-                    args.entries,
-                    allow_write=True,
-                    expected_lock_digest=args.expected_lock_digest,
-                )
-            sys.stdout.write(json.dumps(
-                result.to_dict(), ensure_ascii=False, indent=2, sort_keys=True,
-            ) + "\n")
-            return 0
-        project = ProjectContext.load(args.project, validate_lock=False)
-        if project.manifest_version == 3 or project.language_version == "0.2":
-            return _run_module_command(args, module_roots)
-        if module_roots:
-            raise ProjectError(
-                "HOCUS460",
-                "--module-root requires a language 0.2 schema v3 project.",
-            )
-        result = compile_path(
-            args.source,
-            project_directory=args.project,
-            strict=not args.no_strict,
-            validate_lock=args.command != "format",
+
+
+def _dispatch_command(args: argparse.Namespace) -> int:
+    module_roots = _parse_module_roots(getattr(args, "module_root", ()))
+    if args.command == "write-export":
+        return _write_export_handoff(
+            args.handoff, args.destination, args.project, args.expected_digest,
         )
-        if args.command == "check":
-            if args.json:
-                print(json.dumps(result.to_dict(), ensure_ascii=False, indent=2, sort_keys=True))
-            else:
-                _print_diagnostics(result.to_dict())
-            return 0 if result.valid else 1
-        if not result.valid or result.formatted_source is None:
-            _print_diagnostics(result.to_dict())
-            return 1
-        if args.command == "format":
-            if args.write:
-                if result.native_source_path is None:
-                    raise ProjectError("HOCUS418", "Native source path is unavailable for in-place formatting.")
-                _atomic_write(Path(result.native_source_path), result.formatted_source, expected_digest=result.source_digest)
-            else:
-                sys.stdout.write(result.formatted_source)
-            return 0
-        bundle = CompiledBundle.from_result(result)
-        if not bundle.payload["portable"]:
-            print(f"HOCUS417: {args.project!s} requires hocus.project.toml with a stable project uid for bundle compilation.", file=sys.stderr)
-            return 1
-        output = bundle.to_json(pretty=True)
-        if args.output:
-            _atomic_write(
-                Path(args.output).expanduser().resolve(),
-                output,
-                expected_digest=args.expected_output_digest,
-                max_bytes=MAX_MODULE_BUNDLE_BYTES,
-            )
+    if args.command == "lock":
+        return _run_lock_command(args, module_roots)
+    project = ProjectContext.load(args.project, validate_lock=False)
+    if project.manifest_version == 3 or project.language_version == "0.2":
+        return _run_module_command(args, module_roots)
+    if module_roots:
+        raise ProjectError(
+            "HOCUS460", "--module-root requires a language 0.2 schema v3 project.",
+        )
+    return _run_legacy_command(args)
+
+
+def _run_lock_command(args: argparse.Namespace, module_roots: dict[str, str]) -> int:
+    if module_roots:
+        result = update_project_mixed_module_lock(
+            args.project, args.entries, module_roots, allow_write=True,
+            expected_lock_digest=args.expected_lock_digest,
+        )
+    else:
+        result = update_project_module_lock(
+            args.project, args.entries, allow_write=True,
+            expected_lock_digest=args.expected_lock_digest,
+        )
+    sys.stdout.write(json.dumps(
+        result.to_dict(), ensure_ascii=False, indent=2, sort_keys=True,
+    ) + "\n")
+    return 0
+
+
+def _run_legacy_command(args: argparse.Namespace) -> int:
+    result = compile_path(
+        args.source, project_directory=args.project, strict=not args.no_strict,
+        validate_lock=args.command != "format",
+    )
+    if args.command == "check":
+        if args.json:
+            print(json.dumps(result.to_dict(), ensure_ascii=False, indent=2, sort_keys=True))
         else:
-            sys.stdout.write(output)
-        return 0
-    except _CLI_ERRORS as exc:
-        if args.command == "check" and args.json:
-            sys.stdout.write(json.dumps(
-                _module_check_error_payload(exc),
-                ensure_ascii=False,
-                indent=2,
-                sort_keys=True,
-            ) + "\n")
-            return 1
-        print(f"{exc.code}: {exc.message}", file=sys.stderr)
+            _print_diagnostics(result.to_dict())
+        return 0 if result.valid else 1
+    if not result.valid or result.formatted_source is None:
+        _print_diagnostics(result.to_dict())
         return 1
+    if args.command == "format":
+        return _publish_legacy_format(args, result)
+    bundle = CompiledBundle.from_result(result)
+    if not bundle.payload["portable"]:
+        print(f"HOCUS417: {args.project!s} requires hocus.project.toml with a stable project uid for bundle compilation.", file=sys.stderr)
+        return 1
+    output = bundle.to_json(pretty=True)
+    if args.output:
+        _atomic_write(
+            Path(args.output).expanduser().resolve(), output,
+            expected_digest=args.expected_output_digest, max_bytes=MAX_MODULE_BUNDLE_BYTES,
+        )
+    else:
+        sys.stdout.write(output)
+    return 0
+
+
+def _publish_legacy_format(args: argparse.Namespace, result: Any) -> int:
+    if args.write:
+        if result.native_source_path is None:
+            raise ProjectError("HOCUS418", "Native source path is unavailable for in-place formatting.")
+        _atomic_write(
+            Path(result.native_source_path), result.formatted_source,
+            expected_digest=result.source_digest,
+        )
+    else:
+        sys.stdout.write(result.formatted_source)
+    return 0
+
+
+def _report_cli_error(args: argparse.Namespace, exc: Any) -> int:
+    if args.command == "check" and args.json:
+        sys.stdout.write(json.dumps(
+            _module_check_error_payload(exc), ensure_ascii=False, indent=2, sort_keys=True,
+        ) + "\n")
+        return 1
+    print(f"{exc.code}: {exc.message}", file=sys.stderr)
+    return 1
 
 
 _CLI_ERRORS = (
@@ -399,6 +423,20 @@ def _write_export_handoff(
     project_directory: str,
     expected_digest: str | None,
 ) -> int:
+    payload = _load_export_handoff(handoff_path, project_directory)
+    source, provenance, source_digest = _validate_export_payload(payload)
+    project = ProjectContext.load(project_directory, validate_lock=True)
+    _validate_export_project_identity(project, provenance)
+    output_path = project.resolve_source_destination(destination)
+    source_uri = project.source_uri_for_resolved(output_path)
+    compiled = _compile_export_source(source, output_path, source_uri)
+    _verify_export_catalog(project, provenance, compiled)
+    _atomic_write(output_path, source, expected_digest=expected_digest)
+    print(json.dumps({"sourceUri": source_uri, "sourceDigest": source_digest}, sort_keys=True))
+    return 0
+
+
+def _load_export_handoff(handoff_path: str, project_directory: str) -> dict[str, Any]:
     preview = ProjectContext.load(project_directory, validate_lock=False)
     if preview.manifest_version == 4 or preview.language_version == "0.3":
         raise ProjectError(
@@ -422,6 +460,12 @@ def _write_export_handoff(
         or payload.get("valid") is not True
     ):
         raise ProjectError("HOCUS443", "Export handoff is not a successful source_export result.")
+    return payload
+
+
+def _validate_export_payload(
+    payload: dict[str, Any],
+) -> tuple[str, dict[str, Any], str]:
     source = payload.get("source")
     provenance = payload.get("provenance")
     if (
@@ -437,8 +481,12 @@ def _write_export_handoff(
             "Export source digest does not match its provenance.",
             details={"expected": provenance.get("sourceDigest"), "actual": actual_source_digest},
         )
+    return source, provenance, actual_source_digest
 
-    project = ProjectContext.load(project_directory, validate_lock=True)
+
+def _validate_export_project_identity(
+    project: ProjectContext, provenance: dict[str, Any],
+) -> None:
     entity_records = provenance.get("entities")
     exported_project_uids: set[str] = set()
     if isinstance(entity_records, dict):
@@ -454,8 +502,9 @@ def _write_export_handoff(
             "Export provenance project identity does not match the selected project.",
             details={"exportProjectUids": sorted(exported_project_uids), "projectUid": project.uid},
         )
-    output_path = project.resolve_source_destination(destination)
-    source_uri = project.source_uri_for_resolved(output_path)
+
+
+def _compile_export_source(source: str, output_path: Path, source_uri: str):
     compiled = compile_source(source, output_path.name, source_uri=source_uri, strict=True)
     if not compiled.valid or compiled.graph_spec is None:
         raise ProjectError(
@@ -463,30 +512,32 @@ def _write_export_handoff(
             "Exported source did not pass native recompilation.",
             details={"diagnostics": [item.to_dict() for item in compiled.diagnostics]},
         )
+    return compiled
+
+
+def _verify_export_catalog(
+    project: ProjectContext, provenance: dict[str, Any], compiled: Any,
+) -> None:
     catalog_fingerprint = provenance.get("catalogFingerprint")
-    if catalog_fingerprint is not None:
-        if project.catalog is None:
-            raise ProjectError("HOCUS446", "Export requires a project-locked catalog for semantic verification.")
-        if catalog_fingerprint != project.catalog.fingerprint:
-            raise ProjectError(
-                "HOCUS446",
-                "Export catalog fingerprint does not match the selected project.",
-                details={"export": catalog_fingerprint, "project": project.catalog.fingerprint},
-            )
-        semantic = resolve_graph(
-            compiled.graph_spec,
-            project.catalog,
-            constraint=CatalogConstraint(catalog_fingerprint),
+    if catalog_fingerprint is None:
+        return
+    if project.catalog is None:
+        raise ProjectError("HOCUS446", "Export requires a project-locked catalog for semantic verification.")
+    if catalog_fingerprint != project.catalog.fingerprint:
+        raise ProjectError(
+            "HOCUS446",
+            "Export catalog fingerprint does not match the selected project.",
+            details={"export": catalog_fingerprint, "project": project.catalog.fingerprint},
         )
-        if not semantic.valid:
-            raise ProjectError(
-                "HOCUS445",
-                "Exported source failed catalog-backed recompilation.",
-                details={"diagnostics": [item.to_dict() for item in semantic.diagnostics]},
-            )
-    _atomic_write(output_path, source, expected_digest=expected_digest)
-    print(json.dumps({"sourceUri": source_uri, "sourceDigest": actual_source_digest}, sort_keys=True))
-    return 0
+    semantic = resolve_graph(
+        compiled.graph_spec, project.catalog,
+        constraint=CatalogConstraint(catalog_fingerprint),
+    )
+    if not semantic.valid:
+        raise ProjectError(
+            "HOCUS445", "Exported source failed catalog-backed recompilation.",
+            details={"diagnostics": [item.to_dict() for item in semantic.diagnostics]},
+        )
 
 
 def _read_handoff(path: Path) -> bytes:

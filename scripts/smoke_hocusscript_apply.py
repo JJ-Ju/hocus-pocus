@@ -152,6 +152,83 @@ def _checkpoint_count(plan: dict) -> int:
     return count + 1  # executor's final pre-return cancellation checkpoint
 
 
+def _apply_arguments(planned: dict, original: dict, idempotency_key: str) -> dict:
+    return {
+        "planId": planned["planId"],
+        "planHash": planned["planHash"],
+        "expectedDocumentRevision": original["documentRevision"],
+        "expectedLiveRevision": original["lastSyncedLiveRevision"],
+        "confirmationToken": planned.get("confirmationToken"),
+        "idempotencyKey": idempotency_key,
+    }
+
+
+def _assert_restored(operations, target_path: str, original: dict, label: str) -> None:
+    restored = operations._document_current_network_payload(target_path, force_sync=True)
+    if operations._hocus_canonical_digest(restored) != operations._hocus_canonical_digest(original):
+        raise RuntimeError(f"{label} did not restore the SOP network")
+
+
+def _run_checkpoint_matrix(
+    operations, bundle: dict, context, original: dict, target_path: str, count: int
+) -> None:
+    for checkpoint in range(1, count + 1):
+        planned = operations.document_plan_bundle({"bundle": bundle}, context)["structuredContent"]
+        operations._failure_checkpoint = checkpoint
+        try:
+            operations.document_apply_plan(
+                _apply_arguments(planned, original, f"live-rollback-{checkpoint}"),
+                context,
+            )
+        except Exception as exc:
+            if getattr(exc, "data", {}).get("diagnosticCode") != "HOCUS755":
+                raise
+        else:
+            raise RuntimeError(f"checkpoint {checkpoint} did not interrupt apply")
+        finally:
+            operations._failure_checkpoint = None
+        _assert_restored(
+            operations, target_path, original, f"rollback checkpoint {checkpoint}"
+        )
+
+
+def _run_stage_matrix(
+    operations, bundle: dict, context, original: dict, target_path: str, stages: tuple
+) -> None:
+    for stage in stages:
+        planned = operations.document_plan_bundle({"bundle": bundle}, context)["structuredContent"]
+        operations._hocus_apply_failure_injection = stage
+        try:
+            operations.document_apply_plan(
+                _apply_arguments(planned, original, f"live-stage-{stage}"), context
+            )
+        except Exception as exc:
+            if getattr(exc, "data", {}).get("diagnosticCode") != "HOCUS755":
+                raise
+        else:
+            raise RuntimeError(f"apply stage {stage} did not interrupt apply")
+        finally:
+            operations._hocus_apply_failure_injection = None
+        _assert_restored(operations, target_path, original, f"apply-stage rollback {stage}")
+
+
+def _compile_bundle(source: str, source_uri: str, catalog) -> dict:
+    result = compile_source(source, "smoke.hocus", source_uri=source_uri)
+    if not result.valid or result.graph_spec is None:
+        raise RuntimeError(f"compile failed: {result.to_dict()['diagnostics']}")
+    semantic = resolve_graph(result.graph_spec, catalog)
+    if not semantic.valid:
+        raise RuntimeError(f"semantic resolution failed: {semantic.to_dict()!r}")
+    result.semantic_result = semantic
+    result.source_kind = "project_file"
+    result.project_uid = "live-apply"
+    result.project_manifest_digest = _digest("live-apply-manifest")
+    result.project_lock_digest = _digest("live-apply-lock")
+    result.catalog_fingerprint = catalog.fingerprint
+    result.catalog_content_digest = _digest(catalog.to_json())
+    return CompiledBundle.from_result(result).to_dict()
+
+
 def main() -> int:
     success_only = "--success-only" in sys.argv[1:]
     target_path = "/obj/hocus_apply_smoke"
@@ -192,20 +269,7 @@ graph guarded_apply {{
 }}
 '''
         source_uri = "hocus-project://live-apply/smoke.hocus"
-        result = compile_source(source, "smoke.hocus", source_uri=source_uri)
-        if not result.valid or result.graph_spec is None:
-            raise RuntimeError(f"compile failed: {result.to_dict()['diagnostics']}")
-        semantic = resolve_graph(result.graph_spec, catalog)
-        if not semantic.valid:
-            raise RuntimeError(f"semantic resolution failed: {semantic.to_dict()!r}")
-        result.semantic_result = semantic
-        result.source_kind = "project_file"
-        result.project_uid = "live-apply"
-        result.project_manifest_digest = _digest("live-apply-manifest")
-        result.project_lock_digest = _digest("live-apply-lock")
-        result.catalog_fingerprint = catalog.fingerprint
-        result.catalog_content_digest = _digest(catalog.to_json())
-        bundle = CompiledBundle.from_result(result).to_dict()
+        bundle = _compile_bundle(source, source_uri, catalog)
         context = RequestContext(permissions=("edit_scene",))
         original = operations._document_current_network_payload(target_path, force_sync=True)
 
@@ -214,61 +278,17 @@ graph guarded_apply {{
         checkpoint_count = _checkpoint_count(sample_plan["executionPlan"])
         operations.document_discard_plan({"planId": sample["planId"], "planHash": sample["planHash"]}, context)
 
-        for checkpoint in (() if success_only else range(1, checkpoint_count + 1)):
-            planned = operations.document_plan_bundle({"bundle": bundle}, context)["structuredContent"]
-            operations._failure_checkpoint = checkpoint
-            try:
-                operations.document_apply_plan({
-                    "planId": planned["planId"], "planHash": planned["planHash"],
-                    "expectedDocumentRevision": original["documentRevision"],
-                    "expectedLiveRevision": original["lastSyncedLiveRevision"],
-                    "confirmationToken": planned.get("confirmationToken"),
-                    "idempotencyKey": f"live-rollback-{checkpoint}",
-                }, context)
-            except Exception as exc:
-                data = getattr(exc, "data", {})
-                if data.get("diagnosticCode") != "HOCUS755":
-                    raise
-            else:
-                raise RuntimeError(f"checkpoint {checkpoint} did not interrupt apply")
-            finally:
-                operations._failure_checkpoint = None
-            restored = operations._document_current_network_payload(target_path, force_sync=True)
-            if operations._hocus_canonical_digest(restored) != operations._hocus_canonical_digest(original):
-                raise RuntimeError(f"rollback checkpoint {checkpoint} did not restore the SOP network")
-
         apply_stages = ("after_pending", "after_execute", "after_verify", "before_commit")
-        for stage in (() if success_only else apply_stages):
-            planned = operations.document_plan_bundle({"bundle": bundle}, context)["structuredContent"]
-            operations._hocus_apply_failure_injection = stage
-            try:
-                operations.document_apply_plan({
-                    "planId": planned["planId"], "planHash": planned["planHash"],
-                    "expectedDocumentRevision": original["documentRevision"],
-                    "expectedLiveRevision": original["lastSyncedLiveRevision"],
-                    "confirmationToken": planned.get("confirmationToken"),
-                    "idempotencyKey": f"live-stage-{stage}",
-                }, context)
-            except Exception as exc:
-                data = getattr(exc, "data", {})
-                if data.get("diagnosticCode") != "HOCUS755":
-                    raise
-            else:
-                raise RuntimeError(f"apply stage {stage} did not interrupt apply")
-            finally:
-                operations._hocus_apply_failure_injection = None
-            restored = operations._document_current_network_payload(target_path, force_sync=True)
-            if operations._hocus_canonical_digest(restored) != operations._hocus_canonical_digest(original):
-                raise RuntimeError(f"apply-stage rollback {stage} did not restore the SOP network")
+        if not success_only:
+            _run_checkpoint_matrix(
+                operations, bundle, context, original, target_path, checkpoint_count
+            )
+            _run_stage_matrix(
+                operations, bundle, context, original, target_path, apply_stages
+            )
 
         planned = operations.document_plan_bundle({"bundle": bundle}, context)["structuredContent"]
-        arguments = {
-            "planId": planned["planId"], "planHash": planned["planHash"],
-            "expectedDocumentRevision": original["documentRevision"],
-            "expectedLiveRevision": original["lastSyncedLiveRevision"],
-            "confirmationToken": planned.get("confirmationToken"),
-            "idempotencyKey": "live-success-final",
-        }
+        arguments = _apply_arguments(planned, original, "live-success-final")
         try:
             applied = operations.document_apply_plan(arguments, context)["structuredContent"]
         except Exception as exc:

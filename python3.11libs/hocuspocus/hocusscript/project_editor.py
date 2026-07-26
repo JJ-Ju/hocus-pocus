@@ -227,6 +227,18 @@ class _ProjectEditorSession:
         if len(self.loaded_by_uri) >= self.limits.module_files:
             raise ProjectError("HOCUS464", "Project editor moduleFiles budget was exceeded.")
         locked = _locked_by_uri(self.context).get(uri)
+        raw, syntax = self._read_locked_module(target, relative, uri, locked)
+        interface = _module_interface(syntax, ResolvedModuleLimits(), uri)
+        if module_interface_digest(interface) != locked.interface_digest:
+            raise ProjectError("HOCUS461", "Editor module interface does not match the verified lock.", details={"sourceUri": uri})
+        self._validate_dependencies(syntax, target, uri, locked)
+        loaded = _LoadedModule(specifier, target, uri, raw, locked.content_digest, syntax, interface)
+        self.aggregate_source_bytes += len(raw)
+        self.loaded[specifier] = loaded
+        self.loaded_by_uri[uri] = loaded
+        return loaded
+
+    def _read_locked_module(self, target, relative, uri, locked):
         if locked is None or locked.external_alias is not None or locked.source_path != relative:
             raise ProjectError("HOCUS462", "Editor import is not a locked same-project module.")
         raw = _read_bounded_stable(
@@ -242,9 +254,9 @@ class _ProjectEditorSession:
             raise ProjectError("HOCUS466", "Editor module failed strict language 0.2 parsing.", details={"sourceUri": uri}) from exc
         if syntax.version is None or syntax.version.value != "0.2" or syntax.module is None or syntax.graph is not None:
             raise ProjectError("HOCUS466", "Editor import must contain one language 0.2 module.", details={"sourceUri": uri})
-        interface = _module_interface(syntax, ResolvedModuleLimits(), uri)
-        if module_interface_digest(interface) != locked.interface_digest:
-            raise ProjectError("HOCUS461", "Editor module interface does not match the verified lock.", details={"sourceUri": uri})
+        return raw, syntax
+
+    def _validate_dependencies(self, syntax, target, uri, locked):
         dependencies = []
         lock_by_uri = _locked_by_uri(self.context)
         for declaration in syntax.imports:
@@ -261,11 +273,7 @@ class _ProjectEditorSession:
             dependencies.append(dependency_uri)
         if tuple(sorted(dependencies)) != locked.dependencies or len(set(dependencies)) != len(dependencies):
             raise ProjectError("HOCUS462", "Editor module declarations do not match locked dependencies.", details={"sourceUri": uri})
-        loaded = _LoadedModule(specifier, target, uri, raw, locked.content_digest, syntax, interface)
-        self.aggregate_source_bytes += len(raw)
-        self.loaded[specifier] = loaded
-        self.loaded_by_uri[uri] = loaded
-        return loaded
+        return dependencies
 
     def finish(self) -> None:
         self._cancel()
@@ -439,38 +447,51 @@ def _completion_values(session: _ProjectEditorSession, source: str, offset: int)
         return "use_module", values
     call = _active_use_call(masked_before, len(masked_before))
     if call is not None:
-        local, existing = call
-        imported = _import_for_local(source, local)
-        if imported is not None:
-            module = _load_declared_import(session, imported[0], imported[2])
-            values = []
-            for parameter in module.interface["parameters"]:
-                if parameter["name"] in existing:
-                    continue
-                required = not parameter["hasDefault"]
-                values.append((
-                    parameter["name"], "parameter", parameter["name"] + " = ",
-                    f"{parameter['type']} {'required' if required else 'optional'}",
-                    required, parameter["type"], parameter["default"],
-                ))
+        values = _argument_completions(session, source, call)
+        if values is not None:
             return "named_argument", values
     member = re.search(r"\b([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)?$", masked_before)
     if member:
-        if member.group(1) == "param":
-            return "parameter_name", [
-                (item.name, "parameter", item.name, item.type_name, item.default is None, item.type_name, None)
-                for item in _current_parameters(source, session.source_uri)
-            ]
-        use = _use_for_symbol(source, session.source_uri, member.group(1))
-        if use is not None:
-            imported = _import_for_local(source, use.module_name)
-            if imported is not None:
-                module = _load_declared_import(session, imported[0], imported[2])
-                return "instance_export", [
-                    (item["name"], "export", item["name"], item["type"], None, item["type"], None)
-                    for item in module.interface["exports"]
-                ]
+        return _member_completions(session, source, member.group(1))
     return "none", []
+
+
+def _argument_completions(session, source, call):
+    local, existing = call
+    imported = _import_for_local(source, local)
+    if imported is None:
+        return None
+    module = _load_declared_import(session, imported[0], imported[2])
+    values = []
+    for parameter in module.interface["parameters"]:
+        if parameter["name"] in existing:
+            continue
+        required = not parameter["hasDefault"]
+        values.append((
+            parameter["name"], "parameter", parameter["name"] + " = ",
+            f"{parameter['type']} {'required' if required else 'optional'}",
+            required, parameter["type"], parameter["default"],
+        ))
+    return values
+
+
+def _member_completions(session, source, symbol):
+    if symbol == "param":
+        return "parameter_name", [
+            (item.name, "parameter", item.name, item.type_name, item.default is None, item.type_name, None)
+            for item in _current_parameters(source, session.source_uri)
+        ]
+    use = _use_for_symbol(source, session.source_uri, symbol)
+    if use is None:
+        return "none", []
+    imported = _import_for_local(source, use.module_name)
+    if imported is None:
+        return "none", []
+    module = _load_declared_import(session, imported[0], imported[2])
+    return "instance_export", [
+        (item["name"], "export", item["name"], item["type"], None, item["type"], None)
+        for item in module.interface["exports"]
+    ]
 
 
 def _definition_values(session: _ProjectEditorSession, source: str, offset: int):
@@ -478,49 +499,140 @@ def _definition_values(session: _ProjectEditorSession, source: str, offset: int)
     if syntax is None:
         return []
     for declaration in syntax.imports:
-        if _contains(declaration.specifier_span, offset) or _contains(declaration.imported_name_span, offset) or _contains(declaration.local_name_span, offset):
-            module = _load_declared_import(session, declaration.imported_name, declaration.specifier)
-            return [_definition_item(module.syntax.module.name, "module", module.uri, module.digest, module.syntax.module.name_span)]
-    root = syntax.root
-    statements = root.statements
+        result = _definition_for_import(session, declaration, offset)
+        if result:
+            return result
+    statements = syntax.root.statements
     for statement in statements:
-        if isinstance(statement, UseDecl):
-            if _contains(statement.module_name_span, offset):
-                declaration = next((item for item in syntax.imports if item.local_name == statement.module_name), None)
-                if declaration is not None:
-                    return [_definition_item(declaration.local_name, "import_alias", session.source_uri, session.source_digest, declaration.local_name_span)]
-            imported = next((item for item in syntax.imports if item.local_name == statement.module_name), None)
-            if imported is not None:
-                module = _load_declared_import(session, imported.imported_name, imported.specifier)
-                for argument in statement.arguments:
-                    if _contains(argument.name_span, offset):
-                        parameter = next((item for item in module.syntax.module.parameters if item.name == argument.name), None)
-                        if parameter is not None:
-                            return [_definition_item(parameter.name, "parameter", module.uri, module.digest, parameter.name_span)]
-        expressions = []
-        if isinstance(statement, NodeDecl):
-            expressions = [item.source for item in statement.statements if hasattr(item, "source")] + [item.value for item in statement.statements if hasattr(item, "value")]
-        elif isinstance(statement, UseDecl):
-            expressions = [item.value for item in statement.arguments]
-        elif hasattr(statement, "value"):
-            expressions = [statement.value]
-        for expression in expressions:
-            if isinstance(expression, ParamRefExpr) and _contains(expression.name_span, offset) and syntax.module is not None:
-                parameter = next((item for item in syntax.module.parameters if item.name == expression.name), None)
-                if parameter is not None:
-                    return [_definition_item(parameter.name, "parameter", session.source_uri, session.source_digest, parameter.name_span)]
-            if isinstance(expression, SymbolRefExpr):
-                declaration = next((item for item in statements if isinstance(item, (NodeDecl, UseDecl)) and item.symbol == expression.symbol), None)
-                if _contains(expression.symbol_span, offset) and declaration is not None:
-                    return [_definition_item(declaration.symbol, "symbol", session.source_uri, session.source_digest, declaration.symbol_span)]
-                if _contains(expression.member_span, offset) and isinstance(declaration, UseDecl):
-                    imported = next((item for item in syntax.imports if item.local_name == declaration.module_name), None)
-                    if imported is not None:
-                        module = _load_declared_import(session, imported.imported_name, imported.specifier)
-                        exported = next((item for item in module.syntax.module.exports if item.name == expression.member), None)
-                        if exported is not None:
-                            return [_definition_item(exported.name, "export", module.uri, module.digest, exported.name_span)]
+        result = _definition_for_statement(
+            session, syntax, statements, statement, offset,
+        )
+        if result:
+            return result
     return []
+
+
+def _definition_for_import(session, declaration, offset):
+    if not (
+        _contains(declaration.specifier_span, offset)
+        or _contains(declaration.imported_name_span, offset)
+        or _contains(declaration.local_name_span, offset)
+    ):
+        return []
+    module = _load_declared_import(
+        session, declaration.imported_name, declaration.specifier,
+    )
+    return [_definition_item(
+        module.syntax.module.name, "module", module.uri, module.digest,
+        module.syntax.module.name_span,
+    )]
+
+
+def _definition_for_statement(session, syntax, statements, statement, offset):
+    if isinstance(statement, UseDecl):
+        result = _definition_for_use(session, syntax, statement, offset)
+        if result:
+            return result
+    for expression in _statement_expressions(statement):
+        result = _definition_for_expression(
+            session, syntax, statements, expression, offset,
+        )
+        if result:
+            return result
+    return []
+
+
+def _definition_for_use(session, syntax, statement, offset):
+    declaration = next(
+        (item for item in syntax.imports if item.local_name == statement.module_name),
+        None,
+    )
+    if _contains(statement.module_name_span, offset) and declaration is not None:
+        return [_definition_item(
+            declaration.local_name, "import_alias", session.source_uri,
+            session.source_digest, declaration.local_name_span,
+        )]
+    if declaration is None:
+        return []
+    module = _load_declared_import(
+        session, declaration.imported_name, declaration.specifier,
+    )
+    for argument in statement.arguments:
+        if not _contains(argument.name_span, offset):
+            continue
+        parameter = next(
+            (item for item in module.syntax.module.parameters if item.name == argument.name),
+            None,
+        )
+        if parameter is not None:
+            return [_definition_item(
+                parameter.name, "parameter", module.uri, module.digest,
+                parameter.name_span,
+            )]
+    return []
+
+
+def _statement_expressions(statement):
+    if isinstance(statement, NodeDecl):
+        sources = [
+            item.source for item in statement.statements if hasattr(item, "source")
+        ]
+        values = [
+            item.value for item in statement.statements if hasattr(item, "value")
+        ]
+        return sources + values
+    if isinstance(statement, UseDecl):
+        return [item.value for item in statement.arguments]
+    return [statement.value] if hasattr(statement, "value") else []
+
+
+def _definition_for_expression(session, syntax, statements, expression, offset):
+    if isinstance(expression, ParamRefExpr):
+        return _definition_for_parameter(session, syntax, expression, offset)
+    if not isinstance(expression, SymbolRefExpr):
+        return []
+    declaration = next((
+        item for item in statements
+        if isinstance(item, (NodeDecl, UseDecl)) and item.symbol == expression.symbol
+    ), None)
+    if _contains(expression.symbol_span, offset) and declaration is not None:
+        return [_definition_item(
+            declaration.symbol, "symbol", session.source_uri,
+            session.source_digest, declaration.symbol_span,
+        )]
+    if not _contains(expression.member_span, offset) or not isinstance(declaration, UseDecl):
+        return []
+    imported = next(
+        (item for item in syntax.imports if item.local_name == declaration.module_name),
+        None,
+    )
+    if imported is None:
+        return []
+    module = _load_declared_import(session, imported.imported_name, imported.specifier)
+    exported = next(
+        (item for item in module.syntax.module.exports if item.name == expression.member),
+        None,
+    )
+    if exported is None:
+        return []
+    return [_definition_item(
+        exported.name, "export", module.uri, module.digest, exported.name_span,
+    )]
+
+
+def _definition_for_parameter(session, syntax, expression, offset):
+    if not _contains(expression.name_span, offset) or syntax.module is None:
+        return []
+    parameter = next(
+        (item for item in syntax.module.parameters if item.name == expression.name),
+        None,
+    )
+    if parameter is None:
+        return []
+    return [_definition_item(
+        parameter.name, "parameter", session.source_uri, session.source_digest,
+        parameter.name_span,
+    )]
 
 
 def _definition_item(name, kind, uri, digest, span):
@@ -570,19 +682,11 @@ def _mask_non_import_text(source: str) -> str:
             index = end
             continue
         if source[index] in {'"', '`'}:
-            delimiter = source[index]
-            preserve = delimiter == '"' and re.search(r"\bfrom\s*$", "".join(chars[:index])) is not None
-            cursor = index + 1
-            escaped = False
-            while cursor < len(source):
-                char = source[cursor]
-                if char == delimiter and not escaped:
-                    cursor += 1
-                    break
-                escaped = char == "\\" and not escaped
-                if char != "\\":
-                    escaped = False
-                cursor += 1
+            cursor = _quoted_text_end(source, index)
+            preserve = (
+                source[index] == '"'
+                and re.search(r"\bfrom\s*$", "".join(chars[:index])) is not None
+            )
             if not preserve:
                 for position in range(index, cursor):
                     if source[position] != "\n":
@@ -591,6 +695,21 @@ def _mask_non_import_text(source: str) -> str:
             continue
         index += 1
     return "".join(chars)
+
+
+def _quoted_text_end(source: str, index: int) -> int:
+    delimiter = source[index]
+    cursor = index + 1
+    escaped = False
+    while cursor < len(source):
+        char = source[cursor]
+        if char == delimiter and not escaped:
+            return cursor + 1
+        escaped = char == "\\" and not escaped
+        if char != "\\":
+            escaped = False
+        cursor += 1
+    return cursor
 
 
 def _active_import_clause(source: str, offset: int):

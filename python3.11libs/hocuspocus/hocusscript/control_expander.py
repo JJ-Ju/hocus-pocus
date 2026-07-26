@@ -785,29 +785,30 @@ def _resolve_expr(expr: Any, scope: _Scope) -> _Bound:
         # own the mapping whose primary span is this receiving ParamRef.
         return replace(bound, span=expr.span, producer_modules=())
     if isinstance(expr, SymbolRefExpr):
-        if expr.symbol == "iter" and expr.output_index is None:
-            bound = scope.iterators.get(expr.member)
-            if bound is not None:
-                return replace(bound, span=expr.span)
-        if expr.symbol == "carry" and expr.output_index is None:
-            bound = scope.carries.get(expr.member)
-            if bound is not None:
-                return replace(bound, span=expr.span)
-        if expr.symbol in scope.nodes:
-            symbol, _ = scope.nodes[expr.symbol].value
-            return _Bound(
-                "node_output",
-                (symbol, 0 if expr.output_index is None else expr.output_index),
-                expr.span,
-                producer_modules=scope.nodes[expr.symbol].producer_modules,
-                producer_controls=scope.nodes[expr.symbol].producer_controls,
-            )
-        for table in (scope.uses, scope.controls):
-            members = table.get(expr.symbol)
-            if members is not None and expr.output_index is None and expr.member in members:
-                return replace(members[expr.member], span=expr.span)
-        raise ModuleExpansionError("HOCUS471", "Unknown module/control symbol or member.", expr.span)
+        return _resolve_symbol_expr(expr, scope)
     raise ModuleExpansionError("HOCUS471", "Unsupported module expression.", expr.span)
+
+
+def _resolve_symbol_expr(expr: SymbolRefExpr, scope: _Scope) -> _Bound:
+    table = {"iter": scope.iterators, "carry": scope.carries}.get(expr.symbol)
+    if table is not None and expr.output_index is None:
+        bound = table.get(expr.member)
+        if bound is not None:
+            return replace(bound, span=expr.span)
+    node = scope.nodes.get(expr.symbol)
+    if node is not None:
+        symbol, _ = node.value
+        return _Bound(
+            "node_output",
+            (symbol, 0 if expr.output_index is None else expr.output_index),
+            expr.span,
+            producer_modules=node.producer_modules,
+            producer_controls=node.producer_controls,
+        )
+    for members in (scope.uses.get(expr.symbol), scope.controls.get(expr.symbol)):
+        if members is not None and expr.output_index is None and expr.member in members:
+            return replace(members[expr.member], span=expr.span)
+    raise ModuleExpansionError("HOCUS471", "Unknown module/control symbol or member.", expr.span)
 
 
 def _literal_bound(expr: Any) -> _Bound:
@@ -865,26 +866,44 @@ def _build_graph(
 ) -> dict[str, Any]:
     graph = entry.graph
     assert graph is not None and entry.version is not None
-    target = category = ownership = display = render = output = layout = None
-    mode = "merge"
-    revision = None
-    field_spans: dict[str, SourceSpan] = {
-        "name": graph.name_span,
-        "languageVersion": entry.version.value_span,
+    fields, field_spans, external_nodes, external_origins = _collect_graph_fields(
+        directives, state.root_symbols, graph.name_span, entry.version.value_span
+    )
+    if not isinstance(fields["target"], str):
+        raise ModuleExpansionError(
+            "HOCUS478", "GraphSpec 0.4 requires an absolute target.", graph.span,
+        )
+    result = _graph_envelope(graph, fields, field_spans, external_nodes, state.nodes)
+    result["expansionMap"] = _build_control_expansion_map(
+        entry_uri, graph.span, result, field_spans, external_origins, state
+    )
+    return result
+
+
+def _collect_graph_fields(
+    directives: list[Any],
+    root_symbols: Mapping[str, str],
+    name_span: SourceSpan,
+    version_span: SourceSpan,
+) -> tuple[dict[str, Any], dict[str, SourceSpan], list[ExternalNodeSpec], list[_Origin]]:
+    fields: dict[str, Any] = {
+        "target": None, "category": None, "ownership": None, "display": None,
+        "render": None, "output": None, "layout": None, "mode": "merge", "revision": None,
     }
+    field_spans = {"name": name_span, "languageVersion": version_span}
     external_nodes: list[ExternalNodeSpec] = []
     external_origins: list[_Origin] = []
     for statement in directives:
         if isinstance(statement, TargetStmt):
-            target, field_spans["target"] = statement.value, statement.value_span
+            fields["target"], field_spans["target"] = statement.value, statement.value_span
         elif isinstance(statement, CategoryStmt):
-            category, field_spans["category"] = statement.value, statement.value_span
+            fields["category"], field_spans["category"] = statement.value, statement.value_span
         elif isinstance(statement, ModeStmt):
-            mode, field_spans["mode"] = statement.value, statement.value_span
+            fields["mode"], field_spans["mode"] = statement.value, statement.value_span
         elif isinstance(statement, RevisionStmt):
-            revision, field_spans["expectedRevision"] = statement.value, statement.value_span
+            fields["revision"], field_spans["expectedRevision"] = statement.value, statement.value_span
         elif isinstance(statement, OwnershipStmt):
-            ownership, field_spans["ownership"] = statement.value, statement.value_span
+            fields["ownership"], field_spans["ownership"] = statement.value, statement.value_span
         elif isinstance(statement, ExternalDecl):
             external_nodes.append(ExternalNodeSpec(
                 statement.symbol, statement.path, statement.adopted, statement.span,
@@ -892,44 +911,53 @@ def _build_graph(
             ))
             external_origins.append(_Origin(statement.span))
         elif isinstance(statement, FlagStmt):
-            value = state.root_symbols.get(statement.symbol, statement.symbol)
+            value = root_symbols.get(statement.symbol, statement.symbol)
             field_spans[statement.name] = statement.value_span
-            if statement.name == "display":
-                display = value
-            elif statement.name == "render":
-                render = value
-            else:
-                output = value
+            fields[statement.name] = value
         elif isinstance(statement, LayoutStmt):
-            layout, field_spans["layout"] = statement.value, statement.value_span
+            fields["layout"], field_spans["layout"] = statement.value, statement.value_span
+    return fields, field_spans, external_nodes, external_origins
 
-    if not isinstance(target, str):
-        raise ModuleExpansionError(
-            "HOCUS478", "GraphSpec 0.4 requires an absolute target.", graph.span,
-        )
-    result: dict[str, Any] = {
+
+def _graph_envelope(
+    graph: Any,
+    fields: Mapping[str, Any],
+    field_spans: Mapping[str, SourceSpan],
+    external_nodes: list[ExternalNodeSpec],
+    nodes: list[NodeSpec],
+) -> dict[str, Any]:
+    return {
         "$schema": "hocuspocus://schemas/graph-spec/v0.4",
         "kind": "graph_spec",
         "graphSpecVersion": "0.4",
         "languageVersion": "0.3",
         "name": graph.name,
-        "target": target,
-        "category": category,
-        "mode": mode,
-        "expectedRevision": revision,
-        "ownership": ownership,
+        "target": fields["target"],
+        "category": fields["category"],
+        "mode": fields["mode"],
+        "expectedRevision": fields["revision"],
+        "ownership": fields["ownership"],
         "externalNodes": [item.to_dict() for item in external_nodes],
-        "nodes": [item.to_dict() for item in state.nodes],
-        "display": display,
-        "render": render,
-        "output": output,
-        "layout": layout,
+        "nodes": [item.to_dict() for item in nodes],
+        "display": fields["display"],
+        "render": fields["render"],
+        "output": fields["output"],
+        "layout": fields["layout"],
         "span": graph.span.to_dict(),
         "fieldSpans": {
             key: value.to_dict() for key, value in sorted(field_spans.items())
         },
     }
 
+
+def _build_control_expansion_map(
+    entry_uri: str,
+    graph_span: SourceSpan,
+    graph: Mapping[str, Any],
+    field_spans: Mapping[str, SourceSpan],
+    external_origins: list[_Origin],
+    state: _State,
+) -> dict[str, Any]:
     mappings: list[dict[str, Any]] = []
     module_stacks: dict[str, dict[str, Any]] = {}
     control_stacks: dict[str, dict[str, Any]] = {}
@@ -965,7 +993,7 @@ def _build_graph(
         }
         mappings.append({"originId": _digest(payload), **payload})
 
-    add("", _Origin(graph.span))
+    add("", _Origin(graph_span))
     for index, origin in enumerate(external_origins):
         add(f"/externalNodes/{index}", origin)
     for index, (node_origin, input_origins, parm_origins) in enumerate(state.node_origins):
@@ -975,10 +1003,10 @@ def _build_graph(
         for child, origin in enumerate(parm_origins):
             add(f"/nodes/{index}/parms/{child}", origin)
     for name in ("display", "render", "output", "layout"):
-        if result[name] is not None:
+        if graph[name] is not None:
             add(f"/{name}", _Origin(field_spans[name]))
     mappings.sort(key=lambda item: item["generatedPointer"])
-    result["expansionMap"] = {
+    return {
         "$schema": "hocuspocus://schemas/expansion-map/v2",
         "kind": "hocus_expansion_map",
         "schemaVersion": 2,
@@ -988,7 +1016,6 @@ def _build_graph(
         "controlStacks": [control_stacks[key] for key in sorted(control_stacks)],
         "mappings": mappings,
     }
-    return result
 
 
 def _check_control_depth(

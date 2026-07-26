@@ -1,10 +1,4 @@
-"""Version-lane registry and decode-only HocusScript carrier scaffolds.
-
-This module deliberately does not compile, resolve, expand, or dispatch language
-``0.3``.  It only names immutable carrier combinations and validates the outer
-trust-boundary shape of the new carrier lane.  H2 owns control semantics and H3
-owns production dispatch.
-"""
+"""Version-lane registry and decode-only HocusScript carrier scaffolds."""
 
 from __future__ import annotations
 
@@ -18,14 +12,9 @@ from types import MappingProxyType
 from typing import Any, Mapping
 
 from .resolved_modules import canonical_module_uri
-
-
-_DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
-_JSON_POINTER = re.compile(r"^(?:/(?:[^~/]|~0|~1)*)*$")
-_SOURCE_URI = re.compile(r"^hocus-(?:project|module)://[^\s]+$")
-_UID = re.compile(r"^[a-z0-9][a-z0-9.-]{0,127}$")
-_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
-_SEED = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+_DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$"); _JSON_POINTER = re.compile(r"^(?:/(?:[^~/]|~0|~1)*)*$")
+_SOURCE_URI = re.compile(r"^hocus-(?:project|module)://[^\s]+$"); _UID = re.compile(r"^[a-z0-9][a-z0-9.-]{0,127}$")
+_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$"); _SEED = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _ALIAS = re.compile(r"^[a-z][a-z0-9-]{0,63}$")
 _SEMVER = re.compile(
     r"^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)"
@@ -33,14 +22,9 @@ _SEMVER = re.compile(
     r"(?:\.(?:(?:0|[1-9][0-9]*)|(?:[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)))*)?"
     r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$"
 )
-_MAX_JSON_BYTES = 64 * 1024 * 1024
-_MAX_JSON_VALUES = 500_000
-_MAX_JSON_DEPTH = 128
-_EXPANSION_STACK_DIGEST_DOMAIN = "hocus-expansion-stack-v1"
-_CONTROL_STACK_DIGEST_DOMAIN = "hocus-control-stack-v1"
+_MAX_JSON_BYTES = 64 * 1024 * 1024; _MAX_JSON_VALUES = 500_000; _MAX_JSON_DEPTH = 128
+_EXPANSION_STACK_DIGEST_DOMAIN = "hocus-expansion-stack-v1"; _CONTROL_STACK_DIGEST_DOMAIN = "hocus-control-stack-v1"
 _TRANSITIVE_DIGEST_DOMAIN = "hocus-module-transitive-v1"
-
-
 class CarrierContractError(ValueError):
     """Raised when a carrier version or decode-only envelope is invalid."""
 
@@ -101,14 +85,10 @@ CONTROL_CARRIER_CONTRACT = CarrierContract(
     dispatch_enabled=False,
 )
 
-CONTROL_LANGUAGE_VERSION = CONTROL_CARRIER_CONTRACT.language_version
-CONTROL_COMPILER_VERSION = CONTROL_CARRIER_CONTRACT.compiler_version
-CONTROL_GRAPH_SPEC_VERSION = CONTROL_CARRIER_CONTRACT.graph_spec_version
-CONTROL_EXPANSION_MAP_VERSION = CONTROL_CARRIER_CONTRACT.expansion_map_version
-CONTROL_RESOLVED_MODULE_SET_VERSION = CONTROL_CARRIER_CONTRACT.resolved_module_set_version
-CONTROL_PROJECT_MANIFEST_VERSION = CONTROL_CARRIER_CONTRACT.project_manifest_version
-CONTROL_PROJECT_LOCK_VERSION = CONTROL_CARRIER_CONTRACT.project_lock_version
-CONTROL_MODULE_MANIFEST_VERSION = CONTROL_CARRIER_CONTRACT.module_manifest_version
+CONTROL_LANGUAGE_VERSION = CONTROL_CARRIER_CONTRACT.language_version; CONTROL_COMPILER_VERSION = CONTROL_CARRIER_CONTRACT.compiler_version
+CONTROL_GRAPH_SPEC_VERSION = CONTROL_CARRIER_CONTRACT.graph_spec_version; CONTROL_EXPANSION_MAP_VERSION = CONTROL_CARRIER_CONTRACT.expansion_map_version
+CONTROL_RESOLVED_MODULE_SET_VERSION = CONTROL_CARRIER_CONTRACT.resolved_module_set_version; CONTROL_PROJECT_MANIFEST_VERSION = CONTROL_CARRIER_CONTRACT.project_manifest_version
+CONTROL_PROJECT_LOCK_VERSION = CONTROL_CARRIER_CONTRACT.project_lock_version; CONTROL_MODULE_MANIFEST_VERSION = CONTROL_CARRIER_CONTRACT.module_manifest_version
 CONTROL_BUNDLE_VERSION = CONTROL_CARRIER_CONTRACT.bundle_version
 
 CARRIER_CONTRACTS = (STATIC_CARRIER_CONTRACT, CONTROL_CARRIER_CONTRACT)
@@ -343,84 +323,114 @@ def decode_control_expansion_map_envelope(
     uri = _source_uri(expansion["entrySourceUri"], "expansionMap.entrySourceUri", "HOCUS492")
     if entry_source_uri is not None and uri != entry_source_uri:
         _fail("HOCUS492", "Expansion-map entry source conflicts with its enclosing carrier.")
-    for label, maximum in (
-        ("source_map_entries", source_map_entries), ("instances", instances),
-        ("instance_depth", instance_depth), ("per_fold_iterations", per_fold_iterations),
-        ("aggregate_iterations", aggregate_iterations),
-    ):
-        if type(maximum) is not int or maximum < 1:
-            _fail("HOCUS492", f"{label} bound must be a positive integer.")
-
+    _validate_expansion_bounds(
+        source_map_entries, instances, instance_depth, per_fold_iterations,
+        aggregate_iterations,
+    )
     stack_ids = _validate_module_stacks(expansion["stacks"], instances, instance_depth)
     control_ids = _validate_control_stacks(
         expansion["controlStacks"], source_map_entries, instance_depth,
         per_fold_iterations, aggregate_iterations,
     )
-    mappings = expansion["mappings"]
+    _validate_expansion_mappings(
+        expansion["mappings"], source_map_entries, stack_ids, control_ids,
+    )
+    return expansion
+
+
+def _validate_expansion_bounds(*bounds: int) -> None:
+    labels = (
+        "source_map_entries", "instances", "instance_depth",
+        "per_fold_iterations", "aggregate_iterations",
+    )
+    for label, maximum in zip(labels, bounds):
+        if type(maximum) is not int or maximum < 1:
+            _fail("HOCUS492", f"{label} bound must be a positive integer.")
+
+
+def _validate_expansion_mappings(
+    mappings: Any,
+    source_map_entries: int,
+    stack_ids: list[str],
+    control_ids: list[str],
+) -> None:
     if not isinstance(mappings, list) or len(mappings) > source_map_entries:
         _fail("HOCUS492", "Expansion mappings exceed their declared bound.")
     pointers: list[str] = []
     origin_ids: set[str] = set()
     referenced_stacks: set[str] = set()
-    referenced_controls: set[str] = set()
+    referenced_controls: set[str] = set(); known_stacks, known_controls = set(stack_ids), set(control_ids)
     for index, mapping in enumerate(mappings):
-        label = f"expansionMap.mappings[{index}]"
-        if not isinstance(mapping, dict):
-            _fail("HOCUS492", f"{label} must be an object.")
-        _exact_keys(mapping, {
-            "originId", "generatedPointer", "originKind", "primarySpan", "relatedOrigins",
-            "stackId", "controlStackId",
-        }, label, "HOCUS492")
-        _digest(mapping["originId"], f"{label}.originId", "HOCUS492")
-        pointer = _string(
-            mapping["generatedPointer"],
-            f"{label}.generatedPointer",
-            "HOCUS492",
-            maximum=8192,
-            pattern=_JSON_POINTER,
-            allow_empty=True,
+        pointer, origin_id, stack_id, control_id = _validate_expansion_mapping(
+            mapping, index, known_stacks, known_controls,
         )
-        if mapping["originKind"] not in {"definition", "argument", "export", "synthetic"}:
-            _fail("HOCUS492", f"{label}.originKind is invalid.")
-        _span(mapping["primarySpan"], f"{label}.primarySpan")
-        related = mapping["relatedOrigins"]
-        if not isinstance(related, list) or len(related) > 16:
-            _fail("HOCUS492", f"{label}.relatedOrigins is invalid.")
-        for related_index, origin in enumerate(related):
-            related_label = f"{label}.relatedOrigins[{related_index}]"
-            if not isinstance(origin, dict):
-                _fail("HOCUS492", f"{related_label} must be an object.")
-            _exact_keys(origin, {"role", "span"}, related_label, "HOCUS492")
-            if origin["role"] not in {
-                "definition", "parameter_declaration", "argument", "export", "instance",
-                "control_declaration", "condition", "fold_count", "carry_initializer", "yield",
-            }:
-                _fail("HOCUS492", f"{related_label}.role is invalid.")
-            _span(origin["span"], f"{related_label}.span")
-        stack_id = _nullable_digest(mapping["stackId"], f"{label}.stackId", "HOCUS492")
-        control_id = _nullable_digest(
-            mapping["controlStackId"], f"{label}.controlStackId", "HOCUS492"
-        )
+        if origin_id in origin_ids:
+            _fail(
+                "HOCUS492",
+                f"expansionMap.mappings[{index}].originId is invalid or duplicated.",
+            )
+        origin_ids.add(origin_id)
+        pointers.append(pointer)
         if stack_id is not None:
-            if stack_id not in stack_ids:
-                _fail("HOCUS492", f"{label}.stackId references an unknown stack.")
             referenced_stacks.add(stack_id)
         if control_id is not None:
-            if control_id not in control_ids:
-                _fail("HOCUS492", f"{label}.controlStackId references an unknown control stack.")
             referenced_controls.add(control_id)
-        expected_origin_id = _content_digest({
-            key: mapping[key] for key in sorted(mapping) if key != "originId"
-        })
-        if not hmac.compare_digest(mapping["originId"], expected_origin_id) or mapping["originId"] in origin_ids:
-            _fail("HOCUS492", f"{label}.originId is invalid or duplicated.")
-        origin_ids.add(mapping["originId"])
-        pointers.append(pointer)
     if pointers != sorted(set(pointers)):
         _fail("HOCUS492", "Expansion mappings must be uniquely sorted by generatedPointer.")
-    if referenced_stacks != set(stack_ids) or referenced_controls != set(control_ids):
+    if referenced_stacks != known_stacks or referenced_controls != known_controls:
         _fail("HOCUS492", "Expansion stacks and control stacks must all be referenced.")
-    return expansion
+
+
+def _validate_expansion_mapping(
+    mapping: Any, index: int, stack_ids: set[str], control_ids: set[str],
+) -> tuple[str, str, str | None, str | None]:
+    label = f"expansionMap.mappings[{index}]"
+    if not isinstance(mapping, dict):
+        _fail("HOCUS492", f"{label} must be an object.")
+    _exact_keys(mapping, {
+        "originId", "generatedPointer", "originKind", "primarySpan", "relatedOrigins",
+        "stackId", "controlStackId",
+    }, label, "HOCUS492")
+    origin_id = _digest(mapping["originId"], f"{label}.originId", "HOCUS492")
+    pointer = _string(
+        mapping["generatedPointer"], f"{label}.generatedPointer", "HOCUS492",
+        maximum=8192, pattern=_JSON_POINTER, allow_empty=True,
+    )
+    if mapping["originKind"] not in {"definition", "argument", "export", "synthetic"}:
+        _fail("HOCUS492", f"{label}.originKind is invalid.")
+    _span(mapping["primarySpan"], f"{label}.primarySpan")
+    _validate_related_origins(mapping["relatedOrigins"], label)
+    stack_id = _nullable_digest(mapping["stackId"], f"{label}.stackId", "HOCUS492")
+    control_id = _nullable_digest(
+        mapping["controlStackId"], f"{label}.controlStackId", "HOCUS492"
+    )
+    if stack_id is not None and stack_id not in stack_ids:
+        _fail("HOCUS492", f"{label}.stackId references an unknown stack.")
+    if control_id is not None and control_id not in control_ids:
+        _fail("HOCUS492", f"{label}.controlStackId references an unknown control stack.")
+    expected_origin_id = _content_digest({
+        key: mapping[key] for key in sorted(mapping) if key != "originId"
+    })
+    if not hmac.compare_digest(origin_id, expected_origin_id):
+        _fail("HOCUS492", f"{label}.originId is invalid.")
+    return pointer, origin_id, stack_id, control_id
+
+
+def _validate_related_origins(value: Any, label: str) -> None:
+    if not isinstance(value, list) or len(value) > 16:
+        _fail("HOCUS492", f"{label}.relatedOrigins is invalid.")
+    valid_roles = {
+        "definition", "parameter_declaration", "argument", "export", "instance",
+        "control_declaration", "condition", "fold_count", "carry_initializer", "yield",
+    }
+    for index, origin in enumerate(value):
+        related_label = f"{label}.relatedOrigins[{index}]"
+        if not isinstance(origin, dict):
+            _fail("HOCUS492", f"{related_label} must be an object.")
+        _exact_keys(origin, {"role", "span"}, related_label, "HOCUS492")
+        if origin["role"] not in valid_roles:
+            _fail("HOCUS492", f"{related_label}.role is invalid.")
+        _span(origin["span"], f"{related_label}.span")
 
 
 def decode_control_resolved_module_set_envelope(value: Any) -> dict[str, Any]:
@@ -442,72 +452,16 @@ def decode_control_resolved_module_set_envelope(value: Any) -> dict[str, Any]:
         _fail("HOCUS493", "Resolved-set entrySourceUri conflicts with projectUid.")
     for field in ("projectManifestDigest", "projectLockDigest", "resolverPolicyDigest"):
         _digest(resolved[field], f"resolvedModuleSet.{field}", "HOCUS493")
-
-    limits = resolved["limits"]
-    if not isinstance(limits, dict):
-        _fail("HOCUS493", "resolvedModuleSet.limits must be an object.")
-    _exact_keys(limits, set(CONTROL_RESOLVED_LIMIT_MAXIMA), "resolvedModuleSet.limits", "HOCUS493")
-    for name, maximum in CONTROL_RESOLVED_LIMIT_MAXIMA.items():
-        actual = limits[name]
-        if type(actual) is not int or not 1 <= actual <= maximum:
-            _fail("HOCUS493", f"resolvedModuleSet.limits.{name} exceeds its fixed maximum.")
-
+    limits = _validate_resolved_limits(resolved["limits"])
     modules = resolved["modules"]
     if not isinstance(modules, list) or len(modules) > limits["moduleFiles"]:
         _fail("HOCUS493", "resolvedModuleSet.modules exceeds its declared bound.")
     uris: list[str] = []
     dependencies_by_uri: dict[str, list[str]] = {}
     for index, module in enumerate(modules):
-        label = f"resolvedModuleSet.modules[{index}]"
-        if not isinstance(module, dict):
-            _fail("HOCUS493", f"{label} must be an object.")
-        _exact_keys(module, {
-            "uri", "moduleName", "relativePath", "origin", "ownerUid", "alias", "version",
-            "moduleManifestDigest", "sourceDigest", "interfaceDigest", "transitiveDigest",
-            "dependencies", "languageVersion",
-        }, label, "HOCUS493")
-        uri = _source_uri(module["uri"], f"{label}.uri", "HOCUS493")
-        identity = canonical_module_uri(uri)
-        if identity is None:
-            _fail("HOCUS493", f"{label}.uri is not canonical.")
-        scheme, authority, uri_path = identity
-        _string(module["moduleName"], f"{label}.moduleName", "HOCUS493", pattern=_IDENTIFIER)
-        relative_path = _string(
-            module["relativePath"], f"{label}.relativePath", "HOCUS493", maximum=1024,
+        uri, normalized = _validate_resolved_module(
+            module, index, uid, limits["moduleFiles"],
         )
-        owner_uid = _string(module["ownerUid"], f"{label}.ownerUid", "HOCUS493", pattern=_UID)
-        if uri_path != relative_path or authority != owner_uid:
-            _fail("HOCUS493", f"{label}.uri conflicts with ownerUid or relativePath.")
-        if module["origin"] not in {"project", "external_library"}:
-            _fail("HOCUS493", f"{label}.origin is invalid.")
-        if module["origin"] == "project":
-            if (
-                scheme != "project" or owner_uid != uid
-                or module["alias"] is not None or module["version"] is not None
-                or module["moduleManifestDigest"] is not None
-            ):
-                _fail("HOCUS493", f"{label} has inconsistent project origin fields.")
-        else:
-            if (
-                scheme != "module"
-                or type(module["alias"]) is not str
-                or _ALIAS.fullmatch(module["alias"]) is None
-                or type(module["version"]) is not str
-                or _SEMVER.fullmatch(module["version"]) is None
-            ):
-                _fail("HOCUS493", f"{label} has inconsistent external origin fields.")
-            _digest(module["moduleManifestDigest"], f"{label}.moduleManifestDigest", "HOCUS493")
-        for field in ("sourceDigest", "interfaceDigest", "transitiveDigest"):
-            _digest(module[field], f"{label}.{field}", "HOCUS493")
-        _equal(module, "languageVersion", "0.3", "HOCUS493")
-        dependencies = module["dependencies"]
-        if not isinstance(dependencies, list) or len(dependencies) > limits["moduleFiles"]:
-            _fail("HOCUS493", f"{label}.dependencies is invalid.")
-        normalized = [
-            _source_uri(item, f"{label}.dependencies", "HOCUS493") for item in dependencies
-        ]
-        if normalized != sorted(set(normalized)):
-            _fail("HOCUS493", f"{label}.dependencies must be uniquely sorted by URI.")
         uris.append(uri)
         dependencies_by_uri[uri] = normalized
     if uris != sorted(set(uris)):
@@ -522,6 +476,82 @@ def decode_control_resolved_module_set_envelope(value: Any) -> dict[str, Any]:
         max_depth=limits["importDepth"],
     )
     return resolved
+
+
+def _validate_resolved_limits(value: Any) -> dict[str, int]:
+    if not isinstance(value, dict):
+        _fail("HOCUS493", "resolvedModuleSet.limits must be an object.")
+    _exact_keys(
+        value, set(CONTROL_RESOLVED_LIMIT_MAXIMA),
+        "resolvedModuleSet.limits", "HOCUS493",
+    )
+    for name, maximum in CONTROL_RESOLVED_LIMIT_MAXIMA.items():
+        actual = value[name]
+        if type(actual) is not int or not 1 <= actual <= maximum:
+            _fail("HOCUS493", f"resolvedModuleSet.limits.{name} exceeds its fixed maximum.")
+    return value
+
+
+def _validate_resolved_module(
+    module: Any, index: int, project_uid: str, module_limit: int,
+) -> tuple[str, list[str]]:
+    label = f"resolvedModuleSet.modules[{index}]"
+    if not isinstance(module, dict):
+        _fail("HOCUS493", f"{label} must be an object.")
+    _exact_keys(module, {
+        "uri", "moduleName", "relativePath", "origin", "ownerUid", "alias", "version",
+        "moduleManifestDigest", "sourceDigest", "interfaceDigest", "transitiveDigest",
+        "dependencies", "languageVersion",
+    }, label, "HOCUS493")
+    uri = _source_uri(module["uri"], f"{label}.uri", "HOCUS493")
+    identity = canonical_module_uri(uri)
+    if identity is None:
+        _fail("HOCUS493", f"{label}.uri is not canonical.")
+    scheme, authority, uri_path = identity
+    _string(module["moduleName"], f"{label}.moduleName", "HOCUS493", pattern=_IDENTIFIER)
+    relative_path = _string(
+        module["relativePath"], f"{label}.relativePath", "HOCUS493", maximum=1024,
+    )
+    owner_uid = _string(module["ownerUid"], f"{label}.ownerUid", "HOCUS493", pattern=_UID)
+    if uri_path != relative_path or authority != owner_uid:
+        _fail("HOCUS493", f"{label}.uri conflicts with ownerUid or relativePath.")
+    _validate_resolved_origin(module, label, scheme, owner_uid, project_uid)
+    for field in ("sourceDigest", "interfaceDigest", "transitiveDigest"):
+        _digest(module[field], f"{label}.{field}", "HOCUS493")
+    _equal(module, "languageVersion", "0.3", "HOCUS493")
+    dependencies = module["dependencies"]
+    if not isinstance(dependencies, list) or len(dependencies) > module_limit:
+        _fail("HOCUS493", f"{label}.dependencies is invalid.")
+    normalized = [
+        _source_uri(item, f"{label}.dependencies", "HOCUS493") for item in dependencies
+    ]
+    if normalized != sorted(set(normalized)):
+        _fail("HOCUS493", f"{label}.dependencies must be uniquely sorted by URI.")
+    return uri, normalized
+
+
+def _validate_resolved_origin(
+    module: dict[str, Any], label: str, scheme: str, owner_uid: str, project_uid: str,
+) -> None:
+    if module["origin"] not in {"project", "external_library"}:
+        _fail("HOCUS493", f"{label}.origin is invalid.")
+    if module["origin"] == "project":
+        if (
+            scheme != "project" or owner_uid != project_uid
+            or module["alias"] is not None or module["version"] is not None
+            or module["moduleManifestDigest"] is not None
+        ):
+            _fail("HOCUS493", f"{label} has inconsistent project origin fields.")
+        return
+    if (
+        scheme != "module"
+        or type(module["alias"]) is not str
+        or _ALIAS.fullmatch(module["alias"]) is None
+        or type(module["version"]) is not str
+        or _SEMVER.fullmatch(module["version"]) is None
+    ):
+        _fail("HOCUS493", f"{label} has inconsistent external origin fields.")
+    _digest(module["moduleManifestDigest"], f"{label}.moduleManifestDigest", "HOCUS493")
 
 
 def decode_control_bundle_envelope(value: Any) -> dict[str, Any]:
@@ -552,7 +582,21 @@ def decode_control_bundle_envelope(value: Any) -> dict[str, Any]:
     actual_digest = "sha256:" + hashlib.sha256(_canonical_json(unsigned).encode("utf-8")).hexdigest()
     if not hmac.compare_digest(declared_digest, actual_digest):
         _fail("HOCUS494", "Bundle digest does not match canonical Bundle 0.4 content.")
+    entry, resolved = _validate_bundle_sources(bundle, uid)
+    graph = _validate_bundle_graph(bundle, entry, resolved)
+    catalog = _validate_bundle_catalog(bundle)
+    capabilities = _validate_bundle_capabilities(bundle)
+    semantic = _validate_bundle_semantic(bundle, catalog, graph)
+    if semantic["requiredCapabilities"] != capabilities:
+        _fail("HOCUS494", "Bundle capabilities conflict with semanticResolution.")
+    if len(semantic["diagnostics"]) > resolved["limits"]["diagnostics"]:
+        _fail("HOCUS494", "Bundle diagnostics exceed the resolved limit.")
+    return bundle
 
+
+def _validate_bundle_sources(
+    bundle: dict[str, Any], uid: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
     entry = _source_record(bundle["entrySource"], "bundle.entrySource", {"project_file"})
     if not entry["uri"].startswith(f"hocus-project://{uid}/"):
         _fail("HOCUS494", "Bundle entrySource conflicts with projectUid.")
@@ -581,7 +625,12 @@ def decode_control_bundle_envelope(value: Any) -> dict[str, Any]:
     ]
     if dependencies != expected_dependencies:
         _fail("HOCUS494", "Bundle dependency sources conflict with the resolved set.")
+    return entry, resolved
 
+
+def _validate_bundle_graph(
+    bundle: dict[str, Any], entry: dict[str, Any], resolved: dict[str, Any],
+) -> dict[str, Any]:
     graph = decode_control_graph_spec_envelope(
         bundle["graphSpec"], resolved_limits=resolved["limits"],
     )
@@ -608,6 +657,10 @@ def decode_control_bundle_envelope(value: Any) -> dict[str, Any]:
     }
     if source_maps != expected_source_maps:
         _fail("HOCUS494", "Bundle sourceMaps conflicts with its embedded expansion map.")
+    return graph
+
+
+def _validate_bundle_catalog(bundle: dict[str, Any]) -> dict[str, Any]:
     catalog = bundle["catalogConstraints"]
     if not isinstance(catalog, dict):
         _fail("HOCUS494", "Bundle catalogConstraints must be an object.")
@@ -615,6 +668,10 @@ def decode_control_bundle_envelope(value: Any) -> dict[str, Any]:
     _exact_int(catalog["schemaVersion"], 1, "catalogConstraints.schemaVersion", "HOCUS494")
     _digest(catalog["fingerprint"], "catalogConstraints.fingerprint", "HOCUS494")
     _digest(catalog["contentDigest"], "catalogConstraints.contentDigest", "HOCUS494")
+    return catalog
+
+
+def _validate_bundle_capabilities(bundle: dict[str, Any]) -> list[str]:
     capabilities = bundle["requiredCapabilities"]
     if (
         not isinstance(capabilities, list)
@@ -623,6 +680,12 @@ def decode_control_bundle_envelope(value: Any) -> dict[str, Any]:
         or any(item not in {"edit_scene", "run_code"} for item in capabilities)
     ):
         _fail("HOCUS494", "Bundle requiredCapabilities is invalid.")
+    return capabilities
+
+
+def _validate_bundle_semantic(
+    bundle: dict[str, Any], catalog: dict[str, Any], graph: dict[str, Any],
+) -> dict[str, Any]:
     try:
         from .bundle import BundleValidationError, _validate_semantic_resolution
 
@@ -632,11 +695,7 @@ def decode_control_bundle_envelope(value: Any) -> dict[str, Any]:
         )
     except (BundleValidationError, KeyError, IndexError, TypeError, ValueError) as exc:
         _fail("HOCUS494", f"Bundle semanticResolution is invalid: {exc}")
-    if semantic["requiredCapabilities"] != capabilities:
-        _fail("HOCUS494", "Bundle capabilities conflict with semanticResolution.")
-    if len(semantic["diagnostics"]) > resolved["limits"]["diagnostics"]:
-        _fail("HOCUS494", "Bundle diagnostics exceed the resolved limit.")
-    return bundle
+    return semantic
 
 
 def _validate_module_stacks(value: Any, instances: int, depth: int) -> list[str]:
@@ -645,47 +704,57 @@ def _validate_module_stacks(value: Any, instances: int, depth: int) -> list[str]
     ids: list[str] = []
     instance_paths: set[tuple[str, ...]] = set()
     for index, stack in enumerate(value):
-        label = f"expansionMap.stacks[{index}]"
-        if not isinstance(stack, dict):
-            _fail("HOCUS492", f"{label} must be an object.")
-        _exact_keys(stack, {"stackId", "frames"}, label, "HOCUS492")
-        stack_id = _digest(stack["stackId"], f"{label}.stackId", "HOCUS492")
-        frames = stack["frames"]
-        if not isinstance(frames, list) or not 1 <= len(frames) <= depth:
-            _fail("HOCUS492", f"{label}.frames exceeds its declared bound.")
-        for frame_index, frame in enumerate(frames):
-            frame_label = f"{label}.frames[{frame_index}]"
-            if not isinstance(frame, dict):
-                _fail("HOCUS492", f"{frame_label} must be an object.")
-            _exact_keys(frame, {
-                "moduleUri", "sourceDigest", "moduleName", "instanceSymbol", "instanceIdPath",
-                "importSpan", "useSpan",
-            }, frame_label, "HOCUS492")
-            _source_uri(frame["moduleUri"], f"{frame_label}.moduleUri", "HOCUS492")
-            _digest(frame["sourceDigest"], f"{frame_label}.sourceDigest", "HOCUS492")
-            _string(frame["moduleName"], f"{frame_label}.moduleName", "HOCUS492", pattern=_IDENTIFIER)
-            _string(frame["instanceSymbol"], f"{frame_label}.instanceSymbol", "HOCUS492", pattern=_IDENTIFIER)
-            path = frame["instanceIdPath"]
-            if not isinstance(path, list) or len(path) > depth:
-                _fail("HOCUS492", f"{frame_label}.instanceIdPath is invalid.")
-            for seed in path:
-                _string(seed, f"{frame_label}.instanceIdPath", "HOCUS492", pattern=_SEED)
-            instance_paths.add(tuple(path))
-            if frame["importSpan"] is not None:
-                _span(frame["importSpan"], f"{frame_label}.importSpan")
-            _span(frame["useSpan"], f"{frame_label}.useSpan")
-        expected_stack_id = _content_digest({
-            "domain": _EXPANSION_STACK_DIGEST_DOMAIN,
-            "frames": frames,
-        })
-        if not hmac.compare_digest(stack_id, expected_stack_id):
-            _fail("HOCUS492", f"{label}.stackId does not match its frames.")
-        ids.append(stack_id)
+        ids.append(_validate_module_stack(stack, index, depth, instance_paths))
     if ids != sorted(set(ids)):
         _fail("HOCUS492", "Expansion stacks must be uniquely sorted by stackId.")
     if len(instance_paths) > instances:
         _fail("HOCUS492", "Expansion stacks exceed the declared module-instance limit.")
     return ids
+
+
+def _validate_module_stack(
+    stack: Any, index: int, depth: int, instance_paths: set[tuple[str, ...]],
+) -> str:
+    label = f"expansionMap.stacks[{index}]"
+    if not isinstance(stack, dict):
+        _fail("HOCUS492", f"{label} must be an object.")
+    _exact_keys(stack, {"stackId", "frames"}, label, "HOCUS492")
+    stack_id = _digest(stack["stackId"], f"{label}.stackId", "HOCUS492")
+    frames = stack["frames"]
+    if not isinstance(frames, list) or not 1 <= len(frames) <= depth:
+        _fail("HOCUS492", f"{label}.frames exceeds its declared bound.")
+    for frame_index, frame in enumerate(frames):
+        _validate_module_frame(frame, f"{label}.frames[{frame_index}]", depth, instance_paths)
+    expected_stack_id = _content_digest({
+        "domain": _EXPANSION_STACK_DIGEST_DOMAIN, "frames": frames,
+    })
+    if not hmac.compare_digest(stack_id, expected_stack_id):
+        _fail("HOCUS492", f"{label}.stackId does not match its frames.")
+    return stack_id
+
+
+def _validate_module_frame(
+    frame: Any, label: str, depth: int, instance_paths: set[tuple[str, ...]],
+) -> None:
+    if not isinstance(frame, dict):
+        _fail("HOCUS492", f"{label} must be an object.")
+    _exact_keys(frame, {
+        "moduleUri", "sourceDigest", "moduleName", "instanceSymbol", "instanceIdPath",
+        "importSpan", "useSpan",
+    }, label, "HOCUS492")
+    _source_uri(frame["moduleUri"], f"{label}.moduleUri", "HOCUS492")
+    _digest(frame["sourceDigest"], f"{label}.sourceDigest", "HOCUS492")
+    _string(frame["moduleName"], f"{label}.moduleName", "HOCUS492", pattern=_IDENTIFIER)
+    _string(frame["instanceSymbol"], f"{label}.instanceSymbol", "HOCUS492", pattern=_IDENTIFIER)
+    path = frame["instanceIdPath"]
+    if not isinstance(path, list) or len(path) > depth:
+        _fail("HOCUS492", f"{label}.instanceIdPath is invalid.")
+    for seed in path:
+        _string(seed, f"{label}.instanceIdPath", "HOCUS492", pattern=_SEED)
+    instance_paths.add(tuple(path))
+    if frame["importSpan"] is not None:
+        _span(frame["importSpan"], f"{label}.importSpan")
+    _span(frame["useSpan"], f"{label}.useSpan")
 
 
 def _validate_control_stacks(
@@ -697,61 +766,83 @@ def _validate_control_stacks(
     ids: list[str] = []
     iteration_frames: set[str] = set()
     for index, stack in enumerate(value):
-        label = f"expansionMap.controlStacks[{index}]"
-        if not isinstance(stack, dict):
-            _fail("HOCUS492", f"{label} must be an object.")
-        _exact_keys(stack, {"controlStackId", "frames"}, label, "HOCUS492")
-        stack_id = _digest(stack["controlStackId"], f"{label}.controlStackId", "HOCUS492")
-        frames = stack["frames"]
-        if not isinstance(frames, list) or not 1 <= len(frames) <= depth:
-            _fail("HOCUS492", f"{label}.frames exceeds its declared bound.")
-        for frame_index, frame in enumerate(frames):
-            frame_label = f"{label}.frames[{frame_index}]"
-            if not isinstance(frame, dict):
-                _fail("HOCUS492", f"{frame_label} must be an object.")
-            common = {
-                "kind", "controlSymbol", "durableSeed", "declarationSpan", "selectionSpan",
-                "yieldSpans",
-            }
-            kind = frame.get("kind")
-            keys = common | ({"branch"} if kind == "if" else {"iterator", "iterationIndex"} if kind == "for" else set())
-            _exact_keys(frame, keys, frame_label, "HOCUS492")
-            _string(frame["controlSymbol"], f"{frame_label}.controlSymbol", "HOCUS492", pattern=_IDENTIFIER)
-            _string(frame["durableSeed"], f"{frame_label}.durableSeed", "HOCUS492", pattern=_SEED)
-            _span(frame["declarationSpan"], f"{frame_label}.declarationSpan")
-            _span(frame["selectionSpan"], f"{frame_label}.selectionSpan")
-            yields = frame["yieldSpans"]
-            if not isinstance(yields, list) or not 1 <= len(yields) <= 256:
-                _fail("HOCUS492", f"{frame_label}.yieldSpans is invalid.")
-            for yield_index, yield_span in enumerate(yields):
-                _span(yield_span, f"{frame_label}.yieldSpans[{yield_index}]")
-            if kind == "if":
-                if frame["branch"] not in {"then", "else"}:
-                    _fail("HOCUS492", f"{frame_label}.branch is invalid.")
-            elif kind == "for":
-                _string(frame["iterator"], f"{frame_label}.iterator", "HOCUS492", pattern=_IDENTIFIER)
-                iteration = frame["iterationIndex"]
-                if (
-                    type(iteration) is not int
-                    or iteration < 0
-                    or iteration >= per_fold_iterations
-                ):
-                    _fail("HOCUS492", f"{frame_label}.iterationIndex is invalid.")
-                iteration_frames.add(_canonical_json(frame))
-            else:
-                _fail("HOCUS492", f"{frame_label}.kind is invalid.")
-        expected_stack_id = _content_digest({
-            "domain": _CONTROL_STACK_DIGEST_DOMAIN,
-            "frames": frames,
-        })
-        if not hmac.compare_digest(stack_id, expected_stack_id):
-            _fail("HOCUS492", f"{label}.controlStackId does not match its frames.")
-        ids.append(stack_id)
+        ids.append(_validate_control_stack(
+            stack, index, depth, per_fold_iterations, iteration_frames,
+        ))
     if ids != sorted(set(ids)):
         _fail("HOCUS492", "Control stacks must be uniquely sorted by controlStackId.")
     if len(iteration_frames) > aggregate_iterations:
         _fail("HOCUS492", "Control provenance exceeds the aggregate iteration limit.")
     return ids
+
+
+def _validate_control_stack(
+    stack: Any,
+    index: int,
+    depth: int,
+    per_fold_iterations: int,
+    iteration_frames: set[str],
+) -> str:
+    label = f"expansionMap.controlStacks[{index}]"
+    if not isinstance(stack, dict):
+        _fail("HOCUS492", f"{label} must be an object.")
+    _exact_keys(stack, {"controlStackId", "frames"}, label, "HOCUS492")
+    stack_id = _digest(stack["controlStackId"], f"{label}.controlStackId", "HOCUS492")
+    frames = stack["frames"]
+    if not isinstance(frames, list) or not 1 <= len(frames) <= depth:
+        _fail("HOCUS492", f"{label}.frames exceeds its declared bound.")
+    for frame_index, frame in enumerate(frames):
+        _validate_control_frame(
+            frame, f"{label}.frames[{frame_index}]",
+            per_fold_iterations, iteration_frames,
+        )
+    expected_stack_id = _content_digest({
+        "domain": _CONTROL_STACK_DIGEST_DOMAIN, "frames": frames,
+    })
+    if not hmac.compare_digest(stack_id, expected_stack_id):
+        _fail("HOCUS492", f"{label}.controlStackId does not match its frames.")
+    return stack_id
+
+
+def _validate_control_frame(
+    frame: Any, label: str, per_fold_iterations: int, iteration_frames: set[str],
+) -> None:
+    if not isinstance(frame, dict):
+        _fail("HOCUS492", f"{label} must be an object.")
+    common = {
+        "kind", "controlSymbol", "durableSeed", "declarationSpan", "selectionSpan",
+        "yieldSpans",
+    }
+    kind = frame.get("kind")
+    specific = {"branch"} if kind == "if" else {"iterator", "iterationIndex"} if kind == "for" else set()
+    _exact_keys(frame, common | specific, label, "HOCUS492")
+    _string(frame["controlSymbol"], f"{label}.controlSymbol", "HOCUS492", pattern=_IDENTIFIER)
+    _string(frame["durableSeed"], f"{label}.durableSeed", "HOCUS492", pattern=_SEED)
+    _span(frame["declarationSpan"], f"{label}.declarationSpan")
+    _span(frame["selectionSpan"], f"{label}.selectionSpan")
+    _validate_yield_spans(frame["yieldSpans"], label)
+    if kind == "if":
+        if frame["branch"] not in {"then", "else"}:
+            _fail("HOCUS492", f"{label}.branch is invalid.")
+    elif kind == "for":
+        _validate_iteration_frame(frame, label, per_fold_iterations)
+        iteration_frames.add(_canonical_json(frame))
+    else:
+        _fail("HOCUS492", f"{label}.kind is invalid.")
+
+
+def _validate_yield_spans(value: Any, label: str) -> None:
+    if not isinstance(value, list) or not 1 <= len(value) <= 256:
+        _fail("HOCUS492", f"{label}.yieldSpans is invalid.")
+    for index, yield_span in enumerate(value):
+        _span(yield_span, f"{label}.yieldSpans[{index}]")
+
+
+def _validate_iteration_frame(frame: dict[str, Any], label: str, maximum: int) -> None:
+    _string(frame["iterator"], f"{label}.iterator", "HOCUS492", pattern=_IDENTIFIER)
+    iteration = frame["iterationIndex"]
+    if type(iteration) is not int or iteration < 0 or iteration >= maximum:
+        _fail("HOCUS492", f"{label}.iterationIndex is invalid.")
 
 
 def _walk_graph_values(value: Any):
@@ -1090,42 +1181,20 @@ def _fail(
 
 
 __all__ = [
-    "CARRIER_CONTRACTS",
-    "CARRIER_CONTRACTS_BY_BUNDLE",
-    "CARRIER_CONTRACTS_BY_COMPILER",
-    "CARRIER_CONTRACTS_BY_EXPANSION_MAP",
-    "CARRIER_CONTRACTS_BY_GRAPH_SPEC",
-    "CARRIER_CONTRACTS_BY_LANGUAGE",
-    "CARRIER_CONTRACTS_BY_MODULE_MANIFEST",
-    "CARRIER_CONTRACTS_BY_PROJECT_LOCK",
-    "CARRIER_CONTRACTS_BY_PROJECT_MANIFEST",
-    "CARRIER_CONTRACTS_BY_RESOLVED_MODULE_SET",
-    "CONTROL_CARRIER_CONTRACT",
-    "CONTROL_BUNDLE_VERSION",
-    "CONTROL_COMPILER_VERSION",
-    "CONTROL_EXPANSION_MAP_VERSION",
-    "CONTROL_GRAPH_SPEC_VERSION",
-    "CONTROL_LANGUAGE_VERSION",
-    "CONTROL_MODULE_MANIFEST_VERSION",
-    "CONTROL_PROJECT_LOCK_VERSION",
-    "CONTROL_PROJECT_MANIFEST_VERSION",
-    "CONTROL_RESOLVED_MODULE_SET_VERSION",
-    "CONTROL_RESOLVED_LIMIT_MAXIMA",
-    "STATIC_CARRIER_CONTRACT",
-    "CarrierContract",
-    "CarrierContractError",
-    "contract_for_bundle",
-    "contract_for_compiler",
-    "contract_for_expansion_map",
-    "contract_for_graph_spec",
-    "contract_for_language",
-    "contract_for_module_manifest",
-    "contract_for_project_lock",
-    "contract_for_project_manifest",
-    "contract_for_resolved_module_set",
-    "decode_control_bundle_envelope",
-    "decode_control_expansion_map_envelope",
-    "decode_control_graph_spec_envelope",
-    "decode_control_resolved_module_set_envelope",
-    "require_carrier_contract",
+    "CARRIER_CONTRACTS", "CARRIER_CONTRACTS_BY_BUNDLE", "CARRIER_CONTRACTS_BY_COMPILER",
+    "CARRIER_CONTRACTS_BY_EXPANSION_MAP", "CARRIER_CONTRACTS_BY_GRAPH_SPEC",
+    "CARRIER_CONTRACTS_BY_LANGUAGE", "CARRIER_CONTRACTS_BY_MODULE_MANIFEST",
+    "CARRIER_CONTRACTS_BY_PROJECT_LOCK", "CARRIER_CONTRACTS_BY_PROJECT_MANIFEST",
+    "CARRIER_CONTRACTS_BY_RESOLVED_MODULE_SET", "CONTROL_CARRIER_CONTRACT",
+    "CONTROL_BUNDLE_VERSION", "CONTROL_COMPILER_VERSION", "CONTROL_EXPANSION_MAP_VERSION",
+    "CONTROL_GRAPH_SPEC_VERSION", "CONTROL_LANGUAGE_VERSION", "CONTROL_MODULE_MANIFEST_VERSION",
+    "CONTROL_PROJECT_LOCK_VERSION", "CONTROL_PROJECT_MANIFEST_VERSION",
+    "CONTROL_RESOLVED_MODULE_SET_VERSION", "CONTROL_RESOLVED_LIMIT_MAXIMA",
+    "STATIC_CARRIER_CONTRACT", "CarrierContract", "CarrierContractError",
+    "contract_for_bundle", "contract_for_compiler", "contract_for_expansion_map",
+    "contract_for_graph_spec", "contract_for_language", "contract_for_module_manifest",
+    "contract_for_project_lock", "contract_for_project_manifest",
+    "contract_for_resolved_module_set", "decode_control_bundle_envelope",
+    "decode_control_expansion_map_envelope", "decode_control_graph_spec_envelope",
+    "decode_control_resolved_module_set_envelope", "require_carrier_contract",
 ]

@@ -568,6 +568,16 @@ def _finish_lowering(work: _LoweringWork) -> DocumentPreview:
 
 
 def _validate_and_copy_baseline(value: Any) -> dict[str, Any]:
+    _validate_baseline_envelope(value)
+    result = copy.deepcopy(value)
+    result.setdefault("ports", [])
+    result.setdefault("metadata", {})
+    _validate_baseline_uids(result)
+    _validate_baseline_entities(result)
+    return result
+
+
+def _validate_baseline_envelope(value: Any) -> None:
     if not isinstance(value, dict):
         raise DocumentLoweringError("HOCUS710", "Baseline document must be an object.")
     required = {"$schema", "kind", "documentId", "documentRevision", "rootPath", "category",
@@ -588,9 +598,9 @@ def _validate_and_copy_baseline(value: Any) -> dict[str, Any]:
     for field in ("nodes", "edges", "parameterBindings", "codeBlobs", "diagnostics"):
         if not isinstance(value[field], list):
             raise DocumentLoweringError("HOCUS710", f"Baseline {field} must be an array.")
-    result = copy.deepcopy(value)
-    result.setdefault("ports", [])
-    result.setdefault("metadata", {})
+
+
+def _validate_baseline_uids(result: dict[str, Any]) -> None:
     seen: set[str] = set()
     for field in ("nodes", "ports", "edges", "parameterBindings", "codeBlobs"):
         for item in result[field]:
@@ -599,15 +609,24 @@ def _validate_and_copy_baseline(value: Any) -> dict[str, Any]:
                 raise DocumentLoweringError("HOCUS710", "Baseline entity UIDs must be present and globally unique.",
                                             details={"field": field, "uid": uid})
             seen.add(uid)
-    _validate_baseline_entities(result)
-    return result
 
 
 def _validate_baseline_entities(result: dict[str, Any]) -> None:
-    node_uids = {item["uid"] for item in result["nodes"]}
+    node_uids = _validate_baseline_nodes(result["nodes"])
+    _validate_baseline_ports(result["ports"], node_uids)
+    _validate_baseline_edges(result["edges"], node_uids)
+    binding_uids = _validate_baseline_bindings(result["parameterBindings"], node_uids)
+    _validate_baseline_code(result["codeBlobs"], node_uids, binding_uids)
+
+
+def _validate_baseline_nodes(nodes: list[dict[str, Any]]) -> set[str]:
+    required_node = {
+        "uid", "name", "typeName", "category", "path", "parentPath",
+        "isNetwork", "flags", "metadata",
+    }
+    node_uids = {item["uid"] for item in nodes}
     node_paths: set[str] = set()
-    for node in result["nodes"]:
-        required_node = {"uid", "name", "typeName", "category", "path", "parentPath", "isNetwork", "flags", "metadata"}
+    for node in nodes:
         if not required_node.issubset(node) or not isinstance(node["path"], str) or not node["path"].startswith("/"):
             raise DocumentLoweringError("HOCUS710", "Baseline contains a malformed node.", details={"uid": node.get("uid")})
         if node["path"] in node_paths:
@@ -616,14 +635,27 @@ def _validate_baseline_entities(result: dict[str, Any]) -> None:
         flags = node["flags"]
         if not isinstance(flags, dict) or set(flags) != {"display", "render", "bypass", "template"} or any(type(v) is not bool for v in flags.values()):
             raise DocumentLoweringError("HOCUS710", "Baseline node flags are malformed.", details={"uid": node["uid"]})
-    for port in result["ports"]:
+    return node_uids
+
+
+def _validate_baseline_ports(ports: list[dict[str, Any]], node_uids: set[str]) -> None:
+    for port in ports:
         if port.get("nodeUid") not in node_uids or port.get("direction") not in {"input", "output"}:
             raise DocumentLoweringError("HOCUS710", "Baseline contains a dangling or malformed port.", details={"uid": port["uid"]})
-    for edge in result["edges"]:
+
+
+def _validate_baseline_edges(edges: list[dict[str, Any]], node_uids: set[str]) -> None:
+    for edge in edges:
         if edge.get("from", {}).get("nodeUid") not in node_uids or edge.get("to", {}).get("nodeUid") not in node_uids:
             raise DocumentLoweringError("HOCUS710", "Baseline contains a dangling edge.", details={"uid": edge["uid"]})
-    binding_uids = {item["uid"] for item in result["parameterBindings"]}
-    for binding in result["parameterBindings"]:
+
+
+def _validate_baseline_bindings(
+    bindings: list[dict[str, Any]],
+    node_uids: set[str],
+) -> set[str]:
+    binding_uids = {item["uid"] for item in bindings}
+    for binding in bindings:
         if binding.get("nodeUid") not in node_uids or binding.get("valueMode") not in {
             "literal", "expression", "channel_reference", "code_reference"
         }:
@@ -632,7 +664,15 @@ def _validate_baseline_entities(result: dict[str, Any]) -> None:
         if binding.get("valueMode") == "literal" and isinstance(binding.get("value"), (list, dict)):
             raise DocumentLoweringError("HOCUS710", "Network-document v1 literal bindings must be scalar.",
                                         details={"uid": binding["uid"]})
-    for blob in result["codeBlobs"]:
+    return binding_uids
+
+
+def _validate_baseline_code(
+    blobs: list[dict[str, Any]],
+    node_uids: set[str],
+    binding_uids: set[str],
+) -> None:
+    for blob in blobs:
         target = blob.get("target", {})
         if (target.get("nodeUid") not in node_uids
                 or (target.get("bindingUid") is not None and target.get("bindingUid") not in binding_uids)):
@@ -800,30 +840,58 @@ def _candidate_plan(payload: dict[str, Any], bundle_digest: str, baseline: dict[
                     source_maps: dict[str, Any], adopted_uids: set[str],
                     provenance_update_uids: set[str]) -> dict[str, Any]:
     operations: list[dict[str, Any]] = []
+    sequence = _append_identity_operations(
+        operations, source_maps, adopted_uids, provenance_update_uids
+    )
+    _append_diff_operations(operations, source_maps, diff, sequence)
+    plan = {
+        "kind": "hocus_candidate_plan", "planVersion": PREVIEW_VERSION, "applyable": False,
+        "bundleDigest": bundle_digest, "sourceDigest": payload["entrySource"]["digest"],
+        "catalogFingerprint": payload["catalogConstraints"]["fingerprint"],
+        "catalogContentDigest": payload["catalogConstraints"]["contentDigest"],
+        "ownership": ownership, "mode": payload["graphSpec"]["mode"],
+        "requiredCapabilities": copy.deepcopy(payload["requiredCapabilities"]),
+        "baselineDocumentId": baseline["documentId"],
+        "baselineDocumentRevision": baseline["documentRevision"],
+        "baselineLiveRevision": int(baseline.get("lastSyncedLiveRevision", baseline.get("baselineLiveRevision", 0))),
+        "baselineDigest": _digest(baseline), "targetDocumentDigest": _digest(document),
+        "operations": operations,
+    }
+    plan["planHash"] = _digest(plan)
+    return plan
+
+
+def _append_identity_operations(
+    operations: list[dict[str, Any]],
+    source_maps: dict[str, Any],
+    adopted_uids: set[str],
+    provenance_update_uids: set[str],
+) -> int:
     sequence = 0
-    for uid in sorted(adopted_uids):
-        source = source_maps.get("adoptions", {}).get(uid) or source_maps["entities"].get(uid)
-        operation = {
-            "operationId": f"op:{sequence:06d}", "sequence": sequence, "action": "adopt_node",
-            "entityKind": "node", "entityUid": uid, "change": {"uid": uid},
-        }
-        if source is not None:
-            operation["sourceMap"] = copy.deepcopy(source)
-            source_maps["operations"][operation["operationId"]] = copy.deepcopy(source)
-        operations.append(operation)
-        sequence += 1
-    for uid in sorted(provenance_update_uids):
-        source = source_maps.get("adoptions", {}).get(uid) or source_maps["entities"].get(uid)
-        operation = {
-            "operationId": f"op:{sequence:06d}", "sequence": sequence,
-            "action": "update_node_provenance", "entityKind": "node", "entityUid": uid,
-            "change": {"uid": uid},
-        }
-        if source is not None:
-            operation["sourceMap"] = copy.deepcopy(source)
-            source_maps["operations"][operation["operationId"]] = copy.deepcopy(source)
-        operations.append(operation)
-        sequence += 1
+    groups = (
+        ("adopt_node", adopted_uids),
+        ("update_node_provenance", provenance_update_uids),
+    )
+    for action, uids in groups:
+        for uid in sorted(uids):
+            operation = {
+                "operationId": f"op:{sequence:06d}", "sequence": sequence,
+                "action": action, "entityKind": "node", "entityUid": uid,
+                "change": {"uid": uid},
+            }
+            source = source_maps.get("adoptions", {}).get(uid) or source_maps["entities"].get(uid)
+            _attach_operation_source(operation, source, source_maps)
+            operations.append(operation)
+            sequence += 1
+    return sequence
+
+
+def _append_diff_operations(
+    operations: list[dict[str, Any]],
+    source_maps: dict[str, Any],
+    diff: dict[str, Any],
+    sequence: int,
+) -> int:
     # The order is directly executable in principle: detach references before
     # destructive removals, create structural targets before installing state,
     # and connect only after both endpoints exist.
@@ -845,20 +913,7 @@ def _candidate_plan(payload: dict[str, Any], bundle_digest: str, baseline: dict[
     ):
         for item in diff[field]:
             uid = item.get("uid") or item.get("after", {}).get("uid") or item.get("before", {}).get("uid")
-            effective_action = action
-            if field == "changedNodes":
-                before_node, after_node = item["before"], item["after"]
-                if before_node.get("typeName") != after_node.get("typeName"):
-                    effective_action = "replace_node"
-                elif before_node.get("parentPath") != after_node.get("parentPath"):
-                    effective_action = "reparent_node"
-                elif before_node.get("path") != after_node.get("path") or before_node.get("name") != after_node.get("name"):
-                    effective_action = "rename_node"
-            if entity_kind == "edge":
-                edge = item.get("after") if field == "changedEdges" else item
-                edge_kind = (edge or {}).get("kind")
-                if edge_kind == "output_flag":
-                    effective_action = "clear_output" if field == "deletedEdges" else "set_output"
+            effective_action = _effective_operation_action(entity_kind, action, field, item)
             operation = {
                 "operationId": f"op:{sequence:06d}", "sequence": sequence, "action": effective_action,
                 "entityKind": entity_kind, "entityUid": uid, "change": copy.deepcopy(item),
@@ -867,26 +922,41 @@ def _candidate_plan(payload: dict[str, Any], bundle_digest: str, baseline: dict[
             if source is None:
                 before = item.get("before") if isinstance(item, dict) else None
                 source = _source_map_from_entity(before if isinstance(before, dict) else item)
-            if source is not None:
-                operation["sourceMap"] = copy.deepcopy(source)
-                source_maps["operations"][operation["operationId"]] = copy.deepcopy(source)
+            _attach_operation_source(operation, source, source_maps)
             operations.append(operation)
             sequence += 1
-    plan = {
-        "kind": "hocus_candidate_plan", "planVersion": PREVIEW_VERSION, "applyable": False,
-        "bundleDigest": bundle_digest, "sourceDigest": payload["entrySource"]["digest"],
-        "catalogFingerprint": payload["catalogConstraints"]["fingerprint"],
-        "catalogContentDigest": payload["catalogConstraints"]["contentDigest"],
-        "ownership": ownership, "mode": payload["graphSpec"]["mode"],
-        "requiredCapabilities": copy.deepcopy(payload["requiredCapabilities"]),
-        "baselineDocumentId": baseline["documentId"],
-        "baselineDocumentRevision": baseline["documentRevision"],
-        "baselineLiveRevision": int(baseline.get("lastSyncedLiveRevision", baseline.get("baselineLiveRevision", 0))),
-        "baselineDigest": _digest(baseline), "targetDocumentDigest": _digest(document),
-        "operations": operations,
-    }
-    plan["planHash"] = _digest(plan)
-    return plan
+    return sequence
+
+
+def _effective_operation_action(
+    entity_kind: str,
+    action: str,
+    field: str,
+    item: dict[str, Any],
+) -> str:
+    if field == "changedNodes":
+        before_node, after_node = item["before"], item["after"]
+        if before_node.get("typeName") != after_node.get("typeName"):
+            return "replace_node"
+        if before_node.get("parentPath") != after_node.get("parentPath"):
+            return "reparent_node"
+        if before_node.get("path") != after_node.get("path") or before_node.get("name") != after_node.get("name"):
+            return "rename_node"
+    if entity_kind == "edge":
+        edge = item.get("after") if field == "changedEdges" else item
+        if (edge or {}).get("kind") == "output_flag":
+            return "clear_output" if field == "deletedEdges" else "set_output"
+    return action
+
+
+def _attach_operation_source(
+    operation: dict[str, Any],
+    source: Any,
+    source_maps: dict[str, Any],
+) -> None:
+    if source is not None:
+        operation["sourceMap"] = copy.deepcopy(source)
+        source_maps["operations"][operation["operationId"]] = copy.deepcopy(source)
 
 
 def _source_map_from_entity(entity: Any) -> dict[str, Any] | None:

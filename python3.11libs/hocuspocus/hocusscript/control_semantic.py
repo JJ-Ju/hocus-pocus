@@ -188,20 +188,44 @@ def _validate_module_mapping(modules: Mapping[str, ResolvedModuleUnit], span: An
 
 
 def _validate_graph_directives(graph: GraphDecl, state: _ValidationState) -> None:
-    targets = [item for item in graph.statements if isinstance(item, TargetStmt)]
-    modes = [item for item in graph.statements if isinstance(item, ModeStmt)]
-    revisions = [item for item in graph.statements if isinstance(item, RevisionStmt)]
-    ownerships = [item for item in graph.statements if isinstance(item, OwnershipStmt)]
-    layouts = [item for item in graph.statements if isinstance(item, LayoutStmt)]
+    directives, flags = _collect_graph_directives(graph)
+    target = _validate_graph_options(graph, directives)
+    known, mutable = _validate_graph_externals(graph, target, state)
+    _validate_graph_flags(flags, known, mutable, state)
+
+
+def _collect_graph_directives(
+    graph: GraphDecl,
+) -> tuple[dict[str, list[Any]], dict[str, list[FlagStmt]]]:
+    directive_types = {
+        "target": TargetStmt,
+        "mode": ModeStmt,
+        "revision": RevisionStmt,
+        "ownership": OwnershipStmt,
+        "layout": LayoutStmt,
+    }
+    directives = {
+        name: [item for item in graph.statements if isinstance(item, item_type)]
+        for name, item_type in directive_types.items()
+    }
     flags = {
         name: [item for item in graph.statements if isinstance(item, FlagStmt) and item.name == name]
         for name in ("display", "render", "output")
     }
-    for items in (targets, modes, revisions, ownerships, layouts, *flags.values()):
+    for items in (*directives.values(), *flags.values()):
         if len(items) > 1:
             raise ModuleExpansionError(
                 "HOCUS473", "Duplicate graph directive in a forged control AST.", items[1].span
             )
+    return directives, flags
+
+
+def _validate_graph_options(graph: GraphDecl, directives: Mapping[str, list[Any]]) -> str:
+    targets = directives["target"]
+    modes = directives["mode"]
+    revisions = directives["revision"]
+    ownerships = directives["ownership"]
+    layouts = directives["layout"]
     if len(targets) != 1 or not _is_canonical_houdini_path(targets[0].value):
         raise ModuleExpansionError(
             "HOCUS302", "Graph target must be one canonical absolute Houdini path.",
@@ -233,7 +257,14 @@ def _validate_graph_directives(graph: GraphDecl, state: _ValidationState) -> Non
         raise ModuleExpansionError(
             "HOCUS316", "Language 0.3 supports only layout = auto.", layouts[0].span
         )
+    return target
 
+
+def _validate_graph_externals(
+    graph: GraphDecl,
+    target: str,
+    state: _ValidationState,
+) -> tuple[set[str], set[str]]:
     externals = [item for item in graph.statements if isinstance(item, ExternalDecl)]
     mutable = {
         item.symbol for item in graph.statements if isinstance(item, NodeDecl)
@@ -253,6 +284,15 @@ def _validate_graph_directives(graph: GraphDecl, state: _ValidationState) -> Non
         known.add(external.symbol)
         if external.adopted:
             mutable.add(external.symbol)
+    return known, mutable
+
+
+def _validate_graph_flags(
+    flags: Mapping[str, list[FlagStmt]],
+    known: set[str],
+    mutable: set[str],
+    state: _ValidationState,
+) -> None:
     for name, items in flags.items():
         if not items:
             continue

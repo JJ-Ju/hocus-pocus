@@ -137,6 +137,142 @@ class DocumentValidationOperationsMixin:
 
         return root_path
 
+    @staticmethod
+    def _document_validate_node_entry(
+        node: dict[str, Any],
+        index: int,
+        root_path: str,
+        seen_uids: set[str],
+        seen_paths: set[str],
+        diagnostics: list[dict[str, Any]],
+    ) -> tuple[str, str]:
+        uid = str(node.get("uid", "")).strip()
+        path = str(node.get("path", "")).strip()
+        parent_path = str(node.get("parentPath", "")).strip()
+        node_name = str(node.get("name", "")).strip()
+        pointer = f"/nodes/{index}"
+        checks = (
+            (not uid, "node.uid.missing", "Each node must include uid.", f"{pointer}/uid"),
+            (uid in seen_uids, "node.uid.duplicate", f"Duplicate node uid: {uid}", f"{pointer}/uid"),
+            (not path.startswith("/"), "node.path.invalid", "Node path must be absolute.", f"{pointer}/path"),
+            (path in seen_paths, "node.path.duplicate", f"Duplicate node path: {path}", f"{pointer}/path"),
+            (
+                bool(root_path) and not (path == root_path or path.startswith(f"{root_path}/")),
+                "node.scope.invalid",
+                "Node path is outside the document root scope.",
+                f"{pointer}/path",
+            ),
+            (
+                bool(parent_path) and not parent_path.startswith("/"),
+                "node.parent.invalid",
+                "parentPath must be absolute when present.",
+                f"{pointer}/parentPath",
+            ),
+            (
+                bool(path and parent_path and path != root_path)
+                and path.rsplit("/", 1)[0] != parent_path,
+                "node.parent_path.mismatch",
+                "Node parentPath must match the directory portion of path.",
+                f"{pointer}/parentPath",
+            ),
+        )
+        for failed, code, message, json_pointer in checks:
+            if failed:
+                diagnostic = {
+                    "severity": "error",
+                    "code": code,
+                    "message": message,
+                    "jsonPointer": json_pointer,
+                }
+                if code != "node.uid.missing":
+                    diagnostic["entityUid"] = (
+                        uid if code == "node.uid.duplicate" else uid or None
+                    )
+                if code in {"node.path.duplicate", "node.scope.invalid", "node.parent_path.mismatch"}:
+                    diagnostic["path"] = (
+                        path
+                        if code == "node.parent_path.mismatch"
+                        else path if path.startswith("/") else None
+                    )
+                diagnostics.append(diagnostic)
+        if node_name and path.startswith("/") and path.rsplit("/", 1)[-1] != node_name:
+            diagnostics.append(
+                {
+                    "severity": "warning",
+                    "code": "node.name_path.mismatch",
+                    "message": "Node name does not match the basename of node path.",
+                    "jsonPointer": f"{pointer}/name",
+                    "entityUid": uid or None,
+                    "path": path,
+                }
+            )
+        seen_uids.add(uid)
+        seen_paths.add(path)
+        return uid, path
+
+    def _document_validate_root_node(
+        self,
+        nodes: list[Any],
+        root_path: str,
+        diagnostics: list[dict[str, Any]],
+    ) -> None:
+        root_node = next(
+            (
+                node for node in nodes
+                if isinstance(node, dict) and str(node.get("path", "")).strip() == root_path
+            ),
+            None,
+        )
+        if root_path and root_node is None:
+            diagnostics.append(
+                {
+                    "severity": "error",
+                    "code": "document.root_node.missing",
+                    "message": "The document must include a node entry for the rootPath network.",
+                    "jsonPointer": "/nodes",
+                    "path": root_path,
+                }
+            )
+        elif root_node is not None and not bool(root_node.get("isNetwork", False)):
+            diagnostics.append(
+                {
+                    "severity": "error",
+                    "code": "document.root_node.not_network",
+                    "message": "The rootPath entry must refer to a network container.",
+                    "jsonPointer": "/nodes",
+                    "entityUid": str(root_node.get("uid", "")).strip() or None,
+                    "path": root_path,
+                }
+            )
+        live_root = self._document_root_live_node(root_path) if root_path.startswith("/") else None
+        if live_root is None:
+            return
+        target_type = str((root_node or {}).get("typeName", "")).strip()
+        live_type = str(self._safe_value(lambda: live_root.type().name(), "") or "")
+        if target_type and live_type and target_type != live_type:
+            diagnostics.append(
+                {
+                    "severity": "error",
+                    "code": "document.root_node.retype_unsupported",
+                    "message": "Retyping the document root network is not supported by document.apply.",
+                    "jsonPointer": "/nodes",
+                    "path": root_path,
+                    "details": {"currentTypeName": live_type, "targetTypeName": target_type},
+                }
+            )
+        locked_boundary = self._document_locked_hda_boundary(live_root)
+        if locked_boundary:
+            diagnostics.append(
+                {
+                    "severity": "error",
+                    "code": "document.locked_hda_boundary",
+                    "message": "This network is inside a locked HDA boundary and cannot be structurally applied through document.apply.",
+                    "jsonPointer": "/rootPath",
+                    "path": root_path,
+                    "details": {"lockedBoundaryPath": locked_boundary},
+                }
+            )
+
     def _document_validate_nodes(
         self,
         nodes: list[Any],
@@ -159,151 +295,15 @@ class DocumentValidationOperationsMixin:
                     }
                 )
                 continue
-            uid = str(node.get("uid", "")).strip()
-            path = str(node.get("path", "")).strip()
-            parent_path = str(node.get("parentPath", "")).strip()
-            node_name = str(node.get("name", "")).strip()
-            if not uid:
-                diagnostics.append(
-                    {
-                        "severity": "error",
-                        "code": "node.uid.missing",
-                        "message": "Each node must include uid.",
-                        "jsonPointer": f"/nodes/{index}/uid",
-                    }
-                )
-            if uid in seen_uids:
-                diagnostics.append(
-                    {
-                        "severity": "error",
-                        "code": "node.uid.duplicate",
-                        "message": f"Duplicate node uid: {uid}",
-                        "jsonPointer": f"/nodes/{index}/uid",
-                        "entityUid": uid,
-                    }
-                )
-            seen_uids.add(uid)
-            if not path.startswith("/"):
-                diagnostics.append(
-                    {
-                        "severity": "error",
-                        "code": "node.path.invalid",
-                        "message": "Node path must be absolute.",
-                        "jsonPointer": f"/nodes/{index}/path",
-                        "entityUid": uid or None,
-                    }
-                )
-            if path in seen_paths:
-                diagnostics.append(
-                    {
-                        "severity": "error",
-                        "code": "node.path.duplicate",
-                        "message": f"Duplicate node path: {path}",
-                        "jsonPointer": f"/nodes/{index}/path",
-                        "entityUid": uid or None,
-                        "path": path if path.startswith("/") else None,
-                    }
-                )
-            seen_paths.add(path)
+            uid, path = self._document_validate_node_entry(
+                node, index, root_path, seen_uids, seen_paths, diagnostics
+            )
             node_uid_to_path[uid] = path
             if uid:
                 node_uid_to_node[uid] = node
             if path:
                 node_path_to_uid[path] = uid
-            if root_path and not (path == root_path or path.startswith(f"{root_path}/")):
-                diagnostics.append(
-                    {
-                        "severity": "error",
-                        "code": "node.scope.invalid",
-                        "message": "Node path is outside the document root scope.",
-                        "jsonPointer": f"/nodes/{index}/path",
-                        "entityUid": uid or None,
-                        "path": path if path.startswith("/") else None,
-                    }
-                )
-            if parent_path and not parent_path.startswith("/"):
-                diagnostics.append(
-                    {
-                        "severity": "error",
-                        "code": "node.parent.invalid",
-                        "message": "parentPath must be absolute when present.",
-                        "jsonPointer": f"/nodes/{index}/parentPath",
-                        "entityUid": uid or None,
-                    }
-                )
-            if path and parent_path and path != root_path and path.rsplit("/", 1)[0] != parent_path:
-                diagnostics.append(
-                    {
-                        "severity": "error",
-                        "code": "node.parent_path.mismatch",
-                        "message": "Node parentPath must match the directory portion of path.",
-                        "jsonPointer": f"/nodes/{index}/parentPath",
-                        "entityUid": uid or None,
-                        "path": path,
-                    }
-                )
-            if node_name and path.startswith("/") and path.rsplit("/", 1)[-1] != node_name:
-                diagnostics.append(
-                    {
-                        "severity": "warning",
-                        "code": "node.name_path.mismatch",
-                        "message": "Node name does not match the basename of node path.",
-                        "jsonPointer": f"/nodes/{index}/name",
-                        "entityUid": uid or None,
-                        "path": path,
-                    }
-                )
-
-        root_node = next((node for node in nodes if isinstance(node, dict) and str(node.get("path", "")).strip() == root_path), None)
-        if root_path and root_node is None:
-            diagnostics.append(
-                {
-                    "severity": "error",
-                    "code": "document.root_node.missing",
-                    "message": "The document must include a node entry for the rootPath network.",
-                    "jsonPointer": "/nodes",
-                    "path": root_path,
-                }
-            )
-        elif root_node is not None and not bool(root_node.get("isNetwork", False)):
-            diagnostics.append(
-                {
-                    "severity": "error",
-                    "code": "document.root_node.not_network",
-                    "message": "The rootPath entry must refer to a network container.",
-                    "jsonPointer": "/nodes",
-                    "entityUid": str(root_node.get("uid", "")).strip() or None,
-                    "path": root_path,
-                }
-            )
-
-        live_root = self._document_root_live_node(root_path) if root_path.startswith("/") else None
-        if live_root is not None:
-            root_node_type = str((root_node or {}).get("typeName", "")).strip() if isinstance(root_node, dict) else ""
-            live_root_type = str(self._safe_value(lambda: live_root.type().name(), "") or "")
-            if root_node_type and live_root_type and root_node_type != live_root_type:
-                diagnostics.append(
-                    {
-                        "severity": "error",
-                        "code": "document.root_node.retype_unsupported",
-                        "message": "Retyping the document root network is not supported by document.apply.",
-                        "jsonPointer": "/nodes",
-                        "path": root_path,
-                        "details": {"currentTypeName": live_root_type, "targetTypeName": root_node_type},
-                    }
-                )
-            locked_boundary = self._document_locked_hda_boundary(live_root)
-            if locked_boundary:
-                diagnostics.append(
-                    {
-                        "severity": "error",
-                        "code": "document.locked_hda_boundary",
-                        "message": "This network is inside a locked HDA boundary and cannot be structurally applied through document.apply.",
-                        "jsonPointer": "/rootPath",
-                        "path": root_path,
-                        "details": {"lockedBoundaryPath": locked_boundary},
-                    }
-                )
+        self._document_validate_root_node(nodes, root_path, diagnostics)
 
         return node_uid_to_path, node_uid_to_node, node_path_to_uid
 
@@ -427,6 +427,87 @@ class DocumentValidationOperationsMixin:
 
         return code_blob_uids, code_blob_by_uid
 
+    def _document_validate_code_binding(
+        self,
+        binding: dict[str, Any],
+        index: int,
+        binding_uid: str,
+        node_uid: str,
+        parm_name: str,
+        node_uid_to_path: dict[str, str],
+        node_uid_to_node: dict[str, dict[str, Any]],
+        code_blob_uids: set[str],
+        code_blob_by_uid: dict[str, dict[str, Any]],
+        diagnostics: list[dict[str, Any]],
+    ) -> None:
+        code_blob_uid = str(binding.get("codeBlobUid", "")).strip()
+        if not code_blob_uid or code_blob_uid not in code_blob_uids:
+            diagnostics.append(
+                {
+                    "severity": "error",
+                    "code": "binding.code_blob_missing",
+                    "message": "Code-reference bindings must reference an existing code blob.",
+                    "jsonPointer": f"/parameterBindings/{index}/codeBlobUid",
+                    "entityUid": binding_uid or None,
+                }
+            )
+            return
+        node_payload = node_uid_to_node.get(node_uid, {})
+        blob = code_blob_by_uid.get(code_blob_uid, {})
+        adapter = self._document_code_adapter_for(
+            node_payload.get("typeName"), parm_name, blob.get("language")
+        )
+        if adapter is None:
+            diagnostics.append(
+                {
+                    "severity": "error",
+                    "code": "binding.code_blob_unsupported_target",
+                    "message": "This code blob target is not supported by the current apply adapters.",
+                    "jsonPointer": f"/parameterBindings/{index}/codeBlobUid",
+                    "entityUid": binding_uid or None,
+                    "path": node_uid_to_path.get(node_uid),
+                    "details": {
+                        "nodeTypeName": node_payload.get("typeName"),
+                        "parmName": parm_name,
+                        "language": blob.get("language"),
+                    },
+                }
+            )
+        target = blob.get("target") if isinstance(blob.get("target"), dict) else {}
+        target_uid = str(target.get("nodeUid", "")).strip()
+        if target_uid and target_uid != node_uid:
+            diagnostics.append(
+                {
+                    "severity": "error",
+                    "code": "binding.code_blob_target_mismatch",
+                    "message": "Code blob target nodeUid does not match the binding nodeUid.",
+                    "jsonPointer": f"/parameterBindings/{index}/codeBlobUid",
+                    "entityUid": binding_uid or None,
+                }
+            )
+        target_parm = str(target.get("parmName", "")).strip()
+        if target_parm and parm_name and target_parm != parm_name:
+            diagnostics.append(
+                {
+                    "severity": "error",
+                    "code": "binding.code_blob_parm_mismatch",
+                    "message": "Code blob target parmName does not match the binding parmName.",
+                    "jsonPointer": f"/parameterBindings/{index}/parmName",
+                    "entityUid": binding_uid or None,
+                }
+            )
+        target_binding = str(target.get("bindingUid", "")).strip()
+        if target_binding and binding_uid and target_binding != binding_uid:
+            diagnostics.append(
+                {
+                    "severity": "error",
+                    "code": "binding.code_blob_binding_mismatch",
+                    "message": "Code blob target bindingUid does not match the owning parameter binding.",
+                    "jsonPointer": f"/parameterBindings/{index}/uid",
+                    "entityUid": binding_uid or None,
+                }
+            )
+
     def _document_validate_bindings(
         self,
         document: dict[str, Any],
@@ -531,70 +612,18 @@ class DocumentValidationOperationsMixin:
                     }
                 )
             if value_mode == "code_reference":
-                code_blob_uid = str(binding.get("codeBlobUid", "")).strip()
-                if not code_blob_uid or code_blob_uid not in code_blob_uids:
-                    diagnostics.append(
-                        {
-                            "severity": "error",
-                            "code": "binding.code_blob_missing",
-                            "message": "Code-reference bindings must reference an existing code blob.",
-                            "jsonPointer": f"/parameterBindings/{index}/codeBlobUid",
-                            "entityUid": binding_uid or None,
-                        }
-                    )
-                    continue
-                node_payload = node_uid_to_node.get(node_uid, {})
-                blob = code_blob_by_uid.get(code_blob_uid, {})
-                adapter = self._document_code_adapter_for(node_payload.get("typeName"), parm_name, blob.get("language"))
-                if adapter is None:
-                    diagnostics.append(
-                        {
-                            "severity": "error",
-                            "code": "binding.code_blob_unsupported_target",
-                            "message": "This code blob target is not supported by the current apply adapters.",
-                            "jsonPointer": f"/parameterBindings/{index}/codeBlobUid",
-                            "entityUid": binding_uid or None,
-                            "path": node_uid_to_path.get(node_uid),
-                            "details": {
-                                "nodeTypeName": node_payload.get("typeName"),
-                                "parmName": parm_name,
-                                "language": blob.get("language"),
-                            },
-                        }
-                    )
-                target = blob.get("target") if isinstance(blob.get("target"), dict) else {}
-                if str(target.get("nodeUid", "")).strip() and str(target.get("nodeUid", "")).strip() != node_uid:
-                    diagnostics.append(
-                        {
-                            "severity": "error",
-                            "code": "binding.code_blob_target_mismatch",
-                            "message": "Code blob target nodeUid does not match the binding nodeUid.",
-                            "jsonPointer": f"/parameterBindings/{index}/codeBlobUid",
-                            "entityUid": binding_uid or None,
-                        }
-                    )
-                target_parm_name = str(target.get("parmName", "")).strip()
-                if target_parm_name and parm_name and target_parm_name != parm_name:
-                    diagnostics.append(
-                        {
-                            "severity": "error",
-                            "code": "binding.code_blob_parm_mismatch",
-                            "message": "Code blob target parmName does not match the binding parmName.",
-                            "jsonPointer": f"/parameterBindings/{index}/parmName",
-                            "entityUid": binding_uid or None,
-                        }
-                    )
-                target_binding_uid = str(target.get("bindingUid", "")).strip()
-                if target_binding_uid and binding_uid and target_binding_uid != binding_uid:
-                    diagnostics.append(
-                        {
-                            "severity": "error",
-                            "code": "binding.code_blob_binding_mismatch",
-                            "message": "Code blob target bindingUid does not match the owning parameter binding.",
-                            "jsonPointer": f"/parameterBindings/{index}/uid",
-                            "entityUid": binding_uid or None,
-                        }
-                    )
+                self._document_validate_code_binding(
+                    binding,
+                    index,
+                    binding_uid,
+                    node_uid,
+                    parm_name,
+                    node_uid_to_path,
+                    node_uid_to_node,
+                    code_blob_uids,
+                    code_blob_by_uid,
+                    diagnostics,
+                )
 
 
     @staticmethod

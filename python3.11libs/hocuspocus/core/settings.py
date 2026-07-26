@@ -166,6 +166,68 @@ def _coerce_bool(value: str) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
+_POLICY_FIELDS = (
+    "read_only",
+    "allow_scene_edit",
+    "allow_file_write",
+    "approved_roots",
+    "enable_exec_tools",
+    "enable_stdio_bridge",
+)
+_ENV_FIELDS = {
+    "host": "HOCUSPOCUS_HOST",
+    "port": "HOCUSPOCUS_PORT",
+    "mcp_route": "HOCUSPOCUS_MCP_ROUTE",
+    "health_route": "HOCUSPOCUS_HEALTH_ROUTE",
+    "token_mode": "HOCUSPOCUS_TOKEN_MODE",
+    "token": "HOCUSPOCUS_TOKEN",
+    "auto_start": "HOCUSPOCUS_AUTO_START",
+    "log_level": "HOCUSPOCUS_LOG_LEVEL",
+    "request_timeout_seconds": "HOCUSPOCUS_REQUEST_TIMEOUT_SECONDS",
+    "read_only": "HOCUSPOCUS_READ_ONLY",
+    "allow_scene_edit": "HOCUSPOCUS_ALLOW_SCENE_EDIT",
+    "allow_file_write": "HOCUSPOCUS_ALLOW_FILE_WRITE",
+    "enable_exec_tools": "HOCUSPOCUS_ENABLE_EXEC_TOOLS",
+    "enable_stdio_bridge": "HOCUSPOCUS_ENABLE_STDIO_BRIDGE",
+}
+_BOOL_FIELDS = {
+    "auto_start",
+    "read_only",
+    "allow_scene_edit",
+    "allow_file_write",
+    "enable_exec_tools",
+    "enable_stdio_bridge",
+}
+
+
+def _apply_policy_values(settings: ServerSettings, values: dict[str, Any]) -> None:
+    for key in _POLICY_FIELDS:
+        if key not in values:
+            continue
+        value = values[key]
+        if key == "approved_roots":
+            value = [str(item) for item in value]
+        else:
+            value = bool(value)
+        setattr(settings, key, value)
+
+
+def _apply_environment(settings: ServerSettings) -> None:
+    for key, variable in _ENV_FIELDS.items():
+        value = os.environ.get(variable)
+        if value is None:
+            continue
+        if key == "port":
+            resolved: Any = int(value)
+        elif key == "request_timeout_seconds":
+            resolved = float(value)
+        elif key in _BOOL_FIELDS:
+            resolved = _coerce_bool(value)
+        else:
+            resolved = value
+        setattr(settings, key, resolved)
+
+
 def load_settings(config_path: str | Path | None = None) -> ServerSettings:
     path = Path(config_path) if config_path else paths.config_path()
     payload = _load_toml(path)
@@ -206,67 +268,9 @@ def load_settings(config_path: str | Path | None = None) -> ServerSettings:
     )
 
     if not profile_explicit:
-        if "read_only" in payload:
-            settings.read_only = bool(payload["read_only"])
-        if "allow_scene_edit" in payload:
-            settings.allow_scene_edit = bool(payload["allow_scene_edit"])
-        if "allow_file_write" in payload:
-            settings.allow_file_write = bool(payload["allow_file_write"])
-        if "approved_roots" in payload:
-            settings.approved_roots = [str(item) for item in payload.get("approved_roots", [])]
-        if "enable_exec_tools" in payload:
-            settings.enable_exec_tools = bool(payload["enable_exec_tools"])
-        if "enable_stdio_bridge" in payload:
-            settings.enable_stdio_bridge = bool(payload["enable_stdio_bridge"])
-
-    if "read_only" in policy_overrides:
-        settings.read_only = bool(policy_overrides["read_only"])
-    if "allow_scene_edit" in policy_overrides:
-        settings.allow_scene_edit = bool(policy_overrides["allow_scene_edit"])
-    if "allow_file_write" in policy_overrides:
-        settings.allow_file_write = bool(policy_overrides["allow_file_write"])
-    if "approved_roots" in policy_overrides:
-        settings.approved_roots = [str(item) for item in policy_overrides.get("approved_roots", [])]
-    if "enable_exec_tools" in policy_overrides:
-        settings.enable_exec_tools = bool(policy_overrides["enable_exec_tools"])
-    if "enable_stdio_bridge" in policy_overrides:
-        settings.enable_stdio_bridge = bool(policy_overrides["enable_stdio_bridge"])
-
-    env_overrides: dict[str, Any] = {
-        "host": os.environ.get("HOCUSPOCUS_HOST"),
-        "port": os.environ.get("HOCUSPOCUS_PORT"),
-        "mcp_route": os.environ.get("HOCUSPOCUS_MCP_ROUTE"),
-        "health_route": os.environ.get("HOCUSPOCUS_HEALTH_ROUTE"),
-        "token_mode": os.environ.get("HOCUSPOCUS_TOKEN_MODE"),
-        "token": os.environ.get("HOCUSPOCUS_TOKEN"),
-        "auto_start": os.environ.get("HOCUSPOCUS_AUTO_START"),
-        "log_level": os.environ.get("HOCUSPOCUS_LOG_LEVEL"),
-        "request_timeout_seconds": os.environ.get("HOCUSPOCUS_REQUEST_TIMEOUT_SECONDS"),
-        "read_only": os.environ.get("HOCUSPOCUS_READ_ONLY"),
-        "allow_scene_edit": os.environ.get("HOCUSPOCUS_ALLOW_SCENE_EDIT"),
-        "allow_file_write": os.environ.get("HOCUSPOCUS_ALLOW_FILE_WRITE"),
-        "enable_exec_tools": os.environ.get("HOCUSPOCUS_ENABLE_EXEC_TOOLS"),
-        "enable_stdio_bridge": os.environ.get("HOCUSPOCUS_ENABLE_STDIO_BRIDGE"),
-    }
-
-    for key, value in env_overrides.items():
-        if value is None:
-            continue
-        if key == "port":
-            setattr(settings, key, int(value))
-        elif key == "request_timeout_seconds":
-            setattr(settings, key, float(value))
-        elif key in {
-            "auto_start",
-            "read_only",
-            "allow_scene_edit",
-            "allow_file_write",
-            "enable_exec_tools",
-            "enable_stdio_bridge",
-        }:
-            setattr(settings, key, _coerce_bool(value))
-        else:
-            setattr(settings, key, value)
+        _apply_policy_values(settings, payload)
+    _apply_policy_values(settings, policy_overrides)
+    _apply_environment(settings)
 
     roots_override = os.environ.get("HOCUSPOCUS_APPROVED_ROOTS")
     if roots_override:

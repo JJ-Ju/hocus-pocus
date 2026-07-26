@@ -153,6 +153,98 @@ class DocumentDiffOperationsMixin:
                 return False
         return True
 
+    @staticmethod
+    def _document_changed_nodes(
+        before_nodes: dict[str, dict[str, Any]],
+        after_nodes: dict[str, dict[str, Any]],
+    ) -> tuple[list[dict[str, Any]], int, int, int]:
+        changed: list[dict[str, Any]] = []
+        renamed = reparented = retyped = 0
+        shared = sorted(
+            set(before_nodes) & set(after_nodes),
+            key=lambda uid: str(after_nodes[uid].get("path", "")),
+        )
+        for uid in shared:
+            before, after = before_nodes[uid], after_nodes[uid]
+            changes = {
+                key: {"before": before.get(key), "after": after.get(key)}
+                for key in (
+                    "path", "name", "typeName", "parentPath", "position", "flags",
+                    "subnetworkDocumentId",
+                )
+                if before.get(key) != after.get(key)
+            }
+            if not changes:
+                continue
+            renamed += int("name" in changes or ("path" in changes and "parentPath" not in changes))
+            reparented += int("parentPath" in changes)
+            retyped += int("typeName" in changes)
+            changed.append(
+                {
+                    "uid": uid,
+                    "beforePath": before.get("path"),
+                    "afterPath": after.get("path"),
+                    "changes": changes,
+                }
+            )
+        return changed, renamed, reparented, retyped
+
+    @staticmethod
+    def _document_changed_bindings(
+        before: dict[tuple[str, str], dict[str, Any]],
+        after: dict[tuple[str, str], dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        changed: list[dict[str, Any]] = []
+        fields = (
+            "valueMode", "value", "expression", "expressionLanguage",
+            "channelReference", "codeBlobUid",
+        )
+        for key in sorted(set(before) | set(after)):
+            before_item, after_item = before.get(key), after.get(key)
+            if before_item is None:
+                changed.append({"changeType": "created", "after": after_item})
+            elif after_item is None:
+                changed.append({"changeType": "deleted", "before": before_item})
+            else:
+                changes = {
+                    field: {"before": before_item.get(field), "after": after_item.get(field)}
+                    for field in fields
+                    if before_item.get(field) != after_item.get(field)
+                }
+                if changes:
+                    changed.append(
+                        {
+                            "changeType": "updated",
+                            "bindingUid": after_item.get("uid"),
+                            "changes": changes,
+                        }
+                    )
+        return changed
+
+    @staticmethod
+    def _document_changed_code_blobs(
+        before: dict[str, dict[str, Any]],
+        after: dict[str, dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        changed: list[dict[str, Any]] = []
+        for uid in sorted(set(before) | set(after)):
+            before_item, after_item = before.get(uid), after.get(uid)
+            if before_item is None:
+                changed.append({"changeType": "created", "after": after_item})
+            elif after_item is None:
+                changed.append({"changeType": "deleted", "before": before_item})
+            else:
+                changes = {
+                    field: {"before": before_item.get(field), "after": after_item.get(field)}
+                    for field in ("language", "target", "body")
+                    if before_item.get(field) != after_item.get(field)
+                }
+                if changes:
+                    changed.append(
+                        {"changeType": "updated", "codeBlobUid": uid, "changes": changes}
+                    )
+        return changed
+
     def _document_diff_payload(self, before: dict[str, Any], after: dict[str, Any]) -> dict[str, Any]:
         before_nodes = self._document_nodes_by_uid(before)
         after_nodes = self._document_nodes_by_uid(after)
@@ -171,69 +263,16 @@ class DocumentDiffOperationsMixin:
             [before_nodes[uid] for uid in set(before_nodes) - set(after_nodes)],
             key=lambda item: str(item.get("path", "")),
         )
-        changed_nodes: list[dict[str, Any]] = []
-        renamed_node_count = 0
-        reparented_node_count = 0
-        retyped_node_count = 0
-        for uid in sorted(set(before_nodes) & set(after_nodes), key=lambda item: str(after_nodes[item].get("path", ""))):
-            before_node = before_nodes[uid]
-            after_node = after_nodes[uid]
-            changes = {}
-            for key in ("path", "name", "typeName", "parentPath", "position", "flags", "subnetworkDocumentId"):
-                if before_node.get(key) != after_node.get(key):
-                    changes[key] = {"before": before_node.get(key), "after": after_node.get(key)}
-            if changes:
-                if "name" in changes or ("path" in changes and "parentPath" not in changes):
-                    renamed_node_count += 1
-                if "parentPath" in changes:
-                    reparented_node_count += 1
-                if "typeName" in changes:
-                    retyped_node_count += 1
-                changed_nodes.append(
-                    {
-                        "uid": uid,
-                        "beforePath": before_node.get("path"),
-                        "afterPath": after_node.get("path"),
-                        "changes": changes,
-                    }
-                )
-
-        changed_bindings: list[dict[str, Any]] = []
-        for key in sorted(set(before_bindings) | set(after_bindings)):
-            before_binding = before_bindings.get(key)
-            after_binding = after_bindings.get(key)
-            if before_binding is None:
-                changed_bindings.append({"changeType": "created", "after": after_binding})
-                continue
-            if after_binding is None:
-                changed_bindings.append({"changeType": "deleted", "before": before_binding})
-                continue
-            changes = {}
-            for field in ("valueMode", "value", "expression", "expressionLanguage", "channelReference", "codeBlobUid"):
-                if before_binding.get(field) != after_binding.get(field):
-                    changes[field] = {"before": before_binding.get(field), "after": after_binding.get(field)}
-            if changes:
-                changed_bindings.append({"changeType": "updated", "bindingUid": after_binding.get("uid"), "changes": changes})
+        changed_nodes, renamed_node_count, reparented_node_count, retyped_node_count = (
+            self._document_changed_nodes(before_nodes, after_nodes)
+        )
+        changed_bindings = self._document_changed_bindings(before_bindings, after_bindings)
 
         created_edges = [after_edges[key] for key in sorted(set(after_edges) - set(before_edges))]
         deleted_edges = [before_edges[key] for key in sorted(set(before_edges) - set(after_edges))]
-        changed_code_blobs: list[dict[str, Any]] = []
-        for uid in sorted(set(before_code_blobs) | set(after_code_blobs)):
-            before_blob = before_code_blobs.get(uid)
-            after_blob = after_code_blobs.get(uid)
-            if before_blob is None:
-                changed_code_blobs.append({"changeType": "created", "after": after_blob})
-                continue
-            if after_blob is None:
-                changed_code_blobs.append({"changeType": "deleted", "before": before_blob})
-                continue
-            changes = {
-                field: {"before": before_blob.get(field), "after": after_blob.get(field)}
-                for field in ("language", "target", "body")
-                if before_blob.get(field) != after_blob.get(field)
-            }
-            if changes:
-                changed_code_blobs.append({"changeType": "updated", "codeBlobUid": uid, "changes": changes})
+        changed_code_blobs = self._document_changed_code_blobs(
+            before_code_blobs, after_code_blobs
+        )
         return {
             "summary": {
                 "createdNodeCount": len(created_nodes),

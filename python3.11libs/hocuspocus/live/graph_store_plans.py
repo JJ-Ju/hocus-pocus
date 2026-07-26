@@ -170,6 +170,89 @@ class GraphStorePlanMixin:
             "updated_at": float(row["updated_at"]),
         }
 
+    def _validate_immutable_plan_identity(
+        self,
+        payload: dict[str, Any],
+        plan_id: str | None,
+        session_id: str | None,
+        root_path: str | None,
+    ) -> tuple[str, str, str]:
+        declared = (
+            self._required_plan_string(payload, "planId"),
+            self._required_plan_string(payload, "sessionId"),
+            self._required_plan_string(payload, "rootPath"),
+        )
+        if not declared[2].startswith("/"):
+            raise GraphStorePlanError("Immutable plan rootPath must be absolute.")
+        provided = (plan_id, session_id, root_path)
+        messages = (
+            "plan_id does not match immutable plan planId.",
+            "session_id does not match immutable plan sessionId.",
+            "root_path does not match immutable plan rootPath.",
+        )
+        for value, expected, message in zip(provided, declared, messages):
+            if value is not None and str(value).strip() != expected:
+                raise GraphStorePlanError(message)
+        return declared
+
+    @staticmethod
+    def _validate_optional_plan_label(payload: dict[str, Any], field: str) -> str | None:
+        value = payload.get(field)
+        if value is not None and (not isinstance(value, str) or not value.strip()):
+            raise GraphStorePlanError(f"{field} must be null or a non-empty string.")
+        if isinstance(value, str) and value != value.strip():
+            raise GraphStorePlanError(f"{field} must not contain surrounding whitespace.")
+        return value
+
+    def _validate_immutable_plan_body(
+        self, payload: dict[str, Any]
+    ) -> tuple[str, int, int, list[str], dict[str, Any]]:
+        baseline = payload.get("baseline")
+        if not isinstance(baseline, dict):
+            raise GraphStorePlanError("Immutable plan requires a baseline object.")
+        document_id = self._required_plan_string(baseline, "documentId")
+        document_revision = baseline.get("documentRevision")
+        live_revision = baseline.get("liveRevision")
+        if type(document_revision) is not int or document_revision < 0:
+            raise GraphStorePlanError("baselineDocumentRevision must be a non-negative integer.")
+        if type(live_revision) is not int or live_revision < 0:
+            raise GraphStorePlanError("baselineLiveRevision must be a non-negative integer.")
+        capabilities = payload.get("requiredCapabilities")
+        execution_plan = payload.get("executionPlan")
+        if not isinstance(execution_plan, dict):
+            raise GraphStorePlanError("Immutable plan requires an executionPlan object.")
+        if not isinstance(capabilities, list) or any(
+            not isinstance(item, str) or not item or item != item.strip()
+            for item in capabilities
+        ):
+            raise GraphStorePlanError(
+                "requiredCapabilities must be an array of non-empty strings."
+            )
+        if len(set(capabilities)) != len(capabilities):
+            raise GraphStorePlanError("requiredCapabilities must not contain duplicates.")
+        return document_id, document_revision, live_revision, capabilities, execution_plan
+
+    @staticmethod
+    def _validate_immutable_plan_times(
+        payload: dict[str, Any],
+        created_at: float | None,
+        expires_at: float | None,
+    ) -> tuple[float, float]:
+        declared_created = payload.get("createdAt")
+        declared_expiry = payload.get("expiresAt")
+        if not isinstance(declared_created, (int, float)) or isinstance(declared_created, bool):
+            raise GraphStorePlanError("Immutable plan createdAt must be a number.")
+        if not isinstance(declared_expiry, (int, float)) or isinstance(declared_expiry, bool):
+            raise GraphStorePlanError("Immutable plan expiresAt must be a number.")
+        created, expiry = float(declared_created), float(declared_expiry)
+        if created_at is not None and float(created_at) != created:
+            raise GraphStorePlanError("created_at does not match immutable plan createdAt.")
+        if expires_at is not None and float(expires_at) != expiry:
+            raise GraphStorePlanError("expires_at does not match immutable plan expiresAt.")
+        if not math.isfinite(created) or not math.isfinite(expiry) or expiry <= created:
+            raise GraphStorePlanError("expires_at must be finite and later than created_at.")
+        return created, expiry
+
     def store_immutable_plan(
         self,
         *,
@@ -184,20 +267,9 @@ class GraphStorePlanMixin:
         if not isinstance(payload, dict):
             raise GraphStorePlanError("Immutable plan payload must be an object.")
         plan_payload = copy.deepcopy(payload)
-        declared_plan_id = self._required_plan_string(plan_payload, "planId")
-        declared_session_id = self._required_plan_string(plan_payload, "sessionId")
-        declared_root_path = self._required_plan_string(plan_payload, "rootPath")
-        if not declared_root_path.startswith("/"):
-            raise GraphStorePlanError("Immutable plan rootPath must be absolute.")
-        if plan_id is not None and str(plan_id).strip() != declared_plan_id:
-            raise GraphStorePlanError("plan_id does not match immutable plan planId.")
-        if session_id is not None and str(session_id).strip() != declared_session_id:
-            raise GraphStorePlanError("session_id does not match immutable plan sessionId.")
-        if root_path is not None and str(root_path).strip() != declared_root_path:
-            raise GraphStorePlanError("root_path does not match immutable plan rootPath.")
-        plan_id = declared_plan_id
-        session_id = declared_session_id
-        root_path = declared_root_path
+        plan_id, session_id, root_path = self._validate_immutable_plan_identity(
+            plan_payload, plan_id, session_id, root_path
+        )
         plan_hash = self._required_plan_string(plan_payload, "planHash")
         try:
             computed_hash = self._plan_digest(plan_payload)
@@ -207,51 +279,20 @@ class GraphStorePlanMixin:
             raise GraphStorePlanError("Immutable plan hash does not match its payload.")
         source_digest = self._required_plan_string(plan_payload, "sourceDigest")
         catalog_fingerprint = self._required_plan_string(plan_payload, "catalogFingerprint")
-        baseline = plan_payload.get("baseline")
-        if not isinstance(baseline, dict):
-            raise GraphStorePlanError("Immutable plan requires a baseline object.")
-        document_id = self._required_plan_string(baseline, "documentId")
-        catalog_content_digest = plan_payload.get("catalogContentDigest")
-        if catalog_content_digest is not None and (not isinstance(catalog_content_digest, str) or not catalog_content_digest.strip()):
-            raise GraphStorePlanError("catalogContentDigest must be null or a non-empty string.")
-        if isinstance(catalog_content_digest, str) and catalog_content_digest != catalog_content_digest.strip():
-            raise GraphStorePlanError("catalogContentDigest must not contain surrounding whitespace.")
-        ownership = plan_payload.get("ownership")
-        if ownership is not None and (not isinstance(ownership, str) or not ownership.strip()):
-            raise GraphStorePlanError("ownership must be null or a non-empty string.")
-        if isinstance(ownership, str) and ownership != ownership.strip():
-            raise GraphStorePlanError("ownership must not contain surrounding whitespace.")
-        baseline_document_revision = baseline.get("documentRevision")
-        baseline_live_revision = baseline.get("liveRevision")
-        if type(baseline_document_revision) is not int or baseline_document_revision < 0:
-            raise GraphStorePlanError("baselineDocumentRevision must be a non-negative integer.")
-        if type(baseline_live_revision) is not int or baseline_live_revision < 0:
-            raise GraphStorePlanError("baselineLiveRevision must be a non-negative integer.")
-        required_capabilities = plan_payload.get("requiredCapabilities")
-        execution_plan = plan_payload.get("executionPlan")
-        if not isinstance(execution_plan, dict):
-            raise GraphStorePlanError("Immutable plan requires an executionPlan object.")
-        if not isinstance(required_capabilities, list) or any(
-            not isinstance(item, str) or not item or item != item.strip()
-            for item in required_capabilities
-        ):
-            raise GraphStorePlanError("requiredCapabilities must be an array of non-empty strings.")
-        if len(set(required_capabilities)) != len(required_capabilities):
-            raise GraphStorePlanError("requiredCapabilities must not contain duplicates.")
-        declared_created = plan_payload.get("createdAt")
-        declared_expiry = plan_payload.get("expiresAt")
-        if not isinstance(declared_created, (int, float)) or isinstance(declared_created, bool):
-            raise GraphStorePlanError("Immutable plan createdAt must be a number.")
-        if not isinstance(declared_expiry, (int, float)) or isinstance(declared_expiry, bool):
-            raise GraphStorePlanError("Immutable plan expiresAt must be a number.")
-        created = float(declared_created)
-        expiry = float(declared_expiry)
-        if created_at is not None and float(created_at) != created:
-            raise GraphStorePlanError("created_at does not match immutable plan createdAt.")
-        if expires_at is not None and float(expires_at) != expiry:
-            raise GraphStorePlanError("expires_at does not match immutable plan expiresAt.")
-        if not math.isfinite(created) or not math.isfinite(expiry) or expiry <= created:
-            raise GraphStorePlanError("expires_at must be finite and later than created_at.")
+        catalog_content_digest = self._validate_optional_plan_label(
+            plan_payload, "catalogContentDigest"
+        )
+        ownership = self._validate_optional_plan_label(plan_payload, "ownership")
+        (
+            document_id,
+            baseline_document_revision,
+            baseline_live_revision,
+            required_capabilities,
+            execution_plan,
+        ) = self._validate_immutable_plan_body(plan_payload)
+        created, expiry = self._validate_immutable_plan_times(
+            plan_payload, created_at, expires_at
+        )
 
         with self._lock, self._connect() as connection:
             try:
@@ -307,6 +348,44 @@ class GraphStorePlanMixin:
             ).fetchone()
         return None if row is None else self._decode_plan_commit_row(row)
 
+    def _claimable_plan_row(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        plan_id: str,
+        plan_hash: str,
+        session_id: str,
+        idempotency_key: str,
+        timestamp: float,
+    ) -> dict[str, Any] | None:
+        plan = connection.execute(
+            "SELECT * FROM immutable_apply_plans WHERE plan_id = ?", (plan_id,)
+        ).fetchone()
+        if plan is None:
+            raise GraphStorePlanError(f"Unknown immutable plan: {plan_id}")
+        if str(plan["plan_hash"]) != plan_hash:
+            raise GraphStorePlanError("Plan hash does not match the stored immutable plan.")
+        if str(plan["session_id"]) != session_id:
+            raise GraphStorePlanError("Plan session does not match the current session.")
+        existing = connection.execute(
+            "SELECT * FROM plan_apply_commits WHERE idempotency_key = ?",
+            (idempotency_key,),
+        ).fetchone()
+        if existing is not None:
+            if str(existing["plan_id"]) != plan_id:
+                raise GraphStorePlanError("Idempotency key is already bound to another plan.")
+            return self._decode_plan_commit_row(existing)
+        if timestamp < float(plan["created_at"]):
+            raise GraphStorePlanError("Plan commit timestamp predates the immutable plan.")
+        if float(plan["expires_at"]) <= timestamp:
+            raise GraphStorePlanError("Immutable plan has expired.")
+        previous = connection.execute(
+            "SELECT plan_commit_id FROM plan_apply_commits WHERE plan_id = ?", (plan_id,)
+        ).fetchone()
+        if previous is not None:
+            raise GraphStorePlanError("Immutable plan has already been claimed for apply.")
+        return None
+
     def begin_plan_commit(
         self,
         *,
@@ -337,34 +416,16 @@ class GraphStorePlanMixin:
         inverse_json = self._strict_plan_json(inverse_plan, "inverse_plan") if inverse_plan is not None else None
         with self._lock, self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
-            plan = connection.execute(
-                "SELECT * FROM immutable_apply_plans WHERE plan_id = ?",
-                (plan_id,),
-            ).fetchone()
-            if plan is None:
-                raise GraphStorePlanError(f"Unknown immutable plan: {plan_id}")
-            if str(plan["plan_hash"]) != plan_hash:
-                raise GraphStorePlanError("Plan hash does not match the stored immutable plan.")
-            if str(plan["session_id"]) != session_id:
-                raise GraphStorePlanError("Plan session does not match the current session.")
-            existing = connection.execute(
-                "SELECT * FROM plan_apply_commits WHERE idempotency_key = ?",
-                (idempotency_key,),
-            ).fetchone()
+            existing = self._claimable_plan_row(
+                connection,
+                plan_id=plan_id,
+                plan_hash=plan_hash,
+                session_id=session_id,
+                idempotency_key=idempotency_key,
+                timestamp=timestamp,
+            )
             if existing is not None:
-                if str(existing["plan_id"]) != plan_id:
-                    raise GraphStorePlanError("Idempotency key is already bound to another plan.")
-                return self._decode_plan_commit_row(existing)
-            if timestamp < float(plan["created_at"]):
-                raise GraphStorePlanError("Plan commit timestamp predates the immutable plan.")
-            if float(plan["expires_at"]) <= timestamp:
-                raise GraphStorePlanError("Immutable plan has expired.")
-            previous = connection.execute(
-                "SELECT plan_commit_id FROM plan_apply_commits WHERE plan_id = ?",
-                (plan_id,),
-            ).fetchone()
-            if previous is not None:
-                raise GraphStorePlanError("Immutable plan has already been claimed for apply.")
+                return existing
             try:
                 connection.execute(
                     """

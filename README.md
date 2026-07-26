@@ -52,7 +52,7 @@ The lint gate enforces:
 
 - at most 50 public workflow tests
 - at most 1,200 physical lines per source, script, config, documentation, or fixture file
-- cyclomatic complexity 25, branches 30, returns 12, arguments 12, and statements 100 per function
+- cyclomatic complexity 12, branches 15, returns 12, arguments 12, and statements 100 per function
 
 These limits have no grandfathered files or per-file suppressions. The full release
 suite is intentionally not the default inner loop. See `docs/release-validation.md`
