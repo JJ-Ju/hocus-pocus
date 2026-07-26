@@ -20,6 +20,57 @@ class _NodeTypeGroup:
     predicate: Callable[[str, str, set[str]], bool]
 
 
+_NODE_TYPE_TAG_RULES: dict[str, tuple[tuple[tuple[str, ...], tuple[str, ...]], ...]] = {
+    "Sop": (
+        (("box", "tube", "sphere", "grid", "line", "circle", "add", "poly"), ("geometry", "primitive")),
+        (("xform", "transform", "align", "matchsize", "bound", "clip", "bend"), ("transform", "alignment")),
+        (("copy", "foreach", "block_begin", "block_end"), ("copy", "repeat")),
+        (("instance",), ("instance", "copy")),
+        (("scatter", "pointsfrom", "point", "pack", "assemble"), ("scatter", "points")),
+        (("attrib", "attribute"), ("attribute",)),
+        (("wrangle", "vop"), ("vex",)),
+        (("group", "blast", "delete", "connectivity", "name"), ("group", "selection")),
+        (("boolean", "fuse", "clean", "convert", "bridge", "bevel"), ("boolean", "cleanup")),
+        (("vdb", "volume", "cloud", "fog"), ("volume", "vdb")),
+        (("constraint", "vellum", "rbd", "collision"), ("constraint", "sim_prep")),
+        (("agent", "capture", "armature", "bone", "apex", "kinefx", "character"), ("agent", "character", "apex")),
+    ),
+    "Object": (
+        (("geo", "subnet", "instance", "extractgeo"), ("geometry", "container")),
+        (("cam", "camera", "vrcam", "stereo"), ("camera",)),
+        (("light", "hlight", "envlight", "ambient"), ("light",)),
+        (("alembic", "lopimport", "fetch", "gltf", "import"), ("import", "bridge")),
+        (
+            ("lopnet", "topnet", "dopnet", "ropnet", "matnet", "shopnet", "copnet", "chopnet"),
+            ("network_container",),
+        ),
+        (("bone", "rig", "mocap", "character"), ("rigging", "character")),
+        (("hair", "groom", "guide"), ("hair", "groom")),
+        (("path", "handle", "sticky", "sound", "null"), ("utility",)),
+    ),
+    "Lop": (
+        (("reference", "sublayer", "layer", "merge", "stage", "graft"), ("composition", "layering", "usd")),
+        (("cube", "sphere", "mesh", "capsule", "cone", "cylinder", "xform", "point", "prim"), ("prim", "transform")),
+        (("material", "assignmaterial", "editmaterial"), ("material", "assignment")),
+        (("karma", "render", "rendervar", "renderproduct", "rendersettings"), ("render", "karma")),
+        (("light", "domelight", "distantlight", "geometrylight", "sky", "portal"), ("light", "environment")),
+        (("variant", "component", "asset", "payload"), ("variant", "asset")),
+        (("sopimport", "sopmodify", "sopcreate", "sceneimport"), ("sop_bridge", "bridge")),
+        (("constraint", "followpath", "lookat", "animation"), ("constraint", "animation")),
+    ),
+    "Top": (
+        (("generator", "wedge", "merge", "null", "genericgenerator"), ("graph_core", "generator")),
+        (("python", "script", "mapper", "processor", "partitioner"), ("python", "custom")),
+        (("rop", "render", "fetch", "geometryoutput"), ("rop", "submission")),
+        (("file", "makedir", "copy", "rename", "remove", "range"), ("file_ops", "filesystem")),
+        (("filter", "partition", "sort", "split"), ("filter", "partition")),
+        (("json", "csv", "sql", "text"), ("data_io", "io")),
+        (("scheduler", "deadline", "tractor", "hqueue", "localscheduler", "inprocessscheduler"), ("scheduler",)),
+        (("usd",), ("usd",)),
+    ),
+}
+
+
 class NodeTypeOperationsMixin:
     _DISCOVERY_CATEGORY_ALIASES = {
         "obj": "Object",
@@ -125,87 +176,9 @@ class NodeTypeOperationsMixin:
         lower_name = type_name.lower()
         lower_label = label.lower()
         tags: set[str] = set()
-
-        def has(*needles: str) -> bool:
-            return any(needle in lower_name or needle in lower_label for needle in needles)
-
-        if category_name == "Sop":
-            if has("box", "tube", "sphere", "grid", "line", "circle", "add", "poly"):
-                tags.update({"geometry", "primitive"})
-            if has("xform", "transform", "align", "matchsize", "bound", "clip", "bend"):
-                tags.update({"transform", "alignment"})
-            if has("copy", "foreach", "block_begin", "block_end"):
-                tags.update({"copy", "repeat"})
-            if has("instance"):
-                tags.update({"instance", "copy"})
-            if has("scatter", "pointsfrom", "point", "pack", "assemble"):
-                tags.update({"scatter", "points"})
-            if has("attrib", "attribute"):
-                tags.add("attribute")
-            if has("wrangle", "vop"):
-                tags.add("vex")
-            if has("group", "blast", "delete", "connectivity", "name"):
-                tags.update({"group", "selection"})
-            if has("boolean", "fuse", "clean", "convert", "bridge", "bevel"):
-                tags.update({"boolean", "cleanup"})
-            if has("vdb", "volume", "cloud", "fog"):
-                tags.update({"volume", "vdb"})
-            if has("constraint", "vellum", "rbd", "collision"):
-                tags.update({"constraint", "sim_prep"})
-            if has("agent", "capture", "armature", "bone", "apex", "kinefx", "character"):
-                tags.update({"agent", "character", "apex"})
-        elif category_name == "Object":
-            if has("geo", "subnet", "instance", "extractgeo"):
-                tags.update({"geometry", "container"})
-            if has("cam", "camera", "vrcam", "stereo"):
-                tags.add("camera")
-            if has("light", "hlight", "envlight", "ambient"):
-                tags.add("light")
-            if has("alembic", "lopimport", "fetch", "gltf", "import"):
-                tags.update({"import", "bridge"})
-            if has("lopnet", "topnet", "dopnet", "ropnet", "matnet", "shopnet", "copnet", "chopnet"):
-                tags.add("network_container")
-            if has("bone", "rig", "mocap", "character"):
-                tags.update({"rigging", "character"})
-            if has("hair", "groom", "guide"):
-                tags.update({"hair", "groom"})
-            if has("path", "handle", "sticky", "sound", "null"):
-                tags.add("utility")
-        elif category_name == "Lop":
-            if has("reference", "sublayer", "layer", "merge", "stage", "graft"):
-                tags.update({"composition", "layering", "usd"})
-            if has("cube", "sphere", "mesh", "capsule", "cone", "cylinder", "xform", "point", "prim"):
-                tags.update({"prim", "transform"})
-            if has("material", "assignmaterial", "editmaterial"):
-                tags.update({"material", "assignment"})
-            if has("karma", "render", "rendervar", "renderproduct", "rendersettings"):
-                tags.update({"render", "karma"})
-            if has("light", "domelight", "distantlight", "geometrylight", "sky", "portal"):
-                tags.update({"light", "environment"})
-            if has("variant", "component", "asset", "payload"):
-                tags.update({"variant", "asset"})
-            if has("sopimport", "sopmodify", "sopcreate", "sceneimport"):
-                tags.update({"sop_bridge", "bridge"})
-            if has("constraint", "followpath", "lookat", "animation"):
-                tags.update({"constraint", "animation"})
-        elif category_name == "Top":
-            if has("generator", "wedge", "merge", "null", "genericgenerator"):
-                tags.update({"graph_core", "generator"})
-            if has("python", "script", "mapper", "processor", "partitioner"):
-                tags.update({"python", "custom"})
-            if has("rop", "render", "fetch", "geometryoutput"):
-                tags.update({"rop", "submission"})
-            if has("file", "makedir", "copy", "rename", "remove", "range"):
-                tags.update({"file_ops", "filesystem"})
-            if has("filter", "partition", "sort", "split"):
-                tags.update({"filter", "partition"})
-            if has("json", "csv", "sql", "text"):
-                tags.update({"data_io", "io"})
-            if has("scheduler", "deadline", "tractor", "hqueue", "localscheduler", "inprocessscheduler"):
-                tags.add("scheduler")
-            if has("usd"):
-                tags.add("usd")
-
+        for needles, inferred in _NODE_TYPE_TAG_RULES.get(category_name, ()):
+            if any(needle in lower_name or needle in lower_label for needle in needles):
+                tags.update(inferred)
         return tags
 
     def _all_node_type_groups(self) -> list[_NodeTypeGroup]:

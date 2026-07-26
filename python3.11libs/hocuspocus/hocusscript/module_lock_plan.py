@@ -9,6 +9,7 @@ from typing import Callable, Iterable, Mapping
 from urllib.parse import quote
 
 from .external_roots import (
+    _ValidatedExternalModuleRoots,
     _ValidatedExternalRoot,
     _native_identity,
     _recheck as _recheck_external_roots,
@@ -125,6 +126,150 @@ class _MixedModuleLockDerivation:
         )
 
 
+@dataclass(slots=True)
+class _MixedLockScanner:
+    context: ProjectContext
+    roots: _ValidatedExternalModuleRoots
+    limits: ResolvedModuleLimits
+    cancelled: Callable[[], bool] | None
+    root: Path
+    by_alias: dict
+    scanned: dict[str, _ScannedModule]
+    states: dict[str, str]
+    decisions: list[_Decision]
+    portable: set[tuple[str, str]]
+    aggregate: int = 0
+
+    def select(self, importer: _Target | None, importer_path: Path, specifier: str) -> _Target:
+        if not is_literal_import_specifier(specifier):
+            raise ProjectError("HOCUS460", "Mixed-root imports must be portable literal .hocus paths.")
+        if specifier.startswith("@"):
+            alias, separator, tail = specifier[1:].partition("/")
+            external = self.by_alias.get(alias)
+            if not separator or external is None:
+                raise ProjectError("HOCUS460", "External import alias is not explicitly approved.")
+            self.roots.root_for_alias(alias, require_manifest_pin=True)
+            if importer is not None and importer.owner_kind == "library" and importer.alias == alias:
+                raise ProjectError(
+                    "HOCUS460",
+                    "Imports within one external library must use an explicit relative path.",
+                )
+            if tail not in external.pin.entry_modules:
+                raise ProjectError("HOCUS462", "External alias imports may enter only manifest entry modules.")
+            target = _external_target(external, tail)
+        elif importer is not None and importer.owner_kind == "library":
+            if not specifier.startswith(("./", "../")):
+                raise ProjectError("HOCUS460", "Bare imports are disabled inside external libraries.")
+            external = self.by_alias[importer.alias or ""]
+            target = _external_target(
+                external,
+                _relative_external_path(external.root, importer_path.parent / specifier),
+            )
+        else:
+            selected = _select_project_module_target(
+                self.context, importer_path, specifier, cancelled=self.cancelled,
+            )
+            relative = selected.relative_to(self.root).as_posix()
+            target = _Target(
+                _project_uri(self.context.uid or "", relative), selected, relative,
+                "project", self.context.uid or "", None, self.root,
+            )
+        self.decisions.append(_Decision(importer, importer_path, specifier, target))
+        return target
+
+    def visit(self, target: _Target, depth: int) -> str:
+        _cancel(self.cancelled)
+        if depth > self.limits.import_depth:
+            raise ModuleResolutionError("HOCUS464", "Mixed module closure exceeds importDepth.")
+        state = self.states.get(target.uri)
+        if state == "visiting":
+            raise ModuleResolutionError("HOCUS463", "Mixed module imports contain a cycle.")
+        if state == "done":
+            return target.uri
+        if len(self.states) >= self.limits.module_files:
+            raise ModuleResolutionError("HOCUS464", "Mixed module closure exceeds moduleFiles.")
+        key = (f"{target.owner_kind}:{target.owner_uid}", _portable_path_key(target.relative))
+        if key in self.portable:
+            raise ProjectError("HOCUS462", "Mixed module paths alias after portable normalization.")
+        self.portable.add(key)
+        self.states[target.uri] = "visiting"
+        source, identity = _read_target(target, self.limits, self.cancelled)
+        self.aggregate += len(source)
+        if self.aggregate > self.limits.aggregate_source_bytes:
+            raise ModuleResolutionError("HOCUS464", "Mixed source closure exceeds aggregateSourceBytes.")
+        syntax = _parse(source, target.uri, graph=False)
+        imports: list[ResolvedImport] = []
+        dependencies: list[str] = []
+        local_names: set[str] = set()
+        specifiers: set[str] = set()
+        targets: set[str] = set()
+        for declaration in syntax.imports:
+            _cancel(self.cancelled)
+            if declaration.local_name in local_names or declaration.specifier in specifiers:
+                raise ProjectError("HOCUS462", "Module import names and specifiers must be unique.")
+            selected = self.select(target, target.path, declaration.specifier)
+            if selected.uri in targets:
+                raise ProjectError("HOCUS462", "Module imports cannot target one module more than once.")
+            self.visit(selected, depth + 1)
+            imports.append(ResolvedImport(
+                declaration.specifier, declaration.imported_name,
+                declaration.local_name, selected.uri, declaration.span,
+            ))
+            dependencies.append(selected.uri)
+            local_names.add(declaration.local_name)
+            specifiers.add(declaration.specifier)
+            targets.add(selected.uri)
+        self.scanned[target.uri] = _ScannedModule(
+            target, source, syntax, tuple(imports), tuple(sorted(dependencies)), identity,
+        )
+        self.states[target.uri] = "done"
+        return target.uri
+
+    def scan_entries(self, authored_entries: tuple[str, ...]) -> list[_ScannedEntry]:
+        entries: list[_ScannedEntry] = []
+        for authored in authored_entries:
+            _cancel(self.cancelled)
+            entry_path = _canonical_entry(self.context, authored)
+            relative = entry_path.relative_to(self.root).as_posix()
+            entry_key = (f"project:{self.context.uid}", _portable_path_key(relative))
+            if entry_key in self.portable:
+                raise ProjectError("HOCUS462", "Entries and modules must be portably path-unique.")
+            self.portable.add(entry_key)
+            source = _read_source(entry_path, self.limits, self.cancelled)
+            identity = _native_identity(entry_path, "entry source")
+            self.aggregate += len(source)
+            if self.aggregate > self.limits.aggregate_source_bytes:
+                raise ModuleResolutionError("HOCUS464", "Mixed source closure exceeds aggregateSourceBytes.")
+            uri = _project_uri(self.context.uid or "", relative)
+            syntax = _parse(source, uri, graph=True)
+            imports: list[ResolvedImport] = []
+            dependencies: list[str] = []
+            names: set[str] = set()
+            specifiers: set[str] = set()
+            targets: set[str] = set()
+            for declaration in syntax.imports:
+                _cancel(self.cancelled)
+                if declaration.local_name in names or declaration.specifier in specifiers:
+                    raise ProjectError("HOCUS462", "Entry import names and specifiers must be unique.")
+                selected = self.select(None, entry_path, declaration.specifier)
+                if selected.uri in targets:
+                    raise ProjectError("HOCUS462", "Entry imports cannot target one module more than once.")
+                self.visit(selected, 1)
+                imports.append(ResolvedImport(
+                    declaration.specifier, declaration.imported_name,
+                    declaration.local_name, selected.uri, declaration.span,
+                ))
+                dependencies.append(selected.uri)
+                names.add(declaration.local_name)
+                specifiers.add(declaration.specifier)
+                targets.add(selected.uri)
+            entries.append(_ScannedEntry(
+                entry_path, relative, uri, source, syntax, tuple(imports),
+                tuple(sorted(dependencies)), identity,
+            ))
+        return entries
+
+
 def plan_project_module_lock(
     project_directory: str | PathLike[str],
     entry_source_paths: Iterable[str | PathLike[str]],
@@ -180,144 +325,12 @@ def _derive_mixed_module_lock(
         _reject_reparse_components(root / authored_root, root)
         _require_exact_windows_casing(root / authored_root, root)
 
-    by_alias = {item.alias: item for item in roots.roots}
-    scanned: dict[str, _ScannedModule] = {}
-    states: dict[str, str] = {}
-    decisions: list[_Decision] = []
-    aggregate = 0
-    portable: set[tuple[str, str]] = set()
-
-    def select(importer: _Target | None, importer_path: Path, specifier: str) -> _Target:
-        if not is_literal_import_specifier(specifier):
-            raise ProjectError("HOCUS460", "Mixed-root imports must be portable literal .hocus paths.")
-        if specifier.startswith("@"):
-            alias, separator, tail = specifier[1:].partition("/")
-            external = by_alias.get(alias)
-            if not separator or external is None:
-                raise ProjectError("HOCUS460", "External import alias is not explicitly approved.")
-            roots.root_for_alias(alias, require_manifest_pin=True)
-            if (
-                importer is not None
-                and importer.owner_kind == "library"
-                and importer.alias == alias
-            ):
-                raise ProjectError(
-                    "HOCUS460",
-                    "Imports within one external library must use an explicit relative path.",
-                )
-            if tail not in external.pin.entry_modules:
-                raise ProjectError("HOCUS462", "External alias imports may enter only manifest entry modules.")
-            target = _external_target(external, tail)
-        elif importer is not None and importer.owner_kind == "library":
-            if not specifier.startswith(("./", "../")):
-                raise ProjectError("HOCUS460", "Bare imports are disabled inside external libraries.")
-            external = by_alias[importer.alias or ""]
-            target = _external_target(
-                external,
-                _relative_external_path(external.root, importer_path.parent / specifier),
-            )
-        else:
-            selected = _select_project_module_target(
-                context, importer_path, specifier, cancelled=cancelled,
-            )
-            relative = selected.relative_to(root).as_posix()
-            target = _Target(
-                _project_uri(context.uid or "", relative), selected, relative,
-                "project", context.uid or "", None, root,
-            )
-        decisions.append(_Decision(importer, importer_path, specifier, target))
-        return target
-
-    def visit(target: _Target, depth: int) -> str:
-        nonlocal aggregate
-        _cancel(cancelled)
-        if depth > selected_limits.import_depth:
-            raise ModuleResolutionError("HOCUS464", "Mixed module closure exceeds importDepth.")
-        state = states.get(target.uri)
-        if state == "visiting":
-            raise ModuleResolutionError("HOCUS463", "Mixed module imports contain a cycle.")
-        if state == "done":
-            return target.uri
-        if len(states) >= selected_limits.module_files:
-            raise ModuleResolutionError("HOCUS464", "Mixed module closure exceeds moduleFiles.")
-        key = (f"{target.owner_kind}:{target.owner_uid}", _portable_path_key(target.relative))
-        if key in portable:
-            raise ProjectError("HOCUS462", "Mixed module paths alias after portable normalization.")
-        portable.add(key)
-        states[target.uri] = "visiting"
-        source, identity = _read_target(target, selected_limits, cancelled)
-        aggregate += len(source)
-        if aggregate > selected_limits.aggregate_source_bytes:
-            raise ModuleResolutionError("HOCUS464", "Mixed source closure exceeds aggregateSourceBytes.")
-        syntax = _parse(source, target.uri, graph=False)
-        imports: list[ResolvedImport] = []
-        dependencies: list[str] = []
-        local_names: set[str] = set()
-        specifiers: set[str] = set()
-        targets: set[str] = set()
-        for declaration in syntax.imports:
-            _cancel(cancelled)
-            if declaration.local_name in local_names or declaration.specifier in specifiers:
-                raise ProjectError("HOCUS462", "Module import names and specifiers must be unique.")
-            selected = select(target, target.path, declaration.specifier)
-            if selected.uri in targets:
-                raise ProjectError("HOCUS462", "Module imports cannot target one module more than once.")
-            visit(selected, depth + 1)
-            imports.append(ResolvedImport(
-                declaration.specifier, declaration.imported_name,
-                declaration.local_name, selected.uri, declaration.span,
-            ))
-            dependencies.append(selected.uri)
-            local_names.add(declaration.local_name)
-            specifiers.add(declaration.specifier)
-            targets.add(selected.uri)
-        scanned[target.uri] = _ScannedModule(
-            target, source, syntax, tuple(imports), tuple(sorted(dependencies)), identity,
-        )
-        states[target.uri] = "done"
-        return target.uri
-
-    entries: list[_ScannedEntry] = []
-    for authored in authored_entries:
-        _cancel(cancelled)
-        entry_path = _canonical_entry(context, authored)
-        relative = entry_path.relative_to(root).as_posix()
-        entry_key = (f"project:{context.uid}", _portable_path_key(relative))
-        if entry_key in portable:
-            raise ProjectError("HOCUS462", "Entries and modules must be portably path-unique.")
-        portable.add(entry_key)
-        source = _read_source(entry_path, selected_limits, cancelled)
-        identity = _native_identity(entry_path, "entry source")
-        aggregate += len(source)
-        if aggregate > selected_limits.aggregate_source_bytes:
-            raise ModuleResolutionError("HOCUS464", "Mixed source closure exceeds aggregateSourceBytes.")
-        uri = _project_uri(context.uid, relative)
-        syntax = _parse(source, uri, graph=True)
-        imports: list[ResolvedImport] = []
-        dependencies: list[str] = []
-        names: set[str] = set()
-        specifiers: set[str] = set()
-        targets: set[str] = set()
-        for declaration in syntax.imports:
-            _cancel(cancelled)
-            if declaration.local_name in names or declaration.specifier in specifiers:
-                raise ProjectError("HOCUS462", "Entry import names and specifiers must be unique.")
-            selected = select(None, entry_path, declaration.specifier)
-            if selected.uri in targets:
-                raise ProjectError("HOCUS462", "Entry imports cannot target one module more than once.")
-            visit(selected, 1)
-            imports.append(ResolvedImport(
-                declaration.specifier, declaration.imported_name,
-                declaration.local_name, selected.uri, declaration.span,
-            ))
-            dependencies.append(selected.uri)
-            names.add(declaration.local_name)
-            specifiers.add(declaration.specifier)
-            targets.add(selected.uri)
-        entries.append(_ScannedEntry(
-            entry_path, relative, uri, source, syntax, tuple(imports),
-            tuple(sorted(dependencies)), identity,
-        ))
+    scanner = _MixedLockScanner(
+        context, roots, selected_limits, cancelled, root,
+        {item.alias: item for item in roots.roots}, {}, {}, [], set(),
+    )
+    entries = scanner.scan_entries(authored_entries)
+    scanned = scanner.scanned
 
     _validate_imported_names(entries, scanned)
     records = _derive_records(context, roots, scanned, selected_limits, cancelled)
@@ -337,8 +350,8 @@ def _derive_mixed_module_lock(
             roots,
             entries,
             scanned,
-            decisions,
-            select,
+            scanner.decisions,
+            scanner.select,
             selected_limits,
             cancelled,
         )

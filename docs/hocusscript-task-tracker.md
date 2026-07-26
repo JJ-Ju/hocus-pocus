@@ -15,6 +15,8 @@ Roadmap: `docs/hocusscript-roadmap.md`
 - Active development uses one relevant behavior smoke plus the correctness linter. Full-suite and adversarial qualification belong to H4, stabilized integration checkpoints, or release validation.
 - The tests are `unittest`-native. Do not run the same suite again under pytest unless pytest compatibility itself is under test.
 - The entire repository is capped at 50 tests. Tests must exercise public behavior or a complete user workflow; implementation helpers, schema field matrices, duplicated runner coverage, and assertion-count inflation are not accepted.
+- Source, script, config, documentation, and fixture files are capped at 1,200 physical lines.
+- Ruff enforces cyclomatic complexity 25, branches 30, returns 12, arguments 12, and statements 100 per function. No existing file is grandfathered and complexity suppressions do not count as compliance.
 
 ## 2. Current Slice
 
@@ -22,6 +24,7 @@ Current milestone: HS6 modules and studio libraries in progress; Batches A-G5 an
 Current scope: language `0.2` is frozen; language `0.3` has its exact frontend, strict v4/v2/`0.4` carriers, and isolated pure whole-body validator/selected expander. H3-H4 native integration and adversarial/full qualification remain pending; every project resolver/writer, compiler dispatcher, CLI/editor, document/live consumer stays disabled for `0.3`, and MCP remains content-only with no `.hocus` file/project/root surface
 Live mutation: available only through the completed HS4 guarded `document.apply_plan` path; HS5 format/completion/export tools are observational
 Current test catalogue: 34 public workflow scenarios in four files; lint enforces the repository-wide ceiling of 50
+Current structural gate: every checked file is at or below 1,200 lines and every Python function passes the configured complexity limits
 
 Active-development lint command:
 

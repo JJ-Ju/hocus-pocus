@@ -57,140 +57,131 @@ class ResourceOperationsMixin:
         uri: str,
         context: RequestContext,
     ) -> dict[str, object] | None:
-        if uri == "houdini://documents/scene":
-            return self.read_document_scene(context)
-        if uri == "houdini://documents/schema/network-document/v1":
-            return self.read_document_schema(context)
-        if uri.startswith("houdini://documents/network/"):
-            raw = uri[len("houdini://documents/network/") :].strip("/")
-            if raw:
-                node_path = self._dynamic_node_uri_to_path(f"houdini://nodes/{raw}")
-                if node_path is not None:
-                    return self.read_document_network(node_path, context)
-        if uri.startswith("houdini://documents/checkouts/"):
-            checkout_id = uri[len("houdini://documents/checkouts/") :].strip("/")
-            if checkout_id:
-                return self.read_document_checkout(checkout_id, context)
-        if uri.startswith("houdini://documents/diagnostics/"):
-            checkout_id = uri[len("houdini://documents/diagnostics/") :].strip("/")
-            if checkout_id:
-                return self.read_document_diagnostics(checkout_id, context)
-        if uri.startswith("houdini://documents/previews/"):
-            preview_id = uri[len("houdini://documents/previews/") :].strip("/")
-            if preview_id:
-                return self.read_document_preview(preview_id, context)
-        if uri.startswith("houdini://documents/plans/"):
-            plan_id = uri[len("houdini://documents/plans/") :].strip("/")
-            if plan_id:
-                return self.read_apply_plan(plan_id, context)
-        if uri == "houdini://graph/scene":
-            return self.read_graph_scene(context)
-        if uri == "houdini://graph/index":
-            return self.read_graph_index(context)
-        if uri == "houdini://dependencies/scene":
-            return self.read_scene_dependencies(context)
-        if uri == "houdini://caches/topology":
-            return self.read_cache_topology(context)
-        if uri == "houdini://packages/preview":
-            return self.read_package_preview(context)
-        if uri.startswith("houdini://usd/stage/"):
-            raw = uri[len("houdini://usd/stage/") :].strip("/")
-            if raw:
-                node_path = self._dynamic_node_uri_to_path(f"houdini://nodes/{raw}")
-                if node_path is not None:
-                    return self.read_usd_stage_summary(node_path, context)
-        if uri.startswith("houdini://pdg/graph/"):
-            raw = uri[len("houdini://pdg/graph/") :].strip("/")
-            if raw:
-                node_path = self._dynamic_node_uri_to_path(f"houdini://nodes/{raw}")
-                if node_path is not None:
-                    return self.read_pdg_graph_state(node_path, context)
-        if uri == "houdini://scene/events":
-            return self.read_scene_events(context)
-        if uri.startswith("houdini://renders/graph/"):
-            raw = uri[len("houdini://renders/graph/") :].strip("/")
-            if raw:
-                node_path = self._dynamic_node_uri_to_path(f"houdini://nodes/{raw}")
-                if node_path is not None:
-                    return self.read_render_graph(node_path, context)
-        if uri.startswith("houdini://graph/subgraph/"):
-            raw = uri[len("houdini://graph/subgraph/") :].strip("/")
-            if raw:
-                root_path = self._dynamic_node_uri_to_path(f"houdini://nodes/{raw}")
-                if root_path is not None:
-                    return self._resource_response(
-                        uri,
-                        self._call_live(
-                            lambda root_path=root_path: self._graph_subgraph_payload(self._graph_snapshot(), root_path),
-                            context,
-                        ),
-                    )
-        if uri.startswith("houdini://graph/dependencies/"):
-            raw = uri[len("houdini://graph/dependencies/") :].strip("/")
-            if raw:
-                node_path = self._dynamic_node_uri_to_path(f"houdini://nodes/{raw}")
-                if node_path is not None:
-                    return self._resource_response(
-                        uri,
-                        self._call_live(
-                            lambda node_path=node_path: self._graph_dependency_payload(self._graph_snapshot(), node_path),
-                            context,
-                        ),
-                    )
-        if uri.startswith("houdini://graph/references/"):
-            raw = uri[len("houdini://graph/references/") :].strip("/")
-            if raw:
-                node_path = self._dynamic_node_uri_to_path(f"houdini://nodes/{raw}")
-                if node_path is not None:
-                    return self._resource_response(
-                        uri,
-                        self._call_live(
-                            lambda node_path=node_path: self._graph_reference_payload(self._graph_snapshot(), node_path),
-                            context,
-                        ),
-                    )
+        resolvers = (
+            self._read_document_dynamic_resource,
+            self._read_product_dynamic_resource,
+            self._read_graph_dynamic_resource,
+            self._read_task_or_node_dynamic_resource,
+        )
+        for resolver in resolvers:
+            payload = resolver(uri, context)
+            if payload is not None:
+                return payload
+        return None
 
+    def _read_document_dynamic_resource(
+        self,
+        uri: str,
+        context: RequestContext,
+    ) -> dict[str, object] | None:
+        exact = {
+            "houdini://documents/scene": self.read_document_scene,
+            "houdini://documents/schema/network-document/v1": self.read_document_schema,
+        }
+        reader = exact.get(uri)
+        if reader is not None:
+            return reader(context)
+        prefixes = (
+            ("houdini://documents/checkouts/", self.read_document_checkout),
+            ("houdini://documents/diagnostics/", self.read_document_diagnostics),
+            ("houdini://documents/previews/", self.read_document_preview),
+            ("houdini://documents/plans/", self.read_apply_plan),
+        )
+        for prefix, dynamic_reader in prefixes:
+            identifier = uri.removeprefix(prefix).strip("/") if uri.startswith(prefix) else ""
+            if identifier:
+                return dynamic_reader(identifier, context)
+        prefix = "houdini://documents/network/"
+        if uri.startswith(prefix):
+            raw = uri.removeprefix(prefix).strip("/")
+            node_path = self._dynamic_node_uri_to_path(f"houdini://nodes/{raw}") if raw else None
+            if node_path is not None:
+                return self.read_document_network(node_path, context)
+        return None
+
+    def _read_product_dynamic_resource(
+        self,
+        uri: str,
+        context: RequestContext,
+    ) -> dict[str, object] | None:
+        exact = {
+            "houdini://graph/scene": self.read_graph_scene,
+            "houdini://graph/index": self.read_graph_index,
+            "houdini://dependencies/scene": self.read_scene_dependencies,
+            "houdini://caches/topology": self.read_cache_topology,
+            "houdini://packages/preview": self.read_package_preview,
+            "houdini://scene/events": self.read_scene_events,
+        }
+        reader = exact.get(uri)
+        if reader is not None:
+            return reader(context)
+        prefixed = (
+            ("houdini://usd/stage/", self.read_usd_stage_summary),
+            ("houdini://pdg/graph/", self.read_pdg_graph_state),
+            ("houdini://renders/graph/", self.read_render_graph),
+        )
+        for prefix, dynamic_reader in prefixed:
+            raw = uri.removeprefix(prefix).strip("/") if uri.startswith(prefix) else ""
+            node_path = self._dynamic_node_uri_to_path(f"houdini://nodes/{raw}") if raw else None
+            if node_path is not None:
+                return dynamic_reader(node_path, context)
+        return None
+
+    def _read_graph_dynamic_resource(
+        self,
+        uri: str,
+        context: RequestContext,
+    ) -> dict[str, object] | None:
+        routes = (
+            ("houdini://graph/subgraph/", self._graph_subgraph_payload),
+            ("houdini://graph/dependencies/", self._graph_dependency_payload),
+            ("houdini://graph/references/", self._graph_reference_payload),
+        )
+        for prefix, payload_builder in routes:
+            raw = uri.removeprefix(prefix).strip("/") if uri.startswith(prefix) else ""
+            node_path = self._dynamic_node_uri_to_path(f"houdini://nodes/{raw}") if raw else None
+            if node_path is not None:
+                return self._resource_response(
+                    uri,
+                    self._call_live(
+                        lambda node_path=node_path, payload_builder=payload_builder: payload_builder(
+                            self._graph_snapshot(), node_path
+                        ),
+                        context,
+                    ),
+                )
+        return None
+
+    def _read_task_or_node_dynamic_resource(
+        self,
+        uri: str,
+        context: RequestContext,
+    ) -> dict[str, object] | None:
         task_log_id = self._dynamic_task_id(uri, "/log")
         if task_log_id is not None:
             payload = self._tasks.log_payload(task_log_id)
             if payload is not None:
                 return self._resource_response(uri, payload)
-
         task_id = self._dynamic_task_id(uri)
         if task_id is not None:
             payload = self._tasks.snapshot(task_id)
             if payload is not None:
                 return self._resource_response(uri, payload)
-
-        geometry_path = self._dynamic_node_uri_to_path(uri, "/geometry-summary")
-        if geometry_path is not None:
-            return self._resource_response(
-                uri,
-                self._call_live(
-                    lambda: self._node_geometry_resource_impl(geometry_path),
-                    context,
-                ),
-            )
-
-        parms_path = self._dynamic_node_uri_to_path(uri, "/parms")
-        if parms_path is not None:
-            return self._resource_response(
-                uri,
-                self._call_live(
-                    lambda: self._node_parms_resource_impl(parms_path),
-                    context,
-                ),
-            )
-
-        node_path = self._dynamic_node_uri_to_path(uri)
-        if node_path is not None:
-            return self._resource_response(
-                uri,
-                self._call_live(
-                    lambda: self._node_resource_impl(node_path),
-                    context,
-                ),
-            )
+        node_routes = (
+            ("/geometry-summary", self._node_geometry_resource_impl),
+            ("/parms", self._node_parms_resource_impl),
+            (None, self._node_resource_impl),
+        )
+        for suffix, payload_builder in node_routes:
+            node_path = self._dynamic_node_uri_to_path(uri, suffix) if suffix else self._dynamic_node_uri_to_path(uri)
+            if node_path is not None:
+                return self._resource_response(
+                    uri,
+                    self._call_live(
+                        lambda node_path=node_path, payload_builder=payload_builder: payload_builder(node_path),
+                        context,
+                    ),
+                )
         return None
 
     def resource_templates_payload(self) -> list[dict[str, object]]:

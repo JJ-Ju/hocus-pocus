@@ -1,4 +1,13 @@
 target-version = "py311"
 
 [lint]
-select = ["E9", "F"]
+select = ["E9", "F", "C901", "PLR0911", "PLR0912", "PLR0913", "PLR0915"]
+
+[lint.mccabe]
+max-complexity = 25
+
+[lint.pylint]
+max-args = 12
+max-branches = 30
+max-returns = 12
+max-statements = 100

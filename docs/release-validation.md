@@ -1,6 +1,6 @@
 # HocusPocus Release Validation
 
-This document defines the minimum validation gates for a build to be treated as aligned, installable, and releasable. These are qualification gates, not the normal active-development loop; during implementation, run Ruff plus the narrowest relevant behavior or user-workflow smoke. The complete repository catalogue must remain at or below 50 public scenarios.
+This document defines the minimum validation gates for a build to be treated as aligned, installable, and releasable. These are qualification gates, not the normal active-development loop; during implementation, run Ruff plus the narrowest relevant behavior or user-workflow smoke. The complete repository catalogue must remain at or below 50 public scenarios, every checked file at or below 1,200 physical lines, and every Python function within the configured complexity ceilings.
 
 ## 1. Build Alignment Rule
 
@@ -38,6 +38,8 @@ Required result:
 
 - Ruff reports no correctness violations
 - the test catalogue remains at or below the enforced 50-test ceiling
+- no checked file exceeds 1,200 physical lines
+- cyclomatic, branch, return, argument, and statement complexity limits pass without suppressions
 - no compile failures
 
 ### Gate C. Startup

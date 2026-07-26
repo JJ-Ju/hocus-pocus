@@ -266,94 +266,26 @@ def _validate_resolved_module_dag_common(
     )
     _validate_import_correspondence(entry_syntax, supplied_entry_imports, entry_source_uri)
 
-    supplied = _take_bounded(modules, selected_limits.module_files, "modules", cancelled)
     lock_records = _validated_lock_records(lock_verification, selected_limits, cancelled)
-    by_uri: dict[str, ResolvedModuleRecord] = {}
     portable_paths: set[tuple[str, str]] = {
         (f"project:{project_uid}", _portable_path_key(entry_identity[2]))
     }
-    for index, envelope in enumerate(supplied):
-        _checkpoint(cancelled)
-        if not isinstance(envelope, ModuleSourceEnvelope):
-            _fail("HOCUS460", "Each module must be a ModuleSourceEnvelope.", index=index)
-        if envelope.uri == entry_source_uri:
-            _fail("HOCUS462", "Entry source cannot also be supplied as a module.", uri=envelope.uri)
-        lock_record = lock_records.get(envelope.uri)
-        if lock_record is None:
-            _fail("HOCUS462", "Supplied module is absent from the verified lock.", uri=envelope.uri)
-        if lock_record.external_alias is not None and not mixed:
-            _fail("HOCUS460", "External module aliases remain disabled in Batch B.", uri=envelope.uri)
-        record = _validate_module(
-            envelope,
-            lock_record,
-            project_uid,
-            selected_limits,
-            cancelled,
-            mixed=mixed,
-            mixed_pins=mixed_pins,
-        )
-        uri = record.dependency.uri
-        path_key = (
-            f"{record.dependency.origin}:{record.dependency.owner_uid}",
-            _portable_path_key(record.dependency.relative_path),
-        )
-        if uri in by_uri or path_key in portable_paths:
-            _fail("HOCUS462", "Module URIs and paths must be portably unique.", uri=uri)
-        by_uri[uri] = record
-        portable_paths.add(path_key)
-        aggregate_bytes += len(record.source)
-        if aggregate_bytes > selected_limits.aggregate_source_bytes:
-            _fail("HOCUS464", "Aggregate module source exceeds aggregateSourceBytes.")
-
-    for uri in sorted(by_uri):
-        _checkpoint(cancelled)
-        record = by_uri[uri]
-        dependency_targets = record.dependency.dependencies
-        import_targets = tuple(sorted(item.target_uri for item in record.imports))
-        if import_targets != dependency_targets:
-            _fail("HOCUS462", "Literal imports do not exactly match locked dependency URIs.", uri=uri)
-        local_names: set[str] = set()
-        specifiers: set[str] = set()
-        if len(record.imports) > selected_limits.module_files:
-            _fail("HOCUS464", "Module imports exceed moduleFiles.", uri=uri)
-        for item in record.imports:
-            _checkpoint(cancelled)
-            if item.target_uri not in by_uri:
-                _fail("HOCUS462", "Literal import targets an unresolved module.", uri=uri, target=item.target_uri)
-            target = by_uri[item.target_uri].dependency
-            if item.imported_name != target.module_name:
-                _fail("HOCUS462", "Imported module name conflicts with the target interface.", uri=uri)
-            if item.local_name in local_names or item.specifier in specifiers:
-                _fail("HOCUS462", "Literal import names and specifiers must be unique within a module.", uri=uri)
-            local_names.add(item.local_name)
-            specifiers.add(item.specifier)
-            if item.specifier.startswith("@") and not mixed:
-                _fail("HOCUS460", "External module aliases remain disabled in Batch B.", uri=uri)
-            if mixed:
-                _validate_mixed_import_edge(record.dependency, item, target, mixed_pins)
-
-    entry_targets = _validate_entry_imports(
-        supplied_entry_imports,
-        by_uri,
-        cancelled,
+    by_uri = _validate_supplied_modules(
+        modules,
+        lock_records=lock_records,
+        project_uid=project_uid,
+        entry_source_uri=entry_source_uri,
+        portable_paths=portable_paths,
+        aggregate_bytes=aggregate_bytes,
+        limits=selected_limits,
+        cancelled=cancelled,
         mixed=mixed,
         mixed_pins=mixed_pins,
     )
-    reachable: set[str] = set()
-    pending = list(reversed(sorted(entry_targets)))
-    while pending:
-        _checkpoint(cancelled)
-        uri = pending.pop()
-        if uri in reachable:
-            continue
-        record = by_uri.get(uri)
-        if record is None:
-            _fail("HOCUS462", "Entry-transitive module is missing.", target=uri)
-        reachable.add(uri)
-        pending.extend(reversed(record.dependency.dependencies))
-    unreachable = sorted(set(by_uri) - reachable)
-    if unreachable:
-        _fail("HOCUS462", "Supplied modules must be reachable from entry imports.", uri=unreachable[0])
+    _validate_module_import_graph(
+        by_uri, supplied_entry_imports, selected_limits, cancelled,
+        mixed=mixed, mixed_pins=mixed_pins,
+    )
 
     ordered_uris = _validate_dag(by_uri, selected_limits.import_depth, cancelled)
     for uri in ordered_uris:
@@ -399,6 +331,106 @@ def _validate_resolved_module_dag_common(
             catalog_fingerprint=catalog_fingerprint,
         ),
     )
+
+
+def _validate_supplied_modules(
+    modules: Iterable[ModuleSourceEnvelope],
+    *,
+    lock_records: Mapping[str, ModuleLockRecord],
+    project_uid: str,
+    entry_source_uri: str,
+    portable_paths: set[tuple[str, str]],
+    aggregate_bytes: int,
+    limits: ResolvedModuleLimits,
+    cancelled: Callable[[], bool] | None,
+    mixed: bool,
+    mixed_pins: Mapping[str, Mapping[str, Any]],
+) -> dict[str, ResolvedModuleRecord]:
+    supplied = _take_bounded(modules, limits.module_files, "modules", cancelled)
+    by_uri: dict[str, ResolvedModuleRecord] = {}
+    total_bytes = aggregate_bytes
+    for index, envelope in enumerate(supplied):
+        _checkpoint(cancelled)
+        if not isinstance(envelope, ModuleSourceEnvelope):
+            _fail("HOCUS460", "Each module must be a ModuleSourceEnvelope.", index=index)
+        if envelope.uri == entry_source_uri:
+            _fail("HOCUS462", "Entry source cannot also be supplied as a module.", uri=envelope.uri)
+        lock_record = lock_records.get(envelope.uri)
+        if lock_record is None:
+            _fail("HOCUS462", "Supplied module is absent from the verified lock.", uri=envelope.uri)
+        if lock_record.external_alias is not None and not mixed:
+            _fail("HOCUS460", "External module aliases remain disabled in Batch B.", uri=envelope.uri)
+        record = _validate_module(
+            envelope, lock_record, project_uid, limits, cancelled,
+            mixed=mixed, mixed_pins=mixed_pins,
+        )
+        uri = record.dependency.uri
+        path_key = (
+            f"{record.dependency.origin}:{record.dependency.owner_uid}",
+            _portable_path_key(record.dependency.relative_path),
+        )
+        if uri in by_uri or path_key in portable_paths:
+            _fail("HOCUS462", "Module URIs and paths must be portably unique.", uri=uri)
+        by_uri[uri] = record
+        portable_paths.add(path_key)
+        total_bytes += len(record.source)
+        if total_bytes > limits.aggregate_source_bytes:
+            _fail("HOCUS464", "Aggregate module source exceeds aggregateSourceBytes.")
+    return by_uri
+
+
+def _validate_module_import_graph(
+    by_uri: Mapping[str, ResolvedModuleRecord],
+    entry_imports: tuple[ResolvedImport, ...],
+    limits: ResolvedModuleLimits,
+    cancelled: Callable[[], bool] | None,
+    *,
+    mixed: bool,
+    mixed_pins: Mapping[str, Mapping[str, Any]],
+) -> None:
+    for uri in sorted(by_uri):
+        _checkpoint(cancelled)
+        record = by_uri[uri]
+        import_targets = tuple(sorted(item.target_uri for item in record.imports))
+        if import_targets != record.dependency.dependencies:
+            _fail("HOCUS462", "Literal imports do not exactly match locked dependency URIs.", uri=uri)
+        local_names: set[str] = set()
+        specifiers: set[str] = set()
+        if len(record.imports) > limits.module_files:
+            _fail("HOCUS464", "Module imports exceed moduleFiles.", uri=uri)
+        for item in record.imports:
+            _checkpoint(cancelled)
+            if item.target_uri not in by_uri:
+                _fail("HOCUS462", "Literal import targets an unresolved module.", uri=uri, target=item.target_uri)
+            target = by_uri[item.target_uri].dependency
+            if item.imported_name != target.module_name:
+                _fail("HOCUS462", "Imported module name conflicts with the target interface.", uri=uri)
+            if item.local_name in local_names or item.specifier in specifiers:
+                _fail("HOCUS462", "Literal import names and specifiers must be unique within a module.", uri=uri)
+            local_names.add(item.local_name)
+            specifiers.add(item.specifier)
+            if item.specifier.startswith("@") and not mixed:
+                _fail("HOCUS460", "External module aliases remain disabled in Batch B.", uri=uri)
+            if mixed:
+                _validate_mixed_import_edge(record.dependency, item, target, mixed_pins)
+    entry_targets = _validate_entry_imports(
+        entry_imports, by_uri, cancelled, mixed=mixed, mixed_pins=mixed_pins,
+    )
+    reachable: set[str] = set()
+    pending = list(reversed(sorted(entry_targets)))
+    while pending:
+        _checkpoint(cancelled)
+        uri = pending.pop()
+        if uri in reachable:
+            continue
+        record = by_uri.get(uri)
+        if record is None:
+            _fail("HOCUS462", "Entry-transitive module is missing.", target=uri)
+        reachable.add(uri)
+        pending.extend(reversed(record.dependency.dependencies))
+    unreachable = sorted(set(by_uri) - reachable)
+    if unreachable:
+        _fail("HOCUS462", "Supplied modules must be reachable from entry imports.", uri=unreachable[0])
 
 
 def module_source_digest(source: bytes) -> str:

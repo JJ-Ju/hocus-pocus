@@ -48,9 +48,15 @@ powershell -ExecutionPolicy Bypass -File .\scripts\lint.ps1
 python .\tests\test_hocusscript_control_scenarios.py -q
 ```
 
-The repository test catalogue is capped at 50 public workflow scenarios; the lint
-script enforces that ceiling. The full release suite is intentionally not the
-default inner loop. See `docs/release-validation.md` for qualification gates.
+The lint gate enforces:
+
+- at most 50 public workflow tests
+- at most 1,200 physical lines per source, script, config, documentation, or fixture file
+- cyclomatic complexity 25, branches 30, returns 12, arguments 12, and statements 100 per function
+
+These limits have no grandfathered files or per-file suppressions. The full release
+suite is intentionally not the default inner loop. See `docs/release-validation.md`
+for qualification gates.
 
 ## Connect Codex on Windows
 

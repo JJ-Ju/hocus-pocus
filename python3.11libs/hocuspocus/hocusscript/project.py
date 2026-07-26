@@ -144,6 +144,12 @@ class ProjectError(ValueError):
         }
 
 
+from .project_manifest import (
+    _validate_manifest,
+    _validate_relative_artifact_path,
+)
+
+
 @dataclass(frozen=True, slots=True)
 class ProjectContext:
     root: Path
@@ -811,181 +817,6 @@ def _atomic_write_lock(
         except OSError:
             # Cleanup cannot invalidate an already successful atomic publish.
             pass
-
-
-def _validate_manifest(
-    payload: Any,
-) -> tuple[
-    int, dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any] | None,
-    dict[str, dict[str, Any]],
-]:
-    if not isinstance(payload, dict):
-        raise ProjectError("HOCUS405", f"{PROJECT_MANIFEST_NAME} has unknown top-level fields.")
-    schema_version = payload.get("schema_version")
-    allowed_top_level = {"schema_version", "project", "language", "lock"}
-    if schema_version in {2, 3, 4}:
-        allowed_top_level.add("catalog")
-    if schema_version in {3, 4}:
-        allowed_top_level.add("external_aliases")
-    if set(payload) - allowed_top_level:
-        raise ProjectError("HOCUS405", f"{PROJECT_MANIFEST_NAME} has unknown top-level fields.")
-    if type(schema_version) is not int or schema_version not in {1, 2, 3, 4} or not isinstance(payload.get("project"), dict):
-        raise ProjectError("HOCUS405", f"{PROJECT_MANIFEST_NAME} requires schema_version = 1, 2, 3, or 4 and a [project] table.")
-    project = payload["project"]
-    project_fields = {"uid", "name", "source_directories"}
-    if schema_version in {3, 4}:
-        project_fields.add("module_directories")
-    _require_table_fields(project, project_fields, "project")
-    uid = project.get("uid")
-    if not isinstance(uid, str) or not PROJECT_UID_PATTERN.fullmatch(uid):
-        raise ProjectError("HOCUS406", "Project uid must match ^[a-z0-9][a-z0-9.-]{0,127}$.", details={"uid": uid})
-    name = project.get("name")
-    if name is not None:
-        if (
-            not isinstance(name, str)
-            or not name.strip()
-            or name != name.strip()
-            or len(name) > 256
-            or any(ord(char) < 32 for char in name)
-        ):
-            raise ProjectError("HOCUS407", "Project name must be a bounded non-empty string without control characters.")
-    _validate_source_directory_values(project.get("source_directories", ["."]))
-    if schema_version in {3, 4}:
-        _validate_module_directory_values(project.get("module_directories", []))
-    language = payload.get("language", {})
-    lock = payload.get("lock", {})
-    _require_table_fields(language, {"version"}, "language")
-    _require_table_fields(lock, {"policy", "path"} if schema_version in {2, 3, 4} else {"policy"}, "lock")
-    version = language.get("version", "0.1")
-    if schema_version == 3:
-        version_valid = version == "0.2"
-    elif schema_version == 4:
-        version_valid = version == "0.3"
-    else:
-        version_valid = isinstance(version, str) and version in SUPPORTED_LANGUAGE_VERSIONS
-    if not version_valid:
-        raise ProjectError("HOCUS421", "Project language version is unsupported.", details={"languageVersion": version})
-    policy = lock.get("policy", "optional")
-    if not isinstance(policy, str) or policy not in {"optional", "required"}:
-        raise ProjectError("HOCUS405", "lock.policy must be optional or required.")
-    if schema_version in {2, 3, 4} and policy != "required":
-        raise ProjectError("HOCUS405", f"Manifest schema v{schema_version} requires lock.policy = required.")
-    if schema_version in {2, 3, 4} and "path" not in lock:
-        raise ProjectError("HOCUS405", f"Manifest schema v{schema_version} requires lock.path.")
-    if "path" in lock:
-        _validate_relative_artifact_path(lock["path"], "lock.path")
-        if not lock["path"].endswith(".json"):
-            raise ProjectError("HOCUS405", "lock.path must identify a .json file.")
-    catalog: dict[str, Any] | None = None
-    if schema_version in {2, 3, 4}:
-        catalog = payload.get("catalog")
-        _require_table_fields(catalog, {"path"}, "catalog")
-        if "path" not in catalog:
-            raise ProjectError("HOCUS405", f"Manifest schema v{schema_version} requires catalog.path.")
-        _validate_relative_artifact_path(catalog["path"], "catalog.path")
-        if not catalog["path"].endswith(".json"):
-            raise ProjectError("HOCUS405", "catalog.path must identify a .json file.")
-        if catalog["path"].casefold() == lock.get("path", PROJECT_LOCK_NAME).casefold():
-            raise ProjectError("HOCUS405", "catalog.path and lock.path must be different files.")
-    aliases: dict[str, dict[str, Any]] = {}
-    if schema_version in {3, 4}:
-        raw_aliases = payload.get("external_aliases", {})
-        if not isinstance(raw_aliases, dict) or len(raw_aliases) > MAX_EXTERNAL_ALIASES:
-            raise ProjectError("HOCUS450", "external_aliases must be a bounded table.")
-        folded: set[str] = set()
-        library_identities: dict[str, tuple[str, str | None]] = {}
-        for alias, alias_record in raw_aliases.items():
-            if not isinstance(alias, str) or not EXTERNAL_ALIAS_PATTERN.fullmatch(alias):
-                raise ProjectError("HOCUS450", "External alias names must be bounded identifiers.")
-            if alias.casefold() in folded:
-                raise ProjectError("HOCUS450", "External aliases must be unique after case normalization.")
-            expected_fields = {"library_uid", "version", "module_manifest_digest"}
-            if not isinstance(alias_record, dict) or set(alias_record) - expected_fields:
-                raise ProjectError("HOCUS450", "External alias records have unknown fields.")
-            library_uid = alias_record.get("library_uid")
-            version = alias_record.get("version")
-            manifest_pin = alias_record.get("module_manifest_digest")
-            if not isinstance(library_uid, str) or not PROJECT_UID_PATTERN.fullmatch(library_uid):
-                raise ProjectError("HOCUS450", "External alias library UIDs are invalid.")
-            if not isinstance(version, str) or not SEMANTIC_VERSION_PATTERN.fullmatch(version):
-                raise ProjectError("HOCUS450", "External alias versions must be semantic versions.")
-            if manifest_pin is not None and (
-                not isinstance(manifest_pin, str) or not DIGEST_PATTERN.fullmatch(manifest_pin)
-            ):
-                raise ProjectError("HOCUS450", "External alias module manifest digest is invalid.")
-            identity = (version, manifest_pin)
-            prior_identity = library_identities.get(library_uid)
-            if prior_identity is not None and prior_identity != identity:
-                raise ProjectError(
-                    "HOCUS450",
-                    "Aliases for one external library UID must use one version and manifest digest.",
-                )
-            library_identities[library_uid] = identity
-            folded.add(alias.casefold())
-            aliases[alias] = dict(alias_record)
-    return schema_version, project, language, lock, catalog, aliases
-
-
-def _require_table_fields(table: Any, allowed: set[str], name: str) -> None:
-    if not isinstance(table, dict) or set(table) - allowed:
-        raise ProjectError("HOCUS405", f"[{name}] has unknown fields or is not a table.")
-
-
-def _validate_source_directory_values(values: Any) -> None:
-    if not isinstance(values, list) or not values or len(values) > MAX_PROJECT_DIRECTORIES:
-        raise ProjectError("HOCUS427", "project.source_directories must be a non-empty bounded array.")
-    normalized: list[str] = []
-    for value in values:
-        if not isinstance(value, str) or not value or len(value) > 1024:
-            raise ProjectError("HOCUS427", "Source-directory entries must be bounded non-empty strings.")
-        if value != value.strip() or "\\" in value or ":" in value or value.startswith("/"):
-            raise ProjectError("HOCUS427", "Source directories must use normalized portable relative paths.", details={"path": value})
-        parts = value.split("/")
-        if value != "." and any(part in {"", ".", ".."} for part in parts):
-            raise ProjectError("HOCUS427", "Source directories cannot contain empty, dot, or parent segments.", details={"path": value})
-        if value != ".":
-            _validate_relative_artifact_path(value, "Source directory", code="HOCUS427")
-        normalized.append(_portable_path_key(value))
-    if len(set(normalized)) != len(normalized):
-        raise ProjectError("HOCUS427", "Source directories must be unique after portable case normalization.")
-
-
-def _validate_module_directory_values(values: Any) -> None:
-    if not isinstance(values, list) or len(values) > MAX_PROJECT_DIRECTORIES:
-        raise ProjectError("HOCUS449", "project.module_directories must be a bounded array.")
-    if not values:
-        return
-    try:
-        _validate_source_directory_values(values)
-    except ProjectError as exc:
-        raise ProjectError(
-            "HOCUS449",
-            exc.message.replace("Source directories", "Module directories").replace(
-                "project.source_directories", "project.module_directories"
-            ),
-            details=exc.details,
-        ) from exc
-
-
-def _validate_relative_artifact_path(value: Any, label: str, *, code: str = "HOCUS405") -> None:
-    if not isinstance(value, str) or not value or len(value) > 1024:
-        raise ProjectError(code, f"{label} must be a bounded portable relative path.")
-    if value != value.strip() or "\\" in value or ":" in value or value.startswith("/"):
-        raise ProjectError(code, f"{label} must be a normalized portable relative path.", details={"path": value})
-    if any(part in {"", ".", ".."} for part in value.split("/")):
-        raise ProjectError(code, f"{label} cannot contain empty, dot, or parent segments.", details={"path": value})
-    for part in value.split("/"):
-        if (
-            part != unicodedata.normalize("NFC", part)
-            or part.endswith((" ", "."))
-            or any(ord(char) < 32 or ord(char) == 127 for char in part)
-            or part.split(".", 1)[0].casefold() in WINDOWS_RESERVED_PATH_SEGMENTS
-        ):
-            raise ProjectError(
-                code,
-                f"{label} contains a nonportable or Windows-reserved path segment.",
-                details={"path": value},
-            )
 
 
 def _portable_path_key(value: str) -> str:

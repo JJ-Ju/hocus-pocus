@@ -403,87 +403,194 @@ def _validate_parameter(
         ))
         return None
     if definition.value_type == "code":
-        if not isinstance(parm.value, CodeValue):
-            diagnostics.append(_diagnostic("HOCUS638", f"Code parameter '{definition.token}' requires tagged code.", parm.value.span, pointer=pointer + "/value"))
-            return None
-        if definition.code_surface == "none" or parm.value.language != definition.code_surface:
-            diagnostics.append(_diagnostic(
-                "HOCUS639", f"Code language '{parm.value.language}' is not valid for the '{definition.code_surface}' surface.",
-                parm.value.span, pointer=pointer + "/value",
-                details={"actual": parm.value.language, "expected": definition.code_surface},
-            ))
-            return None
-        return _parm_selection(node, node_index, parm_index, parm, definition, component_index, pointer,
-                               code_surface=definition.code_surface)
+        return _validate_code_parameter(
+            parm, node, node_index, parm_index, definition, component_index, pointer, diagnostics,
+        )
     if isinstance(parm.value, CodeValue):
         diagnostics.append(_diagnostic("HOCUS638", f"Parameter '{definition.token}' is not a code surface.", parm.value.span, pointer=pointer + "/value"))
         return None
     if definition.value_type == "menu":
-        if definition.tuple_size != 1:
-            diagnostics.append(_diagnostic(
-                "HOCUS632",
-                f"Tuple menu parameter '{definition.token}' is unsupported in HocusScript 0.1.",
-                parm.span,
-                pointer=pointer,
-                details={"tupleSize": definition.tuple_size},
-            ))
-            return None
-        raw = _literal(parm.value)
-        if not isinstance(raw, str):
-            diagnostics.append(_type_error(definition, parm, pointer, "a stable string menu token"))
-            return None
-        tokens = [item.token for item in definition.menu]
-        if raw not in tokens:
-            labels = {item.label: item.token for item in definition.menu}
-            if raw in labels:
-                token = labels[raw]
-                diagnostics.append(Diagnostic(
-                    "error", "HOCUS636", "semantic", f"Menu label '{raw}' is not stable; use token '{token}'.",
-                    parm.value.span, fixes=[_replacement_fix(f"Use menu token {token}", parm.value.span, json.dumps(token))],
-                    details={"label": raw, "token": token}, json_pointer=pointer + "/value",
-                ))
-            else:
-                diagnostics.append(_unknown_with_fixes(
-                    "HOCUS635", f"Unknown menu token '{raw}' for '{definition.token}'.", raw, tokens,
-                    parm.value.span, pointer + "/value", quote=True,
-                ))
-            return None
-        return _parm_selection(node, node_index, parm_index, parm, definition, component_index, pointer, menu_token=raw)
+        return _validate_menu_parameter(
+            parm, node, node_index, parm_index, definition, component_index, pointer, diagnostics,
+        )
 
     tuple_assignment = component_index is None and definition.tuple_size > 1
     if tuple_assignment:
-        if not isinstance(parm.value, ArrayValue) or len(parm.value.items) != definition.tuple_size:
-            diagnostics.append(_diagnostic(
-                "HOCUS634", f"Parameter '{definition.token}' requires a {definition.tuple_size}-element tuple.",
-                parm.value.span, pointer=pointer + "/value", details={"tupleSize": definition.tuple_size},
+        return _validate_tuple_parameter(
+            parm, node, node_index, parm_index, definition, component_index, pointer, diagnostics,
+        )
+    return _validate_scalar_parameter(
+        parm, node, node_index, parm_index, definition, component_index, pointer, diagnostics,
+    )
+
+
+def _validate_code_parameter(
+    parm: ParmSpec,
+    node: NodeSpec,
+    node_index: int,
+    parm_index: int,
+    definition: ParameterDefinition,
+    component_index: int | None,
+    pointer: str,
+    diagnostics: list[Diagnostic],
+) -> ParameterSelection | None:
+    if not isinstance(parm.value, CodeValue):
+        diagnostics.append(_diagnostic(
+            "HOCUS638",
+            f"Code parameter '{definition.token}' requires tagged code.",
+            parm.value.span,
+            pointer=pointer + "/value",
+        ))
+        return None
+    if definition.code_surface == "none" or parm.value.language != definition.code_surface:
+        diagnostics.append(_diagnostic(
+            "HOCUS639",
+            f"Code language '{parm.value.language}' is not valid for the '{definition.code_surface}' surface.",
+            parm.value.span,
+            pointer=pointer + "/value",
+            details={"actual": parm.value.language, "expected": definition.code_surface},
+        ))
+        return None
+    return _parm_selection(
+        node, node_index, parm_index, parm, definition, component_index, pointer,
+        code_surface=definition.code_surface,
+    )
+
+
+def _validate_menu_parameter(
+    parm: ParmSpec,
+    node: NodeSpec,
+    node_index: int,
+    parm_index: int,
+    definition: ParameterDefinition,
+    component_index: int | None,
+    pointer: str,
+    diagnostics: list[Diagnostic],
+) -> ParameterSelection | None:
+    if definition.tuple_size != 1:
+        diagnostics.append(_diagnostic(
+            "HOCUS632",
+            f"Tuple menu parameter '{definition.token}' is unsupported in HocusScript 0.1.",
+            parm.span,
+            pointer=pointer,
+            details={"tupleSize": definition.tuple_size},
+        ))
+        return None
+    raw = _literal(parm.value)
+    if not isinstance(raw, str):
+        diagnostics.append(_type_error(definition, parm, pointer, "a stable string menu token"))
+        return None
+    tokens = [item.token for item in definition.menu]
+    if raw not in tokens:
+        _append_invalid_menu_diagnostic(parm, definition, pointer, raw, tokens, diagnostics)
+        return None
+    return _parm_selection(
+        node, node_index, parm_index, parm, definition, component_index, pointer,
+        menu_token=raw,
+    )
+
+
+def _append_invalid_menu_diagnostic(
+    parm: ParmSpec,
+    definition: ParameterDefinition,
+    pointer: str,
+    raw: str,
+    tokens: list[str],
+    diagnostics: list[Diagnostic],
+) -> None:
+    labels = {item.label: item.token for item in definition.menu}
+    if raw in labels:
+        token = labels[raw]
+        diagnostics.append(Diagnostic(
+            "error",
+            "HOCUS636",
+            "semantic",
+            f"Menu label '{raw}' is not stable; use token '{token}'.",
+            parm.value.span,
+            fixes=[_replacement_fix(
+                f"Use menu token {token}", parm.value.span, json.dumps(token),
+            )],
+            details={"label": raw, "token": token},
+            json_pointer=pointer + "/value",
+        ))
+        return
+    diagnostics.append(_unknown_with_fixes(
+        "HOCUS635",
+        f"Unknown menu token '{raw}' for '{definition.token}'.",
+        raw,
+        tokens,
+        parm.value.span,
+        pointer + "/value",
+        quote=True,
+    ))
+
+
+def _validate_tuple_parameter(
+    parm: ParmSpec,
+    node: NodeSpec,
+    node_index: int,
+    parm_index: int,
+    definition: ParameterDefinition,
+    component_index: int | None,
+    pointer: str,
+    diagnostics: list[Diagnostic],
+) -> ParameterSelection | None:
+    if not isinstance(parm.value, ArrayValue) or len(parm.value.items) != definition.tuple_size:
+        diagnostics.append(_diagnostic(
+            "HOCUS634",
+            f"Parameter '{definition.token}' requires a {definition.tuple_size}-element tuple.",
+            parm.value.span,
+            pointer=pointer + "/value",
+            details={"tupleSize": definition.tuple_size},
+        ))
+        return None
+    conversions: list[str] = []
+    for item in parm.value.items:
+        conversion = _scalar_conversion(item, _element_type(definition))
+        if conversion is False:
+            diagnostics.append(_type_error(
+                definition, parm, pointer, f"a tuple of {_element_type(definition)} values",
             ))
             return None
-        conversions: list[str] = []
-        for item in parm.value.items:
-            conversion = _scalar_conversion(item, _element_type(definition))
-            if conversion is False:
-                diagnostics.append(_type_error(definition, parm, pointer, f"a tuple of {_element_type(definition)} values"))
-                return None
-            if isinstance(conversion, str):
-                conversions.append(conversion)
-        if not _range_valid(definition, [_literal(item) for item in parm.value.items]):
-            diagnostics.append(_range_error(definition, parm, pointer))
-            return None
-        return _parm_selection(node, node_index, parm_index, parm, definition, component_index, pointer,
-                               conversion="int_to_float" if conversions else None)
+        if isinstance(conversion, str):
+            conversions.append(conversion)
+    if not _range_valid(definition, [_literal(item) for item in parm.value.items]):
+        diagnostics.append(_range_error(definition, parm, pointer))
+        return None
+    return _parm_selection(
+        node, node_index, parm_index, parm, definition, component_index, pointer,
+        conversion="int_to_float" if conversions else None,
+    )
 
+
+def _validate_scalar_parameter(
+    parm: ParmSpec,
+    node: NodeSpec,
+    node_index: int,
+    parm_index: int,
+    definition: ParameterDefinition,
+    component_index: int | None,
+    pointer: str,
+    diagnostics: list[Diagnostic],
+) -> ParameterSelection | None:
     if isinstance(parm.value, ArrayValue):
-        diagnostics.append(_type_error(definition, parm, pointer, f"a scalar { _element_type(definition) } value"))
+        diagnostics.append(_type_error(
+            definition, parm, pointer, f"a scalar {_element_type(definition)} value",
+        ))
         return None
     conversion = _scalar_conversion(parm.value, _element_type(definition))
     if conversion is False:
-        diagnostics.append(_type_error(definition, parm, pointer, f"a scalar {_element_type(definition)} value"))
+        diagnostics.append(_type_error(
+            definition, parm, pointer, f"a scalar {_element_type(definition)} value",
+        ))
         return None
     if not _range_valid(definition, [_literal(parm.value)]):
         diagnostics.append(_range_error(definition, parm, pointer))
         return None
-    return _parm_selection(node, node_index, parm_index, parm, definition, component_index, pointer,
-                           conversion=conversion if isinstance(conversion, str) else None)
+    return _parm_selection(
+        node, node_index, parm_index, parm, definition, component_index, pointer,
+        conversion=conversion if isinstance(conversion, str) else None,
+    )
 
 
 def _parm_selection(

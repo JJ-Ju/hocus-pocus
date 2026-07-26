@@ -5,16 +5,14 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
-import math
 import re
 from dataclasses import dataclass
 from typing import Any
-from urllib.parse import quote, unquote
+from urllib.parse import quote
 
 from .compiler import SUPPORTED_LANGUAGE_VERSIONS
 from .model import (
     COMPILER_VERSION,
-    EXPLICIT_NODE_ID_PATTERN,
     GRAPH_SPEC_VERSION,
     MODULE_COMPILER_VERSION,
     MODULE_GRAPH_SPEC_VERSION,
@@ -319,55 +317,9 @@ def decode_compiled_bundle(value: Any) -> CompiledBundle:
     if language_version not in expected_language_versions:
         raise BundleValidationError("HOCUS507", "Compiled bundle language version is unsupported.")
 
-    portable = payload.get("portable")
-    if not isinstance(portable, bool):
-        raise BundleValidationError("HOCUS508", "portable must be a boolean.")
-    project_uid = payload.get("projectUid")
-    manifest_digest = payload.get("projectManifestDigest")
-    lock_digest = payload.get("projectLockDigest")
-    if portable:
-        if not isinstance(project_uid, str) or not _PROJECT_UID_PATTERN.fullmatch(project_uid):
-            raise BundleValidationError("HOCUS509", "Portable bundles require a valid stable projectUid.")
-        _require_digest(manifest_digest, "projectManifestDigest", "HOCUS509")
-    elif project_uid is not None or manifest_digest is not None:
-        raise BundleValidationError("HOCUS509", "Preview-only bundles cannot claim portable project identity.")
-    if lock_digest is not None:
-        _require_digest(lock_digest, "projectLockDigest", "HOCUS509")
-    if bundle_version in {BUNDLE_VERSION, MODULE_BUNDLE_VERSION} and portable and lock_digest is None:
-        raise BundleValidationError("HOCUS509", "Portable semantic bundles require projectLockDigest.")
-    if bundle_version == MODULE_BUNDLE_VERSION and not portable:
-        raise BundleValidationError("HOCUS509", "Bundle v0.3 module graphs must be portable.")
-    if not portable and lock_digest is not None:
-        raise BundleValidationError("HOCUS509", "Preview-only bundles cannot claim a project lock digest.")
-
-    entry = _validate_source(payload.get("entrySource"), "entrySource", allow_kinds={"project_file", "workspace_file", "memory"})
-    if portable:
-        if entry["kind"] != "project_file" or not entry["uri"].startswith(f"hocus-project://{project_uid}/"):
-            raise BundleValidationError("HOCUS510", "Portable entry source URI must match its project UID.")
-    elif entry["kind"] == "project_file":
-        raise BundleValidationError("HOCUS510", "Preview-only bundles cannot claim a project_file entry source.")
-
-    dependencies = payload.get("dependencies")
-    if not isinstance(dependencies, list) or len(dependencies) > MAX_DEPENDENCIES:
-        raise BundleValidationError("HOCUS511", f"dependencies must be an array with at most {MAX_DEPENDENCIES} entries.")
-    dependency_uris: set[str] = set()
-    for index, dependency in enumerate(dependencies):
-        normalized = _validate_source(dependency, f"dependencies[{index}]", allow_kinds={"module"})
-        if normalized["uri"] in dependency_uris:
-            raise BundleValidationError("HOCUS512", "Dependency source URIs must be unique.", details={"uri": normalized["uri"]})
-        dependency_uris.add(normalized["uri"])
-
-    module_dependencies: list[dict[str, Any]] = []
-    module_limits: dict[str, int] | None = None
-    if bundle_version == MODULE_BUNDLE_VERSION:
-        module_dependencies, module_limits = _validate_resolved_module_set(
-            payload.get("resolvedModuleSet"),
-            sources=dependencies,
-            project_uid=project_uid,
-            entry_source_uri=entry["uri"],
-            project_manifest_digest=manifest_digest,
-            project_lock_digest=lock_digest,
-        )
+    (
+        entry, dependency_uris, module_dependencies, module_limits,
+    ) = _validate_bundle_provenance_and_sources(payload, bundle_version)
 
     catalog_constraints = payload.get("catalogConstraints")
     if bundle_version == LEGACY_BUNDLE_VERSION:
@@ -438,6 +390,83 @@ def decode_compiled_bundle(value: Any) -> CompiledBundle:
     if not isinstance(source_maps, dict) or source_maps != expected_source_maps:
         raise BundleValidationError("HOCUS517", "sourceMaps is inconsistent with the bundle contract.")
     return CompiledBundle(canonical, declared_digest)
+
+
+def _validate_bundle_provenance_and_sources(
+    payload: dict[str, Any], bundle_version: str,
+) -> tuple[dict[str, str], set[str], list[dict[str, Any]], dict[str, int] | None]:
+    portable = payload.get("portable")
+    if not isinstance(portable, bool):
+        raise BundleValidationError("HOCUS508", "portable must be a boolean.")
+    project_uid = payload.get("projectUid")
+    manifest_digest = payload.get("projectManifestDigest")
+    lock_digest = payload.get("projectLockDigest")
+    if portable:
+        if not isinstance(project_uid, str) or not _PROJECT_UID_PATTERN.fullmatch(project_uid):
+            raise BundleValidationError("HOCUS509", "Portable bundles require a valid stable projectUid.")
+        _require_digest(manifest_digest, "projectManifestDigest", "HOCUS509")
+    elif project_uid is not None or manifest_digest is not None:
+        raise BundleValidationError(
+            "HOCUS509", "Preview-only bundles cannot claim portable project identity."
+        )
+    if lock_digest is not None:
+        _require_digest(lock_digest, "projectLockDigest", "HOCUS509")
+    if bundle_version in {BUNDLE_VERSION, MODULE_BUNDLE_VERSION} and portable and lock_digest is None:
+        raise BundleValidationError("HOCUS509", "Portable semantic bundles require projectLockDigest.")
+    if bundle_version == MODULE_BUNDLE_VERSION and not portable:
+        raise BundleValidationError("HOCUS509", "Bundle v0.3 module graphs must be portable.")
+    if not portable and lock_digest is not None:
+        raise BundleValidationError(
+            "HOCUS509", "Preview-only bundles cannot claim a project lock digest."
+        )
+    entry = _validate_source(
+        payload.get("entrySource"), "entrySource",
+        allow_kinds={"project_file", "workspace_file", "memory"},
+    )
+    if portable and (
+        entry["kind"] != "project_file"
+        or not entry["uri"].startswith(f"hocus-project://{project_uid}/")
+    ):
+        raise BundleValidationError(
+            "HOCUS510", "Portable entry source URI must match its project UID."
+        )
+    if not portable and entry["kind"] == "project_file":
+        raise BundleValidationError(
+            "HOCUS510", "Preview-only bundles cannot claim a project_file entry source."
+        )
+    dependencies = payload.get("dependencies")
+    dependency_uris = _validate_dependency_sources(dependencies)
+    if bundle_version != MODULE_BUNDLE_VERSION:
+        return entry, dependency_uris, [], None
+    module_dependencies, module_limits = _validate_resolved_module_set(
+        payload.get("resolvedModuleSet"),
+        sources=dependencies,
+        project_uid=project_uid,
+        entry_source_uri=entry["uri"],
+        project_manifest_digest=manifest_digest,
+        project_lock_digest=lock_digest,
+    )
+    return entry, dependency_uris, module_dependencies, module_limits
+
+
+def _validate_dependency_sources(value: Any) -> set[str]:
+    if not isinstance(value, list) or len(value) > MAX_DEPENDENCIES:
+        raise BundleValidationError(
+            "HOCUS511",
+            f"dependencies must be an array with at most {MAX_DEPENDENCIES} entries.",
+        )
+    uris: set[str] = set()
+    for index, dependency in enumerate(value):
+        normalized = _validate_source(
+            dependency, f"dependencies[{index}]", allow_kinds={"module"}
+        )
+        if normalized["uri"] in uris:
+            raise BundleValidationError(
+                "HOCUS512", "Dependency source URIs must be unique.",
+                details={"uri": normalized["uri"]},
+            )
+        uris.add(normalized["uri"])
+    return uris
 
 
 def _validate_source(value: Any, label: str, *, allow_kinds: set[str]) -> dict[str, str]:
@@ -675,531 +704,27 @@ def _validate_semantic_resolution(
     value: Any, constraint: dict[str, Any], graph: dict[str, Any],
     *, require_module_provenance: bool = False,
 ) -> dict[str, Any]:
-    keys = {
-        "stage", "valid", "readyForDocumentLowering", "catalogFingerprint", "diagnostics",
-        "operatorSelections", "parameterSelections", "connectionSelections", "deferredChecks",
-        "requiredCapabilities",
-    }
-    if not isinstance(value, dict) or set(value) != keys:
-        raise BundleValidationError("HOCUS521", "semanticResolution has an invalid shape.")
-    if value["stage"] != "semantic" or value["valid"] is not True:
-        raise BundleValidationError("HOCUS521", "A semantic bundle requires a valid semantic-stage result.")
-    if not isinstance(value["readyForDocumentLowering"], bool):
-        raise BundleValidationError("HOCUS521", "readyForDocumentLowering must be a boolean.")
-    fingerprint = _require_digest(value["catalogFingerprint"], "semanticResolution.catalogFingerprint", "HOCUS521")
-    if fingerprint != constraint["fingerprint"]:
-        raise BundleValidationError("HOCUS521", "Semantic and catalog-constraint fingerprints differ.")
-    capabilities = value["requiredCapabilities"]
-    if (
-        not isinstance(capabilities, list)
-        or capabilities != sorted(set(capabilities))
-        or any(item not in {"edit_scene", "run_code"} for item in capabilities)
-    ):
-        raise BundleValidationError("HOCUS521", "Semantic requiredCapabilities is invalid.")
-    diagnostics = value["diagnostics"]
-    if not isinstance(diagnostics, list) or len(diagnostics) > 500:
-        raise BundleValidationError("HOCUS521", "Semantic diagnostics must be a bounded array.")
-    for diagnostic in diagnostics:
-        if not isinstance(diagnostic, dict) or diagnostic.get("severity") == "error":
-            raise BundleValidationError("HOCUS521", "A valid semantic bundle cannot contain error diagnostics.")
-        if (
-            diagnostic.get("severity") not in {"info", "warning"}
-            or not isinstance(diagnostic.get("code"), str)
-            or not diagnostic["code"]
-            or not isinstance(diagnostic.get("phase"), str)
-            or not isinstance(diagnostic.get("message"), str)
-            or not diagnostic["message"]
-        ):
-            raise BundleValidationError("HOCUS521", "Semantic diagnostic records are malformed.")
-        if require_module_provenance:
-            _validate_semantic_diagnostic_provenance(diagnostic, graph)
-    selection_shapes = {
-        "operatorSelections": {
-            "nodeSymbol", "nodeIndex", "jsonPointer", "category", "qualifiedName", "namespace",
-            "version", "sourceKind", "definitionDigest",
-        },
-        "parameterSelections": {
-            "nodeSymbol", "nodeIndex", "parmIndex", "jsonPointer", "authoredToken", "parameterToken",
-            "componentIndex", "valueType", "conversion", "menuToken", "codeSurface",
-        },
-        "connectionSelections": {
-            "nodeSymbol", "nodeIndex", "inputIndex", "inputName", "sourceSymbol", "outputIndex",
-            "outputName", "jsonPointer",
-        },
-        "deferredChecks": {"kind", "jsonPointer", "symbol", "message"},
-    }
-    for field, shape in selection_shapes.items():
-        records = value[field]
-        if not isinstance(records, list) or len(records) > 50_000:
-            raise BundleValidationError("HOCUS521", f"semanticResolution.{field} must be a bounded array.")
-        for record in records:
-            if not isinstance(record, dict) or set(record) != shape:
-                raise BundleValidationError("HOCUS521", f"semanticResolution.{field} contains an invalid record.")
-            pointer = record.get("jsonPointer")
-            if not isinstance(pointer, str) or (pointer and not pointer.startswith("/")):
-                raise BundleValidationError("HOCUS521", f"semanticResolution.{field} has an invalid JSON pointer.")
+    from .bundle_semantic_validation import _validate_semantic_resolution as validate
 
-    operator_selections = value["operatorSelections"]
-    if len(operator_selections) != len(graph["nodes"]):
-        raise BundleValidationError("HOCUS521", "Semantic operator selections do not cover every graph node.")
-    for index, (record, node) in enumerate(zip(operator_selections, graph["nodes"])):
-        _require_semantic_index(record["nodeIndex"], f"operatorSelections[{index}].nodeIndex", expected=index)
-        _require_semantic_string(record["nodeSymbol"], f"operatorSelections[{index}].nodeSymbol", expected=node["symbol"])
-        _require_semantic_string(record["jsonPointer"], f"operatorSelections[{index}].jsonPointer", expected=f"/nodes/{index}/typeName")
-        _require_semantic_string(record["category"], f"operatorSelections[{index}].category")
-        _require_semantic_string(record["qualifiedName"], f"operatorSelections[{index}].qualifiedName")
-        _require_nullable_semantic_string(record["namespace"], f"operatorSelections[{index}].namespace")
-        _require_nullable_semantic_string(record["version"], f"operatorSelections[{index}].version")
-        if record["sourceKind"] not in {"builtin", "hda", "package", "labs"}:
-            raise BundleValidationError("HOCUS521", "Semantic operator sourceKind is invalid.")
-        if record["definitionDigest"] is not None:
-            _require_digest(record["definitionDigest"], "semantic operator definitionDigest", "HOCUS521")
-        if graph.get("category") is not None and record["category"] != graph["category"]:
-            raise BundleValidationError("HOCUS521", "Semantic operator category conflicts with GraphSpec category.")
-
-    expected_parms = [
-        (node_index, parm_index, node, parm)
-        for node_index, node in enumerate(graph["nodes"])
-        for parm_index, parm in enumerate(node["parms"])
-    ]
-    parameter_selections = value["parameterSelections"]
-    if len(parameter_selections) != len(expected_parms):
-        raise BundleValidationError("HOCUS521", "Semantic parameter selections do not cover every authored parameter.")
-    for record, (node_index, parm_index, node, parm) in zip(parameter_selections, expected_parms):
-        _require_semantic_index(record["nodeIndex"], "parameter selection nodeIndex", expected=node_index)
-        _require_semantic_index(record["parmIndex"], "parameter selection parmIndex", expected=parm_index)
-        _require_semantic_string(record["nodeSymbol"], "parameter selection nodeSymbol", expected=node["symbol"])
-        _require_semantic_string(record["jsonPointer"], "parameter selection jsonPointer", expected=f"/nodes/{node_index}/parms/{parm_index}")
-        _require_semantic_string(record["authoredToken"], "parameter selection authoredToken", expected=parm["name"])
-        _require_semantic_string(record["parameterToken"], "parameter selection parameterToken")
-        if record["componentIndex"] is not None:
-            _require_semantic_index(record["componentIndex"], "parameter selection componentIndex")
-        if record["valueType"] not in {
-            "bool", "int", "float", "string", "tuple", "menu", "code", "button",
-            "node_path", "parm_path", "file_path", "usd_prim_path", "asset_reference",
-            "ramp", "multiparm",
-        }:
-            raise BundleValidationError("HOCUS521", "Parameter selection valueType is invalid.")
-        for field in ("conversion", "menuToken", "codeSurface"):
-            _require_nullable_semantic_string(record[field], f"parameter selection {field}")
-        if record["conversion"] not in {None, "int_to_float"}:
-            raise BundleValidationError("HOCUS521", "Parameter selection conversion is invalid.")
-        if record["codeSurface"] not in {None, "vex", "python", "hscript"}:
-            raise BundleValidationError("HOCUS521", "Parameter selection codeSurface is invalid.")
-
-    outcomes: dict[str, str] = {}
-    for record in value["connectionSelections"]:
-        node_index = _require_semantic_index(record["nodeIndex"], "connection selection nodeIndex")
-        if node_index >= len(graph["nodes"]):
-            raise BundleValidationError("HOCUS521", "Connection selection nodeIndex is outside GraphSpec.")
-        node = graph["nodes"][node_index]
-        _require_semantic_string(record["nodeSymbol"], "connection selection nodeSymbol", expected=node["symbol"])
-        pointer = record["jsonPointer"]
-        prefix = f"/nodes/{node_index}/inputs/"
-        if not pointer.startswith(prefix) or not pointer[len(prefix):].isdigit():
-            raise BundleValidationError("HOCUS521", "Connection selection JSON pointer is invalid.")
-        ordinal = int(pointer[len(prefix):])
-        if ordinal >= len(node["inputs"]):
-            raise BundleValidationError("HOCUS521", "Connection selection points outside GraphSpec inputs.")
-        authored = node["inputs"][ordinal]
-        _require_semantic_index(record["inputIndex"], "connection selection inputIndex", expected=authored["index"])
-        _require_semantic_string(record["sourceSymbol"], "connection selection sourceSymbol", expected=authored["source"]["symbol"])
-        _require_semantic_index(record["outputIndex"], "connection selection outputIndex", expected=authored["source"]["outputIndex"])
-        _require_nullable_semantic_string(record["inputName"], "connection selection inputName")
-        _require_nullable_semantic_string(record["outputName"], "connection selection outputName")
-        if pointer in outcomes:
-            raise BundleValidationError("HOCUS521", "Semantic input outcomes must be unique.")
-        outcomes[pointer] = "resolved"
-
-    for record in value["deferredChecks"]:
-        if record["kind"] != "external_output":
-            raise BundleValidationError("HOCUS521", "Semantic deferred-check kind is invalid.")
-        _require_semantic_string(record["symbol"], "deferred-check symbol")
-        _require_semantic_string(record["message"], "deferred-check message")
-        pointer = record["jsonPointer"]
-        if not pointer.endswith("/source"):
-            raise BundleValidationError("HOCUS521", "Deferred-check pointer must identify an input source.")
-        input_pointer = pointer[:-len("/source")]
-        parts = input_pointer.strip("/").split("/")
-        if (
-            len(parts) != 4
-            or parts[0] != "nodes"
-            or not parts[1].isdigit()
-            or parts[2] != "inputs"
-            or not parts[3].isdigit()
-        ):
-            raise BundleValidationError("HOCUS521", "Deferred-check pointer is outside GraphSpec inputs.")
-        node_index, input_index = int(parts[1]), int(parts[3])
-        if node_index >= len(graph["nodes"]) or input_index >= len(graph["nodes"][node_index]["inputs"]):
-            raise BundleValidationError("HOCUS521", "Deferred-check pointer is outside GraphSpec inputs.")
-        authored_symbol = graph["nodes"][node_index]["inputs"][input_index]["source"]["symbol"]
-        external_symbols = {item["symbol"] for item in graph["externalNodes"]}
-        if record["symbol"] != authored_symbol or authored_symbol not in external_symbols:
-            raise BundleValidationError("HOCUS521", "Deferred-check symbol is not the authored external source.")
-        if not any(
-            diagnostic.get("code") == "HOCUS643" and diagnostic.get("jsonPointer") == pointer
-            for diagnostic in diagnostics
-        ):
-            raise BundleValidationError("HOCUS521", "Deferred external checks require a matching diagnostic.")
-        if input_pointer in outcomes:
-            raise BundleValidationError("HOCUS521", "Semantic input outcomes must be unique.")
-        outcomes[input_pointer] = "deferred"
-
-    expected_inputs = {
-        f"/nodes/{node_index}/inputs/{input_index}"
-        for node_index, node in enumerate(graph["nodes"])
-        for input_index, _ in enumerate(node["inputs"])
-    }
-    if set(outcomes) != expected_inputs:
-        raise BundleValidationError("HOCUS521", "Semantic input outcomes do not cover every authored connection.")
-    ready = not value["deferredChecks"]
-    if value["readyForDocumentLowering"] != ready:
-        raise BundleValidationError("HOCUS521", "Semantic document-lowering readiness is inconsistent with deferred checks.")
-    return value
-
-
-def _validate_semantic_diagnostic_provenance(
-    diagnostic: dict[str, Any], graph: dict[str, Any],
-) -> None:
-    """Bind a module diagnostic to the canonical enclosing expansion origin."""
-
-    allowed = {
-        "severity", "code", "phase", "message", "jsonPointer", "originId", "stackId",
-        "sourceUri", "span", "related", "notes", "fixes", "details", "expansionStack",
-        "entityUid", "houdiniPath",
-    }
-    required = {
-        "jsonPointer", "originId", "stackId", "related", "expansionStack",
-        "entityUid", "houdiniPath",
-    }
-    if (
-        not required.issubset(diagnostic)
-        or set(diagnostic) - allowed
-    ):
-        raise BundleValidationError(
-            "HOCUS521", "Bundle v0.3 semantic diagnostics have an invalid provenance shape."
-        )
-    if diagnostic["expansionStack"] != [] or diagnostic["related"] != []:
-        raise BundleValidationError(
-            "HOCUS521", "Bundle v0.3 diagnostics cannot embed expansion frames or related source records."
-        )
-    if diagnostic["entityUid"] is not None or diagnostic["houdiniPath"] is not None:
-        raise BundleValidationError(
-            "HOCUS521", "Offline Bundle v0.3 diagnostics cannot claim live entity or Houdini paths."
-        )
-    pointer = diagnostic.get("jsonPointer")
-    if pointer is not None and (
-        not isinstance(pointer, str)
-        or len(pointer) > 8192
-        or _JSON_POINTER_PATTERN.fullmatch(pointer) is None
-        or not _json_pointer_resolves(graph, pointer)
-    ):
-        raise BundleValidationError("HOCUS521", "Semantic diagnostic jsonPointer is invalid.")
-    mapping = _enclosing_expansion_mapping(pointer, graph["expansionMap"]["mappings"])
-    expected_origin = mapping["originId"] if mapping is not None else None
-    expected_stack = mapping["stackId"] if mapping is not None else None
-    origin_id = diagnostic["originId"]
-    stack_id = diagnostic["stackId"]
-    if origin_id is not None:
-        _require_digest(origin_id, "semantic diagnostic originId", "HOCUS521")
-    if stack_id is not None:
-        _require_digest(stack_id, "semantic diagnostic stackId", "HOCUS521")
-    if origin_id != expected_origin or stack_id != expected_stack:
-        raise BundleValidationError(
-            "HOCUS521",
-            "Semantic diagnostic provenance does not match its enclosing expansion mapping.",
-            details={
-                "jsonPointer": pointer,
-                "expectedOriginId": expected_origin,
-                "expectedStackId": expected_stack,
-            },
-        )
-    if mapping is None:
-        if "sourceUri" in diagnostic or "span" in diagnostic:
-            raise BundleValidationError(
-                "HOCUS521", "Diagnostics without an expansion origin cannot claim source locations."
-            )
-        return
-    source_uri = diagnostic.get("sourceUri")
-    span = diagnostic.get("span")
-    primary = mapping["primarySpan"]
-    if (
-        source_uri != primary["sourceUri"]
-        or not _is_canonical_portable_source_uri(source_uri)
-        or not _diagnostic_span_is_strictly_contained(span, primary)
-    ):
-        raise BundleValidationError(
-            "HOCUS521", "Semantic diagnostic source location is not portable or contained in its origin."
-        )
-
-
-def _enclosing_expansion_mapping(
-    pointer: str | None, mappings: list[dict[str, Any]],
-) -> dict[str, Any] | None:
-    if pointer is None:
-        return None
-    matches = [
-        mapping for mapping in mappings
-        if mapping["generatedPointer"] == pointer
-        or mapping["generatedPointer"] == ""
-        or pointer.startswith(mapping["generatedPointer"] + "/")
-    ]
-    return max(matches, key=lambda item: len(item["generatedPointer"]), default=None)
-
-
-def _is_canonical_portable_source_uri(value: Any) -> bool:
-    if not isinstance(value, str) or len(value) > 4096:
-        return False
-    match = _MODULE_URI_PATTERN.fullmatch(value)
-    if match is None:
-        return False
-    encoded_path = match.group(3)
-    try:
-        decoded_path = unquote(encoded_path, errors="strict")
-    except (UnicodeDecodeError, ValueError):
-        return False
-    return (
-        quote(decoded_path, safe="/-._~") == encoded_path
-        and decoded_path.endswith(".hocus")
-        and not decoded_path.startswith("/")
-        and "\\" not in decoded_path
-        and ":" not in decoded_path
-        and all(part not in {"", ".", ".."} for part in decoded_path.split("/"))
+    return validate(
+        value, constraint, graph,
+        require_module_provenance=require_module_provenance,
     )
-
-
-def _diagnostic_span_is_strictly_contained(value: Any, primary: dict[str, Any]) -> bool:
-    if not isinstance(value, dict) or set(value) != {"start", "end"}:
-        return False
-    for endpoint in ("start", "end"):
-        position = value[endpoint]
-        if not isinstance(position, dict) or set(position) != {"offset", "line", "column"}:
-            return False
-        if any(type(position[key]) is not int for key in position):
-            return False
-        if position["offset"] < 0 or position["line"] < 1 or position["column"] < 1:
-            return False
-    start, end = value["start"], value["end"]
-    primary_start, primary_end = primary["start"], primary["end"]
-    if not (
-        primary_start["offset"] <= start["offset"] < end["offset"] <= primary_end["offset"]
-        and (primary_start["line"], primary_start["column"])
-        <= (start["line"], start["column"])
-        < (end["line"], end["column"])
-        <= (primary_end["line"], primary_end["column"])
-    ):
-        return False
-    if start["offset"] == primary_start["offset"] and (
-        start["line"], start["column"]
-    ) != (primary_start["line"], primary_start["column"]):
-        return False
-    if end["offset"] == primary_end["offset"] and (
-        end["line"], end["column"]
-    ) != (primary_end["line"], primary_end["column"]):
-        return False
-    if start["line"] == primary_start["line"] and (
-        start["offset"] - primary_start["offset"]
-        != start["column"] - primary_start["column"]
-    ):
-        return False
-    if end["line"] == primary_end["line"] and (
-        primary_end["offset"] - end["offset"]
-        != primary_end["column"] - end["column"]
-    ):
-        return False
-    if start["line"] == end["line"] and (
-        end["column"] - start["column"] != end["offset"] - start["offset"]
-    ):
-        return False
-    return True
-
-
-def _require_semantic_index(value: Any, label: str, *, expected: int | None = None) -> int:
-    if type(value) is not int or value < 0 or (expected is not None and value != expected):
-        raise BundleValidationError("HOCUS521", f"{label} is invalid.")
-    return value
-
-
-def _require_semantic_string(value: Any, label: str, *, expected: str | None = None) -> str:
-    if not isinstance(value, str) or not value or (expected is not None and value != expected):
-        raise BundleValidationError("HOCUS521", f"{label} is invalid.")
-    return value
-
-
-def _require_nullable_semantic_string(value: Any, label: str) -> None:
-    if value is not None and (not isinstance(value, str) or not value):
-        raise BundleValidationError("HOCUS521", f"{label} is invalid.")
 
 
 def _validate_expansion_map(
     value: Any, module_dependencies: dict[str, dict[str, Any]], entry_source_uri: str,
     graph: dict[str, Any], limits: dict[str, int],
 ) -> None:
-    required = {"$schema", "kind", "schemaVersion", "graphSpecVersion", "entrySourceUri", "stacks", "mappings"}
-    if not isinstance(value, dict) or set(value) != required:
-        raise BundleValidationError("HOCUS520", "graphSpec.expansionMap has an invalid shape.")
-    if (
-        value["$schema"] != "hocuspocus://schemas/expansion-map/v1"
-        or value["kind"] != "hocus_expansion_map" or value["schemaVersion"] != 1
-        or value["graphSpecVersion"] != MODULE_GRAPH_SPEC_VERSION
-        or value["entrySourceUri"] != entry_source_uri
-    ):
-        raise BundleValidationError("HOCUS520", "graphSpec.expansionMap envelope is inconsistent.")
-    stacks = value["stacks"]
-    if not isinstance(stacks, list) or len(stacks) > 10_000:
-        raise BundleValidationError("HOCUS520", "graphSpec.expansionMap.stacks must be bounded.")
-    stack_ids: list[str] = []
-    for stack_index, stack in enumerate(stacks):
-        stack_label = f"graphSpec.expansionMap.stacks[{stack_index}]"
-        if not isinstance(stack, dict) or set(stack) != {"stackId", "frames"}:
-            raise BundleValidationError("HOCUS520", f"{stack_label} has an invalid shape.")
-        frames = stack["frames"]
-        if not isinstance(frames, list) or not 1 <= len(frames) <= 64:
-            raise BundleValidationError("HOCUS520", f"{stack_label}.frames must contain 1 to 64 frames.")
-        for frame_index, frame in enumerate(frames):
-            frame_label = f"{stack_label}.frames[{frame_index}]"
-            if not isinstance(frame, dict) or set(frame) != {
-                "moduleUri", "sourceDigest", "moduleName", "instanceSymbol",
-                "instanceIdPath", "importSpan", "useSpan",
-            }:
-                raise BundleValidationError("HOCUS520", f"{frame_label} has an invalid shape.")
-            uri = frame["moduleUri"]
-            source_digest = _require_digest(frame["sourceDigest"], f"{frame_label}.sourceDigest", "HOCUS520")
-            module = module_dependencies.get(uri) if isinstance(uri, str) else None
-            if module is None or module["sourceDigest"] != source_digest:
-                raise BundleValidationError("HOCUS520", f"{frame_label} does not match a locked module.")
-            for field in ("moduleName", "instanceSymbol"):
-                if not isinstance(frame[field], str) or not _IDENTIFIER_PATTERN.fullmatch(frame[field]):
-                    raise BundleValidationError("HOCUS520", f"{frame_label}.{field} is invalid.")
-            if frame["moduleName"] != module["moduleName"]:
-                raise BundleValidationError("HOCUS520", f"{frame_label}.moduleName conflicts with the resolved module.")
-            instance_path = frame["instanceIdPath"]
-            if (
-                not isinstance(instance_path, list) or len(instance_path) > 64
-                or any(not isinstance(item, str) or not EXPLICIT_NODE_ID_PATTERN.fullmatch(item)
-                       for item in instance_path)
-            ):
-                raise BundleValidationError("HOCUS520", f"{frame_label}.instanceIdPath is invalid.")
-            if frame["importSpan"] is not None:
-                _validate_span(frame["importSpan"], f"{frame_label}.importSpan")
-            _validate_span(frame["useSpan"], f"{frame_label}.useSpan")
-        stack_id = _require_digest(stack["stackId"], f"{stack_label}.stackId", "HOCUS520")
-        stack_payload = {"domain": _EXPANSION_STACK_DIGEST_DOMAIN, "frames": frames}
-        expected_stack_id = "sha256:" + hashlib.sha256(
-            _canonical_json(stack_payload).encode("utf-8")
-        ).hexdigest()
-        if stack_id != expected_stack_id:
-            raise BundleValidationError("HOCUS520", f"{stack_label}.stackId does not match frames.")
-        stack_ids.append(stack_id)
-    if stack_ids != sorted(set(stack_ids)):
-        raise BundleValidationError("HOCUS520", "Expansion stacks must be uniquely sorted by stackId.")
+    from .bundle_semantic_validation import _validate_expansion_map as validate
 
-    mappings = value["mappings"]
-    if not isinstance(mappings, list) or len(mappings) > limits["sourceMapEntries"]:
-        raise BundleValidationError("HOCUS520", "graphSpec.expansionMap.mappings must be bounded.")
-    pointers: list[str] = []
-    origin_ids: set[str] = set()
-    for index, mapping in enumerate(mappings):
-        label = f"graphSpec.expansionMap.mappings[{index}]"
-        keys = {
-            "originId", "generatedPointer", "originKind", "primarySpan", "relatedOrigins",
-            "stackId",
-        }
-        if not isinstance(mapping, dict) or set(mapping) != keys:
-            raise BundleValidationError("HOCUS520", f"{label} has an invalid shape.")
-        origin_id = _require_digest(mapping["originId"], f"{label}.originId", "HOCUS520")
-        pointer = mapping["generatedPointer"]
-        if (
-            not isinstance(pointer, str)
-            or len(pointer) > 8192
-            or _JSON_POINTER_PATTERN.fullmatch(pointer) is None
-            or not _json_pointer_resolves(graph, pointer)
-        ):
-            raise BundleValidationError("HOCUS520", f"{label}.generatedPointer is invalid.")
-        if mapping["originKind"] not in {"definition", "argument", "export", "synthetic"}:
-            raise BundleValidationError("HOCUS520", f"{label}.originKind is invalid.")
-        _validate_span(mapping["primarySpan"], f"{label}.primarySpan")
-        related = mapping["relatedOrigins"]
-        if not isinstance(related, list) or len(related) > 16:
-            raise BundleValidationError("HOCUS520", f"{label}.relatedOrigins must be bounded.")
-        for related_index, item in enumerate(related):
-            related_label = f"{label}.relatedOrigins[{related_index}]"
-            if not isinstance(item, dict) or set(item) != {"role", "span"} or item["role"] not in {
-                "definition", "parameter_declaration", "argument", "export", "instance",
-            }:
-                raise BundleValidationError("HOCUS520", f"{related_label} is invalid.")
-            _validate_span(item["span"], f"{related_label}.span")
-        if mapping["stackId"] is not None and mapping["stackId"] not in stack_ids:
-            raise BundleValidationError("HOCUS520", f"{label}.stackId references an unknown stack.")
-        origin_payload = {key: mapping[key] for key in sorted(mapping) if key != "originId"}
-        expected_origin_id = "sha256:" + hashlib.sha256(
-            _canonical_json(origin_payload).encode("utf-8")
-        ).hexdigest()
-        if origin_id != expected_origin_id or origin_id in origin_ids:
-            raise BundleValidationError("HOCUS520", f"{label}.originId is invalid or duplicated.")
-        origin_ids.add(origin_id)
-        pointers.append(pointer)
-    if pointers != sorted(set(pointers)):
-        raise BundleValidationError("HOCUS520", "Expansion mappings must be uniquely sorted by generatedPointer.")
-    required_pointers = _required_expansion_pointers(graph)
-    if pointers != sorted(required_pointers):
-        raise BundleValidationError(
-            "HOCUS520", "Expansion mappings do not exactly cover the GraphSpec v0.3 origin surface.",
-            details={
-                "missing": sorted(required_pointers - set(pointers)),
-                "unknown": sorted(set(pointers) - required_pointers),
-            },
-        )
-    referenced_stacks = {mapping["stackId"] for mapping in mappings if mapping["stackId"] is not None}
-    if referenced_stacks != set(stack_ids):
-        raise BundleValidationError("HOCUS520", "Expansion stacks must be referenced exactly once or more.")
-    instance_paths = {
-        tuple(frame["instanceIdPath"])
-        for stack in stacks
-        for frame in stack["frames"]
-    }
-    if len(instance_paths) > limits["instances"]:
-        raise BundleValidationError("HOCUS520", "Expansion instances exceed resolved module limits.")
-    if any(len(path) > limits["instanceDepth"] for path in instance_paths):
-        raise BundleValidationError("HOCUS520", "Expansion instance depth exceeds resolved module limits.")
-
-
-def _json_pointer_resolves(value: Any, pointer: str) -> bool:
-    current = value
-    if pointer == "":
-        return True
-    for encoded in pointer[1:].split("/"):
-        token = encoded.replace("~1", "/").replace("~0", "~")
-        if isinstance(current, dict):
-            if token not in current:
-                return False
-            current = current[token]
-        elif isinstance(current, list):
-            if not token.isdigit() or (token != "0" and token.startswith("0")):
-                return False
-            index = int(token)
-            if index >= len(current):
-                return False
-            current = current[index]
-        else:
-            return False
-    return True
+    validate(value, module_dependencies, entry_source_uri, graph, limits)
 
 
 def _required_expansion_pointers(graph: dict[str, Any]) -> set[str]:
-    """Return the exact expansion-map-v1 origin surface for GraphSpec 0.3."""
+    from .bundle_graph_validation import required_expansion_pointers
 
-    pointers = {""}
-    pointers.update(f"/externalNodes/{index}" for index, _ in enumerate(graph["externalNodes"]))
-    for node_index, node in enumerate(graph["nodes"]):
-        prefix = f"/nodes/{node_index}"
-        pointers.add(prefix)
-        pointers.update(f"{prefix}/inputs/{index}" for index, _ in enumerate(node["inputs"]))
-        pointers.update(f"{prefix}/parms/{index}" for index, _ in enumerate(node["parms"]))
-    for field in ("display", "render", "output", "layout"):
-        if graph[field] is not None:
-            pointers.add(f"/{field}")
-    return pointers
+    return required_expansion_pointers(graph)
 
 
 def _validate_graph_spec(
@@ -1208,356 +733,52 @@ def _validate_graph_spec(
     entry_source_uri: str | None = None,
     module_limits: dict[str, int] | None = None,
 ) -> None:
-    expected_graph_keys = set(_GRAPH_KEYS)
-    if graph_spec_version == MODULE_GRAPH_SPEC_VERSION:
-        expected_graph_keys.add("expansionMap")
-    if set(graph) != expected_graph_keys:
-        raise BundleValidationError("HOCUS520", "graphSpec has missing or unknown fields.")
-    if not isinstance(graph["name"], str) or not _IDENTIFIER_PATTERN.fullmatch(graph["name"]):
-        raise BundleValidationError("HOCUS520", "graphSpec.name must be a HocusScript identifier.")
-    if not isinstance(graph["target"], str) or not _is_canonical_houdini_path(graph["target"]):
-        raise BundleValidationError("HOCUS520", "graphSpec.target must be a canonical absolute Houdini path.")
-    if graph["category"] is not None and (
-        not isinstance(graph["category"], str) or not _IDENTIFIER_PATTERN.fullmatch(graph["category"])
-    ):
-        raise BundleValidationError("HOCUS520", "graphSpec.category must be an identifier or null.")
-    if graph["ownership"] is not None and (
-        not isinstance(graph["ownership"], str) or not graph["ownership"].strip()
-    ):
-        raise BundleValidationError("HOCUS520", "graphSpec.ownership must be a non-empty string or null.")
-    for key in ("display", "render", "output"):
-        if graph[key] is not None and (
-            not isinstance(graph[key], str) or not _IDENTIFIER_PATTERN.fullmatch(graph[key])
-        ):
-            raise BundleValidationError("HOCUS520", f"graphSpec.{key} must be an identifier or null.")
-    if graph["layout"] not in {None, "auto"}:
-        raise BundleValidationError("HOCUS520", "graphSpec.layout must be auto or null.")
-    if graph["mode"] not in {"merge", "reconcile"}:
-        raise BundleValidationError("HOCUS520", "graphSpec.mode must be merge or reconcile.")
-    if graph["mode"] == "reconcile" and graph["ownership"] is None:
-        raise BundleValidationError("HOCUS520", "Reconcile GraphSpecs require ownership.")
-    if graph["expectedRevision"] is not None and (
-        not isinstance(graph["expectedRevision"], int) or isinstance(graph["expectedRevision"], bool) or graph["expectedRevision"] < 0
-    ):
-        raise BundleValidationError("HOCUS520", "graphSpec.expectedRevision must be a nonnegative integer or null.")
-    _validate_span(graph["span"], "graphSpec.span")
-    field_spans = graph["fieldSpans"]
-    allowed_field_spans = {
-        "languageVersion", "name", "target", "category", "mode", "expectedRevision", "ownership",
-        "display", "render", "output", "layout",
-    }
-    if not isinstance(field_spans, dict) or "name" not in field_spans or set(field_spans) - allowed_field_spans:
-        raise BundleValidationError("HOCUS520", "graphSpec.fieldSpans has an invalid shape.")
-    for key, span in field_spans.items():
-        _validate_span(span, f"graphSpec.fieldSpans.{key}")
-    external_nodes = graph["externalNodes"]
-    if not isinstance(external_nodes, list) or len(external_nodes) > 10_000:
-        raise BundleValidationError("HOCUS520", "graphSpec.externalNodes must be a bounded array.")
-    symbols: set[str] = set()
-    mutable_symbols: set[str] = set()
-    for index, external in enumerate(external_nodes):
-        label = f"graphSpec.externalNodes[{index}]"
-        if not isinstance(external, dict) or set(external) not in (
-            {"symbol", "path", "adopted", "span"},
-            {"symbol", "path", "adopted", "span", "fieldSpans"},
-        ):
-            raise BundleValidationError("HOCUS520", f"{label} has an invalid shape.")
-        _validate_symbol(external["symbol"], symbols, label)
-        if not isinstance(external["path"], str) or not _is_canonical_houdini_path(external["path"]):
-            raise BundleValidationError("HOCUS520", f"{label}.path must be a canonical absolute Houdini path.")
-        target_prefix = graph["target"].rstrip("/") + "/"
-        if external["path"] != graph["target"] and not external["path"].startswith(target_prefix):
-            raise BundleValidationError("HOCUS520", f"{label}.path is outside the graph target.")
-        if not isinstance(external["adopted"], bool):
-            raise BundleValidationError("HOCUS520", f"{label}.adopted must be a boolean.")
-        if external["adopted"]:
-            mutable_symbols.add(external["symbol"])
-        _validate_span(external["span"], f"{label}.span")
-        _validate_optional_field_spans(external, label, {"symbol", "path"})
-    explicit_ids: set[str] = set()
-    for index, node in enumerate(graph["nodes"]):
-        label = f"graphSpec.nodes[{index}]"
-        required_node_keys = {"symbol", "typeName", "inputs", "parms", "span"}
-        optional_node_keys = {"fieldSpans"}
-        if graph_spec_version in {GRAPH_SPEC_VERSION, MODULE_GRAPH_SPEC_VERSION}:
-            optional_node_keys.add("explicitId")
-        if (
-            not isinstance(node, dict)
-            or not required_node_keys.issubset(node)
-            or set(node) - required_node_keys - optional_node_keys
-        ):
-            raise BundleValidationError("HOCUS520", f"{label} has an invalid shape.")
-        _validate_symbol(node["symbol"], symbols, label)
-        mutable_symbols.add(node["symbol"])
-        explicit_id = node.get("explicitId")
-        if graph_spec_version == LEGACY_GRAPH_SPEC_VERSION and explicit_id is not None:
-            raise BundleValidationError("HOCUS520", f"{label}.explicitId requires GraphSpec v0.2.")
-        if explicit_id is not None:
-            if not isinstance(explicit_id, str) or not EXPLICIT_NODE_ID_PATTERN.fullmatch(explicit_id):
-                raise BundleValidationError("HOCUS520", f"{label}.explicitId is invalid.")
-            if explicit_id in explicit_ids:
-                raise BundleValidationError("HOCUS520", f"{label}.explicitId must be unique.")
-            explicit_ids.add(explicit_id)
-        if not isinstance(node["typeName"], str) or not node["typeName"].strip() or len(node["typeName"]) > 4096:
-            raise BundleValidationError("HOCUS520", f"{label}.typeName must be a non-empty string.")
-        if not isinstance(node["inputs"], list) or not isinstance(node["parms"], list):
-            raise BundleValidationError("HOCUS520", f"{label} inputs and parms must be arrays.")
-        _validate_span(node["span"], f"{label}.span")
-        expected_spans = {"symbol", "typeName"}
-        if explicit_id is not None:
-            expected_spans.add("explicitId")
-        _validate_optional_field_spans(node, label, expected_spans)
-        input_identities: set[int] = set()
-        for input_index, input_spec in enumerate(node["inputs"]):
-            _validate_input(input_spec, f"{label}.inputs[{input_index}]")
-            if input_spec["index"] in input_identities:
-                raise BundleValidationError("HOCUS520", f"{label} has duplicate input indexes.")
-            input_identities.add(input_spec["index"])
-        parm_identities: set[str] = set()
-        for parm_index, parm in enumerate(node["parms"]):
-            _validate_parm(parm, f"{label}.parms[{parm_index}]")
-            if parm["name"] in parm_identities:
-                raise BundleValidationError("HOCUS520", f"{label} has duplicate parameter assignments.")
-            parm_identities.add(parm["name"])
+    from .bundle_graph_validation import validate_graph_spec
 
-    for node in graph["nodes"]:
-        for input_spec in node["inputs"]:
-            if input_spec["source"]["symbol"] not in symbols:
-                raise BundleValidationError("HOCUS520", "GraphSpec input references an unknown symbol.")
-    for directive in ("display", "render", "output"):
-        symbol = graph[directive]
-        if symbol is not None and symbol not in symbols:
-            raise BundleValidationError("HOCUS520", f"graphSpec.{directive} references an unknown symbol.")
-        if symbol is not None and symbol not in mutable_symbols:
-            raise BundleValidationError("HOCUS520", f"graphSpec.{directive} targets a read-only existing symbol.")
-    if graph_spec_version == MODULE_GRAPH_SPEC_VERSION:
-        limits = module_limits or {
-            "expandedNodes": 10_000, "sourceMapEntries": 100_000,
-            "instances": 4096, "instanceDepth": 64, "aggregateCodeBytes": 4_194_304,
-        }
-        if len(graph["nodes"]) > limits["expandedNodes"]:
-            raise BundleValidationError("HOCUS520", "Expanded nodes exceed resolved module limits.")
-        code_bytes = sum(
-            len(value["body"].encode("utf-8"))
-            for node in graph["nodes"]
-            for parm in node["parms"]
-            for value in _walk_graph_values(parm["value"])
-            if isinstance(value, dict) and value.get("kind") == "code"
-        )
-        if code_bytes > limits["aggregateCodeBytes"]:
-            raise BundleValidationError("HOCUS520", "Expanded code exceeds resolved module limits.")
-        _validate_expansion_map(
-            graph["expansionMap"], module_dependencies or {}, entry_source_uri or "", graph, limits
-        )
-
-
-def _walk_graph_values(value: Any):
-    stack = [value]
-    while stack:
-        item = stack.pop()
-        yield item
-        if isinstance(item, dict):
-            stack.extend(item.values())
-        elif isinstance(item, list):
-            stack.extend(item)
-
-
-def _is_canonical_houdini_path(path: str) -> bool:
-    if path == "/":
-        return True
-    if not path.startswith("/") or path.endswith("/"):
-        return False
-    segments = path.split("/")[1:]
-    return bool(segments) and all(segment not in {"", ".", ".."} for segment in segments)
-
-
-def _validate_symbol(value: Any, symbols: set[str], label: str) -> None:
-    if (
-        not isinstance(value, str)
-        or not _IDENTIFIER_PATTERN.fullmatch(value)
-        or value in symbols
-    ):
-        raise BundleValidationError("HOCUS520", f"{label}.symbol must be a unique identifier.")
-    symbols.add(value)
-
-
-def _validate_input(value: Any, label: str) -> None:
-    if not isinstance(value, dict) or set(value) not in (
-        {"index", "source", "span"}, {"index", "source", "span", "fieldSpans"},
-    ):
-        raise BundleValidationError("HOCUS520", f"{label} has an invalid shape.")
-    if not isinstance(value["index"], int) or isinstance(value["index"], bool) or value["index"] < 0:
-        raise BundleValidationError("HOCUS520", f"{label}.index must be a nonnegative integer.")
-    source = value["source"]
-    if not isinstance(source, dict) or set(source) not in (
-        {"symbol", "outputIndex", "span"}, {"symbol", "outputIndex", "span", "fieldSpans"},
-    ):
-        raise BundleValidationError("HOCUS520", f"{label}.source has an invalid shape.")
-    if not isinstance(source["symbol"], str) or not _IDENTIFIER_PATTERN.fullmatch(source["symbol"]):
-        raise BundleValidationError("HOCUS520", f"{label}.source.symbol must be an identifier.")
-    if not isinstance(source["outputIndex"], int) or isinstance(source["outputIndex"], bool) or source["outputIndex"] < 0:
-        raise BundleValidationError("HOCUS520", f"{label}.source.outputIndex must be nonnegative.")
-    _validate_span(source["span"], f"{label}.source.span")
-    _validate_span(value["span"], f"{label}.span")
-    _validate_optional_field_spans(source, f"{label}.source", {"symbol", "outputIndex"})
-    _validate_optional_field_spans(value, label, {"index"})
-
-
-def _validate_parm(value: Any, label: str) -> None:
-    if not isinstance(value, dict) or set(value) not in (
-        {"name", "value", "span"}, {"name", "value", "span", "fieldSpans"},
-    ):
-        raise BundleValidationError("HOCUS520", f"{label} has an invalid shape.")
-    if not isinstance(value["name"], str) or not _IDENTIFIER_PATTERN.fullmatch(value["name"]):
-        raise BundleValidationError("HOCUS520", f"{label}.name must be an identifier.")
-    _validate_value(value["value"], f"{label}.value")
-    _validate_span(value["span"], f"{label}.span")
-    _validate_optional_field_spans(value, label, {"name"})
-
-
-def _validate_optional_field_spans(value: dict[str, Any], label: str, expected: set[str]) -> None:
-    if "fieldSpans" not in value:
-        return
-    field_spans = value["fieldSpans"]
-    if not isinstance(field_spans, dict) or set(field_spans) != expected:
-        raise BundleValidationError("HOCUS520", f"{label}.fieldSpans has an invalid shape.")
-    for key, span in field_spans.items():
-        _validate_span(span, f"{label}.fieldSpans.{key}")
-
-
-def _validate_value(value: Any, label: str) -> None:
-    if not isinstance(value, dict) or "kind" not in value:
-        raise BundleValidationError("HOCUS520", f"{label} must be a typed value object.")
-    kind = value["kind"]
-    if kind == "literal" and set(value) == {"kind", "value", "span"}:
-        literal = value["value"]
-        if literal is not None and not isinstance(literal, (str, bool, int, float)):
-            raise BundleValidationError("HOCUS520", f"{label}.value is not a scalar literal.")
-        _validate_span(value["span"], f"{label}.span")
-        return
-    if kind == "array" and set(value) == {"kind", "items", "span"} and isinstance(value["items"], list):
-        for index, item in enumerate(value["items"]):
-            _validate_value(item, f"{label}.items[{index}]")
-        _validate_span(value["span"], f"{label}.span")
-        return
-    if kind == "code" and set(value) in (
-        {"kind", "language", "body", "span"},
-        {"kind", "language", "body", "span", "bodySpan", "offsetMap"},
-    ):
-        if value["language"] not in {"vex", "python", "hscript"} or not isinstance(value["body"], str):
-            raise BundleValidationError("HOCUS520", f"{label} code language must be vex/python/hscript and body must be a string.")
-        _validate_span(value["span"], f"{label}.span")
-        if "bodySpan" in value:
-            _validate_span(value["bodySpan"], f"{label}.bodySpan")
-            _validate_code_offset_map(value["offsetMap"], value["body"], value["bodySpan"], label)
-        return
-    raise BundleValidationError("HOCUS520", f"{label} has an invalid typed value shape.")
-
-
-def _validate_code_offset_map(value: Any, body: str, body_span: dict[str, Any], label: str) -> None:
-    if not isinstance(value, dict) or set(value) != {"bodyLength", "checkpoints"}:
-        raise BundleValidationError("HOCUS520", f"{label}.offsetMap has an invalid shape.")
-    if type(value["bodyLength"]) is not int or value["bodyLength"] != len(body):
-        raise BundleValidationError("HOCUS520", f"{label}.offsetMap body length is inconsistent.")
-    checkpoints = value["checkpoints"]
-    if not isinstance(checkpoints, list) or not checkpoints:
-        raise BundleValidationError("HOCUS520", f"{label}.offsetMap checkpoints must be non-empty.")
-    previous = (-1, -1)
-    normalized: list[tuple[int, int]] = []
-    for checkpoint in checkpoints:
-        if not isinstance(checkpoint, dict) or set(checkpoint) != {"bodyOffset", "sourceOffset"}:
-            raise BundleValidationError("HOCUS520", f"{label}.offsetMap checkpoint has an invalid shape.")
-        pair = (checkpoint["bodyOffset"], checkpoint["sourceOffset"])
-        if any(type(item) is not int or item < 0 for item in pair):
-            raise BundleValidationError("HOCUS520", f"{label}.offsetMap checkpoints must be monotonic integers.")
-        if previous != (-1, -1):
-            body_delta = pair[0] - previous[0]
-            source_delta = pair[1] - previous[1]
-            if body_delta <= 0 or source_delta < body_delta:
-                raise BundleValidationError("HOCUS520", f"{label}.offsetMap checkpoints are not physically possible.")
-        previous = pair
-        normalized.append(pair)
-    expected_start = body_span["start"]["offset"]
-    expected_end = body_span["end"]["offset"]
-    if normalized[0] != (0, expected_start) or normalized[-1] != (len(body), expected_end):
-        raise BundleValidationError("HOCUS520", f"{label}.offsetMap endpoints are inconsistent with bodySpan.")
+    validate_graph_spec(
+        graph, graph_spec_version=graph_spec_version,
+        module_dependencies=module_dependencies, entry_source_uri=entry_source_uri,
+        module_limits=module_limits,
+    )
 
 
 def _validate_span(value: Any, label: str) -> None:
-    if not isinstance(value, dict) or set(value) != {"sourceUri", "start", "end"}:
-        raise BundleValidationError("HOCUS520", f"{label} has an invalid span shape.")
-    if not isinstance(value["sourceUri"], str) or not value["sourceUri"] or len(value["sourceUri"]) > 1024:
-        raise BundleValidationError("HOCUS520", f"{label}.sourceUri must be a bounded non-empty string.")
-    for endpoint in ("start", "end"):
-        position = value[endpoint]
-        if not isinstance(position, dict) or set(position) != {"offset", "line", "column"}:
-            raise BundleValidationError("HOCUS520", f"{label}.{endpoint} has an invalid position shape.")
-        if any(not isinstance(position[key], int) or isinstance(position[key], bool) for key in position):
-            raise BundleValidationError("HOCUS520", f"{label}.{endpoint} values must be integers.")
-        if position["offset"] < 0 or position["line"] < 1 or position["column"] < 1:
-            raise BundleValidationError("HOCUS520", f"{label}.{endpoint} values are out of range.")
-    start = value["start"]
-    end = value["end"]
-    if end["offset"] < start["offset"] or (end["line"], end["column"]) < (start["line"], start["column"]):
-        raise BundleValidationError("HOCUS520", f"{label} end precedes its start.")
+    from .bundle_graph_validation import validate_span
+
+    validate_span(value, label)
 
 
 def _validate_declared_source_uris(value: Any, allowed: set[str]) -> None:
-    stack = [value]
-    while stack:
-        item = stack.pop()
-        if isinstance(item, dict):
-            if {"sourceUri", "start", "end"}.issubset(item) and item["sourceUri"] not in allowed:
-                raise BundleValidationError(
-                    "HOCUS520",
-                    "GraphSpec source span references an undeclared source URI.",
-                    details={"sourceUri": item["sourceUri"]},
-                )
-            stack.extend(item.values())
-        elif isinstance(item, list):
-            stack.extend(item)
+    from .bundle_graph_validation import validate_declared_source_uris
+
+    validate_declared_source_uris(value, allowed)
 
 
 def _required_capabilities(graph_spec: dict[str, Any]) -> list[str]:
-    capabilities = {"edit_scene"}
-    stack: list[Any] = [graph_spec]
-    while stack:
-        value = stack.pop()
-        if isinstance(value, dict):
-            if value.get("kind") == "code":
-                capabilities.add("run_code")
-            stack.extend(value.values())
-        elif isinstance(value, list):
-            stack.extend(value)
-    return sorted(capabilities)
+    from .bundle_graph_validation import required_capabilities
+
+    return required_capabilities(graph_spec)
 
 
 def _validate_complexity(value: Any, *, max_values: int = MAX_BUNDLE_VALUES) -> None:
-    count = 0
-    stack: list[tuple[Any, int]] = [(value, 0)]
-    while stack:
-        item, depth = stack.pop()
-        count += 1
-        if count > max_values or depth > MAX_BUNDLE_DEPTH:
-            raise BundleValidationError("HOCUS519", "Compiled bundle exceeds structural complexity limits.")
-        if isinstance(item, float) and not math.isfinite(item):
-            raise BundleValidationError("HOCUS519", "Compiled bundle contains a non-finite number.")
-        if isinstance(item, dict):
-            stack.extend((child, depth + 1) for child in item.values())
-        elif isinstance(item, list):
-            stack.extend((child, depth + 1) for child in item)
+    from .bundle_graph_validation import validate_complexity
+
+    validate_complexity(value, max_values=max_values)
 
 
 def _require_digest(value: Any, label: str, code: str) -> str:
-    if not isinstance(value, str) or not _DIGEST_PATTERN.fullmatch(value):
-        raise BundleValidationError(code, f"{label} must be a lowercase SHA-256 digest.")
-    return value
+    from .bundle_graph_validation import require_digest
+
+    return require_digest(value, label, code)
 
 
 def _require_equal(payload: dict[str, Any], key: str, expected: Any, code: str) -> None:
-    if payload.get(key) != expected:
-        raise BundleValidationError(code, f"{key} must equal {expected!r}.")
+    from .bundle_graph_validation import require_equal
+
+    require_equal(payload, key, expected, code)
 
 
 def _canonical_json(payload: dict[str, Any]) -> str:
-    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True, allow_nan=False)
+    from .bundle_graph_validation import canonical_json
+
+    return canonical_json(payload)

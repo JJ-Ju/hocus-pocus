@@ -641,73 +641,97 @@ def _validate_relations(snapshot: CatalogSnapshot) -> None:
         _fail("catalog.duplicate", "Operator category/name identities must be unique.", "$.operators")
     for index, operator in enumerate(snapshot.operators):
         path = f"$.operators[{index}]"
-        if operator.category not in categories:
-            _fail("catalog.reference", f"Unknown category {operator.category}.", path + ".category")
-        if operator.source.package_id is not None and operator.source.package_id not in packages:
-            _fail("catalog.reference", f"Unknown package {operator.source.package_id}.", path + ".source.packageId")
-        if operator.source.kind in {"package", "labs"} and operator.source.package_id is None:
-            _fail("catalog.reference", "Package and Labs definitions require packageId.", path + ".source.packageId")
-        if (operator.source.kind in {"package", "labs"} and operator.source.package_id is not None
-                and packages_by_id[operator.source.package_id].kind != operator.source.kind):
-            _fail("catalog.reference", "Definition source kind must match its package kind.", path + ".source")
-        if operator.source.kind == "builtin" and operator.source.package_id is not None:
-            _fail("catalog.reference", "Builtin definitions cannot declare packageId.", path + ".source.packageId")
-        if operator.source.kind == "hda" and operator.source.hda_library is None:
-            _fail("catalog.hda", "HDA definitions require hdaLibrary metadata.", path + ".source")
-        if operator.source.kind != "hda" and operator.source.hda_library is not None:
-            _fail("catalog.hda", "Only HDA definitions may include hdaLibrary metadata.", path + ".source")
+        _validate_operator_source(operator, categories, packages_by_id, path)
         tokens = [item.token for item in operator.parameters]
         if len(set(tokens)) != len(tokens):
             _fail("catalog.duplicate", "Parameter tokens must be unique.", path + ".parameters")
         for parameter in operator.parameters:
-            if parameter.tuple_size == 1 and parameter.tuple_names:
-                _fail("catalog.tuple_shape", "Scalar parameters cannot declare tupleNames.", path + ".parameters")
-            if parameter.value_type == "tuple" and parameter.tuple_size < 2:
-                _fail("catalog.tuple_shape", "Tuple parameters require tupleSize >= 2.", path + ".parameters")
-            if parameter.value_type in {"code", "button", "ramp", "multiparm"} and parameter.tuple_size != 1:
-                _fail("catalog.tuple_shape", f"{parameter.value_type} parameters require tupleSize 1.", path + ".parameters")
-            if parameter.value_type != "menu" and parameter.menu:
-                _fail("catalog.menu", "Only menu parameters may declare menu items.", path + ".parameters")
-            if parameter.value_type == "menu" and not parameter.menu:
-                _fail("catalog.menu", "Menu parameters require menu items.", path + ".parameters")
-            if parameter.value_type == "menu" and parameter.default is not None:
-                menu_tokens = {item.token for item in parameter.menu}
-                defaults = (
-                    parameter.default
-                    if parameter.tuple_size > 1 and isinstance(parameter.default, tuple)
-                    else (parameter.default,)
-                )
-                if any(item not in menu_tokens for item in defaults):
-                    _fail("catalog.menu", "Menu defaults must use a declared stable token.", path + ".parameters")
-            if parameter.value_type in {"button", "ramp", "multiparm"} and parameter.assignable:
-                _fail(
-                    "catalog.action",
-                    f"{parameter.value_type} parameters cannot be ordinary assignments in HocusScript 0.1.",
-                    path + ".parameters",
-                )
-            if parameter.tuple_size > 1:
-                if parameter.default is not None and (
-                    not isinstance(parameter.default, tuple) or len(parameter.default) != parameter.tuple_size
-                ):
-                    _fail("catalog.tuple_shape", "Tuple defaults must match tupleSize.", path + ".parameters")
-                if parameter.default is not None and any(not _is_catalog_scalar(item) for item in parameter.default):
-                    _fail("catalog.tuple_shape", "Tuple defaults must contain scalar values.", path + ".parameters")
-                if (
-                    parameter.default is not None
-                    and parameter.value_type != "tuple"
-                    and any(not _default_matches_type(parameter.value_type, item) for item in parameter.default)
-                ):
-                    _fail("catalog.default", "Tuple default components do not match the declared type.", path + ".parameters")
-            elif not _default_matches_type(parameter.value_type, parameter.default):
-                _fail("catalog.default", "Parameter default does not match its declared type.", path + ".parameters")
-            if parameter.code_surface != "none" and parameter.value_type != "code":
-                _fail("catalog.code_surface", "Only code parameters may declare a code surface.", path + ".parameters")
-            if parameter.value_type == "code" and parameter.code_surface == "none":
-                _fail("catalog.code_surface", "Code parameters require a declared code surface.", path + ".parameters")
+            _validate_parameter_relation(parameter, path + ".parameters")
         for connector in (*operator.inputs, *operator.outputs):
             unknown_categories = set(connector.categories) - categories
             if unknown_categories:
                 _fail("catalog.reference", f"Unknown connector category {sorted(unknown_categories)[0]}.", path)
+
+
+def _validate_operator_source(
+    operator: OperatorDefinition,
+    categories: set[str],
+    packages_by_id: dict[str, PackageDefinition],
+    path: str,
+) -> None:
+    source = operator.source
+    package_id = source.package_id
+    if operator.category not in categories:
+        _fail("catalog.reference", f"Unknown category {operator.category}.", path + ".category")
+    if package_id is not None and package_id not in packages_by_id:
+        _fail("catalog.reference", f"Unknown package {package_id}.", path + ".source.packageId")
+    if source.kind in {"package", "labs"} and package_id is None:
+        _fail("catalog.reference", "Package and Labs definitions require packageId.", path + ".source.packageId")
+    if (
+        source.kind in {"package", "labs"}
+        and package_id is not None
+        and packages_by_id[package_id].kind != source.kind
+    ):
+        _fail("catalog.reference", "Definition source kind must match its package kind.", path + ".source")
+    if source.kind == "builtin" and package_id is not None:
+        _fail("catalog.reference", "Builtin definitions cannot declare packageId.", path + ".source.packageId")
+    if source.kind == "hda" and source.hda_library is None:
+        _fail("catalog.hda", "HDA definitions require hdaLibrary metadata.", path + ".source")
+    if source.kind != "hda" and source.hda_library is not None:
+        _fail("catalog.hda", "Only HDA definitions may include hdaLibrary metadata.", path + ".source")
+
+
+def _validate_parameter_relation(parameter: ParameterDefinition, path: str) -> None:
+    value_type = parameter.value_type
+    if parameter.tuple_size == 1 and parameter.tuple_names:
+        _fail("catalog.tuple_shape", "Scalar parameters cannot declare tupleNames.", path)
+    if value_type == "tuple" and parameter.tuple_size < 2:
+        _fail("catalog.tuple_shape", "Tuple parameters require tupleSize >= 2.", path)
+    if value_type in {"code", "button", "ramp", "multiparm"} and parameter.tuple_size != 1:
+        _fail("catalog.tuple_shape", f"{value_type} parameters require tupleSize 1.", path)
+    _validate_parameter_menu(parameter, path)
+    if value_type in {"button", "ramp", "multiparm"} and parameter.assignable:
+        _fail("catalog.action", f"{value_type} parameters cannot be ordinary assignments in HocusScript 0.1.", path)
+    _validate_parameter_default(parameter, path)
+    if parameter.code_surface != "none" and value_type != "code":
+        _fail("catalog.code_surface", "Only code parameters may declare a code surface.", path)
+    if value_type == "code" and parameter.code_surface == "none":
+        _fail("catalog.code_surface", "Code parameters require a declared code surface.", path)
+
+
+def _validate_parameter_menu(parameter: ParameterDefinition, path: str) -> None:
+    if parameter.value_type != "menu" and parameter.menu:
+        _fail("catalog.menu", "Only menu parameters may declare menu items.", path)
+    if parameter.value_type == "menu" and not parameter.menu:
+        _fail("catalog.menu", "Menu parameters require menu items.", path)
+    if parameter.value_type != "menu" or parameter.default is None:
+        return
+    menu_tokens = {item.token for item in parameter.menu}
+    defaults = (
+        parameter.default
+        if parameter.tuple_size > 1 and isinstance(parameter.default, tuple)
+        else (parameter.default,)
+    )
+    if any(item not in menu_tokens for item in defaults):
+        _fail("catalog.menu", "Menu defaults must use a declared stable token.", path)
+
+
+def _validate_parameter_default(parameter: ParameterDefinition, path: str) -> None:
+    if parameter.tuple_size <= 1:
+        if not _default_matches_type(parameter.value_type, parameter.default):
+            _fail("catalog.default", "Parameter default does not match its declared type.", path)
+        return
+    default = parameter.default
+    if default is not None and (not isinstance(default, tuple) or len(default) != parameter.tuple_size):
+        _fail("catalog.tuple_shape", "Tuple defaults must match tupleSize.", path)
+    if default is not None and any(not _is_catalog_scalar(item) for item in default):
+        _fail("catalog.tuple_shape", "Tuple defaults must contain scalar values.", path)
+    if (
+        default is not None
+        and parameter.value_type != "tuple"
+        and any(not _default_matches_type(parameter.value_type, item) for item in default)
+    ):
+        _fail("catalog.default", "Tuple default components do not match the declared type.", path)
 
 
 def _is_catalog_scalar(value: Any) -> bool:

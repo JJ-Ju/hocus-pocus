@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from os import PathLike, fspath
 import os
@@ -34,6 +35,113 @@ from .resolved_modules import (
 )
 
 
+@dataclass(slots=True)
+class _ProjectResolver:
+    context: ProjectContext
+    verification: LockVerificationResult
+    limits: ResolvedModuleLimits
+    cancelled: Callable[[], bool] | None
+    root: Path
+    lock_by_uri: dict[str, ModuleLockRecord]
+    envelopes: dict[str, ModuleSourceEnvelope]
+    states: dict[str, str]
+    portable_paths: set[str]
+    decisions: list[tuple[Path, str, Path]]
+    aggregate: int
+
+    def select_target(self, importer: Path, specifier: str) -> Path:
+        return _select_project_module_target(
+            self.context, importer, specifier, cancelled=self.cancelled,
+        )
+
+    def resolve_import(self, importer: Path, declaration) -> tuple[ResolvedImport, ModuleLockRecord, Path]:
+        specifier = declaration.specifier
+        if not is_literal_import_specifier(specifier) or specifier.startswith("@"):
+            raise ProjectError("HOCUS460", "External or nonportable imports are disabled in Batch C.")
+        target = self.select_target(importer, specifier)
+        self.decisions.append((importer, specifier, target))
+        relative = target.relative_to(self.root).as_posix()
+        uri = _project_uri(self.verification.project_uid, relative)
+        locked = self.lock_by_uri.get(uri)
+        if locked is None or locked.external_alias is not None:
+            raise ProjectError(
+                "HOCUS462",
+                "Resolved module does not match a same-project verified lock record.",
+                details={"moduleUri": uri},
+            )
+        return (
+            ResolvedImport(
+                declaration.specifier, declaration.imported_name,
+                declaration.local_name, uri, declaration.span,
+            ),
+            locked,
+            target,
+        )
+
+    def visit(self, locked: ModuleLockRecord, path: Path, depth: int) -> None:
+        _cancel(self.cancelled)
+        if depth > self.limits.import_depth:
+            raise ModuleResolutionError("HOCUS464", "Native module closure exceeds importDepth.")
+        state = self.states.get(locked.module_uri)
+        if state == "visiting":
+            raise ModuleResolutionError("HOCUS463", "Native module imports contain a cycle.")
+        if state == "done":
+            return
+        if len(self.envelopes) >= self.limits.module_files:
+            raise ModuleResolutionError("HOCUS464", "Native module closure exceeds moduleFiles.")
+        self.states[locked.module_uri] = "visiting"
+        relative = path.relative_to(self.root).as_posix()
+        if (
+            locked.source_path != relative
+            or locked.module_uri != _project_uri(self.verification.project_uid, relative)
+        ):
+            raise ProjectError("HOCUS462", "Resolved physical module conflicts with its verified lock identity.")
+        key = _portable_path_key(relative)
+        if key in self.portable_paths:
+            raise ProjectError("HOCUS462", "Resolved files alias after portable path normalization.")
+        self.portable_paths.add(key)
+        source = _read_source(path, self.limits, self.cancelled)
+        self.aggregate += len(source)
+        if self.aggregate > self.limits.aggregate_source_bytes:
+            raise ModuleResolutionError("HOCUS464", "Native source closure exceeds aggregateSourceBytes.")
+        syntax = _parse(source, locked.module_uri, graph=False)
+        imports: list[ResolvedImport] = []
+        targets: list[tuple[ModuleLockRecord, Path]] = []
+        for declaration in syntax.imports:
+            _cancel(self.cancelled)
+            resolved, target_lock, target_path = self.resolve_import(path, declaration)
+            imports.append(resolved)
+            targets.append((target_lock, target_path))
+        self.envelopes[locked.module_uri] = ModuleSourceEnvelope(
+            locked.module_uri, source, tuple(imports),
+        )
+        for target_lock, target_path in targets:
+            self.visit(target_lock, target_path, depth + 1)
+        self.states[locked.module_uri] = "done"
+
+    def resolve_entry_imports(self, entry: Path, entry_syntax) -> tuple[ResolvedImport, ...]:
+        entry_imports: list[ResolvedImport] = []
+        entry_targets: list[tuple[ModuleLockRecord, Path]] = []
+        for declaration in entry_syntax.imports:
+            _cancel(self.cancelled)
+            resolved, target_lock, target_path = self.resolve_import(entry, declaration)
+            entry_imports.append(resolved)
+            entry_targets.append((target_lock, target_path))
+        for target_lock, target_path in entry_targets:
+            self.visit(target_lock, target_path, 1)
+        return tuple(entry_imports)
+
+    def recheck_decisions(self) -> None:
+        for importer, specifier, selected in self.decisions:
+            _cancel(self.cancelled)
+            if self.select_target(importer, specifier) != selected:
+                raise ProjectError(
+                    "HOCUS428",
+                    "Import resolution changed while sources were being read.",
+                    details={"specifier": specifier},
+                )
+
+
 def resolve_project_module_dag(
     project_directory: str | Path,
     entry_source_path: str | PathLike[str],
@@ -48,24 +156,7 @@ def resolve_project_module_dag(
     filesystem sandbox.
     """
     project_text = _validate_project_directory(project_directory)
-    authored_entry = entry_source_path
-    try:
-        entry_source_path = fspath(entry_source_path)
-    except TypeError as exc:
-        raise ProjectError("HOCUS460", "entry_source_path must be a relative string path.") from exc
-    if not isinstance(entry_source_path, str):
-        raise ProjectError("HOCUS460", "entry_source_path must be a relative string path.")
-    if not isinstance(authored_entry, str):
-        path_value = Path(entry_source_path)
-        if path_value.is_absolute() or path_value.drive:
-            raise ProjectError("HOCUS460", "entry_source_path must be project-relative.")
-        entry_source_path = path_value.as_posix()
-    try:
-        _validate_relative_artifact_path(entry_source_path, "entry_source_path", code="HOCUS460")
-    except ProjectError:
-        raise
-    if not entry_source_path.endswith(".hocus"):
-        raise ProjectError("HOCUS460", "entry_source_path must identify a .hocus file.")
+    entry_source_path = _validated_entry_path_text(entry_source_path)
     selected_limits = limits or ResolvedModuleLimits()
     _validate_limits(selected_limits)
     _cancel(cancelled)
@@ -94,107 +185,31 @@ def resolve_project_module_dag(
     entry_bytes = _read_source(entry, selected_limits, cancelled)
     entry_syntax = _parse(entry_bytes, entry_uri, graph=True)
 
-    lock_by_uri = {record.module_uri: record for record in verification.modules}
-    envelopes: dict[str, ModuleSourceEnvelope] = {}
-    states: dict[str, str] = {}
-    portable_paths = {_portable_path_key(entry_relative)}
-    aggregate = len(entry_bytes)
-    decisions: list[tuple[Path, str, Path]] = []
     if len(context.module_directory_paths) != len(context.module_directories):
         raise ProjectError("HOCUS452", "Verified project lost ordered module-directory provenance.")
     for authored_root in context.module_directory_paths:
         _reject_reparse_components(root / authored_root, root)
         _require_exact_windows_casing(root / authored_root, root)
 
-    def select_target(importer: Path, specifier: str) -> Path:
-        return _select_project_module_target(context, importer, specifier, cancelled=cancelled)
-
-    def resolve_import(importer: Path, declaration) -> tuple[ResolvedImport, ModuleLockRecord, Path]:
-        specifier = declaration.specifier
-        if not is_literal_import_specifier(specifier) or specifier.startswith("@"):
-            raise ProjectError("HOCUS460", "External or nonportable imports are disabled in Batch C.")
-        target = select_target(importer, specifier)
-        decisions.append((importer, specifier, target))
-        relative = target.relative_to(root).as_posix()
-        uri = _project_uri(verification.project_uid, relative)
-        locked = lock_by_uri.get(uri)
-        if locked is None or locked.external_alias is not None:
-            raise ProjectError("HOCUS462", "Resolved module does not match a same-project verified lock record.",
-                               details={"moduleUri": uri})
-        return (
-            ResolvedImport(
-                declaration.specifier, declaration.imported_name, declaration.local_name,
-                uri, declaration.span,
-            ),
-            locked,
-            target,
-        )
-
-    def visit(locked: ModuleLockRecord, path: Path, depth: int) -> None:
-        nonlocal aggregate
-        _cancel(cancelled)
-        if depth > selected_limits.import_depth:
-            raise ModuleResolutionError("HOCUS464", "Native module closure exceeds importDepth.")
-        state = states.get(locked.module_uri)
-        if state == "visiting":
-            raise ModuleResolutionError("HOCUS463", "Native module imports contain a cycle.")
-        if state == "done":
-            return
-        if len(envelopes) >= selected_limits.module_files:
-            raise ModuleResolutionError("HOCUS464", "Native module closure exceeds moduleFiles.")
-        states[locked.module_uri] = "visiting"
-        relative = path.relative_to(root).as_posix()
-        if locked.source_path != relative or locked.module_uri != _project_uri(verification.project_uid, relative):
-            raise ProjectError("HOCUS462", "Resolved physical module conflicts with its verified lock identity.")
-        key = _portable_path_key(relative)
-        if key in portable_paths:
-            raise ProjectError("HOCUS462", "Resolved files alias after portable path normalization.")
-        portable_paths.add(key)
-        source = _read_source(path, selected_limits, cancelled)
-        aggregate += len(source)
-        if aggregate > selected_limits.aggregate_source_bytes:
-            raise ModuleResolutionError("HOCUS464", "Native source closure exceeds aggregateSourceBytes.")
-        syntax = _parse(source, locked.module_uri, graph=False)
-        imports: list[ResolvedImport] = []
-        targets: list[tuple[ModuleLockRecord, Path]] = []
-        for declaration in syntax.imports:
-            _cancel(cancelled)
-            resolved, target_lock, target_path = resolve_import(path, declaration)
-            imports.append(resolved)
-            targets.append((target_lock, target_path))
-        envelope = ModuleSourceEnvelope(locked.module_uri, source, tuple(imports))
-        envelopes[locked.module_uri] = envelope
-        for target_lock, target_path in targets:
-            visit(target_lock, target_path, depth + 1)
-        states[locked.module_uri] = "done"
-
-    entry_imports: list[ResolvedImport] = []
-    entry_targets: list[tuple[ModuleLockRecord, Path]] = []
-    for declaration in entry_syntax.imports:
-        _cancel(cancelled)
-        resolved, target_lock, target_path = resolve_import(entry, declaration)
-        entry_imports.append(resolved)
-        entry_targets.append((target_lock, target_path))
-    for target_lock, target_path in entry_targets:
-        visit(target_lock, target_path, 1)
-
+    resolver = _ProjectResolver(
+        context, verification, selected_limits, cancelled, root,
+        {record.module_uri: record for record in verification.modules},
+        {}, {}, {_portable_path_key(entry_relative)}, [], len(entry_bytes),
+    )
+    entry_imports = resolver.resolve_entry_imports(entry, entry_syntax)
     policy = _project_module_resolver_policy(context)
     if context.catalog_content_digest is None or context.catalog_fingerprint is None:
         raise ProjectError("HOCUS452", "Native module resolution requires exact verified catalog pins.")
-    for importer, specifier, selected in decisions:
-        _cancel(cancelled)
-        if select_target(importer, specifier) != selected:
-            raise ProjectError("HOCUS428", "Import resolution changed while sources were being read.",
-                               details={"specifier": specifier})
+    resolver.recheck_decisions()
     return validate_resolved_module_dag(
-        tuple(envelopes.values()),
+        tuple(resolver.envelopes.values()),
         lock_verification=LockVerificationResult(
             verification.project_uid, verification.manifest_digest,
             verification.lock_digest, verification.modules,
         ),
         entry_source_uri=entry_uri,
         entry_source=entry_bytes,
-        entry_imports=tuple(entry_imports),
+        entry_imports=entry_imports,
         resolver_policy=policy,
         resolver_policy_digest=module_interface_digest(policy),
         catalog_content_digest=context.catalog_content_digest,
@@ -202,6 +217,25 @@ def resolve_project_module_dag(
         limits=selected_limits,
         cancelled=cancelled,
     )
+
+
+def _validated_entry_path_text(value: str | PathLike[str]) -> str:
+    authored = value
+    try:
+        value = fspath(value)
+    except TypeError as exc:
+        raise ProjectError("HOCUS460", "entry_source_path must be a relative string path.") from exc
+    if not isinstance(value, str):
+        raise ProjectError("HOCUS460", "entry_source_path must be a relative string path.")
+    if not isinstance(authored, str):
+        path_value = Path(value)
+        if path_value.is_absolute() or path_value.drive:
+            raise ProjectError("HOCUS460", "entry_source_path must be project-relative.")
+        value = path_value.as_posix()
+    _validate_relative_artifact_path(value, "entry_source_path", code="HOCUS460")
+    if not value.endswith(".hocus"):
+        raise ProjectError("HOCUS460", "entry_source_path must identify a .hocus file.")
+    return value
 
 
 def _canonical_file(path: Path, root: Path, label: str) -> Path:

@@ -21,6 +21,8 @@ This is an incremental extension of the document graph architecture, not a paral
 - Keep Houdini MCP content-based; it consumes compiled bundles and never needs general project-file access.
 - Treat offline automated tests and live-Houdini tests as separate required gates.
 - Cap the complete repository catalogue at 50 public workflow scenarios; do not use implementation-detail test volume as delivery evidence.
+- Cap every source, script, config, documentation, and fixture file at 1,200 physical lines.
+- Enforce explicit function complexity ceilings in Ruff and require the whole repository to comply without grandfathered files or suppressions.
 - Mark code-only, live-validated, and production-validated states distinctly.
 
 ## 3. Phase Overview

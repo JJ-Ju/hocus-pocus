@@ -215,36 +215,38 @@ def _parameter_type(
     kind = template_type.lower()
     evidence = " ".join((token, *tags.keys(), *tags.values())).lower()
     if "button" in kind:
-        return "button"
-    if menu:
-        return "menu"
-    if code_surface != "none":
-        return "code"
-    if "toggle" in kind:
-        return "bool"
-    if "ramp" in kind:
-        return "ramp"
-    if "multiparm" in kind:
-        return "multiparm"
-    if "float" in kind:
-        return "float"
-    if "int" in kind:
-        return "int"
-    if "string" in kind:
-        if "filereference" in evidence:
-            return "file_path"
-        if "nodereference" in evidence:
-            return "node_path"
-        if "usd" in evidence and ("prim" in evidence or "path" in evidence):
-            return "usd_prim_path"
-        if "filechooser" in evidence or "file path" in evidence:
-            return "file_path"
-        if "opfilter" in evidence or "node path" in evidence:
-            return "node_path"
-        if "parm path" in evidence:
-            return "parm_path"
-        return "string"
-    return None
+        result = "button"
+    elif menu:
+        result = "menu"
+    elif code_surface != "none":
+        result = "code"
+    elif "toggle" in kind:
+        result = "bool"
+    elif "ramp" in kind:
+        result = "ramp"
+    elif "multiparm" in kind:
+        result = "multiparm"
+    elif "float" in kind:
+        result = "float"
+    elif "int" in kind:
+        result = "int"
+    elif "string" in kind:
+        result = _string_parameter_type(evidence)
+    else:
+        result = None
+    return result
+
+
+def _string_parameter_type(evidence: str) -> str:
+    if "filereference" in evidence or "filechooser" in evidence or "file path" in evidence:
+        return "file_path"
+    if "nodereference" in evidence or "opfilter" in evidence or "node path" in evidence:
+        return "node_path"
+    if "usd" in evidence and ("prim" in evidence or "path" in evidence):
+        return "usd_prim_path"
+    if "parm path" in evidence:
+        return "parm_path"
+    return "string"
 
 
 def _parameter_range(template: Any) -> ParmRange | None:

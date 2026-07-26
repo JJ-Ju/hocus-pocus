@@ -598,61 +598,138 @@ def _validate_module_body(unit: ResolvedModuleUnit, modules: Mapping[str, Resolv
     nodes: dict[str, str] = {
         statement.symbol: "node_output" for statement in module.statements if isinstance(statement, NodeDecl)
     }
-    uses: dict[str, dict[str, str]] = {}
-    for statement in module.statements:
-        if isinstance(statement, UseDecl):
-            resolved_import = unit.imports.get(statement.module_name)
-            if resolved_import is None or _target_uri(resolved_import) not in modules:
-                raise ModuleExpansionError("HOCUS466", f"Unknown imported module: {statement.module_name}.", statement.module_name_span)
-            target = modules[_target_uri(resolved_import)].declaration
-            uses[statement.symbol] = {item.name: item.type_name for item in target.exports}
+    uses = _module_use_types(unit, modules)
     exports: dict[str, ExportStmt] = {}
     for statement in module.statements:
-        if isinstance(statement, NodeDecl):
-            for child in statement.statements:
-                if isinstance(child, InputStmt):
-                    actual = _infer_expr_type(child.source, parameters, nodes, uses)
-                    if actual != "node_output":
-                        _type_mismatch("node_output", actual, child.source.span)
-                    if child.index < 0 or getattr(child.source, "output_index", 0) is not None and getattr(child.source, "output_index", 0) < 0:
-                        raise ModuleExpansionError("HOCUS474", "Node input/output indices must be nonnegative.", child.span)
-                elif isinstance(child, ParmStmt) and isinstance(child.value, (ParamRefExpr, SymbolRefExpr, LiteralExpr)):
-                    actual = _infer_expr_type(child.value, parameters, nodes, uses)
-                    if actual == "node_output":
-                        raise ModuleExpansionError("HOCUS470", "node_output cannot be assigned to a scalar parameter.", child.value.span)
-        elif isinstance(statement, UseDecl):
-            resolved_import = unit.imports.get(statement.module_name)
-            if resolved_import is None:
-                raise ModuleExpansionError("HOCUS466", f"Unknown imported module: {statement.module_name}.", statement.module_name_span)
-            target = modules[_target_uri(resolved_import)].declaration
-            authored: dict[str, Any] = {}
-            for argument in statement.arguments:
-                if argument.name in authored:
-                    raise ModuleExpansionError("HOCUS469", f"Duplicate named argument: {argument.name}.", argument.span)
-                authored[argument.name] = argument
-            declared = {item.name: item for item in target.parameters}
-            if set(authored) - set(declared):
-                argument = authored[sorted(set(authored) - set(declared))[0]]
-                raise ModuleExpansionError("HOCUS469", f"Unknown named argument: {argument.name}.", argument.span)
-            for name, declaration in declared.items():
-                if name not in authored:
-                    if declaration.default is None:
-                        raise ModuleExpansionError("HOCUS469", f"Missing required argument: {name}.", statement.span)
-                    continue
-                actual = _infer_expr_type(authored[name].value, parameters, nodes, uses)
-                if actual != declaration.type_name:
-                    _type_mismatch(declaration.type_name, actual, authored[name].value.span)
-        elif isinstance(statement, ExportStmt):
-            if statement.name in exports:
-                raise ModuleExpansionError("HOCUS468", f"Duplicate export definition: {statement.name}.", statement.span)
-            exports[statement.name] = statement
+        _validate_module_statement(
+            statement, unit, modules, parameters, nodes, uses, exports,
+        )
     declarations = {item.name: item for item in module.exports}
     if set(exports) != set(declarations):
-        raise ModuleExpansionError("HOCUS468", "Module export definitions do not exactly match its interface.", module.span)
+        raise ModuleExpansionError(
+            "HOCUS468",
+            "Module export definitions do not exactly match its interface.",
+            module.span,
+        )
     for name, declaration in declarations.items():
         actual = _infer_expr_type(exports[name].value, parameters, nodes, uses)
         if actual != declaration.type_name:
             _type_mismatch(declaration.type_name, actual, exports[name].value.span)
+
+
+def _module_use_types(
+    unit: ResolvedModuleUnit,
+    modules: Mapping[str, ResolvedModuleUnit],
+) -> dict[str, dict[str, str]]:
+    uses: dict[str, dict[str, str]] = {}
+    for statement in unit.declaration.statements:
+        if not isinstance(statement, UseDecl):
+            continue
+        resolved_import = unit.imports.get(statement.module_name)
+        if resolved_import is None or _target_uri(resolved_import) not in modules:
+            raise ModuleExpansionError(
+                "HOCUS466",
+                f"Unknown imported module: {statement.module_name}.",
+                statement.module_name_span,
+            )
+        target = modules[_target_uri(resolved_import)].declaration
+        uses[statement.symbol] = {item.name: item.type_name for item in target.exports}
+    return uses
+
+
+def _validate_module_statement(
+    statement: Any,
+    unit: ResolvedModuleUnit,
+    modules: Mapping[str, ResolvedModuleUnit],
+    parameters: Mapping[str, str],
+    nodes: Mapping[str, str],
+    uses: Mapping[str, Mapping[str, str]],
+    exports: dict[str, ExportStmt],
+) -> None:
+    if isinstance(statement, NodeDecl):
+        _validate_module_node(statement, parameters, nodes, uses)
+    elif isinstance(statement, UseDecl):
+        _validate_module_use(statement, unit, modules, parameters, nodes, uses)
+    elif isinstance(statement, ExportStmt):
+        if statement.name in exports:
+            raise ModuleExpansionError(
+                "HOCUS468",
+                f"Duplicate export definition: {statement.name}.",
+                statement.span,
+            )
+        exports[statement.name] = statement
+
+
+def _validate_module_node(
+    statement: NodeDecl,
+    parameters: Mapping[str, str],
+    nodes: Mapping[str, str],
+    uses: Mapping[str, Mapping[str, str]],
+) -> None:
+    for child in statement.statements:
+        if isinstance(child, InputStmt):
+            actual = _infer_expr_type(child.source, parameters, nodes, uses)
+            if actual != "node_output":
+                _type_mismatch("node_output", actual, child.source.span)
+            output_index = getattr(child.source, "output_index", 0)
+            if child.index < 0 or output_index is not None and output_index < 0:
+                raise ModuleExpansionError(
+                    "HOCUS474",
+                    "Node input/output indices must be nonnegative.",
+                    child.span,
+                )
+        elif isinstance(child, ParmStmt) and isinstance(
+            child.value, (ParamRefExpr, SymbolRefExpr, LiteralExpr),
+        ):
+            actual = _infer_expr_type(child.value, parameters, nodes, uses)
+            if actual == "node_output":
+                raise ModuleExpansionError(
+                    "HOCUS470",
+                    "node_output cannot be assigned to a scalar parameter.",
+                    child.value.span,
+                )
+
+
+def _validate_module_use(
+    statement: UseDecl,
+    unit: ResolvedModuleUnit,
+    modules: Mapping[str, ResolvedModuleUnit],
+    parameters: Mapping[str, str],
+    nodes: Mapping[str, str],
+    uses: Mapping[str, Mapping[str, str]],
+) -> None:
+    resolved_import = unit.imports.get(statement.module_name)
+    if resolved_import is None:
+        raise ModuleExpansionError(
+            "HOCUS466",
+            f"Unknown imported module: {statement.module_name}.",
+            statement.module_name_span,
+        )
+    target = modules[_target_uri(resolved_import)].declaration
+    authored: dict[str, Any] = {}
+    for argument in statement.arguments:
+        if argument.name in authored:
+            raise ModuleExpansionError(
+                "HOCUS469", f"Duplicate named argument: {argument.name}.", argument.span,
+            )
+        authored[argument.name] = argument
+    declared = {item.name: item for item in target.parameters}
+    unknown = set(authored) - set(declared)
+    if unknown:
+        argument = authored[sorted(unknown)[0]]
+        raise ModuleExpansionError(
+            "HOCUS469", f"Unknown named argument: {argument.name}.", argument.span,
+        )
+    for name, declaration in declared.items():
+        if name not in authored:
+            if declaration.default is None:
+                raise ModuleExpansionError(
+                    "HOCUS469", f"Missing required argument: {name}.", statement.span,
+                )
+            continue
+        actual = _infer_expr_type(authored[name].value, parameters, nodes, uses)
+        if actual != declaration.type_name:
+            _type_mismatch(declaration.type_name, actual, authored[name].value.span)
 
 
 def _infer_expr_type(
