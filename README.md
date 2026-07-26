@@ -45,10 +45,12 @@ Use the fast correctness gate and the narrowest relevant behavior smoke while it
 ```powershell
 python -m pip install -r requirements-lint.txt
 powershell -ExecutionPolicy Bypass -File .\scripts\lint.ps1
-python .\tests\test_hocusscript_v03_expander.py -q
+python .\tests\test_hocusscript_control_scenarios.py -q
 ```
 
-The full release suite is intentionally not the default inner loop. See `docs/release-validation.md` for qualification gates.
+The repository test catalogue is capped at 50 public workflow scenarios; the lint
+script enforces that ceiling. The full release suite is intentionally not the
+default inner loop. See `docs/release-validation.md` for qualification gates.
 
 ## Connect Codex on Windows
 

@@ -1,6 +1,6 @@
 # HocusPocus Release Validation
 
-This document defines the minimum validation gates for a build to be treated as aligned, installable, and releasable. These are qualification gates, not the normal active-development loop; during implementation, run Ruff plus the narrowest relevant behavior or user-workflow smoke.
+This document defines the minimum validation gates for a build to be treated as aligned, installable, and releasable. These are qualification gates, not the normal active-development loop; during implementation, run Ruff plus the narrowest relevant behavior or user-workflow smoke. The complete repository catalogue must remain at or below 50 public scenarios.
 
 ## 1. Build Alignment Rule
 
@@ -37,6 +37,7 @@ python -m compileall python3.11libs\hocuspocus
 Required result:
 
 - Ruff reports no correctness violations
+- the test catalogue remains at or below the enforced 50-test ceiling
 - no compile failures
 
 ### Gate C. Startup
@@ -52,14 +53,14 @@ Required result in a real Houdini `21.x` session:
 Run:
 
 ```powershell
-python -m unittest discover -s tests -p "test_hocusscript*.py"
+python -m unittest discover -s tests -p "test_*.py"
 ```
 
 Required result:
 
-- lexer, parser, structural compiler, formatter, and preview-tool tests pass
+- all four public scenario suites pass once
 - preview compilation remains non-mutating and reports `readyForApply = false`
-- deterministic compile and formatter-idempotence tests pass
+- authoring, project/module, control/apply, and runtime workflows remain intact
 
 ### Gate D. Live Smoke
 

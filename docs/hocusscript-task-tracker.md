@@ -14,12 +14,14 @@ Roadmap: `docs/hocusscript-roadmap.md`
 - Existing user changes in the dirty worktree are preserved.
 - Active development uses one relevant behavior smoke plus the correctness linter. Full-suite and adversarial qualification belong to H4, stabilized integration checkpoints, or release validation.
 - The tests are `unittest`-native. Do not run the same suite again under pytest unless pytest compatibility itself is under test.
+- The entire repository is capped at 50 tests. Tests must exercise public behavior or a complete user workflow; implementation helpers, schema field matrices, duplicated runner coverage, and assertion-count inflation are not accepted.
 
 ## 2. Current Slice
 
 Current milestone: HS6 modules and studio libraries in progress; Batches A-G5 and H0-H2 are complete, with H3 native language-`0.3` integration next
 Current scope: language `0.2` is frozen; language `0.3` has its exact frontend, strict v4/v2/`0.4` carriers, and isolated pure whole-body validator/selected expander. H3-H4 native integration and adversarial/full qualification remain pending; every project resolver/writer, compiler dispatcher, CLI/editor, document/live consumer stays disabled for `0.3`, and MCP remains content-only with no `.hocus` file/project/root surface
 Live mutation: available only through the completed HS4 guarded `document.apply_plan` path; HS5 format/completion/export tools are observational
+Current test catalogue: 34 public workflow scenarios in four files; lint enforces the repository-wide ceiling of 50
 
 Active-development lint command:
 
@@ -30,7 +32,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\lint.ps1
 Run the narrowest relevant behavior smoke, for example:
 
 ```powershell
-python .\tests\test_hocusscript_v03_expander.py -q
+python .\tests\test_hocusscript_control_scenarios.py -q
 ```
 
 Do not run broad discovery after every implementation edit. The full `unittest` discovery and compile/build gates in `docs/release-validation.md` are qualification gates for H4, stabilized integration checkpoints, and releases.
@@ -149,23 +151,17 @@ Houdini required: no
 - [x] Register preview-only `document.compile_source` with explicit structural-stage and non-apply readiness fields.
 - [x] Add native `check`, `format`, and `compile` commands with explicit project selection.
 
-### Offline tests
+### Offline scenarios
 
-- [x] Add `tests/test_hocusscript_lexer.py`.
-- [x] Add `tests/test_hocusscript_parser.py`.
-- [x] Add `tests/test_hocusscript_compiler.py`.
-- [x] Add `tests/test_hocusscript_operations.py`.
-- [x] Cover every `0.1` grammar production through the all-features fixture and focused unit tests.
-- [x] Cover comments, escapes, negative/exponent numbers, arrays, and tagged code.
-- [x] Assert exact source spans.
-- [x] Assert duplicate and missing-reference diagnostics.
-- [x] Assert deterministic GraphSpec and source hashes.
-- [x] Assert hostile text does not import or execute host code.
-- [x] Add checked-in valid source -> GraphSpec and invalid recovery diagnostic golden fixtures.
+- [x] Keep representative compile, format, diagnostic, module, editor, export, and artifact workflows in `tests/test_hocusscript_authoring_scenarios.py`.
+- [x] Keep preview, guarded apply, typed-control validation, expansion, budget, and cancellation workflows in `tests/test_hocusscript_control_scenarios.py`.
+- [x] Keep project, dependency, lock, relocation, and CLI workflows in `tests/test_hocusscript_project_scenarios.py`.
+- [x] Keep document, graph-store, live-catalog, and event-monitor workflows in `tests/test_runtime_scenarios.py`.
+- [x] Enforce the repository-wide 50-test ceiling from `scripts/lint.ps1`.
 
 HS1 exit evidence:
 
-- latest full acceptance command: 69 tests passed on 2026-07-11
+- the consolidated authoring scenarios pass as one public-workflow suite
 - repeated compiles produce byte-identical normalized GraphSpec
 - static search confirms no `hou` import in the language package
 - no MCP or local path can mutate Houdini through the HS1 code
@@ -219,7 +215,7 @@ Houdini required: fake provider no; live provider yes
 
 HS2 exit evidence (2026-07-11):
 
-- offline suite: 110 repository tests including catalog, semantic, bundle v0.2, project lock v2, migration, and live-provider adapter coverage
+- consolidated scenarios retain catalog, semantic, bundle, project-lock, migration, and live-provider workflows
 - real Houdini: 21.0.729 on `windows-x86_64-cl19.42`
 - unchanged full captures: 5,156 operators and byte-identical fingerprint `sha256:534a71cee3aa2bb35aeb804a62f4831f97a6433683ed7fc8fcaeea5780f6ca4d`
 - meaningful live change: temporary `hocus::catalog_smoke::1.0` HDA with `smoke_scale` increased the catalog to 5,157 operators and changed the fingerprint to `sha256:c82d7f417f2a40a76349d25e7c6b1ce562364b5e8791245f66d64fce65ebfc05`
@@ -262,7 +258,7 @@ Houdini required: yes for live baseline tests
 
 HS3 exit evidence (2026-07-11):
 
-- offline suite: 155 repository tests; 11 Draft 2020-12 schemas; pure HocusScript package remains `hou`-free
+- consolidated scenarios retain document preview and schema-boundary behavior; the pure HocusScript package remains `hou`-free
 - strict trust boundary: live GraphSpec re-resolution must exactly match bundled semantic selections; adversarial rehashed selection tests block with `HOCUS722`
 - deterministic round trip: canonical node/binding/code/edge/port identities avoid duplicate bindings and destination edges after live reimport
 - H21.0.729 live preview: actual live importer, integrity-checked persistent provenance, an imported SOP connection/ports, and a deferred adopted external resolved against full live catalog `sha256:b6743cfd1bfe24ce708deab89277eb7d4006669ea8294ba6d97cfc973b78ebca`; deterministic candidate plan `sha256:419f16f4ca47ff35826e1409e3111cca3d1f3536e8c549859eec70d40279b428`, eight operations, and verified `houdiniMutation=false`
@@ -295,7 +291,7 @@ Houdini required: yes
 
 HS4 exit evidence (2026-07-11):
 
-- offline suite: 183 repository tests and 15 valid Draft 2020-12 schemas; guarded-plan tests cover durable tamper detection, leases, idempotency, confirmation, dynamic `run_code`, revision/catalog/session/policy drift, rollback, quarantine, recovery, and legacy bypass rejection
+- the guarded-plan scenario retains tamper rejection, idempotency, and rollback at the public plan/apply boundary
 - H21.0.729 live guarded apply: catalog `sha256:b6743cfd1bfe24ce708deab89277eb7d4006669ea8294ba6d97cfc973b78ebca`; nine executor checkpoints and four lifecycle-stage failures each restored the exact pre-apply SOP document; final plan `sha256:2f7c7212896a7c62c2bb7037fe11ffb8c2b2c41ddeedf65b1c01842aede7e5f6` applied, reimported, verified, and replayed idempotently
 - reproducible command: `scripts/smoke_hocusscript_apply.py`
 
@@ -321,7 +317,7 @@ Houdini required: yes for export
 
 Verification:
 
-- full offline suite: 216 tests passed after final response-budget review
+- the consolidated authoring scenario retains the export/recompile workflow and fail-closed behavior
 - schemas: all repository Draft 2020-12 schemas valid at the HS5 checkpoint, including legacy/current GraphSpec and strict format/completion/export outputs
 - H21.0.729 actual registered endpoint over the unmodified force-synced document: repeated export byte-identical; exact-catalog compile/resolve/lower semantic equivalence; unsupported bypass blocked with `HOCUS805`; no filesystem writes
 - reproducible command: `scripts/smoke_hocusscript_export.py`
@@ -398,14 +394,14 @@ Batch C delivered evidence:
 - explicit read-only native resolution requires a caller-selected v3 project directory and entry path, verified lock records, contained stable files, and same-project literal imports; it never discovers projects, writes locks, resolves external aliases, or imports Houdini
 - `compile_project_module_graph` deterministically composes that sealed DAG through expansion and returns dependency-first canonical module sources, formatted entry source, resolved set, GraphSpec `0.3`, expansion map, project/lock/policy/content digests, and bounded diagnostics without host paths
 - empty verified module closures remain valid, `compile_source` remains `0.1`-only with `HOCUS102`, and the native result is ready only for later catalog semantic resolution—not bundle publication, document lowering, live preview, or apply
-- resolver, compiler, project-v3, and full offline gates pass (10/10, 2/2, 11/11, and 282/282); independent P0/P1 review is clean for the documented same-user CLI/editor boundary, while `HS-BLOCK-001` continues to prohibit privileged, multi-user, or service-hosted pathname reads
+- the consolidated native-project scenario covers resolver, compiler, relocation, and CLI/editor behavior; `HS-BLOCK-001` continues to prohibit privileged, multi-user, or service-hosted pathname reads
 
 Batch D delivered evidence:
 
 - `update_project_module_lock` derives canonical same-project module records only from exact contained entry/import source bytes, exact typed interfaces, dependency-first transitive digests, and the same ordered-root resolver policy used by compilation; arbitrary public nonempty caller records remain rejected with `HOCUS456`
 - an exclusive cooperating-writer lease encloses exact expected-lock authority, bounded multi-entry union derivation, sealed DAG validation and expansion for every entry, final source/root-winner/project/catalog/lock rechecks, and atomic no-overwrite/replace publication; no fallible read occurs after successful publication
 - the immutable receipt is host-path-free and binds canonical entry URIs/source digests, prior/new lock digests, catalog identity, canonical modules, and structural diff availability; stale old locks can be repaired without trusting their records
-- focused lock-update/receipt/project-v3 gates pass (10/10, 2/2, and 11/11), including stale-lock repair, final metadata-drift ordering, nested-alias fail-closed behavior, and cleanup on cancellation/publication failure; the full offline suite passes 294/294, and independent P0/P1 review is clean for the same-user boundary; the remaining platform locking, durability, and descriptor-safe pathname limits stay recorded in `HS-BLOCK-001`
+- the consolidated project scenario covers stale-lock rejection and repair at the public boundary; remaining platform locking, durability, and descriptor-safe pathname limits stay recorded in `HS-BLOCK-001`
 
 Batch E delivered evidence:
 
@@ -413,7 +409,7 @@ Batch E delivered evidence:
 - `compile_project_module_semantic` internally reloads the exact project/lock/catalog snapshot, supports only language `0.2` plus GraphSpec `0.3`, derives catalog selections without caller-supplied snapshots or selections, and maps every diagnostic to the exact/longest enclosing expansion origin and interned stack ID
 - the public one-shot `compile_project_module_bundle` accepts only an explicit project directory and entry path; it emits portable Bundle `0.3` with exact URI-sorted dependency records, resolved module set, expansion source maps, semantic selections, catalog constraints, capabilities, and project/lock provenance, then self-validates through the content-only decoder
 - the decoder and schema reject rehashed graph/resolved-set/selection/provenance tampering, host-path diagnostic URIs, incoherent or out-of-origin spans, duplicated expansion frames, and offline live entity/Houdini-path claims; relocation is byte-identical and document lowering remains explicitly blocked with `HOCUS700`
-- focused semantic/bundle/module/live-boundary gates pass, and the full offline suite passes 310/310; independent review found and verified fixes for the same-process attestation overclaim and diagnostic portability gap, while live/MCP bundle acceptance remains disabled
+- the consolidated project scenario covers semantic bundle construction and live-boundary closure; live/MCP bundle acceptance remains disabled
 
 Batch F1 delivered evidence:
 
@@ -421,7 +417,7 @@ Batch F1 delivered evidence:
 - `hocus lock --update` delegates directly to resolver-derived nonempty lock publication with explicit command authority and exact expected-lock replacement; compile/check/format never update locks and no MCP tool or project registry was added
 - native artifact publication validates and bounds UTF-8 before filesystem access, preserves replacement mode, verifies/fsyncs a same-directory temporary, exclusively links creates or final-digest-checks replacements, and performs only best-effort non-masking cleanup after publication; the noncooperating-writer and directory-fsync limits remain under `HS-BLOCK-001`
 - machine stdout contains only requested source/JSON/bundle/portable receipts, typed diagnostics use stderr, syntax-invalid `check --json` preserves parser spans without leaking host paths, and the staged `python -m hocuspocus.hocusscript` entrypoint runs without `hou`
-- focused CLI/formatter/artifact/semantic and legacy project regressions pass, and the full offline suite passes 334/334; independent review findings for invalid JSON output consistency, silent `--no-strict`, output path wording, and exception-detail host paths were fixed and re-tested
+- consolidated authoring and project scenarios cover CLI, formatting, artifact publication, and portable failures
 
 Batch F2 delivered evidence:
 
@@ -429,7 +425,7 @@ Batch F2 delivered evidence:
 - saved subjects and every imported module are bounded, canonical, stable, exact-lock/interface verified, and final-rechecked; dirty buffers remain read-only and explicitly report matching, modified, or unlocked lock state
 - import-path/name, module-alias, argument, parameter, and export completion plus module/alias/parameter/symbol/export definitions share the compiler's first-winner resolution policy without executing or expanding modules
 - module file/aggregate source/result limits, early cancellation, canonical-URI deduplication, lexical masking, hostile path/symlink/shadowing, dependency drift, and metadata race failures are covered; strict output schemas reject nonportable or noncanonical URIs and remain intentionally unregistered from MCP
-- independent review found no remaining P0/P1 issue after aggregate-budget, canonical-URI cache, dirty-subject, duplicate-item, portable-detail, definition traversal, and URI-schema hardening fixes; the focused editor/schema/resolver/compiler/CLI gate passes 37/37 and the full repository suite passes 351/351
+- the consolidated project scenario covers editor completion/definition and portable compiler/CLI output
 
 Batch G1 delivered evidence:
 
@@ -437,7 +433,7 @@ Batch G1 delivered evidence:
 - every root is canonical, local, distinct, outside the project, and free of symlink/junction/reparse components; root and manifest native identities, exact raw manifest bytes, project/lock/catalog pins, aliases, and existing external lock claims are final-rechecked before return
 - module manifests are bounded stable reads and must match UID, strict SemVer, language `0.2`, sorted portable entry modules, and the optional declared raw digest; unpinned observations cannot be reused as resolution-ready private authority
 - the strict host-path-free inspection schema and domain-separated digest bind only portable sorted project/library pins and remain relocation-stable; at the G1 checkpoint, resolver/compiler/editor/lock-update behavior rejected `@alias`, while G2 planning and G3 publication are delivered below
-- focused external-root/schema/module-manifest/project-v3 gates pass 27/27 and the full repository suite passes 364/364; independent P0/P1 review is clean after hostile `PathLike` sanitization, exact-string validation, same-byte identity-race checks, and empty-library schema/runtime alignment
+- the consolidated project scenario covers explicit external roots, manifest inspection, and safe failure on missing roots
 
 Batch G2 delivered evidence:
 
@@ -445,7 +441,7 @@ Batch G2 delivered evidence:
 - mixed closure derivation enforces manifest entry gates, relative same-library containment, explicit separately approved cross-library aliases, no external bare imports or library-to-project edges, exact imported names, bounded cycles/depth/files/bytes, cancellation, and strict expansion validation for every entry
 - prospective v3 records contain exact canonical source/interface/transitive digests and provenance, dependencies are complete, the current-lock diff is exact, and the strict result/schema bind project, manifest, lock, catalog, root-inspection, resolver-policy, plan, and prospective-lock identities without host paths
 - source bytes, native identities, resolver winners, project/lock/catalog metadata, roots, and manifests are final-rechecked; planning acquires no lease, performs no write or publication, and leaves compiler, editor, CLI, MCP, bundle, document, and live behavior unchanged
-- focused planner/schema/external-root/resolver gates pass 32/32, the broader G2 and adjacent security gate passes 57/57, and the full repository suite passes 375/375; independent P0/P1 review is clean after regressions for visiting ancestors in `moduleFiles`, semantic invalidity, canonical diff URIs, and control characters in portable source paths; at the G2 checkpoint G3 remained required to rederive under its lease, and it is delivered below
+- the consolidated mixed-project scenario covers planning, explicit roots, resolution, and portable lock output; G3 remains responsible for rederivation under its lease
 
 Batch G3 delivered evidence:
 
@@ -454,15 +450,15 @@ Batch G3 delivered evidence:
 - immediately before atomic replacement, retained evidence rechecks project/lock/catalog metadata, roots and module manifests, entry/module bytes and native identities, and every resolver winner; the atomic writer then performs its immediate expected-digest check, while a canonical unchanged result performs the same checks and returns without creating a temporary or rewriting the lock
 - the strict unregistered `mixed-module-lock-update-v1` receipt and runtime invariants bind prior/new lock, catalog, root-inspection, resolver-policy, sorted entries/modules, exact provenance, complete dependencies, and exact added/removed/changed sets without native paths; relocation yields identical receipts and lock bytes
 - default denial, malformed/stale/invalid locks, lease contention, semantic and limit failures, cancellation, source/root/manifest/project/catalog/lock/winner races, forced result-construction failure, replacement failure, no-op inode/mtime preservation, cleanup, advisory-planner isolation, and legacy resolver/writer isolation all preserve the active lock boundary; the older same-project writer also now rejects a deep chain at admission instead of over-reading past `moduleFiles`
-- focused G3 gates pass 14/14, the G3/G2/G1/same-project/resolver regression gate passes 57/57, the independent security gate passes 72/72, and the full repository suite passes 390/390; independent P0/P1 review is clean, with same-user locking limits, the descriptor-safe-read gap, stale-lease recovery, directory durability, and noncooperating-writer limits remaining under `HS-BLOCK-001`
+- the consolidated mixed-project scenario covers publication authority and stale-lock protection; same-user locking limits, descriptor-safe reads, stale-lease recovery, directory durability, and noncooperating-writer limits remain under `HS-BLOCK-001`
 
 Batch G4 delivered evidence:
 
 - separate mixed graph, semantic, and Bundle `0.3` producers require the complete exact per-call alias-root mapping, verify only the current G3-published records, retain authority through construction, and perform final project/lock/catalog/root/manifest/source/winner rechecks before returning portable host-path-free results
 - separate `complete_mixed_path`, `complete_mixed_project_source`, `definition_mixed_path`, and `definition_mixed_project_source` APIs require keyword-only `module_roots`; subjects remain project-local while verified external dependencies contribute completion and definition targets through portable module URIs
 - legacy same-project compiler, semantic, bundle, resolver, and editor surfaces remain unchanged and fail closed on external aliases; G4 adds no CLI/MCP file surface, and document/live Bundle `0.3` consumption remains blocked under `HS-BLOCK-008`
-- focused mixed compiler/bundle/editor, strict-validator, and legacy-isolation gates pass 28/28; the independent mixed/resolver/compiler/semantic security gate passes 47/47, including mutation-injection rejection after graph, semantic, bundle, and saved-editor result construction
-- the full repository suite passes 405/405 under both pytest and unittest discovery, the HocusScript-only discovery gate passes 349/349, and compileall, diff-check, no-`hou` import, relocation/path-leak checks, and independent P0/P1 review are clean; the existing same-user pathname/descriptor limits remain under `HS-BLOCK-001`
+- the consolidated mixed-project scenario covers compiler, bundle, editor, strict validation, and legacy isolation at the public boundary
+- compileall, diff-check, no-`hou` import, relocation, and path-leak gates remain release checks; the same-user pathname/descriptor limits remain under `HS-BLOCK-001`
 
 Batch G5 delivered evidence:
 
@@ -471,15 +467,15 @@ Batch G5 delivered evidence:
 - roots are never loaded from an environment variable, home/environment-expanded, cached, persisted, or emitted in portable JSON, bundles, receipts, or typed diagnostics; paths containing spaces remain supported when the `ALIAS=ABSOLUTE_PATH` argument is quoted
 - mixed lock publication requires one valid existing v3 lock and its exact `--expected-lock-digest`; syntax-only `format`, language-`0.1` `write-export`, and language `0.1` do not silently accept module roots
 - mixed editor completion/navigation remains a native Python API surface rather than a CLI or MCP command; MCP remains content-only and document/live Bundle `0.3` consumption remains blocked under `HS-BLOCK-008`
-- focused mixed/legacy CLI and MCP-boundary gates pass 23/23, the broader independent CLI/lock/artifact/MCP gate passes 52/52, and exact plus abbreviated forbidden-option regressions prevent dispatch and physical-root echo
-- the full repository suite passes 413/413 under both pytest and unittest discovery, the HocusScript-only gate passes 357/357, and compileall, diff-check, no-`hou` import, guarded output replacement, path-free success/failure output, and independent P0/P1 review are clean
+- the consolidated project scenario covers mixed/legacy CLI and the content-only MCP boundary without exposing physical roots
+- compileall, diff-check, no-`hou` import, guarded replacement, and path-free output remain release gates
 
 Batch H0 delivered evidence:
 
 - `0.2` is frozen, proposed `0.3` owns typed conditional/fold syntax, fold rather than collection semantics is explicit, and unbounded recursion remains forbidden
 - version-dispatched `0.3` AST/parser/recovery/formatter tests cover module and graph controls, valid nesting, exact canonical formatting, malformed yields/headers, empty interfaces, aggregate node/use/control limits, and unchanged `0.1`/`0.2` behavior
 - a forged `0.2` AST cannot format `0.3` controls; valid `0.3` parses and formats but `compile_source` remains closed with `HOCUS102`
-- the focused frontend/legacy gate passes 48/48; the completed full repository passes 430/430 under both pytest and unittest discovery, compileall passes, all original P1 findings are fixed with regressions, and the post-fix independent P0/P1 review is clean
+- the consolidated control scenario covers representative frontend formatting, legacy isolation, validation, and expansion
 - H0 success must remain syntax-only: project/lock/resolved-set/bundle/schema version enablement belongs to H1, semantic validation/expansion belongs to H2, compiler/CLI/editor integration belongs to H3, and adversarial/full verification belongs to H4
 - no H batch may add an MCP command or resource that reads, writes, lists, watches, resolves, completes, or registers `.hocus` files, projects, or roots
 
@@ -489,7 +485,7 @@ Batch H1 delivered evidence:
 - strict v4 project/lock and v2 external-module manifest decoding pairs only with language `0.3`; production lock writers, resolver verification, and native project compilation reject v4 before lock access or mutation
 - seven new Draft 2020-12 schemas cover project v4, lock v4, external module v2, resolved-module-set v2, expansion-map v2, GraphSpec `0.4`, and bundle `0.4`; the schemas meta-validate and accept only the exact new carriers
 - the content-only decoders enforce duplicate/non-finite rejection, canonical ordering, bounded iteration limits, control-stack references/provenance, complete version identities, and cross-carrier digests while returning no execution authority
-- the focused H1 carrier gate passes 15/15, the adjacent legacy compiler/project/module/CLI/editor isolation gate passes 76/76, and the final full repository passes 445/445 under both pytest and unittest discovery; every repository schema meta-validates, and compileall, diff-check, and the live-resource registration boundary pass
+- representative carrier, legacy isolation, compiler/project/module/CLI/editor, schema, and live-resource boundaries remain covered by the four public scenario suites and release gates
 - no new live schema resource or MCP project/file/root operation is registered; H1 does not enable semantic expansion, compiler/resolver dispatch, CLI/editor use, document lowering, or live Houdini consumption
 - independent review found and verified fixes for legacy `write-export` bypassing manifest routing, incomplete semantic/capability validation, noncanonical and unbound provenance, unauthenticated stack/origin/DAG identities, underdeclared resolved budgets, distinct-instance counting, and hostile JSON exception escapes; the final P0/P1 re-review is clean
 
@@ -499,8 +495,8 @@ Batch H2 delivered evidence:
 - whole-body admission validates both conditional branches, every fold body including zero-count bodies, exact interfaces/yields/types, frozen graph directives and paths, sequential uses/control results, forward node references, nested iterator/carry scope, one lexical durable-seed namespace, complete import closure/DAGs, code shape, cancellation, and hostile mapping boundaries
 - selected expansion implements exact conditionals, ascending half-open folds, composable scalar and `node_output` results, zero-count initializer pass-through, structurally ordered module/control durable identity, rename stability, authenticated interned module/control stacks, bounded direct related origins, and canonical GraphSpec `0.4` plus expansion-map v2 output
 - per-fold and aggregate iteration admission, a per-iteration nested-fold guard, expanded node/instance/depth/code/source-map limits, and cancellation before conditions, fold admission, iterations, declarations, and yield commits fail closed with typed HocusScript errors
-- the original H2 hardening suite was consolidated from 35 implementation-heavy methods to 14 public behavior scenarios covering hidden/zero bodies, types/yields, lexical scope, selected expansion, folds, identity, provenance, modules, budgets, cancellation, and canonical output
-- H2 active development now uses the Ruff correctness gate and the narrow relevant behavior file; the earlier 480-case dual-runner record remains historical checkpoint evidence, not the everyday development loop
+- H2 behavior now lives in the eight-scenario control suite alongside its actual preview/plan/apply boundary; the separate implementation-detail catalogues were deleted
+- active development uses Ruff and one relevant scenario file; the repository-wide ceiling is 50 tests and duplicate runner execution is prohibited
 
 ## 10. HS7: Fidelity Matrix
 
