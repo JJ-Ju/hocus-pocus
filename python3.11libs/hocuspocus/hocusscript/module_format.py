@@ -1,4 +1,4 @@
-"""Native, read-only formatting for HocusScript 0.2 project files."""
+"""Native, read-only formatting for versioned HocusScript project files."""
 
 from __future__ import annotations
 
@@ -44,6 +44,7 @@ class ModuleProjectFormatResult:
 
     source_uri: str
     source_digest: str
+    language_version: str
     root_kind: str | None
     changed: bool
     formatted_source: str | None
@@ -60,7 +61,7 @@ class ModuleProjectFormatResult:
         return {
             "stage": "format",
             "valid": self.valid,
-            "languageVersion": "0.2",
+            "languageVersion": self.language_version,
             "sourceUri": self.source_uri,
             "sourceDigest": self.source_digest,
             "rootKind": self.root_kind,
@@ -77,7 +78,7 @@ def format_project_module_path(
     *,
     cancelled: Callable[[], bool] | None = None,
 ) -> ModuleProjectFormatResult:
-    """Canonically format one contained 0.2 graph or module without reading its lock.
+    """Canonically format one contained graph or module without reading its lock.
 
     This is a same-user native editor/CLI boundary. It rejects link/reparse paths
     and uses a bounded stat-read-stat snapshot, but it is not a privileged
@@ -89,10 +90,11 @@ def format_project_module_path(
     _checkpoint(cancelled)
     project = ProjectContext.load(project_text, validate_lock=False)
     _checkpoint(cancelled)
-    if project.manifest_version != 3 or project.language_version != "0.2" or project.uid is None:
+    lane = (project.manifest_version, project.language_version)
+    if lane not in {(3, "0.2"), (4, "0.3")} or project.uid is None:
         raise ProjectError(
             "HOCUS452",
-            "Native module formatting requires an explicit language 0.2 schema v3 project.",
+            "Native formatting requires an explicit schema v3/0.2 or v4/0.3 project.",
         )
 
     root = project.root.resolve(strict=True)
@@ -138,6 +140,7 @@ def format_project_module_path(
         return ModuleProjectFormatResult(
             source_uri,
             source_digest,
+            project.language_version,
             None,
             False,
             None,
@@ -148,16 +151,27 @@ def format_project_module_path(
     root_kind = "graph" if syntax.graph is not None and syntax.module is None else (
         "module" if syntax.module is not None and syntax.graph is None else None
     )
-    if syntax.version is None or syntax.version.value != "0.2" or root_kind is None:
+    if (
+        syntax.version is None
+        or syntax.version.value != project.language_version
+        or root_kind is None
+    ):
         diagnostic = Diagnostic(
             "error",
             "HOCUS466",
             "parse",
-            "Native module formatting requires a hocus 0.2 graph or module source root.",
+            f"Native formatting requires a hocus {project.language_version} graph or module source root.",
             syntax.span,
         )
         return ModuleProjectFormatResult(
-            source_uri, source_digest, root_kind, False, None, (diagnostic,), str(source)
+            source_uri,
+            source_digest,
+            project.language_version,
+            root_kind,
+            False,
+            None,
+            (diagnostic,),
+            str(source),
         )
 
     formatted = format_syntax(syntax)
@@ -165,6 +179,7 @@ def format_project_module_path(
     return ModuleProjectFormatResult(
         source_uri,
         source_digest,
+        project.language_version,
         root_kind,
         formatted != text,
         formatted,

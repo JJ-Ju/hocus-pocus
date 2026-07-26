@@ -67,7 +67,7 @@ STATIC_CARRIER_CONTRACT = CarrierContract(
     bundle_version="0.3",
     resolver_policy_version=1,
     resolver_interface_version=1,
-    dispatch_enabled=True,
+    dispatch_enabled=False,
 )
 
 CONTROL_CARRIER_CONTRACT = CarrierContract(
@@ -82,7 +82,7 @@ CONTROL_CARRIER_CONTRACT = CarrierContract(
     bundle_version="0.4",
     resolver_policy_version=1,
     resolver_interface_version=1,
-    dispatch_enabled=False,
+    dispatch_enabled=True,
 )
 
 CONTROL_LANGUAGE_VERSION = CONTROL_CARRIER_CONTRACT.language_version; CONTROL_COMPILER_VERSION = CONTROL_CARRIER_CONTRACT.compiler_version

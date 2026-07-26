@@ -423,13 +423,13 @@ def compile_path(
 
 
 def verify_project_lock(project_directory: str | Path) -> LockVerificationResult:
-    """Explicitly verify a v3 lock without changing project or lock files."""
+    """Explicitly verify a portable module lock without changing project files."""
     preview = ProjectContext.load(project_directory, validate_lock=False)
-    if preview.manifest_version != 3:
-        raise ProjectError("HOCUS452", "Module lock verification requires a schema v3 project.")
+    if preview.manifest_version not in {3, 4}:
+        raise ProjectError("HOCUS452", "Module lock verification requires a schema v3 or v4 project.")
     project = ProjectContext.load(project_directory, validate_lock=True)
     if project.uid is None or project.manifest_digest is None or project.lock_digest is None:
-        raise ProjectError("HOCUS452", "Schema v3 project lock verification is incomplete.")
+        raise ProjectError("HOCUS452", "Portable project lock verification is incomplete.")
     return LockVerificationResult(
         project.uid, project.manifest_digest, project.lock_digest, project.locked_modules
     )
@@ -442,7 +442,7 @@ def update_project_lock(
     expected_lock_digest: str | None = None,
     allow_write: bool = False,
 ) -> LockVerificationResult:
-    """Explicitly replace/create a v3 lock with optimistic concurrency.
+    """Explicitly replace/create an empty portable lock with optimistic concurrency.
 
     Loading, checking, formatting, and compiling never call this function. An
     existing lock always requires its current canonical digest.
@@ -452,22 +452,22 @@ def update_project_lock(
     _require_empty_module_scaffold(modules)
     initial_project = ProjectContext.load(project_directory, validate_lock=False)
     if (
-        initial_project.manifest_version != 3
+        initial_project.manifest_version not in {3, 4}
         or initial_project.uid is None
         or initial_project.manifest_digest is None
     ):
-        raise ProjectError("HOCUS452", "Lock update requires a portable schema v3 project.")
+        raise ProjectError("HOCUS452", "Lock update requires a portable schema v3 or v4 project.")
     if (
         initial_project.lock_path is None
         or initial_project.catalog_path is None
         or initial_project.catalog_relative_path is None
     ):
-        raise ProjectError("HOCUS452", "Schema v3 lock and catalog paths are required.")
+        raise ProjectError("HOCUS452", "Portable lock and catalog paths are required.")
     lock_path = initial_project.lock_path
     with _exclusive_update_lease(lock_path):
         project = ProjectContext.load(project_directory, validate_lock=False)
         if (
-            project.manifest_version != 3
+            project.manifest_version != initial_project.manifest_version
             or project.uid is None
             or project.manifest_digest is None
             or project.lock_path != lock_path
@@ -489,9 +489,13 @@ def update_project_lock(
                 details={"catalogCode": exc.code, "catalogPath": exc.path},
             ) from exc
         payload = {
-            "$schema": LOCK_SCHEMA_URI_V3,
+            "$schema": (
+                LOCK_SCHEMA_URI_V4
+                if project.manifest_version == 4
+                else LOCK_SCHEMA_URI_V3
+            ),
             "kind": "hocus_project_lock",
-            "schemaVersion": 3,
+            "schemaVersion": project.manifest_version,
             "projectUid": project.uid,
             "manifestDigest": project.manifest_digest,
             "languageVersion": project.language_version,

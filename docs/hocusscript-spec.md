@@ -800,6 +800,8 @@ Control provenance is deliberately bounded. A mapping produced during control ex
 
 H2 capability validation covers everything derivable without Houdini or a catalog, including hidden-body language/module/type rules, code-surface restrictions, and code/capability budgets. H3 MUST re-run whole-AST catalog/operator/parameter capability validation against the pinned immutable catalog, including unselected branches and zero-count bodies, before enabling native compiler/CLI/editor dispatch. Selected-only GraphSpec catalog resolution is insufficient for that gate.
 
+H3A implements that admission boundary for the explicit same-project lane. A schema-v4/language-`0.3` native compile MUST resolve one caller-selected project-relative entry and its verified local lock closure into resolved-module-set v2, validate the complete authored AST against the exact pinned catalog before selected evaluation, expand to GraphSpec `0.4`, run selected graph semantic resolution, union capabilities from hidden and selected bodies, authenticate Bundle `0.4`, and finally recheck the project, lock, catalog, source identities, and resolver winners. Native format is lock-independent; check and compile never update the lock. External aliases, resolver-derived v4 lock publication, control-aware project editor behavior, document/live consumption, and MCP filesystem access remain outside H3A and fail closed.
+
 H1 freezes the language-`0.3` carrier family as one indivisible tuple:
 
 | Carrier | Exact H1 version |

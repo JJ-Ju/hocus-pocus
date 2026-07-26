@@ -16,6 +16,9 @@ MODULE_LANGUAGE_VERSION = "0.2"
 MODULE_GRAPH_SPEC_VERSION = "0.3"
 MODULE_COMPILER_VERSION = "0.4.0"
 EXPANSION_MAP_VERSION = 1
+CONTROL_LANGUAGE_VERSION = "0.3"
+CONTROL_GRAPH_SPEC_VERSION = "0.4"
+CONTROL_EXPANSION_MAP_VERSION = 2
 EXPLICIT_NODE_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 
 
@@ -220,9 +223,10 @@ class ExpansionOrigin:
     primary_span: SourceSpan
     related_origins: tuple[RelatedOrigin, ...] = ()
     stack_id: str | None = None
+    control_stack_id: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "originId": self.origin_id,
             "generatedPointer": self.generated_pointer,
             "originKind": self.origin_kind,
@@ -230,6 +234,9 @@ class ExpansionOrigin:
             "relatedOrigins": [item.to_dict() for item in self.related_origins],
             "stackId": self.stack_id,
         }
+        if self.control_stack_id is not None:
+            payload["controlStackId"] = self.control_stack_id
+        return payload
 
 
 @dataclass(frozen=True, slots=True)
@@ -237,17 +244,33 @@ class ExpansionMap:
     entry_source_uri: str
     stacks: tuple[ExpansionStack, ...] = ()
     mappings: tuple[ExpansionOrigin, ...] = ()
+    schema_version: int = EXPANSION_MAP_VERSION
+    graph_spec_version: str = MODULE_GRAPH_SPEC_VERSION
+    control_stacks: tuple[dict[str, Any], ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
-        return {
-            "$schema": "hocuspocus://schemas/expansion-map/v1",
+        mappings = [item.to_dict() for item in self.mappings]
+        if self.schema_version == CONTROL_EXPANSION_MAP_VERSION:
+            for mapping in mappings:
+                mapping.setdefault("controlStackId", None)
+        payload = {
+            "$schema": f"hocuspocus://schemas/expansion-map/v{self.schema_version}",
             "kind": "hocus_expansion_map",
-            "schemaVersion": 1,
-            "graphSpecVersion": MODULE_GRAPH_SPEC_VERSION,
+            "schemaVersion": self.schema_version,
+            "graphSpecVersion": self.graph_spec_version,
             "entrySourceUri": self.entry_source_uri,
             "stacks": [item.to_dict() for item in self.stacks],
-            "mappings": [item.to_dict() for item in self.mappings],
+            "mappings": mappings,
         }
+        if self.schema_version == CONTROL_EXPANSION_MAP_VERSION:
+            payload["controlStacks"] = [
+                {
+                    **item,
+                    "frames": [dict(frame) for frame in item["frames"]],
+                }
+                for item in self.control_stacks
+            ]
+        return payload
 
 
 @dataclass(frozen=True, slots=True)
@@ -312,6 +335,20 @@ class GraphSpec:
         if self.graph_spec_version == MODULE_GRAPH_SPEC_VERSION:
             if self.language_version != MODULE_LANGUAGE_VERSION or self.expansion_map is None:
                 raise ValueError("GraphSpec v0.3 requires language 0.2 and expansionMap v1")
+            if (
+                self.expansion_map.schema_version != EXPANSION_MAP_VERSION
+                or self.expansion_map.graph_spec_version != MODULE_GRAPH_SPEC_VERSION
+            ):
+                raise ValueError("GraphSpec v0.3 requires expansionMap v1")
+            return
+        if self.graph_spec_version == CONTROL_GRAPH_SPEC_VERSION:
+            if self.language_version != CONTROL_LANGUAGE_VERSION or self.expansion_map is None:
+                raise ValueError("GraphSpec v0.4 requires language 0.3 and expansionMap v2")
+            if (
+                self.expansion_map.schema_version != CONTROL_EXPANSION_MAP_VERSION
+                or self.expansion_map.graph_spec_version != CONTROL_GRAPH_SPEC_VERSION
+            ):
+                raise ValueError("GraphSpec v0.4 requires expansionMap v2")
             return
         raise ValueError(f"Unsupported GraphSpec version: {self.graph_spec_version}")
 
@@ -339,9 +376,12 @@ class GraphSpec:
                 for key, value in sorted(self.field_spans.items())
             },
         }
-        if self.graph_spec_version == MODULE_GRAPH_SPEC_VERSION:
+        if self.graph_spec_version in {
+            MODULE_GRAPH_SPEC_VERSION,
+            CONTROL_GRAPH_SPEC_VERSION,
+        }:
             if self.expansion_map is None:
-                raise ValueError("GraphSpec v0.3 requires an expansion map")
+                raise ValueError("Module GraphSpec requires an expansion map")
             payload["expansionMap"] = self.expansion_map.to_dict()
         return payload
 
@@ -437,9 +477,13 @@ def graph_spec_from_dict(value: dict[str, Any]) -> GraphSpec:
                         for child in item["relatedOrigins"]
                     ),
                     stack_id=item["stackId"],
+                    control_stack_id=item.get("controlStackId"),
                 )
                 for item in encoded_map["mappings"]
             ),
+            schema_version=encoded_map["schemaVersion"],
+            graph_spec_version=encoded_map["graphSpecVersion"],
+            control_stacks=tuple(encoded_map.get("controlStacks", ())),
         )
     return GraphSpec(
         value["languageVersion"], value["name"], value["target"], value["category"], value["mode"],

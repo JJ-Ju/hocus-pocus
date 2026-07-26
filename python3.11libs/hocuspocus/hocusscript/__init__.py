@@ -73,6 +73,27 @@ from .expander import (
     validate_module_interfaces,
 )
 from .control_expander import expand_control_graph
+from .control_artifact import (
+    ControlArtifactError,
+    ControlCompiledBundle,
+    rehydrate_control_graph,
+)
+from .control_catalog import (
+    ControlCatalogDiagnostic,
+    ControlCatalogSelection,
+    ControlCatalogValidationResult,
+    validate_control_catalog_program,
+)
+from .control_compiler import (
+    ControlProjectCompileError,
+    ControlProjectCompileResult,
+    compile_project_control_program,
+)
+from .control_resolver import (
+    ControlResolverLimits,
+    ResolvedControlProgram,
+    resolve_project_control_program,
+)
 from .control_semantic import ControlExpansionLimits, validate_control_program
 from .formatter import format_graph, format_syntax
 from .lock_update import update_project_module_lock
@@ -226,7 +247,15 @@ __all__ = [
     "CompileResult",
     "CompletionItem",
     "CompletionResult",
+    "ControlCatalogDiagnostic",
+    "ControlCatalogSelection",
+    "ControlCatalogValidationResult",
+    "ControlArtifactError",
+    "ControlCompiledBundle",
     "ControlExpansionLimits",
+    "ControlProjectCompileError",
+    "ControlProjectCompileResult",
+    "ControlResolverLimits",
     "COMPILER_VERSION",
     "MODULE_COMPILER_VERSION",
     "MODULE_GRAPH_SPEC_VERSION",
@@ -274,6 +303,7 @@ __all__ = [
     "ModuleSemanticCompileError",
     "ModuleSemanticCompileResult",
     "RelatedOrigin",
+    "ResolvedControlProgram",
     "SUPPORTED_LANGUAGE_VERSIONS",
     "SourcePosition",
     "SourceSpan",
@@ -303,6 +333,7 @@ __all__ = [
     "ResolvedModuleUnit",
     "SnapshotCatalogProvider",
     "compile_path",
+    "compile_project_control_program",
     "compile_project_mixed_module_graph",
     "compile_project_mixed_module_bundle",
     "compile_project_mixed_module_semantic",
@@ -356,6 +387,7 @@ __all__ = [
     "resolved_import_map",
     "resolved_units_from_dag",
     "validate_graph",
+    "validate_control_catalog_program",
     "validate_module_interfaces",
     "validate_control_program",
     "validate_resolved_module_dag",
@@ -376,4 +408,6 @@ __all__ = [
     "format_syntax",
     "parse_syntax",
     "require_carrier_contract",
+    "rehydrate_control_graph",
+    "resolve_project_control_program",
 ]

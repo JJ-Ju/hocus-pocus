@@ -115,6 +115,7 @@ class _ValidationState:
     modules: Mapping[str, ResolvedModuleUnit]
     limits: ControlExpansionLimits
     cancellation: Callable[[], bool] | None
+    node_parameter_observer: Callable[[NodeDecl, tuple[str, ...]], None] | None = None
     declarations: int = 0
     code_bytes: int = 0
 
@@ -139,6 +140,7 @@ def validate_control_program(
     *,
     limits: ControlExpansionLimits = ControlExpansionLimits(),
     cancellation: Callable[[], bool] | None = None,
+    _node_parameter_observer: Callable[[NodeDecl, tuple[str, ...]], None] | None = None,
 ) -> None:
     """Validate one exact 0.3 graph plus its complete immutable module closure.
 
@@ -160,7 +162,9 @@ def validate_control_program(
             "HOCUS460", "Control validation requires one HocusScript 0.3 graph entry.", entry.span
         )
 
-    state = _ValidationState(modules, limits, cancellation)
+    state = _ValidationState(
+        modules, limits, cancellation, _node_parameter_observer,
+    )
     state.checkpoint(entry.span)
     _validate_module_mapping(modules, entry.span)
     _validate_modules(modules, state)
@@ -634,20 +638,28 @@ def _validate_declaration(
 
 def _validate_node(node: NodeDecl, scope: _Scope, state: _ValidationState) -> None:
     _validate_node_shape(node)
+    parameter_types: list[str] = []
     for child in node.statements:
         if isinstance(child, InputStmt):
             actual = _infer_expr_type(child.source, scope)
             if actual != "node_output":
                 _type_mismatch("node_output", actual, child.source.span)
         elif isinstance(child, ParmStmt):
-            if isinstance(child.value, (ArrayExpr, CodeExpr)):
+            if isinstance(child.value, ArrayExpr):
                 _validate_value_shape(child.value, state)
+                parameter_types.append("array")
+            elif isinstance(child.value, CodeExpr):
+                _validate_value_shape(child.value, state)
+                parameter_types.append("code")
             else:
                 actual = _infer_expr_type(child.value, scope)
                 if actual == "node_output":
                     raise ModuleExpansionError(
                         "HOCUS470", "node_output cannot be assigned to a scalar parameter.", child.value.span
                     )
+                parameter_types.append(actual)
+    if state.node_parameter_observer is not None:
+        state.node_parameter_observer(node, tuple(parameter_types))
 
 
 def _validate_value_shape(value: Any, state: _ValidationState, *, depth: int = 0) -> None:

@@ -16,6 +16,11 @@ from .bundle import (
     CompiledBundle,
 )
 from .compiler import MAX_SOURCE_BYTES, compile_source
+from .control_artifact import ControlArtifactError
+from .control_compiler import (
+    ControlProjectCompileError,
+    compile_project_control_program,
+)
 from .expander import ModuleExpansionError
 from .exporter import MAX_EXPORT_RESPONSE_BYTES
 from .lock_update import update_project_module_lock
@@ -86,7 +91,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     lock = subparsers.add_parser(
         "lock",
-        help="Explicitly derive and atomically update a HocusScript 0.2 module lock.",
+        help="Explicitly derive and atomically update a HocusScript module lock.",
         allow_abbrev=False,
     )
     lock.add_argument("entries", nargs="+", help="Project-relative graph entry .hocus files.")
@@ -183,8 +188,11 @@ def _dispatch_command(args: argparse.Namespace) -> int:
     if args.command == "lock":
         return _run_lock_command(args, module_roots)
     project = ProjectContext.load(args.project, validate_lock=False)
-    if project.manifest_version == 3 or project.language_version == "0.2":
+    lane = (project.manifest_version, project.language_version)
+    if lane == (3, "0.2"):
         return _run_module_command(args, module_roots)
+    if lane == (4, "0.3"):
+        return _run_control_command(args, module_roots)
     if module_roots:
         raise ProjectError(
             "HOCUS460", "--module-root requires a language 0.2 schema v3 project.",
@@ -193,6 +201,12 @@ def _dispatch_command(args: argparse.Namespace) -> int:
 
 
 def _run_lock_command(args: argparse.Namespace, module_roots: dict[str, str]) -> int:
+    project = ProjectContext.load(args.project, validate_lock=False)
+    if (project.manifest_version, project.language_version) == (4, "0.3"):
+        raise ProjectError(
+            "HOCUS456",
+            "Language 0.3 derived lock publication is the next H3 integration batch.",
+        )
     if module_roots:
         result = update_project_mixed_module_lock(
             args.project, args.entries, module_roots, allow_write=True,
@@ -254,10 +268,14 @@ def _publish_legacy_format(args: argparse.Namespace, result: Any) -> int:
 
 
 def _report_cli_error(args: argparse.Namespace, exc: Any) -> int:
+    details = dict(getattr(exc, "details", {}) or {})
     if args.command == "check" and args.json:
         sys.stdout.write(json.dumps(
             _module_check_error_payload(exc), ensure_ascii=False, indent=2, sort_keys=True,
         ) + "\n")
+        return 1
+    if args.command == "check" and isinstance(details.get("diagnostic"), dict):
+        _print_diagnostics({"diagnostics": [details["diagnostic"]]})
         return 1
     print(f"{exc.code}: {exc.message}", file=sys.stderr)
     return 1
@@ -267,12 +285,67 @@ _CLI_ERRORS = (
     ProjectError,
     ModuleResolutionError,
     ModuleExpansionError,
+    ControlArtifactError,
+    ControlProjectCompileError,
     ModuleProjectCompileError,
     ModuleProjectFormatError,
     ModuleSemanticCompileError,
     BundleValidationError,
     NativeArtifactError,
 )
+
+
+def _run_control_command(
+    args: argparse.Namespace,
+    module_roots: dict[str, str],
+) -> int:
+    if args.no_strict:
+        raise ProjectError(
+            "HOCUS460",
+            "--no-strict is a language 0.1 compatibility option; language 0.3 headers are mandatory.",
+        )
+    if module_roots:
+        raise ProjectError(
+            "HOCUS460",
+            "External module roots remain closed in the same-project H3 control compiler.",
+        )
+    if args.command == "format":
+        return _run_project_format(args)
+    result = compile_project_control_program(args.project, args.source)
+    if args.command == "check":
+        if args.json:
+            sys.stdout.write(result.to_json(pretty=True))
+        else:
+            _print_diagnostics(result.to_dict())
+        return 0
+    output = result.bundle.to_json(pretty=True)
+    if args.output:
+        _atomic_write(
+            Path(args.output).expanduser().resolve(),
+            output,
+            expected_digest=args.expected_output_digest,
+            max_bytes=MAX_MODULE_BUNDLE_BYTES,
+        )
+    else:
+        sys.stdout.write(output)
+    return 0
+
+
+def _run_project_format(args: argparse.Namespace) -> int:
+    result = format_project_module_path(args.project, args.source)
+    if not result.valid or result.formatted_source is None:
+        _print_diagnostics(result.to_dict())
+        return 1
+    if args.write:
+        _atomic_write(
+            Path(result.native_source_path),
+            result.formatted_source,
+            expected_digest=result.source_digest,
+            max_bytes=MAX_SOURCE_BYTES,
+        )
+    else:
+        sys.stdout.write(result.formatted_source)
+    return 0
 
 
 def _run_module_command(
@@ -285,20 +358,7 @@ def _run_module_command(
             "--no-strict is a language 0.1 compatibility option; language 0.2 headers are mandatory.",
         )
     if args.command == "format":
-        result = format_project_module_path(args.project, args.source)
-        if not result.valid or result.formatted_source is None:
-            _print_diagnostics(result.to_dict())
-            return 1
-        if args.write:
-            _atomic_write(
-                Path(result.native_source_path),
-                result.formatted_source,
-                expected_digest=result.source_digest,
-                max_bytes=MAX_SOURCE_BYTES,
-            )
-        else:
-            sys.stdout.write(result.formatted_source)
-        return 0
+        return _run_project_format(args)
     if args.command == "check":
         result = (
             compile_project_mixed_module_semantic(
