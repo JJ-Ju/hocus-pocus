@@ -20,7 +20,10 @@ from .control_artifact import ControlArtifactError
 from .control_compiler import (
     ControlProjectCompileError,
     compile_project_control_program,
+    compile_project_mixed_control_program,
 )
+from .control_lock_update import update_project_control_lock
+from .control_mixed_lock_update import update_project_mixed_control_lock
 from .expander import ModuleExpansionError
 from .exporter import MAX_EXPORT_RESPONSE_BYTES
 from .lock_update import update_project_module_lock
@@ -195,7 +198,7 @@ def _dispatch_command(args: argparse.Namespace) -> int:
         return _run_control_command(args, module_roots)
     if module_roots:
         raise ProjectError(
-            "HOCUS460", "--module-root requires a language 0.2 schema v3 project.",
+            "HOCUS460", "--module-root requires a supported manifest-selected module lane.",
         )
     return _run_legacy_command(args)
 
@@ -203,10 +206,26 @@ def _dispatch_command(args: argparse.Namespace) -> int:
 def _run_lock_command(args: argparse.Namespace, module_roots: dict[str, str]) -> int:
     project = ProjectContext.load(args.project, validate_lock=False)
     if (project.manifest_version, project.language_version) == (4, "0.3"):
-        raise ProjectError(
-            "HOCUS456",
-            "Language 0.3 derived lock publication is the next H3 integration batch.",
+        result = (
+            update_project_mixed_control_lock(
+                args.project,
+                args.entries,
+                module_roots,
+                allow_write=True,
+                expected_lock_digest=args.expected_lock_digest,
+            )
+            if module_roots
+            else update_project_control_lock(
+                args.project,
+                args.entries,
+                allow_write=True,
+                expected_lock_digest=args.expected_lock_digest,
+            )
         )
+        sys.stdout.write(json.dumps(
+            result.to_dict(), ensure_ascii=False, indent=2, sort_keys=True,
+        ) + "\n")
+        return 0
     if module_roots:
         result = update_project_mixed_module_lock(
             args.project, args.entries, module_roots, allow_write=True,
@@ -304,14 +323,15 @@ def _run_control_command(
             "HOCUS460",
             "--no-strict is a language 0.1 compatibility option; language 0.3 headers are mandatory.",
         )
-    if module_roots:
-        raise ProjectError(
-            "HOCUS460",
-            "External module roots remain closed in the same-project H3 control compiler.",
-        )
     if args.command == "format":
         return _run_project_format(args)
-    result = compile_project_control_program(args.project, args.source)
+    result = (
+        compile_project_mixed_control_program(
+            args.project, args.source, module_roots,
+        )
+        if module_roots
+        else compile_project_control_program(args.project, args.source)
+    )
     if args.command == "check":
         if args.json:
             sys.stdout.write(result.to_json(pretty=True))

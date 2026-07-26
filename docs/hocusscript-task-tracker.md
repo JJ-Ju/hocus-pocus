@@ -20,8 +20,8 @@ Roadmap: `docs/hocusscript-roadmap.md`
 
 ## 2. Current Slice
 
-Current milestone: HS6 modules and studio libraries in progress; Batches A-G5 and H0-H2 are complete, and H3 native language-`0.3` integration is active
-Current scope: H3A enables the explicit same-project v4 resolver, pinned whole-AST catalog admission, one-shot compiler/Bundle `0.4`, and manifest-selected native format/check/compile. Resolver-derived v4 lock publication, external module-manifest-v2 roots, and control-aware project editor completion/navigation remain pending. Document/live consumers stay disabled for `0.3`, and MCP remains content-only with no `.hocus` file/project/root surface
+Current milestone: HS6 modules and studio libraries in progress; Batches A-G5 and H0-H3 are complete, and H4 qualification is next
+Current scope: H3 completes the explicit user-selected project-directory lane for local and external language-`0.3` projects: resolver-derived v4 locks, whole-AST pinned catalog admission, Bundle `0.4`, manifest-selected CLI format/check/compile/lock, exact per-call module-manifest-v2 roots, and control-aware saved/dirty completion/navigation. The editing surface remains ordinary `*.hocus` files; document/live consumers stay disabled for `0.3`, and MCP remains content-only with no file/project/root surface
 Live mutation: available only through the completed HS4 guarded `document.apply_plan` path; HS5 format/completion/export tools are observational
 Current test catalogue: 34 public workflow scenarios in four files; lint enforces the repository-wide ceiling of 50
 Current structural gate: every checked file is at or below 1,200 lines and every Python function passes the configured complexity limits
@@ -327,7 +327,7 @@ Verification:
 
 ## 9. HS6: Modules and Studio Libraries
 
-Status: Batches A-G5 complete for the native `0.2` lane; H0-H2 complete the isolated language-`0.3` frontend, strict carrier family, and pure validator/expander. H3-H4 and document/live integration remain pending, while MCP remains content-only
+Status: Batches A-G5 complete for the native `0.2` lane; H0-H3 complete the language-`0.3` frontend, carriers, semantics, and native project integration. H4 qualification and document/live integration remain pending, while MCP remains content-only
 
 Dependencies: HS5, import security design
 Houdini required: module compiler no; live module fixtures yes
@@ -363,10 +363,10 @@ Houdini required: module compiler no; live module fixtures yes
 - [x] H0 frontend: implement the isolated version-dispatched `0.3` frozen AST, bounded parser with brace-aware recovery and aggregate limits, canonical formatter with version/AST isolation, and focused frontend tests without enabling project compilation or any MCP file/root surface.
 - [x] H1 versioned carriers: assign language `0.3` / compiler `0.5.0` / project-lock v4 / external-module v2 / resolved-set v2 / expansion-map v2 / GraphSpec `0.4` / bundle `0.4`; add the exact compatibility matrix, strict bounded decoders, and seven Draft 2020-12 schemas; reject unsupported/mixed pairs and keep compiler/resolver/writer/CLI/editor/document/live dispatch disabled.
 - [x] H2 validator/expander: statically validate both conditional branches and every fold body including zero-count folds; implement exact evaluation, lexical hygiene, composable typed results, domain-separated branch/index identity, bounded provenance, cancellation, per-fold/aggregate iteration budgets, and all existing expansion budgets.
-- [ ] H3 compiler/CLI/editor integration: enable the new version only through verified native project resolver/compiler/lock and manifest-selected check/format/compile plus project-aware completion/navigation; preserve explicit user-selected project/module roots, legacy isolation, and content-only MCP behavior; accept active batches with Ruff, focused regression coverage, and one real compiler/CLI/editor workflow smoke.
+- [x] H3 compiler/CLI/editor integration: enable the new version only through verified native project resolver/compiler/lock and manifest-selected check/format/compile plus project-aware completion/navigation; preserve explicit user-selected project/module roots, legacy isolation, and content-only MCP behavior; accept active batches with Ruff, focused regression coverage, and one real compiler/CLI/editor workflow smoke.
   - [x] H3A same-project compiler/CLI: resolve verified v4 local closures into resolved-set v2; validate hidden and selected authored nodes against the pinned catalog; produce authenticated GraphSpec/Bundle `0.4`; dispatch native format/check/compile; retain final project/lock/catalog/source rechecks and the content-only MCP boundary.
-  - [ ] H3B lock writer: derive and atomically publish v4 local module records under explicit authority and optimistic digest/lease checks; validation must precede publication.
-  - [ ] H3C external/editor: consume only explicit per-call module-manifest-v2 roots, then add control-scope completion/navigation to the native project editor without adding MCP filesystem access.
+  - [x] H3B lock writer: derive and atomically publish v4 local module records under explicit authority and optimistic digest/lease checks; validation precedes publication.
+  - [x] H3C external/editor: consume only explicit per-call module-manifest-v2 roots; compile and publish mixed closures; add nested control-scope completion/navigation for saved and dirty project files without adding MCP filesystem access.
 - [ ] H4 adversarial/full verification: cover malformed recovery, unreachable invalid branches, zero and boundary counts, aggregate exhaustion, nesting/shadowing, cancellation, rename/branch/index identity, provenance, relocation, hostile roots, artifact tampering, `0.1`/`0.2` isolation, full repository tests, and independent P0/P1 review.
 - [ ] Keep unbounded recursion permanently forbidden; defer explicitly bounded deterministic compile-time recursion to a separately reviewed syntax, termination, identity, provenance, and budget contract outside H0-H4.
 - [x] Expose deterministic expanded GraphSpec `0.3`, expansion maps, resolved sets, formatted sources, and digests through the native typed result before semantic/apply integration.

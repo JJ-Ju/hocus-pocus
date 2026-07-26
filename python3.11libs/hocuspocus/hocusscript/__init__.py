@@ -88,6 +88,22 @@ from .control_compiler import (
     ControlProjectCompileError,
     ControlProjectCompileResult,
     compile_project_control_program,
+    compile_project_mixed_control_program,
+)
+from .control_lock_update import update_project_control_lock
+from .control_mixed_lock_update import update_project_mixed_control_lock
+from .control_mixed_project_editor import (
+    complete_mixed_control_path,
+    complete_mixed_control_project_source,
+    definition_mixed_control_path,
+    definition_mixed_control_project_source,
+)
+from .control_mixed_resolution import resolve_project_mixed_control_program
+from .control_project_editor import (
+    complete_control_path,
+    complete_control_project_source,
+    definition_control_path,
+    definition_control_project_source,
 )
 from .control_resolver import (
     ControlResolverLimits,
@@ -104,6 +120,7 @@ from .external_roots import (
     EXTERNAL_ROOTS_INSPECTION_SCHEMA_URI,
     ExternalLibraryRootPin,
     ExternalModuleRootsInspection,
+    inspect_control_external_module_roots,
     inspect_external_module_roots,
 )
 from .model import (
@@ -334,6 +351,7 @@ __all__ = [
     "SnapshotCatalogProvider",
     "compile_path",
     "compile_project_control_program",
+    "compile_project_mixed_control_program",
     "compile_project_mixed_module_graph",
     "compile_project_mixed_module_bundle",
     "compile_project_mixed_module_semantic",
@@ -344,6 +362,10 @@ __all__ = [
     "compile_source",
     "check_source",
     "complete_source",
+    "complete_control_path",
+    "complete_control_project_source",
+    "complete_mixed_control_path",
+    "complete_mixed_control_project_source",
     "complete_mixed_path",
     "complete_mixed_project_source",
     "complete_path",
@@ -356,6 +378,10 @@ __all__ = [
     "decode_control_graph_spec_envelope",
     "decode_control_resolved_module_set_envelope",
     "definition_path",
+    "definition_control_path",
+    "definition_control_project_source",
+    "definition_mixed_control_path",
+    "definition_mixed_control_project_source",
     "definition_mixed_path",
     "definition_mixed_project_source",
     "definition_project_source",
@@ -364,6 +390,7 @@ __all__ = [
     "format_project_module_path",
     "export_network_document",
     "inspect_external_module_roots",
+    "inspect_control_external_module_roots",
     "expand_module_graph",
     "expand_control_graph",
     "expand_resolved_module_dag",
@@ -384,6 +411,7 @@ __all__ = [
     "plan_project_module_lock",
     "resolve_graph",
     "resolve_project_module_dag",
+    "resolve_project_mixed_control_program",
     "resolved_import_map",
     "resolved_units_from_dag",
     "validate_graph",
@@ -392,6 +420,8 @@ __all__ = [
     "validate_control_program",
     "validate_resolved_module_dag",
     "update_project_lock",
+    "update_project_control_lock",
+    "update_project_mixed_control_lock",
     "update_project_mixed_module_lock",
     "update_project_module_lock",
     "verify_project_lock",

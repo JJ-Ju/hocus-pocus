@@ -361,6 +361,14 @@ class _ControlResolverSession:
 
     def recheck(self) -> None:
         _cancel(self.cancelled)
+        cancelled = self.cancelled
+        self.cancelled = None
+        try:
+            self._recheck_without_cancellation()
+        finally:
+            self.cancelled = cancelled
+
+    def _recheck_without_cancellation(self) -> None:
         refreshed = ProjectContext.load(self.root, validate_lock=True)
         if _project_pins(refreshed) != _project_pins(self.context):
             raise ProjectError(

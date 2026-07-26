@@ -153,6 +153,7 @@ class _ValidatedExternalModuleRoots:
 
     inspection: ExternalModuleRootsInspection
     roots: tuple[_ValidatedExternalRoot, ...] = field(repr=False, compare=False)
+    lane: tuple[int, str, int] = field(repr=False)
 
     def root_for_alias(self, alias: str, *, require_manifest_pin: bool = True) -> Path:
         for item in self.roots:
@@ -179,19 +180,74 @@ def inspect_external_module_roots(
     ).inspection
 
 
+def inspect_control_external_module_roots(
+    project_directory: str | PathLike[str],
+    module_roots: Mapping[str, str | PathLike[str]],
+    *,
+    cancelled: Callable[[], bool] | None = None,
+) -> ExternalModuleRootsInspection:
+    """Inspect exact module-manifest-v2 roots for one language-0.3 project."""
+
+    return _validate_control_external_module_roots(
+        project_directory,
+        module_roots,
+        cancelled=cancelled,
+    ).inspection
+
+
 def _validate_external_module_roots(
     project_directory: str | PathLike[str],
     module_roots: Mapping[str, str | PathLike[str]],
     *,
     cancelled: Callable[[], bool] | None = None,
 ) -> _ValidatedExternalModuleRoots:
+    return _validate_external_module_roots_lane(
+        project_directory,
+        module_roots,
+        project_manifest_version=3,
+        language_version="0.2",
+        module_manifest_version=1,
+        cancelled=cancelled,
+    )
+
+
+def _validate_control_external_module_roots(
+    project_directory: str | PathLike[str],
+    module_roots: Mapping[str, str | PathLike[str]],
+    *,
+    cancelled: Callable[[], bool] | None = None,
+) -> _ValidatedExternalModuleRoots:
+    return _validate_external_module_roots_lane(
+        project_directory,
+        module_roots,
+        project_manifest_version=4,
+        language_version="0.3",
+        module_manifest_version=2,
+        cancelled=cancelled,
+    )
+
+
+def _validate_external_module_roots_lane(
+    project_directory: str | PathLike[str],
+    module_roots: Mapping[str, str | PathLike[str]],
+    *,
+    project_manifest_version: int,
+    language_version: str,
+    module_manifest_version: int,
+    cancelled: Callable[[], bool] | None,
+) -> _ValidatedExternalModuleRoots:
+    lane = (
+        project_manifest_version,
+        language_version,
+        module_manifest_version,
+    )
     authored_roots = _bounded_authored_roots(module_roots, cancelled)
     _cancel(cancelled)
     context = ProjectContext.load(project_directory, validate_lock=True)
     _cancel(cancelled)
     if (
-        context.manifest_version != 3
-        or context.language_version != "0.2"
+        context.manifest_version != project_manifest_version
+        or context.language_version != language_version
         or context.uid is None
         or context.manifest_digest is None
         or context.lock_digest is None
@@ -200,7 +256,12 @@ def _validate_external_module_roots(
     ):
         raise ProjectError(
             "HOCUS458",
-            "External roots inspection requires one fully pinned language 0.2 schema v3 project.",
+            "External roots inspection requires the exact fully pinned project carrier lane.",
+            details={
+                "projectManifestVersion": project_manifest_version,
+                "languageVersion": language_version,
+                "moduleManifestVersion": module_manifest_version,
+            },
         )
     aliases = {item.alias: item for item in context.external_aliases}
     if not aliases:
@@ -234,6 +295,7 @@ def _validate_external_module_roots(
         manifest_path, manifest_bytes, manifest, manifest_identity = _read_module_manifest(
             root, cancelled,
         )
+        _require_manifest_lane(manifest, lane)
         pin = _pin_from_manifest(alias, aliases[alias], manifest)
         validated.append(
             _ValidatedExternalRoot(
@@ -246,9 +308,24 @@ def _validate_external_module_roots(
 
     _validate_locked_external_identities(context, tuple(validated))
     inspection = _inspection_from_context(context, tuple(item.pin for item in validated))
-    session = _ValidatedExternalModuleRoots(inspection, tuple(validated))
+    session = _ValidatedExternalModuleRoots(inspection, tuple(validated), lane)
     _recheck(context, session, cancelled)
     return session
+
+
+def _require_manifest_lane(
+    manifest: ModuleManifest,
+    lane: tuple[int, str, int],
+) -> None:
+    _, language_version, module_manifest_version = lane
+    if (
+        manifest.schema_version != module_manifest_version
+        or manifest.language_version != language_version
+    ):
+        raise ProjectError(
+            "HOCUS458",
+            "External module manifest does not match the selected project carrier lane.",
+        )
 
 
 def _bounded_authored_roots(
@@ -434,6 +511,8 @@ def _recheck(
     _cancel(cancelled)
     refreshed = ProjectContext.load(original.root, validate_lock=True)
     if (
+        (refreshed.manifest_version, refreshed.language_version) != session.lane[:2]
+        or
         refreshed.uid != original.uid
         or refreshed.manifest_digest != original.manifest_digest
         or refreshed.lock_digest != original.lock_digest
@@ -444,11 +523,11 @@ def _recheck(
     ):
         raise ProjectError("HOCUS458", "Project or lock pins changed during external root inspection.")
     for item in session.roots:
-        _cancel(cancelled)
         current_root, current_root_identity = _canonical_external_root(item.root)
         if current_root != item.root or current_root_identity != item.root_identity:
             raise ProjectError("HOCUS458", "External root identity changed during inspection.")
-        path, raw, manifest, manifest_identity = _read_module_manifest(item.root, cancelled)
+        path, raw, manifest, manifest_identity = _read_module_manifest(item.root, None)
+        _require_manifest_lane(manifest, session.lane)
         if (
             path != item.manifest_path
             or raw != item.manifest_bytes
@@ -462,7 +541,6 @@ def _recheck(
         refreshed, tuple(item.pin for item in session.roots),
     ) != session.inspection:
         raise ProjectError("HOCUS458", "External roots inspection changed during final verification.")
-    _cancel(cancelled)
 
 
 def _reject_reparse_chain(path: Path) -> None:

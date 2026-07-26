@@ -6,7 +6,7 @@ import hashlib
 import json
 from dataclasses import dataclass
 from os import PathLike
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 
 from .contracts import (
     CONTROL_COMPILER_VERSION,
@@ -24,6 +24,7 @@ from .control_resolver import (
     ResolvedControlProgram,
     resolve_project_control_program,
 )
+from .control_mixed_resolution import resolve_project_mixed_control_program
 from .control_semantic import ControlExpansionLimits
 from .formatter import format_syntax
 
@@ -142,6 +143,33 @@ def compile_project_control_program(
         limits=limits,
         cancelled=cancelled,
     )
+    return _compile_resolved_control_program(program, cancelled)
+
+
+def compile_project_mixed_control_program(
+    project_directory: str | PathLike[str],
+    entry_source_path: str | PathLike[str],
+    module_roots: Mapping[str, str | PathLike[str]],
+    *,
+    limits: ControlResolverLimits | ControlExpansionLimits | None = None,
+    cancelled: Callable[[], bool] | None = None,
+) -> ControlProjectCompileResult:
+    """Compile one v4 entry through an exact per-call external root mapping."""
+
+    program = resolve_project_mixed_control_program(
+        project_directory,
+        entry_source_path,
+        module_roots,
+        limits=limits,
+        cancelled=cancelled,
+    )
+    return _compile_resolved_control_program(program, cancelled)
+
+
+def _compile_resolved_control_program(
+    program: ResolvedControlProgram,
+    cancelled: Callable[[], bool] | None,
+) -> ControlProjectCompileResult:
     catalog = program._project.catalog
     if catalog is None:
         raise ControlProjectCompileError(
@@ -254,5 +282,6 @@ def _digest_text(value: str) -> str:
 __all__ = [
     "ControlProjectCompileError",
     "ControlProjectCompileResult",
+    "compile_project_mixed_control_program",
     "compile_project_control_program",
 ]
