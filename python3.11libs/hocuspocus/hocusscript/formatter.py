@@ -7,7 +7,9 @@ from typing import Any
 
 from .model import ArrayValue, CodeValue, GraphSpec, LiteralValue, NodeReference
 from .syntax import (
+    ArrayExpr,
     CategoryStmt,
+    CodeExpr,
     ExportStmt,
     ExternalDecl,
     FlagStmt,
@@ -18,18 +20,29 @@ from .syntax import (
     LiteralExpr,
     ModeStmt,
     ModuleDecl,
+    MultiparmValue,
     NodeDecl,
     OwnershipStmt,
     IfDecl,
     ParamRefExpr,
     ParmStmt,
     RevisionStmt,
+    RampValue,
+    RawPathValue,
+    ResetValue,
+    ExpressionValue,
+    ChannelReferenceValue,
+    QuantityValue,
     SymbolRefExpr,
     SyntaxSource,
     TargetStmt,
+    TaggedValueExpr,
     UseDecl,
     YieldStmt,
 )
+from .runtime_syntax import AnimationDecl, SpareParameterDecl
+from .editor_syntax import EditorEntityDecl
+from .editor_format import format_editor_entity
 
 
 def _format_value(value: Any) -> str:
@@ -107,30 +120,108 @@ def _format_graph_flags(graph: GraphSpec, lines: list[str]) -> None:
         lines.append(f"  layout = {graph.layout};")
 
 
-def _format_syntax_expr(value: Any) -> str:
+def _format_syntax_expr(value: Any, *, rich_values: bool = False) -> str:
     if isinstance(value, LiteralExpr):
         return _format_value(value.value)
     if isinstance(value, ParamRefExpr):
         return f"param.{value.name}"
     if isinstance(value, SymbolRefExpr):
-        suffix = f"[{value.output_index}]" if value.output_index is not None else ""
+        selector = (
+            json.dumps(value.output_name, ensure_ascii=False)
+            if value.output_name is not None else value.output_index
+        )
+        suffix = f"[{selector}]" if selector is not None else ""
         return f"{value.symbol}.{value.member}{suffix}"
+    if rich_values and isinstance(value, ArrayExpr):
+        return "[" + ", ".join(
+            _format_syntax_expr(item, rich_values=True) for item in value.items
+        ) + "]"
+    if rich_values and isinstance(value, CodeExpr):
+        body = value.body.replace("\r\n", "\n").replace("\r", "\n").replace("`", "\\`")
+        return f"{value.language}`{body}`"
+    if rich_values and isinstance(value, TaggedValueExpr):
+        return _format_tagged_value(value)
     # The 0.1 syntax formatter delegates through lowering, so this is a hard
     # boundary against accidentally accepting arrays or code in language 0.2.
     raise TypeError(f"unsupported language 0.2 expression: {type(value).__name__}")
 
 
-def _format_syntax_node(node: NodeDecl, indent: str) -> list[str]:
+def _format_tagged_value(value: TaggedValueExpr) -> str:
+    payload = value.payload
+    if isinstance(payload, ResetValue):
+        return "reset()"
+    if isinstance(payload, ExpressionValue):
+        body = payload.body.replace("`", "\\`")
+        return f"expression({payload.language}`{body}`)"
+    if isinstance(payload, ChannelReferenceValue):
+        return f"channel({payload.node_symbol}, {payload.parm_name})"
+    if isinstance(payload, RawPathValue):
+        return (
+            f"raw_path({payload.path_kind}, "
+            f"{json.dumps(payload.raw, ensure_ascii=False)})"
+        )
+    if isinstance(payload, QuantityValue):
+        return (
+            f"quantity({_format_value(payload.magnitude)}, "
+            f"{json.dumps(payload.unit, ensure_ascii=False)})"
+        )
+    if isinstance(payload, RampValue):
+        points = ", ".join(
+            f"[{_format_value(point.position)}, "
+            f"{_format_syntax_expr(point.value, rich_values=True)}]"
+            for point in payload.points
+        )
+        basis = ", ".join(json.dumps(item, ensure_ascii=False) for item in payload.basis)
+        return f"ramp(points = [{points}], basis = [{basis}])"
+    if isinstance(payload, MultiparmValue):
+        instances = []
+        for instance in payload.instances:
+            fields = " ".join(
+                f"{field.name} = "
+                f"{_format_syntax_expr(field.value, rich_values=True)};"
+                for field in instance.fields
+            )
+            instances.append(
+                f"instance({json.dumps(instance.instance_id, ensure_ascii=False)}, "
+                f"{{ {fields} }})"
+            )
+        return f"multiparm(instances = [{', '.join(instances)}])"
+    raise TypeError(f"unsupported HocusScript 0.4 tagged value: {value.tag}")
+
+
+def _format_syntax_node(
+    node: NodeDecl, indent: str, *, rich_values: bool = False
+) -> list[str]:
     identity = f" @id({_format_value(node.explicit_id)})" if node.explicit_id is not None else ""
     lines = [f"{indent}node {node.symbol}{identity}: {_format_value(node.type_name)} {{"]
     child = indent + "  "
     for statement in node.statements:
         if isinstance(statement, InputStmt):
+            selector = (
+                json.dumps(statement.name, ensure_ascii=False)
+                if statement.name is not None else statement.index
+            )
             lines.append(
-                f"{child}input[{statement.index}] = {_format_syntax_expr(statement.source)};"
+                f"{child}input[{selector}] = {_format_syntax_expr(statement.source)};"
             )
         elif isinstance(statement, ParmStmt):
-            lines.append(f"{child}{statement.name} = {_format_syntax_expr(statement.value)};")
+            lines.append(
+                f"{child}{statement.name} = "
+                f"{_format_syntax_expr(statement.value, rich_values=rich_values)};"
+            )
+        elif isinstance(statement, (SpareParameterDecl, AnimationDecl)):
+            keyword = "spare" if isinstance(statement, SpareParameterDecl) else "animate"
+            name = statement.name if isinstance(statement, SpareParameterDecl) else statement.parm_name
+            lines.append(
+                f"{child}{keyword} {name} @id("
+                f"{_format_value(statement.explicit_id)}) {{"
+            )
+            for prop in statement.properties:
+                lines.append(
+                    f"{child}  {prop.name} = "
+                    f"{_format_syntax_expr(prop.value, rich_values=True)};"
+                )
+            lines.append(f"{child}}}")
         else:  # pragma: no cover - closed syntax union
             raise TypeError(f"unsupported node statement: {type(statement).__name__}")
     lines.append(f"{indent}}}")
@@ -147,9 +238,11 @@ def _format_use(statement: UseDecl, indent: str) -> str:
     )
 
 
-def _format_control_statement(statement: Any, indent: str) -> list[str]:
+def _format_control_statement(
+    statement: Any, indent: str, *, rich_values: bool = False
+) -> list[str]:
     if isinstance(statement, NodeDecl):
-        return _format_syntax_node(statement, indent)
+        return _format_syntax_node(statement, indent, rich_values=rich_values)
     if isinstance(statement, UseDecl):
         return [_format_use(statement, indent)]
     if isinstance(statement, YieldStmt):
@@ -165,10 +258,18 @@ def _format_control_statement(statement: Any, indent: str) -> list[str]:
             f"({_format_syntax_expr(statement.condition)}) outputs ({outputs}) {{"
         ]
         for item in statement.then_body:
-            lines.extend(_format_control_statement(item, indent + "  "))
+            lines.extend(
+                _format_control_statement(
+                    item, indent + "  ", rich_values=rich_values
+                )
+            )
         lines.append(f"{indent}}} else {{")
         for item in statement.else_body:
-            lines.extend(_format_control_statement(item, indent + "  "))
+            lines.extend(
+                _format_control_statement(
+                    item, indent + "  ", rich_values=rich_values
+                )
+            )
         lines.append(f"{indent}}}")
         return lines
     if isinstance(statement, ForDecl):
@@ -182,21 +283,27 @@ def _format_control_statement(statement: Any, indent: str) -> list[str]:
             f"carry ({carries}) {{"
         ]
         for item in statement.body:
-            lines.extend(_format_control_statement(item, indent + "  "))
+            lines.extend(
+                _format_control_statement(
+                    item, indent + "  ", rich_values=rich_values
+                )
+            )
         lines.append(f"{indent}}}")
         return lines
     raise TypeError(f"unsupported control statement: {type(statement).__name__}")
 
 
-def _format_v02_graph(graph: GraphDecl) -> list[str]:
+def _format_v02_graph(graph: GraphDecl, *, rich_values: bool = False) -> list[str]:
     lines = [f"graph {graph.name} {{"]
     for statement in graph.statements:
-        lines.extend(_format_v02_graph_statement(statement))
+        lines.extend(_format_v02_graph_statement(statement, rich_values=rich_values))
     lines.append("}")
     return lines
 
 
-def _format_v02_graph_statement(statement: Any) -> list[str]:
+def _format_v02_graph_statement(
+    statement: Any, *, rich_values: bool = False
+) -> list[str]:
     if isinstance(statement, TargetStmt):
         return [f"  target {_format_value(statement.value)};"]
     if isinstance(statement, CategoryStmt):
@@ -210,16 +317,20 @@ def _format_v02_graph_statement(statement: Any) -> list[str]:
     if isinstance(statement, ExternalDecl):
         keyword = "adopt" if statement.adopted else "existing"
         return [f"  {keyword} {statement.symbol} = {_format_value(statement.path)};"]
-    return _format_v02_graph_body_statement(statement)
+    return _format_v02_graph_body_statement(statement, rich_values=rich_values)
 
 
-def _format_v02_graph_body_statement(statement: Any) -> list[str]:
+def _format_v02_graph_body_statement(
+    statement: Any, *, rich_values: bool = False
+) -> list[str]:
     if isinstance(statement, NodeDecl):
-        return _format_syntax_node(statement, "  ")
+        return _format_syntax_node(statement, "  ", rich_values=rich_values)
+    if isinstance(statement, EditorEntityDecl):
+        return format_editor_entity(statement)
     if isinstance(statement, UseDecl):
         return [_format_use(statement, "  ")]
     if isinstance(statement, (IfDecl, ForDecl)):
-        return _format_control_statement(statement, "  ")
+        return _format_control_statement(statement, "  ", rich_values=rich_values)
     if isinstance(statement, FlagStmt):
         return [f"  {statement.name} = {statement.symbol};"]
     if isinstance(statement, LayoutStmt):
@@ -227,7 +338,9 @@ def _format_v02_graph_body_statement(statement: Any) -> list[str]:
     raise TypeError(f"unsupported graph statement: {type(statement).__name__}")
 
 
-def _format_v02_module(module: ModuleDecl) -> list[str]:
+def _format_v02_module(
+    module: ModuleDecl, *, rich_values: bool = False
+) -> list[str]:
     lines = [f"module {module.name}("]
     for parameter in module.parameters:
         default = (
@@ -241,11 +354,17 @@ def _format_v02_module(module: ModuleDecl) -> list[str]:
     lines.append(") {")
     for statement in module.statements:
         if isinstance(statement, NodeDecl):
-            lines.extend(_format_syntax_node(statement, "  "))
+            lines.extend(
+                _format_syntax_node(statement, "  ", rich_values=rich_values)
+            )
         elif isinstance(statement, UseDecl):
             lines.append(_format_use(statement, "  "))
         elif isinstance(statement, (IfDecl, ForDecl)):
-            lines.extend(_format_control_statement(statement, "  "))
+            lines.extend(
+                _format_control_statement(
+                    statement, "  ", rich_values=rich_values
+                )
+            )
         elif isinstance(statement, ExportStmt):
             lines.append(f"  export {statement.name} = {_format_syntax_expr(statement.value)};")
         else:  # pragma: no cover - closed syntax union
@@ -259,17 +378,17 @@ def _validate_control_ast(
 ) -> None:
     for statement in statements:
         if isinstance(statement, YieldStmt):
-            if version != "0.3":
+            if version not in {"0.3", "0.4"}:
                 raise ValueError("language 0.2 syntax cannot contain language 0.3 controls")
             if not in_control:
                 raise ValueError("yield statements are valid only inside language 0.3 controls")
         elif isinstance(statement, IfDecl):
-            if version != "0.3":
+            if version not in {"0.3", "0.4"}:
                 raise ValueError("language 0.2 syntax cannot contain language 0.3 controls")
             _validate_control_ast(statement.then_body, version=version, in_control=True)
             _validate_control_ast(statement.else_body, version=version, in_control=True)
         elif isinstance(statement, ForDecl):
-            if version != "0.3":
+            if version not in {"0.3", "0.4"}:
                 raise ValueError("language 0.2 syntax cannot contain language 0.3 controls")
             _validate_control_ast(statement.body, version=version, in_control=True)
 
@@ -277,7 +396,7 @@ def _validate_control_ast(
 def format_syntax(source: SyntaxSource) -> str:
     """Canonical-format parsed language 0.2 or 0.3 source without compiling it."""
     version = source.version.value if source.version is not None else "0.1"
-    if version not in {"0.2", "0.3"}:
+    if version not in {"0.2", "0.3", "0.4"}:
         from .lowering import lower_syntax
 
         return format_graph(lower_syntax(source))
@@ -302,9 +421,13 @@ def format_syntax(source: SyntaxSource) -> str:
             )
     lines.append("")
     if source.graph is not None:
-        lines.extend(_format_v02_graph(source.graph))
+        lines.extend(
+            _format_v02_graph(source.graph, rich_values=version == "0.4")
+        )
     elif source.module is not None:
-        lines.extend(_format_v02_module(source.module))
+        lines.extend(
+            _format_v02_module(source.module, rich_values=version == "0.4")
+        )
     else:
         raise ValueError(f"language {version} source has no root declaration")
     return "\n".join(lines) + "\n"

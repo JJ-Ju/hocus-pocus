@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "hocuspocus://schemas/hs8-clean-image-environment/v1",
+  "title": "HS8 Clean Image or VM Environment Receipt v1",
+  "description": "Self-digested environment evidence. This envelope is not authenticated and cannot by itself certify a clean-image boundary or authorize release.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema", "kind", "schemaVersion", "isolationBoundary", "ephemeral",
+    "imageDigest", "runnerDigest", "sourceSnapshotDigest",
+    "installedPayloadManifestDigest", "receiptDigest"
+  ],
+  "properties": {
+    "$schema": {
+      "const": "hocuspocus://schemas/hs8-clean-image-environment/v1"
+    },
+    "kind": {"const": "hocus_hs8_clean_image_environment"},
+    "schemaVersion": {"const": 1},
+    "isolationBoundary": {"const": "clean_image_or_vm"},
+    "ephemeral": {"const": true},
+    "imageDigest": {"$ref": "#/$defs/digest"},
+    "runnerDigest": {"$ref": "#/$defs/digest"},
+    "sourceSnapshotDigest": {"$ref": "#/$defs/digest"},
+    "installedPayloadManifestDigest": {"$ref": "#/$defs/digest"},
+    "receiptDigest": {"$ref": "#/$defs/digest"}
+  },
+  "$defs": {
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    }
+  }
+}

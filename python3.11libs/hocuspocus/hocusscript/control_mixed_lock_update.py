@@ -178,7 +178,7 @@ def _strict_mixed_modules(
         [item.to_dict() for item in modules],
         project_uid=project.uid or "",
         external_aliases=project.external_aliases,
-        expected_language_version="0.3",
+        expected_language_version=project.language_version,
     )
     if validated != modules:
         raise ProjectError(
@@ -190,8 +190,8 @@ def _strict_mixed_modules(
 
 def _require_mixed_publish_project(project: ProjectContext) -> None:
     if (
-        project.manifest_version != 4
-        or project.language_version != "0.3"
+        (project.manifest_version, project.language_version)
+        not in {(4, "0.3"), (5, "0.4")}
         or project.uid is None
         or project.manifest_digest is None
         or project.lock_path is None
@@ -201,7 +201,7 @@ def _require_mixed_publish_project(project: ProjectContext) -> None:
     ):
         raise ProjectError(
             "HOCUS452",
-            "Mixed control publication requires a portable v4 project with aliases.",
+            "Mixed control publication requires a portable v4/v5 project with aliases.",
         )
 
 

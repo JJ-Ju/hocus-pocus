@@ -14,9 +14,16 @@ from .contracts import (
     CONTROL_COMPILER_VERSION,
     CONTROL_GRAPH_SPEC_VERSION,
     CONTROL_LANGUAGE_VERSION,
+    VALUE_BUNDLE_VERSION,
+    VALUE_COMPILER_VERSION,
+    VALUE_GRAPH_SPEC_VERSION,
+    VALUE_LANGUAGE_VERSION,
     decode_control_bundle_envelope,
     decode_control_graph_spec_envelope,
     decode_control_resolved_module_set_envelope,
+    decode_value_bundle_envelope,
+    decode_value_graph_spec_envelope,
+    decode_value_resolved_module_set_envelope,
 )
 from .model import GraphSpec, graph_spec_from_dict
 from .semantic import CatalogConstraint, SemanticResult, resolve_graph
@@ -52,9 +59,12 @@ class ControlCompiledBundle:
     def __post_init__(self) -> None:
         try:
             payload = json.loads(self._payload_json)
-            decoded = decode_control_bundle_envelope(
-                {**payload, "bundleDigest": self.digest},
+            decoder = (
+                decode_value_bundle_envelope
+                if payload.get("bundleVersion") == VALUE_BUNDLE_VERSION
+                else decode_control_bundle_envelope
             )
+            decoded = decoder({**payload, "bundleDigest": self.digest})
         except Exception as exc:
             raise ValueError("ControlCompiledBundle content is invalid.") from exc
         unsigned = dict(decoded)
@@ -90,7 +100,15 @@ def rehydrate_control_graph(
 ) -> GraphSpec:
     """Strict-decode GraphSpec 0.4 and expose its existing semantic model view."""
 
-    decoded = decode_control_graph_spec_envelope(
+    graph_version = (
+        value.get("graphSpecVersion") if isinstance(value, Mapping) else None
+    )
+    decoder = (
+        decode_value_graph_spec_envelope
+        if graph_version == VALUE_GRAPH_SPEC_VERSION
+        else decode_control_graph_spec_envelope
+    )
+    decoded = decoder(
         value,
         resolved_limits=resolved_limits,
     )
@@ -121,8 +139,22 @@ def _compile_control_bundle(
 ) -> ControlCompiledBundle:
     """Resolve explicit canonical inputs and produce a self-authenticated Bundle 0.4."""
 
-    resolved = decode_control_resolved_module_set_envelope(resolved_module_set)
-    graph_payload = decode_control_graph_spec_envelope(
+    resolved_version = (
+        resolved_module_set.get("schemaVersion")
+        if isinstance(resolved_module_set, Mapping) else None
+    )
+    resolved_decoder = (
+        decode_value_resolved_module_set_envelope
+        if resolved_version == 3
+        else decode_control_resolved_module_set_envelope
+    )
+    resolved = resolved_decoder(resolved_module_set)
+    graph_decoder = (
+        decode_value_graph_spec_envelope
+        if resolved["languageVersion"] == VALUE_LANGUAGE_VERSION
+        else decode_control_graph_spec_envelope
+    )
+    graph_payload = graph_decoder(
         graph_spec,
         resolved_limits=resolved["limits"],
     )
@@ -134,6 +166,18 @@ def _compile_control_bundle(
     _require_digest(catalog_content_digest, "catalog_content_digest")
     _require_digest(catalog_fingerprint, "catalog_fingerprint")
     snapshot = _catalog_snapshot(catalog)
+    expected_catalog_version = (
+        2 if graph_payload["graphSpecVersion"] == VALUE_GRAPH_SPEC_VERSION else 1
+    )
+    if snapshot.catalog_version != expected_catalog_version:
+        raise ControlArtifactError(
+            "HOCUS495",
+            "Catalog schema version does not match the selected carrier lane.",
+            details={
+                "expected": expected_catalog_version,
+                "actual": snapshot.catalog_version,
+            },
+        )
     if snapshot.fingerprint != catalog_fingerprint:
         raise ControlArtifactError(
             "HOCUS495",
@@ -181,9 +225,12 @@ def _compile_control_bundle(
         capabilities,
     )
     digest = _digest_json(unsigned)
-    decoded = decode_control_bundle_envelope(
-        {**unsigned, "bundleDigest": digest},
+    bundle_decoder = (
+        decode_value_bundle_envelope
+        if unsigned["bundleVersion"] == VALUE_BUNDLE_VERSION
+        else decode_control_bundle_envelope
     )
+    decoded = bundle_decoder({**unsigned, "bundleDigest": digest})
     authenticated = dict(decoded)
     authenticated.pop("bundleDigest")
     return ControlCompiledBundle(_canonical_json(authenticated), digest)
@@ -278,13 +325,19 @@ def _bundle_payload(
 ) -> dict[str, Any]:
     entry_uri = resolved["entrySourceUri"]
     expansion = graph["expansionMap"]
+    rich_values = graph["graphSpecVersion"] == VALUE_GRAPH_SPEC_VERSION
+    bundle_version = VALUE_BUNDLE_VERSION if rich_values else CONTROL_BUNDLE_VERSION
+    compiler_version = VALUE_COMPILER_VERSION if rich_values else CONTROL_COMPILER_VERSION
+    language_version = VALUE_LANGUAGE_VERSION if rich_values else CONTROL_LANGUAGE_VERSION
+    graph_version = VALUE_GRAPH_SPEC_VERSION if rich_values else CONTROL_GRAPH_SPEC_VERSION
+    expansion_version = 3 if rich_values else 2
     return {
-        "$schema": "hocuspocus://schemas/compiled-bundle/v0.4",
+        "$schema": f"hocuspocus://schemas/compiled-bundle/v{bundle_version}",
         "kind": "hocus_compiled_bundle",
-        "bundleVersion": CONTROL_BUNDLE_VERSION,
-        "compilerVersion": CONTROL_COMPILER_VERSION,
-        "graphSpecVersion": CONTROL_GRAPH_SPEC_VERSION,
-        "languageVersion": CONTROL_LANGUAGE_VERSION,
+        "bundleVersion": bundle_version,
+        "compilerVersion": compiler_version,
+        "graphSpecVersion": graph_version,
+        "languageVersion": language_version,
         "portable": True,
         "projectUid": resolved["projectUid"],
         "projectManifestDigest": resolved["projectManifestDigest"],
@@ -303,16 +356,16 @@ def _bundle_payload(
             for item in resolved["modules"]
         ],
         "catalogConstraints": {
-            "schemaVersion": 1,
+            "schemaVersion": 2 if rich_values else 1,
             "fingerprint": catalog_fingerprint,
             "contentDigest": catalog_content_digest,
         },
         "requiredCapabilities": list(capabilities),
         "sourceMaps": {
-            "format": "graph-spec-expansion-v2",
+            "format": f"graph-spec-expansion-v{expansion_version}",
             "entrySourceUri": entry_uri,
             "embeddedInGraphSpec": True,
-            "expansionMapVersion": 2,
+            "expansionMapVersion": expansion_version,
             "expansionMapDigest": _digest_json(expansion),
         },
         "graphSpec": graph,

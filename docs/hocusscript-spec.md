@@ -1,8 +1,10 @@
 # HocusScript Language and Compiler Specification
 
-Status: experimental design contract
-Language version: `0.1`
+Status: implemented multi-version contract; V1 production-release closure active
+Supported language versions: `0.1` through `0.4`
 File extension: `.hocus`
+
+Release-closure plan: `docs/hocusscript-roadmap-completion-plan.md`
 
 ## 1. Purpose
 
@@ -140,7 +142,7 @@ The server MAY configure lower limits and MUST return a structured limit diagnos
 
 ### 5.1 Native Project and File Surface
 
-HocusScript files are ordinary source-code files. Agents and users read, edit, search, diff, rename, and version `*.hocus`, `hocus.project.toml`, and `hocus.lock.json` through their native editor, workspace, and filesystem tools. Native tools remain the primary file surface. H6 MAY additionally expose the same files through an opt-in, user-approved MCP project workspace; it MUST NOT expose a general host filesystem or make a parallel source store.
+HocusScript files are ordinary source-code files. Agents and users read, edit, search, diff, rename, and version `*.hocus`, `hocus.project.toml`, and `hocus.lock.json` through their native editor, workspace, and filesystem tools. Native tools remain the primary file surface. H6 additionally exposes approved authored files through an opt-in MCP project workspace; it does not expose a general host filesystem or make a parallel source store.
 
 The user-selectable project directory belongs to the offline compiler/editor configuration. The native command accepts it explicitly through `--project`; editor settings and `HOCUS_PROJECT_DIRECTORY` MAY provide the same value. H6 adds an optional host-owned Houdini/MCP configuration that lets the user approve canonical project directories and separately approved read-only external roots. An agent request MUST NOT grant itself a root.
 
@@ -240,7 +242,7 @@ path = "catalogs/houdini-21.0.json"
 }
 ```
 
-The manifest digest covers the exact bounded manifest bytes. The lock digest covers canonical JSON with sorted keys, so lock whitespace and key order do not create false bundle drift. Lock updates are explicit write operations through `hocus lock --update` or the planned H6 `source.project.build` lock action; they are never implicit side effects of check, compile, format, document preview, or document apply.
+The manifest digest covers the exact bounded manifest bytes. The lock digest covers canonical JSON with sorted keys, so lock whitespace and key order do not create false bundle drift. Lock updates are explicit write operations through `hocus lock --update` or the H6 `source.project.build` lock action; they are never implicit side effects of check, compile, format, document preview, or document apply.
 
 The offline compiler emits deterministic, content-addressed bundles. Structural bundle v0.1 remains the compatibility format for unpinned v1 and memory/workspace results. Semantic bundle v0.2 additionally requires:
 
@@ -260,19 +262,19 @@ Both formats contain at least:
 
 Absolute physical paths are excluded from portable bundle identity and payloads. Relocating a project preserves source and bundle identity when its manifest UID, relative paths, contents, compiler inputs, and locks are unchanged.
 
-The Houdini mutation boundary is content-based. The shared standard-library `decode_compiled_bundle()` trust boundary validates exact fields, supported versions, canonical digest, bounded complexity, finite values, portable provenance, source/dependency records, source maps, GraphSpec envelope consistency, and capabilities derived from graph content. It never reads paths or Houdini state. Even when H6 can access approved source files, document preview/plan/apply consumes only authenticated bundle content and stored plan identity. Source bytes are not embedded, so the decoder validates the integrity of source-digest claims, not their external authenticity.
+The Houdini mutation boundary is content-based. The exact standard-library trust boundaries use `decode_compiled_bundle()` for Bundles `0.1`-`0.3`, the control-carrier decoder for Bundle `0.4`, and the value-carrier decoder for Bundle `0.5`; each validates its own exact fields and version tuple, canonical digest, bounded complexity, finite values, portable provenance, source/dependency records, source maps, GraphSpec envelope consistency, and capabilities derived from graph content. They never read paths or Houdini state, and versions are never coerced. Even when H6 can access approved source files, document preview/plan/apply consumes only authenticated bundle content and stored plan identity. Source bytes are not embedded, so the decoder validates the integrity of source-digest claims, not their external authenticity.
 
 MCP progression:
 
 - `document.compile_source` remains an optional compatibility/convenience endpoint for unsaved source text. It never accepts a project directory or reads a path.
-- `document.preview_bundle` accepts compiled bundle content through `decode_compiled_bundle()`, resolves it against the current Houdini catalog/baseline, and returns a non-mutating diff and candidate plan.
-- `document.plan_bundle` persists an immutable guarded plan only after all HS4 gates pass.
-- `document.apply_plan` accepts only a stored plan identity, not source paths or arbitrary source text.
+- `document.preview_bundle` accepts flat Bundle `0.2`, frozen module Bundle `0.3`, control Bundle `0.4`, or value Bundle `0.5` content through its version-specific decoder, freshly resolves it against the current Houdini catalog/baseline, and returns a non-mutating candidate document, diff, destructive summary, and preview plan.
+- `document.plan_bundle` reruns the exact live validations and persists an immutable guarded plan only after all HS4 gates pass.
+- `document.apply_plan` accepts only a stored plan identity, not source paths or arbitrary source text, and rechecks its live drift guards without rebuilding the plan.
 - `document.export_source` returns source text plus provenance. The native editor/CLI owns writing it to a chosen `.hocus` file.
-- H5 enables frozen Bundle `0.3` and extends the same content-only document operations to strict Bundle `0.4`, GraphSpec `0.4`, and module/control provenance after `HS-BLOCK-008` closes.
+- At the historical H5 checkpoint, frozen Bundle `0.3` and strict Bundle `0.4` used the same content-only document operations with GraphSpec `0.4`, durable module/control provenance, fresh live semantics, exact pins, guarded apply, cancellation, verification, rollback, and recovery. HS7 subsequently added the exact Bundle `0.5` value lane without widening the frozen carriers.
 - H6 adds a separate `source.*` namespace for approved-project describe/read/patch/build/navigation operations. It does not add path parameters to `document.*` or let source-file access bypass bundle planning.
 
-There is no `document.compile_file`, path-taking `document.open_project`, or general filesystem operation. H6 MAY register a bounded source-workspace registry only from host-approved project configuration and MUST identify projects to clients by opaque `projectId`. A Houdini-local UI MAY manage approvals, access mode, persistence, external-root grants, and revocation, but document mutation remains bundle/plan based.
+There is no `document.compile_file`, path-taking `document.open_project`, or general filesystem operation. H6 registers a bounded source-workspace registry only from host-approved project configuration and identifies projects to clients by opaque `projectId`. The Houdini-local Source Workspaces UI manages approvals, access mode, persistence, external-root grants, expiry, audit viewing, and revocation; document mutation remains bundle/plan based.
 
 ## 6. Version 0.1 Grammar
 
@@ -422,7 +424,15 @@ graph rocks {
 
 The AST and GraphSpec reserve first-class forms for tuples, ramps, multiparms, expressions, channel references, keyframes, time samples, units, and resets. Unsupported forms MUST produce diagnostics rather than be approximated or discarded.
 
-Network-document v1 carries scalar literal bindings. HocusScript `0.1` scalar component assignments lower directly. Whole-tuple assignments currently stop with `HOCUS708` because compiled-bundle v0.2 does not retain the ordered component-token mapping required for safe expansion. Ramp and multiparm assignments are rejected by both schema and runtime. A later compatible bundle/schema version must carry the missing structure before enabling those forms.
+Network-document v1 carries scalar literal bindings. In the frozen HocusScript
+`0.1` / Bundle `0.2` lane, scalar component assignments lower directly while
+whole-tuple assignments stop with `HOCUS708` because that carrier does not
+retain the ordered component-token mapping required for safe expansion. Frozen
+language `0.2` / Bundle `0.3` and language `0.3` / Bundle `0.4` gain no
+whole-tuple syntax or carrier semantics. Language `0.4` / GraphSpec `0.5` /
+Bundle `0.5` is the separate current lane that carries exact ordered component
+tokens and safely lowers whole tuples. Ramp and multiparm rejection is likewise
+a legacy-lane rule, not a limitation of the accepted language `0.4` surface.
 
 ### 8.8 Code Blocks
 
@@ -555,11 +565,12 @@ HS6 adds a new lane; it does not reinterpret any `0.1` artifact:
 | --- | --- | --- | --- | --- |
 | `0.1` | `0.3.0` | `0.2` | `0.1`/`0.2` | Existing single-file graph lane |
 | `0.2` | `0.4.0` | `0.3` | `0.3` | Static modules, typed expansion, and transitive module provenance |
-| `0.3` | `0.5.0` | `0.4` | `0.4` | Typed compile-time control; H1 decode-only carrier lane |
+| `0.3` | `0.5.0` | `0.4` | `0.4` | Typed compile-time control with exact native and H5 document/live paths |
+| `0.4` | `0.6.0` | `0.5` | `0.5` | HS7 named ports, typed values, graph-editor entities, managed instance spares, and numeric animation |
 
 Compiler `0.4.0` MUST retain the existing `0.1` parser and emit GraphSpec `0.2`; it emits GraphSpec `0.3` and bundle `0.3` only for language `0.2`. Decoders reject mixed pairs rather than upgrading them implicitly. Portable language `0.2` compilation requires project manifest/lock v3; the implemented v1 and v2 contracts remain immutable.
 
-Language `0.2` is frozen at the static module feature set in this table. Typed compile-time control belongs only to language `0.3`; it MUST NOT be accepted under a `hocus 0.2;` header or inserted into the `0.2` compiler, lock, resolved-set, expansion-map, GraphSpec, or bundle contracts. H1 assigns a parallel, exact compatibility row and provides strict read-only carrier decoders and schemas. That row is not execution authority: native compiler, resolver, check/compile/format/lock CLI, editor, document, and live MCP dispatch remain disabled until their named later gates. Decoders reject every mixed tuple rather than upgrading or inferring versions.
+Language `0.2` is frozen at the static module feature set in this table. Typed compile-time control belongs only to language `0.3`; it MUST NOT be accepted under a `hocus 0.2;` header or inserted into the `0.2` compiler, lock, resolved-set, expansion-map, GraphSpec, or bundle contracts. H1 assigns a parallel, exact compatibility row and provides strict carrier decoders and schemas; those decoders alone grant no execution authority. H3 composes the native compiler/resolver/CLI/editor lane and H5 composes the document/live lane through their named gates. Every decoder rejects mixed tuples rather than upgrading or inferring versions.
 
 ## 14. Compile and Apply Contract
 
@@ -577,34 +588,70 @@ Input:
 
 The compatibility tool remains at `stage = structural`: syntax, structural diagnostics, canonical formatting, source digest, compiler/GraphSpec versions, and a span-bearing GraphSpec. `readyForDocumentLowering` and `readyForApply` remain false. HS3 and HS4 progression occurs through `document.preview_bundle` and `document.plan_bundle`, not by giving this tool filesystem responsibilities.
 
-The fully resolved compiler returns:
+The live path is deliberately split across four authority boundaries:
 
-- language/compiler/IR versions
-- source digest and formatted source
-- diagnostics and validity
-- normalized GraphSpec
-- resolved catalog fingerprint and operator selections
-- capability manifest
-- baseline document/live revisions
-- generated canonical document
-- graph diff and destructive summary
-- immutable `planId`, `planHash`, and expiry when all gates pass
+- the `compile` action of `source.project.build` reads one approved ordinary
+  project `.hocus` entry and returns the exact authenticated carrier for its
+  lane: flat Bundle `0.2`, module Bundle `0.3`, control Bundle `0.4`, or value
+  Bundle `0.5`;
+- `document.preview_bundle` accepts that content, reruns its exact-version
+  carrier, semantic, catalog/HDA, capability, ownership, target, revision, and
+  provenance checks, lowers it over the current network-document baseline, and
+  returns the canonical candidate document, deterministic diff, destructive
+  summary, and a preview-only candidate plan;
+- `document.plan_bundle` reruns those live checks and persists an immutable
+  `planId`, `planHash`, expiry, baseline, inverse, and exact drift guards; and
+- `document.apply_plan` consumes only that stored immutable plan identity,
+  rechecks its live session, policy, catalog, capability, ownership, target,
+  revision, confirmation, lease, idempotency, and cancellation guards, then
+  applies and verifies it without rereading or recompiling source.
 
-Compilation never mutates Houdini.
+Source compilation and preview never mutate Houdini.
 
 For `document.compile_source`, `source` is required and provenance is `hocus-memory://`; it cannot read a path or create an applyable plan. Durable project provenance comes from the offline compiler bundle.
 
 ### 14.2 `document.preview_bundle` and `document.plan_bundle`
 
-HS3 `document.preview_bundle` accepts a canonical compiled-bundle v0.2 object, passes it through the shared strict decoder, rehydrates GraphSpec, and freshly re-resolves the graph against the current live catalog. The fresh semantic result must exactly match the bundle selections; a recomputed content hash does not make forged selections trustworthy. The operation then overlays the complete live network-document baseline, validates the resulting document, and returns a deterministic diff, destructive summary, source maps, and a non-applyable candidate plan.
+`document.preview_bundle` accepts flat Bundle `0.2`, frozen module Bundle `0.3`,
+control Bundle `0.4`, or value Bundle `0.5` content and dispatches only
+through that carrier's exact strict decoder. It rehydrates the exact GraphSpec
+version and freshly resolves the graph against the current live catalog. Each
+authenticated carrier must match its applicable semantic selections, exact
+catalog fingerprint/content and HDA/operator resolution, capability manifest,
+project/lock/module identity, target constraints, and provenance pins; a
+recomputed content hash does not make forged selections trustworthy. Bundle
+`0.4` may conservatively retain hidden-body `run_code` authority, but selected
+graph semantics must still match exactly. The operation overlays the complete
+live network-document baseline, validates the resulting document, and returns a
+deterministic diff, destructive summary, source maps, durable provenance, and a
+non-applyable candidate plan.
 
-This `document.*` operation accepts content, not paths. It never reads DSL/project source files and never mutates Houdini. The planned H6 `source.*` workspace is a separate authority and does not change this contract. Live catalog provenance may inspect the installed Houdini/HDA/package environment. Preview artifacts up to the configured memory limit are content-addressed at `houdini://documents/previews/{preview_id}`; payloads larger than the inline threshold are returned only through that resource. Per-artifact and aggregate byte budgets plus LRU/TTL eviction bound Houdini-process memory.
+This `document.*` operation accepts content, not paths. It never reads DSL/project source files and never mutates Houdini. The H6 `source.*` workspace is a separate authority and does not change this contract. Live catalog provenance may inspect the installed Houdini/HDA/package environment. Preview artifacts up to the configured memory limit are content-addressed at `houdini://documents/previews/{preview_id}`; payloads larger than the inline threshold are returned only through that resource. Per-artifact and aggregate byte budgets plus LRU/TTL eviction bound Houdini-process memory.
 
-Bundle catalog drift, semantic-selection drift, document-revision drift, schema errors, unsafe ownership/collision conditions, unsupported values, or missing source provenance produce blocking diagnostics and no candidate plan. Imports remain an offline compiler responsibility when the active language version supports them.
+Bundle catalog/HDA drift, semantic-selection drift, project/lock/module drift, target-document or revision drift, schema errors, unsafe ownership/collision conditions, unsupported values, or missing source provenance produce blocking diagnostics and no candidate plan. Imports remain an offline compiler responsibility when the active language version supports them. Complete effective Houdini package-search provenance remains outside the claim while `HS-BLOCK-003` is open.
 
-HS4 `document.plan_bundle` reruns the same strict live trust gates, normalizes the verified target into the executable SOP operation groups, rejects unknown or irreversible actions, captures the exact baseline and inverse plan, and persists a `hocus_apply_plan` v1 envelope. The envelope has an independent hash domain from the HS3 candidate plan and binds its UUID, TTL, process/hip session epoch, source/bundle/compiler/GraphSpec/project manifest and lock identities, catalog fingerprint/content digest, effective policy fingerprint, capabilities, ownership, target scope, baseline document/live revisions and digest, target document, confirmation policy, normalized operations, and inverse plan. The SQLite record is insert-only; mutable apply lifecycle state is stored separately. A bundle containing preview-only workspace provenance cannot produce a stored plan.
+`document.plan_bundle` reruns the same exact-version live trust gates, normalizes
+the verified target into executable operation groups for its supported network
+family, rejects unknown or irreversible actions, captures the exact baseline
+and inverse plan, and persists a `hocus_apply_plan` v1 envelope. The envelope
+has an independent hash domain from the preview candidate plan and binds its
+UUID, TTL, process/hip session epoch, source/bundle/compiler/GraphSpec/project
+manifest and lock identities, catalog fingerprint/content digest, effective
+policy fingerprint, capabilities, ownership, target scope, baseline
+document/live revisions and digest, target document, provenance, confirmation
+policy, normalized operations, and inverse plan. Generated expansion symbols
+are mapped to deterministic legal Houdini node names without changing durable
+entity IDs or provenance. The SQLite record is insert-only; mutable apply
+lifecycle state is stored separately. A bundle containing preview-only
+workspace provenance cannot produce a stored plan.
 
-Plans are available at `houdini://documents/plans/{plan_id}` and are bounded by count, per-plan size, aggregate size, TTL, and LRU retention in the live cache. `document.discard_plan` removes the cache entry and durably claims the persisted plan as aborted so it cannot be applied after a restart.
+An existing authored node is reusable only when its complete managed Hocus identity matches the requested project, graph, entity kind, symbol, ownership, and `managedFields.nodeUid`. Exact UID/path coincidence is not adoption authority. Missing identity, UID-only artist state, or project/graph/ownership collision fails with `HOCUS706` before a candidate plan exists and leaves the baseline unchanged. Source, bundle, compiler, language, and expansion values may refresh as provenance, but every accepted existing-node refresh emits `update_node_provenance`. The only ownership-transfer lane is an authored external with `adopted = true`; it emits `adopt_node`, remains confirmation-requiring, and is never inferred. Before storage, normalized `identityUpdates` must correspond exactly to supported `adopt_node` or `update_node_provenance` candidate actions; hidden, missing, or unsupported identity transitions fail with `HOCUS740`.
+
+Reconcile is field-selective. It deletes only matching-owned nodes omitted from the new graph; artist-owned dependants still block deletion with `HOCUS709`, and safely removable owned state without source provenance still fails with `HOCUS713`. On retained nodes, only fields named by the previously validated `managedFields` manifest may be reset when omitted: managed parameters and code return to Houdini defaults, managed input indices disconnect, managed display/render/output state clears, and compiler-owned ports are pruned only when unused. Unowned/default bindings, edges, code, flags, positions, and arbitrary metadata survive omission. A live parameter counts as an ignorable default observation only when HOM confirms the permanent default and compares expressions; temporary defaults, unsupported checks, and comparison errors fail closed as unowned state. Explicit source at the same parameter or input coordinate may replace prior state, but omission never claims an artist field.
+
+Expansion provenance is materialized only after the final target document is complete. Every non-null module `stackId` and `controlStackId` referenced by final nodes, ports, edges, bindings, or code blobs must resolve through the authenticated incoming tables or a normalized baseline table. Duplicate IDs must have identical canonical content. Tables are ID-sorted, deduplicated, and pruned to referenced entries; the root table is absent when no reference remains. Forged frames, conflicting definitions, dangling references, more than 4,096 stacks of either kind, more than 64 frames per stack, or a provenance envelope above 4 MiB fail before planning with typed `HOCUS715`/document-provenance diagnostics. The same pure normalizer is used by lowering, document validation, and live save/reopen.
+
+Plans are available at `houdini://documents/plans/{plan_id}` and are bounded by count, per-plan size, aggregate size, TTL, and LRU retention in the live cache. `document.discard_plan` removes the cache entry and durably claims the persisted plan as aborted so it cannot be applied after a restart. SQLite is authoritative for replay and recovery. Expired unclaimed plans are removed immediately; committed/aborted replay history is retained for at most the 24-hour idempotency window and is pressure-pruned to at most 256 terminal histories and 256 MiB of retained JSON. Pending and `partial_or_unknown` evidence is never automatically deleted. A 32 MiB terminal-transition allowance is reserved for each active history so finishing or recovering a commit cannot push protected storage beyond the 256 MiB ceiling; an oversized finish remains pending and an oversized recovery remains quarantined. If protected records alone exhaust capacity, new durable storage fails with `HOCUS759`. The graph-store boundary translates SQLite connect, PRAGMA, query/write, transaction, rollback, and close failures only after cleanup; persistence, replay, discard, quarantine hydration, and recovery expose those failures through typed `HOCUS759`, while cancellation, explicit schema errors, and apply-time `partial_or_unknown` quarantine retain their distinct contracts. Pruning is transactional after migrations, before insertion, and after terminal completion or recovery; it deletes events, then commits, then unreferenced plans and does not run automatic `VACUUM`.
 
 ### 14.3 `document.apply_plan`
 
@@ -626,9 +673,11 @@ The implemented guarded apply:
 7. commit the document/store revision and audit record
 8. return a true success or true typed failure
 
-The plan is never rebuilt from source. A freshly normalized operation set is computed only as a validation oracle and must byte-match the stored execution plan; the stored plan remains the sole execution authority. Hocus-generated preview documents are rejected by legacy `document.apply`, and any code-blob installation dynamically requires `run_code` in addition to `edit_scene`.
+The plan is never rebuilt from source. A freshly normalized operation set is computed only as a validation oracle and must byte-match the stored execution plan; the stored plan remains the sole execution authority. Bundle `0.3`/`0.4` node provenance is copied into signed live `managedFields` metadata, while exact non-node source provenance for managed ports, edges, bindings, code, and output state is stored in a bounded, canonical, digest-checked root carrier. Reimport reconstructs the exact `jsonPointer`, span, origin, and module/control stack references by entity UID and validates their node identity lane, so a newly compiled second reconcile remains source-resolvable after a live snapshot. Hocus-generated preview documents are rejected by legacy `document.apply`, and any code-blob installation dynamically requires `run_code` in addition to `edit_scene`.
 
-Large plans MAY become cancellable tasks.
+Preview, planning, and guarded apply check request cancellation at bounded semantic, lowering, normalization, and operation-group checkpoints. Cancellation before mutation leaves the scene unchanged; cancellation during apply enters the same verified rollback/quarantine lifecycle as another apply failure.
+
+`clear_output` performs the live display/output mutation rather than recording only an intent. Every omitted managed parameter returns to the permanent Houdini default through `revertToAndRestorePermanentDefaults()` and is verified with `parm.isAtDefault(compare_temporary_defaults = false, compare_expressions = true)`; temporary defaults, surviving expressions, unsupported checks, and errors fail closed. A failed reset, failed provenance write, or failed output mutation enters the same rollback/quarantine lifecycle as any other executor failure.
 
 ### 14.4 HS5 editor and export interfaces
 
@@ -645,7 +694,7 @@ Exported source is a baseline-preserving merge projection, not an implicit claim
 
 HS5 export is deliberately fail-closed. Its supported subset is one flat SOP network containing persistent unique node UIDs, exact catalog-resolvable operator types, indexed data connections, finite scalar/menu literals (including representable scalar tuple-component tokens), supported VEX/Python/HScript code bindings, and representable display/render/output state. It rejects nested networks, cross-network edges, unsupported edge/port kinds, bypass/template state, expressions and channel references, animation/keyframes, whole-tuple values, ramps, multiparms, spare parameters, unsupported code, invalid identifiers, orphan entities, mixed/incomplete ownership, duplicate/nonpersistent IDs, and any state it cannot reproduce exactly. HocusScript 0.1 has no opaque syntax, so nothing may be silently omitted or approximated.
 
-The native `hocus write-export` command owns the filesystem handoff through H5. It accepts the same bounded export response emitted by MCP, requires an explicit `--project` (or explicit editor setting/environment equivalent), resolves a project-contained `.hocus` destination through configured source directories, validates the handoff digest and recompiles before writing, creates exclusively by default, and permits replacement only with the destination's exact expected digest. H6 MAY perform that same authenticated handoff only inside a user-approved source-write project through the distinct `source.file.write_export` operation, which reuses the native validation/recompile/publish path; generic `source.file.apply_patch` is not an export handoff. `document.export_source` itself never accepts a destination or writes a file.
+The native `hocus write-export` command owns the filesystem handoff through H5. It accepts the same bounded export response emitted by MCP, requires an explicit `--project` (or explicit editor setting/environment equivalent), resolves a project-contained `.hocus` destination through configured source directories, validates the handoff digest and recompiles before writing, creates exclusively by default, and permits replacement only with the destination's exact expected digest. H6 performs that same authenticated handoff only inside a user-approved source-write project through the distinct `source.file.write_export` operation, which reuses the native validation/recompile/publish path; generic `source.file.apply_patch` is not an export handoff. `document.export_source` itself never accepts a destination or writes a file.
 
 For language `0.2`, the same native `hocus check`, `hocus format`, and `hocus compile` commands dispatch from the selected manifest rather than sniffing source headers. `check` verifies the complete locked module closure and pinned catalog semantics; `check --json` emits one portable JSON result even on syntax/project failure. `format` reads and formats exactly one contained graph or module file without consuming the lock, so it remains usable to repair stale projects. `compile` invokes the one-shot project-to-Bundle `0.3` producer and never accepts caller-supplied semantic selections. Bundle output creates exclusively by default and permits replacement only with `--expected-output-digest` equal to the current raw output-file digest. Text diagnostics use stderr; requested source/JSON/bundle content alone uses stdout. `--no-strict` remains a `0.1` compatibility option and is rejected for `0.2`, whose header is mandatory.
 
@@ -662,7 +711,9 @@ G5 adds repeatable `--module-root ALIAS=ABSOLUTE_PATH` only to `check`, `compile
 - A failed rollback returns `partial_or_unknown`, quarantines the scope, and requires explicit resync or recovery.
 - Store commits use pending, committed, aborted, and `partial_or_unknown` states; the last state quarantines overlapping parent/child scopes.
 - Startup/lazy recovery treats durable pending and `partial_or_unknown` commits as quarantined. `document.recover_scope` force-reimports under the same scope lease and releases quarantine only when live state classifies exactly as the stored baseline or verified target; any third state remains quarantined.
-- Client timeout and retry behavior are controlled by idempotency keys.
+- A target-classified recovery becomes a normal successful terminal result with the original plan ID/hash, commit ID, `applied = true`, `verified = true`, committed state, recovered document/verification, and `recovered = true`; it does not invent lease, timing, or executed-operation fields.
+- A baseline-classified recovery becomes an aborted `HOCUS755` result. When baseline and target are indistinguishable, classification remains conservatively aborted. A third state remains protected as `partial_or_unknown` with `HOCUS756`.
+- Client timeout and retry behavior are controlled by idempotency keys. Replay of a recovered target returns the recovered committed result with `idempotentReplay = true`; `HOCUS760` is reserved for a genuinely pending recovery. Any surviving in-memory reservation is reconciled by idempotency key against authoritative SQLite state.
 - The implementation MUST NOT claim general atomicity while relying only on an unqualified global undo.
 
 ## 16. Modules and Imports
@@ -714,13 +765,13 @@ Resolution is deterministic and native-only:
 3. `@alias/path.hocus` resolves only through a manifest-declared alias. The alias declares expected external library UID and version; its physical root comes from a separate explicit CLI/editor approval such as `--module-root alias=path`. Host paths never enter portable artifacts.
 4. Every file remains inside the project or separately approved alias root after symlink/junction-aware canonicalization. Absolute imports, dynamic strings, environment lookup, network fetches, and implicit Houdini/package searches are rejected.
 
-Local module files use `hocus-project://<project-uid>/<relative-path>`; approved external libraries use `hocus-module://<library-uid>/<relative-path>`. Lexical import aliases and instance symbols are not identity. Stable module identity is canonical URI plus declared name. Expanded identity derives from graph identity, the ordered nested instance-`@id` seed path, module URI, and the local node/use `@id` seed or symbol fallback. A `use` symbol may therefore be renamed without replacing its expanded entities when its seed is unchanged. Argument values do not change identity. Generated symbols use a reserved collision-proof encoding; authored `__hocus_` symbols are forbidden.
+Local module files use `hocus-project://<project-uid>/<relative-path>`; approved external libraries use `hocus-module://<library-uid>/<relative-path>`. Lexical import aliases and instance symbols are not identity. Stable module identity is canonical URI plus declared name. Expanded identity derives from graph identity, the ordered nested instance-`@id` seed path, module URI, and the local node/use `@id` seed or symbol fallback. A `use` symbol may therefore be renamed without replacing its expanded entities when its seed is unchanged. Argument values do not change identity. Generated symbols use a reserved collision-proof GraphSpec encoding; authored `__hocus_` symbols are forbidden. H5 maps each generated symbol to a deterministic legal Houdini node name at plan time while retaining the generated symbol, durable entity UID, and expansion provenance as separate authoritative identities.
 
 Expansion is pure, after import/interface validation and before catalog resolution. It produces flat GraphSpec `0.3`, strict `resolved-module-set-v1`, and strict `expansion-map-v1`. GraphSpec `0.3` embeds that exact standalone expansion-map object rather than defining a second projection. The expanded graph is inspectable as JSON or normalized generated source, but module files remain the editable authority; editing generated expansion is not a source round trip.
 
 Every generated GraphSpec pointer has a primary source span and nullable `stackId`. `expansion-map-v1` interns ordered expansion stacks in one top-level `stacks` array; mappings never repeat frames. A stack ID is SHA-256 over domain `hocus-expansion-stack-v1` plus the canonical frame array. Stacks are sorted and unique by `stackId`; every non-null mapping reference resolves exactly once, and unreferenced stacks are forbidden. Each frame identifies module URI and source digest, module name, instance symbol, durable instance-ID path, import span when applicable, and `use` span. A null `stackId` means the entry source has no module-expansion frame. Substituted arguments point primarily to the call-site argument and retain the parameter declaration as related origin. Diagnostics resolve and reuse the same interned frames. Document lowering consumes per-entity module URI, source digest, durable instance-ID path, and origin rather than hardcoding the entry source.
 
-Portable manifest/lock v3 is a new schema pair. Manifest v3 adds ordered `module_directories` and logical aliases without approved host roots. External roots contain `hocus.module.toml` v1 with stable library UID, strict SemVer 2.0 version (including optional pre-release and build metadata), supported language versions, and allowed entry modules. The same SemVer grammar applies to manifest aliases, lock records, resolved module sets, and bundle module dependencies. Lock v3 preserves the v2 catalog pin and records every transitive module by canonical URI, source and interface digests, project/library identity, version and module-manifest digest when applicable, resolved alias when applicable, and sorted dependency URIs. Ordering is by module URI. Compile is verify-only. `hocus lock --update` derives every same-project nonempty record from actual contained source, is explicit, expected-digest guarded, and atomic for cooperating writers; ordinary compile and every MCP operation through H5 never write locks. The separate native G3 publisher can atomically replace a valid current lock with independently derived mixed-root records, and the separate G4 consumers verify and consume those records only when the exact roots are supplied again. G5 exposes those native boundaries through explicit repeated CLI root options without granting ambient root authority. H6 MAY invoke the same writer only through the explicit `source.project.build` `lock_update` action with the generated-lock grant and exact current lock digest.
+Portable manifest/lock v3 is a new schema pair. Manifest v3 adds ordered `module_directories` and logical aliases without approved host roots. External roots contain `hocus.module.toml` v1 with stable library UID, strict SemVer 2.0 version (including optional pre-release and build metadata), supported language versions, and allowed entry modules. The same SemVer grammar applies to manifest aliases, lock records, resolved module sets, and bundle module dependencies. Lock v3 preserves the v2 catalog pin and records every transitive module by canonical URI, source and interface digests, project/library identity, version and module-manifest digest when applicable, resolved alias when applicable, and sorted dependency URIs. Ordering is by module URI. Compile is verify-only. `hocus lock --update` derives every same-project nonempty record from actual contained source, is explicit, expected-digest guarded, and atomic for cooperating writers; ordinary compile and every MCP operation through H5 never write locks. The separate native G3 publisher can atomically replace a valid current lock with independently derived mixed-root records, and the separate G4 consumers verify and consume those records only when the exact roots are supplied again. G5 exposes those native boundaries through explicit repeated CLI root options without granting ambient root authority. H6 invokes the same writer only through the explicit `source.project.build` `lock_update` action with the generated-lock grant and an explicit absent/exclusive-create or present/exact-digest-replace expectation.
 
 Native external-root inspection accepts an explicit per-call `alias -> absolute local directory` mapping only after the v3 project declares every alias. The mapping must cover the declarations exactly, use one alias per library UID, and name distinct canonical local roots outside the project with no relative, home, environment, UNC, device, symlink, junction, reparse, casing-alias, or overlapping path. Inspection stable-reads exactly `hocus.module.toml`, checks its raw digest, UID, version, language, sorted entry-module list, optional project pin, and any existing lock identity, then final-rechecks project/lock/catalog/root/manifest identity. Its deterministic result and digest contain only portable pins; physical roots and file identities remain private and ephemeral. An alias whose project declaration omits `module_manifest_digest` may be inspected but is not resolution-ready. Inspection reads no module source, writes nothing, grants no persistent authority, and does not enable resolver, lock-writer, editor, CLI, MCP, bundle, document, or live support.
 
@@ -732,15 +783,15 @@ The mixed-root resolver contract shared by G2 planning, G3 publication, G4 nativ
 
 G4 exposes separate native `compile_project_mixed_module_graph`, `compile_project_mixed_module_semantic`, and `compile_project_mixed_module_bundle` APIs. Each requires an explicit project directory, a project-relative entry path, and the complete exact per-call `module_roots` mapping. The APIs verify the current G3-published lock records and mixed resolver policy, resolve only the permitted project/library edge forms, and retain the authority session through graph expansion, semantic resolution, or bundle construction. Immediately before a successful return, the retained session rechecks the project, lock, catalog, roots, module manifests, source bytes/native identities, and every resolver winner. Graph, semantic, and Bundle `0.3` results contain only canonical project/module URIs and portable digests/provenance; physical roots and native file identities never appear in artifacts or diagnostics. The existing same-project compiler, semantic, bundle, resolver, and editor APIs remain behaviorally isolated and fail closed on external aliases; G4 does not add a permissive mixed-mode flag to those legacy surfaces.
 
-Bundle `0.3` embeds the resolved module set and expansion map, lists every module source in `dependencies`, and binds them into its hash. Native production is implemented. Live consumption remains disabled by `HOCUS700` until H5 closes `HS-BLOCK-008` and the fresh live-semantic gates. H5 then enables the frozen Bundle `0.3` carrier and Bundle `0.4` through distinct strict decoders over the same guarded document pipeline; `0.3` receives no control-language or cross-version coercion. The `document.*` consumer consumes only bundle content and never resolves project paths. H6 source-workspace access remains a separate optional authority.
+Bundle `0.3` embeds the resolved module set and expansion map, lists every module source in `dependencies`, and binds them into its hash. Native production and the H5 exact-version document/live path are implemented and accepted in installed Houdini. Frozen Bundle `0.3` and Bundle `0.4` use distinct strict decoders over the same guarded document pipeline; `0.3` receives no control-language or cross-version coercion. Unsupported, malformed, mixed, or drifted carriers remain fail-closed with typed diagnostics. The `document.*` consumer consumes only bundle content and never resolves project paths. H6 source-workspace access remains a separate optional authority.
 
-The live schema resource surface registers GraphSpec `0.3`, `expansion-map-v1`, and `resolved-module-set-v1` separately. A client can therefore resolve GraphSpec's external expansion-map `$ref` without filesystem access; publishing GraphSpec `0.3` without its referenced standalone schema is invalid. H5 MUST register GraphSpec `0.4`, expansion-map v2, resolved-module-set v2, and Bundle `0.4` together as one exact compatibility unit before accepting Bundle `0.4` live.
+The live schema resource surface registers GraphSpec `0.3`, `expansion-map-v1`, and `resolved-module-set-v1` separately. A client can therefore resolve GraphSpec's external expansion-map `$ref` without filesystem access; publishing GraphSpec `0.3` without its referenced standalone schema is invalid. H5 registers GraphSpec `0.4`, expansion-map v2, resolved-module-set v2, and Bundle `0.4` together as one exact compatibility unit. The build stages those resources plus the exact preview, plan, and apply schemas into the installed package; H5E proved exact running-package alignment and availability of the four installed H5 schema resources.
 
 Native saved-file and unsaved-buffer editor APIs use the same explicit project directory, `ProjectContext`, resolver winner policy, catalog/manifest/lock pins, and exact locked module interfaces as compilation. Completion covers literal import paths, exported module names, imported aliases, parameter names/types/defaults, required arguments, and instance exports without executing or expanding modules. Go-to-definition covers imported modules and aliases, module parameters, local symbols, and instance exports. Results use only canonical project/module URIs and source digests, report whether the subject matches its lock, is modified, or is unlocked, enforce the HS6 read/aggregate/result budgets and cancellation, and recheck every selected identity before returning. These native APIs never write project state.
 
 G4 adds separate `complete_mixed_path`, `complete_mixed_project_source`, `definition_mixed_path`, and `definition_mixed_project_source` native APIs. Their `module_roots` argument is mandatory and keyword-only on every request. The subject remains a project-relative `.hocus` file inside the selected project, including for an unsaved buffer; an external library file cannot become the editor subject. A project subject may nevertheless complete permitted external import paths/interfaces and navigate definitions into verified `hocus-module://` dependencies. The editor retains and finally rechecks the same exact mixed authority used to load those dependencies, and returns only portable URIs, spans, digests, pins, and lock-state metadata. The original same-project editor APIs remain unchanged and continue to reject external aliases. Through H5 these result schemas remain unregistered from MCP. H6 `source.project.navigate` MUST reuse these exact typed results and resolver authorities rather than defining weaker completion or definition semantics.
 
-G5 adds the explicit repeatable CLI `--module-root ALIAS=ABSOLUTE_PATH` dispatch described above, but no editor command. Mixed saved-file and dirty-buffer completion/navigation remain Python APIs for native editor integrations, with mandatory keyword-only `module_roots`; they are not `hocus` subcommands. G5 itself adds no MCP project/root/file surface, document lowering, or live behavior. H5 later enables bundle document/live consumption, and H6 later adds the separately approved source-workspace surface without changing the frozen G5 CLI or `document.*` content contracts.
+G5 adds the explicit repeatable CLI `--module-root ALIAS=ABSOLUTE_PATH` dispatch described above, but no editor command. Mixed saved-file and dirty-buffer completion/navigation remain Python APIs for native editor integrations, with mandatory keyword-only `module_roots`; they are not `hocus` subcommands. G5 itself adds no MCP project/root/file surface, document lowering, or live behavior. H5 provides exact bundle document/live consumption, and H6 adds the separately approved source-workspace surface without changing the frozen G5 CLI or `document.*` content contracts.
 
 ### Proposed language `0.3`: typed compile-time control
 
@@ -830,11 +881,13 @@ Project manifest/lock v4 and external module manifest v2 pair exactly with langu
 
 All H1 carrier decoders are strict, bounded, duplicate-key/non-finite rejecting, and observational. They accept only the complete row above, validate canonical ordering, cross-carrier identities, source-map and bundle digests, and reject mixed or historical versions. Project/module file decoding is available only to inspect the new manifest and lock shapes; it does not authorize resolution, compilation, formatting, lock publication, editor services, document lowering, or live use. H1 schemas are offline files and are deliberately not registered as live MCP resources. H2 owns control semantic validation and expansion; H3 owns compiler/resolver/CLI/editor dispatch; H4 owns adversarial and full-support qualification.
 
-H5 MUST extend the existing guarded document pipeline rather than create a control-specific mutation engine. It MUST enable the frozen Bundle `0.3` carrier and strict-decode Bundle `0.4` through distinct version paths without coercion, validate GraphSpec `0.4` and expansion-map v2, preserve authenticated module/control provenance, freshly re-resolve all semantic selections against the live catalog, and lower to the canonical network document. Exact catalog operator and HDA fingerprints are authoritative for H5; complete effective package-search provenance remains outside the claim while `HS-BLOCK-003` is open. H5 MUST register GraphSpec `0.4`, expansion-map v2, resolved-module-set v2, and Bundle `0.4` live schemas as one compatibility unit. `document.preview_bundle`, `document.plan_bundle`, and `document.apply_plan` retain their content-only and stored-plan contracts. Bundle, catalog, target-document, policy, capability, ownership, and live revisions MUST be pinned before planning; apply MUST verify realized state and roll back failures. Any cook acceptance step is a separately authorized post-apply action after structural verification. Current export remains a normalized flat language-`0.1` semantic handoff and MUST NOT claim to reconstruct authored module or control structure. Bundle `0.3` and `0.4` remain rejected with `HOCUS700` until `HS-BLOCK-008` and their installed live workflow matrix close.
+H5 extends the existing guarded document pipeline rather than creating a control-specific mutation engine. Frozen Bundle `0.3` and strict Bundle `0.4` use distinct version paths without coercion, validate GraphSpec `0.4` and expansion-map v2, preserve authenticated module/control provenance, freshly re-resolve semantic selections against the live catalog, and lower to the canonical network document. Exact catalog operator and HDA fingerprints are authoritative; complete effective package-search provenance remains outside the claim while `HS-BLOCK-003` is open. GraphSpec `0.4`, expansion-map v2, resolved-module-set v2, Bundle `0.4`, and the H5 operation schemas are registered and staged as an exact installed compatibility unit. `document.preview_bundle`, `document.plan_bundle`, and `document.apply_plan` retain their content-only and stored-plan contracts. Plans pin exact bundle/compiler/GraphSpec, project/lock, catalog, target-document, policy, capability, ownership, revision, and expansion-provenance identities. Generated symbols map to deterministic legal live names without replacing durable IDs. Apply observes cancellation, preserves signed `managedFields` and artist-owned state, verifies realized state, and rolls back or quarantines failures through the existing lifecycle. The URI/fresh-semantic `HS-BLOCK-008` gate is resolved. Any cook acceptance step remains a separately authorized post-apply action after structural verification. At this historical H5 checkpoint, export remained a normalized flat language-`0.1` semantic handoff and did not claim to reconstruct authored module or control structure; HS7 later added the guarded language-`0.4` family/value export lane.
 
-H6 MAY add project filesystem access only through an opt-in `source.*` namespace. The host user MUST approve each canonical project root outside the request channel. The server startup/configuration surface and Houdini approval UI MUST use one canonical host-owned registry. Each approved entry receives a stable opaque `projectId` selector, but the ID is not a bearer capability: every operation and resource read MUST recheck server-side authorization for the current connection/session. Access MUST default to read-only and session-scoped. Optional persistence requires an explicit user choice. Source read, source write, generated-lock update, external-root read, and optional change notification are separate grants; selecting read-write mode MUST NOT silently grant lock updates, external access, or watching. Grants MUST support expiry and immediate revocation. Physical roots MUST NOT be returned to the client or participate in portable identities. External roots require separate grants and are read-only by default. No MCP argument may self-authorize an absolute root, infer one from `$HIP`, CWD, environment variables, lock records, or source text, or access outside an approved project.
+The repaired H5E run passed in installed Houdini 21.0.729 with exact source/build/install/running-module alignment across 37 critical modules. Three targets exercised Bundle `0.3`, `0.4`, and `0.4` in `merge`, `merge`, and `reconcile` modes. Preview was deterministic; first apply verified realized state, while newly compiled second merge and reconcile operations produced distinct non-replay plans and commits. Exact catalog drift failed with `HOCUS752` until exact restore, stale plans failed with `HOCUS753`, and an injected mid-executor failure returned `HOCUS755` after verified rollback. Target recovery through a reopened SQLite store returned committed idempotent replay. Save/reopen retained exact node, port, edge, binding, code, and referenced module/control expansion provenance across all three targets. Timestamp-controlled retention proved immediate expiry, age pruning, count pressure, byte pressure, preservation of pending and `partial_or_unknown` evidence, and exact mapped `HOCUS759` rejection when protected records exhausted capacity. The installed schema resources resolved; the normalized flat language-`0.1` export structurally recompiled and passed exact-catalog semantic and connector validation without claiming network or authored module/control reconstruction; and 67 live node observations recorded zero cooks. The final status was `passed`, and final independent P0/P1 review was clean.
 
-The initial H6 operations are exactly `source.project.describe`, `source.file.search`, `source.file.read`, `source.file.apply_patch`, `source.file.write_export`, `source.project.build`, and `source.project.navigate`. `source.project.describe`, resource enumeration, and search MUST reveal only projects/files authorized to the current connection. Approved project metadata and authored files MAY also be exposed as read-only `hocus-source://{projectId}` and `hocus-source://{projectId}/{relativePath}` MCP resources. Every enumeration/fetch MUST recheck the current grant and authority-projection digest; the raw file digest is the cache validator, and revocation, expiry, or successful write immediately invalidates server-side cache entries. Digest-only change notification is optional H6N follow-up work after the H6 core; if implemented, it MUST emit only project-relative identity and digest invalidation, never source bytes or physical paths. Read operations MUST use descriptor/handle-based containment and identity verification after `HS-BLOCK-001` closes, including defenses against symlink, junction, reparse-point, and hardlink escape or swap. `source.file.apply_patch` MAY edit only authored `.hocus` files and validated project manifests inside a source-write project; it MUST create exclusively or atomically replace against an exact raw content digest. It MUST reject raw lock/catalog/bundle edits, blind overwrite, delete, recursive move, external-root write, stale authority, and stale content. A grant MUST bind an authority-projection digest covering project UID, source/module directories, alias declarations, and catalog/lock locations; a prospective manifest change to that projection MUST fail without writing and require host-user reapproval. `source.file.write_export` MUST accept only the bounded authenticated export handoff, validate its digest, resolve an authorized project-contained destination, recompile before publication, and create exclusively or replace only against the exact current destination digest. `source.project.build` MUST select exactly one action from `format`, `check`, `compile`, or `lock_update`; format/check/compile MUST NOT publish a lock. `lock_update` additionally requires explicit write intent, selected project-relative entries, the generated-lock grant, the approved complete external-root mapping retained server-side, and exact current lock digest. Build and navigation MUST compose the existing native resolver/compiler/lock/editor APIs and their limits, final rechecks, portable results, and exact-root rules. Every operation and resource MUST be permission-annotated, bounded, rate-limited, and auditable without recording returned source content. Expiry or revocation MUST prevent new reads, writes, builds, navigation, and notifications immediately.
+H6 adds project filesystem access only through an opt-in `source.*` namespace. The host user MUST approve each canonical project root outside the request channel. The server startup/configuration surface and Houdini approval UI MUST use one canonical host-owned registry. Each approved entry receives a stable opaque `projectId` selector, but the ID is not a bearer capability: every operation and resource read MUST recheck server-side authorization for the current connection/session. Access MUST default to read-only and session-scoped. Optional persistence requires an explicit user choice. Source read, source write, generated-lock update, external-root read, and optional change notification are separate grants; selecting read-write mode MUST NOT silently grant lock updates, external access, or watching. Grants MUST support expiry and immediate revocation. Physical roots MUST NOT be returned to the client or participate in portable identities. External roots require separate grants and are read-only by default. No MCP argument may self-authorize an absolute root, infer one from `$HIP`, CWD, environment variables, lock records, or source text, or access outside an approved project.
+
+The initial H6 operations are exactly `source.project.describe`, `source.file.search`, `source.file.read`, `source.file.apply_patch`, `source.file.write_export`, `source.project.build`, and `source.project.navigate`. `source.project.describe`, resource enumeration, and search MUST reveal only projects/files authorized to the current connection. Approved project metadata and authored files MAY also be exposed as read-only `hocus-source://{projectId}` and `hocus-source://{projectId}/{relativePath}` MCP resources. Every enumeration/fetch MUST recheck the current grant and authority-projection digest; the raw file digest is the cache validator, and revocation, expiry, or successful write immediately invalidates server-side cache entries. Digest-only change notification is optional H6N follow-up work after the H6 core; if implemented, it MUST emit only project-relative identity and digest invalidation, never source bytes or physical paths. Read operations MUST use descriptor/handle-based containment and identity verification after `HS-BLOCK-001` closes, including defenses against symlink, junction, reparse-point, and hardlink escape or swap. `source.file.apply_patch` MAY edit only authored `.hocus` files and validated project manifests inside a source-write project; it MUST create exclusively or atomically replace against an exact raw content digest. It MUST reject raw lock/catalog/bundle edits, blind overwrite, delete, recursive move, external-root write, stale authority, and stale content. A grant MUST bind an authority-projection digest covering project UID, source/module directories, alias declarations, and catalog/lock locations; a prospective manifest change to that projection MUST fail without writing and require host-user reapproval. `source.file.write_export` MUST accept only the bounded authenticated export handoff, validate its digest, resolve an authorized project-contained destination, recompile before publication, and create exclusively or replace only against the exact current destination digest. `source.project.build` MUST select exactly one action from `format`, `check`, `compile`, or `lock_update`; format/check/compile MUST NOT publish a lock. `lock_update` additionally requires explicit write intent, selected project-relative entries, the generated-lock grant, the approved complete external-root mapping retained server-side, and `expectedLockState`. The `absent` state forbids `expectedLockDigest` and publishes exclusively; the `present` state requires the exact current canonical lock digest and descriptor-safe raw-digest CAS replacement. Build and navigation MUST compose the existing native resolver/compiler/lock/editor APIs and their limits, final rechecks, portable results, and exact-root rules. Every operation and resource MUST be permission-annotated, bounded, rate-limited, and auditable without recording returned source content. Expiry or revocation MUST prevent new reads, writes, builds, navigation, and notifications immediately.
 
 H6 freezes these operational budgets; deployments MAY configure lower values but MUST NOT exceed the hard ceilings:
 
@@ -849,7 +902,70 @@ H6 freezes these operational budgets; deployments MAY configure lower values but
 | Concurrent builds per project / session | 1 / 2 | 1 / 8 |
 | Audit events retained per project | 10,000 | 100,000 |
 
+Every H6 mutating operation MUST establish a terminal commit boundary. Patch, export, and lock publication first prepare the exact content, compare-and-swap authority, portable receipt, and serialized response and reject an oversized response before mutation. After compilation and snapshot validation, the operation acquires the project write lease, performs its final authority/source recheck, commits once, and returns the frozen receipt. Cancellation, expiry, revocation, serialization, response-size enforcement, snapshot cleanup, registry persistence, cache invalidation, audit, and other housekeeping MUST NOT turn a confirmed commit into an error response. A projection-preserving manifest identity refresh occurs under the same lease; failure after commit invalidates project authority and requires reapproval while retaining the immutable success receipt.
+
+Writable compilation uses a temporary compiler closure plus retained descriptor/handle-backed authority state. The temporary closure MUST be verified and removed before publication, while the retained state performs the final source and external-root recheck under the lease. That recheck binds every captured native object identity and digest and brackets their validation with matching opening and closing enumerations of the exact authored, generated, external, and external-manifest path sets so same-byte replacement or a phase-boundary resolver winner cannot be omitted. One shared 4,096-file/64 MiB snapshot budget is consumed before each project or external read and retention, not after materializing the closure. Snapshot construction and close MUST attempt every strict handle close and temporary-tree cleanup, preserve the primary typed error, report only aggregated sanitized failure stages, and become terminal only after every cleanup attempt. Native create and replacement keep rollback authority until target identity/content verification, root and parent-chain verification, and file/parent durability checks succeed. Any failure before that commit point restores the displaced object or removes the create through the retained parent descriptor and durably records the rollback. Rollback MUST first prove that the active target is still the published candidate; loss of authority during the rollback syscall itself also enters recovery. If a noncooperating writer replaced or removed the target, the implementation MUST preserve the competing target plus displaced/candidate evidence rather than overwrite or silently orphan either. Recovery/publication admission is serialized by a process lock plus an OS-wide root lock and durable `clean`, `publishing`, `orphan`, and `recovery` states. One root sentinel permits at most one unresolved incident, two digest-described artifacts, and 24 MiB, contains only portable relative identities/roles/sizes/digests, and blocks further writes across reopen even when final marker creation fails. Windows MUST durably flush evidence parent and root namespaces. Cleanup after the commit point, including descriptor closure, is best effort, sanitized, and non-masking. These phases apply on both supported Linux and Windows filesystems.
+
+H6 rate limits use atomic monotonic sliding windows keyed by authenticated principal, session, authorized project, and category. The monotonic timestamp is sampled while holding the limiter lock so each queue remains ordered. Total and category windows are checked before either is charged; expired empty buckets are pruned with bounded work, resource enumeration uses a reserved session-resource scope, and invalid or unauthorized caller selectors share one bounded denial scope instead of allocating caller-controlled project buckets. Because `source.project.build` includes `lock_update`, its MCP metadata is conservatively mutating and non-idempotent. Its action metadata names the implemented `generated_lock` grant, while the runtime grant check remains authoritative.
+
+H6 is complete and accepted after H6G trust-boundary repair. `HS-BLOCK-001` and `HS-BLOCK-009` are closed for the approved local NTFS/Linux source-workspace lane. The six focused H6 workflows and full 40-workflow catalogue pass, as do Ruff cyclomatic/branch limits `12`/`15`, compileall, diff check, the 50-test ceiling, and the 1,200-line gate. Windows and Ubuntu 24.04 WSL acceptance cover descriptor-safe publication, rollback races, bounded durable recovery, hostile-environment cross-process lock contention, legacy-lock denial, mandatory strong Linux root identity, and project-artifact absence. The clean installed Houdini 21.0.729 run verifies source/build/install/running hash alignment including the publication-lock and recovery-record modules, the exact seven-tool surface, source-to-live apply, flat export structural recompilation and exact-catalog semantic/connector validation followed by reconcile, Git/native-editor visibility, revocation, and zero cooks. It did not establish export network-reconstruction equivalence. Final independent P0/P1 closure review is clean.
+
 H6 changes the transport available to an agent, not the source or mutation authority: `.hocus` remains ordinary Git-visible code, native editors and CLI remain fully interoperable, and only authenticated bundles plus stored plans can mutate Houdini. Unbounded loops and recursion remain forbidden. Explicitly bounded deterministic compile-time recursion remains deferred to a separate reviewed syntax, termination, identity, provenance, and budget contract and is not part of language `0.3`.
+
+## 16.8 HS7 Fidelity Carrier and Live Contract
+
+HS7 assigns the exact compatibility row language `0.4`, compiler `0.6.0`, GraphSpec `0.5`, Bundle `0.5`, catalog v2, expansion-map v3, resolved-module-set v3, project/lock v5, and network-document v2. Frozen `0.1`-`0.3` source and Bundle `0.2`-`0.4` lanes are never inferred, upgraded, or widened. Bundle `0.5` binds closed typed-value, named-port, graph-editor, spare-parameter, and animation semantic selections to the authenticated catalog and expansion provenance. Any cross-carrier disagreement rejects before document lowering.
+
+At a language-`0.4` root graph, an explicit authored `@id` is the durable
+entity identity and authored symbol used by export and structural recompilation. It is not hashed
+a second time. Frozen language-`0.3` behavior and module/control descendant
+identity domains remain unchanged, so the new rule cannot silently rewrite a
+legacy project or collapse expansion-instance identity.
+
+SOP, fixed-port material/VOP, LOP, and TOP networks use the same guarded preview, immutable-plan, apply, verify, rollback, save/reopen, reconcile, and export pipeline. Source and destination indexes remain authoritative. Language `0.4` MAY author `input["name"] = source.output["name"]` only when catalog v2 proves a complete, fixed, unique namespace and resolves both names to exact indexes; ambiguity, dynamic connectors, or incomplete evidence rejects. ROP, DOP, COP, and CHOP remain read-only, and HDA definition mutation remains rejected. Structural LOP support does not authorize direct USD layer, relationship, variant, or time-sample editing.
+
+Typed parameter values include exact whole tuples, menu tokens, dimensioned quantities, intentionally raw paths, explicit reset, float/color ramps, bounded multiparms, fixed-language expressions, and structural channel references. Tuple components and multiparm child tokens require exact catalog evidence. Ramp kind comes from `RampParmTemplate.parmType()` and supports only declared basis enums. Multiparm instance count comes from the root parameter value, while the exact start offset comes from `multiParmStartOffset()` or matching catalog evidence; flattened child counts MUST NOT substitute for instance count. Reset verifies `parm.isAtDefault()`. Callbacks and buttons remain actions and are rejected from declarative values.
+
+Houdini parameters whose exact live `parentMultiParm()` is non-null are nested
+ramp/multiparm implementation coordinates, not independent top-level
+`parameterBindings`. Live snapshots omit those coordinates before binding or
+code-blob construction. Lookup/API failure retains the observation, and names
+are never used to infer nesting. Artist values remain untouched live and
+opaque; only an authenticated managed parent composite may create, replace, or
+reset them. Canonical language-`0.4` export renders every supported tagged
+value, including nested multiparm values, and recompilation must reproduce the
+same authenticated value carrier.
+
+Language `0.4` graph bodies MAY contain stable-ID `network_box`, `sticky_note`, `node_comment`, `network_dot`, and `layout_constraint` declarations. GraphSpec and network-document v2 carry these as closed entity tables. Dots preserve one exact upstream output and every exact downstream input coordinate. Network boxes preserve direct membership rather than recursive flattened membership. Layout is deterministic compiler-time positioning: automatic layout runs first and declared constraints resolve afterward. Live receipts authenticate durable IDs to current Houdini names without treating auto-suffixed names as success.
+
+Node bodies MAY declare managed instance spares with `spare <name> @id("...")` and bounded closed properties for float/tuple, int, string, toggle, or menu interfaces. They MAY declare scalar float or int animation with `animate <parm-or-component> @id("...")`, canonical seconds, explicit authored/display FPS, fixed constant/linear/bezier key functions, optional numeric tangent fields, and bounded constant/linear/cycle/cycle-offset/oscillate extrapolation. Carrier `linear` extrapolation maps to Houdini `parmExtrapolate.Slope`. String keyframes, Python or arbitrary HScript functions, callbacks, locked HDA internals, HDA-definition edits, and USD time samples reject before mutation.
+
+Managed spares and animation are ownership-scoped entities. Stable tag text alone never proves ownership: live mutation requires the authenticated per-node runtime receipt, exact UID/name or UID/parameter target, and matching Hocus ownership. Reconcile removes only omitted runtime entities in the target ownership namespace and preserves artist-owned or differently owned state. Apply orders spare creation before animation/bindings and spare removal afterward, verifies the realized interface and animation, and includes runtime state in inverse receipts so rollback cannot silently flatten or discard artist state.
+
+The machine-readable matrix at `houdini://documents/hocusscript/fidelity/hs7`
+and `docs/hocusscript-hs7-support-matrix.md` is authoritative. `supported`
+requires source, catalog, carrier, document, live apply, save/reopen, rollback,
+zero cooks, and exported source that structurally recompiles and passes
+exact-catalog semantic and connector validation. That export validation is not
+a network-reconstruction guarantee. Constructs without the required evidence
+remain `read-only`, `preserved-opaque`, or `rejected`; no generic metadata
+escape hatch changes their classification.
+
+HS7 final acceptance passed in installed Houdini 21.0.729. SOP,
+fixed-port material/VOP, LOP, and TOP fixtures completed guarded create,
+reconcile, injected rollback, save/reopen, and structural export recompilation
+with exact-catalog semantic/connector validation. This did not establish export
+network-reconstruction equivalence. A disposable
+locked HDA rejected with `document.locked_hda_boundary`; unsupported
+ROP/DOP/COP/CHOP mutation and direct USD time samples failed closed. The
+editor/runtime/typed extension preserved artist spare and sticky state,
+restored ramp and multiparm parents to exact Houdini defaults, and completed
+rollback at editor, runtime, and typed executor checkpoints. All managed
+descendants recorded zero cooks. The receipt authenticated 79 critical
+source/install/running modules. The full 40-workflow catalogue, Ruff
+complexity `12`/branch `15`, compileall, schema parsing, diff check, clean
+build/install, 50-test ceiling, and 1,200-line gate pass; final independent
+P0/P1 review is clean.
 
 | HS6 limit | Default |
 | --- | ---: |
@@ -877,14 +993,17 @@ Modules MUST NOT provide:
 
 Same-project modules remain the default and legacy implementation lane. External aliases are available only through the separate G4 native consumers after explicit per-call root approval, library-manifest verification, transitive lock verification, containment, and hostile-path gates succeed together; CLI, MCP, document, and live enablement do not follow implicitly.
 
-## 17. Formatting, Export, and Round-Trip
+## 17. Formatting and Export Validation
 
 - The formatter emits canonical whitespace, ordering, quoting, and LF newlines.
 - Language `0.1` accepts comments, but the canonical normalized formatter intentionally discards trivia and does not preserve comments. A distinct source-preserving formatter requires a trivia-preserving concrete syntax tree and is deferred beyond the HS5 canonical-format contract.
 - Formatting is idempotent.
 - Live graphs can be exported to normalized HocusScript when all relevant constructs are supported.
 - HocusScript `0.1` has no opaque construct. Any unsupported entity blocks the whole export; blockers are reported deterministically up to the fixed limit, with exact overflow accounting, and unsupported state is never silently dropped.
-- The semantic guarantee is `compile(export(network))` equivalence for supported features.
+- Emitted source is structurally recompiled and checked through exact-catalog
+  semantic and connector validation. This proves that the export is an
+  admissible source handoff; it does not prove reconstruction or equivalence of
+  the input network.
 - Exact preservation of arbitrary original formatting and comments is not required for initial live export.
 
 ## 18. Safety and Policy
@@ -928,6 +1047,102 @@ HocusScript can orchestrate AAA-quality procedural assets only when the surround
 
 The language enables reproducible procedural art direction. It does not replace visual review or specialist sculpting, grooming, painting, rigging, or art direction.
 
+### 20.1 HS8 production qualification contract
+
+HS8 retains `.hocus` as the authored graph surface and adds a separate strict
+evidence layer. `asset-contract/v1` declares units, coordinate conventions,
+naming, pivots, bounds, topology, normals/tangents, UV/UDIM and texel-density
+requirements, material slots, LODs, collision, instancing, target-platform
+budgets, USD composition, and exact dependencies. Material, LOD, collision,
+and instancing requirements bind explicit delivered USD prims so intermediate
+SOP labels cannot satisfy the contract. Instancing additionally binds the
+serialized prototype prim path and exact representation (`native_instance` or
+`point_instancer`); effective instance visibility drives rendered counts while
+the delivered mesh binding retains its authored purpose and visibility.
+Contract and observation decoding is bounded, path-free, finite-JSON-only,
+and content-addressed.
+
+The live production observer MUST inspect only explicitly authorized Houdini
+roots, MUST reject dirty geometry or stages rather than implicitly cooking, and
+MUST compare the complete authorized-root cook-count set before and after
+observation. Portable evidence MUST NOT contain physical HDA, file, USD-layer,
+or output paths. Production cooks are explicit measured build actions after
+guarded apply; they are not hidden inside validation. Acceptance facts MUST be
+derived from normalized USDA reopened as a fresh USD stage. SOP facts MAY be
+cross-checked against that product but MUST NOT fill a missing default prim,
+composition policy, material binding, LOD, collision, instancing, dependency,
+or platform metric.
+
+The reopened USD dependency observation MUST enumerate a complete bounded
+closure of root sublayers, reference and payload arcs, used composition layers,
+and authored asset dependencies. Every dependency MUST resolve to a regular
+local file within the authorized output root, match exactly one declared
+contract dependency by kind and digest, and be hashed from stable bytes.
+Anonymous, unresolved, ambient, escaping, or ambiguous dependencies MUST fail
+closed. Portable observation exposes only contract identity, digest, byte
+length, and role; it MUST NOT expose resolved paths. An `inline` publish MUST
+have no external composition dependency.
+
+`build-provenance-manifest/v1` binds one portable asset and target platform to
+the exact recipe, sources, compiler, catalog, modules, HDAs, inputs, and
+outputs. `build-report/v1` additionally binds a valid asset-contract report,
+artist-override preservation, production metrics, the selected platform budget,
+a repeated clean-build comparison, a numeric comparison, and a visual
+comparison. Packaging requires every check except visual comparison. Publishing
+requires a matching passing packaging receipt and every check including visual
+comparison. Upstream decisions and all evidence digests are authenticated;
+callers cannot replace a failed packaging decision with a locally passing
+publish envelope.
+
+The single high-level MCP operation is `production.asset.qualify`. It is
+read-only and non-idempotent. It performs no cook, Houdini mutation, filesystem
+write, packaging, or publication and returns the strict
+`production-qualification/v1` carrier. Raw packaging and publish gate decisions
+are advisory technical facts. Every public caller receives
+`attestationMode=content_only`, `readyForPackaging=false`, and
+`readyForPublish=false`, including an authenticated context with
+`review_production`; caller facts can never mint host attestation or actionable
+readiness. The installed runner and detached verifier remain private authority
+boundaries rather than general graph or filesystem tools. HS8 errors use
+`HOCUS950`-`HOCUS959` for
+contract/observation failures, `HOCUS980`-`HOCUS989` for build evidence and
+gates, and `HOCUS990` for the complete qualification boundary. `HOCUS991`
+remains reserved for private attestation rejection.
+
+Numeric comparison MUST contain exactly the canonical build-metric fields and
+its candidate values MUST equal the measured metrics. Every visual comparison
+MUST bind an exact candidate provenance output URI and digest. Technical
+qualification may generate a deterministic contact sheet and review request,
+but MUST NOT generate its own approval carrier. Release qualification requires
+an externally authored and authenticated approval carrier plus an externally
+authenticated clean-image/VM decision and detached-verifier pass. The approval is a
+detached input with its own content identity and trust chain; it MUST bind the
+exact frozen source candidate, installed manifest, review request, provenance,
+output set, comparison, version, and policy. It MUST NOT be copied into the
+candidate source archive or governed installation, because doing so would
+change the identity it approves. A checked-in development review fixture is
+non-authoritative. The candidate MUST freeze only after its approval schema,
+request generator, verifier, baseline, and detached-input plumbing are final.
+
+The same-host two-process runner verifies installed harness, fixture, complete
+governed module bytes, effective package-search provenance, and source/install
+alignment, and proves only fresh-process determinism on that host. The
+`hs8-clean-image-environment/v1` carrier retains an integrity digest but no
+authority; its wrapper is therefore evidence-only and always
+non-authoritative. External authority uses the separately supplied strict
+`hs8-release-trust-policy/v1`,
+`hs8-external-clean-image-attestation/v1`,
+`hs8-signed-visual-approval/v1`, and
+`hs8-final-release-decision/v1` carriers. The offline verifier requires
+role-separated Ed25519 principals, validity windows, exact policy identity,
+and exact independently supplied candidate/source/install/runtime/environment/
+dependency/technical bindings. The final decision additionally binds the
+exact signed visual approval after clean-image/visual/decision chronology
+checks. No private key or trust policy is generated by the
+repository. A clean-image or release claim remains unavailable until external
+CI and the release authority issue those signed carriers; local execution
+cannot satisfy that boundary.
+
 ## 21. Testing and Conformance
 
 Required suites include:
@@ -945,17 +1160,23 @@ Required suites include:
 - stale plan, revision, catalog, hash, timeout, idempotency, and cancellation tests
 - verified rollback after every execution phase
 - SOP, MAT/VOP, LOP, TOP, ROP, and locked-HDA live matrices as support expands
-- semantic export/recompile equivalence
-- 1k/10k-node performance and payload budgets
+- structural export recompilation plus exact-catalog semantic and connector
+  validation, without a network-reconstruction guarantee
+- required 1k-node performance and payload budgets; 10k-node scale remains a
+  separately defined post-v1 target
 - at least one production fixture covering geometry, materials, UVs, LODs, collision, USD/publish outputs, validation, and visual comparison
 
 ## 22. HS1 Target Boundary
 
-The HS1 implementation target is intentionally preview-only:
+The historical HS1 implementation target was intentionally preview-only:
 
 - pure-Python lexer, source positions, parser, AST, structural compiler, and formatter
 - version header, one graph, target, category, mode, revision, ownership, existing/adopt, nodes, indexed inputs, scalar/array values, tagged code, display/render/output, and auto layout
 - deterministic GraphSpec serialization and structured diagnostics
 - offline unit and golden tests
 
-It does not lower to a live apply plan or mutate Houdini. Source application remains blocked until persistent UID stamping, sparse-document verification, exact source-output handling, ownership-safe reconcile, catalog resolution, and code-capability enforcement are complete.
+At HS1 this target did not lower to a live apply plan or mutate Houdini. Those
+later gates are now implemented through the exact Bundle `0.2`/`0.3`/`0.4`/`0.5`
+preview, immutable-plan, and guarded-apply path described in section 14; the
+structural `document.compile_source` compatibility endpoint itself remains
+non-applyable.

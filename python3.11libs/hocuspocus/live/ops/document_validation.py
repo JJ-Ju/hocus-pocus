@@ -4,8 +4,86 @@ from __future__ import annotations
 
 from typing import Any
 
+from hocuspocus.hocusscript.document_provenance import (
+    DocumentProvenanceError,
+    validate_expansion_references,
+)
+from hocuspocus.hocusscript.document_value_validation import (
+    DocumentValueValidationError,
+    validate_v2_binding,
+)
+from hocuspocus.hocusscript.document_runtime_contract import (
+    DocumentRuntimeContractError,
+    validate_runtime_contract,
+)
+from hocuspocus.hocusscript.document_editor_entities import (
+    DocumentEditorEntityError,
+    editor_entities_from_document,
+)
+from .document_network_families import network_family_policy
 
 from ..context import RequestContext
+
+
+def _validate_v1_binding_value(
+    binding: dict[str, Any],
+    index: int,
+    binding_uid: str,
+    value_mode: str,
+    diagnostics: list[dict[str, Any]],
+) -> None:
+    pointer = f"/parameterBindings/{index}"
+    if value_mode not in {
+        "literal", "expression", "channel_reference", "code_reference",
+    }:
+        diagnostics.append({
+            "severity": "error",
+            "code": "binding.value_mode.invalid",
+            "message": (
+                "valueMode must be literal, expression, "
+                "channel_reference, or code_reference."
+            ),
+            "jsonPointer": pointer + "/valueMode",
+            "entityUid": binding_uid or None,
+            "details": {"received": binding.get("valueMode")},
+        })
+    if value_mode == "literal" and isinstance(
+        binding.get("value"), (list, dict)
+    ):
+        diagnostics.append({
+            "severity": "error",
+            "code": "binding.compound_value.unsupported",
+            "message": (
+                "Network-document v1 compound values must use scalar "
+                "component bindings."
+            ),
+            "jsonPointer": pointer + "/value",
+            "entityUid": binding_uid or None,
+        })
+    if value_mode == "expression" and not str(
+        binding.get("expression") or ""
+    ).strip():
+        diagnostics.append({
+            "severity": "error",
+            "code": "binding.expression.missing",
+            "message": "Expression bindings must include expression text.",
+            "jsonPointer": pointer + "/expression",
+            "entityUid": binding_uid or None,
+        })
+    if value_mode == "channel_reference" and not (
+        str(binding.get("channelReference") or "").strip()
+        or str(binding.get("expression") or "").strip()
+    ):
+        diagnostics.append({
+            "severity": "error",
+            "code": "binding.channel_reference.missing",
+            "message": (
+                "Channel-reference bindings require a reference or "
+                "compiled expression."
+            ),
+            "jsonPointer": pointer + "/channelReference",
+            "entityUid": binding_uid or None,
+        })
 
 
 class DocumentValidationOperationsMixin:
@@ -59,8 +137,79 @@ class DocumentValidationOperationsMixin:
             code_blob_by_uid,
             diagnostics,
         )
+        self._document_validate_runtime_contract(
+            document, set(node_uid_to_path), diagnostics
+        )
         self._document_validate_edges(document, node_uid_to_path, diagnostics)
+        if document.get("$schema") == self._NETWORK_DOCUMENT_SCHEMA_URI_V2:
+            try:
+                editor_entities_from_document(
+                    document, node_uids=node_uid_to_path,
+                )
+            except DocumentEditorEntityError as exc:
+                diagnostics.append({
+                    "severity": "error",
+                    "code": "document.editor_entities.invalid",
+                    "message": str(exc),
+                    "jsonPointer": "/networkBoxes",
+                    "details": {
+                        "diagnosticCode": "HOCUS936",
+                        **exc.details,
+                    },
+                })
+        self._document_validate_expansion_references(document, diagnostics)
         return diagnostics
+
+    @staticmethod
+    def _document_validate_runtime_contract(
+        document: dict[str, Any],
+        node_uids: set[str],
+        diagnostics: list[dict[str, Any]],
+    ) -> None:
+        if document.get("$schema") != (
+            "hocuspocus://schemas/network-document/v2"
+        ):
+            if any(
+                field in document
+                for field in ("spareParameters", "animations", "timeSamples")
+            ):
+                diagnostics.append({
+                    "severity": "error",
+                    "code": "runtime_contract.requires_v2",
+                    "message": (
+                        "Managed spares and animation require "
+                        "network-document-v2."
+                    ),
+                })
+            return
+        try:
+            validate_runtime_contract(document, node_uids)
+        except DocumentRuntimeContractError as exc:
+            code = (
+                "animation.usd_time_samples.unsupported"
+                if "USD time samples" in str(exc)
+                else "runtime_contract.invalid"
+            )
+            diagnostics.append({
+                "severity": "error",
+                "code": code,
+                "message": str(exc),
+            })
+
+    @staticmethod
+    def _document_validate_expansion_references(
+        document: dict[str, Any],
+        diagnostics: list[dict[str, Any]],
+    ) -> None:
+        try:
+            validate_expansion_references(document)
+        except DocumentProvenanceError as exc:
+            diagnostics.append({
+                "severity": "error",
+                "code": "document.hocus_expansion.invalid",
+                "message": str(exc),
+                "jsonPointer": "/metadata/hocusExpansion",
+            })
 
     def _document_validate_header(
         self,
@@ -91,12 +240,15 @@ class DocumentValidationOperationsMixin:
                     }
                 )
 
-        if document.get("$schema") != self._NETWORK_DOCUMENT_SCHEMA_URI:
+        if document.get("$schema") not in {
+            self._NETWORK_DOCUMENT_SCHEMA_URI,
+            self._NETWORK_DOCUMENT_SCHEMA_URI_V2,
+        }:
             diagnostics.append(
                 {
                     "severity": "error",
                     "code": "document.schema.invalid",
-                    "message": "Document $schema does not match the locked network-document v1 contract.",
+                    "message": "Document $schema is not a supported network-document contract.",
                     "jsonPointer": "/$schema",
                     "details": {"received": document.get("$schema")},
                 }
@@ -124,14 +276,19 @@ class DocumentValidationOperationsMixin:
             )
 
         network_family = self._document_network_family(root_path, document.get("category"))
-        if network_family == "generic":
+        family_policy = network_family_policy(network_family)
+        if not family_policy.structural_indexed_apply:
             diagnostics.append(
                 {
-                    "severity": "warning",
-                    "code": "document.network_family.generic",
-                    "message": "Document root does not resolve to a known first-class network family; apply will fall back to generic node operations.",
+                    "severity": "error",
+                    "code": "document.network_family.unsupported",
+                    "message": "This network family is read-only through the indexed structural document lane.",
                     "jsonPointer": "/rootPath",
                     "path": root_path or None,
+                    "details": {
+                        "networkFamily": network_family,
+                        "supportedFamilies": ["lop", "mat", "sop", "top"],
+                    },
                 }
             )
 
@@ -518,6 +675,10 @@ class DocumentValidationOperationsMixin:
         diagnostics: list[dict[str, Any]],
     ) -> None:
         binding_by_uid: dict[str, dict[str, Any]] = {}
+        document_v2 = (
+            document.get("$schema") == self._NETWORK_DOCUMENT_SCHEMA_URI_V2
+        )
+        node_uids = set(node_uid_to_path)
         for index, binding in enumerate(document.get("parameterBindings", [])):
             if not isinstance(binding, dict):
                 diagnostics.append(
@@ -533,6 +694,18 @@ class DocumentValidationOperationsMixin:
             node_uid = str(binding.get("nodeUid", "")).strip()
             value_mode = str(binding.get("valueMode", "")).strip()
             parm_name = str(binding.get("parmName", "")).strip()
+            if document_v2:
+                try:
+                    validate_v2_binding(binding, node_uids)
+                except DocumentValueValidationError as exc:
+                    diagnostics.append({
+                        "severity": "error",
+                        "code": "binding.v2.invalid",
+                        "message": str(exc),
+                        "jsonPointer": f"/parameterBindings/{index}",
+                        "entityUid": binding_uid or None,
+                    })
+                    continue
             if binding_uid:
                 binding_by_uid[binding_uid] = binding
             else:
@@ -564,52 +737,9 @@ class DocumentValidationOperationsMixin:
                         "entityUid": binding_uid or None,
                     }
                 )
-            if value_mode not in {"literal", "expression", "channel_reference", "code_reference"}:
-                diagnostics.append(
-                    {
-                        "severity": "error",
-                        "code": "binding.value_mode.invalid",
-                        "message": "valueMode must be literal, expression, channel_reference, or code_reference.",
-                        "jsonPointer": f"/parameterBindings/{index}/valueMode",
-                        "entityUid": binding_uid or None,
-                        "details": {"received": binding.get("valueMode")},
-                    }
-                )
-            if value_mode == "literal" and isinstance(binding.get("value"), (list, dict)):
-                diagnostics.append(
-                    {
-                        "severity": "error",
-                        "code": "binding.compound_value.unsupported",
-                        "message": "Tuple, ramp, and multiparm values are not supported as a single network-document binding; bind tuple components separately using scalar literal bindings.",
-                        "jsonPointer": f"/parameterBindings/{index}/value",
-                        "entityUid": binding_uid or None,
-                        "details": {
-                            "policy": "scalar_component_bindings",
-                            "receivedType": "array" if isinstance(binding.get("value"), list) else "object",
-                        },
-                    }
-                )
-            if value_mode == "expression" and not str(binding.get("expression") or "").strip():
-                diagnostics.append(
-                    {
-                        "severity": "error",
-                        "code": "binding.expression.missing",
-                        "message": "Expression bindings must include expression text.",
-                        "jsonPointer": f"/parameterBindings/{index}/expression",
-                        "entityUid": binding_uid or None,
-                    }
-                )
-            if value_mode == "channel_reference" and not (
-                str(binding.get("channelReference") or "").strip() or str(binding.get("expression") or "").strip()
-            ):
-                diagnostics.append(
-                    {
-                        "severity": "error",
-                        "code": "binding.channel_reference.missing",
-                        "message": "Channel-reference bindings must include channelReference or a compiled expression.",
-                        "jsonPointer": f"/parameterBindings/{index}/channelReference",
-                        "entityUid": binding_uid or None,
-                    }
+            if not document_v2:
+                _validate_v1_binding_value(
+                    binding, index, binding_uid, value_mode, diagnostics
                 )
             if value_mode == "code_reference":
                 self._document_validate_code_binding(

@@ -32,10 +32,12 @@ PROJECT_SCHEMA_URI = "hocuspocus://schemas/hocus-project/v1"
 PROJECT_SCHEMA_URI_V2 = "hocuspocus://schemas/hocus-project/v2"
 PROJECT_SCHEMA_URI_V3 = "hocuspocus://schemas/hocus-project/v3"
 PROJECT_SCHEMA_URI_V4 = "hocuspocus://schemas/hocus-project/v4"
+PROJECT_SCHEMA_URI_V5 = "hocuspocus://schemas/hocus-project/v5"
 LOCK_SCHEMA_URI = "hocuspocus://schemas/hocus-lock/v1"
 LOCK_SCHEMA_URI_V2 = "hocuspocus://schemas/hocus-lock/v2"
 LOCK_SCHEMA_URI_V3 = "hocuspocus://schemas/hocus-lock/v3"
 LOCK_SCHEMA_URI_V4 = "hocuspocus://schemas/hocus-lock/v4"
+LOCK_SCHEMA_URI_V5 = "hocuspocus://schemas/hocus-lock/v5"
 MAX_MANIFEST_BYTES = 256 * 1024
 MAX_LOCK_BYTES_V3 = 16 * 1024 * 1024
 MAX_PROJECT_DIRECTORIES = 64
@@ -376,16 +378,16 @@ def compile_path(
     """Compile one native .hocus file inside an explicitly selected project."""
 
     preview = ProjectContext.load(project_directory, validate_lock=False)
-    if preview.manifest_version in {3, 4} or preview.language_version in {"0.2", "0.3"}:
+    if preview.manifest_version in {3, 4, 5} or preview.language_version in {"0.2", "0.3", "0.4"}:
         raise ProjectError(
             "HOCUS456",
-            "HocusScript 0.2/0.3 project compilation remains disabled until a compatible resolver/compiler batch.",
+            "Versioned module/control project compilation requires its dedicated resolver/compiler.",
         )
     project = ProjectContext.load(project_directory, validate_lock=validate_lock)
-    if project.language_version in {"0.2", "0.3"}:
+    if project.language_version in {"0.2", "0.3", "0.4"}:
         raise ProjectError(
             "HOCUS456",
-            "HocusScript 0.2/0.3 project compilation remains disabled until a compatible resolver/compiler batch.",
+            "Versioned module/control project compilation requires its dedicated resolver/compiler.",
         )
     resolved = project.resolve_source(source_path)
     if validate_lock:
@@ -425,8 +427,8 @@ def compile_path(
 def verify_project_lock(project_directory: str | Path) -> LockVerificationResult:
     """Explicitly verify a portable module lock without changing project files."""
     preview = ProjectContext.load(project_directory, validate_lock=False)
-    if preview.manifest_version not in {3, 4}:
-        raise ProjectError("HOCUS452", "Module lock verification requires a schema v3 or v4 project.")
+    if preview.manifest_version not in {3, 4, 5}:
+        raise ProjectError("HOCUS452", "Module lock verification requires a schema v3, v4, or v5 project.")
     project = ProjectContext.load(project_directory, validate_lock=True)
     if project.uid is None or project.manifest_digest is None or project.lock_digest is None:
         raise ProjectError("HOCUS452", "Portable project lock verification is incomplete.")
@@ -452,11 +454,11 @@ def update_project_lock(
     _require_empty_module_scaffold(modules)
     initial_project = ProjectContext.load(project_directory, validate_lock=False)
     if (
-        initial_project.manifest_version not in {3, 4}
+        initial_project.manifest_version not in {3, 4, 5}
         or initial_project.uid is None
         or initial_project.manifest_digest is None
     ):
-        raise ProjectError("HOCUS452", "Lock update requires a portable schema v3 or v4 project.")
+        raise ProjectError("HOCUS452", "Lock update requires a portable schema v3, v4, or v5 project.")
     if (
         initial_project.lock_path is None
         or initial_project.catalog_path is None
@@ -490,9 +492,13 @@ def update_project_lock(
             ) from exc
         payload = {
             "$schema": (
-                LOCK_SCHEMA_URI_V4
-                if project.manifest_version == 4
-                else LOCK_SCHEMA_URI_V3
+                LOCK_SCHEMA_URI_V5
+                if project.manifest_version == 5
+                else (
+                    LOCK_SCHEMA_URI_V4
+                    if project.manifest_version == 4
+                    else LOCK_SCHEMA_URI_V3
+                )
             ),
             "kind": "hocus_project_lock",
             "schemaVersion": project.manifest_version,
@@ -500,7 +506,7 @@ def update_project_lock(
             "manifestDigest": project.manifest_digest,
             "languageVersion": project.language_version,
             "catalog": {
-                "schemaVersion": 1,
+                "schemaVersion": catalog.catalog_version,
                 "path": project.catalog_relative_path,
                 "contentDigest": catalog_digest,
                 "fingerprint": catalog.fingerprint,

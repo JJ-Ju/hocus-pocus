@@ -1,0 +1,199 @@
+{
+  "$id": "hocuspocus://schemas/rc1-evidence-set/v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "const": "hocuspocus://schemas/rc1-evidence-set/v1"
+    },
+    "candidate": {
+      "additionalProperties": false,
+      "properties": {
+        "clean": {
+          "const": true
+        },
+        "commitDigest": {
+          "$ref": "#/$defs/gitDigest"
+        },
+        "fileCount": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "treeDigest": {
+          "$ref": "#/$defs/gitDigest"
+        },
+        "workspaceSnapshotDigest": {
+          "$ref": "#/$defs/digest"
+        }
+      },
+      "required": [
+        "commitDigest",
+        "treeDigest",
+        "workspaceSnapshotDigest",
+        "fileCount",
+        "clean"
+      ],
+      "type": "object"
+    },
+    "evidenceSetDigest": {
+      "$ref": "#/$defs/digest"
+    },
+    "installedPayloadManifestDigest": {
+      "$ref": "#/$defs/digest"
+    },
+    "kind": {
+      "const": "hocus_rc1_evidence_set"
+    },
+    "receipts": {
+      "additionalProperties": false,
+      "properties": {
+        "compatibility": {
+          "$ref": "#/$defs/internalCompatibility"
+        },
+        "graphStore": {
+          "$ref": "#/$defs/internalGraphStore"
+        },
+        "packageSearch": {
+          "$ref": "#/$defs/packageSearch"
+        },
+        "performance": {
+          "$ref": "#/$defs/internalPerformance"
+        }
+      },
+      "required": [
+        "performance",
+        "compatibility",
+        "graphStore",
+        "packageSearch"
+      ],
+      "type": "object"
+    },
+    "runtimeDigest": {
+      "$ref": "#/$defs/digest"
+    },
+    "schemaVersion": {
+      "const": 1,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "$schema",
+    "kind",
+    "schemaVersion",
+    "candidate",
+    "receipts",
+    "installedPayloadManifestDigest",
+    "runtimeDigest",
+    "evidenceSetDigest"
+  ],
+  "title": "HocusScript RC1 Evidence Set",
+  "type": "object",
+  "$defs": {
+    "digest": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "gitDigest": {
+      "pattern": "^(git-sha1:[0-9a-f]{40}|git-sha256:[0-9a-f]{64})$",
+      "type": "string"
+    },
+    "internalBase": {
+      "additionalProperties": false,
+      "properties": {
+        "fileDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "receiptDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "schema": {
+          "const": "hocuspocus://schemas/internal-release-evidence/v1"
+        }
+      },
+      "required": [
+        "schema",
+        "kind",
+        "receiptDigest",
+        "fileDigest"
+      ],
+      "type": "object"
+    },
+    "internalCompatibility": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/internalBase"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "hocus_compatibility_matrix_receipt"
+            }
+          }
+        }
+      ]
+    },
+    "internalGraphStore": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/internalBase"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "hocus_graph_store_upgrade_receipt"
+            }
+          }
+        }
+      ]
+    },
+    "internalPerformance": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/internalBase"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "hocus_performance_benchmark_receipt"
+            }
+          }
+        }
+      ]
+    },
+    "packageSearch": {
+      "additionalProperties": false,
+      "properties": {
+        "fileDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "installedPayloadManifestDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "kind": {
+          "const": "hocus_effective_package_search_provenance"
+        },
+        "receiptDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "runtimeDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "schema": {
+          "const": "hocuspocus://schemas/effective-package-search-provenance/v1"
+        }
+      },
+      "required": [
+        "schema",
+        "kind",
+        "receiptDigest",
+        "fileDigest",
+        "installedPayloadManifestDigest",
+        "runtimeDigest"
+      ],
+      "type": "object"
+    }
+  }
+}

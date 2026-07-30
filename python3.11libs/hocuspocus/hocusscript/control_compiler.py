@@ -8,11 +8,6 @@ from dataclasses import dataclass
 from os import PathLike
 from typing import Any, Callable, Mapping
 
-from .contracts import (
-    CONTROL_COMPILER_VERSION,
-    CONTROL_GRAPH_SPEC_VERSION,
-    CONTROL_LANGUAGE_VERSION,
-)
 from .control_artifact import ControlCompiledBundle, _compile_control_bundle
 from .control_catalog import (
     ControlCatalogValidationResult,
@@ -86,12 +81,13 @@ class ControlProjectCompileResult:
 
     def to_dict(self) -> dict[str, Any]:
         diagnostics = self.semantic["diagnostics"]
+        payload = self.bundle.payload
         return {
             "stage": "semantic",
             "valid": True,
-            "compilerVersion": CONTROL_COMPILER_VERSION,
-            "graphSpecVersion": CONTROL_GRAPH_SPEC_VERSION,
-            "languageVersion": CONTROL_LANGUAGE_VERSION,
+            "compilerVersion": payload["compilerVersion"],
+            "graphSpecVersion": payload["graphSpecVersion"],
+            "languageVersion": payload["languageVersion"],
             "projectUid": self.project_uid,
             "projectManifestDigest": self.project_manifest_digest,
             "projectLockDigest": self.project_lock_digest,
@@ -113,7 +109,7 @@ class ControlProjectCompileResult:
             "diagnostics": diagnostics,
             "bundleDigest": self.bundle.digest,
             "compileDigest": self.compile_digest,
-            "readyForDocumentLowering": False,
+            "readyForDocumentLowering": True,
             "readyForApply": False,
         }
 
@@ -222,13 +218,14 @@ def _build_result(
     admission: ControlCatalogValidationResult,
     bundle: ControlCompiledBundle,
 ) -> ControlProjectCompileResult:
+    bundle_payload = bundle.payload
     formatted = format_syntax(program.entry_syntax)
     formatted_digest = _digest_text(formatted)
     graph_json = _canonical_json(graph)
     graph_digest = _digest_text(graph_json)
     core = {
         "domain": "hocus-control-project-compile-v1",
-        "compilerVersion": CONTROL_COMPILER_VERSION,
+        "compilerVersion": bundle_payload["compilerVersion"],
         "projectUid": program.project_uid,
         "projectManifestDigest": program.project_manifest_digest,
         "projectLockDigest": program.project_lock_digest,

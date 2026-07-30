@@ -6,11 +6,19 @@ import json
 from typing import Any
 
 from hocuspocus.core import paths as core_paths
+from hocuspocus.hocusscript.fidelity import hs7_fidelity_matrix
 
 from ..context import RequestContext
 
 
 class HocusScriptResourceOperationsMixin:
+    def read_hs7_fidelity_matrix(self, context: RequestContext) -> dict[str, Any]:
+        del context
+        return self._resource_response(
+            self._HS7_FIDELITY_RESOURCE_URI,
+            hs7_fidelity_matrix(),
+        )
+
     def read_apply_plan(self, plan_id: str, context: RequestContext) -> dict[str, Any] | None:
         del context
         payload = self._hocus_service_call(lambda: self._documents.apply_plan_resource(plan_id))
@@ -44,6 +52,62 @@ class HocusScriptResourceOperationsMixin:
         del context
         return self._read_hocusscript_schema(
             "resolved-module-set-v1.schema.json", self._RESOLVED_MODULE_SET_SCHEMA_RESOURCE_URI
+        )
+
+    def read_control_graph_spec_schema(self, context: RequestContext) -> dict[str, Any]:
+        del context
+        return self._read_hocusscript_schema(
+            "graph-spec-v0.4.schema.json", self._CONTROL_GRAPH_SPEC_SCHEMA_RESOURCE_URI
+        )
+
+    def read_control_expansion_map_schema(self, context: RequestContext) -> dict[str, Any]:
+        del context
+        return self._read_hocusscript_schema(
+            "expansion-map-v2.schema.json", self._CONTROL_EXPANSION_MAP_SCHEMA_RESOURCE_URI
+        )
+
+    def read_control_resolved_module_set_schema(
+        self, context: RequestContext
+    ) -> dict[str, Any]:
+        del context
+        return self._read_hocusscript_schema(
+            "resolved-module-set-v2.schema.json",
+            self._CONTROL_RESOLVED_MODULE_SET_SCHEMA_RESOURCE_URI,
+        )
+
+    def read_control_compiled_bundle_schema(self, context: RequestContext) -> dict[str, Any]:
+        del context
+        return self._read_hocusscript_schema(
+            "compiled-bundle-v0.4.schema.json",
+            self._CONTROL_COMPILED_BUNDLE_SCHEMA_RESOURCE_URI,
+        )
+
+    def read_value_graph_spec_schema(self, context: RequestContext) -> dict[str, Any]:
+        del context
+        return self._read_hocusscript_schema(
+            "graph-spec-v0.5.schema.json", self._VALUE_GRAPH_SPEC_SCHEMA_RESOURCE_URI
+        )
+
+    def read_value_expansion_map_schema(self, context: RequestContext) -> dict[str, Any]:
+        del context
+        return self._read_hocusscript_schema(
+            "expansion-map-v3.schema.json", self._VALUE_EXPANSION_MAP_SCHEMA_RESOURCE_URI
+        )
+
+    def read_value_resolved_module_set_schema(
+        self, context: RequestContext
+    ) -> dict[str, Any]:
+        del context
+        return self._read_hocusscript_schema(
+            "resolved-module-set-v3.schema.json",
+            self._VALUE_RESOLVED_MODULE_SET_SCHEMA_RESOURCE_URI,
+        )
+
+    def read_value_compiled_bundle_schema(self, context: RequestContext) -> dict[str, Any]:
+        del context
+        return self._read_hocusscript_schema(
+            "compiled-bundle-v0.5.schema.json",
+            self._VALUE_COMPILED_BUNDLE_SCHEMA_RESOURCE_URI,
         )
 
     def _read_hocusscript_schema(self, filename: str, uri: str) -> dict[str, Any]:

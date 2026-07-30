@@ -43,27 +43,27 @@ def _validate_manifest_envelope(payload: Any) -> int:
         raise ProjectError("HOCUS405", f"{PROJECT_MANIFEST_NAME} has unknown top-level fields.")
     schema_version = payload.get("schema_version")
     allowed = {"schema_version", "project", "language", "lock"}
-    if schema_version in {2, 3, 4}:
+    if schema_version in {2, 3, 4, 5}:
         allowed.add("catalog")
-    if schema_version in {3, 4}:
+    if schema_version in {3, 4, 5}:
         allowed.add("external_aliases")
     if set(payload) - allowed:
         raise ProjectError("HOCUS405", f"{PROJECT_MANIFEST_NAME} has unknown top-level fields.")
     if (
         type(schema_version) is not int
-        or schema_version not in {1, 2, 3, 4}
+        or schema_version not in {1, 2, 3, 4, 5}
         or not isinstance(payload.get("project"), dict)
     ):
         raise ProjectError(
             "HOCUS405",
-            f"{PROJECT_MANIFEST_NAME} requires schema_version = 1, 2, 3, or 4 and a [project] table.",
+            f"{PROJECT_MANIFEST_NAME} requires schema_version = 1, 2, 3, 4, or 5 and a [project] table.",
         )
     return schema_version
 
 
 def _validate_project_table(project: dict[str, Any], schema_version: int) -> None:
     fields = {"uid", "name", "source_directories"}
-    if schema_version in {3, 4}:
+    if schema_version in {3, 4, 5}:
         fields.add("module_directories")
     _require_table_fields(project, fields, "project")
     uid = project.get("uid")
@@ -86,7 +86,7 @@ def _validate_project_table(project: dict[str, Any], schema_version: int) -> Non
             "Project name must be a bounded non-empty string without control characters.",
         )
     _validate_source_directory_values(project.get("source_directories", ["."]))
-    if schema_version in {3, 4}:
+    if schema_version in {3, 4, 5}:
         _validate_module_directory_values(project.get("module_directories", []))
 
 
@@ -98,7 +98,7 @@ def _validate_language_and_lock(
     _require_table_fields(language, {"version"}, "language")
     _require_table_fields(
         lock,
-        {"policy", "path"} if schema_version in {2, 3, 4} else {"policy"},
+        {"policy", "path"} if schema_version in {2, 3, 4, 5} else {"policy"},
         "lock",
     )
     version = language.get("version", "0.1")
@@ -106,6 +106,8 @@ def _validate_language_and_lock(
         valid = version == "0.2"
     elif schema_version == 4:
         valid = version == "0.3"
+    elif schema_version == 5:
+        valid = version == "0.4"
     else:
         valid = isinstance(version, str) and version in SUPPORTED_LANGUAGE_VERSIONS
     if not valid:
@@ -117,9 +119,9 @@ def _validate_language_and_lock(
     policy = lock.get("policy", "optional")
     if not isinstance(policy, str) or policy not in {"optional", "required"}:
         raise ProjectError("HOCUS405", "lock.policy must be optional or required.")
-    if schema_version in {2, 3, 4} and policy != "required":
+    if schema_version in {2, 3, 4, 5} and policy != "required":
         raise ProjectError("HOCUS405", f"Manifest schema v{schema_version} requires lock.policy = required.")
-    if schema_version in {2, 3, 4} and "path" not in lock:
+    if schema_version in {2, 3, 4, 5} and "path" not in lock:
         raise ProjectError("HOCUS405", f"Manifest schema v{schema_version} requires lock.path.")
     if "path" in lock:
         _validate_relative_artifact_path(lock["path"], "lock.path")
@@ -132,7 +134,7 @@ def _validate_catalog(
     lock: dict[str, Any],
     schema_version: int,
 ) -> dict[str, Any] | None:
-    if schema_version not in {2, 3, 4}:
+    if schema_version not in {2, 3, 4, 5}:
         return None
     catalog = payload.get("catalog")
     _require_table_fields(catalog, {"path"}, "catalog")
@@ -150,7 +152,7 @@ def _validate_aliases(
     payload: dict[str, Any],
     schema_version: int,
 ) -> dict[str, dict[str, Any]]:
-    if schema_version not in {3, 4}:
+    if schema_version not in {3, 4, 5}:
         return {}
     raw_aliases = payload.get("external_aliases", {})
     if not isinstance(raw_aliases, dict) or len(raw_aliases) > MAX_EXTERNAL_ALIASES:

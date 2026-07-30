@@ -1,0 +1,95 @@
+{
+  "$schema": "hocuspocus://schemas/internal-compatibility-goldens/v1",
+  "kind": "hocus_internal_compatibility_goldens",
+  "rows": [
+    {
+      "bundleDigest": "sha256:0481cc8a5f4cbe6b47b2fdd88cacc2feed0f7e8fba3b7d65565b3ba335edb9ae",
+      "bundleVersion": "0.1",
+      "compilerVersion": "0.1.1",
+      "fixtureDigest": "sha256:c1cc543b0c48b98e2b80b9c0926acc0a5ec4367668b295ca6c275c7461afc855",
+      "graphSpecDigest": "sha256:9456712c8ee83a525672a7a3edecf76940eb12e47cf894d4cd55a0832c71661c",
+      "graphSpecVersion": "0.1",
+      "id": "legacy-011-g01-b01",
+      "languageVersion": "0.1",
+      "proofType": "retained-exact-decoder-fixture"
+    },
+    {
+      "bundleDigest": "sha256:7f0ba5c30c65d6388f0723ce1b365e83e0aaf1c39e5932c115442a9a8ac9d1b7",
+      "bundleVersion": "0.1",
+      "compilerVersion": "0.2.0",
+      "fixtureDigest": "sha256:2d465ee1fc6365d468eb9e1aa494544cdc38c348eefd2d2d207e322fc4131788",
+      "graphSpecDigest": "sha256:9456712c8ee83a525672a7a3edecf76940eb12e47cf894d4cd55a0832c71661c",
+      "graphSpecVersion": "0.1",
+      "id": "legacy-020-g01-b01",
+      "languageVersion": "0.1",
+      "proofType": "retained-exact-decoder-fixture"
+    },
+    {
+      "bundleDigest": "sha256:55d2067a7c59253d23b40e5bf84af9a4c897a60a2f1fd256867b8c06e5622daf",
+      "bundleVersion": "0.1",
+      "compilerVersion": "0.3.0",
+      "entrySourceDigest": "sha256:a4d3fe08f322c3a14d5362892b865b11337643bc32535938da873272c68fcc3d",
+      "graphSpecDigest": "sha256:bf5c9a887b6fb792dc1760cf84763a622bf0ba403767de46ed1272ab44f3f5f9",
+      "graphSpecVersion": "0.2",
+      "id": "legacy-030-g02-b01",
+      "languageVersion": "0.1",
+      "proofType": "native-source-to-carrier"
+    },
+    {
+      "bundleDigest": "sha256:85321bd5b642cdea9e60fe2f996e1b9ae81c32938c51be4fc37b3a8cd90a5492",
+      "bundleVersion": "0.2",
+      "compilerVersion": "0.2.0",
+      "fixtureDigest": "sha256:83ca7f56a17ee600c902aad9d67b1b4e56a586c945ee5de7590252142b2ef067",
+      "graphSpecDigest": "sha256:9456712c8ee83a525672a7a3edecf76940eb12e47cf894d4cd55a0832c71661c",
+      "graphSpecVersion": "0.1",
+      "id": "legacy-020-g01-b02",
+      "languageVersion": "0.1",
+      "proofType": "retained-exact-decoder-fixture"
+    },
+    {
+      "bundleDigest": "sha256:297cfa4401d5a088b3ccce2f1ad39dfb86cecf133432d90d2944e7868981f22e",
+      "bundleVersion": "0.2",
+      "compilerVersion": "0.3.0",
+      "entrySourceDigest": "sha256:3a16b197fc22fcb226f2a59f97356f98e771b9558baf9875c2fc872d189880f6",
+      "graphSpecDigest": "sha256:701533530aa4a2f37bbea5c84f6bcf78d849a31e1b8241d44c57b60999b5085a",
+      "graphSpecVersion": "0.2",
+      "id": "legacy-030-g02-b02",
+      "languageVersion": "0.1",
+      "proofType": "native-source-to-carrier"
+    },
+    {
+      "bundleDigest": "sha256:76daeb618a3dfd95a8adb6f2e8ffd4eb839bbfc6715835e36fbb8923adab8843",
+      "bundleVersion": "0.3",
+      "compilerVersion": "0.4.0",
+      "entrySourceDigest": "sha256:a1dcfe38d5926cd5b148526219c2f6e5d88cfa85e2690915bd613585d9e51f0c",
+      "graphSpecDigest": "sha256:be88e4b7478a503d47b06d041f4693ae5b3a12050f95987113efa4b51c62f126",
+      "graphSpecVersion": "0.3",
+      "id": "static-040-g03-b03",
+      "languageVersion": "0.2",
+      "proofType": "native-source-to-carrier"
+    },
+    {
+      "bundleDigest": "sha256:3d51274cc9a5b175363b2d735859e13de16aabb3c3307aff96c64471b3df9755",
+      "bundleVersion": "0.4",
+      "compilerVersion": "0.5.0",
+      "entrySourceDigest": "sha256:543b7b28b8a5448bd85f039582d20e3fb56e68ab22c30ffda1a1233b60b21a48",
+      "graphSpecDigest": "sha256:0e2ab2930df8df8edc303fd674fc3467eb6866098262012af8d3113cb012080d",
+      "graphSpecVersion": "0.4",
+      "id": "control-050-g04-b04",
+      "languageVersion": "0.3",
+      "proofType": "native-source-to-carrier"
+    },
+    {
+      "bundleDigest": "sha256:27df2051d04c2dcc98e53e979f446f361cbb3f70decf100c614fdc989e6f9a93",
+      "bundleVersion": "0.5",
+      "compilerVersion": "0.6.0",
+      "entrySourceDigest": "sha256:aa85a285e04c850212498d1ca44a4ab1866ada4822d61586df07d30a64506291",
+      "graphSpecDigest": "sha256:31486ca9c1377c364e4af5cf6e45010bf383eac6d7fc335f7d8620883d22d8e8",
+      "graphSpecVersion": "0.5",
+      "id": "value-060-g05-b05",
+      "languageVersion": "0.4",
+      "proofType": "native-source-to-carrier"
+    }
+  ],
+  "schemaVersion": 1
+}

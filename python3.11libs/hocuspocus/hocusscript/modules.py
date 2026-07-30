@@ -23,6 +23,7 @@ from .project import (
 
 MODULE_MANIFEST_SCHEMA_URI = "hocuspocus://schemas/hocus-module/v1"
 MODULE_MANIFEST_SCHEMA_URI_V2 = "hocuspocus://schemas/hocus-module/v2"
+MODULE_MANIFEST_SCHEMA_URI_V3 = "hocuspocus://schemas/hocus-module/v3"
 MAX_MODULE_MANIFEST_BYTES = 256 * 1024
 MAX_MODULE_ENTRIES = 4096
 
@@ -92,8 +93,8 @@ def _validate_manifest_header(payload: dict[str, Any]) -> tuple[int, str, str, s
     }:
         raise ProjectError("HOCUS457", "Module manifest has missing or unknown fields.")
     schema_version = payload["schema_version"]
-    if type(schema_version) is not int or schema_version not in {1, 2}:
-        raise ProjectError("HOCUS457", "Module manifest schema_version must be 1 or 2.")
+    if type(schema_version) is not int or schema_version not in {1, 2, 3}:
+        raise ProjectError("HOCUS457", "Module manifest schema_version must be 1, 2, or 3.")
     library, language = payload["library"], payload["language"]
     if not isinstance(library, dict) or set(library) != {"uid", "version"}:
         raise ProjectError("HOCUS457", "Module manifest [library] is malformed.")
@@ -104,7 +105,7 @@ def _validate_manifest_header(payload: dict[str, Any]) -> tuple[int, str, str, s
         raise ProjectError("HOCUS457", "Module library uid is invalid.")
     if not isinstance(version, str) or not SEMANTIC_VERSION_PATTERN.fullmatch(version):
         raise ProjectError("HOCUS457", "Module library version must be a semantic version.")
-    expected_language_version = "0.2" if schema_version == 1 else "0.3"
+    expected_language_version = {1: "0.2", 2: "0.3", 3: "0.4"}[schema_version]
     if language_version != expected_language_version:
         raise ProjectError(
             "HOCUS457",

@@ -1,0 +1,253 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "hocuspocus://schemas/production-qualification/v1",
+  "title": "HocusScript HS8 Production Qualification v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "kind",
+    "schemaVersion",
+    "assetUri",
+    "contractReport",
+    "buildReport",
+    "packagingGate",
+    "publishGate",
+    "readyForPackaging",
+    "readyForPublish",
+    "authority",
+    "qualificationDigest"
+  ],
+  "properties": {
+    "$schema": {
+      "const": "hocuspocus://schemas/production-qualification/v1"
+    },
+    "kind": {
+      "const": "hocus_production_qualification"
+    },
+    "schemaVersion": {
+      "const": 1
+    },
+    "assetUri": {
+      "type": "string",
+      "pattern": "^hocus-asset://"
+    },
+    "contractReport": {
+      "$ref": "#/$defs/contractReport"
+    },
+    "buildReport": {
+      "$ref": "hocuspocus://schemas/build-report/v1"
+    },
+    "packagingGate": {
+      "$ref": "hocuspocus://schemas/publish-gate-receipt/v1"
+    },
+    "publishGate": {
+      "$ref": "hocuspocus://schemas/publish-gate-receipt/v1"
+    },
+    "readyForPackaging": {
+      "type": "boolean"
+    },
+    "readyForPublish": {
+      "type": "boolean"
+    },
+    "authority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "attestationDigest"],
+      "properties": {
+        "mode": {
+          "enum": ["content_only", "host_attested"]
+        },
+        "attestationDigest": {
+          "oneOf": [
+            {"$ref": "#/$defs/digest"},
+            {"type": "null"}
+          ]
+        }
+      }
+    },
+    "qualificationDigest": {
+      "$ref": "#/$defs/digest"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "authority": {
+            "properties": {"mode": {"const": "content_only"}},
+            "required": ["mode"]
+          }
+        },
+        "required": ["authority"]
+      },
+      "then": {
+        "properties": {
+          "readyForPackaging": {"const": false},
+          "readyForPublish": {"const": false},
+          "authority": {
+            "properties": {"attestationDigest": {"type": "null"}},
+            "required": ["attestationDigest"]
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "authority": {
+            "properties": {
+              "mode": {"const": "host_attested"},
+              "attestationDigest": {"$ref": "#/$defs/digest"}
+            },
+            "required": ["mode", "attestationDigest"]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {"readyForPackaging": {"const": true}},
+        "required": ["readyForPackaging"]
+      },
+      "then": {
+        "properties": {
+          "packagingGate": {
+            "properties": {"decision": {"const": "pass"}},
+            "required": ["decision"]
+          },
+          "authority": {
+            "properties": {"mode": {"const": "host_attested"}},
+            "required": ["mode"]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {"readyForPublish": {"const": true}},
+        "required": ["readyForPublish"]
+      },
+      "then": {
+        "properties": {
+          "readyForPackaging": {"const": true},
+          "publishGate": {
+            "properties": {"decision": {"const": "pass"}},
+            "required": ["decision"]
+          },
+          "authority": {
+            "properties": {"mode": {"const": "host_attested"}},
+            "required": ["mode"]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "packagingGate": {
+            "properties": {"decision": {"const": "fail"}},
+            "required": ["decision"]
+          }
+        },
+        "required": ["packagingGate"]
+      },
+      "then": {
+        "properties": {
+          "readyForPackaging": {"const": false},
+          "readyForPublish": {"const": false}
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "publishGate": {
+            "properties": {"decision": {"const": "fail"}},
+            "required": ["decision"]
+          }
+        },
+        "required": ["publishGate"]
+      },
+      "then": {
+        "properties": {"readyForPublish": {"const": false}}
+      }
+    }
+  ],
+  "$defs": {
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "contractReport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "reportVersion",
+        "contractDigest",
+        "observationDigest",
+        "valid",
+        "diagnostics",
+        "coverage",
+        "reportDigest"
+      ],
+      "properties": {
+        "kind": {
+          "const": "hocus_asset_contract_report"
+        },
+        "reportVersion": {
+          "const": 1
+        },
+        "contractDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "observationDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "valid": {
+          "type": "boolean"
+        },
+        "diagnostics": {
+          "type": "array",
+          "maxItems": 4096,
+          "items": {
+            "type": "object"
+          }
+        },
+        "coverage": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["notObserved"],
+          "properties": {
+            "notObserved": {
+              "type": "array",
+              "maxItems": 4096,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["jsonPointer", "reasonCode", "required"],
+                "properties": {
+                  "jsonPointer": {
+                    "type": "string", "pattern": "^/", "maxLength": 8192
+                  },
+                  "reasonCode": {
+                    "enum": [
+                      "host_api_unavailable",
+                      "texture_resolution_unavailable",
+                      "runtime_camera_model_unavailable",
+                      "required_input_unavailable",
+                      "not_applicable"
+                    ]
+                  },
+                  "required": {"type": "boolean"}
+                }
+              }
+            }
+          }
+        },
+        "reportDigest": {
+          "$ref": "#/$defs/digest"
+        }
+      }
+    }
+  }
+}

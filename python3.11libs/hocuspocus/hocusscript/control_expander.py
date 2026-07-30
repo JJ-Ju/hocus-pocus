@@ -1,11 +1,3 @@
-"""Pure deterministic expansion for HocusScript 0.3 compile-time controls.
-
-This module is intentionally parallel to :mod:`expander`.  It consumes only
-caller-supplied bytes and resolved in-memory module units and produces the
-language-0.3/GraphSpec-0.4 carrier as a plain JSON-compatible object.  Project
-resolution and native compiler dispatch remain later integration concerns.
-"""
-
 from __future__ import annotations
 
 import hashlib
@@ -13,30 +5,38 @@ import json
 from dataclasses import dataclass, field, replace
 from typing import Any, Callable, Mapping
 
-from .contracts import CarrierContractError, decode_control_graph_spec_envelope
+from .contracts import (
+    CarrierContractError,
+    decode_control_graph_spec_envelope,
+    decode_value_graph_spec_envelope,
+)
 from .control_semantic import ControlExpansionLimits, validate_control_program
+from .control_value_budget import graph_value_code_bytes
 from .diagnostics import SourceSpan
 from .expander import ModuleExpansionError, ResolvedModuleUnit
 from .model import (
     ArrayValue, CodeValue, ExpansionFrame, ExternalNodeSpec, InputSpec,
-    LiteralValue, NodeReference, NodeSpec, ParmSpec,
+    LiteralValue, NodeReference, NodeSpec, ParmSpec, TaggedValue,
 )
 from .resolved_modules import ResolvedImport, canonical_module_uri
-from .syntax import (
-    ArrayExpr, CategoryStmt, CodeExpr, ExportStmt, ExternalDecl, FlagStmt,
-    ForDecl, IfDecl, InputStmt, LayoutStmt, LiteralExpr, ModeStmt, NodeDecl,
-    OwnershipStmt, ParamRefExpr, ParmStmt, RevisionStmt, SymbolRefExpr,
-    SyntaxSource, TargetStmt, UseDecl, YieldStmt,
+from .editor_expansion import attach_editor_entities, editor_origin_spans
+from .runtime_expansion import (
+    add_runtime_origins, attach_graph_runtime, integrate_runtime_state,
 )
-
-
+from .syntax import (
+    ArrayExpr, CategoryStmt, ChannelReferenceValue, CodeExpr, ExportStmt,
+    ExpressionValue, ExternalDecl, FlagStmt, ForDecl, IfDecl, InputStmt,
+    LayoutStmt, LiteralExpr, ModeStmt, MultiparmValue, NodeDecl, OwnershipStmt,
+    ParamRefExpr, ParmStmt, QuantityValue, RampValue, RawPathValue,
+    ResetValue, RevisionStmt, SymbolRefExpr, SyntaxSource, TaggedValueExpr,
+    TargetStmt, UseDecl, YieldStmt,
+)
 _RESERVED_PREFIX = "__hocus_"
 _MODULE_IDENTITY_DOMAIN = "hocus-module-instance-v1"
 _IF_IDENTITY_DOMAIN = "hocus-control-if-branch-v1"
 _FOR_IDENTITY_DOMAIN = "hocus-control-for-index-v1"
 _MODULE_STACK_DOMAIN = "hocus-expansion-stack-v1"
 _CONTROL_STACK_DOMAIN = "hocus-control-stack-v1"
-
 
 @dataclass(frozen=True, slots=True)
 class _Bound:
@@ -47,7 +47,6 @@ class _Bound:
     related: tuple[tuple[str, SourceSpan], ...] = ()
     producer_modules: tuple[ExpansionFrame, ...] = ()
     producer_controls: tuple[dict[str, Any], ...] = ()
-
 
 @dataclass(slots=True)
 class _Scope:
@@ -64,7 +63,6 @@ class _Scope:
             dict(self.controls), dict(self.iterators), dict(self.carries),
         )
 
-
 @dataclass(frozen=True, slots=True)
 class _Origin:
     span: SourceSpan
@@ -72,7 +70,6 @@ class _Origin:
     control_frames: tuple[dict[str, Any], ...] = ()
     kind: str = "definition"
     related: tuple[tuple[str, SourceSpan], ...] = ()
-
 
 @dataclass(slots=True)
 class _State:
@@ -84,10 +81,13 @@ class _State:
     iteration_count: int = 0
     code_bytes: int = 0
     root_symbols: dict[str, str] = field(default_factory=dict)
+    runtime_spares: list[dict[str, Any]] = field(default_factory=list)
+    runtime_animations: list[dict[str, Any]] = field(default_factory=list)
+    runtime_spare_origins: list[_Origin] = field(default_factory=list)
+    runtime_animation_origins: list[_Origin] = field(default_factory=list)
 
     def checkpoint(self, span: SourceSpan) -> None:
         _check_cancel(self.cancellation, span)
-
 
 def expand_control_graph(
     entry_source: bytes,
@@ -125,10 +125,15 @@ def expand_control_graph(
     _predeclare_nodes(
         graph.statements, scope, entry_uri, (), (), graph_identity,
     )
+    if entry.version.value == "0.4":
+        scope.nodes.update({
+            item.symbol: _Bound("node_output", (item.symbol, 0, None), item.span)
+            for item in graph.statements if isinstance(item, NodeDecl) and item.explicit_id is not None
+        })
     for statement in graph.statements:
         if isinstance(statement, ExternalDecl):
             scope.nodes[statement.symbol] = _Bound(
-                "node_output", (statement.symbol, 0), statement.span,
+                "node_output", (statement.symbol, 0, None), statement.span,
             )
     state.root_symbols.update({
         name: bound.value[0]
@@ -142,6 +147,7 @@ def expand_control_graph(
         if isinstance(statement, NodeDecl):
             scope.nodes[statement.symbol] = _emit_node(
                 statement, entry_uri, (), (), (), graph_identity, scope, state,
+                direct_explicit_id=entry.version.value == "0.4",
             )
         elif isinstance(statement, UseDecl):
             value = _expand_use(
@@ -175,13 +181,17 @@ def expand_control_graph(
         "aggregateIterations": limits.aggregate_iterations,
     }
     try:
-        return decode_control_graph_spec_envelope(result, resolved_limits=projection)
+        decoder = (
+            decode_value_graph_spec_envelope
+            if entry.version.value == "0.4"
+            else decode_control_graph_spec_envelope
+        )
+        return decoder(result, resolved_limits=projection)
     except CarrierContractError as exc:
         raise ModuleExpansionError(
             "HOCUS478", "Expanded graph failed strict GraphSpec 0.4 validation.",
             graph.span, details={"validatorCode": exc.code},
         ) from exc
-
 
 def _parse_entry(source: bytes, uri: str) -> SyntaxSource:
     if type(source) is not bytes:
@@ -206,16 +216,15 @@ def _parse_entry(source: bytes, uri: str) -> SyntaxSource:
             "HOCUS460", "Entry source failed strict parsing.", _synthetic_span(),
         ) from exc
     if (
-        syntax.version is None or syntax.version.value != "0.3"
+        syntax.version is None or syntax.version.value not in {"0.3", "0.4"}
         or syntax.graph is None or syntax.module is not None
         or syntax.span.source_name != uri
     ):
         raise ModuleExpansionError(
-            "HOCUS460", "Expansion requires one HocusScript 0.3 graph entry source.",
+            "HOCUS460", "Expansion requires one HocusScript 0.3 or 0.4 graph entry source.",
             syntax.span,
         )
     return syntax
-
 
 def _snapshot_program_inputs(
     entry_imports: Mapping[str, Any],
@@ -280,7 +289,6 @@ def _snapshot_import_mapping(
                 "HOCUS460", "Import mapping keys must be unique strings.", span,
             )
         try:
-            # Each potentially stateful property is read exactly once.
             specifier = item.specifier
             imported_name = item.imported_name
             local_name = item.local_name
@@ -668,13 +676,20 @@ def _emit_node(
     control_frames: tuple[dict[str, Any], ...], graph_identity: str,
     scope: _Scope, state: _State, *,
     control_path: tuple[dict[str, Any], ...] = (),
+    direct_explicit_id: bool = False,
 ) -> _Bound:
     state.checkpoint(node.span)
     if len(state.nodes) >= state.limits.expanded_nodes:
         raise ModuleExpansionError("HOCUS464", "Expanded graph exceeds the node limit.", node.span)
     identity_bound = _node_bound(node, module_uri, seed_path, control_path, graph_identity)
-    symbol, _ = identity_bound.value
+    symbol = node.symbol if direct_explicit_id and node.explicit_id is not None else identity_bound.value[0]
     identity = "sha256:" + symbol.removeprefix(_RESERVED_PREFIX)
+    runtime = integrate_runtime_state(
+        node, symbol, compose_identity=bool(module_frames or control_path),
+        state=state, origin=lambda item: _Origin(
+            item.span, module_frames, control_frames,
+        ),
+    )
     inputs: list[InputSpec] = []
     parms: list[ParmSpec] = []
     input_origins: list[_Origin] = []
@@ -683,24 +698,32 @@ def _emit_node(
         state.checkpoint(statement.span)
         if isinstance(statement, InputStmt):
             bound = _resolve_expr(statement.source, scope)
-            ref_symbol, output_index = bound.value
+            ref_symbol, output_index, output_name = bound.value
             inputs.append(InputSpec(
                 statement.index,
                 NodeReference(
                     ref_symbol, output_index, bound.span,
-                    {"symbol": bound.span, "outputIndex": bound.span},
+                    {"symbol": bound.span, **({
+                        "outputName": getattr(statement.source, "output_name_span", None) or bound.span,
+                    } if output_name is not None else {"outputIndex": bound.span})},
+                    output_name,
                 ),
-                statement.span, {"index": statement.index_span},
+                statement.span, ({
+                    "name": statement.name_span,
+                } if statement.name is not None else {"index": statement.index_span}),
+                statement.name,
             ))
             input_origins.append(_value_origin(bound, module_frames, control_frames))
         elif isinstance(statement, ParmStmt):
             bound = _resolve_expr(statement.value, scope)
             graph_value = (
                 bound.value
-                if isinstance(bound.value, (LiteralValue, ArrayValue, CodeValue))
+                if isinstance(bound.value, (
+                    LiteralValue, ArrayValue, CodeValue, TaggedValue,
+                ))
                 else LiteralValue(bound.value, bound.span)
             )
-            state.code_bytes += _graph_value_code_bytes(graph_value)
+            state.code_bytes += graph_value_code_bytes(graph_value)
             if state.code_bytes > state.limits.aggregate_code_bytes:
                 raise ModuleExpansionError(
                     "HOCUS464", "Expanded graph exceeds aggregateCodeBytes.",
@@ -711,7 +734,25 @@ def _emit_node(
                 statement.span, {"name": statement.name_span},
             ))
             parm_origins.append(_value_origin(bound, module_frames, control_frames))
-    explicit_id = "hocus." + identity.removeprefix("sha256:")
+    spare_names = {item["name"] for item in runtime.spares}
+    for declaration, animation in zip(
+        runtime.animation_declarations, runtime.animations,
+    ):
+        if animation["parmName"] not in spare_names:
+            value_property = next(
+                item for item in declaration.properties if item.name == "value"
+            )
+            parms.append(ParmSpec(
+                animation["parmName"],
+                LiteralValue(animation["value"], value_property.value.span),
+                declaration.span, {"name": declaration.parm_name_span},
+            ))
+            parm_origins.append(_Origin(
+                declaration.span, module_frames, control_frames,
+            ))
+    explicit_id = node.explicit_id if direct_explicit_id and node.explicit_id is not None else (
+        "hocus." + identity.removeprefix("sha256:")
+    )
     state.nodes.append(NodeSpec(
         symbol, node.type_name, inputs, parms, node.span,
         {
@@ -724,7 +765,7 @@ def _emit_node(
         _Origin(node.span, module_frames, control_frames), input_origins, parm_origins,
     ))
     return _Bound(
-        "node_output", (symbol, 0), node.span,
+        "node_output", (symbol, 0, None), node.span,
         producer_modules=module_frames,
         producer_controls=control_frames,
     )
@@ -760,7 +801,7 @@ def _node_bound(
         payload["durableIdentityPath"] = list(control_path)
     identity = _digest(payload)
     return _Bound(
-        "node_output", (_RESERVED_PREFIX + identity.removeprefix("sha256:"), 0),
+        "node_output", (_RESERVED_PREFIX + identity.removeprefix("sha256:"), 0, None),
         node.span,
     )
 
@@ -778,13 +819,12 @@ def _resolve_expr(expr: Any, scope: _Scope) -> _Bound:
             ),
             expr.span,
         )
+    if isinstance(expr, TaggedValueExpr):
+        return _Bound("tagged", _tagged_value(expr, scope), expr.span)
     if isinstance(expr, ParamRefExpr):
         bound = scope.parameters.get(expr.name)
         if bound is None:
             raise ModuleExpansionError("HOCUS471", f"Unknown module parameter: {expr.name}.", expr.span)
-        # The generated use is in the receiving module.  Keep upstream value
-        # and control provenance, but let its current module execution stack
-        # own the mapping whose primary span is this receiving ParamRef.
         return replace(bound, span=expr.span, producer_modules=())
     if isinstance(expr, SymbolRefExpr):
         return _resolve_symbol_expr(expr, scope)
@@ -799,10 +839,14 @@ def _resolve_symbol_expr(expr: SymbolRefExpr, scope: _Scope) -> _Bound:
             return replace(bound, span=expr.span)
     node = scope.nodes.get(expr.symbol)
     if node is not None:
-        symbol, _ = node.value
+        symbol, _, _ = node.value
         return _Bound(
             "node_output",
-            (symbol, 0 if expr.output_index is None else expr.output_index),
+            (
+                symbol,
+                0 if expr.output_index is None and expr.output_name is None else expr.output_index,
+                expr.output_name,
+            ),
             expr.span,
             producer_modules=node.producer_modules,
             producer_controls=node.producer_controls,
@@ -849,17 +893,79 @@ def _array_value(expr: ArrayExpr) -> ArrayValue:
     return ArrayValue(items, expr.span)
 
 
-def _graph_value_code_bytes(value: Any) -> int:
-    if isinstance(value, CodeValue):
-        try:
-            return len(value.body.encode("utf-8"))
-        except UnicodeEncodeError as exc:
-            raise ModuleExpansionError(
-                "HOCUS474", "Embedded code must be valid Unicode text.", value.span,
-            ) from exc
-    if isinstance(value, ArrayValue):
-        return sum(_graph_value_code_bytes(item) for item in value.items)
-    return 0
+def _graph_value(expr: Any, scope: _Scope | None = None) -> Any:
+    if isinstance(expr, LiteralExpr):
+        return LiteralValue(expr.value, expr.span)
+    if isinstance(expr, ArrayExpr):
+        return _array_value(expr)
+    if isinstance(expr, CodeExpr):
+        return CodeValue(
+            expr.language, expr.body, expr.span, expr.body_span, expr.offset_map,
+        )
+    if isinstance(expr, TaggedValueExpr):
+        if scope is None:
+            raise ModuleExpansionError("HOCUS471", "Nested tagged value lacks expansion scope.", expr.span)
+        return _tagged_value(expr, scope)
+    raise ModuleExpansionError(
+        "HOCUS471", "Unsupported typed parameter value.", expr.span
+    )
+
+
+def _tagged_value(expr: TaggedValueExpr, scope: _Scope) -> TaggedValue:
+    payload = expr.payload
+    if isinstance(payload, ResetValue):
+        encoded: dict[str, Any] = {}
+    elif isinstance(payload, ExpressionValue):
+        encoded = {
+            "language": payload.language,
+            "body": payload.body,
+            "bodySpan": payload.body_span.to_dict(),
+            "offsetMap": payload.offset_map.to_dict(),
+        }
+    elif isinstance(payload, ChannelReferenceValue):
+        target = scope.nodes.get(payload.node_symbol)
+        if target is None:
+            raise ModuleExpansionError("HOCUS471", "Unknown structural channel node symbol.", expr.span)
+        encoded = {
+            "nodeSymbol": target.value[0],
+            "parmName": payload.parm_name,
+        }
+    elif isinstance(payload, RawPathValue):
+        encoded = {"pathKind": payload.path_kind, "raw": payload.raw}
+    elif isinstance(payload, QuantityValue):
+        encoded = {"magnitude": payload.magnitude, "unit": payload.unit}
+    elif isinstance(payload, RampValue):
+        encoded = {
+            "points": [
+                {
+                    "position": point.position,
+                    "value": _graph_value(point.value, scope),
+                }
+                for point in payload.points
+            ],
+            "basis": list(payload.basis),
+        }
+    elif isinstance(payload, MultiparmValue):
+        encoded = {
+            "instances": [
+                {
+                    "instanceId": instance.instance_id,
+                    "fields": [
+                        {"name": field.name, "value": _graph_value(field.value, scope)}
+                        for field in instance.fields
+                    ],
+                }
+                for instance in payload.instances
+            ]
+        }
+    else:  # pragma: no cover - closed syntax union
+        raise ModuleExpansionError(
+            "HOCUS471", "Unsupported tagged parameter value.", expr.span
+        )
+    carrier_kind = (
+        "channel_reference" if expr.tag == "channel" else expr.tag
+    )
+    return TaggedValue(carrier_kind, encoded, expr.span)
 
 
 def _build_graph(
@@ -873,9 +979,14 @@ def _build_graph(
     )
     if not isinstance(fields["target"], str):
         raise ModuleExpansionError(
-            "HOCUS478", "GraphSpec 0.4 requires an absolute target.", graph.span,
+            "HOCUS478", "GraphSpec requires an absolute target.", graph.span,
         )
-    result = _graph_envelope(graph, fields, field_spans, external_nodes, state.nodes)
+    result = _graph_envelope(
+        graph, fields, field_spans, external_nodes, state.nodes,
+        entry.version.value,
+    )
+    attach_editor_entities(result, entry, directives, state.root_symbols, fields["ownership"])
+    attach_graph_runtime(result, state, language_version=entry.version.value)
     result["expansionMap"] = _build_control_expansion_map(
         entry_uri, graph.span, result, field_spans, external_origins, state
     )
@@ -927,12 +1038,14 @@ def _graph_envelope(
     field_spans: Mapping[str, SourceSpan],
     external_nodes: list[ExternalNodeSpec],
     nodes: list[NodeSpec],
+    language_version: str,
 ) -> dict[str, Any]:
+    graph_version = "0.5" if language_version == "0.4" else "0.4"
     return {
-        "$schema": "hocuspocus://schemas/graph-spec/v0.4",
+        "$schema": f"hocuspocus://schemas/graph-spec/v{graph_version}",
         "kind": "graph_spec",
-        "graphSpecVersion": "0.4",
-        "languageVersion": "0.3",
+        "graphSpecVersion": graph_version,
+        "languageVersion": language_version,
         "name": graph.name,
         "target": fields["target"],
         "category": fields["category"],
@@ -1005,15 +1118,20 @@ def _build_control_expansion_map(
             add(f"/nodes/{index}/inputs/{child}", origin)
         for child, origin in enumerate(parm_origins):
             add(f"/nodes/{index}/parms/{child}", origin)
+    for index, span in enumerate(editor_origin_spans(graph)):
+        add(f"/editorEntities/{index}", _Origin(span))
+    add_runtime_origins(add, state)
     for name in ("display", "render", "output", "layout"):
         if graph[name] is not None:
             add(f"/{name}", _Origin(field_spans[name]))
     mappings.sort(key=lambda item: item["generatedPointer"])
+    graph_version = str(graph["graphSpecVersion"])
+    expansion_version = 3 if graph_version == "0.5" else 2
     return {
-        "$schema": "hocuspocus://schemas/expansion-map/v2",
+        "$schema": f"hocuspocus://schemas/expansion-map/v{expansion_version}",
         "kind": "hocus_expansion_map",
-        "schemaVersion": 2,
-        "graphSpecVersion": "0.4",
+        "schemaVersion": expansion_version,
+        "graphSpecVersion": graph_version,
         "entrySourceUri": entry_uri,
         "stacks": [module_stacks[key] for key in sorted(module_stacks)],
         "controlStacks": [control_stacks[key] for key in sorted(control_stacks)],
@@ -1032,8 +1150,6 @@ def _selected_producer_controls(
     producer: tuple[dict[str, Any], ...],
     selected: tuple[dict[str, Any], ...],
 ) -> tuple[dict[str, Any], ...]:
-    """Keep only a genuinely nested producer under the current selection."""
-
     if len(producer) > len(selected) and producer[:len(selected)] == selected:
         return producer
     return selected

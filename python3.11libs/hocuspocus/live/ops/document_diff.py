@@ -6,11 +6,24 @@ import copy
 import json
 from typing import Any
 
+from hocuspocus.hocusscript.document_editor_entities import (
+    DocumentEditorEntityError,
+    diff_editor_entities,
+    editor_entities_from_document,
+)
 
 from ..context import RequestContext
 
 
 class DocumentDiffOperationsMixin:
+    _BINDING_VALUE_FIELDS = {
+        "valueMode", "value", "menuToken", "expression",
+        "expressionLanguage", "channelReference", "pathKind", "raw",
+        "magnitude", "unit", "dimension", "canonicalMagnitude",
+        "canonicalUnit", "rampKind", "points", "basis", "instances",
+        "instanceStart", "fieldContract", "codeBlobUid",
+    }
+
     @staticmethod
     def _document_nodes_by_path(document: dict[str, Any]) -> dict[str, dict[str, Any]]:
         return {
@@ -195,10 +208,6 @@ class DocumentDiffOperationsMixin:
         after: dict[tuple[str, str], dict[str, Any]],
     ) -> list[dict[str, Any]]:
         changed: list[dict[str, Any]] = []
-        fields = (
-            "valueMode", "value", "expression", "expressionLanguage",
-            "channelReference", "codeBlobUid",
-        )
         for key in sorted(set(before) | set(after)):
             before_item, after_item = before.get(key), after.get(key)
             if before_item is None:
@@ -206,10 +215,20 @@ class DocumentDiffOperationsMixin:
             elif after_item is None:
                 changed.append({"changeType": "deleted", "before": before_item})
             else:
+                before_state = DocumentDiffOperationsMixin._document_binding_value_state(
+                    before_item
+                )
+                after_state = DocumentDiffOperationsMixin._document_binding_value_state(
+                    after_item
+                )
+                fields = sorted(set(before_state) | set(after_state))
                 changes = {
-                    field: {"before": before_item.get(field), "after": after_item.get(field)}
+                    field: {
+                        "before": before_state.get(field),
+                        "after": after_state.get(field),
+                    }
                     for field in fields
-                    if before_item.get(field) != after_item.get(field)
+                    if before_state.get(field) != after_state.get(field)
                 }
                 if changes:
                     changed.append(
@@ -220,6 +239,24 @@ class DocumentDiffOperationsMixin:
                         }
                     )
         return changed
+
+    @classmethod
+    def _document_binding_value_state(
+        cls, binding: dict[str, Any],
+    ) -> dict[str, Any]:
+        state = {
+            field: copy.deepcopy(binding[field])
+            for field in cls._BINDING_VALUE_FIELDS
+            if field in binding
+        }
+        metadata = binding.get("metadata")
+        selection = (
+            metadata.get("parameterSelection")
+            if isinstance(metadata, dict) else None
+        )
+        if isinstance(selection, dict):
+            state["parameterSelection"] = copy.deepcopy(selection)
+        return state
 
     @staticmethod
     def _document_changed_code_blobs(
@@ -244,6 +281,56 @@ class DocumentDiffOperationsMixin:
                         {"changeType": "updated", "codeBlobUid": uid, "changes": changes}
                     )
         return changed
+
+    @staticmethod
+    def _document_changed_runtime_entities(
+        before: Any,
+        after: Any,
+    ) -> list[dict[str, Any]]:
+        before_by_uid = {
+            str(item.get("uid")): item
+            for item in before
+            if isinstance(item, dict) and str(item.get("uid", "")).strip()
+        } if isinstance(before, list) else {}
+        after_by_uid = {
+            str(item.get("uid")): item
+            for item in after
+            if isinstance(item, dict) and str(item.get("uid", "")).strip()
+        } if isinstance(after, list) else {}
+        changed: list[dict[str, Any]] = []
+        for uid in sorted(set(before_by_uid) | set(after_by_uid)):
+            old, new = before_by_uid.get(uid), after_by_uid.get(uid)
+            if old == new:
+                continue
+            changed.append({
+                "changeType": (
+                    "created" if old is None
+                    else "deleted" if new is None
+                    else "updated"
+                ),
+                "uid": uid,
+                "before": copy.deepcopy(old),
+                "after": copy.deepcopy(new),
+            })
+        return changed
+
+    @staticmethod
+    def _document_editor_diff_projection(
+        document: dict[str, Any],
+    ) -> dict[str, Any]:
+        projected = copy.deepcopy(document)
+        for collection in (
+            "networkBoxes", "stickyNotes", "nodeComments", "networkDots",
+            "layoutConstraints",
+        ):
+            for entity in projected.get(collection, []):
+                metadata = (
+                    entity.get("metadata")
+                    if isinstance(entity, dict) else None
+                )
+                if isinstance(metadata, dict):
+                    metadata.pop("liveName", None)
+        return projected
 
     def _document_diff_payload(self, before: dict[str, Any], after: dict[str, Any]) -> dict[str, Any]:
         before_nodes = self._document_nodes_by_uid(before)
@@ -273,6 +360,33 @@ class DocumentDiffOperationsMixin:
         changed_code_blobs = self._document_changed_code_blobs(
             before_code_blobs, after_code_blobs
         )
+        changed_spares = self._document_changed_runtime_entities(
+            before.get("spareParameters", []),
+            after.get("spareParameters", []),
+        )
+        changed_animations = self._document_changed_runtime_entities(
+            before.get("animations", []), after.get("animations", []),
+        )
+        try:
+            editor_diff = diff_editor_entities(
+                editor_entities_from_document(
+                    self._document_editor_diff_projection(before)
+                ),
+                editor_entities_from_document(
+                    self._document_editor_diff_projection(after)
+                ),
+            )
+        except DocumentEditorEntityError:
+            editor_diff = {
+                "summary": {
+                    "createdCount": 0,
+                    "changedCount": 1,
+                    "deletedCount": 0,
+                },
+                "created": [],
+                "changed": [{"uid": None, "kind": "invalid"}],
+                "deleted": [],
+            }
         return {
             "summary": {
                 "createdNodeCount": len(created_nodes),
@@ -283,17 +397,90 @@ class DocumentDiffOperationsMixin:
                 "retypedNodeCount": retyped_node_count,
                 "changedBindingCount": len(changed_bindings),
                 "changedCodeBlobCount": len(changed_code_blobs),
+                "changedSpareParameterCount": len(changed_spares),
+                "changedAnimationCount": len(changed_animations),
                 "createdEdgeCount": len(created_edges),
                 "deletedEdgeCount": len(deleted_edges),
+                "createdEditorEntityCount": editor_diff[
+                    "summary"
+                ]["createdCount"],
+                "changedEditorEntityCount": editor_diff[
+                    "summary"
+                ]["changedCount"],
+                "deletedEditorEntityCount": editor_diff[
+                    "summary"
+                ]["deletedCount"],
             },
             "createdNodes": created_nodes,
             "deletedNodes": deleted_nodes,
             "changedNodes": changed_nodes,
             "changedParameterBindings": changed_bindings,
             "changedCodeBlobs": changed_code_blobs,
+            "changedSpareParameters": changed_spares,
+            "changedAnimations": changed_animations,
             "createdEdges": created_edges,
             "deletedEdges": deleted_edges,
+            "editorEntities": editor_diff,
         }
+
+    @staticmethod
+    def _document_project_unmanaged_positions(
+        authored_nodes: dict[str, dict[str, Any]],
+        projected_live: dict[str, Any],
+    ) -> None:
+        for node in projected_live.get("nodes", []):
+            expected = authored_nodes.get(str(node.get("uid", "")))
+            if expected is not None and expected.get("position") is None:
+                node["position"] = None
+
+    def _document_project_verified_resets(
+        self,
+        projected_authored: dict[str, Any],
+        projected_live: dict[str, Any],
+    ) -> None:
+        live_bindings = self._document_bindings_by_key(projected_live)
+        for binding in projected_authored.get("parameterBindings", []):
+            if (
+                not isinstance(binding, dict)
+                or binding.get("valueMode") != "reset"
+            ):
+                continue
+            key = (
+                str(binding.get("nodeUid", "")).strip(),
+                str(binding.get("parmName", "")).strip(),
+            )
+            observed = live_bindings.get(key)
+            metadata = (
+                observed.get("metadata")
+                if isinstance(observed, dict) else None
+            )
+            if (
+                isinstance(metadata, dict)
+                and metadata.get("isAtDefault") is True
+            ):
+                binding.clear()
+                binding.update(copy.deepcopy(observed))
+
+    @staticmethod
+    def _document_project_runtime_contract(
+        authored: dict[str, Any],
+        projected_authored: dict[str, Any],
+        live: dict[str, Any],
+        projected_live: dict[str, Any],
+    ) -> None:
+        for collection in ("spareParameters", "animations"):
+            authored_uids = {
+                str(item.get("uid", "")).strip()
+                for item in authored.get(collection, [])
+                if isinstance(item, dict)
+            }
+            projected_live[collection] = [
+                item for item in live.get(collection, [])
+                if isinstance(item, dict)
+                and str(item.get("uid", "")).strip() in authored_uids
+            ]
+            if collection not in projected_authored:
+                projected_authored[collection] = []
 
     def _document_verification_diff_payload(self, authored: dict[str, Any], live: dict[str, Any]) -> dict[str, Any]:
         """Compare live state only against parameter values authored by the source.
@@ -322,6 +509,16 @@ class DocumentDiffOperationsMixin:
             for blob in live.get("codeBlobs", [])
             if isinstance(blob, dict) and str(blob.get("uid", "")).strip() in authored_code_blob_uids
         ]
+        self._document_project_runtime_contract(
+            authored, projected_authored, live, projected_live
+        )
+        self._document_project_verified_resets(
+            projected_authored, projected_live
+        )
+        authored_nodes = self._document_nodes_by_uid(authored)
+        self._document_project_unmanaged_positions(
+            authored_nodes, projected_live
+        )
 
         def edge_contract(edge: dict[str, Any], template: dict[str, Any] | None = None) -> dict[str, Any]:
             reference = template or edge
@@ -359,14 +556,30 @@ class DocumentDiffOperationsMixin:
             if isinstance(edge, dict)
         ]
         diff = self._document_diff_payload(projected_authored, projected_live)
+        expected_expansion = self._document_expansion_from_metadata(authored)
+        actual_expansion = self._document_expansion_from_metadata(live)
+        expansion_changed = expected_expansion != actual_expansion
+        diff["summary"]["changedDocumentMetadataCount"] = int(expansion_changed)
+        diff["changedDocumentMetadata"] = (
+            {
+                "hocusExpansion": {
+                    "before": copy.deepcopy(expected_expansion),
+                    "after": copy.deepcopy(actual_expansion),
+                }
+            }
+            if expansion_changed
+            else {}
+        )
         live_nodes = self._document_nodes_by_uid(live)
         provenance_fields = (
             "version", "entityKind", "projectUid", "sourceUri", "sourceDigest",
             "bundleDigest", "compilerVersion", "languageVersion", "graphName",
-            "symbol", "ownership", "jsonPointer", "span",
+            "symbol", "ownership", "jsonPointer", "span", "originId",
+            "originKind", "relatedOrigins", "stackId", "controlStackId",
+            "managedFields",
         )
         changed_by_uid = {item.get("uid"): item for item in diff["changedNodes"]}
-        for uid, expected_node in self._document_nodes_by_uid(authored).items():
+        for uid, expected_node in authored_nodes.items():
             expected_metadata = expected_node.get("metadata") if isinstance(expected_node.get("metadata"), dict) else {}
             expected_hocus = expected_metadata.get("hocus") if isinstance(expected_metadata.get("hocus"), dict) else None
             actual_node = live_nodes.get(uid, {})

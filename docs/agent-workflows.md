@@ -113,7 +113,20 @@ The complete loop is:
 5. cook and capture the resulting asset
 6. revise the same source file and repeat
 
-`document.compile_source`, `document.format_source`, and `document.complete_source` remain content-only unsaved-buffer conveniences. Completion is backed by the live catalog; none of these tools currently reads project files or external module roots. Bundle `0.3` document lowering and live consumption remain blocked under `HS-BLOCK-008`. Roadmap H5 adds exact-version Bundle `0.3`/`0.4` document/live handling, while H6 separately adds host-approved project-scoped `source.*` access; neither changes the content-only contract of these `document.*` tools.
+For a production build, keep the graph loop unchanged and add one final
+`production.asset.qualify` call after the explicit cook. Supply the strict asset
+contract, already-cooked observation, baseline and candidate provenance,
+platform metrics/budget, numeric and visual comparisons, and artist-override
+evidence. Require `readyForPackaging` before packaging and `readyForPublish`
+before publication, but obtain those authoritative decisions from the private
+installed runner and detached verifier. The public operation always returns
+advisory `content_only` output with both readiness flags false, even with
+`review_production`; it never cooks, writes, publishes, or mints authority on
+the agent's behalf. Read the exact schemas from
+`hocuspocus://schemas/...` or their byte-identical
+`houdini://production/schema/...` aliases instead of guessing carrier fields.
+
+`document.compile_source`, `document.format_source`, and `document.complete_source` remain content-only unsaved-buffer conveniences. Completion is backed by the live catalog; these `document.*` tools do not read project files or external module roots. For saved projects, H6 exposes exactly seven separately authorized `source.*` operations over user-approved roots: describe, search, read, apply patch, write export, build, and navigate. Clients select projects by opaque `projectId`, never physical path. Exact flat Bundle `0.2`, module Bundle `0.3`, control Bundle `0.4`, and value Bundle `0.5` document/live handling remains content-based, so source workspace access does not change the contract of the existing `document.*` tools or bypass preview/plan/apply.
 
 Rules for the current preview:
 
@@ -123,7 +136,7 @@ Rules for the current preview:
 - require `readyForDocumentLowering = false` and `readyForApply = false`
 - do not treat a valid structural preview as a Houdini-aware or applyable plan
 
-An export with `valid = false` is intentionally all-or-nothing: `source` is null and blockers are deterministically reported up to the fixed limit; `HOCUS819` records the exact overflow count. Do not delete or approximate blockers to force a round trip.
+An export with `valid = false` is intentionally all-or-nothing: `source` is null and blockers are deterministically reported up to the fixed limit; `HOCUS819` records the exact overflow count. Do not delete or approximate blockers to force an export or imply network reconstruction.
 
 ## 4. Handle Long-Running Work
 

@@ -77,6 +77,7 @@ class ResourceOperationsMixin:
         exact = {
             "houdini://documents/scene": self.read_document_scene,
             "houdini://documents/schema/network-document/v1": self.read_document_schema,
+            "houdini://documents/schema/network-document/v2": self.read_document_schema_v2,
         }
         reader = exact.get(uri)
         if reader is not None:
@@ -224,6 +225,17 @@ class ResourceOperationsMixin:
                         "uri": "houdini://documents/schema/network-document/v1",
                     }
                 ],
+            },
+            {
+                "uriTemplate": "houdini://documents/schema/network-document/v2",
+                "name": "Network Document Schema v2",
+                "description": "Read the strict typed-value network document contract.",
+                "mimeType": "application/json",
+                "payloadSummary": "JSON Schema for `hocuspocus://schemas/network-document/v2`.",
+                "examples": [{
+                    "description": "Inspect the typed-value document schema.",
+                    "uri": "houdini://documents/schema/network-document/v2",
+                }],
             },
             {
                 "uriTemplate": "houdini://documents/checkouts/{checkout_id}",

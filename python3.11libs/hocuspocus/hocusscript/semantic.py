@@ -5,16 +5,38 @@ from __future__ import annotations
 import json
 import re
 from bisect import insort
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Callable, Mapping
 
-from .catalog import CatalogProvider, CatalogSnapshot, ConnectorDefinition, OperatorDefinition, ParameterDefinition
+from .catalog import (
+    VALUE_CATALOG_VERSION,
+    CatalogProvider,
+    CatalogSnapshot,
+    ConnectorDefinition,
+    OperatorDefinition,
+    ParameterDefinition,
+)
 from .diagnostics import Diagnostic, SourceSpan, sort_diagnostics
-from .model import ArrayValue, CodeValue, GraphSpec, LiteralValue, NodeSpec, ParmSpec
+from .model import (
+    ArrayValue, CodeValue, GraphSpec, LiteralValue, NodeSpec, ParmSpec,
+    TaggedValue,
+)
+from .value_catalog_semantics import (
+    TypedValueSemanticError,
+    invalid_channel_targets,
+    typed_value_adapter,
+)
+from .port_selectors import (
+    connector_evidence_name,
+    connector_for_index,
+    connector_indexes,
+    fixed_named_connector,
+    resolved_connector_index,
+)
+from .runtime_semantic import append_runtime_semantics
+from .semantic_carrier import semantic_result_dict
 
 _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-
-
 @dataclass(frozen=True, slots=True)
 class CatalogConstraint:
     fingerprint: str
@@ -38,13 +60,17 @@ class OperatorSelection:
     version: str | None
     source_kind: str
     definition_digest: str | None
+    instance_network: bool | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "nodeSymbol": self.node_symbol, "nodeIndex": self.node_index, "jsonPointer": self.json_pointer,
             "category": self.category, "qualifiedName": self.qualified_name, "namespace": self.namespace,
             "version": self.version, "sourceKind": self.source_kind, "definitionDigest": self.definition_digest,
         }
+        if self.instance_network is not None:
+            payload["instanceNetwork"] = self.instance_network
+        return payload
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,15 +86,28 @@ class ParameterSelection:
     conversion: str | None = None
     menu_token: str | None = None
     code_surface: str | None = None
+    component_tokens: tuple[str, ...] | None = None
+    tuple_size: int | None = None
+    element_type: str | None = None
+    value_adapter: Mapping[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "nodeSymbol": self.node_symbol, "nodeIndex": self.node_index, "parmIndex": self.parm_index,
             "jsonPointer": self.json_pointer, "authoredToken": self.authored_token,
             "parameterToken": self.parameter_token, "componentIndex": self.component_index,
             "valueType": self.value_type, "conversion": self.conversion, "menuToken": self.menu_token,
             "codeSurface": self.code_surface,
         }
+        if self.component_tokens is not None:
+            payload.update({
+                "componentTokens": list(self.component_tokens),
+                "tupleSize": self.tuple_size,
+                "elementType": self.element_type,
+            })
+        if self.value_adapter is not None:
+            payload["valueAdapter"] = dict(self.value_adapter)
+        return payload
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,20 +150,23 @@ class SemanticResult:
     parameter_selections: tuple[ParameterSelection, ...]
     connection_selections: tuple[ConnectionSelection, ...]
     deferred_checks: tuple[DeferredCheck, ...]
+    runtime_selections: tuple[Mapping[str, Any], ...] | None
     required_capabilities: tuple[str, ...]
 
     def to_dict(self) -> dict[str, Any]:
-        return {
-            "stage": "semantic", "valid": self.valid,
-            "readyForDocumentLowering": self.ready_for_document_lowering,
-            "catalogFingerprint": self.catalog_fingerprint,
-            "diagnostics": [item.to_dict() for item in self.diagnostics],
-            "operatorSelections": [item.to_dict() for item in self.operator_selections],
-            "parameterSelections": [item.to_dict() for item in self.parameter_selections],
-            "connectionSelections": [item.to_dict() for item in self.connection_selections],
-            "deferredChecks": [item.to_dict() for item in self.deferred_checks],
-            "requiredCapabilities": list(self.required_capabilities),
-        }
+        return semantic_result_dict(self)
+
+
+@dataclass(frozen=True, slots=True)
+class _ConnectionResolutionState:
+    catalog: CatalogSnapshot
+    bindings: Mapping[str, ExternalNodeBinding]
+    external_symbols: set[str]
+    selected: dict[str, OperatorDefinition]
+    diagnostics: list[Diagnostic]
+    deferred: list[DeferredCheck]
+    selections: list[ConnectionSelection]
+    checkpoint: Callable[[], None] | None
 
 
 def resolve_graph(
@@ -133,9 +175,12 @@ def resolve_graph(
     *,
     constraint: CatalogConstraint | None = None,
     external_bindings: Mapping[str, ExternalNodeBinding] | None = None,
+    checkpoint: Callable[[], None] | None = None,
 ) -> SemanticResult:
     """Resolve a structurally valid graph without consulting Houdini or mutating inputs."""
 
+    if checkpoint is not None:
+        checkpoint()
     catalog = (
         catalog_or_provider
         if isinstance(catalog_or_provider, CatalogSnapshot)
@@ -148,25 +193,63 @@ def resolve_graph(
     parameter_selections: list[ParameterSelection] = []
     connection_selections: list[ConnectionSelection] = []
     capabilities = {"edit_scene"}
-    if any(isinstance(parm.value, CodeValue) for node in graph.nodes for parm in node.parms):
-        capabilities.add("run_code")
+    for node_index, node in enumerate(graph.nodes):
+        _periodic_checkpoint(checkpoint, node_index)
+        for parm_index, parm in enumerate(node.parms):
+            _periodic_checkpoint(checkpoint, parm_index)
+            if isinstance(parm.value, CodeValue):
+                capabilities.add("run_code")
     category_names = _validate_catalog_constraint(
-        graph, catalog, constraint, diagnostics,
+        graph, catalog, constraint, diagnostics, checkpoint,
     )
     selected = _select_operators(
         graph, catalog, category_names, diagnostics,
-        operator_selections, parameter_selections, capabilities,
+        operator_selections, parameter_selections, capabilities, checkpoint,
     )
+    _validate_channel_targets(graph, selected, diagnostics, checkpoint)
     _resolve_connections(
         graph, catalog, bindings, selected, diagnostics, deferred,
-        connection_selections,
+        connection_selections, checkpoint,
     )
+    runtime_selections = append_runtime_semantics(
+        graph, selected, parameter_selections, diagnostics, _diagnostic,
+    )
+    if checkpoint is not None:
+        checkpoint()
     ordered = tuple(sort_diagnostics(diagnostics))
     valid = not any(item.severity == "error" for item in ordered)
     return SemanticResult(
         valid, valid and not deferred, catalog.fingerprint, ordered, tuple(operator_selections),
-        tuple(parameter_selections), tuple(connection_selections), tuple(deferred), tuple(sorted(capabilities)),
+        tuple(parameter_selections), tuple(connection_selections), tuple(deferred),
+        (
+            tuple(runtime_selections)
+            if graph.graph_spec_version == "0.5" else None
+        ),
+        tuple(sorted(capabilities)),
     )
+
+
+def _validate_channel_targets(
+    graph: GraphSpec,
+    selected: Mapping[str, OperatorDefinition],
+    diagnostics: list[Diagnostic],
+    checkpoint: Callable[[], None] | None,
+) -> None:
+    if graph.graph_spec_version != "0.5":
+        return
+    if checkpoint is not None:
+        checkpoint()
+    for reference, pointer in invalid_channel_targets(graph, selected):
+        diagnostics.append(_diagnostic(
+            "HOCUS932",
+            "Structural channel reference does not identify one exact catalog parameter.",
+            reference.span,
+            pointer=pointer,
+            details={
+                "nodeSymbol": reference.payload["nodeSymbol"],
+                "parmName": reference.payload["parmName"],
+            },
+        ))
 
 
 def _validate_catalog_constraint(
@@ -174,18 +257,32 @@ def _validate_catalog_constraint(
     catalog: CatalogSnapshot,
     constraint: CatalogConstraint | None,
     diagnostics: list[Diagnostic],
+    checkpoint: Callable[[], None] | None,
 ) -> set[str]:
     if constraint is not None and constraint.fingerprint != catalog.fingerprint:
         diagnostics.append(_diagnostic(
             "HOCUS605", "Catalog fingerprint differs from the locked semantic input.", graph.span,
             phase="catalog", pointer="", details={"expected": constraint.fingerprint, "actual": catalog.fingerprint},
         ))
-    category_names = {item.name for item in catalog.categories}
+    if (
+        graph.graph_spec_version == "0.5"
+        and catalog.catalog_version != VALUE_CATALOG_VERSION
+    ):
+        diagnostics.append(_diagnostic(
+            "HOCUS932",
+            "GraphSpec 0.5 typed values require an exact catalog v2 snapshot.",
+            graph.span,
+            phase="catalog",
+            pointer="",
+            details={"actual": catalog.catalog_version, "expected": 2},
+        ))
+    category_names = _catalog_category_names(catalog, checkpoint)
     if graph.category is not None and graph.category not in category_names:
         span = graph.field_spans.get("category", graph.span)
         diagnostics.append(_unknown_with_fixes(
             "HOCUS620", f"Unknown catalog category '{graph.category}'.", graph.category,
             sorted(category_names), span, "/category", quote=False,
+            checkpoint=checkpoint,
         ))
     return category_names
 
@@ -198,17 +295,27 @@ def _select_operators(
     operator_selections: list[OperatorSelection],
     parameter_selections: list[ParameterSelection],
     capabilities: set[str],
+    checkpoint: Callable[[], None] | None,
 ) -> dict[str, OperatorDefinition]:
     selected: dict[str, OperatorDefinition] = {}
     for node_index, node in enumerate(graph.nodes):
+        _periodic_checkpoint(checkpoint, node_index)
         if graph.category is not None and graph.category not in category_names:
             continue
-        operator = _resolve_operator(node, node_index, graph.category, catalog, diagnostics)
+        operator = _resolve_operator(
+            node, node_index, graph.category, catalog, diagnostics, checkpoint,
+        )
         if operator is None:
             continue
         selected[node.symbol] = operator
-        operator_selections.append(_operator_selection(node, node_index, operator))
-        _resolve_parameters(node, node_index, operator, diagnostics, parameter_selections, capabilities)
+        operator_selections.append(_operator_selection(
+            node, node_index, operator,
+            rich_values=graph.graph_spec_version == "0.5",
+        ))
+        _resolve_parameters(
+            node, node_index, operator, diagnostics, parameter_selections,
+            capabilities, checkpoint, rich_values=graph.language_version == "0.4",
+        )
     return selected
 
 
@@ -220,16 +327,24 @@ def _resolve_connections(
     diagnostics: list[Diagnostic],
     deferred: list[DeferredCheck],
     selections: list[ConnectionSelection],
+    checkpoint: Callable[[], None] | None,
 ) -> None:
     external_symbols = {item.symbol for item in graph.external_nodes}
+    state = _ConnectionResolutionState(
+        catalog, bindings, external_symbols, selected, diagnostics, deferred,
+        selections, checkpoint,
+    )
     for node_index, node in enumerate(graph.nodes):
+        _periodic_checkpoint(checkpoint, node_index)
         destination = selected.get(node.symbol)
         if destination is None:
             continue
+        claimed_inputs: set[int] = set()
         for input_ordinal, input_spec in enumerate(node.inputs):
+            _periodic_checkpoint(checkpoint, input_ordinal)
             _resolve_connection(
-                node, node_index, input_ordinal, input_spec, destination, catalog,
-                bindings, external_symbols, selected, diagnostics, deferred, selections,
+                node, node_index, input_ordinal, input_spec, destination, state,
+                claimed_inputs,
             )
 
 
@@ -239,42 +354,62 @@ def _resolve_connection(
     input_ordinal: int,
     input_spec: Any,
     destination: OperatorDefinition,
-    catalog: CatalogSnapshot,
-    bindings: Mapping[str, ExternalNodeBinding],
-    external_symbols: set[str],
-    selected: dict[str, OperatorDefinition],
-    diagnostics: list[Diagnostic],
-    deferred: list[DeferredCheck],
-    selections: list[ConnectionSelection],
+    state: _ConnectionResolutionState,
+    claimed_inputs: set[int],
 ) -> None:
     pointer = f"/nodes/{node_index}/inputs/{input_ordinal}"
-    input_port = _connector_for_index(destination.inputs, input_spec.index)
+    input_port = (
+        fixed_named_connector(destination.inputs, input_spec.name)
+        if input_spec.name is not None
+        else connector_for_index(destination.inputs, input_spec.index)
+    )
     if input_port is None:
-        diagnostics.append(_diagnostic(
-            "HOCUS640", f"Operator '{destination.qualified_name}' has no input {input_spec.index}.",
-            input_spec.field_spans.get("index", input_spec.span), pointer=pointer + "/index",
-            details={"availableIndexes": _connector_indexes(destination.inputs)},
+        selector = input_spec.name if input_spec.name is not None else input_spec.index
+        field = "name" if input_spec.name is not None else "index"
+        state.diagnostics.append(_diagnostic(
+            "HOCUS640", f"Operator '{destination.qualified_name}' has no fixed input {selector!r}.",
+            input_spec.field_spans.get(field, input_spec.span), pointer=f"{pointer}/{field}",
+            details={"availableIndexes": connector_indexes(destination.inputs)},
         ))
-    source_operator = selected.get(input_spec.source.symbol)
-    if source_operator is None and input_spec.source.symbol in external_symbols:
+    source_operator = state.selected.get(input_spec.source.symbol)
+    if source_operator is None and input_spec.source.symbol in state.external_symbols:
         source_operator = _resolve_external_operator(
-            input_spec, pointer, catalog, bindings, diagnostics, deferred,
+            input_spec, pointer, state,
         )
     if source_operator is None:
         return
-    output_port = _connector_for_index(source_operator.outputs, input_spec.source.output_index)
+    output_port = (
+        fixed_named_connector(source_operator.outputs, input_spec.source.output_name)
+        if input_spec.source.output_name is not None
+        else connector_for_index(source_operator.outputs, input_spec.source.output_index)
+    )
     if output_port is None:
-        diagnostics.append(_diagnostic(
-            "HOCUS641", f"Operator '{source_operator.qualified_name}' has no output {input_spec.source.output_index}.",
-            input_spec.source.field_spans.get("outputIndex", input_spec.source.span),
-            pointer=pointer + "/source/outputIndex",
-            details={"availableIndexes": _connector_indexes(source_operator.outputs)},
+        selector = (
+            input_spec.source.output_name
+            if input_spec.source.output_name is not None
+            else input_spec.source.output_index
+        )
+        field = "outputName" if input_spec.source.output_name is not None else "outputIndex"
+        state.diagnostics.append(_diagnostic(
+            "HOCUS641", f"Operator '{source_operator.qualified_name}' has no fixed output {selector!r}.",
+            input_spec.source.field_spans.get(field, input_spec.source.span),
+            pointer=f"{pointer}/source/{field}",
+            details={"availableIndexes": connector_indexes(source_operator.outputs)},
         ))
         return
     if input_port is None:
         return
+    resolved_input = resolved_connector_index(input_spec.index, input_port)
+    resolved_output = resolved_connector_index(
+        input_spec.source.output_index, output_port)
+    if resolved_input in claimed_inputs:
+        state.diagnostics.append(_diagnostic(
+            "HOCUS640", "Multiple authored selectors resolve to the same destination input.",
+            input_spec.span, pointer=pointer, details={"resolvedIndex": resolved_input},
+        ))
+        return
     if not _ports_compatible(source_operator, output_port, destination, input_port):
-        diagnostics.append(_diagnostic(
+        state.diagnostics.append(_diagnostic(
             "HOCUS642", "Source output and destination input catalog types are incompatible.",
             input_spec.span, pointer=pointer, details={
                 "sourceOperator": source_operator.qualified_name,
@@ -284,45 +419,52 @@ def _resolve_connection(
             },
         ))
         return
-    selections.append(ConnectionSelection(
-        node.symbol, node_index, input_spec.index, input_port.name, input_spec.source.symbol,
-        input_spec.source.output_index, output_port.name, pointer,
+    state.selections.append(ConnectionSelection(
+        node.symbol,
+        node_index,
+        resolved_input,
+        connector_evidence_name(input_port, resolved_input),
+        input_spec.source.symbol,
+        resolved_output,
+        connector_evidence_name(output_port, resolved_output),
+        pointer,
     ))
+    claimed_inputs.add(resolved_input)
 
 
 def _resolve_external_operator(
     input_spec: Any,
     pointer: str,
-    catalog: CatalogSnapshot,
-    bindings: Mapping[str, ExternalNodeBinding],
-    diagnostics: list[Diagnostic],
-    deferred: list[DeferredCheck],
+    state: _ConnectionResolutionState,
 ) -> OperatorDefinition | None:
     symbol = input_spec.source.symbol
-    binding = bindings.get(symbol)
+    binding = state.bindings.get(symbol)
     if binding is None:
         message = f"Output validation for external symbol '{symbol}' requires a live baseline binding."
-        deferred.append(DeferredCheck("external_output", pointer + "/source", symbol, message))
-        diagnostics.append(Diagnostic(
+        state.deferred.append(DeferredCheck("external_output", pointer + "/source", symbol, message))
+        state.diagnostics.append(Diagnostic(
             "info", "HOCUS643", "semantic", message, input_spec.source.span,
             details={"symbol": symbol}, json_pointer=pointer + "/source",
         ))
         return None
-    if binding.catalog_fingerprint != catalog.fingerprint:
-        diagnostics.append(_diagnostic(
+    if binding.catalog_fingerprint != state.catalog.fingerprint:
+        state.diagnostics.append(_diagnostic(
             "HOCUS605", f"External binding for '{symbol}' uses a different catalog.",
             input_spec.source.span, phase="catalog", pointer=pointer + "/source",
-            details={"expected": catalog.fingerprint, "actual": binding.catalog_fingerprint},
+            details={"expected": state.catalog.fingerprint, "actual": binding.catalog_fingerprint},
         ))
         return None
-    matches = [
-        item for item in catalog.operators
-        if item.qualified_name == binding.operator_qualified_name
-        and (binding.category is None or item.category == binding.category)
-    ]
+    matches = []
+    for index, item in enumerate(state.catalog.operators):
+        _periodic_checkpoint(state.checkpoint, index)
+        if (
+            item.qualified_name == binding.operator_qualified_name
+            and (binding.category is None or item.category == binding.category)
+        ):
+            matches.append(item)
     if len(matches) == 1:
         return matches[0]
-    diagnostics.append(_diagnostic(
+    state.diagnostics.append(_diagnostic(
         "HOCUS626",
         f"External binding operator '{binding.operator_qualified_name}' does not identify exactly one catalog definition.",
         input_spec.source.span, pointer=pointer + "/source",
@@ -497,30 +639,51 @@ def _bounded_ambiguous_names(
     return ordered, len(identities)
 
 
-def _operator_selection(node: NodeSpec, index: int, operator: OperatorDefinition) -> OperatorSelection:
+def _operator_selection(
+    node: NodeSpec, index: int, operator: OperatorDefinition, *,
+    rich_values: bool,
+) -> OperatorSelection:
     hda = operator.source.hda_library
     return OperatorSelection(
         node.symbol, index, f"/nodes/{index}/typeName", operator.category, operator.qualified_name,
         operator.namespace, operator.version, operator.source.kind, hda.content_digest if hda else None,
+        operator.instance_network if rich_values else None,
     )
 
 
 def _resolve_parameters(
     node: NodeSpec, node_index: int, operator: OperatorDefinition, diagnostics: list[Diagnostic],
     selections: list[ParameterSelection], capabilities: set[str],
+    checkpoint: Callable[[], None] | None, *, rich_values: bool = False,
 ) -> None:
-    roots = {item.token: item for item in operator.parameters}
+    complete_tokens = [
+        token
+        for parameter in operator.parameters
+        for token in (parameter.token, *parameter.tuple_names)
+    ]
+    tuple_namespace_unambiguous = len(complete_tokens) == len(set(complete_tokens))
+    roots: dict[str, ParameterDefinition] = {}
     components: dict[str, list[tuple[ParameterDefinition, int]]] = {}
-    for definition in operator.parameters:
+    for definition_index, definition in enumerate(operator.parameters):
+        _periodic_checkpoint(checkpoint, definition_index)
+        roots[definition.token] = definition
         for index, token in enumerate(definition.tuple_names):
+            _periodic_checkpoint(checkpoint, index)
             components.setdefault(token, []).append((definition, index))
     writes: dict[str, set[int] | None] = {}
     for parm_index, parm in enumerate(node.parms):
+        _periodic_checkpoint(checkpoint, parm_index)
         pointer = f"/nodes/{node_index}/parms/{parm_index}"
         definition = roots.get(parm.name)
         component_index: int | None = None
         component_candidates = components.get(parm.name, [])
-        if definition is not None and component_candidates:
+        whole_tuple = (
+            rich_values
+            and definition is not None
+            and definition.tuple_size > 1
+            and isinstance(parm.value, ArrayValue)
+        )
+        if definition is not None and component_candidates and not whole_tuple:
             diagnostics.append(_diagnostic(
                 "HOCUS630", f"Parameter token '{parm.name}' collides with a tuple component in the catalog.",
                 parm.field_spans.get("name", parm.span), pointer=pointer + "/name",
@@ -541,6 +704,7 @@ def _resolve_parameters(
             diagnostics.append(_unknown_with_fixes(
                 "HOCUS630", f"Unknown parameter token '{parm.name}' on '{operator.qualified_name}'.",
                 parm.name, names, parm.field_spans.get("name", parm.span), pointer + "/name", quote=False,
+                checkpoint=checkpoint,
             ))
             continue
         previous = writes.get(definition.token)
@@ -554,15 +718,89 @@ def _resolve_parameters(
         writes[definition.token] = current if previous is None else previous | current  # type: ignore[operator]
         selection = _validate_parameter(parm, node, node_index, parm_index, definition, component_index, pointer, diagnostics)
         if selection is not None:
+            selection = _attach_tuple_evidence(
+                selection,
+                parm,
+                definition,
+                component_index,
+                pointer,
+                diagnostics,
+                rich_values=rich_values,
+                namespace_unambiguous=tuple_namespace_unambiguous,
+            )
+            if selection is None:
+                continue
             selections.append(selection)
             if isinstance(parm.value, CodeValue) or definition.code_surface != "none":
                 capabilities.add("run_code")
+
+
+def _attach_tuple_evidence(
+    selection: ParameterSelection,
+    parm: ParmSpec,
+    definition: ParameterDefinition,
+    component_index: int | None,
+    pointer: str,
+    diagnostics: list[Diagnostic],
+    *,
+    rich_values: bool,
+    namespace_unambiguous: bool,
+) -> ParameterSelection | None:
+    if not (
+        rich_values
+        and component_index is None
+        and definition.tuple_size > 1
+        and isinstance(parm.value, ArrayValue)
+    ):
+        return selection
+    element_type = _explicit_tuple_element_type(definition)
+    if (
+        len(definition.tuple_names) != definition.tuple_size
+        or len(set(definition.tuple_names)) != definition.tuple_size
+        or not namespace_unambiguous
+        or element_type not in {"bool", "int", "float", "string"}
+        or not _tuple_default_matches(
+            definition.default,
+            element_type,
+            definition.tuple_size,
+        )
+    ):
+        diagnostics.append(_diagnostic(
+            "HOCUS931",
+            f"Tuple parameter '{definition.token}' lacks an exact component-token map.",
+            parm.span,
+            pointer=pointer,
+        ))
+        return None
+    return replace(
+        selection,
+        component_tokens=definition.tuple_names,
+        tuple_size=definition.tuple_size,
+        element_type=element_type,
+    )
 
 
 def _validate_parameter(
     parm: ParmSpec, node: NodeSpec, node_index: int, parm_index: int, definition: ParameterDefinition,
     component_index: int | None, pointer: str, diagnostics: list[Diagnostic],
 ) -> ParameterSelection | None:
+    if isinstance(parm.value, TaggedValue):
+        try:
+            adapter = typed_value_adapter(
+                parm.value, definition, component_index
+            )
+        except TypedValueSemanticError as exc:
+            diagnostics.append(_diagnostic(
+                "HOCUS932",
+                str(exc),
+                parm.value.span,
+                pointer=pointer + "/value",
+            ))
+            return None
+        return _parm_selection(
+            node, node_index, parm_index, parm, definition, component_index,
+            pointer, value_adapter=adapter,
+        )
     if not definition.assignable or definition.value_type in {"button", "ramp", "multiparm"}:
         diagnostics.append(_diagnostic(
             "HOCUS632", f"Parameter '{definition.token}' is not an ordinary assignable HocusScript 0.1 value.",
@@ -764,9 +1002,11 @@ def _parm_selection(
     node: NodeSpec, node_index: int, parm_index: int, parm: ParmSpec, definition: ParameterDefinition,
     component_index: int | None, pointer: str, *, conversion: str | None = None,
     menu_token: str | None = None, code_surface: str | None = None,
+    value_adapter: Mapping[str, Any] | None = None,
 ) -> ParameterSelection:
     return ParameterSelection(node.symbol, node_index, parm_index, pointer, parm.name, definition.token,
-                              component_index, definition.value_type, conversion, menu_token, code_surface)
+                              component_index, definition.value_type, conversion, menu_token, code_surface,
+                              value_adapter=value_adapter)
 
 
 def _element_type(definition: ParameterDefinition) -> str:
@@ -783,6 +1023,29 @@ def _element_type(definition: ParameterDefinition) -> str:
         if isinstance(value, float): return "float"
         if isinstance(value, str): return "string"
     return "unknown"
+
+
+def _explicit_tuple_element_type(definition: ParameterDefinition) -> str | None:
+    tagged = definition.tags.get("elementType")
+    return tagged if tagged in {"bool", "int", "float", "string"} else None
+
+
+def _tuple_default_matches(
+    value: Any,
+    element_type: str | None,
+    tuple_size: int,
+) -> bool:
+    if not isinstance(value, tuple) or len(value) != tuple_size:
+        return False
+    expected = {
+        "bool": bool,
+        "int": int,
+        "float": float,
+        "string": str,
+    }.get(element_type)
+    if expected is None:
+        return False
+    return all(type(item) is expected for item in value)
 
 
 def _scalar_conversion(value: Any, expected: str) -> bool | str:
@@ -829,23 +1092,6 @@ def _range_error(definition: ParameterDefinition, parm: ParmSpec, pointer: str) 
 def _type_error(definition: ParameterDefinition, parm: ParmSpec, pointer: str, expected: str) -> Diagnostic:
     return _diagnostic("HOCUS633", f"Parameter '{definition.token}' requires {expected}.", parm.value.span,
                        pointer=pointer + "/value", details={"expectedType": definition.value_type})
-
-
-def _connector_for_index(connectors: tuple[ConnectorDefinition, ...], index: int) -> ConnectorDefinition | None:
-    for connector in connectors:
-        if connector.index == index:
-            return connector
-    variadic = [item for item in connectors if item.index is not None and item.index <= index and item.cardinality == "many"]
-    if variadic:
-        return max(variadic, key=lambda item: item.index or 0)
-    return next(
-        (item for item in connectors if item.index is None and item.cardinality == "many"),
-        None,
-    )
-
-
-def _connector_indexes(connectors: tuple[ConnectorDefinition, ...]) -> list[int]:
-    return sorted(item.index for item in connectors if item.index is not None)
 
 
 def _ports_compatible(

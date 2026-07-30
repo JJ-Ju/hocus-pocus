@@ -8,9 +8,9 @@ import json
 import re
 from dataclasses import dataclass
 from typing import Any
-from urllib.parse import quote
 
 from .compiler import SUPPORTED_LANGUAGE_VERSIONS
+from .module_paths import is_relative_hocus_path
 from .model import (
     COMPILER_VERSION,
     GRAPH_SPEC_VERSION,
@@ -21,6 +21,7 @@ from .model import (
     LEGACY_GRAPH_SPEC_VERSION,
     CompileResult,
 )
+from .resolved_modules import canonical_module_uri
 
 BUNDLE_VERSION = "0.2"
 LEGACY_BUNDLE_VERSION = "0.1"
@@ -40,9 +41,6 @@ _SEMVER_PATTERN = re.compile(
     r"(?:-(?:(?:0|[1-9][0-9]*)|(?:[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))"
     r"(?:\.(?:(?:0|[1-9][0-9]*)|(?:[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)))*)?"
     r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$"
-)
-_MODULE_URI_PATTERN = re.compile(
-    r"^hocus-(project|module)://([a-z0-9][a-z0-9.-]{0,127})/(.+)$"
 )
 _JSON_POINTER_PATTERN = re.compile(r"^(?:/(?:[^~/]|~0|~1)*)*$")
 _TRANSITIVE_DIGEST_DOMAIN = "hocus-module-transitive-v1"
@@ -492,6 +490,7 @@ def _validate_bundle_provenance_and_sources(
         payload.get("entrySource"), "entrySource",
         allow_kinds={"project_file", "workspace_file", "memory"},
     )
+    _validate_module_entry_uri(entry, bundle_version, project_uid)
     if portable and (
         entry["kind"] != "project_file"
         or not entry["uri"].startswith(f"hocus-project://{project_uid}/")
@@ -504,7 +503,10 @@ def _validate_bundle_provenance_and_sources(
             "HOCUS510", "Preview-only bundles cannot claim a project_file entry source."
         )
     dependencies = payload.get("dependencies")
-    dependency_uris = _validate_dependency_sources(dependencies)
+    dependency_uris = _validate_dependency_sources(
+        dependencies,
+        require_portable=bundle_version == MODULE_BUNDLE_VERSION,
+    )
     if bundle_version != MODULE_BUNDLE_VERSION:
         return entry, dependency_uris, [], None
     module_dependencies, module_limits = _validate_resolved_module_set(
@@ -518,7 +520,22 @@ def _validate_bundle_provenance_and_sources(
     return entry, dependency_uris, module_dependencies, module_limits
 
 
-def _validate_dependency_sources(value: Any) -> set[str]:
+def _validate_module_entry_uri(
+    entry: dict[str, str], bundle_version: str, project_uid: Any,
+) -> None:
+    if bundle_version != MODULE_BUNDLE_VERSION:
+        return
+    identity = canonical_module_uri(entry["uri"])
+    if identity is None or identity[:2] != ("project", project_uid):
+        raise BundleValidationError(
+            "HOCUS510",
+            "Bundle v0.3 entry source must use its canonical portable project URI.",
+        )
+
+
+def _validate_dependency_sources(
+    value: Any, *, require_portable: bool = False,
+) -> set[str]:
     if not isinstance(value, list) or len(value) > MAX_DEPENDENCIES:
         raise BundleValidationError(
             "HOCUS511",
@@ -529,6 +546,12 @@ def _validate_dependency_sources(value: Any) -> set[str]:
         normalized = _validate_source(
             dependency, f"dependencies[{index}]", allow_kinds={"module"}
         )
+        if require_portable and canonical_module_uri(normalized["uri"]) is None:
+            raise BundleValidationError(
+                "HOCUS512",
+                "Bundle v0.3 dependency sources must use canonical portable module URIs.",
+                details={"uri": normalized["uri"]},
+            )
         if normalized["uri"] in uris:
             raise BundleValidationError(
                 "HOCUS512", "Dependency source URIs must be unique.",
@@ -662,15 +685,15 @@ def _validate_module_dependency_identity(
     item: dict[str, Any],
     label: str,
     seen: set[str],
-) -> tuple[str, Any]:
+) -> tuple[str, tuple[str, str, str]]:
     uri = item["uri"]
     if not isinstance(uri, str) or len(uri) > 4096 or uri in seen:
         raise BundleValidationError("HOCUS512", f"{label}.uri must be a unique canonical module URI.")
-    uri_match = _MODULE_URI_PATTERN.fullmatch(uri)
-    if uri_match is None:
+    identity = canonical_module_uri(uri)
+    if identity is None:
         raise BundleValidationError("HOCUS512", f"{label}.uri must be a unique canonical module URI.")
     seen.add(uri)
-    return uri, uri_match
+    return uri, identity
 
 
 def _validate_module_dependency_content(item: dict[str, Any], label: str) -> str:
@@ -685,13 +708,7 @@ def _validate_module_dependency_content(item: dict[str, Any], label: str) -> str
     ):
         raise BundleValidationError("HOCUS512", f"{label}.moduleName is invalid.")
     relative_path = item["relativePath"]
-    if (
-        not isinstance(relative_path, str)
-        or not relative_path.endswith(".hocus")
-        or relative_path.startswith(("/", "\\"))
-        or "\\" in relative_path
-        or any(part in {"", ".", ".."} for part in relative_path.split("/"))
-    ):
+    if not is_relative_hocus_path(relative_path):
         raise BundleValidationError("HOCUS512", f"{label}.relativePath is invalid.")
     if not isinstance(item["ownerUid"], str) or not _PROJECT_UID_PATTERN.fullmatch(item["ownerUid"]):
         raise BundleValidationError("HOCUS512", f"{label}.ownerUid is invalid.")
@@ -701,12 +718,12 @@ def _validate_module_dependency_content(item: dict[str, Any], label: str) -> str
 def _validate_module_dependency_provenance(
     item: dict[str, Any],
     label: str,
-    uri_match: Any,
+    identity: tuple[str, str, str],
     relative_path: str,
     project_uid: str,
 ) -> None:
-    scheme, authority, uri_path = uri_match.groups()
-    if uri_path != quote(relative_path, safe="/-._~") or authority != item["ownerUid"]:
+    scheme, authority, uri_path = identity
+    if uri_path != relative_path or authority != item["ownerUid"]:
         raise BundleValidationError("HOCUS512", f"{label} URI does not match ownerUid/relativePath.")
     if item["origin"] == "project":
         if scheme != "project" or authority != project_uid or any(
@@ -733,7 +750,7 @@ def _validate_module_dependency_children(child_uris: Any, label: str, uri: str) 
         or len(child_uris) > MAX_DEPENDENCIES
         or child_uris != sorted(set(child_uris))
         or any(
-            not isinstance(child, str) or _MODULE_URI_PATTERN.fullmatch(child) is None
+            canonical_module_uri(child) is None
             for child in child_uris
         )
         or uri in child_uris

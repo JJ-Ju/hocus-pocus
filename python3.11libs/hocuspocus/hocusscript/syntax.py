@@ -38,7 +38,97 @@ class CodeExpr:
     offset_map: CodeOffsetMap
 
 
-ValueExpr: TypeAlias = LiteralExpr | ArrayExpr | CodeExpr
+@dataclass(frozen=True, slots=True)
+class ResetValue:
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class ExpressionValue:
+    language: str
+    body: str
+    body_span: SourceSpan
+    offset_map: CodeOffsetMap
+
+
+@dataclass(frozen=True, slots=True)
+class ChannelReferenceValue:
+    node_symbol: str
+    parm_name: str
+    node_span: SourceSpan
+    parm_span: SourceSpan
+
+
+@dataclass(frozen=True, slots=True)
+class RawPathValue:
+    path_kind: str
+    raw: str
+    kind_span: SourceSpan
+    raw_span: SourceSpan
+
+
+@dataclass(frozen=True, slots=True)
+class QuantityValue:
+    magnitude: int | float
+    unit: str
+    magnitude_span: SourceSpan
+    unit_span: SourceSpan
+
+
+@dataclass(frozen=True, slots=True)
+class RampPointExpr:
+    position: int | float
+    value: LiteralExpr | ArrayExpr
+    span: SourceSpan
+    position_span: SourceSpan
+
+
+@dataclass(frozen=True, slots=True)
+class RampValue:
+    points: tuple[RampPointExpr, ...]
+    basis: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class MultiparmFieldExpr:
+    name: str
+    value: "ValueExpr"
+    span: SourceSpan
+    name_span: SourceSpan
+
+
+@dataclass(frozen=True, slots=True)
+class MultiparmInstanceExpr:
+    instance_id: str
+    fields: tuple[MultiparmFieldExpr, ...]
+    span: SourceSpan
+    instance_id_span: SourceSpan
+
+
+@dataclass(frozen=True, slots=True)
+class MultiparmValue:
+    instances: tuple[MultiparmInstanceExpr, ...]
+
+
+TaggedValuePayload: TypeAlias = (
+    ResetValue
+    | ExpressionValue
+    | ChannelReferenceValue
+    | RawPathValue
+    | QuantityValue
+    | RampValue
+    | MultiparmValue
+)
+
+
+@dataclass(frozen=True, slots=True)
+class TaggedValueExpr:
+    tag: str
+    payload: TaggedValuePayload
+    span: SourceSpan
+
+
+ValueExpr: TypeAlias = LiteralExpr | ArrayExpr | CodeExpr | TaggedValueExpr
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,12 +185,14 @@ class ExternalDecl:
 @dataclass(frozen=True, slots=True)
 class ReferenceExpr:
     symbol: str
-    output_index: int
+    output_index: int | None
     explicit_output: bool
     port_keyword: str | None
     span: SourceSpan
     symbol_span: SourceSpan
-    output_index_span: SourceSpan
+    output_index_span: SourceSpan | None
+    output_name: str | None = None
+    output_name_span: SourceSpan | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,6 +211,8 @@ class SymbolRefExpr:
     symbol_span: SourceSpan
     member_span: SourceSpan
     output_index_span: SourceSpan | None
+    output_name: str | None = None
+    output_name_span: SourceSpan | None = None
 
 
 ModuleExpr: TypeAlias = LiteralExpr | ParamRefExpr | SymbolRefExpr
@@ -126,10 +220,12 @@ ModuleExpr: TypeAlias = LiteralExpr | ParamRefExpr | SymbolRefExpr
 
 @dataclass(frozen=True, slots=True)
 class InputStmt:
-    index: int
+    index: int | None
     source: ReferenceExpr | ParamRefExpr | SymbolRefExpr
     span: SourceSpan
-    index_span: SourceSpan
+    index_span: SourceSpan | None
+    name: str | None = None
+    name_span: SourceSpan | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -140,7 +236,10 @@ class ParmStmt:
     name_span: SourceSpan
 
 
-NodeStmt: TypeAlias = InputStmt | ParmStmt
+from .runtime_syntax import AnimationDecl, SpareParameterDecl
+
+
+NodeStmt: TypeAlias = InputStmt | ParmStmt | SpareParameterDecl | AnimationDecl
 
 
 @dataclass(frozen=True, slots=True)

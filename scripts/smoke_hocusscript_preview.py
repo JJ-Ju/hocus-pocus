@@ -65,7 +65,7 @@ class _SmokeOperations(OperationBaseMixin, DocumentOperationsMixin, HocusScriptO
             raise AssertionError(f"unexpected subgraph target {root_path}")
         return snapshot
 
-    def _document_preview_live_catalog(self):
+    def _document_preview_live_catalog(self, _graph_spec_version=None):
         return self._catalog
 
 

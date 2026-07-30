@@ -1,0 +1,12 @@
+hocus 0.4;
+graph HS8RockMaterial {
+  target "/mat";
+  category Vop;
+  ownership "hs8";
+  mode merge;
+  layout = auto;
+  node hs8_rock_material @id("hs8.material"): "principledshader::2.0" {
+    rough = 0.72;
+    metallic = 0.0;
+  }
+}

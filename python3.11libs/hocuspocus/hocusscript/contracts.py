@@ -1,5 +1,4 @@
 """Version-lane registry and decode-only HocusScript carrier scaffolds."""
-
 from __future__ import annotations
 
 import hashlib
@@ -7,10 +6,54 @@ import hmac
 import json
 import math
 import re
-from dataclasses import dataclass
-from types import MappingProxyType
 from typing import Any, Mapping
 
+from ._carrier_versions import (  # noqa: F401
+    CARRIER_CONTRACTS,
+    CARRIER_CONTRACTS_BY_BUNDLE,
+    CARRIER_CONTRACTS_BY_COMPILER,
+    CARRIER_CONTRACTS_BY_EXPANSION_MAP,
+    CARRIER_CONTRACTS_BY_GRAPH_SPEC,
+    CARRIER_CONTRACTS_BY_LANGUAGE,
+    CARRIER_CONTRACTS_BY_MODULE_MANIFEST,
+    CARRIER_CONTRACTS_BY_PROJECT_LOCK,
+    CARRIER_CONTRACTS_BY_PROJECT_MANIFEST,
+    CARRIER_CONTRACTS_BY_RESOLVED_MODULE_SET,
+    CONTROL_BUNDLE_VERSION,
+    CONTROL_CARRIER_CONTRACT,
+    CONTROL_COMPILER_VERSION,
+    CONTROL_EXPANSION_MAP_VERSION,
+    CONTROL_GRAPH_SPEC_VERSION,
+    CONTROL_LANGUAGE_VERSION,
+    CONTROL_MODULE_MANIFEST_VERSION,
+    CONTROL_PROJECT_LOCK_VERSION,
+    CONTROL_PROJECT_MANIFEST_VERSION,
+    CONTROL_RESOLVED_LIMIT_MAXIMA,
+    CONTROL_RESOLVED_MODULE_SET_VERSION,
+    STATIC_CARRIER_CONTRACT,
+    VALUE_BUNDLE_VERSION,
+    VALUE_CARRIER_CONTRACT,
+    VALUE_COMPILER_VERSION,
+    VALUE_EXPANSION_MAP_VERSION,
+    VALUE_GRAPH_SPEC_VERSION,
+    VALUE_LANGUAGE_VERSION,
+    VALUE_MODULE_MANIFEST_VERSION,
+    VALUE_PROJECT_LOCK_VERSION,
+    VALUE_PROJECT_MANIFEST_VERSION,
+    VALUE_RESOLVED_MODULE_SET_VERSION,
+    CarrierContract,
+    CarrierContractError,
+    contract_for_bundle,
+    contract_for_compiler,
+    contract_for_expansion_map,
+    contract_for_graph_spec,
+    contract_for_language,
+    contract_for_module_manifest,
+    contract_for_project_lock,
+    contract_for_project_manifest,
+    contract_for_resolved_module_set,
+    require_carrier_contract,
+)
 from .resolved_modules import canonical_module_uri
 _DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$"); _JSON_POINTER = re.compile(r"^(?:/(?:[^~/]|~0|~1)*)*$")
 _SOURCE_URI = re.compile(r"^hocus-(?:project|module)://[^\s]+$"); _UID = re.compile(r"^[a-z0-9][a-z0-9.-]{0,127}$")
@@ -25,217 +68,25 @@ _SEMVER = re.compile(
 _MAX_JSON_BYTES = 64 * 1024 * 1024; _MAX_JSON_VALUES = 500_000; _MAX_JSON_DEPTH = 128
 _EXPANSION_STACK_DIGEST_DOMAIN = "hocus-expansion-stack-v1"; _CONTROL_STACK_DIGEST_DOMAIN = "hocus-control-stack-v1"
 _TRANSITIVE_DIGEST_DOMAIN = "hocus-module-transitive-v1"
-class CarrierContractError(ValueError):
-    """Raised when a carrier version or decode-only envelope is invalid."""
-
-    def __init__(
-        self, code: str, message: str, *, details: Mapping[str, Any] | None = None,
-    ) -> None:
-        super().__init__(message)
-        self.code = code
-        self.message = message
-        self.details = dict(details or {})
-
-
-@dataclass(frozen=True, slots=True)
-class CarrierContract:
-    """One exact, non-interchangeable HocusScript carrier compatibility row."""
-
-    language_version: str
-    compiler_version: str
-    graph_spec_version: str
-    expansion_map_version: int
-    resolved_module_set_version: int
-    project_manifest_version: int
-    project_lock_version: int
-    module_manifest_version: int
-    bundle_version: str
-    resolver_policy_version: int
-    resolver_interface_version: int
-    dispatch_enabled: bool
-
-
-STATIC_CARRIER_CONTRACT = CarrierContract(
-    language_version="0.2",
-    compiler_version="0.4.0",
-    graph_spec_version="0.3",
-    expansion_map_version=1,
-    resolved_module_set_version=1,
-    project_manifest_version=3,
-    project_lock_version=3,
-    module_manifest_version=1,
-    bundle_version="0.3",
-    resolver_policy_version=1,
-    resolver_interface_version=1,
-    dispatch_enabled=False,
-)
-
-CONTROL_CARRIER_CONTRACT = CarrierContract(
-    language_version="0.3",
-    compiler_version="0.5.0",
-    graph_spec_version="0.4",
-    expansion_map_version=2,
-    resolved_module_set_version=2,
-    project_manifest_version=4,
-    project_lock_version=4,
-    module_manifest_version=2,
-    bundle_version="0.4",
-    resolver_policy_version=1,
-    resolver_interface_version=1,
-    dispatch_enabled=True,
-)
-
-CONTROL_LANGUAGE_VERSION = CONTROL_CARRIER_CONTRACT.language_version; CONTROL_COMPILER_VERSION = CONTROL_CARRIER_CONTRACT.compiler_version
-CONTROL_GRAPH_SPEC_VERSION = CONTROL_CARRIER_CONTRACT.graph_spec_version; CONTROL_EXPANSION_MAP_VERSION = CONTROL_CARRIER_CONTRACT.expansion_map_version
-CONTROL_RESOLVED_MODULE_SET_VERSION = CONTROL_CARRIER_CONTRACT.resolved_module_set_version; CONTROL_PROJECT_MANIFEST_VERSION = CONTROL_CARRIER_CONTRACT.project_manifest_version
-CONTROL_PROJECT_LOCK_VERSION = CONTROL_CARRIER_CONTRACT.project_lock_version; CONTROL_MODULE_MANIFEST_VERSION = CONTROL_CARRIER_CONTRACT.module_manifest_version
-CONTROL_BUNDLE_VERSION = CONTROL_CARRIER_CONTRACT.bundle_version
-
-CARRIER_CONTRACTS = (STATIC_CARRIER_CONTRACT, CONTROL_CARRIER_CONTRACT)
-
-
-def _index(attribute: str) -> Mapping[Any, CarrierContract]:
-    return MappingProxyType({getattr(row, attribute): row for row in CARRIER_CONTRACTS})
-
-
-CARRIER_CONTRACTS_BY_LANGUAGE = _index("language_version")
-CARRIER_CONTRACTS_BY_COMPILER = _index("compiler_version")
-CARRIER_CONTRACTS_BY_GRAPH_SPEC = _index("graph_spec_version")
-CARRIER_CONTRACTS_BY_EXPANSION_MAP = _index("expansion_map_version")
-CARRIER_CONTRACTS_BY_RESOLVED_MODULE_SET = _index("resolved_module_set_version")
-CARRIER_CONTRACTS_BY_PROJECT_MANIFEST = _index("project_manifest_version")
-CARRIER_CONTRACTS_BY_PROJECT_LOCK = _index("project_lock_version")
-CARRIER_CONTRACTS_BY_MODULE_MANIFEST = _index("module_manifest_version")
-CARRIER_CONTRACTS_BY_BUNDLE = _index("bundle_version")
-
-
-def _lookup(index: Mapping[Any, CarrierContract], value: Any, label: str) -> CarrierContract:
-    try:
-        return index[value]
-    except (KeyError, TypeError) as exc:
-        raise CarrierContractError(
-            "HOCUS490", f"Unsupported HocusScript {label}: {value!r}."
-        ) from exc
-
-
-def contract_for_language(version: str) -> CarrierContract:
-    """Return the one exact carrier row for a language version."""
-
-    return _lookup(CARRIER_CONTRACTS_BY_LANGUAGE, version, "language version")
-
-
-def contract_for_compiler(version: str) -> CarrierContract:
-    """Return the one exact carrier row for a compiler version."""
-
-    return _lookup(CARRIER_CONTRACTS_BY_COMPILER, version, "compiler version")
-
-
-def contract_for_graph_spec(version: str) -> CarrierContract:
-    """Return the one exact carrier row for a GraphSpec version."""
-
-    return _lookup(CARRIER_CONTRACTS_BY_GRAPH_SPEC, version, "GraphSpec version")
-
-
-def contract_for_expansion_map(version: int) -> CarrierContract:
-    """Return the one exact carrier row for an expansion-map version."""
-
-    if type(version) is not int:
-        raise CarrierContractError("HOCUS490", "Expansion-map version must be an integer.")
-    return _lookup(CARRIER_CONTRACTS_BY_EXPANSION_MAP, version, "expansion-map version")
-
-
-def contract_for_resolved_module_set(version: int) -> CarrierContract:
-    """Return the one exact carrier row for a resolved-set version."""
-
-    if type(version) is not int:
-        raise CarrierContractError("HOCUS490", "Resolved-set version must be an integer.")
-    return _lookup(CARRIER_CONTRACTS_BY_RESOLVED_MODULE_SET, version, "resolved-set version")
-
-
-def contract_for_project_manifest(version: int) -> CarrierContract:
-    """Return the one exact carrier row for a project-manifest version."""
-
-    if type(version) is not int:
-        raise CarrierContractError("HOCUS490", "Project-manifest version must be an integer.")
-    return _lookup(CARRIER_CONTRACTS_BY_PROJECT_MANIFEST, version, "project-manifest version")
-
-
-def contract_for_project_lock(version: int) -> CarrierContract:
-    """Return the one exact carrier row for a project-lock version."""
-
-    if type(version) is not int:
-        raise CarrierContractError("HOCUS490", "Project-lock version must be an integer.")
-    return _lookup(CARRIER_CONTRACTS_BY_PROJECT_LOCK, version, "project-lock version")
-
-
-def contract_for_module_manifest(version: int) -> CarrierContract:
-    """Return the one exact carrier row for a module-manifest version."""
-
-    if type(version) is not int:
-        raise CarrierContractError("HOCUS490", "Module-manifest version must be an integer.")
-    return _lookup(CARRIER_CONTRACTS_BY_MODULE_MANIFEST, version, "module-manifest version")
-
-
-def contract_for_bundle(version: str) -> CarrierContract:
-    """Return the one exact carrier row for a compiled-bundle version."""
-
-    return _lookup(CARRIER_CONTRACTS_BY_BUNDLE, version, "compiled-bundle version")
-
-
-def require_carrier_contract(
-    *, language_version: str, compiler_version: str, graph_spec_version: str,
-    expansion_map_version: int, resolved_module_set_version: int,
-    project_manifest_version: int, project_lock_version: int,
-    module_manifest_version: int, bundle_version: str,
-    resolver_policy_version: int = 1, resolver_interface_version: int = 1,
-) -> CarrierContract:
-    """Require every supplied carrier version to identify the same exact row."""
-
-    supplied = {
-        "language_version": language_version,
-        "compiler_version": compiler_version,
-        "graph_spec_version": graph_spec_version,
-        "expansion_map_version": expansion_map_version,
-        "resolved_module_set_version": resolved_module_set_version,
-        "project_manifest_version": project_manifest_version,
-        "project_lock_version": project_lock_version,
-        "module_manifest_version": module_manifest_version,
-        "bundle_version": bundle_version,
-        "resolver_policy_version": resolver_policy_version,
-        "resolver_interface_version": resolver_interface_version,
-    }
-    row = contract_for_language(language_version)
-    if any(getattr(row, name) != value for name, value in supplied.items()):
-        raise CarrierContractError(
-            "HOCUS490", "HocusScript carrier versions are mixed or unsupported.",
-            details={"languageVersion": language_version},
-        )
-    return row
-
-
-CONTROL_RESOLVED_LIMIT_MAXIMA = MappingProxyType({
-    "sourceBytesPerFile": 1_048_576,
-    "aggregateSourceBytes": 8_388_608,
-    "moduleFiles": 4_096,
-    "importDepth": 64,
-    "instanceDepth": 64,
-    "instances": 4_096,
-    "parametersPerModule": 256,
-    "exportsPerModule": 256,
-    "expandedNodes": 10_000,
-    "aggregateCodeBytes": 4_194_304,
-    "sourceMapEntries": 100_000,
-    "diagnostics": 500,
-    "perFoldIterations": 4_096,
-    "aggregateIterations": 100_000,
-})
-
-
-def decode_control_graph_spec_envelope(
-    value: Any, *, resolved_limits: Mapping[str, int] | None = None,
-) -> dict[str, Any]:
+def decode_control_graph_spec_envelope(value: Any, *, resolved_limits: Mapping[str, int] | None = None) -> dict[str, Any]:
     """Decode the strict GraphSpec 0.4 envelope without interpreting its graph."""
+    return _decode_graph_spec_envelope(
+        value, CONTROL_CARRIER_CONTRACT, resolved_limits=resolved_limits
+    )
+def decode_value_graph_spec_envelope(
+    value: Any, *, resolved_limits: Mapping[str, int] | None = None
+) -> dict[str, Any]:
+    """Decode the strict HS7 GraphSpec 0.5 envelope."""
 
+    return _decode_graph_spec_envelope(
+        value, VALUE_CARRIER_CONTRACT, resolved_limits=resolved_limits
+    )
+def _decode_graph_spec_envelope(
+    value: Any,
+    contract: CarrierContract,
+    *,
+    resolved_limits: Mapping[str, int] | None,
+) -> dict[str, Any]:
     required_limits = {
         "expandedNodes", "sourceMapEntries", "instances", "instanceDepth",
         "aggregateCodeBytes", "perFoldIterations", "aggregateIterations",
@@ -247,16 +98,24 @@ def decode_control_graph_spec_envelope(
     ):
         _fail("HOCUS491", "GraphSpec resolved limits are malformed.")
 
-    graph = _decode_json_object(value, "GraphSpec 0.4", "HOCUS491")
-    _exact_keys(graph, {
+    label = f"GraphSpec {contract.graph_spec_version}"
+    graph = _decode_json_object(value, label, "HOCUS491")
+    graph_keys = {
         "$schema", "kind", "graphSpecVersion", "languageVersion", "name", "target",
         "category", "mode", "expectedRevision", "ownership", "externalNodes", "nodes",
         "display", "render", "output", "layout", "span", "fieldSpans", "expansionMap",
-    }, "GraphSpec 0.4", "HOCUS491")
-    _equal(graph, "$schema", "hocuspocus://schemas/graph-spec/v0.4", "HOCUS491")
+    }
+    if contract.graph_spec_version == "0.5":
+        graph_keys.update({"editorEntities", "spareParameters", "animations"})
+    _exact_keys(graph, graph_keys, label, "HOCUS491")
+    _equal(
+        graph, "$schema",
+        f"hocuspocus://schemas/graph-spec/v{contract.graph_spec_version}",
+        "HOCUS491",
+    )
     _equal(graph, "kind", "graph_spec", "HOCUS491")
-    _equal(graph, "graphSpecVersion", "0.4", "HOCUS491")
-    _equal(graph, "languageVersion", "0.3", "HOCUS491")
+    _equal(graph, "graphSpecVersion", contract.graph_spec_version, "HOCUS491")
+    _equal(graph, "languageVersion", contract.language_version, "HOCUS491")
     _string(graph["name"], "GraphSpec.name", "HOCUS491", pattern=_IDENTIFIER)
     _string(graph["target"], "GraphSpec.target", "HOCUS491", maximum=4096)
     _nullable_string(graph["category"], "GraphSpec.category", "HOCUS491")
@@ -278,8 +137,9 @@ def decode_control_graph_spec_envelope(
         _fail("HOCUS491", "GraphSpec.layout is invalid.")
     if not isinstance(graph["span"], dict) or not isinstance(graph["fieldSpans"], dict):
         _fail("HOCUS491", "GraphSpec span carriers must be objects.")
-    graph["expansionMap"] = decode_control_expansion_map_envelope(
+    graph["expansionMap"] = _decode_expansion_map_envelope(
         graph["expansionMap"],
+        contract,
         entry_source_uri=None,
         source_map_entries=(
             resolved_limits["sourceMapEntries"] if resolved_limits is not None else 100_000
@@ -298,9 +158,13 @@ def decode_control_graph_spec_envelope(
     try:
         from .bundle_graph_validation import BundleValidationError, validate_graph_spec
         structural_graph = {key: value for key, value in graph.items() if key != "expansionMap"}
-        validate_graph_spec(structural_graph, graph_spec_version="0.2")
+        validate_graph_spec(
+            structural_graph,
+            graph_spec_version=contract.graph_spec_version,
+            structural_only=True,
+        )
     except (BundleValidationError, KeyError, TypeError, ValueError) as exc:
-        _fail("HOCUS491", f"GraphSpec 0.4 graph structure is invalid: {exc}")
+        _fail("HOCUS491", f"{label} graph structure is invalid: {exc}")
     _validate_expansion_surface(graph)
     if resolved_limits is not None:
         code_bytes = _graph_code_bytes(graph)
@@ -317,15 +181,71 @@ def decode_control_expansion_map_envelope(
 ) -> dict[str, Any]:
     """Decode expansion-map v2 and validate its stack/reference envelope."""
 
-    expansion = _decode_json_object(value, "expansion-map v2", "HOCUS492")
+    return _decode_expansion_map_envelope(
+        value,
+        CONTROL_CARRIER_CONTRACT,
+        entry_source_uri=entry_source_uri,
+        source_map_entries=source_map_entries,
+        instances=instances,
+        instance_depth=instance_depth,
+        per_fold_iterations=per_fold_iterations,
+        aggregate_iterations=aggregate_iterations,
+    )
+
+
+def decode_value_expansion_map_envelope(
+    value: Any, *, entry_source_uri: str | None = None,
+    source_map_entries: int = 100_000, instances: int = 10_000,
+    instance_depth: int = 64, per_fold_iterations: int = 4_096,
+    aggregate_iterations: int = 100_000,
+) -> dict[str, Any]:
+    """Decode the HS7 expansion-map v3 envelope."""
+
+    return _decode_expansion_map_envelope(
+        value,
+        VALUE_CARRIER_CONTRACT,
+        entry_source_uri=entry_source_uri,
+        source_map_entries=source_map_entries,
+        instances=instances,
+        instance_depth=instance_depth,
+        per_fold_iterations=per_fold_iterations,
+        aggregate_iterations=aggregate_iterations,
+    )
+
+
+def _decode_expansion_map_envelope(
+    value: Any,
+    contract: CarrierContract,
+    *,
+    entry_source_uri: str | None,
+    source_map_entries: int,
+    instances: int,
+    instance_depth: int,
+    per_fold_iterations: int,
+    aggregate_iterations: int,
+) -> dict[str, Any]:
+    label = f"expansion-map v{contract.expansion_map_version}"
+    expansion = _decode_json_object(value, label, "HOCUS492")
     _exact_keys(expansion, {
         "$schema", "kind", "schemaVersion", "graphSpecVersion", "entrySourceUri",
         "stacks", "controlStacks", "mappings",
-    }, "expansion-map v2", "HOCUS492")
-    _equal(expansion, "$schema", "hocuspocus://schemas/expansion-map/v2", "HOCUS492")
+    }, label, "HOCUS492")
+    _equal(
+        expansion,
+        "$schema",
+        f"hocuspocus://schemas/expansion-map/v{contract.expansion_map_version}",
+        "HOCUS492",
+    )
     _equal(expansion, "kind", "hocus_expansion_map", "HOCUS492")
-    _exact_int(expansion["schemaVersion"], 2, "expansionMap.schemaVersion", "HOCUS492")
-    _equal(expansion, "graphSpecVersion", "0.4", "HOCUS492")
+    _exact_int(
+        expansion["schemaVersion"],
+        contract.expansion_map_version,
+        "expansionMap.schemaVersion",
+        "HOCUS492",
+    )
+    _equal(
+        expansion, "graphSpecVersion", contract.graph_spec_version, "HOCUS492"
+    )
     uri = _source_uri(expansion["entrySourceUri"], "expansionMap.entrySourceUri", "HOCUS492")
     if entry_source_uri is not None and uri != entry_source_uri:
         _fail("HOCUS492", "Expansion-map entry source conflicts with its enclosing carrier.")
@@ -442,16 +362,39 @@ def _validate_related_origins(value: Any, label: str) -> None:
 def decode_control_resolved_module_set_envelope(value: Any) -> dict[str, Any]:
     """Decode resolved-module-set v2 and validate ordering, limits, and identities."""
 
-    resolved = _decode_json_object(value, "resolved-module-set v2", "HOCUS493")
+    return _decode_resolved_module_set_envelope(value, CONTROL_CARRIER_CONTRACT)
+
+
+def decode_value_resolved_module_set_envelope(value: Any) -> dict[str, Any]:
+    """Decode the HS7 resolved-module-set v3 envelope."""
+
+    return _decode_resolved_module_set_envelope(value, VALUE_CARRIER_CONTRACT)
+
+
+def _decode_resolved_module_set_envelope(
+    value: Any, contract: CarrierContract
+) -> dict[str, Any]:
+    label = f"resolved-module-set v{contract.resolved_module_set_version}"
+    resolved = _decode_json_object(value, label, "HOCUS493")
     _exact_keys(resolved, {
         "$schema", "kind", "schemaVersion", "languageVersion", "projectUid",
         "entrySourceUri", "projectManifestDigest", "projectLockDigest",
         "resolverPolicyDigest", "limits", "modules",
-    }, "resolved-module-set v2", "HOCUS493")
-    _equal(resolved, "$schema", "hocuspocus://schemas/resolved-module-set/v2", "HOCUS493")
+    }, label, "HOCUS493")
+    _equal(
+        resolved,
+        "$schema",
+        f"hocuspocus://schemas/resolved-module-set/v{contract.resolved_module_set_version}",
+        "HOCUS493",
+    )
     _equal(resolved, "kind", "hocus_resolved_module_set", "HOCUS493")
-    _exact_int(resolved["schemaVersion"], 2, "resolvedModuleSet.schemaVersion", "HOCUS493")
-    _equal(resolved, "languageVersion", "0.3", "HOCUS493")
+    _exact_int(
+        resolved["schemaVersion"],
+        contract.resolved_module_set_version,
+        "resolvedModuleSet.schemaVersion",
+        "HOCUS493",
+    )
+    _equal(resolved, "languageVersion", contract.language_version, "HOCUS493")
     uid = _string(resolved["projectUid"], "resolvedModuleSet.projectUid", "HOCUS493", pattern=_UID)
     entry_uri = _source_uri(resolved["entrySourceUri"], "resolvedModuleSet.entrySourceUri", "HOCUS493")
     if not entry_uri.startswith(f"hocus-project://{uid}/"):
@@ -466,7 +409,7 @@ def decode_control_resolved_module_set_envelope(value: Any) -> dict[str, Any]:
     dependencies_by_uri: dict[str, list[str]] = {}
     for index, module in enumerate(modules):
         uri, normalized = _validate_resolved_module(
-            module, index, uid, limits["moduleFiles"],
+            module, index, uid, limits["moduleFiles"], contract.language_version,
         )
         uris.append(uri)
         dependencies_by_uri[uri] = normalized
@@ -500,6 +443,7 @@ def _validate_resolved_limits(value: Any) -> dict[str, int]:
 
 def _validate_resolved_module(
     module: Any, index: int, project_uid: str, module_limit: int,
+    language_version: str,
 ) -> tuple[str, list[str]]:
     label = f"resolvedModuleSet.modules[{index}]"
     if not isinstance(module, dict):
@@ -524,7 +468,7 @@ def _validate_resolved_module(
     _validate_resolved_origin(module, label, scheme, owner_uid, project_uid)
     for field in ("sourceDigest", "interfaceDigest", "transitiveDigest"):
         _digest(module[field], f"{label}.{field}", "HOCUS493")
-    _equal(module, "languageVersion", "0.3", "HOCUS493")
+    _equal(module, "languageVersion", language_version, "HOCUS493")
     dependencies = module["dependencies"]
     if not isinstance(dependencies, list) or len(dependencies) > module_limit:
         _fail("HOCUS493", f"{label}.dependencies is invalid.")
@@ -563,20 +507,38 @@ def _validate_resolved_origin(
 def decode_control_bundle_envelope(value: Any) -> dict[str, Any]:
     """Decode and authenticate Bundle 0.4 without enabling its consumption."""
 
-    bundle = _decode_json_object(value, "compiled bundle 0.4", "HOCUS494")
+    return _decode_bundle_envelope(value, CONTROL_CARRIER_CONTRACT)
+
+
+def decode_value_bundle_envelope(value: Any) -> dict[str, Any]:
+    """Decode and authenticate the HS7 Bundle 0.5 carrier."""
+
+    return _decode_bundle_envelope(value, VALUE_CARRIER_CONTRACT)
+
+
+def _decode_bundle_envelope(
+    value: Any, contract: CarrierContract
+) -> dict[str, Any]:
+    label = f"compiled bundle {contract.bundle_version}"
+    bundle = _decode_json_object(value, label, "HOCUS494")
     _exact_keys(bundle, {
         "$schema", "kind", "bundleVersion", "bundleDigest", "compilerVersion",
         "graphSpecVersion", "languageVersion", "portable", "projectUid",
         "projectManifestDigest", "projectLockDigest", "entrySource", "dependencies",
         "catalogConstraints", "requiredCapabilities", "sourceMaps", "graphSpec",
         "semanticResolution", "resolvedModuleSet",
-    }, "compiled bundle 0.4", "HOCUS494")
-    _equal(bundle, "$schema", "hocuspocus://schemas/compiled-bundle/v0.4", "HOCUS494")
+    }, label, "HOCUS494")
+    _equal(
+        bundle,
+        "$schema",
+        f"hocuspocus://schemas/compiled-bundle/v{contract.bundle_version}",
+        "HOCUS494",
+    )
     _equal(bundle, "kind", "hocus_compiled_bundle", "HOCUS494")
-    _equal(bundle, "bundleVersion", "0.4", "HOCUS494")
-    _equal(bundle, "compilerVersion", "0.5.0", "HOCUS494")
-    _equal(bundle, "graphSpecVersion", "0.4", "HOCUS494")
-    _equal(bundle, "languageVersion", "0.3", "HOCUS494")
+    _equal(bundle, "bundleVersion", contract.bundle_version, "HOCUS494")
+    _equal(bundle, "compilerVersion", contract.compiler_version, "HOCUS494")
+    _equal(bundle, "graphSpecVersion", contract.graph_spec_version, "HOCUS494")
+    _equal(bundle, "languageVersion", contract.language_version, "HOCUS494")
     if bundle["portable"] is not True:
         _fail("HOCUS494", "Bundle 0.4 portable must be the exact boolean true.")
     uid = _string(bundle["projectUid"], "bundle.projectUid", "HOCUS494", pattern=_UID)
@@ -587,21 +549,24 @@ def decode_control_bundle_envelope(value: Any) -> dict[str, Any]:
     del unsigned["bundleDigest"]
     actual_digest = "sha256:" + hashlib.sha256(_canonical_json(unsigned).encode("utf-8")).hexdigest()
     if not hmac.compare_digest(declared_digest, actual_digest):
-        _fail("HOCUS494", "Bundle digest does not match canonical Bundle 0.4 content.")
-    entry, resolved = _validate_bundle_sources(bundle, uid)
-    graph = _validate_bundle_graph(bundle, entry, resolved)
-    catalog = _validate_bundle_catalog(bundle)
-    capabilities = _validate_bundle_capabilities(bundle)
+        _fail("HOCUS494", f"Bundle digest does not match canonical {label} content.")
+    entry, resolved = _validate_bundle_sources(bundle, uid, contract)
+    graph = _validate_bundle_graph(bundle, entry, resolved, contract)
+    catalog = _validate_bundle_catalog(bundle, contract)
+    capabilities = _validate_bundle_capabilities(bundle, graph)
     semantic = _validate_bundle_semantic(bundle, catalog, graph)
     if semantic["requiredCapabilities"] != capabilities:
-        _fail("HOCUS494", "Bundle capabilities conflict with semanticResolution.")
+        _fail(
+            "HOCUS494", "Bundle capabilities conflict with semanticResolution.",
+            details={"expected": capabilities, "actual": semantic["requiredCapabilities"]},
+        )
     if len(semantic["diagnostics"]) > resolved["limits"]["diagnostics"]:
         _fail("HOCUS494", "Bundle diagnostics exceed the resolved limit.")
     return bundle
 
 
 def _validate_bundle_sources(
-    bundle: dict[str, Any], uid: str,
+    bundle: dict[str, Any], uid: str, contract: CarrierContract,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     entry = _source_record(bundle["entrySource"], "bundle.entrySource", {"project_file"})
     if not entry["uri"].startswith(f"hocus-project://{uid}/"):
@@ -617,7 +582,9 @@ def _validate_bundle_sources(
     if dependency_uris != sorted(set(dependency_uris)):
         _fail("HOCUS494", "Bundle dependencies must be uniquely sorted by URI.")
 
-    resolved = decode_control_resolved_module_set_envelope(bundle["resolvedModuleSet"])
+    resolved = _decode_resolved_module_set_envelope(
+        bundle["resolvedModuleSet"], contract
+    )
     if (
         resolved["projectUid"] != uid
         or resolved["entrySourceUri"] != entry["uri"]
@@ -636,14 +603,24 @@ def _validate_bundle_sources(
 
 def _validate_bundle_graph(
     bundle: dict[str, Any], entry: dict[str, Any], resolved: dict[str, Any],
+    contract: CarrierContract,
 ) -> dict[str, Any]:
-    graph = decode_control_graph_spec_envelope(
-        bundle["graphSpec"], resolved_limits=resolved["limits"],
+    graph = _decode_graph_spec_envelope(
+        bundle["graphSpec"], contract, resolved_limits=resolved["limits"],
     )
     expansion = graph["expansionMap"]
     if expansion["entrySourceUri"] != entry["uri"]:
         _fail("HOCUS494", "Bundle GraphSpec expansion entry conflicts with entrySource.")
     _validate_expansion_module_provenance(expansion, resolved)
+    try:
+        from .bundle_graph_validation import BundleValidationError, validate_declared_source_uris
+        validate_declared_source_uris(
+            graph, {entry["uri"], *(item["uri"] for item in bundle["dependencies"])},
+        )
+    except BundleValidationError as exc:
+        _fail(
+            "HOCUS494", "Bundle GraphSpec references an undeclared source URI.", details=exc.details,
+        )
     source_maps = bundle["sourceMaps"]
     if not isinstance(source_maps, dict):
         _fail("HOCUS494", "Bundle sourceMaps must be an object.")
@@ -655,10 +632,10 @@ def _validate_bundle_graph(
         _canonical_json(expansion).encode("utf-8")
     ).hexdigest()
     expected_source_maps = {
-        "format": "graph-spec-expansion-v2",
+        "format": f"graph-spec-expansion-v{contract.expansion_map_version}",
         "entrySourceUri": entry["uri"],
         "embeddedInGraphSpec": True,
-        "expansionMapVersion": 2,
+        "expansionMapVersion": contract.expansion_map_version,
         "expansionMapDigest": expected_expansion_digest,
     }
     if source_maps != expected_source_maps:
@@ -666,18 +643,28 @@ def _validate_bundle_graph(
     return graph
 
 
-def _validate_bundle_catalog(bundle: dict[str, Any]) -> dict[str, Any]:
+def _validate_bundle_catalog(
+    bundle: dict[str, Any], contract: CarrierContract,
+) -> dict[str, Any]:
     catalog = bundle["catalogConstraints"]
     if not isinstance(catalog, dict):
         _fail("HOCUS494", "Bundle catalogConstraints must be an object.")
     _exact_keys(catalog, {"schemaVersion", "fingerprint", "contentDigest"}, "bundle.catalogConstraints", "HOCUS494")
-    _exact_int(catalog["schemaVersion"], 1, "catalogConstraints.schemaVersion", "HOCUS494")
+    expected_version = 2 if contract is VALUE_CARRIER_CONTRACT else 1
+    _exact_int(
+        catalog["schemaVersion"],
+        expected_version,
+        "catalogConstraints.schemaVersion",
+        "HOCUS494",
+    )
     _digest(catalog["fingerprint"], "catalogConstraints.fingerprint", "HOCUS494")
     _digest(catalog["contentDigest"], "catalogConstraints.contentDigest", "HOCUS494")
     return catalog
 
 
-def _validate_bundle_capabilities(bundle: dict[str, Any]) -> list[str]:
+def _validate_bundle_capabilities(
+    bundle: dict[str, Any], graph: dict[str, Any],
+) -> list[str]:
     capabilities = bundle["requiredCapabilities"]
     if (
         not isinstance(capabilities, list)
@@ -686,6 +673,16 @@ def _validate_bundle_capabilities(bundle: dict[str, Any]) -> list[str]:
         or any(item not in {"edit_scene", "run_code"} for item in capabilities)
     ):
         _fail("HOCUS494", "Bundle requiredCapabilities is invalid.")
+    from .bundle_graph_validation import required_capabilities
+
+    expected = required_capabilities(graph)
+    missing = sorted(set(expected) - set(capabilities))
+    if missing:
+        _fail(
+            "HOCUS494",
+            "Bundle requiredCapabilities omits capabilities required by GraphSpec content.",
+            details={"expectedMinimum": expected, "actual": capabilities, "missing": missing},
+        )
     return capabilities
 
 
@@ -896,6 +893,8 @@ def _validate_expansion_surface(graph: Mapping[str, Any]) -> None:
         required.add(prefix)
         required.update(f"{prefix}/inputs/{index}" for index, _ in enumerate(inputs))
         required.update(f"{prefix}/parms/{index}" for index, _ in enumerate(parms))
+    from .runtime_pointers import runtime_entity_pointers
+    required.update(runtime_entity_pointers(graph))
     for field in ("display", "render", "output", "layout"):
         if graph[field] is not None:
             required.add(f"/{field}")

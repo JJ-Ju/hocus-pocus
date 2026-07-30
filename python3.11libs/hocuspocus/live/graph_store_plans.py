@@ -18,6 +18,11 @@ class GraphStorePlanError(RuntimeError):
 class GraphStorePlanMixin:
     """SQLite operations for checkout records and immutable plan lifecycles."""
 
+    _DURABLE_TERMINAL_RETENTION_SECONDS = 24 * 60 * 60
+    _MAX_DURABLE_PLAN_HISTORIES = 256
+    _MAX_DURABLE_PLAN_HISTORY_BYTES = 256 * 1024 * 1024
+    _DURABLE_TERMINAL_TRANSITION_MAX_BYTES = 32 * 1024 * 1024
+
     def save_checkout_record(self, record: dict[str, Any]) -> None:
         with self._lock, self._connect() as connection:
             connection.execute(
@@ -253,6 +258,190 @@ class GraphStorePlanMixin:
             raise GraphStorePlanError("expires_at must be finite and later than created_at.")
         return created, expiry
 
+    @staticmethod
+    def _durable_plan_history_rows(
+        connection: sqlite3.Connection,
+    ) -> list[sqlite3.Row]:
+        return connection.execute(
+            """
+            SELECT
+                plan.plan_id,
+                plan.expires_at,
+                plan_commit.plan_commit_id,
+                plan_commit.state,
+                plan_commit.updated_at,
+                (
+                    LENGTH(plan.required_capabilities_json)
+                    + LENGTH(plan.execution_plan_json)
+                    + LENGTH(plan.payload_json)
+                    + COALESCE(LENGTH(plan_commit.pre_apply_snapshot_json), 0)
+                    + COALESCE(LENGTH(plan_commit.inverse_plan_json), 0)
+                    + COALESCE(LENGTH(plan_commit.result_json), 0)
+                    + COALESCE(LENGTH(plan_commit.error_json), 0)
+                    + COALESCE(events.json_bytes, 0)
+                ) AS json_bytes,
+                (
+                    COALESCE(LENGTH(plan_commit.result_json), 0)
+                    + COALESCE(LENGTH(plan_commit.error_json), 0)
+                    + COALESCE(events.transition_bytes, 0)
+                ) AS terminal_transition_bytes
+            FROM immutable_apply_plans AS plan
+            LEFT JOIN plan_apply_commits AS plan_commit
+                ON plan_commit.plan_id = plan.plan_id
+            LEFT JOIN (
+                SELECT
+                    plan_commit_id,
+                    SUM(LENGTH(details_json)) AS json_bytes,
+                    SUM(
+                        CASE WHEN from_state IS NULL
+                            THEN 0 ELSE LENGTH(details_json)
+                        END
+                    ) AS transition_bytes
+                FROM plan_commit_events
+                GROUP BY plan_commit_id
+            ) AS events
+                ON events.plan_commit_id = plan_commit.plan_commit_id
+            ORDER BY plan.created_at, plan.plan_id
+            """
+        ).fetchall()
+
+    @staticmethod
+    def _delete_durable_plan_histories(
+        connection: sqlite3.Connection,
+        plan_ids: list[str],
+    ) -> None:
+        for plan_id in plan_ids:
+            commit_rows = connection.execute(
+                "SELECT plan_commit_id FROM plan_apply_commits WHERE plan_id = ?",
+                (plan_id,),
+            ).fetchall()
+            for commit in commit_rows:
+                connection.execute(
+                    "DELETE FROM plan_commit_events WHERE plan_commit_id = ?",
+                    (commit["plan_commit_id"],),
+                )
+            connection.execute(
+                "DELETE FROM plan_apply_commits WHERE plan_id = ?",
+                (plan_id,),
+            )
+            connection.execute(
+                """
+                DELETE FROM immutable_apply_plans
+                WHERE plan_id = ?
+                  AND NOT EXISTS (
+                      SELECT 1 FROM plan_apply_commits
+                      WHERE plan_apply_commits.plan_id = immutable_apply_plans.plan_id
+                  )
+                """,
+                (plan_id,),
+            )
+
+    @classmethod
+    def _durable_history_budget_bytes(cls, rows: list[sqlite3.Row]) -> int:
+        total = 0
+        for row in rows:
+            actual = int(row["json_bytes"] or 0)
+            total += actual
+            if row["state"] in {"pending", "partial_or_unknown"}:
+                used = int(row["terminal_transition_bytes"] or 0)
+                total += max(
+                    0,
+                    cls._DURABLE_TERMINAL_TRANSITION_MAX_BYTES - used,
+                )
+        return total
+
+    @classmethod
+    def _durable_history_over_budget(
+        cls,
+        rows: list[sqlite3.Row],
+        *,
+        incoming_count: int,
+        incoming_bytes: int,
+    ) -> bool:
+        return (
+            len(rows) + incoming_count > cls._MAX_DURABLE_PLAN_HISTORIES
+            or cls._durable_history_budget_bytes(rows) + incoming_bytes
+            > cls._MAX_DURABLE_PLAN_HISTORY_BYTES
+        )
+
+    def _prune_durable_plan_history_locked(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        now: float,
+        incoming_count: int = 0,
+        incoming_bytes: int = 0,
+        reject_growth: bool,
+    ) -> dict[str, int]:
+        rows = self._durable_plan_history_rows(connection)
+        expired_unclaimed = [
+            str(row["plan_id"])
+            for row in rows
+            if row["plan_commit_id"] is None and float(row["expires_at"]) <= now
+        ]
+        self._delete_durable_plan_histories(connection, expired_unclaimed)
+        rows = self._durable_plan_history_rows(connection)
+        cutoff = now - self._DURABLE_TERMINAL_RETENTION_SECONDS
+        aged_terminal = [
+            str(row["plan_id"])
+            for row in rows
+            if row["state"] in {"committed", "aborted"}
+            and float(row["updated_at"]) <= cutoff
+        ]
+        self._delete_durable_plan_histories(connection, aged_terminal)
+        rows = self._durable_plan_history_rows(connection)
+        pressure_candidates = sorted(
+            (
+                row
+                for row in rows
+                if row["state"] in {"committed", "aborted"}
+            ),
+            key=lambda row: (float(row["updated_at"]), str(row["plan_commit_id"])),
+        )
+        pressure_pruned: list[str] = []
+        while pressure_candidates and self._durable_history_over_budget(
+            rows,
+            incoming_count=incoming_count,
+            incoming_bytes=incoming_bytes,
+        ):
+            selected = pressure_candidates.pop(0)
+            plan_id = str(selected["plan_id"])
+            pressure_pruned.append(plan_id)
+            self._delete_durable_plan_histories(connection, [plan_id])
+            rows = self._durable_plan_history_rows(connection)
+        if reject_growth and self._durable_history_over_budget(
+            rows,
+            incoming_count=incoming_count,
+            incoming_bytes=incoming_bytes,
+        ):
+            raise GraphStorePlanError(
+                "Durable immutable-plan retention is exhausted by active or "
+                "unresolved recovery records."
+            )
+        return {
+            "historyCount": len(rows),
+            "retainedJsonBytes": sum(int(row["json_bytes"] or 0) for row in rows),
+            "expiredUnclaimedPruned": len(expired_unclaimed),
+            "agedTerminalPruned": len(aged_terminal),
+            "pressurePruned": len(pressure_pruned),
+        }
+
+    def prune_durable_plan_history(
+        self,
+        *,
+        now: float | None = None,
+    ) -> dict[str, int]:
+        timestamp = time.time() if now is None else float(now)
+        if not math.isfinite(timestamp):
+            raise GraphStorePlanError("Retention timestamp must be finite.")
+        with self._lock, self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            return self._prune_durable_plan_history_locked(
+                connection,
+                now=timestamp,
+                reject_growth=False,
+            )
+
     def store_immutable_plan(
         self,
         *,
@@ -262,6 +451,7 @@ class GraphStorePlanMixin:
         root_path: str | None = None,
         expires_at: float | None = None,
         created_at: float | None = None,
+        now: float | None = None,
     ) -> dict[str, Any]:
         """Persist one content-verified plan; an existing ID is never replaced."""
         if not isinstance(payload, dict):
@@ -293,8 +483,29 @@ class GraphStorePlanMixin:
         created, expiry = self._validate_immutable_plan_times(
             plan_payload, created_at, expires_at
         )
+        timestamp = time.time() if now is None else float(now)
+        if not math.isfinite(timestamp):
+            raise GraphStorePlanError("Storage timestamp must be finite.")
+        if expiry <= timestamp:
+            raise GraphStorePlanError(
+                "Cannot persist an immutable plan that is already expired."
+            )
 
+        capabilities_json = self._strict_plan_json(
+            required_capabilities, "requiredCapabilities"
+        )
+        execution_json = self._strict_plan_json(execution_plan, "executionPlan")
+        payload_json = self._strict_plan_json(plan_payload, "plan payload")
+        incoming_bytes = len(capabilities_json) + len(execution_json) + len(payload_json)
         with self._lock, self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            self._prune_durable_plan_history_locked(
+                connection,
+                now=timestamp,
+                incoming_count=1,
+                incoming_bytes=incoming_bytes,
+                reject_growth=True,
+            )
             try:
                 connection.execute(
                     """
@@ -310,8 +521,8 @@ class GraphStorePlanMixin:
                         plan_id, plan_hash, source_digest, session_id,
                         catalog_fingerprint, catalog_content_digest, ownership,
                         document_id, root_path, baseline_document_revision,
-                        baseline_live_revision, self._strict_plan_json(required_capabilities, "requiredCapabilities"),
-                        self._strict_plan_json(execution_plan, "executionPlan"), self._strict_plan_json(plan_payload, "plan payload"),
+                        baseline_live_revision, capabilities_json,
+                        execution_json, payload_json,
                         expiry, created,
                     ),
                 )
@@ -328,6 +539,46 @@ class GraphStorePlanMixin:
                 (str(plan_id).strip(),),
             ).fetchone()
         return None if row is None else self._decode_plan_row(row)
+
+    def delete_unclaimed_plan(
+        self,
+        plan_id: str,
+        *,
+        expected_hash: str,
+    ) -> bool:
+        """Delete a plan that was never returned and has no lifecycle claim."""
+
+        normalized_id = str(plan_id).strip()
+        normalized_hash = str(expected_hash).strip()
+        if not normalized_id or not normalized_hash:
+            raise GraphStorePlanError(
+                "Plan ID and expected hash are required for unclaimed deletion."
+            )
+        with self._lock, self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT plan_hash FROM immutable_apply_plans WHERE plan_id = ?",
+                (normalized_id,),
+            ).fetchone()
+            if row is None:
+                return False
+            if str(row["plan_hash"]) != normalized_hash:
+                raise GraphStorePlanError(
+                    "Plan hash does not match the unclaimed immutable plan."
+                )
+            claimed = connection.execute(
+                "SELECT 1 FROM plan_apply_commits WHERE plan_id = ?",
+                (normalized_id,),
+            ).fetchone()
+            if claimed is not None:
+                raise GraphStorePlanError(
+                    "Claimed immutable plans cannot be deleted as unclaimed."
+                )
+            connection.execute(
+                "DELETE FROM immutable_apply_plans WHERE plan_id = ?",
+                (normalized_id,),
+            )
+            return True
 
     def load_plan_commit(
         self,
@@ -414,6 +665,7 @@ class GraphStorePlanMixin:
             raise GraphStorePlanError("Plan commit timestamp must be finite.")
         snapshot_json = self._strict_plan_json(pre_apply_snapshot, "pre_apply_snapshot")
         inverse_json = self._strict_plan_json(inverse_plan, "inverse_plan") if inverse_plan is not None else None
+        event_details_json = self._stable_json({"idempotencyKey": idempotency_key})
         with self._lock, self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             existing = self._claimable_plan_row(
@@ -426,6 +678,17 @@ class GraphStorePlanMixin:
             )
             if existing is not None:
                 return existing
+            self._prune_durable_plan_history_locked(
+                connection,
+                now=timestamp,
+                incoming_bytes=(
+                    len(snapshot_json)
+                    + len(inverse_json or "")
+                    + len(event_details_json)
+                    + self._DURABLE_TERMINAL_TRANSITION_MAX_BYTES
+                ),
+                reject_growth=True,
+            )
             try:
                 connection.execute(
                     """
@@ -448,7 +711,7 @@ class GraphStorePlanMixin:
                         plan_commit_id, from_state, to_state, details_json, created_at
                     ) VALUES (?, NULL, 'pending', ?, ?)
                     """,
-                    (plan_commit_id, self._stable_json({"idempotencyKey": idempotency_key}), timestamp),
+                    (plan_commit_id, event_details_json, timestamp),
                 )
             except sqlite3.IntegrityError as exc:
                 raise GraphStorePlanError("Plan commit identity conflicts with an existing record.") from exc
@@ -458,6 +721,34 @@ class GraphStorePlanMixin:
             ).fetchone()
             assert row is not None
             return self._decode_plan_commit_row(row)
+
+    def _bounded_terminal_transition_json(
+        self,
+        *,
+        result: dict[str, Any] | None,
+        error: dict[str, Any] | None,
+        event_details: dict[str, Any],
+        label: str,
+    ) -> tuple[str | None, str | None, str]:
+        result_json = (
+            self._strict_plan_json(result, f"{label} result")
+            if result is not None
+            else None
+        )
+        error_json = (
+            self._strict_plan_json(error, f"{label} error")
+            if error is not None
+            else None
+        )
+        event_json = self._strict_plan_json(event_details, f"{label} event")
+        byte_length = len(result_json or "") + len(error_json or "") + len(event_json)
+        if byte_length > self._DURABLE_TERMINAL_TRANSITION_MAX_BYTES:
+            raise GraphStorePlanError(
+                f"{label} result, error, and event require {byte_length} bytes; "
+                "the durable terminal transition limit is "
+                f"{self._DURABLE_TERMINAL_TRANSITION_MAX_BYTES} bytes."
+            )
+        return result_json, error_json, event_json
 
     def finish_plan_commit(
         self,
@@ -481,8 +772,15 @@ class GraphStorePlanMixin:
         timestamp = time.time() if now is None else float(now)
         if not math.isfinite(timestamp):
             raise GraphStorePlanError("Plan commit timestamp must be finite.")
-        result_json = self._strict_plan_json(result, "result") if result is not None else None
-        error_json = self._strict_plan_json(error, "error") if error is not None else None
+        result_json, error_json, event_json = self._bounded_terminal_transition_json(
+            result=result,
+            error=error,
+            event_details={
+                "hasResult": result is not None,
+                "hasError": error is not None,
+            },
+            label="Plan commit terminal transition",
+        )
         with self._lock, self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
@@ -514,7 +812,7 @@ class GraphStorePlanMixin:
                 """,
                 (
                     plan_commit_id, state,
-                    self._stable_json({"hasResult": result is not None, "hasError": error is not None}),
+                    event_json,
                     timestamp,
                 ),
             )
@@ -523,7 +821,13 @@ class GraphStorePlanMixin:
                 (plan_commit_id,),
             ).fetchone()
             assert updated is not None
-            return self._decode_plan_commit_row(updated)
+            decoded = self._decode_plan_commit_row(updated)
+            self._prune_durable_plan_history_locked(
+                connection,
+                now=timestamp,
+                reject_growth=True,
+            )
+            return decoded
 
     def recoverable_plan_commits(self) -> list[dict[str, Any]]:
         """Return commits requiring crash recovery or explicit quarantine handling."""
@@ -554,7 +858,13 @@ class GraphStorePlanMixin:
         timestamp = time.time() if now is None else float(now)
         if not math.isfinite(timestamp):
             raise GraphStorePlanError("Recovery timestamp must be finite.")
-        result_json = self._strict_plan_json(result, "recovery result")
+        result_json, _, event_json = self._bounded_terminal_transition_json(
+            result=result,
+            error=None,
+            event_details={"recovered": True},
+            label="Plan commit recovery",
+        )
+        assert result_json is not None
         with self._lock, self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
@@ -567,16 +877,39 @@ class GraphStorePlanMixin:
                 raise GraphStorePlanError(
                     f"Only partial_or_unknown commits require explicit recovery; found {current_state}."
                 )
+            prior_event_bytes = int(
+                connection.execute(
+                    """
+                    SELECT COALESCE(SUM(LENGTH(details_json)), 0)
+                    FROM plan_commit_events
+                    WHERE plan_commit_id = ? AND from_state IS NOT NULL
+                    """,
+                    (plan_commit_id,),
+                ).fetchone()[0]
+            )
+            if prior_event_bytes + len(result_json) + len(event_json) > (
+                self._DURABLE_TERMINAL_TRANSITION_MAX_BYTES
+            ):
+                raise GraphStorePlanError(
+                    "Plan commit recovery exceeds its reserved durable terminal "
+                    "transition headroom."
+                )
             connection.execute(
                 "UPDATE plan_apply_commits SET state = ?, result_json = ?, error_json = NULL, updated_at = ? WHERE plan_commit_id = ? AND state = 'partial_or_unknown'",
                 (state, result_json, timestamp, plan_commit_id),
             )
             connection.execute(
                 "INSERT INTO plan_commit_events (plan_commit_id, from_state, to_state, details_json, created_at) VALUES (?, 'partial_or_unknown', ?, ?, ?)",
-                (plan_commit_id, state, self._stable_json({"recovered": True}), timestamp),
+                (plan_commit_id, state, event_json, timestamp),
             )
             updated = connection.execute(
                 "SELECT * FROM plan_apply_commits WHERE plan_commit_id = ?", (plan_commit_id,)
             ).fetchone()
             assert updated is not None
-            return self._decode_plan_commit_row(updated)
+            decoded = self._decode_plan_commit_row(updated)
+            self._prune_durable_plan_history_locked(
+                connection,
+                now=timestamp,
+                reject_growth=True,
+            )
+            return decoded

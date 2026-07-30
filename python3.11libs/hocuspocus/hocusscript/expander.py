@@ -965,15 +965,19 @@ def _validate_graph_symbols(graph: GraphDecl) -> None:
 def _validate_node_shape(node: NodeDecl) -> None:
     if not node.type_name.strip() or len(node.type_name) > 4096:
         raise ModuleExpansionError("HOCUS477", "Node operator type must not be empty.", node.type_span)
-    inputs: set[int] = set()
+    inputs: set[tuple[str, Any]] = set()
     parms: set[str] = set()
     for statement in node.statements:
         if isinstance(statement, InputStmt):
-            if statement.index < 0:
+            if statement.index is not None and statement.index < 0:
                 raise ModuleExpansionError("HOCUS474", "Node input index must be nonnegative.", statement.index_span)
-            if statement.index in inputs:
-                raise ModuleExpansionError("HOCUS477", f"Duplicate node input index: {statement.index}.", statement.span)
-            inputs.add(statement.index)
+            selector = (
+                ("name", statement.name)
+                if statement.name is not None else ("index", statement.index)
+            )
+            if selector in inputs:
+                raise ModuleExpansionError("HOCUS477", f"Duplicate node input selector: {selector[1]}.", statement.span)
+            inputs.add(selector)
             output_index = getattr(statement.source, "output_index", None)
             if output_index is not None and (type(output_index) is not int or output_index < 0):
                 raise ModuleExpansionError("HOCUS474", "Node output index must be nonnegative.", statement.source.span)

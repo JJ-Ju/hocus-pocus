@@ -5,13 +5,16 @@ from __future__ import annotations
 from .diagnostics import Diagnostic, HocusSourceError, SourceSpan
 import re
 
-from .lexer import Lexer, Token
+from .lexer import Token
 from .module_paths import is_literal_import_specifier
+from .parser_tagged_values import TAGGED_VALUE_NAMES, TaggedValueParserMixin
+from .parser_port_selectors import PortSelectorParserMixin
+from .parser_editor_entities import EditorEntityParserMixin
+from .parser_runtime_entities import RuntimeEntityParserMixin
+from .editor_syntax import EDITOR_ENTITY_KEYWORDS
 from .syntax import (
-    ArrayExpr,
     CategoryStmt,
     CarryDecl,
-    CodeExpr,
     ControlOutputDecl,
     ExternalDecl,
     FlagStmt,
@@ -35,7 +38,6 @@ from .syntax import (
     SyntaxSource,
     SymbolRefExpr,
     TargetStmt,
-    ValueExpr,
     VersionDecl,
     UseDecl,
     ExportStmt,
@@ -50,7 +52,12 @@ _ID_SEED = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")
 _RESERVED_SYMBOL_PREFIX = "__hocus_"
 
 
-class Parser:
+class Parser(
+    EditorEntityParserMixin,
+    RuntimeEntityParserMixin,
+    PortSelectorParserMixin,
+    TaggedValueParserMixin,
+):
     def __init__(
         self,
         tokens: list[Token],
@@ -73,6 +80,7 @@ class Parser:
         self._max_control_depth = max_control_depth
         self._max_control_items = max_control_items
         self._control_items = 0
+        self._value_items = 0
         self._v03_node_count = 0
         self._v03_instance_count = 0
         self._language_version = "0.1"
@@ -105,7 +113,7 @@ class Parser:
                 )
             )
 
-        if version is not None and version.value in {"0.2", "0.3"}:
+        if version is not None and version.value in {"0.2", "0.3", "0.4"}:
             return self._parse_v02_source(version)
 
         graph = self._parse_graph()
@@ -206,7 +214,7 @@ class Parser:
 
     def _parse_module_statement(self, counts: dict[str, int]):
         if self._is_ident("node"):
-            if self._language_version == "0.3":
+            if self._uses_control_syntax():
                 self._claim_v03_node()
             elif counts["node"] >= self._max_nodes:
                 self._error("HOCUS314", f"Module exceeds the {self._max_nodes}-node limit.")
@@ -214,14 +222,14 @@ class Parser:
             counts["node"] += 1
             return statement
         if self._is_ident("use"):
-            if self._language_version == "0.3":
+            if self._uses_control_syntax():
                 self._claim_v03_instance()
             elif counts["instance"] >= self._max_instances:
                 self._error("HOCUS271", f"Module exceeds the {self._max_instances}-instance limit.")
             statement = self._parse_use()
             counts["instance"] += 1
             return statement
-        if self._language_version == "0.3" and (
+        if self._uses_control_syntax() and (
             self._is_ident("if") or self._is_ident("for")
         ):
             return self._parse_control(depth=1)
@@ -248,7 +256,7 @@ class Parser:
     def _recover_module_statement(
         self, exc: HocusSourceError, statement_index: int, statement_kind: object,
     ) -> None:
-        if self._language_version == "0.3" and statement_kind in {"if", "for"}:
+        if self._uses_control_syntax() and statement_kind in {"if", "for"}:
             self._index = statement_index
             self._synchronize_control_declaration()
         elif exc.diagnostic.code in {"HOCUS222", "HOCUS223", "HOCUS224", "HOCUS225", "HOCUS300"}:
@@ -378,8 +386,8 @@ class Parser:
         return ExportStmt(str(name.value), value, self._joined_span(start, end), name.span)
 
     def _parse_control(self, *, depth: int) -> IfDecl | ForDecl:
-        if self._language_version != "0.3":
-            self._error("HOCUS315", "Compile-time controls require language 0.3.")
+        if not self._uses_control_syntax():
+            self._error("HOCUS315", "Compile-time controls require language 0.3 or 0.4.")
         if depth > self._max_control_depth:
             self._error(
                 "HOCUS323",
@@ -652,10 +660,15 @@ class Parser:
             return self._parse_counted_graph_node(counts)
         if self._uses_module_syntax() and self._is_ident("use"):
             return self._parse_counted_graph_use(counts)
-        if self._language_version == "0.3" and (
+        if self._uses_control_syntax() and (
             self._is_ident("if") or self._is_ident("for")
         ):
             return self._parse_control(depth=1)
+        if (
+            self._language_version == "0.4"
+            and self._current().value in EDITOR_ENTITY_KEYWORDS
+        ):
+            return self._parse_editor_entity()
         if self._is_ident("display") or self._is_ident("render") or self._is_ident("output"):
             key = str(self._current().value)
             self._claim_singleton(key, seen_singletons)
@@ -674,7 +687,7 @@ class Parser:
         self._error("HOCUS217", message)
 
     def _parse_counted_graph_node(self, counts: dict[str, int]) -> NodeDecl:
-        if self._language_version == "0.3":
+        if self._uses_control_syntax():
             self._claim_v03_node()
         elif counts["node"] >= self._max_nodes:
             self._error("HOCUS314", f"Graph exceeds the {self._max_nodes}-node limit.")
@@ -683,7 +696,7 @@ class Parser:
         return statement
 
     def _parse_counted_graph_use(self, counts: dict[str, int]) -> UseDecl:
-        if self._language_version == "0.3":
+        if self._uses_control_syntax():
             self._claim_v03_instance()
         elif counts["instance"] >= self._max_instances:
             self._error("HOCUS271", f"Graph exceeds the {self._max_instances}-instance limit.")
@@ -705,7 +718,7 @@ class Parser:
     def _recover_graph_statement(
         self, exc: HocusSourceError, statement_index: int, statement_kind: object,
     ) -> None:
-        if self._language_version == "0.3" and statement_kind in {"if", "for"}:
+        if self._uses_control_syntax() and statement_kind in {"if", "for"}:
             self._index = statement_index
             self._synchronize_control_declaration()
         elif exc.diagnostic.code in {"HOCUS222", "HOCUS223", "HOCUS224", "HOCUS225", "HOCUS300"}:
@@ -805,7 +818,10 @@ class Parser:
         statements = []
         while self._current().kind not in {"RBRACE", "EOF"}:
             try:
-                if self._is_ident("input"):
+                runtime = self._parse_runtime_node_statement()
+                if runtime is not None:
+                    statements.append(runtime)
+                elif self._is_ident("input"):
                     statements.append(
                         self._parse_module_input() if self._uses_module_syntax() else self._parse_input()
                     )
@@ -837,40 +853,62 @@ class Parser:
     def _parse_module_input(self) -> InputStmt:
         start = self._advance()
         self._expect("LBRACKET", "HOCUS227", "Expected '[' after input.")
-        index = self._expect("NUMBER", "HOCUS228", "Expected an integer input index.")
-        if not isinstance(index.value, int):
-            self._error("HOCUS229", "Input index must be an integer.", token=index)
-        self._expect("RBRACKET", "HOCUS230", "Expected ']' after the input index.")
+        index, name, selector_span, _ = self._parse_port_selector(
+            expected_code="HOCUS228", integer_code="HOCUS229",
+            expected_message="Expected an integer input index.",
+            integer_message="Input index must be an integer.",
+        )
         self._expect("EQUAL", "HOCUS231", "Expected '=' in an input assignment.")
         source = self._parse_module_expr()
         if not isinstance(source, (ParamRefExpr, SymbolRefExpr)):
             self._error("HOCUS290", "Module inputs require a node_output reference.")
         end = self._statement_end()
-        return InputStmt(index.value, source, self._joined_span(start, end), index.span)
+        return InputStmt(
+            index, source, self._joined_span(start, end),
+            selector_span if index is not None else None,
+            name, selector_span if name is not None else None,
+        )
 
     def _parse_module_parm(self) -> ParmStmt:
         name = self._expect_authored_ident("HOCUS239", "Expected a parameter name.")
         self._expect("EQUAL", "HOCUS240", "Expected '=' after the parameter name.")
-        value = self._parse_module_expr()
+        token = self._current()
+        rich_value = (
+            self._language_version == "0.4"
+            and (token.kind == "LBRACKET" or (
+                token.kind == "IDENT" and token.value in {"vex", "python", "hscript"}
+                and self._tokens[self._index + 1].kind == "CODE"
+            ) or (
+                token.kind == "IDENT" and token.value in TAGGED_VALUE_NAMES
+                and self._tokens[self._index + 1].kind == "LPAREN"
+            ))
+        )
+        value = self._parse_value() if rich_value else self._parse_module_expr()
         end = self._statement_end()
         return ParmStmt(str(name.value), value, self._joined_span(name, end), name.span)
 
     def _parse_input(self) -> InputStmt:
         start = self._advance()
         self._expect("LBRACKET", "HOCUS227", "Expected '[' after input.")
-        index = self._expect("NUMBER", "HOCUS228", "Expected an integer input index.")
-        if not isinstance(index.value, int):
-            self._error("HOCUS229", "Input index must be an integer.", token=index)
-        self._expect("RBRACKET", "HOCUS230", "Expected ']' after the input index.")
+        index, name, selector_span, _ = self._parse_port_selector(
+            expected_code="HOCUS228", integer_code="HOCUS229",
+            expected_message="Expected an integer input index.",
+            integer_message="Input index must be an integer.",
+        )
         self._expect("EQUAL", "HOCUS231", "Expected '=' in an input assignment.")
         reference = self._parse_reference()
         end = self._statement_end()
-        return InputStmt(index.value, reference, self._joined_span(start, end), index.span)
+        return InputStmt(
+            index, reference, self._joined_span(start, end),
+            selector_span if index is not None else None,
+            name, selector_span if name is not None else None,
+        )
 
     def _parse_reference(self) -> ReferenceExpr:
         symbol = self._expect("IDENT", "HOCUS232", "Expected a node symbol.")
-        output_index = 0
-        output_span = symbol.span
+        output_index: int | None = 0
+        output_name: str | None = None
+        output_span: SourceSpan | None = symbol.span
         end = symbol
         explicit_output = False
         port_keyword: str | None = None
@@ -881,12 +919,11 @@ class Parser:
                 self._error("HOCUS234", "Only .output[index] and .out[index] are supported in 0.1.", token=port)
             port_keyword = str(port.value)
             self._expect("LBRACKET", "HOCUS235", "Expected '[' before the output index.")
-            output = self._expect("NUMBER", "HOCUS236", "Expected an integer output index.")
-            if not isinstance(output.value, int):
-                self._error("HOCUS237", "Output index must be an integer.", token=output)
-            output_index = output.value
-            output_span = output.span
-            end = self._expect("RBRACKET", "HOCUS238", "Expected ']' after the output index.")
+            output_index, output_name, output_span, end = self._parse_port_selector(
+                expected_code="HOCUS236", integer_code="HOCUS237",
+                expected_message="Expected an integer output index.",
+                integer_message="Output index must be an integer.",
+            )
         return ReferenceExpr(
             str(symbol.value),
             output_index,
@@ -894,7 +931,9 @@ class Parser:
             port_keyword,
             self._joined_span(symbol, end),
             symbol.span,
-            output_span,
+            output_span if output_index is not None else None,
+            output_name,
+            output_span if output_name is not None else None,
         )
 
     def _parse_parm(self) -> ParmStmt:
@@ -903,46 +942,6 @@ class Parser:
         value = self._parse_value()
         end = self._statement_end()
         return ParmStmt(str(name.value), value, self._joined_span(name, end), name.span)
-
-    def _parse_value(self, depth: int = 0) -> ValueExpr:
-        if depth > self._max_value_depth:
-            self._error("HOCUS246", f"Value nesting exceeds the {self._max_value_depth}-level limit.")
-        token = self._current()
-        if token.kind in {"STRING", "NUMBER"}:
-            self._advance()
-            return LiteralExpr(token.value, token.span)
-        if token.kind == "IDENT" and token.value in {"true", "false", "null"}:
-            self._advance()
-            value = {"true": True, "false": False, "null": None}[str(token.value)]
-            return LiteralExpr(value, token.span)
-        if token.kind == "IDENT" and token.value in {"vex", "python", "hscript"}:
-            language = self._advance()
-            code = self._expect("CODE", "HOCUS241", "Expected a raw code template after the language tag.")
-            if code.body_span is None or code.code_offset_map is None:
-                raise RuntimeError("CODE token is missing body source-map metadata")
-            return CodeExpr(
-                str(language.value),
-                str(code.value),
-                SourceSpan(language.span.source_name, language.span.start, code.span.end),
-                code.body_span,
-                code.code_offset_map,
-            )
-        if token.kind == "LBRACKET":
-            start = self._advance()
-            values: list[ValueExpr] = []
-            trailing_comma = False
-            if self._current().kind != "RBRACKET":
-                while True:
-                    values.append(self._parse_value(depth + 1))
-                    if self._match("COMMA") is None:
-                        break
-                    if self._current().kind == "RBRACKET":
-                        trailing_comma = True
-                        break
-            end = self._expect("RBRACKET", "HOCUS242", "Expected ']' to close the array.")
-            return ArrayExpr(tuple(values), trailing_comma, self._joined_span(start, end))
-        self._error("HOCUS243", "Expected a scalar, array, or tagged code value; executable expressions are not supported.")
-        raise AssertionError("unreachable")
 
     def _parse_module_literal(self) -> LiteralExpr:
         token = self._current()
@@ -979,16 +978,16 @@ class Parser:
                 member.span,
             )
         output_index: int | None = None
+        output_name: str | None = None
         output_span: SourceSpan | None = None
         end = member
         if member.value == "output":
             self._expect("LBRACKET", "HOCUS296", "Local node outputs require an explicit output index.")
-            output = self._expect("NUMBER", "HOCUS297", "Expected an integer output index.")
-            if not isinstance(output.value, int):
-                self._error("HOCUS298", "Output indexes must be integers.", token=output)
-            output_index = output.value
-            output_span = output.span
-            end = self._expect("RBRACKET", "HOCUS299", "Expected ']' after the output index.")
+            output_index, output_name, output_span, end = self._parse_port_selector(
+                expected_code="HOCUS297", integer_code="HOCUS298",
+                expected_message="Expected an integer output index.",
+                integer_message="Output indexes must be integers.",
+            )
         elif self._current().kind == "LBRACKET":
             self._error("HOCUS296", "Only .output[index] references may use an output index.")
         return SymbolRefExpr(
@@ -998,7 +997,9 @@ class Parser:
             self._joined_span(root, end),
             root.span,
             member.span,
-            output_span,
+            output_span if output_index is not None else None,
+            output_name,
+            output_span if output_name is not None else None,
         )
 
     def _parse_flag(self) -> FlagStmt:
@@ -1119,20 +1120,24 @@ class Parser:
             return token.value in {"node", "use", "if", "for", "yield"}
         if scope == "module":
             return token.value in {"node", "use", "export"} or (
-                self._language_version == "0.3" and token.value in {"if", "for"}
+                self._uses_control_syntax() and token.value in {"if", "for"}
             )
         starts = {
             "target", "category", "mode", "expect", "ownership", "existing", "adopt", "node",
             "display", "render", "output", "layout",
         }
+        starts.update(EDITOR_ENTITY_KEYWORDS)
         return token.value in starts or (
             self._uses_module_syntax() and token.value == "use"
         ) or (
-            self._language_version == "0.3" and token.value in {"if", "for"}
+            self._uses_control_syntax() and token.value in {"if", "for"}
         )
 
     def _uses_module_syntax(self) -> bool:
-        return self._language_version in {"0.2", "0.3"}
+        return self._language_version in {"0.2", "0.3", "0.4"}
+
+    def _uses_control_syntax(self) -> bool:
+        return self._language_version in {"0.3", "0.4"}
 
     def _expect_authored_ident(self, code: str, message: str) -> Token:
         token = self._expect("IDENT", code, message)
@@ -1185,13 +1190,5 @@ class Parser:
 
 
 def parse_syntax(source: str, source_name: str = "<memory>") -> SyntaxSource:
-    """Parse one bounded source string into the version-dispatched syntax AST."""
-    if not isinstance(source, str):
-        raise TypeError("source must be a string")
-    if not isinstance(source_name, str) or not source_name.strip():
-        raise TypeError("source_name must be a non-empty string")
-    parser = Parser(Lexer(source, source_name).tokenize())
-    syntax = parser.parse()
-    if parser.diagnostics:
-        raise HocusSourceError(parser.diagnostics[0])
-    return syntax
+    from .parser_api import parse_syntax as parse
+    return parse(source, source_name)

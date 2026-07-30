@@ -50,6 +50,20 @@ class GraphOperationsMixin:
                 references.append(candidate)
         return references
 
+    def _parm_is_strict_default(self, parm: Any) -> bool:
+        method = getattr(parm, "isAtDefault", None)
+        if not callable(method):
+            return False
+        return bool(
+            self._safe_value(
+                lambda: method(
+                    compare_temporary_defaults=False,
+                    compare_expressions=True,
+                ),
+                False,
+            )
+        )
+
     def _graph_parm_summary(self, parm: Any) -> dict[str, Any]:
         expression_language = self._safe_value(parm.expressionLanguage, None)
         expression_language_name = None
@@ -70,6 +84,7 @@ class GraphOperationsMixin:
             "expression": self._safe_value(parm.expression, None),
             "expressionLanguage": expression_language_name,
             "referencePaths": self._parm_reference_paths(parm),
+            "isAtDefault": self._parm_is_strict_default(parm),
         }
 
     @staticmethod

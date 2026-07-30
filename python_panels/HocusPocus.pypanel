@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<pythonPanelDocument>
+  <interface name="hocuspocus_source_workspaces"
+             label="HocusPocus Source Workspaces"
+             icon="MISC_python">
+    <script><![CDATA[
+from hocuspocus.ui.workspace_widget import WorkspaceApprovalWidget
+
+
+def onCreateInterface():
+    widget = WorkspaceApprovalWidget()
+    widget.refresh()
+    return widget
+]]></script>
+  </interface>
+</pythonPanelDocument>

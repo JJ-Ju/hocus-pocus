@@ -14,6 +14,7 @@ from .project import (
     LOCK_SCHEMA_URI_V2,
     LOCK_SCHEMA_URI_V3,
     LOCK_SCHEMA_URI_V4,
+    LOCK_SCHEMA_URI_V5,
     MAX_LOCK_BYTES_V3,
     MAX_LOCKED_MODULES,
     MAX_LOCK_METADATA_VALUES_V3,
@@ -58,7 +59,7 @@ def load_lock(
 
 
 def _decode_lock_payload(path: Path, manifest_version: int) -> Any:
-    lock_limit = MAX_LOCK_BYTES_V3 if manifest_version in {3, 4} else MAX_MANIFEST_BYTES
+    lock_limit = MAX_LOCK_BYTES_V3 if manifest_version in {3, 4, 5} else MAX_MANIFEST_BYTES
     raw = _read_bounded(path, lock_limit, "HOCUS410", "Project lock")
     try:
         payload = json.loads(
@@ -73,7 +74,7 @@ def _decode_lock_payload(path: Path, manifest_version: int) -> Any:
     _validate_json_complexity(
         payload,
         max_values=MAX_LOCK_METADATA_VALUES_V3
-        if manifest_version in {3, 4}
+        if manifest_version in {3, 4, 5}
         else MAX_METADATA_VALUES,
     )
     return payload
@@ -86,12 +87,13 @@ def _validate_lock_envelope(payload: Any, manifest_version: int) -> int:
     }
     if not isinstance(payload, dict) or set(payload) != expected_keys:
         raise ProjectError("HOCUS422", f"{PROJECT_LOCK_NAME} has missing or unknown fields.")
-    lock_version = manifest_version if manifest_version in {2, 3, 4} else 1
+    lock_version = manifest_version if manifest_version in {2, 3, 4, 5} else 1
     schema_uri = {
         1: LOCK_SCHEMA_URI,
         2: LOCK_SCHEMA_URI_V2,
         3: LOCK_SCHEMA_URI_V3,
         4: LOCK_SCHEMA_URI_V4,
+        5: LOCK_SCHEMA_URI_V5,
     }[lock_version]
     if (
         payload["$schema"] != schema_uri
@@ -134,6 +136,8 @@ def _valid_lock_language(value: Any, lock_version: int) -> bool:
         return value == "0.2"
     if lock_version == 4:
         return value == "0.3"
+    if lock_version == 5:
+        return value == "0.4"
     return isinstance(value, str) and value in SUPPORTED_LANGUAGE_VERSIONS
 
 
@@ -150,7 +154,9 @@ def _validate_lock_contents(
                 "HOCUS425", "Lock v1 reserves catalog as null and modules as empty until HS2/HS6."
             )
         return None, ()
-    catalog = _validate_catalog_lock(payload["catalog"], catalog_relative_path)
+    catalog = _validate_catalog_lock(
+        payload["catalog"], catalog_relative_path, lock_version
+    )
     if lock_version == 2:
         if payload["modules"] != []:
             raise ProjectError("HOCUS425", "Lock v2 reserves modules as empty until HS6.")
@@ -159,17 +165,26 @@ def _validate_lock_contents(
         payload["modules"],
         project_uid=project_uid,
         external_aliases=external_aliases,
-        expected_language_version="0.3" if lock_version == 4 else "0.2",
+        expected_language_version={3: "0.2", 4: "0.3", 5: "0.4"}[lock_version],
     )
     return catalog, modules
 
 
-def _validate_catalog_lock(value: Any, expected_path: str | None) -> dict[str, Any]:
+def _validate_catalog_lock(
+    value: Any, expected_path: str | None, lock_version: int,
+) -> dict[str, Any]:
     keys = {"schemaVersion", "path", "contentDigest", "fingerprint"}
     if not isinstance(value, dict) or set(value) != keys:
         raise ProjectError("HOCUS425", "Lock v2 catalog pin has missing or unknown fields.")
-    if type(value["schemaVersion"]) is not int or value["schemaVersion"] != 1:
-        raise ProjectError("HOCUS425", "Lock v2 catalog schemaVersion must be 1.")
+    expected_version = 2 if lock_version == 5 else 1
+    if (
+        type(value["schemaVersion"]) is not int
+        or value["schemaVersion"] != expected_version
+    ):
+        raise ProjectError(
+            "HOCUS425",
+            f"Lock v{lock_version} catalog schemaVersion must be {expected_version}.",
+        )
     _validate_relative_artifact_path(value["path"], "catalog.path", code="HOCUS425")
     if expected_path is None or value["path"] != expected_path:
         raise ProjectError(

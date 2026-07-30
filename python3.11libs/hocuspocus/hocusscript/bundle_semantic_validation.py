@@ -4,20 +4,19 @@ from __future__ import annotations
 
 import hashlib
 from typing import Any
-from urllib.parse import quote, unquote
 
 from .bundle import (
     BundleValidationError,
     _EXPANSION_STACK_DIGEST_DOMAIN,
     _IDENTIFIER_PATTERN,
     _JSON_POINTER_PATTERN,
-    _MODULE_URI_PATTERN,
     _canonical_json,
     _require_digest,
     _required_expansion_pointers,
     _validate_span,
 )
 from .model import EXPLICIT_NODE_ID_PATTERN, MODULE_GRAPH_SPEC_VERSION
+from .resolved_modules import canonical_module_uri
 
 def _validate_semantic_resolution(
     value: Any, constraint: dict[str, Any], graph: dict[str, Any],
@@ -29,6 +28,19 @@ def _validate_semantic_resolution(
     _validate_operator_selections(value["operatorSelections"], graph)
     _validate_parameter_selections(value["parameterSelections"], graph)
     outcomes = _validate_connection_selections(value["connectionSelections"], graph)
+    if graph.get("graphSpecVersion") == "0.5":
+        try:
+            from .editor_carrier import validate_dot_route_conflicts
+            from .runtime_semantic import validate_runtime_evidence
+            validate_dot_route_conflicts(
+                graph["editorEntities"], graph, value["connectionSelections"]
+            )
+            validate_runtime_evidence(
+                graph, value["runtimeSelections"],
+                value["parameterSelections"],
+            )
+        except ValueError as exc:
+            raise BundleValidationError("HOCUS521", str(exc)) from exc
     _validate_deferred_checks(value["deferredChecks"], graph, diagnostics, outcomes)
     expected_inputs = {
         f"/nodes/{node_index}/inputs/{input_index}"
@@ -57,6 +69,8 @@ def _validate_semantic_envelope(
         "operatorSelections", "parameterSelections", "connectionSelections", "deferredChecks",
         "requiredCapabilities",
     }
+    if graph.get("graphSpecVersion") == "0.5":
+        keys.add("runtimeSelections")
     if not isinstance(value, dict) or set(value) != keys:
         raise BundleValidationError("HOCUS521", "semanticResolution has an invalid shape.")
     if value["stage"] != "semantic" or value["valid"] is not True:
@@ -84,7 +98,7 @@ def _validate_semantic_envelope(
         raise BundleValidationError("HOCUS521", "Semantic diagnostics must be a bounded array.")
     for diagnostic in diagnostics:
         _validate_semantic_diagnostic(diagnostic, graph, require_module_provenance)
-    _validate_selection_shapes(value)
+    _validate_selection_shapes(value, graph)
     return diagnostics
 
 
@@ -106,7 +120,9 @@ def _validate_semantic_diagnostic(
         _validate_semantic_diagnostic_provenance(diagnostic, graph)
 
 
-def _validate_selection_shapes(value: dict[str, Any]) -> None:
+def _validate_selection_shapes(
+    value: dict[str, Any], graph: dict[str, Any]
+) -> None:
     shapes = {
         "operatorSelections": {
             "nodeSymbol", "nodeIndex", "jsonPointer", "category", "qualifiedName", "namespace",
@@ -131,7 +147,24 @@ def _validate_selection_shapes(value: dict[str, Any]) -> None:
             )
         for record in records:
             pointer = record.get("jsonPointer") if isinstance(record, dict) else None
-            if not isinstance(record, dict) or set(record) != shape:
+            actual_shape = set(record) if isinstance(record, dict) else set()
+            rich_tuple_shape = shape | {
+                "componentTokens", "tupleSize", "elementType",
+            }
+            rich_value_shape = shape | {"valueAdapter"}
+            valid_shape = actual_shape == shape or (
+                field == "parameterSelections"
+                and graph.get("graphSpecVersion") == "0.5"
+                and (
+                    actual_shape == rich_tuple_shape
+                    or actual_shape == rich_value_shape
+                )
+            ) or (
+                field == "operatorSelections"
+                and graph.get("graphSpecVersion") == "0.5"
+                and actual_shape == shape | {"instanceNetwork"}
+            )
+            if not isinstance(record, dict) or not valid_shape:
                 raise BundleValidationError(
                     "HOCUS521", f"semanticResolution.{field} contains an invalid record."
                 )
@@ -164,6 +197,13 @@ def _validate_operator_selections(
             raise BundleValidationError(
                 "HOCUS521", "Semantic operator category conflicts with GraphSpec category."
             )
+        if graph.get("graphSpecVersion") == "0.5" and type(
+            record.get("instanceNetwork")
+        ) is not bool:
+            raise BundleValidationError(
+                "HOCUS521",
+                "GraphSpec 0.5 operator selection lacks exact instance network shape.",
+            )
 
 
 def _validate_parameter_selections(
@@ -179,11 +219,14 @@ def _validate_parameter_selections(
             "HOCUS521", "Semantic parameter selections do not cover every authored parameter."
         )
     for record, authored in zip(selections, expected):
-        _validate_parameter_selection(record, authored)
+        _validate_parameter_selection(
+            record, authored, str(graph.get("graphSpecVersion", ""))
+        )
 
 
 def _validate_parameter_selection(
     record: dict[str, Any], authored: tuple[int, int, dict[str, Any], dict[str, Any]],
+    graph_version: str,
 ) -> None:
     node_index, parm_index, node, parm = authored
     _require_semantic_index(record["nodeIndex"], "parameter selection nodeIndex", expected=node_index)
@@ -206,12 +249,92 @@ def _validate_parameter_selection(
         raise BundleValidationError("HOCUS521", "Parameter selection conversion is invalid.")
     if record["codeSurface"] not in {None, "vex", "python", "hscript"}:
         raise BundleValidationError("HOCUS521", "Parameter selection codeSurface is invalid.")
+    rich_fields = {"componentTokens", "tupleSize", "elementType"}
+    has_rich = rich_fields.issubset(record)
+    value = parm["value"]
+    has_adapter = "valueAdapter" in record
+    tagged = isinstance(value, dict) and value.get("kind") in {
+        "reset", "expression", "channel_reference", "raw_path", "quantity",
+        "ramp", "multiparm",
+    }
+    if tagged != has_adapter:
+        raise BundleValidationError(
+            "HOCUS932",
+            "Tagged values require an exact catalog-derived value adapter.",
+        )
+    if has_adapter:
+        from .value_carrier_validation import validate_value_adapter
+
+        validate_value_adapter(
+            record["valueAdapter"], value, "semantic parameter selection"
+        )
+        if (
+            value.get("kind") == "quantity"
+            and record["valueType"] == "tuple"
+            and record["componentIndex"] is None
+        ):
+            raise BundleValidationError(
+                "HOCUS932",
+                "Tuple quantity requires an explicit selected component.",
+            )
+    whole_tuple = (
+        graph_version == "0.5"
+        and record["componentIndex"] is None
+        and isinstance(value, dict)
+        and value.get("kind") == "array"
+    )
+    if whole_tuple != has_rich:
+        raise BundleValidationError(
+            "HOCUS931",
+            "Whole-tuple parameter selections require exact component evidence.",
+        )
+    if not has_rich:
+        return
+    tokens = record["componentTokens"]
+    size = record["tupleSize"]
+    if (
+        not isinstance(tokens, list)
+        or not tokens
+        or tokens != list(dict.fromkeys(tokens))
+        or any(
+            not isinstance(item, str) or not _IDENTIFIER_PATTERN.fullmatch(item)
+            for item in tokens
+        )
+        or type(size) is not int
+        or not 2 <= size <= 1024
+        or size != len(tokens)
+        or size != len(value["items"])
+        or record["elementType"] not in {"bool", "int", "float", "string"}
+        or not _tuple_items_match(value["items"], record["elementType"])
+    ):
+        raise BundleValidationError(
+            "HOCUS931", "Whole-tuple component evidence is malformed or incomplete."
+        )
+
+
+def _tuple_items_match(items: list[Any], element_type: str) -> bool:
+    for item in items:
+        if not isinstance(item, dict) or item.get("kind") != "literal":
+            return False
+        value = item.get("value")
+        if element_type == "bool" and type(value) is not bool:
+            return False
+        if element_type == "int" and type(value) is not int:
+            return False
+        if element_type == "float" and (
+            isinstance(value, bool) or not isinstance(value, (int, float))
+        ):
+            return False
+        if element_type == "string" and type(value) is not str:
+            return False
+    return True
 
 
 def _validate_connection_selections(
     selections: list[dict[str, Any]], graph: dict[str, Any],
 ) -> dict[str, str]:
     outcomes: dict[str, str] = {}
+    resolved_inputs: set[tuple[int, int]] = set()
     for record in selections:
         node_index = _require_semantic_index(
             record["nodeIndex"], "connection selection nodeIndex"
@@ -221,13 +344,15 @@ def _validate_connection_selections(
                 "HOCUS521", "Connection selection nodeIndex is outside GraphSpec."
             )
         node = graph["nodes"][node_index]
-        _validate_connection_selection(record, node, node_index, outcomes)
+        _validate_connection_selection(
+            record, node, node_index, outcomes, resolved_inputs
+        )
     return outcomes
 
 
 def _validate_connection_selection(
     record: dict[str, Any], node: dict[str, Any], node_index: int,
-    outcomes: dict[str, str],
+    outcomes: dict[str, str], resolved_inputs: set[tuple[int, int]],
 ) -> None:
     _require_semantic_string(
         record["nodeSymbol"], "connection selection nodeSymbol", expected=node["symbol"]
@@ -244,11 +369,35 @@ def _validate_connection_selection(
             "HOCUS521", "Connection selection points outside GraphSpec inputs."
         )
     authored = node["inputs"][ordinal]
-    _require_semantic_index(record["inputIndex"], "connection selection inputIndex", expected=authored["index"])
+    input_index = _require_semantic_index(
+        record["inputIndex"], "connection selection inputIndex",
+        expected=authored.get("index"),
+    )
     _require_semantic_string(record["sourceSymbol"], "connection selection sourceSymbol", expected=authored["source"]["symbol"])
-    _require_semantic_index(record["outputIndex"], "connection selection outputIndex", expected=authored["source"]["outputIndex"])
-    _require_nullable_semantic_string(record["inputName"], "connection selection inputName")
-    _require_nullable_semantic_string(record["outputName"], "connection selection outputName")
+    _require_semantic_index(
+        record["outputIndex"], "connection selection outputIndex",
+        expected=authored["source"].get("outputIndex"),
+    )
+    if "name" in authored:
+        _require_semantic_string(
+            record["inputName"], "connection selection inputName",
+            expected=authored["name"],
+        )
+    else:
+        _require_nullable_semantic_string(record["inputName"], "connection selection inputName")
+    if "outputName" in authored["source"]:
+        _require_semantic_string(
+            record["outputName"], "connection selection outputName",
+            expected=authored["source"]["outputName"],
+        )
+    else:
+        _require_nullable_semantic_string(record["outputName"], "connection selection outputName")
+    resolved = (node_index, input_index)
+    if resolved in resolved_inputs:
+        raise BundleValidationError(
+            "HOCUS521", "Connection selections resolve to a duplicate destination input."
+        )
+    resolved_inputs.add(resolved)
     if pointer in outcomes:
         raise BundleValidationError("HOCUS521", "Semantic input outcomes must be unique.")
     outcomes[pointer] = "resolved"
@@ -390,23 +539,10 @@ def _enclosing_expansion_mapping(
 
 
 def _is_canonical_portable_source_uri(value: Any) -> bool:
-    if not isinstance(value, str) or len(value) > 4096:
-        return False
-    match = _MODULE_URI_PATTERN.fullmatch(value)
-    if match is None:
-        return False
-    encoded_path = match.group(3)
-    try:
-        decoded_path = unquote(encoded_path, errors="strict")
-    except (UnicodeDecodeError, ValueError):
-        return False
     return (
-        quote(decoded_path, safe="/-._~") == encoded_path
-        and decoded_path.endswith(".hocus")
-        and not decoded_path.startswith("/")
-        and "\\" not in decoded_path
-        and ":" not in decoded_path
-        and all(part not in {"", ".", ".."} for part in decoded_path.split("/"))
+        isinstance(value, str)
+        and len(value) <= 4096
+        and canonical_module_uri(value) is not None
     )
 
 

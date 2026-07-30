@@ -133,13 +133,20 @@ def _lower_node(node: NodeDecl) -> NodeSpec:
                         statement.source.symbol,
                         statement.source.output_index,
                         statement.source.span,
-                        {
-                            "symbol": statement.source.symbol_span,
+                        {"symbol": statement.source.symbol_span, **({
+                            "outputName": statement.source.output_name_span,
+                        } if statement.source.output_name is not None else {
                             "outputIndex": statement.source.output_index_span,
-                        },
+                        })},
+                        statement.source.output_name,
                     ),
                     statement.span,
-                    {"index": statement.index_span},
+                    ({
+                        "name": statement.name_span,
+                    } if statement.name is not None else {
+                        "index": statement.index_span,
+                    }),
+                    statement.name,
                 )
             )
         elif isinstance(statement, ParmStmt):

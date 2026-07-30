@@ -94,4 +94,77 @@ def panel_snapshot(
         "tasks": tasks,
         "events": events,
         "logs": logs,
+        "workspaces": workspace_snapshot(),
     }
+
+
+def workspace_snapshot() -> dict[str, Any]:
+    with _runtime_lock:
+        runtime = _runtime
+        if runtime is None:
+            return {"projects": [], "sessions": [], "grants": [], "recentAudit": []}
+        return runtime.workspace_snapshot()
+
+
+def register_workspace_project(
+    project_directory: str,
+    *,
+    label: str | None = None,
+    reapprove: bool = False,
+) -> dict[str, Any]:
+    runtime = _running_runtime()
+    return runtime.register_workspace_project(
+        project_directory,
+        label=label,
+        reapprove=reapprove,
+    )
+
+
+def remove_workspace_project(project_id: str) -> dict[str, Any]:
+    return _running_runtime().remove_workspace_project(project_id)
+
+
+def grant_workspace_project(
+    project_id: str,
+    *,
+    session_id: str | None = None,
+    grants: tuple[str, ...] = ("source_read",),
+    external_roots: dict[str, str] | None = None,
+    persistent: bool = False,
+    expires_in_seconds: float | None = None,
+    until_revoked: bool = False,
+) -> dict[str, Any]:
+    return _running_runtime().grant_workspace_project(
+        project_id,
+        session_id=session_id,
+        grants=grants,
+        external_roots=external_roots,
+        persistent=persistent,
+        expires_in_seconds=expires_in_seconds,
+        until_revoked=until_revoked,
+    )
+
+
+def revoke_workspace_project(
+    project_id: str,
+    *,
+    session_id: str | None = None,
+    persistent: bool | None = None,
+) -> bool:
+    return _running_runtime().revoke_workspace_project(
+        project_id,
+        session_id=session_id,
+        persistent=persistent,
+    )
+
+
+def _running_runtime() -> HocusPocusRuntime:
+    with _runtime_lock:
+        runtime = _runtime
+    if runtime is None:
+        start_server()
+        with _runtime_lock:
+            runtime = _runtime
+    if runtime is None:
+        raise RuntimeError("HocusPocus server could not be started.")
+    return runtime

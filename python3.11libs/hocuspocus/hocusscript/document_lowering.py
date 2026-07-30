@@ -13,12 +13,44 @@ from dataclasses import dataclass
 from typing import Any, Iterable
 
 from .bundle import BUNDLE_VERSION, CompiledBundle, decode_compiled_bundle
+from .document_provenance import (
+    DocumentProvenanceIndex,
+    DocumentProvenanceError,
+    compose_expansion_tables,
+    entity_metadata as _entity_metadata,
+    entity_source_map as _source_map,
+    managed_explicit_rename_candidate as _managed_explicit_rename_candidate,
+    validate_expansion_references,
+)
+from .document_reconcile import protected_owned_dependencies, reconcile_owned_state
+from .document_live_names import live_node_names
+from .document_baseline_entities import (
+    DocumentBaselineEntityError,
+    destructive_summary as _destructive_summary,
+    document_diff,
+    validate_baseline_entities,
+)
+from .document_tuple_lowering import lower_tuple_bindings
+from .document_value_lowering import (
+    DocumentValueLoweringError,
+    lower_value_binding,
+)
+from .document_editor_lowering import (
+    EDITOR_DELETE_OPERATION_SPECS, EDITOR_DOCUMENT_COLLECTIONS,
+    EDITOR_UPSERT_OPERATION_SPECS,
+    lower_work_editor_entities,
+)
+from .document_runtime_lowering import (
+    DocumentRuntimeLoweringError,
+    RUNTIME_DELETE_OPERATION_SPECS, RUNTIME_DOCUMENT_COLLECTIONS,
+    RUNTIME_UPSERT_OPERATION_SPECS,
+    lower_work_runtime_entities,
+)
 from .semantic import SemanticResult
 
 DOCUMENT_SCHEMA_URI = "hocuspocus://schemas/network-document/v1"
+DOCUMENT_SCHEMA_URI_V2 = "hocuspocus://schemas/network-document/v2"
 PREVIEW_VERSION = "0.1"
-
-
 class DocumentLoweringError(ValueError):
     """Typed rejection when a bundle cannot safely become a document preview."""
 
@@ -59,21 +91,28 @@ class DocumentPreview:
             "provenance": self.provenance,
             "diagnostics": list(self.diagnostics),
         })
-
-
 def lower_bundle_to_document(
     bundle: CompiledBundle | dict[str, Any], baseline_document: dict[str, Any],
     *, _trusted_semantic_result: SemanticResult | None = None,
 ) -> DocumentPreview:
     """Lower a resolved semantic bundle over an explicit network-document baseline."""
     work = _prepare_lowering(bundle, baseline_document, _trusted_semantic_result)
+    return _lower_prepared_work(work)
+
+
+def _lower_prepared_work(work: _LoweringWork) -> DocumentPreview:
     _reconcile_baseline(work)
     _lower_external_nodes(work)
     _lower_authored_nodes(work)
     _lower_display_render_and_layout(work)
+    lower_work_editor_entities(work)
     _lower_parameters(work)
     _lower_connections_and_output(work)
     _record_managed_fields(work)
+    try:
+        lower_work_runtime_entities(work)
+    except DocumentRuntimeLoweringError as exc:
+        raise DocumentLoweringError("HOCUS717", str(exc)) from exc
     return _finish_lowering(work)
 
 
@@ -97,6 +136,7 @@ class _LoweringWork:
     generated_by_symbol: dict[str, dict[str, Any]]
     adopted_uids: set[str]
     provenance_update_uids: set[str]
+    document_provenance: DocumentProvenanceIndex | None
 
 
 def _prepare_lowering(
@@ -108,6 +148,25 @@ def _prepare_lowering(
     payload = decoded.to_dict()
     if payload["bundleVersion"] != BUNDLE_VERSION or "semanticResolution" not in payload:
         raise DocumentLoweringError("HOCUS700", "Document lowering requires a resolved bundle v0.2.")
+    return _prepare_payload(
+        payload, decoded.digest, baseline_document, trusted_semantic_result
+    )
+
+
+def _prepare_payload(
+    payload: dict[str, Any],
+    bundle_digest: str,
+    baseline_document: dict[str, Any],
+    trusted_semantic_result: SemanticResult | None,
+) -> _LoweringWork:
+    if (
+        payload.get("graphSpec", {}).get("graphSpecVersion") == "0.5"
+        and type(trusted_semantic_result) is not SemanticResult
+    ):
+        raise DocumentLoweringError(
+            "HOCUS701",
+            "GraphSpec 0.5 lowering requires fresh trusted semantic resolution.",
+        )
     semantic = (
         trusted_semantic_result.to_dict()
         if trusted_semantic_result is not None
@@ -131,14 +190,17 @@ def _prepare_lowering(
             details={"baselineRootPath": baseline["rootPath"], "target": target},
         )
     document = copy.deepcopy(baseline)
+    if payload["graphSpecVersion"] == "0.5":
+        document["$schema"] = DOCUMENT_SCHEMA_URI_V2
     document.setdefault("ports", [])
     document.setdefault("metadata", {})
+    document_provenance = DocumentProvenanceIndex.from_graph(graph)
     return _LoweringWork(
-        payload, decoded.digest, semantic, baseline, graph, target,
-        _provenance(payload, decoded.digest, baseline), graph.get("ownership"), [],
+        payload, bundle_digest, semantic, baseline, graph, target,
+        _provenance(payload, bundle_digest, baseline), graph.get("ownership"), [],
         document, {}, {}, _by_uid(document.get("nodes", [])),
         {item["path"]: item for item in document.get("nodes", [])},
-        {}, {}, set(), set(),
+        {}, {}, set(), set(), document_provenance,
     )
 
 
@@ -155,10 +217,32 @@ def _reconcile_baseline(work: _LoweringWork) -> None:
     if mode != "reconcile":
         return
     preserved_paths = {item["path"] for item in work.graph["externalNodes"] if item["adopted"]}
-    work.diagnostics.extend(
-        _protected_owned_dependency_diagnostics(work.document, work.ownership, preserved_paths)
+    retained_uids = {
+        item.get("explicitId")
+        or _uid("node", work.payload, work.graph["name"], item["symbol"])
+        for item in work.graph["nodes"]
+    }
+    retained_uids.update(
+        work.nodes_by_path[path]["uid"]
+        for path in preserved_paths
+        if path in work.nodes_by_path
     )
-    for entity_uid in _remove_owned_state(work.document, work.ownership, preserved_paths):
+    protected, blocked_uids = protected_owned_dependencies(
+        work.document, work.ownership, preserved_paths, retained_uids,
+    )
+    for field, index, entity_uid in protected:
+        work.diagnostics.append(_diagnostic(
+            "HOCUS709",
+            "Reconcile would disturb baseline state outside the requested ownership namespace.",
+            f"/baselineDocument/{field}/{index}", entity_uid=entity_uid,
+        ))
+    for entity_uid in reconcile_owned_state(
+        work.document,
+        work.ownership,
+        preserved_paths,
+        retained_uids,
+        protected_node_uids=blocked_uids,
+    ):
         work.diagnostics.append(_diagnostic(
             "HOCUS713", "Owned baseline state cannot be reconciled without durable source provenance.",
             "/baselineDocument", entity_uid=entity_uid,
@@ -166,7 +250,13 @@ def _reconcile_baseline(work: _LoweringWork) -> None:
 
 
 def _lower_external_nodes(work: _LoweringWork) -> None:
-    identity_keys = ("entityKind", "projectUid", "sourceUri", "graphName", "symbol", "ownership")
+    identity_keys = (
+        "entityKind",
+        "projectUid",
+        "graphName",
+        "symbol",
+        "ownership",
+    )
     for index, external in enumerate(work.graph["externalNodes"]):
         node = work.nodes_by_path.get(external["path"])
         if node is None:
@@ -187,6 +277,7 @@ def _lower_external_nodes(work: _LoweringWork) -> None:
         authored_metadata = _entity_metadata(
             work.payload, work.bundle_digest, work.graph, external["symbol"],
             f"/externalNodes/{index}", external.get("span"), work.ownership,
+            work.document_provenance,
             entity_kind="adopted_node",
         )
         previous_metadata = node.get("metadata") if isinstance(node.get("metadata"), dict) else {}
@@ -200,17 +291,21 @@ def _lower_external_nodes(work: _LoweringWork) -> None:
         elif previous_hocus != authored_hocus:
             work.provenance_update_uids.add(node["uid"])
         node["metadata"] = _merged_metadata(node.get("metadata"), authored_metadata)
-        source_map = _source_map(work.payload, f"/externalNodes/{index}", external.get("span"))
+        source_map = _source_map(
+            work.payload, f"/externalNodes/{index}", external.get("span"),
+            work.document_provenance,
+        )
         work.source_map_entities[node["uid"]] = source_map
         work.adoption_source_maps[node["uid"]] = copy.deepcopy(source_map)
 
 
 def _lower_authored_nodes(work: _LoweringWork) -> None:
     selections = {item["nodeSymbol"]: item for item in work.semantic["operatorSelections"]}
+    live_names = live_node_names(work.graph["nodes"])
     for index, node_spec in enumerate(work.graph["nodes"]):
         symbol = node_spec["symbol"]
         uid = node_spec.get("explicitId") or _uid("node", work.payload, work.graph["name"], symbol)
-        path = f"{work.target.rstrip('/')}/{symbol}"
+        path = f"{work.target.rstrip('/')}/{live_names[symbol]}"
         previous = work.nodes_by_uid.get(uid)
         old_path = _validate_node_destination(work, node_spec, index, uid, path, previous)
         if old_path is False:
@@ -218,11 +313,16 @@ def _lower_authored_nodes(work: _LoweringWork) -> None:
         if isinstance(old_path, str):
             work.nodes_by_path.pop(old_path, None)
         generated = _authored_node(work, node_spec, index, uid, path, previous, selections[symbol])
+        if previous is not None and _hocus_metadata(previous) != _hocus_metadata(generated):
+            work.provenance_update_uids.add(uid)
         _upsert_by_uid(work.document["nodes"], generated)
         work.nodes_by_uid[uid] = generated
         work.nodes_by_path[path] = generated
         work.generated_by_symbol[symbol] = generated
-        work.source_map_entities[uid] = _source_map(work.payload, f"/nodes/{index}", node_spec.get("span"))
+        work.source_map_entities[uid] = _source_map(
+            work.payload, f"/nodes/{index}", node_spec.get("span"),
+            work.document_provenance,
+        )
 
 
 def _validate_node_destination(
@@ -230,15 +330,22 @@ def _validate_node_destination(
     path: str, previous: dict[str, Any] | None,
 ) -> str | bool | None:
     old_path: str | None = None
-    if previous is not None and previous.get("path") != path:
-        if node_spec.get("explicitId") is None or not _managed_explicit_rename_candidate(
-            previous, work.payload, work.graph, work.ownership
+    if previous is not None:
+        path_changed = previous.get("path") != path
+        if not _managed_explicit_rename_candidate(
+            previous,
+            work.payload,
+            work.graph,
+            work.ownership,
+            node_spec["symbol"],
+            allow_symbol_change=path_changed and node_spec.get("explicitId") is not None,
         ):
             work.diagnostics.append(_diagnostic(
-                "HOCUS706", f"Node ID '{uid}' belongs to a different path without matching managed provenance.",
+                "HOCUS706", f"Node ID '{uid}' belongs to state without matching managed provenance.",
                 f"/graphSpec/nodes/{index}/explicitId", path, entity_uid=uid,
             ))
             return False
+    if previous is not None and previous.get("path") != path:
         old_path = str(previous.get("path", ""))
     collision = work.nodes_by_path.get(path)
     if collision is not None and collision.get("uid") != uid:
@@ -262,23 +369,33 @@ def _authored_node(
         flags["render"] = True
     metadata = _entity_metadata(
         work.payload, work.bundle_digest, work.graph, symbol, f"/nodes/{index}",
-        node_spec.get("span"), work.ownership, entity_kind="node",
+        node_spec.get("span"), work.ownership, work.document_provenance,
+        entity_kind="node",
     )
-    if work.graph.get("output") == symbol:
+    if work.graph.get("category") == "Sop" and work.graph.get("output") == symbol:
         metadata["output"] = True
-    return {
-        "uid": uid, "name": symbol, "typeName": selection["qualifiedName"],
+    is_network = (
+        selection["instanceNetwork"]
+        if work.graph.get("graphSpecVersion") == "0.5"
+        else (
+            selection.get("sourceKind") == "hda"
+            and selection.get("category") == "Sop"
+        )
+    )
+    result = {
+        "uid": uid, "name": path.rsplit("/", 1)[-1], "typeName": selection["qualifiedName"],
         "category": selection["category"], "path": path, "parentPath": work.target,
-        "isNetwork": bool(previous.get("isNetwork", False)) if previous is not None else False,
+        "isNetwork": is_network, "flags": flags,
         "position": copy.deepcopy(previous.get("position")) if previous is not None else None,
-        "flags": flags,
         "definitionRef": {
             "qualifiedName": selection["qualifiedName"], "namespace": selection["namespace"],
             "version": selection["version"], "sourceKind": selection["sourceKind"],
             "definitionDigest": selection["definitionDigest"],
         },
         "metadata": _merged_metadata(previous.get("metadata") if previous else None, metadata),
+        **({"subnetworkDocumentId": f"network:{path}"} if is_network else {}),
     }
+    return result
 
 
 def _lower_display_render_and_layout(work: _LoweringWork) -> None:
@@ -291,13 +408,17 @@ def _lower_display_render_and_layout(work: _LoweringWork) -> None:
         selected_flags = selected.get("flags")
         if isinstance(selected_flags, dict):
             selected_flags[flag_name] = True
-            work.source_map_entities[selected["uid"]] = _source_map(work.payload, f"/{flag_name}", span)
+            work.source_map_entities[selected["uid"]] = _source_map(
+                work.payload, f"/{flag_name}", span, work.document_provenance,
+            )
         for node in work.document["nodes"]:
             flags = node.get("flags")
             if isinstance(flags, dict) and node.get("uid") != selected.get("uid") and bool(flags.get(flag_name)):
                 flags[flag_name] = False
                 work.source_map_entities.setdefault(
-                    node["uid"], _source_map(work.payload, f"/{flag_name}", span)
+                    node["uid"], _source_map(
+                        work.payload, f"/{flag_name}", span, work.document_provenance,
+                    )
                 )
     if work.graph.get("layout") == "auto":
         _lower_auto_layout(work)
@@ -329,7 +450,9 @@ def _lower_auto_layout(work: _LoweringWork) -> None:
         ))
     for node, (column, row) in zip(layout_nodes, free_cells):
         node["position"] = [float(column * 3.25), float(-row * 1.85)]
-        work.source_map_entities[node["uid"]] = _source_map(work.payload, "/layout", span)
+        work.source_map_entities[node["uid"]] = _source_map(
+            work.payload, "/layout", span, work.document_provenance,
+        )
 
 
 def _lower_parameters(work: _LoweringWork) -> None:
@@ -358,16 +481,29 @@ def _lower_parameter(
         if selection["componentIndex"] is not None else selection["parameterToken"]
     )
     value = parm["value"]
+    if value["kind"] == "array":
+        bindings, source_maps = lower_tuple_bindings(
+            work, node_spec, target_node, parm, pointer, selection,
+        )
+        for tuple_binding in bindings:
+            _replace_binding(work.document["parameterBindings"], tuple_binding)
+        work.source_map_entities.update(source_maps)
+        return
     binding_uid = _binding_uid(target_node["uid"], parm_name)
     metadata = _entity_metadata(
         work.payload, work.bundle_digest, work.graph, node_spec["symbol"], pointer,
-        parm.get("span"), work.ownership, entity_kind="parameter_binding",
+        parm.get("span"), work.ownership, work.document_provenance,
+        entity_kind="parameter_binding",
     )
     metadata["parameterSelection"] = {
         key: selection[key] for key in (
             "authoredToken", "parameterToken", "componentIndex", "valueType", "conversion", "menuToken"
         )
     }
+    if "valueAdapter" in selection:
+        metadata["parameterSelection"]["valueAdapter"] = copy.deepcopy(
+            selection["valueAdapter"]
+        )
     binding: dict[str, Any] = {
         "uid": binding_uid, "nodeUid": target_node["uid"], "parmName": parm_name,
         "valueMode": "literal", "metadata": metadata,
@@ -375,21 +511,32 @@ def _lower_parameter(
     if value["kind"] == "code":
         if not _lower_code_parameter(work, node_spec, target_node, value, binding, pointer, parm_name):
             return
-    elif value["kind"] == "array":
-        work.diagnostics.append(_diagnostic(
-            "HOCUS708",
-            f"Whole-tuple parameter '{selection['parameterToken']}' cannot be lowered because "
-            "the resolved bundle does not carry its component token mapping; author scalar "
-            "components until that mapping is versioned.",
-            f"/graphSpec{pointer}/value", target_node["path"], target_node["uid"],
-        ))
-        return
+    elif work.graph.get("graphSpecVersion") == "0.5":
+        try:
+            binding.update(lower_value_binding(
+                value,
+                selection,
+                generated_by_symbol=work.generated_by_symbol,
+                external_by_symbol=work.external_by_symbol,
+            ))
+        except DocumentValueLoweringError as exc:
+            work.diagnostics.append(_diagnostic(
+                "HOCUS716",
+                str(exc),
+                f"/graphSpec{pointer}/value",
+                target_node["path"],
+                target_node["uid"],
+            ))
+            return
+        hocus = metadata.get("hocus")
+        if isinstance(hocus, dict):
+            hocus["valueMode"] = binding["valueMode"]
     else:
         binding["value"] = _literal_value(value)
     _replace_binding(work.document["parameterBindings"], binding)
-    work.source_map_entities[binding_uid] = _source_map(work.payload, pointer, parm.get("span"))
-
-
+    work.source_map_entities[binding_uid] = _source_map(
+        work.payload, pointer, parm.get("span"), work.document_provenance,
+    )
 def _lower_code_parameter(
     work: _LoweringWork, node_spec: dict[str, Any], target_node: dict[str, Any],
     value: dict[str, Any], binding: dict[str, Any], pointer: str, parm_name: str,
@@ -410,11 +557,14 @@ def _lower_code_parameter(
         "body": value["body"],
         "metadata": _entity_metadata(
             work.payload, work.bundle_digest, work.graph, node_spec["symbol"], f"{pointer}/value",
-            value.get("span"), work.ownership, entity_kind="code_blob",
+            value.get("span"), work.ownership, work.document_provenance,
+            entity_kind="code_blob",
         ),
     }
     _replace_code_blob(work.document["codeBlobs"], blob)
-    work.source_map_entities[blob_uid] = _source_map(work.payload, f"{pointer}/value", value.get("span"))
+    work.source_map_entities[blob_uid] = _source_map(
+        work.payload, f"{pointer}/value", value.get("span"), work.document_provenance,
+    )
     return True
 
 
@@ -453,13 +603,16 @@ def _lower_connection(
         endpoint_to["portName"] = selection["inputName"]
     metadata = _entity_metadata(
         work.payload, work.bundle_digest, work.graph, node_spec["symbol"], pointer,
-        input_spec.get("span"), work.ownership, entity_kind="edge",
+        input_spec.get("span"), work.ownership, work.document_provenance,
+        entity_kind="edge",
     )
     _replace_edge(work.document["edges"], {
         "uid": edge_uid, "kind": "data", "from": endpoint_from, "to": endpoint_to,
         "metadata": metadata,
     })
-    work.source_map_entities[edge_uid] = _source_map(work.payload, pointer, input_spec.get("span"))
+    work.source_map_entities[edge_uid] = _source_map(
+        work.payload, pointer, input_spec.get("span"), work.document_provenance,
+    )
     for direction, endpoint, name, index in (
         ("output", source, selection["outputName"], selection["outputIndex"]),
         ("input", dest, selection["inputName"], selection["inputIndex"]),
@@ -470,12 +623,14 @@ def _lower_connection(
             "name": name or "", "index": index, "kind": "data",
             "metadata": {**metadata, "hocus": {**metadata["hocus"], "entityKind": "port"}},
         })
-        work.source_map_entities[port_uid] = _source_map(work.payload, pointer, input_spec.get("span"))
+        work.source_map_entities[port_uid] = _source_map(
+            work.payload, pointer, input_spec.get("span"), work.document_provenance,
+        )
 
 
 def _lower_output(work: _LoweringWork) -> None:
     output_symbol = work.graph.get("output")
-    if output_symbol is None:
+    if work.graph.get("category") != "Sop" or output_symbol is None:
         return
     output_node = work.generated_by_symbol.get(output_symbol) or work.external_by_symbol.get(output_symbol)
     root_node = work.nodes_by_path.get(work.target)
@@ -488,10 +643,12 @@ def _lower_output(work: _LoweringWork) -> None:
         "from": {"nodeUid": output_node["uid"]}, "to": {"nodeUid": root_node["uid"]},
         "metadata": _entity_metadata(
             work.payload, work.bundle_digest, work.graph, output_symbol, "/output", span,
-            work.ownership, entity_kind="output_flag",
+            work.ownership, work.document_provenance, entity_kind="output_flag",
         ),
     })
-    work.source_map_entities[output_uid] = _source_map(work.payload, "/output", span)
+    work.source_map_entities[output_uid] = _source_map(
+        work.payload, "/output", span, work.document_provenance,
+    )
 
 
 def _record_managed_fields(work: _LoweringWork) -> None:
@@ -514,17 +671,33 @@ def _record_managed_fields(work: _LoweringWork) -> None:
             "flags": _managed_flags(work.graph, node_spec["symbol"]),
             "nodeUid": str(generated["uid"]),
         }
+    for external in work.graph["externalNodes"]:
+        if not external["adopted"]:
+            continue
+        adopted = work.external_by_symbol.get(external["symbol"])
+        metadata = adopted.get("metadata") if isinstance(adopted, dict) else None
+        hocus = metadata.get("hocus") if isinstance(metadata, dict) else None
+        if not isinstance(hocus, dict):
+            continue
+        hocus["managedFields"] = {
+            "type": True,
+            "inputs": [],
+            "parameters": [],
+            "flags": _managed_flags(work.graph, external["symbol"]),
+            "nodeUid": str(adopted["uid"]),
+        }
 
 
 def _managed_flags(graph: dict[str, Any], symbol: str) -> dict[str, bool]:
     return {
         name: graph.get(name) == symbol
         for name in ("display", "render", "output")
-        if graph.get(name) is not None
+        if graph.get(name) is not None and (name != "output" or graph.get("category") == "Sop")
     }
 
 
 def _finish_lowering(work: _LoweringWork) -> DocumentPreview:
+    _compose_document_provenance(work)
     _canonicalize_document(work.document)
     preliminary_diff = _document_diff(work.baseline, work.document)
     work.document["documentRevision"] = work.baseline["documentRevision"] + int(
@@ -567,6 +740,32 @@ def _finish_lowering(work: _LoweringWork) -> DocumentPreview:
     )
 
 
+def _compose_document_provenance(work: _LoweringWork) -> None:
+    metadata = work.document.setdefault("metadata", {})
+    baseline_metadata = work.baseline.get("metadata")
+    baseline_tables = (
+        baseline_metadata.get("hocusExpansion")
+        if isinstance(baseline_metadata, dict) else None
+    )
+    incoming_tables = (
+        work.document_provenance.tables()
+        if work.document_provenance is not None else None
+    )
+    try:
+        composed = compose_expansion_tables(
+            work.document, baseline_tables, incoming_tables,
+        )
+    except DocumentProvenanceError as exc:
+        raise DocumentLoweringError(
+            "HOCUS715",
+            f"Final document expansion provenance cannot be represented: {exc}",
+        ) from exc
+    if composed is None:
+        metadata.pop("hocusExpansion", None)
+    else:
+        metadata["hocusExpansion"] = composed
+
+
 def _validate_and_copy_baseline(value: Any) -> dict[str, Any]:
     _validate_baseline_envelope(value)
     result = copy.deepcopy(value)
@@ -574,6 +773,12 @@ def _validate_and_copy_baseline(value: Any) -> dict[str, Any]:
     result.setdefault("metadata", {})
     _validate_baseline_uids(result)
     _validate_baseline_entities(result)
+    try:
+        validate_expansion_references(result)
+    except DocumentProvenanceError as exc:
+        raise DocumentLoweringError(
+            "HOCUS710", f"Baseline document expansion provenance is invalid: {exc}",
+        ) from exc
     return result
 
 
@@ -585,8 +790,13 @@ def _validate_baseline_envelope(value: Any) -> None:
     missing = sorted(required - set(value))
     if missing:
         raise DocumentLoweringError("HOCUS710", "Baseline document is missing required fields.", details={"missing": missing})
-    if value["$schema"] != DOCUMENT_SCHEMA_URI or value["kind"] != "network_document":
-        raise DocumentLoweringError("HOCUS710", "Baseline must be a network-document v1 value.")
+    if (
+        value["$schema"] not in {DOCUMENT_SCHEMA_URI, DOCUMENT_SCHEMA_URI_V2}
+        or value["kind"] != "network_document"
+    ):
+        raise DocumentLoweringError(
+            "HOCUS710", "Baseline must be a supported network-document value."
+        )
     if type(value["documentRevision"]) is not int or value["documentRevision"] < 0:
         raise DocumentLoweringError("HOCUS710", "Baseline documentRevision must be a non-negative integer.")
     if not isinstance(value["rootPath"], str) or not value["rootPath"].startswith("/"):
@@ -612,71 +822,16 @@ def _validate_baseline_uids(result: dict[str, Any]) -> None:
 
 
 def _validate_baseline_entities(result: dict[str, Any]) -> None:
-    node_uids = _validate_baseline_nodes(result["nodes"])
-    _validate_baseline_ports(result["ports"], node_uids)
-    _validate_baseline_edges(result["edges"], node_uids)
-    binding_uids = _validate_baseline_bindings(result["parameterBindings"], node_uids)
-    _validate_baseline_code(result["codeBlobs"], node_uids, binding_uids)
-
-
-def _validate_baseline_nodes(nodes: list[dict[str, Any]]) -> set[str]:
-    required_node = {
-        "uid", "name", "typeName", "category", "path", "parentPath",
-        "isNetwork", "flags", "metadata",
-    }
-    node_uids = {item["uid"] for item in nodes}
-    node_paths: set[str] = set()
-    for node in nodes:
-        if not required_node.issubset(node) or not isinstance(node["path"], str) or not node["path"].startswith("/"):
-            raise DocumentLoweringError("HOCUS710", "Baseline contains a malformed node.", details={"uid": node.get("uid")})
-        if node["path"] in node_paths:
-            raise DocumentLoweringError("HOCUS710", "Baseline node paths must be unique.", details={"path": node["path"]})
-        node_paths.add(node["path"])
-        flags = node["flags"]
-        if not isinstance(flags, dict) or set(flags) != {"display", "render", "bypass", "template"} or any(type(v) is not bool for v in flags.values()):
-            raise DocumentLoweringError("HOCUS710", "Baseline node flags are malformed.", details={"uid": node["uid"]})
-    return node_uids
-
-
-def _validate_baseline_ports(ports: list[dict[str, Any]], node_uids: set[str]) -> None:
-    for port in ports:
-        if port.get("nodeUid") not in node_uids or port.get("direction") not in {"input", "output"}:
-            raise DocumentLoweringError("HOCUS710", "Baseline contains a dangling or malformed port.", details={"uid": port["uid"]})
-
-
-def _validate_baseline_edges(edges: list[dict[str, Any]], node_uids: set[str]) -> None:
-    for edge in edges:
-        if edge.get("from", {}).get("nodeUid") not in node_uids or edge.get("to", {}).get("nodeUid") not in node_uids:
-            raise DocumentLoweringError("HOCUS710", "Baseline contains a dangling edge.", details={"uid": edge["uid"]})
-
-
-def _validate_baseline_bindings(
-    bindings: list[dict[str, Any]],
-    node_uids: set[str],
-) -> set[str]:
-    binding_uids = {item["uid"] for item in bindings}
-    for binding in bindings:
-        if binding.get("nodeUid") not in node_uids or binding.get("valueMode") not in {
-            "literal", "expression", "channel_reference", "code_reference"
-        }:
-            raise DocumentLoweringError("HOCUS710", "Baseline contains a dangling or malformed parameter binding.",
-                                        details={"uid": binding["uid"]})
-        if binding.get("valueMode") == "literal" and isinstance(binding.get("value"), (list, dict)):
-            raise DocumentLoweringError("HOCUS710", "Network-document v1 literal bindings must be scalar.",
-                                        details={"uid": binding["uid"]})
-    return binding_uids
-
-
-def _validate_baseline_code(
-    blobs: list[dict[str, Any]],
-    node_uids: set[str],
-    binding_uids: set[str],
-) -> None:
-    for blob in blobs:
-        target = blob.get("target", {})
-        if (target.get("nodeUid") not in node_uids
-                or (target.get("bindingUid") is not None and target.get("bindingUid") not in binding_uids)):
-            raise DocumentLoweringError("HOCUS710", "Baseline contains a dangling code blob.", details={"uid": blob["uid"]})
+    try:
+        validate_baseline_entities(
+            result,
+            schema_v1=DOCUMENT_SCHEMA_URI,
+            schema_v2=DOCUMENT_SCHEMA_URI_V2,
+        )
+    except DocumentBaselineEntityError as exc:
+        raise DocumentLoweringError(
+            "HOCUS710", str(exc), details=exc.details,
+        ) from exc
 
 
 def _provenance(payload: dict[str, Any], bundle_digest: str, baseline: dict[str, Any]) -> dict[str, Any]:
@@ -699,132 +854,6 @@ def _provenance(payload: dict[str, Any], bundle_digest: str, baseline: dict[str,
         "baselineLiveRevision": int(baseline.get("lastSyncedLiveRevision", baseline.get("baselineLiveRevision", 0))),
         "baselineDigest": _digest(baseline),
     }
-
-
-def _entity_metadata(payload: dict[str, Any], bundle_digest: str, graph: dict[str, Any], symbol: str,
-                     pointer: str, span: Any, ownership: str | None, *, entity_kind: str) -> dict[str, Any]:
-    return {"hocus": {
-        "version": 1, "entityKind": entity_kind, "projectUid": payload["projectUid"],
-        "sourceUri": payload["entrySource"]["uri"], "sourceDigest": payload["entrySource"]["digest"],
-        "bundleDigest": bundle_digest, "compilerVersion": payload["compilerVersion"],
-        "languageVersion": payload["languageVersion"], "graphName": graph["name"], "symbol": symbol,
-        "ownership": ownership, "jsonPointer": pointer, "span": copy.deepcopy(span),
-    }}
-
-
-def _managed_explicit_rename_candidate(
-    previous: dict[str, Any],
-    payload: dict[str, Any],
-    graph: dict[str, Any],
-    ownership: str | None,
-) -> bool:
-    """Prove an explicit-ID path change is a managed rename, never adoption.
-
-    Source URI and symbol deliberately may change.  Project, graph, ownership, entity
-    kind, and complete compiler provenance must still identify the baseline node as a
-    prior Hocus-authored revision of this graph.
-    """
-
-    metadata = previous.get("metadata")
-    hocus = metadata.get("hocus") if isinstance(metadata, dict) else None
-    if not isinstance(hocus, dict):
-        return False
-    required_strings = (
-        "sourceUri", "sourceDigest", "bundleDigest", "compilerVersion",
-        "languageVersion", "graphName", "symbol", "jsonPointer",
-    )
-    if any(not isinstance(hocus.get(key), str) or not hocus.get(key) for key in required_strings):
-        return False
-    if not isinstance(hocus.get("span"), dict):
-        return False
-    if not str(hocus["sourceDigest"]).startswith("sha256:") or not str(hocus["bundleDigest"]).startswith("sha256:"):
-        return False
-    return (
-        hocus.get("entityKind") == "node"
-        and hocus.get("projectUid") == payload.get("projectUid")
-        and hocus.get("graphName") == graph.get("name")
-        and hocus.get("ownership") == ownership
-        and hocus.get("symbol") == previous.get("name")
-        and str(hocus.get("jsonPointer", "")).startswith("/nodes/")
-    )
-
-
-def _source_map(payload: dict[str, Any], pointer: str, span: Any) -> dict[str, Any]:
-    return {"sourceUri": payload["entrySource"]["uri"], "jsonPointer": pointer, "span": copy.deepcopy(span)}
-
-
-def _remove_owned_state(
-    document: dict[str, Any],
-    ownership: str,
-    preserved_node_paths: set[str],
-) -> list[str]:
-    def owned(item: dict[str, Any]) -> bool:
-        return ((item.get("metadata") or {}).get("hocus") or {}).get("ownership") == ownership
-    removed_entities = [
-        item
-        for field in ("nodes", "ports", "edges", "parameterBindings", "codeBlobs")
-        for item in document.get(field, [])
-        if isinstance(item, dict) and owned(item)
-        and not (field == "nodes" and item.get("path") in preserved_node_paths)
-    ]
-    missing_provenance = sorted(
-        str(item.get("uid", ""))
-        for item in removed_entities
-        if _source_map_from_entity(item) is None
-    )
-    removed_nodes = {
-        item["uid"] for item in document["nodes"]
-        if owned(item) and item.get("path") not in preserved_node_paths
-    }
-    document["nodes"] = [item for item in document["nodes"] if item["uid"] not in removed_nodes]
-    document["ports"] = [item for item in document.get("ports", [])
-                         if item.get("nodeUid") not in removed_nodes and not owned(item)]
-    document["edges"] = [item for item in document["edges"]
-                         if item.get("from", {}).get("nodeUid") not in removed_nodes
-                         and item.get("to", {}).get("nodeUid") not in removed_nodes and not owned(item)]
-    removed_bindings = {item["uid"] for item in document["parameterBindings"]
-                        if item.get("nodeUid") in removed_nodes or owned(item)}
-    document["parameterBindings"] = [item for item in document["parameterBindings"]
-                                      if item["uid"] not in removed_bindings]
-    document["codeBlobs"] = [item for item in document["codeBlobs"]
-                              if item.get("target", {}).get("nodeUid") not in removed_nodes
-                              and item.get("target", {}).get("bindingUid") not in removed_bindings and not owned(item)]
-    return missing_provenance
-
-
-def _protected_owned_dependency_diagnostics(
-    document: dict[str, Any],
-    ownership: str,
-    preserved_node_paths: set[str],
-) -> list[dict[str, Any]]:
-    """Report artist-owned state that reconcile would necessarily disturb."""
-
-    def owner(item: dict[str, Any]) -> Any:
-        return ((item.get("metadata") or {}).get("hocus") or {}).get("ownership")
-
-    removed_nodes = {
-        item["uid"] for item in document["nodes"]
-        if owner(item) == ownership and item.get("path") not in preserved_node_paths
-    }
-    diagnostics: list[dict[str, Any]] = []
-    for field, items in (("edges", document["edges"]), ("parameterBindings", document["parameterBindings"]),
-                         ("codeBlobs", document["codeBlobs"])):
-        for index, item in enumerate(items):
-            if owner(item) == ownership:
-                continue
-            references_removed = (
-                item.get("nodeUid") in removed_nodes
-                or item.get("from", {}).get("nodeUid") in removed_nodes
-                or item.get("to", {}).get("nodeUid") in removed_nodes
-                or item.get("target", {}).get("nodeUid") in removed_nodes
-            )
-            if references_removed:
-                diagnostics.append(_diagnostic(
-                    "HOCUS709",
-                    "Reconcile would disturb baseline state outside the requested ownership namespace.",
-                    f"/baselineDocument/{field}/{index}", entity_uid=item.get("uid"),
-                ))
-    return diagnostics
 
 
 def _literal_value(value: dict[str, Any]) -> Any:
@@ -899,6 +928,8 @@ def _append_diff_operations(
         ("edge", "disconnect", "deletedEdges"),
         ("parameter_binding", "remove_binding", "deletedParameterBindings"),
         ("code_blob", "remove_code", "deletedCodeBlobs"),
+        *EDITOR_DELETE_OPERATION_SPECS,
+        *RUNTIME_DELETE_OPERATION_SPECS,
         ("port", "delete_port", "deletedPorts"),
         ("node", "delete_node", "deletedNodes"),
         ("node", "create_node", "createdNodes"),
@@ -910,6 +941,8 @@ def _append_diff_operations(
         ("code_blob", "install_code", "changedCodeBlobs"),
         ("edge", "connect", "changedEdges"),
         ("edge", "connect", "createdEdges"),
+        *EDITOR_UPSERT_OPERATION_SPECS,
+        *RUNTIME_UPSERT_OPERATION_SPECS,
     ):
         for item in diff[field]:
             uid = item.get("uid") or item.get("after", {}).get("uid") or item.get("before", {}).get("uid")
@@ -971,78 +1004,33 @@ def _source_map_from_entity(entity: Any) -> dict[str, Any] | None:
     span = hocus.get("span")
     if not isinstance(source_uri, str) or not source_uri or not isinstance(pointer, str) or span is None:
         return None
-    return {"sourceUri": source_uri, "jsonPointer": pointer, "span": copy.deepcopy(span)}
-
-
-def _document_diff(before: dict[str, Any], after: dict[str, Any]) -> dict[str, Any]:
-    result: dict[str, Any] = {}
-    total = 0
-    specs = (
-        ("Nodes", "nodes"), ("Ports", "ports"), ("Edges", "edges"),
-        ("ParameterBindings", "parameterBindings"), ("CodeBlobs", "codeBlobs"),
-    )
-    summary: dict[str, int] = {}
-    for label, field in specs:
-        old = _by_uid(before.get(field, []))
-        new = _by_uid(after.get(field, []))
-        created = [copy.deepcopy(new[uid]) for uid in sorted(set(new) - set(old))]
-        deleted = [copy.deepcopy(old[uid]) for uid in sorted(set(old) - set(new))]
-        changed = [
-            {"uid": uid, "before": copy.deepcopy(old[uid]), "after": copy.deepcopy(new[uid])}
-            for uid in sorted(set(old) & set(new))
-            if _operational_entity(old[uid]) != _operational_entity(new[uid])
-        ]
-        result[f"created{label}"] = created
-        result[f"deleted{label}"] = deleted
-        result[f"changed{label}"] = changed
-        summary[f"created{label[:-1] if label.endswith('s') else label}Count"] = len(created)
-        summary[f"deleted{label[:-1] if label.endswith('s') else label}Count"] = len(deleted)
-        summary[f"changed{label[:-1] if label.endswith('s') else label}Count"] = len(changed)
-        total += len(created) + len(deleted) + len(changed)
-    summary["totalChangeCount"] = total
-    result["summary"] = summary
-    return {"summary": summary, **{key: result[key] for key in sorted(result) if key != "summary"}}
-
-
-def _operational_entity(entity: dict[str, Any]) -> dict[str, Any]:
-    result = copy.deepcopy(entity)
-    result.pop("metadata", None)
-    result.pop("definitionRef", None)
+    result = {
+        "sourceUri": source_uri,
+        "jsonPointer": pointer,
+        "span": copy.deepcopy(span),
+    }
+    for field in (
+        "originId", "originKind", "relatedOrigins", "stackId", "controlStackId",
+    ):
+        if field in hocus:
+            result[field] = copy.deepcopy(hocus[field])
     return result
 
 
-def _destructive_summary(diff: dict[str, Any], adopted_uids: set[str]) -> dict[str, Any]:
-    deleted_nodes = diff["deletedNodes"]
-    retyped = [item["uid"] for item in diff["changedNodes"]
-               if item["before"].get("typeName") != item["after"].get("typeName")]
-    displaced_display = [
-        item["uid"] for item in diff["changedNodes"]
-        if bool((item["before"].get("flags") or {}).get("display"))
-        and not bool((item["after"].get("flags") or {}).get("display"))
-    ]
-    displaced_render = [
-        item["uid"] for item in diff["changedNodes"]
-        if bool((item["before"].get("flags") or {}).get("render"))
-        and not bool((item["after"].get("flags") or {}).get("render"))
-    ]
-    return {
-        "destructive": bool(deleted_nodes or diff["deletedParameterBindings"] or diff["deletedCodeBlobs"]
-                            or diff["deletedEdges"] or adopted_uids or retyped),
-        "deletedNodeCount": len(deleted_nodes),
-        "deletedParameterBindingCount": len(diff["deletedParameterBindings"]),
-        "deletedCodeBlobCount": len(diff["deletedCodeBlobs"]),
-        "disconnectedEdgeCount": len(diff["deletedEdges"]),
-        "adoptedNodeCount": len(adopted_uids),
-        "ownershipTransfer": bool(adopted_uids),
-        "replacedNodeCount": len(retyped),
-        "displacedDisplayNodeCount": len(displaced_display),
-        "displacedRenderNodeCount": len(displaced_render),
-        "deletedNodeUids": sorted(item["uid"] for item in deleted_nodes),
-        "adoptedNodeUids": sorted(adopted_uids),
-        "replacedNodeUids": sorted(retyped),
-        "displacedDisplayNodeUids": sorted(displaced_display),
-        "displacedRenderNodeUids": sorted(displaced_render),
-    }
+def _hocus_metadata(entity: dict[str, Any]) -> dict[str, Any] | None:
+    metadata = entity.get("metadata")
+    hocus = metadata.get("hocus") if isinstance(metadata, dict) else None
+    return hocus if isinstance(hocus, dict) else None
+
+
+def _document_diff(before: dict[str, Any], after: dict[str, Any]) -> dict[str, Any]:
+    specs = (
+        ("Nodes", "Node", "nodes"), ("Ports", "Port", "ports"), ("Edges", "Edge", "edges"),
+        ("ParameterBindings", "ParameterBinding", "parameterBindings"),
+        ("CodeBlobs", "CodeBlob", "codeBlobs"),
+        *EDITOR_DOCUMENT_COLLECTIONS, *RUNTIME_DOCUMENT_COLLECTIONS,
+    )
+    return document_diff(before, after, specs)
 
 
 def _diagnostic(code: str, message: str, pointer: str, path: str | None = None,

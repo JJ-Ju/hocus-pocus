@@ -172,7 +172,12 @@ class _ControlProjectEditorSession:
                 "HOCUS464", "Control editor moduleFiles budget was exceeded.",
             )
         lock = self.lock_by_uri.get(uri)
-        _require_editor_lock(lock, self.context.uid or "", relative)
+        _require_editor_lock(
+            lock,
+            self.context.uid or "",
+            relative,
+            self.context.language_version,
+        )
         raw = _read_bounded_stable(
             target, self.limits.source_bytes_per_file,
             "HOCUS461", "HocusScript control editor module",
@@ -186,7 +191,12 @@ class _ControlProjectEditorSession:
                 "HOCUS461", "Control editor module bytes do not match the v4 lock.",
                 details={"sourceUri": uri},
             )
-        syntax = _parse_control_source(raw, uri, graph=False)
+        syntax = _parse_control_source(
+            raw,
+            uri,
+            graph=False,
+            language_version=self.context.language_version,
+        )
         interface = _module_interface(
             syntax, self.limits.to_legacy_shape(), uri,
         )
@@ -309,7 +319,12 @@ class _ControlProjectEditorSession:
             relative = target.relative_to(self.root).as_posix()
             uri = _project_uri(self.context.uid or "", relative)
             lock = self.lock_by_uri.get(uri)
-            _require_editor_lock(lock, self.context.uid or "", relative)
+            _require_editor_lock(
+                lock,
+                self.context.uid or "",
+                relative,
+                self.context.language_version,
+            )
             dependencies.append(uri)
         if tuple(sorted(dependencies)) != expected or len(set(dependencies)) != len(dependencies):
             raise ProjectError(
@@ -499,7 +514,11 @@ def _definition(
         project_directory, current_path, source,
         cancelled=cancelled, saved=saved,
     )
-    syntax = _parse_current(source, session.source_uri)
+    syntax = _parse_current(
+        source,
+        session.source_uri,
+        session.context.language_version,
+    )
     items: tuple[ProjectDefinitionItem, ...] = ()
     if syntax is not None:
         views = session.import_views(syntax)
@@ -529,7 +548,15 @@ def _completion_values(
     masked = _mask_non_import_text(before)
     if re.search(r"\bhocus\s+[0-9.]*$", masked):
         return "language_version", [
-            ("0.3", "value", "0.3", "control language version", None, None, None),
+            (
+                session.context.language_version,
+                "value",
+                session.context.language_version,
+                "control language version",
+                None,
+                None,
+                None,
+            ),
         ]
     if _active_import_path(masked):
         return "import_path", [
@@ -561,7 +588,12 @@ def _completion_values(
     parameters = _node_parameter_completions(session.catalog, before)
     if parameters is not None:
         return "parameter_name", parameters
-    syntax = _parse_completion_source(source, offset, session.source_uri)
+    syntax = _parse_completion_source(
+        source,
+        offset,
+        session.source_uri,
+        session.context.language_version,
+    )
     if syntax is None:
         return "none", []
     views = session.import_views(syntax)
@@ -681,14 +713,18 @@ def _completion_prefix(source: str, offset: int, context: str):
     return _context_prefix(source, offset, context)
 
 
-def _parse_current(source: str, uri: str) -> SyntaxSource | None:
+def _parse_current(
+    source: str,
+    uri: str,
+    language_version: str,
+) -> SyntaxSource | None:
     try:
         syntax = parse_syntax(source, uri)
     except (HocusSourceError, TypeError, ValueError, RecursionError):
         return None
     if (
         syntax.version is None
-        or syntax.version.value != "0.3"
+        or syntax.version.value != language_version
         or (syntax.graph is None) == (syntax.module is None)
     ):
         return None
@@ -699,8 +735,9 @@ def _parse_completion_source(
     source: str,
     offset: int,
     uri: str,
+    language_version: str,
 ) -> SyntaxSource | None:
-    syntax = _parse_current(source, uri)
+    syntax = _parse_current(source, uri, language_version)
     if syntax is not None:
         return syntax
     yield_match = re.search(
@@ -709,7 +746,11 @@ def _parse_completion_source(
     )
     if yield_match is not None:
         suffix = " = 0;" if yield_match.group(1) else "__cursor = 0;"
-        syntax = _parse_current(source[:offset] + suffix + source[offset:], uri)
+        syntax = _parse_current(
+            source[:offset] + suffix + source[offset:],
+            uri,
+            language_version,
+        )
         if syntax is not None:
             return syntax
     match = re.search(
@@ -721,7 +762,7 @@ def _parse_completion_source(
     length = offset - match.start()
     replacement = "false".rjust(length)
     repaired = source[:match.start()] + replacement + source[offset:]
-    return _parse_current(repaired, uri)
+    return _parse_current(repaired, uri, language_version)
 
 
 def _module_view(
@@ -777,14 +818,19 @@ def _require_local_editor_project(context: ProjectContext) -> None:
         )
 
 
-def _require_editor_lock(lock, project_uid: str, relative: str) -> None:
+def _require_editor_lock(
+    lock,
+    project_uid: str,
+    relative: str,
+    language_version: str,
+) -> None:
     expected_uri = _project_uri(project_uid, relative)
     if (
         lock is None
         or lock.module_uri != expected_uri
         or lock.project_uid != project_uid
         or lock.source_path != relative
-        or lock.language_version != "0.3"
+        or lock.language_version != language_version
         or lock.external_alias is not None
     ):
         raise ProjectError(

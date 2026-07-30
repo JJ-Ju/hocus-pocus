@@ -91,10 +91,10 @@ def format_project_module_path(
     project = ProjectContext.load(project_text, validate_lock=False)
     _checkpoint(cancelled)
     lane = (project.manifest_version, project.language_version)
-    if lane not in {(3, "0.2"), (4, "0.3")} or project.uid is None:
+    if lane not in {(3, "0.2"), (4, "0.3"), (5, "0.4")} or project.uid is None:
         raise ProjectError(
             "HOCUS452",
-            "Native formatting requires an explicit schema v3/0.2 or v4/0.3 project.",
+            "Native formatting requires an explicit schema v3/0.2, v4/0.3, or v5/0.4 project.",
         )
 
     root = project.root.resolve(strict=True)

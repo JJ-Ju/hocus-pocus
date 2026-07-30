@@ -50,6 +50,7 @@ class NodeOperationsMixin:
         node_name = arguments.get("node_name")
         run_init_scripts = bool(arguments.get("run_init_scripts", True))
         load_contents = bool(arguments.get("load_contents", True))
+        exact_type_name = bool(arguments.get("exact_type_name", False))
         parent = hou_module.node(parent_path)
         if parent is None:
             raise JsonRpcError(INVALID_PARAMS, f"Parent node not found: {parent_path}")
@@ -60,6 +61,7 @@ class NodeOperationsMixin:
                 node_name=node_name,
                 run_init_scripts=run_init_scripts,
                 load_contents=load_contents,
+                exact_type_name=exact_type_name,
             )
             node.setUserData("hpmcp.created_by", "hocuspocus")
             node.setUserData("hpmcp.operation_id", "tool:node.create")

@@ -438,7 +438,11 @@ def _definition(
         cancelled=cancelled,
         saved=saved,
     )
-    syntax = _parse_current(source, session.source_uri)
+    syntax = _parse_current(
+        source,
+        session.source_uri,
+        session.context.language_version or "0.3",
+    )
     items: tuple[ProjectDefinitionItem, ...] = ()
     if syntax is not None:
         views = session.import_views(syntax)

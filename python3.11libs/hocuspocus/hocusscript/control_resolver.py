@@ -19,6 +19,7 @@ from .contracts import (
     CONTROL_RESOLVED_LIMIT_MAXIMA,
     CarrierContractError,
     decode_control_resolved_module_set_envelope,
+    decode_value_resolved_module_set_envelope,
 )
 from .control_semantic import ControlExpansionLimits
 from .diagnostics import HocusSourceError
@@ -258,7 +259,12 @@ class _ControlResolverSession:
         entry_path = self._resolve_entry()
         entry_uri = _project_uri(self.context.uid or "", self.entry_path_text)
         entry_source = self._read(entry_path)
-        entry_syntax = _parse_control_source(entry_source, entry_uri, graph=True)
+        entry_syntax = _parse_control_source(
+            entry_source,
+            entry_uri,
+            graph=True,
+            language_version=self.context.language_version,
+        )
         self.entry_path = entry_path
         self.entry_source = entry_source
         self.entry_syntax = entry_syntax
@@ -312,7 +318,7 @@ class _ControlResolverSession:
         if not is_literal_import_specifier(specifier) or specifier.startswith("@"):
             raise ProjectError(
                 "HOCUS460",
-                "Language 0.3 same-project resolution requires literal non-alias imports.",
+                "Same-project control resolution requires literal non-alias imports.",
             )
         if specifier.startswith(("./", "../")):
             return self._contained_candidate(
@@ -339,16 +345,26 @@ class _ControlResolverSession:
             )
         self.states[lock.module_uri] = "visiting"
         relative = path.relative_to(self.root).as_posix()
-        _require_local_lock(lock, self.context.uid or "", relative)
+        _require_local_lock(
+            lock,
+            self.context.uid or "",
+            relative,
+            self.context.language_version,
+        )
         self._claim_portable_path(relative)
         source = self._read(path)
-        syntax = _parse_control_source(source, lock.module_uri, graph=False)
+        syntax = _parse_control_source(
+            source,
+            lock.module_uri,
+            graph=False,
+            language_version=self.context.language_version,
+        )
         imports, targets = self._scan_module_imports(path, syntax)
         dependency_uris = tuple(sorted({item.target_uri for item in imports}))
         if dependency_uris != lock.dependencies:
             raise ProjectError(
                 "HOCUS462",
-                "Resolved language 0.3 imports do not match locked dependencies.",
+                "Resolved control imports do not match locked dependencies.",
                 details={"moduleUri": lock.module_uri},
             )
         for target_lock, target_path in targets:
@@ -481,7 +497,7 @@ class _ControlResolverSession:
         if actual != expected:
             raise ProjectError(
                 "HOCUS461",
-                "Language 0.3 module content, interface, or transitive digest is stale.",
+                "Control module content, interface, or transitive digest is stale.",
                 details={"moduleUri": lock.module_uri},
             )
         assert syntax.module is not None
@@ -498,7 +514,7 @@ class _ControlResolverSession:
             interface_digest,
             transitive_digest,
             lock.dependencies,
-            "0.3",
+            self.context.language_version,
         )
 
     def _resolved_set(
@@ -506,11 +522,12 @@ class _ControlResolverSession:
         entry_uri: str,
         ordered: tuple[_ScannedModule, ...],
     ) -> tuple[str, str]:
+        version = 3 if self.context.language_version == "0.4" else 2
         payload = {
-            "$schema": "hocuspocus://schemas/resolved-module-set/v2",
+            "$schema": f"hocuspocus://schemas/resolved-module-set/v{version}",
             "kind": "hocus_resolved_module_set",
-            "schemaVersion": 2,
-            "languageVersion": "0.3",
+            "schemaVersion": version,
+            "languageVersion": self.context.language_version,
             "projectUid": self.context.uid,
             "entrySourceUri": entry_uri,
             "projectManifestDigest": self.context.manifest_digest,
@@ -520,11 +537,16 @@ class _ControlResolverSession:
             "modules": [item.dependency.to_dict() for item in ordered],
         }
         try:
-            decoded = decode_control_resolved_module_set_envelope(payload)
+            decoder = (
+                decode_value_resolved_module_set_envelope
+                if version == 3
+                else decode_control_resolved_module_set_envelope
+            )
+            decoded = decoder(payload)
         except CarrierContractError as exc:
             raise ModuleResolutionError(
                 "HOCUS493",
-                "Resolved control module set failed its strict v2 contract.",
+                f"Resolved control module set failed its strict v{version} contract.",
                 details={"validatorCode": exc.code},
             ) from exc
         encoded = _canonical_json(decoded)
@@ -537,10 +559,15 @@ class _ControlResolverSession:
         if lock is None:
             raise ProjectError(
                 "HOCUS462",
-                "Resolved language 0.3 module is absent from the verified v4 lock.",
+                "Resolved control module is absent from the verified project lock.",
                 details={"moduleUri": uri},
             )
-        _require_local_lock(lock, self.context.uid or "", relative)
+        _require_local_lock(
+            lock,
+            self.context.uid or "",
+            relative,
+            self.context.language_version,
+        )
         return lock
 
     def _contained_candidate(self, candidate: Path, label: str) -> Path:
@@ -654,13 +681,13 @@ def _require_control_project(context: ProjectContext) -> None:
         context.catalog,
     )
     if (
-        context.manifest_version != 4
-        or context.language_version != "0.3"
+        (context.manifest_version, context.language_version)
+        not in {(4, "0.3"), (5, "0.4")}
         or any(value is None for value in required)
     ):
         raise ProjectError(
             "HOCUS452",
-            "Control resolution requires one fully pinned schema-v4 language-0.3 project.",
+            "Control resolution requires one fully pinned schema-v4/v5 control project.",
         )
     if context.external_aliases:
         raise ProjectError(
@@ -683,14 +710,20 @@ def _validate_project_roots(context: ProjectContext, root: Path) -> None:
         _require_exact_windows_casing(root / authored_root, root)
 
 
-def _parse_control_source(source: bytes, uri: str, *, graph: bool) -> SyntaxSource:
+def _parse_control_source(
+    source: bytes,
+    uri: str,
+    *,
+    graph: bool,
+    language_version: str,
+) -> SyntaxSource:
     try:
         text = source.decode("utf-8", errors="strict")
         syntax = parse_syntax(text, uri)
     except (UnicodeDecodeError, HocusSourceError, TypeError, ValueError, RecursionError) as exc:
         raise ProjectError(
             "HOCUS466",
-            "Native HocusScript source failed strict language 0.3 parsing.",
+            f"Native HocusScript source failed strict language {language_version} parsing.",
             details={"sourceUri": uri},
         ) from exc
     valid_root = (
@@ -698,23 +731,28 @@ def _parse_control_source(source: bytes, uri: str, *, graph: bool) -> SyntaxSour
         if graph
         else syntax.module is not None and syntax.graph is None
     )
-    if syntax.version is None or syntax.version.value != "0.3" or not valid_root:
+    if syntax.version is None or syntax.version.value != language_version or not valid_root:
         kind = "graph" if graph else "module"
         raise ProjectError(
             "HOCUS466",
-            f"Native control source must contain one language 0.3 {kind} root.",
+            f"Native control source must contain one language {language_version} {kind} root.",
             details={"sourceUri": uri},
         )
     return syntax
 
 
-def _require_local_lock(lock: ModuleLockRecord, project_uid: str, relative: str) -> None:
+def _require_local_lock(
+    lock: ModuleLockRecord,
+    project_uid: str,
+    relative: str,
+    language_version: str,
+) -> None:
     expected_uri = _project_uri(project_uid, relative)
     if (
         lock.module_uri != expected_uri
         or lock.project_uid != project_uid
         or lock.source_path != relative
-        or lock.language_version != "0.3"
+        or lock.language_version != language_version
         or lock.external_alias is not None
         or any(value is not None for value in (
             lock.library_uid, lock.library_version, lock.module_manifest_digest,
@@ -722,7 +760,7 @@ def _require_local_lock(lock: ModuleLockRecord, project_uid: str, relative: str)
     ):
         raise ProjectError(
             "HOCUS462",
-            "Resolved language 0.3 module conflicts with its verified local lock identity.",
+            "Resolved control module conflicts with its verified local lock identity.",
             details={"moduleUri": expected_uri},
         )
 

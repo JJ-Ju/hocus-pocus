@@ -1,0 +1,22 @@
+{
+  "$schema": "hocuspocus://schemas/internal-performance-fixtures/v1",
+  "fixtures": [
+    {
+      "baselineDigest": "sha256:59992a564e0afd653b3db6c85d11f9c2b1b0901f32aff27da919e211abfc81bf",
+      "id": "preview-chain-100",
+      "nodeCount": 100,
+      "operator": "sink",
+      "profile": "preview",
+      "topology": "linear-chain"
+    },
+    {
+      "id": "compile-chain-1000",
+      "nodeCount": 1000,
+      "operator": "sink",
+      "profile": "compile",
+      "topology": "linear-chain"
+    }
+  ],
+  "kind": "hocus_internal_performance_fixtures",
+  "schemaVersion": 1
+}

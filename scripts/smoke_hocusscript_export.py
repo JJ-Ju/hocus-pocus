@@ -133,7 +133,7 @@ class _ExportSmokeOperations(OperationBaseMixin, GraphOperationsMixin, DocumentO
             raise AssertionError(f"unexpected export target {root_path}")
         return super()._graph_subgraph_payload(snapshot, root_path)
 
-    def _document_preview_live_catalog(self):
+    def _document_preview_live_catalog(self, _graph_spec_version=None):
         # Production may cache the immutable catalog above this method. Keep this
         # smoke focused on endpoint/document integrity rather than extracting the
         # same complete Houdini catalog once per repeatability assertion.

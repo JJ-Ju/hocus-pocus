@@ -37,6 +37,10 @@ from .jsonrpc import (
 from .mcp_types import ResourceRegistry, ToolRegistry
 from .policy import capability_set_from_settings, require_capabilities
 from .settings import ServerSettings
+from .workspace_authority import WorkspaceAuthority
+from .workspace_grants import WorkspaceGrantError, principal_from_bearer
+
+_MAX_MCP_REQUEST_BYTES = 8 * 1024 * 1024
 
 
 def _json_dumps(payload: Any) -> bytes:
@@ -86,6 +90,7 @@ class RuntimeRequestHandler(BaseHTTPRequestHandler):
         self.send_error(HTTPStatus.NOT_FOUND)
 
     def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
+        self._response_session_id: str | None = None
         if self.path != self._runtime().settings.normalized_mcp_route:
             self.send_error(HTTPStatus.NOT_FOUND)
             return
@@ -94,7 +99,8 @@ class RuntimeRequestHandler(BaseHTTPRequestHandler):
             self._write_plain(HTTPStatus.FORBIDDEN, "Origin not allowed.\n")
             return
 
-        if not self._runtime().authorize(self.headers.get("Authorization", "")):
+        authorization = self.headers.get("Authorization", "")
+        if not self._runtime().authorize(authorization):
             self._write_json(
                 HTTPStatus.UNAUTHORIZED,
                 error_response(
@@ -109,16 +115,10 @@ class RuntimeRequestHandler(BaseHTTPRequestHandler):
                 ),
             )
             return
+        principal_id = self._runtime().principal_for_authorization(authorization)
 
-        content_length = int(self.headers.get("Content-Length", "0"))
-        raw_body = self.rfile.read(content_length)
-        try:
-            payload = json.loads(raw_body.decode("utf-8"))
-        except json.JSONDecodeError as exc:
-            self._write_json(
-                HTTPStatus.OK,
-                error_response(None, JsonRpcError(PARSE_ERROR, "Invalid JSON", str(exc))),
-            )
+        payload = self._read_request_payload()
+        if payload is None:
             return
 
         protocol_error = self._runtime().validate_protocol_header(self.headers, payload)
@@ -126,7 +126,22 @@ class RuntimeRequestHandler(BaseHTTPRequestHandler):
             self._write_plain(HTTPStatus.BAD_REQUEST, protocol_error + "\n")
             return
 
-        response = self._runtime().handle_request(payload)
+        session_id = self.headers.get("Mcp-Session-Id")
+        issued_session_id: str | None = None
+        if self._runtime().payload_initializes(payload):
+            client_info = self._runtime().client_info_from_payload(payload)
+            session_id = self._runtime().issue_session(principal_id, client_info).session_id
+            issued_session_id = session_id
+        response = self._runtime().handle_request(
+            payload,
+            principal_id=principal_id,
+            session_id=session_id,
+        )
+        if issued_session_id is not None:
+            if self._runtime().initialize_succeeded(response):
+                self._response_session_id = issued_session_id
+            else:
+                self._runtime().workspace_authority.revoke_session(issued_session_id)
         if response is None:
             self.send_response(HTTPStatus.ACCEPTED)
             self.send_header("Content-Length", "0")
@@ -136,6 +151,87 @@ class RuntimeRequestHandler(BaseHTTPRequestHandler):
             return
         self._write_json(HTTPStatus.OK, response)
 
+    def _read_request_payload(self) -> Any | None:
+        content_length = self._content_length()
+        if content_length is None:
+            return None
+        raw_body = self.rfile.read(content_length)
+        if len(raw_body) != content_length:
+            self._write_plain(HTTPStatus.BAD_REQUEST, "Incomplete request body.\n")
+            return None
+        try:
+            payload = json.loads(raw_body.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            self._write_json(
+                HTTPStatus.OK,
+                error_response(None, JsonRpcError(PARSE_ERROR, "Invalid JSON", str(exc))),
+            )
+            return None
+        if (
+            self._runtime().payload_uses_source_workspace(payload)
+            and content_length > self._runtime().settings.workspace_payload_bytes
+        ):
+            self._write_json(
+                HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
+                error_response(
+                    None,
+                    JsonRpcError(
+                        INVALID_REQUEST,
+                        "Source workspace request exceeds its configured payload limit.",
+                        {
+                            "hocusCode": "HOCUS830",
+                            "limitBytes": self._runtime().settings.workspace_payload_bytes,
+                        },
+                        family="validation",
+                        retryable=False,
+                    ),
+                ),
+            )
+            return None
+        return payload
+
+    def _content_length(self) -> int | None:
+        transfer_encoding = str(self.headers.get("Transfer-Encoding", "") or "").strip()
+        if transfer_encoding:
+            self._write_plain(
+                HTTPStatus.BAD_REQUEST,
+                "Transfer-Encoding is unsupported; use bounded Content-Length.\n",
+            )
+            return None
+        values = self.headers.get_all("Content-Length", [])
+        raw = values[0] if len(values) == 1 else None
+        if (
+            not isinstance(raw, str)
+            or not raw
+            or not raw.isascii()
+            or not raw.isdigit()
+        ):
+            self._write_plain(
+                HTTPStatus.LENGTH_REQUIRED,
+                "A non-negative Content-Length is required.\n",
+            )
+            return None
+        length = int(raw)
+        if length > _MAX_MCP_REQUEST_BYTES:
+            self._write_json(
+                HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
+                error_response(
+                    None,
+                    JsonRpcError(
+                        INVALID_REQUEST,
+                        "MCP request exceeds the transport payload limit.",
+                        {
+                            "hocusCode": "HOCUS830",
+                            "limitBytes": _MAX_MCP_REQUEST_BYTES,
+                        },
+                        family="validation",
+                        retryable=False,
+                    ),
+                ),
+            )
+            return None
+        return length
+
     def _write_json(self, status: HTTPStatus, payload: Any) -> None:
         body = _json_dumps(payload)
         self.send_response(status)
@@ -143,6 +239,9 @@ class RuntimeRequestHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Connection", "close")
         self.send_header("MCP-Protocol-Version", PROTOCOL_VERSION)
+        response_session = getattr(self, "_response_session_id", None)
+        if response_session is not None:
+            self.send_header("Mcp-Session-Id", response_session)
         self.end_headers()
         self.wfile.write(body)
 
@@ -174,6 +273,10 @@ class HocusPocusRuntime:
         self.dispatcher = LiveCommandDispatcher(logger)
         self.monitor = SceneEventMonitor(logger)
         self.tasks = LiveTaskManager(self.dispatcher, logger)
+        self._token = settings.resolved_token()
+        self.workspace_authority = WorkspaceAuthority(settings, logger)
+        self.workspace_authority.apply_configured_grants(self.host_principal_id)
+        self.workspace_rate = self.workspace_authority.rate
         self.operations = LiveOperations(
             self.dispatcher,
             self.monitor,
@@ -181,10 +284,11 @@ class HocusPocusRuntime:
             settings,
             logger,
         )
+        self.operations._workspace_authority = self.workspace_authority
+        self.operations._workspace_rate = self.workspace_rate
         self.operations.register(self.tools, self.resources)
         self.audit = AuditLogger(logger)
         self._default_capabilities = capability_set_from_settings(settings)
-        self._token = settings.resolved_token()
         self._server: RuntimeHTTPServer | None = None
         self._server_thread: threading.Thread | None = None
         self._state_lock = threading.Lock()
@@ -216,23 +320,27 @@ class HocusPocusRuntime:
             )
 
     def stop(self) -> None:
+        self._stop(close_authority=True)
+
+    def _stop(self, *, close_authority: bool) -> None:
         with self._state_lock:
-            if not self._running:
-                return
-            assert self._server is not None
-            self._server.shutdown()
-            self._server.server_close()
-            if self._server_thread is not None:
-                self._server_thread.join(timeout=2.0)
-            self.monitor.stop()
-            self.dispatcher.stop()
-            self._server = None
-            self._server_thread = None
-            self._running = False
-            self.logger.info("server stopped")
+            if self._running:
+                assert self._server is not None
+                self._server.shutdown()
+                self._server.server_close()
+                if self._server_thread is not None:
+                    self._server_thread.join(timeout=2.0)
+                self.monitor.stop()
+                self.dispatcher.stop()
+                self._server = None
+                self._server_thread = None
+                self._running = False
+                self.logger.info("server stopped")
+            if close_authority:
+                self.workspace_authority.close()
 
     def restart(self) -> None:
-        self.stop()
+        self._stop(close_authority=False)
         self.start()
 
     def status(self, *, include_secret: bool = False, include_sensitive: bool = True) -> dict[str, Any]:
@@ -272,6 +380,173 @@ class HocusPocusRuntime:
         expected = f"Bearer {self._token}"
         return header_value == expected
 
+    def principal_for_authorization(self, header_value: str) -> str:
+        try:
+            return principal_from_bearer(
+                header_value,
+                token_mode=self.settings.token_mode,
+            )
+        except WorkspaceGrantError as exc:
+            raise JsonRpcError(
+                -32001,
+                "Unauthorized.",
+                {"authRequired": True},
+                family="auth",
+                retryable=False,
+            ) from exc
+
+    @property
+    def host_principal_id(self) -> str:
+        header = ""
+        if self.settings.token_mode != "disabled":
+            header = f"Bearer {self._token}"
+        return self.principal_for_authorization(header)
+
+    def workspace_snapshot(self) -> dict[str, Any]:
+        return self.workspace_authority.host_snapshot()
+
+    def register_workspace_project(
+        self,
+        root: str,
+        *,
+        label: str | None = None,
+        reapprove: bool = False,
+    ) -> dict[str, Any]:
+        project = self.workspace_authority.register_project(
+            root,
+            label=label,
+            reapprove=reapprove,
+        )
+        return project.host_payload()
+
+    def remove_workspace_project(self, project_id: str) -> dict[str, Any]:
+        return self.workspace_authority.remove_project(project_id).host_payload()
+
+    def grant_workspace_project(
+        self,
+        project_id: str,
+        *,
+        session_id: str | None = None,
+        grants: tuple[str, ...],
+        external_roots: dict[str, str] | None = None,
+        persistent: bool = False,
+        expires_in_seconds: float | None = None,
+        until_revoked: bool = False,
+    ) -> dict[str, Any]:
+        principal_id = self.host_principal_id
+        if session_id is not None:
+            session = self.workspace_authority.session(session_id, touch=False)
+            if session is None:
+                raise ValueError("Selected MCP session is no longer active.")
+            principal_id = session.principal_id
+        grant = self.workspace_authority.host_grant(
+            project_id,
+            principal_id=principal_id,
+            session_id=session_id,
+            grants=grants,
+            external_roots=external_roots,
+            persistent=persistent,
+            expires_in_seconds=expires_in_seconds,
+            until_revoked=until_revoked,
+        )
+        return grant.host_payload(include_roots=True)
+
+    def revoke_workspace_project(
+        self,
+        project_id: str,
+        *,
+        session_id: str | None = None,
+        persistent: bool | None = None,
+    ) -> bool:
+        principal_id = self.host_principal_id
+        if session_id is not None:
+            session = self.workspace_authority.session(session_id, touch=False)
+            if session is not None:
+                principal_id = session.principal_id
+        return self.workspace_authority.host_revoke(
+            project_id,
+            principal_id=principal_id,
+            session_id=session_id,
+            persistent=persistent,
+        )
+
+    def issue_session(
+        self,
+        principal_id: str,
+        client_info: dict[str, Any] | None = None,
+    ):
+        return self.workspace_authority.issue_session(principal_id, client_info)
+
+    def list_authorized_projects(
+        self, context: RequestContext
+    ) -> tuple[dict[str, Any], ...]:
+        return self.workspace_authority.list_projects(context)
+
+    def authorize_workspace(
+        self,
+        context: RequestContext,
+        project_id: str,
+        required_grant: str,
+        authority_projection_digest: str | None = None,
+        *,
+        external_alias: str | None = None,
+    ):
+        return self.workspace_authority.authorize(
+            context,
+            project_id,
+            required_grant,
+            authority_projection_digest,
+            external_alias=external_alias,
+        )
+
+    @staticmethod
+    def payload_initializes(payload: Any) -> bool:
+        if isinstance(payload, dict):
+            return payload.get("method") == "initialize"
+        if isinstance(payload, list):
+            return any(
+                isinstance(item, dict) and item.get("method") == "initialize"
+                for item in payload
+            )
+        return False
+
+    @staticmethod
+    def payload_uses_source_workspace(payload: Any) -> bool:
+        rows = payload if isinstance(payload, list) else [payload]
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            method = row.get("method")
+            params = row.get("params")
+            if method == "tools/call" and isinstance(params, dict):
+                if str(params.get("name", "")).startswith("source."):
+                    return True
+            if method == "resources/read" and isinstance(params, dict):
+                if str(params.get("uri", "")).startswith("hocus-source://"):
+                    return True
+        return False
+
+    @staticmethod
+    def client_info_from_payload(payload: Any) -> dict[str, Any]:
+        rows = payload if isinstance(payload, list) else [payload]
+        for row in rows:
+            if not isinstance(row, dict) or row.get("method") != "initialize":
+                continue
+            params = row.get("params")
+            if isinstance(params, dict) and isinstance(params.get("clientInfo"), dict):
+                return dict(params["clientInfo"])
+        return {}
+
+    @staticmethod
+    def initialize_succeeded(response: Any) -> bool:
+        rows = response if isinstance(response, list) else [response]
+        return any(
+            isinstance(row, dict)
+            and isinstance(row.get("result"), dict)
+            and isinstance(row["result"].get("serverInfo"), dict)
+            for row in rows
+        )
+
     def origin_allowed(self, origin_header: str | None) -> bool:
         if not origin_header:
             return True
@@ -301,13 +576,36 @@ class HocusPocusRuntime:
             return "Unsupported MCP-Protocol-Version header."
         return None
 
-    def handle_request(self, payload: Any) -> Any:
+    def handle_request(
+        self,
+        payload: Any,
+        *,
+        principal_id: str = "local-runtime",
+        session_id: str | None = None,
+    ) -> Any:
         if isinstance(payload, list):
-            responses = [self._handle_single(item) for item in payload]
+            responses = [
+                self._handle_single(
+                    item,
+                    principal_id=principal_id,
+                    session_id=session_id,
+                )
+                for item in payload
+            ]
             return [item for item in responses if item is not None]
-        return self._handle_single(payload)
+        return self._handle_single(
+            payload,
+            principal_id=principal_id,
+            session_id=session_id,
+        )
 
-    def _handle_single(self, payload: Any) -> dict[str, Any] | None:
+    def _handle_single(
+        self,
+        payload: Any,
+        *,
+        principal_id: str,
+        session_id: str | None,
+    ) -> dict[str, Any] | None:
         request_id = None
         try:
             if not isinstance(payload, dict):
@@ -327,10 +625,22 @@ class HocusPocusRuntime:
                 raise JsonRpcError(INVALID_PARAMS, "params must be an object")
 
             if request_id is None and method.startswith("notifications/"):
-                self._dispatch_method(method, params, request_id)
+                self._dispatch_method(
+                    method,
+                    params,
+                    request_id,
+                    principal_id=principal_id,
+                    session_id=session_id,
+                )
                 return None
 
-            result = self._dispatch_method(method, params, request_id)
+            result = self._dispatch_method(
+                method,
+                params,
+                request_id,
+                principal_id=principal_id,
+                session_id=session_id,
+            )
             if request_id is None:
                 return None
             return success_response(request_id, result)
@@ -353,12 +663,17 @@ class HocusPocusRuntime:
         method: str,
         request_id: Any,
         params: dict[str, Any],
+        *,
+        principal_id: str,
+        session_id: str | None,
     ) -> RequestContext:
         metadata = {
             "method": method,
             "requestId": request_id,
+            "production_review_policy_id": (
+                self.settings.production_review_policy_id
+            ),
         }
-        caller = str(params.get("_caller", "mcp-client"))
         timeout_seconds = float(
             params.get("_timeout_seconds", self.settings.request_timeout_seconds)
         )
@@ -370,20 +685,44 @@ class HocusPocusRuntime:
         if not operation_id:
             operation_id = RequestContext().operation_id
         return RequestContext(
-            caller_id=caller,
+            caller_id=principal_id,
             permissions=self._default_capabilities,
             timeout_seconds=timeout_seconds,
             metadata=metadata,
             operation_id=operation_id,
+            principal_id=principal_id,
+            session_id=(
+                session_id
+                if self.workspace_authority.session(
+                    session_id,
+                    principal_id=principal_id,
+                )
+                is not None
+                else None
+            ),
         )
 
-    def _dispatch_method(self, method: str, params: dict[str, Any], request_id: Any) -> Any:
-        context = self._build_context(method, request_id, params)
+    def _dispatch_method(
+        self,
+        method: str,
+        params: dict[str, Any],
+        request_id: Any,
+        *,
+        principal_id: str,
+        session_id: str | None,
+    ) -> Any:
+        context = self._build_context(
+            method,
+            request_id,
+            params,
+            principal_id=principal_id,
+            session_id=session_id,
+        )
         static_handlers = {
             "initialize": lambda: self._initialize_payload(params),
             "ping": lambda: {},
             "tools/list": lambda: {"tools": self.tools.list_payload()},
-            "resources/list": lambda: {"resources": self.resources.list_payload()},
+            "resources/list": lambda: self._resources_list(params, context),
             "resources/templates/list": lambda: {
                 "resourceTemplates": self.operations.resource_templates_payload()
             },
@@ -401,6 +740,30 @@ class HocusPocusRuntime:
             self.logger.info("client initialized")
             return None
         raise JsonRpcError(METHOD_NOT_FOUND, f"Unknown method: {method}")
+
+    def _resources_list(
+        self,
+        params: dict[str, Any],
+        context: RequestContext,
+    ) -> dict[str, Any]:
+        cursor = params.get("cursor")
+        if cursor is not None and not isinstance(cursor, str):
+            raise JsonRpcError(INVALID_PARAMS, "Resource cursor must be a string.")
+        resources = [] if cursor else self.resources.list_payload()
+        workspace_list = getattr(self.operations, "list_workspace_resources", None)
+        if not callable(workspace_list):
+            return {"resources": resources}
+        workspace_payload = workspace_list(context, cursor)
+        if not isinstance(workspace_payload, dict) or not isinstance(
+            workspace_payload.get("resources"), list
+        ):
+            raise JsonRpcError(INTERNAL_ERROR, "Workspace resource listing failed.")
+        resources.extend(workspace_payload["resources"])
+        result: dict[str, Any] = {"resources": resources}
+        next_cursor = workspace_payload.get("nextCursor")
+        if isinstance(next_cursor, str) and next_cursor:
+            result["nextCursor"] = next_cursor
+        return result
 
     def _dispatch_tool_call(self, params: dict[str, Any], context: RequestContext) -> Any:
         name = params.get("name")

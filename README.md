@@ -16,12 +16,16 @@ That installs the package into:
 %USERPROFILE%\Documents\houdini21.0\packages\
 ```
 
-During install, the script also:
+The package manifest points at a versioned `HocusPocus.<install-id>` directory
+and is switched only after the candidate compiles and validates. During
+install, the script also:
 
 - provisions a stable HocusPocus bearer token into the installed config
 - sets the user environment variable `HOCUSPOCUS_TOKEN`
 
 So the normal local setup does not require copying tokens by hand after install.
+Reinstalling preserves the token. Rotate it only with the explicit
+`-RotateToken` option, then restart Houdini and connected clients.
 
 ## Verify
 
@@ -121,7 +125,7 @@ python -m hocuspocus.hocusscript compile assets/rocks.hocus --project D:/houdini
 
 Module roots are not inferred, persisted, environment-backed, or accepted by `format`/`write-export`. External-aware completion and definition remain native Python editor APIs rather than CLI or MCP commands.
 
-The compiled bundle is the content-based handoff to Houdini MCP. `document.export_source` performs the reverse handoff by returning canonical source plus provenance; the native `write-export` command creates the chosen project file with no-overwrite safeguards. Today the MCP does not read or edit project files or external roots, and Bundle `0.3` document lowering/live consumption remain blocked under `HS-BLOCK-008`. Roadmap H5 plans the exact-version Bundle `0.3`/`0.4` live bridge; H6 plans a separate opt-in, user-approved project workspace without changing bundle-based Houdini mutation.
+The compiled bundle is the content-based handoff to Houdini MCP. `document.export_source` performs the reverse handoff by returning canonical source plus provenance; the native `write-export` command creates the chosen project file with no-overwrite safeguards. H6 adds an opt-in source workspace for explicitly approved local NTFS/Linux projects: users select physical roots in the Houdini **Source Workspaces** panel or host configuration, while MCP clients receive only opaque `projectId` values and portable paths. The seven bounded `source.*` operations can describe, search, read, patch, export, build, and navigate those same Git-visible files. Houdini mutation still uses authenticated flat Bundle `0.2`, module Bundle `0.3`, control Bundle `0.4`, or value Bundle `0.5` preview, plan, and apply rather than file-path authority. HS7 language `0.4` / Bundle `0.5` adds exact named ports, catalog-v2 typed values, graph-editor entities, managed instance spares, and numeric keyframes; its precise supported/read-only/rejected boundaries are published in the HS7 fidelity matrix. HS8 adds one high-level, read-only `production.asset.qualify` decision over strict asset contracts, portable build provenance, budgets, clean-rebuild/numeric/visual comparisons, and artist-override evidence. See the [HS8 production workflow](C:\Users\jujun\Documents\Source\Houdini\HocusPocus_mcp\docs\hocusscript-hs8-production.md).
 
 ## Docs
 

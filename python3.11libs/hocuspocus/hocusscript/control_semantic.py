@@ -1,16 +1,9 @@
-"""Pure whole-program static semantics for HocusScript 0.3 controls.
-
-This module deliberately has no project, resolver, compiler, editor, MCP, or
-Houdini dispatch.  H3 may compose this content-only validator with those
-surfaces after their separate trust-boundary work is complete.
-"""
-
 from __future__ import annotations
-
 import re
 from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping
-
+from ._control_ast_validation import _ControlAstAdmissionBudget, validate_control_syntax_ast
+from .control_limits import ControlExpansionLimits
 from .diagnostics import CodeOffsetMap, SourceSpan
 from .expander import (
     MODULE_TYPES,
@@ -45,54 +38,19 @@ from .syntax import (
     OwnershipStmt,
     SymbolRefExpr,
     SyntaxSource,
+    TaggedValueExpr,
     TargetStmt,
     UseDecl,
     YieldStmt,
 )
-
-
+from .editor_syntax import EditorEntityDecl
+from .editor_semantic import validate_graph_editor_declarations
+from .runtime_carrier import is_runtime_declaration, validate_node_runtime_source
+from .value_semantic_validation import validate_tagged_value
+from .port_selectors import require_selector, selector_is_valid
 _SPECIAL_REFERENCE_ROOTS = frozenset({"param", "iter", "carry"})
 _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _IDENTITY_SEED = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
-
-
-@dataclass(frozen=True, slots=True)
-class ControlExpansionLimits:
-    """Fixed H2 validation and expansion limits for the isolated 0.3 lane."""
-
-    import_depth: int = 64
-    instance_depth: int = 64
-    instances: int = 4096
-    parameters_per_module: int = 256
-    exports_per_module: int = 256
-    expanded_nodes: int = 10_000
-    aggregate_code_bytes: int = 4 * 1024 * 1024
-    source_map_entries: int = 100_000
-    diagnostics: int = 500
-    per_fold_iterations: int = 4096
-    aggregate_iterations: int = 100_000
-
-    def __post_init__(self) -> None:
-        maxima = {
-            "import_depth": 64,
-            "instance_depth": 64,
-            "instances": 4096,
-            "parameters_per_module": 256,
-            "exports_per_module": 256,
-            "expanded_nodes": 10_000,
-            "aggregate_code_bytes": 4_194_304,
-            "source_map_entries": 100_000,
-            "diagnostics": 500,
-            "per_fold_iterations": 4096,
-            "aggregate_iterations": 100_000,
-        }
-        for name, maximum in maxima.items():
-            value = getattr(self, name)
-            if type(value) is not int or not 1 <= value <= maximum:
-                raise ValueError(
-                    f"ControlExpansionLimits.{name} must be an integer from 1 to {maximum}."
-                )
-
 
 @dataclass(slots=True)
 class _Scope:
@@ -113,15 +71,16 @@ class _Scope:
             dict(self.carries),
         )
 
-
 @dataclass(slots=True)
 class _ValidationState:
     modules: Mapping[str, ResolvedModuleUnit]
     limits: ControlExpansionLimits
     cancellation: Callable[[], bool] | None
+    language_version: str = "0.3"
     node_parameter_observer: Callable[[NodeDecl, tuple[str, ...]], None] | None = None
     declarations: int = 0
     code_bytes: int = 0
+    value_nodes: int = 0
 
     def checkpoint(self, span: Any) -> None:
         _check_cancel(self.cancellation, span)
@@ -129,13 +88,18 @@ class _ValidationState:
     def claim_declaration(self, span: Any) -> None:
         self.checkpoint(span)
         self.declarations += 1
-        # This is an admission bound for forged ASTs. Parsed sources already
-        # apply tighter per-source node/use/control limits.
         if self.declarations > self.limits.source_map_entries:
             raise ModuleExpansionError(
                 "HOCUS464", "Static declarations exceed the source-map limit.", span
             )
 
+    def claim_value(self, span: Any) -> None:
+        self.checkpoint(span)
+        self.value_nodes += 1
+        if self.value_nodes > 100_000:
+            raise ModuleExpansionError(
+                "HOCUS464", "Aggregate parameter values exceed 100000 nodes.", span
+            )
 
 def validate_control_program(
     entry: SyntaxSource,
@@ -146,11 +110,9 @@ def validate_control_program(
     cancellation: Callable[[], bool] | None = None,
     _node_parameter_observer: Callable[[NodeDecl, tuple[str, ...]], None] | None = None,
 ) -> None:
-    """Validate one exact 0.3 graph plus its complete immutable module closure.
+    """Validate one exact control graph plus its complete immutable closure.
 
-    Validation always visits both conditional branches and every fold body.
-    It never evaluates a branch, iterates a fold, reads a file, or performs a
-    catalog/operator lookup.
+    Validation visits all branches and folds without evaluating or doing I/O.
     """
 
     if not isinstance(entry, SyntaxSource):
@@ -161,17 +123,26 @@ def validate_control_program(
         raise TypeError("modules must be a mapping")
     if not isinstance(limits, ControlExpansionLimits):
         raise TypeError("limits must be a ControlExpansionLimits")
-    if entry.version is None or entry.version.value != "0.3" or entry.graph is None or entry.module is not None:
+    ast_budget = _ControlAstAdmissionBudget()
+    validate_control_syntax_ast(entry, cancellation=cancellation, budget=ast_budget)
+    if (
+        entry.version is None
+        or entry.version.value not in {"0.3", "0.4"}
+        or entry.graph is None
+        or entry.module is not None
+    ):
         raise ModuleExpansionError(
-            "HOCUS460", "Control validation requires one HocusScript 0.3 graph entry.", entry.span
+            "HOCUS460", "Control validation requires one HocusScript 0.3 or 0.4 graph entry.", entry.span
         )
 
     try:
         state = _ValidationState(
-            modules, limits, cancellation, _node_parameter_observer,
+            modules, limits, cancellation, entry.version.value,
+            _node_parameter_observer,
         )
         state.checkpoint(entry.span)
         _validate_module_mapping(modules, entry.span)
+        _validate_module_syntax_trees(modules, cancellation, ast_budget)
         _validate_modules(modules, state)
         _validate_import_dag(modules, limits.import_depth, state)
         _validate_entry_imports(entry, entry_imports, modules, state)
@@ -187,6 +158,15 @@ def validate_control_program(
         raise ModuleExpansionError(
             "HOCUS479", "Control syntax tree contains malformed field values.", entry.span
         ) from exc
+
+
+def _validate_module_syntax_trees(
+    modules: Mapping[str, ResolvedModuleUnit],
+    cancellation: Callable[[], bool] | None,
+    budget: _ControlAstAdmissionBudget,
+) -> None:
+    for uri in sorted(modules):
+        validate_control_syntax_ast(modules[uri].syntax, cancellation=cancellation, budget=budget)
 
 
 def _validate_module_mapping(modules: Mapping[str, ResolvedModuleUnit], span: Any) -> None:
@@ -209,6 +189,7 @@ def _validate_graph_directives(graph: GraphDecl, state: _ValidationState) -> Non
     target = _validate_graph_options(graph, directives)
     known, mutable = _validate_graph_externals(graph, target, state)
     _validate_graph_flags(flags, known, mutable, state)
+    validate_graph_editor_declarations(graph, directives, known, mutable)
 
 
 def _collect_graph_directives(
@@ -303,6 +284,7 @@ def _validate_graph_statement_shape(
         UseDecl,
         IfDecl,
         ForDecl,
+        EditorEntityDecl,
     )
     for statement in graph.statements:
         state.checkpoint(statement.span)
@@ -383,12 +365,14 @@ def _validate_modules(
         syntax = unit.syntax
         if (
             syntax.version is None
-            or syntax.version.value != "0.3"
+            or syntax.version.value != state.language_version
             or syntax.module is None
             or syntax.graph is not None
         ):
             raise ModuleExpansionError(
-                "HOCUS460", "Resolved control modules must use HocusScript 0.3.", syntax.span
+                "HOCUS460",
+                f"Resolved control modules must use HocusScript {state.language_version}.",
+                syntax.span,
             )
         module = syntax.module
         _require_authored_name(module.name, module.name_span)
@@ -593,7 +577,7 @@ def _validate_module_body(
                 raise ModuleExpansionError(
                     "HOCUS468", f"Undeclared module export: {statement.name}.", statement.span
                 )
-            actual = _infer_expr_type(statement.value, scope)
+            actual = _infer_expr_type(statement.value, scope, state.language_version)
             if actual != expected:
                 _type_mismatch(expected, actual, statement.value.span)
     if set(authored_exports) != set(declared_exports):
@@ -642,7 +626,7 @@ def _validate_control_body(
                 raise ModuleExpansionError(
                     "HOCUS479", f"Undeclared control yield: {statement.name}.", statement.span
                 )
-            actual = _infer_expr_type(statement.value, scope)
+            actual = _infer_expr_type(statement.value, scope, state.language_version)
             if actual != expected:
                 _type_mismatch(expected, actual, statement.value.span)
             yielded[statement.name] = statement
@@ -690,7 +674,8 @@ def _validate_declaration(
     if isinstance(statement, UseDecl):
         scope.nodes.pop(statement.symbol, None)
         scope.controls.pop(statement.symbol, None)
-        scope.uses[statement.symbol] = _validate_use(statement, imports, scope, state.modules)
+        scope.uses[statement.symbol] = _validate_use(
+            statement, imports, scope, state.modules, state.language_version)
         return
     if isinstance(statement, IfDecl):
         scope.nodes.pop(statement.symbol, None)
@@ -718,22 +703,37 @@ def _validate_node(node: NodeDecl, scope: _Scope, state: _ValidationState) -> No
             "HOCUS477", "Node operator type must be a string.", node.type_span
         )
     _validate_node_shape(node)
+    validate_node_runtime_source(node, state.language_version)
     parameter_types: list[str] = []
-    for child in node.statements:
+    for child in (
+        item for item in node.statements if not is_runtime_declaration(item)
+    ):
         state.checkpoint(child.span)
         if isinstance(child, InputStmt):
-            actual = _infer_expr_type(child.source, scope)
+            require_selector(
+                child.index, child.name, state.language_version,
+                ModuleExpansionError(
+                    "HOCUS471", "Input must select one valid index or fixed name.", child.span))
+            actual = _infer_expr_type(child.source, scope, state.language_version)
             if actual != "node_output":
                 _type_mismatch("node_output", actual, child.source.span)
         elif isinstance(child, ParmStmt):
             if isinstance(child.value, ArrayExpr):
+                _require_rich_value_lane(child.value, state)
                 _validate_value_shape(child.value, state)
                 parameter_types.append("array")
             elif isinstance(child.value, CodeExpr):
+                _require_rich_value_lane(child.value, state)
                 _validate_value_shape(child.value, state)
                 parameter_types.append("code")
+            elif isinstance(child.value, TaggedValueExpr):
+                _require_rich_value_lane(child.value, state)
+                validate_tagged_value(
+                    child.value, scope, state, _validate_value_shape
+                )
+                parameter_types.append(f"tagged:{child.value.tag}")
             else:
-                actual = _infer_expr_type(child.value, scope)
+                actual = _infer_expr_type(child.value, scope, state.language_version)
                 if actual == "node_output":
                     raise ModuleExpansionError(
                         "HOCUS470", "node_output cannot be assigned to a scalar parameter.", child.value.span
@@ -747,11 +747,21 @@ def _validate_node(node: NodeDecl, scope: _Scope, state: _ValidationState) -> No
         state.node_parameter_observer(node, tuple(parameter_types))
 
 
+def _require_rich_value_lane(value: Any, state: _ValidationState) -> None:
+    if state.language_version != "0.4":
+        raise ModuleExpansionError(
+            "HOCUS479",
+            "Rich parameter values require HocusScript 0.4.",
+            value.span,
+        )
+
+
 def _validate_value_shape(value: Any, state: _ValidationState, *, depth: int = 0) -> None:
     if depth > 64:
         raise ModuleExpansionError(
             "HOCUS464", "Value nesting exceeds the 64-level static limit.", value.span
         )
+    state.claim_value(value.span)
     if isinstance(value, LiteralExpr):
         _literal_type(value.value, value.span)
         return
@@ -809,10 +819,8 @@ def _validate_value_shape(value: Any, state: _ValidationState, *, depth: int = 0
 
 
 def _validate_use(
-    use: UseDecl,
-    imports: Mapping[str, Any],
-    scope: _Scope,
-    modules: Mapping[str, ResolvedModuleUnit],
+    use: UseDecl, imports: Mapping[str, Any], scope: _Scope,
+    modules: Mapping[str, ResolvedModuleUnit], language_version: str,
 ) -> dict[str, str]:
     resolved_import = imports.get(use.module_name)
     if resolved_import is None:
@@ -846,7 +854,7 @@ def _validate_use(
                     "HOCUS469", f"Missing required argument: {name}.", use.span
                 )
             continue
-        actual = _infer_expr_type(argument.value, scope)
+        actual = _infer_expr_type(argument.value, scope, language_version)
         if actual != declaration.type_name:
             _type_mismatch(declaration.type_name, actual, argument.value.span)
     return {item.name: item.type_name for item in target.declaration.exports}
@@ -864,7 +872,7 @@ def _validate_if(
         control.outputs, "conditional output", control.span, state
     )
     state.checkpoint(control.condition_span)
-    actual = _infer_expr_type(control.condition, scope)
+    actual = _infer_expr_type(control.condition, scope, state.language_version)
     if actual != "bool":
         _type_mismatch("bool", actual, control.condition_span)
     _validate_control_body(
@@ -898,7 +906,7 @@ def _validate_for(
     _validate_control_depth(control_depth, control.span, state)
     carries = _control_interface(control.carries, "fold carry", control.span, state)
     state.checkpoint(control.count_span)
-    actual_count = _infer_expr_type(control.count, scope)
+    actual_count = _infer_expr_type(control.count, scope, state.language_version)
     if actual_count != "int":
         _type_mismatch("int", actual_count, control.count_span)
     if isinstance(control.count, LiteralExpr):
@@ -912,11 +920,9 @@ def _validate_for(
             raise ModuleExpansionError(
                 "HOCUS464", "Fold exceeds perFoldIterations.", control.count_span
             )
-    # Initializers all use the enclosing scope. A prior carry declaration is
-    # intentionally not visible to a later initializer.
     for declaration in control.carries:
         state.checkpoint(declaration.initial_span)
-        actual = _infer_expr_type(declaration.initial, scope)
+        actual = _infer_expr_type(declaration.initial, scope, state.language_version)
         if actual != declaration.type_name:
             _type_mismatch(declaration.type_name, actual, declaration.initial_span)
     body_scope = scope.child()
@@ -972,7 +978,7 @@ def _control_interface(
     return result
 
 
-def _infer_expr_type(expr: Any, scope: _Scope) -> str:
+def _infer_expr_type(expr: Any, scope: _Scope, language_version: str) -> str:
     if isinstance(expr, LiteralExpr):
         return _literal_type(expr.value, expr.span)
     if isinstance(expr, ParamRefExpr):
@@ -987,7 +993,9 @@ def _infer_expr_type(expr: Any, scope: _Scope) -> str:
         if expr.symbol == "carry":
             return _qualified_type(expr, scope.carries, "fold carry")
         if expr.symbol in scope.nodes:
-            if expr.member != "output" or expr.output_index is None or expr.output_index < 0:
+            valid = expr.member == "output" and selector_is_valid(
+                expr.output_index, expr.output_name, language_version)
+            if not valid:
                 raise ModuleExpansionError(
                     "HOCUS471", "Node references must select output[index].", expr.span
                 )
@@ -1004,7 +1012,11 @@ def _infer_expr_type(expr: Any, scope: _Scope) -> str:
 
 
 def _qualified_type(expr: SymbolRefExpr, values: Mapping[str, str], label: str) -> str:
-    if expr.output_index is not None or expr.member not in values:
+    if (
+        expr.output_index is not None
+        or expr.output_name is not None
+        or expr.member not in values
+    ):
         raise ModuleExpansionError(
             "HOCUS471", f"Unknown or inactive {label}: {expr.member}.", expr.span
         )

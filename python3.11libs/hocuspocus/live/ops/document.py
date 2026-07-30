@@ -9,13 +9,23 @@ from hocuspocus.core.jsonrpc import INVALID_PARAMS, JsonRpcError
 from ..context import RequestContext
 from .document_apply import DocumentApplyOperationsMixin
 from .document_diff import DocumentDiffOperationsMixin
+from .document_editor_receipts import DocumentEditorReceiptOperationsMixin
+from .document_entity_provenance import DocumentEntityProvenanceOperationsMixin
+from .document_expansion_provenance import (
+    DocumentExpansionProvenanceOperationsMixin,
+)
 from .document_metadata import DocumentMetadataOperationsMixin
 from .document_snapshot import DocumentSnapshotOperationsMixin
+from .document_typed_receipts import DocumentTypedReceiptOperationsMixin
 from .document_validation import DocumentValidationOperationsMixin
 
 
 class DocumentOperationsMixin(
+    DocumentExpansionProvenanceOperationsMixin,
+    DocumentEntityProvenanceOperationsMixin,
     DocumentMetadataOperationsMixin,
+    DocumentTypedReceiptOperationsMixin,
+    DocumentEditorReceiptOperationsMixin,
     DocumentSnapshotOperationsMixin,
     DocumentValidationOperationsMixin,
     DocumentDiffOperationsMixin,
@@ -30,8 +40,10 @@ class DocumentOperationsMixin(
     _DOCUMENT_NODE_PROVENANCE_DIGEST_KEY = "hpmcp.provenance_sha256"
     _MAX_NODE_PROVENANCE_BYTES = 16 * 1024
     _NETWORK_DOCUMENT_SCHEMA_URI = "hocuspocus://schemas/network-document/v1"
+    _NETWORK_DOCUMENT_SCHEMA_URI_V2 = "hocuspocus://schemas/network-document/v2"
     _SCENE_DOCUMENT_SCHEMA_URI = "hocuspocus://schemas/scene-document/v1"
     _DOCUMENT_SCHEMA_RESOURCE_URI = "houdini://documents/schema/network-document/v1"
+    _DOCUMENT_SCHEMA_RESOURCE_URI_V2 = "houdini://documents/schema/network-document/v2"
     _CODE_LANGUAGE_ALIASES = {
         "python": "python",
         "py": "python",
@@ -98,6 +110,12 @@ class DocumentOperationsMixin(
         return self._document_resource_response(
             self._DOCUMENT_SCHEMA_RESOURCE_URI,
             self._document_schema_payload(),
+        )
+
+    def read_document_schema_v2(self, context: RequestContext) -> dict[str, Any]:
+        return self._document_resource_response(
+            self._DOCUMENT_SCHEMA_RESOURCE_URI_V2,
+            self._document_schema_payload(2),
         )
 
     def read_document_network(self, root_path: str, context: RequestContext) -> dict[str, Any]:

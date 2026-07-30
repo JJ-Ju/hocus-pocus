@@ -1,0 +1,14 @@
+{
+  "$schema": "hocuspocus://schemas/visual-review-request/v1",
+  "assetUri": "hocus-asset://hs8.fixture/rock-family",
+  "baselineDigest": "sha256:8df65c061189caaf408ebae53afb41a673a2d2716dc9350b0165bd76648ad51b",
+  "baselineFile": "baseline-contact-sheet.png",
+  "candidateOutputSetDigest": "sha256:2d782aad240f91ade7163fc1e3bc6ff2f82a0db8eeec27fe55a13874b23bd0f2",
+  "candidateProvenanceManifestDigest": "sha256:5ba161153e5434a722b95dd0e432f3ec4acfd5b5f98708f7096991cfe40360a3",
+  "candidateVersionId": "hs8-rock-family-v1",
+  "decision": "review_pending",
+  "kind": "hocus_visual_version_review_request",
+  "reviewPolicyId": "hs8-installed-visual-review-v1",
+  "reviewVersion": 1,
+  "visualComparisonDigest": "sha256:a2e5077d1e50fff18ecfc3811923d24efffbe43eb8268f3562c310cc13d8641e"
+}

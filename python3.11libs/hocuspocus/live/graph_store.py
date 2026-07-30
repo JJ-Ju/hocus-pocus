@@ -1,5 +1,4 @@
 """Embedded SQLite-backed document graph store."""
-
 from __future__ import annotations
 
 import copy
@@ -13,24 +12,18 @@ from pathlib import Path
 from typing import Any
 
 from hocuspocus.core import paths as core_paths
+from .graph_store_live_revisions import live_revision_fields
 from .graph_store_plans import (
     GraphStorePlanError as _GraphStorePlanError,
     GraphStorePlanMixin,
 )
+from .graph_store_sqlite import (
+    GraphStoreSchemaError,
+    open_storage_connection,
+)
 
 GraphStorePlanError = _GraphStorePlanError
 
-class GraphStoreSchemaError(RuntimeError):
-    """Raised when a graph-store database cannot be migrated safely."""
-
-class _ClosingConnection(sqlite3.Connection):
-    """SQLite connection whose context manager also releases the file handle."""
-
-    def __exit__(self, exc_type: Any, exc_value: Any, traceback: Any) -> bool:
-        try:
-            return bool(super().__exit__(exc_type, exc_value, traceback))
-        finally:
-            self.close()
 
 _MIGRATION_1_SQL = """
 CREATE TABLE IF NOT EXISTS documents (
@@ -257,16 +250,15 @@ class LiveGraphStore(GraphStorePlanMixin):
         self._cache_hits = 0
         self._cache_misses = 0
         self._ensure_schema()
+        self.prune_durable_plan_history()
 
     def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(
+        connection = open_storage_connection(
             str(self._db_path),
             timeout=30.0,
-            factory=_ClosingConnection,
+            pragmas=("PRAGMA journal_mode=WAL", "PRAGMA foreign_keys=ON"),
         )
         connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA journal_mode=WAL")
-        connection.execute("PRAGMA foreign_keys=ON")
         return connection
 
     @staticmethod
@@ -363,9 +355,8 @@ class LiveGraphStore(GraphStorePlanMixin):
         self,
         version: int,
     ) -> dict[str, tuple[tuple[tuple[Any, ...], ...], tuple[tuple[Any, ...], ...]]]:
-        reference = sqlite3.connect(":memory:")
-        reference.row_factory = sqlite3.Row
-        try:
+        with open_storage_connection(":memory:") as reference:
+            reference.row_factory = sqlite3.Row
             reference.execute(
                 """
                 CREATE TABLE graph_store_migrations (
@@ -379,8 +370,6 @@ class LiveGraphStore(GraphStorePlanMixin):
             for _, _, sql in _MIGRATIONS[:version]:
                 self._execute_migration_sql(reference, sql)
             return self._schema_signatures(reference)
-        finally:
-            reference.close()
 
     def _record_migration(
         self,
@@ -674,8 +663,9 @@ class LiveGraphStore(GraphStorePlanMixin):
             document_revision = latest_revision + 1 if changed else max(latest_revision, 1)
 
             payload["documentRevision"] = document_revision
-            payload["baselineLiveRevision"] = previous_live_revision if previous_live_revision > 0 else live_revision
-            payload["lastSyncedLiveRevision"] = live_revision
+            latest_json = str(latest["payload_json"]) if latest is not None else None
+            revision_fields = live_revision_fields(latest_json, changed=changed, previous=previous_live_revision, current=live_revision)
+            payload.update(revision_fields)
             metadata = payload.setdefault("metadata", {})
             if isinstance(metadata, dict):
                 metadata["store"] = {

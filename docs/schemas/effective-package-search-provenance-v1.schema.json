@@ -1,0 +1,299 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "hocuspocus://schemas/effective-package-search-provenance/v1",
+  "title": "HocusScript Effective Houdini Package Search Provenance v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema", "kind", "schemaVersion", "houdini", "installedPayload",
+    "packageTrace",
+    "packages", "searchOrder", "precedence", "operatorWinners", "shadowing",
+    "loadedLibraryDigest", "receiptDigest"
+  ],
+  "properties": {
+    "$schema": {"const": "hocuspocus://schemas/effective-package-search-provenance/v1"},
+    "kind": {"const": "hocus_effective_package_search_provenance"},
+    "schemaVersion": {"const": 1},
+    "houdini": {"$ref": "#/$defs/houdini"},
+    "installedPayload": {"$ref": "#/$defs/installedPayload"},
+    "packageTrace": {"$ref": "#/$defs/packageTrace"},
+    "packages": {
+      "type": "array",
+      "maxItems": 4096,
+      "items": {"$ref": "#/$defs/package"}
+    },
+    "searchOrder": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["package", "houdini", "hda", "python"],
+      "properties": {
+        "package": {"$ref": "#/$defs/searchRows"},
+        "houdini": {"$ref": "#/$defs/searchRows"},
+        "hda": {"$ref": "#/$defs/searchRows"},
+        "python": {"$ref": "#/$defs/searchRows"}
+      }
+    },
+    "precedence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "packageProcessing", "searchOrderDigest", "operatorWinnerDigest"
+      ],
+      "properties": {
+        "packageProcessing": {
+          "type": "array",
+          "maxItems": 4096,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/locator"}
+        },
+        "searchOrderDigest": {"$ref": "#/$defs/digest"},
+        "operatorWinnerDigest": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "operatorWinners": {
+      "type": "array",
+      "maxItems": 16384,
+      "items": {"$ref": "#/$defs/operatorWinner"}
+    },
+    "shadowing": {
+      "type": "array",
+      "maxItems": 16384,
+      "items": {"$ref": "#/$defs/shadow"}
+    },
+    "loadedLibraryDigest": {"$ref": "#/$defs/digest"},
+    "receiptDigest": {"$ref": "#/$defs/digest"}
+  },
+  "$defs": {
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "locator": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 8192,
+      "pattern": "^(?:hocus-install|houdini-install|hocus-search)://"
+    },
+    "nullableText": {
+      "oneOf": [
+        {"type": "string", "minLength": 1, "maxLength": 1024},
+        {"type": "null"}
+      ]
+    },
+    "houdini": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "product", "version", "build", "platform", "featureFlags"
+      ],
+      "properties": {
+        "product": {"type": "string", "minLength": 1, "maxLength": 1024},
+        "version": {"type": "string", "minLength": 1, "maxLength": 1024},
+        "build": {"type": "string", "minLength": 1, "maxLength": 1024},
+        "platform": {"type": "string", "minLength": 1, "maxLength": 1024},
+        "featureFlags": {
+          "type": "array",
+          "maxItems": 4096,
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1, "maxLength": 1024}
+        }
+      }
+    },
+    "installedPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "rootLocator", "rootDigest", "manifestDigest", "artifactCount"
+      ],
+      "properties": {
+        "rootLocator": {"const": "hocus-install://root"},
+        "rootDigest": {"$ref": "#/$defs/digest"},
+        "manifestDigest": {"$ref": "#/$defs/digest"},
+        "artifactCount": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 20000
+        }
+      }
+    },
+    "packageTrace": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "authority", "events", "loadedLocators", "disabledLocators",
+        "skippedLocators", "traceDigest"
+      ],
+      "properties": {
+        "authority": {"const": "HOUDINI_PACKAGE_VERBOSE=1"},
+        "events": {
+          "type": "array",
+          "maxItems": 12288,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["rank", "kind", "sourceLocator"],
+            "properties": {
+              "rank": {"type": "integer", "minimum": 0, "maximum": 12287},
+              "kind": {"enum": ["discovered", "processed", "load_once"]},
+              "sourceLocator": {"$ref": "#/$defs/locator"}
+            }
+          }
+        },
+        "loadedLocators": {"$ref": "#/$defs/packageLocators"},
+        "disabledLocators": {"$ref": "#/$defs/packageLocators"},
+        "skippedLocators": {"$ref": "#/$defs/packageLocators"},
+        "traceDigest": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "packageLocators": {
+      "type": "array",
+      "maxItems": 4096,
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/locator"}
+    },
+    "package": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name", "sourceLocator", "contentDigest", "byteLength", "loaded",
+        "status", "discoveryRank", "evaluationRank", "processOrder",
+        "conditionKeys", "conditionDigest",
+        "evaluatedDigest", "declaresHocusPocusRoot"
+      ],
+      "properties": {
+        "name": {"type": "string", "minLength": 1, "maxLength": 1024},
+        "sourceLocator": {"$ref": "#/$defs/locator"},
+        "contentDigest": {"$ref": "#/$defs/digest"},
+        "byteLength": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1048576
+        },
+        "loaded": {"type": "boolean"},
+        "status": {"enum": ["loaded", "disabled", "skipped"]},
+        "discoveryRank": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4095
+        },
+        "evaluationRank": {
+          "type": "integer",
+          "minimum": -1,
+          "maximum": 4095
+        },
+        "processOrder": {
+          "oneOf": [
+            {"type": "number"},
+            {"type": "null"}
+          ]
+        },
+        "conditionKeys": {
+          "type": "array",
+          "maxItems": 6,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "enable", "load_package_once", "package_path", "process_order",
+              "recommends", "requires"
+            ]
+          }
+        },
+        "conditionDigest": {"$ref": "#/$defs/digest"},
+        "evaluatedDigest": {"$ref": "#/$defs/digest"},
+        "declaresHocusPocusRoot": {"type": "boolean"}
+      }
+    },
+    "searchRows": {
+      "type": "array",
+      "maxItems": 4096,
+      "items": {"$ref": "#/$defs/searchRow"}
+    },
+    "searchRow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rank", "locator", "exists", "directory"],
+      "properties": {
+        "rank": {"type": "integer", "minimum": 0, "maximum": 4095},
+        "locator": {"$ref": "#/$defs/locator"},
+        "exists": {"type": "boolean"},
+        "directory": {"type": "boolean"}
+      }
+    },
+    "operatorWinner": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "category", "qualifiedName", "sourceKind", "packageId", "winner"
+      ],
+      "properties": {
+        "category": {"type": "string", "minLength": 1, "maxLength": 1024},
+        "qualifiedName": {"type": "string", "minLength": 1, "maxLength": 1024},
+        "sourceKind": {"enum": ["builtin", "package", "labs", "hda"]},
+        "packageId": {"$ref": "#/$defs/nullableText"},
+        "winner": {
+          "oneOf": [
+            {"$ref": "#/$defs/hdaWinner"},
+            {"$ref": "#/$defs/binaryWinner"},
+            {"$ref": "#/$defs/internalWinner"}
+          ]
+        }
+      }
+    },
+    "hdaWinner": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind", "libraryLocator", "contentDigest", "version", "preferred"
+      ],
+      "properties": {
+        "kind": {"const": "hda"},
+        "libraryLocator": {"$ref": "#/$defs/locator"},
+        "contentDigest": {"$ref": "#/$defs/digest"},
+        "version": {"$ref": "#/$defs/nullableText"},
+        "preferred": {"type": "boolean"}
+      }
+    },
+    "binaryWinner": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind", "sourceType", "libraryLocator", "contentDigest", "byteLength"
+      ],
+      "properties": {
+        "kind": {"const": "binary"},
+        "sourceType": {"const": "CompiledCode"},
+        "libraryLocator": {"$ref": "#/$defs/locator"},
+        "contentDigest": {"$ref": "#/$defs/digest"},
+        "byteLength": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2147483648
+        }
+      }
+    },
+    "internalWinner": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "sourceType"],
+      "properties": {
+        "kind": {"const": "internal"},
+        "sourceType": {"const": "Internal"}
+      }
+    },
+    "shadow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "category", "qualifiedName", "winnerLocator", "shadowedLocator",
+        "shadowedDigest"
+      ],
+      "properties": {
+        "category": {"type": "string", "minLength": 1, "maxLength": 1024},
+        "qualifiedName": {"type": "string", "minLength": 1, "maxLength": 1024},
+        "winnerLocator": {"$ref": "#/$defs/locator"},
+        "shadowedLocator": {"$ref": "#/$defs/locator"},
+        "shadowedDigest": {"$ref": "#/$defs/digest"}
+      }
+    }
+  }
+}

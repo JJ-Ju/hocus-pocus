@@ -83,12 +83,15 @@ class _DiagnosticCollector:
 def _validate_node(node: NodeSpec, symbols: set[str], collector: _DiagnosticCollector) -> None:
     for name, span in _duplicates((item.name, item.span) for item in node.parms):
         collector.add(_diagnostic("HOCUS307", f"Duplicate parameter assignment '{name}' on node '{node.symbol}'.", span))
-    for index, span in _duplicates((str(item.index), item.span) for item in node.inputs):
+    for index, span in _duplicates(
+        (str(item.name if item.name is not None else item.index), item.span)
+        for item in node.inputs
+    ):
         collector.add(_diagnostic("HOCUS308", f"Duplicate input index {index} on node '{node.symbol}'.", span))
     for input_spec in node.inputs:
-        if input_spec.index < 0:
+        if input_spec.index is not None and input_spec.index < 0:
             collector.add(_diagnostic("HOCUS312", "Input indexes must be nonnegative.", input_spec.span))
-        if input_spec.source.output_index < 0:
+        if input_spec.source.output_index is not None and input_spec.source.output_index < 0:
             collector.add(_diagnostic("HOCUS313", "Output indexes must be nonnegative.", input_spec.source.span))
         if input_spec.source.symbol not in symbols:
             collector.add(

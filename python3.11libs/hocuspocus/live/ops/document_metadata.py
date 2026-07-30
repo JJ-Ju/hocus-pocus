@@ -13,15 +13,30 @@ from typing import Any
 
 from hocuspocus.core import paths as core_paths
 from hocuspocus.core.jsonrpc import INVALID_PARAMS, JsonRpcError
+from .document_network_families import resolve_network_family
 
 
 
 class DocumentMetadataOperationsMixin:
-    def _document_schema_path(self) -> Path:
-        return core_paths.package_root() / "docs" / "schemas" / "network-document-v1.schema.json"
+    def _document_schema_path(self, version: int = 1) -> Path:
+        return (
+            core_paths.package_root()
+            / "docs"
+            / "schemas"
+            / f"network-document-v{version}.schema.json"
+        )
 
-    def _document_schema_payload(self) -> dict[str, Any]:
-        path = self._document_schema_path()
+    def _document_schema_payload(self, version: int = 1) -> dict[str, Any]:
+        path = (
+            self._document_schema_path()
+            if version == 1
+            else (
+                core_paths.package_root()
+                / "docs"
+                / "schemas"
+                / f"network-document-v{version}.schema.json"
+            )
+        )
         with path.open("r", encoding="utf-8") as handle:
             return json.load(handle)
 
@@ -64,7 +79,26 @@ class DocumentMetadataOperationsMixin:
         """
         if "$ref" in schema:
             reference = schema["$ref"]
-            if not isinstance(reference, str) or not reference.startswith("#/$defs/"):
+            v1_prefix = (
+                "hocuspocus://schemas/network-document/v1#/$defs/"
+            )
+            if isinstance(reference, str) and reference.startswith(v1_prefix):
+                v1_schema = self._document_schema_payload(1)
+                resolved = v1_schema.get("$defs", {}).get(
+                    reference.removeprefix(v1_prefix)
+                )
+                if not isinstance(resolved, dict):
+                    return [{
+                        "path": path,
+                        "message": f"Unresolved schema reference: {reference}",
+                    }]
+                return self._document_schema_errors(
+                    value, resolved, v1_schema, path
+                )
+            if (
+                not isinstance(reference, str)
+                or not reference.startswith("#/$defs/")
+            ):
                 return [{"path": path, "message": f"Unsupported schema reference: {reference}"}]
             resolved = root_schema.get("$defs", {}).get(reference.removeprefix("#/$defs/"))
             if not isinstance(resolved, dict):
@@ -203,7 +237,12 @@ class DocumentMetadataOperationsMixin:
         return errors
 
     def _document_schema_diagnostics(self, document: dict[str, Any]) -> list[dict[str, Any]]:
-        schema = self._document_schema_payload()
+        version = (
+            2
+            if document.get("$schema") == self._NETWORK_DOCUMENT_SCHEMA_URI_V2
+            else 1
+        )
+        schema = self._document_schema_payload(version)
         return [
             {
                 "severity": "error",
@@ -293,9 +332,13 @@ class DocumentMetadataOperationsMixin:
         declared = str(
             self._safe_value(lambda: node.userData(self._DOCUMENT_NODE_PROVENANCE_DIGEST_KEY), "") or ""
         ).strip()
-        if not raw or len(raw.encode("utf-8")) > self._MAX_NODE_PROVENANCE_BYTES:
+        try:
+            raw_bytes = raw.encode("utf-8")
+        except UnicodeEncodeError:
             return None
-        actual = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+        if not raw_bytes or len(raw_bytes) > self._MAX_NODE_PROVENANCE_BYTES:
+            return None
+        actual = hashlib.sha256(raw_bytes).hexdigest()
         if len(declared) != 64 or not hmac.compare_digest(declared, actual):
             return None
         try:
@@ -326,7 +369,12 @@ class DocumentMetadataOperationsMixin:
             return False
         if not re.fullmatch(r"sha256:[0-9a-f]{64}", hocus["bundleDigest"]):
             return False
-        return self._document_managed_fields_valid(hocus.get("managedFields"), persistent_uid)
+        return (
+            self._document_managed_fields_valid(
+                hocus.get("managedFields"), persistent_uid
+            )
+            and self._document_h5_entity_provenance_valid(hocus)
+        )
 
     @staticmethod
     def _document_managed_fields_valid(value: Any, persistent_uid: str) -> bool:
@@ -396,13 +444,21 @@ class DocumentMetadataOperationsMixin:
             "uid": str(node_payload.get("uid", "")).strip(),
             "hocus": copy.deepcopy(hocus),
         }
+        if not self._document_provenance_valid(
+            provenance, provenance["hocus"], provenance["uid"]
+        ):
+            raise JsonRpcError(INVALID_PARAMS, "Managed node provenance is malformed.")
         encoded = json.dumps(provenance, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
-        if len(encoded.encode("utf-8")) > self._MAX_NODE_PROVENANCE_BYTES:
+        try:
+            encoded_bytes = encoded.encode("utf-8")
+        except UnicodeEncodeError as exc:
+            raise JsonRpcError(INVALID_PARAMS, "Managed node provenance contains invalid Unicode.") from exc
+        if len(encoded_bytes) > self._MAX_NODE_PROVENANCE_BYTES:
             raise JsonRpcError(INVALID_PARAMS, "Managed node provenance exceeds the bounded user-data limit.")
         node.setUserData(self._DOCUMENT_NODE_PROVENANCE_KEY, encoded)
         node.setUserData(
             self._DOCUMENT_NODE_PROVENANCE_DIGEST_KEY,
-            hashlib.sha256(encoded.encode("utf-8")).hexdigest(),
+            hashlib.sha256(encoded_bytes).hexdigest(),
         )
 
     def _document_clear_live_node_metadata(self, path: str) -> None:
@@ -418,7 +474,12 @@ class DocumentMetadataOperationsMixin:
         ):
             self._safe_value(lambda key=key: node.destroyUserData(key), None)
 
-    def _document_live_input_connections(self, dest_path: str) -> list[dict[str, Any]]:
+    def _document_live_input_connections(
+        self,
+        dest_path: str,
+        *,
+        ignored_input_item_names: set[str] | None = None,
+    ) -> list[dict[str, Any]]:
         """Read connection objects without reducing them to input-node paths."""
         try:
             node = self._require_hou().node(dest_path)
@@ -429,6 +490,18 @@ class DocumentMetadataOperationsMixin:
             return []
         payloads: list[dict[str, Any]] = []
         for ordinal, connection in enumerate(connections):
+            if ignored_input_item_names:
+                input_item_method = getattr(connection, "inputItem", None)
+                input_item = (
+                    self._safe_value(input_item_method, None)
+                    if callable(input_item_method) else None
+                )
+                input_item_name = (
+                    self._safe_value(input_item.name, None)
+                    if input_item is not None else None
+                )
+                if input_item_name in ignored_input_item_names:
+                    continue
             source = self._safe_value(connection.inputNode, None)
             source_path = self._safe_value(source.path, None) if source is not None else None
             if not source_path:
@@ -472,27 +545,9 @@ class DocumentMetadataOperationsMixin:
         raw = str(language or "").strip().lower()
         return cls._CODE_LANGUAGE_ALIASES.get(raw, raw or "hscript")
 
-    @staticmethod
-    def _document_network_family(root_path: str, category: Any = None) -> str:
-        root = str(root_path or "").strip()
-        if root.startswith("/obj/"):
-            return "sop"
-        if root == "/mat" or root.startswith("/mat/"):
-            return "mat"
-        if root == "/stage" or root.startswith("/stage/"):
-            return "lop"
-        if root == "/tasks" or root.startswith("/tasks/"):
-            return "top"
-        if root == "/out" or root.startswith("/out/"):
-            return "rop"
-        category_name = str(category or "").strip().lower()
-        if category_name == "lop":
-            return "lop"
-        if category_name == "top":
-            return "top"
-        if category_name in {"vop", "shop"}:
-            return "mat"
-        return "generic"
+    def _document_network_family(self, root_path: str, category: Any = None) -> str:
+        hou_module = self._safe_value(self._require_hou, None)
+        return resolve_network_family(hou_module, root_path, category)
 
     @classmethod
     def _document_code_surface_kind(cls, parm_name: Any) -> str | None:
@@ -591,7 +646,10 @@ class DocumentMetadataOperationsMixin:
                 "bindingUid": self._document_binding_uid(node_uid, str(parm.get("name", ""))),
             },
             "body": "" if body is None else str(body),
-            "metadata": {"sourceParmPath": parm_path},
+            "metadata": {
+                "sourceParmPath": parm_path,
+                "isAtDefault": parm.get("isAtDefault") is True,
+            },
         }
 
     def _document_binding_for_parm(self, parm: dict[str, Any], node_uid: str, code_blob_uid: str | None) -> dict[str, Any]:
@@ -605,6 +663,7 @@ class DocumentMetadataOperationsMixin:
                 "path": parm.get("path"),
                 "label": parm.get("label"),
                 "templateType": parm.get("templateType"),
+                "isAtDefault": parm.get("isAtDefault") is True,
             },
         }
         if value_mode == "literal":

@@ -202,7 +202,7 @@ def _dispatch_command(args: argparse.Namespace) -> int:
     lane = (project.manifest_version, project.language_version)
     if lane == (3, "0.2"):
         return _run_module_command(args, module_roots)
-    if lane == (4, "0.3"):
+    if lane in {(4, "0.3"), (5, "0.4")}:
         return _run_control_command(args, module_roots)
     if module_roots:
         raise ProjectError(
@@ -213,7 +213,10 @@ def _dispatch_command(args: argparse.Namespace) -> int:
 
 def _run_lock_command(args: argparse.Namespace, module_roots: dict[str, str]) -> int:
     project = ProjectContext.load(args.project, validate_lock=False)
-    if (project.manifest_version, project.language_version) == (4, "0.3"):
+    if (project.manifest_version, project.language_version) in {
+        (4, "0.3"),
+        (5, "0.4"),
+    }:
         result = _update_control_lock(args, module_roots)
         sys.stdout.write(json.dumps(
             result.to_dict(), ensure_ascii=False, indent=2, sort_keys=True,
@@ -270,7 +273,8 @@ def _bootstrap_control_lock_digest(
     project = ProjectContext.load(project_directory, validate_lock=False)
     declared_aliases = {item.alias for item in project.external_aliases}
     if (
-        (project.manifest_version, project.language_version) != (4, "0.3")
+        (project.manifest_version, project.language_version)
+        not in {(4, "0.3"), (5, "0.4")}
         or project.uid is None
         or project.manifest_digest is None
         or project.lock_path is None
@@ -280,7 +284,7 @@ def _bootstrap_control_lock_digest(
     ):
         raise ProjectError(
             "HOCUS452",
-            "Mixed control lock bootstrap requires a portable v4 project "
+            "Mixed control lock bootstrap requires a portable v4/v5 project "
             "and the complete declared alias root mapping.",
         )
     if project.lock_path.exists():
@@ -577,7 +581,10 @@ def _write_export_handoff(
 
 def _load_export_handoff(handoff_path: str, project_directory: str) -> dict[str, Any]:
     preview = ProjectContext.load(project_directory, validate_lock=False)
-    if preview.manifest_version == 4 or preview.language_version == "0.3":
+    if (
+        preview.manifest_version in {4, 5}
+        or preview.language_version in {"0.3", "0.4"}
+    ):
         raise ProjectError(
             "HOCUS456",
             "HocusScript 0.3 export publication remains disabled until its native integration batch.",

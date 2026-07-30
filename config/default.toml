@@ -8,8 +8,38 @@ auto_start = true
 log_level = "INFO"
 request_timeout_seconds = 30.0
 policy_profile = "local-dev"
+allow_production_review = false
+production_review_policy_id = "production-review-v1"
 
 [feature_flags]
 python_panel = false
 native_bridge = false
 headless_workers = false
+
+[source_workspace]
+session_ttl_seconds = 28800
+session_grant_ttl_seconds = 28800
+persistent_grant_ttl_seconds = 2592000
+audit_events_per_project = 10000
+projects_per_session = 16
+enumeration_limit = 1000
+search_limit = 200
+read_batch_limit = 16
+patch_operation_limit = 64
+payload_bytes = 2097152
+builds_per_project = 1
+builds_per_session = 2
+rate_total_per_minute = 120
+rate_search_per_minute = 30
+rate_write_per_minute = 20
+rate_build_per_minute = 6
+
+# Host-owned project registration may be declared with repeated tables:
+# [[source_workspace.projects]]
+# root = "C:/projects/example"
+# label = "Example"
+# grants = ["source_read", "external_read"]
+# Choose either a finite grant expiry or explicit persistence until host revocation.
+# grant_expires_in_seconds = 2592000
+# grant_until_revoked = true
+# external_roots = { studio = "C:/studio/hocus-modules" }

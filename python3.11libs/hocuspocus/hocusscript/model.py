@@ -19,11 +19,15 @@ EXPANSION_MAP_VERSION = 1
 CONTROL_LANGUAGE_VERSION = "0.3"
 CONTROL_GRAPH_SPEC_VERSION = "0.4"
 CONTROL_EXPANSION_MAP_VERSION = 2
+VALUE_LANGUAGE_VERSION = "0.4"
+VALUE_GRAPH_SPEC_VERSION = "0.5"
+VALUE_COMPILER_VERSION = "0.6.0"
+VALUE_EXPANSION_MAP_VERSION = 3
 EXPLICIT_NODE_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 
 
 def _value_to_dict(value: Any) -> Any:
-    if isinstance(value, (LiteralValue, ArrayValue, CodeValue)):
+    if isinstance(value, (LiteralValue, ArrayValue, CodeValue, TaggedValue)):
         return value.to_dict()
     return value
 
@@ -77,18 +81,51 @@ class CodeValue:
 
 
 @dataclass(slots=True)
+class TaggedValue:
+    tag: str
+    payload: dict[str, Any]
+    span: SourceSpan
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "kind": self.tag,
+            **{
+                key: _tagged_payload_to_dict(value)
+                for key, value in self.payload.items()
+            },
+            "span": self.span.to_dict(),
+        }
+
+
+def _tagged_payload_to_dict(value: Any) -> Any:
+    if isinstance(value, (LiteralValue, ArrayValue, CodeValue, TaggedValue)):
+        return value.to_dict()
+    if isinstance(value, list):
+        return [_tagged_payload_to_dict(item) for item in value]
+    if isinstance(value, dict):
+        return {
+            key: _tagged_payload_to_dict(item)
+            for key, item in value.items()
+        }
+    return value
+
+
+@dataclass(slots=True)
 class NodeReference:
     symbol: str
-    output_index: int
+    output_index: int | None
     span: SourceSpan
     field_spans: dict[str, SourceSpan] = field(default_factory=dict, repr=False)
+    output_name: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         payload = {
             "symbol": self.symbol,
-            "outputIndex": self.output_index,
             "span": self.span.to_dict(),
         }
+        payload["outputName" if self.output_name is not None else "outputIndex"] = (
+            self.output_name if self.output_name is not None else self.output_index
+        )
         if self.field_spans:
             payload["fieldSpans"] = {key: value.to_dict() for key, value in sorted(self.field_spans.items())}
         return payload
@@ -96,17 +133,20 @@ class NodeReference:
 
 @dataclass(slots=True)
 class InputSpec:
-    index: int
+    index: int | None
     source: NodeReference
     span: SourceSpan
     field_spans: dict[str, SourceSpan] = field(default_factory=dict, repr=False)
+    name: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         payload = {
-            "index": self.index,
             "source": self.source.to_dict(),
             "span": self.span.to_dict(),
         }
+        payload["name" if self.name is not None else "index"] = (
+            self.name if self.name is not None else self.index
+        )
         if self.field_spans:
             payload["fieldSpans"] = {key: value.to_dict() for key, value in sorted(self.field_spans.items())}
         return payload
@@ -250,7 +290,10 @@ class ExpansionMap:
 
     def to_dict(self) -> dict[str, Any]:
         mappings = [item.to_dict() for item in self.mappings]
-        if self.schema_version == CONTROL_EXPANSION_MAP_VERSION:
+        if self.schema_version in {
+            CONTROL_EXPANSION_MAP_VERSION,
+            VALUE_EXPANSION_MAP_VERSION,
+        }:
             for mapping in mappings:
                 mapping.setdefault("controlStackId", None)
         payload = {
@@ -262,7 +305,10 @@ class ExpansionMap:
             "stacks": [item.to_dict() for item in self.stacks],
             "mappings": mappings,
         }
-        if self.schema_version == CONTROL_EXPANSION_MAP_VERSION:
+        if self.schema_version in {
+            CONTROL_EXPANSION_MAP_VERSION,
+            VALUE_EXPANSION_MAP_VERSION,
+        }:
             payload["controlStacks"] = [
                 {
                     **item,
@@ -307,6 +353,22 @@ class ModuleDependency:
         }
 
 
+def _validate_editor_lane(version: str, entities: Any) -> None:
+    if version != VALUE_GRAPH_SPEC_VERSION and entities:
+        raise ValueError("Editor entities require GraphSpec v0.5")
+    if not isinstance(entities, list):
+        raise ValueError("GraphSpec editor entities must be a list")
+
+
+def _validate_runtime_lane(
+    version: str, spares: Any, animations: Any, ownership: str | None,
+) -> None:
+    if version != VALUE_GRAPH_SPEC_VERSION and (spares or animations):
+        raise ValueError("Runtime entities require GraphSpec v0.5")
+    from .runtime_carrier import validate_runtime_carrier
+    validate_runtime_carrier(spares, animations, ownership=ownership)
+
+
 @dataclass(slots=True)
 class GraphSpec:
     language_version: str
@@ -326,8 +388,16 @@ class GraphSpec:
     field_spans: dict[str, SourceSpan] = field(default_factory=dict, repr=False)
     graph_spec_version: str = GRAPH_SPEC_VERSION
     expansion_map: ExpansionMap | None = None
+    editor_entities: list[dict[str, Any]] = field(default_factory=list)
+    spare_parameters: list[dict[str, Any]] = field(default_factory=list)
+    animations: list[dict[str, Any]] = field(default_factory=list)
 
     def __post_init__(self) -> None:
+        _validate_editor_lane(self.graph_spec_version, self.editor_entities)
+        _validate_runtime_lane(
+            self.graph_spec_version, self.spare_parameters, self.animations,
+            self.ownership,
+        )
         if self.graph_spec_version in {LEGACY_GRAPH_SPEC_VERSION, GRAPH_SPEC_VERSION}:
             if self.language_version != "0.1" or self.expansion_map is not None:
                 raise ValueError("GraphSpec v0.1/v0.2 requires language 0.1 without expansionMap")
@@ -349,6 +419,15 @@ class GraphSpec:
                 or self.expansion_map.graph_spec_version != CONTROL_GRAPH_SPEC_VERSION
             ):
                 raise ValueError("GraphSpec v0.4 requires expansionMap v2")
+            return
+        if self.graph_spec_version == VALUE_GRAPH_SPEC_VERSION:
+            if self.language_version != VALUE_LANGUAGE_VERSION or self.expansion_map is None:
+                raise ValueError("GraphSpec v0.5 requires language 0.4 and expansionMap v3")
+            if (
+                self.expansion_map.schema_version != VALUE_EXPANSION_MAP_VERSION
+                or self.expansion_map.graph_spec_version != VALUE_GRAPH_SPEC_VERSION
+            ):
+                raise ValueError("GraphSpec v0.5 requires expansionMap v3")
             return
         raise ValueError(f"Unsupported GraphSpec version: {self.graph_spec_version}")
 
@@ -379,40 +458,97 @@ class GraphSpec:
         if self.graph_spec_version in {
             MODULE_GRAPH_SPEC_VERSION,
             CONTROL_GRAPH_SPEC_VERSION,
+            VALUE_GRAPH_SPEC_VERSION,
         }:
             if self.expansion_map is None:
                 raise ValueError("Module GraphSpec requires an expansion map")
             payload["expansionMap"] = self.expansion_map.to_dict()
+        if self.graph_spec_version == VALUE_GRAPH_SPEC_VERSION:
+            payload["editorEntities"] = [
+                dict(item) for item in self.editor_entities
+            ]
+            payload["spareParameters"] = [
+                dict(item) for item in self.spare_parameters
+            ]
+            payload["animations"] = [dict(item) for item in self.animations]
         return payload
+
+
+def _decode_position(item: dict[str, Any]) -> SourcePosition:
+    return SourcePosition(
+        offset=item["offset"], line=item["line"], column=item["column"]
+    )
+
+
+def _decode_span(item: dict[str, Any]) -> SourceSpan:
+    return SourceSpan(
+        item["sourceUri"],
+        _decode_position(item["start"]),
+        _decode_position(item["end"]),
+    )
+
+
+def _decode_field_spans(item: dict[str, Any]) -> dict[str, SourceSpan]:
+    return {
+        key: _decode_span(child)
+        for key, child in item.get("fieldSpans", {}).items()
+    }
+
+
+def _decode_graph_value(item: dict[str, Any]) -> Any:
+    kind = item["kind"]
+    if kind == "literal":
+        return LiteralValue(item["value"], _decode_span(item["span"]))
+    if kind == "array":
+        return ArrayValue(
+            [_decode_graph_value(child) for child in item["items"]],
+            _decode_span(item["span"]),
+        )
+    if kind != "code":
+        return TaggedValue(
+            kind,
+            {
+                key: _decode_tagged_payload(child)
+                for key, child in item.items()
+                if key not in {"kind", "span"}
+            },
+            _decode_span(item["span"]),
+        )
+    body_span = _decode_span(item["bodySpan"]) if "bodySpan" in item else None
+    offset_map = None
+    if "offsetMap" in item:
+        encoded = item["offsetMap"]
+        offset_map = CodeOffsetMap(
+            encoded["bodyLength"],
+            tuple(
+                (point["bodyOffset"], point["sourceOffset"])
+                for point in encoded["checkpoints"]
+            ),
+        )
+    return CodeValue(
+        item["language"], item["body"], _decode_span(item["span"]),
+        body_span, offset_map,
+    )
+
+
+def _decode_tagged_payload(item: Any) -> Any:
+    if isinstance(item, dict) and "kind" in item and "span" in item:
+        return _decode_graph_value(item)
+    if isinstance(item, list):
+        return [_decode_tagged_payload(child) for child in item]
+    if isinstance(item, dict):
+        return {
+            key: _decode_tagged_payload(child) for key, child in item.items()
+        }
+    return item
 
 
 def graph_spec_from_dict(value: dict[str, Any]) -> GraphSpec:
     """Rehydrate a GraphSpec that already crossed the strict bundle boundary."""
 
-    def position(item: dict[str, Any]) -> SourcePosition:
-        return SourcePosition(offset=item["offset"], line=item["line"], column=item["column"])
-
-    def span(item: dict[str, Any]) -> SourceSpan:
-        return SourceSpan(item["sourceUri"], position(item["start"]), position(item["end"]))
-
-    def field_spans(item: dict[str, Any]) -> dict[str, SourceSpan]:
-        return {key: span(child) for key, child in item.get("fieldSpans", {}).items()}
-
-    def decoded_value(item: dict[str, Any]) -> Any:
-        kind = item["kind"]
-        if kind == "literal":
-            return LiteralValue(item["value"], span(item["span"]))
-        if kind == "array":
-            return ArrayValue([decoded_value(child) for child in item["items"]], span(item["span"]))
-        body_span = span(item["bodySpan"]) if "bodySpan" in item else None
-        offset_map = None
-        if "offsetMap" in item:
-            encoded = item["offsetMap"]
-            offset_map = CodeOffsetMap(
-                encoded["bodyLength"],
-                tuple((point["bodyOffset"], point["sourceOffset"]) for point in encoded["checkpoints"]),
-            )
-        return CodeValue(item["language"], item["body"], span(item["span"]), body_span, offset_map)
+    span = _decode_span
+    field_spans = _decode_field_spans
+    decoded_value = _decode_graph_value
 
     external_nodes = [
         ExternalNodeSpec(
@@ -424,15 +560,17 @@ def graph_spec_from_dict(value: dict[str, Any]) -> GraphSpec:
     for item in value["nodes"]:
         inputs = [
             InputSpec(
-                child["index"],
+                child.get("index"),
                 NodeReference(
                     child["source"]["symbol"],
-                    child["source"]["outputIndex"],
+                    child["source"].get("outputIndex"),
                     span(child["source"]["span"]),
                     field_spans(child["source"]),
+                    child["source"].get("outputName"),
                 ),
                 span(child["span"]),
                 field_spans(child),
+                child.get("name"),
             )
             for child in item["inputs"]
         ]
@@ -489,7 +627,8 @@ def graph_spec_from_dict(value: dict[str, Any]) -> GraphSpec:
         value["languageVersion"], value["name"], value["target"], value["category"], value["mode"],
         value["expectedRevision"], value["ownership"], external_nodes, nodes, value["display"],
         value["render"], value["output"], value["layout"], span(value["span"]), field_spans(value),
-        value["graphSpecVersion"], expansion_map,
+        value["graphSpecVersion"], expansion_map, value.get("editorEntities", []),
+        value.get("spareParameters", []), value.get("animations", []),
     )
 
 

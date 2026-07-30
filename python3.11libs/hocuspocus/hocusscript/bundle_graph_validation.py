@@ -15,10 +15,12 @@ from .bundle import (
     _IDENTIFIER_PATTERN,
 )
 from .model import (
+    CONTROL_GRAPH_SPEC_VERSION,
     EXPLICIT_NODE_ID_PATTERN,
     GRAPH_SPEC_VERSION,
     LEGACY_GRAPH_SPEC_VERSION,
     MODULE_GRAPH_SPEC_VERSION,
+    VALUE_GRAPH_SPEC_VERSION,
 )
 
 
@@ -30,6 +32,12 @@ def required_expansion_pointers(graph: dict[str, Any]) -> set[str]:
         pointers.add(prefix)
         pointers.update(f"{prefix}/inputs/{index}" for index, _ in enumerate(node["inputs"]))
         pointers.update(f"{prefix}/parms/{index}" for index, _ in enumerate(node["parms"]))
+    from .runtime_pointers import runtime_entity_pointers
+    pointers.update(runtime_entity_pointers(graph))
+    pointers.update(
+        f"/editorEntities/{index}"
+        for index, _ in enumerate(graph.get("editorEntities", []))
+    )
     for field in ("display", "render", "output", "layout"):
         if graph[field] is not None:
             pointers.add(f"/{field}")
@@ -41,8 +49,9 @@ def validate_graph_spec(
     module_dependencies: dict[str, dict[str, Any]] | None = None,
     entry_source_uri: str | None = None,
     module_limits: dict[str, int] | None = None,
+    structural_only: bool = False,
 ) -> None:
-    _validate_graph_envelope(graph, graph_spec_version)
+    _validate_graph_envelope(graph, graph_spec_version, structural_only)
     symbols, mutable_symbols = _validate_external_nodes(graph)
     _validate_authored_nodes(graph, graph_spec_version, symbols, mutable_symbols)
     _validate_graph_references(graph, symbols, mutable_symbols)
@@ -52,9 +61,20 @@ def validate_graph_spec(
         )
 
 
-def _validate_graph_envelope(graph: dict[str, Any], graph_spec_version: str) -> None:
+def _validate_graph_envelope(
+    graph: dict[str, Any], graph_spec_version: str, structural_only: bool,
+) -> None:
     expected_keys = set(_GRAPH_KEYS)
-    if graph_spec_version == MODULE_GRAPH_SPEC_VERSION:
+    if graph_spec_version == VALUE_GRAPH_SPEC_VERSION:
+        expected_keys.update({"editorEntities", "spareParameters", "animations"})
+    if (
+        not structural_only
+        and graph_spec_version in {
+            MODULE_GRAPH_SPEC_VERSION,
+            CONTROL_GRAPH_SPEC_VERSION,
+            VALUE_GRAPH_SPEC_VERSION,
+        }
+    ):
         expected_keys.add("expansionMap")
     if set(graph) != expected_keys:
         raise BundleValidationError("HOCUS520", "graphSpec has missing or unknown fields.")
@@ -62,6 +82,28 @@ def _validate_graph_envelope(graph: dict[str, Any], graph_spec_version: str) -> 
     _validate_graph_options(graph)
     _validate_graph_revision(graph)
     _validate_graph_spans(graph)
+    if graph_spec_version == VALUE_GRAPH_SPEC_VERSION:
+        try:
+            from .editor_carrier import validate_editor_carrier
+            from .runtime_carrier import validate_runtime_carrier
+            validate_editor_carrier(graph["editorEntities"])
+            validate_runtime_carrier(
+                graph["spareParameters"], graph["animations"],
+                ownership=graph["ownership"],
+                node_symbols={
+                    item["symbol"] for item in graph["nodes"]
+                },
+                forbidden_ids={
+                    item["explicitId"] for item in graph["nodes"]
+                    if item.get("explicitId") is not None
+                } | {
+                    item["explicitId"] for item in graph["editorEntities"]
+                },
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise BundleValidationError(
+                "HOCUS520", f"graphSpec HS7 entity carrier is invalid: {exc}"
+            ) from exc
 
 
 def _validate_graph_identity(graph: dict[str, Any]) -> None:
@@ -175,14 +217,21 @@ def _validate_authored_nodes(
         if node.get("explicitId") is not None:
             expected_spans.add("explicitId")
         _validate_optional_field_spans(node, label, expected_spans)
-        _validate_node_inputs(node, label)
-        _validate_node_parms(node, label)
+        _validate_node_inputs(node, label, graph_spec_version)
+        _validate_node_parms(
+            node, label, tagged_values=graph_spec_version == VALUE_GRAPH_SPEC_VERSION
+        )
 
 
 def _validate_node_shape(node: Any, label: str, graph_spec_version: str) -> None:
     required = {"symbol", "typeName", "inputs", "parms", "span"}
     optional = {"fieldSpans"}
-    if graph_spec_version in {GRAPH_SPEC_VERSION, MODULE_GRAPH_SPEC_VERSION}:
+    if graph_spec_version in {
+        GRAPH_SPEC_VERSION,
+        MODULE_GRAPH_SPEC_VERSION,
+        CONTROL_GRAPH_SPEC_VERSION,
+        VALUE_GRAPH_SPEC_VERSION,
+    }:
         optional.add("explicitId")
     if not isinstance(node, dict) or not required.issubset(node) or set(node) - required - optional:
         raise BundleValidationError("HOCUS520", f"{label} has an invalid shape.")
@@ -202,19 +251,29 @@ def _validate_explicit_id(
     seen.add(explicit_id)
 
 
-def _validate_node_inputs(node: dict[str, Any], label: str) -> None:
-    identities: set[int] = set()
+def _validate_node_inputs(
+    node: dict[str, Any], label: str, graph_spec_version: str,
+) -> None:
+    identities: set[tuple[str, Any]] = set()
     for index, input_spec in enumerate(node["inputs"]):
-        _validate_input(input_spec, f"{label}.inputs[{index}]")
-        if input_spec["index"] in identities:
-            raise BundleValidationError("HOCUS520", f"{label} has duplicate input indexes.")
-        identities.add(input_spec["index"])
+        _validate_input(
+            input_spec, f"{label}.inputs[{index}]",
+            named=graph_spec_version == VALUE_GRAPH_SPEC_VERSION,
+        )
+        key = ("name", input_spec["name"]) if "name" in input_spec else ("index", input_spec["index"])
+        if key in identities:
+            raise BundleValidationError("HOCUS520", f"{label} has duplicate input selectors.")
+        identities.add(key)
 
 
-def _validate_node_parms(node: dict[str, Any], label: str) -> None:
+def _validate_node_parms(
+    node: dict[str, Any], label: str, *, tagged_values: bool,
+) -> None:
     identities: set[str] = set()
     for index, parm in enumerate(node["parms"]):
-        _validate_parm(parm, f"{label}.parms[{index}]")
+        _validate_parm(
+            parm, f"{label}.parms[{index}]", tagged_values=tagged_values
+        )
         if parm["name"] in identities:
             raise BundleValidationError(
                 "HOCUS520", f"{label} has duplicate parameter assignments."
@@ -241,6 +300,25 @@ def _validate_graph_references(
             raise BundleValidationError(
                 "HOCUS520", f"graphSpec.{directive} targets a read-only existing symbol."
             )
+    if graph.get("graphSpecVersion") == VALUE_GRAPH_SPEC_VERSION:
+        try:
+            from .editor_carrier import validate_editor_carrier_references
+            validate_editor_carrier_references(
+                graph["editorEntities"],
+                node_symbols=symbols,
+                mutable_node_symbols=mutable_symbols,
+            )
+            if {
+                item["explicitId"] for item in graph["editorEntities"]
+            } & {
+                item["explicitId"] for item in graph["nodes"]
+                if item.get("explicitId") is not None
+            }:
+                raise ValueError("editor entity ID collides with a node ID")
+            from .editor_carrier import validate_dot_route_conflicts
+            validate_dot_route_conflicts(graph["editorEntities"], graph)
+        except ValueError as exc:
+            raise BundleValidationError("HOCUS520", str(exc)) from exc
 
 
 def _validate_module_graph_limits(
@@ -294,37 +372,54 @@ def _validate_symbol(value: Any, symbols: set[str], label: str) -> None:
     symbols.add(value)
 
 
-def _validate_input(value: Any, label: str) -> None:
-    if not isinstance(value, dict) or set(value) not in (
-        {"index", "source", "span"}, {"index", "source", "span", "fieldSpans"},
+def _validate_input(value: Any, label: str, *, named: bool) -> None:
+    if not isinstance(value, dict):
+        raise BundleValidationError("HOCUS520", f"{label} has an invalid shape.")
+    selector = "name" if "name" in value else "index"
+    allowed = {selector, "source", "span"}
+    if set(value) not in (allowed, allowed | {"fieldSpans"}) or (
+        selector == "name" and not named
     ):
         raise BundleValidationError("HOCUS520", f"{label} has an invalid shape.")
-    if type(value["index"]) is not int or value["index"] < 0:
+    selected = value[selector]
+    if selector == "index" and (type(selected) is not int or selected < 0):
         raise BundleValidationError("HOCUS520", f"{label}.index must be a nonnegative integer.")
+    if selector == "name" and (
+        not isinstance(selected, str) or not selected or len(selected) > 256
+    ):
+        raise BundleValidationError("HOCUS520", f"{label}.name must be a non-empty bounded string.")
     source = value["source"]
-    if not isinstance(source, dict) or set(source) not in (
-        {"symbol", "outputIndex", "span"},
-        {"symbol", "outputIndex", "span", "fieldSpans"},
+    if not isinstance(source, dict):
+        raise BundleValidationError("HOCUS520", f"{label}.source has an invalid shape.")
+    output_selector = "outputName" if "outputName" in source else "outputIndex"
+    source_allowed = {"symbol", output_selector, "span"}
+    if set(source) not in (source_allowed, source_allowed | {"fieldSpans"}) or (
+        output_selector == "outputName" and not named
     ):
         raise BundleValidationError("HOCUS520", f"{label}.source has an invalid shape.")
     if not isinstance(source["symbol"], str) or not _IDENTIFIER_PATTERN.fullmatch(source["symbol"]):
         raise BundleValidationError("HOCUS520", f"{label}.source.symbol must be an identifier.")
-    if type(source["outputIndex"]) is not int or source["outputIndex"] < 0:
+    output = source[output_selector]
+    if output_selector == "outputIndex" and (type(output) is not int or output < 0):
         raise BundleValidationError("HOCUS520", f"{label}.source.outputIndex must be nonnegative.")
+    if output_selector == "outputName" and (
+        not isinstance(output, str) or not output or len(output) > 256
+    ):
+        raise BundleValidationError("HOCUS520", f"{label}.source.outputName is invalid.")
     validate_span(source["span"], f"{label}.source.span")
     validate_span(value["span"], f"{label}.span")
-    _validate_optional_field_spans(source, f"{label}.source", {"symbol", "outputIndex"})
-    _validate_optional_field_spans(value, label, {"index"})
+    _validate_optional_field_spans(source, f"{label}.source", {"symbol", output_selector})
+    _validate_optional_field_spans(value, label, {selector})
 
 
-def _validate_parm(value: Any, label: str) -> None:
+def _validate_parm(value: Any, label: str, *, tagged_values: bool) -> None:
     if not isinstance(value, dict) or set(value) not in (
         {"name", "value", "span"}, {"name", "value", "span", "fieldSpans"},
     ):
         raise BundleValidationError("HOCUS520", f"{label} has an invalid shape.")
     if not isinstance(value["name"], str) or not _IDENTIFIER_PATTERN.fullmatch(value["name"]):
         raise BundleValidationError("HOCUS520", f"{label}.name must be an identifier.")
-    _validate_value(value["value"], f"{label}.value")
+    _validate_value(value["value"], f"{label}.value", tagged_values=tagged_values)
     validate_span(value["span"], f"{label}.span")
     _validate_optional_field_spans(value, label, {"name"})
 
@@ -341,7 +436,7 @@ def _validate_optional_field_spans(
         validate_span(span, f"{label}.fieldSpans.{key}")
 
 
-def _validate_value(value: Any, label: str) -> None:
+def _validate_value(value: Any, label: str, *, tagged_values: bool = False) -> None:
     if not isinstance(value, dict) or "kind" not in value:
         raise BundleValidationError("HOCUS520", f"{label} must be a typed value object.")
     kind = value["kind"]
@@ -353,7 +448,9 @@ def _validate_value(value: Any, label: str) -> None:
         return
     if kind == "array" and set(value) == {"kind", "items", "span"} and isinstance(value["items"], list):
         for index, item in enumerate(value["items"]):
-            _validate_value(item, f"{label}.items[{index}]")
+            _validate_value(
+                item, f"{label}.items[{index}]", tagged_values=tagged_values
+            )
         validate_span(value["span"], f"{label}.span")
         return
     if kind == "code" and set(value) in (
@@ -369,6 +466,16 @@ def _validate_value(value: Any, label: str) -> None:
             validate_span(value["bodySpan"], f"{label}.bodySpan")
             _validate_code_offset_map(value["offsetMap"], value["body"], value["bodySpan"], label)
         return
+    if tagged_values:
+        from .value_carrier_validation import validate_tagged_graph_value
+
+        if validate_tagged_graph_value(
+            value, label, validate_span=validate_span,
+            validate_value=lambda item, child_label: _validate_value(
+                item, child_label, tagged_values=True
+            ),
+        ):
+            return
     raise BundleValidationError("HOCUS520", f"{label} has an invalid typed value shape.")
 
 

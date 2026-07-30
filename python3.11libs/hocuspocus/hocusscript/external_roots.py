@@ -217,12 +217,22 @@ def _validate_control_external_module_roots(
     *,
     cancelled: Callable[[], bool] | None = None,
 ) -> _ValidatedExternalModuleRoots:
+    preview = ProjectContext.load(project_directory, validate_lock=False)
+    lane = {
+        (4, "0.3"): (4, "0.3", 2),
+        (5, "0.4"): (5, "0.4", 3),
+    }.get((preview.manifest_version, preview.language_version))
+    if lane is None:
+        raise ProjectError(
+            "HOCUS458",
+            "Control external roots require a schema-v4/v5 control project.",
+        )
     return _validate_external_module_roots_lane(
         project_directory,
         module_roots,
-        project_manifest_version=4,
-        language_version="0.3",
-        module_manifest_version=2,
+        project_manifest_version=lane[0],
+        language_version=lane[1],
+        module_manifest_version=lane[2],
         cancelled=cancelled,
     )
 
@@ -370,6 +380,7 @@ def _authored_root_path(authored: str | PathLike[str]) -> Path:
     if os.path.normpath(raw) != raw:
         raise ProjectError("HOCUS458", "External root paths must be lexically canonical.")
     path = Path(raw)
+    _require_canonical_windows_drive(path)
     if not path.is_absolute() or path.drive and not path.root:
         raise ProjectError("HOCUS458", "External root paths must be absolute.")
     if Path(os.path.abspath(path)) != path:
@@ -582,6 +593,7 @@ def _native_identity(path: Path, label: str) -> tuple[int, int, int]:
 def _require_exact_native_casing(path: Path) -> None:
     if os.name != "nt":
         return
+    _require_canonical_windows_drive(path)
     absolute = Path(os.path.abspath(path))
     current = Path(absolute.anchor)
     for part in absolute.parts[1:]:
@@ -596,6 +608,20 @@ def _require_exact_native_casing(path: Path) -> None:
                 raise ProjectError("HOCUS458", "External root path casing is not exact.")
             return
         current /= part
+
+
+def _require_canonical_windows_drive(path: Path) -> None:
+    drive = path.drive
+    if (
+        os.name == "nt"
+        and len(drive) == 2
+        and drive[1] == ":"
+        and "a" <= drive[0] <= "z"
+    ):
+        raise ProjectError(
+            "HOCUS458",
+            "External root drive letters must use canonical uppercase spelling.",
+        )
 
 
 def _inspection_digest(payload: Mapping[str, Any]) -> str:

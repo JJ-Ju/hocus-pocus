@@ -1,0 +1,1111 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "hocuspocus://schemas/network-document/v2",
+  "title": "HocusPocus Network Document v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "kind",
+    "documentId",
+    "documentRevision",
+    "rootPath",
+    "category",
+    "nodes",
+    "edges",
+    "parameterBindings",
+    "codeBlobs",
+    "diagnostics"
+  ],
+  "properties": {
+    "$schema": {
+      "const": "hocuspocus://schemas/network-document/v2"
+    },
+    "kind": {
+      "const": "network_document"
+    },
+    "documentId": {
+      "type": "string",
+      "pattern": "^network:"
+    },
+    "documentRevision": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "baselineLiveRevision": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "lastSyncedLiveRevision": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "rootPath": {
+      "$ref": "hocuspocus://schemas/network-document/v1#/$defs/absolutePath"
+    },
+    "category": {
+      "type": "string",
+      "minLength": 1
+    },
+    "parentDocumentId": {
+      "type": "string"
+    },
+    "metadata": {
+      "$ref": "hocuspocus://schemas/network-document/v1#/$defs/freeformObject"
+    },
+    "nodes": {
+      "type": "array",
+      "items": {
+        "$ref": "hocuspocus://schemas/network-document/v1#/$defs/node"
+      }
+    },
+    "ports": {
+      "type": "array",
+      "items": {
+        "$ref": "hocuspocus://schemas/network-document/v1#/$defs/port"
+      }
+    },
+    "edges": {
+      "type": "array",
+      "items": {
+        "$ref": "hocuspocus://schemas/network-document/v1#/$defs/edge"
+      }
+    },
+    "parameterBindings": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/parameterBinding"
+      }
+    },
+    "spareParameters": {
+      "type": "array",
+      "maxItems": 16384,
+      "items": {
+        "$ref": "#/$defs/managedSpareParameter"
+      }
+    },
+    "animations": {
+      "type": "array",
+      "maxItems": 16384,
+      "items": {
+        "$ref": "#/$defs/numericAnimation"
+      }
+    },
+    "timeSamples": {
+      "description": "Reserved for an explicitly unsupported future USD time-sample contract.",
+      "type": "array",
+      "maxItems": 0
+    },
+    "networkBoxes": {
+      "type": "array",
+      "maxItems": 16384,
+      "items": {"$ref": "#/$defs/networkBox"}
+    },
+    "stickyNotes": {
+      "type": "array",
+      "maxItems": 16384,
+      "items": {"$ref": "#/$defs/stickyNote"}
+    },
+    "nodeComments": {
+      "type": "array",
+      "maxItems": 16384,
+      "items": {"$ref": "#/$defs/nodeComment"}
+    },
+    "networkDots": {
+      "type": "array",
+      "maxItems": 16384,
+      "items": {"$ref": "#/$defs/networkDot"}
+    },
+    "layoutConstraints": {
+      "type": "array",
+      "maxItems": 512,
+      "items": {"$ref": "#/$defs/layoutConstraint"}
+    },
+    "codeBlobs": {
+      "type": "array",
+      "items": {
+        "$ref": "hocuspocus://schemas/network-document/v1#/$defs/codeBlob"
+      }
+    },
+    "diagnostics": {
+      "type": "array",
+      "items": {
+        "$ref": "hocuspocus://schemas/network-document/v1#/$defs/diagnostic"
+      }
+    }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,127}$"
+    },
+    "jsonScalar": {
+      "type": [
+        "null",
+        "boolean",
+        "integer",
+        "number",
+        "string"
+      ]
+    },
+    "jsonValue": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/jsonScalar"
+        },
+        {
+          "type": "array",
+          "maxItems": 100000,
+          "items": {
+            "$ref": "#/$defs/jsonValue"
+          }
+        }
+      ]
+    },
+    "channelReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "nodeUid",
+        "parmName"
+      ],
+      "properties": {
+        "nodeUid": {
+          "$ref": "hocuspocus://schemas/network-document/v1#/$defs/uid"
+        },
+        "parmName": {
+          "$ref": "#/$defs/identifier"
+        }
+      }
+    },
+    "bindingCommon": {
+      "type": "object",
+      "required": [
+        "uid",
+        "nodeUid",
+        "parmName",
+        "valueMode",
+        "metadata"
+      ],
+      "properties": {
+        "uid": {
+          "$ref": "hocuspocus://schemas/network-document/v1#/$defs/uid"
+        },
+        "nodeUid": {
+          "$ref": "hocuspocus://schemas/network-document/v1#/$defs/uid"
+        },
+        "parmName": {
+          "$ref": "#/$defs/identifier"
+        },
+        "valueMode": {
+          "enum": [
+            "literal",
+            "menu_token",
+            "reset",
+            "expression",
+            "channel_reference",
+            "raw_path",
+            "quantity",
+            "ramp",
+            "multiparm",
+            "code_reference"
+          ]
+        },
+        "metadata": {
+          "$ref": "hocuspocus://schemas/network-document/v1#/$defs/freeformObject"
+        }
+      }
+    },
+    "parameterBinding": {
+      "type": "object",
+      "allOf": [
+        {
+          "$ref": "#/$defs/bindingCommon"
+        }
+      ],
+      "oneOf": [
+        {
+          "$ref": "#/$defs/literalBinding"
+        },
+        {
+          "$ref": "#/$defs/menuTokenBinding"
+        },
+        {
+          "$ref": "#/$defs/resetBinding"
+        },
+        {
+          "$ref": "#/$defs/expressionBinding"
+        },
+        {
+          "$ref": "#/$defs/channelBinding"
+        },
+        {
+          "$ref": "#/$defs/rawPathBinding"
+        },
+        {
+          "$ref": "#/$defs/quantityBinding"
+        },
+        {
+          "$ref": "#/$defs/rampBinding"
+        },
+        {
+          "$ref": "#/$defs/multiparmBinding"
+        },
+        {
+          "$ref": "#/$defs/codeReferenceBinding"
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "literalBinding": {
+      "type": "object",
+      "required": [
+        "value"
+      ],
+      "properties": {
+        "valueMode": {
+          "const": "literal"
+        },
+        "value": {
+          "$ref": "#/$defs/jsonValue"
+        }
+      }
+    },
+    "menuTokenBinding": {
+      "type": "object",
+      "required": [
+        "menuToken"
+      ],
+      "properties": {
+        "valueMode": {
+          "const": "menu_token"
+        },
+        "menuToken": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192
+        }
+      }
+    },
+    "resetBinding": {
+      "type": "object",
+      "properties": {
+        "valueMode": {
+          "const": "reset"
+        }
+      }
+    },
+    "expressionBinding": {
+      "type": "object",
+      "required": [
+        "expression",
+        "expressionLanguage"
+      ],
+      "properties": {
+        "valueMode": {
+          "const": "expression"
+        },
+        "expression": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1048576
+        },
+        "expressionLanguage": {
+          "enum": [
+            "hscript",
+            "python"
+          ]
+        }
+      }
+    },
+    "channelBinding": {
+      "type": "object",
+      "required": [
+        "channelReference"
+      ],
+      "properties": {
+        "valueMode": {
+          "const": "channel_reference"
+        },
+        "channelReference": {
+          "$ref": "#/$defs/channelReference"
+        }
+      }
+    },
+    "rawPathBinding": {
+      "type": "object",
+      "required": [
+        "pathKind",
+        "raw"
+      ],
+      "properties": {
+        "valueMode": {
+          "const": "raw_path"
+        },
+        "pathKind": {
+          "enum": [
+            "node",
+            "parm",
+            "file",
+            "usd_prim",
+            "asset"
+          ]
+        },
+        "raw": {
+          "type": "string",
+          "maxLength": 8192
+        }
+      }
+    },
+    "quantityBinding": {
+      "type": "object",
+      "required": [
+        "magnitude",
+        "unit",
+        "dimension",
+        "canonicalMagnitude",
+        "canonicalUnit"
+      ],
+      "properties": {
+        "valueMode": {
+          "const": "quantity"
+        },
+        "magnitude": {
+          "type": "number"
+        },
+        "unit": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "dimension": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "canonicalMagnitude": {
+          "type": "number"
+        },
+        "canonicalUnit": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        }
+      }
+    },
+    "rampBinding": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/floatRampBinding"
+        },
+        {
+          "$ref": "#/$defs/colorRampBinding"
+        }
+      ]
+    },
+    "floatRampBinding": {
+      "type": "object",
+      "required": [
+        "rampKind",
+        "points",
+        "basis"
+      ],
+      "properties": {
+        "valueMode": {
+          "const": "ramp"
+        },
+        "rampKind": {
+          "const": "float"
+        },
+        "points": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 4096,
+          "items": {
+            "$ref": "#/$defs/floatRampPoint"
+          }
+        },
+        "basis": {
+          "$ref": "#/$defs/rampBasis"
+        }
+      }
+    },
+    "colorRampBinding": {
+      "type": "object",
+      "required": [
+        "rampKind",
+        "points",
+        "basis"
+      ],
+      "properties": {
+        "valueMode": {
+          "const": "ramp"
+        },
+        "rampKind": {
+          "const": "color"
+        },
+        "points": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 4096,
+          "items": {
+            "$ref": "#/$defs/colorRampPoint"
+          }
+        },
+        "basis": {
+          "$ref": "#/$defs/rampBasis"
+        }
+      }
+    },
+    "floatRampPoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "position",
+        "value"
+      ],
+      "properties": {
+        "position": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "value": {
+          "type": "number"
+        }
+      }
+    },
+    "colorRampPoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "position",
+        "value"
+      ],
+      "properties": {
+        "position": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "value": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 3,
+          "items": {
+            "type": "number"
+          }
+        }
+      }
+    },
+    "rampBasis": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 4096,
+      "items": {
+        "enum": [
+          "constant",
+          "linear",
+          "catmullrom",
+          "monotonecubic",
+          "bezier",
+          "bspline",
+          "hermite"
+        ]
+      }
+    },
+    "multiparmBinding": {
+      "type": "object",
+      "required": [
+        "instanceStart",
+        "instances",
+        "fieldContract"
+      ],
+      "properties": {
+        "valueMode": {
+          "const": "multiparm"
+        },
+        "instanceStart": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4096
+        },
+        "instances": {
+          "type": "array",
+          "maxItems": 4096,
+          "items": {
+            "$ref": "#/$defs/multiparmInstance"
+          }
+        },
+        "fieldContract": {
+          "type": "array",
+          "maxItems": 256,
+          "items": {
+            "$ref": "#/$defs/multiparmFieldContract"
+          }
+        }
+      }
+    },
+    "multiparmFieldContract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "tokenTemplate",
+        "valueType",
+        "tupleSize",
+        "elementType"
+      ],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/identifier"
+        },
+        "tokenTemplate": {
+          "type": "string",
+          "maxLength": 512,
+          "pattern": "^[^#]*#[^#]*$"
+        },
+        "valueType": {
+          "enum": [
+            "bool",
+            "int",
+            "float",
+            "string",
+            "tuple",
+            "menu",
+            "code",
+            "node_path",
+            "parm_path",
+            "file_path",
+            "usd_prim_path",
+            "asset_reference"
+          ]
+        },
+        "tupleSize": {
+          "const": 1
+        },
+        "elementType": {
+          "const": null
+        }
+      }
+    },
+    "multiparmInstance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "instanceId",
+        "fields"
+      ],
+      "properties": {
+        "instanceId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+        },
+        "fields": {
+          "type": "array",
+          "maxItems": 256,
+          "items": {
+            "$ref": "#/$defs/multiparmField"
+          }
+        }
+      }
+    },
+    "multiparmField": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "value"
+      ],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/identifier"
+        },
+        "value": {
+          "$ref": "#/$defs/nestedValue"
+        }
+      }
+    },
+    "nestedValue": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/nestedLiteral"
+        },
+        {
+          "$ref": "#/$defs/nestedExpression"
+        },
+        {
+          "$ref": "#/$defs/nestedChannelReference"
+        },
+        {
+          "$ref": "#/$defs/nestedRawPath"
+        }
+      ]
+    },
+    "nestedLiteral": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "value"
+      ],
+      "properties": {
+        "kind": {
+          "const": "literal"
+        },
+        "value": {
+          "$ref": "#/$defs/jsonScalar"
+        }
+      }
+    },
+    "nestedExpression": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "language",
+        "body"
+      ],
+      "properties": {
+        "kind": {
+          "const": "expression"
+        },
+        "language": {
+          "enum": [
+            "hscript",
+            "python"
+          ]
+        },
+        "body": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1048576
+        }
+      }
+    },
+    "nestedChannelReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "nodeUid",
+        "parmName"
+      ],
+      "properties": {
+        "kind": {
+          "const": "channel_reference"
+        },
+        "nodeUid": {
+          "$ref": "hocuspocus://schemas/network-document/v1#/$defs/uid"
+        },
+        "parmName": {
+          "$ref": "#/$defs/identifier"
+        }
+      }
+    },
+    "nestedRawPath": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "pathKind",
+        "raw"
+      ],
+      "properties": {
+        "kind": {
+          "const": "raw_path"
+        },
+        "pathKind": {
+          "enum": [
+            "node",
+            "parm",
+            "file",
+            "usd_prim",
+            "asset"
+          ]
+        },
+        "raw": {
+          "type": "string",
+          "maxLength": 8192
+        }
+      }
+    },
+    "managedSpareParameter": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "uid",
+        "nodeUid",
+        "name",
+        "label",
+        "type",
+        "tupleSize",
+        "default",
+        "menuItems",
+        "metadata"
+      ],
+      "properties": {
+        "uid": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$"
+        },
+        "nodeUid": {
+          "$ref": "hocuspocus://schemas/network-document/v1#/$defs/uid"
+        },
+        "name": {
+          "$ref": "#/$defs/identifier"
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "type": {
+          "enum": [
+            "float",
+            "int",
+            "string",
+            "toggle",
+            "menu"
+          ]
+        },
+        "tupleSize": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 16
+        },
+        "default": {
+          "$ref": "#/$defs/jsonValue"
+        },
+        "menuItems": {
+          "type": "array",
+          "maxItems": 256,
+          "items": {
+            "$ref": "#/$defs/spareMenuItem"
+          }
+        },
+        "metadata": {
+          "$ref": "hocuspocus://schemas/network-document/v1#/$defs/freeformObject"
+        }
+      }
+    },
+    "spareMenuItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "token",
+        "label"
+      ],
+      "properties": {
+        "token": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        }
+      }
+    },
+    "numericAnimation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "uid",
+        "nodeUid",
+        "parmName",
+        "valueType",
+        "value",
+        "authoredFps",
+        "displayFps",
+        "extrapolation",
+        "keys",
+        "metadata"
+      ],
+      "properties": {
+        "uid": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$"
+        },
+        "nodeUid": {
+          "$ref": "hocuspocus://schemas/network-document/v1#/$defs/uid"
+        },
+        "parmName": {
+          "$ref": "#/$defs/identifier"
+        },
+        "valueType": {
+          "enum": [
+            "float",
+            "int"
+          ]
+        },
+        "value": {
+          "type": [
+            "integer",
+            "number"
+          ]
+        },
+        "authoredFps": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1000
+        },
+        "displayFps": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1000
+        },
+        "extrapolation": {
+          "$ref": "#/$defs/animationExtrapolation"
+        },
+        "keys": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4096,
+          "items": {
+            "$ref": "#/$defs/numericKeyframe"
+          }
+        },
+        "metadata": {
+          "$ref": "hocuspocus://schemas/network-document/v1#/$defs/freeformObject"
+        }
+      }
+    },
+    "animationExtrapolation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "before",
+        "after"
+      ],
+      "properties": {
+        "before": {
+          "$ref": "#/$defs/animationExtrapolationMode"
+        },
+        "after": {
+          "$ref": "#/$defs/animationExtrapolationMode"
+        }
+      }
+    },
+    "animationExtrapolationMode": {
+      "enum": [
+        "constant",
+        "linear",
+        "cycle",
+        "cycle_offset",
+        "oscillate"
+      ]
+    },
+    "numericKeyframe": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "timeSeconds",
+        "value",
+        "interpolation"
+      ],
+      "properties": {
+        "timeSeconds": {
+          "type": "number",
+          "minimum": -1000000000,
+          "maximum": 1000000000
+        },
+        "value": {
+          "type": [
+            "integer",
+            "number"
+          ]
+        },
+        "interpolation": {
+          "enum": [
+            "constant",
+            "linear",
+            "bezier"
+          ]
+        },
+        "slope": {
+          "type": "number"
+        },
+        "accel": {
+          "type": "number"
+        },
+        "slopeAuto": {
+          "type": "boolean"
+        },
+        "accelAuto": {
+          "type": "boolean"
+        },
+        "slopeTied": {
+          "type": "boolean"
+        },
+        "accelTied": {
+          "type": "boolean"
+        },
+        "slopeUsed": {
+          "type": "boolean"
+        },
+        "accelUsed": {
+          "type": "boolean"
+        }
+      }
+    },
+    "editorUid": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "editorMetadata": {
+      "$ref": "hocuspocus://schemas/network-document/v1#/$defs/freeformObject"
+    },
+    "editorVec2": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "items": {"type": "number"}
+    },
+    "editorColor": {
+      "anyOf": [
+        {"type": "null"},
+        {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 3,
+          "items": {"type": "number", "minimum": 0, "maximum": 1}
+        }
+      ]
+    },
+    "networkBox": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["uid", "label", "position", "size", "color", "itemUids", "metadata"],
+      "properties": {
+        "uid": {"$ref": "#/$defs/editorUid"},
+        "label": {"type": "string", "maxLength": 4096},
+        "position": {"$ref": "#/$defs/editorVec2"},
+        "size": {"$ref": "#/$defs/editorVec2"},
+        "color": {"$ref": "#/$defs/editorColor"},
+        "itemUids": {
+          "type": "array",
+          "maxItems": 4096,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/editorUid"}
+        },
+        "metadata": {"$ref": "#/$defs/editorMetadata"}
+      }
+    },
+    "stickyNote": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["uid", "text", "position", "size", "color", "textSize", "drawBackground", "minimized", "metadata"],
+      "properties": {
+        "uid": {"$ref": "#/$defs/editorUid"},
+        "text": {"type": "string", "maxLength": 65536},
+        "position": {"$ref": "#/$defs/editorVec2"},
+        "size": {"$ref": "#/$defs/editorVec2"},
+        "color": {"$ref": "#/$defs/editorColor"},
+        "textSize": {"type": "number", "minimum": 0.1, "maximum": 10},
+        "drawBackground": {"type": "boolean"},
+        "minimized": {"type": "boolean"},
+        "metadata": {"$ref": "#/$defs/editorMetadata"}
+      }
+    },
+    "nodeComment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["uid", "nodeUid", "text", "visible", "metadata"],
+      "properties": {
+        "uid": {"$ref": "#/$defs/editorUid"},
+        "nodeUid": {"$ref": "#/$defs/editorUid"},
+        "text": {"type": "string", "maxLength": 65536},
+        "visible": {"type": "boolean"},
+        "metadata": {"$ref": "#/$defs/editorMetadata"}
+      }
+    },
+    "networkDot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["uid", "position", "pinned", "input", "outputs", "metadata"],
+      "properties": {
+        "uid": {"$ref": "#/$defs/editorUid"},
+        "position": {"$ref": "#/$defs/editorVec2"},
+        "pinned": {"type": "boolean"},
+        "input": {
+          "anyOf": [
+            {"type": "null"},
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["itemUid", "outputIndex"],
+              "properties": {
+                "itemUid": {"$ref": "#/$defs/editorUid"},
+                "outputIndex": {"type": "integer", "minimum": 0, "maximum": 65535}
+              }
+            }
+          ]
+        },
+        "outputs": {
+          "type": "array",
+          "maxItems": 256,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["nodeUid", "inputIndex"],
+            "properties": {
+              "nodeUid": {"$ref": "#/$defs/editorUid"},
+              "inputIndex": {"type": "integer", "minimum": 0, "maximum": 65535}
+            }
+          }
+        },
+        "metadata": {"$ref": "#/$defs/editorMetadata"}
+      }
+    },
+    "layoutConstraint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["uid", "constraintKind", "itemUids", "anchorUid", "offset", "spacing", "padding", "priority", "metadata"],
+      "properties": {
+        "uid": {"$ref": "#/$defs/editorUid"},
+        "constraintKind": {"enum": ["align_x", "align_y", "offset", "distribute_x", "distribute_y", "contain"]},
+        "itemUids": {
+          "type": "array",
+          "maxItems": 256,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/editorUid"}
+        },
+        "anchorUid": {
+          "anyOf": [{"type": "null"}, {"$ref": "#/$defs/editorUid"}]
+        },
+        "offset": {
+          "anyOf": [{"type": "null"}, {"$ref": "#/$defs/editorVec2"}]
+        },
+        "spacing": {
+          "anyOf": [
+            {"type": "null"},
+            {"type": "number", "minimum": 0, "maximum": 100000}
+          ]
+        },
+        "padding": {"$ref": "#/$defs/editorVec2"},
+        "priority": {"type": "integer", "minimum": 0, "maximum": 100},
+        "metadata": {"$ref": "#/$defs/editorMetadata"}
+      }
+    },
+    "codeReferenceBinding": {
+      "type": "object",
+      "required": [
+        "codeBlobUid"
+      ],
+      "properties": {
+        "valueMode": {
+          "const": "code_reference"
+        },
+        "codeBlobUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        }
+      }
+    }
+  }
+}

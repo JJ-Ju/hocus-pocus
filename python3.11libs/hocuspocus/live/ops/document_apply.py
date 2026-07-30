@@ -8,12 +8,25 @@ from typing import Any, Callable
 from uuid import uuid4
 
 from hocuspocus.core.jsonrpc import INVALID_PARAMS, JsonRpcError
-
 from ..context import RequestContext
 from .document_apply_planning import structural_context, structural_moves
+from .document_apply_editor import DocumentApplyEditorOperationsMixin
+from .document_apply_managed import (
+    plan_binding_changes,
+    plan_connection_changes,
+)
+from .document_typed_apply import execute_typed_updates
+from .document_runtime_contract import (
+    execute_runtime_bindings,
+    plan_runtime_changes,
+    runtime_plan_summary,
+)
+from .document_network_families import (
+    connection_mismatch,
+    network_family_policy,
+)
 
-
-class DocumentApplyOperationsMixin:
+class DocumentApplyOperationsMixin(DocumentApplyEditorOperationsMixin):
     def _document_apply_state(self, baseline: dict[str, Any]) -> dict[str, Any]:
         return {
             "uidToPath": {
@@ -65,6 +78,7 @@ class DocumentApplyOperationsMixin:
                 "parent_path": parent_path,
                 "node_type_name": node.get("typeName"),
                 "node_name": node_name,
+                "exact_type_name": True,
             }
         )
         if created.get("path") != target_path:
@@ -146,68 +160,16 @@ class DocumentApplyOperationsMixin:
         create_uids: set[str],
         structural_changed_uids: set[str],
     ) -> list[dict[str, Any]]:
-        baseline_inputs = self._document_data_connection_map(baseline)
-        target_inputs = self._document_data_connection_map(target)
-        force_connection_dest_uids = {
-            dest_uid
-            for dest_uid, desired in target_inputs.items()
-            if dest_uid in create_uids
-            or dest_uid in structural_changed_uids
-            or any(
-                connection.get("sourceUid") in structural_changed_uids
-                for connection in desired.values()
-                if connection.get("sourceUid")
-            )
-        }
-        connection_changes: list[dict[str, Any]] = []
-        if mode == "reconcile":
-            dest_uids = sorted(target_nodes_by_uid, key=lambda item: str(target_nodes_by_uid[item].get("path", "")))
-        else:
-            dest_uids = sorted(target_inputs, key=lambda item: str(target_nodes_by_uid.get(item, {}).get("path", "")))
-        for dest_uid in dest_uids:
-            current = baseline_inputs.get(dest_uid, {})
-            desired = target_inputs.get(dest_uid, {})
-            if mode == "merge":
-                for index, connection in sorted(desired.items()):
-                    if dest_uid in force_connection_dest_uids or current.get(index) != connection:
-                        source_uid = connection.get("sourceUid")
-                        connection_changes.append(
-                            {
-                                "destUid": dest_uid,
-                                "destPath": str(target_nodes_by_uid.get(dest_uid, {}).get("path", "")).strip(),
-                                "inputIndex": index,
-                                "sourceUid": source_uid,
-                                "sourcePath": str(target_nodes_by_uid.get(source_uid, {}).get("path", "")).strip() if source_uid else None,
-                                **{key: connection.get(key) for key in ("sourceOutputIndex", "sourceOutputName", "destInputName", "connectionOrder")},
-                            }
-                        )
-                continue
-            max_index = max(list(current.keys()) + list(desired.keys()), default=-1)
-            for index in range(max_index + 1):
-                if dest_uid in force_connection_dest_uids or current.get(index) != desired.get(index):
-                    connection = desired.get(index)
-                    source_uid = connection.get("sourceUid") if connection else None
-                    connection_changes.append(
-                        {
-                            "destUid": dest_uid,
-                            "destPath": str(target_nodes_by_uid.get(dest_uid, {}).get("path", "")).strip(),
-                            "inputIndex": index,
-                            "sourceUid": source_uid,
-                            "sourcePath": str(target_nodes_by_uid.get(source_uid, {}).get("path", "")).strip() if source_uid else None,
-                            **(
-                                {key: connection.get(key) for key in ("sourceOutputIndex", "sourceOutputName", "destInputName", "connectionOrder")}
-                                if connection
-                                else {"sourceOutputIndex": 0, "sourceOutputName": None, "destInputName": None, "connectionOrder": index}
-                            ),
-                        }
-                    )
-
-        return connection_changes
+        return plan_connection_changes(
+            self, baseline, target, mode, target_nodes_by_uid, create_uids,
+            structural_changed_uids,
+        )
 
     def _document_plan_binding_changes(
         self,
         baseline: dict[str, Any],
         target: dict[str, Any],
+        mode: str,
         target_nodes_by_uid: dict[str, dict[str, Any]],
         baseline_nodes_by_uid: dict[str, dict[str, Any]],
         create_uids: set[str],
@@ -219,118 +181,9 @@ class DocumentApplyOperationsMixin:
         list[dict[str, Any]],
         list[dict[str, Any]],
     ]:
-        baseline_code_blobs = self._document_code_blobs_by_uid(baseline)
-        baseline_bindings = self._document_bindings_by_key(baseline)
-        target_bindings = self._document_bindings_by_key(target)
-        code_blobs = self._document_code_blobs_by_uid(target)
-        parameter_resets: list[dict[str, Any]] = []
-        parameter_assignments: list[dict[str, Any]] = []
-        expression_updates: list[dict[str, Any]] = []
-        code_blob_installs: list[dict[str, Any]] = []
-        forced_binding_uids = set(create_uids)
-
-        identity_updates = [
-            {
-                "uid": uid,
-                "path": str(target_node.get("path", "")).strip(),
-                "metadata": copy.deepcopy(target_node.get("metadata", {})),
-            }
-            for uid, target_node in sorted(target_nodes_by_uid.items())
-            if uid in baseline_nodes_by_uid
-            and str(((target_node.get("metadata") or {}).get("hocus") or {}).get("entityKind", "")) == "adopted_node"
-            and (
-                str((baseline_nodes_by_uid[uid].get("metadata") or {}).get("identityMode", "")) != "persistent_user_data"
-                or (baseline_nodes_by_uid[uid].get("metadata") or {}).get("hocus")
-                != (target_node.get("metadata") or {}).get("hocus")
-            )
-        ]
-        identity_clears = [
-            {
-                "uid": uid,
-                "path": str(target_node.get("path", "")).strip(),
-            }
-            for uid, target_node in sorted(target_nodes_by_uid.items())
-            if uid in baseline_nodes_by_uid
-            and isinstance((baseline_nodes_by_uid[uid].get("metadata") or {}).get("hocus"), dict)
-            and not isinstance((target_node.get("metadata") or {}).get("hocus"), dict)
-        ]
-
-        def _binding_sort_key(item: tuple[tuple[str, str], dict[str, Any]]) -> tuple[str, str]:
-            node_uid, parm_name = item[0]
-            return (str(target_nodes_by_uid.get(node_uid, {}).get("path", "")), parm_name)
-
-        for key, binding in sorted(target_bindings.items(), key=_binding_sort_key):
-            node_uid, parm_name = key
-            node_payload = target_nodes_by_uid.get(node_uid)
-            if node_payload is None:
-                continue
-            force_install = node_uid in forced_binding_uids
-            entry = {
-                "bindingUid": str(binding.get("uid", "")).strip(),
-                "nodeUid": node_uid,
-                "nodePath": str(node_payload.get("path", "")).strip(),
-                "parmName": parm_name,
-                "metadata": copy.deepcopy(binding.get("metadata", {})) if isinstance(binding.get("metadata"), dict) else {},
-            }
-            value_mode = str(binding.get("valueMode", "")).strip()
-            binding_unchanged = baseline_bindings.get(key) == binding
-            if value_mode == "code_reference":
-                code_blob_uid = str(binding.get("codeBlobUid", "")).strip()
-                blob = code_blobs.get(code_blob_uid, {})
-                blob_changed = baseline_code_blobs.get(code_blob_uid) != blob
-                if not force_install and binding_unchanged and not blob_changed:
-                    continue
-                language = self._document_normalize_language(blob.get("language"))
-                code_blob_installs.append(
-                    {
-                        **entry,
-                        "codeBlobUid": code_blob_uid,
-                        "language": language,
-                        "adapter": self._document_code_adapter_for(node_payload.get("typeName"), parm_name, language),
-                        "body": blob.get("body", ""),
-                    }
-                )
-                continue
-            if not force_install and binding_unchanged:
-                continue
-            if value_mode == "literal":
-                parameter_assignments.append({**entry, "value": binding.get("value")})
-                continue
-            if value_mode == "expression":
-                expression_updates.append(
-                    {
-                        **entry,
-                        "expression": binding.get("expression"),
-                        "expressionLanguage": self._document_normalize_language(binding.get("expressionLanguage") or "hscript"),
-                    }
-                )
-                continue
-            if value_mode == "channel_reference":
-                expression = str(binding.get("expression") or "").strip()
-                language = self._document_normalize_language(binding.get("expressionLanguage") or "hscript")
-                if not expression:
-                    expression, language = self._document_compile_channel_reference(binding.get("channelReference"), entry["metadata"])
-                expression_updates.append(
-                    {
-                        **entry,
-                        "expression": expression,
-                        "expressionLanguage": language,
-                        "channelReference": binding.get("channelReference"),
-                    }
-                )
-                continue
-
-        # Parameter bindings are sparse authored intent in every apply mode.
-        # Omission means preserve live/default state; a future explicit reset
-        # value form may populate parameterResets without overloading omission.
-
-        return (
-            parameter_assignments,
-            expression_updates,
-            code_blob_installs,
-            identity_updates,
-            identity_clears,
-            parameter_resets,
+        return plan_binding_changes(
+            self, baseline, target, mode, target_nodes_by_uid,
+            baseline_nodes_by_uid, create_uids,
         )
 
     @staticmethod
@@ -373,8 +226,14 @@ class DocumentApplyOperationsMixin:
         return None
 
     def _document_plan_output(
-        self, baseline: dict[str, Any], target: dict[str, Any], context: dict[str, Any]
-    ) -> tuple[dict[str, Any], dict[str, Any] | None]:
+        self,
+        baseline: dict[str, Any],
+        target: dict[str, Any],
+        context: dict[str, Any],
+        network_family: str,
+    ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+        if network_family_policy(network_family).output_strategy != "sop_display":
+            return None, None
         baseline_uid = self._document_output_source_uid(baseline, context["rootUid"])
         target_uid = self._document_output_source_uid(target, context["rootUid"])
         display_uids = sorted(
@@ -437,6 +296,9 @@ class DocumentApplyOperationsMixin:
         baseline_nodes_by_uid = structural["before"]
         target_nodes_by_uid = structural["after"]
         root_path, root_uid = structural["rootPath"], structural["rootUid"]
+        network_family = self._document_network_family(
+            root_path, target.get("category")
+        )
         create_uids = structural["created"]
         target_created_nodes = [
             copy.deepcopy(target_nodes_by_uid[uid])
@@ -469,17 +331,41 @@ class DocumentApplyOperationsMixin:
             identity_updates,
             identity_clears,
             parameter_resets,
+            typed_value_updates,
         ) = self._document_plan_binding_changes(
             baseline,
             target,
+            mode,
             target_nodes_by_uid,
             baseline_nodes_by_uid,
             create_uids,
         )
 
         node_updates = self._document_plan_node_updates(structural)
+        root_provenance_change = self._document_plan_root_expansion_provenance(
+            baseline, target
+        )
+        root_entity_provenance_change = (
+            self._document_plan_root_entity_provenance(baseline, target)
+        )
+        root_typed_binding_change = self._document_plan_root_typed_receipt(
+            baseline, target
+        )
+        editor_entity_change = self._document_plan_editor_entities(
+            baseline, target, mode
+        )
+        root_editor_entity_change = self._document_plan_root_editor_receipt(
+            baseline, target
+        )
+        runtime_changes = plan_runtime_changes(
+            baseline,
+            target,
+            mode=mode,
+            target_nodes=target_nodes_by_uid,
+            create_uids=create_uids,
+        )
         output_guard, output_change = self._document_plan_output(
-            baseline, target, structural
+            baseline, target, structural, network_family
         )
 
         replace_nodes = [
@@ -495,7 +381,7 @@ class DocumentApplyOperationsMixin:
         )
 
         return {
-            "networkFamily": self._document_network_family(root_path, target.get("category")),
+            "networkFamily": network_family,
             "rootNodeGuard": (
                 {
                     "uid": root_uid,
@@ -513,11 +399,18 @@ class DocumentApplyOperationsMixin:
             "connectionChanges": connection_changes,
             "parameterResets": parameter_resets,
             "parameterAssignments": parameter_assignments,
+            "typedValueUpdates": typed_value_updates,
             "expressionUpdates": expression_updates,
             "codeBlobInstalls": code_blob_installs,
             "identityUpdates": identity_updates,
             "identityClears": identity_clears,
             "nodeUpdates": node_updates,
+            "rootProvenanceChange": root_provenance_change,
+            "rootEntityProvenanceChange": root_entity_provenance_change,
+            "rootTypedBindingChange": root_typed_binding_change,
+            "editorEntityChange": editor_entity_change,
+            "rootEditorEntityChange": root_editor_entity_change,
+            **runtime_changes,
             "outputGuard": output_guard,
             "outputChange": output_change,
             "deleteNodes": delete_nodes,
@@ -531,11 +424,27 @@ class DocumentApplyOperationsMixin:
                 "connectionChangeCount": len(connection_changes),
                 "parameterResetCount": len(parameter_resets),
                 "parameterAssignmentCount": len(parameter_assignments),
+                "typedValueUpdateCount": len(typed_value_updates),
                 "expressionUpdateCount": len(expression_updates),
                 "codeBlobInstallCount": len(code_blob_installs),
                 "identityUpdateCount": len(identity_updates),
                 "identityClearCount": len(identity_clears),
                 "nodeUpdateCount": len(node_updates),
+                "rootProvenanceChangeCount": int(root_provenance_change is not None),
+                "rootEntityProvenanceChangeCount": int(
+                    root_entity_provenance_change is not None
+                ),
+                "rootTypedBindingChangeCount": int(
+                    root_typed_binding_change is not None
+                ),
+                "editorEntityChangeCount": (
+                    len(editor_entity_change["plan"]["operations"])
+                    if editor_entity_change is not None else 0
+                ),
+                "rootEditorEntityChangeCount": int(
+                    root_editor_entity_change is not None
+                ),
+                **runtime_plan_summary(runtime_changes),
                 "outputChangeCount": 1 if output_change is not None else 0,
                 "deleteNodeCount": len(delete_nodes),
                 "protectedDeleteNodeCount": len(protected_delete_nodes),
@@ -717,6 +626,27 @@ class DocumentApplyOperationsMixin:
                         "source_output_index": change.get("sourceOutputIndex", 0),
                     }
                 )
+                observed = next(
+                    (
+                        item
+                        for item in self._document_live_input_connections(dest)
+                        if item.get("inputIndex") == change["inputIndex"]
+                    ),
+                    {},
+                )
+                mismatch = connection_mismatch(
+                    {**change, "sourcePath": source}, observed
+                )
+                if mismatch:
+                    raise JsonRpcError(
+                        INVALID_PARAMS,
+                        "Live connection metadata does not match the indexed document contract.",
+                        {
+                            "destPath": dest,
+                            "inputIndex": change["inputIndex"],
+                            "mismatches": mismatch,
+                        },
+                    )
                 executed.append(
                     {
                         "type": "connect", "sourceUid": change.get("sourceUid"),
@@ -743,9 +673,33 @@ class DocumentApplyOperationsMixin:
         for reset in plan.get("parameterResets", []):
             checkpoint()
             path = self._document_binding_parm_path(state, reset)
-            self._parm_revert_to_default_impl({"parm_path": path})
+            self._parm_revert_to_permanent_default_impl({"parm_path": path})
+            parm = self._require_parm_by_path(path)
+            is_default = getattr(parm, "isAtDefault", None)
+            verified_default = (
+                callable(is_default)
+                and bool(
+                    self._safe_value(
+                        lambda: is_default(
+                            compare_temporary_defaults=False,
+                            compare_expressions=True,
+                        ),
+                        False,
+                    )
+                )
+            )
+            if not verified_default:
+                raise JsonRpcError(
+                    INVALID_PARAMS,
+                    f"Managed parameter reset could not be verified at {path}.",
+                )
             executed.append(
-                {"type": "revert_parm", "bindingUid": reset.get("bindingUid"), "parmPath": path}
+                {
+                    "type": "revert_parm",
+                    "bindingUid": reset.get("bindingUid"),
+                    "parmPath": path,
+                    "verifiedDefault": True,
+                }
             )
         assignments = [
             {
@@ -758,6 +712,13 @@ class DocumentApplyOperationsMixin:
             checkpoint()
             self._parm_set_many_impl({"assignments": assignments})
             executed.append({"type": "set_many_parms", "count": len(assignments)})
+        execute_typed_updates(
+            self,
+            plan.get("typedValueUpdates", []),
+            state,
+            executed,
+            checkpoint,
+        )
         for update in plan.get("expressionUpdates", []):
             checkpoint()
             path = self._document_binding_parm_path(state, update)
@@ -789,6 +750,15 @@ class DocumentApplyOperationsMixin:
     def _document_execute_finalizers(self, plan, state, executed, checkpoint) -> None:
         output = plan.get("outputChange")
         if isinstance(output, dict):
+            network_family = plan.get("networkFamily")
+            if (
+                network_family is not None
+                and network_family_policy(network_family).output_strategy != "sop_display"
+            ):
+                raise JsonRpcError(
+                    INVALID_PARAMS,
+                    "Only SOP documents may execute display-output finalizers.",
+                )
             checkpoint()
             source_uid = str(output.get("sourceUid", "")).strip()
             source = (
@@ -806,7 +776,18 @@ class DocumentApplyOperationsMixin:
                     }
                 )
             else:
-                executed.append({"type": "clear_output", "rootPath": output.get("rootPath")})
+                before_uid = str(output.get("beforeSourceUid", "")).strip()
+                before = self._document_apply_state_current_path(
+                    state, before_uid
+                ) if before_uid else None
+                if before:
+                    self._node_set_flags_impl({"path": before, "display": False})
+                executed.append({
+                    "type": "clear_output",
+                    "rootPath": output.get("rootPath"),
+                    "previousSourceUid": before_uid or None,
+                    "previousSourcePath": before,
+                })
         guard = plan.get("rootNodeGuard")
         if isinstance(guard, dict) and guard.get("path"):
             checkpoint()
@@ -855,12 +836,35 @@ class DocumentApplyOperationsMixin:
         self._document_execute_creates(plan, state, executed, check_cancelled)
         self._document_execute_moves(plan, state, executed, check_cancelled)
         self._document_execute_connections(plan, state, executed, check_cancelled)
-        self._document_execute_bindings(plan, state, executed, check_cancelled)
+        execute_runtime_bindings(
+            self, plan, state, executed, check_cancelled
+        )
         self._document_execute_node_updates(
             plan.get("nodeUpdates", []),
             state,
             executed,
             check_cancelled,
+        )
+        editor_identities = self._document_execute_editor_entities(
+            plan.get("editorEntityChange"),
+            state,
+            executed,
+            check_cancelled,
+        )
+        self._document_execute_root_editor_receipt(
+            plan.get("rootEditorEntityChange"),
+            editor_identities,
+            executed,
+            check_cancelled,
+        )
+        self._document_execute_root_expansion_provenance(
+            plan, executed, check_cancelled
+        )
+        self._document_execute_root_entity_provenance(
+            plan, executed, check_cancelled
+        )
+        self._document_execute_root_typed_receipt(
+            plan, executed, check_cancelled
         )
         self._document_execute_finalizers(plan, state, executed, check_cancelled)
         check_cancelled()
@@ -880,10 +884,16 @@ class DocumentApplyOperationsMixin:
                 or str((item.get("from") or {}).get("nodeUid", "")).startswith("hocus-")
                 or str((item.get("to") or {}).get("nodeUid", "")).startswith("hocus-")
             )
-            for field in ("nodes", "ports", "edges", "parameterBindings", "codeBlobs")
+            for field in (
+                "nodes", "ports", "edges", "parameterBindings", "codeBlobs",
+                "networkBoxes", "stickyNotes", "nodeComments", "networkDots",
+                "layoutConstraints", "spareParameters", "animations",
+            )
             for item in target.get(field, [])
         )
-        if (
+        if target.get("$schema") == (
+            "hocuspocus://schemas/network-document/v2"
+        ) or (
             isinstance(metadata, dict)
             and isinstance(metadata.get("hocusPreview"), dict)
         ) or has_hocus_entities:

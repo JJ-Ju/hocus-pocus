@@ -16,8 +16,13 @@ from hocuspocus.hocusscript import (
     BUNDLE_VERSION,
     BundleValidationError,
     CatalogConstraint,
+    CONTROL_BUNDLE_VERSION,
+    CompiledBundle,
     DocumentLoweringError,
     ExternalNodeBinding,
+    MODULE_BUNDLE_VERSION,
+    VALUE_BUNDLE_VERSION,
+    SnapshotCatalogProvider,
     compile_source,
     complete_source,
     decode_compiled_bundle,
@@ -28,21 +33,59 @@ from hocuspocus.hocusscript import (
     resolve_graph,
 )
 from hocuspocus.hocusscript.compiler import MAX_SOURCE_BYTES
+from hocuspocus.hocusscript._document_bundle_boundary import (
+    _DecodedDocumentBundle,
+    _DocumentBundleBoundaryError,
+    _decode_document_bundle_content,
+)
+from hocuspocus.hocusscript.document_bundle_lowering import (
+    _document_bundle_plan_pins,
+    _lower_decoded_document_bundle_to_document,
+)
+from hocuspocus.hocusscript.document_bundle_semantics import (
+    _FreshDocumentSemanticError,
+    _rehydrate_exact_graph,
+    _resolve_decoded_document_bundle_semantics,
+)
 
 from ..catalog_provider import LiveHoudiniCatalogProvider
 from ..document_service import ApplyPlanError, PreviewArtifactError
 from ..graph_store import GraphStorePlanError
 
-from ..context import RequestContext
-from .hocusscript_apply import HocusScriptApplyOperationsMixin
+from ..context import OperationCancelledError, RequestContext
+from .document_apply_managed import identity_update_mismatches
+from .document_network_families import network_family_policy
+from .hocusscript_apply import (
+    DESTRUCTIVE_CANDIDATE_ACTIONS,
+    REVERSIBLE_CANDIDATE_ACTIONS,
+    HocusScriptApplyOperationsMixin,
+)
+from .hocusscript_recovery import recovered_apply_result
 from .hocusscript_resources import HocusScriptResourceOperationsMixin
 
 
 class HocusScriptOperationsMixin(HocusScriptApplyOperationsMixin, HocusScriptResourceOperationsMixin):
+    _HS7_FIDELITY_RESOURCE_URI = "houdini://documents/hocusscript/fidelity/hs7"
     _GRAPH_SPEC_SCHEMA_RESOURCE_URI = "houdini://documents/schema/graph-spec/v0.2"
     _MODULE_GRAPH_SPEC_SCHEMA_RESOURCE_URI = "houdini://documents/schema/graph-spec/v0.3"
     _EXPANSION_MAP_SCHEMA_RESOURCE_URI = "houdini://documents/schema/expansion-map/v1"
     _RESOLVED_MODULE_SET_SCHEMA_RESOURCE_URI = "houdini://documents/schema/resolved-module-set/v1"
+    _CONTROL_GRAPH_SPEC_SCHEMA_RESOURCE_URI = "houdini://documents/schema/graph-spec/v0.4"
+    _CONTROL_EXPANSION_MAP_SCHEMA_RESOURCE_URI = "houdini://documents/schema/expansion-map/v2"
+    _CONTROL_RESOLVED_MODULE_SET_SCHEMA_RESOURCE_URI = (
+        "houdini://documents/schema/resolved-module-set/v2"
+    )
+    _CONTROL_COMPILED_BUNDLE_SCHEMA_RESOURCE_URI = (
+        "houdini://documents/schema/compiled-bundle/v0.4"
+    )
+    _VALUE_GRAPH_SPEC_SCHEMA_RESOURCE_URI = "houdini://documents/schema/graph-spec/v0.5"
+    _VALUE_EXPANSION_MAP_SCHEMA_RESOURCE_URI = "houdini://documents/schema/expansion-map/v3"
+    _VALUE_RESOLVED_MODULE_SET_SCHEMA_RESOURCE_URI = (
+        "houdini://documents/schema/resolved-module-set/v3"
+    )
+    _VALUE_COMPILED_BUNDLE_SCHEMA_RESOURCE_URI = (
+        "houdini://documents/schema/compiled-bundle/v0.5"
+    )
     _LEGACY_GRAPH_SPEC_SCHEMA_RESOURCE_URI = "houdini://documents/schema/graph-spec/v0.1"
     _FORMAT_OUTPUT_SCHEMA_RESOURCE_URI = "houdini://documents/schema/format-source-output/v1"
     _COMPLETE_OUTPUT_SCHEMA_RESOURCE_URI = "houdini://documents/schema/complete-source-output/v1"
@@ -179,6 +222,12 @@ class HocusScriptOperationsMixin(HocusScriptApplyOperationsMixin, HocusScriptRes
             ).to_dict()
 
         result = self._call_live(export, context)
+        authority = getattr(self, "_source_workspace_authority", None) or getattr(
+            self, "_workspace_authority", None,
+        )
+        signer = getattr(self, "_get_source_workspace_service", None)
+        if result["valid"] and authority is not None and callable(signer):
+            result = signer().issue_export_handoff(context, result)
         summary = (
             "Exported a complete, exact-catalog HocusScript source handoff without writing project files."
             if result["valid"]
@@ -186,9 +235,11 @@ class HocusScriptOperationsMixin(HocusScriptApplyOperationsMixin, HocusScriptRes
         )
         return self._tool_response(summary, result)
 
-    def _document_preview_live_catalog(self):
-        return LiveHoudiniCatalogProvider(self._require_hou()).get_catalog()
-
+    def _document_preview_live_catalog(self, graph_spec_version: str | None = None):
+        catalog_version = 2 if graph_spec_version == "0.5" else 1
+        return LiveHoudiniCatalogProvider(
+            self._require_hou(), catalog_version=catalog_version
+        ).get_catalog()
     @staticmethod
     def _preview_diagnostic(code: str, message: str, **details: Any) -> dict[str, Any]:
         diagnostic: dict[str, Any] = {"severity": "error", "code": code, "message": message}
@@ -230,11 +281,30 @@ class HocusScriptOperationsMixin(HocusScriptApplyOperationsMixin, HocusScriptRes
             and not live.get("diagnostics")
         )
 
-    def _document_preview_bundle_impl(self, bundle_value: dict[str, Any]) -> dict[str, Any]:
+    def _document_preview_bundle_impl(
+        self,
+        bundle_value: dict[str, Any],
+        *,
+        checkpoint=None,
+    ) -> dict[str, Any]:
         bundle = self._document_decode_preview_bundle(bundle_value)
+        return self._document_preview_decoded_bundle_impl(bundle, checkpoint=checkpoint)
+
+    def _document_preview_decoded_bundle_impl(
+        self,
+        bundle: CompiledBundle | _DecodedDocumentBundle,
+        *,
+        checkpoint=None,
+    ) -> dict[str, Any]:
+        if type(bundle) not in {CompiledBundle, _DecodedDocumentBundle}:
+            raise TypeError("Document preview requires one exact authenticated bundle value.")
+        self._document_checkpoint(checkpoint)
         payload = bundle.payload
         target = payload["graphSpec"]["target"]
-        baseline = self._document_current_network_payload(target)
+        baseline = self._document_current_network_payload(
+            target, force_sync=True
+        )
+        self._document_checkpoint(checkpoint)
         baseline_diagnostics = self._document_validate_network_document(baseline)
         baseline_blocking = [item for item in baseline_diagnostics if item.get("severity") == "error"]
         if baseline_blocking:
@@ -251,7 +321,8 @@ class HocusScriptOperationsMixin(HocusScriptApplyOperationsMixin, HocusScriptRes
                 "artifact": None,
             }
 
-        live_catalog = self._document_preview_live_catalog()
+        live_catalog = self._document_preview_live_catalog(payload["graphSpecVersion"])
+        self._document_checkpoint(checkpoint)
         expected_fingerprint = payload["catalogConstraints"]["fingerprint"]
         if live_catalog.fingerprint != expected_fingerprint:
             diagnostic = self._preview_diagnostic(
@@ -278,36 +349,57 @@ class HocusScriptOperationsMixin(HocusScriptApplyOperationsMixin, HocusScriptRes
                 "artifact": None,
             }
 
-        graph = graph_spec_from_dict(payload["graphSpec"])
-        baseline_nodes_by_path = {
-            str(node.get("path", "")): node
-            for node in baseline.get("nodes", [])
-            if isinstance(node, dict) and str(node.get("path", ""))
-        }
-        external_bindings: dict[str, ExternalNodeBinding] = {}
-        for external in graph.external_nodes:
-            live_node = baseline_nodes_by_path.get(external.path)
-            if live_node is None:
-                continue
-            qualified_name = str(live_node.get("typeName", "")).strip()
-            if qualified_name:
-                external_bindings[external.symbol] = ExternalNodeBinding(
-                    qualified_name,
-                    live_catalog.fingerprint,
-                    str(live_node.get("category", "")).strip() or None,
-                )
-        live_semantic_result = resolve_graph(
-            graph,
-            live_catalog,
-            constraint=CatalogConstraint(expected_fingerprint),
-            external_bindings=external_bindings,
+        graph = (
+            graph_spec_from_dict(payload["graphSpec"])
+            if type(bundle) is CompiledBundle
+            else _rehydrate_exact_graph(bundle.version, payload)
         )
-        live_semantic = live_semantic_result.to_dict()
-        if not self._document_preview_semantics_match(payload["semanticResolution"], live_semantic):
+        external_bindings = self._document_preview_external_bindings(
+            graph, baseline, live_catalog.fingerprint
+        )
+        try:
+            if type(bundle) is CompiledBundle:
+                live_semantic_result = resolve_graph(
+                    graph,
+                    live_catalog,
+                    constraint=CatalogConstraint(expected_fingerprint),
+                    external_bindings=external_bindings,
+                    checkpoint=checkpoint,
+                )
+                semantic_matches = self._document_preview_semantics_match(
+                    payload["semanticResolution"],
+                    live_semantic_result.to_dict(),
+                )
+                semantic_error = None
+            else:
+                fresh = _resolve_decoded_document_bundle_semantics(
+                    bundle,
+                    SnapshotCatalogProvider(live_catalog),
+                    external_bindings=external_bindings,
+                    checkpoint=checkpoint,
+                )
+                live_semantic_result = fresh.semantic_result
+                semantic_matches = True
+                semantic_error = None
+        except _FreshDocumentSemanticError as exc:
+            live_semantic_result = None
+            semantic_matches = False
+            semantic_error = exc
+        self._document_checkpoint(checkpoint)
+        if not semantic_matches:
+            details = (
+                self._document_semantic_error_details(semantic_error)
+                if semantic_error is not None
+                else {"liveSemanticResolution": live_semantic_result.to_dict()}
+            )
             diagnostic = self._preview_diagnostic(
                 "HOCUS722",
-                "Bundle semantic selections do not match fresh resolution against the live catalog.",
-                liveSemanticResolution=live_semantic,
+                (
+                    semantic_error.message
+                    if semantic_error is not None
+                    else "Bundle semantic selections do not match fresh resolution against the live catalog."
+                ),
+                **details,
             )
             return {
                 "stage": "document_preview",
@@ -328,10 +420,18 @@ class HocusScriptOperationsMixin(HocusScriptApplyOperationsMixin, HocusScriptRes
             }
 
         try:
-            preview = lower_bundle_to_document(
-                bundle,
-                baseline,
-                _trusted_semantic_result=live_semantic_result,
+            preview = (
+                lower_bundle_to_document(
+                    bundle,
+                    baseline,
+                    _trusted_semantic_result=live_semantic_result,
+                )
+                if type(bundle) is CompiledBundle
+                else _lower_decoded_document_bundle_to_document(
+                    bundle,
+                    baseline,
+                    _trusted_semantic_result=live_semantic_result,
+                )
             )
         except DocumentLoweringError as exc:
             raise JsonRpcError(
@@ -339,6 +439,7 @@ class HocusScriptOperationsMixin(HocusScriptApplyOperationsMixin, HocusScriptRes
                 exc.message,
                 {"diagnosticCode": exc.code, **exc.details},
             ) from exc
+        self._document_checkpoint(checkpoint)
         artifact = preview.to_dict()
         diagnostics = list(artifact["diagnostics"])
         runtime_diagnostics = self._document_validate_network_document(artifact["document"])
@@ -348,6 +449,7 @@ class HocusScriptOperationsMixin(HocusScriptApplyOperationsMixin, HocusScriptRes
             if (item.get("code"), item.get("jsonPointer"), item.get("message")) not in known
         )
         diagnostics = self._document_clean_diagnostics(diagnostics)
+        self._document_checkpoint(checkpoint)
         blocking = any(item.get("severity") == "error" for item in diagnostics)
         artifact["diagnostics"] = diagnostics
         artifact["valid"] = not blocking
@@ -376,6 +478,7 @@ class HocusScriptOperationsMixin(HocusScriptApplyOperationsMixin, HocusScriptRes
                 "diagnosticCount": 1,
                 "artifact": None,
             }
+        self._document_checkpoint(checkpoint)
         response = {
             "stage": "document_preview",
             "previewVersion": artifact["previewVersion"],
@@ -404,7 +507,38 @@ class HocusScriptOperationsMixin(HocusScriptApplyOperationsMixin, HocusScriptRes
         return response
 
     @staticmethod
+    def _document_checkpoint(checkpoint) -> None:
+        if checkpoint is not None:
+            checkpoint()
+
+    @staticmethod
     def _document_decode_preview_bundle(bundle_value: dict[str, Any]):
+        version = bundle_value.get("bundleVersion")
+        if type(version) is not str:
+            raise JsonRpcError(
+                INVALID_PARAMS,
+                "document.preview_bundle requires an exact string bundleVersion.",
+                {"diagnosticCode": "HOCUS700", "bundleVersion": version},
+            )
+        if version in {
+            MODULE_BUNDLE_VERSION,
+            CONTROL_BUNDLE_VERSION,
+            VALUE_BUNDLE_VERSION,
+        }:
+            try:
+                return _decode_document_bundle_content(bundle_value)
+            except _DocumentBundleBoundaryError as exc:
+                raise JsonRpcError(
+                    INVALID_PARAMS,
+                    exc.message,
+                    {"diagnosticCode": exc.code, **exc.details},
+                ) from exc
+        if version != BUNDLE_VERSION:
+            raise JsonRpcError(
+                INVALID_PARAMS,
+                "document.preview_bundle does not support this bundleVersion.",
+                {"diagnosticCode": "HOCUS700", "bundleVersion": version},
+            )
         try:
             bundle = decode_compiled_bundle(bundle_value)
         except BundleValidationError as exc:
@@ -414,13 +548,48 @@ class HocusScriptOperationsMixin(HocusScriptApplyOperationsMixin, HocusScriptRes
                 {"diagnosticCode": exc.code, **exc.details},
             ) from exc
         payload = bundle.payload
-        if payload.get("bundleVersion") != BUNDLE_VERSION or "semanticResolution" not in payload:
+        if "semanticResolution" not in payload:
             raise JsonRpcError(
                 INVALID_PARAMS,
                 "document.preview_bundle requires a resolved compiled bundle v0.2.",
                 {"diagnosticCode": "HOCUS700"},
             )
         return bundle
+
+    @staticmethod
+    def _document_semantic_error_details(
+        error: _FreshDocumentSemanticError,
+    ) -> dict[str, Any]:
+        details = {"field": error.field}
+        scalar = (str, int, float, bool, type(None))
+        if isinstance(error.expected, scalar) and isinstance(error.actual, scalar):
+            details.update(expected=error.expected, actual=error.actual)
+        return details
+
+    @staticmethod
+    def _document_preview_external_bindings(
+        graph,
+        baseline: dict[str, Any],
+        catalog_fingerprint: str,
+    ) -> dict[str, ExternalNodeBinding]:
+        baseline_nodes_by_path = {
+            str(node.get("path", "")): node
+            for node in baseline.get("nodes", [])
+            if isinstance(node, dict) and str(node.get("path", ""))
+        }
+        bindings: dict[str, ExternalNodeBinding] = {}
+        for external in graph.external_nodes:
+            live_node = baseline_nodes_by_path.get(external.path)
+            if live_node is None:
+                continue
+            qualified_name = str(live_node.get("typeName", "")).strip()
+            if qualified_name:
+                bindings[external.symbol] = ExternalNodeBinding(
+                    qualified_name,
+                    catalog_fingerprint,
+                    str(live_node.get("category", "")).strip() or None,
+                )
+        return bindings
 
     def document_preview_bundle(
         self,
@@ -430,7 +599,13 @@ class HocusScriptOperationsMixin(HocusScriptApplyOperationsMixin, HocusScriptRes
         bundle = arguments.get("bundle")
         if not isinstance(bundle, dict):
             raise JsonRpcError(INVALID_PARAMS, "bundle must be a compiled-bundle JSON object.")
-        data = self._call_live(lambda: self._document_preview_bundle_impl(bundle), context)
+        data = self._call_live(
+            lambda: self._document_preview_bundle_impl(
+                bundle,
+                checkpoint=context.raise_if_cancelled,
+            ),
+            context,
+        )
         if not data["valid"]:
             return self._tool_response(
                 f"Bundle preview blocked by {data['diagnosticCount']} diagnostic(s) without mutating Houdini.",
@@ -504,28 +679,42 @@ class HocusScriptOperationsMixin(HocusScriptApplyOperationsMixin, HocusScriptRes
     def _hocus_confirmation_required(
         candidate: dict[str, Any], execution_plan: dict[str, Any]
     ) -> bool:
-        destructive_actions = {
-            "adopt_node", "delete_node", "replace_node", "install_code",
-            "disconnect", "clear_output",
-        }
         return bool(
-            any(item.get("action") in destructive_actions for item in candidate.get("operations", []))
+            any(
+                item.get("action") in DESTRUCTIVE_CANDIDATE_ACTIONS
+                for item in candidate.get("operations", [])
+            )
             or execution_plan.get("codeBlobInstalls")
             or execution_plan.get("replaceNodes")
             or execution_plan.get("deleteNodes")
         )
 
+    def _hocus_require_network_family_policy(self, execution_plan: dict[str, Any]):
+        policy = network_family_policy(execution_plan.get("networkFamily"))
+        if not policy.structural_indexed_apply:
+            self._hocus_fail(
+                "HOCUS741",
+                "This network family is not supported by the guarded indexed structural lane.",
+                networkFamily=execution_plan.get("networkFamily"),
+                supportedFamilies=["lop", "mat", "sop", "top"],
+            )
+        if policy.output_strategy == "none" and (
+            execution_plan.get("outputGuard") is not None
+            or execution_plan.get("outputChange") is not None
+        ):
+            self._hocus_fail(
+                "HOCUS761",
+                "This network family cannot carry a synthetic display-output operation.",
+                networkFamily=policy.family,
+            )
+        return policy
+
     def _hocus_validate_reversible_plan(
         self,
         candidate: dict[str, Any],
         execution_plan: dict[str, Any],
+        baseline: dict[str, Any],
     ) -> None:
-        allowed_actions = {
-            "adopt_node", "update_node_provenance", "create_node", "replace_node",
-            "rename_node", "reparent_node", "update_node", "delete_node", "create_port",
-            "delete_port", "set_binding", "remove_binding", "install_code", "remove_code", "connect", "disconnect",
-            "set_output", "clear_output",
-        }
         operations = candidate.get("operations")
         if not isinstance(operations, list):
             self._hocus_fail("HOCUS740", "Candidate plan operations are absent or invalid.")
@@ -537,23 +726,28 @@ class HocusScriptOperationsMixin(HocusScriptApplyOperationsMixin, HocusScriptRes
             if operation_id in operation_ids or operation.get("sequence") != index:
                 self._hocus_fail("HOCUS740", "Candidate plan operation identity or sequence is invalid.")
             operation_ids.add(operation_id)
-            if operation.get("action") not in allowed_actions:
+            if operation.get("action") not in REVERSIBLE_CANDIDATE_ACTIONS:
                 self._hocus_fail(
                     "HOCUS741", "Candidate plan contains an unsupported or irreversible action.",
                     action=operation.get("action"), operationId=operation_id,
                 )
-        if execution_plan.get("networkFamily") != "sop":
-            self._hocus_fail(
-                "HOCUS741", "HS4 guarded apply currently supports only SOP network documents.",
-                networkFamily=execution_plan.get("networkFamily"),
-            )
+        family_policy = self._hocus_require_network_family_policy(execution_plan)
         if execution_plan.get("protectedDeleteNodes"):
             self._hocus_fail(
                 "HOCUS742", "The normalized plan would delete state outside its ownership namespace.",
                 protectedNodes=execution_plan["protectedDeleteNodes"],
             )
+        identity_mismatches = identity_update_mismatches(
+            candidate, execution_plan, baseline
+        )
+        if identity_mismatches:
+            self._hocus_fail(
+                "HOCUS740",
+                "Candidate identity operations do not authorize the normalized identity updates.",
+                identityMismatches=identity_mismatches,
+            )
         output_guard = execution_plan.get("outputGuard")
-        if isinstance(output_guard, dict):
+        if family_policy.output_strategy == "sop_display" and isinstance(output_guard, dict):
             output_uid = output_guard.get("sourceUid")
             display_uids = output_guard.get("targetDisplayUids") or []
             if (output_uid is not None and output_uid not in display_uids) or (
@@ -587,8 +781,9 @@ class HocusScriptOperationsMixin(HocusScriptApplyOperationsMixin, HocusScriptRes
                 operationCount=len(opaque),
             )
 
-    @staticmethod
+    @classmethod
     def _document_plan_bundle_input(
+        cls,
         arguments: dict[str, Any],
     ):
         bundle_value = arguments.get("bundle")
@@ -603,24 +798,104 @@ class HocusScriptOperationsMixin(HocusScriptApplyOperationsMixin, HocusScriptRes
             raise JsonRpcError(
                 INVALID_PARAMS, "ttlSeconds must be an integer from 30 through 1800."
             )
+        decoded = cls._document_decode_preview_bundle(bundle_value)
+        return ttl_seconds, decoded
+
+    def _hocus_persist_apply_plan(
+        self,
+        plan: dict[str, Any],
+        ttl_seconds: float,
+        context: RequestContext,
+    ) -> dict[str, Any]:
+        context.raise_if_cancelled()
+        stored = self._hocus_service_call(
+            lambda: self._documents.store_apply_plan(
+                plan,
+                ttl_seconds=ttl_seconds,
+            )
+        )
         try:
-            decoded = decode_compiled_bundle(bundle_value)
-        except BundleValidationError as exc:
-            raise JsonRpcError(
-                INVALID_PARAMS,
-                exc.message,
-                {"diagnosticCode": exc.code, **exc.details},
-            ) from exc
-        return bundle_value, ttl_seconds, decoded
+            context.raise_if_cancelled()
+            self._graph_store.store_immutable_plan(payload=plan)
+            context.raise_if_cancelled()
+        except GraphStorePlanError as exc:
+            cleanup_errors = self._hocus_cleanup_failed_plan_persistence(plan)
+            self._hocus_fail(
+                "HOCUS759",
+                self._hocus_persistence_failure_message(
+                    "Could not durably persist the immutable plan",
+                    exc,
+                    cleanup_errors,
+                ),
+            )
+        except OperationCancelledError:
+            cleanup_errors = self._hocus_cleanup_failed_plan_persistence(plan)
+            if cleanup_errors:
+                self._hocus_fail(
+                    "HOCUS759",
+                    self._hocus_persistence_failure_message(
+                        "Could not revoke the cancelled immutable plan",
+                        cleanup_errors[0],
+                        cleanup_errors[1:],
+                    ),
+                )
+            raise
+        except Exception as exc:
+            cleanup_errors = self._hocus_cleanup_failed_plan_persistence(plan)
+            self._hocus_fail(
+                "HOCUS759",
+                self._hocus_persistence_failure_message(
+                    "Could not durably persist the immutable plan",
+                    exc,
+                    cleanup_errors,
+                ),
+            )
+        return stored
+
+    def _hocus_cleanup_failed_plan_persistence(
+        self, plan: dict[str, Any],
+    ) -> list[Exception]:
+        errors: list[Exception] = []
+        try:
+            self._documents.discard_apply_plan(
+                plan["planId"],
+                expected_hash=plan["planHash"],
+            )
+        except Exception as exc:
+            errors.append(exc)
+        try:
+            self._graph_store.delete_unclaimed_plan(
+                plan["planId"],
+                expected_hash=plan["planHash"],
+            )
+        except Exception as exc:
+            errors.append(exc)
+        return errors
+
+    @staticmethod
+    def _hocus_persistence_failure_message(
+        prefix: str,
+        failure: Exception,
+        cleanup_errors: list[Exception],
+    ) -> str:
+        message = f"{prefix}: {failure}"
+        if cleanup_errors:
+            message += "; cleanup also failed: " + "; ".join(
+                str(item) for item in cleanup_errors
+            )
+        return message
 
     def _document_plan_bundle_impl(
         self,
         arguments: dict[str, Any],
         context: RequestContext,
     ) -> dict[str, Any]:
-        bundle_value, ttl_seconds, decoded = self._document_plan_bundle_input(arguments)
+        ttl_seconds, decoded = self._document_plan_bundle_input(arguments)
         payload = decoded.payload
-        preview_response = self._document_preview_bundle_impl(bundle_value)
+        preview_response = self._document_preview_decoded_bundle_impl(
+            decoded,
+            checkpoint=context.raise_if_cancelled,
+        )
         if not preview_response.get("valid") or not preview_response.get("readyForPlan"):
             self._hocus_fail(
                 "HOCUS744", "Bundle cannot produce an immutable apply plan.",
@@ -636,8 +911,31 @@ class HocusScriptOperationsMixin(HocusScriptApplyOperationsMixin, HocusScriptRes
         target_document = preview.get("document")
         if not isinstance(candidate, dict) or not isinstance(target_document, dict):
             self._hocus_fail("HOCUS744", "The preview has no complete candidate plan and target document.")
+        new_lane_pins = (
+            _document_bundle_plan_pins(decoded)
+            if type(decoded) is _DecodedDocumentBundle
+            else {}
+        )
+        mismatched_pins = {
+            key: {"expected": value, "actual": candidate.get(key)}
+            for key, value in new_lane_pins.items()
+            if candidate.get(key) != value
+        }
+        if mismatched_pins:
+            self._hocus_fail(
+                "HOCUS744",
+                "Candidate plan pins do not match the authenticated bundle.",
+                mismatchedPins=mismatched_pins,
+            )
+        if candidate.get("bundleDigest") != decoded.digest:
+            self._hocus_fail(
+                "HOCUS744",
+                "Candidate plan digest does not match the authenticated bundle.",
+            )
         root_path = str(target_document.get("rootPath", "")).strip()
+        context.raise_if_cancelled()
         baseline = self._document_current_network_payload(root_path, force_sync=True)
+        context.raise_if_cancelled()
         if self._hocus_canonical_digest(baseline) != candidate.get("baselineDigest"):
             self._hocus_fail(
                 "HOCUS745", "The live network changed between preview and plan persistence.",
@@ -649,7 +947,11 @@ class HocusScriptOperationsMixin(HocusScriptApplyOperationsMixin, HocusScriptRes
         execution_plan = self._document_build_apply_plan(
             baseline, target_document, mode=str(candidate.get("mode", "merge"))
         )
-        self._hocus_validate_reversible_plan(candidate, execution_plan)
+        context.raise_if_cancelled()
+        self._hocus_validate_reversible_plan(
+            candidate, execution_plan, baseline
+        )
+        context.raise_if_cancelled()
         rollback_owner = f"hocus.rollback.{uuid4()}"
         inverse_source = copy.deepcopy(target_document)
         created_uids = {
@@ -663,6 +965,7 @@ class HocusScriptOperationsMixin(HocusScriptApplyOperationsMixin, HocusScriptRes
         inverse_target = copy.deepcopy(baseline)
         inverse_target.setdefault("metadata", {})["reconcileOwnership"] = rollback_owner
         inverse_plan = self._document_build_apply_plan(inverse_source, inverse_target, mode="reconcile")
+        context.raise_if_cancelled()
         confirmation_required = self._hocus_confirmation_required(candidate, execution_plan)
         confirmation_token = secrets.token_urlsafe(32) if confirmation_required else ""
         now = time.time()
@@ -700,16 +1003,14 @@ class HocusScriptOperationsMixin(HocusScriptApplyOperationsMixin, HocusScriptRes
             "candidatePlanHash": candidate["planHash"],
             "confirmationRequired": confirmation_required,
             "confirmationTokenDigest": self._hocus_canonical_digest(confirmation_token),
+            **new_lane_pins,
         }
         plan["planHash"] = self._hocus_canonical_digest(plan)
-        stored = self._hocus_service_call(
-            lambda: self._documents.store_apply_plan(plan, ttl_seconds=ttl_seconds)
+        stored = self._hocus_persist_apply_plan(
+            plan,
+            ttl_seconds,
+            context,
         )
-        try:
-            self._graph_store.store_immutable_plan(payload=plan)
-        except GraphStorePlanError as exc:
-            self._documents.discard_apply_plan(plan["planId"], expected_hash=plan["planHash"])
-            self._hocus_fail("HOCUS759", f"Could not durably persist the immutable plan: {exc}")
         response = {
             "stage": "document_plan",
             "planVersion": self._APPLY_PLAN_VERSION,
@@ -772,7 +1073,11 @@ class HocusScriptOperationsMixin(HocusScriptApplyOperationsMixin, HocusScriptRes
                 )
                 durable_revoked = True
             except GraphStorePlanError as exc:
-                existing = self._graph_store.load_plan_commit(idempotency_key=f"discard:{plan_id}")
+                existing = self._hocus_store_call(
+                    lambda: self._graph_store.load_plan_commit(
+                        idempotency_key=f"discard:{plan_id}"
+                    )
+                )
                 if existing is None or existing.get("state") != "aborted":
                     self._hocus_fail("HOCUS759", f"Could not durably revoke the plan: {exc}", family="conflict")
                 durable_revoked = True
@@ -809,8 +1114,15 @@ class HocusScriptOperationsMixin(HocusScriptApplyOperationsMixin, HocusScriptRes
                 )
             recovered_commits: list[dict[str, Any]] = []
             unresolved: list[dict[str, Any]] = []
-            for commit in self._graph_store.recoverable_plan_commits():
-                stored = self._graph_store.load_immutable_plan(commit["plan_id"])
+            recoverable = self._hocus_store_call(
+                self._graph_store.recoverable_plan_commits
+            )
+            for commit in recoverable:
+                stored = self._hocus_store_call(
+                    lambda commit=commit: self._graph_store.load_immutable_plan(
+                        commit["plan_id"]
+                    )
+                )
                 plan = stored.get("payload") if isinstance(stored, dict) else None
                 if not isinstance(plan, dict) or not self._hocus_scopes_overlap(scope, str(plan.get("rootPath", "/"))):
                     continue
@@ -821,27 +1133,51 @@ class HocusScriptOperationsMixin(HocusScriptApplyOperationsMixin, HocusScriptRes
                     unresolved.append({"planId": commit["plan_id"], "state": commit["state"]})
                     continue
                 resolved_state = "committed" if target_match and not baseline_match else "aborted"
-                recovery_result = {
-                    "stage": "document_apply_recovery",
-                    "planId": commit["plan_id"],
-                    "applyCommitId": commit["plan_commit_id"],
-                    "state": resolved_state,
-                    "recovered": True,
-                    "rootPath": plan["rootPath"],
-                    "classification": "target" if resolved_state == "committed" else "baseline",
-                }
+                classification = "target" if resolved_state == "committed" else "baseline"
+                verification = (
+                    target_verification
+                    if classification == "target"
+                    else self._document_verification_diff_payload(
+                        plan["baseline"]["document"], document
+                    )
+                )
+                recovery_result = recovered_apply_result(
+                    plan=plan,
+                    plan_commit_id=commit["plan_commit_id"],
+                    document=document,
+                    classification=classification,
+                    verification=verification,
+                )
                 if commit["state"] == "pending":
-                    self._graph_store.finish_plan_commit(
-                        plan_commit_id=commit["plan_commit_id"],
-                        state=resolved_state,
-                        result=recovery_result,
-                        error=None,
+                    self._hocus_store_call(
+                        lambda commit=commit: self._graph_store.finish_plan_commit(
+                            plan_commit_id=commit["plan_commit_id"],
+                            state=resolved_state,
+                            result=recovery_result,
+                            error=None,
+                        )
                     )
                 else:
-                    self._graph_store.resolve_plan_commit_recovery(
-                        plan_commit_id=commit["plan_commit_id"],
-                        state=resolved_state,
+                    self._hocus_store_call(
+                        lambda commit=commit: (
+                            self._graph_store.resolve_plan_commit_recovery(
+                                plan_commit_id=commit["plan_commit_id"],
+                                state=resolved_state,
+                                result=recovery_result,
+                            )
+                        )
+                    )
+                try:
+                    self._documents.recover_apply_result(
+                        commit["idempotency_key"],
+                        plan_id=plan["planId"],
+                        plan_hash=plan["planHash"],
                         result=recovery_result,
+                    )
+                except ApplyPlanError:
+                    self._logger.exception(
+                        "could not cache recovered apply result %s",
+                        commit["plan_commit_id"],
                     )
                 recovered_commits.append(recovery_result)
             if unresolved:

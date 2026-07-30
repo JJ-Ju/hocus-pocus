@@ -41,6 +41,8 @@ from hocuspocus.hocusscript import (
     verify_project_lock,
 )
 from hocuspocus.hocusscript.cli import main
+from hocuspocus.hocusscript.project import ProjectContext
+from hocuspocus.hocusscript.project_build import compile_project as compile_source_project
 
 
 CATALOG = ROOT / "tests/fixtures/hocusscript/catalog/catalog-v1.json"
@@ -120,6 +122,18 @@ graph Main {
   output = out;
 }
 """
+VALUE_ENTRY = """hocus 0.4;
+graph Main {
+  target "/obj/geo1";
+  category Sop;
+  node align @id("align"): "labs::sop::axis_align::2.0" {
+    size = [2.0, 3.0, 4.0];
+  }
+  output = align;
+}
+"""
+VALUE_EXTERNAL_MODULE = CONTROL_EXTERNAL_MODULE.replace("hocus 0.3;", "hocus 0.4;")
+VALUE_MIXED_ENTRY = CONTROL_MIXED_ENTRY.replace("hocus 0.3;", "hocus 0.4;")
 
 
 def _digest(raw: bytes) -> str:
@@ -244,6 +258,105 @@ def _control_native_project(
     )
 
 
+def _value_native_project(root: Path) -> None:
+    _write_control_base(root, "scenario-value-project")
+    catalog_path = root / "catalog/catalog.json"
+    catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
+    catalog["$schema"] = "hocuspocus://schemas/catalog/v2"
+    catalog["catalogVersion"] = 2
+    for operator in catalog["operators"]:
+        operator["instanceNetwork"] = (
+            operator["source"]["kind"] == "hda"
+            and operator["category"] == "Sop"
+        )
+        for parameter in operator["parameters"]:
+            parameter["valueContract"] = None
+    size = next(
+        parameter
+        for operator in catalog["operators"]
+        for parameter in operator["parameters"]
+        if parameter["token"] == "size"
+    )
+    size["tags"]["elementType"] = "float"
+    unsigned = dict(catalog)
+    unsigned.pop("catalogFingerprint")
+    catalog["catalogFingerprint"] = _digest(json.dumps(
+        unsigned, ensure_ascii=False, separators=(",", ":"), sort_keys=True,
+    ).encode("utf-8"))
+    catalog_path.write_text(json.dumps(
+        catalog, ensure_ascii=False, separators=(",", ":"), sort_keys=True,
+    ), encoding="utf-8")
+    manifest = root / "hocus.project.toml"
+    manifest.write_text(
+        manifest.read_text(encoding="utf-8")
+        .replace("schema_version = 4", "schema_version = 5")
+        .replace('version = "0.3"', 'version = "0.4"'),
+        encoding="utf-8",
+    )
+    (root / "src/main.hocus").write_text(VALUE_ENTRY, encoding="utf-8")
+    update_project_control_lock(root, ["src/main.hocus"], allow_write=True)
+
+
+def _value_mixed_project(base: Path) -> tuple[Path, Path]:
+    project, library = base / "value-project", base / "value-library"
+    manifest = b"""schema_version = 3
+entry_modules = ["modules/main.hocus"]
+[library]
+uid = "value-library"
+version = "1.0.0"
+[language]
+version = "0.4"
+"""
+    library.mkdir(parents=True)
+    (library / "hocus.module.toml").write_bytes(manifest)
+    (library / "modules").mkdir()
+    (library / "modules/main.hocus").write_text(
+        VALUE_EXTERNAL_MODULE, encoding="utf-8",
+    )
+    external = f"""[external_aliases.terrain]
+library_uid = "value-library"
+version = "1.0.0"
+module_manifest_digest = "{_digest(manifest)}"
+"""
+    _write_control_base(project, "scenario-value-mixed", external)
+    catalog_path = project / "catalog/catalog.json"
+    catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
+    catalog["$schema"] = "hocuspocus://schemas/catalog/v2"
+    catalog["catalogVersion"] = 2
+    for operator in catalog["operators"]:
+        operator["instanceNetwork"] = (
+            operator["source"]["kind"] == "hda"
+            and operator["category"] == "Sop"
+        )
+        for parameter in operator["parameters"]:
+            parameter["valueContract"] = None
+    unsigned = dict(catalog)
+    unsigned.pop("catalogFingerprint")
+    catalog["catalogFingerprint"] = _digest(json.dumps(
+        unsigned, ensure_ascii=False, separators=(",", ":"), sort_keys=True,
+    ).encode("utf-8"))
+    catalog_path.write_text(json.dumps(
+        catalog, ensure_ascii=False, separators=(",", ":"), sort_keys=True,
+    ), encoding="utf-8")
+    project_manifest = project / "hocus.project.toml"
+    project_manifest.write_text(
+        project_manifest.read_text(encoding="utf-8")
+        .replace("schema_version = 4", "schema_version = 5")
+        .replace('version = "0.3"', 'version = "0.4"'),
+        encoding="utf-8",
+    )
+    (project / "src/main.hocus").write_text(VALUE_MIXED_ENTRY, encoding="utf-8")
+    empty = update_project_lock(project, (), allow_write=True)
+    update_project_mixed_control_lock(
+        project,
+        ["src/main.hocus"],
+        {"terrain": library},
+        expected_lock_digest=empty.lock_digest,
+        allow_write=True,
+    )
+    return project, library
+
+
 def _control_mixed_project(
     base: Path,
     *,
@@ -331,6 +444,52 @@ class HocusScriptProjectScenarios(unittest.TestCase):
             self.assertNotIn(
                 str(control),
                 control_check_output + control_bundle_output,
+            )
+
+            value = root / "value"
+            _value_native_project(value)
+            value_checked, value_check_output, value_check_errors = _run(
+                "check", "src/main.hocus", "--project", str(value), "--json",
+            )
+            value_compiled, value_bundle_output, value_bundle_errors = _run(
+                "compile", "src/main.hocus", "--project", str(value),
+            )
+            self.assertEqual(
+                (value_checked, value_compiled),
+                (0, 0),
+                value_check_errors + value_bundle_errors,
+            )
+            self.assertTrue(json.loads(value_check_output)["valid"])
+            value_bundle = json.loads(value_bundle_output)
+            self.assertEqual(value_bundle["bundleVersion"], "0.5")
+            selection = value_bundle["semanticResolution"]["parameterSelections"][0]
+            self.assertEqual(selection["componentTokens"], ["sizex", "sizey", "sizez"])
+            value_context = ProjectContext.load(value, validate_lock=True)
+            self.assertEqual(
+                compile_source_project(
+                    value_context,
+                    Path("src/main.hocus"),
+                    {},
+                    False,
+                    None,
+                ).payload["bundleVersion"],
+                "0.5",
+            )
+
+            value_mixed, value_library = _value_mixed_project(root / "mixed-value")
+            inspection = inspect_control_external_module_roots(
+                value_mixed, {"terrain": value_library},
+            )
+            self.assertEqual(inspection.libraries[0].module_manifest_digest, _digest(
+                (value_library / "hocus.module.toml").read_bytes()
+            ))
+            self.assertEqual(
+                compile_project_mixed_control_program(
+                    value_mixed,
+                    "src/main.hocus",
+                    {"terrain": value_library},
+                ).bundle.payload["bundleVersion"],
+                "0.5",
             )
 
     def test_native_bundle_is_deterministic_after_project_relocation(self) -> None:
@@ -572,6 +731,22 @@ class HocusScriptProjectScenarios(unittest.TestCase):
                     roots,
                 )
             external.write_text(CONTROL_EXTERNAL_MODULE, encoding="utf-8")
+
+            if os.name == "nt":
+                canonical_root = str(control_library)
+                canonical_root = canonical_root[0].upper() + canonical_root[1:]
+                inspected = inspect_control_external_module_roots(
+                    control,
+                    {"terrain": canonical_root},
+                )
+                self.assertEqual(inspected.libraries[0].alias, "terrain")
+                lowercase_drive = canonical_root[0].lower() + canonical_root[1:]
+                with self.assertRaises(ProjectError) as drive_alias:
+                    inspect_control_external_module_roots(
+                        control,
+                        {"terrain": lowercase_drive},
+                    )
+                self.assertEqual(drive_alias.exception.code, "HOCUS458")
 
             hostile = str(control_library) + os.sep + "."
             with self.assertRaises(ProjectError):

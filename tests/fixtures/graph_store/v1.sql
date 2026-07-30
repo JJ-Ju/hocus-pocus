@@ -119,3 +119,5 @@ CREATE TABLE graph_store_migrations (version INTEGER PRIMARY KEY CHECK(version >
 INSERT INTO graph_store_migrations VALUES (1, 'initial_graph_store', '7c5956eeb0a0877ee9761e821f18e09a9770d3ed2c5aa9820f3c232739f3b03a', 1700000000.0);
 PRAGMA user_version=1;
 INSERT INTO documents (document_id, kind, root_path, latest_revision, live_revision, content_hash, payload_json, source, created_at, updated_at) VALUES ('fixture:/geo', 'network', '/obj/geo', 1, 7, 'fixture-hash', '{"documentId":"fixture:/geo","kind":"network"}', 'fixture', 1700000000.0, 1700000000.0);
+INSERT INTO document_versions (document_id, document_revision, live_revision, content_hash, payload_json, source, created_at) VALUES ('fixture:/geo', 1, 7, 'fixture-hash', '{"documentId":"fixture:/geo","kind":"network"}', 'fixture', 1700000000.0);
+INSERT INTO apply_commits (apply_commit_id, document_id, root_path, baseline_document_revision, applied_document_revision, mode, verified, summary_json, created_at) VALUES ('fixture-commit-v1', 'fixture:/geo', '/obj/geo', 0, 1, 'merge', 1, '{"fixture":"v1"}', 1700000000.0);

@@ -14,24 +14,48 @@ from ..context import RequestContext
 from ..document_service import ApplyPlanError
 from ..graph_store import GraphStorePlanError
 
+DESTRUCTIVE_CANDIDATE_ACTIONS = frozenset({
+    "adopt_node", "delete_node", "replace_node", "install_code",
+    "disconnect", "clear_output", "delete_editor_entity", "update_editor_entity",
+    "remove_spare_parameter", "update_spare_parameter",
+    "clear_animation", "update_animation",
+})
+REVERSIBLE_CANDIDATE_ACTIONS = frozenset({
+    "adopt_node", "update_node_provenance", "create_node", "replace_node",
+    "rename_node", "reparent_node", "update_node", "delete_node", "create_port",
+    "delete_port", "set_binding", "remove_binding", "install_code", "remove_code",
+    "connect", "disconnect", "set_output", "clear_output",
+    "create_editor_entity", "update_editor_entity", "delete_editor_entity",
+    "create_spare_parameter", "update_spare_parameter", "remove_spare_parameter",
+    "create_animation", "update_animation", "clear_animation",
+})
+
 
 class HocusScriptApplyOperationsMixin:
     def _hocus_quarantine_map(self) -> dict[str, dict[str, Any]]:
         value = getattr(self, "_hocus_apply_quarantines", None)
         if not isinstance(value, dict):
-            value = {}
-            self._hocus_apply_quarantines = value
+            hydrated: dict[str, dict[str, Any]] = {}
             if hasattr(self._graph_store, "recoverable_plan_commits"):
-                for commit in self._graph_store.recoverable_plan_commits():
-                    plan = self._graph_store.load_immutable_plan(commit["plan_id"])
+                commits = self._hocus_store_call(
+                    self._graph_store.recoverable_plan_commits
+                )
+                for commit in commits:
+                    plan = self._hocus_store_call(
+                        lambda commit=commit: self._graph_store.load_immutable_plan(
+                            commit["plan_id"]
+                        )
+                    )
                     payload = plan.get("payload") if isinstance(plan, dict) else None
                     if isinstance(payload, dict):
-                        value[str(payload.get("rootPath", "/"))] = {
+                        hydrated[str(payload.get("rootPath", "/"))] = {
                             "planId": commit["plan_id"],
                             "applyCommitId": commit["plan_commit_id"],
                             "reason": f"durable {commit['state']} apply requires recovery",
                             "createdAt": commit["created_at"],
                         }
+            value = hydrated
+            self._hocus_apply_quarantines = value
         return value
 
     @staticmethod
@@ -81,18 +105,33 @@ class HocusScriptApplyOperationsMixin:
                     "HOCUS731", "Submitted plan hash does not authenticate the durable replay record."
                 )
             durable_result = durable_replay.get("result") or {}
-            if durable_replay.get("state") == "committed" and durable_result.get("applied"):
-                return {**durable_result, "idempotentReplay": True}
-            if durable_replay.get("state") in {"aborted", "partial_or_unknown"}:
+            durable_state = durable_replay.get("state")
+            if durable_state == "committed":
+                if durable_result.get("applied"):
+                    return {**durable_result, "idempotentReplay": True}
                 self._hocus_fail(
-                    str(durable_result.get("diagnosticCode", "HOCUS755")),
+                    "HOCUS759",
+                    "The durable committed apply result is malformed.",
+                    family="runtime",
+                    retryable=False,
+                )
+            if durable_state in {"aborted", "partial_or_unknown"}:
+                self._hocus_fail(
+                    str(
+                        durable_result.get(
+                            "diagnosticCode",
+                            "HOCUS756" if durable_state == "partial_or_unknown" else "HOCUS755",
+                        )
+                    ),
                     str(durable_result.get("message", "The prior durable apply attempt failed.")),
                     family="runtime", priorResult=durable_result, idempotentReplay=True,
                 )
-            self._hocus_fail(
-                "HOCUS760", "A durable apply with this idempotency key is still pending recovery.",
-                family="conflict", retryable=True,
-            )
+            if durable_state == "pending":
+                self._hocus_fail(
+                    "HOCUS760", "A durable apply with this idempotency key is still pending recovery.",
+                    family="conflict", retryable=True,
+                )
+            self._hocus_fail("HOCUS759", "The durable apply lifecycle state is invalid.")
         if replay and replay.get("state") == "committed":
             result = replay.get("result") or {}
             if result.get("applied"):
@@ -157,7 +196,9 @@ class HocusScriptApplyOperationsMixin:
                 self._hocus_canonical_digest(supplied), plan.get("confirmationTokenDigest", "")
             ):
                 self._hocus_fail("HOCUS751", "A valid confirmation token is required for this plan.", family="policy")
-        catalog = self._document_preview_live_catalog()
+        catalog = self._document_preview_live_catalog(
+            str(plan.get("graphSpecVersion", ""))
+        )
         if catalog.fingerprint != plan.get("catalogFingerprint"):
             self._hocus_fail(
                 "HOCUS752", "The live Houdini catalog changed after planning.",

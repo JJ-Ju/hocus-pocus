@@ -14,6 +14,7 @@ from .catalog import CatalogSnapshot
 from .contracts import (
     CarrierContractError,
     decode_control_resolved_module_set_envelope,
+    decode_value_resolved_module_set_envelope,
 )
 from .control_catalog import validate_control_catalog_program
 from .control_expander import expand_control_graph
@@ -179,7 +180,12 @@ class _MixedControlSession:
             )
             self._claim(target)
             source, identity = self._read(target)
-            syntax = _parse_control_source(source, target.uri, graph=True)
+            syntax = _parse_control_source(
+                source,
+                target.uri,
+                graph=True,
+                language_version=self.context.language_version,
+            )
             imports, roots = self._scan_imports(None, target.path, syntax, 0)
             self.entries.append(
                 _ScannedMixedControlEntry(
@@ -201,7 +207,12 @@ class _MixedControlSession:
     ) -> _Target:
         target = self._select_target(importer, importer_path, specifier)
         if self.verify_lock:
-            _require_locked_target(target, self.lock_by_uri, self.roots)
+            _require_locked_target(
+                target,
+                self.lock_by_uri,
+                self.roots,
+                self.context.language_version,
+            )
         self.decisions.append((importer, importer_path, specifier, target))
         return target
 
@@ -226,7 +237,12 @@ class _MixedControlSession:
         self._claim(target)
         self.states[target.uri] = "visiting"
         source, identity = self._read(target)
-        syntax = _parse_control_source(source, target.uri, graph=False)
+        syntax = _parse_control_source(
+            source,
+            target.uri,
+            graph=False,
+            language_version=self.context.language_version,
+        )
         imports, dependencies = self._scan_imports(
             target,
             target.path,
@@ -617,7 +633,7 @@ class _MixedControlSession:
                 None,
                 None,
                 None,
-                "0.3",
+                self.context.language_version,
                 target.relative,
                 source_digest,
                 interface_digest,
@@ -632,7 +648,7 @@ class _MixedControlSession:
             root.pin.library_uid,
             root.pin.library_version,
             root.pin.module_manifest_digest,
-            "0.3",
+            self.context.language_version,
             target.relative,
             source_digest,
             interface_digest,
@@ -647,7 +663,7 @@ class _MixedControlSession:
             if locked != record:
                 raise ProjectError(
                     "HOCUS461",
-                    "Mixed control module differs from its verified v4 lock record.",
+                    "Mixed control module differs from its verified project lock record.",
                     details={"moduleUri": record.module_uri},
                 )
 
@@ -679,7 +695,7 @@ class _MixedControlSession:
                     record.interface_digest,
                     record.transitive_digest,
                     record.dependencies,
-                    "0.3",
+                    self.context.language_version,
                 )
             )
         return tuple(output)
@@ -692,11 +708,12 @@ class _MixedControlSession:
         policy_digest = _digest_json(
             _control_mixed_resolver_policy(self.context, self.roots)
         )
+        version = 3 if self.context.language_version == "0.4" else 2
         payload = {
-            "$schema": "hocuspocus://schemas/resolved-module-set/v2",
+            "$schema": f"hocuspocus://schemas/resolved-module-set/v{version}",
             "kind": "hocus_resolved_module_set",
-            "schemaVersion": 2,
-            "languageVersion": "0.3",
+            "schemaVersion": version,
+            "languageVersion": self.context.language_version,
             "projectUid": self.context.uid,
             "entrySourceUri": entry_uri,
             "projectManifestDigest": self.context.manifest_digest,
@@ -706,11 +723,16 @@ class _MixedControlSession:
             "modules": [item.to_dict() for item in dependencies],
         }
         try:
-            decoded = decode_control_resolved_module_set_envelope(payload)
+            decoder = (
+                decode_value_resolved_module_set_envelope
+                if version == 3
+                else decode_control_resolved_module_set_envelope
+            )
+            decoded = decoder(payload)
         except CarrierContractError as exc:
             raise ModuleResolutionError(
                 "HOCUS493",
-                "Mixed control resolved set failed its strict v2 contract.",
+                f"Mixed control resolved set failed its strict v{version} contract.",
                 details={"validatorCode": exc.code},
             ) from exc
         encoded = _canonical_json(decoded)
@@ -746,7 +768,12 @@ class _MixedControlSession:
                 "Mixed control source changed during the retained authority session.",
             )
         if self.verify_lock and require_locked:
-            _require_locked_target(target, self.lock_by_uri, self.roots)
+            _require_locked_target(
+                target,
+                self.lock_by_uri,
+                self.roots,
+                self.context.language_version,
+            )
 
 
 def resolve_project_mixed_control_program(
@@ -778,16 +805,17 @@ def _require_locked_target(
     target: _Target,
     lock_by_uri: Mapping[str, ModuleLockRecord],
     roots: _ValidatedExternalModuleRoots,
+    language_version: str,
 ) -> ModuleLockRecord:
     locked = lock_by_uri.get(target.uri)
     if (
         locked is None
         or locked.source_path != target.relative
-        or locked.language_version != "0.3"
+        or locked.language_version != language_version
     ):
         raise ProjectError(
             "HOCUS462",
-            "Mixed control target is absent from the verified v4 lock.",
+            "Mixed control target is absent from the verified project lock.",
         )
     if target.owner_kind == "project":
         _require_locked_project_target(target, locked)
@@ -851,14 +879,14 @@ def _require_mixed_control_project(context: ProjectContext) -> None:
         context.catalog,
     )
     if (
-        context.manifest_version != 4
-        or context.language_version != "0.3"
+        (context.manifest_version, context.language_version)
+        not in {(4, "0.3"), (5, "0.4")}
         or any(value is None for value in required)
         or not context.external_aliases
     ):
         raise ProjectError(
             "HOCUS452",
-            "Mixed control resolution requires a fully pinned v4 project with aliases.",
+            "Mixed control resolution requires a fully pinned v4/v5 project with aliases.",
         )
 
 

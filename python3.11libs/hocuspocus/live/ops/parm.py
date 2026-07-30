@@ -146,6 +146,19 @@ class ParmOperationsMixin:
             parm.revertToDefaults()
         return self._parm_summary(parm)
 
+    def _parm_revert_to_permanent_default_impl(
+        self,
+        arguments: dict[str, Any],
+    ) -> dict[str, Any]:
+        hou_module = self._require_hou()
+        parm_path = str(arguments.get("parm_path", "")).strip()
+        parm = self._require_parm_by_path(parm_path)
+        with hou_module.undos.group(
+            f"HocusPocus: restore permanent default {parm_path}"
+        ):
+            parm.revertToAndRestorePermanentDefaults()
+        return self._parm_summary(parm)
+
     def parm_revert_to_default(
         self,
         arguments: dict[str, Any],

@@ -25,6 +25,7 @@ from .lock_update_result import ModuleLockUpdateEntry, ModuleLockUpdateResult
 from .module_paths import is_literal_import_specifier
 from .project import (
     LOCK_SCHEMA_URI_V4,
+    LOCK_SCHEMA_URI_V5,
     MAX_LOCK_BYTES_V3,
     LockVerificationResult,
     ModuleLockRecord,
@@ -194,7 +195,12 @@ class _ControlLockDerivation:
         self._claim_portable(relative, uri)
         self.states[uri] = "visiting"
         source = self._read(path)
-        syntax = _parse_control_source(source, uri, graph=False)
+        syntax = _parse_control_source(
+            source,
+            uri,
+            graph=False,
+            language_version=self.project.language_version,
+        )
         imports, dependencies = self._scan_imports(path, syntax, depth)
         self.scanned[uri] = _ScannedControlModule(
             uri,
@@ -248,7 +254,12 @@ class _ControlLockDerivation:
             uri = _project_uri(self.project.uid or "", relative)
             self._claim_portable(relative, uri)
             source = self._read(path)
-            syntax = _parse_control_source(source, uri, graph=True)
+            syntax = _parse_control_source(
+                source,
+                uri,
+                graph=True,
+                language_version=self.project.language_version,
+            )
             imports, roots = self._scan_imports(path, syntax, 0)
             self.entries.append(_ScannedControlEntry(
                 uri,
@@ -314,7 +325,7 @@ class _ControlLockDerivation:
                 None,
                 None,
                 None,
-                "0.3",
+                self.project.language_version,
                 item.relative_path,
                 source_digest,
                 interface_digest,
@@ -588,14 +599,18 @@ def _lock_payload(
     catalog_digest: str,
 ) -> tuple[bytes, str]:
     payload = {
-        "$schema": LOCK_SCHEMA_URI_V4,
+        "$schema": (
+            LOCK_SCHEMA_URI_V5
+            if project.manifest_version == 5
+            else LOCK_SCHEMA_URI_V4
+        ),
         "kind": "hocus_project_lock",
-        "schemaVersion": 4,
+        "schemaVersion": project.manifest_version,
         "projectUid": project.uid,
         "manifestDigest": project.manifest_digest,
-        "languageVersion": "0.3",
+        "languageVersion": project.language_version,
         "catalog": {
-            "schemaVersion": 1,
+            "schemaVersion": catalog.catalog_version,
             "path": project.catalog_relative_path,
             "contentDigest": catalog_digest,
             "fingerprint": catalog.fingerprint,
@@ -644,7 +659,7 @@ def _strict_modules(
         [item.to_dict() for item in modules],
         project_uid=project.uid or "",
         external_aliases=(),
-        expected_language_version="0.3",
+        expected_language_version=project.language_version,
     )
     if validated != modules:
         raise ProjectError(
@@ -670,8 +685,8 @@ def _current_verification(
 
 def _require_control_project(project: ProjectContext) -> None:
     if (
-        project.manifest_version != 4
-        or project.language_version != "0.3"
+        (project.manifest_version, project.language_version)
+        not in {(4, "0.3"), (5, "0.4")}
         or project.uid is None
         or project.manifest_digest is None
         or project.lock_path is None
@@ -680,7 +695,7 @@ def _require_control_project(project: ProjectContext) -> None:
     ):
         raise ProjectError(
             "HOCUS452",
-            "Control lock derivation requires a portable schema-v4 language-0.3 project.",
+            "Control lock derivation requires a portable schema-v4/v5 control project.",
         )
     if project.external_aliases:
         raise ProjectError(

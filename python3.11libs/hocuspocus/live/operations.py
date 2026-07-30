@@ -33,10 +33,13 @@ from .ops.parm import ParmOperationsMixin
 from .ops.package_ops import PackageOperationsMixin
 from .ops.pdg_prod_ops import PdgProductionOperationsMixin
 from .ops.pdg_ops import PdgOperationsMixin
+from .ops.production import ProductionOperationsMixin
 from .ops.render_ops import RenderOperationsMixin
 from .ops.resources import ResourceOperationsMixin
 from .ops.scene import SceneOperationsMixin
 from .ops.session import SessionOperationsMixin
+from .ops.source_resources import SourceResourceOperationsMixin
+from .ops.source_workspace import SourceWorkspaceOperationsMixin
 from .ops.tasks_ops import TaskExecutionOperationsMixin
 from .ops.usd_ops import UsdOperationsMixin
 from .ops.usd_stage_ops import UsdStageOperationsMixin
@@ -70,6 +73,9 @@ class LiveOperations(
     ViewportOperationsMixin,
     RenderOperationsMixin,
     HighLevelOperationsMixin,
+    ProductionOperationsMixin,
+    SourceWorkspaceOperationsMixin,
+    SourceResourceOperationsMixin,
     ResourceOperationsMixin,
 ):
     def __init__(
@@ -89,6 +95,13 @@ class LiveOperations(
         self._documents = LiveDocumentService(logger, self._graph_store)
         self._monitor.add_listener(self._graph_store.on_monitor_event)
         self._logger = logger.getChild("live.operations")
+        self._source_workspace_authority = getattr(
+            settings, "source_workspace_authority", None,
+        )
+        self._source_workspace_factory = getattr(
+            settings, "source_workspace_factory", None,
+        )
+        self._source_workspace_service = None
 
     def register(self, tools: ToolRegistry, resources: ResourceRegistry) -> None:
         tool_specs = [
@@ -152,13 +165,13 @@ class LiveOperations(
             ("document.discard_checkout", "Discard Document Checkout", "Delete a working copy that is no longer needed.", {"type": "object", "properties": {"checkout_id": {"type": "string"}}, "required": ["checkout_id"]}, {"destructiveHint": True}, self.document_discard_checkout),
             ("document.query", "Query Documents", "Query the current document-backed graph surface without materializing a full network document.", {"type": "object", "properties": {"root_path": {"type": "string"}, "path_prefix": {"type": "string"}, "node_type_name": {"type": "string"}, "category": {"type": "string"}, "name_contains": {"type": "string"}, "material_path": {"type": "string"}, "flag_name": {"type": "string"}, "flag_value": {"type": "boolean"}, "limit": {"type": "integer", "default": 200}}}, {"readOnlyHint": True, "idempotentHint": True}, self.document_query),
             ("document.sync_from_houdini", "Sync Documents From Houdini", "Force a document refresh from the live Houdini scene for a network root or for the whole scene manifest.", {"type": "object", "properties": {"root_path": {"type": "string"}}}, {"readOnlyHint": True, "idempotentHint": True}, self.document_sync_from_houdini),
-            ("document.compile_source", "Compile HocusScript Source", "Parse, structurally validate, and canonically format HocusScript source without mutating Houdini. The initial implementation returns a span-bearing structural GraphSpec preview only; catalog resolution, network-document lowering, immutable planning, and apply remain disabled until their safety gates are complete.", {"type": "object", "additionalProperties": False, "properties": {"source": {"type": "string", "maxLength": 1048576}, "source_name": {"type": "string", "maxLength": 1024, "default": "<mcp-source>"}, "strict": {"type": "boolean", "default": True}}, "required": ["source"]}, {"readOnlyHint": True, "idempotentHint": True}, self.document_compile_source),
+            ("document.compile_source", "Compile HocusScript Source", "Parse, structurally validate, and canonically format unsaved HocusScript without mutating Houdini. This compatibility endpoint returns a span-bearing structural GraphSpec only. For the live guarded path, compile an ordinary project .hocus file with source.project.build, then pass its exact Bundle to document.preview_bundle and document.plan_bundle before document.apply_plan; apply never rereads this source.", {"type": "object", "additionalProperties": False, "properties": {"source": {"type": "string", "maxLength": 1048576}, "source_name": {"type": "string", "maxLength": 1024, "default": "<mcp-source>"}, "strict": {"type": "boolean", "default": True}}, "required": ["source"]}, {"readOnlyHint": True, "idempotentHint": True}, self.document_compile_source),
             ("document.format_source", "Format HocusScript Source", "Validate and canonically format unsaved HocusScript text without reading or writing project files. Invalid source returns exact diagnostics and no formatted text.", {"type": "object", "additionalProperties": False, "properties": {"source": {"type": "string", "maxLength": 1048576}, "source_name": {"type": "string", "maxLength": 1024, "default": "<mcp-source>"}, "strict": {"type": "boolean", "default": True}}, "required": ["source"]}, {"readOnlyHint": True, "idempotentHint": True}, self.document_format_source),
             ("document.complete_source", "Complete HocusScript Source", "Return bounded, deterministic completions for an unsaved HocusScript buffer using the current live Houdini operator catalog. Offsets are Python/Unicode character offsets.", {"type": "object", "additionalProperties": False, "properties": {"source": {"type": "string", "maxLength": 1048576}, "offset": {"type": "integer", "minimum": 0}, "source_name": {"type": "string", "maxLength": 1024, "default": "<mcp-source>"}, "limit": {"type": "integer", "minimum": 1, "maximum": 200, "default": 100}}, "required": ["source", "offset"]}, {"readOnlyHint": True, "idempotentHint": True}, self.document_complete_source),
-            ("document.export_source", "Export Network as HocusScript", "Export a supported live SOP network as canonical HocusScript text plus durable identity, ownership, managed-field, catalog, revision, and digest provenance. This observational tool never accepts a project directory or writes a DSL file.", {"type": "object", "additionalProperties": False, "properties": {"root_path": {"type": "string"}, "graph_name": {"type": "string", "maxLength": 256}}, "required": ["root_path"]}, {"readOnlyHint": True, "idempotentHint": True}, self.document_export_source),
-            ("document.preview_bundle", "Preview HocusScript Bundle", "Strictly decode a portable resolved HocusScript bundle, verify its catalog pin against live Houdini, lower it over the current network-document baseline, and return a deterministic diff plus preview-only candidate plan without mutating Houdini or reading DSL project files.", {"type": "object", "additionalProperties": False, "properties": {"bundle": {"type": "object"}}, "required": ["bundle"]}, {"readOnlyHint": True, "idempotentHint": True}, self.document_preview_bundle),
-            ("document.plan_bundle", "Plan HocusScript Bundle", "Validate a portable bundle against live Houdini and persist a versioned immutable apply plan bound to the current session, policy, catalog, ownership, revisions, and exact target network.", {"type": "object", "additionalProperties": False, "properties": {"bundle": {"type": "object"}, "ttlSeconds": {"type": "integer", "minimum": 30, "maximum": 1800, "default": 900}}, "required": ["bundle"]}, {"readOnlyHint": True}, self.document_plan_bundle),
-            ("document.apply_plan", "Apply HocusScript Plan", "Apply only a previously stored immutable HocusScript plan after all session, policy, catalog, revision, ownership, confirmation, lease, idempotency, and cancellation gates pass.", {"type": "object", "additionalProperties": False, "properties": {"planId": {"type": "string"}, "planHash": {"type": "string"}, "expectedDocumentRevision": {"type": "integer", "minimum": 0}, "expectedLiveRevision": {"type": "integer", "minimum": 0}, "confirmationToken": {"type": "string"}, "idempotencyKey": {"type": "string", "minLength": 8, "maxLength": 256}}, "required": ["planId", "planHash", "expectedDocumentRevision", "expectedLiveRevision", "idempotencyKey"]}, {"destructiveHint": True, "idempotentHint": True}, self.document_apply_plan),
+            ("document.export_source", "Export Network as HocusScript", "Export one supported flat direct-child live SOP, fixed-port material/VOP, LOP, or TOP network as canonical HocusScript plus durable provenance. Emitted source is structurally recompiled and passes exact-catalog semantic and connector validation, but this observational operation neither proves network reconstruction nor publishes a DSL file. Network-document v2 emits language 0.4; unsupported families, locked HDA contents, direct USD state, and dynamic or incomplete connector evidence fail closed with bounded blockers.", {"type": "object", "additionalProperties": False, "properties": {"root_path": {"type": "string"}, "graph_name": {"type": "string", "maxLength": 256}}, "required": ["root_path"]}, {"readOnlyHint": True, "idempotentHint": True}, self.document_export_source),
+            ("document.preview_bundle", "Preview HocusScript Bundle", "Strictly decode an exact flat Bundle 0.2, frozen module Bundle 0.3, control Bundle 0.4, or value Bundle 0.5, freshly revalidate its authenticated carrier semantics and provenance pins, including catalog/HDA selections, against live Houdini, lower it over the current network-document baseline, and return the candidate document, deterministic diff, destructive summary, and preview-only plan without mutating Houdini or reading DSL project files.", {"type": "object", "additionalProperties": False, "properties": {"bundle": {"type": "object", "properties": {"bundleVersion": {"type": "string", "enum": ["0.2", "0.3", "0.4", "0.5"]}}, "required": ["bundleVersion"]}}, "required": ["bundle"]}, {"readOnlyHint": True, "idempotentHint": True}, self.document_preview_bundle),
+            ("document.plan_bundle", "Plan HocusScript Bundle", "Rerun the exact-version live validation of an authenticated flat Bundle 0.2, module Bundle 0.3, control Bundle 0.4, or value Bundle 0.5, including carrier semantics and provenance pins, then persist a versioned immutable apply plan bound to the current session, policy, catalog, capabilities, ownership, revisions, and exact target network.", {"type": "object", "additionalProperties": False, "properties": {"bundle": {"type": "object", "properties": {"bundleVersion": {"type": "string", "enum": ["0.2", "0.3", "0.4", "0.5"]}}, "required": ["bundleVersion"]}, "ttlSeconds": {"type": "integer", "minimum": 30, "maximum": 1800, "default": 900}}, "required": ["bundle"]}, {"readOnlyHint": True}, self.document_plan_bundle),
+            ("document.apply_plan", "Apply HocusScript Plan", "Validate immutable plan identity plus live session, policy, catalog, capability, revision, ownership, target, confirmation, lease, idempotency, and cancellation drift gates, then apply only the stored plan without rereading or recompiling HocusScript source.", {"type": "object", "additionalProperties": False, "properties": {"planId": {"type": "string"}, "planHash": {"type": "string"}, "expectedDocumentRevision": {"type": "integer", "minimum": 0}, "expectedLiveRevision": {"type": "integer", "minimum": 0}, "confirmationToken": {"type": "string"}, "idempotencyKey": {"type": "string", "minLength": 8, "maxLength": 256}}, "required": ["planId", "planHash", "expectedDocumentRevision", "expectedLiveRevision", "idempotencyKey"]}, {"destructiveHint": True, "idempotentHint": True}, self.document_apply_plan),
             ("document.discard_plan", "Discard HocusScript Plan", "Revoke an immutable HocusScript apply plan by exact plan ID and hash without mutating Houdini.", {"type": "object", "additionalProperties": False, "properties": {"planId": {"type": "string"}, "planHash": {"type": "string"}}, "required": ["planId", "planHash"]}, {"readOnlyHint": True, "idempotentHint": True}, self.document_discard_plan),
             ("document.apply_quarantines", "List Apply Quarantines", "List network scopes blocked after an apply whose rollback could not be verified.", {"type": "object", "additionalProperties": False, "properties": {}}, {"readOnlyHint": True, "idempotentHint": True}, self.document_apply_quarantines),
             ("document.recover_scope", "Recover Apply Scope", "Force-reimport and validate a quarantined network scope, then release its quarantine only when the canonical document is valid.", {"type": "object", "additionalProperties": False, "properties": {"rootPath": {"type": "string"}}, "required": ["rootPath"]}, {"destructiveHint": True}, self.document_recover_scope),
@@ -228,6 +241,8 @@ class LiveOperations(
                     examples=self._tool_examples(name),
                 )
             )
+        self.register_source_tools(tools)
+        self.register_production_surface(tools, resources)
         for legacy_name in {
             "graph.query",
             "graph.find_upstream",
@@ -266,11 +281,21 @@ class LiveOperations(
             ("houdini://session/conventions", "Session Conventions", "Houdini coordinate-system and snapshot conventions for this server.", self.read_session_conventions),
             ("houdini://session/scene-summary", "Scene Summary", "Current scene summary.", self.read_scene_summary),
             ("houdini://documents/scene", "Scene Document", "Scene manifest over root document-capable Houdini networks.", self.read_document_scene),
+            ("houdini://documents/hocusscript/fidelity/hs7", "HocusScript HS7 Fidelity Matrix", "Static build policy for supported, preserved-opaque, read-only, and rejected HS7 surfaces.", self.read_hs7_fidelity_matrix),
             ("houdini://documents/schema/network-document/v1", "Network Document Schema v1", "Locked machine-readable schema for the first-wave network document contract.", self.read_document_schema),
+            ("houdini://documents/schema/network-document/v2", "Network Document Schema v2", "Strict typed-value network-document contract for the HocusScript 0.4 lane.", self.read_document_schema_v2),
             ("houdini://documents/schema/graph-spec/v0.2", "GraphSpec Schema v0.2", "Machine-readable schema for the current HocusScript GraphSpec contract.", self.read_graph_spec_schema),
             ("houdini://documents/schema/graph-spec/v0.3", "GraphSpec Schema v0.3", "Reserved module-expansion GraphSpec contract for HocusScript 0.2.", self.read_module_graph_spec_schema),
             ("houdini://documents/schema/expansion-map/v1", "Expansion Map Schema v1", "Interned module-expansion origin and stack contract referenced by GraphSpec v0.3.", self.read_expansion_map_schema),
             ("houdini://documents/schema/resolved-module-set/v1", "Resolved Module Set Schema v1", "Portable resolved-module, resolver-policy, and expansion-limit contract for HocusScript 0.2.", self.read_resolved_module_set_schema),
+            ("houdini://documents/schema/graph-spec/v0.4", "GraphSpec Schema v0.4", "Strict control-language GraphSpec contract in the HocusScript 0.3 compatibility unit.", self.read_control_graph_spec_schema),
+            ("houdini://documents/schema/expansion-map/v2", "Expansion Map Schema v2", "Bounded control-expansion origin and stack contract in the HocusScript 0.3 compatibility unit.", self.read_control_expansion_map_schema),
+            ("houdini://documents/schema/resolved-module-set/v2", "Resolved Module Set Schema v2", "Portable control-module resolution contract in the HocusScript 0.3 compatibility unit.", self.read_control_resolved_module_set_schema),
+            ("houdini://documents/schema/compiled-bundle/v0.4", "Compiled Bundle Schema v0.4", "Portable compiled carrier contract for the HocusScript 0.3 live preview, planning, and guarded-apply lane.", self.read_control_compiled_bundle_schema),
+            ("houdini://documents/schema/graph-spec/v0.5", "GraphSpec Schema v0.5", "Strict value-language GraphSpec contract for HocusScript 0.4.", self.read_value_graph_spec_schema),
+            ("houdini://documents/schema/expansion-map/v3", "Expansion Map Schema v3", "Bounded value-language expansion origin and stack contract for HocusScript 0.4.", self.read_value_expansion_map_schema),
+            ("houdini://documents/schema/resolved-module-set/v3", "Resolved Module Set Schema v3", "Portable value-language module resolution contract for HocusScript 0.4.", self.read_value_resolved_module_set_schema),
+            ("houdini://documents/schema/compiled-bundle/v0.5", "Compiled Bundle Schema v0.5", "Portable HocusScript 0.4 carrier admitted by preview, planning, and guarded apply.", self.read_value_compiled_bundle_schema),
             ("houdini://documents/schema/graph-spec/v0.1", "GraphSpec Schema v0.1", "Legacy machine-readable schema retained for safe bundle decoding.", self.read_legacy_graph_spec_schema),
             ("houdini://documents/schema/format-source-output/v1", "Format Source Output Schema v1", "Machine-readable output schema for document.format_source.", self.read_format_source_output_schema),
             ("houdini://documents/schema/complete-source-output/v1", "Complete Source Output Schema v1", "Machine-readable output schema for document.complete_source.", self.read_complete_source_output_schema),
@@ -422,7 +447,7 @@ class LiveOperations(
                 "Verification compares the refreshed live document against the requested target document and reports residual differences in-band.",
             ],
             "document.preview_bundle": [
-                "The bundle must pass the strict compiled-bundle v0.2 decoder and carry portable project provenance.",
+                "The bundle must pass its exact flat Bundle 0.2, module Bundle 0.3, control Bundle 0.4, or value Bundle 0.5 decoder and carry portable project provenance; versions are never coerced.",
                 "Catalog, document-revision, ownership, collision, or schema drift blocks the candidate plan without mutating Houdini.",
                 "Large preview payloads are returned through a content-addressed resource URI instead of being duplicated inline.",
             ],
@@ -622,7 +647,13 @@ class LiveOperations(
             "document.preview_bundle": [
                 {
                     "description": "Preview an offline-compiled, content-addressed HocusScript bundle against the current live network baseline.",
-                    "arguments": {"bundle": {"kind": "hocus_compiled_bundle", "bundleVersion": "0.2", "bundleDigest": "sha256:..."}},
+                    "arguments": {"bundle": {"kind": "hocus_compiled_bundle", "bundleVersion": "0.4", "bundleDigest": "sha256:..."}},
+                }
+            ],
+            "document.plan_bundle": [
+                {
+                    "description": "Persist a guarded immutable plan from one exact authenticated bundle after fresh live semantic resolution.",
+                    "arguments": {"bundle": {"kind": "hocus_compiled_bundle", "bundleVersion": "0.3", "bundleDigest": "sha256:..."}, "ttlSeconds": 900},
                 }
             ],
             "cook.node": [
@@ -823,12 +854,24 @@ class LiveOperations(
             "houdini://session/conventions": "Coordinate-system and snapshot behavior notes for agent planning.",
             "houdini://session/scene-summary": "Compact scene summary with hip state, frame, and selection.",
             "houdini://documents/scene": "Scene manifest over root network documents plus hip and graph metadata.",
+            "houdini://documents/hocusscript/fidelity/hs7": "Static path-free HS7 support policy for this server build; no source-workspace grant is required.",
             "houdini://documents/schema/network-document/v1": "Locked machine-readable schema for the first-wave network document contract.",
+            "houdini://documents/schema/network-document/v2": "Strict typed-value network-document contract for HocusScript 0.4.",
+            "houdini://documents/schema/graph-spec/v0.4": "Strict GraphSpec 0.4 contract for HocusScript 0.3 control-language output.",
+            "houdini://documents/schema/expansion-map/v2": "Bounded expansion-map v2 contract paired with GraphSpec 0.4.",
+            "houdini://documents/schema/resolved-module-set/v2": "Portable resolved-module-set v2 contract paired with GraphSpec 0.4.",
+            "houdini://documents/schema/compiled-bundle/v0.4": "Offline compiled-bundle v0.4 contract for the exact HocusScript 0.3 carrier unit.",
+            "houdini://documents/schema/graph-spec/v0.5": "Strict GraphSpec 0.5 contract for HocusScript 0.4 value-language output.",
+            "houdini://documents/schema/expansion-map/v3": "Bounded expansion-map v3 contract paired with GraphSpec 0.5.",
+            "houdini://documents/schema/resolved-module-set/v3": "Portable resolved-module-set v3 contract paired with GraphSpec 0.5.",
+            "houdini://documents/schema/compiled-bundle/v0.5": "Offline compiled-bundle v0.5 contract for the exact HocusScript 0.4 carrier unit.",
             "houdini://documents/schema/format-source-output/v1": "Strict versioned output contract for canonical formatting and exact diagnostics.",
             "houdini://documents/schema/complete-source-output/v1": "Strict versioned output contract for bounded catalog-backed completion.",
             "houdini://documents/schema/export-source-output/v1": "Strict fail-closed source export and durable provenance contract.",
             "houdini://documents/schema/preview-bundle-input/v1": "Strict MCP input contract for document.preview_bundle.",
             "houdini://documents/schema/preview-bundle-output/v1": "Structured preview result contract including catalog resolution, diagnostics, and artifact references.",
+            "houdini://documents/schema/plan-bundle-input/v1": "Strict exact-version input contract for document.plan_bundle.",
+            "houdini://documents/schema/apply-plan/v1": "Immutable HocusScript plan contract, including guarded new-lane carrier pins.",
             "houdini://graph/scene": "Whole-scene graph snapshot with indexed nodes, parms, edges, and material assignments.",
             "houdini://graph/index": "Graph-cache metadata including revision, counts, and refresh timing.",
             "houdini://dependencies/scene": "Whole-scene dependency scan across file-reference parms with missing-file and policy flags.",
@@ -859,14 +902,50 @@ class LiveOperations(
             "houdini://documents/scene": [
                 {"description": "Read the scene manifest that links to document-capable root networks."}
             ],
+            "houdini://documents/hocusscript/fidelity/hs7": [
+                {"description": "Inspect exact HS7 support and rejection boundaries before authoring or applying a graph."}
+            ],
             "houdini://documents/schema/network-document/v1": [
                 {"description": "Read the locked network-document JSON schema used by the document resources and tools."}
+            ],
+            "houdini://documents/schema/network-document/v2": [
+                {"description": "Read the strict typed-value network-document schema used by HocusScript 0.4 preview and apply."}
+            ],
+            "houdini://documents/schema/graph-spec/v0.4": [
+                {"description": "Inspect the strict HocusScript 0.3 graph carrier before consuming offline control output."}
+            ],
+            "houdini://documents/schema/expansion-map/v2": [
+                {"description": "Inspect the exact bounded origin and expansion-stack contract paired with GraphSpec 0.4."}
+            ],
+            "houdini://documents/schema/resolved-module-set/v2": [
+                {"description": "Inspect the portable control-module resolution carrier paired with GraphSpec 0.4."}
+            ],
+            "houdini://documents/schema/compiled-bundle/v0.4": [
+                {"description": "Inspect the exact HocusScript 0.3 bundle carrier admitted by live preview, planning, and guarded apply."}
+            ],
+            "houdini://documents/schema/graph-spec/v0.5": [
+                {"description": "Inspect the strict HocusScript 0.4 graph carrier before consuming value-language output."}
+            ],
+            "houdini://documents/schema/expansion-map/v3": [
+                {"description": "Inspect bounded value-language origins and expansion stacks paired with GraphSpec 0.5."}
+            ],
+            "houdini://documents/schema/resolved-module-set/v3": [
+                {"description": "Inspect the portable HocusScript 0.4 module-resolution carrier."}
+            ],
+            "houdini://documents/schema/compiled-bundle/v0.5": [
+                {"description": "Inspect the HocusScript 0.4 bundle admitted by live preview, planning, and guarded apply."}
             ],
             "houdini://documents/schema/preview-bundle-input/v1": [
                 {"description": "Inspect the exact input boundary before passing an offline compiled bundle to Houdini."}
             ],
             "houdini://documents/schema/preview-bundle-output/v1": [
                 {"description": "Inspect the preview result and content-addressed artifact-reference contract."}
+            ],
+            "houdini://documents/schema/plan-bundle-input/v1": [
+                {"description": "Inspect the exact admitted Bundle 0.2, 0.3, 0.4, and 0.5 planning boundary."}
+            ],
+            "houdini://documents/schema/apply-plan/v1": [
+                {"description": "Inspect immutable plan identity, revision, capability, policy, carrier, and rollback pins."}
             ],
             "houdini://graph/scene": [
                 {"description": "Load the current indexed scene graph as a single resource snapshot."}

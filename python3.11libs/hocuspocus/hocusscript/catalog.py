@@ -17,6 +17,8 @@ from typing import Any, Mapping, Protocol, Sequence, runtime_checkable
 
 CATALOG_VERSION = 1
 CATALOG_SCHEMA_URI = "hocuspocus://schemas/catalog/v1"
+VALUE_CATALOG_VERSION = 2
+VALUE_CATALOG_SCHEMA_URI = "hocuspocus://schemas/catalog/v2"
 # A complete Houdini 21 catalog with full parameter metadata is currently about
 # 43 MiB. Keep a bounded margin for package/HDA growth without filtering the
 # semantic input and silently weakening its fingerprint.
@@ -25,6 +27,7 @@ MAX_CATALOG_DEPTH = 64
 MAX_CATALOG_VALUES = 5_000_000
 
 _DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
+_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
 _PARM_TYPES = {
     "bool", "int", "float", "string", "tuple", "menu", "code", "button",
     "node_path", "parm_path", "file_path", "usd_prim_path", "asset_reference",
@@ -160,7 +163,7 @@ class HoudiniBuild:
     platform: str
     feature_flags: tuple[str, ...] = ()
 
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self, *, catalog_version: int = CATALOG_VERSION) -> dict[str, Any]:
         return {"product": self.product, "version": self.version, "build": self.build,
                 "platform": self.platform, "featureFlags": sorted(self.feature_flags)}
 
@@ -236,13 +239,17 @@ class ParameterDefinition:
     tags: Mapping[str, str] = field(default_factory=dict)
     code_surface: str = "none"
     assignable: bool = True
+    value_contract: Mapping[str, Any] | None = None
 
-    def to_dict(self) -> dict[str, Any]:
-        return {"token": self.token, "label": self.label, "type": self.value_type,
+    def to_dict(self, *, catalog_version: int = CATALOG_VERSION) -> dict[str, Any]:
+        payload = {"token": self.token, "label": self.label, "type": self.value_type,
                 "tupleSize": self.tuple_size, "tupleNames": list(self.tuple_names),
                 "default": _thaw(self.default), "range": self.range.to_dict() if self.range else None,
                 "menu": [item.to_dict() for item in self.menu], "tags": dict(sorted(self.tags.items())),
                 "codeSurface": self.code_surface, "assignable": self.assignable}
+        if catalog_version == VALUE_CATALOG_VERSION:
+            payload["valueContract"] = _thaw(self.value_contract)
+        return payload
 
 
 @dataclass(frozen=True, slots=True)
@@ -276,16 +283,23 @@ class OperatorDefinition:
     locked: bool = False
     editable: bool = True
     network_families: tuple[str, ...] = ()
+    instance_network: bool | None = None
 
-    def to_dict(self) -> dict[str, Any]:
-        return {"qualifiedName": self.qualified_name, "name": self.name, "namespace": self.namespace,
+    def to_dict(self, *, catalog_version: int = CATALOG_VERSION) -> dict[str, Any]:
+        payload = {"qualifiedName": self.qualified_name, "name": self.name, "namespace": self.namespace,
                 "version": self.version, "category": self.category, "aliases": sorted(self.aliases),
                 "source": self.source.to_dict(),
-                "parameters": [item.to_dict() for item in sorted(self.parameters, key=lambda item: item.token)],
+                "parameters": [
+                    item.to_dict(catalog_version=catalog_version)
+                    for item in sorted(self.parameters, key=lambda item: item.token)
+                ],
                 "inputs": [item.to_dict() for item in sorted(self.inputs, key=_connector_key)],
                 "outputs": [item.to_dict() for item in sorted(self.outputs, key=_connector_key)],
                 "spareParameterPolicy": self.spare_parameter_policy, "locked": self.locked,
                 "editable": self.editable, "networkFamilies": sorted(self.network_families)}
+        if catalog_version == VALUE_CATALOG_VERSION:
+            payload["instanceNetwork"] = self.instance_network
+        return payload
 
 
 @dataclass(frozen=True, slots=True)
@@ -308,13 +322,19 @@ class CatalogSnapshot:
     categories: tuple[CategoryDefinition, ...]
     operators: tuple[OperatorDefinition, ...]
     packages: tuple[PackageDefinition, ...] = ()
+    catalog_version: int = CATALOG_VERSION
 
     def unsigned_dict(self) -> dict[str, Any]:
-        return {"$schema": CATALOG_SCHEMA_URI, "kind": "hocus_catalog", "catalogVersion": CATALOG_VERSION,
+        schema_uri = (
+            VALUE_CATALOG_SCHEMA_URI
+            if self.catalog_version == VALUE_CATALOG_VERSION
+            else CATALOG_SCHEMA_URI
+        )
+        return {"$schema": schema_uri, "kind": "hocus_catalog", "catalogVersion": self.catalog_version,
                 "houdini": self.houdini.to_dict(),
                 "categories": [item.to_dict() for item in sorted(self.categories, key=lambda item: item.name)],
                 "operators": [
-                    item.to_dict()
+                    item.to_dict(catalog_version=self.catalog_version)
                     for item in sorted(self.operators, key=lambda item: (item.category, item.qualified_name))
                 ],
                 "packages": [item.to_dict() for item in sorted(self.packages, key=lambda item: item.identifier)]}
@@ -365,10 +385,11 @@ class FakeCatalogProvider:
         packages: Sequence[PackageDefinition] = (), product: str = "Houdini",
         version: str = "test", build: str = "test", platform: str = "test",
         feature_flags: Sequence[str] = (),
+        catalog_version: int = CATALOG_VERSION,
     ) -> "FakeCatalogProvider":
         catalog = CatalogSnapshot(
             HoudiniBuild(product, version, build, platform, tuple(feature_flags)),
-            tuple(categories), tuple(operators), tuple(packages),
+            tuple(categories), tuple(operators), tuple(packages), catalog_version,
         )
         # Round-trip through strict validation so invalid fakes cannot bypass the boundary.
         return cls(decode_catalog_snapshot(catalog.to_dict()))
@@ -383,16 +404,18 @@ def canonical_catalog_json(payload: Mapping[str, Any]) -> str:
 
 
 def decode_catalog_snapshot(content: str | bytes | bytearray | Mapping[str, Any]) -> CatalogSnapshot:
-    """Strictly decode and authenticate an untrusted v1 catalog snapshot."""
+    """Strictly decode and authenticate an untrusted v1/v2 catalog snapshot."""
     payload = _load_catalog_payload(content)
     _enforce_limits(payload)
     root = _catalog_root(payload)
     fingerprint = _catalog_fingerprint(root)
+    version = root["catalogVersion"]
     snapshot = CatalogSnapshot(
         _decode_houdini(root["houdini"], "$.houdini"),
         _decode_categories(root["categories"], "$.categories"),
-        _decode_operators(root["operators"], "$.operators"),
+        _decode_operators(root["operators"], "$.operators", version),
         _decode_packages(root["packages"], "$.packages"),
+        version,
     )
     _validate_relations(snapshot)
     if not hmac.compare_digest(fingerprint, snapshot.fingerprint):
@@ -448,10 +471,15 @@ def _catalog_root(payload: Any) -> dict[str, Any]:
     root = _object(payload, "$", {
         "$schema", "kind", "catalogVersion", "catalogFingerprint", "houdini", "categories", "operators", "packages"
     }, {"$schema", "kind", "catalogVersion", "catalogFingerprint", "houdini", "categories", "operators", "packages"})
-    if (root["$schema"] != CATALOG_SCHEMA_URI or root["kind"] != "hocus_catalog"
+    version = root["catalogVersion"]
+    expected_schema = {
+        CATALOG_VERSION: CATALOG_SCHEMA_URI,
+        VALUE_CATALOG_VERSION: VALUE_CATALOG_SCHEMA_URI,
+    }.get(version)
+    if (root["$schema"] != expected_schema or root["kind"] != "hocus_catalog"
             or isinstance(root["catalogVersion"], bool)
             or not isinstance(root["catalogVersion"], int)
-            or root["catalogVersion"] != CATALOG_VERSION):
+            or version not in {CATALOG_VERSION, VALUE_CATALOG_VERSION}):
         _fail("catalog.version", "Unsupported catalog schema, kind, or version.")
     return root
 
@@ -540,10 +568,14 @@ def _decode_tags(value: Any, path: str) -> Mapping[str, str]:
     return MappingProxyType({_string(key, path): _string(item, f"{path}.{key}") for key, item in value.items()})  # type: ignore[misc]
 
 
-def _decode_operators(value: Any, path: str) -> tuple[OperatorDefinition, ...]:
+def _decode_operators(
+    value: Any, path: str, catalog_version: int,
+) -> tuple[OperatorDefinition, ...]:
     result = []
     keys = {"qualifiedName", "name", "namespace", "version", "category", "aliases", "source", "parameters",
             "inputs", "outputs", "spareParameterPolicy", "locked", "editable", "networkFamilies"}
+    if catalog_version == VALUE_CATALOG_VERSION:
+        keys.add("instanceNetwork")
     for index, raw in enumerate(_array(value, path, 100000)):
         current = f"{path}[{index}]"
         item = _object(raw, current, keys, keys)
@@ -553,12 +585,18 @@ def _decode_operators(value: Any, path: str) -> tuple[OperatorDefinition, ...]:
             _string(item["version"], current + ".version", nullable=True),
             _string(item["category"], current + ".category"), _strings(item["aliases"], current + ".aliases"),
             _decode_source(item["source"], current + ".source"),
-            _decode_parameters(item["parameters"], current + ".parameters"),
+            _decode_parameters(
+                item["parameters"], current + ".parameters", catalog_version
+            ),
             _decode_connectors(item["inputs"], current + ".inputs"),
             _decode_connectors(item["outputs"], current + ".outputs"),
             _enum(item["spareParameterPolicy"], _SPARE_POLICIES, current + ".spareParameterPolicy"),
             _boolean(item["locked"], current + ".locked"), _boolean(item["editable"], current + ".editable"),
             _strings(item["networkFamilies"], current + ".networkFamilies"),
+            (
+                _boolean(item["instanceNetwork"], current + ".instanceNetwork")
+                if catalog_version == VALUE_CATALOG_VERSION else None
+            ),
         ))
     return tuple(result)  # type: ignore[arg-type]
 
@@ -580,10 +618,14 @@ def _decode_source(value: Any, path: str) -> DefinitionSource:
                             _string(item["packageId"], path + ".packageId", nullable=True), hda)
 
 
-def _decode_parameters(value: Any, path: str) -> tuple[ParameterDefinition, ...]:
+def _decode_parameters(
+    value: Any, path: str, catalog_version: int,
+) -> tuple[ParameterDefinition, ...]:
     result = []
     keys = {"token", "label", "type", "tupleSize", "tupleNames", "default", "range", "menu", "tags",
             "codeSurface", "assignable"}
+    if catalog_version == VALUE_CATALOG_VERSION:
+        keys.add("valueContract")
     for index, raw in enumerate(_array(value, path, 100000)):
         current = f"{path}[{index}]"
         item = _object(raw, current, keys, keys)
@@ -599,8 +641,164 @@ def _decode_parameters(value: Any, path: str) -> tuple[ParameterDefinition, ...]
             _decode_tags(item["tags"], current + ".tags"),
             _enum(item["codeSurface"], _CODE_SURFACES, current + ".codeSurface"),
             _boolean(item["assignable"], current + ".assignable"),
+            (
+                _decode_value_contract(
+                    item["valueContract"], current + ".valueContract"
+                )
+                if catalog_version == VALUE_CATALOG_VERSION else None
+            ),
         ))
     return tuple(result)  # type: ignore[arg-type]
+
+
+def _decode_value_contract(value: Any, path: str) -> Mapping[str, Any] | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        _fail("catalog.type", "valueContract must be an object or null.", path)
+    kind = value.get("kind")
+    if kind == "quantity":
+        result = _decode_quantity_contract(value, path)
+    elif kind == "ramp":
+        result = _decode_ramp_contract(value, path)
+    elif kind == "multiparm":
+        result = _decode_multiparm_contract(value, path)
+    else:
+        _fail("catalog.enum", "valueContract kind is unsupported.", path)
+    return _json_value(result, path)
+
+
+def _decode_quantity_contract(value: dict[str, Any], path: str) -> dict[str, Any]:
+    item = _object(
+        value, path,
+        {"kind", "dimension", "canonicalUnit", "units"},
+        {"kind", "dimension", "canonicalUnit", "units"},
+    )
+    units = []
+    seen: set[str] = set()
+    for index, raw in enumerate(_array(item["units"], path + ".units", 256)):
+        current = f"{path}.units[{index}]"
+        unit = _object(
+            raw, current, {"unit", "scale", "offset"},
+            {"unit", "scale", "offset"},
+        )
+        name = _string(unit["unit"], current + ".unit", maximum=128)
+        if name in seen:
+            _fail("catalog.duplicate", "Quantity units must be unique.", current)
+        seen.add(name)
+        scale = _number(unit["scale"], current + ".scale")
+        if scale == 0:
+            _fail("catalog.range", "Quantity unit scale cannot be zero.", current)
+        units.append({
+            "unit": name,
+            "scale": scale,
+            "offset": _number(unit["offset"], current + ".offset"),
+        })
+    canonical = _string(
+        item["canonicalUnit"], path + ".canonicalUnit", maximum=128
+    )
+    if canonical not in seen:
+        _fail(
+            "catalog.reference",
+            "canonicalUnit must appear in the quantity unit table.",
+            path,
+        )
+    return {
+        "kind": "quantity",
+        "dimension": _string(item["dimension"], path + ".dimension"),
+        "canonicalUnit": canonical,
+        "units": units,
+    }
+
+
+def _decode_ramp_contract(value: dict[str, Any], path: str) -> dict[str, Any]:
+    item = _object(
+        value, path, {"kind", "rampKind", "allowedBases"},
+        {"kind", "rampKind", "allowedBases"},
+    )
+    bases = _strings(item["allowedBases"], path + ".allowedBases")
+    allowed = {
+        "constant", "linear", "catmullrom", "monotonecubic", "bezier",
+        "bspline", "hermite",
+    }
+    if not bases or any(basis not in allowed for basis in bases):
+        _fail("catalog.enum", "Ramp basis contract is invalid.", path)
+    return {
+        "kind": "ramp",
+        "rampKind": _enum(item["rampKind"], {"float", "color"}, path + ".rampKind"),
+        "allowedBases": list(bases),
+    }
+
+
+def _decode_multiparm_contract(value: dict[str, Any], path: str) -> dict[str, Any]:
+    item = _object(
+        value, path,
+        {"kind", "instanceStart", "minInstances", "maxInstances", "fields"},
+        {"kind", "instanceStart", "minInstances", "maxInstances", "fields"},
+    )
+    instance_start = _integer(
+        item["instanceStart"], path + ".instanceStart", maximum=4096
+    )
+    minimum = _integer(
+        item["minInstances"], path + ".minInstances", maximum=4096
+    )
+    maximum = _integer(
+        item["maxInstances"], path + ".maxInstances", maximum=4096
+    )
+    if minimum > maximum:
+        _fail("catalog.range", "Multiparm instance bounds are inverted.", path)
+    fields = []
+    names: set[str] = set()
+    templates: set[str] = set()
+    for index, raw in enumerate(_array(item["fields"], path + ".fields", 256)):
+        current = f"{path}.fields[{index}]"
+        field_value = _object(
+            raw, current,
+            {"name", "tokenTemplate", "valueType", "tupleSize", "elementType"},
+            {"name", "tokenTemplate", "valueType", "tupleSize", "elementType"},
+        )
+        name = _string(field_value["name"], current + ".name")
+        template = _string(
+            field_value["tokenTemplate"], current + ".tokenTemplate"
+        )
+        if (
+            _IDENTIFIER.fullmatch(name) is None
+            or template.count("#") != 1
+            or name in names
+            or template in templates
+        ):
+            _fail(
+                "catalog.duplicate",
+                "Multiparm field identities/templates are invalid.",
+                current,
+            )
+        names.add(name)
+        templates.add(template)
+        fields.append({
+            "name": name,
+            "tokenTemplate": template,
+            "valueType": _enum(
+                field_value["valueType"],
+                _PARM_TYPES - {"button", "ramp", "multiparm"},
+                current + ".valueType",
+            ),
+            "tupleSize": _integer(
+                field_value["tupleSize"], current + ".tupleSize",
+                minimum=1, maximum=1024,
+            ),
+            "elementType": _string(
+                field_value["elementType"],
+                current + ".elementType",
+                nullable=True,
+            ),
+        })
+    return {
+        "kind": "multiparm",
+        "instanceStart": instance_start,
+        "minInstances": minimum,
+        "maxInstances": maximum,
+        "fields": fields,
+    }
 
 
 def _decode_range(value: Any, path: str) -> ParmRange | None:
@@ -665,11 +863,9 @@ def _validate_relations(snapshot: CatalogSnapshot) -> None:
     for index, operator in enumerate(snapshot.operators):
         path = f"$.operators[{index}]"
         _validate_operator_source(operator, categories, packages_by_id, path)
-        tokens = [item.token for item in operator.parameters]
-        if len(set(tokens)) != len(tokens):
-            _fail("catalog.duplicate", "Parameter tokens must be unique.", path + ".parameters")
         for parameter in operator.parameters:
             _validate_parameter_relation(parameter, path + ".parameters")
+            _validate_value_contract_relation(parameter, path + ".parameters")
         for connector in (*operator.inputs, *operator.outputs):
             unknown_categories = set(connector.categories) - categories
             if unknown_categories:
@@ -720,6 +916,31 @@ def _validate_parameter_relation(parameter: ParameterDefinition, path: str) -> N
         _fail("catalog.code_surface", "Only code parameters may declare a code surface.", path)
     if value_type == "code" and parameter.code_surface == "none":
         _fail("catalog.code_surface", "Code parameters require a declared code surface.", path)
+
+
+def _validate_value_contract_relation(
+    parameter: ParameterDefinition, path: str,
+) -> None:
+    contract = parameter.value_contract
+    if contract is None:
+        return
+    kind = contract["kind"]
+    if kind == "quantity" and parameter.value_type not in {"int", "float", "tuple"}:
+        _fail(
+            "catalog.value_contract",
+            "Quantity contracts require numeric parameters.",
+            path,
+        )
+    if kind == "ramp" and parameter.value_type != "ramp":
+        _fail(
+            "catalog.value_contract", "Ramp contracts require ramp parameters.", path
+        )
+    if kind == "multiparm" and parameter.value_type != "multiparm":
+        _fail(
+            "catalog.value_contract",
+            "Multiparm contracts require multiparm parameters.",
+            path,
+        )
 
 
 def _validate_parameter_menu(parameter: ParameterDefinition, path: str) -> None:

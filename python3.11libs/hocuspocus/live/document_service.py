@@ -436,6 +436,49 @@ class LiveDocumentService:
             record.expires_at = now + self._IDEMPOTENCY_TTL_SECONDS
             return {"state": "committed", "result": copy.deepcopy(record.result)}
 
+    def recover_apply_result(
+        self,
+        idempotency_key: str,
+        *,
+        plan_id: str,
+        plan_hash: str,
+        result: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Reconcile the volatile replay cache to an authoritative durable result."""
+
+        if not isinstance(idempotency_key, str) or not idempotency_key.strip():
+            raise ApplyPlanError("HOCUS735", "Idempotency key must be a non-empty string.")
+        if not isinstance(result, dict):
+            raise ApplyPlanError("HOCUS737", "Recovered apply result must be an object.")
+        now = time.time()
+        with self._lock:
+            self._prune_idempotency_locked(now)
+            record = self._idempotency.get(idempotency_key)
+            if record is not None and (record.plan_id, record.plan_hash) != (plan_id, plan_hash):
+                raise ApplyPlanError(
+                    "HOCUS736", "Idempotency key is bound to a different apply plan."
+                )
+            if record is None:
+                self._prune_idempotency_locked(now, reserve_slot=True)
+                record = IdempotencyRecord(
+                    idempotency_key=idempotency_key,
+                    plan_id=plan_id,
+                    plan_hash=plan_hash,
+                    reservation_id=str(uuid4()),
+                    state="committed",
+                    result=copy.deepcopy(result),
+                    created_at=now,
+                    updated_at=now,
+                    expires_at=now + self._IDEMPOTENCY_TTL_SECONDS,
+                )
+                self._idempotency[idempotency_key] = record
+            else:
+                record.result = copy.deepcopy(result)
+                record.state = "committed"
+                record.updated_at = now
+                record.expires_at = now + self._IDEMPOTENCY_TTL_SECONDS
+            return {"state": "committed", "result": copy.deepcopy(record.result)}
+
     def abort_apply_result(self, reservation_id: str) -> bool:
         """Release an uncommitted reservation so a later retry may execute."""
         with self._lock:

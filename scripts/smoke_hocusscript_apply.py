@@ -93,7 +93,7 @@ class _ApplySmokeOperations(
     def _document_schema_path(self) -> Path:
         return ROOT / "docs" / "schemas" / "network-document-v1.schema.json"
 
-    def _document_preview_live_catalog(self):
+    def _document_preview_live_catalog(self, _graph_spec_version=None):
         return self._catalog
 
     def _graph_subgraph_payload(self, snapshot, root_path):

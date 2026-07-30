@@ -1,12 +1,9 @@
 from __future__ import annotations
 
 import copy
-import hashlib
-import logging
 import sys
 import tempfile
 import unittest
-from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
 
@@ -15,294 +12,35 @@ sys.path.insert(0, str(ROOT / "python3.11libs"))
 
 from hocuspocus.core.jsonrpc import JsonRpcError
 from hocuspocus.core.mcp_types import ResourceRegistry, ToolRegistry
-from hocuspocus.core.settings import ServerSettings
 from hocuspocus.hocusscript import (
-    CompiledBundle,
     compile_source,
     format_syntax,
     parse_syntax,
-    resolve_graph,
     validate_control_catalog_program,
 )
-from hocuspocus.hocusscript.catalog import (
-    CategoryDefinition,
-    ConnectorDefinition,
-    DefinitionSource,
-    FakeCatalogProvider,
-    OperatorDefinition,
-    ParameterDefinition,
-)
-from hocuspocus.hocusscript.control_expander import expand_control_graph
+from hocuspocus.hocusscript.catalog import CategoryDefinition, FakeCatalogProvider
 from hocuspocus.hocusscript.control_semantic import ControlExpansionLimits, validate_control_program
-from hocuspocus.hocusscript.expander import ModuleExpansionError
-from hocuspocus.live.context import RequestContext
-from hocuspocus.live.document_service import LiveDocumentService
-from hocuspocus.live.graph_store import LiveGraphStore
-from hocuspocus.live.ops.base import OperationBaseMixin
-from hocuspocus.live.ops.document import DocumentOperationsMixin
-from hocuspocus.live.ops.hocusscript import HocusScriptOperationsMixin
+from hocuspocus.hocusscript.expander import ModuleExpansionError, ResolvedModuleUnit
+from hocuspocus.live.context import OperationCancelledError, RequestContext
 from hocuspocus.live.operations import LiveOperations
-
-
-SOURCE_URI = "hocus-project://city/assets/rocks.hocus"
-
-
-def _digest(value: str) -> str:
-    return "sha256:" + hashlib.sha256(value.encode("utf-8")).hexdigest()
-
-
-def _catalog_provider() -> FakeCatalogProvider:
-    geometry_out = ConnectorDefinition(0, "geometry", "Geometry", data_types=("geometry",))
-    points_out = ConnectorDefinition(1, "points", "Points", data_types=("geometry",))
-    geometry_in = ConnectorDefinition(0, "source", "Source", data_types=("geometry",))
-    return FakeCatalogProvider.create(
-        categories=(CategoryDefinition("Sop", "SOP", "sop"),),
-        operators=(
-            OperatorDefinition(
-                "acme::source::1.0",
-                "source",
-                "acme",
-                "1.0",
-                "Sop",
-                (),
-                DefinitionSource("builtin"),
-                (
-                    ParameterDefinition(
-                        "scale",
-                        "Scale",
-                        "float",
-                        3,
-                        ("sx", "sy", "sz"),
-                        (1.0, 1.0, 1.0),
-                    ),
-                ),
-                (),
-                (geometry_out, points_out),
-            ),
-            OperatorDefinition(
-                "sink",
-                "sink",
-                None,
-                None,
-                "Sop",
-                (),
-                DefinitionSource("builtin"),
-                (),
-                (geometry_in,),
-                (geometry_out,),
-            ),
-        ),
-    )
-
-
-def _bundle() -> CompiledBundle:
-    source = '''hocus 0.1;
-graph rocks {
-  target "/obj/geo1";
-  category Sop;
-  mode merge;
-  node source @id("rock-source"): "acme::source::1.0" { sx = 2; }
-  node sink @id("rock-sink"): sink { input[0] = source.output[1]; }
-  display = sink;
-  render = sink;
-  output = sink;
-}
-'''
-    provider = _catalog_provider()
-    result = compile_source(source, "assets/rocks.hocus", source_uri=SOURCE_URI)
-    assert result.valid and result.graph_spec is not None
-    result.semantic_result = resolve_graph(result.graph_spec, provider)
-    assert result.semantic_result.valid
-    result.source_uri = SOURCE_URI
-    result.source_kind = "project_file"
-    result.project_uid = "city"
-    result.project_manifest_digest = _digest("manifest")
-    result.project_lock_digest = _digest("lock")
-    result.catalog_fingerprint = provider.catalog.fingerprint
-    result.catalog_content_digest = _digest(provider.catalog.to_json())
-    return CompiledBundle.from_result(result)
-
-
-def _baseline() -> dict:
-    return {
-        "$schema": "hocuspocus://schemas/network-document/v1",
-        "kind": "network_document",
-        "documentId": "network:/obj/geo1",
-        "documentRevision": 7,
-        "baselineLiveRevision": 19,
-        "lastSyncedLiveRevision": 19,
-        "rootPath": "/obj/geo1",
-        "category": "Sop",
-        "metadata": {},
-        "nodes": [
-            {
-                "uid": "root-stable",
-                "name": "geo1",
-                "typeName": "geo",
-                "category": "Sop",
-                "path": "/obj/geo1",
-                "parentPath": "/obj",
-                "isNetwork": True,
-                "position": [0.0, 0.0],
-                "flags": {
-                    "display": False,
-                    "render": False,
-                    "bypass": False,
-                    "template": False,
-                },
-                "metadata": {},
-            }
-        ],
-        "ports": [],
-        "edges": [],
-        "parameterBindings": [],
-        "codeBlobs": [],
-        "diagnostics": [],
-    }
-
-
-class _Dispatcher:
-    @staticmethod
-    def call(callback, _context):
-        return callback()
-
-
-class _EditorOperations(OperationBaseMixin, HocusScriptOperationsMixin):
-    pass
-
-
-class _PreviewOperations(OperationBaseMixin, DocumentOperationsMixin, HocusScriptOperationsMixin):
-    def __init__(self, *, catalog=None):
-        self._dispatcher = _Dispatcher()
-        self._documents = LiveDocumentService(logging.getLogger("test.preview"))
-        self.baseline = _baseline()
-        self.catalog = catalog or _catalog_provider().catalog
-
-    def _document_schema_path(self) -> Path:
-        return ROOT / "docs" / "schemas" / "network-document-v1.schema.json"
-
-    def _document_current_network_payload(self, root_path: str, **_kwargs):
-        self.asserted_root_path = root_path
-        return copy.deepcopy(self.baseline)
-
-    def _document_preview_live_catalog(self):
-        return self.catalog
-
-
-class _Monitor:
-    def mark_dirty(self, *_args, **_kwargs):
-        return 1
-
-
-class _Undos:
-    def __init__(self, owner):
-        self.owner = owner
-        self.snapshot = None
-        self.label = None
-
-    @contextmanager
-    def group(self, label):
-        self.snapshot = copy.deepcopy(self.owner.baseline)
-        self.label = label
-        yield
-
-    def undoLabels(self):
-        return (self.label,) if self.label else ()
-
-    def performUndo(self):
-        self.owner.baseline = copy.deepcopy(self.snapshot)
-        self.snapshot = None
-        self.label = None
-
-
-class _Hou:
-    def __init__(self, owner):
-        self.undos = _Undos(owner)
-
-
-class _PlanOperations(_PreviewOperations):
-    def __init__(self, database: Path):
-        self._dispatcher = _Dispatcher()
-        self._settings = ServerSettings(enable_exec_tools=True)
-        self._graph_store = LiveGraphStore(logging.getLogger("test.plan"), database)
-        self._documents = LiveDocumentService(logging.getLogger("test.plan"), self._graph_store)
-        self._monitor = _Monitor()
-        self.baseline = _baseline()
-        self.catalog = _catalog_provider().catalog
-        self._hou = _Hou(self)
-        self.target_document = None
-        self.fail_execution = False
-
-    def _require_hou(self):
-        return self._hou
-
-    def _document_plan_bundle_impl(self, arguments, context):
-        result = super()._document_plan_bundle_impl(arguments, context)
-        stored = self._documents.apply_plan(result["planId"], expected_hash=result["planHash"])
-        self.target_document = copy.deepcopy(stored["targetDocument"])
-        return result
-
-    def _document_execute_apply_plan(self, plan, baseline, *, checkpoint=None):
-        if checkpoint:
-            checkpoint()
-        self.baseline = copy.deepcopy(self.target_document)
-        if self.fail_execution:
-            self.fail_execution = False
-            raise RuntimeError("injected execution failure")
-        return [{"type": "fake_apply", "summary": copy.deepcopy(plan.get("summary", {}))}]
-
-
-def _apply_arguments(plan: dict, key: str) -> dict:
-    return {
-        "planId": plan["planId"],
-        "planHash": plan["planHash"],
-        "expectedDocumentRevision": plan["baseline"]["documentRevision"],
-        "expectedLiveRevision": plan["baseline"]["liveRevision"],
-        "confirmationToken": plan.get("confirmationToken"),
-        "idempotencyKey": key,
-    }
-
-
-def _expand(body: str, *, limits=None, cancellation=None):
-    source = f'''hocus 0.3;
-graph ControlGraph {{
-  target = "/obj";
-{body}
-}}
-'''
-    return expand_control_graph(
-        source.encode(),
-        "hocus-project://controls/main.hocus",
-        {},
-        {},
-        limits=limits or ControlExpansionLimits(),
-        cancellation=cancellation,
-    )
-
-
-def _identity_symbols(
-    *,
-    control_symbol: str = "choice",
-    branch: str = "true",
-    iterator: str = "i",
-    node_symbol: str = "piece",
-    count: int = 2,
-) -> list[str]:
-    graph = _expand(
-        f'''
-  if {control_symbol} @id("branch-id") ({branch}) outputs (value: int) {{
-    for series @id("fold-id") ({iterator} in range({count})) carry (value: int = 0) {{
-      node {node_symbol} @id("node-id"): "null" {{ index = iter.{iterator}; }}
-      yield value = iter.{iterator};
-    }}
-    yield value = series.value;
-  }} else {{
-    node fallback @id("node-id"): "null" {{ index = 0; }}
-    yield value = 0;
-  }}
-'''
-    )
-    return [node["symbol"] for node in graph["nodes"]]
+from tests.test_hocusscript_authoring_scenarios import (
+    _control_bundle as _h5_control_bundle,
+    _module_bundle as _h5_module_bundle,
+    _provider as _h5_provider,
+    _tampered_control_bundle as _tampered_h5_bundle,
+)
+from tests.hocusscript_hs7_helpers import assert_heuristic_tuple_evidence_rejected, assert_tagged_value_pipeline, assert_value_plan_apply, assert_value_preview_bindings, value_bundle
+from tests.hocusscript_control_runtime_helpers import (
+    _EditorOperations,
+    _PlanOperations,
+    _PreviewOperations,
+    _apply_arguments,
+    _bundle,
+    _catalog_provider,
+    _expand,
+    _h5_plan_bundle,
+    _identity_symbols,
+)
 
 
 class HocusScriptControlScenarios(unittest.TestCase):
@@ -327,11 +65,62 @@ class HocusScriptControlScenarios(unittest.TestCase):
 
         tools, resources = ToolRegistry(), ResourceRegistry()
         LiveOperations.__new__(LiveOperations).register(tools, resources)
-        for name in ("document.compile_source", "document.format_source", "document.preview_bundle"):
+        expected_metadata = {
+            "document.compile_source": (
+                ("source.project.build", "document.apply_plan", "never rereads this source"),
+                ("observe",),
+                True,
+            ),
+            "document.format_source": ((), ("observe",), True),
+            "document.export_source": (
+                (
+                    "flat direct-child",
+                    "structurally recompiled",
+                    "exact-catalog semantic and connector validation",
+                    "neither proves network reconstruction nor publishes",
+                ),
+                ("observe",),
+                True,
+            ),
+            "document.preview_bundle": (
+                (
+                    "authenticated carrier semantics and provenance pins", "flat Bundle 0.2", "module Bundle 0.3",
+                    "control Bundle 0.4", "value Bundle 0.5", "catalog/HDA selections",
+                    "candidate document", "destructive summary", "without mutating Houdini or reading DSL project files",
+                ),
+                ("observe",),
+                True,
+            ),
+            "document.plan_bundle": (
+                (
+                    "Rerun the exact-version live validation", "flat Bundle 0.2", "module Bundle 0.3",
+                    "control Bundle 0.4", "value Bundle 0.5", "carrier semantics and provenance pins",
+                    "immutable apply plan",
+                ),
+                ("observe",),
+                True,
+            ),
+            "document.apply_plan": (
+                (
+                    "immutable plan identity",
+                    "drift gates",
+                    "without rereading or recompiling HocusScript source",
+                ),
+                ("edit_scene",),
+                False,
+            ),
+        }
+        for name, (fragments, capabilities, read_only) in expected_metadata.items():
             definition = tools.get(name)
             self.assertIsNotNone(definition)
-            self.assertEqual(definition.required_capabilities, ("observe",))
-            self.assertTrue(definition.annotations["readOnlyHint"])
+            self.assertEqual(definition.required_capabilities, capabilities)
+            self.assertEqual(
+                bool(definition.annotations.get("readOnlyHint", False)),
+                read_only,
+            )
+            self.assertTrue(
+                all(fragment in definition.description for fragment in fragments)
+            )
 
     def test_preview_produces_a_read_only_plan_and_rejects_catalog_drift(self) -> None:
         operations = _PreviewOperations()
@@ -355,14 +144,88 @@ class HocusScriptControlScenarios(unittest.TestCase):
         self.assertFalse(blocked["valid"])
         self.assertFalse(blocked["readyForPlan"])
         self.assertEqual(blocked["diagnostics"][0]["code"], "HOCUS720")
+        for malformed_value in ([], "hocus-compiled-bundle-v9.9"):
+            malformed_version = _bundle().to_dict()
+            malformed_version["bundleVersion"] = malformed_value
+            with self.assertRaises(JsonRpcError) as malformed:
+                operations.document_preview_bundle(
+                    {"bundle": malformed_version},
+                    RequestContext(),
+                )
+            self.assertEqual(
+                malformed.exception.data["diagnosticCode"], "HOCUS700"
+            )
 
+        control = _tampered_h5_bundle(
+            _tampered_h5_bundle(
+                _h5_control_bundle(),
+                ("semanticResolution", "requiredCapabilities"),
+                ["edit_scene", "run_code"],
+            ),
+            ("requiredCapabilities",),
+            ["edit_scene", "run_code"],
+        )
+        value, value_provider = value_bundle(_h5_provider())
+        for carrier, provider in ((_h5_module_bundle(), _h5_provider()), (control, _h5_provider()), (value, value_provider)):
+            with self.subTest(live_bundle=carrier["bundleVersion"]):
+                operations = _PreviewOperations(catalog=provider.catalog)
+                target = carrier["graphSpec"]["target"]
+                operations.baseline["documentId"] = f"network:{target}"
+                operations.baseline["rootPath"] = target
+                operations.baseline["nodes"][0].update({
+                    "name": target.rsplit("/", 1)[-1],
+                    "path": target,
+                    "parentPath": target.rsplit("/", 1)[0],
+                })
+                preview = operations.document_preview_bundle(
+                    {"bundle": carrier},
+                    RequestContext(),
+                )["structuredContent"]
+                self.assertTrue(preview["valid"], preview["diagnostics"])
+                candidate = preview["preview"]["candidatePlan"]
+                self.assertEqual(candidate["bundleVersion"], carrier["bundleVersion"])
+                self.assertEqual(candidate["languageVersion"], carrier["languageVersion"])
+                self.assertEqual(candidate["resolverPolicyDigest"], carrier["resolvedModuleSet"]["resolverPolicyDigest"])
+                self.assertEqual(operations.catalog_request, carrier["graphSpecVersion"])
+                self.assertEqual(
+                    candidate["expansionMapDigest"],
+                    carrier["sourceMaps"]["expansionMapDigest"],
+                )
+                self.assertEqual(
+                    candidate["requiredCapabilities"],
+                    carrier["requiredCapabilities"],
+                )
+                if carrier["bundleVersion"] == "0.5":
+                    assert_value_preview_bindings(self, preview)
+                if carrier["bundleVersion"] == "0.4":
+                    lowered = [
+                        node
+                        for node in preview["preview"]["document"]["nodes"]
+                        if (
+                            (node.get("metadata") or {}).get("hocus") or {}
+                        ).get("symbol", "").startswith("__hocus_")
+                    ]
+                    self.assertTrue(
+                        all(node["name"].startswith("hocus_generated_") for node in lowered)
+                    )
+                    self.assertTrue(
+                        all(
+                            node["metadata"]["hocus"]["symbol"].startswith("__hocus_")
+                            for node in lowered
+                        )
+                    )
+                    self.assertEqual(len(lowered), len(carrier["graphSpec"]["nodes"]))
     def test_plan_apply_is_guarded_durable_and_idempotent(self) -> None:
+        assert_tagged_value_pipeline(self, _PreviewOperations, RequestContext, _h5_provider())
+        assert_value_plan_apply(self, _PlanOperations, RequestContext, _apply_arguments, _h5_provider())
         with tempfile.TemporaryDirectory() as temporary:
             operations = _PlanOperations(Path(temporary) / "graph.sqlite3")
             context = RequestContext(permissions=("edit_scene", "run_code"))
+            operations.global_revision += 1
             plan = operations.document_plan_bundle(
                 {"bundle": _bundle().to_dict()}, context
             )["structuredContent"]
+            self.assertEqual(operations.sync_calls, 2)
 
             before = copy.deepcopy(operations.baseline)
             invalid = _apply_arguments(plan, "invalid-token")
@@ -378,6 +241,100 @@ class HocusScriptControlScenarios(unittest.TestCase):
             self.assertTrue(first["verified"])
             self.assertFalse(first["idempotentReplay"])
             self.assertTrue(replay["idempotentReplay"])
+
+        with tempfile.TemporaryDirectory() as temporary:
+            operations = _PlanOperations(Path(temporary) / "drift.sqlite3")
+            operations.mutate_on_sync_call = 2
+            with self.assertRaises(JsonRpcError) as drift:
+                operations.document_plan_bundle(
+                    {"bundle": _bundle().to_dict()},
+                    RequestContext(permissions=("edit_scene", "run_code")),
+                )
+            self.assertEqual(drift.exception.data["diagnosticCode"], "HOCUS745")
+
+        with tempfile.TemporaryDirectory() as temporary:
+            operations = _PlanOperations(Path(temporary) / "cancel.sqlite3")
+            context = RequestContext(permissions=("edit_scene", "run_code"))
+            operations.cancel_context = context
+            operations.cancel_on_sync_call = 2
+            with self.assertRaises(OperationCancelledError):
+                operations.document_plan_bundle(
+                    {"bundle": _bundle().to_dict()}, context
+                )
+            self.assertEqual(operations._documents.apply_plan_stats()["count"], 0)
+            self.assertEqual(
+                operations._graph_store.stats()["immutablePlanCount"], 0
+            )
+
+            operations.cancel_context = RequestContext(
+                permissions=("edit_scene", "run_code")
+            )
+            operations.cancel_on_sync_call = None
+            operations.cancel_on_plan_build = 1
+            with self.assertRaises(OperationCancelledError):
+                operations.document_plan_bundle(
+                    {"bundle": _bundle().to_dict()},
+                    operations.cancel_context,
+                )
+            self.assertEqual(operations._documents.apply_plan_stats()["count"], 0)
+            self.assertEqual(
+                operations._graph_store.stats()["immutablePlanCount"], 0
+            )
+
+        with tempfile.TemporaryDirectory() as temporary:
+            operations = _PlanOperations(
+                Path(temporary) / "cancel-after-store.sqlite3"
+            )
+            context = RequestContext(permissions=("edit_scene", "run_code"))
+            original_store = operations._graph_store.store_immutable_plan
+
+            def store_then_cancel(*arguments, **keywords):
+                result = original_store(*arguments, **keywords)
+                context.cancel()
+                return result
+
+            operations._graph_store.store_immutable_plan = store_then_cancel
+            with self.assertRaises(OperationCancelledError):
+                operations.document_plan_bundle(
+                    {"bundle": _bundle().to_dict()}, context
+                )
+            self.assertEqual(operations._documents.apply_plan_stats()["count"], 0)
+            self.assertEqual(
+                operations._graph_store.stats()["immutablePlanCount"], 0
+            )
+
+        carrier = _h5_plan_bundle()
+        with tempfile.TemporaryDirectory() as temporary:
+            operations = _PlanOperations(Path(temporary) / "h5-graph.sqlite3")
+            operations.catalog = _h5_provider().catalog
+            target = carrier["graphSpec"]["target"]
+            operations.baseline["documentId"] = f"network:{target}"
+            operations.baseline["rootPath"] = target
+            operations.baseline["nodes"][0].update({
+                "name": target.rsplit("/", 1)[-1],
+                "path": target,
+                "parentPath": target.rsplit("/", 1)[0],
+            })
+            _PlanOperations.decode_calls = 0
+            context = RequestContext(permissions=("edit_scene", "run_code"))
+            plan = operations.document_plan_bundle(
+                {"bundle": carrier},
+                context,
+            )["structuredContent"]
+            self.assertEqual(_PlanOperations.decode_calls, 1)
+            stored = operations._documents.apply_plan(
+                plan["planId"],
+                expected_hash=plan["planHash"],
+            )
+            expected_pins = {
+                "bundleVersion": carrier["bundleVersion"],
+                "languageVersion": carrier["languageVersion"],
+                "resolverPolicyDigest": carrier["resolvedModuleSet"]["resolverPolicyDigest"],
+                "expansionMapDigest": carrier["sourceMaps"]["expansionMapDigest"],
+            }
+            for key, expected in expected_pins.items():
+                self.assertEqual(stored[key], expected)
+            self.assertEqual(stored["requiredCapabilities"], ["edit_scene", "run_code"])
 
     def test_failed_apply_rolls_back_the_scene_candidate(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -430,6 +387,7 @@ module Repeat(flag: bool = true, count: int = 2) exports (out: int) {
         self.assertEqual(malformed.exception.code, "HOCUS460")
 
     def test_semantics_validate_the_whole_control_program(self) -> None:
+        assert_heuristic_tuple_evidence_rejected(self, _catalog_provider())
         valid = '''hocus 0.3;
 graph G {
   target "/obj/g";
@@ -544,6 +502,212 @@ graph G {
         with self.assertRaises(ModuleExpansionError) as hostile_category:
             validate_control_program(invalid_category, {}, {})
         self.assertEqual(hostile_category.exception.code, "HOCUS479")
+
+        malformed_root = replace(valid_ast, span=7)
+        with self.assertRaises(ModuleExpansionError) as malformed_span:
+            validate_control_program(malformed_root, {}, {})
+        self.assertEqual(malformed_span.exception.code, "HOCUS479")
+        self.assertEqual(malformed_span.exception.span.source_name, "<control-ast>")
+
+        unsupported = replace(
+            valid_ast,
+            version=replace(valid_ast.version, value="0.2"),
+        )
+        with self.assertRaises(ModuleExpansionError) as wrong_lane:
+            validate_control_program(unsupported, {}, {})
+        self.assertEqual(wrong_lane.exception.code, "HOCUS460")
+
+        parm = node.statements[0]
+        value = parm.value
+        malformed_fields = (
+            replace(valid_ast, version=7),
+            replace(
+                valid_ast,
+                graph=replace(valid_ast.graph, statements=list(valid_ast.graph.statements)),
+            ),
+            replace(
+                valid_ast,
+                graph=replace(
+                    valid_ast.graph,
+                    statements=(
+                        *valid_ast.graph.statements[:-1],
+                        replace(node, statements=(replace(parm, span=7),)),
+                    ),
+                ),
+            ),
+            replace(
+                valid_ast,
+                graph=replace(
+                    valid_ast.graph,
+                    statements=(
+                        *valid_ast.graph.statements[:-1],
+                        replace(
+                            node,
+                            statements=(
+                                replace(
+                                    parm,
+                                    value=replace(
+                                        value,
+                                        output_index=True,
+                                        output_index_span=value.member_span,
+                                    ),
+                                ),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        for malformed_ast in malformed_fields:
+            with self.subTest(malformed_field=malformed_ast):
+                with self.assertRaises(ModuleExpansionError) as malformed:
+                    validate_control_program(malformed_ast, {}, {})
+                self.assertEqual(malformed.exception.code, "HOCUS479")
+
+        invalid_parm_name = replace(
+            valid_ast,
+            graph=replace(
+                valid_ast.graph,
+                statements=(
+                    *valid_ast.graph.statements[:-1],
+                    replace(node, statements=(replace(parm, name=7),)),
+                ),
+            ),
+        )
+        with self.assertRaises(ModuleExpansionError) as invalid_name:
+            validate_control_program(invalid_parm_name, {}, {})
+        self.assertEqual(invalid_name.exception.code, "HOCUS473")
+
+        fold_ast = parse_syntax(
+            '''hocus 0.3;
+graph G {
+  target "/obj/g";
+  for series @id("series") (i in range(1)) carry (out: int = 0) {
+    yield out = iter.i;
+  }
+}
+''',
+            "forged-fold.hocus",
+        )
+        fold = fold_ast.graph.statements[-1]
+        folded_yield = fold.body[-1]
+        invalid_control_names = (
+            replace(fold, iterator=7),
+            replace(
+                fold,
+                body=(
+                    replace(
+                        folded_yield,
+                        value=replace(folded_yield.value, member=7),
+                    ),
+                ),
+            ),
+        )
+        for invalid_control in invalid_control_names:
+            hostile_fold = replace(
+                fold_ast,
+                graph=replace(
+                    fold_ast.graph,
+                    statements=(
+                        *fold_ast.graph.statements[:-1],
+                        invalid_control,
+                    ),
+                ),
+            )
+            with self.assertRaises(ModuleExpansionError) as invalid_identifier:
+                validate_control_program(hostile_fold, {}, {})
+            self.assertEqual(invalid_identifier.exception.code, "HOCUS473")
+
+        code_ast_v01 = parse_syntax(
+            'hocus 0.1; graph G { target "/obj/g"; node n: "null" { script = vex`@P = 0;`; } }',
+            "forged-code.hocus",
+        )
+        code_ast = replace(
+            code_ast_v01,
+            version=replace(code_ast_v01.version, value="0.3"),
+        )
+        array_ast_v04 = parse_syntax(
+            'hocus 0.4; graph G { target "/obj/g"; node n: "null" { scale = [1, 2, 3]; } }',
+            "forged-array.hocus",
+        )
+        for rich_ast in (
+            code_ast,
+            replace(array_ast_v04, version=replace(array_ast_v04.version, value="0.3")),
+        ):
+            with self.assertRaises(ModuleExpansionError) as frozen_lane:
+                validate_control_program(rich_ast, {}, {})
+            self.assertEqual(frozen_lane.exception.code, "HOCUS479")
+        code_node = code_ast.graph.statements[-1]
+        code_parm = code_node.statements[0]
+        code_value = code_parm.value
+        malformed_map = replace(
+            code_value.offset_map,
+            checkpoints=((0, code_value.body_span.start.offset), ("bad", 0)),
+        )
+        hostile_code = replace(
+            code_ast,
+            graph=replace(
+                code_ast.graph,
+                statements=(
+                    *code_ast.graph.statements[:-1],
+                    replace(
+                        code_node,
+                        statements=(
+                            replace(code_parm, value=replace(code_value, offset_map=malformed_map)),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        with self.assertRaises(ModuleExpansionError) as invalid_offset_map:
+            validate_control_program(hostile_code, {}, {})
+        self.assertEqual(invalid_offset_map.exception.code, "HOCUS479")
+
+        payload = "x" * (1024 * 1024)
+        literal = valid_ast.graph.statements[1].then_body[0].value
+        amplified_node = replace(
+            node,
+            statements=tuple(
+                replace(
+                    parm,
+                    name=f"payload{index}",
+                    value=replace(literal, value=payload, span=parm.value.span),
+                )
+                for index in range(9)
+            ),
+        )
+        amplified_ast = replace(
+            valid_ast,
+            graph=replace(
+                valid_ast.graph,
+                statements=(*valid_ast.graph.statements[:-1], amplified_node),
+            ),
+        )
+        with self.assertRaises(ModuleExpansionError) as amplified_text:
+            validate_control_program(amplified_ast, {}, {})
+        self.assertEqual(amplified_text.exception.code, "HOCUS479")
+
+        module_ast = parse_syntax(
+            "hocus 0.3; module M(value: int) exports (out: int) { export out = param.value; }",
+            "forged-module.hocus",
+        )
+        parameter = module_ast.module.parameters[0]
+        malformed_module = replace(
+            module_ast,
+            module=replace(
+                module_ast.module,
+                parameters=(replace(parameter, name=7),),
+            ),
+        )
+        unit = ResolvedModuleUnit(
+            "hocus-project://project/forged-module.hocus",
+            "sha256:" + "0" * 64,
+            malformed_module,
+            {},
+        )
+        with self.assertRaises(ModuleExpansionError) as invalid_module_name:
+            validate_control_program(valid_ast, {}, {unit.uri: unit})
+        self.assertEqual(invalid_module_name.exception.code, "HOCUS473")
 
     def test_expansion_executes_if_and_for_into_a_canonical_graph(self) -> None:
         graph = _expand(

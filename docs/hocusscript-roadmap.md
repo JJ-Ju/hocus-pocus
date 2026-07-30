@@ -1,7 +1,8 @@
 # HocusScript Delivery Roadmap
 
-Status: active
+Status: V1 technical baseline complete; production-release closure active
 Source contract: `docs/hocusscript-spec.md`
+Completion plan: `docs/hocusscript-roadmap-completion-plan.md`
 
 ## 1. Outcome
 
@@ -18,8 +19,8 @@ This is an incremental extension of the document graph architecture, not a paral
 - Preserve or reject unsupported constructs; never silently approximate them.
 - Separate structural graph state from cooks, renders, exports, button presses, and publishing.
 - Treat `.hocus` as ordinary code: native editor/agent filesystem tools remain the primary editing surface, while every compiler or workspace consumer receives an explicit user-selected project authority.
-- Keep Houdini mutation content-based: even when the planned opt-in MCP workspace can access approved source projects, preview/plan/apply consumes authenticated compiled bundles rather than mutating from file paths.
-- Scope planned MCP filesystem access to user-approved HocusScript projects and separately approved read-only external roots; never expose a general host-filesystem tool.
+- Keep Houdini mutation content-based: the opt-in MCP workspace can access approved source projects, but preview/plan/apply consumes authenticated compiled bundles rather than mutating from file paths.
+- Scope MCP filesystem access to user-approved HocusScript projects and separately approved read-only external roots; never expose a general host-filesystem tool.
 - Treat offline automated tests and live-Houdini tests as separate required gates.
 - Cap the complete repository catalogue at 50 public workflow scenarios; do not use implementation-detail test volume as delivery evidence.
 - Cap every source, script, config, documentation, and fixture file at 1,200 physical lines.
@@ -37,11 +38,12 @@ This is an incremental extension of the document graph architecture, not a paral
 | HS3 | Document lowering and preview | A compiled bundle produces a canonical document, diff, and deterministic preview plan |
 | HS4 | Immutable plan and guarded apply | Compiled plans apply with revision, ownership, and policy checks |
 | HS5 | Export, formatter, and editor loop | Live networks export to source; editor workflows become practical |
-| HS6 | Modules and studio libraries | Typed reusable modules expand deterministically |
+| HS6 | Modules and reusable source libraries | Typed local and approved external source modules expand deterministically |
 | HS6-H5 | Module/control document-live bridge | Frozen Bundle `0.3` and Bundle `0.4` lower, preview, plan, and apply through exact-version guarded paths |
 | HS6-H6 | Project-scoped MCP source workspace | Agents can read, edit, build, and navigate explicitly user-approved HocusScript projects |
 | HS7 | Network-family and value parity | SOP/MAT/LOP/TOP and complex values reach declared fidelity |
 | HS8 | Production and AAA hardening | Deterministic asset fixtures, validation, review, CI, and publishing |
+| RC0-RC5 | V1 release closure | Complete mutable engineering, freeze once, bind external clean-image and human authority to that candidate, and publish |
 
 ## 4. HS0: Contract and Risk Lock
 
@@ -91,7 +93,7 @@ Supported syntax:
 Testing:
 
 - one representative authoring workflow covering parse, compile, format, and diagnostics
-- one deterministic serialization/export round trip
+- deterministic serialization plus fail-closed export validation
 - public failure scenarios for malformed source and unresolved references
 - bounded-input and cancellation behavior at the public expansion boundary
 
@@ -241,7 +243,9 @@ Objectives:
 Exit criteria:
 
 - formatting is idempotent
-- supported live networks export and recompile to semantically equivalent documents
+- supported live networks emit source that structurally recompiles and passes
+  exact-catalog semantic and connector validation, without claiming network
+  reconstruction
 - unsupported constructs are explicit and lossless or block export
 - agents can use a `.hocus` file without manually authoring network-document JSON
 - editor diagnostics point to exact source spans
@@ -252,10 +256,15 @@ Delivered evidence:
 - native `hocus write-export` requires the explicit project directory, creates exclusively by default, and replaces only against an expected digest
 - `@id("...")` carries persistent network-document node identity across export destination and symbol changes; provenance records ownership and managed fields
 - unsupported HocusScript 0.1 constructs block the entire export with typed diagnostics and no partial source
-- offline editor/export/schema/compiler suites pass; the actual registered `document.export_source` H21.0.729 smoke used the unmodified force-synced network document and produced byte-identical repeated exports, exact-catalog compile/resolve/lower equivalence, an explicit unsupported-state blocker, and no filesystem writes
+- offline editor/export/schema/compiler suites pass; the actual registered
+  `document.export_source` H21.0.729 smoke used the unmodified force-synced
+  network document and produced byte-identical repeated exports, structural
+  recompilation plus exact-catalog semantic and connector validation, an
+  explicit unsupported-state blocker, and no filesystem writes; it did not
+  establish network-reconstruction equivalence
 - TextMate syntax highlighting ships now; LSP remains intentionally deferred until these JSON contracts have downstream use and can be stabilized without premature protocol coupling
 
-## 10. HS6: Modules and Studio Libraries
+## 10. HS6: Modules and Reusable Source Libraries
 
 Contract status (Batch A, 2026-07-11): locked. HS6 uses language `0.2`, compiler `0.4.0`, GraphSpec `0.3`, and bundle `0.3`; `0.1` remains unchanged. The contract fixes one root graph/module per file, literal imports, `bool`/`int`/`float`/`string`/`node_output` parameters and exports, named `use` instances with mandatory durable `@id` seeds, namespaced module-local identity seeds, aggregate limits, interned expansion stacks, native-only resolution, and separately approved external aliases. `expansion-map-v1` and `resolved-module-set-v1` are standalone strict contracts; GraphSpec `0.3` embeds the exact expansion-map contract.
 
@@ -277,11 +286,11 @@ External authority status (Batch G1, 2026-07-12): the native `inspect_external_m
 
 Mixed-root planning status (Batch G2, 2026-07-14): the native read-only `plan_project_module_lock` API now revalidates the exact G1 project/root/manifest boundary, requires pre-pinned manifests, resolves caller-selected entries into a bounded and transitively complete mixed project/library closure, derives exact source/interface/transitive records, requires every entry to pass strict expansion validation while discarding the expansion output, and returns a deterministic host-path-free prospective-lock plan with an exact current-lock diff. Project entry gates, same-library containment, explicit cross-library aliases, canonical identities, relocation stability, cancellation, limits, and final source/root/winner/project/catalog rechecks are enforced. It acquires no writer lease, writes and publishes nothing, and does not enable external-alias use by the compiler, editor, CLI, MCP, bundle, document, or live paths. At the G2 checkpoint G3-G5 remained pending, with G3 required to independently rederive under its lease rather than trust the advisory plan; G3 is delivered below.
 
-External publication status (Batch G3, 2026-07-14): the separate native `update_project_mixed_module_lock` API now requires explicit write authority, one valid existing v3 lock, its exact current digest, nonempty project-relative entries, and the exact per-call alias-root mapping. It accepts no G2 plan, plan digest, prospective payload, or caller-authored records. The cooperating-writer lease encloses complete G1 validation, independent private G2 derivation and expansion checks, strict canonical record/payload/result validation, result construction, and final project/lock/catalog/root/manifest/source/winner rechecks before the atomic writer's immediate digest check. Repeated identical publication is a verified no-op without rewriting. The strict unregistered host-path-free receipt binds prior/new lock, catalog, root-inspection, resolver-policy, entry, module, and exact diff identities; private roots never persist. The same-user limitations remain under `HS-BLOCK-001`. At the G3 checkpoint external-alias compiler/editor/bundle use remained disabled pending G4, CLI root flags remained disabled pending G5, and MCP remained content-only. Bundle `0.3` document lowering and live consumption remain disabled under `HS-BLOCK-008`.
+External publication status (Batch G3, 2026-07-14): the separate native `update_project_mixed_module_lock` API now requires explicit write authority, one valid existing v3 lock, its exact current digest, nonempty project-relative entries, and the exact per-call alias-root mapping. It accepts no G2 plan, plan digest, prospective payload, or caller-authored records. The cooperating-writer lease encloses complete G1 validation, independent private G2 derivation and expansion checks, strict canonical record/payload/result validation, result construction, and final project/lock/catalog/root/manifest/source/winner rechecks before the atomic writer's immediate digest check. Repeated identical publication is a verified no-op without rewriting. The strict unregistered host-path-free receipt binds prior/new lock, catalog, root-inspection, resolver-policy, entry, module, and exact diff identities; private roots never persist. The same-user limitations remain under `HS-BLOCK-001`. At the G3 checkpoint external-alias compiler/editor/bundle use, CLI root flags, and Bundle `0.3` document/live consumption remained disabled pending their later gates; MCP remained content-only.
 
-External consumer status (Batch G4, 2026-07-14): complete. Separate native `compile_project_mixed_module_graph`, `compile_project_mixed_module_semantic`, and `compile_project_mixed_module_bundle` APIs now consume the exact G3-published external records only when the caller supplies the complete exact alias-root mapping again for that call. The authority is retained through the requested compiler stage and finally rechecks project, lock, catalog, roots, module manifests, source identities, and every resolver winner before return. Separate saved-file and dirty-buffer `complete_mixed_*` and `definition_mixed_*` APIs require keyword-only `module_roots`; editor subjects remain project-relative while verified external dependencies can contribute completions and definition targets. All successful artifacts remain relocation-stable and host-path-free. The legacy same-project compiler/editor/bundle APIs remain unchanged and fail closed on external aliases. G4 adds no CLI or MCP file/root surface: G5 CLI flags remain pending, MCP remains content-only, and Bundle `0.3` document lowering/live consumption remain blocked under `HS-BLOCK-008`.
+External consumer status (Batch G4, 2026-07-14): complete. Separate native `compile_project_mixed_module_graph`, `compile_project_mixed_module_semantic`, and `compile_project_mixed_module_bundle` APIs now consume the exact G3-published external records only when the caller supplies the complete exact alias-root mapping again for that call. The authority is retained through the requested compiler stage and finally rechecks project, lock, catalog, roots, module manifests, source identities, and every resolver winner before return. Separate saved-file and dirty-buffer `complete_mixed_*` and `definition_mixed_*` APIs require keyword-only `module_roots`; editor subjects remain project-relative while verified external dependencies can contribute completions and definition targets. All successful artifacts remain relocation-stable and host-path-free. The legacy same-project compiler/editor/bundle APIs remain unchanged and fail closed on external aliases. G4 added no CLI or MCP file/root surface; at that checkpoint G5 CLI flags and Bundle `0.3` document/live consumption remained pending.
 
-External CLI status (Batch G5, 2026-07-14): complete. The native `check`, `compile`, and `lock --update` commands accept repeatable `--module-root ALIAS=ABSOLUTE_PATH`; supplying roots dispatches only to the separate G4 semantic/bundle consumers or G3 mixed lock publisher, while omission preserves the same-project paths. Each mixed invocation must supply the complete exact declared alias mapping again. Duplicate, malformed, relative, missing, or extra roots fail closed; roots are not sourced from environment variables, expanded, inferred from lock data, cached, persisted, or emitted. Mixed lock publication requires the exact current lock digest. Syntax-only `format` and language-`0.1` `write-export` do not accept module roots, and language `0.1` rejects rather than ignores the option. Mixed editor completion/navigation remains available only through native Python APIs and no CLI editor command was added. MCP remains content-only, and Bundle `0.3` document lowering/live consumption remain blocked under `HS-BLOCK-008`. The consolidated project workflow covers the CLI and MCP boundary without retaining the former exhaustive regression matrix.
+External CLI status (Batch G5, 2026-07-14): complete. The native `check`, `compile`, and `lock --update` commands accept repeatable `--module-root ALIAS=ABSOLUTE_PATH`; supplying roots dispatches only to the separate G4 semantic/bundle consumers or G3 mixed lock publisher, while omission preserves the same-project paths. Each mixed invocation must supply the complete exact declared alias mapping again. Duplicate, malformed, relative, missing, or extra roots fail closed; roots are not sourced from environment variables, expanded, inferred from lock data, cached, persisted, or emitted. Mixed lock publication requires the exact current lock digest. Syntax-only `format` and language-`0.1` `write-export` do not accept module roots, and language `0.1` rejects rather than ignores the option. Mixed editor completion/navigation remains available only through native Python APIs and no CLI editor command was added. MCP remains content-only for project files. At the G5 checkpoint Bundle `0.3` document/live consumption remained pending H5; H5 now provides that content-based path. The consolidated project workflow covers the CLI and MCP boundary without retaining the former exhaustive regression matrix.
 
 Typed-control status (Batch H0, 2026-07-15): complete for the isolated frontend and contract. Language `0.2` is frozen, while typed expression-producing conditionals and bounded fold iteration belong to language `0.3`. The exact `if ... outputs` and `for ... range(...) carry` grammar, exact typing, mandatory durable IDs, lexical yields, both-path/zero-body static validation, zero-count behavior, domain-separated branch/index identity, fixed iteration budgets, and continued prohibition on unbounded recursion are specified. The version-dispatched frozen AST, bounded parser with brace-aware recovery and aggregate control/node/use limits, and canonical formatter are implemented; forged `0.2` ASTs cannot emit `0.3` controls. No MCP file/project/root surface is introduced. Representative parsing, formatting, validation, and expansion remain covered by the consolidated control workflow.
 
@@ -291,7 +300,7 @@ Typed-control semantic status (Batch H2, 2026-07-15): complete for the isolated 
 
 Typed-control native integration status (Batch H3, 2026-07-25): complete. Callers choose the directory containing their ordinary `*.hocus` editing surface through an explicit project-directory argument or the CLI `--project` option. The local lane derives and atomically publishes complete schema-v4 locks under explicit write authority, expected-digest and lease checks, whole-program H2 validation, pinned whole-AST catalog admission, and final project/lock/catalog/source/winner rechecks. The external lane additionally requires the complete exact `--module-root ALIAS=ABSOLUTE_PATH` mapping on every lock/check/compile call, accepts only pre-pinned module-manifest-v2 libraries, and never persists or emits host roots. Both lanes emit resolved-module-set v2, GraphSpec `0.4`, and authenticated portable Bundle `0.4`; syntax-only format remains lock-independent.
 
-The native editor surface now provides saved-file and dirty-buffer completion and definition APIs for local and mixed projects. It models nested `if`/`for` lexical scopes, branch isolation, declaration order, iterator/carry/control results, imported module arguments/exports, yields, and pinned catalog operator/parameter names. Mixed definition targets use portable `hocus-module://` URIs while the edited subject remains project-relative. The combined real workflow published an external v4 lock, passed manifest-selected CLI check/compile, produced a host-path-free Bundle `0.4`, completed a control result, and navigated an imported export. No editor command or MCP filesystem capability was added in H3: `.hocus` stays code, document/live Bundle `0.4` consumption is planned for H5, and opt-in MCP workspace access is planned for H6.
+The native editor surface now provides saved-file and dirty-buffer completion and definition APIs for local and mixed projects. It models nested `if`/`for` lexical scopes, branch isolation, declaration order, iterator/carry/control results, imported module arguments/exports, yields, and pinned catalog operator/parameter names. Mixed definition targets use portable `hocus-module://` URIs while the edited subject remains project-relative. The combined real workflow published an external v4 lock, passed manifest-selected CLI check/compile, produced a host-path-free Bundle `0.4`, completed a control result, and navigated an imported export. No editor command or MCP filesystem capability was added in H3: `.hocus` stays code. H5 now provides exact document/live Bundle `0.4` consumption, and opt-in MCP workspace access is next in H6.
 
 Objectives:
 
@@ -302,7 +311,8 @@ Objectives:
 - transitive lockfiles and content hashes
 - language-`0.3` typed expression-producing conditionals and bounded fold iteration under fixed limits
 - expansion source maps and inspectable expanded graphs
-- reviewed studio module/HDA contracts and provenance
+- pinned local and separately approved external source-module provenance;
+  consumption-only studio/HDA library productization is post-v1
 
 Exit criteria:
 
@@ -320,23 +330,23 @@ Implementation sequence:
 4. bind the manifest/lock v3 and bundle `0.3` scaffolds to resolver-derived `resolved-module-set-v1`; verified same-project nonempty lock updates and native semantic bundle production are complete
 5. make document provenance and default UIDs consume the already-resolved module origins and instance paths
 6. add native project-aware completion/navigation while keeping MCP content-only
-7. enable external aliases only through staged gates: G1 explicit root/manifest inspection, G2 read-only complete mixed-root lock planning, G3 leased atomic external-record publication, G4 separate exact-root compiler/editor/bundle consumption, and G5 explicit repeatable CLI `--module-root ALIAS=ABSOLUTE_PATH` dispatch are complete; MCP remains content-only through H5, then H6 may add only the separately approved source workspace
+7. enable external aliases only through staged gates: G1 explicit root/manifest inspection, G2 read-only complete mixed-root lock planning, G3 leased atomic external-record publication, G4 separate exact-root compiler/editor/bundle consumption, and G5 explicit repeatable CLI `--module-root ALIAS=ABSOLUTE_PATH` dispatch are complete; MCP remains content-only through H5, and H6 adds only the separately approved source workspace
 8. deliver proposed language `0.3` control through separately reviewable H sub-batches:
    - H0 contract/frontend: freeze `0.2`; lock `if SYMBOL @id(...) (...) outputs (...) { ... yield ... } else { ... }` and `for SYMBOL @id(...) (ITERATOR in range(...)) carry (...) { ... yield ... }`; implement isolated AST/parser/formatter/recovery only, with completion dependent on focused frontend verification
    - H1 versioned carriers (complete): assign and scaffold compiler `0.5.0`, project/lock v4, external module manifest v2, resolved-set v2, expansion-map v2, GraphSpec `0.4`, bundle `0.4`, the exact compatibility matrix, strict decoders, and offline schemas; reject every mixed or unsupported pairing and keep compiler/resolver/writer/CLI/editor/document/live MCP dispatch disabled
    - H2 semantics (complete): add whole-body static validation, exact evaluation, fold expansion, lexical hygiene, domain-separated identity, bounded provenance, cancellation, and all iteration plus existing expansion budgets
    - H3 native integration (complete): enable verified local/mixed project resolver/compiler/lock, CLI check/format/compile, and control-aware editor completion/navigation only through the new version lane; retain explicit user-selected project/module roots and the content-only MCP boundary
    - H4 adversarial/full verification (complete): cover malformed/recovery, hidden-branch, zero-count, boundary/aggregate budget, cancellation, identity stability, nesting, provenance, relocation, hostile-root, artifact-tamper, legacy-isolation, and full repository gates before declaring `0.3` supported
-   - H5 document/live integration: close the Bundle `0.3`/`0.4` diagnostic and URI blocker; lower GraphSpec `0.4` plus module/control provenance into canonical network documents; freshly re-resolve against the live catalog; enable preview, immutable plan, guarded apply, rollback, verification, and export/recompile parity
+   - H5 document/live integration: close the Bundle `0.3`/`0.4` diagnostic and URI blocker; lower GraphSpec `0.4` plus module/control provenance into canonical network documents; freshly re-resolve against the live catalog; enable preview, immutable plan, guarded apply, rollback, verification, and structural export recompilation with exact-catalog semantic/connector validation
    - H6 project-scoped MCP workspace: let the user approve and configure project directories and read-only external roots; expose bounded project-relative source read/edit/build/navigation operations; preserve exact-digest writes, native-file authority, bundle-based Houdini mutation, and explicit revocation
 
-H4 qualification status (2026-07-26): complete. The existing authoring, control, and project workflow scenarios now cover strict carrier tampering, malformed/recovered and forged ASTs, hidden invalid bodies, zero/boundary/aggregate folds, nesting/shadowing, late cancellation including large catalog scans and ambiguity materialization, durable identity/provenance, local/mixed relocation, hostile roots, stale authority, and frozen legacy behavior without increasing the 34-scenario catalogue. Qualification fixed GraphSpec `0.4` structural decoding, hostile AST typed failures, control admission/cancellation gaps, bounded cancellable ambiguity diagnostics, and raw external-root canonicality. The clean build/install, 34-workflow suite, Ruff complexity, compileall, diff check, 50-scenario ceiling, and 1,200-line gate pass; independent P0/P1 re-review is clean.
+H4 qualification status (2026-07-26): complete after trust-boundary repair. The existing authoring, control, and project workflow scenarios now cover strict carrier tampering, malformed/recovered and forged ASTs, hidden invalid bodies, zero/boundary/aggregate folds, nesting/shadowing, late cancellation including large catalog scans and ambiguity materialization, durable identity/provenance, local/mixed relocation, hostile roots, stale authority, and frozen legacy behavior without increasing the 34-scenario catalogue. Qualification fixed GraphSpec `0.4` structural decoding, GraphSpec-derived minimum capabilities, declared-source span binding, exact bounded AST admission with a shared aggregate text budget, control admission/cancellation gaps, bounded cancellable ambiguity diagnostics, raw external-root canonicality, and Windows drive-anchor aliases. The clean build/install, 34-workflow suite, Ruff complexity, compileall, diff check, 50-scenario ceiling, and 1,200-line gate pass; the final independent P0/P1 repair review is clean.
 
 ### H5: Bundle 0.3/0.4 Document and Live Integration
 
-Status: next; H4 complete
+Status: complete after repair, expanded installed H5E acceptance, and clean independent P0/P1 review
 
-Dependencies: H4 qualification, HS3 document lowering, HS4 immutable plan/apply, `HS-BLOCK-008`
+Dependencies: H4 qualification, HS3 document lowering, HS4 immutable plan/apply; the `HS-BLOCK-008` URI/fresh-semantic gate is resolved in code
 Houdini required: yes
 
 Implementation batches:
@@ -351,21 +361,32 @@ Implementation batches:
    - lower GraphSpec `0.4`, expansion-map v2, module stacks, control stacks, selected branch/index provenance, and generated entity IDs into the canonical network document
    - preserve ownership, existing/adopt semantics, display/render/output selection, layout, and artist-owned state
    - map document diagnostics and diffs back to portable project/module URIs
-3. **H5C fresh live semantics**
+3. **H5C fresh live semantics — complete**
    - re-resolve every operator, parameter, connector, capability, exact catalog/HDA fingerprint, and deferred baseline constraint against the running Houdini catalog
    - do not claim complete effective package-search provenance while `HS-BLOCK-003` remains open
    - reject catalog, lock, module, capability, or target-document drift before a plan exists
    - require the same live policy and capability gates already used by HS3/HS4
-4. **H5D preview, plan, and guarded apply**
-   - accept authenticated frozen Bundle `0.3` and Bundle `0.4` content through distinct exact-version paths in `document.preview_bundle` and `document.plan_bundle`
+4. **H5D preview, plan, and guarded apply — complete**
+   - at this historical H5D checkpoint, accept authenticated frozen Bundle `0.3` and Bundle `0.4` content through distinct exact-version paths in `document.preview_bundle` and `document.plan_bundle`; HS7 later adds Bundle `0.5`
    - produce deterministic diffs and immutable plans; apply only stored plan identities with revision, confirmation, ownership, and policy checks
    - verify the realized document, roll back failures, and preserve idempotent replay behavior
-5. **H5E live workflow qualification**
+5. **H5E live workflow qualification — complete**
    - prove local and external-module projects containing nested `if`/`for` controls in a real Houdini session
-   - cover preview-only, merge, reconcile, stale-plan, catalog-drift, rollback, save/reload, and export/recompile cases
-   - treat current live export as a normalized flat language-`0.1` semantic handoff; prove compile equivalence without claiming it reconstructs authored modules or controls
+   - cover preview-only, merge, reconcile, stale-plan, catalog-drift, rollback, save/reload, and structural export recompilation/validation cases
+   - apply a newly compiled second merge and second reconcile rather than using idempotent replay; verify exact managed entity and expansion provenance after save/reopen
+   - prove target/baseline/partial crash recovery replay and timestamp-controlled expiry/count/byte pruning against a reopened SQLite store
+   - at the historical H5 checkpoint, treat live export as a normalized flat
+     language-`0.1` semantic handoff; prove structural recompilation and
+     exact-catalog semantic/connector validation without claiming network or
+     authored module/control reconstruction
    - run any cook used by acceptance as a separately authorized post-apply action after structural apply verification
    - record installed-package/runtime alignment and keep Bundle `0.3`/`0.4` live acceptance fail-closed until the complete matrix passes
+6. **H5F trust-boundary and lifecycle repair — complete**
+   - reject implicit UID/path adoption and ownership transfer; require complete managed identity, explicit non-confirming provenance-refresh actions, explicit confirming adoption, and plan-time identity-transition cross-checks
+   - make reconcile field-selective for retained nodes, execute/verify managed default resets and output clearing, and preserve every unowned field
+   - compose only authenticated, referenced module/control expansion stacks after the final document exists; preserve exact non-node provenance through the bounded live root carrier
+   - normalize target/baseline recovery replay and bound durable SQLite history to the 24-hour idempotency window, 256 terminal histories, and 256 MiB while preserving pending/partial evidence
+   - keep public Bundle, GraphSpec, document, apply-plan, and MCP interfaces unchanged; retain the 34-workflow catalogue and repository linter limits
 
 Exit criteria:
 
@@ -375,9 +396,105 @@ Exit criteria:
 - no file or project path becomes Houdini mutation authority; only the authenticated bundle and stored plan do
 - failures before or during apply leave the live scene unchanged or verified rolled back
 
+H5A status (2026-07-26): complete after independent P0/P1 review. Exact
+content-only Bundle `0.3` and
+Bundle `0.4` admission now uses distinct authenticated carrier decoders and
+rejects legacy, unsupported, malformed, or mixed lanes with `HOCUS700`.
+Bundle `0.3` project/module URIs now reuse the native canonical portable-path
+contract, including Unicode NFC and Windows-reserved-name rules. Carrier-bound
+locations are retained only as authenticated display hints because portable
+bundles do not contain the source bytes needed to attest line/column/offset
+relationships. The GraphSpec `0.4`, expansion-map v2, resolved-module-set v2,
+and Bundle `0.4` schema resources are registered as one adjacent compatibility
+unit. At the H5A checkpoint the new carriers remained disabled pending H5C/H5D;
+those gates are now implemented below. Focused authoring/runtime workflows and
+the independent review are clean.
+
+H5B status (2026-07-26): the pure lowering slice is complete after independent
+P0/P1 repair review. A private exact-type adapter accepts only
+self-authenticating Bundle `0.3`/`0.4` boundary values, rehydrates the exact
+graph version, and feeds the existing deterministic document lowerer. At the
+H5B checkpoint this remained a pure lane without a live endpoint. Expanded
+entities retain dependency source digests,
+origin IDs, related spans, module/control stack references, selected branches
+and iteration indexes; stack tables are interned once in document metadata.
+Generated explicit identities remain stable, conservative carrier capabilities
+remain on the candidate plan, public Bundle `0.2` behavior stays unchanged,
+and ordinary public lowering still rejects `0.3`/`0.4`. Independent review
+found and repaired direct-construction and subclass token-forgery seams before
+qualification.
+
+H5C status (2026-07-26): complete after independent P0/P1 review. Frozen Bundle
+`0.3` and control Bundle `0.4` are freshly rehydrated and semantically resolved
+against the running catalog through distinct exact-version paths. The live gate
+compares operator, parameter, connector, diagnostic, capability, catalog
+fingerprint, catalog-content, project, lock, module, and target identities
+against the authenticated carrier and rejects drift before planning. Bundle
+`0.4` retains conservative hidden-body capability authority while selected
+graph semantics must match exactly. Cancellation reaches fresh semantic work
+and document preparation. This closes the fresh-live-semantic portion of
+`HS-BLOCK-008` in code; it does not claim complete effective package-search
+provenance while `HS-BLOCK-003` remains open.
+
+Historical H5D checkpoint status (2026-07-26): complete after independent P0/P1 repair review.
+`document.preview_bundle` and `document.plan_bundle` admit Bundle `0.2`, frozen
+Bundle `0.3`, and Bundle `0.4` only through their exact decoders; no carrier is
+coerced into another lane. Plans pin the exact bundle, compiler/GraphSpec,
+project manifest/lock, catalog fingerprint/content, policy, capabilities,
+ownership, target document, baseline document/live revisions, and expansion
+provenance. Generated expansion symbols receive deterministic legal Houdini
+node names without replacing their durable entity IDs or module/control origin
+records. `document.apply_plan` consumes only stored plan identity, preserves
+signed `managedFields` and artist-owned state, observes cancellation, verifies
+the realized document, and uses the existing rollback/quarantine/idempotency
+lifecycle on failure. The build stages the exact H5 input/output/apply and
+Bundle `0.4` compatibility schemas into the installed package.
+
+Prior H5E status (2026-07-26): passed in installed Houdini 21.0.729 with exact
+source/build/install/running-module alignment. The three targets used Bundle
+versions `0.3`, `0.4`, and `0.4` in `merge`, `merge`, and `reconcile` modes.
+Preview was deterministic; apply verified the realized document and idempotent
+replay. Catalog drift failed with `HOCUS752` and succeeded after exact catalog
+restore, stale plans failed with `HOCUS753`, and injected mid-executor failure
+failed with `HOCUS755` after verified rollback. Save/reopen retained durable
+module/control provenance and signed managed fields across all three targets.
+All four staged H5 schema resources were available from the installed server.
+At that historical H5E checkpoint, the normalized flat language-`0.1` export
+structurally recompiled and passed exact-catalog semantic and connector
+validation without claiming network or authored module/control reconstruction.
+No acceptance cook ran (`cookExecuted = false`), and the final status was
+`passed`.
+
+Installed qualification discovered and fixed three core runtime issues before
+the passing rerun: preview now force-syncs its live baseline and observes
+cancellation; an unchanged graph-store baseline keeps a stable
+`baselineLiveRevision`; and an unmanaged `None` position is a verification
+wildcard while explicitly managed positions remain exact.
+
+H5F repair status (2026-07-26): complete after implementation, offline
+qualification, expanded installed H5E, and clean independent P0/P1 review. The repair closes implicit adoption and
+identity-transition seams, makes reconcile selective down to previously
+managed coordinates, authenticates and prunes the final expansion-provenance
+closure, restores exact non-node source provenance after live snapshots, and
+normalizes crash-recovery replay. Durable SQLite replay is now explicitly
+24-hour and capacity bounded: at most 256 terminal histories and 256 MiB of
+retained JSON, with reserved terminal-transition headroom and no automatic
+deletion of pending or `partial_or_unknown` evidence. The offline 34-workflow,
+Ruff complexity `12`/branch `15`, compileall, diff, 50-test, and 1,200-line
+gates pass without adding a public test.
+
+The repaired H5E run used the installed Houdini 21.0.729 package and hashed 37
+critical source/install/runtime modules. It applied distinct newly compiled
+second merge and reconcile plans, preserved exact node and non-node provenance
+plus referenced expansion stacks after save/reopen, replayed a recovered target
+through a reopened SQLite store, and proved expiry, age, count, byte, pending,
+partial, and protected-capacity retention behavior including exact `HOCUS759`.
+Sixty-seven live node observations recorded zero cooks, and the receipt status
+was `passed`.
+
 ### H6: Opt-In Project-Scoped MCP Source Workspace
 
-Status: planned after H5
+Status: complete and accepted after H6G trust-boundary repair, Windows/Linux publication acceptance, installed Houdini acceptance, the full 40-workflow gate, and clean independent P0/P1 closure review. `HS-BLOCK-001` and `HS-BLOCK-009` are closed for the approved local NTFS/Linux workspace boundary. All seven source operations and their public schemas remain unchanged.
 
 Dependencies: H4, H5, descriptor-safe project access from `HS-BLOCK-001`, MCP permission/audit integration
 Houdini required: installed-server validation yes; core path and edit logic no
@@ -400,8 +517,18 @@ Minimal MCP surface:
 3. `source.file.read` — read one or a bounded batch of exact project-relative authored files with raw content digests
 4. `source.file.apply_patch` — create exclusively or atomically patch/replace against an exact expected digest; no blind overwrite, raw delete, recursive move, or external-root write in the initial slice
 5. `source.file.write_export` — publish an authenticated `document.export_source` handoff through the existing native validation/recompile path with exclusive-create or exact-digest replacement
-6. `source.project.build` — invoke one explicit `format`, `check`, `compile`, or `lock_update` action through the existing native APIs and return portable diagnostics, receipts, and Bundle `0.3`/`0.4` content; `lock_update` additionally requires explicit write intent, selected entries, the generated-lock grant, approved complete external mapping, and exact current lock digest
+6. `source.project.build` — invoke one explicit `format`, `check`, `compile`, or `lock_update` action through the existing native APIs and return portable diagnostics, receipts, and exact flat Bundle `0.2`, module Bundle `0.3`, control Bundle `0.4`, or value Bundle `0.5` content for the selected frozen lane; `lock_update` additionally requires explicit write intent, selected entries, the generated-lock grant, approved complete external mapping, and an explicit expected lock state: absent uses exclusive creation without a prior digest, while present requires exact canonical-digest and descriptor-safe raw-digest CAS replacement
 7. `source.project.navigate` — expose completion and definition over saved files or supplied dirty buffers, including explicit approved external roots
+
+The current V1 mutation sequence is `source.project.build` with `compile`,
+followed by `document.preview_bundle`, `document.plan_bundle`, and
+`document.apply_plan`. Preview returns the candidate document, deterministic
+diff, destructive summary, and preview-only plan. Planning reruns exact live
+validation and persists immutable plan identity, hash, expiry, baseline,
+inverse, and drift guards. Apply consumes only that stored plan and rechecks
+session, policy, catalog, capabilities, ownership, target, revisions,
+confirmation, lease, idempotency, and cancellation before executing and
+verifying it across every family declared `supported` by the HS7 matrix.
 
 Read-only MCP resources use `hocus-source://{projectId}` and `hocus-source://{projectId}/{relativePath}` for approved project metadata and authored files. Enumeration and every fetch recheck the current connection grant and authority-projection digest; file digests are cache validators, and revoke, expiry, or a successful write immediately invalidates server-side cached resources. Digest-only change notification is the named optional H6N follow-up after the H6 core exit; it may notify clients of invalidation but does not stream file contents, reveal physical paths, or replace exact-digest checks at write/build time.
 
@@ -413,6 +540,7 @@ Security and correctness batches:
 - **H6D compiler/editor composition:** project build, lock, completion, and definition reuse the existing resolver/compiler authorities without duplicating a weaker MCP resolver
 - **H6E end-to-end agent loop:** configure project, discover/read resources, patch source, check/compile, preview, plan, apply, verify, export, and reconcile the same native files
 - **H6F hostile and installed validation:** traversal, alternate drive, UNC/device, reparse/hardlink swaps, case/Unicode aliases, stale digests, oversized payloads, rate limits, grant expiry/revocation, concurrent edits, scope-widening manifest patches, external-root write attempts, restart, and live Houdini tests; add resource-invalidation tests only when optional notifications ship
+- **H6G trust-boundary repair:** prepare, freeze, and size-check the exact public MCP mutation envelope before filesystem changes; establish one terminal commit point under the write-authority lease; bracket captured native identity/digest validation with matching opening/closing project/generated/external path sets; consume one shared 4,096-file/64 MiB budget before every retained read; exhaustively and strictly clean every snapshot resource without masking the primary error; keep create/replacement rollback authority through namespace, content, identity, and durability verification on Linux and Windows; serialize publication/recovery with process plus OS-wide root locks and durable clean/publishing/orphan/recovery states; preserve competing, displaced, and candidate evidence when rollback loses target ownership through one fail-closed root recovery sentinel bounded to one incident, two artifacts, and 24 MiB; durably flush Windows recovery namespaces; make post-commit descriptor cleanup and housekeeping non-masking; use lock-ordered atomic monotonic sliding-window quotas over authorized project scopes with one bounded invalid-selector scope; and advertise build plus `generated_lock` metadata conservatively
 - **H6N optional change notification (post-core):** add a separately granted, rate-limited digest-only subscription after H6 exits; prove coalescing, overflow/resync, revoke/expiry shutdown, and no source/path leakage
 
 Default operational budgets are frozen before H6 implementation and may be configured lower, never above the hard ceilings:
@@ -436,40 +564,127 @@ Exit criteria:
 - an unapproved path, stale digest, read-only project, external-library write, generated-file raw edit, or changed authority fails before filesystem mutation
 - no approved physical root leaks into portable artifacts, diagnostics, plans, resources, logs returned to the client, or durable source identity
 
+Final acceptance evidence (2026-07-27): six H6 public workflows remain inside the 40/50 catalogue and cover authority/restart, hostile descriptor-safe IO, guarded publication, native services, MCP/resources/limits/audit, and installed Houdini source-to-live behavior. H6G adds exact public-envelope preflight, terminal commit semantics, native-identity plus two-pass path-set snapshot authority, incremental closure budgets, exhaustive strict cleanup, bounded durable recovery, process and OS-wide account-scoped publication locks, hostile-environment cross-process contention, mandatory strong Linux root identity, Windows namespace durability, scoped sliding-window limits, and corrected MCP metadata. Windows and Ubuntu 24.04 WSL focused acceptance pass. Ruff with cyclomatic/branch limits 12/15, compileall, diff check, the 1,200-line gate, the full 40-workflow suite, and clean build/install pass. The installed Houdini 21.0.729 receipt proves the exact seven-tool surface, bounded HTTP rejection, Bundle `0.4` patch/build/apply, flat `0.1` export structural recompilation and exact-catalog semantic/connector validation followed by reconcile, native editor/Git visibility without project lock artifacts, revocation denial, source/install/running hash alignment including the publication-lock and recovery-record modules, and zero cooks; it does not establish export network-reconstruction equivalence. Final independent P0/P1 closure review is clean.
+
 Unbounded recursion remains permanently forbidden. Explicitly bounded deterministic compile-time recursion is deferred to a separate reviewed contract covering syntax, termination, identity, provenance, and budgets; it is not part of H0-H6.
 
 The historical safe `0.2` slice was same-project static imports with typed scalar/`node_output` parameters and exports; it is complete through G5 and remains frozen. The current H3 slice adds verified local/mixed resolver, lock-writer, compiler, CLI, whole-AST pinned catalog admission, and native editor dispatch to the H0-H2 language core. H4 qualifies it, H5 connects Bundle `0.4` to the guarded document/live pipeline, and H6 adds explicitly approved project-scoped MCP source access. Recursion remains outside these phases.
 
 ## 11. HS7: Network-Family and Value Parity
 
-Sequence:
+Status: complete and accepted after the clean installed Houdini family/value
+matrix, full 40-workflow qualification, and final independent P0/P1 review
 
-1. SOP and OBJ-contained SOP networks
-2. material builders and VOP-like networks
-3. LOP/Solaris and USD relationships/variants
-4. TOP/PDG structural graphs
-5. selected ROP, DOP, COP, and CHOP surfaces
-6. HDA definition authoring only through a separate, stronger contract
+Exact carrier lane: language `0.4`, compiler `0.6.0`, catalog v2,
+GraphSpec `0.5`, Bundle `0.5`, expansion-map/resolved-module-set v3, and
+network-document v2. Older lanes remain frozen.
+
+Delivered sequence:
+
+1. SOP and OBJ-contained SOP structural networks
+2. fixed-port material builders and VOP-like structural networks
+3. LOP/Solaris structural networks, with direct USD layer/relationship/variant
+   and time-sample authoring explicitly rejected
+4. TOP/PDG structural graphs without scheduler/work-item execution
+5. ROP, DOP, COP, and CHOP evaluated and retained as read-only
+6. HDA definition authoring rejected pending a separate stronger contract
 
 Value and graph parity includes:
 
-- named and multi-output ports
-- tuples, menu tokens, units, raw paths, and resets
-- ramps and multiparms
-- expressions and structural channel references
-- spare parameters
-- keyframes and time samples
-- code blobs and callbacks with differentiated policy
-- network boxes, dots, sticky notes, comments, and layout constraints
-- locked HDA and definition boundaries
+- exact named and multi-output ports with index authority
+- tuples, menu tokens, quantities, raw paths, and explicit/default resets
+- float/color ramps and bounded multiparms
+- fixed-language expressions and structural channel references
+- ownership-scoped managed instance spare parameters
+- seconds-based scalar numeric keyframes; USD time samples rejected
+- catalog-declared code blobs; callbacks and buttons rejected as actions
+- network boxes, routed dots, sticky notes, comments, and deterministic layout
+  constraints
+- locked-HDA internal and HDA-definition boundaries
 
 Exit criteria:
 
 - a published support matrix labels every feature supported, preserved-opaque, read-only, or rejected
 - no network family claims parity without a live test matrix
-- export/recompile equivalence exists for every supported construct
+- exported source structurally recompiles and passes exact-catalog semantic and
+  connector validation for every supported construct, without a
+  network-reconstruction guarantee
+
+Final acceptance (2026-07-27): complete. The source, catalog, carrier,
+semantic, document, guarded-plan/apply, reconcile, rollback, export, and
+machine-readable matrix paths are implemented. The catalogue remains 40/50
+public scenarios. The full 40-workflow run, Ruff cyclomatic/branch limits
+`12`/`15`, compileall, all JSON schemas, diff check, clean build/install, and
+the 1,200-line gate pass.
+
+Installed Houdini 21.0.729 accepted SOP, fixed-port material/VOP, LOP, and TOP
+create/reconcile/rollback/save-reopen/export flows; rejected nested/dynamic
+ports, unsupported families, direct USD time samples, and a disposable locked
+HDA boundary; and retained ROP/DOP/COP/CHOP as read-only. The extension matrix
+accepted graph-editor entities, managed spares/keyframes, tagged values,
+artist-state preservation, exact default reset, structural export recompilation
+and exact-catalog semantic/connector validation, and injected rollback. All managed descendants
+recorded zero cooks. Seventy-nine critical
+runtime-module receipts matched the source, installed package, and running
+modules.
+
+Qualification found and repaired nonzero network-dot input decoding,
+editor/runtime diff omissions, cross-ownership runtime reconcile, real HOM
+extrapolation enum mapping, nested box membership flattening, HOM
+editor-wrapper identity drift, language-`0.4` direct-root identity,
+complete tagged-value export, managed runtime observation pruning,
+float32-ramp overflow handling, and composite-child snapshot normalization.
+Final independent P0/P1 closure review is clean.
 
 ## 12. HS8: Production and AAA Hardening
+
+Implementation status: the repaired governed payload passes a fresh
+two-process same-host technical qualification on Houdini 21.0.729. Its current
+technical receipt is
+`sha256:5063c88c876822b595d44eafcb25cb43f6b04b78a59424d0a9ebc6f9b0a3a266`,
+with portable evidence
+`sha256:9f2d771da3de3d136f6da60fb415a2886e6260384e41e639aa0f05f37bbf0683`,
+installed manifest
+`sha256:8a835f7af6275fe235aa9c01a418466a8d71fe21dbb5930268e1cbd6e239b703`,
+and normalized USDA
+`sha256:15b2e0961ef43667707fabde87f6bb2517afd44c825818770476b7cfcc609149`.
+Both processes accepted with zero cook warnings/errors, and an identical
+second install preserved the token and activation bytes. This is same-host
+technical evidence only; RC1 clean-commit evidence and the RC2 source freeze
+remain pending. The older same-host receipt
+`sha256:e4e0f745421dabee7c4c9c576ee2df3390a19101a13422ee18e6afca87f73591`
+is historical because its observer could accept fallback-derived USD,
+material, delivery, dependency, and platform facts and its installed receipt
+covered an incomplete runtime closure. The later repaired Houdini 21.0.729
+two-process technical receipt, also historical, is
+`sha256:c21b1a7b2f09fe8f95d72c84f1c2440bb2e2c4b7dd2852268df762d29259e698`,
+with portable evidence
+`sha256:a863daa8b159603470cc5fddee87dcb38feb1dce73eca51ea77ff162968041ee`
+and installed manifest
+`sha256:71b5817d66a13167e599beec921ba8696400d42900b9e006824d21b9333252b7`.
+External human visual review and externally authenticated clean-image/VM
+acceptance remain separate open gates, so release authority remains false.
+
+### 12A. V1 release-closure program
+
+The detailed closure sequence is
+`docs/hocusscript-roadmap-completion-plan.md`. It separates the accepted
+technical product from the external evidence needed for release:
+
+1. RC0 reconciles stale roadmap/tracker state.
+2. RC1 completes performance, compatibility, hostile-boundary, migration,
+   effective package-search, and detached external-evidence tooling while the
+   tree is still mutable.
+3. RC2 freezes the exact source/install candidate once and binds final internal
+   receipts to it.
+4. RC3 obtains externally authenticated clean-image/VM qualification.
+5. RC4 obtains a detached human visual approval and external release
+   qualification for the unchanged RC2 candidate.
+6. RC5 publishes the exact candidate and moves nonblocking work to post-v1.
+
+Environment, multi-variant USD, destruction/simulation, 10k-node scale,
+broader connector/variadic fidelity, conflict-policy annotations, and new
+language syntax do not block the current fail-closed V1 claim.
 
 Objectives:
 
@@ -483,18 +698,38 @@ Objectives:
 
 Reference fixtures:
 
-- one procedural environment kit
-- one hard-surface or rock asset family
-- one destruction or simulation setup
-- one USD assembly with variants
+- implemented: one material-aware procedural rock family with UVs, two LOD
+  groups, collision, packed instancing, protected artist state, and a USD
+  assembly
+- future coverage reference: one procedural environment kit
+- future coverage reference: one destruction or simulation setup
+- future coverage reference: a multi-variant USD assembly
 
 Exit criteria:
 
-- at least one substantial asset rebuilds deterministically on a clean machine
+- at least one substantial asset rebuilds deterministically in same-host fresh
+  processes and in an externally established clean image or VM
 - generated LOD, collision, UV, material, and publish outputs meet declared contracts
 - visual and numeric regression reports are produced
 - a human artist can edit protected regions without source apply erasing them
 - pipeline provenance identifies source, compiler, catalog, modules, HDAs, inputs, and outputs
+
+Implemented HS8 boundaries:
+
+- one strict content-addressed asset contract and exact live observation model
+- deterministic recipe/source/compiler/catalog/module/HDA/input/output manifests
+- canonical metrics, platform budgets, repeated-build/numeric/visual comparison,
+  packaging receipts, and publish receipts
+- one read-only, non-idempotent `production.asset.qualify` operation; content-only
+  requests retain advisory raw gate decisions but both actionable readiness
+  flags remain false even with `review_production`; only the private installed
+  runner and detached verifier can establish authority
+- deterministic headless four-view contact sheets plus a separate review-request
+  carrier; the harness cannot create its own approval
+- historically accepted installed-only same-host runner and an evidence-only clean-image/VM
+  wrapper that cannot confer release authority; authenticated detached
+  approval/attestation ingestion remains pre-freeze RC1 work
+- 43 public scenario tests total, leaving seven slots below the 50-test ceiling
 
 ## 13. Cross-Cutting Workstreams
 
@@ -568,11 +803,11 @@ Code implemented but awaiting live Houdini validation remains explicitly `implem
 
 ### HS-BLOCK-001: Descriptor-Safe Native Project Reads
 
-Status: open
+Status: resolved and accepted by H6G plus clean independent closure review
 
-Canonical path resolution blocks ordinary traversal and symlink/junction escapes, but pathname check-then-open still permits a narrow reparse-point swap race between validation and file open. Before H6 permits the Houdini-hosted MCP process to read or write approved projects, implement descriptor/handle-based opens, verify final object identity and containment from the opened handle, and add Windows junction plus POSIX symlink race tests. Native same-user CLI operation may continue while this remains explicitly gated; H6 project access cannot begin while this blocker is open.
+H6 uses pinned root and contained-file handles on supported local NTFS/Linux filesystems, rejects unsupported/network/removable/reparse/link-count states, and verifies containment, final identity, casing, Unicode, and raw digests. Linux uses beneath/no-follow descriptor-relative operations, mandatory nonzero inode generation, and atomic exchange rollback. Windows holds reparse-inspected, no-delete-sharing guards over every namespace component during publication, uses atomic displaced-object backup semantics, validates the object actually replaced, and restores that exact object on conflict. Deterministic root/component/target swap, reparse/symlink, hardlink, stale-content, rollback, recovery, cross-process contention, and project-artifact scenarios pass on Windows and Ubuntu 24.04 WSL. Operations fail closed when the platform cannot provide the required semantics.
 
-The v3 empty-lock and same-project writers use an exclusive sibling update lease, exact digest rechecks immediately before atomic publication, and no-overwrite creation. G3 external-record publication uses this same-user cooperating-writer boundary and independently rederives and revalidates the complete mixed-root closure under the lease; a G2 plan or caller-supplied plan JSON is advisory and never publication authority. This lease is not a filesystem-native compare-and-swap against an arbitrary non-cooperating writer in the final recheck/replace window. A process crash can also leave a stale lease requiring manual recovery. Platform handle-based locking, stale-lease ownership/recovery, directory-durability guarantees, descriptor-safe reads, and adversarial raw-writer race tests remain part of this blocker before multi-user/service-hosted lock updates are enabled.
+The older pathname-based native CLI APIs retain their same-user compatibility signatures and limitations. H6 does not route trusted workspace operations through them: its internal file-provider and safe publisher abstractions own the stronger hosted boundary.
 
 ### HS-BLOCK-002: Non-Mutating Live Named/Typed Connector Fidelity
 
@@ -594,9 +829,16 @@ Houdini may compact sparse requested indices on unordered inputs; for example, a
 
 ### HS-BLOCK-005: Whole-Tuple Component Mapping in Portable Bundles
 
-Status: open
+Status: resolved for language `0.4`, GraphSpec `0.5`, and Bundle `0.5` by HS7;
+all earlier compatibility rows remain frozen and fail-closed
 
-Catalog resolution knows tuple component tokens, but compiled-bundle v0.2 parameter selections do not retain the ordered component-token mapping required to expand a whole-tuple assignment into scalar network-document bindings. HS3 emits blocking `HOCUS708`; scalar component assignments work. Add the mapping in a compatible semantic/bundle version, bind it into the bundle hash/schema, and add relocation plus live round-trip tests before enabling whole-tuple lowering.
+Catalog v2 and Bundle `0.5` retain the exact ordered component-token mapping
+required to lower whole tuples into scalar document bindings. Relocation,
+live reimport, reset, rollback, and structural export recompilation plus
+exact-catalog semantic/connector validation evidence is accepted in
+HS7. Language `0.1` / Bundle `0.2` continues to reject whole tuples with
+`HOCUS708`; the frozen language `0.2` / Bundle `0.3` and language `0.3` /
+Bundle `0.4` rows likewise gain no whole-tuple syntax or carrier semantics.
 
 ### HS-BLOCK-006: Explicit Source Entity IDs Across Symbol Renames
 
@@ -612,12 +854,33 @@ The first export smoke used a normalized projection and therefore did not prove 
 
 ### HS-BLOCK-008: Bundle 0.3/0.4 Diagnostic and URI Parity Before Live Acceptance
 
-Status: open; blocks H5 Bundle `0.3`/`0.4` live preview/document lowering, not native offline production
+Status: resolved and accepted by repaired installed H5E plus clean independent review
 
-The strict Bundle `0.3` decoder now rejects host-path diagnostic URIs, invalid or out-of-origin spans, duplicated expansion frames, and offline live-path/entity claims. Bundle `0.4` additionally authenticates module/control provenance and GraphSpec `0.4`, but neither live consumer may assume those spans or portable URI spellings are safe merely because the bundle hash is valid. Source bytes are intentionally absent from portable bundles, so the consumer cannot reconstruct arbitrary interior multiline offset/line/column relationships from bytes. Before H5 enables either carrier, bind diagnostics to exact authenticated field/origin spans or explicitly treat locations as untrusted display hints, unify URI validation with the native portable-path contract including Unicode NFC and Windows-reserved segments, validate module/control stack references, add rehashed hostile fixtures, and freshly re-resolve all semantic selections against the live catalog. Live/document lowering remains fail-closed with `HOCUS700` while this gate is open.
+The strict Bundle `0.3` decoder rejects host-path diagnostic URIs, invalid or
+out-of-origin spans, duplicated expansion frames, and offline
+live-path/entity claims. Bundle `0.4` additionally authenticates
+module/control provenance and GraphSpec `0.4`; its decoder rejects every
+GraphSpec span whose source URI is absent from the authenticated
+entry/dependency set and enforces the GraphSpec-derived minimum capability
+set. H5A closed the carrier-side gaps: both lanes now use exact-version
+admission, Bundle `0.3` uses the native Unicode NFC/Windows-reserved portable
+URI rules throughout, module/control stack references remain carrier
+validated, and source positions are explicitly classified as authenticated
+display hints rather than source-byte-attested coordinates. H5C now freshly
+re-resolves semantic selections, capabilities, and exact catalog identities
+against the running Houdini catalog while preserving the authenticated
+carrier's conservative capability manifest. H5D composes that gate into the
+exact-version preview/plan/apply paths with durable module/control provenance,
+exact pins, cancellation, verification, and rollback. Unsupported, malformed,
+mixed, or drifted artifacts remain fail-closed with typed diagnostics. The
+repaired installed H5E proved the exact-version local/mixed workflow matrix,
+diagnostic locations, fresh live semantics, distinct second reconcile,
+durable provenance, and reopened-store recovery; final independent review was
+clean, so the blocker is accepted. Complete effective Houdini
+package-search provenance remains separately excluded under `HS-BLOCK-003`.
 
 ### HS-BLOCK-009: MCP Project Workspace Authority
 
-Status: open; blocks H6 MCP project reads and writes
+Status: resolved and accepted by H6G plus clean independent closure review
 
-H6 requires a host-owned approval model rather than an agent-supplied absolute path. Define server startup/config-file registration and a Houdini approval UI over one canonical registry, an opaque non-authorizing project selector, server-side connection/session authorization, separate source-read/source-write/generated-lock/external-read grants, session versus persisted grants, expiry and revocation behavior, authority-projection binding, audit record, and MCP permission annotations. Close `HS-BLOCK-001` first, then prove descriptor-safe containment, expected-digest writes, no-overwrite creation, concurrent-edit rejection, scope-widening manifest rejection, generated-file protection, reparse/hardlink-race defense, path-free responses, frozen operational limits, resource cache invalidation, and installed Houdini restart behavior. No general filesystem operation or self-authorizing root parameter is permitted. Optional digest-only notifications remain H6N follow-up work.
+One canonical host-owned registry now serves startup configuration and the Houdini Source Workspaces UI. Random stable `projectId` selectors are non-authorizing; authenticated `Mcp-Session-Id` sessions, principal-bound persistence, projection-bound grants, expiry, revocation, generation invalidation, separate read/write/generated-lock/external permissions, path-free audit, and context-filtered resources are enforced on every source operation. Manifest/root identity drift requires reapproval, and publication holds a linearizable authority lease through the terminal commit. Final installed Houdini acceptance proves restart, limits, exact path-free responses, cache invalidation, revocation denial, Git-visible source edits without project lock artifacts, and the complete source-to-live loop. No general filesystem operation or self-authorizing root parameter exists. Optional digest-only notifications remain H6N follow-up work.

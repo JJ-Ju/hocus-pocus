@@ -12,13 +12,32 @@ from typing import Any
 
 from .catalog import CatalogProvider, CatalogSnapshot, SnapshotCatalogProvider
 from .compiler import MAX_SOURCE_BYTES, compile_source
+from .document_live_names import live_node_names
 from .model import EXPLICIT_NODE_ID_PATTERN
+from .model import graph_spec_from_dict
 from .semantic import CatalogConstraint, resolve_graph
+from .control_expander import expand_control_graph
+from .export_named_ports import named_edge_selectors, use_authored_symbols
+from .export_network_shape import validate_exported_network_nodes
+from .export_editor_entities import render_editor_entities
+from .export_runtime_entities import render_runtime_entities
+from .export_ownership import managed_export_ownership
+from .export_tagged_values import (
+    ParameterValueExportError,
+    render_parameter_value,
+)
 
 
 _DOCUMENT_SCHEMA_URI = "hocuspocus://schemas/network-document/v1"
+_DOCUMENT_SCHEMA_URI_V2 = "hocuspocus://schemas/network-document/v2"
 _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _SUPPORTED_CODE_LANGUAGES = frozenset({"vex", "python", "hscript"})
+_EXPORT_FAMILY_CATEGORIES = {
+    "sop": frozenset({"Sop"}),
+    "mat": frozenset({"Vop", "Shop", "Mat"}),
+    "lop": frozenset({"Lop"}),
+    "top": frozenset({"Top"}),
+}
 MAX_EXPORT_DIAGNOSTICS = 500
 MAX_EXPORT_RESPONSE_BYTES = 16 * 1024 * 1024
 _PROVENANCE_FIELDS = (
@@ -53,6 +72,7 @@ class NetworkDocumentExport:
     source: str | None
     diagnostics: tuple[ExportDiagnostic, ...]
     provenance: dict[str, Any]
+    language_version: str = "0.1"
 
     @property
     def valid(self) -> bool:
@@ -60,7 +80,8 @@ class NetworkDocumentExport:
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "stage": "source_export", "exportVersion": "1.0", "languageVersion": "0.1", "valid": self.valid,
+            "stage": "source_export", "exportVersion": "1.0",
+            "languageVersion": self.language_version, "valid": self.valid,
             "source": self.source,
             "diagnostics": [item.to_dict() for item in self.diagnostics],
             "provenance": copy.deepcopy(self.provenance),
@@ -83,10 +104,19 @@ class _ExportWork:
     used_code_uids: set[str]
     parms_by_node: dict[str, list[tuple[str, str]]]
     supported_binding_uids: set[str]
+    symbols_by_uid: dict[str, str]
+    ports_by_key: dict[tuple[str, str, int], dict[str, Any]]
+    connector_names_by_dest: dict[tuple[str, int], tuple[str | None, str | None]]
+    network_family: str = ""
+    child_category: str | None = None
+    language_version: str = "0.1"
 
     @classmethod
     def create(cls, document: dict[str, Any]) -> "_ExportWork":
-        return cls(document, [], {}, {}, {}, [], [], [], {}, [], set(), set(), {}, set())
+        return cls(
+            document, [], {}, {}, {}, [], [], [], {}, [], set(), set(), {},
+            set(), {}, {}, {},
+        )
 
     def block(
         self, code: str, message: str, pointer: str, uid: str | None = None, **details: Any
@@ -106,7 +136,7 @@ def export_network_document(
     document: dict[str, Any], *, graph_name: str | None = None,
     catalog: CatalogProvider | CatalogSnapshot | None = None,
 ) -> NetworkDocumentExport:
-    """Export a flat SOP document without host access or filesystem writes."""
+    """Export one supported flat network without host access or filesystem writes."""
     if not isinstance(document, dict):
         diagnostic = ExportDiagnostic("HOCUS800", "Network-document export requires an object.", "")
         return _result(None, [diagnostic], _empty_provenance())
@@ -114,42 +144,58 @@ def export_network_document(
     root_path, revision = _validate_document_envelope(work)
     _collect_identities(work)
     _collect_nodes(work, root_path)
+    use_authored_symbols(work)
     display_nodes, render_nodes = _collect_flags(work)
     _validate_ports(work)
     _collect_edges(work)
     _collect_bindings(work)
     ownerships, ownership = _resolve_ownership(work)
+    runtime_lines, animated_targets, runtime_errors = render_runtime_entities(
+        document, work.symbols_by_uid, ownership,
+    )
+    for message in runtime_errors:
+        work.block("HOCUS814", message, "/animations")
+    editor_lines, editor_errors = render_editor_entities(
+        document, work.symbols_by_uid, ownership,
+    )
+    for message in editor_errors:
+        work.block("HOCUS814", message, "/networkDots")
     resolved_graph_name = graph_name or _normalized_graph_name(root_path)
     if not isinstance(resolved_graph_name, str) or _IDENTIFIER.fullmatch(resolved_graph_name) is None:
         work.block("HOCUS811", "graph_name must be a HocusScript identifier.", "/graphName")
     managed_fields = _managed_fields(
         work.authored_nodes, work.inputs_by_dest, work.parms_by_node,
-        display_nodes, render_nodes, work.output_nodes,
+        display_nodes, render_nodes, work.output_nodes, work.symbols_by_uid,
     )
     provenance = _provenance(
         document, work.identities, ownerships, managed_fields, work.preserved_state
     )
     provider = _load_catalog(work, catalog, provenance)
     if work.diagnostics:
-        return _result(None, work.diagnostics, provenance)
+        return _result(None, work.diagnostics, provenance, work.language_version)
+    named_edges = named_edge_selectors(work, provider)
     source = _render_source(
         work, str(resolved_graph_name), root_path, revision, ownership,
-        display_nodes, render_nodes,
+        display_nodes, render_nodes, work.child_category or "", named_edges,
+        editor_lines,
+        runtime_lines, animated_targets,
     )
     if len(source.encode("utf-8")) > MAX_SOURCE_BYTES:
         work.block("HOCUS812", "Normalized export exceeds the HocusScript source-size limit.", "")
-        return _result(None, work.diagnostics, provenance)
+        return _result(None, work.diagnostics, provenance, work.language_version)
     _validate_exported_source(work, source, str(resolved_graph_name), provider, provenance)
     if work.diagnostics:
-        return _result(None, work.diagnostics, provenance)
+        return _result(None, work.diagnostics, provenance, work.language_version)
     provenance["sourceDigest"] = "sha256:" + hashlib.sha256(source.encode("utf-8")).hexdigest()
-    return _result(source, work.diagnostics, provenance)
+    return _result(source, work.diagnostics, provenance, work.language_version)
 
 
 def _validate_document_envelope(work: _ExportWork) -> tuple[str, Any]:
     document = work.document
-    if document.get("$schema") != _DOCUMENT_SCHEMA_URI or document.get("kind") != "network_document":
-        work.block("HOCUS800", "Export requires the locked network-document v1 contract.", "")
+    schema = document.get("$schema")
+    if schema not in {_DOCUMENT_SCHEMA_URI, _DOCUMENT_SCHEMA_URI_V2} or document.get("kind") != "network_document":
+        work.block("HOCUS800", "Export requires a locked network-document contract.", "")
+    work.language_version = "0.4" if schema == _DOCUMENT_SCHEMA_URI_V2 else "0.1"
     document_id = document.get("documentId")
     if not isinstance(document_id, str) or not document_id.startswith("network:"):
         work.block("HOCUS800", "documentId must be a network-document identity.", "/documentId")
@@ -171,13 +217,24 @@ def _validate_document_envelope(work: _ExportWork) -> tuple[str, Any]:
         work.block("HOCUS801", "rootPath must be a canonical absolute Houdini path.", "/rootPath")
         root_path = ""
     category = document.get("category")
-    if category not in {"Sop", "Object"} or (
-        category == "Object" and not root_path.startswith("/obj/")
-    ):
+    metadata = document.get("metadata")
+    family = (
+        str(metadata.get("networkFamily", "")).strip().lower()
+        if isinstance(metadata, dict)
+        else ""
+    )
+    if not family and category in {"Sop", "Object"} and root_path.startswith("/obj/"):
+        family = "sop"
+    if family not in _EXPORT_FAMILY_CATEGORIES:
         work.block(
-            "HOCUS802", "HocusScript 0.1 export requires a SOP network or an /obj SOP container.",
-            "/category", received=category,
+            "HOCUS802",
+            "HocusScript flat export supports only SOP, fixed-port MAT/VOP, LOP, and TOP networks.",
+            "/metadata/networkFamily",
+            receivedFamily=family or None,
+            receivedCategory=category,
         )
+    else:
+        work.network_family = family
     for field in ("nodes", "ports", "edges", "parameterBindings", "codeBlobs"):
         value = document.get(field)
         if isinstance(value, list):
@@ -231,9 +288,33 @@ def _collect_nodes(work: _ExportWork, root_path: str) -> None:
             if not bool(node.get("isNetwork")):
                 work.block("HOCUS804", "The rootPath node must be a network container.", pointer + "/isNetwork", uid)
             continue
-        if _validate_authored_node(work, node, pointer, uid, root_path, symbols):
-            symbols[str(node["name"])] = str(uid)
+        symbol = _exported_node_symbol(work, node, pointer, uid)
+        if (
+            symbol is not None
+            and _validate_authored_node(
+                work, node, pointer, uid, root_path, symbols, symbol,
+            )
+        ):
+            symbols[symbol] = str(uid)
+            work.symbols_by_uid[str(uid)] = symbol
             work.authored_nodes.append(node)
+    _validate_exported_live_names(work)
+    categories = {
+        str(node.get("category"))
+        for node in work.authored_nodes
+        if isinstance(node.get("category"), str)
+    }
+    if len(categories) == 1:
+        work.child_category = next(iter(categories))
+    elif work.authored_nodes:
+        work.block(
+            "HOCUS805",
+            "Flat export requires one exact child operator category.",
+            "/nodes",
+            categories=sorted(categories),
+        )
+    if not work.authored_nodes:
+        work.block("HOCUS805", "Flat export requires at least one authored child node.", "/nodes")
     if len(work.root_nodes) != 1:
         work.block(
             "HOCUS801", "The document must contain exactly one rootPath node.",
@@ -243,7 +324,7 @@ def _collect_nodes(work: _ExportWork, root_path: str) -> None:
 
 def _validate_authored_node(
     work: _ExportWork, node: dict[str, Any], pointer: str, uid: str | None,
-    root_path: str, symbols: dict[str, str],
+    root_path: str, symbols: dict[str, str], symbol: str,
 ) -> bool:
     path, name = node.get("path"), node.get("name")
     if not isinstance(path, str) or not root_path or not path.startswith(root_path + "/"):
@@ -254,12 +335,35 @@ def _validate_authored_node(
         work.block("HOCUS804", "Node names must already be valid HocusScript identifiers.", pointer + "/name", uid)
     elif not isinstance(uid, str) or EXPLICIT_NODE_ID_PATTERN.fullmatch(uid) is None:
         work.block("HOCUS803", "Exported nodes require a persistent UID valid for explicit @id syntax.", pointer + "/uid", uid)
-    elif name in symbols:
-        work.block("HOCUS804", "Node symbols must be unique.", pointer + "/name", uid, firstUid=symbols[name])
-    elif bool(node.get("isNetwork")):
-        work.block("HOCUS805", "Nested network containers are opaque in HocusScript 0.1 export.", pointer + "/isNetwork", uid)
-    elif node.get("category") != "Sop":
-        work.block("HOCUS805", "Only SOP child operators can be exported.", pointer + "/category", uid)
+    elif symbol in symbols:
+        work.block(
+            "HOCUS804",
+            "Node symbols must be unique.",
+            pointer + "/metadata/hocus/symbol",
+            uid,
+            firstUid=symbols[symbol],
+        )
+    elif (
+        bool(node.get("isNetwork"))
+        and node.get("subnetworkDocumentId") != f"network:{path}"
+    ):
+        work.block(
+            "HOCUS805",
+            "Nested network nodes require their exact subordinate document identity.",
+            pointer + "/subnetworkDocumentId",
+            uid,
+        )
+    elif node.get("category") not in _EXPORT_FAMILY_CATEGORIES.get(
+        work.network_family, frozenset()
+    ):
+        work.block(
+            "HOCUS805",
+            "Node category does not match the selected flat network family.",
+            pointer + "/category",
+            uid,
+            networkFamily=work.network_family,
+            receivedCategory=node.get("category"),
+        )
     elif not isinstance(node.get("typeName"), str) or not node["typeName"] or not _is_utf8(node["typeName"]):
         work.block("HOCUS804", "Each exported node requires an exact operator typeName.", pointer + "/typeName", uid)
     elif not isinstance(node.get("flags"), dict):
@@ -275,6 +379,56 @@ def _validate_authored_node(
             )
         return True
     return False
+
+
+def _exported_node_symbol(
+    work: _ExportWork,
+    node: dict[str, Any],
+    pointer: str,
+    uid: str | None,
+) -> str | None:
+    """Preserve authenticated managed identity; otherwise use the live name."""
+
+    name = node.get("name")
+    manifest = _node_managed_manifest(node)
+    if manifest is None:
+        return str(name) if isinstance(name, str) else None
+    metadata = node.get("metadata")
+    hocus = metadata.get("hocus") if isinstance(metadata, dict) else None
+    symbol = hocus.get("symbol") if isinstance(hocus, dict) else None
+    if (
+        not isinstance(uid, str)
+        or manifest.get("nodeUid") != uid
+        or not isinstance(hocus, dict)
+        or hocus.get("entityKind") != "node"
+        or not isinstance(symbol, str)
+        or _IDENTIFIER.fullmatch(symbol) is None
+    ):
+        work.block(
+            "HOCUS803",
+            "Managed node export requires its exact durable Hocus symbol identity.",
+            pointer + "/metadata/hocus/symbol",
+            uid,
+        )
+        return None
+    return symbol
+
+
+def _validate_exported_live_names(work: _ExportWork) -> None:
+    projected = live_node_names([
+        {"symbol": symbol}
+        for symbol in work.symbols_by_uid.values()
+    ])
+    for node in work.authored_nodes:
+        uid = str(node["uid"])
+        symbol = work.symbols_by_uid[uid]
+        if projected[symbol] != node.get("name"):
+            work.block(
+                "HOCUS803",
+                "Managed node symbols do not reproduce the exact live node names.",
+                "/nodes",
+                uid,
+            )
 
 
 def _collect_flags(work: _ExportWork) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
@@ -294,6 +448,19 @@ def _collect_flags(work: _ExportWork) -> tuple[list[dict[str, Any]], list[dict[s
     for flag_name, nodes in selected.items():
         if len(nodes) > 1:
             work.block("HOCUS806", f"At most one exported node may carry the {flag_name} flag.", "/nodes")
+        supported = (
+            work.network_family == "sop"
+            or (work.network_family == "lop" and flag_name == "display")
+            or work.network_family == "top"
+        )
+        if nodes and not supported:
+            work.block(
+                "HOCUS806",
+                "This node flag is unsupported by the selected flat-export lane.",
+                "/nodes",
+                networkFamily=work.network_family,
+                flag=flag_name,
+            )
     return selected["display"], selected["render"]
 
 
@@ -308,6 +475,16 @@ def _validate_ports(work: _ExportWork) -> None:
             work.block("HOCUS807", "Port references a missing nodeUid.", f"/ports/{index}/nodeUid", uid)
         direction, port_index = port.get("direction"), port.get("index")
         if isinstance(uid, str) and direction in {"input", "output"} and type(port_index) is int and port_index >= 0:
+            key = (str(port.get("nodeUid")), direction, port_index)
+            if key in work.ports_by_key:
+                work.block(
+                    "HOCUS807",
+                    "Port identities must be unique by node, direction, and index.",
+                    f"/ports/{index}",
+                    uid,
+                )
+            else:
+                work.ports_by_key[key] = port
             expected_uid = f"port:{port.get('nodeUid')}:{direction}:{port_index}"
             if uid != expected_uid:
                 work.block("HOCUS803", "Port uid is not reproducible from persistent node identity.",
@@ -390,9 +567,75 @@ def _collect_data_edge(
     if uid != expected_uid:
         work.block("HOCUS803", "Data-edge uid is not reproducible from persistent node identity.",
                    pointer + "/uid", uid, expectedUid=expected_uid)
+    names = _edge_connector_names(
+        work, source, dest, str(source_uid), str(dest_uid),
+        output_index, input_index, pointer, uid,
+    )
     work.inputs_by_dest.setdefault(str(dest_uid), []).append((input_index, str(source_uid), output_index))
+    work.connector_names_by_dest[(str(dest_uid), input_index)] = names
     if uid:
         work.supported_edge_uids.add(uid)
+
+
+def _edge_connector_names(
+    work: _ExportWork,
+    source: dict[str, Any],
+    dest: dict[str, Any],
+    source_uid: str,
+    dest_uid: str,
+    output_index: int,
+    input_index: int,
+    pointer: str,
+    edge_uid: str | None,
+) -> tuple[str | None, str | None]:
+    output_name = source.get("portName")
+    input_name = dest.get("portName")
+    output_port = work.ports_by_key.get((source_uid, "output", output_index))
+    input_port = work.ports_by_key.get((dest_uid, "input", input_index))
+    observed = (
+        _optional_connector_name(
+            output_port.get("name") if isinstance(output_port, dict) else None
+        ),
+        _optional_connector_name(
+            input_port.get("name") if isinstance(input_port, dict) else None
+        ),
+    )
+    endpoint = (
+        _optional_connector_name(output_name),
+        _optional_connector_name(input_name),
+    )
+    if any(value is not None and not isinstance(value, str) for value in endpoint):
+        work.block(
+            "HOCUS807",
+            "Connection port names must be strings when present.",
+            pointer,
+            edge_uid,
+        )
+        return None, None
+    if output_port is None or input_port is None:
+        work.block(
+            "HOCUS807",
+            "Every exported connection requires exact source and destination port records.",
+            pointer,
+            edge_uid,
+        )
+    elif endpoint != observed:
+        work.block(
+            "HOCUS807",
+            "Connection endpoint names conflict with their exact port records.",
+            pointer,
+            edge_uid,
+            endpointNames=list(endpoint),
+            portRecordNames=list(observed),
+        )
+    return (
+        endpoint[0],
+        endpoint[1],
+    )
+
+
+def _optional_connector_name(value: Any) -> str | None:
+    return value if isinstance(value, str) and value else None
 
 
 def _collect_bindings(work: _ExportWork) -> None:
@@ -462,6 +705,23 @@ def _encode_binding(
     node_uid: Any, parm_name: str, code_by_uid: dict[str, dict[str, Any]],
 ) -> str | None:
     mode = binding.get("valueMode")
+    if work.language_version == "0.4" and mode != "code_reference":
+        try:
+            return render_parameter_value(
+                binding,
+                node_uids=set(work.nodes_by_uid),
+                symbols_by_uid=work.symbols_by_uid,
+            )
+        except ParameterValueExportError as exc:
+            work.block(
+                "HOCUS808",
+                "Managed HocusScript 0.4 value cannot be exported exactly.",
+                pointer + "/valueMode",
+                uid,
+                valueMode=mode,
+                error=str(exc),
+            )
+            return None
     if mode == "literal":
         if "value" not in binding or not _is_scalar(binding.get("value")):
             work.block("HOCUS808", "Literal bindings must contain one finite scalar value.", pointer + "/value", uid)
@@ -503,7 +763,9 @@ def _resolve_ownership(work: _ExportWork) -> tuple[set[str], str | None]:
         {str(node["uid"]) for node in work.authored_nodes}
         | work.supported_edge_uids | work.supported_binding_uids | work.used_code_uids
     )
-    ownerships, complete = _managed_ownership(work.collections, managed_uids)
+    ownerships, complete = managed_export_ownership(
+        work.document, work.collections, managed_uids
+    )
     if len(ownerships) > 1 or (ownerships and not complete):
         work.block(
             "HOCUS810",
@@ -523,8 +785,9 @@ def _load_catalog(
     if catalog is None:
         return None
     try:
-        provider = SnapshotCatalogProvider(catalog) if isinstance(catalog, CatalogSnapshot) else catalog
-        provenance["catalogFingerprint"] = provider.get_catalog().fingerprint
+        snapshot = catalog if isinstance(catalog, CatalogSnapshot) else catalog.get_catalog()
+        provider = SnapshotCatalogProvider(snapshot)
+        provenance["catalogFingerprint"] = snapshot.fingerprint
         return provider
     except Exception as exc:
         work.block("HOCUS813", "Catalog could not be read for semantic export validation.",
@@ -535,11 +798,16 @@ def _load_catalog(
 def _render_source(
     work: _ExportWork, graph_name: str, root_path: str, revision: Any,
     ownership: str | None, display_nodes: list[dict[str, Any]],
-    render_nodes: list[dict[str, Any]],
+    render_nodes: list[dict[str, Any]], child_category: str,
+    named_edges: set[tuple[str, int]], editor_lines: list[str],
+    runtime_lines: dict[str, list[str]],
+    animated_targets: set[tuple[str, str]],
 ) -> str:
     lines = [
-        "hocus 0.1;", "", f"graph {graph_name} {{",
-        f"  target {_format_scalar(root_path)};", "  category Sop;", "  mode merge;",
+        f"hocus {work.language_version};", "", f"graph {graph_name} {{",
+        f"  target {_format_scalar(root_path)};",
+        f"  category {child_category};",
+        "  mode merge;",
     ]
     if type(revision) is int and revision >= 0:
         lines.append(f"  expect revision {revision};")
@@ -547,16 +815,39 @@ def _render_source(
         lines.append(f"  ownership {_format_scalar(ownership)};")
     for node in sorted(work.authored_nodes, key=lambda item: (str(item.get("path")), str(item.get("uid")))):
         uid = str(node["uid"])
-        lines.extend(("", f"  node {node['name']} @id({_format_scalar(uid)}): {_format_scalar(node['typeName'])} {{"))
+        symbol = work.symbols_by_uid[uid]
+        lines.extend(("", f"  node {symbol} @id({_format_scalar(uid)}): {_format_scalar(node['typeName'])} {{"))
         for input_index, source_uid, output_index in sorted(work.inputs_by_dest.get(uid, [])):
-            lines.append(f"    input[{input_index}] = {work.nodes_by_uid[source_uid]['name']}.output[{output_index}];")
+            names = work.connector_names_by_dest.get((uid, input_index), (None, None))
+            named = (uid, input_index) in named_edges
+            input_selector = _format_scalar(names[1]) if named else str(input_index)
+            output_selector = _format_scalar(names[0]) if named else str(output_index)
+            lines.append(
+                f"    input[{input_selector}] = "
+                f"{work.symbols_by_uid[source_uid]}.output[{output_selector}];"
+            )
         for parm_name, encoded in sorted(work.parms_by_node.get(uid, [])):
-            lines.append(f"    {parm_name} = {encoded};")
+            if (uid, parm_name) not in animated_targets:
+                lines.append(f"    {parm_name} = {encoded};")
+        lines.extend(runtime_lines.get(uid, []))
         lines.append("  }")
+    lines.extend(editor_lines)
     directives = (
-        ("display", display_nodes[0]["name"] if display_nodes else None),
-        ("render", render_nodes[0]["name"] if render_nodes else None),
-        ("output", work.output_nodes[0]["name"] if work.output_nodes else None),
+        (
+            "display",
+            work.symbols_by_uid[str(display_nodes[0]["uid"])]
+            if display_nodes else None,
+        ),
+        (
+            "render",
+            work.symbols_by_uid[str(render_nodes[0]["uid"])]
+            if render_nodes else None,
+        ),
+        (
+            "output",
+            work.symbols_by_uid[str(work.output_nodes[0]["uid"])]
+            if work.output_nodes else None,
+        ),
     )
     if any(value is not None for _, value in directives):
         lines.append("")
@@ -569,6 +860,19 @@ def _validate_exported_source(
     work: _ExportWork, source: str, graph_name: str,
     provider: CatalogProvider | None, provenance: dict[str, Any],
 ) -> None:
+    if work.language_version == "0.4":
+        try:
+            graph = graph_spec_from_dict(expand_control_graph(
+                source.encode("utf-8"), f"hocus-project://export/{graph_name}.hocus", {}, {},
+            ))
+        except Exception as exc:
+            work.block(
+                "HOCUS813", "Exporter output failed structural recompilation.",
+                "", errorType=exc.__class__.__name__, error=str(exc),
+            )
+            return
+        _validate_exported_semantics(work, graph, provider, provenance)
+        return
     compiled = compile_source(
         source, f"{graph_name}.hocus", source_uri=f"hocus-export://{graph_name}.hocus"
     )
@@ -577,13 +881,21 @@ def _validate_exported_source(
             work.block("HOCUS813", "Exporter output failed structural recompilation.",
                        item.json_pointer or "", originalCode=item.code, originalMessage=item.message)
         return
+    _validate_exported_semantics(work, compiled.graph_spec, provider, provenance)
+
+
+def _validate_exported_semantics(
+    work: _ExportWork, graph: Any, provider: CatalogProvider | None,
+    provenance: dict[str, Any],
+) -> None:
     if provider is None:
         return
     semantic = resolve_graph(
-        compiled.graph_spec, provider,
+        graph, provider,
         constraint=CatalogConstraint(provenance["catalogFingerprint"]),
     )
     if semantic.valid and semantic.ready_for_document_lowering:
+        _validate_exported_connectors(work, semantic, provider.get_catalog())
         return
     for item in semantic.diagnostics or []:
         work.block("HOCUS813", "Exporter output failed exact-catalog semantic resolution.",
@@ -592,7 +904,118 @@ def _validate_exported_source(
         work.block("HOCUS813", "Exporter output is not ready for document lowering.", "/catalog")
 
 
-def _result(source: str | None, diagnostics: list[ExportDiagnostic], provenance: dict[str, Any]) -> NetworkDocumentExport:
+def _validate_exported_connectors(
+    work: _ExportWork,
+    semantic: Any,
+    catalog: CatalogSnapshot,
+) -> None:
+    operators = {
+        (item.category, item.qualified_name): item
+        for item in catalog.operators
+    }
+    selected = {
+        item.node_symbol: operators.get((item.category, item.qualified_name))
+        for item in semantic.operator_selections
+    }
+    document_uids = [
+        str(node["uid"])
+        for node in sorted(
+            work.authored_nodes,
+            key=lambda item: (str(item.get("path")), str(item.get("uid"))),
+        )
+    ]
+    selected_by_uid = {
+        document_uids[item.node_index]: selected.get(item.node_symbol)
+        for item in semantic.operator_selections
+        if 0 <= item.node_index < len(document_uids)
+    }
+    validate_exported_network_nodes(
+        work.authored_nodes, selected_by_uid, work.block
+    )
+    if work.network_family == "sop":
+        return
+    for symbol, operator in selected.items():
+        if (
+            operator is None
+            or not _fixed_connector_layout(operator.inputs)
+            or not _fixed_connector_layout(operator.outputs)
+        ):
+            work.block(
+                "HOCUS813",
+                "Exported non-SOP operator has dynamic or incomplete connector metadata.",
+                "/nodes",
+                networkFamily=work.network_family,
+                nodeSymbol=symbol,
+            )
+    uid_by_symbol = {
+        symbol: uid for uid, symbol in work.symbols_by_uid.items()
+    }
+    for connection in semantic.connection_selections:
+        source_operator = selected.get(connection.source_symbol)
+        dest_operator = selected.get(connection.node_symbol)
+        output = _exact_fixed_connector(
+            getattr(source_operator, "outputs", ()), connection.output_index
+        )
+        input_connector = _exact_fixed_connector(
+            getattr(dest_operator, "inputs", ()), connection.input_index
+        )
+        dest_uid = uid_by_symbol.get(connection.node_symbol)
+        observed = work.connector_names_by_dest.get(
+            (str(dest_uid), connection.input_index)
+        )
+        expected = (
+            output.name if output is not None else None,
+            input_connector.name if input_connector is not None else None,
+        )
+        name_mismatch = (
+            observed is None
+            or any(
+                isinstance(expected_name, str)
+                and expected_name
+                and expected_name != observed_name
+                for expected_name, observed_name in zip(expected, observed)
+            )
+        )
+        if (
+            output is None
+            or input_connector is None
+            or name_mismatch
+        ):
+            work.block(
+                "HOCUS813",
+                "Exported non-SOP connection is dynamic or lacks exact catalog connector evidence.",
+                connection.json_pointer,
+                networkFamily=work.network_family,
+                expectedNames=list(expected),
+                observedNames=list(observed) if observed is not None else None,
+            )
+
+
+def _exact_fixed_connector(connectors: Any, index: int) -> Any | None:
+    matches = [
+        item
+        for item in connectors
+        if item.index == index
+        and item.cardinality in {"one", "optional"}
+        and (item.name is None or isinstance(item.name, str))
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
+def _fixed_connector_layout(connectors: Any) -> bool:
+    return all(
+        type(item.index) is int
+        and item.index >= 0
+        and item.cardinality in {"one", "optional"}
+        and (item.name is None or isinstance(item.name, str))
+        for item in connectors
+    )
+
+
+def _result(
+    source: str | None, diagnostics: list[ExportDiagnostic],
+    provenance: dict[str, Any], language_version: str = "0.1",
+) -> NetworkDocumentExport:
     sentinels = [item for item in diagnostics if item.code == "HOCUS819"]
     ordered_items = sorted(
         (item for item in diagnostics if item.code != "HOCUS819"),
@@ -600,7 +1023,9 @@ def _result(source: str | None, diagnostics: list[ExportDiagnostic], provenance:
     )
     if sentinels:
         ordered_items.append(sentinels[-1])
-    result = NetworkDocumentExport(source, tuple(ordered_items), copy.deepcopy(provenance))
+    result = NetworkDocumentExport(
+        source, tuple(ordered_items), copy.deepcopy(provenance), language_version,
+    )
     encoded_size = len(json.dumps(
         result.to_dict(), ensure_ascii=False, separators=(",", ":"), sort_keys=True,
     ).encode("utf-8"))
@@ -690,30 +1115,15 @@ def _identity_record(kind: str, item: dict[str, Any]) -> dict[str, Any]:
     return record
 
 
-def _managed_ownership(collections: dict[str, list[Any]], managed_uids: set[str]) -> tuple[set[str], bool]:
-    ownerships: set[str] = set()
-    covered = 0
-    for items in collections.values():
-        for item in items:
-            if not isinstance(item, dict) or item.get("uid") not in managed_uids:
-                continue
-            metadata = item.get("metadata")
-            hocus = metadata.get("hocus") if isinstance(metadata, dict) else None
-            ownership = hocus.get("ownership") if isinstance(hocus, dict) else None
-            if isinstance(ownership, str) and ownership:
-                ownerships.add(ownership)
-                covered += 1
-    return ownerships, covered == len(managed_uids)
-
-
 def _managed_fields(nodes: list[dict[str, Any]], inputs: dict[str, list[tuple[int, str, int]]],
                     parms: dict[str, list[tuple[str, str]]], displays: list[dict[str, Any]],
-                    renders: list[dict[str, Any]], outputs: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+                    renders: list[dict[str, Any]], outputs: list[dict[str, Any]],
+                    symbols_by_uid: dict[str, str]) -> dict[str, dict[str, Any]]:
     display_uids, render_uids, output_uids = ({str(item["uid"]) for item in group}
                                                   for group in (displays, renders, outputs))
     return {
         str(node["uid"]): {
-            "symbol": node["name"], "type": True,
+            "symbol": symbols_by_uid[str(node["uid"])], "type": True,
             "inputs": sorted(item[0] for item in inputs.get(str(node["uid"]), [])),
             "parameters": sorted(item[0] for item in parms.get(str(node["uid"]), [])),
             "flags": {
