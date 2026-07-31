@@ -1,0 +1,73 @@
+hocus 0.4;
+graph HS8RockUSD {
+  target "/stage";
+  category Lop;
+  ownership "hs8";
+  mode merge;
+  layout = auto;
+  node hs8_rock_usd @id("hs8.usd.import"): "sopimport" {
+    soppath = "/obj/hs8_rock_family/OUT_ROCK_FAMILY";
+    primpath = "/World/RockFamily";
+    enable_pathprefix = true;
+    pathprefix = "/World/RockFamily";
+    parentprimkind = "assembly";
+    enable_kindschema = true;
+    kindschema = "nestedassembly";
+    bindmaterials = "bind";
+    enable_pathattr = true;
+    pathattr = "path";
+    enable_setdefaultprim = true;
+    setdefaultprim = true;
+  }
+  node rock_material_library @id("hs8.usd.material.library"): "materiallibrary" {
+    input[0] = hs8_rock_usd.output[0];
+    matpathprefix = raw_path(usd_prim, "/World/Looks");
+    matnet = raw_path(node, "/mat");
+    materials = multiparm(instances = [
+      instance("rock", {
+        enable = true;
+        matflag = false;
+        matnode = raw_path(node, "/mat/hs8_rock_material");
+        matpath = raw_path(usd_prim, "/World/Looks/hs8_rock_material");
+        assign = true;
+        geopath = "/World/RockFamily/Prototypes/Rock/LOD0 /World/RockFamily/Prototypes/Rock/LOD1";
+      })
+    ]);
+  }
+  node configure_lod0 @id("hs8.usd.configure.lod0"): "configureprimitive" {
+    input[0] = rock_material_library.output[0];
+    primpattern = "/World/RockFamily/Prototypes/Rock/LOD0";
+    setpurpose = true;
+    purpose = "render";
+    setvisibility = true;
+    visibility = "inherit";
+  }
+  node configure_lod1 @id("hs8.usd.configure.lod1"): "configureprimitive" {
+    input[0] = configure_lod0.output[0];
+    primpattern = "/World/RockFamily/Prototypes/Rock/LOD1";
+    setpurpose = true;
+    purpose = "render";
+    setvisibility = true;
+    visibility = "invisible";
+  }
+  node configure_collision @id("hs8.usd.configure.collision"): "configureprimitive" {
+    input[0] = configure_lod1.output[0];
+    primpattern = "/World/RockFamily/Prototypes/Rock/Collision";
+    setpurpose = true;
+    purpose = "proxy";
+    setvisibility = true;
+    visibility = "invisible";
+  }
+  node configure_publish_layer @id("hs8.usd.configure.layer"): "configurelayer" {
+    input[0] = configure_collision.output[0];
+    setdefaultprim = true;
+    defaultprim = "World";
+    setupaxis = true;
+    upaxis = "y";
+    setmetersperunit = true;
+    metersperunit = 1.0;
+    setstagemetadata = true;
+  }
+  display = configure_publish_layer;
+  output = configure_publish_layer;
+}

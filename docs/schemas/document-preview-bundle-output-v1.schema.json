@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "hocuspocus://schemas/document-preview-bundle-output/v1",
+  "title": "HocusScript Document Preview Bundle Output v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "stage",
+    "previewVersion",
+    "valid",
+    "readyForPlan",
+    "readyForApply",
+    "bundleDigest",
+    "target",
+    "diagnostics",
+    "diagnosticCount",
+    "artifact"
+  ],
+  "properties": {
+    "stage": {"const": "document_preview"},
+    "previewVersion": {"const": "0.1"},
+    "valid": {"type": "boolean"},
+    "readyForPlan": {"type": "boolean"},
+    "readyForApply": {"const": false},
+    "bundleDigest": {"$ref": "#/$defs/digest"},
+    "target": {"type": "string", "pattern": "^/"},
+    "catalogResolution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["matched", "expectedFingerprint", "liveFingerprint"],
+      "properties": {
+        "matched": {"type": "boolean"},
+        "expectedFingerprint": {"$ref": "#/$defs/digest"},
+        "liveFingerprint": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "baseline": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["documentId", "documentRevision", "liveRevision"],
+      "properties": {
+        "documentId": {"type": "string", "minLength": 1},
+        "documentRevision": {"type": "integer", "minimum": 0},
+        "liveRevision": {"type": "integer", "minimum": 0}
+      }
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["diff", "destructive", "operationCount"],
+      "properties": {
+        "diff": {"type": "object"},
+        "destructive": {"type": "object"},
+        "operationCount": {"type": "integer", "minimum": 0}
+      }
+    },
+    "diagnostics": {"type": "array", "items": {"type": "object"}},
+    "diagnosticCount": {"type": "integer", "minimum": 0},
+    "artifact": {
+      "oneOf": [
+        {"type": "null"},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["previewId", "resourceUri", "contentDigest", "byteLength", "inline"],
+          "properties": {
+            "previewId": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+            "resourceUri": {"type": "string", "pattern": "^houdini://documents/previews/[0-9a-f]{64}$"},
+            "contentDigest": {"$ref": "#/$defs/digest"},
+            "byteLength": {"type": "integer", "minimum": 0},
+            "inline": {"type": "boolean"}
+          }
+        }
+      ]
+    },
+    "preview": {"type": "object"}
+  },
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+  }
+}

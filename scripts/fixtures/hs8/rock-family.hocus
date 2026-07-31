@@ -1,0 +1,120 @@
+hocus 0.4;
+graph HS8RockFamily {
+  target "/obj/hs8_rock_family";
+  category Sop;
+  ownership "hs8";
+  mode reconcile;
+  layout = auto;
+  node hero_seed @id("hs8.hero.seed"): "platonic" {
+    type = "4";
+    radius = 1.8;
+  }
+  node hero_sculpt @id("hs8.hero.sculpt"): "mountain" {
+    input[0] = hero_seed.output[0];
+    height = 0.55;
+  }
+  node hero_uv @id("hs8.hero.uv"): "uvunwrap" {
+    input[0] = hero_sculpt.output[0];
+    uvattrib = "uv";
+    layout = "square";
+  }
+  node hero_normal @id("hs8.hero.normal"): "normal" {
+    input[0] = hero_uv.output[0];
+    cuspangle = 48.0;
+  }
+  node hero_tangent @id("hs8.hero.tangent"): "polyframe" {
+    input[0] = hero_normal.output[0];
+    tangentuon = true;
+    tangentu = "tangentu";
+    ortho = true;
+  }
+  node hero_lod0 @id("hs8.hero.lod0"): "groupcreate" {
+    input[0] = hero_tangent.output[0];
+    groupname = "lod0";
+    grouptype = "primitive";
+    groupbase = true;
+  }
+  node lod0_path @id("hs8.lod0.path"): "attribcreate" {
+    input[0] = hero_lod0.output[0];
+    name = "path";
+    class = "primitive";
+    type = "index";
+    string = "LOD0";
+  }
+  node lod0_material @id("hs8.lod0.material"): "attribcreate" {
+    input[0] = lod0_path.output[0];
+    name = "shop_materialpath";
+    class = "primitive";
+    type = "index";
+    string = "/mat/hs8_rock_material";
+  }
+  node hero_reduce @id("hs8.hero.reduce"): "polyreduce::2.0" {
+    input[0] = hero_uv.output[0];
+    percentage = 62.0;
+  }
+  node lod1_normal @id("hs8.lod1.normal"): "normal" {
+    input[0] = hero_reduce.output[0];
+    cuspangle = 48.0;
+  }
+  node lod1_tangent @id("hs8.lod1.tangent"): "polyframe" {
+    input[0] = lod1_normal.output[0];
+    tangentuon = true;
+    tangentu = "tangentu";
+    ortho = true;
+  }
+  node hero_lod1 @id("hs8.hero.lod1"): "groupcreate" {
+    input[0] = lod1_tangent.output[0];
+    groupname = "lod1";
+    grouptype = "primitive";
+    groupbase = true;
+  }
+  node lod1_path @id("hs8.lod1.path"): "attribcreate" {
+    input[0] = hero_lod1.output[0];
+    name = "path";
+    class = "primitive";
+    type = "index";
+    string = "LOD1";
+  }
+  node lod1_material @id("hs8.lod1.material"): "attribcreate" {
+    input[0] = lod1_path.output[0];
+    name = "shop_materialpath";
+    class = "primitive";
+    type = "index";
+    string = "/mat/hs8_rock_material";
+  }
+  node collision_group @id("hs8.collision.group"): "groupcreate" {
+    input[0] = hero_lod1.output[0];
+    groupname = "collision_proxy";
+    grouptype = "primitive";
+    groupbase = true;
+  }
+  node collision_path @id("hs8.collision.path"): "attribcreate" {
+    input[0] = collision_group.output[0];
+    name = "path";
+    class = "primitive";
+    type = "index";
+    string = "Collision";
+  }
+  node family_prototype @id("hs8.family.prototype"): "merge" {
+    input[0] = lod0_material.output[0];
+    input[1] = lod1_material.output[0];
+    input[2] = collision_path.output[0];
+  }
+  node family_instance_source @id("hs8.family.instance.source"): "pack" {
+    input[0] = family_prototype.output[0];
+    createpath = true;
+    path = "/World/RockFamily/Rock";
+  }
+  node family_instances @id("hs8.family.instances"): "copyxform" {
+    input[0] = family_instance_source.output[0];
+    ncy = 3;
+    tx = 3.0;
+    rz = 17.0;
+  }
+  node OUT_ROCK_FAMILY @id("hs8.family.output"): "null" {
+    input[0] = family_instances.output[0];
+  }
+  display = OUT_ROCK_FAMILY;
+  render = OUT_ROCK_FAMILY;
+  output = OUT_ROCK_FAMILY;
+}

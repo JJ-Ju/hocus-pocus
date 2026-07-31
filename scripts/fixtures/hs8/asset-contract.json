@@ -1,0 +1,184 @@
+{
+  "$schema": "hocuspocus://schemas/asset-contract/v1",
+  "kind": "hocus_asset_contract",
+  "contractVersion": 1,
+  "identity": {
+    "assetId": "hs8-rock-family",
+    "name": "HS8RockFamily",
+    "assetType": "rock"
+  },
+  "space": {
+    "linearUnit": "meter",
+    "metersPerUnit": 1.0,
+    "upAxis": "Y",
+    "forwardAxis": "-Z",
+    "handedness": "right"
+  },
+  "naming": {
+    "policyId": "portable_ascii_asset_name_v1",
+    "caseSensitive": true,
+    "requiredNames": [
+      "Collision",
+      "LOD0",
+      "LOD1",
+      "OUT_ROCK_FAMILY",
+      "RockFamily",
+      "World",
+      "hs8_rock_material"
+    ]
+  },
+  "geometry": {
+    "pivot": {
+      "mode": "origin",
+      "position": [0.0, 0.0, 0.0],
+      "tolerance": 0.001
+    },
+    "bounds": {
+      "minimum": [-1.8535534143447876, -1.7542808042445515, -1.6067315340042114],
+      "maximum": [7.86227803514339, 1.933097664469095, 1.5085524320602417],
+      "tolerance": 0.00001
+    },
+    "topology": {
+      "manifold": true,
+      "watertight": true,
+      "maxNgonSides": 8,
+      "allowDegenerate": false
+    },
+    "normals": {
+      "required": true,
+      "consistent": true,
+      "unitLengthTolerance": 0.01
+    },
+    "tangents": {
+      "required": true,
+      "orthogonal": true,
+      "orthogonalTolerance": 0.01
+    }
+  },
+  "surface": {
+    "uvSets": [
+      {
+        "name": "uv",
+        "required": true,
+        "udimTiles": [1001],
+        "allowDuplicateUvTriangles": true,
+        "duplicateUvTriangleMeasurementRequired": true,
+        "texelDensityMeasurementRequired": true,
+        "texelDensity": {
+          "minimum": 217.2,
+          "maximum": 217.6,
+          "unit": "px_per_m"
+        }
+      }
+    ],
+    "materialSlots": [
+      {
+        "name": "hs8_rock_material",
+        "required": true
+      }
+    ]
+  },
+  "delivery": {
+    "lods": [
+      {
+        "name": "lod0",
+        "maxTriangles": 100000,
+        "maxVertices": 100000,
+        "maxRelativeTriangleReduction": 0.0,
+        "relativeTriangleReductionMeasurementRequired": true
+      },
+      {
+        "name": "lod1",
+        "maxTriangles": 100000,
+        "maxVertices": 100000,
+        "maxRelativeTriangleReduction": 0.8,
+        "relativeTriangleReductionMeasurementRequired": true
+      }
+    ],
+    "collision": {
+      "mode": "mesh",
+      "requireConvex": false,
+      "maxPrimitives": 100000,
+      "maxTriangles": 100000
+    },
+    "instancing": {
+      "required": true,
+      "prototypePrimPath": "/Flattened_Prototype_1",
+      "representation": "native_instance",
+      "maxUniqueMeshes": 8,
+      "maxUnpackedInstances": 8
+    },
+    "platformBudgets": [
+      {
+        "platform": "houdini",
+        "maxTriangles": 100000,
+        "maxVertices": 100000,
+        "maxTextureBytes": 0,
+        "maxMaterialSlots": 4,
+        "maxInstances": 32
+      }
+    ]
+  },
+  "usd": {
+    "kind": "assembly",
+    "purpose": "default",
+    "variants": [],
+    "publish": {
+      "rootPrim": "/World",
+      "defaultPrim": "/World",
+      "payload": "inline"
+    },
+    "primBindings": [
+      {
+        "name": "collision",
+        "role": "collision",
+        "primPath": "/World/RockFamily/Prototypes/Rock/Collision",
+        "purpose": "proxy",
+        "visibility": "invisible",
+        "materialPrimPath": null
+      },
+      {
+        "name": "lod0",
+        "role": "render",
+        "primPath": "/World/RockFamily/Prototypes/Rock/LOD0",
+        "purpose": "render",
+        "visibility": "inherited",
+        "materialPrimPath": "/World/Looks/hs8_rock_material"
+      },
+      {
+        "name": "lod1",
+        "role": "render",
+        "primPath": "/World/RockFamily/Prototypes/Rock/LOD1",
+        "purpose": "render",
+        "visibility": "invisible",
+        "materialPrimPath": "/World/Looks/hs8_rock_material"
+      }
+    ]
+  },
+  "dependencies": [
+    {
+      "id": "Sop.matchaxis",
+      "kind": "hda",
+      "version": "builtin",
+      "digest": "sha256:8b9b18caaa26da0bf65c6dc87df29d7241678285c3508c730ae22bd15d3ec82f"
+    },
+    {
+      "id": "Sop.mountain",
+      "kind": "hda",
+      "version": "builtin",
+      "digest": "sha256:1425629145b902dcb0354b57c118bbed5da640621d40ae4a3b186636808717f5"
+    },
+    {
+      "id": "Sop.platonic",
+      "kind": "hda",
+      "version": "builtin",
+      "digest": "sha256:6fdf89034f7a2e8ea4a2ec80fbfba401949029902e3a3bbf97f01cd6785a7305"
+    },
+    {
+      "id": "Vop.principledshader::2.0",
+      "kind": "hda",
+      "version": "builtin",
+      "digest": "sha256:9fb5a072c4934c726572254f8ae814ec44f7f94f681fa7e7fca0446110909c5a"
+    }
+  ]
+}

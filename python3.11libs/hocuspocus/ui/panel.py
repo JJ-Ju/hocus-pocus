@@ -17,6 +17,7 @@ except ImportError:  # pragma: no cover
     hou = None  # type: ignore
 
 from hocuspocus import startup
+from hocuspocus.ui.workspace_widget import WorkspaceApprovalWidget
 
 _PANEL_INSTANCE: "HocusPocusPanel | None" = None
 _LOGGER = logging.getLogger("hocuspocus.ui.panel")
@@ -62,8 +63,15 @@ class HocusPocusPanel(QtWidgets.QDialog):
         self._summary_label.setWordWrap(True)
         root.addWidget(self._summary_label)
 
+        tabs = QtWidgets.QTabWidget()
+        root.addWidget(tabs, 1)
+        server_page = QtWidgets.QWidget()
+        server_layout = QtWidgets.QVBoxLayout(server_page)
         splitter = QtWidgets.QSplitter(QtCore.Qt.Vertical)
-        root.addWidget(splitter, 1)
+        server_layout.addWidget(splitter)
+        tabs.addTab(server_page, "Server")
+        self._workspace_widget = WorkspaceApprovalWidget()
+        tabs.addTab(self._workspace_widget, "Source Workspaces")
 
         self._status_view = self._make_json_view("Status")
         self._tasks_view = self._make_json_view("Recent Tasks")
@@ -109,6 +117,7 @@ class HocusPocusPanel(QtWidgets.QDialog):
         self._tasks_view["editor"].setPlainText(json.dumps(payload["tasks"], indent=2, sort_keys=True))
         self._events_view["editor"].setPlainText(json.dumps(payload["events"], indent=2, sort_keys=True))
         self._logs_view["editor"].setPlainText("\n".join(payload["logs"]))
+        self._workspace_widget.refresh()
 
         running = bool(status.get("running"))
         endpoint = status.get("mcpUrl", "")
@@ -123,16 +132,24 @@ class HocusPocusPanel(QtWidgets.QDialog):
         self._copy_token_button.setEnabled(bool(status.get("token")))
 
     def _start_server(self) -> None:
-        startup.start_server()
-        self.refresh()
+        try:
+            startup.start_server()
+        except startup.RuntimeAdmissionError:
+            pass
+        finally:
+            self.refresh()
 
     def _stop_server(self) -> None:
         startup.stop_server()
         self.refresh()
 
     def _restart_server(self) -> None:
-        startup.restart_server()
-        self.refresh()
+        try:
+            startup.restart_server()
+        except startup.RuntimeAdmissionError:
+            pass
+        finally:
+            self.refresh()
 
     def _copy_endpoint(self) -> None:
         QtWidgets.QApplication.clipboard().setText(startup.server_status().get("mcpUrl", ""))

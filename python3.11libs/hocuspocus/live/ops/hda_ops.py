@@ -12,6 +12,68 @@ from ..context import RequestContext
 
 
 class HdaOperationsMixin:
+    @staticmethod
+    def _hda_append_promoted_template(
+        hou_module: Any,
+        definition: Any,
+        template: Any,
+        folder_label: str | None,
+    ) -> None:
+        group = definition.parmTemplateGroup()
+        folder = group.findFolder(folder_label) if folder_label else None
+        if folder is not None:
+            group.appendToFolder(folder, template)
+        elif folder_label:
+            folder_template = hou_module.FolderParmTemplate(
+                folder_label.lower().replace(" ", "_"), folder_label
+            )
+            folder_template.addParmTemplate(template)
+            group.append(folder_template)
+        else:
+            group.append(template)
+        definition.setParmTemplateGroup(
+            group, rename_conflicting_parms=True, create_backup=True
+        )
+
+    @staticmethod
+    def _hda_promoted_paths(instance: Any, promoted_name: str, source_index: int):
+        promoted_parm = instance.parm(promoted_name)
+        promoted_tuple = instance.parmTuple(promoted_name)
+        if promoted_tuple is not None:
+            paths = [parm.path() for parm in promoted_tuple]
+            component = (
+                promoted_tuple[source_index].path()
+                if source_index < len(promoted_tuple)
+                else None
+            )
+            return component, paths, promoted_name
+        component = promoted_parm.path() if promoted_parm is not None else None
+        return component, [component] if component is not None else [], None
+
+    def _hda_create_promoted_reference(
+        self,
+        instance: Any,
+        definition: Any,
+        source_parm_path: str,
+        source_tuple: Any,
+        promoted_component_path: str,
+        promoted_tuple_name: str | None,
+    ) -> None:
+        instance.allowEditingOfContents()
+        source_parm = self._require_parm_by_path(source_parm_path)
+        promoted_component = self._require_parm_by_path(promoted_component_path)
+        live_source_tuple = self._safe_value(source_parm.tuple, None)
+        live_source_tuple = live_source_tuple() if callable(live_source_tuple) else live_source_tuple
+        live_promoted_tuple = (
+            instance.parmTuple(promoted_tuple_name) if promoted_tuple_name else None
+        )
+        if source_tuple is not None and live_source_tuple is not None and live_promoted_tuple is not None:
+            live_source_tuple.set(live_promoted_tuple)
+        else:
+            source_parm.set(promoted_component)
+        definition.updateFromNode(instance)
+        instance.matchCurrentDefinition()
+
     def _hda_definition_summary(self, definition: Any, *, include_sections: bool = True) -> dict[str, Any]:
         sections_payload = []
         if include_sections:
@@ -301,61 +363,28 @@ class HdaOperationsMixin:
         template = template_source.clone()
         template.setName(promoted_name)
         template.setLabel(promoted_label)
-        ptg = definition.parmTemplateGroup()
-        if folder_label:
-            folder = ptg.findFolder(folder_label)
-            if folder is not None:
-                ptg.appendToFolder(folder, template)
-            else:
-                folder_template = hou_module.FolderParmTemplate(folder_label.lower().replace(" ", "_"), folder_label)
-                folder_template.addParmTemplate(template)
-                ptg.append(folder_template)
-        else:
-            ptg.append(template)
-        definition.setParmTemplateGroup(ptg, rename_conflicting_parms=True, create_backup=True)
+        self._hda_append_promoted_template(hou_module, definition, template, folder_label)
         instance.matchCurrentDefinition()
 
-        source_index = 0
-        if source_tuple is not None:
-            source_tuple_parms = list(source_tuple)
-            if source_parm in source_tuple_parms:
-                source_index = source_tuple_parms.index(source_parm)
-
-        def _promoted_paths_payload() -> tuple[str | None, list[str], str | None]:
-            promoted_parm = instance.parm(promoted_name)
-            promoted_tuple = instance.parmTuple(promoted_name)
-            promoted_paths: list[str] = []
-            promoted_component_path: str | None = None
-            tuple_name: str | None = None
-            if promoted_tuple is not None:
-                promoted_paths = [parm.path() for parm in promoted_tuple]
-                tuple_name = promoted_name
-                if source_index < len(promoted_tuple):
-                    promoted_component_path = promoted_tuple[source_index].path()
-            elif promoted_parm is not None:
-                promoted_component_path = promoted_parm.path()
-                promoted_paths = [promoted_component_path]
-            return promoted_component_path, promoted_paths, tuple_name
-
-        promoted_component_path, promoted_paths, promoted_tuple_name = _promoted_paths_payload()
+        source_parms = list(source_tuple) if source_tuple is not None else []
+        source_index = source_parms.index(source_parm) if source_parm in source_parms else 0
+        promoted_component_path, promoted_paths, promoted_tuple_name = (
+            self._hda_promoted_paths(instance, promoted_name, source_index)
+        )
 
         if create_reference and promoted_component_path is not None:
-            instance.allowEditingOfContents()
+            self._hda_create_promoted_reference(
+                instance,
+                definition,
+                source_parm_path,
+                source_tuple,
+                promoted_component_path,
+                promoted_tuple_name,
+            )
             source_parm = self._require_parm_by_path(source_parm_path)
-            promoted_component = self._require_parm_by_path(promoted_component_path)
-            if source_tuple is not None and promoted_tuple_name is not None:
-                live_source_tuple = self._safe_value(source_parm.tuple, None)
-                live_source_tuple = live_source_tuple() if callable(live_source_tuple) else live_source_tuple
-                live_promoted_tuple = instance.parmTuple(promoted_tuple_name)
-                if live_source_tuple is not None and live_promoted_tuple is not None:
-                    live_source_tuple.set(live_promoted_tuple)
-                else:
-                    source_parm.set(promoted_component)
-            else:
-                source_parm.set(promoted_component)
-            definition.updateFromNode(instance)
-            instance.matchCurrentDefinition()
-            promoted_component_path, promoted_paths, promoted_tuple_name = _promoted_paths_payload()
+            promoted_component_path, promoted_paths, promoted_tuple_name = (
+                self._hda_promoted_paths(instance, promoted_name, source_index)
+            )
 
         return {
             "instance": self._hda_instance_summary(instance),

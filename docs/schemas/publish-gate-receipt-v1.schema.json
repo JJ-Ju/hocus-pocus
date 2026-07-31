@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "hocuspocus://schemas/publish-gate-receipt/v1",
+  "title": "HocusScript Packaging and Publish Gate Receipt v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema", "kind", "schemaVersion", "gate", "reportDigest",
+    "upstreamReceiptDigest", "upstreamDecision", "checks", "decision", "receiptDigest"
+  ],
+  "properties": {
+    "$schema": {"const": "hocuspocus://schemas/publish-gate-receipt/v1"},
+    "kind": {"const": "hocus_gate_receipt"},
+    "schemaVersion": {"const": 1},
+    "gate": {"enum": ["packaging", "publish"]},
+    "reportDigest": {"$ref": "#/$defs/digest"},
+    "upstreamReceiptDigest": {
+      "oneOf": [{"$ref": "#/$defs/digest"}, {"type": "null"}]
+    },
+    "upstreamDecision": {
+      "oneOf": [{"enum": ["pass", "fail"]}, {"type": "null"}]
+    },
+    "checks": {
+      "type": "array",
+      "minItems": 7,
+      "maxItems": 9,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "passed", "evidenceDigest"],
+        "properties": {
+          "id": {
+            "enum": [
+              "contract", "artistOverrides", "provenance", "outputs", "budget",
+              "deterministic", "numeric", "visual", "visualVersionReview"
+            ]
+          },
+          "passed": {"type": "boolean"},
+          "evidenceDigest": {"$ref": "#/$defs/digest"}
+        }
+      }
+    },
+    "decision": {"enum": ["pass", "fail"]},
+    "receiptDigest": {"$ref": "#/$defs/digest"}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"gate": {"const": "packaging"}}, "required": ["gate"]},
+      "then": {
+        "properties": {
+          "upstreamReceiptDigest": {"type": "null"},
+          "upstreamDecision": {"type": "null"},
+          "checks": {"minItems": 7, "maxItems": 7}
+        }
+      },
+      "else": {
+        "properties": {
+          "upstreamReceiptDigest": {"$ref": "#/$defs/digest"},
+          "upstreamDecision": {"enum": ["pass", "fail"]},
+          "checks": {"minItems": 9, "maxItems": 9}
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+  }
+}

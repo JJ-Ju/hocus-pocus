@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "hocuspocus://schemas/hocus-lock/v2",
+  "title": "hocus.lock.json v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "kind",
+    "schemaVersion",
+    "projectUid",
+    "manifestDigest",
+    "languageVersion",
+    "catalog",
+    "modules"
+  ],
+  "properties": {
+    "$schema": {"const": "hocuspocus://schemas/hocus-lock/v2"},
+    "kind": {"const": "hocus_project_lock"},
+    "schemaVersion": {"const": 2},
+    "projectUid": {"type": "string", "pattern": "^[a-z0-9][a-z0-9.-]{0,127}$"},
+    "manifestDigest": {"$ref": "#/$defs/digest"},
+    "languageVersion": {"const": "0.1"},
+    "catalog": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "path", "contentDigest", "fingerprint"],
+      "properties": {
+        "schemaVersion": {"const": 1},
+        "path": {"$ref": "#/$defs/relativeFile"},
+        "contentDigest": {"$ref": "#/$defs/digest"},
+        "fingerprint": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "modules": {"type": "array", "maxItems": 0}
+  },
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "relativeFile": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^(?=\\S)(?!.*\\s$)(?!/)(?!.*(?:^|/)\\.\\.?(?:/|$))(?!.*\\\\)(?!.*:)(?!.*//)[^/]+(?:/[^/]+)*\\.json$"
+    }
+  }
+}

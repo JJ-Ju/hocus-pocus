@@ -11,6 +11,65 @@ from ..context import RequestContext
 
 
 class UsdStageOperationsMixin:
+    def _usd_reference_issues(self, stage: Any) -> list[dict[str, Any]]:
+        issues: list[dict[str, Any]] = []
+        for prim in stage.Traverse():
+            summary = self._usd_prim_summary(prim)
+            for reference in summary["references"]:
+                asset_path = str(reference.get("assetPath") or "").strip()
+                if not asset_path:
+                    continue
+                try:
+                    resolved = self._require_hou().expandString(asset_path)
+                    candidate = self._safe_value(
+                        lambda resolved=resolved: ensure_path_allowed(resolved, self._settings),
+                        None,
+                    )
+                    if candidate is not None and not candidate.exists():
+                        issues.append(
+                            {
+                                "severity": "warning",
+                                "kind": "usd_reference_missing_file",
+                                "primPath": summary["path"],
+                                "assetPath": resolved,
+                            }
+                        )
+                except Exception:
+                    issues.append(
+                        {
+                            "severity": "warning",
+                            "kind": "usd_reference_unresolved",
+                            "primPath": summary["path"],
+                            "assetPath": asset_path,
+                        }
+                    )
+        return issues
+
+    def _usd_layer_savepath_issues(self) -> list[dict[str, Any]]:
+        issues: list[dict[str, Any]] = []
+        for node in self._graph_snapshot().get("nodes", []):
+            if node.get("category") != "Lop" or node.get("typeName") != "configurelayer":
+                continue
+            parm = self._safe_value(
+                lambda path=node["path"]: self._require_parm_by_path(f"{path}/savepath"),
+                None,
+            )
+            value = self._safe_value(parm.evalAsString, "") if parm is not None else ""
+            if not value:
+                continue
+            try:
+                ensure_path_allowed(value, self._settings)
+            except JsonRpcError as exc:
+                issues.append(
+                    {
+                        "severity": "error",
+                        "kind": "usd_layer_savepath_policy",
+                        "nodePath": node["path"],
+                        "details": exc.to_payload(),
+                    }
+                )
+        return issues
+
     def _require_usd_stage(self) -> Any:
         try:
             from pxr import Sdf, UsdShade  # type: ignore
@@ -178,57 +237,8 @@ class UsdStageOperationsMixin:
         if not node_path:
             raise JsonRpcError(INVALID_PARAMS, "node_path is required")
         stage = self._stage_for_lop_node(node_path)
-        issues: list[dict[str, Any]] = []
-        for prim in stage.Traverse():
-            summary = self._usd_prim_summary(prim)
-            for reference in summary["references"]:
-                asset_path = str(reference.get("assetPath") or "").strip()
-                if asset_path:
-                    try:
-                        resolved = self._require_hou().expandString(asset_path)
-                        candidate = self._safe_value(lambda resolved=resolved: ensure_path_allowed(resolved, self._settings), None)
-                        if candidate is not None and not candidate.exists():
-                            issues.append(
-                                {
-                                    "severity": "warning",
-                                    "kind": "usd_reference_missing_file",
-                                    "primPath": summary["path"],
-                                    "assetPath": resolved,
-                                }
-                            )
-                    except Exception:
-                        issues.append(
-                            {
-                                "severity": "warning",
-                                "kind": "usd_reference_unresolved",
-                                "primPath": summary["path"],
-                                "assetPath": asset_path,
-                            }
-                        )
-        # reuse existing configurelayer save-path validation from graph snapshot
-        snapshot = self._graph_snapshot()
-        for node in snapshot.get("nodes", []):
-            if node.get("category") != "Lop":
-                continue
-            if node.get("typeName") != "configurelayer":
-                continue
-            parm = self._safe_value(lambda path=node["path"]: self._require_parm_by_path(f"{path}/savepath"), None)
-            if parm is None:
-                continue
-            value = self._safe_value(parm.evalAsString, "") or ""
-            if not value:
-                continue
-            try:
-                ensure_path_allowed(value, self._settings)
-            except JsonRpcError as exc:
-                issues.append(
-                    {
-                        "severity": "error",
-                        "kind": "usd_layer_savepath_policy",
-                        "nodePath": node["path"],
-                        "details": exc.to_payload(),
-                    }
-                )
+        issues = self._usd_reference_issues(stage)
+        issues.extend(self._usd_layer_savepath_issues())
         return {
             "nodePath": node_path,
             "issueCount": len(issues),

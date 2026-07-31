@@ -50,6 +50,20 @@ class GraphOperationsMixin:
                 references.append(candidate)
         return references
 
+    def _parm_is_strict_default(self, parm: Any) -> bool:
+        method = getattr(parm, "isAtDefault", None)
+        if not callable(method):
+            return False
+        return bool(
+            self._safe_value(
+                lambda: method(
+                    compare_temporary_defaults=False,
+                    compare_expressions=True,
+                ),
+                False,
+            )
+        )
+
     def _graph_parm_summary(self, parm: Any) -> dict[str, Any]:
         expression_language = self._safe_value(parm.expressionLanguage, None)
         expression_language_name = None
@@ -70,7 +84,56 @@ class GraphOperationsMixin:
             "expression": self._safe_value(parm.expression, None),
             "expressionLanguage": expression_language_name,
             "referencePaths": self._parm_reference_paths(parm),
+            "isAtDefault": self._parm_is_strict_default(parm),
         }
+
+    @staticmethod
+    def _scene_graph_edges(
+        nodes_by_path: dict[str, dict[str, Any]],
+        parms_by_path: dict[str, dict[str, Any]],
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+        edges: list[dict[str, Any]] = []
+        downstream: dict[str, list[str]] = {}
+        upstream: dict[str, list[str]] = {}
+        materials: list[dict[str, Any]] = []
+        references: list[dict[str, Any]] = []
+        for node_path, node in nodes_by_path.items():
+            for input_index, input_path in enumerate(node.get("inputs", [])):
+                if input_path:
+                    edge = {
+                        "kind": "input", "from": input_path, "to": node_path,
+                        "inputIndex": input_index,
+                    }
+                    edges.append(edge)
+                    downstream.setdefault(input_path, []).append(node_path)
+                    upstream.setdefault(node_path, []).append(input_path)
+            for kind, key in (
+                ("display", "displayNodePath"),
+                ("render", "renderNodePath"),
+                ("output", "outputNodePath"),
+            ):
+                target = node.get(key)
+                if isinstance(target, str) and target:
+                    edges.append({"kind": kind, "from": node_path, "to": target})
+            material = node.get("materialPath")
+            if isinstance(material, str) and material:
+                assignment = {"kind": "material", "from": node_path, "to": material}
+                materials.append(assignment)
+                edges.append(assignment)
+        for parm_path, parm in parms_by_path.items():
+            for ref_path in parm.get("referencePaths", []):
+                edge = {
+                    "kind": "parm_reference",
+                    "from": parm_path,
+                    "to": ref_path,
+                    "fromNodePath": parm.get("nodePath"),
+                }
+                references.append(edge)
+                edges.append(edge)
+        for node_path, node in nodes_by_path.items():
+            node["upstreamPaths"] = sorted(set(upstream.get(node_path, [])))
+            node["downstreamPaths"] = sorted(set(downstream.get(node_path, [])))
+        return edges, materials, references
 
     def _scene_graph_snapshot_build_impl(self) -> dict[str, Any]:
         hou_module = self._require_hou()
@@ -101,46 +164,9 @@ class GraphOperationsMixin:
                 parms_by_path[parm_payload["path"]] = parm_payload
                 node_payload["parmPaths"].append(parm_payload["path"])
 
-        edges: list[dict[str, Any]] = []
-        downstream_map: dict[str, list[str]] = {}
-        upstream_map: dict[str, list[str]] = {}
-        material_assignments: list[dict[str, Any]] = []
-        parm_references: list[dict[str, Any]] = []
-
-        for node_path, node_payload in nodes_by_path.items():
-            for input_index, input_path in enumerate(node_payload.get("inputs", [])):
-                if not input_path:
-                    continue
-                edge = {"kind": "input", "from": input_path, "to": node_path, "inputIndex": input_index}
-                edges.append(edge)
-                downstream_map.setdefault(input_path, []).append(node_path)
-                upstream_map.setdefault(node_path, []).append(input_path)
-
-            for edge_kind, target_key in (("display", "displayNodePath"), ("render", "renderNodePath"), ("output", "outputNodePath")):
-                target_path = node_payload.get(target_key)
-                if isinstance(target_path, str) and target_path:
-                    edges.append({"kind": edge_kind, "from": node_path, "to": target_path})
-
-            material_path = node_payload.get("materialPath")
-            if isinstance(material_path, str) and material_path:
-                assignment = {"kind": "material", "from": node_path, "to": material_path}
-                material_assignments.append(assignment)
-                edges.append(assignment)
-
-        for parm_path, parm_payload in parms_by_path.items():
-            for ref_path in parm_payload.get("referencePaths", []):
-                edge = {
-                    "kind": "parm_reference",
-                    "from": parm_path,
-                    "to": ref_path,
-                    "fromNodePath": parm_payload.get("nodePath"),
-                }
-                parm_references.append(edge)
-                edges.append(edge)
-
-        for node_path, node_payload in nodes_by_path.items():
-            node_payload["upstreamPaths"] = sorted(set(upstream_map.get(node_path, [])))
-            node_payload["downstreamPaths"] = sorted(set(downstream_map.get(node_path, [])))
+        edges, material_assignments, parm_references = self._scene_graph_edges(
+            nodes_by_path, parms_by_path
+        )
 
         return self._json_safe_graph_value(
             {
@@ -277,7 +303,12 @@ class GraphOperationsMixin:
         return self._json_safe_graph_value({"count": len(matches), "revision": snapshot.get("revision"), "nodes": matches})
 
     def graph_query(self, arguments: dict[str, Any], context: RequestContext) -> dict[str, Any]:
-        data = self._call_live(lambda: self._graph_query_impl(arguments), context)
+        document_query = self._call_live(lambda: self._document_query_impl(arguments), context)
+        data = {
+            "count": document_query["count"],
+            "revision": document_query["documentRevision"],
+            "nodes": [item["node"] | {"rootPath": item["rootPath"], "documentUri": item["documentUri"]} for item in document_query["matches"]],
+        }
         return self._tool_response(f"Matched {data['count']} graph node(s).", data)
 
     def _graph_bfs_impl(self, start_path: str, *, direction: str, max_depth: int) -> dict[str, Any]:
@@ -479,6 +510,157 @@ class GraphOperationsMixin:
                 return alt
             suffix += 1
 
+    def _simulate_create_node(
+        self, index: int, resolved: dict[str, Any], nodes: dict[str, Any], parms: dict[str, Any]
+    ) -> str:
+        parent_path = str(resolved.get("parent_path", "/obj")).strip() or "/obj"
+        node_type = str(resolved.get("node_type_name", "")).strip()
+        node_name = str(resolved.get("node_name", "")).strip() or None
+        if parent_path not in nodes:
+            raise JsonRpcError(
+                INVALID_PARAMS, f"Parent node not found in graph snapshot: {parent_path}"
+            )
+        if not node_type:
+            raise JsonRpcError(INVALID_PARAMS, "create_node requires node_type_name")
+        path = self._planned_node_path(
+            parent_path=parent_path,
+            node_type_name=node_type,
+            node_name=node_name,
+            fallback_index=index,
+            existing_paths=set(nodes),
+        )
+        nodes[path] = {
+            "path": path,
+            "name": path.rsplit("/", 1)[-1],
+            "typeName": node_type,
+            "category": None,
+            "parentPath": parent_path,
+            "isNetwork": True,
+            "position": None,
+            "flags": {"bypass": False, "display": None, "render": None, "template": None},
+            "inputs": [],
+            "childCount": 0,
+            "displayNodePath": None,
+            "renderNodePath": None,
+            "outputNodePath": None,
+            "outputNodePaths": [],
+            "childPaths": [],
+            "parmPaths": [],
+            "materialPath": None,
+            "fileOutputs": [],
+            "upstreamPaths": [],
+            "downstreamPaths": [],
+        }
+        nodes[parent_path].setdefault("childPaths", []).append(path)
+        nodes[parent_path]["childCount"] = len(nodes[parent_path].get("childPaths", []))
+        return path
+
+    @staticmethod
+    def _simulate_connect(
+        index: int, resolved: dict[str, Any], nodes: dict[str, Any], parms: dict[str, Any]
+    ) -> str:
+        source = str(resolved.get("source_node_path", "")).strip()
+        dest_path = str(resolved.get("dest_node_path", "")).strip()
+        dest_index = int(resolved.get("dest_input_index", 0))
+        if source not in nodes or dest_path not in nodes:
+            raise JsonRpcError(
+                INVALID_PARAMS, "connect references unknown path in graph snapshot."
+            )
+        inputs = list(nodes[dest_path].get("inputs", []))
+        inputs.extend([None] * max(0, dest_index + 1 - len(inputs)))
+        inputs[dest_index] = source
+        nodes[dest_path]["inputs"] = inputs
+        return dest_path
+
+    def _simulate_set_parm(
+        self, index: int, resolved: dict[str, Any], nodes: dict[str, Any], parms: dict[str, Any]
+    ) -> str:
+        path = str(resolved.get("parm_path", "")).strip()
+        node_path = path.rsplit("/", 1)[0] if "/" in path else None
+        if not node_path or node_path not in nodes:
+            raise JsonRpcError(
+                INVALID_PARAMS, f"Parameter target not found in graph snapshot: {path}"
+            )
+        payload = self._json_safe_graph_value(
+            parms.get(
+                path,
+                {
+                    "path": path,
+                    "name": path.rsplit("/", 1)[-1],
+                    "nodePath": node_path,
+                    "referencePaths": [],
+                    "expression": None,
+                },
+            )
+        )
+        payload["rawValue"] = resolved.get("value")
+        payload["value"] = resolved.get("value")
+        parms[path] = payload
+        if path not in nodes[node_path].get("parmPaths", []):
+            nodes[node_path].setdefault("parmPaths", []).append(path)
+        return path
+
+    @staticmethod
+    def _simulate_set_flags(
+        index: int, resolved: dict[str, Any], nodes: dict[str, Any], parms: dict[str, Any]
+    ) -> str:
+        path = str(resolved.get("path", "")).strip()
+        if path not in nodes:
+            raise JsonRpcError(INVALID_PARAMS, f"Node not found in graph snapshot: {path}")
+        flags = dict(nodes[path].get("flags", {}))
+        flags.update(
+            {
+                key: bool(resolved[key])
+                for key in ("bypass", "display", "render", "template")
+                if key in resolved
+            }
+        )
+        nodes[path]["flags"] = flags
+        return path
+
+    @staticmethod
+    def _simulate_move_node(
+        index: int, resolved: dict[str, Any], nodes: dict[str, Any], parms: dict[str, Any]
+    ) -> str:
+        path = str(resolved.get("path", "")).strip()
+        if path not in nodes:
+            raise JsonRpcError(INVALID_PARAMS, f"Node not found in graph snapshot: {path}")
+        nodes[path]["position"] = [
+            float(resolved.get("x", 0.0)),
+            float(resolved.get("y", 0.0)),
+        ]
+        return path
+
+    def _simulate_graph_operation(
+        self,
+        index: int,
+        raw_op: dict[str, Any],
+        nodes: dict[str, Any],
+        parms: dict[str, Any],
+        refs: dict[str, str],
+    ) -> dict[str, Any]:
+        op_type = str(raw_op.get("type", "")).strip()
+        resolved = self._batch_resolve(raw_op, refs)
+        handlers = {
+            "create_node": self._simulate_create_node,
+            "connect": self._simulate_connect,
+            "set_parm": self._simulate_set_parm,
+            "set_flags": self._simulate_set_flags,
+            "move_node": self._simulate_move_node,
+        }
+        if op_type == "layout":
+            return {"index": index, "type": op_type, "note": "layout is not simulated structurally"}
+        handler = handlers.get(op_type)
+        if handler is None:
+            raise JsonRpcError(
+                INVALID_PARAMS, f"Unsupported patch operation type: {op_type}"
+            )
+        path = handler(index, resolved, nodes, parms)
+        op_id = str(raw_op.get("id", "")).strip()
+        if op_type == "create_node" and op_id:
+            refs[op_id] = path
+        return {"index": index, "type": op_type, "path": path}
+
     def _simulate_graph_patch(self, snapshot: dict[str, Any], operations: list[dict[str, Any]]) -> dict[str, Any]:
         state = copy.deepcopy(self._json_safe_graph_value(snapshot))
         nodes_by_path = self._graph_nodes_by_path(state)
@@ -489,110 +671,11 @@ class GraphOperationsMixin:
         for index, raw_op in enumerate(operations):
             if not isinstance(raw_op, dict):
                 raise JsonRpcError(INVALID_PARAMS, f"Operation at index {index} must be an object.")
-            op_type = str(raw_op.get("type", "")).strip()
-            op_id = str(raw_op.get("id", "")).strip()
-            resolved = self._batch_resolve(raw_op, refs)
-
-            if op_type == "create_node":
-                parent_path = str(resolved.get("parent_path", "/obj")).strip() or "/obj"
-                node_type_name = str(resolved.get("node_type_name", "")).strip()
-                node_name = str(resolved.get("node_name", "")).strip() or None
-                if parent_path not in nodes_by_path:
-                    raise JsonRpcError(INVALID_PARAMS, f"Parent node not found in graph snapshot: {parent_path}")
-                if not node_type_name:
-                    raise JsonRpcError(INVALID_PARAMS, "create_node requires node_type_name")
-                predicted_path = self._planned_node_path(
-                    parent_path=parent_path,
-                    node_type_name=node_type_name,
-                    node_name=node_name,
-                    fallback_index=index,
-                    existing_paths=set(nodes_by_path.keys()),
+            planned_results.append(
+                self._simulate_graph_operation(
+                    index, raw_op, nodes_by_path, parms_by_path, refs
                 )
-                node_payload = {
-                    "path": predicted_path,
-                    "name": predicted_path.rsplit("/", 1)[-1],
-                    "typeName": node_type_name,
-                    "category": None,
-                    "parentPath": parent_path,
-                    "isNetwork": True,
-                    "position": None,
-                    "flags": {"bypass": False, "display": None, "render": None, "template": None},
-                    "inputs": [],
-                    "childCount": 0,
-                    "displayNodePath": None,
-                    "renderNodePath": None,
-                    "outputNodePath": None,
-                    "outputNodePaths": [],
-                    "childPaths": [],
-                    "parmPaths": [],
-                    "materialPath": None,
-                    "fileOutputs": [],
-                    "upstreamPaths": [],
-                    "downstreamPaths": [],
-                }
-                nodes_by_path[predicted_path] = node_payload
-                parent = nodes_by_path[parent_path]
-                parent.setdefault("childPaths", []).append(predicted_path)
-                parent["childCount"] = len(parent.get("childPaths", []))
-                if op_id:
-                    refs[op_id] = predicted_path
-                planned_results.append({"index": index, "type": op_type, "path": predicted_path})
-            elif op_type == "connect":
-                source_path = str(resolved.get("source_node_path", "")).strip()
-                dest_path = str(resolved.get("dest_node_path", "")).strip()
-                dest_input_index = int(resolved.get("dest_input_index", 0))
-                if source_path not in nodes_by_path or dest_path not in nodes_by_path:
-                    raise JsonRpcError(INVALID_PARAMS, "connect references unknown path in graph snapshot.")
-                dest = nodes_by_path[dest_path]
-                inputs = list(dest.get("inputs", []))
-                while len(inputs) <= dest_input_index:
-                    inputs.append(None)
-                inputs[dest_input_index] = source_path
-                dest["inputs"] = inputs
-                planned_results.append({"index": index, "type": op_type, "path": dest_path})
-            elif op_type == "set_parm":
-                parm_path = str(resolved.get("parm_path", "")).strip()
-                node_path = parm_path.rsplit("/", 1)[0] if "/" in parm_path else None
-                if not node_path or node_path not in nodes_by_path:
-                    raise JsonRpcError(INVALID_PARAMS, f"Parameter target not found in graph snapshot: {parm_path}")
-                parm_payload = self._json_safe_graph_value(
-                    parms_by_path.get(
-                        parm_path,
-                        {
-                            "path": parm_path,
-                            "name": parm_path.rsplit("/", 1)[-1],
-                            "nodePath": node_path,
-                            "referencePaths": [],
-                            "expression": None,
-                        },
-                    )
-                )
-                parm_payload["rawValue"] = resolved.get("value")
-                parm_payload["value"] = resolved.get("value")
-                parms_by_path[parm_path] = parm_payload
-                if parm_path not in nodes_by_path[node_path].get("parmPaths", []):
-                    nodes_by_path[node_path].setdefault("parmPaths", []).append(parm_path)
-                planned_results.append({"index": index, "type": op_type, "path": parm_path})
-            elif op_type == "set_flags":
-                path = str(resolved.get("path", "")).strip()
-                if path not in nodes_by_path:
-                    raise JsonRpcError(INVALID_PARAMS, f"Node not found in graph snapshot: {path}")
-                flags = dict(nodes_by_path[path].get("flags", {}))
-                for key in ("bypass", "display", "render", "template"):
-                    if key in resolved:
-                        flags[key] = bool(resolved[key])
-                nodes_by_path[path]["flags"] = flags
-                planned_results.append({"index": index, "type": op_type, "path": path})
-            elif op_type == "move_node":
-                path = str(resolved.get("path", "")).strip()
-                if path not in nodes_by_path:
-                    raise JsonRpcError(INVALID_PARAMS, f"Node not found in graph snapshot: {path}")
-                nodes_by_path[path]["position"] = [float(resolved.get("x", 0.0)), float(resolved.get("y", 0.0))]
-                planned_results.append({"index": index, "type": op_type, "path": path})
-            elif op_type == "layout":
-                planned_results.append({"index": index, "type": op_type, "note": "layout is not simulated structurally"})
-            else:
-                raise JsonRpcError(INVALID_PARAMS, f"Unsupported patch operation type: {op_type}")
+            )
 
         state["nodes"] = sorted(nodes_by_path.values(), key=lambda item: item["path"])
         state["parms"] = sorted(parms_by_path.values(), key=lambda item: item["path"])
@@ -617,6 +700,8 @@ class GraphOperationsMixin:
         return self._tool_response("Planned a graph patch against the current scene graph.", data)
 
     def graph_apply_patch(self, arguments: dict[str, Any], context: RequestContext) -> dict[str, Any]:
+        if arguments.get("document") is not None or arguments.get("checkout_id") is not None:
+            return self.document_apply(arguments, context)
         operations = arguments.get("operations")
         patch = arguments.get("patch")
         transactional = bool(arguments.get("transactional", True))
@@ -638,7 +723,6 @@ class GraphOperationsMixin:
             },
             context,
         )
-        self._monitor.mark_dirty("tool:graph.apply_patch")
         after_snapshot = self._call_live(self._graph_snapshot, context)
         return self._tool_response(
             "Applied graph patch operations.",

@@ -1,0 +1,308 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "hocuspocus://schemas/graph-spec/v0.4",
+  "title": "HocusScript GraphSpec v0.4",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "kind",
+    "graphSpecVersion",
+    "languageVersion",
+    "name",
+    "target",
+    "category",
+    "mode",
+    "expectedRevision",
+    "ownership",
+    "externalNodes",
+    "nodes",
+    "display",
+    "render",
+    "output",
+    "layout",
+    "span",
+    "fieldSpans",
+    "expansionMap"
+  ],
+  "properties": {
+    "$schema": {
+      "const": "hocuspocus://schemas/graph-spec/v0.4"
+    },
+    "kind": {
+      "const": "graph_spec"
+    },
+    "graphSpecVersion": {
+      "const": "0.4"
+    },
+    "languageVersion": {
+      "type": "string",
+      "const": "0.3"
+    },
+    "name": {
+      "$ref": "#/$defs/identifier"
+    },
+    "target": {"$ref": "#/$defs/absolutePath"},
+    "category": {
+      "oneOf": [
+        {"type": "null"},
+        {"$ref": "#/$defs/identifier"}
+      ]
+    },
+    "mode": {
+      "enum": ["merge", "reconcile"]
+    },
+    "expectedRevision": {
+      "oneOf": [
+        {"type": "null"},
+        {"type": "integer", "minimum": 0}
+      ]
+    },
+    "ownership": {
+      "oneOf": [
+        {"type": "null"},
+        {"type": "string", "minLength": 1}
+      ]
+    },
+    "externalNodes": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/externalNode"}
+    },
+    "nodes": {
+      "type": "array",
+      "maxItems": 10000,
+      "items": {"$ref": "#/$defs/node"}
+    },
+    "display": {"$ref": "#/$defs/nullableIdentifier"},
+    "render": {"$ref": "#/$defs/nullableIdentifier"},
+    "output": {"$ref": "#/$defs/nullableIdentifier"},
+    "layout": {
+      "oneOf": [
+        {"type": "null"},
+        {"const": "auto"}
+      ]
+    },
+    "span": {"$ref": "#/$defs/sourceSpan"},
+    "expansionMap": {"$ref": "hocuspocus://schemas/expansion-map/v2"},
+    "fieldSpans": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "languageVersion": {"$ref": "#/$defs/sourceSpan"},
+        "name": {"$ref": "#/$defs/sourceSpan"},
+        "target": {"$ref": "#/$defs/sourceSpan"},
+        "category": {"$ref": "#/$defs/sourceSpan"},
+        "mode": {"$ref": "#/$defs/sourceSpan"},
+        "expectedRevision": {"$ref": "#/$defs/sourceSpan"},
+        "ownership": {"$ref": "#/$defs/sourceSpan"},
+        "display": {"$ref": "#/$defs/sourceSpan"},
+        "render": {"$ref": "#/$defs/sourceSpan"},
+        "output": {"$ref": "#/$defs/sourceSpan"},
+        "layout": {"$ref": "#/$defs/sourceSpan"}
+      }
+    }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+    },
+    "nullableIdentifier": {
+      "oneOf": [
+        {"type": "null"},
+        {"$ref": "#/$defs/identifier"}
+      ]
+    },
+    "absolutePath": {
+      "type": "string",
+      "pattern": "^/"
+    },
+    "sourceUri": {
+      "type": "string", "minLength": 1, "maxLength": 8192,
+      "pattern": "^hocus-(?:project|module)://[a-z0-9][a-z0-9.-]{0,127}/(?!/)(?!\\.{1,2}(?:/|$))(?!.*\\/\\.{1,2}(?:/|$))(?!.*//)(?!.*[?#\\\\:])[^/]+(?:/[^/]+)*\\.hocus$"
+    },
+    "sourcePosition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["offset", "line", "column"],
+      "properties": {
+        "offset": {"type": "integer", "minimum": 0},
+        "line": {"type": "integer", "minimum": 1},
+        "column": {"type": "integer", "minimum": 1}
+      }
+    },
+    "sourceSpan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sourceUri", "start", "end"],
+      "properties": {
+        "sourceUri": {"$ref": "#/$defs/sourceUri"},
+        "start": {"$ref": "#/$defs/sourcePosition"},
+        "end": {"$ref": "#/$defs/sourcePosition"}
+      }
+    },
+    "literalValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "value", "span"],
+      "properties": {
+        "kind": {"const": "literal"},
+        "value": {
+          "type": ["null", "boolean", "integer", "number", "string"]
+        },
+        "span": {"$ref": "#/$defs/sourceSpan"}
+      }
+    },
+    "arrayValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "items", "span"],
+      "properties": {
+        "kind": {"const": "array"},
+        "items": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/value"}
+        },
+        "span": {"$ref": "#/$defs/sourceSpan"}
+      }
+    },
+    "codeValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "language", "body", "span"],
+      "dependentRequired": {
+        "bodySpan": ["offsetMap"],
+        "offsetMap": ["bodySpan"]
+      },
+      "properties": {
+        "kind": {"const": "code"},
+        "language": {"enum": ["vex", "python", "hscript"]},
+        "body": {"type": "string"},
+        "span": {"$ref": "#/$defs/sourceSpan"},
+        "bodySpan": {"$ref": "#/$defs/sourceSpan"},
+        "offsetMap": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["bodyLength", "checkpoints"],
+          "properties": {
+            "bodyLength": {"type": "integer", "minimum": 0},
+            "checkpoints": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["bodyOffset", "sourceOffset"],
+                "properties": {
+                  "bodyOffset": {"type": "integer", "minimum": 0},
+                  "sourceOffset": {"type": "integer", "minimum": 0}
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "value": {
+      "oneOf": [
+        {"$ref": "#/$defs/literalValue"},
+        {"$ref": "#/$defs/arrayValue"},
+        {"$ref": "#/$defs/codeValue"}
+      ]
+    },
+    "reference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["symbol", "outputIndex", "span"],
+      "properties": {
+        "symbol": {"$ref": "#/$defs/identifier"},
+        "outputIndex": {"type": "integer", "minimum": 0},
+        "span": {"$ref": "#/$defs/sourceSpan"},
+        "fieldSpans": {"$ref": "#/$defs/referenceFieldSpans"}
+      }
+    },
+    "input": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["index", "source", "span"],
+      "properties": {
+        "index": {"type": "integer", "minimum": 0},
+        "source": {"$ref": "#/$defs/reference"},
+        "span": {"$ref": "#/$defs/sourceSpan"},
+        "fieldSpans": {"$ref": "#/$defs/inputFieldSpans"}
+      }
+    },
+    "parm": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "value", "span"],
+      "properties": {
+        "name": {"$ref": "#/$defs/identifier"},
+        "value": {"$ref": "#/$defs/value"},
+        "span": {"$ref": "#/$defs/sourceSpan"},
+        "fieldSpans": {"$ref": "#/$defs/parmFieldSpans"}
+      }
+    },
+    "node": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["symbol", "typeName", "inputs", "parms", "span"],
+      "properties": {
+        "symbol": {"$ref": "#/$defs/identifier"},
+        "explicitId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+        },
+        "typeName": {"type": "string", "minLength": 1},
+        "inputs": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/input"}
+        },
+        "parms": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/parm"}
+        },
+        "span": {"$ref": "#/$defs/sourceSpan"},
+        "fieldSpans": {"$ref": "#/$defs/nodeFieldSpans"}
+      }
+    },
+    "externalNode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["symbol", "path", "adopted", "span"],
+      "properties": {
+        "symbol": {"$ref": "#/$defs/identifier"},
+        "path": {"$ref": "#/$defs/absolutePath"},
+        "adopted": {"type": "boolean"},
+        "span": {"$ref": "#/$defs/sourceSpan"},
+        "fieldSpans": {"$ref": "#/$defs/externalFieldSpans"}
+      }
+    },
+    "referenceFieldSpans": {
+      "type": "object", "additionalProperties": false,
+      "required": ["symbol", "outputIndex"],
+      "properties": {"symbol": {"$ref": "#/$defs/sourceSpan"}, "outputIndex": {"$ref": "#/$defs/sourceSpan"}}
+    },
+    "inputFieldSpans": {
+      "type": "object", "additionalProperties": false, "required": ["index"],
+      "properties": {"index": {"$ref": "#/$defs/sourceSpan"}}
+    },
+    "parmFieldSpans": {
+      "type": "object", "additionalProperties": false, "required": ["name"],
+      "properties": {"name": {"$ref": "#/$defs/sourceSpan"}}
+    },
+    "nodeFieldSpans": {
+      "type": "object", "additionalProperties": false, "required": ["symbol", "typeName"],
+      "properties": {
+        "symbol": {"$ref": "#/$defs/sourceSpan"},
+        "explicitId": {"$ref": "#/$defs/sourceSpan"},
+        "typeName": {"$ref": "#/$defs/sourceSpan"}
+      }
+    },
+    "externalFieldSpans": {
+      "type": "object", "additionalProperties": false, "required": ["symbol", "path"],
+      "properties": {"symbol": {"$ref": "#/$defs/sourceSpan"}, "path": {"$ref": "#/$defs/sourceSpan"}}
+    }
+  }
+}

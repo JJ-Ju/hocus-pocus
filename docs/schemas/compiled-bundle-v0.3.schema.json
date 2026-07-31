@@ -1,0 +1,247 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "hocuspocus://schemas/compiled-bundle/v0.3",
+  "title": "HocusScript Semantic Compiled Bundle v0.3",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema", "kind", "bundleVersion", "bundleDigest", "compilerVersion",
+    "graphSpecVersion", "languageVersion", "portable", "projectUid",
+    "projectManifestDigest", "projectLockDigest", "entrySource", "dependencies",
+    "catalogConstraints", "requiredCapabilities", "sourceMaps", "graphSpec",
+    "semanticResolution", "resolvedModuleSet"
+  ],
+  "properties": {
+    "$schema": {"const": "hocuspocus://schemas/compiled-bundle/v0.3"},
+    "kind": {"const": "hocus_compiled_bundle"},
+    "bundleVersion": {"const": "0.3"},
+    "bundleDigest": {"$ref": "#/$defs/digest"},
+    "compilerVersion": {"const": "0.4.0"},
+    "graphSpecVersion": {"const": "0.3"},
+    "languageVersion": {"const": "0.2"},
+    "portable": {"const": true},
+    "projectUid": {"type": ["string", "null"], "pattern": "^[a-z0-9][a-z0-9.-]{0,127}$"},
+    "projectManifestDigest": {"anyOf": [{"$ref": "#/$defs/digest"}, {"type": "null"}]},
+    "projectLockDigest": {"anyOf": [{"$ref": "#/$defs/digest"}, {"type": "null"}]},
+    "entrySource": {"$ref": "#/$defs/source"},
+    "dependencies": {"type": "array", "maxItems": 4096, "items": {"$ref": "#/$defs/source"}},
+    "resolvedModuleSet": {"$ref": "hocuspocus://schemas/resolved-module-set/v1"},
+    "catalogConstraints": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "fingerprint", "contentDigest"],
+      "properties": {
+        "schemaVersion": {"const": 1},
+        "fingerprint": {"$ref": "#/$defs/digest"},
+        "contentDigest": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "requiredCapabilities": {"$ref": "#/$defs/capabilities"},
+    "sourceMaps": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "format", "entrySourceUri", "embeddedInGraphSpec",
+        "expansionMapVersion", "expansionMapDigest"
+      ],
+      "properties": {
+        "format": {"const": "graph-spec-expansion-v1"},
+        "entrySourceUri": {"type": "string", "minLength": 1, "maxLength": 4096},
+        "embeddedInGraphSpec": {"const": true},
+        "expansionMapVersion": {"const": 1},
+        "expansionMapDigest": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "graphSpec": {"$ref": "hocuspocus://schemas/graph-spec/v0.3"},
+    "semanticResolution": {"$ref": "#/$defs/semanticResolution"}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"portable": {"const": true}}},
+      "then": {
+        "properties": {
+          "projectUid": {"type": "string"},
+          "projectManifestDigest": {"$ref": "#/$defs/digest"},
+          "projectLockDigest": {"$ref": "#/$defs/digest"},
+          "entrySource": {"properties": {"kind": {"const": "project_file"}}}
+        }
+      }
+    },
+    {}
+  ],
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "semanticVersion": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$"
+    },
+    "capabilities": {
+      "type": "array", "minItems": 1, "maxItems": 2, "uniqueItems": true,
+      "items": {"enum": ["edit_scene", "run_code"]}
+    },
+    "source": {
+      "type": "object", "additionalProperties": false, "required": ["uri", "digest", "kind"],
+      "properties": {
+        "uri": {"type": "string", "minLength": 1, "maxLength": 4096},
+        "digest": {"$ref": "#/$defs/digest"},
+        "kind": {"enum": ["memory", "workspace_file", "project_file", "module"]}
+      }
+    },
+    "moduleDependency": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "uri", "moduleName", "relativePath", "origin", "ownerUid", "alias", "version",
+        "moduleManifestDigest", "sourceDigest", "interfaceDigest", "transitiveDigest",
+        "dependencies", "languageVersion"
+      ],
+      "properties": {
+        "uri": {
+          "type": "string", "minLength": 1, "maxLength": 4096,
+          "pattern": "^hocus-(?:project|module)://"
+        },
+        "moduleName": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"},
+        "relativePath": {"type": "string", "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.?(?:/|$))(?!.*\\\\)(?!.*:)(?!.*//)[^/]+(?:/[^/]+)*\\.hocus$"},
+        "origin": {"enum": ["project", "external_library"]},
+        "ownerUid": {"type": "string", "pattern": "^[a-z0-9][a-z0-9.-]{0,127}$"},
+        "alias": {"type": ["string", "null"]},
+        "version": {"oneOf": [{"$ref": "#/$defs/semanticVersion"}, {"type": "null"}]},
+        "moduleManifestDigest": {"oneOf": [{"$ref": "#/$defs/digest"}, {"type": "null"}]},
+        "sourceDigest": {"$ref": "#/$defs/digest"},
+        "interfaceDigest": {"$ref": "#/$defs/digest"},
+        "transitiveDigest": {"$ref": "#/$defs/digest"},
+        "dependencies": {
+          "type": "array", "maxItems": 4096, "uniqueItems": true,
+          "items": {"type": "string", "pattern": "^hocus-(?:project|module)://"}
+        },
+        "languageVersion": {"const": "0.2"}
+      },
+      "allOf": [{
+        "if": {"properties": {"origin": {"const": "project"}}},
+        "then": {"properties": {
+          "uri": {"pattern": "^hocus-project://"}, "alias": {"type": "null"},
+          "version": {"type": "null"}, "moduleManifestDigest": {"type": "null"}
+        }},
+        "else": {"properties": {
+          "uri": {"pattern": "^hocus-module://"}, "alias": {"type": "string", "minLength": 1},
+          "version": {"type": "string", "minLength": 1},
+          "moduleManifestDigest": {"$ref": "#/$defs/digest"}
+        }}
+      }]
+    },
+    "semanticResolution": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "stage", "valid", "readyForDocumentLowering", "catalogFingerprint", "diagnostics",
+        "operatorSelections", "parameterSelections", "connectionSelections", "deferredChecks",
+        "requiredCapabilities"
+      ],
+      "properties": {
+        "stage": {"const": "semantic"},
+        "valid": {"const": true},
+        "readyForDocumentLowering": {"type": "boolean"},
+        "catalogFingerprint": {"$ref": "#/$defs/digest"},
+        "diagnostics": {"type": "array", "maxItems": 500, "items": {"$ref": "#/$defs/semanticDiagnostic"}},
+        "operatorSelections": {"type": "array", "maxItems": 10000, "items": {"$ref": "#/$defs/operatorSelection"}},
+        "parameterSelections": {"type": "array", "maxItems": 50000, "items": {"$ref": "#/$defs/parameterSelection"}},
+        "connectionSelections": {"type": "array", "maxItems": 50000, "items": {"$ref": "#/$defs/connectionSelection"}},
+        "deferredChecks": {"type": "array", "maxItems": 50000, "items": {"$ref": "#/$defs/deferredCheck"}},
+        "requiredCapabilities": {"$ref": "#/$defs/capabilities"}
+      }
+    },
+    "operatorSelection": {
+      "type": "object", "additionalProperties": false,
+      "required": ["nodeSymbol", "nodeIndex", "jsonPointer", "category", "qualifiedName", "namespace", "version", "sourceKind", "definitionDigest"],
+      "properties": {
+        "nodeSymbol": {"type": "string", "minLength": 1}, "nodeIndex": {"type": "integer", "minimum": 0},
+        "jsonPointer": {"type": "string", "pattern": "^/"}, "category": {"type": "string", "minLength": 1},
+        "qualifiedName": {"type": "string", "minLength": 1}, "namespace": {"type": ["string", "null"]},
+        "version": {"type": ["string", "null"]}, "sourceKind": {"enum": ["builtin", "hda", "package", "labs"]},
+        "definitionDigest": {"anyOf": [{"$ref": "#/$defs/digest"}, {"type": "null"}]}
+      }
+    },
+    "parameterSelection": {
+      "type": "object", "additionalProperties": false,
+      "required": ["nodeSymbol", "nodeIndex", "parmIndex", "jsonPointer", "authoredToken", "parameterToken", "componentIndex", "valueType", "conversion", "menuToken", "codeSurface"],
+      "properties": {
+        "nodeSymbol": {"type": "string", "minLength": 1}, "nodeIndex": {"type": "integer", "minimum": 0},
+        "parmIndex": {"type": "integer", "minimum": 0}, "jsonPointer": {"type": "string", "pattern": "^/"},
+        "authoredToken": {"type": "string", "minLength": 1}, "parameterToken": {"type": "string", "minLength": 1},
+        "componentIndex": {"type": ["integer", "null"], "minimum": 0}, "valueType": {"type": "string", "minLength": 1},
+        "conversion": {"type": ["string", "null"]}, "menuToken": {"type": ["string", "null"]},
+        "codeSurface": {"type": ["string", "null"]}
+      }
+    },
+    "connectionSelection": {
+      "type": "object", "additionalProperties": false,
+      "required": ["nodeSymbol", "nodeIndex", "inputIndex", "inputName", "sourceSymbol", "outputIndex", "outputName", "jsonPointer"],
+      "properties": {
+        "nodeSymbol": {"type": "string", "minLength": 1}, "nodeIndex": {"type": "integer", "minimum": 0},
+        "inputIndex": {"type": "integer", "minimum": 0}, "inputName": {"type": ["string", "null"]},
+        "sourceSymbol": {"type": "string", "minLength": 1}, "outputIndex": {"type": "integer", "minimum": 0},
+        "outputName": {"type": ["string", "null"]}, "jsonPointer": {"type": "string", "pattern": "^/"}
+      }
+    },
+    "deferredCheck": {
+      "type": "object", "additionalProperties": false, "required": ["kind", "jsonPointer", "symbol", "message"],
+      "properties": {
+        "kind": {"type": "string", "minLength": 1}, "jsonPointer": {"type": "string", "pattern": "^/"},
+        "symbol": {"type": "string", "minLength": 1}, "message": {"type": "string", "minLength": 1}
+      }
+    },
+    "semanticDiagnostic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "severity", "code", "phase", "message", "jsonPointer", "originId", "stackId",
+        "related", "expansionStack", "entityUid", "houdiniPath"
+      ],
+      "properties": {
+        "severity": {"enum": ["info", "warning"]},
+        "code": {"type": "string", "minLength": 1},
+        "phase": {"type": "string", "minLength": 1},
+        "message": {"type": "string", "minLength": 1},
+        "jsonPointer": {
+          "type": ["string", "null"],
+          "maxLength": 8192,
+          "pattern": "^(?:/(?:[^~/]|~0|~1)*)*$"
+        },
+        "originId": {"anyOf": [{"$ref": "#/$defs/digest"}, {"type": "null"}]},
+        "stackId": {"anyOf": [{"$ref": "#/$defs/digest"}, {"type": "null"}]},
+        "sourceUri": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096,
+          "pattern": "^hocus-(?:project|module)://[a-z0-9][a-z0-9.-]{0,127}/(?!/)(?!\\.{1,2}(?:/|$))(?!.*\\/\\.{1,2}(?:/|$))(?!.*\\\\)(?!.*:).+\\.hocus$"
+        },
+        "span": {"$ref": "#/$defs/diagnosticSpan"},
+        "related": {"type": "array", "maxItems": 0},
+        "notes": {"type": "array"},
+        "fixes": {"type": "array"},
+        "details": {"type": "object"},
+        "expansionStack": {"type": "array", "maxItems": 0},
+        "entityUid": {"type": "null"},
+        "houdiniPath": {"type": "null"}
+      }
+    },
+    "sourcePosition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["offset", "line", "column"],
+      "properties": {
+        "offset": {"type": "integer", "minimum": 0},
+        "line": {"type": "integer", "minimum": 1},
+        "column": {"type": "integer", "minimum": 1}
+      }
+    },
+    "diagnosticSpan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["start", "end"],
+      "properties": {
+        "start": {"$ref": "#/$defs/sourcePosition"},
+        "end": {"$ref": "#/$defs/sourcePosition"}
+      }
+    }
+  }
+}

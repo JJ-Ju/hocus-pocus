@@ -21,7 +21,7 @@ Project state:
 
 The project is considered complete for v1 when all of the following are true:
 
-- Houdini 21.x can load the plugin as a normal package
+- Houdini 22.0.368 can load the plugin as a normal package
 - a live Houdini GUI session can host the MCP server on localhost
 - an external MCP client can connect and perform real scene work
 - live scene operations are serialized onto the Houdini main thread
@@ -95,7 +95,7 @@ Done when:
 
 Manual smoke:
 
-- Launch Houdini 21.x with the package enabled and confirm the module imports.
+- Launch Houdini 22.0.368 with the package enabled and confirm the module imports.
 - Start the stub entry point and confirm it writes a startup log line.
 
 ## M1. MCP Server Runtime and Transport
@@ -293,7 +293,7 @@ Tasks:
 - [ ] Add docs for auth token handling, approved roots, and permissions.
 - [ ] Add docs for live GUI mode, `hython` mode, and worker mode.
 - [ ] Add troubleshooting notes for missing packages, bad ports, and auth failures.
-- [ ] Add version compatibility notes for Houdini 21.x.
+- [ ] Add version compatibility notes for Houdini 22.0.368.
 
 Done when:
 
@@ -379,7 +379,7 @@ Tasks:
 
 Done when:
 
-- The native module can be loaded on supported Houdini 21.x builds.
+- The native module can be loaded on supported Houdini 22.0.368.
 - At least one feature meaningfully benefits from the native module.
 - The Python-only fallback path remains valid.
 
@@ -453,7 +453,7 @@ Use this section as the lightweight running journal while implementing.
 - Finished M2 with tracked operation state, cooperative cancellation, cancellation notifications, and non-UI serialized worker execution.
 - Expanded M3 substantially with scene lifecycle, node graph, parm, selection, playbar, and viewport tools plus additional session resources.
 - Remaining M3 gap is resource templates and Houdini-hosted validation of the broader tool surface.
-- Added a build/install PowerShell script that stages an installable Houdini package, runs `compileall`, and can install directly into `houdini21.0/packages`.
+- Added a build/install PowerShell script that stages an installable Houdini package, runs `compileall`, and can install directly into `houdini22.0/packages`.
 - Added a README covering build, deploy, install, startup, token discovery, and first-run troubleshooting.
 - Added self-describing Houdini orientation/convention notes to session responses and a dedicated `houdini://session/conventions` resource.
 - Added more discoverable snapshot/camera tooling with `snapshot.capture_viewport` and `camera.get_active`.

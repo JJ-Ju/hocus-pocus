@@ -1,0 +1,258 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "hocuspocus://schemas/expansion-map/v3",
+  "title": "HocusScript Expansion Map v3",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema", "kind", "schemaVersion", "graphSpecVersion", "entrySourceUri",
+    "stacks", "controlStacks", "mappings"
+  ],
+  "properties": {
+    "$schema": {"const": "hocuspocus://schemas/expansion-map/v3"},
+    "kind": {"const": "hocus_expansion_map"},
+    "schemaVersion": {"const": 3},
+    "graphSpecVersion": {"const": "0.5"},
+    "entrySourceUri": {"$ref": "#/$defs/sourceUri"},
+    "stacks": {
+      "type": "array",
+      "maxItems": 10000,
+      "items": {"$ref": "#/$defs/stack"}
+    },
+    "controlStacks": {
+      "type": "array",
+      "maxItems": 100000,
+      "items": {"$ref": "#/$defs/controlStack"}
+    },
+    "mappings": {
+      "type": "array",
+      "maxItems": 100000,
+      "items": {"$ref": "#/$defs/mapping"}
+    }
+  },
+  "$defs": {
+    "sourceUri": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 8192,
+      "pattern": "^hocus-(?:project|module)://[a-z0-9][a-z0-9.-]{0,127}/(?!/)(?!\\.{1,2}(?:/|$))(?!.*\\/\\.{1,2}(?:/|$))(?!.*//)(?!.*[?#\\\\:])[^/]+(?:/[^/]+)*\\.hocus$"
+    },
+    "position": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["line", "column", "offset"],
+      "properties": {
+        "line": {"type": "integer", "minimum": 1},
+        "column": {"type": "integer", "minimum": 1},
+        "offset": {"type": "integer", "minimum": 0}
+      }
+    },
+    "span": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sourceUri", "start", "end"],
+      "properties": {
+        "sourceUri": {"$ref": "#/$defs/sourceUri"},
+        "start": {"$ref": "#/$defs/position"},
+        "end": {"$ref": "#/$defs/position"}
+      }
+    },
+    "instanceIdPath": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"}
+    },
+    "frame": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["moduleUri", "sourceDigest", "moduleName", "instanceSymbol", "instanceIdPath", "importSpan", "useSpan"],
+      "properties": {
+        "moduleUri": {"$ref": "#/$defs/sourceUri"},
+        "sourceDigest": {"$ref": "#/$defs/digest"},
+        "moduleName": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$", "maxLength": 128},
+        "instanceSymbol": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$", "maxLength": 128},
+        "instanceIdPath": {"$ref": "#/$defs/instanceIdPath"},
+        "importSpan": {"oneOf": [{"$ref": "#/$defs/span"}, {"type": "null"}]},
+        "useSpan": {"$ref": "#/$defs/span"}
+      }
+    },
+    "stack": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["stackId", "frames"],
+      "properties": {
+        "stackId": {"$ref": "#/$defs/digest"},
+        "frames": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "items": {"$ref": "#/$defs/frame"}
+        }
+      }
+    },
+    "controlFrameCommon": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind", "controlSymbol", "durableSeed", "declarationSpan",
+        "selectionSpan", "yieldSpans"
+      ],
+      "properties": {
+        "kind": {"enum": ["if", "for"]},
+        "controlSymbol": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+          "maxLength": 128
+        },
+        "durableSeed": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+        },
+        "branch": {"enum": ["then", "else"]},
+        "iterator": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+          "maxLength": 128
+        },
+        "iterationIndex": {"type": "integer", "minimum": 0, "maximum": 4095},
+        "declarationSpan": {"$ref": "#/$defs/span"},
+        "selectionSpan": {"$ref": "#/$defs/span"},
+        "yieldSpans": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 256,
+          "items": {"$ref": "#/$defs/span"}
+        }
+      }
+    },
+    "ifControlFrame": {
+      "allOf": [
+        {"$ref": "#/$defs/controlFrameCommon"},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind", "controlSymbol", "durableSeed", "branch",
+            "declarationSpan", "selectionSpan", "yieldSpans"
+          ],
+          "properties": {
+            "kind": {"const": "if"},
+            "controlSymbol": {
+              "type": "string",
+              "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+              "maxLength": 128
+            },
+            "durableSeed": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+            },
+            "branch": {"enum": ["then", "else"]},
+            "declarationSpan": {"$ref": "#/$defs/span"},
+            "selectionSpan": {"$ref": "#/$defs/span"},
+            "yieldSpans": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 256,
+              "items": {"$ref": "#/$defs/span"}
+            }
+          }
+        }
+      ]
+    },
+    "forControlFrame": {
+      "allOf": [
+        {"$ref": "#/$defs/controlFrameCommon"},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind", "controlSymbol", "durableSeed", "iterator", "iterationIndex",
+            "declarationSpan", "selectionSpan", "yieldSpans"
+          ],
+          "properties": {
+            "kind": {"const": "for"},
+            "controlSymbol": {
+              "type": "string",
+              "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+              "maxLength": 128
+            },
+            "durableSeed": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+            },
+            "iterator": {
+              "type": "string",
+              "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+              "maxLength": 128
+            },
+            "iterationIndex": {"type": "integer", "minimum": 0, "maximum": 4095},
+            "declarationSpan": {"$ref": "#/$defs/span"},
+            "selectionSpan": {"$ref": "#/$defs/span"},
+            "yieldSpans": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 256,
+              "items": {"$ref": "#/$defs/span"}
+            }
+          }
+        }
+      ]
+    },
+    "controlFrame": {
+      "oneOf": [
+        {"$ref": "#/$defs/ifControlFrame"},
+        {"$ref": "#/$defs/forControlFrame"}
+      ]
+    },
+    "controlStack": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["controlStackId", "frames"],
+      "properties": {
+        "controlStackId": {"$ref": "#/$defs/digest"},
+        "frames": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "items": {"$ref": "#/$defs/controlFrame"}
+        }
+      }
+    },
+    "relatedOrigin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role", "span"],
+      "properties": {
+        "role": {
+          "enum": [
+            "definition", "parameter_declaration", "argument", "export", "instance",
+            "control_declaration", "condition", "fold_count", "carry_initializer", "yield"
+          ]
+        },
+        "span": {"$ref": "#/$defs/span"}
+      }
+    },
+    "mapping": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "originId", "generatedPointer", "originKind", "primarySpan",
+        "relatedOrigins", "stackId", "controlStackId"
+      ],
+      "properties": {
+        "originId": {"$ref": "#/$defs/digest"},
+        "generatedPointer": {"type": "string", "pattern": "^(?:/(?:[^~/]|~0|~1)*)*$", "maxLength": 8192},
+        "originKind": {"enum": ["definition", "argument", "export", "synthetic"]},
+        "primarySpan": {"$ref": "#/$defs/span"},
+        "relatedOrigins": {
+          "type": "array",
+          "maxItems": 16,
+          "items": {"$ref": "#/$defs/relatedOrigin"}
+        },
+        "stackId": {"oneOf": [{"$ref": "#/$defs/digest"}, {"type": "null"}]},
+        "controlStackId": {"oneOf": [{"$ref": "#/$defs/digest"}, {"type": "null"}]}
+      }
+    },
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+  }
+}

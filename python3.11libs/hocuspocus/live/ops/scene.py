@@ -197,28 +197,16 @@ class SceneOperationsMixin:
         frame_range = arguments.get("frame_range", [1, 240])
         camera_name = str(arguments.get("camera_name", "turntable_cam")).strip() or "turntable_cam"
         distance_multiplier = float(arguments.get("distance_multiplier", 2.5))
+        activate_viewport_camera = bool(arguments.get("activate_viewport_camera", False))
 
-        center = [0.0, 0.0, 0.0]
-        radius = 4.0
-        if target_path:
-            target_node = self._require_node_by_path(target_path, label="target_path")
-            try:
-                geo_summary = self._geometry_summary_for_node(target_node)
-                bbox_min = geo_summary["bboxMin"]
-                bbox_max = geo_summary["bboxMax"]
-                center = [
-                    (bbox_min[0] + bbox_max[0]) / 2.0,
-                    (bbox_min[1] + bbox_max[1]) / 2.0,
-                    (bbox_min[2] + bbox_max[2]) / 2.0,
-                ]
-                extents = [
-                    bbox_max[0] - bbox_min[0],
-                    bbox_max[1] - bbox_min[1],
-                    bbox_max[2] - bbox_min[2],
-                ]
-                radius = max(max(extents), 1.0) * distance_multiplier
-            except JsonRpcError:
-                pass
+        target_fit = self._target_fit_summary(
+            target_path or None,
+            fallback_center=(0.0, 0.0, 0.0),
+            fallback_radius=4.0,
+            distance_multiplier=distance_multiplier,
+        )
+        center = target_fit["center"]
+        radius = float(target_fit["radius"])
 
         frame_values = self._frame_sequence(frame_range, default_frame=float(hou_module.frame()))
         start_frame = frame_values[0]
@@ -252,11 +240,23 @@ class SceneOperationsMixin:
                     key_end.setValue(360.0)
                     angle_parm.setKeyframe(key_end)
 
+        viewport_camera_activated = False
+        if activate_viewport_camera and hou_module.isUIAvailable():
+            try:
+                scene_viewer = self._current_scene_viewer(hou_module)
+                viewport = scene_viewer.curViewport()
+                viewport.setCamera(camera)
+                viewport_camera_activated = True
+            except Exception:
+                viewport_camera_activated = False
+
         return {
             "camera": self._node_summary(camera),
             "rig": self._node_summary(rig),
             "target": self._node_summary(target),
             "frameRange": [start_frame, end_frame],
+            "targetFit": target_fit,
+            "viewportCameraActivated": viewport_camera_activated,
         }
 
     def scene_create_turntable_camera(

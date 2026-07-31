@@ -1,0 +1,1001 @@
+{
+  "$schema": "hocuspocus://schemas/internal-compatibility-decoder-fixtures/v1",
+  "kind": "hocus_internal_compatibility_decoder_fixtures",
+  "rows": [
+    {
+      "carrier": {
+        "$schema": "hocuspocus://schemas/compiled-bundle/v0.1",
+        "bundleDigest": "sha256:0481cc8a5f4cbe6b47b2fdd88cacc2feed0f7e8fba3b7d65565b3ba335edb9ae",
+        "bundleVersion": "0.1",
+        "catalogConstraints": {},
+        "compilerVersion": "0.1.1",
+        "dependencies": [],
+        "entrySource": {
+          "digest": "sha256:a4d3fe08f322c3a14d5362892b865b11337643bc32535938da873272c68fcc3d",
+          "kind": "project_file",
+          "uri": "hocus-project://compatibility/compatibility.hocus"
+        },
+        "graphSpec": {
+          "$schema": "hocuspocus://schemas/graph-spec/v0.1",
+          "category": "Sop",
+          "display": null,
+          "expectedRevision": null,
+          "externalNodes": [],
+          "fieldSpans": {
+            "category": {
+              "end": {
+                "column": 15,
+                "line": 4,
+                "offset": 78
+              },
+              "sourceUri": "hocus-project://compatibility/compatibility.hocus",
+              "start": {
+                "column": 12,
+                "line": 4,
+                "offset": 75
+              }
+            },
+            "languageVersion": {
+              "end": {
+                "column": 10,
+                "line": 1,
+                "offset": 9
+              },
+              "sourceUri": "hocus-project://compatibility/compatibility.hocus",
+              "start": {
+                "column": 7,
+                "line": 1,
+                "offset": 6
+              }
+            },
+            "mode": {
+              "end": {
+                "column": 13,
+                "line": 5,
+                "offset": 92
+              },
+              "sourceUri": "hocus-project://compatibility/compatibility.hocus",
+              "start": {
+                "column": 8,
+                "line": 5,
+                "offset": 87
+              }
+            },
+            "name": {
+              "end": {
+                "column": 20,
+                "line": 2,
+                "offset": 30
+              },
+              "sourceUri": "hocus-project://compatibility/compatibility.hocus",
+              "start": {
+                "column": 7,
+                "line": 2,
+                "offset": 17
+              }
+            },
+            "output": {
+              "end": {
+                "column": 21,
+                "line": 8,
+                "offset": 210
+              },
+              "sourceUri": "hocus-project://compatibility/compatibility.hocus",
+              "start": {
+                "column": 12,
+                "line": 8,
+                "offset": 201
+              }
+            },
+            "target": {
+              "end": {
+                "column": 30,
+                "line": 3,
+                "offset": 62
+              },
+              "sourceUri": "hocus-project://compatibility/compatibility.hocus",
+              "start": {
+                "column": 10,
+                "line": 3,
+                "offset": 42
+              }
+            }
+          },
+          "graphSpecVersion": "0.1",
+          "kind": "graph_spec",
+          "languageVersion": "0.1",
+          "layout": null,
+          "mode": "merge",
+          "name": "compatibility",
+          "nodes": [
+            {
+              "fieldSpans": {
+                "symbol": {
+                  "end": {
+                    "column": 14,
+                    "line": 6,
+                    "offset": 107
+                  },
+                  "sourceUri": "hocus-project://compatibility/compatibility.hocus",
+                  "start": {
+                    "column": 8,
+                    "line": 6,
+                    "offset": 101
+                  }
+                },
+                "typeName": {
+                  "end": {
+                    "column": 35,
+                    "line": 6,
+                    "offset": 128
+                  },
+                  "sourceUri": "hocus-project://compatibility/compatibility.hocus",
+                  "start": {
+                    "column": 16,
+                    "line": 6,
+                    "offset": 109
+                  }
+                }
+              },
+              "inputs": [],
+              "parms": [],
+              "span": {
+                "end": {
+                  "column": 38,
+                  "line": 6,
+                  "offset": 131
+                },
+                "sourceUri": "hocus-project://compatibility/compatibility.hocus",
+                "start": {
+                  "column": 3,
+                  "line": 6,
+                  "offset": 96
+                }
+              },
+              "symbol": "source",
+              "typeName": "acme::source::1.0"
+            },
+            {
+              "fieldSpans": {
+                "symbol": {
+                  "end": {
+                    "column": 17,
+                    "line": 7,
+                    "offset": 148
+                  },
+                  "sourceUri": "hocus-project://compatibility/compatibility.hocus",
+                  "start": {
+                    "column": 8,
+                    "line": 7,
+                    "offset": 139
+                  }
+                },
+                "typeName": {
+                  "end": {
+                    "column": 25,
+                    "line": 7,
+                    "offset": 156
+                  },
+                  "sourceUri": "hocus-project://compatibility/compatibility.hocus",
+                  "start": {
+                    "column": 19,
+                    "line": 7,
+                    "offset": 150
+                  }
+                }
+              },
+              "inputs": [
+                {
+                  "fieldSpans": {
+                    "index": {
+                      "end": {
+                        "column": 35,
+                        "line": 7,
+                        "offset": 166
+                      },
+                      "sourceUri": "hocus-project://compatibility/compatibility.hocus",
+                      "start": {
+                        "column": 34,
+                        "line": 7,
+                        "offset": 165
+                      }
+                    }
+                  },
+                  "index": 0,
+                  "source": {
+                    "fieldSpans": {
+                      "outputIndex": {
+                        "end": {
+                          "column": 54,
+                          "line": 7,
+                          "offset": 185
+                        },
+                        "sourceUri": "hocus-project://compatibility/compatibility.hocus",
+                        "start": {
+                          "column": 53,
+                          "line": 7,
+                          "offset": 184
+                        }
+                      },
+                      "symbol": {
+                        "end": {
+                          "column": 45,
+                          "line": 7,
+                          "offset": 176
+                        },
+                        "sourceUri": "hocus-project://compatibility/compatibility.hocus",
+                        "start": {
+                          "column": 39,
+                          "line": 7,
+                          "offset": 170
+                        }
+                      }
+                    },
+                    "outputIndex": 0,
+                    "span": {
+                      "end": {
+                        "column": 55,
+                        "line": 7,
+                        "offset": 186
+                      },
+                      "sourceUri": "hocus-project://compatibility/compatibility.hocus",
+                      "start": {
+                        "column": 39,
+                        "line": 7,
+                        "offset": 170
+                      }
+                    },
+                    "symbol": "source"
+                  },
+                  "span": {
+                    "end": {
+                      "column": 56,
+                      "line": 7,
+                      "offset": 187
+                    },
+                    "sourceUri": "hocus-project://compatibility/compatibility.hocus",
+                    "start": {
+                      "column": 28,
+                      "line": 7,
+                      "offset": 159
+                    }
+                  }
+                }
+              ],
+              "parms": [],
+              "span": {
+                "end": {
+                  "column": 58,
+                  "line": 7,
+                  "offset": 189
+                },
+                "sourceUri": "hocus-project://compatibility/compatibility.hocus",
+                "start": {
+                  "column": 3,
+                  "line": 7,
+                  "offset": 134
+                }
+              },
+              "symbol": "sink_node",
+              "typeName": "sink"
+            }
+          ],
+          "output": "sink_node",
+          "ownership": null,
+          "render": null,
+          "span": {
+            "end": {
+              "column": 2,
+              "line": 9,
+              "offset": 213
+            },
+            "sourceUri": "hocus-project://compatibility/compatibility.hocus",
+            "start": {
+              "column": 1,
+              "line": 2,
+              "offset": 11
+            }
+          },
+          "target": "/obj/compatibility"
+        },
+        "graphSpecVersion": "0.1",
+        "kind": "hocus_compiled_bundle",
+        "languageVersion": "0.1",
+        "portable": true,
+        "projectLockDigest": "sha256:fd1d8d3d7b435f6755c3a9067d3fd639abf345ffe491b0cfb117c217ebc2c8a7",
+        "projectManifestDigest": "sha256:0a8ba6d8b3f74df75d502c44fc52b86a9dab28e76ad85818032dba76d666a66b",
+        "projectUid": "compatibility",
+        "requiredCapabilities": [
+          "edit_scene"
+        ],
+        "sourceMaps": {
+          "embeddedInGraphSpec": true,
+          "entrySourceUri": "hocus-project://compatibility/compatibility.hocus",
+          "format": "graph-spec-spans-v0.1"
+        }
+      },
+      "id": "legacy-011-g01-b01"
+    },
+    {
+      "carrier": {
+        "$schema": "hocuspocus://schemas/compiled-bundle/v0.1",
+        "bundleDigest": "sha256:7f0ba5c30c65d6388f0723ce1b365e83e0aaf1c39e5932c115442a9a8ac9d1b7",
+        "bundleVersion": "0.1",
+        "catalogConstraints": {},
+        "compilerVersion": "0.2.0",
+        "dependencies": [],
+        "entrySource": {
+          "digest": "sha256:a4d3fe08f322c3a14d5362892b865b11337643bc32535938da873272c68fcc3d",
+          "kind": "project_file",
+          "uri": "hocus-project://compatibility/compatibility.hocus"
+        },
+        "graphSpec": {
+          "$schema": "hocuspocus://schemas/graph-spec/v0.1",
+          "category": "Sop",
+          "display": null,
+          "expectedRevision": null,
+          "externalNodes": [],
+          "fieldSpans": {
+            "category": {
+              "end": {
+                "column": 15,
+                "line": 4,
+                "offset": 78
+              },
+              "sourceUri": "hocus-project://compatibility/compatibility.hocus",
+              "start": {
+                "column": 12,
+                "line": 4,
+                "offset": 75
+              }
+            },
+            "languageVersion": {
+              "end": {
+                "column": 10,
+                "line": 1,
+                "offset": 9
+              },
+              "sourceUri": "hocus-project://compatibility/compatibility.hocus",
+              "start": {
+                "column": 7,
+                "line": 1,
+                "offset": 6
+              }
+            },
+            "mode": {
+              "end": {
+                "column": 13,
+                "line": 5,
+                "offset": 92
+              },
+              "sourceUri": "hocus-project://compatibility/compatibility.hocus",
+              "start": {
+                "column": 8,
+                "line": 5,
+                "offset": 87
+              }
+            },
+            "name": {
+              "end": {
+                "column": 20,
+                "line": 2,
+                "offset": 30
+              },
+              "sourceUri": "hocus-project://compatibility/compatibility.hocus",
+              "start": {
+                "column": 7,
+                "line": 2,
+                "offset": 17
+              }
+            },
+            "output": {
+              "end": {
+                "column": 21,
+                "line": 8,
+                "offset": 210
+              },
+              "sourceUri": "hocus-project://compatibility/compatibility.hocus",
+              "start": {
+                "column": 12,
+                "line": 8,
+                "offset": 201
+              }
+            },
+            "target": {
+              "end": {
+                "column": 30,
+                "line": 3,
+                "offset": 62
+              },
+              "sourceUri": "hocus-project://compatibility/compatibility.hocus",
+              "start": {
+                "column": 10,
+                "line": 3,
+                "offset": 42
+              }
+            }
+          },
+          "graphSpecVersion": "0.1",
+          "kind": "graph_spec",
+          "languageVersion": "0.1",
+          "layout": null,
+          "mode": "merge",
+          "name": "compatibility",
+          "nodes": [
+            {
+              "fieldSpans": {
+                "symbol": {
+                  "end": {
+                    "column": 14,
+                    "line": 6,
+                    "offset": 107
+                  },
+                  "sourceUri": "hocus-project://compatibility/compatibility.hocus",
+                  "start": {
+                    "column": 8,
+                    "line": 6,
+                    "offset": 101
+                  }
+                },
+                "typeName": {
+                  "end": {
+                    "column": 35,
+                    "line": 6,
+                    "offset": 128
+                  },
+                  "sourceUri": "hocus-project://compatibility/compatibility.hocus",
+                  "start": {
+                    "column": 16,
+                    "line": 6,
+                    "offset": 109
+                  }
+                }
+              },
+              "inputs": [],
+              "parms": [],
+              "span": {
+                "end": {
+                  "column": 38,
+                  "line": 6,
+                  "offset": 131
+                },
+                "sourceUri": "hocus-project://compatibility/compatibility.hocus",
+                "start": {
+                  "column": 3,
+                  "line": 6,
+                  "offset": 96
+                }
+              },
+              "symbol": "source",
+              "typeName": "acme::source::1.0"
+            },
+            {
+              "fieldSpans": {
+                "symbol": {
+                  "end": {
+                    "column": 17,
+                    "line": 7,
+                    "offset": 148
+                  },
+                  "sourceUri": "hocus-project://compatibility/compatibility.hocus",
+                  "start": {
+                    "column": 8,
+                    "line": 7,
+                    "offset": 139
+                  }
+                },
+                "typeName": {
+                  "end": {
+                    "column": 25,
+                    "line": 7,
+                    "offset": 156
+                  },
+                  "sourceUri": "hocus-project://compatibility/compatibility.hocus",
+                  "start": {
+                    "column": 19,
+                    "line": 7,
+                    "offset": 150
+                  }
+                }
+              },
+              "inputs": [
+                {
+                  "fieldSpans": {
+                    "index": {
+                      "end": {
+                        "column": 35,
+                        "line": 7,
+                        "offset": 166
+                      },
+                      "sourceUri": "hocus-project://compatibility/compatibility.hocus",
+                      "start": {
+                        "column": 34,
+                        "line": 7,
+                        "offset": 165
+                      }
+                    }
+                  },
+                  "index": 0,
+                  "source": {
+                    "fieldSpans": {
+                      "outputIndex": {
+                        "end": {
+                          "column": 54,
+                          "line": 7,
+                          "offset": 185
+                        },
+                        "sourceUri": "hocus-project://compatibility/compatibility.hocus",
+                        "start": {
+                          "column": 53,
+                          "line": 7,
+                          "offset": 184
+                        }
+                      },
+                      "symbol": {
+                        "end": {
+                          "column": 45,
+                          "line": 7,
+                          "offset": 176
+                        },
+                        "sourceUri": "hocus-project://compatibility/compatibility.hocus",
+                        "start": {
+                          "column": 39,
+                          "line": 7,
+                          "offset": 170
+                        }
+                      }
+                    },
+                    "outputIndex": 0,
+                    "span": {
+                      "end": {
+                        "column": 55,
+                        "line": 7,
+                        "offset": 186
+                      },
+                      "sourceUri": "hocus-project://compatibility/compatibility.hocus",
+                      "start": {
+                        "column": 39,
+                        "line": 7,
+                        "offset": 170
+                      }
+                    },
+                    "symbol": "source"
+                  },
+                  "span": {
+                    "end": {
+                      "column": 56,
+                      "line": 7,
+                      "offset": 187
+                    },
+                    "sourceUri": "hocus-project://compatibility/compatibility.hocus",
+                    "start": {
+                      "column": 28,
+                      "line": 7,
+                      "offset": 159
+                    }
+                  }
+                }
+              ],
+              "parms": [],
+              "span": {
+                "end": {
+                  "column": 58,
+                  "line": 7,
+                  "offset": 189
+                },
+                "sourceUri": "hocus-project://compatibility/compatibility.hocus",
+                "start": {
+                  "column": 3,
+                  "line": 7,
+                  "offset": 134
+                }
+              },
+              "symbol": "sink_node",
+              "typeName": "sink"
+            }
+          ],
+          "output": "sink_node",
+          "ownership": null,
+          "render": null,
+          "span": {
+            "end": {
+              "column": 2,
+              "line": 9,
+              "offset": 213
+            },
+            "sourceUri": "hocus-project://compatibility/compatibility.hocus",
+            "start": {
+              "column": 1,
+              "line": 2,
+              "offset": 11
+            }
+          },
+          "target": "/obj/compatibility"
+        },
+        "graphSpecVersion": "0.1",
+        "kind": "hocus_compiled_bundle",
+        "languageVersion": "0.1",
+        "portable": true,
+        "projectLockDigest": "sha256:fd1d8d3d7b435f6755c3a9067d3fd639abf345ffe491b0cfb117c217ebc2c8a7",
+        "projectManifestDigest": "sha256:0a8ba6d8b3f74df75d502c44fc52b86a9dab28e76ad85818032dba76d666a66b",
+        "projectUid": "compatibility",
+        "requiredCapabilities": [
+          "edit_scene"
+        ],
+        "sourceMaps": {
+          "embeddedInGraphSpec": true,
+          "entrySourceUri": "hocus-project://compatibility/compatibility.hocus",
+          "format": "graph-spec-spans-v0.1"
+        }
+      },
+      "id": "legacy-020-g01-b01"
+    },
+    {
+      "carrier": {
+        "$schema": "hocuspocus://schemas/compiled-bundle/v0.2",
+        "bundleDigest": "sha256:85321bd5b642cdea9e60fe2f996e1b9ae81c32938c51be4fc37b3a8cd90a5492",
+        "bundleVersion": "0.2",
+        "catalogConstraints": {
+          "contentDigest": "sha256:c3a5fd8bc9825c77701b6b30ef0dd8e4717ae612594350f81637950bcf6a8d84",
+          "fingerprint": "sha256:b78afa04c66c95a76d0921a827eaa185f49d34f642c982b35a224540ca7f49b1",
+          "schemaVersion": 1
+        },
+        "compilerVersion": "0.2.0",
+        "dependencies": [],
+        "entrySource": {
+          "digest": "sha256:a4d3fe08f322c3a14d5362892b865b11337643bc32535938da873272c68fcc3d",
+          "kind": "project_file",
+          "uri": "hocus-project://compatibility/compatibility.hocus"
+        },
+        "graphSpec": {
+          "$schema": "hocuspocus://schemas/graph-spec/v0.1",
+          "category": "Sop",
+          "display": null,
+          "expectedRevision": null,
+          "externalNodes": [],
+          "fieldSpans": {
+            "category": {
+              "end": {
+                "column": 15,
+                "line": 4,
+                "offset": 78
+              },
+              "sourceUri": "hocus-project://compatibility/compatibility.hocus",
+              "start": {
+                "column": 12,
+                "line": 4,
+                "offset": 75
+              }
+            },
+            "languageVersion": {
+              "end": {
+                "column": 10,
+                "line": 1,
+                "offset": 9
+              },
+              "sourceUri": "hocus-project://compatibility/compatibility.hocus",
+              "start": {
+                "column": 7,
+                "line": 1,
+                "offset": 6
+              }
+            },
+            "mode": {
+              "end": {
+                "column": 13,
+                "line": 5,
+                "offset": 92
+              },
+              "sourceUri": "hocus-project://compatibility/compatibility.hocus",
+              "start": {
+                "column": 8,
+                "line": 5,
+                "offset": 87
+              }
+            },
+            "name": {
+              "end": {
+                "column": 20,
+                "line": 2,
+                "offset": 30
+              },
+              "sourceUri": "hocus-project://compatibility/compatibility.hocus",
+              "start": {
+                "column": 7,
+                "line": 2,
+                "offset": 17
+              }
+            },
+            "output": {
+              "end": {
+                "column": 21,
+                "line": 8,
+                "offset": 210
+              },
+              "sourceUri": "hocus-project://compatibility/compatibility.hocus",
+              "start": {
+                "column": 12,
+                "line": 8,
+                "offset": 201
+              }
+            },
+            "target": {
+              "end": {
+                "column": 30,
+                "line": 3,
+                "offset": 62
+              },
+              "sourceUri": "hocus-project://compatibility/compatibility.hocus",
+              "start": {
+                "column": 10,
+                "line": 3,
+                "offset": 42
+              }
+            }
+          },
+          "graphSpecVersion": "0.1",
+          "kind": "graph_spec",
+          "languageVersion": "0.1",
+          "layout": null,
+          "mode": "merge",
+          "name": "compatibility",
+          "nodes": [
+            {
+              "fieldSpans": {
+                "symbol": {
+                  "end": {
+                    "column": 14,
+                    "line": 6,
+                    "offset": 107
+                  },
+                  "sourceUri": "hocus-project://compatibility/compatibility.hocus",
+                  "start": {
+                    "column": 8,
+                    "line": 6,
+                    "offset": 101
+                  }
+                },
+                "typeName": {
+                  "end": {
+                    "column": 35,
+                    "line": 6,
+                    "offset": 128
+                  },
+                  "sourceUri": "hocus-project://compatibility/compatibility.hocus",
+                  "start": {
+                    "column": 16,
+                    "line": 6,
+                    "offset": 109
+                  }
+                }
+              },
+              "inputs": [],
+              "parms": [],
+              "span": {
+                "end": {
+                  "column": 38,
+                  "line": 6,
+                  "offset": 131
+                },
+                "sourceUri": "hocus-project://compatibility/compatibility.hocus",
+                "start": {
+                  "column": 3,
+                  "line": 6,
+                  "offset": 96
+                }
+              },
+              "symbol": "source",
+              "typeName": "acme::source::1.0"
+            },
+            {
+              "fieldSpans": {
+                "symbol": {
+                  "end": {
+                    "column": 17,
+                    "line": 7,
+                    "offset": 148
+                  },
+                  "sourceUri": "hocus-project://compatibility/compatibility.hocus",
+                  "start": {
+                    "column": 8,
+                    "line": 7,
+                    "offset": 139
+                  }
+                },
+                "typeName": {
+                  "end": {
+                    "column": 25,
+                    "line": 7,
+                    "offset": 156
+                  },
+                  "sourceUri": "hocus-project://compatibility/compatibility.hocus",
+                  "start": {
+                    "column": 19,
+                    "line": 7,
+                    "offset": 150
+                  }
+                }
+              },
+              "inputs": [
+                {
+                  "fieldSpans": {
+                    "index": {
+                      "end": {
+                        "column": 35,
+                        "line": 7,
+                        "offset": 166
+                      },
+                      "sourceUri": "hocus-project://compatibility/compatibility.hocus",
+                      "start": {
+                        "column": 34,
+                        "line": 7,
+                        "offset": 165
+                      }
+                    }
+                  },
+                  "index": 0,
+                  "source": {
+                    "fieldSpans": {
+                      "outputIndex": {
+                        "end": {
+                          "column": 54,
+                          "line": 7,
+                          "offset": 185
+                        },
+                        "sourceUri": "hocus-project://compatibility/compatibility.hocus",
+                        "start": {
+                          "column": 53,
+                          "line": 7,
+                          "offset": 184
+                        }
+                      },
+                      "symbol": {
+                        "end": {
+                          "column": 45,
+                          "line": 7,
+                          "offset": 176
+                        },
+                        "sourceUri": "hocus-project://compatibility/compatibility.hocus",
+                        "start": {
+                          "column": 39,
+                          "line": 7,
+                          "offset": 170
+                        }
+                      }
+                    },
+                    "outputIndex": 0,
+                    "span": {
+                      "end": {
+                        "column": 55,
+                        "line": 7,
+                        "offset": 186
+                      },
+                      "sourceUri": "hocus-project://compatibility/compatibility.hocus",
+                      "start": {
+                        "column": 39,
+                        "line": 7,
+                        "offset": 170
+                      }
+                    },
+                    "symbol": "source"
+                  },
+                  "span": {
+                    "end": {
+                      "column": 56,
+                      "line": 7,
+                      "offset": 187
+                    },
+                    "sourceUri": "hocus-project://compatibility/compatibility.hocus",
+                    "start": {
+                      "column": 28,
+                      "line": 7,
+                      "offset": 159
+                    }
+                  }
+                }
+              ],
+              "parms": [],
+              "span": {
+                "end": {
+                  "column": 58,
+                  "line": 7,
+                  "offset": 189
+                },
+                "sourceUri": "hocus-project://compatibility/compatibility.hocus",
+                "start": {
+                  "column": 3,
+                  "line": 7,
+                  "offset": 134
+                }
+              },
+              "symbol": "sink_node",
+              "typeName": "sink"
+            }
+          ],
+          "output": "sink_node",
+          "ownership": null,
+          "render": null,
+          "span": {
+            "end": {
+              "column": 2,
+              "line": 9,
+              "offset": 213
+            },
+            "sourceUri": "hocus-project://compatibility/compatibility.hocus",
+            "start": {
+              "column": 1,
+              "line": 2,
+              "offset": 11
+            }
+          },
+          "target": "/obj/compatibility"
+        },
+        "graphSpecVersion": "0.1",
+        "kind": "hocus_compiled_bundle",
+        "languageVersion": "0.1",
+        "portable": true,
+        "projectLockDigest": "sha256:fd1d8d3d7b435f6755c3a9067d3fd639abf345ffe491b0cfb117c217ebc2c8a7",
+        "projectManifestDigest": "sha256:0a8ba6d8b3f74df75d502c44fc52b86a9dab28e76ad85818032dba76d666a66b",
+        "projectUid": "compatibility",
+        "requiredCapabilities": [
+          "edit_scene"
+        ],
+        "semanticResolution": {
+          "catalogFingerprint": "sha256:b78afa04c66c95a76d0921a827eaa185f49d34f642c982b35a224540ca7f49b1",
+          "connectionSelections": [
+            {
+              "inputIndex": 0,
+              "inputName": "source",
+              "jsonPointer": "/nodes/1/inputs/0",
+              "nodeIndex": 1,
+              "nodeSymbol": "sink_node",
+              "outputIndex": 0,
+              "outputName": "geometry",
+              "sourceSymbol": "source"
+            }
+          ],
+          "deferredChecks": [],
+          "diagnostics": [],
+          "operatorSelections": [
+            {
+              "category": "Sop",
+              "definitionDigest": null,
+              "jsonPointer": "/nodes/0/typeName",
+              "namespace": "acme",
+              "nodeIndex": 0,
+              "nodeSymbol": "source",
+              "qualifiedName": "acme::source::1.0",
+              "sourceKind": "builtin",
+              "version": "1.0"
+            },
+            {
+              "category": "Sop",
+              "definitionDigest": null,
+              "jsonPointer": "/nodes/1/typeName",
+              "namespace": null,
+              "nodeIndex": 1,
+              "nodeSymbol": "sink_node",
+              "qualifiedName": "sink",
+              "sourceKind": "builtin",
+              "version": null
+            }
+          ],
+          "parameterSelections": [],
+          "readyForDocumentLowering": true,
+          "requiredCapabilities": [
+            "edit_scene"
+          ],
+          "stage": "semantic",
+          "valid": true
+        },
+        "sourceMaps": {
+          "embeddedInGraphSpec": true,
+          "entrySourceUri": "hocus-project://compatibility/compatibility.hocus",
+          "format": "graph-spec-spans-v0.1"
+        }
+      },
+      "id": "legacy-020-g01-b02"
+    }
+  ],
+  "schemaVersion": 1
+}

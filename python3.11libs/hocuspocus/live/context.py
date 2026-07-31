@@ -24,6 +24,8 @@ class RequestContext:
     metadata: dict[str, Any] = field(default_factory=dict)
     operation_id: str = field(default_factory=lambda: str(uuid4()))
     cancel_event: threading.Event = field(default_factory=threading.Event)
+    principal_id: str = "local-runtime"
+    session_id: str | None = None
 
     def cancel(self) -> None:
         self.cancel_event.set()

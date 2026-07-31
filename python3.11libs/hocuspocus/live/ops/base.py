@@ -71,6 +71,24 @@ class OperationBaseMixin:
         }
 
     @staticmethod
+    def _resource_response_text(
+        uri: str,
+        payload: dict[str, Any],
+        *,
+        indent: int | None = None,
+        sort_keys: bool = False,
+    ) -> dict[str, Any]:
+        return {
+            "contents": [
+                {
+                    "uri": uri,
+                    "mimeType": "application/json",
+                    "text": json.dumps(payload, ensure_ascii=True, indent=indent, sort_keys=sort_keys),
+                }
+            ]
+        }
+
+    @staticmethod
     def _safe_value(getter: Any, default: Any = None) -> Any:
         try:
             return getter()
@@ -139,6 +157,72 @@ class OperationBaseMixin:
             payload["parms"] = [self._parm_summary(parm) for parm in node.parms()]
         return payload
 
+    def _target_fit_summary(
+        self,
+        target_path: str | None = None,
+        *,
+        fallback_center: tuple[float, float, float] = (0.0, 0.0, 0.0),
+        fallback_radius: float = 4.0,
+        distance_multiplier: float = 2.5,
+    ) -> dict[str, Any]:
+        center = [float(fallback_center[0]), float(fallback_center[1]), float(fallback_center[2])]
+        radius = max(float(fallback_radius), 1.0)
+        bbox_min: list[float] | None = None
+        bbox_max: list[float] | None = None
+        extents = [radius * 2.0, radius * 2.0, radius * 2.0]
+        placement_mode = "fallback"
+        target_node_path: str | None = None
+        warnings: list[str] = []
+
+        if target_path:
+            target_node = self._require_node_by_path(target_path, label="target_path")
+            target_node_path = target_node.path()
+            try:
+                geo_summary = self._geometry_summary_for_node(target_node)
+                bbox_min = [float(value) for value in geo_summary["bboxMin"]]
+                bbox_max = [float(value) for value in geo_summary["bboxMax"]]
+                center = [
+                    (bbox_min[0] + bbox_max[0]) / 2.0,
+                    (bbox_min[1] + bbox_max[1]) / 2.0,
+                    (bbox_min[2] + bbox_max[2]) / 2.0,
+                ]
+                extents = [
+                    bbox_max[0] - bbox_min[0],
+                    bbox_max[1] - bbox_min[1],
+                    bbox_max[2] - bbox_min[2],
+                ]
+                radius = max(max(extents), 1.0) * distance_multiplier
+                placement_mode = "geometry_bbox"
+            except JsonRpcError:
+                translate = self._safe_value(lambda: list(target_node.parmTuple("t").eval()), None)
+                if translate is not None and len(translate) >= 3:
+                    center = [float(translate[0]), float(translate[1]), float(translate[2])]
+                    placement_mode = "node_translate"
+                else:
+                    warnings.append("Could not derive geometry bounds; using fallback targeting.")
+
+        max_extent = max(extents) if extents else radius * 2.0
+        if max_extent <= 8.0:
+            size_class = "small"
+        elif max_extent <= 24.0:
+            size_class = "medium"
+        elif max_extent <= 60.0:
+            size_class = "large"
+        else:
+            size_class = "exterior"
+
+        return {
+            "targetPath": target_node_path,
+            "center": center,
+            "bboxMin": bbox_min,
+            "bboxMax": bbox_max,
+            "extents": extents,
+            "radius": radius,
+            "placementMode": placement_mode,
+            "sizeClass": size_class,
+            "warnings": warnings,
+        }
+
     def _require_node_by_path(self, node_path: str, *, label: str = "path") -> Any:
         hou_module = self._require_hou()
         node_path = str(node_path).strip()
@@ -193,6 +277,63 @@ class OperationBaseMixin:
         return resolved
 
     @staticmethod
+    def _guess_document_scope_path(candidate: Any) -> str | None:
+        raw = str(candidate or "").strip()
+        if not raw.startswith("/"):
+            return None
+        segments = [item for item in raw.split("/") if item]
+        if not segments:
+            return None
+        first = segments[0]
+        if first == "obj":
+            if len(segments) >= 2:
+                return f"/obj/{segments[1]}"
+            return "/obj"
+        if first in {"stage", "mat", "tasks", "out"}:
+            return f"/{first}"
+        return f"/{first}"
+
+    def dirty_scope_for_tool(
+        self,
+        tool_name: str,
+        arguments: dict[str, Any],
+        result: dict[str, Any] | None = None,
+    ) -> str | None:
+        if tool_name in {"scene.new", "scene.open_hip", "scene.merge_hip", "scene.undo", "scene.redo"}:
+            return None
+        candidate_keys = (
+            "root_path",
+            "node_path",
+            "path",
+            "parent_path",
+            "dest_node_path",
+            "source_node_path",
+            "target_node_path",
+            "input_node_path",
+            "graph_path",
+            "instance_path",
+            "source_parm_path",
+            "parm_path",
+            "material_path",
+        )
+        for key in candidate_keys:
+            scope = self._guess_document_scope_path(arguments.get(key))
+            if scope is not None:
+                return scope
+        structured = result.get("structuredContent") if isinstance(result, dict) else None
+        if isinstance(structured, dict):
+            for key in ("rootPath", "path", "nodePath", "targetPath"):
+                scope = self._guess_document_scope_path(structured.get(key))
+                if scope is not None:
+                    return scope
+            house_node = structured.get("houseNode")
+            if isinstance(house_node, dict):
+                scope = self._guess_document_scope_path(house_node.get("path"))
+                if scope is not None:
+                    return scope
+        return None
+
+    @staticmethod
     def _tool_capabilities(name: str) -> tuple[str, ...]:
         capability_map = {
             "session.info": (OBSERVE,),
@@ -224,6 +365,10 @@ class OperationBaseMixin:
             "cache.get_topology": (OBSERVE,),
             "package.preview_scene": (OBSERVE,),
             "package.create_scene_package": (WRITE_FILES,),
+            "node_types.list_groups": (OBSERVE,),
+            "node_types.list": (OBSERVE,),
+            "node_types.get_info": (OBSERVE,),
+            "node_types.list_compatible": (OBSERVE,),
             "node.list": (OBSERVE,),
             "node.get": (OBSERVE,),
             "node.create": (EDIT_SCENE,),
@@ -244,9 +389,27 @@ class OperationBaseMixin:
             "graph.diff_subgraph": (OBSERVE,),
             "graph.plan_edit": (OBSERVE,),
             "graph.apply_patch": (EDIT_SCENE,),
+            "document.checkout": (OBSERVE,),
+            "document.validate": (OBSERVE,),
+            "document.diff": (OBSERVE,),
+            "document.apply": (EDIT_SCENE,),
+            "document.discard_checkout": (OBSERVE,),
+            "document.query": (OBSERVE,),
+            "document.sync_from_houdini": (OBSERVE,),
+            "document.compile_source": (OBSERVE,),
+            "document.format_source": (OBSERVE,),
+            "document.complete_source": (OBSERVE,),
+            "document.export_source": (OBSERVE,),
+            "document.preview_bundle": (OBSERVE,),
+            "document.plan_bundle": (OBSERVE,),
+            "document.apply_plan": (EDIT_SCENE,),
+            "document.discard_plan": (OBSERVE,),
+            "document.apply_quarantines": (OBSERVE,),
+            "document.recover_scope": (EDIT_SCENE,),
             "parm.list": (OBSERVE,),
             "parm.get": (OBSERVE,),
             "parm.set": (EDIT_SCENE,),
+            "parm.set_many": (EDIT_SCENE,),
             "parm.set_expression": (EDIT_SCENE,),
             "parm.press_button": (EDIT_SCENE,),
             "parm.revert_to_default": (EDIT_SCENE,),
@@ -273,6 +436,14 @@ class OperationBaseMixin:
             "usd.inspect_material_bindings": (OBSERVE,),
             "usd.validate_stage": (OBSERVE,),
             "geometry.get_summary": (OBSERVE,),
+            "building.generate_massing": (EDIT_SCENE,),
+            "building.add_envelope": (EDIT_SCENE,),
+            "building.add_floor_stack": (EDIT_SCENE,),
+            "building.add_core": (EDIT_SCENE,),
+            "building.add_structural_bands": (EDIT_SCENE,),
+            "building.add_window_grid": (EDIT_SCENE,),
+            "building.add_rooftop_mech": (EDIT_SCENE,),
+            "building.apply_style_profile": (EDIT_SCENE,),
             "material.create": (EDIT_SCENE,),
             "material.update": (EDIT_SCENE,),
             "material.assign": (EDIT_SCENE,),

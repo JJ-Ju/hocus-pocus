@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from hocuspocus.core.jsonrpc import INVALID_PARAMS, JsonRpcError
+from hocuspocus.core.jsonrpc import JsonRpcError
 from hocuspocus.core.policy import ensure_path_allowed
 
 from ..context import RequestContext

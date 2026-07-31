@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "hocuspocus://schemas/hocus-lock/v1",
+  "title": "hocus.lock.json v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "kind",
+    "schemaVersion",
+    "projectUid",
+    "manifestDigest",
+    "languageVersion",
+    "catalog",
+    "modules"
+  ],
+  "properties": {
+    "$schema": {"const": "hocuspocus://schemas/hocus-lock/v1"},
+    "kind": {"const": "hocus_project_lock"},
+    "schemaVersion": {"const": 1},
+    "projectUid": {"type": "string", "pattern": "^[a-z0-9][a-z0-9.-]{0,127}$"},
+    "manifestDigest": {"$ref": "#/$defs/digest"},
+    "languageVersion": {"const": "0.1"},
+    "catalog": {"type": "null"},
+    "modules": {"type": "array", "maxItems": 0}
+  },
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+  }
+}

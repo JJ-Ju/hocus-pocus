@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "hocuspocus://schemas/document-complete-source-output/v1",
+  "title": "HocusScript Complete Source Output v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "interfaceVersion", "offsetEncoding", "sourceUri", "offset", "context",
+    "catalogFingerprint", "isIncomplete", "items"
+  ],
+  "properties": {
+    "interfaceVersion": {"const": "1.0"},
+    "offsetEncoding": {"const": "unicode_code_points"},
+    "sourceUri": {"type": "string", "minLength": 1, "maxLength": 8192},
+    "offset": {"type": "integer", "minimum": 0, "maximum": 1048576},
+    "context": {
+      "enum": [
+        "language_version", "category", "mode", "layout", "node_type",
+        "parameter", "menu_value", "node_reference", "graph"
+      ]
+    },
+    "catalogFingerprint": {"$ref": "#/$defs/digest"},
+    "isIncomplete": {"type": "boolean"},
+    "items": {
+      "type": "array",
+      "maxItems": 200,
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/completionItem"}
+    }
+  },
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "position": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["offset", "line", "column"],
+      "properties": {
+        "offset": {"type": "integer", "minimum": 0},
+        "line": {"type": "integer", "minimum": 1},
+        "column": {"type": "integer", "minimum": 1}
+      }
+    },
+    "sourceSpan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sourceUri", "start", "end"],
+      "properties": {
+        "sourceUri": {"type": "string", "minLength": 1, "maxLength": 8192},
+        "start": {"$ref": "#/$defs/position"},
+        "end": {"$ref": "#/$defs/position"}
+      }
+    },
+    "completionItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["label", "kind", "insertText", "replacementSpan", "detail", "documentation", "sortText"],
+      "properties": {
+        "label": {"type": "string", "minLength": 1, "maxLength": 4096},
+        "kind": {
+          "enum": ["keyword", "category", "operator", "parameter", "enum_member", "reference", "value"]
+        },
+        "insertText": {"type": "string", "maxLength": 262144},
+        "replacementSpan": {"$ref": "#/$defs/sourceSpan"},
+        "detail": {"type": ["string", "null"], "maxLength": 16384},
+        "documentation": {"type": ["string", "null"], "maxLength": 65536},
+        "sortText": {"type": "string", "minLength": 1, "maxLength": 4096}
+      }
+    }
+  }
+}

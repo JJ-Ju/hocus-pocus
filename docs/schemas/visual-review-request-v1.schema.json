@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "hocuspocus://schemas/visual-review-request/v1",
+  "title": "HocusScript Visual Review Request v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "kind",
+    "reviewVersion",
+    "assetUri",
+    "candidateProvenanceManifestDigest",
+    "candidateOutputSetDigest",
+    "visualComparisonDigest",
+    "candidateVersionId",
+    "reviewPolicyId",
+    "baselineFile",
+    "baselineDigest",
+    "decision"
+  ],
+  "properties": {
+    "$schema": {"const": "hocuspocus://schemas/visual-review-request/v1"},
+    "kind": {"const": "hocus_visual_version_review_request"},
+    "reviewVersion": {"const": 1},
+    "assetUri": {"type": "string", "pattern": "^hocus-asset://"},
+    "candidateProvenanceManifestDigest": {"$ref": "#/$defs/digest"},
+    "candidateOutputSetDigest": {"$ref": "#/$defs/digest"},
+    "visualComparisonDigest": {"$ref": "#/$defs/digest"},
+    "candidateVersionId": {"$ref": "#/$defs/id"},
+    "reviewPolicyId": {"$ref": "#/$defs/id"},
+    "baselineFile": {"const": "baseline-contact-sheet.png"},
+    "baselineDigest": {"$ref": "#/$defs/digest"},
+    "decision": {"const": "review_pending"}
+  },
+  "$defs": {
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"
+    }
+  }
+}

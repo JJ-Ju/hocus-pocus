@@ -5,20 +5,23 @@ Status: active
 Applies to:
 
 - HocusPocus `0.9.x`
-- Houdini `21.x`
+- Houdini `22.0.368`
 - the Streamable HTTP MCP surface served by HocusPocus
 
 ## 1. Supported Houdini Range
 
-HocusPocus currently targets Houdini `21.x`.
+Houdini `22.0.368` is the sole supported and release-qualifying live runtime
+for HocusPocus V1.
 
 Compatibility expectations:
 
-- supported and actively validated: Houdini `21.0`
-- intended compatibility target: other Houdini `21.x` builds where HOM, LOP, PDG, and viewport APIs remain materially compatible
-- not guaranteed: Houdini `20.x`, Houdini `22.x`, or Engine-only/headless deployments that do not expose the same UI/runtime APIs
+- sole supported target: Houdini `22.0.368`
+- unsupported for V1: every other Houdini build, including Houdini `21.x`, and
+  Engine-only/headless deployments that do not expose the same UI/runtime APIs
+- historical H21 receipts are migration evidence only and do not establish
+  current support, availability, or release qualification
 
-If a Houdini `21.x` point release changes HOM or UI behavior in a way that breaks an existing tool, HocusPocus should treat that as a compatibility regression and fix it in a patch release where practical.
+If Houdini `22.0.368` behavior breaks an existing tool, HocusPocus should treat that as a compatibility regression and fix it in a patch release where practical.
 
 ## 2. MCP Compatibility Contract
 

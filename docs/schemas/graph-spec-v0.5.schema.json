@@ -1,0 +1,839 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "hocuspocus://schemas/graph-spec/v0.5",
+  "title": "HocusScript GraphSpec v0.5",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "kind",
+    "graphSpecVersion",
+    "languageVersion",
+    "name",
+    "target",
+    "category",
+    "mode",
+    "expectedRevision",
+    "ownership",
+    "externalNodes",
+    "nodes",
+    "editorEntities",
+    "spareParameters",
+    "animations",
+    "display",
+    "render",
+    "output",
+    "layout",
+    "span",
+    "fieldSpans",
+    "expansionMap"
+  ],
+  "properties": {
+    "$schema": {
+      "const": "hocuspocus://schemas/graph-spec/v0.5"
+    },
+    "kind": {
+      "const": "graph_spec"
+    },
+    "graphSpecVersion": {
+      "const": "0.5"
+    },
+    "languageVersion": {
+      "type": "string",
+      "const": "0.4"
+    },
+    "name": {
+      "$ref": "#/$defs/identifier"
+    },
+    "target": {"$ref": "#/$defs/absolutePath"},
+    "category": {
+      "oneOf": [
+        {"type": "null"},
+        {"$ref": "#/$defs/identifier"}
+      ]
+    },
+    "mode": {
+      "enum": ["merge", "reconcile"]
+    },
+    "expectedRevision": {
+      "oneOf": [
+        {"type": "null"},
+        {"type": "integer", "minimum": 0}
+      ]
+    },
+    "ownership": {
+      "oneOf": [
+        {"type": "null"},
+        {"type": "string", "minLength": 1}
+      ]
+    },
+    "externalNodes": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/externalNode"}
+    },
+    "nodes": {
+      "type": "array",
+      "maxItems": 10000,
+      "items": {"$ref": "#/$defs/node"}
+    },
+    "editorEntities": {
+      "type": "array",
+      "maxItems": 16384,
+      "items": {"$ref": "#/$defs/editorEntity"}
+    },
+    "spareParameters": {
+      "type": "array",
+      "maxItems": 16384,
+      "items": {"$ref": "#/$defs/spareParameter"}
+    },
+    "animations": {
+      "type": "array",
+      "maxItems": 16384,
+      "items": {"$ref": "#/$defs/animation"}
+    },
+    "display": {"$ref": "#/$defs/nullableIdentifier"},
+    "render": {"$ref": "#/$defs/nullableIdentifier"},
+    "output": {"$ref": "#/$defs/nullableIdentifier"},
+    "layout": {
+      "oneOf": [
+        {"type": "null"},
+        {"const": "auto"}
+      ]
+    },
+    "span": {"$ref": "#/$defs/sourceSpan"},
+    "expansionMap": {"$ref": "hocuspocus://schemas/expansion-map/v3"},
+    "fieldSpans": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "languageVersion": {"$ref": "#/$defs/sourceSpan"},
+        "name": {"$ref": "#/$defs/sourceSpan"},
+        "target": {"$ref": "#/$defs/sourceSpan"},
+        "category": {"$ref": "#/$defs/sourceSpan"},
+        "mode": {"$ref": "#/$defs/sourceSpan"},
+        "expectedRevision": {"$ref": "#/$defs/sourceSpan"},
+        "ownership": {"$ref": "#/$defs/sourceSpan"},
+        "display": {"$ref": "#/$defs/sourceSpan"},
+        "render": {"$ref": "#/$defs/sourceSpan"},
+        "output": {"$ref": "#/$defs/sourceSpan"},
+        "layout": {"$ref": "#/$defs/sourceSpan"}
+      }
+    }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+    },
+    "nullableIdentifier": {
+      "oneOf": [
+        {"type": "null"},
+        {"$ref": "#/$defs/identifier"}
+      ]
+    },
+    "absolutePath": {
+      "type": "string",
+      "pattern": "^/"
+    },
+    "sourceUri": {
+      "type": "string", "minLength": 1, "maxLength": 8192,
+      "pattern": "^hocus-(?:project|module)://[a-z0-9][a-z0-9.-]{0,127}/(?!/)(?!\\.{1,2}(?:/|$))(?!.*\\/\\.{1,2}(?:/|$))(?!.*//)(?!.*[?#\\\\:])[^/]+(?:/[^/]+)*\\.hocus$"
+    },
+    "sourcePosition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["offset", "line", "column"],
+      "properties": {
+        "offset": {"type": "integer", "minimum": 0},
+        "line": {"type": "integer", "minimum": 1},
+        "column": {"type": "integer", "minimum": 1}
+      }
+    },
+    "sourceSpan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sourceUri", "start", "end"],
+      "properties": {
+        "sourceUri": {"$ref": "#/$defs/sourceUri"},
+        "start": {"$ref": "#/$defs/sourcePosition"},
+        "end": {"$ref": "#/$defs/sourcePosition"}
+      }
+    },
+    "literalValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "value", "span"],
+      "properties": {
+        "kind": {"const": "literal"},
+        "value": {
+          "type": ["null", "boolean", "integer", "number", "string"]
+        },
+        "span": {"$ref": "#/$defs/sourceSpan"}
+      }
+    },
+    "arrayValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "items", "span"],
+      "properties": {
+        "kind": {"const": "array"},
+        "items": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/value"}
+        },
+        "span": {"$ref": "#/$defs/sourceSpan"}
+      }
+    },
+    "codeValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "language", "body", "span"],
+      "dependentRequired": {
+        "bodySpan": ["offsetMap"],
+        "offsetMap": ["bodySpan"]
+      },
+      "properties": {
+        "kind": {"const": "code"},
+        "language": {"enum": ["vex", "python", "hscript"]},
+        "body": {"type": "string"},
+        "span": {"$ref": "#/$defs/sourceSpan"},
+        "bodySpan": {"$ref": "#/$defs/sourceSpan"},
+        "offsetMap": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["bodyLength", "checkpoints"],
+          "properties": {
+            "bodyLength": {"type": "integer", "minimum": 0},
+            "checkpoints": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["bodyOffset", "sourceOffset"],
+                "properties": {
+                  "bodyOffset": {"type": "integer", "minimum": 0},
+                  "sourceOffset": {"type": "integer", "minimum": 0}
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "resetValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "span"],
+      "properties": {
+        "kind": {"const": "reset"},
+        "span": {"$ref": "#/$defs/sourceSpan"}
+      }
+    },
+    "expressionValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "language", "body", "bodySpan", "offsetMap", "span"],
+      "properties": {
+        "kind": {"const": "expression"},
+        "language": {"enum": ["hscript", "python"]},
+        "body": {"type": "string", "minLength": 1, "maxLength": 1048576},
+        "bodySpan": {"$ref": "#/$defs/sourceSpan"},
+        "offsetMap": {"$ref": "#/$defs/codeValue/properties/offsetMap"},
+        "span": {"$ref": "#/$defs/sourceSpan"}
+      }
+    },
+    "channelReferenceValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "nodeSymbol", "parmName", "span"],
+      "properties": {
+        "kind": {"const": "channel_reference"},
+        "nodeSymbol": {"$ref": "#/$defs/identifier"},
+        "parmName": {"$ref": "#/$defs/identifier"},
+        "span": {"$ref": "#/$defs/sourceSpan"}
+      }
+    },
+    "rawPathValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "pathKind", "raw", "span"],
+      "properties": {
+        "kind": {"const": "raw_path"},
+        "pathKind": {"enum": ["node", "parm", "file", "usd_prim", "asset"]},
+        "raw": {"type": "string", "maxLength": 8192},
+        "span": {"$ref": "#/$defs/sourceSpan"}
+      }
+    },
+    "quantityValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "magnitude", "unit", "span"],
+      "properties": {
+        "kind": {"const": "quantity"},
+        "magnitude": {"type": "number"},
+        "unit": {"type": "string", "minLength": 1, "maxLength": 128},
+        "span": {"$ref": "#/$defs/sourceSpan"}
+      }
+    },
+    "rampPoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["position", "value"],
+      "properties": {
+        "position": {"type": "number", "minimum": 0, "maximum": 1},
+        "value": {
+          "oneOf": [
+            {"$ref": "#/$defs/literalValue"},
+            {"$ref": "#/$defs/arrayValue"}
+          ]
+        }
+      }
+    },
+    "rampValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "points", "basis", "span"],
+      "properties": {
+        "kind": {"const": "ramp"},
+        "points": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 4096,
+          "items": {"$ref": "#/$defs/rampPoint"}
+        },
+        "basis": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 4096,
+          "items": {
+            "enum": [
+              "constant", "linear", "catmullrom", "monotonecubic",
+              "bezier", "bspline", "hermite"
+            ]
+          }
+        },
+        "span": {"$ref": "#/$defs/sourceSpan"}
+      }
+    },
+    "multiparmField": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "value"],
+      "properties": {
+        "name": {"$ref": "#/$defs/identifier"},
+        "value": {"$ref": "#/$defs/value"}
+      }
+    },
+    "multiparmInstance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["instanceId", "fields"],
+      "properties": {
+        "instanceId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+        },
+        "fields": {
+          "type": "array",
+          "maxItems": 256,
+          "items": {"$ref": "#/$defs/multiparmField"}
+        }
+      }
+    },
+    "multiparmValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "instances", "span"],
+      "properties": {
+        "kind": {"const": "multiparm"},
+        "instances": {
+          "type": "array",
+          "maxItems": 4096,
+          "items": {"$ref": "#/$defs/multiparmInstance"}
+        },
+        "span": {"$ref": "#/$defs/sourceSpan"}
+      }
+    },
+    "value": {
+      "oneOf": [
+        {"$ref": "#/$defs/literalValue"},
+        {"$ref": "#/$defs/arrayValue"},
+        {"$ref": "#/$defs/codeValue"},
+        {"$ref": "#/$defs/resetValue"},
+        {"$ref": "#/$defs/expressionValue"},
+        {"$ref": "#/$defs/channelReferenceValue"},
+        {"$ref": "#/$defs/rawPathValue"},
+        {"$ref": "#/$defs/quantityValue"},
+        {"$ref": "#/$defs/rampValue"},
+        {"$ref": "#/$defs/multiparmValue"}
+      ]
+    },
+    "reference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["symbol", "span"],
+      "oneOf": [
+        {"required": ["outputIndex"]},
+        {"required": ["outputName"]}
+      ],
+      "properties": {
+        "symbol": {"$ref": "#/$defs/identifier"},
+        "outputIndex": {"type": "integer", "minimum": 0},
+        "outputName": {"type": "string", "minLength": 1, "maxLength": 256},
+        "span": {"$ref": "#/$defs/sourceSpan"},
+        "fieldSpans": {"$ref": "#/$defs/referenceFieldSpans"}
+      }
+    },
+    "input": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "span"],
+      "oneOf": [
+        {"required": ["index"]},
+        {"required": ["name"]}
+      ],
+      "properties": {
+        "index": {"type": "integer", "minimum": 0},
+        "name": {"type": "string", "minLength": 1, "maxLength": 256},
+        "source": {"$ref": "#/$defs/reference"},
+        "span": {"$ref": "#/$defs/sourceSpan"},
+        "fieldSpans": {"$ref": "#/$defs/inputFieldSpans"}
+      }
+    },
+    "parm": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "value", "span"],
+      "properties": {
+        "name": {"$ref": "#/$defs/identifier"},
+        "value": {"$ref": "#/$defs/value"},
+        "span": {"$ref": "#/$defs/sourceSpan"},
+        "fieldSpans": {"$ref": "#/$defs/parmFieldSpans"}
+      }
+    },
+    "node": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["symbol", "typeName", "inputs", "parms", "span"],
+      "properties": {
+        "symbol": {"$ref": "#/$defs/identifier"},
+        "explicitId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+        },
+        "typeName": {"type": "string", "minLength": 1},
+        "inputs": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/input"}
+        },
+        "parms": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/parm"}
+        },
+        "span": {"$ref": "#/$defs/sourceSpan"},
+        "fieldSpans": {"$ref": "#/$defs/nodeFieldSpans"}
+      }
+    },
+    "editorId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+    },
+    "editorRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "identity"],
+      "properties": {
+        "kind": {"enum": ["node", "dot", "box", "sticky"]},
+        "identity": {"type": "string", "minLength": 1, "maxLength": 512}
+      }
+    },
+    "editorVec2": {
+      "type": "array",
+      "prefixItems": [
+        {"type": "number", "minimum": -1000000, "maximum": 1000000},
+        {"type": "number", "minimum": -1000000, "maximum": 1000000}
+      ],
+      "items": false
+    },
+    "editorSize": {
+      "type": "array",
+      "prefixItems": [
+        {"type": "number", "exclusiveMinimum": 0, "maximum": 100000},
+        {"type": "number", "exclusiveMinimum": 0, "maximum": 100000}
+      ],
+      "items": false
+    },
+    "editorColor": {
+      "oneOf": [
+        {"type": "null"},
+        {
+          "type": "array",
+          "prefixItems": [
+            {"type": "number", "minimum": 0, "maximum": 1},
+            {"type": "number", "minimum": 0, "maximum": 1},
+            {"type": "number", "minimum": 0, "maximum": 1}
+          ],
+          "items": false
+        }
+      ]
+    },
+    "editorFieldSpans": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["explicitId"],
+      "properties": {
+        "explicitId": {"$ref": "#/$defs/sourceSpan"},
+        "label": {"$ref": "#/$defs/sourceSpan"},
+        "position": {"$ref": "#/$defs/sourceSpan"},
+        "size": {"$ref": "#/$defs/sourceSpan"},
+        "color": {"$ref": "#/$defs/sourceSpan"},
+        "items": {"$ref": "#/$defs/sourceSpan"},
+        "text": {"$ref": "#/$defs/sourceSpan"},
+        "text_size": {"$ref": "#/$defs/sourceSpan"},
+        "background": {"$ref": "#/$defs/sourceSpan"},
+        "minimized": {"$ref": "#/$defs/sourceSpan"},
+        "node": {"$ref": "#/$defs/sourceSpan"},
+        "visible": {"$ref": "#/$defs/sourceSpan"},
+        "pinned": {"$ref": "#/$defs/sourceSpan"},
+        "input": {"$ref": "#/$defs/sourceSpan"},
+        "outputs": {"$ref": "#/$defs/sourceSpan"},
+        "kind": {"$ref": "#/$defs/sourceSpan"},
+        "anchor": {"$ref": "#/$defs/sourceSpan"},
+        "offset": {"$ref": "#/$defs/sourceSpan"},
+        "spacing": {"$ref": "#/$defs/sourceSpan"},
+        "padding": {"$ref": "#/$defs/sourceSpan"},
+        "priority": {"$ref": "#/$defs/sourceSpan"}
+      }
+    },
+    "editorBase": {
+      "type": "object",
+      "required": ["kind", "explicitId", "span", "fieldSpans"],
+      "properties": {
+        "kind": {"type": "string"},
+        "explicitId": {"$ref": "#/$defs/editorId"},
+        "span": {"$ref": "#/$defs/sourceSpan"},
+        "fieldSpans": {"$ref": "#/$defs/editorFieldSpans"}
+      }
+    },
+    "editorEntity": {
+      "oneOf": [
+        {
+          "allOf": [
+            {"$ref": "#/$defs/editorBase"},
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "kind", "explicitId", "label", "position", "size", "color",
+                "itemRefs", "span", "fieldSpans"
+              ],
+              "properties": {
+                "kind": {"const": "network_box"},
+                "explicitId": {"$ref": "#/$defs/editorId"},
+                "label": {"type": "string", "maxLength": 4096},
+                "position": {"$ref": "#/$defs/editorVec2"},
+                "size": {"$ref": "#/$defs/editorSize"},
+                "color": {"$ref": "#/$defs/editorColor"},
+                "itemRefs": {
+                  "type": "array", "maxItems": 4096,
+                  "items": {"$ref": "#/$defs/editorRef"}
+                },
+                "span": {"$ref": "#/$defs/sourceSpan"},
+                "fieldSpans": {"$ref": "#/$defs/editorFieldSpans"}
+              }
+            }
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind", "explicitId", "text", "position", "size", "color",
+            "textSize", "drawBackground", "minimized", "span", "fieldSpans"
+          ],
+          "properties": {
+            "kind": {"const": "sticky_note"},
+            "explicitId": {"$ref": "#/$defs/editorId"},
+            "text": {"type": "string", "maxLength": 65536},
+            "position": {"$ref": "#/$defs/editorVec2"},
+            "size": {"$ref": "#/$defs/editorSize"},
+            "color": {"$ref": "#/$defs/editorColor"},
+            "textSize": {"type": "number", "minimum": 0.1, "maximum": 10},
+            "drawBackground": {"type": "boolean"},
+            "minimized": {"type": "boolean"},
+            "span": {"$ref": "#/$defs/sourceSpan"},
+            "fieldSpans": {"$ref": "#/$defs/editorFieldSpans"}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind", "explicitId", "nodeRef", "text", "visible", "span",
+            "fieldSpans"
+          ],
+          "properties": {
+            "kind": {"const": "node_comment"},
+            "explicitId": {"$ref": "#/$defs/editorId"},
+            "nodeRef": {"$ref": "#/$defs/editorRef"},
+            "text": {"type": "string", "maxLength": 65536},
+            "visible": {"type": "boolean"},
+            "span": {"$ref": "#/$defs/sourceSpan"},
+            "fieldSpans": {"$ref": "#/$defs/editorFieldSpans"}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind", "explicitId", "position", "pinned", "input", "outputs", "span",
+            "fieldSpans"
+          ],
+          "properties": {
+            "kind": {"const": "network_dot"},
+            "explicitId": {"$ref": "#/$defs/editorId"},
+            "position": {"$ref": "#/$defs/editorVec2"},
+            "pinned": {"type": "boolean"},
+            "input": {
+              "oneOf": [
+                {"type": "null"},
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["item", "outputIndex"],
+                  "properties": {
+                    "item": {"$ref": "#/$defs/editorRef"},
+                    "outputIndex": {
+                      "type": "integer", "minimum": 0, "maximum": 65535
+                    }
+                  }
+                }
+              ]
+            },
+            "outputs": {
+              "type": "array",
+              "maxItems": 256,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["nodeRef", "inputIndex"],
+                "properties": {
+                  "nodeRef": {"$ref": "#/$defs/editorRef"},
+                  "inputIndex": {
+                    "type": "integer", "minimum": 0, "maximum": 65535
+                  }
+                }
+              }
+            },
+            "span": {"$ref": "#/$defs/sourceSpan"},
+            "fieldSpans": {"$ref": "#/$defs/editorFieldSpans"}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind", "explicitId", "constraintKind", "itemRefs", "anchorRef",
+            "offset", "spacing", "padding", "priority", "span", "fieldSpans"
+          ],
+          "properties": {
+            "kind": {"const": "layout_constraint"},
+            "explicitId": {"$ref": "#/$defs/editorId"},
+            "constraintKind": {
+              "enum": [
+                "align_x", "align_y", "offset", "distribute_x",
+                "distribute_y", "contain"
+              ]
+            },
+            "itemRefs": {
+              "type": "array", "maxItems": 256,
+              "items": {"$ref": "#/$defs/editorRef"}
+            },
+            "anchorRef": {
+              "oneOf": [
+                {"type": "null"},
+                {"$ref": "#/$defs/editorRef"}
+              ]
+            },
+            "offset": {
+              "oneOf": [
+                {"type": "null"},
+                {"$ref": "#/$defs/editorVec2"}
+              ]
+            },
+            "spacing": {
+              "type": ["number", "null"], "minimum": 0, "maximum": 100000
+            },
+            "padding": {
+              "type": "array",
+              "prefixItems": [
+                {"type": "number", "minimum": 0, "maximum": 100000},
+                {"type": "number", "minimum": 0, "maximum": 100000}
+              ],
+              "items": false
+            },
+            "priority": {"type": "integer", "minimum": 0, "maximum": 100},
+            "span": {"$ref": "#/$defs/sourceSpan"},
+            "fieldSpans": {"$ref": "#/$defs/editorFieldSpans"}
+          }
+        }
+      ]
+    },
+    "spareParameter": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "explicitId", "nodeSymbol", "name", "label", "type", "tupleSize",
+        "default", "menuItems", "span", "fieldSpans"
+      ],
+      "properties": {
+        "explicitId": {"$ref": "#/$defs/explicitId"},
+        "nodeSymbol": {"$ref": "#/$defs/identifier"},
+        "name": {"$ref": "#/$defs/identifier"},
+        "label": {"type": "string", "minLength": 1, "maxLength": 512},
+        "type": {"enum": ["float", "int", "string", "toggle", "menu"]},
+        "tupleSize": {"type": "integer", "minimum": 1, "maximum": 16},
+        "default": {},
+        "menuItems": {
+          "type": "array",
+          "maxItems": 256,
+          "items": {"$ref": "#/$defs/runtimeMenuItem"}
+        },
+        "span": {"$ref": "#/$defs/sourceSpan"},
+        "fieldSpans": {"$ref": "#/$defs/runtimeFieldSpans"}
+      }
+    },
+    "runtimeMenuItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["token", "label"],
+      "properties": {
+        "token": {"type": "string", "minLength": 1, "maxLength": 512},
+        "label": {"type": "string", "minLength": 1, "maxLength": 512}
+      }
+    },
+    "animation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "explicitId", "nodeSymbol", "parmName", "valueType", "value",
+        "authoredFps", "displayFps", "extrapolation", "keys", "span",
+        "fieldSpans"
+      ],
+      "properties": {
+        "explicitId": {"$ref": "#/$defs/explicitId"},
+        "nodeSymbol": {"$ref": "#/$defs/identifier"},
+        "parmName": {"$ref": "#/$defs/identifier"},
+        "valueType": {"enum": ["float", "int"]},
+        "value": {"type": "number"},
+        "authoredFps": {
+          "type": "number", "exclusiveMinimum": 0, "maximum": 1000
+        },
+        "displayFps": {
+          "type": "number", "exclusiveMinimum": 0, "maximum": 1000
+        },
+        "extrapolation": {"$ref": "#/$defs/animationExtrapolation"},
+        "keys": {
+          "type": "array", "minItems": 1, "maxItems": 4096,
+          "items": {"$ref": "#/$defs/animationKey"}
+        },
+        "span": {"$ref": "#/$defs/sourceSpan"},
+        "fieldSpans": {"$ref": "#/$defs/runtimeFieldSpans"}
+      }
+    },
+    "animationExtrapolation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["before", "after"],
+      "properties": {
+        "before": {
+          "enum": ["constant", "linear", "cycle", "cycle_offset", "oscillate"]
+        },
+        "after": {
+          "enum": ["constant", "linear", "cycle", "cycle_offset", "oscillate"]
+        }
+      }
+    },
+    "animationKey": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["timeSeconds", "value", "interpolation"],
+      "properties": {
+        "timeSeconds": {"type": "number"},
+        "value": {"type": "number"},
+        "interpolation": {"enum": ["constant", "linear", "bezier"]},
+        "slope": {
+          "type": "number", "minimum": -1000000000000,
+          "maximum": 1000000000000
+        },
+        "accel": {
+          "type": "number", "minimum": -1000000000000,
+          "maximum": 1000000000000
+        }
+      }
+    },
+    "runtimeFieldSpans": {
+      "type": "object",
+      "required": ["name", "explicitId"],
+      "additionalProperties": {"$ref": "#/$defs/sourceSpan"},
+      "properties": {
+        "name": {"$ref": "#/$defs/sourceSpan"},
+        "explicitId": {"$ref": "#/$defs/sourceSpan"}
+      }
+    },
+    "externalNode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["symbol", "path", "adopted", "span"],
+      "properties": {
+        "symbol": {"$ref": "#/$defs/identifier"},
+        "path": {"$ref": "#/$defs/absolutePath"},
+        "adopted": {"type": "boolean"},
+        "span": {"$ref": "#/$defs/sourceSpan"},
+        "fieldSpans": {"$ref": "#/$defs/externalFieldSpans"}
+      }
+    },
+    "referenceFieldSpans": {
+      "type": "object", "additionalProperties": false,
+      "required": ["symbol"],
+      "oneOf": [
+        {"required": ["outputIndex"]},
+        {"required": ["outputName"]}
+      ],
+      "properties": {
+        "symbol": {"$ref": "#/$defs/sourceSpan"},
+        "outputIndex": {"$ref": "#/$defs/sourceSpan"},
+        "outputName": {"$ref": "#/$defs/sourceSpan"}
+      }
+    },
+    "inputFieldSpans": {
+      "type": "object", "additionalProperties": false,
+      "oneOf": [
+        {"required": ["index"]},
+        {"required": ["name"]}
+      ],
+      "properties": {
+        "index": {"$ref": "#/$defs/sourceSpan"},
+        "name": {"$ref": "#/$defs/sourceSpan"}
+      }
+    },
+    "parmFieldSpans": {
+      "type": "object", "additionalProperties": false, "required": ["name"],
+      "properties": {"name": {"$ref": "#/$defs/sourceSpan"}}
+    },
+    "nodeFieldSpans": {
+      "type": "object", "additionalProperties": false, "required": ["symbol", "typeName"],
+      "properties": {
+        "symbol": {"$ref": "#/$defs/sourceSpan"},
+        "explicitId": {"$ref": "#/$defs/sourceSpan"},
+        "typeName": {"$ref": "#/$defs/sourceSpan"}
+      }
+    },
+    "externalFieldSpans": {
+      "type": "object", "additionalProperties": false, "required": ["symbol", "path"],
+      "properties": {"symbol": {"$ref": "#/$defs/sourceSpan"}, "path": {"$ref": "#/$defs/sourceSpan"}}
+    }
+  }
+}

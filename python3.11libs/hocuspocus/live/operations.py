@@ -13,24 +13,33 @@ from hocuspocus.core.mcp_types import (
 from hocuspocus.core.settings import ServerSettings
 
 from .dispatcher import LiveCommandDispatcher
+from .document_service import LiveDocumentService
 from .graph_cache import LiveSceneGraphCache
+from .graph_store import LiveGraphStore
 from .monitor import SceneEventMonitor
 from .ops.base import OperationBaseMixin
+from .ops.building_ops import BuildingOperationsMixin
 from .ops.dependency_ops import DependencyOperationsMixin
+from .ops.document import DocumentOperationsMixin
 from .ops.export import ExportOperationsMixin
 from .ops.graph import GraphOperationsMixin
 from .ops.hda_ops import HdaOperationsMixin
 from .ops.high_level import HighLevelOperationsMixin
+from .ops.hocusscript import HocusScriptOperationsMixin
 from .ops.material import MaterialOperationsMixin
 from .ops.node import NodeOperationsMixin
+from .ops.node_types import NodeTypeOperationsMixin
 from .ops.parm import ParmOperationsMixin
 from .ops.package_ops import PackageOperationsMixin
 from .ops.pdg_prod_ops import PdgProductionOperationsMixin
 from .ops.pdg_ops import PdgOperationsMixin
+from .ops.production import ProductionOperationsMixin
 from .ops.render_ops import RenderOperationsMixin
 from .ops.resources import ResourceOperationsMixin
 from .ops.scene import SceneOperationsMixin
 from .ops.session import SessionOperationsMixin
+from .ops.source_resources import SourceResourceOperationsMixin
+from .ops.source_workspace import SourceWorkspaceOperationsMixin
 from .ops.tasks_ops import TaskExecutionOperationsMixin
 from .ops.usd_ops import UsdOperationsMixin
 from .ops.usd_stage_ops import UsdStageOperationsMixin
@@ -41,10 +50,14 @@ from .tasks import LiveTaskManager
 
 class LiveOperations(
     OperationBaseMixin,
+    BuildingOperationsMixin,
     DependencyOperationsMixin,
+    DocumentOperationsMixin,
+    HocusScriptOperationsMixin,
     SessionOperationsMixin,
     SceneOperationsMixin,
     NodeOperationsMixin,
+    NodeTypeOperationsMixin,
     ParmOperationsMixin,
     MaterialOperationsMixin,
     TaskExecutionOperationsMixin,
@@ -60,6 +73,9 @@ class LiveOperations(
     ViewportOperationsMixin,
     RenderOperationsMixin,
     HighLevelOperationsMixin,
+    ProductionOperationsMixin,
+    SourceWorkspaceOperationsMixin,
+    SourceResourceOperationsMixin,
     ResourceOperationsMixin,
 ):
     def __init__(
@@ -75,7 +91,17 @@ class LiveOperations(
         self._tasks = tasks
         self._settings = settings
         self._graph = LiveSceneGraphCache(logger)
+        self._graph_store = LiveGraphStore(logger)
+        self._documents = LiveDocumentService(logger, self._graph_store)
+        self._monitor.add_listener(self._graph_store.on_monitor_event)
         self._logger = logger.getChild("live.operations")
+        self._source_workspace_authority = getattr(
+            settings, "source_workspace_authority", None,
+        )
+        self._source_workspace_factory = getattr(
+            settings, "source_workspace_factory", None,
+        )
+        self._source_workspace_service = None
 
     def register(self, tools: ToolRegistry, resources: ResourceRegistry) -> None:
         tool_specs = [
@@ -91,7 +117,7 @@ class LiveOperations(
             ("scene.save_hip", "Save Hip", "Save the current scene to the existing hip path or to a new explicit path. Output paths are validated against server write policy and approved roots before saving.", {"type": "object", "properties": {"path": {"type": "string"}, "save_to_recent_files": {"type": "boolean", "default": True}}}, {"destructiveHint": True}, self.scene_save_hip),
             ("scene.undo", "Undo", "Undo the last Houdini operation in the current session. This affects the live undo stack immediately.", {"type": "object", "properties": {}}, {"destructiveHint": True}, self.scene_undo),
             ("scene.redo", "Redo", "Redo the last undone Houdini operation in the current session. This affects the live undo stack immediately.", {"type": "object", "properties": {}}, {"destructiveHint": True}, self.scene_redo),
-            ("scene.create_turntable_camera", "Create Turntable Camera", "Create a target null, rig null, and camera for a simple orbit shot under `/obj`. If `target_path` resolves to geometry, the orbit distance is derived from that geometry's bounds.", {"type": "object", "properties": {"target_path": {"type": "string"}, "frame_range": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 3}, "camera_name": {"type": "string", "default": "turntable_cam"}, "distance_multiplier": {"type": "number", "default": 2.5}}}, {"destructiveHint": True}, self.scene_create_turntable_camera),
+            ("scene.create_turntable_camera", "Create Turntable Camera", "Create a target null, rig null, and camera for a simple orbit shot under `/obj`. If `target_path` resolves to geometry, the orbit distance is derived from shared bbox-fit logic so camera and light helpers target assets consistently.", {"type": "object", "properties": {"target_path": {"type": "string"}, "frame_range": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 3}, "camera_name": {"type": "string", "default": "turntable_cam"}, "distance_multiplier": {"type": "number", "default": 2.5}, "activate_viewport_camera": {"type": "boolean", "default": False}}}, {"destructiveHint": True}, self.scene_create_turntable_camera),
             ("hda.list_libraries", "List HDA Libraries", "List installed HDA library files and the first set of definitions they contain. Use this as the top-level discovery read for HDA workflows.", {"type": "object", "properties": {}}, {"readOnlyHint": True, "idempotentHint": True}, self.hda_list_libraries),
             ("hda.list_definitions", "List HDA Definitions", "List HDA definitions from a specific library file or from all currently loaded HDA libraries.", {"type": "object", "properties": {"library_file_path": {"type": "string"}}}, {"readOnlyHint": True, "idempotentHint": True}, self.hda_list_definitions),
             ("hda.get_definition", "Get HDA Definition", "Return metadata, sections, and parm-interface structure for a specific HDA definition resolved by node type name, library file, or HDA instance path.", {"type": "object", "properties": {"node_type_name": {"type": "string"}, "library_file_path": {"type": "string"}, "node_path": {"type": "string"}, "include_sections": {"type": "boolean", "default": True}}}, {"readOnlyHint": True, "idempotentHint": True}, self.hda_get_definition),
@@ -108,6 +134,10 @@ class LiveOperations(
             ("cache.get_topology", "Get Cache Topology", "Summarize common cache-producing or cache-consuming nodes such as File Cache, file, and geometry-output nodes. Use this before packaging or publish work.", {"type": "object", "properties": {"root_path": {"type": "string"}}}, {"readOnlyHint": True, "idempotentHint": True}, self.cache_get_topology),
             ("package.preview_scene", "Preview Scene Package", "Preview which files would be collected into a scene package or archive. This reuses the dependency-scan surface and reports both collected and skipped files.", {"type": "object", "properties": {"root_path": {"type": "string"}, "include_hip": {"type": "boolean", "default": True}, "include_outputs": {"type": "boolean", "default": False}, "existing_only": {"type": "boolean", "default": True}, "dependency_scan": {"type": "object"}}}, {"readOnlyHint": True, "idempotentHint": True}, self.package_preview_scene),
             ("package.create_scene_package", "Create Scene Package", "Create a scene package as a zip archive or directory tree at a validated destination. Set `dry_run = true` to preview the package without writing files.", {"type": "object", "properties": {"destination_path": {"type": "string"}, "package_name": {"type": "string"}, "mode": {"type": "string", "enum": ["zip", "directory"], "default": "zip"}, "dry_run": {"type": "boolean", "default": False}, "root_path": {"type": "string"}, "include_hip": {"type": "boolean", "default": True}, "include_outputs": {"type": "boolean", "default": False}, "existing_only": {"type": "boolean", "default": True}, "dependency_scan": {"type": "object"}}}, {"destructiveHint": True}, self.package_create_scene_package),
+            ("node_types.list_groups", "List Node Type Groups", "List curated node-type discovery groups for the supported Houdini categories. Use this to browse a smaller conceptual map before searching individual node types.", {"type": "object", "properties": {"category": {"type": "string"}}}, {"readOnlyHint": True, "idempotentHint": True}, self.node_types_list_groups),
+            ("node_types.list", "List Node Types", "List discoverable node types for supported categories such as SOP, OBJ, LOP, and TOP. This returns compact records with labels, groups, aliases, tags, and input-count hints so agents can discover valid type names without guessing.", {"type": "object", "properties": {"category": {"type": "string"}, "group_id": {"type": "string"}, "query": {"type": "string"}, "tags": {"type": "array", "items": {"type": "string"}}, "limit": {"type": "integer", "default": 100}, "offset": {"type": "integer", "default": 0}, "include_labs": {"type": "boolean", "default": True}, "include_legacy": {"type": "boolean", "default": True}}}, {"readOnlyHint": True, "idempotentHint": True}, self.node_types_list),
+            ("node_types.get_info", "Get Node Type Info", "Return focused metadata for a single node type, including category, aliases, tags, input-count hints, and key parameters. Use `detail_level = full_parms` only when you really need the entire surfaced parm list.", {"type": "object", "properties": {"type_name": {"type": "string"}, "category": {"type": "string"}, "detail_level": {"type": "string", "enum": ["summary", "key_parms", "full_parms"], "default": "summary"}}, "required": ["type_name"]}, {"readOnlyHint": True, "idempotentHint": True}, self.node_types_get_info),
+            ("node_types.list_compatible", "List Compatible Node Types", "Suggest node types by task or intent such as copying, instancing, scatter, booleans, attributes, vex, materials, or USD composition. This is the main escape hatch when the agent knows the Houdini concept but not the exact type name.", {"type": "object", "properties": {"task": {"type": "string"}, "category": {"type": "string"}, "limit": {"type": "integer", "default": 40}, "offset": {"type": "integer", "default": 0}, "include_labs": {"type": "boolean", "default": True}, "include_legacy": {"type": "boolean", "default": True}}, "required": ["task"]}, {"readOnlyHint": True, "idempotentHint": True}, self.node_types_list_compatible),
             ("node.list", "List Nodes", "List child nodes under a network path, optionally recursively. Use this for graph discovery when you know the parent network but not the child names.", {"type": "object", "properties": {"parent_path": {"type": "string", "default": "/obj"}, "recursive": {"type": "boolean", "default": False}, "max_items": {"type": "integer", "default": 200}}}, {"readOnlyHint": True, "idempotentHint": True}, self.node_list),
             ("node.get", "Get Node", "Return summary information for a single node, including flags, inputs, display/render/output node pointers, and optionally parameter summaries. This is the primary structured node read tool.", {"type": "object", "properties": {"path": {"type": "string"}, "include_parms": {"type": "boolean", "default": False}}, "required": ["path"]}, {"readOnlyHint": True, "idempotentHint": True}, self.node_get),
             ("node.create", "Create Node", "Create a Houdini node under a parent network and return the created node summary. The result includes the final resolved node path, which may differ from the requested name if Houdini renames it.", {"type": "object", "properties": {"parent_path": {"type": "string", "default": "/obj"}, "node_type_name": {"type": "string"}, "node_name": {"type": "string"}, "run_init_scripts": {"type": "boolean", "default": True}, "load_contents": {"type": "boolean", "default": True}}, "required": ["node_type_name"]}, {"destructiveHint": True}, self.node_create),
@@ -128,9 +158,27 @@ class LiveOperations(
             ("graph.diff_subgraph", "Diff Subgraph", "Diff a current rooted subgraph against a previously captured baseline subgraph snapshot.", {"type": "object", "properties": {"root_path": {"type": "string"}, "baseline": {"type": "object"}}, "required": ["root_path", "baseline"]}, {"readOnlyHint": True, "idempotentHint": True}, self.graph_diff_subgraph),
             ("graph.plan_edit", "Plan Graph Edit", "Simulate a grouped graph patch against the current indexed scene graph and return the predicted diff without mutating Houdini. This uses the same operation shapes as `graph.batch_edit`.", {"type": "object", "properties": {"operations": {"type": "array", "items": {"type": "object"}}}, "required": ["operations"]}, {"readOnlyHint": True, "idempotentHint": True}, self.graph_plan_edit),
             ("graph.apply_patch", "Apply Graph Patch", "Apply a graph patch using the current batch-edit execution path. Set `dry_run = true` to return only the predicted plan and diff.", {"type": "object", "properties": {"operations": {"type": "array", "items": {"type": "object"}}, "patch": {"type": "object"}, "transactional": {"type": "boolean", "default": True}, "dry_run": {"type": "boolean", "default": False}, "label": {"type": "string"}}, "required": []}, {"destructiveHint": True}, self.graph_apply_patch),
-            ("parm.list", "List Parameters", "List all parameters on a node and return normalized parameter summaries. Use this when you know the node path but not the parm names.", {"type": "object", "properties": {"node_path": {"type": "string"}}, "required": ["node_path"]}, {"readOnlyHint": True, "idempotentHint": True}, self.parm_list),
+            ("document.checkout", "Checkout Document", "Create a working copy for a network document or scene document so an agent can edit it offline and feed it back through validation, diff, and apply.", {"type": "object", "properties": {"scope": {"type": "string", "enum": ["network", "scene"], "default": "network"}, "root_path": {"type": "string"}}}, {"readOnlyHint": True}, self.document_checkout),
+            ("document.validate", "Validate Document", "Validate a supplied document or an existing checkout against the locked document contract and document-level graph rules.", {"type": "object", "properties": {"checkout_id": {"type": "string"}, "document": {"type": "object"}}}, {"readOnlyHint": True, "idempotentHint": True}, self.document_validate),
+            ("document.diff", "Diff Document", "Diff a supplied document or checkout against its baseline network document.", {"type": "object", "properties": {"checkout_id": {"type": "string"}, "document": {"type": "object"}}}, {"readOnlyHint": True, "idempotentHint": True}, self.document_diff),
+            ("document.apply", "Apply Document", "Apply a network document or checkout back into the live Houdini network using reconcile, merge, or validate-only mode.", {"type": "object", "properties": {"checkout_id": {"type": "string"}, "document": {"type": "object"}, "expected_document_revision": {"type": "integer"}, "mode": {"type": "string", "enum": ["reconcile", "merge", "validate_only"], "default": "reconcile"}, "label": {"type": "string"}}}, {"destructiveHint": True}, self.document_apply),
+            ("document.discard_checkout", "Discard Document Checkout", "Delete a working copy that is no longer needed.", {"type": "object", "properties": {"checkout_id": {"type": "string"}}, "required": ["checkout_id"]}, {"destructiveHint": True}, self.document_discard_checkout),
+            ("document.query", "Query Documents", "Query the current document-backed graph surface without materializing a full network document.", {"type": "object", "properties": {"root_path": {"type": "string"}, "path_prefix": {"type": "string"}, "node_type_name": {"type": "string"}, "category": {"type": "string"}, "name_contains": {"type": "string"}, "material_path": {"type": "string"}, "flag_name": {"type": "string"}, "flag_value": {"type": "boolean"}, "limit": {"type": "integer", "default": 200}}}, {"readOnlyHint": True, "idempotentHint": True}, self.document_query),
+            ("document.sync_from_houdini", "Sync Documents From Houdini", "Force a document refresh from the live Houdini scene for a network root or for the whole scene manifest.", {"type": "object", "properties": {"root_path": {"type": "string"}}}, {"readOnlyHint": True, "idempotentHint": True}, self.document_sync_from_houdini),
+            ("document.compile_source", "Compile HocusScript Source", "Parse, structurally validate, and canonically format unsaved HocusScript without mutating Houdini. This compatibility endpoint returns a span-bearing structural GraphSpec only. For the live guarded path, compile an ordinary project .hocus file with source.project.build, then pass its exact Bundle to document.preview_bundle and document.plan_bundle before document.apply_plan; apply never rereads this source.", {"type": "object", "additionalProperties": False, "properties": {"source": {"type": "string", "maxLength": 1048576}, "source_name": {"type": "string", "maxLength": 1024, "default": "<mcp-source>"}, "strict": {"type": "boolean", "default": True}}, "required": ["source"]}, {"readOnlyHint": True, "idempotentHint": True}, self.document_compile_source),
+            ("document.format_source", "Format HocusScript Source", "Validate and canonically format unsaved HocusScript text without reading or writing project files. Invalid source returns exact diagnostics and no formatted text.", {"type": "object", "additionalProperties": False, "properties": {"source": {"type": "string", "maxLength": 1048576}, "source_name": {"type": "string", "maxLength": 1024, "default": "<mcp-source>"}, "strict": {"type": "boolean", "default": True}}, "required": ["source"]}, {"readOnlyHint": True, "idempotentHint": True}, self.document_format_source),
+            ("document.complete_source", "Complete HocusScript Source", "Return bounded, deterministic completions for an unsaved HocusScript buffer using the current live Houdini operator catalog. Offsets are Python/Unicode character offsets.", {"type": "object", "additionalProperties": False, "properties": {"source": {"type": "string", "maxLength": 1048576}, "offset": {"type": "integer", "minimum": 0}, "source_name": {"type": "string", "maxLength": 1024, "default": "<mcp-source>"}, "limit": {"type": "integer", "minimum": 1, "maximum": 200, "default": 100}}, "required": ["source", "offset"]}, {"readOnlyHint": True, "idempotentHint": True}, self.document_complete_source),
+            ("document.export_source", "Export Network as HocusScript", "Export one supported flat direct-child live SOP, fixed-port material/VOP, LOP, or TOP network as canonical HocusScript plus durable provenance. Emitted source is structurally recompiled and passes exact-catalog semantic and connector validation, but this observational operation neither proves network reconstruction nor publishes a DSL file. Network-document v2 emits language 0.4; unsupported families, locked HDA contents, direct USD state, and dynamic or incomplete connector evidence fail closed with bounded blockers.", {"type": "object", "additionalProperties": False, "properties": {"root_path": {"type": "string"}, "graph_name": {"type": "string", "maxLength": 256}}, "required": ["root_path"]}, {"readOnlyHint": True, "idempotentHint": True}, self.document_export_source),
+            ("document.preview_bundle", "Preview HocusScript Bundle", "Strictly decode an exact flat Bundle 0.2, frozen module Bundle 0.3, control Bundle 0.4, or value Bundle 0.5, freshly revalidate its authenticated carrier semantics and provenance pins, including catalog/HDA selections, against live Houdini, lower it over the current network-document baseline, and return the candidate document, deterministic diff, destructive summary, and preview-only plan without mutating Houdini or reading DSL project files.", {"type": "object", "additionalProperties": False, "properties": {"bundle": {"type": "object", "properties": {"bundleVersion": {"type": "string", "enum": ["0.2", "0.3", "0.4", "0.5"]}}, "required": ["bundleVersion"]}}, "required": ["bundle"]}, {"readOnlyHint": True, "idempotentHint": True}, self.document_preview_bundle),
+            ("document.plan_bundle", "Plan HocusScript Bundle", "Rerun the exact-version live validation of an authenticated flat Bundle 0.2, module Bundle 0.3, control Bundle 0.4, or value Bundle 0.5, including carrier semantics and provenance pins, then persist a versioned immutable apply plan bound to the current session, policy, catalog, capabilities, ownership, revisions, and exact target network.", {"type": "object", "additionalProperties": False, "properties": {"bundle": {"type": "object", "properties": {"bundleVersion": {"type": "string", "enum": ["0.2", "0.3", "0.4", "0.5"]}}, "required": ["bundleVersion"]}, "ttlSeconds": {"type": "integer", "minimum": 30, "maximum": 1800, "default": 900}}, "required": ["bundle"]}, {"readOnlyHint": True}, self.document_plan_bundle),
+            ("document.apply_plan", "Apply HocusScript Plan", "Validate immutable plan identity plus live session, policy, catalog, capability, revision, ownership, target, confirmation, lease, idempotency, and cancellation drift gates, then apply only the stored plan without rereading or recompiling HocusScript source.", {"type": "object", "additionalProperties": False, "properties": {"planId": {"type": "string"}, "planHash": {"type": "string"}, "expectedDocumentRevision": {"type": "integer", "minimum": 0}, "expectedLiveRevision": {"type": "integer", "minimum": 0}, "confirmationToken": {"type": "string"}, "idempotencyKey": {"type": "string", "minLength": 8, "maxLength": 256}}, "required": ["planId", "planHash", "expectedDocumentRevision", "expectedLiveRevision", "idempotencyKey"]}, {"destructiveHint": True, "idempotentHint": True}, self.document_apply_plan),
+            ("document.discard_plan", "Discard HocusScript Plan", "Revoke an immutable HocusScript apply plan by exact plan ID and hash without mutating Houdini.", {"type": "object", "additionalProperties": False, "properties": {"planId": {"type": "string"}, "planHash": {"type": "string"}}, "required": ["planId", "planHash"]}, {"readOnlyHint": True, "idempotentHint": True}, self.document_discard_plan),
+            ("document.apply_quarantines", "List Apply Quarantines", "List network scopes blocked after an apply whose rollback could not be verified.", {"type": "object", "additionalProperties": False, "properties": {}}, {"readOnlyHint": True, "idempotentHint": True}, self.document_apply_quarantines),
+            ("document.recover_scope", "Recover Apply Scope", "Force-reimport and validate a quarantined network scope, then release its quarantine only when the canonical document is valid.", {"type": "object", "additionalProperties": False, "properties": {"rootPath": {"type": "string"}}, "required": ["rootPath"]}, {"destructiveHint": True}, self.document_recover_scope),
+            ("parm.list", "List Parameters", "List parameters on a node and return normalized parameter summaries. Use filters and pagination for heavy nodes so introspection stays bounded.", {"type": "object", "properties": {"node_path": {"type": "string"}, "name_prefix": {"type": "string"}, "name_contains": {"type": "string"}, "limit": {"type": "integer", "default": 250}, "offset": {"type": "integer", "default": 0}}, "required": ["node_path"]}, {"readOnlyHint": True, "idempotentHint": True}, self.parm_list),
             ("parm.get", "Get Parameter", "Return metadata and value information for a single parameter path. This is the primary structured parameter read tool.", {"type": "object", "properties": {"parm_path": {"type": "string"}}, "required": ["parm_path"]}, {"readOnlyHint": True, "idempotentHint": True}, self.parm_get),
             ("parm.set", "Set Parameter", "Set a parameter value and return the updated parameter summary. This works for standard value assignment, not expression assignment.", {"type": "object", "properties": {"parm_path": {"type": "string"}, "value": {}}, "required": ["parm_path", "value"]}, {"destructiveHint": True}, self.parm_set),
+            ("parm.set_many", "Set Many Parameters", "Set many parameter values in one request and one undo group. Use this when creating or configuring a node would otherwise require a long sequence of separate `parm.set` calls.", {"type": "object", "properties": {"assignments": {"type": "array", "items": {"type": "object", "properties": {"parm_path": {"type": "string"}, "value": {}}, "required": ["parm_path", "value"]}}}, "required": ["assignments"]}, {"destructiveHint": True}, self.parm_set_many),
             ("parm.set_expression", "Set Parameter Expression", "Set an HScript or Python expression on a parameter and return the updated parameter summary. Use `language = python` to force Python expression mode.", {"type": "object", "properties": {"parm_path": {"type": "string"}, "expression": {"type": "string"}, "language": {"type": "string", "default": "hscript"}}, "required": ["parm_path", "expression"]}, {"destructiveHint": True}, self.parm_set_expression),
             ("parm.press_button", "Press Button", "Press a button parameter and return the resulting parameter summary. Use this for operator actions implemented as button parms.", {"type": "object", "properties": {"parm_path": {"type": "string"}}, "required": ["parm_path"]}, {"destructiveHint": True}, self.parm_press_button),
             ("parm.revert_to_default", "Revert Parameter", "Revert a parameter to its default value and return the updated parameter summary. This is useful for clearing previous edits or expressions.", {"type": "object", "properties": {"parm_path": {"type": "string"}}, "required": ["parm_path"]}, {"destructiveHint": True}, self.parm_revert_to_default),
@@ -160,11 +208,10 @@ class LiveOperations(
             ("usd.inspect_material_bindings", "Inspect USD Material Bindings", "Inspect bound USD materials under a root prim path on a composed stage.", {"type": "object", "properties": {"node_path": {"type": "string"}, "root_prim_path": {"type": "string", "default": "/"}} , "required": ["node_path"]}, {"readOnlyHint": True, "idempotentHint": True}, self.usd_inspect_material_bindings),
             ("usd.validate_stage", "Validate USD Stage", "Validate composed USD stage references and Solaris save-path policy issues for a LOP node.", {"type": "object", "properties": {"node_path": {"type": "string"}}, "required": ["node_path"]}, {"readOnlyHint": True, "idempotentHint": True}, self.usd_validate_stage),
             ("geometry.get_summary", "Geometry Summary", "Return geometry facts for a node with cooked geometry, including counts, bbox, groups, attributes, and discovered material paths. This is the fastest geometry-level reasoning tool for agents.", {"type": "object", "properties": {"node_path": {"type": "string"}}, "required": ["node_path"]}, {"readOnlyHint": True, "idempotentHint": True}, self.geometry_get_summary),
-            ("model.create_house_blockout", "Create House Blockout", "Create a simple house blockout network under an object Geometry node and return the house and output node summaries. This is a proof-point high-level modeling macro rather than a general-purpose builder.", {"type": "object", "properties": {"parent_path": {"type": "string", "default": "/obj"}, "node_name": {"type": "string", "default": "house_blockout1"}}}, {"destructiveHint": True}, self.model_create_house_blockout),
             ("render.inspect_graph", "Inspect Render Graph", "Inspect a ROP node and its upstream ROP input chain, including output paths, frame-range parms, and node-reference parms. Use this before render preflight or task launch.", {"type": "object", "properties": {"node_path": {"type": "string"}, "max_depth": {"type": "integer", "default": 20}}, "required": ["node_path"]}, {"readOnlyHint": True, "idempotentHint": True}, self.render_inspect_graph),
             ("render.inspect_outputs", "Inspect Render Outputs", "Inspect a render node's file-output parms and AOV or image-plane parms where the node type exposes them. This is the main output-introspection read tool for renders.", {"type": "object", "properties": {"node_path": {"type": "string"}}, "required": ["node_path"]}, {"readOnlyHint": True, "idempotentHint": True}, self.render_inspect_outputs),
             ("render.preflight", "Preflight Render", "Run a render preflight over a ROP chain, checking output-path policy, missing file dependencies, and broken node-reference parms before render launch.", {"type": "object", "properties": {"node_path": {"type": "string"}, "max_depth": {"type": "integer", "default": 20}}, "required": ["node_path"]}, {"readOnlyHint": True, "idempotentHint": True}, self.render_preflight),
-            ("lookdev.create_three_point_light_rig", "Create Three Point Light Rig", "Create a simple three-point object-light rig and target null under `/obj` for lookdev or turntable work.", {"type": "object", "properties": {"rig_name": {"type": "string", "default": "lookdev_rig"}, "target_name": {"type": "string"}, "key_name": {"type": "string"}, "fill_name": {"type": "string"}, "rim_name": {"type": "string"}}}, {"destructiveHint": True}, self.lookdev_create_three_point_light_rig),
+            ("lookdev.create_three_point_light_rig", "Create Three Point Light Rig", "Create a scale-aware three-point light rig under `/obj`. If `target_path` resolves to geometry, the helper reuses the same bbox-fit logic as the turntable camera and defaults to distant-style lighting for large exterior assets.", {"type": "object", "properties": {"target_path": {"type": "string"}, "rig_name": {"type": "string", "default": "lookdev_rig"}, "target_name": {"type": "string"}, "key_name": {"type": "string"}, "fill_name": {"type": "string"}, "rim_name": {"type": "string"}}}, {"destructiveHint": True}, self.lookdev_create_three_point_light_rig),
             ("pdg.inspect_schedulers", "Inspect PDG Schedulers", "Inspect scheduler nodes under a TOP network, including working directory and scheduler type information.", {"type": "object", "properties": {"graph_path": {"type": "string"}}, "required": ["graph_path"]}, {"readOnlyHint": True, "idempotentHint": True}, self.pdg_inspect_schedulers),
             ("pdg.get_workitem_logs", "Get PDG Work Item Logs", "Return stored log messages for PDG work items on a TOP graph or a specific TOP node.", {"type": "object", "properties": {"graph_path": {"type": "string"}, "node_path": {"type": "string"}, "work_item_ids": {"type": "array", "items": {"type": "integer"}}, "limit": {"type": "integer", "default": 200}}, "required": ["graph_path"]}, {"readOnlyHint": True, "idempotentHint": True}, self.pdg_get_workitem_logs),
             ("pdg.retry_workitems", "Retry PDG Work", "Dirty a PDG graph or specific TOP node so work can be retried, and optionally restart graph execution.", {"type": "object", "properties": {"graph_path": {"type": "string"}, "node_path": {"type": "string"}, "execute": {"type": "boolean", "default": False}}, "required": ["graph_path"]}, {"destructiveHint": True}, self.pdg_retry_workitems),
@@ -178,14 +225,14 @@ class LiveOperations(
             ("viewport.capture", "Capture Viewport", "Capture the current scene viewer viewport to an image file. If `path` is omitted, HocusPocus writes to a managed snapshot path and returns it.", {"type": "object", "properties": {"path": {"type": "string"}}}, {"destructiveHint": True}, self.viewport_capture),
             ("snapshot.capture_viewport", "Capture Viewport Snapshot", "Capture the current scene viewer viewport to an explicit path or a managed snapshot path. Managed snapshots are written under the server snapshot output directory and returned in the result.", {"type": "object", "properties": {"path": {"type": "string"}}}, {"destructiveHint": True}, self.snapshot_capture_viewport),
         ]
-        for name, title, description, input_schema, annotations, handler in tool_specs:
+        for name, title, description, input_schema, tool_annotations, handler in tool_specs:
             tools.register(
                 ToolDefinition(
                     name=name,
                     title=title,
                     description=description,
                     input_schema=input_schema,
-                    annotations=annotations,
+                    annotations=tool_annotations,
                     required_capabilities=self._tool_capabilities(name),
                     handler=handler,
                     output_summary=self._tool_output_summary(name),
@@ -194,6 +241,38 @@ class LiveOperations(
                     examples=self._tool_examples(name),
                 )
             )
+        self.register_source_tools(tools)
+        self.register_production_surface(tools, resources)
+        for legacy_name in {
+            "graph.query",
+            "graph.find_upstream",
+            "graph.find_downstream",
+            "graph.find_by_type",
+            "graph.find_by_flag",
+            "graph.batch_edit",
+            "scene.diff",
+            "graph.diff_subgraph",
+            "graph.plan_edit",
+            "graph.apply_patch",
+            "node.list",
+            "node.get",
+            "node.create",
+            "node.delete",
+            "node.rename",
+            "node.connect",
+            "node.disconnect",
+            "node.move",
+            "node.layout",
+            "node.set_flags",
+            "parm.list",
+            "parm.get",
+            "parm.set",
+            "parm.set_many",
+            "parm.set_expression",
+            "parm.press_button",
+            "parm.revert_to_default",
+        }:
+            tools.set_listed(legacy_name, False)
 
         resource_specs = [
             ("houdini://session/info", "Session Info", "Current session metadata and server state.", self.read_session_info),
@@ -201,6 +280,32 @@ class LiveOperations(
             ("houdini://session/policy", "Session Policy", "Active policy profile, effective permissions, and profile presets.", self.read_session_policy),
             ("houdini://session/conventions", "Session Conventions", "Houdini coordinate-system and snapshot conventions for this server.", self.read_session_conventions),
             ("houdini://session/scene-summary", "Scene Summary", "Current scene summary.", self.read_scene_summary),
+            ("houdini://documents/scene", "Scene Document", "Scene manifest over root document-capable Houdini networks.", self.read_document_scene),
+            ("houdini://documents/hocusscript/fidelity/hs7", "HocusScript HS7 Fidelity Matrix", "Static build policy for supported, preserved-opaque, read-only, and rejected HS7 surfaces.", self.read_hs7_fidelity_matrix),
+            ("houdini://documents/schema/network-document/v1", "Network Document Schema v1", "Locked machine-readable schema for the first-wave network document contract.", self.read_document_schema),
+            ("houdini://documents/schema/network-document/v2", "Network Document Schema v2", "Strict typed-value network-document contract for the HocusScript 0.4 lane.", self.read_document_schema_v2),
+            ("houdini://documents/schema/graph-spec/v0.2", "GraphSpec Schema v0.2", "Machine-readable schema for the current HocusScript GraphSpec contract.", self.read_graph_spec_schema),
+            ("houdini://documents/schema/graph-spec/v0.3", "GraphSpec Schema v0.3", "Reserved module-expansion GraphSpec contract for HocusScript 0.2.", self.read_module_graph_spec_schema),
+            ("houdini://documents/schema/expansion-map/v1", "Expansion Map Schema v1", "Interned module-expansion origin and stack contract referenced by GraphSpec v0.3.", self.read_expansion_map_schema),
+            ("houdini://documents/schema/resolved-module-set/v1", "Resolved Module Set Schema v1", "Portable resolved-module, resolver-policy, and expansion-limit contract for HocusScript 0.2.", self.read_resolved_module_set_schema),
+            ("houdini://documents/schema/graph-spec/v0.4", "GraphSpec Schema v0.4", "Strict control-language GraphSpec contract in the HocusScript 0.3 compatibility unit.", self.read_control_graph_spec_schema),
+            ("houdini://documents/schema/expansion-map/v2", "Expansion Map Schema v2", "Bounded control-expansion origin and stack contract in the HocusScript 0.3 compatibility unit.", self.read_control_expansion_map_schema),
+            ("houdini://documents/schema/resolved-module-set/v2", "Resolved Module Set Schema v2", "Portable control-module resolution contract in the HocusScript 0.3 compatibility unit.", self.read_control_resolved_module_set_schema),
+            ("houdini://documents/schema/compiled-bundle/v0.4", "Compiled Bundle Schema v0.4", "Portable compiled carrier contract for the HocusScript 0.3 live preview, planning, and guarded-apply lane.", self.read_control_compiled_bundle_schema),
+            ("houdini://documents/schema/graph-spec/v0.5", "GraphSpec Schema v0.5", "Strict value-language GraphSpec contract for HocusScript 0.4.", self.read_value_graph_spec_schema),
+            ("houdini://documents/schema/expansion-map/v3", "Expansion Map Schema v3", "Bounded value-language expansion origin and stack contract for HocusScript 0.4.", self.read_value_expansion_map_schema),
+            ("houdini://documents/schema/resolved-module-set/v3", "Resolved Module Set Schema v3", "Portable value-language module resolution contract for HocusScript 0.4.", self.read_value_resolved_module_set_schema),
+            ("houdini://documents/schema/compiled-bundle/v0.5", "Compiled Bundle Schema v0.5", "Portable HocusScript 0.4 carrier admitted by preview, planning, and guarded apply.", self.read_value_compiled_bundle_schema),
+            ("houdini://documents/schema/graph-spec/v0.1", "GraphSpec Schema v0.1", "Legacy machine-readable schema retained for safe bundle decoding.", self.read_legacy_graph_spec_schema),
+            ("houdini://documents/schema/format-source-output/v1", "Format Source Output Schema v1", "Machine-readable output schema for document.format_source.", self.read_format_source_output_schema),
+            ("houdini://documents/schema/complete-source-output/v1", "Complete Source Output Schema v1", "Machine-readable output schema for document.complete_source.", self.read_complete_source_output_schema),
+            ("houdini://documents/schema/export-source-output/v1", "Export Source Output Schema v1", "Machine-readable output schema for document.export_source.", self.read_export_source_output_schema),
+            ("houdini://documents/schema/preview-bundle-input/v1", "Document Preview Bundle Input Schema v1", "Machine-readable input schema for document.preview_bundle.", self.read_preview_bundle_input_schema),
+            ("houdini://documents/schema/preview-bundle-output/v1", "Document Preview Bundle Output Schema v1", "Machine-readable output schema for document.preview_bundle.", self.read_preview_bundle_output_schema),
+            ("houdini://documents/schema/plan-bundle-input/v1", "Document Plan Bundle Input Schema v1", "Machine-readable input schema for document.plan_bundle.", self.read_plan_bundle_input_schema),
+            ("houdini://documents/schema/plan-bundle-output/v1", "Document Plan Bundle Output Schema v1", "Machine-readable output schema for document.plan_bundle.", self.read_plan_bundle_output_schema),
+            ("houdini://documents/schema/apply-plan/v1", "Immutable Apply Plan Schema v1", "Machine-readable schema for stored HocusScript apply plans.", self.read_apply_plan_schema),
+            ("houdini://documents/schema/apply-plan-input/v1", "Document Apply Plan Input Schema v1", "Machine-readable input schema for document.apply_plan.", self.read_apply_plan_input_schema),
             ("houdini://graph/scene", "Scene Graph", "Indexed whole-scene graph snapshot.", self.read_graph_scene),
             ("houdini://graph/index", "Graph Index", "Indexed scene-graph cache metadata and revision state.", self.read_graph_index),
             ("houdini://dependencies/scene", "Scene Dependencies", "Whole-scene dependency scan across file parms.", self.read_scene_dependencies),
@@ -265,7 +370,24 @@ class LiveOperations(
             "graph.diff_subgraph": "Graph diff between a baseline subgraph snapshot and the current rooted subgraph.",
             "graph.plan_edit": "Predicted graph diff, planned refs, and simulated results for a patch without mutation.",
             "graph.apply_patch": "Predicted plan plus actual batch execution result and post-apply revision.",
+            "document.checkout": "Checkout id plus resource URIs for the working document and its diagnostics.",
+            "document.validate": "Document validity flag, diagnostic list, and document revision metadata.",
+            "document.diff": "Document-level diff payload between a baseline and target network document.",
+            "document.apply": "Apply mode result with diagnostics, compiled plan, executed operations, and the refreshed document.",
+            "document.discard_checkout": "Discard acknowledgement for a working document checkout.",
+            "document.query": "Matched document-oriented graph nodes with their owning network-document URIs.",
+            "document.sync_from_houdini": "Refreshed scene or network document projected from the current live Houdini state.",
+            "document.compile_source": "Compiler and GraphSpec versions, source digest, structured diagnostics, canonical formatting, and a span-bearing GraphSpec preview.",
+            "document.format_source": "Canonical source, input digest, changed flag, and exact diagnostics; invalid source is never recovery-formatted.",
+            "document.complete_source": "Live-catalog fingerprint, completion context, replacement span, and bounded deterministic completion items.",
+            "document.export_source": "Canonical source text or fail-closed diagnostics, plus durable entity, ownership, managed-field, catalog, revision, and digest provenance.",
+            "document.preview_bundle": "Live catalog resolution, canonical target document, deterministic diff and destructive summary, preview-only candidate plan, diagnostics, and a content-addressed preview resource.",
+            "node_types.list_groups": "Curated node-type discovery groups for the supported Houdini categories, including counts and priorities.",
+            "node_types.list": "Compact node-type records with labels, groups, aliases, tags, and input-count hints.",
+            "node_types.get_info": "Focused node-type metadata with category, aliases, tags, input info, and key parameter summaries.",
+            "node_types.list_compatible": "Ranked node-type suggestions for a task such as copying, scatter, booleans, vex, or USD composition.",
             "parm.get": "Single normalized parameter summary including raw value, evaluated value, and expression.",
+            "parm.set_many": "Count plus normalized summaries for all parameter assignments applied in one undo group.",
             "material.create": "Created material summary plus applied and skipped material property names.",
             "material.update": "Updated material summary plus applied and skipped material property names.",
             "material.assign": "Assignment result with target node, assignment owner node, material summary, and geometry summary when available.",
@@ -283,11 +405,11 @@ class LiveOperations(
             "usd.inspect_material_bindings": "List of composed material bindings under a USD prim subtree.",
             "usd.validate_stage": "USD stage diagnostics covering missing reference files and save-path policy issues.",
             "geometry.get_summary": "Geometry counts, bbox, groups, attributes, discovered material paths, and object-level material path when present.",
-            "scene.create_turntable_camera": "Camera, rig, and target node summaries plus the animated frame range.",
+            "scene.create_turntable_camera": "Camera, rig, and target node summaries plus frame range, target-fit data, and whether the viewport camera was activated.",
             "render.inspect_graph": "Render-chain nodes, edges, output paths, frame-range parms, and node-reference summaries.",
             "render.inspect_outputs": "File-output parm details, validated output paths, and AOV or image-plane data when supported.",
             "render.preflight": "Render readiness result with blocking issues, graph snapshot, and per-issue details.",
-            "lookdev.create_three_point_light_rig": "Target node summary plus summaries for the created key, fill, and rim lights.",
+            "lookdev.create_three_point_light_rig": "Target node summary plus authored light types, target-fit data, distances, placement mode, and warnings for the created key, fill, and rim lights.",
             "pdg.inspect_schedulers": "Scheduler node summaries with working directory and scheduler type info.",
             "pdg.get_workitem_logs": "PDG work-item log payloads grouped by work item.",
             "pdg.retry_workitems": "PDG dirty/retry acknowledgement plus refreshed graph summary.",
@@ -297,7 +419,6 @@ class LiveOperations(
             "parm.find_broken_refs": "Broken absolute parameter references grouped by parm path.",
             "scene.events_recent": "Recent monitor events with sequence numbers, revisions, and timestamps.",
             "snapshot.capture_viewport": "Viewport image path, viewport name, and whether the output path was managed by the server.",
-            "model.create_house_blockout": "House object summary, output node summary, and named refs for created subnodes.",
         }
         return summaries.get(name, "")
 
@@ -318,6 +439,18 @@ class LiveOperations(
                 "Transactional mode reports rollback state when apply fails after partial progress.",
                 "Validation errors in referenced paths or parms return `errorFamily = validation`.",
             ],
+            "document.checkout": [
+                "Use `scope = network` with `root_path` for the first implementation slice; scene checkouts are read-oriented and not intended for live apply.",
+            ],
+            "document.apply": [
+                "This first implementation slice applies network documents by compiling against the current live graph snapshot.",
+                "Verification compares the refreshed live document against the requested target document and reports residual differences in-band.",
+            ],
+            "document.preview_bundle": [
+                "The bundle must pass its exact flat Bundle 0.2, module Bundle 0.3, control Bundle 0.4, or value Bundle 0.5 decoder and carry portable project provenance; versions are never coerced.",
+                "Catalog, document-revision, ownership, collision, or schema drift blocks the candidate plan without mutating Houdini.",
+                "Large preview payloads are returned through a content-addressed resource URI instead of being duplicated inline.",
+            ],
             "node.create": [
                 "Creation may fail with `errorFamily = validation` when the parent path is not a network.",
                 "The returned path may differ from the requested name if Houdini resolves a naming conflict.",
@@ -325,8 +458,20 @@ class LiveOperations(
             "node.delete": [
                 "Missing nodes return `errorFamily = validation` unless `ignore_missing = true`.",
             ],
+            "node_types.get_info": [
+                "Use `detail_level = full_parms` only when you need the full surfaced parm list for a specific node type.",
+            ],
+            "parm.list": [
+                "Use `name_prefix`, `name_contains`, `limit`, and `offset` to keep heavy parm listings bounded.",
+            ],
+            "parm.set_many": [
+                "Each assignment requires `parm_path` and `value`; the batch fails on the first invalid assignment.",
+            ],
             "scene.save_hip": [
                 "Blocked save paths return `errorFamily = policy` when file writes are disabled or outside approved roots.",
+            ],
+            "scene.create_turntable_camera": [
+                "The helper does not activate the viewport camera unless `activate_viewport_camera = true` is requested.",
             ],
             "snapshot.capture_viewport": [
                 "Viewport capture can fail with `errorFamily = runtime` if no compatible Scene Viewer is available in the current UI context.",
@@ -359,6 +504,10 @@ class LiveOperations(
             "hda.promote_parm": [
                 "Parm promotion on locked or unsupported assets may fail with `errorFamily = runtime` if Houdini refuses definition edits.",
             ],
+            "lookdev.create_three_point_light_rig": [
+                "The helper chooses light type from inferred asset scale; inspect `placementMode` and `lights[].lightType` in the response.",
+                "Large exterior assets default to distant-style lighting instead of point lights.",
+            ],
         }
         return notes.get(name, [])
 
@@ -386,6 +535,48 @@ class LiveOperations(
                     "arguments": {"root_path": "/obj/geo1", "node_type_name": "null", "flag_name": "display", "flag_value": True},
                 }
             ],
+            "node_types.list_groups": [
+                {
+                    "description": "Browse the curated SOP discovery groups before searching individual node types.",
+                    "arguments": {"category": "Sop"},
+                }
+            ],
+            "node_types.list": [
+                {
+                    "description": "Find SOP node types related to instancing and repetition.",
+                    "arguments": {"category": "Sop", "group_id": "sop_copy_instance_repeat", "limit": 25},
+                }
+            ],
+            "node_types.get_info": [
+                {
+                    "description": "Inspect the key parameter surface for Attribute Wrangle.",
+                    "arguments": {"category": "Sop", "type_name": "attribwrangle", "detail_level": "key_parms"},
+                }
+            ],
+            "node_types.list_compatible": [
+                {
+                    "description": "Ask for SOP node types that match the scattering task.",
+                    "arguments": {"task": "scatter", "category": "Sop", "limit": 20},
+                }
+            ],
+            "parm.list": [
+                {
+                    "description": "Inspect only light-related parms on a heavy light object.",
+                    "arguments": {"node_path": "/obj/lookdev_rig_key", "name_prefix": "light_", "limit": 80, "offset": 0},
+                }
+            ],
+            "parm.set_many": [
+                {
+                    "description": "Configure several key parms on a node in one request.",
+                    "arguments": {
+                        "assignments": [
+                            {"parm_path": "/obj/geo1/box1/sizex", "value": 2.0},
+                            {"parm_path": "/obj/geo1/box1/sizey", "value": 5.0},
+                            {"parm_path": "/obj/geo1/box1/sizez", "value": 3.0},
+                        ]
+                    },
+                }
+            ],
             "graph.plan_edit": [
                 {
                     "description": "Preview a simple SOP chain before applying it.",
@@ -409,6 +600,60 @@ class LiveOperations(
                             {"type": "create_node", "id": "box", "parent_path": "$ref:geo", "node_type_name": "box", "node_name": "box1"},
                         ],
                     },
+                }
+            ],
+            "document.checkout": [
+                {
+                    "description": "Create a working copy for a SOP network document.",
+                    "arguments": {"scope": "network", "root_path": "/obj/geo1"},
+                }
+            ],
+            "document.validate": [
+                {
+                    "description": "Validate a checkout after editing its document resource.",
+                    "arguments": {"checkout_id": "01234567-89ab-cdef-0123-456789abcdef"},
+                }
+            ],
+            "document.diff": [
+                {
+                    "description": "Diff a checkout against its baseline network document.",
+                    "arguments": {"checkout_id": "01234567-89ab-cdef-0123-456789abcdef"},
+                }
+            ],
+            "document.apply": [
+                {
+                    "description": "Apply a checked-out SOP network document back into Houdini.",
+                    "arguments": {"checkout_id": "01234567-89ab-cdef-0123-456789abcdef", "mode": "reconcile"},
+                }
+            ],
+            "document.discard_checkout": [
+                {
+                    "description": "Discard a working copy once it is no longer needed.",
+                    "arguments": {"checkout_id": "01234567-89ab-cdef-0123-456789abcdef"},
+                }
+            ],
+            "document.query": [
+                {
+                    "description": "Find display-flagged null nodes and return their owning network-document URIs.",
+                    "arguments": {"root_path": "/obj/geo1", "node_type_name": "null", "flag_name": "display", "flag_value": True},
+                }
+            ],
+            "document.sync_from_houdini": [
+                {
+                    "description": "Force a fresh document projection for a live SOP network.",
+                    "arguments": {"root_path": "/obj/geo1"},
+                }
+            ],
+            "document.preview_bundle": [
+                {
+                    "description": "Preview an offline-compiled, content-addressed HocusScript bundle against the current live network baseline.",
+                    "arguments": {"bundle": {"kind": "hocus_compiled_bundle", "bundleVersion": "0.4", "bundleDigest": "sha256:..."}},
+                }
+            ],
+            "document.plan_bundle": [
+                {
+                    "description": "Persist a guarded immutable plan from one exact authenticated bundle after fresh live semantic resolution.",
+                    "arguments": {"bundle": {"kind": "hocus_compiled_bundle", "bundleVersion": "0.3", "bundleDigest": "sha256:..."}, "ttlSeconds": 900},
                 }
             ],
             "cook.node": [
@@ -552,7 +797,7 @@ class LiveOperations(
             "scene.create_turntable_camera": [
                 {
                     "description": "Create a turntable rig around a displayable SOP output.",
-                    "arguments": {"target_path": "/obj/geo1/OUT", "camera_name": "turntable_cam", "frame_range": [1, 120]},
+                    "arguments": {"target_path": "/obj/geo1/OUT", "camera_name": "turntable_cam", "frame_range": [1, 120], "activate_viewport_camera": True},
                 }
             ],
             "render.inspect_graph": [
@@ -593,14 +838,8 @@ class LiveOperations(
             ],
             "lookdev.create_three_point_light_rig": [
                 {
-                    "description": "Create a basic three-point light setup for a lookdev or turntable scene.",
-                    "arguments": {"rig_name": "lookdev_rig"},
-                }
-            ],
-            "model.create_house_blockout": [
-                {
-                    "description": "Create a simple house blockout under `/obj`.",
-                    "arguments": {"parent_path": "/obj", "node_name": "house_blockout1"},
+                    "description": "Create a scale-aware three-point light setup for a large exterior asset.",
+                    "arguments": {"rig_name": "lookdev_rig", "target_path": "/obj/tower1/OUT"},
                 }
             ],
         }
@@ -614,6 +853,25 @@ class LiveOperations(
             "houdini://session/policy": "Active policy profile, effective permissions, approved roots, and available profiles.",
             "houdini://session/conventions": "Coordinate-system and snapshot behavior notes for agent planning.",
             "houdini://session/scene-summary": "Compact scene summary with hip state, frame, and selection.",
+            "houdini://documents/scene": "Scene manifest over root network documents plus hip and graph metadata.",
+            "houdini://documents/hocusscript/fidelity/hs7": "Static path-free HS7 support policy for this server build; no source-workspace grant is required.",
+            "houdini://documents/schema/network-document/v1": "Locked machine-readable schema for the first-wave network document contract.",
+            "houdini://documents/schema/network-document/v2": "Strict typed-value network-document contract for HocusScript 0.4.",
+            "houdini://documents/schema/graph-spec/v0.4": "Strict GraphSpec 0.4 contract for HocusScript 0.3 control-language output.",
+            "houdini://documents/schema/expansion-map/v2": "Bounded expansion-map v2 contract paired with GraphSpec 0.4.",
+            "houdini://documents/schema/resolved-module-set/v2": "Portable resolved-module-set v2 contract paired with GraphSpec 0.4.",
+            "houdini://documents/schema/compiled-bundle/v0.4": "Offline compiled-bundle v0.4 contract for the exact HocusScript 0.3 carrier unit.",
+            "houdini://documents/schema/graph-spec/v0.5": "Strict GraphSpec 0.5 contract for HocusScript 0.4 value-language output.",
+            "houdini://documents/schema/expansion-map/v3": "Bounded expansion-map v3 contract paired with GraphSpec 0.5.",
+            "houdini://documents/schema/resolved-module-set/v3": "Portable resolved-module-set v3 contract paired with GraphSpec 0.5.",
+            "houdini://documents/schema/compiled-bundle/v0.5": "Offline compiled-bundle v0.5 contract for the exact HocusScript 0.4 carrier unit.",
+            "houdini://documents/schema/format-source-output/v1": "Strict versioned output contract for canonical formatting and exact diagnostics.",
+            "houdini://documents/schema/complete-source-output/v1": "Strict versioned output contract for bounded catalog-backed completion.",
+            "houdini://documents/schema/export-source-output/v1": "Strict fail-closed source export and durable provenance contract.",
+            "houdini://documents/schema/preview-bundle-input/v1": "Strict MCP input contract for document.preview_bundle.",
+            "houdini://documents/schema/preview-bundle-output/v1": "Structured preview result contract including catalog resolution, diagnostics, and artifact references.",
+            "houdini://documents/schema/plan-bundle-input/v1": "Strict exact-version input contract for document.plan_bundle.",
+            "houdini://documents/schema/apply-plan/v1": "Immutable HocusScript plan contract, including guarded new-lane carrier pins.",
             "houdini://graph/scene": "Whole-scene graph snapshot with indexed nodes, parms, edges, and material assignments.",
             "houdini://graph/index": "Graph-cache metadata including revision, counts, and refresh timing.",
             "houdini://dependencies/scene": "Whole-scene dependency scan across file-reference parms with missing-file and policy flags.",
@@ -640,6 +898,54 @@ class LiveOperations(
             ],
             "houdini://session/policy": [
                 {"description": "Inspect the active policy profile and effective write or edit permissions."}
+            ],
+            "houdini://documents/scene": [
+                {"description": "Read the scene manifest that links to document-capable root networks."}
+            ],
+            "houdini://documents/hocusscript/fidelity/hs7": [
+                {"description": "Inspect exact HS7 support and rejection boundaries before authoring or applying a graph."}
+            ],
+            "houdini://documents/schema/network-document/v1": [
+                {"description": "Read the locked network-document JSON schema used by the document resources and tools."}
+            ],
+            "houdini://documents/schema/network-document/v2": [
+                {"description": "Read the strict typed-value network-document schema used by HocusScript 0.4 preview and apply."}
+            ],
+            "houdini://documents/schema/graph-spec/v0.4": [
+                {"description": "Inspect the strict HocusScript 0.3 graph carrier before consuming offline control output."}
+            ],
+            "houdini://documents/schema/expansion-map/v2": [
+                {"description": "Inspect the exact bounded origin and expansion-stack contract paired with GraphSpec 0.4."}
+            ],
+            "houdini://documents/schema/resolved-module-set/v2": [
+                {"description": "Inspect the portable control-module resolution carrier paired with GraphSpec 0.4."}
+            ],
+            "houdini://documents/schema/compiled-bundle/v0.4": [
+                {"description": "Inspect the exact HocusScript 0.3 bundle carrier admitted by live preview, planning, and guarded apply."}
+            ],
+            "houdini://documents/schema/graph-spec/v0.5": [
+                {"description": "Inspect the strict HocusScript 0.4 graph carrier before consuming value-language output."}
+            ],
+            "houdini://documents/schema/expansion-map/v3": [
+                {"description": "Inspect bounded value-language origins and expansion stacks paired with GraphSpec 0.5."}
+            ],
+            "houdini://documents/schema/resolved-module-set/v3": [
+                {"description": "Inspect the portable HocusScript 0.4 module-resolution carrier."}
+            ],
+            "houdini://documents/schema/compiled-bundle/v0.5": [
+                {"description": "Inspect the HocusScript 0.4 bundle admitted by live preview, planning, and guarded apply."}
+            ],
+            "houdini://documents/schema/preview-bundle-input/v1": [
+                {"description": "Inspect the exact input boundary before passing an offline compiled bundle to Houdini."}
+            ],
+            "houdini://documents/schema/preview-bundle-output/v1": [
+                {"description": "Inspect the preview result and content-addressed artifact-reference contract."}
+            ],
+            "houdini://documents/schema/plan-bundle-input/v1": [
+                {"description": "Inspect the exact admitted Bundle 0.2, 0.3, 0.4, and 0.5 planning boundary."}
+            ],
+            "houdini://documents/schema/apply-plan/v1": [
+                {"description": "Inspect immutable plan identity, revision, capability, policy, carrier, and rollback pins."}
             ],
             "houdini://graph/scene": [
                 {"description": "Load the current indexed scene graph as a single resource snapshot."}

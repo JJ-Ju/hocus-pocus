@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "hocuspocus://schemas/document-preview-bundle-input/v1",
+  "title": "HocusScript Document Preview Bundle Input v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["bundle"],
+  "properties": {
+    "bundle": {
+      "type": "object",
+      "description": "A canonical resolved compiled-bundle v0.2, frozen Bundle v0.3, control Bundle v0.4, or value Bundle v0.5 object. Each version follows its own exact strict decoder before consulting Houdini state.",
+      "required": ["bundleVersion"],
+      "properties": {
+        "bundleVersion": {"enum": ["0.2", "0.3", "0.4", "0.5"]}
+      }
+    }
+  }
+}

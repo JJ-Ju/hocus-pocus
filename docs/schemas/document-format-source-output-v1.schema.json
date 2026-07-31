@@ -1,0 +1,110 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "hocuspocus://schemas/document-format-source-output/v1",
+  "title": "HocusScript Format Source Output v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "interfaceVersion",
+    "offsetEncoding",
+    "languageVersion",
+    "sourceName",
+    "sourceUri",
+    "sourceDigest",
+    "valid",
+    "changed",
+    "formattedSource",
+    "diagnosticCount",
+    "diagnostics"
+  ],
+  "properties": {
+    "interfaceVersion": {"const": "1.0"},
+    "offsetEncoding": {"const": "unicode_code_points"},
+    "languageVersion": {"type": ["string", "null"], "enum": ["0.1", null]},
+    "sourceName": {"type": "string", "minLength": 1, "maxLength": 1024},
+    "sourceUri": {"type": "string", "minLength": 1, "maxLength": 8192},
+    "sourceDigest": {"$ref": "#/$defs/sourceDigest"},
+    "valid": {"type": "boolean"},
+    "changed": {"type": "boolean"},
+    "formattedSource": {
+      "oneOf": [
+        {"type": "string", "maxLength": 1048576},
+        {"type": "null"}
+      ]
+    },
+    "diagnosticCount": {"type": "integer", "minimum": 0, "maximum": 500},
+    "diagnostics": {
+      "type": "array",
+      "maxItems": 500,
+      "items": {"$ref": "#/$defs/diagnostic"}
+    }
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"valid": {"const": true}}, "required": ["valid"]},
+      "then": {
+        "properties": {
+          "languageVersion": {"const": "0.1"},
+          "formattedSource": {"type": "string"}
+        }
+      },
+      "else": {
+        "properties": {
+          "changed": {"const": false},
+          "formattedSource": {"type": "null"},
+          "diagnostics": {"minItems": 1}
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "sourceDigest": {
+      "type": "string",
+      "pattern": "^sha256:(?:[0-9a-f]{64}|source-too-large|invalid-unicode)$"
+    },
+    "position": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["offset", "line", "column"],
+      "properties": {
+        "offset": {"type": "integer", "minimum": 0},
+        "line": {"type": "integer", "minimum": 1},
+        "column": {"type": "integer", "minimum": 1}
+      }
+    },
+    "span": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["start", "end"],
+      "properties": {
+        "start": {"$ref": "#/$defs/position"},
+        "end": {"$ref": "#/$defs/position"}
+      }
+    },
+    "diagnostic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "severity", "code", "phase", "message", "related", "notes", "fixes",
+        "details", "expansionStack", "jsonPointer", "entityUid", "houdiniPath"
+      ],
+      "properties": {
+        "severity": {"enum": ["error", "warning", "info"]},
+        "code": {"type": "string", "minLength": 1, "maxLength": 128},
+        "phase": {"type": "string", "minLength": 1, "maxLength": 128},
+        "message": {"type": "string", "minLength": 1, "maxLength": 16384},
+        "related": {"type": "array", "maxItems": 100, "items": {"type": "object"}},
+        "notes": {"type": "array", "maxItems": 100, "items": {"type": "string", "maxLength": 16384}},
+        "fixes": {"type": "array", "maxItems": 100, "items": {"type": "object"}},
+        "details": {"type": "object"},
+        "expansionStack": {"type": "array", "maxItems": 100, "items": {"type": "object"}},
+        "jsonPointer": {"type": ["string", "null"], "maxLength": 8192},
+        "entityUid": {"type": ["string", "null"], "maxLength": 1024},
+        "houdiniPath": {"type": ["string", "null"], "maxLength": 8192},
+        "sourceUri": {"type": "string", "minLength": 1, "maxLength": 8192},
+        "span": {"$ref": "#/$defs/span"}
+      },
+      "dependentRequired": {"span": ["sourceUri"], "sourceUri": ["span"]}
+    }
+  }
+}

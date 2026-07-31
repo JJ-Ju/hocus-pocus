@@ -1,0 +1,317 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "hocuspocus://schemas/build-report/v1",
+  "title": "HocusScript Build Report v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema", "kind", "schemaVersion", "assetUri", "targetPlatform",
+    "provenanceManifestDigest", "buildIdentity", "outputSetDigest", "outputCount",
+    "contractReport", "contractReportDigest", "contractPassed",
+    "artistOverrideEvidence", "artistOverrideEvidenceDigest",
+    "visualVersionReviewEvidence", "visualVersionReviewEvidenceDigest", "metrics", "budget",
+    "budgetEvaluation", "comparisons", "reportDigest"
+  ],
+  "properties": {
+    "$schema": {"const": "hocuspocus://schemas/build-report/v1"},
+    "kind": {"const": "hocus_build_report"},
+    "schemaVersion": {"const": 1},
+    "assetUri": {"type": "string", "pattern": "^hocus-asset://", "maxLength": 8192},
+    "targetPlatform": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"},
+    "provenanceManifestDigest": {"$ref": "#/$defs/digest"},
+    "buildIdentity": {"$ref": "#/$defs/digest"},
+    "outputSetDigest": {"$ref": "#/$defs/digest"},
+    "outputCount": {"type": "integer", "minimum": 0, "maximum": 4096},
+    "contractReport": {"$ref": "#/$defs/contractReport"},
+    "contractReportDigest": {"$ref": "#/$defs/digest"},
+    "contractPassed": {"type": "boolean"},
+    "artistOverrideEvidence": {"$ref": "#/$defs/artistOverrides"},
+    "artistOverrideEvidenceDigest": {"$ref": "#/$defs/digest"},
+    "visualVersionReviewEvidence": {
+      "oneOf": [{"$ref": "#/$defs/visualVersionReview"}, {"type": "null"}]
+    },
+    "visualVersionReviewEvidenceDigest": {"$ref": "#/$defs/digest"},
+    "metrics": {"$ref": "#/$defs/metrics"},
+    "budget": {"$ref": "#/$defs/budget"},
+    "budgetEvaluation": {"$ref": "#/$defs/budgetEvaluation"},
+    "comparisons": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["deterministic", "numeric", "visual"],
+      "properties": {
+        "deterministic": {
+          "oneOf": [{"$ref": "#/$defs/deterministicComparison"}, {"type": "null"}]
+        },
+        "numeric": {
+          "oneOf": [{"$ref": "#/$defs/numericComparison"}, {"type": "null"}]
+        },
+        "visual": {
+          "oneOf": [{"$ref": "#/$defs/visualComparison"}, {"type": "null"}]
+        }
+      }
+    },
+    "reportDigest": {"$ref": "#/$defs/digest"}
+  },
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "number": {"type": "number", "minimum": 0},
+    "contractReport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind", "reportVersion", "contractDigest", "observationDigest",
+        "valid", "diagnostics", "coverage", "reportDigest"
+      ],
+      "properties": {
+        "kind": {"const": "hocus_asset_contract_report"},
+        "reportVersion": {"const": 1},
+        "contractDigest": {"$ref": "#/$defs/digest"},
+        "observationDigest": {"$ref": "#/$defs/digest"},
+        "valid": {"type": "boolean"},
+        "diagnostics": {
+          "type": "array",
+          "maxItems": 4096,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["severity", "code", "message", "jsonPointer", "expected", "actual"],
+            "properties": {
+              "severity": {"enum": ["error", "warning", "info"]},
+              "code": {"type": "string", "pattern": "^HOCUS9[0-9]{2}$"},
+              "message": {"type": "string", "minLength": 1, "maxLength": 4096},
+              "jsonPointer": {"type": "string", "maxLength": 8192},
+              "expected": {},
+              "actual": {}
+            }
+          }
+        },
+        "coverage": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["notObserved"],
+          "properties": {
+            "notObserved": {
+              "type": "array",
+              "maxItems": 4096,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["jsonPointer", "reasonCode", "required"],
+                "properties": {
+                  "jsonPointer": {
+                    "type": "string", "pattern": "^/", "maxLength": 8192
+                  },
+                  "reasonCode": {
+                    "enum": [
+                      "host_api_unavailable",
+                      "texture_resolution_unavailable",
+                      "runtime_camera_model_unavailable",
+                      "required_input_unavailable",
+                      "not_applicable"
+                    ]
+                  },
+                  "required": {"type": "boolean"}
+                }
+              }
+            }
+          }
+        },
+        "reportDigest": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "artistOverrides": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "protectedRegionCount", "beforeDigest", "afterDigest", "passed"],
+      "properties": {
+        "kind": {"const": "artist_override_evidence"},
+        "protectedRegionCount": {"type": "integer", "minimum": 0, "maximum": 1000000},
+        "beforeDigest": {"$ref": "#/$defs/digest"},
+        "afterDigest": {"$ref": "#/$defs/digest"},
+        "passed": {"type": "boolean"}
+      }
+    },
+    "visualVersionReview": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind", "reviewVersion", "assetUri",
+        "candidateProvenanceManifestDigest", "candidateOutputSetDigest",
+        "visualComparisonDigest", "candidateVersionId", "reviewPolicyId",
+        "reviewerPrincipalId", "decision", "notesDigest"
+      ],
+      "properties": {
+        "kind": {"const": "hocus_visual_version_review_evidence"},
+        "reviewVersion": {"const": 1},
+        "assetUri": {"type": "string", "pattern": "^hocus-asset://", "maxLength": 8192},
+        "candidateProvenanceManifestDigest": {"$ref": "#/$defs/digest"},
+        "candidateOutputSetDigest": {"$ref": "#/$defs/digest"},
+        "visualComparisonDigest": {"$ref": "#/$defs/digest"},
+        "candidateVersionId": {
+          "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"
+        },
+        "reviewPolicyId": {
+          "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"
+        },
+        "reviewerPrincipalId": {
+          "type": "string",
+          "pattern": "^(?:hocus-principal://[a-z0-9][a-z0-9._-]{0,127}|hprincipal_[0-9a-f]{32}|sha256:[0-9a-f]{64})$"
+        },
+        "decision": {"enum": ["approved", "rejected"]},
+        "notesDigest": {
+          "oneOf": [{"$ref": "#/$defs/digest"}, {"type": "null"}]
+        }
+      }
+    },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "cookDurationMs", "peakMemoryBytes", "polygonCount", "textureCount",
+        "textureBytes", "outputBytes", "cookErrorCount", "cookWarningCount"
+      ],
+      "properties": {
+        "cookDurationMs": {"type": "number", "minimum": 0, "maximum": 31536000000},
+        "peakMemoryBytes": {"type": "integer", "minimum": 0},
+        "polygonCount": {"type": "integer", "minimum": 0},
+        "textureCount": {"type": "integer", "minimum": 0},
+        "textureBytes": {"type": "integer", "minimum": 0},
+        "outputBytes": {"type": "integer", "minimum": 0},
+        "cookErrorCount": {"type": "integer", "minimum": 0},
+        "cookWarningCount": {"type": "integer", "minimum": 0}
+      }
+    },
+    "budget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "targetPlatform", "maxCookDurationMs", "maxPeakMemoryBytes",
+        "maxPolygonCount", "maxTextureCount", "maxTextureBytes", "maxOutputBytes",
+        "maxCookErrorCount", "maxCookWarningCount"
+      ],
+      "properties": {
+        "targetPlatform": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"},
+        "maxCookDurationMs": {"type": "number", "minimum": 0, "maximum": 31536000000},
+        "maxPeakMemoryBytes": {"type": "integer", "minimum": 0},
+        "maxPolygonCount": {"type": "integer", "minimum": 0},
+        "maxTextureCount": {"type": "integer", "minimum": 0},
+        "maxTextureBytes": {"type": "integer", "minimum": 0},
+        "maxOutputBytes": {"type": "integer", "minimum": 0},
+        "maxCookErrorCount": {"type": "integer", "minimum": 0},
+        "maxCookWarningCount": {"type": "integer", "minimum": 0}
+      }
+    },
+    "budgetEvaluation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["targetPlatform", "passed", "checks"],
+      "properties": {
+        "targetPlatform": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"},
+        "passed": {"type": "boolean"},
+        "checks": {
+          "type": "array", "minItems": 8, "maxItems": 8,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["metric", "actual", "maximum", "passed"],
+            "properties": {
+              "metric": {"type": "string", "minLength": 1, "maxLength": 128},
+              "actual": {"$ref": "#/$defs/number"},
+              "maximum": {"$ref": "#/$defs/number"},
+              "passed": {"type": "boolean"}
+            }
+          }
+        }
+      }
+    },
+    "deterministicComparison": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind", "baselineManifestDigest", "candidateManifestDigest",
+        "buildIdentityMatches", "outputSetMatches", "passed", "outputs"
+      ],
+      "properties": {
+        "kind": {"const": "deterministic_rebuild_comparison"},
+        "baselineManifestDigest": {"$ref": "#/$defs/digest"},
+        "candidateManifestDigest": {"$ref": "#/$defs/digest"},
+        "buildIdentityMatches": {"type": "boolean"},
+        "outputSetMatches": {"type": "boolean"},
+        "passed": {"type": "boolean"},
+        "outputs": {
+          "type": "array", "maxItems": 4096,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["outputUri", "baselineDigest", "candidateDigest", "status"],
+            "properties": {
+              "outputUri": {"type": "string", "pattern": "^hocus-output://", "maxLength": 8192},
+              "baselineDigest": {"oneOf": [{"$ref": "#/$defs/digest"}, {"type": "null"}]},
+              "candidateDigest": {"oneOf": [{"$ref": "#/$defs/digest"}, {"type": "null"}]},
+              "status": {"enum": ["match", "changed", "added", "missing"]}
+            }
+          }
+        }
+      }
+    },
+    "numericCheck": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "metric", "baseline", "candidate", "absoluteDifference",
+        "absoluteTolerance", "passed"
+      ],
+      "properties": {
+        "metric": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_.-]{0,127}$"},
+        "baseline": {"type": "number"},
+        "candidate": {"type": "number"},
+        "absoluteDifference": {"$ref": "#/$defs/number"},
+        "absoluteTolerance": {"$ref": "#/$defs/number"},
+        "passed": {"type": "boolean"}
+      }
+    },
+    "numericComparison": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "passed", "checks"],
+      "properties": {
+        "kind": {"const": "numeric_baseline_comparison"},
+        "passed": {"type": "boolean"},
+        "checks": {
+          "type": "array", "minItems": 1, "maxItems": 1024,
+          "items": {"$ref": "#/$defs/numericCheck"}
+        }
+      }
+    },
+    "visualCheck": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "outputUri", "baselineDigest", "candidateDigest", "algorithm",
+        "difference", "maximumDifference", "passed"
+      ],
+      "properties": {
+        "outputUri": {"type": "string", "pattern": "^hocus-output://", "maxLength": 8192},
+        "baselineDigest": {"$ref": "#/$defs/digest"},
+        "candidateDigest": {"$ref": "#/$defs/digest"},
+        "algorithm": {"type": "string", "pattern": "^[a-z][a-z0-9._-]{0,63}$"},
+        "difference": {"$ref": "#/$defs/number"},
+        "maximumDifference": {"$ref": "#/$defs/number"},
+        "passed": {"type": "boolean"}
+      }
+    },
+    "visualComparison": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "passed", "checks"],
+      "properties": {
+        "kind": {"const": "visual_baseline_comparison"},
+        "passed": {"type": "boolean"},
+        "checks": {
+          "type": "array", "minItems": 1, "maxItems": 1024,
+          "items": {"$ref": "#/$defs/visualCheck"}
+        }
+      }
+    }
+  }
+}

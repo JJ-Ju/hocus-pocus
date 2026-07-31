@@ -1,0 +1,101 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "hocuspocus://schemas/hocus-apply-plan/v1",
+  "title": "Immutable HocusScript Apply Plan v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["kind", "planVersion", "planId", "sessionId", "createdAt", "expiresAt", "bundleDigest", "sourceDigest", "catalogFingerprint", "catalogContentDigest", "compilerVersion", "graphSpecVersion", "projectUid", "projectManifestDigest", "projectLockDigest", "policyFingerprint", "requiredCapabilities", "ownership", "mode", "rootPath", "baseline", "targetDocument", "executionPlan", "inversePlan", "candidatePlanHash", "confirmationRequired", "confirmationTokenDigest", "planHash"],
+  "properties": {
+    "kind": {"const": "hocus_apply_plan"},
+    "planVersion": {"const": "1.0"},
+    "planId": {"type": "string", "format": "uuid"},
+    "sessionId": {"type": "string", "format": "uuid"},
+    "createdAt": {"type": "number"},
+    "expiresAt": {"type": "number"},
+    "bundleDigest": {"$ref": "#/$defs/digest"},
+    "bundleVersion": {"enum": ["0.3", "0.4", "0.5"]},
+    "sourceDigest": {"$ref": "#/$defs/digest"},
+    "catalogFingerprint": {"$ref": "#/$defs/digest"},
+    "catalogContentDigest": {"$ref": "#/$defs/digest"},
+    "compilerVersion": {"type": "string", "minLength": 1},
+    "graphSpecVersion": {"type": "string", "minLength": 1},
+    "languageVersion": {"enum": ["0.2", "0.3", "0.4"]},
+    "resolverPolicyDigest": {"$ref": "#/$defs/digest"},
+    "expansionMapDigest": {"$ref": "#/$defs/digest"},
+    "projectUid": {"type": "string", "minLength": 1},
+    "projectManifestDigest": {"$ref": "#/$defs/digest"},
+    "projectLockDigest": {"$ref": "#/$defs/digest"},
+    "policyFingerprint": {"$ref": "#/$defs/digest"},
+    "requiredCapabilities": {"type": "array", "uniqueItems": true, "items": {"enum": ["edit_scene", "run_code"]}},
+    "ownership": {"type": ["string", "null"]},
+    "mode": {"enum": ["merge", "reconcile"]},
+    "rootPath": {"type": "string", "pattern": "^/"},
+    "baseline": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["documentId", "documentRevision", "liveRevision", "digest", "document"],
+      "properties": {
+        "documentId": {"type": "string", "minLength": 1},
+        "documentRevision": {"type": "integer", "minimum": 0},
+        "liveRevision": {"type": "integer", "minimum": 0},
+        "digest": {"$ref": "#/$defs/digest"},
+        "document": {"type": "object"}
+      }
+    },
+    "targetDocument": {"type": "object"},
+    "executionPlan": {"type": "object"},
+    "inversePlan": {"type": "object"},
+    "candidatePlanHash": {"$ref": "#/$defs/digest"},
+    "confirmationRequired": {"type": "boolean"},
+    "confirmationTokenDigest": {"$ref": "#/$defs/digest"},
+    "planHash": {"$ref": "#/$defs/digest"}
+  },
+  "allOf": [
+    {
+      "if": {"required": ["bundleVersion"]},
+      "then": {
+        "required": [
+          "languageVersion",
+          "resolverPolicyDigest",
+          "expansionMapDigest"
+        ],
+        "oneOf": [
+          {
+            "properties": {
+              "bundleVersion": {"const": "0.3"},
+              "languageVersion": {"const": "0.2"},
+              "compilerVersion": {"const": "0.4.0"},
+              "graphSpecVersion": {"const": "0.3"}
+            }
+          },
+          {
+            "properties": {
+              "bundleVersion": {"const": "0.4"},
+              "languageVersion": {"const": "0.3"},
+              "compilerVersion": {"const": "0.5.0"},
+              "graphSpecVersion": {"const": "0.4"}
+            }
+          },
+          {
+            "properties": {
+              "bundleVersion": {"const": "0.5"},
+              "languageVersion": {"const": "0.4"},
+              "compilerVersion": {"const": "0.6.0"},
+              "graphSpecVersion": {"const": "0.5"}
+            }
+          }
+        ]
+      },
+      "else": {
+        "not": {
+          "anyOf": [
+            {"required": ["languageVersion"]},
+            {"required": ["resolverPolicyDigest"]},
+            {"required": ["expansionMapDigest"]}
+          ]
+        }
+      }
+    }
+  ],
+  "$defs": {"digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}}
+}

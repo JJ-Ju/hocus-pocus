@@ -20,6 +20,7 @@ class ToolDefinition:
     annotations: dict[str, Any]
     required_capabilities: tuple[str, ...]
     handler: ToolHandler
+    listed: bool = True
     output_summary: str = ""
     execution_hint: str = ""
     failure_notes: list[str] = field(default_factory=list)
@@ -77,10 +78,15 @@ class ToolRegistry:
         self.tools[tool.name] = tool
 
     def list_payload(self) -> list[dict[str, Any]]:
-        return [tool.as_payload() for tool in self.tools.values()]
+        return [tool.as_payload() for tool in self.tools.values() if tool.listed]
 
     def get(self, name: str) -> ToolDefinition | None:
         return self.tools.get(name)
+
+    def set_listed(self, name: str, listed: bool) -> None:
+        tool = self.tools.get(name)
+        if tool is not None:
+            tool.listed = listed
 
 
 @dataclass(slots=True)

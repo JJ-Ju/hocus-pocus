@@ -1,0 +1,122 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "hocuspocus://schemas/compiled-bundle/v0.1",
+  "title": "HocusScript Compiled Bundle v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "kind",
+    "bundleVersion",
+    "bundleDigest",
+    "compilerVersion",
+    "graphSpecVersion",
+    "languageVersion",
+    "portable",
+    "projectUid",
+    "projectManifestDigest",
+    "projectLockDigest",
+    "entrySource",
+    "dependencies",
+    "catalogConstraints",
+    "requiredCapabilities",
+    "sourceMaps",
+    "graphSpec"
+  ],
+  "properties": {
+    "$schema": {"const": "hocuspocus://schemas/compiled-bundle/v0.1"},
+    "kind": {"const": "hocus_compiled_bundle"},
+    "bundleVersion": {"const": "0.1"},
+    "bundleDigest": {
+      "allOf": [{"$ref": "#/$defs/digest"}],
+      "description": "SHA-256 of canonical bundle JSON with this bundleDigest field omitted."
+    },
+    "compilerVersion": {"type": "string", "minLength": 1},
+    "graphSpecVersion": {"enum": ["0.1", "0.2"]},
+    "languageVersion": {"type": "string", "minLength": 1},
+    "portable": {"type": "boolean"},
+    "projectUid": {"type": ["string", "null"], "pattern": "^[a-z0-9][a-z0-9.-]{0,127}$"},
+    "projectManifestDigest": {"anyOf": [{"$ref": "#/$defs/digest"}, {"type": "null"}]},
+    "projectLockDigest": {"anyOf": [{"$ref": "#/$defs/digest"}, {"type": "null"}]},
+    "entrySource": {"$ref": "#/$defs/source"},
+    "dependencies": {
+      "type": "array",
+      "maxItems": 4096,
+      "items": {"$ref": "#/$defs/source"}
+    },
+    "catalogConstraints": {"type": "object", "maxProperties": 256},
+    "requiredCapabilities": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 2,
+      "items": {"enum": ["edit_scene", "run_code"]},
+      "uniqueItems": true
+    },
+    "sourceMaps": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["format", "entrySourceUri", "embeddedInGraphSpec"],
+      "properties": {
+        "format": {"const": "graph-spec-spans-v0.1"},
+        "entrySourceUri": {"type": "string", "minLength": 1, "maxLength": 4096},
+        "embeddedInGraphSpec": {"const": true}
+      }
+    },
+    "graphSpec": {
+      "oneOf": [
+        {"$ref": "hocuspocus://schemas/graph-spec/v0.1"},
+        {"$ref": "hocuspocus://schemas/graph-spec/v0.2"}
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"graphSpecVersion": {"const": "0.1"}}},
+      "then": {"properties": {
+        "compilerVersion": {"enum": ["0.1.1", "0.2.0"]},
+        "graphSpec": {"$ref": "hocuspocus://schemas/graph-spec/v0.1"}
+      }}
+    },
+    {
+      "if": {"properties": {"graphSpecVersion": {"const": "0.2"}}},
+      "then": {"properties": {
+        "compilerVersion": {"const": "0.3.0"},
+        "graphSpec": {"$ref": "hocuspocus://schemas/graph-spec/v0.2"}
+      }}
+    },
+    {
+      "if": {"properties": {"portable": {"const": true}}},
+      "then": {
+        "properties": {
+          "projectUid": {"type": "string"},
+          "projectManifestDigest": {"$ref": "#/$defs/digest"},
+          "entrySource": {
+            "properties": {"kind": {"const": "project_file"}}
+          }
+        }
+      }
+    },
+    {
+      "if": {"properties": {"portable": {"const": false}}},
+      "then": {
+        "properties": {
+          "projectUid": {"type": "null"},
+          "projectManifestDigest": {"type": "null"}
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["uri", "digest", "kind"],
+      "properties": {
+        "uri": {"type": "string", "minLength": 1, "maxLength": 4096},
+        "digest": {"$ref": "#/$defs/digest"},
+        "kind": {"enum": ["memory", "workspace_file", "project_file", "module"]}
+      }
+    }
+  }
+}

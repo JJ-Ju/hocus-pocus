@@ -1,0 +1,62 @@
+{
+  "$schema": "hocuspocus://schemas/graph-spec/v0.2",
+  "category": "Sop",
+  "display": "sink",
+  "expectedRevision": 7,
+  "externalNodes": [
+    {"adopted": false, "path": "/obj/geo1/READ_ONLY", "symbol": "readonly"},
+    {"adopted": true, "path": "/obj/geo1/MANAGED", "symbol": "managed"}
+  ],
+  "graphSpecVersion": "0.2",
+  "kind": "graph_spec",
+  "languageVersion": "0.1",
+  "layout": "auto",
+  "mode": "reconcile",
+  "name": "all_features",
+  "nodes": [
+    {
+      "inputs": [],
+      "parms": [
+        {"name": "empty", "value": {"items": [], "kind": "array"}},
+        {
+          "name": "trailing",
+          "value": {"items": [{"kind": "literal", "value": 1}], "kind": "array"}
+        },
+        {
+          "name": "scalars",
+          "value": {
+            "items": [
+              {"kind": "literal", "value": -2},
+              {"kind": "literal", "value": 35.0},
+              {"kind": "literal", "value": true},
+              {"kind": "literal", "value": false},
+              {"kind": "literal", "value": null},
+              {"kind": "literal", "value": "text"}
+            ],
+            "kind": "array"
+          }
+        },
+        {"name": "python_code", "value": {"body": "return 1", "kind": "code", "language": "python"}},
+        {"name": "hscript_code", "value": {"body": "$F + 1", "kind": "code", "language": "hscript"}}
+      ],
+      "symbol": "source",
+      "typeName": "null"
+    },
+    {
+      "inputs": [
+        {"index": 0, "source": {"outputIndex": 0, "symbol": "source"}},
+        {"index": 1, "source": {"outputIndex": 2, "symbol": "source"}},
+        {"index": 2, "source": {"outputIndex": 0, "symbol": "managed"}}
+      ],
+      "parms": [
+        {"name": "vex_code", "value": {"body": "a`b", "kind": "code", "language": "vex"}}
+      ],
+      "symbol": "sink",
+      "typeName": "attribwrangle"
+    }
+  ],
+  "output": "sink",
+  "ownership": "tests.all_features",
+  "render": "sink",
+  "target": "/obj/geo1"
+}

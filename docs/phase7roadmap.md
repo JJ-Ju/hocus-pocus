@@ -9,6 +9,8 @@ Scope:
 - extend HocusPocus beyond single-asset authoring into full environment, worldbuilding, shot-layout, and publish workflows
 - add domain toolkits and templates for urban, interior, industrial, natural, and presentation-oriented scene creation
 - build on the procedural asset and critique systems planned for phase 6
+- continue the system-first rule: agents should author procedural worldbuilding systems in Houdini rather than directly placing large numbers of final meshes
+- treat environment and shot tools as scaffolds for rule systems and scene grammars, not as hardcoded output macros
 
 This phase assumes the current baseline from phases 1 through 6 planning:
 
@@ -22,6 +24,8 @@ Primary goals:
 - let agents assemble complete environments and shot-ready scenes, not just individual assets
 - support worldbuilding domains that combine many procedural systems into coherent locations
 - improve storytelling, presentation, and publish workflows through reusable templates and higher-level scene macros
+- keep the resulting scene logic compact, parameterized, and generator-oriented so it remains editable and reusable
+- allow agents to author different worldbuilding languages and scene grammars rather than only invoking fixed scene presets
 
 Non-goals for this phase:
 
@@ -57,6 +61,8 @@ Deliver:
   - `infrastructure.populate_street_furniture`
 - reusable templates for blocks, lanes, curbs, sidewalks, medians, signage, and lighting
 - traffic- and pedestrian-oriented spacing and dressing rules
+- generator graphs for road, block, and infrastructure repetition rather than direct per-piece scene placement
+- urban grammar scaffolds that agents can adapt into different planning and architectural systems rather than a single street-layout preset
 
 Success looks like:
 
@@ -78,6 +84,8 @@ Deliver:
   - `interior.decorate_room`
 - modular kits for walls, trim, ceilings, fixtures, doors, frames, and props
 - layout rules for circulation, spacing, and room-type variation
+- modular procedural systems that derive repeated room or corridor structure from rules instead of individual placement
+- interior scaffolds that can be pushed toward different typologies such as residential, institutional, or industrial spaces through rule changes
 
 Success looks like:
 
@@ -99,6 +107,8 @@ Deliver:
   - `mech.generate_greeble_pass`
 - templates for pipes, ducts, vents, tanks, ladders, braces, and hard-surface detail passes
 - rules for clearance, repetition control, and structural support logic
+- route- and rule-driven procedural systems instead of manually placed runs of repeated industrial parts
+- mechanical-system scaffolds that let agents define different industrial design languages rather than one canned kitbash look
 
 Success looks like:
 
@@ -121,6 +131,8 @@ Deliver:
   - `water.scatter_riparian_zone`
 - reusable systems for cliffs, caves, rock layers, riverbeds, coastlines, wetlands, and erosion zones
 - biome and water-edge integration helpers
+- terrain and shoreline systems driven by masks, fields, and attributes instead of direct point-by-point scene dressing
+- natural-environment scaffolds that let agents define different ecological or geological rule sets instead of invoking a fixed landscape macro
 
 Success looks like:
 
@@ -143,6 +155,8 @@ Deliver:
   - `setdress.story_clutter_pass`
 - reusable detail systems for grime, rust, cracks, leaks, overgrowth, debris, props, and narrative clutter
 - controls for damage level, occupancy, neglect, and storytelling density
+- layered transformation systems that modify environments procedurally rather than manually decorating each asset instance
+- style and storytelling transformation scaffolds rather than hardwired “make it abandoned” output recipes
 
 Success looks like:
 
@@ -187,6 +201,8 @@ Success looks like:
 - favor reusable templates and rule systems over one-off macros
 - support storytelling and presentation, not just geometry generation
 - make layout, lookdev, and publish outputs part of the authoring loop
+- preserve the phase-six system-first philosophy: agents should design procedural scene logic, not directly author large counts of final placements
+- treat scene templates as starting grammars that agents can reshape, not fixed environment presets
 
 ## 6. Success Criteria
 
@@ -196,3 +212,5 @@ This phase is successful when:
 - environments can be aged, damaged, and dressed with story-aware detail layers
 - scenes can be composed for review and packaged for presentation or delivery
 - the system feels capable of environment and shot building, not just asset building
+- the resulting Houdini graphs remain compact, parameterized, and recognizably procedural rather than sprawling collections of explicit repeated placements
+- the same toolkits can be steered toward different worldbuilding aesthetics because the agent is authoring scene rules and grammars rather than invoking rigid hardcoded scene macros

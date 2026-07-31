@@ -1,0 +1,357 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "hocuspocus://schemas/asset-contract/v1",
+  "title": "HocusScript Production Asset Contract v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["$schema", "kind", "contractVersion", "identity", "space", "naming", "geometry", "surface", "delivery", "usd", "dependencies"],
+  "properties": {
+    "$schema": {"const": "hocuspocus://schemas/asset-contract/v1"},
+    "kind": {"const": "hocus_asset_contract"},
+    "contractVersion": {"const": 1},
+    "identity": {"$ref": "#/$defs/identity"},
+    "space": {"$ref": "#/$defs/space"},
+    "naming": {"$ref": "#/$defs/naming"},
+    "geometry": {"$ref": "#/$defs/geometry"},
+    "surface": {"$ref": "#/$defs/surface"},
+    "delivery": {"$ref": "#/$defs/delivery"},
+    "usd": {"$ref": "#/$defs/usd"},
+    "dependencies": {
+      "type": "array",
+      "maxItems": 256,
+      "items": {"$ref": "#/$defs/dependency"}
+    }
+  },
+  "$defs": {
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z][A-Za-z0-9_.-]{0,127}$"
+    },
+    "identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z][A-Za-z0-9_.:-]{0,127}$"
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "count": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 1000000000000
+    },
+    "vector3": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "items": {"type": "number", "minimum": -1000000000000, "maximum": 1000000000000}
+    },
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["assetId", "name", "assetType"],
+      "properties": {
+        "assetId": {"$ref": "#/$defs/identifier"},
+        "name": {"$ref": "#/$defs/name"},
+        "assetType": {"enum": ["environment", "hard_surface", "rock", "destruction", "simulation", "assembly", "other"]}
+      }
+    },
+    "space": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["linearUnit", "metersPerUnit", "upAxis", "forwardAxis", "handedness"],
+      "properties": {
+        "linearUnit": {"enum": ["millimeter", "centimeter", "meter"]},
+        "metersPerUnit": {"type": "number", "exclusiveMinimum": 0, "maximum": 1000},
+        "upAxis": {"enum": ["X", "Y", "Z"]},
+        "forwardAxis": {"enum": ["X", "Y", "Z", "-X", "-Y", "-Z"]},
+        "handedness": {"enum": ["left", "right"]}
+      }
+    },
+    "naming": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["policyId", "caseSensitive", "requiredNames"],
+      "properties": {
+        "policyId": {
+          "enum": [
+            "portable_ascii_asset_name_v1",
+            "uppercase_ascii_asset_name_v1"
+          ]
+        },
+        "caseSensitive": {"type": "boolean"},
+        "requiredNames": {
+          "type": "array",
+          "uniqueItems": true,
+          "maxItems": 256,
+          "items": {"$ref": "#/$defs/name"}
+        }
+      }
+    },
+    "geometry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pivot", "bounds", "topology", "normals", "tangents"],
+      "properties": {
+        "pivot": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode", "position", "tolerance"],
+          "properties": {
+            "mode": {"enum": ["origin", "center", "base", "explicit"]},
+            "position": {"$ref": "#/$defs/vector3"},
+            "tolerance": {"type": "number", "minimum": 0, "maximum": 1000000}
+          }
+        },
+        "bounds": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["minimum", "maximum", "tolerance"],
+          "properties": {
+            "minimum": {"$ref": "#/$defs/vector3"},
+            "maximum": {"$ref": "#/$defs/vector3"},
+            "tolerance": {"type": "number", "minimum": 0, "maximum": 1000000}
+          }
+        },
+        "topology": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["manifold", "watertight", "maxNgonSides", "allowDegenerate"],
+          "properties": {
+            "manifold": {"type": "boolean"},
+            "watertight": {"type": "boolean"},
+            "maxNgonSides": {"type": "integer", "minimum": 3, "maximum": 1024},
+            "allowDegenerate": {"type": "boolean"}
+          }
+        },
+        "normals": {"$ref": "#/$defs/normals"},
+        "tangents": {"$ref": "#/$defs/tangents"}
+      }
+    },
+    "normals": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["required", "consistent", "unitLengthTolerance"],
+      "properties": {
+        "required": {"type": "boolean"},
+        "consistent": {"type": "boolean"},
+        "unitLengthTolerance": {"type": "number", "minimum": 0, "maximum": 1}
+      }
+    },
+    "tangents": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["required", "orthogonal", "orthogonalTolerance"],
+      "properties": {
+        "required": {"type": "boolean"},
+        "orthogonal": {"type": "boolean"},
+        "orthogonalTolerance": {"type": "number", "minimum": 0, "maximum": 1}
+      }
+    },
+    "surface": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["uvSets", "materialSlots"],
+      "properties": {
+        "uvSets": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {"$ref": "#/$defs/uvSet"}
+        },
+        "materialSlots": {
+          "type": "array",
+          "maxItems": 256,
+          "items": {"$ref": "#/$defs/materialSlot"}
+        }
+      }
+    },
+    "uvSet": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "required", "udimTiles", "allowDuplicateUvTriangles", "duplicateUvTriangleMeasurementRequired", "texelDensity", "texelDensityMeasurementRequired"],
+      "properties": {
+        "name": {"$ref": "#/$defs/name"},
+        "required": {"type": "boolean"},
+        "udimTiles": {
+          "type": "array",
+          "uniqueItems": true,
+          "maxItems": 256,
+          "items": {"type": "integer", "minimum": 1001, "maximum": 9999}
+        },
+        "allowDuplicateUvTriangles": {"type": "boolean"},
+        "duplicateUvTriangleMeasurementRequired": {"type": "boolean"},
+        "texelDensityMeasurementRequired": {"type": "boolean"},
+        "texelDensity": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["minimum", "maximum", "unit"],
+          "properties": {
+            "minimum": {"type": "number", "minimum": 0, "maximum": 1000000000},
+            "maximum": {"type": "number", "minimum": 0, "maximum": 1000000000},
+            "unit": {"enum": ["px_per_cm", "px_per_m"]}
+          }
+        }
+      }
+    },
+    "materialSlot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "required"],
+      "properties": {
+        "name": {"$ref": "#/$defs/name"},
+        "required": {"type": "boolean"}
+      }
+    },
+    "delivery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["lods", "collision", "instancing", "platformBudgets"],
+      "properties": {
+        "lods": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "items": {"$ref": "#/$defs/lod"}
+        },
+        "collision": {"$ref": "#/$defs/collision"},
+        "instancing": {"$ref": "#/$defs/instancing"},
+        "platformBudgets": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "items": {"$ref": "#/$defs/platformBudget"}
+        }
+      }
+    },
+    "lod": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "maxTriangles", "maxVertices", "maxRelativeTriangleReduction", "relativeTriangleReductionMeasurementRequired"],
+      "properties": {
+        "name": {"$ref": "#/$defs/name"},
+        "maxTriangles": {"$ref": "#/$defs/count"},
+        "maxVertices": {"$ref": "#/$defs/count"},
+        "maxRelativeTriangleReduction": {"type": "number", "minimum": 0, "maximum": 1},
+        "relativeTriangleReductionMeasurementRequired": {"type": "boolean"}
+      }
+    },
+    "collision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "requireConvex", "maxPrimitives", "maxTriangles"],
+      "properties": {
+        "mode": {"enum": ["none", "simple", "convex", "mesh"]},
+        "requireConvex": {"type": "boolean"},
+        "maxPrimitives": {"$ref": "#/$defs/count"},
+        "maxTriangles": {"$ref": "#/$defs/count"}
+      }
+    },
+    "instancing": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["required", "prototypePrimPath", "representation", "maxUniqueMeshes", "maxUnpackedInstances"],
+      "properties": {
+        "required": {"type": "boolean"},
+        "prototypePrimPath": {"type": "string", "minLength": 2, "maxLength": 512, "pattern": "^/[A-Za-z_][A-Za-z0-9_/]*$"},
+        "representation": {"enum": ["native_instance", "point_instancer"]},
+        "maxUniqueMeshes": {"$ref": "#/$defs/count"},
+        "maxUnpackedInstances": {"$ref": "#/$defs/count"}
+      }
+    },
+    "platformBudget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["platform", "maxTriangles", "maxVertices", "maxTextureBytes", "maxMaterialSlots", "maxInstances"],
+      "properties": {
+        "platform": {"$ref": "#/$defs/name"},
+        "maxTriangles": {"$ref": "#/$defs/count"},
+        "maxVertices": {"$ref": "#/$defs/count"},
+        "maxTextureBytes": {"$ref": "#/$defs/count"},
+        "maxMaterialSlots": {"$ref": "#/$defs/count"},
+        "maxInstances": {"$ref": "#/$defs/count"}
+      }
+    },
+    "usd": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "purpose", "variants", "publish", "primBindings"],
+      "properties": {
+        "kind": {"enum": ["component", "assembly", "group"]},
+        "purpose": {"enum": ["default", "proxy", "render", "guide"]},
+        "variants": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {"$ref": "#/$defs/variant"}
+        },
+        "publish": {"$ref": "#/$defs/publish"},
+        "primBindings": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 256,
+          "items": {"$ref": "#/$defs/primBinding"}
+        }
+      }
+    },
+    "variant": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "allowedValues", "requiredValue"],
+      "properties": {
+        "name": {"$ref": "#/$defs/name"},
+        "allowedValues": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 256,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/name"}
+        },
+        "requiredValue": {
+          "oneOf": [{"$ref": "#/$defs/name"}, {"type": "null"}]
+        }
+      }
+    },
+    "publish": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rootPrim", "defaultPrim", "payload"],
+      "properties": {
+        "rootPrim": {"type": "string", "minLength": 2, "maxLength": 512, "pattern": "^/[A-Za-z_][A-Za-z0-9_/]*$"},
+        "defaultPrim": {"type": "string", "minLength": 2, "maxLength": 512, "pattern": "^/[A-Za-z_][A-Za-z0-9_/]*$"},
+        "payload": {"enum": ["inline", "payload", "reference"]}
+      }
+    },
+    "primBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "role", "primPath", "purpose", "visibility", "materialPrimPath"],
+      "properties": {
+        "name": {"$ref": "#/$defs/name"},
+        "role": {"enum": ["render", "collision"]},
+        "primPath": {"type": "string", "minLength": 2, "maxLength": 512, "pattern": "^/[A-Za-z_][A-Za-z0-9_/]*$"},
+        "purpose": {"enum": ["default", "proxy", "render", "guide"]},
+        "visibility": {"enum": ["inherited", "invisible"]},
+        "materialPrimPath": {
+          "oneOf": [
+            {"type": "string", "minLength": 2, "maxLength": 512, "pattern": "^/[A-Za-z_][A-Za-z0-9_/]*$"},
+            {"type": "null"}
+          ]
+        }
+      }
+    },
+    "dependency": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "version", "digest"],
+      "properties": {
+        "id": {"$ref": "#/$defs/identifier"},
+        "kind": {"enum": ["asset", "hda", "module", "texture", "usd"]},
+        "version": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$"},
+        "digest": {"$ref": "#/$defs/digest"}
+      }
+    }
+  }
+}

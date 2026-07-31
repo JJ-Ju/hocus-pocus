@@ -11,7 +11,7 @@ from ..context import RequestContext
 
 class MaterialOperationsMixin:
     def _material_create_impl(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        hou_module = self._require_hou()
+        self._require_hou()
         parent_path = str(arguments.get("parent_path", "/mat")).strip() or "/mat"
         node_name = str(arguments.get("node_name", "")).strip() or None
         requested_type = str(arguments.get("material_type_name", "")).strip()

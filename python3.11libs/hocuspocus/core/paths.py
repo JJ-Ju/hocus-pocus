@@ -74,5 +74,17 @@ def audit_log_path() -> Path:
     return runtime_dir() / "audit.jsonl"
 
 
+def workspace_registry_path() -> Path:
+    return runtime_dir() / "source-workspaces.json"
+
+
+def workspace_grants_path() -> Path:
+    return runtime_dir() / "source-workspace-grants.json"
+
+
+def workspace_audit_path() -> Path:
+    return runtime_dir() / "source-workspace-audit.sqlite3"
+
+
 def server_log_path() -> Path:
     return log_dir() / "server.log"

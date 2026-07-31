@@ -31,6 +31,7 @@ class ResourceOperationsMixin:
             },
             "monitor": self._monitor.snapshot(),
             "graph": self._graph.stats(),
+            "graphStore": self._graph_store.stats(),
             "activeOperations": self._dispatcher.operations_snapshot(limit=20),
             "recentTasks": self._tasks.snapshots(limit=20),
         }
@@ -56,118 +57,233 @@ class ResourceOperationsMixin:
         uri: str,
         context: RequestContext,
     ) -> dict[str, object] | None:
-        if uri == "houdini://graph/scene":
-            return self.read_graph_scene(context)
-        if uri == "houdini://graph/index":
-            return self.read_graph_index(context)
-        if uri == "houdini://dependencies/scene":
-            return self.read_scene_dependencies(context)
-        if uri == "houdini://caches/topology":
-            return self.read_cache_topology(context)
-        if uri == "houdini://packages/preview":
-            return self.read_package_preview(context)
-        if uri.startswith("houdini://usd/stage/"):
-            raw = uri[len("houdini://usd/stage/") :].strip("/")
-            if raw:
-                node_path = self._dynamic_node_uri_to_path(f"houdini://nodes/{raw}")
-                if node_path is not None:
-                    return self.read_usd_stage_summary(node_path, context)
-        if uri.startswith("houdini://pdg/graph/"):
-            raw = uri[len("houdini://pdg/graph/") :].strip("/")
-            if raw:
-                node_path = self._dynamic_node_uri_to_path(f"houdini://nodes/{raw}")
-                if node_path is not None:
-                    return self.read_pdg_graph_state(node_path, context)
-        if uri == "houdini://scene/events":
-            return self.read_scene_events(context)
-        if uri.startswith("houdini://renders/graph/"):
-            raw = uri[len("houdini://renders/graph/") :].strip("/")
-            if raw:
-                node_path = self._dynamic_node_uri_to_path(f"houdini://nodes/{raw}")
-                if node_path is not None:
-                    return self.read_render_graph(node_path, context)
-        if uri.startswith("houdini://graph/subgraph/"):
-            raw = uri[len("houdini://graph/subgraph/") :].strip("/")
-            if raw:
-                root_path = self._dynamic_node_uri_to_path(f"houdini://nodes/{raw}")
-                if root_path is not None:
-                    return self._resource_response(
-                        uri,
-                        self._call_live(
-                            lambda root_path=root_path: self._graph_subgraph_payload(self._graph_snapshot(), root_path),
-                            context,
-                        ),
-                    )
-        if uri.startswith("houdini://graph/dependencies/"):
-            raw = uri[len("houdini://graph/dependencies/") :].strip("/")
-            if raw:
-                node_path = self._dynamic_node_uri_to_path(f"houdini://nodes/{raw}")
-                if node_path is not None:
-                    return self._resource_response(
-                        uri,
-                        self._call_live(
-                            lambda node_path=node_path: self._graph_dependency_payload(self._graph_snapshot(), node_path),
-                            context,
-                        ),
-                    )
-        if uri.startswith("houdini://graph/references/"):
-            raw = uri[len("houdini://graph/references/") :].strip("/")
-            if raw:
-                node_path = self._dynamic_node_uri_to_path(f"houdini://nodes/{raw}")
-                if node_path is not None:
-                    return self._resource_response(
-                        uri,
-                        self._call_live(
-                            lambda node_path=node_path: self._graph_reference_payload(self._graph_snapshot(), node_path),
-                            context,
-                        ),
-                    )
+        resolvers = (
+            self._read_document_dynamic_resource,
+            self._read_product_dynamic_resource,
+            self._read_graph_dynamic_resource,
+            self._read_task_or_node_dynamic_resource,
+        )
+        for resolver in resolvers:
+            payload = resolver(uri, context)
+            if payload is not None:
+                return payload
+        return None
 
+    def _read_document_dynamic_resource(
+        self,
+        uri: str,
+        context: RequestContext,
+    ) -> dict[str, object] | None:
+        exact = {
+            "houdini://documents/scene": self.read_document_scene,
+            "houdini://documents/schema/network-document/v1": self.read_document_schema,
+            "houdini://documents/schema/network-document/v2": self.read_document_schema_v2,
+        }
+        reader = exact.get(uri)
+        if reader is not None:
+            return reader(context)
+        prefixes = (
+            ("houdini://documents/checkouts/", self.read_document_checkout),
+            ("houdini://documents/diagnostics/", self.read_document_diagnostics),
+            ("houdini://documents/previews/", self.read_document_preview),
+            ("houdini://documents/plans/", self.read_apply_plan),
+        )
+        for prefix, dynamic_reader in prefixes:
+            identifier = uri.removeprefix(prefix).strip("/") if uri.startswith(prefix) else ""
+            if identifier:
+                return dynamic_reader(identifier, context)
+        prefix = "houdini://documents/network/"
+        if uri.startswith(prefix):
+            raw = uri.removeprefix(prefix).strip("/")
+            node_path = self._dynamic_node_uri_to_path(f"houdini://nodes/{raw}") if raw else None
+            if node_path is not None:
+                return self.read_document_network(node_path, context)
+        return None
+
+    def _read_product_dynamic_resource(
+        self,
+        uri: str,
+        context: RequestContext,
+    ) -> dict[str, object] | None:
+        exact = {
+            "houdini://graph/scene": self.read_graph_scene,
+            "houdini://graph/index": self.read_graph_index,
+            "houdini://dependencies/scene": self.read_scene_dependencies,
+            "houdini://caches/topology": self.read_cache_topology,
+            "houdini://packages/preview": self.read_package_preview,
+            "houdini://scene/events": self.read_scene_events,
+        }
+        reader = exact.get(uri)
+        if reader is not None:
+            return reader(context)
+        prefixed = (
+            ("houdini://usd/stage/", self.read_usd_stage_summary),
+            ("houdini://pdg/graph/", self.read_pdg_graph_state),
+            ("houdini://renders/graph/", self.read_render_graph),
+        )
+        for prefix, dynamic_reader in prefixed:
+            raw = uri.removeprefix(prefix).strip("/") if uri.startswith(prefix) else ""
+            node_path = self._dynamic_node_uri_to_path(f"houdini://nodes/{raw}") if raw else None
+            if node_path is not None:
+                return dynamic_reader(node_path, context)
+        return None
+
+    def _read_graph_dynamic_resource(
+        self,
+        uri: str,
+        context: RequestContext,
+    ) -> dict[str, object] | None:
+        routes = (
+            ("houdini://graph/subgraph/", self._graph_subgraph_payload),
+            ("houdini://graph/dependencies/", self._graph_dependency_payload),
+            ("houdini://graph/references/", self._graph_reference_payload),
+        )
+        for prefix, payload_builder in routes:
+            raw = uri.removeprefix(prefix).strip("/") if uri.startswith(prefix) else ""
+            node_path = self._dynamic_node_uri_to_path(f"houdini://nodes/{raw}") if raw else None
+            if node_path is not None:
+                return self._resource_response(
+                    uri,
+                    self._call_live(
+                        lambda node_path=node_path, payload_builder=payload_builder: payload_builder(
+                            self._graph_snapshot(), node_path
+                        ),
+                        context,
+                    ),
+                )
+        return None
+
+    def _read_task_or_node_dynamic_resource(
+        self,
+        uri: str,
+        context: RequestContext,
+    ) -> dict[str, object] | None:
         task_log_id = self._dynamic_task_id(uri, "/log")
         if task_log_id is not None:
             payload = self._tasks.log_payload(task_log_id)
             if payload is not None:
                 return self._resource_response(uri, payload)
-
         task_id = self._dynamic_task_id(uri)
         if task_id is not None:
             payload = self._tasks.snapshot(task_id)
             if payload is not None:
                 return self._resource_response(uri, payload)
-
-        geometry_path = self._dynamic_node_uri_to_path(uri, "/geometry-summary")
-        if geometry_path is not None:
-            return self._resource_response(
-                uri,
-                self._call_live(
-                    lambda: self._node_geometry_resource_impl(geometry_path),
-                    context,
-                ),
-            )
-
-        parms_path = self._dynamic_node_uri_to_path(uri, "/parms")
-        if parms_path is not None:
-            return self._resource_response(
-                uri,
-                self._call_live(
-                    lambda: self._node_parms_resource_impl(parms_path),
-                    context,
-                ),
-            )
-
-        node_path = self._dynamic_node_uri_to_path(uri)
-        if node_path is not None:
-            return self._resource_response(
-                uri,
-                self._call_live(
-                    lambda: self._node_resource_impl(node_path),
-                    context,
-                ),
-            )
+        node_routes = (
+            ("/geometry-summary", self._node_geometry_resource_impl),
+            ("/parms", self._node_parms_resource_impl),
+            (None, self._node_resource_impl),
+        )
+        for suffix, payload_builder in node_routes:
+            node_path = self._dynamic_node_uri_to_path(uri, suffix) if suffix else self._dynamic_node_uri_to_path(uri)
+            if node_path is not None:
+                return self._resource_response(
+                    uri,
+                    self._call_live(
+                        lambda node_path=node_path, payload_builder=payload_builder: payload_builder(node_path),
+                        context,
+                    ),
+                )
         return None
 
     def resource_templates_payload(self) -> list[dict[str, object]]:
         return [
+            {
+                "uriTemplate": "houdini://documents/scene",
+                "name": "Scene Document",
+                "description": "Read the scene manifest over root document-capable Houdini networks.",
+                "mimeType": "application/json",
+                "payloadSummary": "Scene document with root network document links plus hip and graph metadata.",
+                "examples": [
+                    {
+                        "description": "Read the scene manifest before choosing a network document to edit.",
+                        "uri": "houdini://documents/scene",
+                    }
+                ],
+            },
+            {
+                "uriTemplate": "houdini://documents/network/{path}",
+                "name": "Network Document",
+                "description": "Read a canonical network document for a Houdini network or subnetwork path. `{path}` uses the same slash-separated or percent-encoded path rules as node resources.",
+                "mimeType": "application/json",
+                "payloadSummary": "Canonical network document with nodes, edges, parameter bindings, code blobs, and diagnostics.",
+                "examples": [
+                    {
+                        "description": "Read a SOP network document for a geometry object.",
+                        "uri": "houdini://documents/network/obj/geo1",
+                    }
+                ],
+            },
+            {
+                "uriTemplate": "houdini://documents/schema/network-document/v1",
+                "name": "Network Document Schema v1",
+                "description": "Read the locked machine-readable schema for the first-wave network document contract.",
+                "mimeType": "application/json",
+                "payloadSummary": "JSON Schema for `hocuspocus://schemas/network-document/v1`.",
+                "examples": [
+                    {
+                        "description": "Inspect the locked schema before generating or editing a network document.",
+                        "uri": "houdini://documents/schema/network-document/v1",
+                    }
+                ],
+            },
+            {
+                "uriTemplate": "houdini://documents/schema/network-document/v2",
+                "name": "Network Document Schema v2",
+                "description": "Read the strict typed-value network document contract.",
+                "mimeType": "application/json",
+                "payloadSummary": "JSON Schema for `hocuspocus://schemas/network-document/v2`.",
+                "examples": [{
+                    "description": "Inspect the typed-value document schema.",
+                    "uri": "houdini://documents/schema/network-document/v2",
+                }],
+            },
+            {
+                "uriTemplate": "houdini://documents/checkouts/{checkout_id}",
+                "name": "Checkout Document",
+                "description": "Read the current working document stored for a checkout created by `document.checkout`.",
+                "mimeType": "application/json",
+                "payloadSummary": "Working network document payload for a checkout id.",
+                "examples": [
+                    {
+                        "description": "Read the working document for a checkout after editing it offline.",
+                        "uri": "houdini://documents/checkouts/01234567-89ab-cdef-0123-456789abcdef",
+                    }
+                ],
+            },
+            {
+                "uriTemplate": "houdini://documents/diagnostics/{checkout_id}",
+                "name": "Checkout Diagnostics",
+                "description": "Read the latest validation or apply diagnostics stored for a checkout.",
+                "mimeType": "application/json",
+                "payloadSummary": "Diagnostic report payload for a checkout id.",
+                "examples": [
+                    {
+                        "description": "Read validation diagnostics for a checkout after calling `document.validate`.",
+                        "uri": "houdini://documents/diagnostics/01234567-89ab-cdef-0123-456789abcdef",
+                    }
+                ],
+            },
+            {
+                "uriTemplate": "houdini://documents/previews/{preview_id}",
+                "name": "HocusScript Document Preview",
+                "description": "Read a content-addressed HS3 document preview artifact produced by `document.preview_bundle`.",
+                "mimeType": "application/json",
+                "payloadSummary": "Canonical document, diff, destructive summary, preview-only candidate plan, provenance, source maps, and diagnostics.",
+                "examples": [
+                    {
+                        "description": "Read a large preview artifact by the URI returned from document.preview_bundle.",
+                        "uri": "houdini://documents/previews/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                    }
+                ],
+            },
+            {
+                "uriTemplate": "houdini://documents/plans/{plan_id}",
+                "name": "Immutable HocusScript Apply Plan",
+                "description": "Read a stored, integrity-checked HS4 apply plan by the URI returned from document.plan_bundle.",
+                "mimeType": "application/json",
+                "payloadSummary": "Versioned apply plan envelope, guards, normalized operations, inverse plan, and expiry without the confirmation secret.",
+                "examples": [{"description": "Inspect a stored plan before guarded apply.", "uri": "houdini://documents/plans/01234567-89ab-cdef-0123-456789abcdef"}],
+            },
             {
                 "uriTemplate": "houdini://graph/scene",
                 "name": "Scene Graph Snapshot",

@@ -224,14 +224,86 @@ class RenderOperationsMixin:
             {"candidates": list(candidates)},
         )
 
+    def _set_light_type(self, light: Any, light_type: str) -> str:
+        parm = self._safe_value(lambda: light.parm("light_type"), None)
+        if parm is None:
+            return "unknown"
+        try:
+            parm.set(light_type)
+            return str(parm.evalAsString())
+        except Exception:
+            return str(self._safe_value(parm.evalAsString, "unknown"))
+
+    def _author_light(
+        self,
+        light: Any,
+        target: Any,
+        center: tuple[float, float, float],
+        radius: float,
+        placement_mode: str,
+        intensity: float,
+        exposure: float,
+        color: tuple[float, float, float],
+    ) -> dict[str, Any]:
+        lookat = self._safe_value(lambda: light.parm("lookatpath"), None)
+        if lookat is not None:
+            lookat.set(target.path())
+        intensity_parm = self._safe_value(lambda: light.parm("light_intensity"), None)
+        if intensity_parm is None:
+            intensity_parm = self._safe_value(lambda: light.parm("intensity"), None)
+        if intensity_parm is not None:
+            intensity_parm.set(intensity)
+        exposure_parm = self._safe_value(lambda: light.parm("light_exposure"), None)
+        if exposure_parm is not None:
+            exposure_parm.set(exposure)
+        color_parm = self._safe_value(lambda: light.parmTuple("light_color"), None)
+        if color_parm is None:
+            color_parm = self._safe_value(lambda: light.parmTuple("light_colorr"), None)
+        if color_parm is not None and len(color_parm) >= 3:
+            color_parm.set(color)
+        authored_type = self._set_light_type(light, placement_mode)
+        if placement_mode == "grid":
+            area_size = self._safe_value(lambda: light.parmTuple("areasize"), None)
+            if area_size is not None:
+                size = max(radius * 0.35, 2.0)
+                area_size.set((size, size))
+        return {
+            "node": self._node_summary(light, include_parms=False),
+            "lightType": authored_type,
+            "distanceToTarget": self._safe_value(
+                lambda: sum(
+                    (light.parmTuple("t").eval()[index] - center[index]) ** 2
+                    for index in range(3)
+                )
+                ** 0.5,
+                None,
+            ),
+        }
+
     def _lookdev_create_three_point_light_rig_impl(self, arguments: dict[str, Any]) -> dict[str, Any]:
         hou_module = self._require_hou()
         obj = self._require_node_by_path("/obj")
         rig_name = str(arguments.get("rig_name", "lookdev_rig")).strip() or "lookdev_rig"
+        target_path = str(arguments.get("target_path", "")).strip()
         target_name = str(arguments.get("target_name", f"{rig_name}_target")).strip() or f"{rig_name}_target"
         key_name = str(arguments.get("key_name", f"{rig_name}_key")).strip() or f"{rig_name}_key"
         fill_name = str(arguments.get("fill_name", f"{rig_name}_fill")).strip() or f"{rig_name}_fill"
         rim_name = str(arguments.get("rim_name", f"{rig_name}_rim")).strip() or f"{rig_name}_rim"
+
+        target_fit = self._target_fit_summary(
+            target_path or None,
+            fallback_center=(0.0, 1.5, 0.0),
+            fallback_radius=6.0,
+            distance_multiplier=2.0,
+        )
+        center = target_fit["center"]
+        radius = float(target_fit["radius"])
+        size_class = str(target_fit["sizeClass"])
+        placement_mode = "point"
+        if size_class in {"large", "exterior"}:
+            placement_mode = "distant"
+        elif size_class == "medium":
+            placement_mode = "grid"
 
         with hou_module.undos.group("HocusPocus: create three point light rig"):
             target = obj.createNode("null", node_name=target_name)
@@ -243,40 +315,39 @@ class RenderOperationsMixin:
             self._place_node_on_grid(obj, fill)
             self._place_node_on_grid(obj, rim)
 
-            target.parmTuple("t").set((0.0, 1.5, 0.0))
-            key.parmTuple("t").set((6.0, 5.0, 6.0))
-            fill.parmTuple("t").set((-6.0, 2.5, 4.5))
-            rim.parmTuple("t").set((0.0, 4.0, -7.0))
+            target.parmTuple("t").set(center)
+            key.parmTuple("t").set((center[0] + radius, center[1] + (radius * 0.35), center[2] + radius))
+            fill.parmTuple("t").set((center[0] - (radius * 0.9), center[1] + (radius * 0.18), center[2] + (radius * 0.7)))
+            rim.parmTuple("t").set((center[0], center[1] + (radius * 0.25), center[2] - (radius * 1.1)))
 
-            for light, intensity, exposure, color in (
+            authored_lights = [
+                self._author_light(
+                    light, target, center, radius, placement_mode, intensity, exposure, color
+                )
+                for light, intensity, exposure, color in (
                 (key, 1.0, 1.5, (1.0, 0.96, 0.9)),
                 (fill, 0.5, 0.25, (0.78, 0.84, 1.0)),
                 (rim, 0.75, 1.0, (1.0, 1.0, 1.0)),
-            ):
-                lookat = self._safe_value(lambda light=light: light.parm("lookatpath"), None)
-                if lookat is not None:
-                    lookat.set(target.path())
-                intensity_parm = self._safe_value(lambda light=light: light.parm("light_intensity"), None)
-                if intensity_parm is None:
-                    intensity_parm = self._safe_value(lambda light=light: light.parm("intensity"), None)
-                if intensity_parm is not None:
-                    intensity_parm.set(intensity)
-                exposure_parm = self._safe_value(lambda light=light: light.parm("light_exposure"), None)
-                if exposure_parm is not None:
-                    exposure_parm.set(exposure)
-                color_parm = self._safe_value(lambda light=light: light.parmTuple("light_color"), None)
-                if color_parm is None:
-                    color_parm = self._safe_value(lambda light=light: light.parmTuple("light_colorr"), None)
-                if color_parm is not None and len(color_parm) >= 3:
-                    color_parm.set(color)
+                )
+            ]
+
+        warnings: list[str] = list(target_fit["warnings"])
+        if placement_mode == "point" and size_class in {"large", "exterior"}:
+            warnings.append("Point lights on large assets may under-light broad facades.")
+        if target_fit["bboxMin"] is not None and center[1] < ((target_fit["bboxMin"][1] + target_fit["bboxMax"][1]) / 2.0):
+            warnings.append("Computed target is below the asset center.")
 
         return {
             "target": self._node_summary(target, include_parms=False),
-            "lights": [
-                self._node_summary(key, include_parms=False),
-                self._node_summary(fill, include_parms=False),
-                self._node_summary(rim, include_parms=False),
-            ],
+            "lights": authored_lights,
+            "targetFit": target_fit,
+            "placementMode": placement_mode,
+            "assetBBox": {
+                "min": target_fit["bboxMin"],
+                "max": target_fit["bboxMax"],
+            },
+            "targetPosition": center,
+            "warnings": warnings,
         }
 
     def lookdev_create_three_point_light_rig(

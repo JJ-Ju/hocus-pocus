@@ -12,6 +12,45 @@ from ..context import RequestContext
 
 
 class DependencyOperationsMixin:
+    @staticmethod
+    def _dependency_replacement(value: str, old_path: str, new_path: str, match_mode: str) -> str | None:
+        matches = value == old_path if match_mode == "exact" else value.startswith(old_path)
+        if not matches:
+            return None
+        return new_path if match_mode == "exact" else new_path + value[len(old_path) :]
+
+    def _dependency_repath_entry(
+        self,
+        entry: dict[str, Any],
+        old_path: str,
+        new_path: str,
+        match_mode: str,
+        dry_run: bool,
+        hou_module: Any,
+    ) -> tuple[str, dict[str, Any]] | None:
+        raw = str(entry["rawValue"] or "")
+        expanded = str(entry["expandedPath"] or "")
+        if not raw and not expanded:
+            return None
+        replacement = self._dependency_replacement(raw, old_path, new_path, match_mode)
+        if replacement is None and expanded:
+            replacement = self._dependency_replacement(expanded, old_path, new_path, match_mode)
+        if replacement is None:
+            return "skipped", {"parmPath": entry["parmPath"], "reason": "no_match"}
+        payload = {"parmPath": entry["parmPath"], "oldValue": raw, "newValue": replacement}
+        parm = self._require_parm_by_path(entry["parmPath"])
+        try:
+            ensure_path_allowed(replacement, self._settings)
+        except JsonRpcError as exc:
+            return "failed", {**payload, "error": exc.to_payload()}
+        if dry_run:
+            return "changed", {**payload, "applied": False}
+        try:
+            parm.set(replacement)
+        except hou_module.PermissionError as exc:
+            return "failed", {**payload, "error": str(exc)}
+        return "changed", {**payload, "applied": True}
+
     _OUTPUT_PARM_NAMES = {
         "sopoutput",
         "picture",
@@ -164,74 +203,14 @@ class DependencyOperationsMixin:
         failed: list[dict[str, Any]] = []
         skipped: list[dict[str, Any]] = []
 
-        def is_match(value: str) -> bool:
-            if match_mode == "exact":
-                return value == old_path
-            return value.startswith(old_path)
-
-        def replace_value(value: str) -> str:
-            if match_mode == "exact":
-                return new_path
-            return new_path + value[len(old_path) :]
-
+        buckets = {"changed": changed, "failed": failed, "skipped": skipped}
         for entry in self._dependency_entries(root_path=root_path):
-            raw = str(entry["rawValue"] or "")
-            expanded = str(entry["expandedPath"] or "")
-            if not raw and not expanded:
-                continue
-            replacement: str | None = None
-            if is_match(raw):
-                replacement = replace_value(raw)
-            elif expanded and is_match(expanded):
-                replacement = replace_value(expanded)
-            if replacement is None:
-                skipped.append({"parmPath": entry["parmPath"], "reason": "no_match"})
-                continue
-
-            parm = self._require_parm_by_path(entry["parmPath"])
-            try:
-                ensure_path_allowed(replacement, self._settings)
-            except JsonRpcError as exc:
-                failed.append(
-                    {
-                        "parmPath": entry["parmPath"],
-                        "oldValue": raw,
-                        "newValue": replacement,
-                        "error": exc.to_payload(),
-                    }
-                )
-                continue
-
-            if dry_run:
-                changed.append(
-                    {
-                        "parmPath": entry["parmPath"],
-                        "oldValue": raw,
-                        "newValue": replacement,
-                        "applied": False,
-                    }
-                )
-                continue
-
-            try:
-                parm.set(replacement)
-                changed.append(
-                    {
-                        "parmPath": entry["parmPath"],
-                        "oldValue": raw,
-                        "newValue": replacement,
-                        "applied": True,
-                    }
-                )
-            except hou_module.PermissionError as exc:
-                failed.append(
-                    {
-                        "parmPath": entry["parmPath"],
-                        "oldValue": raw,
-                        "newValue": replacement,
-                        "error": str(exc),
-                    }
-                )
+            outcome = self._dependency_repath_entry(
+                entry, old_path, new_path, match_mode, dry_run, hou_module
+            )
+            if outcome is not None:
+                bucket, payload = outcome
+                buckets[bucket].append(payload)
 
         return {
             "rootPath": root_path,

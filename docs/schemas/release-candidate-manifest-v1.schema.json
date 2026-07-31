@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "hocuspocus://schemas/release-candidate-manifest/v1",
+  "title": "HocusPocus Immutable Release Candidate Manifest v1",
+  "description": "Content identity for one frozen release candidate. The canonical manifestDigest detects mutation but grants no signing, clean-image, visual-review, publish, or release authority.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["$schema", "kind", "schemaVersion", "inputs", "manifestDigest"],
+  "properties": {
+    "$schema": {"const": "hocuspocus://schemas/release-candidate-manifest/v1"},
+    "kind": {"const": "hocus_release_candidate_manifest"},
+    "schemaVersion": {"const": 1},
+    "inputs": {"$ref": "#/$defs/inputs"},
+    "manifestDigest": {"$ref": "#/$defs/digest"}
+  },
+  "$defs": {
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "gitDigest": {
+      "type": "string",
+      "pattern": "^(git-sha1:[0-9a-f]{40}|git-sha256:[0-9a-f]{64})$"
+    },
+    "inputs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source",
+        "execution",
+        "releaseAssets",
+        "installedCandidate",
+        "evidence"
+      ],
+      "properties": {
+        "source": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "commitDigest",
+            "treeDigest",
+            "sourceArchiveDigest"
+          ],
+          "properties": {
+            "commitDigest": {"$ref": "#/$defs/gitDigest"},
+            "treeDigest": {"$ref": "#/$defs/gitDigest"},
+            "sourceArchiveDigest": {"$ref": "#/$defs/digest"}
+          }
+        },
+        "execution": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["runnerSetDigest", "dependencySetDigest"],
+          "properties": {
+            "runnerSetDigest": {"$ref": "#/$defs/digest"},
+            "dependencySetDigest": {"$ref": "#/$defs/digest"}
+          }
+        },
+        "releaseAssets": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "fixtureSetDigest",
+            "baselineSetDigest",
+            "reviewRequestDigest",
+            "schemaSetDigest"
+          ],
+          "properties": {
+            "fixtureSetDigest": {"$ref": "#/$defs/digest"},
+            "baselineSetDigest": {"$ref": "#/$defs/digest"},
+            "reviewRequestDigest": {"$ref": "#/$defs/digest"},
+            "schemaSetDigest": {"$ref": "#/$defs/digest"}
+          }
+        },
+        "installedCandidate": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "installManifestDigest",
+            "activePointerDigest",
+            "runtimeDigest"
+          ],
+          "properties": {
+            "installManifestDigest": {"$ref": "#/$defs/digest"},
+            "activePointerDigest": {"$ref": "#/$defs/digest"},
+            "runtimeDigest": {"$ref": "#/$defs/digest"}
+          }
+        },
+        "evidence": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "technicalQualificationReceiptDigest",
+            "packageProvenanceReceiptDigest",
+            "rc1EvidenceDigest"
+          ],
+          "properties": {
+            "technicalQualificationReceiptDigest": {"$ref": "#/$defs/digest"},
+            "packageProvenanceReceiptDigest": {"$ref": "#/$defs/digest"},
+            "rc1EvidenceDigest": {"$ref": "#/$defs/digest"}
+          }
+        }
+      }
+    }
+  }
+}

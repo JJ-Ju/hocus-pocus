@@ -28,7 +28,7 @@ Goal:
 
 Tasks:
 
-- [x] Publish a compatibility policy for Houdini `21.x`, MCP protocol assumptions, and breaking-change expectations.
+- [x] Publish a compatibility policy for Houdini `22.0.368`, MCP protocol assumptions, and breaking-change expectations.
 - [x] Add canonical workflow docs for common agent tasks such as scene inspection, graph planning, render validation, packaging, and PDG control.
 - [x] Normalize high-value tool contracts with explicit output schemas, examples, and failure notes where still missing.
 - [x] Add an end-to-end smoke harness for the Houdini-hosted server covering live mutation, tasks, graph reads, and exports.

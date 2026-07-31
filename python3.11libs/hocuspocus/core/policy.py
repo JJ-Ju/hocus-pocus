@@ -15,6 +15,7 @@ RUN_CODE = "run_code"
 LAUNCH_PROCESSES = "launch_processes"
 USE_NETWORK = "use_network"
 SUBMIT_FARM_JOBS = "submit_farm_jobs"
+REVIEW_PRODUCTION = "review_production"
 POLICY_DENIED_ERROR = -32010
 PATH_POLICY_ERROR = -32011
 
@@ -27,6 +28,8 @@ def capability_set_from_settings(settings: ServerSettings) -> tuple[str, ...]:
         capabilities.add(WRITE_FILES)
     if settings.enable_exec_tools:
         capabilities.add(RUN_CODE)
+    if settings.allow_production_review:
+        capabilities.add(REVIEW_PRODUCTION)
     return tuple(sorted(capabilities))
 
 

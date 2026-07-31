@@ -1,0 +1,129 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "hocuspocus://schemas/build-provenance-manifest/v1",
+  "title": "HocusScript Build Provenance Manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema", "kind", "schemaVersion", "assetUri", "targetPlatform", "recipe",
+    "sources", "compiler", "catalog", "modules", "hdas", "inputs", "outputs",
+    "buildIdentity", "outputSetDigest", "manifestDigest"
+  ],
+  "properties": {
+    "$schema": {"const": "hocuspocus://schemas/build-provenance-manifest/v1"},
+    "kind": {"const": "hocus_build_provenance"},
+    "schemaVersion": {"const": 1},
+    "assetUri": {"$ref": "#/$defs/assetUri"},
+    "targetPlatform": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"},
+    "recipe": {"$ref": "#/$defs/recipe"},
+    "sources": {
+      "type": "array", "minItems": 1, "maxItems": 4096,
+      "items": {"$ref": "#/$defs/source"}
+    },
+    "compiler": {"$ref": "#/$defs/compiler"},
+    "catalog": {"$ref": "#/$defs/catalog"},
+    "modules": {
+      "type": "array", "maxItems": 4096,
+      "items": {"$ref": "#/$defs/module"}
+    },
+    "hdas": {
+      "type": "array", "maxItems": 4096,
+      "items": {"$ref": "#/$defs/hda"}
+    },
+    "inputs": {
+      "type": "array", "maxItems": 4096,
+      "items": {"$ref": "#/$defs/input"}
+    },
+    "outputs": {
+      "type": "array", "maxItems": 4096,
+      "items": {"$ref": "#/$defs/output"}
+    },
+    "buildIdentity": {"$ref": "#/$defs/digest"},
+    "outputSetDigest": {"$ref": "#/$defs/digest"},
+    "manifestDigest": {"$ref": "#/$defs/digest"}
+  },
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "assetUri": {
+      "type": "string", "minLength": 1, "maxLength": 8192,
+      "pattern": "^hocus-asset://[a-z0-9][a-z0-9.-]{0,127}/(?!/)(?!\\.{1,2}(?:/|$))(?!.*?/\\.{1,2}(?:/|$))(?!.*//)(?!.*[?#\\\\:])[^/]+(?:/[^/]+)*$"
+    },
+    "nullableText": {
+      "oneOf": [
+        {"type": "string", "minLength": 1, "maxLength": 1024},
+        {"type": "null"}
+      ]
+    },
+    "component": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind", "uri", "contentDigest", "byteLength", "version",
+        "fingerprint", "role", "mediaType"
+      ],
+      "properties": {
+        "kind": {
+          "enum": ["recipe", "source", "compiler", "catalog", "module", "hda", "input", "output"]
+        },
+        "uri": {
+          "type": "string", "minLength": 1, "maxLength": 8192,
+          "pattern": "^hocus-(?:asset|catalog|compiler|hda|input|module|output|project|recipe)://[a-z0-9][a-z0-9.-]{0,127}/(?!/)(?!\\.{1,2}(?:/|$))(?!.*?/\\.{1,2}(?:/|$))(?!.*//)(?!.*[?#\\\\:])[^/]+(?:/[^/]+)*$"
+        },
+        "contentDigest": {"$ref": "#/$defs/digest"},
+        "byteLength": {"type": "integer", "minimum": 0, "maximum": 1099511627776},
+        "version": {"$ref": "#/$defs/nullableText"},
+        "fingerprint": {"$ref": "#/$defs/nullableText"},
+        "role": {"$ref": "#/$defs/nullableText"},
+        "mediaType": {"$ref": "#/$defs/nullableText"}
+      }
+    },
+    "recipe": {
+      "allOf": [
+        {"$ref": "#/$defs/component"},
+        {"properties": {"kind": {"const": "recipe"}, "uri": {"pattern": "^hocus-recipe://"}, "role": {"type": "null"}, "mediaType": {"type": "null"}}}
+      ]
+    },
+    "source": {
+      "allOf": [
+        {"$ref": "#/$defs/component"},
+        {"properties": {"kind": {"const": "source"}, "uri": {"pattern": "^hocus-project://"}, "role": {"type": "null"}, "mediaType": {"type": "null"}}}
+      ]
+    },
+    "compiler": {
+      "allOf": [
+        {"$ref": "#/$defs/component"},
+        {"properties": {"kind": {"const": "compiler"}, "uri": {"pattern": "^hocus-compiler://"}, "version": {"type": "string", "minLength": 1}, "role": {"type": "null"}, "mediaType": {"type": "null"}}}
+      ]
+    },
+    "catalog": {
+      "allOf": [
+        {"$ref": "#/$defs/component"},
+        {"properties": {"kind": {"const": "catalog"}, "uri": {"pattern": "^hocus-catalog://"}, "fingerprint": {"type": "string", "minLength": 1}, "role": {"type": "null"}, "mediaType": {"type": "null"}}}
+      ]
+    },
+    "module": {
+      "allOf": [
+        {"$ref": "#/$defs/component"},
+        {"properties": {"kind": {"const": "module"}, "uri": {"pattern": "^hocus-module://"}, "role": {"type": "null"}, "mediaType": {"type": "null"}}}
+      ]
+    },
+    "hda": {
+      "allOf": [
+        {"$ref": "#/$defs/component"},
+        {"properties": {"kind": {"const": "hda"}, "uri": {"pattern": "^hocus-hda://"}, "role": {"type": "null"}, "mediaType": {"type": "null"}}}
+      ]
+    },
+    "input": {
+      "allOf": [
+        {"$ref": "#/$defs/component"},
+        {"properties": {"kind": {"const": "input"}, "uri": {"pattern": "^hocus-input://"}, "role": {"type": "null"}, "mediaType": {"type": "null"}}}
+      ]
+    },
+    "output": {
+      "allOf": [
+        {"$ref": "#/$defs/component"},
+        {"properties": {"kind": {"const": "output"}, "uri": {"pattern": "^hocus-output://"}, "role": {"type": "string", "minLength": 1}, "mediaType": {"type": "string", "minLength": 1}}}
+      ]
+    }
+  }
+}

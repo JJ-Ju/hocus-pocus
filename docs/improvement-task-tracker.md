@@ -33,13 +33,15 @@ Tasks:
 - [x] Decide whether health requires auth or returns only non-sensitive data.
 - [x] Ensure no unauthenticated route exposes connection secrets or sensitive scene metadata.
 - [x] Add a clear “auth disabled” indicator when token auth is turned off intentionally.
-- [x] Validate that Codex app and manual HTTP clients still connect cleanly after the changes.
+- [x] Validate that manual HTTP MCP clients still connect cleanly after the changes.
+- [ ] Validate native Codex app tool exposure end to end, separately from transport-level HTTP checks.
 
 Done when:
 
 - unauthenticated requests cannot discover the bearer token
 - health/status data is intentionally scoped and non-sensitive
-- existing clients can still connect with the documented token flow
+- transport-level MCP clients can still connect with the documented token flow
+- native Codex app tool exposure has either been proven separately or is explicitly marked unverified
 
 Manual smoke:
 

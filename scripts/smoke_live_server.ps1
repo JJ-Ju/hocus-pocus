@@ -1,6 +1,6 @@
 param(
     [string]$BaseUrl = "http://127.0.0.1:37219/hocuspocus",
-    [string]$TokenPath = "$env:USERPROFILE\Documents\houdini21.0\hocuspocus\runtime\token.txt",
+    [string]$TokenPath = "$env:USERPROFILE\Documents\houdini22.0\hocuspocus\runtime\token.txt",
     [switch]$IncludeOptionalDomains
 )
 
