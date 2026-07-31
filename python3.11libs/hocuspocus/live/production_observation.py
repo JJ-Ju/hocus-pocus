@@ -14,6 +14,8 @@ import re
 import time
 from typing import Any, Iterable
 
+from .production_file_dependencies import collect_file_dependencies
+
 MAX_OBSERVED_NODES = 10_000
 MAX_OBSERVED_POINTS = 10_000_000
 MAX_OBSERVED_VERTICES = 30_000_000
@@ -34,7 +36,7 @@ class ProductionFixtureObserver:
     def __init__(self, hou_module: Any, *, authorized_roots: Iterable[str]):
         self._hou = hou_module
         self._hda_cache: dict[
-            tuple[str, str], tuple[dict[str, Any], int]
+            tuple[str, str, str], tuple[dict[str, Any], int]
         ] = {}
         self._roots = tuple(sorted({self._clean_path(path) for path in authorized_roots}))
         if not self._roots:
@@ -1011,15 +1013,6 @@ class ProductionFixtureObserver:
         version = self._portable_version(
             str(self._safe(definition.version, "") or ""),
         )
-        cache_key = (node.type().nameWithCategory(), version)
-        cached = self._hda_cache.get(cache_key)
-        if cached is not None:
-            cached_record, cached_bytes = cached
-            return (
-                ("hda", node.path(), cached_record["digest"]),
-                {**cached_record, "nodePath": node.path()},
-                cached_bytes,
-            )
         sections = self._required(
             definition.sections,
             f"Could not enumerate HDA sections at {node.path()}.",
@@ -1056,58 +1049,38 @@ class ProductionFixtureObserver:
             "version": str(self._safe(definition.version, "") or ""),
             "sections": receipts,
         }, sort_keys=True, separators=(",", ":"))
+        identity_digest = "sha256:" + hashlib.sha256(
+            identity.encode("utf-8"),
+        ).hexdigest()
+        cache_key = (node.type().nameWithCategory(), version, identity_digest)
+        cached = self._hda_cache.get(cache_key)
+        if cached is not None:
+            cached_record, cached_bytes = cached
+            return (
+                ("hda", node.path(), identity_digest),
+                {**cached_record, "nodePath": node.path()},
+                cached_bytes,
+            )
         record = {
             "kind": "hda",
             "nodePath": node.path(),
             "id": self._portable_id(node.type().nameWithCategory()),
             "version": version,
-            "digest": "sha256:" + hashlib.sha256(
-                identity.encode("utf-8"),
-            ).hexdigest(),
+            "digest": identity_digest,
             "byteLength": total_bytes,
         }
         self._hda_cache[cache_key] = ({**record, "nodePath": ""}, total_bytes)
-        return ("hda", node.path(), identity), record, total_bytes
+        return ("hda", node.path(), identity_digest), record, total_bytes
 
     def _file_dependencies(
         self,
         node: Any,
     ) -> list[tuple[tuple[str, str, str], dict[str, Any]]]:
-        result = []
-        parms = self._required(
-            node.parms,
-            f"Could not enumerate parameters at {node.path()}.",
+        return collect_file_dependencies(
+            node,
+            required=self._required,
+            error_type=ProductionObservationError,
         )
-        for parm in parms or ():
-            template = self._required(
-                parm.parmTemplate,
-                f"Could not inspect parameter template at {parm.path()}.",
-            )
-            template_type = str(self._required(
-                lambda template=template: template.type().name(),
-                f"Could not inspect parameter type at {parm.path()}.",
-            ))
-            if template_type != "String":
-                continue
-            string_type = str(self._required(
-                lambda template=template: template.stringType().name(),
-                f"Could not inspect parameter string type at {parm.path()}.",
-            ))
-            if "FileReference" not in string_type:
-                continue
-            value = str(self._required(
-                parm.unexpandedString,
-                f"Could not inspect file dependency at {parm.path()}.",
-            ) or "")
-            if not value:
-                continue
-            if value.startswith(("/obj/", "/stage/", "/mat/")):
-                continue
-            raise ProductionObservationError(
-                "Ambient file dependency lacks an approved bounded byte receipt "
-                f"at {parm.path()}."
-            )
-        return result
 
     @staticmethod
     def _intrinsic(geometry: Any, name: str, default: Any) -> Any:

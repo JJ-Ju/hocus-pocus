@@ -428,17 +428,20 @@ def normalize_installed_config(
         raise RuntimeError("Repository token_mode is not the installer input.")
     if len(re.findall(r'(?m)^token = ""(?=\r?$)', repository)) != 1:
         raise RuntimeError("Repository token is not the installer input.")
-    normalized, mode_count = re.subn(
-        r'(?m)^token_mode = "static"(?=\r?$)',
-        'token_mode = "generated"',
+    if len(re.findall(
+        r'(?m)^token_mode = "generated"(?=\r?$)',
         installed,
-    )
+    )) != 1:
+        raise RuntimeError(
+            "Installed config changed the generated-token mode."
+        )
+    normalized = installed
     normalized, token_count = re.subn(
         r'(?m)^token = "[A-Za-z0-9_-]{32}"(?=\r?$)',
         'token = ""',
         normalized,
     )
-    if mode_count != 1 or token_count != 1:
+    if token_count != 1:
         raise RuntimeError(
             "Installed config does not contain the exact generated-token rewrite."
         )

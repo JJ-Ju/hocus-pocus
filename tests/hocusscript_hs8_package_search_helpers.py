@@ -23,13 +23,17 @@ from hocuspocus.live.catalog_provider import (
 )
 from hocuspocus.live.hda_library_identity import HdaLibraryIdentityError
 from hocuspocus.hocusscript.catalog import DefinitionSource
+from hocuspocus.live.production_observation import ProductionFixtureObserver
 from hocuspocus.live.package_search_provenance import (
     PackageSearchProvenanceError,
     collect_effective_package_search,
     decode_effective_package_search,
     verify_effective_package_search,
 )
-from hocuspocus.live.package_startup_trace import load_package_startup_trace
+from hocuspocus.live.package_startup_trace import (
+    PackageStartupTraceError,
+    load_package_startup_trace,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -185,10 +189,10 @@ class _Hou:
         self.hda = _Hda(fixture)
 
     def applicationVersion(self):
-        return (21, 0, 729)
+        return (22, 0, 368)
 
     def applicationVersionString(self):
-        return "21.0.729"
+        return "22.0.368"
 
     def applicationPlatformInfo(self):
         return "windows-x86_64"
@@ -770,6 +774,8 @@ def _assert_hda_library_identity_boundaries(
         testcase.assertEqual(library.stat().st_ino, original.st_ino)
         testcase.assertEqual(library.stat().st_mtime_ns, original.st_mtime_ns)
         testcase.assertEqual(library.read_bytes(), b"other-pass")
+    _assert_windows_descriptor_ctime_compatibility(testcase, root)
+    _assert_windows_terminal_hda_authority(testcase, root)
     with testcase.subTest("directory HDA stable file identity"):
         library = root / "unstable.hda"
         library.mkdir()
@@ -799,6 +805,114 @@ def _assert_hda_library_identity_boundaries(
             ),
         ):
             hda_identity.hda_library_content_digest(library)
+    _assert_observer_hda_cache_identity(testcase)
+
+
+def _assert_observer_hda_cache_identity(testcase: Any) -> None:
+    observer = ProductionFixtureObserver(
+        SimpleNamespace(), authorized_roots=("/obj/cache",),
+    )
+    state = {"content": b"first"}
+    section = SimpleNamespace(binaryContents=lambda: state["content"])
+    definition = SimpleNamespace(
+        version=lambda: "1.0", sections=lambda: {"Contents": section},
+    )
+    node_type = SimpleNamespace(
+        nameWithCategory=lambda: "Sop/cache", definition=lambda: definition,
+    )
+    node = SimpleNamespace(path=lambda: "/obj/cache/node", type=lambda: node_type)
+    first = observer._hda_dependency(node)[1]["digest"]
+    state["content"] = b"second"
+    with testcase.subTest("observer HDA cache content identity"):
+        testcase.assertNotEqual(
+            first, observer._hda_dependency(node)[1]["digest"],
+        )
+
+
+def _assert_windows_descriptor_ctime_compatibility(
+    testcase: Any,
+    root: Path,
+) -> None:
+    if os.name != "nt":
+        return
+    with testcase.subTest("descriptor/path ctime compatibility"):
+        library = root / "windows-ctime.hda"
+        library.write_bytes(b"stable-ctime-content")
+        baseline = hda_identity.hda_library_content_digest(library)
+        original_fstat = hda_identity.os.fstat
+
+        def mismatched_ctime(descriptor: int) -> Any:
+            value = original_fstat(descriptor)
+            return SimpleNamespace(
+                st_mode=value.st_mode,
+                st_size=value.st_size,
+                st_mtime_ns=value.st_mtime_ns,
+                st_ctime_ns=value.st_ctime_ns + 1,
+                st_dev=value.st_dev,
+                st_ino=value.st_ino,
+            )
+
+        with patch.object(
+            hda_identity.os,
+            "fstat",
+            side_effect=mismatched_ctime,
+        ):
+            testcase.assertEqual(
+                hda_identity.hda_library_content_digest(library),
+                baseline,
+            )
+
+
+def _assert_windows_terminal_hda_authority(
+    testcase: Any,
+    root: Path,
+) -> None:
+    if os.name != "nt":
+        return
+    with testcase.subTest("terminal native HDA identity"):
+        library = root / "windows-terminal-authority.hda"
+        library.write_bytes(b"first-pass")
+        original = library.stat()
+        original_open = hda_identity.os.open
+        opened = 0
+        mutated = False
+
+        def mutate_before_terminal(path: Any, flags: int) -> int:
+            nonlocal mutated, opened
+            opened += 1
+            if opened == 2:
+                with library.open("r+b") as stream:
+                    stream.write(b"other-pass")
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                os.utime(
+                    library,
+                    ns=(original.st_atime_ns, original.st_mtime_ns),
+                )
+                mutated = True
+            return original_open(path, flags)
+
+        result = None
+        with patch.object(
+            hda_identity.os,
+            "open",
+            side_effect=mutate_before_terminal,
+        ):
+            try:
+                result = hda_identity.hda_library_content_digest(library)
+            except HdaLibraryIdentityError:
+                pass
+        testcase.assertTrue(mutated)
+        testcase.assertGreaterEqual(opened, 2)
+        testcase.assertEqual(library.stat().st_ino, original.st_ino)
+        testcase.assertEqual(library.stat().st_size, original.st_size)
+        testcase.assertEqual(library.stat().st_mtime_ns, original.st_mtime_ns)
+        testcase.assertEqual(library.read_bytes(), b"other-pass")
+        if result is not None:
+            testcase.assertEqual(
+                result,
+                hda_identity.hda_library_content_digest(library),
+            )
 
 
 def _create_directory_link(link: Path, target: Path) -> None:
@@ -904,7 +1018,7 @@ def _assert_disabled_skipped_trace(testcase: Any, root: Path) -> None:
     loaded = (root / "base" / "loaded.json").resolve().as_posix()
     disabled = (root / "base" / "disabled.json").resolve().as_posix()
     recursive = (root / "queued" / "skipped.json").resolve().as_posix()
-    trace = load_package_startup_trace(
+    source = (
         "= = = Houdini Package log = = =\n"
         f"Loading: {loaded}\nLoading: {disabled}\nLoading: {recursive}\n"
         f"Processing: {loaded}\n"
@@ -913,11 +1027,38 @@ def _assert_disabled_skipped_trace(testcase: Any, root: Path) -> None:
         f"    {loaded}\n"
         "  Disabled Packages (1):\n"
         f"    {disabled}\n"
-        "= = = = = = = = = = = = = = = =\n",
+        "  Skipped Packages (1):\n"
+        f"    {recursive}\n"
+        "= = = = = = = = = = = = = = = =\n"
     )
+    trace = load_package_startup_trace(source)
     testcase.assertEqual(len(trace["disabled"]), 1)
     testcase.assertEqual(len(trace["skipped"]), 1)
     testcase.assertEqual(trace["skipped"][0].parent.name, "queued")
+    hostile = {
+        "skipped_count": source.replace(
+            "Skipped Packages (1):", "Skipped Packages (0):",
+        ),
+        "duplicate_skipped": source.replace(
+            "  Skipped Packages (1):\n",
+            f"  Skipped Packages (2):\n    {recursive}\n",
+        ),
+        "duplicate_summary": source.replace(
+            "= = = = = = = = = = = = = = = =\n",
+            f"  Skipped Packages (1):\n    {recursive}\n"
+            "= = = = = = = = = = = = = = = =\n",
+        ),
+        "state_intersection": source.replace(
+            f"    {recursive}\n", f"    {loaded}\n",
+        ),
+        "missing_explicit_skip": source.replace(
+            f"  Skipped Packages (1):\n    {recursive}\n", "",
+        ),
+    }
+    for label, candidate in hostile.items():
+        with testcase.subTest(h22_skipped_trace=label):
+            with testcase.assertRaises(PackageStartupTraceError):
+                load_package_startup_trace(candidate)
 
 
 def _assert_schema_and_build_coverage(
@@ -973,6 +1114,9 @@ def _startup_trace(
     discovered = "".join(
         f"Loading: {item.resolve().as_posix()}\n\n" for item in skipped
     )
+    skipped_summary = "".join(
+        f"        {item.resolve().as_posix()}\n" for item in skipped
+    )
     return (
         "= = = Houdini Package log = = =\n"
         f"Loading: {source}\n\n"
@@ -982,6 +1126,8 @@ def _startup_trace(
         "    Loaded Packages (1):\n"
         f"        {source}\n\n"
         "    Disabled Packages (0):\n\n"
+        f"    Skipped Packages ({len(skipped)}):\n"
+        f"{skipped_summary}\n"
         "= = = = = = = = = = = = = = = =\n"
     )
 

@@ -85,11 +85,13 @@ metadata.
 
 ## Final acceptance
 
-Installed Houdini 21.0.729 accepted the SOP, fixed-port material/VOP, LOP, and
+Installed Houdini 22.0.368 accepted the SOP, fixed-port material/VOP, LOP, and
 TOP family fixtures plus the graph-editor, runtime, and typed-value extension.
 The matrix covered guarded create/reconcile, save/reopen, structural export
 recompilation with exact-catalog semantic/connector validation, artist-state
 preservation, exact default reset, locked/dynamic/nested
 rejection, and injected rollback. All managed descendants recorded zero cooks,
-79 critical source/install/running module receipts aligned, and final
-independent P0/P1 review was clean.
+37 acceptance-critical source/install/running module receipts aligned, no
+fixture was unavailable, and all four unsupported family policies failed
+closed. The complete H22 catalog measured 44,342,922 UTF-8 bytes across 5,566
+operators, inside the 64 MiB admission bound.

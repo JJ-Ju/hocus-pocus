@@ -193,7 +193,7 @@ def qualify_two_clean_processes(
             "houdini-user-preferences",
             "houdini-temp",
             "process-temp",
-            "python-bytecode-cache",
+            "python-bytecode-disabled",
             "xdg-cache",
         ],
         "timingCompared": False,
@@ -472,7 +472,6 @@ def _isolated_environment(
         "HOUDINI_TEMP_DIR": run_root / "houdini-temp",
         "TEMP": run_root / "process-temp",
         "TMP": run_root / "process-temp",
-        "PYTHONPYCACHEPREFIX": run_root / "python-cache",
         "XDG_CACHE_HOME": run_root / "xdg-cache",
     }
     concrete_directories = {
@@ -494,6 +493,7 @@ def _isolated_environment(
                     "value": "$HOCUSPOCUS_ROOT/python3.11libs",
                 },
             },
+            {"PYTHONDONTWRITEBYTECODE": "1"},
         ],
         "hpath": "$HOCUSPOCUS_ROOT",
     }
@@ -512,6 +512,7 @@ def _isolated_environment(
         "HOCUSPOCUS_HS8_QUALIFICATION_MODE": mode,
         "HOUDINI_PACKAGE_DIR": str(package_directory),
         "HOUDINI_NO_ENV_FILE": "1",
+        "PYTHONDONTWRITEBYTECODE": "1",
         "PYTHONNOUSERSITE": "1",
         "HOCUSPOCUS_HS8_PACKAGE_TRACE": str(
             run_root / "package-startup-trace.log",
@@ -807,12 +808,12 @@ def _active_package_root(package_file: Path) -> Path:
         not isinstance(payload, Mapping)
         or set(payload) != {"env", "hpath"}
         or not isinstance(payload.get("env"), list)
-        or len(payload["env"]) != 2
+        or len(payload["env"]) != 3
     ):
         raise CleanProcessQualificationError(
             "HOCUS991", "Active Houdini package pointer has an invalid envelope.",
         )
-    root_entry, python_entry = payload["env"]
+    root_entry, python_entry, bytecode_entry = payload["env"]
     prefix = "$HOUDINI_PACKAGE_PATH/"
     if (
         not isinstance(root_entry, Mapping)
@@ -836,10 +837,17 @@ def _active_package_root(package_file: Path) -> Path:
                     "value": "$HOCUSPOCUS_ROOT/python3.11libs",
                 },
             },
+            {
+                "PYTHONDONTWRITEBYTECODE": "1",
+            },
         ],
         "hpath": "$HOCUSPOCUS_ROOT",
     }
-    if payload != expected or not isinstance(python_entry, Mapping):
+    if (
+        payload != expected
+        or not isinstance(python_entry, Mapping)
+        or not isinstance(bytecode_entry, Mapping)
+    ):
         raise CleanProcessQualificationError(
             "HOCUS991", "Active Houdini package pointer is not canonical.",
         )

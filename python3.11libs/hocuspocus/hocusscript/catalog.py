@@ -19,8 +19,8 @@ CATALOG_VERSION = 1
 CATALOG_SCHEMA_URI = "hocuspocus://schemas/catalog/v1"
 VALUE_CATALOG_VERSION = 2
 VALUE_CATALOG_SCHEMA_URI = "hocuspocus://schemas/catalog/v2"
-# A complete Houdini 21 catalog with full parameter metadata is currently about
-# 43 MiB. Keep a bounded margin for package/HDA growth without filtering the
+# The complete Houdini 22.0.368 catalog is 44,342,922 UTF-8 bytes across 5,566
+# operators. Keep a bounded margin for package/HDA growth without filtering the
 # semantic input and silently weakening its fingerprint.
 MAX_CATALOG_BYTES = 64 * 1024 * 1024
 MAX_CATALOG_DEPTH = 64

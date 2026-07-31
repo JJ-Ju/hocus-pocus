@@ -5,11 +5,12 @@ from __future__ import annotations
 import ast
 import importlib.util
 from pathlib import Path
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 MAIN = ROOT / "scripts/smoke_hocusscript_h6.py"
+H5_MAIN = ROOT / "scripts/smoke_hocusscript_h5.py"
 SUPPORT = ROOT / "scripts/smoke_hocusscript_h6_support.py"
 
 
@@ -26,6 +27,8 @@ def exercise_h6_installed_workflow(
         compile(source, str(path), "exec")
     main_tree = ast.parse(MAIN.read_text(encoding="utf-8"), filename=str(MAIN))
     case.assertFalse(_adds_repository_python_path(main_tree))
+    for path in (H5_MAIN, MAIN):
+        _assert_wrong_host_rejects_before_side_effects(case, path)
     case.assertEqual(
         tuple(support.SOURCE_TOOL_NAMES),
         (
@@ -95,13 +98,43 @@ def _adds_repository_python_path(tree: ast.AST) -> bool:
     return False
 
 
+def _assert_wrong_host_rejects_before_side_effects(
+    case: Any,
+    path: Path,
+) -> None:
+    source = path.read_text(encoding="utf-8")
+    tree = ast.parse(source, filename=str(path))
+    main = next(
+        node for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "main"
+    )
+    events: list[str] = []
+    namespace = {
+        "hou": SimpleNamespace(
+            applicationVersionString=lambda: "21.0.729",
+            hipFile=SimpleNamespace(
+                clear=lambda **_kwargs: events.append("scene-clear"),
+            ),
+        ),
+        "logging": SimpleNamespace(
+            INFO=20,
+            basicConfig=lambda **_kwargs: events.append("logging"),
+        ),
+        "tempfile": SimpleNamespace(
+            TemporaryDirectory=lambda **_kwargs: events.append("temporary"),
+        ),
+    }
+    module = ast.fix_missing_locations(ast.Module(body=[main], type_ignores=[]))
+    exec(compile(module, str(path), "exec"), namespace)
+    with case.subTest(wrong_host_guard=path.name):
+        with case.assertRaisesRegex(RuntimeError, "22.0.368"):
+            namespace["main"]()
+        case.assertEqual(events, [])
+
+
 def _assert_installer_token_alignment(case: Any, support: ModuleType) -> None:
     repository = (ROOT / "config/default.toml").read_bytes()
     installed = repository.replace(
-        b'token_mode = "generated"',
-        b'token_mode = "static"',
-        1,
-    ).replace(
         b'token = ""',
         b'token = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"',
         1,
@@ -122,7 +155,7 @@ def _assert_installer_token_alignment(case: Any, support: ModuleType) -> None:
             1,
         ),
         "wrong_mode": installed.replace(
-            b'token_mode = "static"',
+            b'token_mode = "generated"',
             b'token_mode = "disabled"',
             1,
         ),
@@ -137,7 +170,7 @@ def _assert_installer_token_alignment(case: Any, support: ModuleType) -> None:
 def _representative_receipt(support: ModuleType) -> dict[str, Any]:
     return {
         "status": "passed",
-        "alignment": {"houdini": "21.0.729", "h6Modules": {}},
+        "alignment": {"houdini": "22.0.368", "h6Modules": {}},
         "sourceTools": list(support.SOURCE_TOOL_NAMES),
         "project": {
             "bundleVersion": "0.4",

@@ -4,7 +4,7 @@ The harness mutates only a disposable untitled scene, performs no cooks, and
 fails with explicit evidence when a required SOP/MAT/LOP/TOP fixture is absent.
 
 Usage:
-    "C:\\Program Files\\Side Effects Software\\Houdini 21.0.729\\bin\\hython.exe" ^
+    "C:\\Program Files\\Side Effects Software\\Houdini 22.0.368\\bin\\hython.exe" ^
         scripts\\smoke_hocusscript_hs7.py
 """
 
@@ -593,6 +593,11 @@ def _run_installed_hs7(temporary_root: Path) -> dict[str, Any]:
 
 def main() -> int:
     logging.basicConfig(level=logging.INFO)
+    if hou.applicationVersionString() != "22.0.368":
+        raise RuntimeError(
+            "HS7 installed acceptance requires Houdini 22.0.368, got "
+            f"{hou.applicationVersionString()}."
+        )
     temporary = tempfile.TemporaryDirectory(prefix="hocuspocus-hs7-")
     try:
         hou.hipFile.clear(suppress_save_prompt=True)

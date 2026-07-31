@@ -5,7 +5,7 @@ HocusScript apply must remain zero-cook; the harness then explicitly authorizes
 the SOP and LOP fixture outputs to cook before read-only production observation.
 
 Usage:
-    "C:\\Program Files\\Side Effects Software\\Houdini 21.0.729\\bin\\hython.exe" ^
+    "C:\\Program Files\\Side Effects Software\\Houdini 22.0.368\\bin\\hython.exe" ^
         scripts\\smoke_hocusscript_hs8.py
 """
 
@@ -889,6 +889,11 @@ def _run(temporary_root: Path) -> dict[str, Any]:
 
 def main() -> int:
     logging.basicConfig(level=logging.INFO)
+    if hou.applicationVersionString() != "22.0.368":
+        raise RuntimeError(
+            "HS8 installed acceptance requires Houdini 22.0.368, got "
+            f"{hou.applicationVersionString()}."
+        )
     temporary = tempfile.TemporaryDirectory(prefix="hocuspocus-hs8-")
     operation_root = Path(temporary.name).resolve()
     try:

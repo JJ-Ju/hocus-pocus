@@ -7,6 +7,7 @@ import hashlib
 import inspect
 import json
 import re
+import sys
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
@@ -89,6 +90,7 @@ def audit_loaded_modules(
     resolved_root = root.resolve(strict=True)
     verified = verify_manifest(resolved_root) if manifest is None else manifest
     _validate_envelope(verified)
+    _reject_ungoverned_bytecode_loader(modules)
     governed = {
         item["relativePath"]: item["contentDigest"]
         for item in verified["files"]
@@ -120,6 +122,27 @@ def audit_loaded_modules(
             "digest": installed_digest,
         })
     return receipts
+
+
+def _reject_ungoverned_bytecode_loader(modules: Mapping[str, Any]) -> None:
+    if sys.pycache_prefix is not None or not sys.dont_write_bytecode:
+        raise InstallManifestError(
+            "Runtime Python bytecode caching is not governed by the install manifest."
+        )
+    for module_name, module in modules.items():
+        cached = getattr(module, "__cached__", None)
+        if not cached:
+            continue
+        try:
+            exists = Path(cached).is_file()
+        except (OSError, TypeError, ValueError) as exc:
+            raise InstallManifestError(
+                f"Loaded governed module has invalid bytecode origin: {module_name}."
+            ) from exc
+        if exists:
+            raise InstallManifestError(
+                f"Loaded governed module executed ungoverned bytecode: {module_name}."
+            )
 
 
 def _records(root: Path) -> Iterable[dict[str, Any]]:

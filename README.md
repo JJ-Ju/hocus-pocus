@@ -1,6 +1,11 @@
 # HocusPocus
 
-HocusPocus is a Houdini 21.x MCP server that runs inside Houdini and auto-starts with the application. It is designed to be a one-install, connect-your-agent workflow.
+HocusPocus is a Houdini 22.0.368 MCP server that runs inside Houdini and auto-starts with the application. It is designed to be a one-install, connect-your-agent workflow.
+
+Houdini `22.0.368` is the sole supported and release-qualifying live runtime
+for V1. Other Houdini builds, including `21.x`, are unsupported; retained H21
+receipts are historical migration evidence and do not establish current
+availability.
 
 ## Install
 
@@ -13,7 +18,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\build.ps1 -Clean -Install
 That installs the package into:
 
 ```text
-%USERPROFILE%\Documents\houdini21.0\packages\
+%USERPROFILE%\Documents\houdini22.0\packages\
 ```
 
 The package manifest points at a versioned `HocusPocus.<install-id>` directory
@@ -22,6 +27,8 @@ install, the script also:
 
 - provisions a stable HocusPocus bearer token into the installed config
 - sets the user environment variable `HOCUSPOCUS_TOKEN`
+- disables Python bytecode caching so restarts execute the governed source
+  bytes from the versioned installed payload
 
 So the normal local setup does not require copying tokens by hand after install.
 Reinstalling preserves the token. Rotate it only with the explicit

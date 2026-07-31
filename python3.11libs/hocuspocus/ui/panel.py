@@ -132,16 +132,24 @@ class HocusPocusPanel(QtWidgets.QDialog):
         self._copy_token_button.setEnabled(bool(status.get("token")))
 
     def _start_server(self) -> None:
-        startup.start_server()
-        self.refresh()
+        try:
+            startup.start_server()
+        except startup.RuntimeAdmissionError:
+            pass
+        finally:
+            self.refresh()
 
     def _stop_server(self) -> None:
         startup.stop_server()
         self.refresh()
 
     def _restart_server(self) -> None:
-        startup.restart_server()
-        self.refresh()
+        try:
+            startup.restart_server()
+        except startup.RuntimeAdmissionError:
+            pass
+        finally:
+            self.refresh()
 
     def _copy_endpoint(self) -> None:
         QtWidgets.QApplication.clipboard().setText(startup.server_status().get("mcpUrl", ""))

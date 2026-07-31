@@ -47,6 +47,7 @@ TRANSIENT_HOUDINI_CUSTOM_DATA_KEYS = frozenset({
     "HoudiniDataId",
     "HoudiniEditorNodes",
     "HoudiniPrimEditorNodes",
+    "HoudiniSavePath",
     "HoudiniVolumeFilePaths",
 })
 MATERIAL_SOURCE = FIXTURE_BYTES["material"].decode("utf-8")

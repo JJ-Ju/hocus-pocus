@@ -32,6 +32,24 @@ def assert_h21_ramp_adapter_surface(testcase) -> None:
     parameter = _parameter(RampParmTemplate(), "test", 2)
     testcase.assertEqual(parameter.value_type, "ramp")
     testcase.assertEqual(parameter.value_contract["rampKind"], "color")
+
+    class ButtonMenuParmTemplate:
+        name = lambda self: "pre_xform"
+        label = lambda self: "Pre-transform"
+        type = lambda self: SimpleNamespace(name=lambda: "Button")
+        numComponents = lambda self: 1
+        defaultValue = lambda self: None
+        menuItems = lambda self: ("clean", "extract")
+        menuLabels = lambda self: ("Clean", "Extract")
+
+    button = _parameter(ButtonMenuParmTemplate(), "test", 2)
+    testcase.assertEqual(button.value_type, "button")
+    testcase.assertFalse(button.assignable)
+    testcase.assertEqual(button.menu, ())
+    testcase.assertEqual(
+        button.tags["hocus.buttonMenuStatus"],
+        "unsupported-action-menu",
+    )
     group = SimpleNamespace(entries=lambda: (RampParmTemplate(),))
     node_type = SimpleNamespace(
         name=lambda: "test", parmTemplateGroup=lambda: group,

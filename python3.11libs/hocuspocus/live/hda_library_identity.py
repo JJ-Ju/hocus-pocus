@@ -41,6 +41,13 @@ class _FileRecord:
     snapshot: _Snapshot
 
 
+@dataclass(frozen=True)
+class _WindowsFileAuthority:
+    volume_serial: int
+    file_id: bytes
+    change_time: int
+
+
 def hda_library_content_digest(value: str | os.PathLike[str]) -> str:
     """Hash one stable HDA file or directory without following filesystem links."""
 
@@ -193,7 +200,7 @@ def _hash_file_record(
     else:
         digest.update(relative)
         digest.update(b"\0")
-    _hash_open_file(digest, record)
+    windows_authority = _hash_open_file(digest, record)
     if not directory_format:
         digest.update(b"\0")
     after = _lstat(record.path)
@@ -203,9 +210,14 @@ def _hash_file_record(
             "HDA library file changed while it was hashed."
         )
     _require_contained(record.path, root)
+    if windows_authority is not None:
+        _verify_windows_terminal_path(record, windows_authority)
 
 
-def _hash_open_file(digest: Any, record: _FileRecord) -> None:
+def _hash_open_file(
+    digest: Any,
+    record: _FileRecord,
+) -> _WindowsFileAuthority | None:
     flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
     try:
         descriptor = os.open(record.path, flags)
@@ -215,10 +227,16 @@ def _hash_open_file(digest: Any, record: _FileRecord) -> None:
         ) from exc
     try:
         before = os.fstat(descriptor)
-        if not stat.S_ISREG(before.st_mode) or _snapshot(before) != record.snapshot:
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or not _matches_open_snapshot(_snapshot(before), record.snapshot)
+        ):
             raise HdaLibraryIdentityError(
                 "HDA library file identity changed while being opened."
             )
+        windows_authority = (
+            _windows_file_authority(descriptor) if os.name == "nt" else None
+        )
         change_time = _descriptor_change_time(descriptor)
         count, first_digest, change_time = _read_open_pass(
             descriptor,
@@ -228,7 +246,7 @@ def _hash_open_file(digest: Any, record: _FileRecord) -> None:
         )
         middle = os.fstat(descriptor)
         if (
-            _snapshot(middle) != record.snapshot
+            not _matches_open_snapshot(_snapshot(middle), record.snapshot)
             or _descriptor_change_time(descriptor) != change_time
         ):
             raise HdaLibraryIdentityError(
@@ -243,22 +261,30 @@ def _hash_open_file(digest: Any, record: _FileRecord) -> None:
         )
         after = os.fstat(descriptor)
         after_change_time = _descriptor_change_time(descriptor)
+        if (
+            count != record.snapshot.size
+            or second_count != count
+            or first_digest != second_digest
+            or not _matches_open_snapshot(_snapshot(after), record.snapshot)
+            or after_change_time != change_time
+        ):
+            raise HdaLibraryIdentityError(
+                "HDA library file changed while being read."
+            )
+        if (
+            windows_authority is not None
+            and _windows_file_authority(descriptor) != windows_authority
+        ):
+            raise HdaLibraryIdentityError(
+                "HDA library file changed while being read."
+            )
     except OSError as exc:
         raise HdaLibraryIdentityError(
             "HDA library file cannot be read."
         ) from exc
     finally:
         os.close(descriptor)
-    if (
-        count != record.snapshot.size
-        or second_count != count
-        or first_digest != second_digest
-        or _snapshot(after) != record.snapshot
-        or after_change_time != change_time
-    ):
-        raise HdaLibraryIdentityError(
-            "HDA library file changed while being read."
-        )
+    return windows_authority
 
 
 def _read_open_pass(
@@ -326,6 +352,75 @@ def _windows_descriptor_change_time(descriptor: int) -> int:
     return int(info.ChangeTime)
 
 
+def _windows_file_authority(descriptor: int) -> _WindowsFileAuthority:
+    import ctypes
+    import msvcrt
+
+    class _FileIdInfo(ctypes.Structure):
+        _fields_ = [
+            ("VolumeSerialNumber", ctypes.c_ulonglong),
+            ("FileId", ctypes.c_ubyte * 16),
+        ]
+
+    info = _FileIdInfo()
+    handle = ctypes.c_void_p(msvcrt.get_osfhandle(descriptor))
+    read_info = ctypes.windll.kernel32.GetFileInformationByHandleEx
+    if not read_info(
+        handle,
+        18,
+        ctypes.byref(info),
+        ctypes.sizeof(info),
+    ):
+        raise ctypes.WinError(ctypes.get_last_error())
+    return _WindowsFileAuthority(
+        volume_serial=int(info.VolumeSerialNumber),
+        file_id=bytes(info.FileId),
+        change_time=_windows_descriptor_change_time(descriptor),
+    )
+
+
+def _verify_windows_terminal_path(
+    record: _FileRecord,
+    expected: _WindowsFileAuthority,
+) -> None:
+    before = _lstat(record.path)
+    _reject_link_or_reparse(record.path, before)
+    if not stat.S_ISREG(before.st_mode) or _snapshot(before) != record.snapshot:
+        raise HdaLibraryIdentityError(
+            "HDA library file changed before terminal identity verification."
+        )
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_BINARY", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    try:
+        path_descriptor = os.open(record.path, flags)
+    except OSError as exc:
+        raise HdaLibraryIdentityError(
+            "HDA library path cannot be reopened for terminal identity verification."
+        ) from exc
+    try:
+        path_value = os.fstat(path_descriptor)
+        path_authority = _windows_file_authority(path_descriptor)
+        after = _lstat(record.path)
+        _reject_link_or_reparse(record.path, after)
+        if (
+            not stat.S_ISREG(path_value.st_mode)
+            or not _matches_open_snapshot(
+                _snapshot(path_value),
+                record.snapshot,
+            )
+            or _snapshot(after) != record.snapshot
+            or path_authority != expected
+        ):
+            raise HdaLibraryIdentityError(
+                "HDA library file changed during terminal identity verification."
+            )
+    finally:
+        os.close(path_descriptor)
+
+
 def _lstat(path: Path) -> os.stat_result:
     try:
         return path.stat(follow_symlinks=False)
@@ -343,6 +438,18 @@ def _snapshot(value: os.stat_result) -> _Snapshot:
         ctime_ns=value.st_ctime_ns,
         device=value.st_dev,
         file_id=value.st_ino,
+    )
+
+
+def _matches_open_snapshot(value: _Snapshot, expected: _Snapshot) -> bool:
+    if os.name != "nt":
+        return value == expected
+    return (
+        value.mode == expected.mode
+        and value.size == expected.size
+        and value.mtime_ns == expected.mtime_ns
+        and value.device == expected.device
+        and value.file_id == expected.file_id
     )
 
 

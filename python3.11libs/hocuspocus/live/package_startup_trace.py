@@ -15,7 +15,7 @@ MAX_TRACE_PACKAGES = 4096
 _START = "= = = Houdini Package log = = ="
 _END = "= = = = = = = = = = = = = = = ="
 _EVENT = re.compile(r"^(Loading|Processing|Processing load once):\s+(.+?)\s*$")
-_SECTION = re.compile(r"^(Loaded|Disabled) Packages \((\d+)\):$")
+_SECTION = re.compile(r"^(Loaded|Disabled|Skipped) Packages \((\d+)\):$")
 
 
 class PackageStartupTraceError(RuntimeError):
@@ -97,7 +97,9 @@ def _scan_lines(
     expand: Callable[[str], str],
 ) -> tuple[list[dict[str, Any]], dict[str, list[Path]], dict[str, int]]:
     events: list[dict[str, Any]] = []
-    summaries: dict[str, list[Path]] = {"loaded": [], "disabled": []}
+    summaries: dict[str, list[Path]] = {
+        "loaded": [], "disabled": [], "skipped": [],
+    }
     expected: dict[str, int] = {}
     section: str | None = None
     in_loading_info = False
@@ -123,6 +125,10 @@ def _scan_lines(
         heading = _SECTION.fullmatch(stripped)
         if in_loading_info and heading:
             section = heading.group(1).lower()
+            if section in expected:
+                raise PackageStartupTraceError(
+                    f"Houdini package startup trace repeats its {section} summary."
+                )
             expected[section] = int(heading.group(2))
             continue
         if in_loading_info and section and raw.startswith((" ", "\t")) and stripped:
@@ -135,25 +141,7 @@ def _validated_trace(
     summaries: dict[str, list[Path]],
     expected: dict[str, int],
 ) -> dict[str, Any]:
-    if set(expected) != {"loaded", "disabled"}:
-        raise PackageStartupTraceError(
-            "Houdini package startup trace omits its loaded/disabled summary."
-        )
-    for name, paths in summaries.items():
-        if expected[name] != len(paths) or len(paths) > MAX_TRACE_PACKAGES:
-            raise PackageStartupTraceError(
-                f"Houdini package startup trace {name} count is inconsistent."
-            )
-        if len({_path_key(item) for item in paths}) != len(paths):
-            raise PackageStartupTraceError(
-                f"Houdini package startup trace repeats a {name} package."
-            )
-    loaded = {_path_key(item) for item in summaries["loaded"]}
-    disabled = {_path_key(item) for item in summaries["disabled"]}
-    if loaded.intersection(disabled):
-        raise PackageStartupTraceError(
-            "Houdini package startup trace marks a package loaded and disabled."
-        )
+    loaded, disabled, skipped = _validated_summaries(summaries, expected)
     discovered = [item for item in events if item["kind"] == "discovered"]
     processed = [item for item in events if item["kind"] == "processed"]
     if not discovered or not processed:
@@ -178,10 +166,11 @@ def _validated_trace(
         raise PackageStartupTraceError(
             "Houdini package summary contains an undiscovered package."
         )
-    skipped = [
-        item["path"] for item in discovered
-        if _path_key(item["path"]) not in loaded.union(disabled)
-    ]
+    expected_skipped = set(discovered_keys).difference(loaded, disabled)
+    if skipped != expected_skipped:
+        raise PackageStartupTraceError(
+            "Houdini skipped-package summary disagrees with discovery events."
+        )
     if len(events) > MAX_TRACE_PACKAGES * 3:
         raise PackageStartupTraceError(
             "Houdini package startup trace event count exceeds its limit."
@@ -191,9 +180,40 @@ def _validated_trace(
         "events": events,
         "loaded": tuple(summaries["loaded"]),
         "disabled": tuple(summaries["disabled"]),
-        "skipped": tuple(skipped),
+        "skipped": tuple(summaries["skipped"]),
         "processed": tuple(item["path"] for item in processed),
     }
+
+
+def _validated_summaries(
+    summaries: dict[str, list[Path]],
+    expected: dict[str, int],
+) -> tuple[set[str], set[str], set[str]]:
+    if set(expected) != {"loaded", "disabled", "skipped"}:
+        raise PackageStartupTraceError(
+            "Houdini package startup trace omits a required package summary."
+        )
+    for name, paths in summaries.items():
+        if expected[name] != len(paths) or len(paths) > MAX_TRACE_PACKAGES:
+            raise PackageStartupTraceError(
+                f"Houdini package startup trace {name} count is inconsistent."
+            )
+        if len({_path_key(item) for item in paths}) != len(paths):
+            raise PackageStartupTraceError(
+                f"Houdini package startup trace repeats a {name} package."
+            )
+    loaded = {_path_key(item) for item in summaries["loaded"]}
+    disabled = {_path_key(item) for item in summaries["disabled"]}
+    skipped = {_path_key(item) for item in summaries["skipped"]}
+    if (
+        loaded.intersection(disabled)
+        or loaded.intersection(skipped)
+        or disabled.intersection(skipped)
+    ):
+        raise PackageStartupTraceError(
+            "Houdini package summaries assign one package to multiple states."
+        )
+    return loaded, disabled, skipped
 
 
 def _trace_path(value: str, expand: Callable[[str], str]) -> Path:

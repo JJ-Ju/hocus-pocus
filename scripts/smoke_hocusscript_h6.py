@@ -1,4 +1,4 @@
-"""Run the installed H6 source-workspace workflow in Houdini 21.0.729.
+"""Run the installed H6 source-workspace workflow in Houdini 22.0.368.
 
 This script is launched from the repository, but every ``hocuspocus`` import
 must resolve from the clean installed Houdini package. It uses a disposable
@@ -6,7 +6,7 @@ scene and temporary local NTFS projects, performs no cooks, and cleans up all
 live and filesystem state before exit.
 
 Usage:
-    "C:\\Program Files\\Side Effects Software\\Houdini 21.0.729\\bin\\hython.exe" ^
+    "C:\\Program Files\\Side Effects Software\\Houdini 22.0.368\\bin\\hython.exe" ^
         scripts\\smoke_hocusscript_h6.py
 """
 
@@ -617,8 +617,8 @@ def _run_installed_h6(temporary_root: Path) -> dict[str, Any]:
         REPOSITORY_ROOT,
         installed_root,
     )
-    if hou.applicationVersionString() != "21.0.729":
-        raise RuntimeError("H6 installed acceptance requires Houdini 21.0.729.")
+    if hou.applicationVersionString() != "22.0.368":
+        raise RuntimeError("H6 installed acceptance requires Houdini 22.0.368.")
     if Path(hou.hipFile.path()).name.casefold() != "untitled.hip":
         raise RuntimeError("H6 installed acceptance requires a disposable scene.")
 
@@ -838,6 +838,11 @@ def _run_installed_h6(temporary_root: Path) -> dict[str, Any]:
 
 
 def main() -> int:
+    if hou.applicationVersionString() != "22.0.368":
+        raise RuntimeError(
+            "H6 installed acceptance requires Houdini 22.0.368, got "
+            f"{hou.applicationVersionString()}."
+        )
     logging.basicConfig(level=logging.INFO)
     COOK_OBSERVATIONS.update({"nodeChecks": 0, "cookCount": 0})
     temporary = tempfile.TemporaryDirectory(prefix="hocuspocus-h6-")

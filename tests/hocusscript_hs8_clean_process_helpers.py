@@ -20,6 +20,9 @@ from unittest import mock
 from tests.hocusscript_hs8_build_transaction_helpers import (
     assert_build_transaction_edges,
 )
+from tests.hocusscript_hs8_runtime_admission_helpers import (
+    assert_hs8_runtime_admission,
+)
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from hocuspocus.hocusscript.build_comparison import (
     VisualComparison,
@@ -62,7 +65,7 @@ def assert_hs8_clean_process_orchestrator(testcase: Any) -> None:
     testcase.assertIn('"releaseAuthorized": False', source)
     for environment_name in (
         "HOUDINI_USER_PREF_DIR", "HOUDINI_TEMP_DIR", "TEMP", "TMP",
-        "PYTHONPYCACHEPREFIX", "XDG_CACHE_HOME", "HOUDINI_PACKAGE_DIR",
+        "PYTHONDONTWRITEBYTECODE", "XDG_CACHE_HOME", "HOUDINI_PACKAGE_DIR",
     ):
         testcase.assertIn(environment_name, source)
     testcase.assertIn("houdini__HVER__", source)
@@ -75,6 +78,7 @@ def assert_hs8_clean_process_orchestrator(testcase: Any) -> None:
     testcase.assertIn("HOCUSPOCUS_HS8_VISUAL_REVIEW_DIGEST", harness_source)
     module = _load_orchestrator()
     _assert_installed_payload_preflight(testcase, module)
+    assert_hs8_runtime_admission(testcase)
     _assert_detached_visual_review(testcase, module)
     _assert_child_process_lifecycle(testcase)
     _assert_retained_failure_evidence(testcase, module)
@@ -386,7 +390,48 @@ def _assert_installed_payload_preflight(
             shutil.copytree(ROOT / relative, installed / relative)
         _remove_python_bytecode(installed)
         helper.write_manifest(installed)
-        with testcase.assertRaises(helper.InstallManifestError):
+        loaded = ModuleType("hocuspocus")
+        loaded.__file__ = str(
+            installed / "python3.11libs/hocuspocus/__init__.py"
+        )
+        loaded.__cached__ = None
+        with (
+            mock.patch.object(sys, "pycache_prefix", None),
+            mock.patch.object(sys, "dont_write_bytecode", True),
+        ):
+            testcase.assertEqual(
+                len(helper.audit_loaded_modules(
+                    installed, {"hocuspocus": loaded},
+                )),
+                1,
+            )
+        with (
+            mock.patch.object(
+                sys, "pycache_prefix", str(installed / "hostile-cache"),
+            ),
+            mock.patch.object(sys, "dont_write_bytecode", True),
+            testcase.assertRaisesRegex(
+                helper.InstallManifestError, "bytecode caching",
+            ),
+        ):
+            helper.audit_loaded_modules(installed, {"hocuspocus": loaded})
+        external_bytecode = installed / "hostile.pyc"
+        external_bytecode.write_bytes(b"not governed")
+        loaded.__cached__ = str(external_bytecode)
+        with (
+            mock.patch.object(sys, "pycache_prefix", None),
+            mock.patch.object(sys, "dont_write_bytecode", True),
+            testcase.assertRaisesRegex(
+                helper.InstallManifestError, "executed ungoverned bytecode",
+            ),
+        ):
+            helper.audit_loaded_modules(installed, {"hocuspocus": loaded})
+        loaded.__cached__ = None
+        with (
+            mock.patch.object(sys, "pycache_prefix", None),
+            mock.patch.object(sys, "dont_write_bytecode", True),
+            testcase.assertRaises(helper.InstallManifestError),
+        ):
             helper.audit_loaded_modules(
                 installed,
                 {"hocuspocus.fileless": ModuleType("hocuspocus.fileless")},
@@ -432,6 +477,18 @@ def _assert_installed_payload_preflight(
         package_file.write_text(json.dumps(shadowed_pointer), encoding="utf-8")
         with testcase.assertRaises(module.CleanProcessQualificationError):
             module._active_package_root(package_file)
+        install_cache_pointer = copy.deepcopy(canonical_pointer)
+        install_cache_pointer["env"][2] = {
+            "PYTHONPYCACHEPREFIX": (
+            "$HOCUSPOCUS_ROOT/python-cache"
+            ),
+        }
+        package_file.write_text(
+            json.dumps(install_cache_pointer),
+            encoding="utf-8",
+        )
+        with testcase.assertRaises(module.CleanProcessQualificationError):
+            module._active_package_root(package_file)
         reordered_pointer = copy.deepcopy(canonical_pointer)
         reordered_pointer["env"].reverse()
         package_file.write_text(json.dumps(reordered_pointer), encoding="utf-8")
@@ -454,6 +511,16 @@ def _assert_installed_payload_preflight(
             mode="release",
             visual_review=None,
         )
+        testcase.assertEqual(
+            technical_environment["PYTHONDONTWRITEBYTECODE"],
+            "1",
+        )
+        testcase.assertEqual(
+            release_environment["PYTHONDONTWRITEBYTECODE"],
+            "1",
+        )
+        testcase.assertNotIn("PYTHONPYCACHEPREFIX", technical_environment)
+        testcase.assertNotIn("PYTHONPYCACHEPREFIX", release_environment)
         testcase.assertIn(
             "HOCUSPOCUS_HS8_DIAGNOSTIC_OUTPUT_ROOT", technical_environment,
         )
@@ -508,7 +575,13 @@ def _assert_detached_visual_review(
             visual_key := Ed25519PrivateKey.generate(),
             Ed25519PrivateKey.generate(),
         )
-        approval = _visual_approval(policy, request, review, visual_key)
+        approval = _visual_approval(
+            policy,
+            request,
+            review,
+            visual_key,
+            expires_at="2026-12-31T23:59:59Z",
+        )
         external = root / "external-visual-review.json"
         external.write_text(json.dumps(approval), encoding="utf-8")
         policy_path = root / "external-trust-policy.json"
@@ -614,6 +687,11 @@ def _assert_build_transaction(testcase: Any) -> None:
         testcase.assertEqual(first.returncode, 0, first.stderr + first.stdout)
         package = preferences / "packages" / "hocuspocus.json"
         first_package = package.read_bytes()
+        package_payload = json.loads(first_package)
+        testcase.assertEqual(
+            package_payload["env"][2],
+            {"PYTHONDONTWRITEBYTECODE": "1"},
+        )
         first_config = _active_config(preferences, first_package)
         first_token = _configured_token(first_config)
         installed_root = first_config.parents[1]
@@ -972,6 +1050,9 @@ def _package_pointer(root_name: str) -> dict[str, Any]:
                     "method": "prepend",
                     "value": "$HOCUSPOCUS_ROOT/python3.11libs",
                 },
+            },
+            {
+                "PYTHONDONTWRITEBYTECODE": "1",
             },
         ],
         "hpath": "$HOCUSPOCUS_ROOT",

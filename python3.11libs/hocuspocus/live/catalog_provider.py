@@ -482,6 +482,9 @@ def _parameter(
     value_type = _parameter_type(template_type, token, tags, menu, "none")
     if value_type is None:
         return None
+    if value_type == "button" and menu:
+        tags["hocus.buttonMenuStatus"] = "unsupported-action-menu"
+        menu = ()
     code_surface = (
         _code_surface(token, label, tags, operator_name)
         if value_type == "string"

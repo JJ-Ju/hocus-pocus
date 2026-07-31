@@ -14,6 +14,10 @@ The staged ownership and claim boundaries are defined in
 run Ruff plus the narrowest relevant workflow. Run this complete checklist only
 at a stabilized candidate boundary.
 
+Exact Houdini `22.0.368` is the sole supported and release-qualifying live
+runtime for V1. A run under any other build, including Houdini `21.x`, cannot
+produce current candidate evidence.
+
 ## 1. Current public workflow catalogue
 
 The full suite is six files and 43 public workflows:
@@ -35,10 +39,15 @@ suites, 34 workflows, or 40 workflows.
 Commands below use these operator-supplied values:
 
 ```powershell
-$Hython = "<absolute-path-to-hython.exe>"
-$HoudiniUserPrefDir = "<isolated-or-release-houdini21.0-preferences>"
+$Hython = "<absolute-path-to-Houdini-22.0.368-hython.exe>"
+$HoudiniUserPrefDir = "<isolated-or-release-houdini22.0-preferences>"
 $EvidenceRoot = "<absolute-path-outside-the-repository>"
 New-Item -ItemType Directory -Path $EvidenceRoot -Force | Out-Null
+
+& $Hython -c "import hou,sys; sys.exit(0 if hou.applicationVersionString() == '22.0.368' else 42)"
+if ($LASTEXITCODE -ne 0) {
+    throw "Release qualification requires exact Houdini 22.0.368."
+}
 ```
 
 Do not place release evidence inside the source tree. Offline receipt commands
@@ -356,6 +365,8 @@ candidate.
 
 ## 5. Phase D: installed/runtime technical qualification
 
+- [ ] Confirm the exact Houdini `22.0.368` Hython preflight above passed. No
+  historical H21 receipt or other Houdini build can satisfy this gate.
 - [ ] Restart Houdini so no old Python modules remain loaded.
 - [ ] Verify package startup in Houdini's Python shell:
 

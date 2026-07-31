@@ -160,25 +160,25 @@
       "id": "Sop.matchaxis",
       "kind": "hda",
       "version": "builtin",
-      "digest": "sha256:63be528e9b48bbbb6286ab7a7c1969fe6dd6bfda045c53dec12913f980e016b2"
+      "digest": "sha256:8b9b18caaa26da0bf65c6dc87df29d7241678285c3508c730ae22bd15d3ec82f"
     },
     {
       "id": "Sop.mountain",
       "kind": "hda",
       "version": "builtin",
-      "digest": "sha256:82dec85dc6913359c1d9e668754a6f5079f70c8dfd489e44169ec9cb247b64f7"
+      "digest": "sha256:1425629145b902dcb0354b57c118bbed5da640621d40ae4a3b186636808717f5"
     },
     {
       "id": "Sop.platonic",
       "kind": "hda",
       "version": "builtin",
-      "digest": "sha256:778ab24acc9f9d76b847301dc95968dd6e15a0ee9409dd9d2afc8aff7d7c8a94"
+      "digest": "sha256:6fdf89034f7a2e8ea4a2ec80fbfba401949029902e3a3bbf97f01cd6785a7305"
     },
     {
       "id": "Vop.principledshader::2.0",
       "kind": "hda",
       "version": "builtin",
-      "digest": "sha256:f8ec8dd39131b609cee3a54588cdca0182d84afdc041769178c0b0a0cca1b528"
+      "digest": "sha256:9fb5a072c4934c726572254f8ae814ec44f7f94f681fa7e7fca0446110909c5a"
     }
   ]
 }

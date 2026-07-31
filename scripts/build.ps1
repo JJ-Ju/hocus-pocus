@@ -2,7 +2,7 @@
 param(
     [string]$PythonExe = "python",
     [string]$OutputDir = "dist\houdini-package",
-    [string]$HoudiniVersion = "21.0",
+    [string]$HoudiniVersion = "22.0",
     [string]$HoudiniUserPrefDir = "",
     [switch]$Clean,
     [switch]$Install,
@@ -267,6 +267,9 @@ function Build-PackageJson {
         "method": "prepend",
         "value": "`$HOCUSPOCUS_ROOT/python3.11libs"
       }
+    },
+    {
+      "PYTHONDONTWRITEBYTECODE": "1"
     }
   ],
   "hpath": "`$HOCUSPOCUS_ROOT"
@@ -289,6 +292,28 @@ function Assert-PackageActivation {
     $expected = '$HOUDINI_PACKAGE_PATH/' + $RootName
     if ($roots.Count -ne 1 -or $roots[0] -cne $expected) {
         throw "Activated package pointer does not select $RootName."
+    }
+    $bytecodePolicies = @()
+    foreach ($entry in @($payload.env)) {
+        if (
+            $entry.PSObject.Properties.Name -contains
+                "PYTHONDONTWRITEBYTECODE"
+        ) {
+            $bytecodePolicies += [string]$entry.PYTHONDONTWRITEBYTECODE
+        }
+    }
+    if (
+        $bytecodePolicies.Count -ne 1 -or
+        $bytecodePolicies[0] -cne "1"
+    ) {
+        throw "Activated package pointer does not disable Python bytecode."
+    }
+    if (
+        @($payload.env | Where-Object {
+            $_.PSObject.Properties.Name -contains "PYTHONPYCACHEPREFIX"
+        }).Count -ne 0
+    ) {
+        throw "Activated package pointer routes Python bytecode outside the payload."
     }
 }
 

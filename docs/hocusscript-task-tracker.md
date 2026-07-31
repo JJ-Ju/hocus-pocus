@@ -1,10 +1,15 @@
 # HocusScript Engineering Task Tracker
 
-Status: current governed payload passes same-host technical qualification;
-RC1 clean-commit evidence remains pending before RC2 freeze
+Status: exact H22.0.368 same-host technical qualification passed for the active
+bootstrap-repaired manifest; RC1 clean-commit evidence remains pending before
+RC2 freeze
 Specification: `docs/hocusscript-spec.md`
 Roadmap: `docs/hocusscript-roadmap.md`
 Completion plan: `docs/hocusscript-roadmap-completion-plan.md`
+
+Exact Houdini `22.0.368` is the sole supported and release-qualifying live
+runtime for V1. Every H21 receipt retained in this tracker is historical
+pre-H22 migration evidence only.
 
 ## 1. Tracking Rules
 
@@ -22,10 +27,11 @@ Completion plan: `docs/hocusscript-roadmap-completion-plan.md`
 
 ## 2. Current Slice
 
-Current milestone: the repaired HS8 governed payload passes fresh two-process
-same-host technical qualification; obtain RC1 clean-commit evidence before RC2
-freeze, then bind external clean-image and human-review authority to that exact
-candidate
+Current milestone: use the passing exact Houdini 22.0.368 technical-6
+two-process same-host evidence for active installed manifest
+`sha256:facf4f0b4dcf63737ebef615654f461446b321c7cce4a0365018d937e4769e4a`
+to obtain RC1 clean-commit evidence before RC2 freeze, then bind external
+clean-image and human-review authority to that exact candidate
 Current scope: complete all mutable internal evidence and detached
 external-evidence tooling, freeze one exact H4-HS8 source/install candidate in
 RC2, then bind externally authenticated clean-image/VM and human-review
@@ -231,7 +237,7 @@ Houdini required: fake provider no; live provider yes
 - [x] Add fake-catalog ambiguity, drift, HDA, tuple, menu, and port tests.
 - [x] Add live catalog fingerprint smoke procedure.
 
-HS2 exit evidence (2026-07-11):
+Historical pre-H22 HS2 exit evidence (2026-07-11):
 
 - consolidated scenarios retain catalog, semantic, bundle, project-lock, migration, and live-provider workflows
 - real Houdini: 21.0.729 on `windows-x86_64-cl19.42`
@@ -277,7 +283,7 @@ Houdini required: yes for live baseline tests
 - [x] Verify compile/preview never mutates Houdini.
 - [x] Add fake-baseline and live SOP preview tests.
 
-HS3 exit evidence (2026-07-11):
+Historical pre-H22 HS3 exit evidence (2026-07-11):
 
 - consolidated scenarios retain document preview and schema-boundary behavior; the pure HocusScript package remains `hou`-free
 - strict trust boundary: live GraphSpec re-resolution must exactly match bundled semantic selections; adversarial rehashed selection tests block with `HOCUS722`
@@ -310,7 +316,7 @@ Houdini required: yes
 - [x] Test stale, expired, tampered, wrong-session, wrong-policy/capability, and wrong-catalog plans.
 - [x] Test rollback after all nine executor checkpoints and after pending, execute, verify, and pre-commit lifecycle stages.
 
-HS4 exit evidence (2026-07-11):
+Historical pre-H22 HS4 exit evidence (2026-07-11):
 
 - the guarded-plan scenario retains tamper rejection, idempotency, and rollback at the public plan/apply boundary
 - H21.0.729 live guarded apply: catalog `sha256:b6743cfd1bfe24ce708deab89277eb7d4006669ea8294ba6d97cfc973b78ebca`; nine executor checkpoints and four lifecycle-stage failures each restored the exact pre-apply SOP document; final plan `sha256:2f7c7212896a7c62c2bb7037fe11ffb8c2b2c41ddeedf65b1c01842aede7e5f6` applied, reimported, verified, and replayed idempotently
@@ -340,7 +346,7 @@ Verification:
 
 - the consolidated authoring scenario retains the export structural-recompile/validation workflow and fail-closed behavior
 - schemas: all repository Draft 2020-12 schemas valid at the HS5 checkpoint, including legacy/current GraphSpec and strict format/completion/export outputs
-- H21.0.729 actual registered endpoint over the unmodified force-synced
+- historical pre-H22 H21.0.729 registered endpoint over the unmodified force-synced
   document: repeated export byte-identical; structural recompilation and
   exact-catalog semantic/connector validation passed; unsupported bypass
   blocked with `HOCUS805`; no filesystem writes; no network-reconstruction
@@ -399,7 +405,7 @@ Houdini required: module compiler no; live module fixtures yes
   - [x] H5B lowering: pure lowering slice complete after independent P0/P1 repair review. GraphSpec `0.4`, expansion-map v2, selected control frames, module stacks, stable generated identities, conservative capabilities, ownership, and source mappings lower into canonical documents through self-authenticating exact-type carrier values.
   - [x] H5C fresh live semantics: complete after independent P0/P1 review. Rehydrate and freshly resolve frozen Bundle `0.3` and Bundle `0.4` against the running catalog; compare semantic selections, exact catalog/HDA pins, capabilities, project/lock/module identity, and target constraints; reject drift before planning; preserve conservative control capabilities; and propagate cancellation. This resolves the fresh-live-semantic portion of `HS-BLOCK-008` in code without claiming complete package-search provenance while `HS-BLOCK-003` is open.
   - [x] Historical H5D exact preview/plan/apply checkpoint: complete after independent P0/P1 repair review. At this checkpoint, `document.preview_bundle` and `document.plan_bundle` accepted Bundle `0.2`, frozen `0.3`, and `0.4` only through exact decoders; HS7 later added Bundle `0.5`. Plans bind exact bundle/compiler/GraphSpec, project/lock, catalog, policy, capability, ownership, target, revision, and module/control provenance pins. Generated symbols map to deterministic legal live names while durable IDs remain authoritative. Apply executes only stored plan identities, preserves signed `managedFields` and artist state, checks cancellation, verifies realized state, and rolls back/quarantines failures. Build staging includes the exact H5 and Bundle `0.4` schemas.
-  - [x] H5E live acceptance rerun: installed Houdini 21.0.729 passed with 37 critical-module hashes, distinct newly compiled second merge/reconcile plans, exact node/non-node plus expansion provenance after save/reopen, reopened-store target recovery replay, expiry/age/count/byte pruning with pending/partial preservation and exact `HOCUS759`, and 67 observed node checks with zero cooks.
+  - [x] Historical pre-H22 H5E live acceptance rerun: installed Houdini 21.0.729 passed with 37 critical-module hashes, distinct newly compiled second merge/reconcile plans, exact node/non-node plus expansion provenance after save/reopen, reopened-store target recovery replay, expiry/age/count/byte pruning with pending/partial preservation and exact `HOCUS759`, and 67 observed node checks with zero cooks.
     - [x] Runtime fixes discovered by installed qualification: force-sync preview baselines with cancellation, keep `baselineLiveRevision` stable for an unchanged graph-store baseline, and treat unmanaged `None` positions as verification wildcards while keeping explicit positions exact.
   - [x] H5F1 ownership/adoption repair: existing UID/path matches require complete managed project/graph/kind/symbol/ownership/`managedFields.nodeUid` identity; provenance refresh emits `update_node_provenance`; only `external adopted=true` emits confirming `adopt_node`; hidden/missing identity transitions fail `HOCUS740`.
   - [x] H5F2 selective reconcile repair: remove only omitted matching-owned nodes; reset/disconnect/clear only previously managed coordinates; preserve artist/default state; execute real output clearing; verify parameter defaults; retain `HOCUS709`/`HOCUS713` safety gates.
@@ -413,8 +419,8 @@ Houdini required: module compiler no; live module fixtures yes
   - [x] H6D project services: expose minimal `source.project.describe`, `source.file.search`, `source.file.read`, `source.file.apply_patch`, `source.file.write_export`, `source.project.build`, and `source.project.navigate` operations by composing the existing native compiler/lock/editor/export APIs rather than duplicating resolution; keep generic patching distinct from authenticated export handoff; make build action explicit and require explicit write intent, selected entries, approved complete external mapping, the generated-lock grant, and explicit absent/exclusive-create or present/exact-digest-CAS authority for `lock_update`.
   - [x] H6E end-to-end workflow: approve a project, discover/read its resources, patch source, and use `source.project.build` `compile` to produce exact flat Bundle `0.2`, module Bundle `0.3`, control Bundle `0.4`, or value Bundle `0.5`; preview returns the candidate document/diff/destructive summary/preview-only plan, planning persists immutable identity/hash/expiry/baseline/inverse/drift guards, and apply consumes only that plan while rechecking all live drift gates across HS7-supported families. Verify, export, and reconcile the same Git-visible files without returning a physical root.
   - [x] H6G trust-boundary repair implementation: freeze and size-check the exact public MCP mutation envelope before mutation; enforce one terminal commit boundary under the write lease; bracket retained native identity/digest validation with matching opening/closing project/generated/external path sets; consume one shared 4,096-file/64 MiB budget before each retained read; exhaust every strict cleanup resource without masking the primary error; keep Linux/Windows rollback authority through namespace, content, identity, and durability verification; serialize recovery with process plus OS-wide root locks and durable clean/publishing/orphan/recovery states; preserve competing, displaced, and candidate evidence through one fail-closed root sentinel bounded to one incident, two artifacts, and 24 MiB; durably flush Windows recovery namespaces; make post-commit descriptor cleanup/housekeeping non-masking; replace fixed counters with lock-ordered atomic monotonic windows over authorized project scopes and one bounded invalid-selector scope; and correct build plus `generated_lock` MCP metadata.
-  - [x] H6F hostile/installed acceptance: frozen limits, unauthorized/stale/revoked access, descriptor and namespace attacks, exact response boundaries, cross-process publication/recovery, restart persistence, path-free audit, and live Houdini behavior pass on Windows, Ubuntu 24.04 WSL, and installed Houdini 21.0.729; final independent P0/P1 closure review is clean.
-  - Final acceptance evidence: six H6 workflows pass inside the 40/50
+  - [x] Historical pre-H22 H6F hostile/installed acceptance: frozen limits, unauthorized/stale/revoked access, descriptor and namespace attacks, exact response boundaries, cross-process publication/recovery, restart persistence, path-free audit, and live Houdini behavior pass on Windows, Ubuntu 24.04 WSL, and installed Houdini 21.0.729; final independent P0/P1 closure review is clean.
+  - Historical pre-H22 final acceptance evidence: six H6 workflows pass inside the 40/50
     catalogue; Ruff 12/15, compileall, diff, 1,200-line, full-suite, clean
     build/install, Windows/Linux focused acceptance, and installed Houdini
     21.0.729 gates pass. The live receipt proves all seven tools, HTTP payload
@@ -627,10 +633,10 @@ Houdini required: yes
 
 ## 11. HS8: Production and AAA Validation
 
-Status: the repaired governed payload passes fresh installed two-process
-same-host technical qualification; RC1 clean-commit evidence remains before
-RC2 freeze, while external human review and authenticated clean-image/VM
-qualification remain open
+Status: exact Houdini 22.0.368 installed two-process same-host technical
+qualification passed for the active bootstrap-repaired manifest; RC1
+clean-commit evidence remains before RC2 freeze, while external human review
+and authenticated clean-image/VM qualification remain open
 
 Dependencies: HS6 and relevant HS7 coverage
 Houdini required: yes
@@ -666,14 +672,64 @@ Houdini required: yes
   authenticated public context from minting readiness, keep public qualification
   advisory, validate strict private receipts, install transactionally, preserve
   credentials, and bind the complete installed/runtime payload manifest.
+- [x] Repair the H22 runtime boundary: disable installed bytecode caching,
+  reject non-22.0.368 hosts before server construction, bind HDA content and
+  Windows terminal file authority, and reject undeclared file references.
+- [x] Repair the H22 bootstrap boundary: make `pythonrc` install source-only
+  admission before any governed import and derive the governed root from
+  Houdini-compatible code filenames. Active installed manifest:
+  `sha256:facf4f0b4dcf63737ebef615654f461446b321c7cce4a0365018d937e4769e4a`.
 - [x] Bind numeric evidence to exact canonical metrics and visual evidence to exact candidate output digests.
 - [x] Separate generated review requests from externally authored approval carriers.
+- [x] Record technical-5 as superseded diagnostic evidence for pre-bootstrap
+  installed manifest
+  `sha256:7035092a036ca51b9885981389c74fca773420f862c0f926580ce68c03300279`.
+  Outer receipt:
+  `sha256:98fe1498faae2aa0e1b93d29c81cbe57890203d10a8dc286732132a5716ae82b`;
+  portable evidence:
+  `sha256:dc2f1b425e4fa8e9d346555d2682af3b59cc1d2cd1c6b04c14ca7fe7cc2ab475`;
+  installed manifest:
+  `sha256:7035092a036ca51b9885981389c74fca773420f862c0f926580ce68c03300279`;
+  normalized USDA:
+  `sha256:5bd91213d3cabd33299980ee07e2a043b3571de8239dc2292a4dd4427d2de20d`
+  at 35,588 bytes; observation:
+  `sha256:d439936c0922f3b34e1460c7372828b8bf168368b44f29436b0584e26fa9cc0b`.
+  Both processes audited 210 governed modules each and reported zero authored
+  cook warnings/errors. `review_pending`, `readyForPackaging=false`,
+  `readyForPublish=false`, and `releaseAuthorized=false` remain explicit. This
+  does not qualify the active bootstrap-repaired payload, establish external
+  clean-image/VM or human authority, provide RC1 clean-commit evidence, or
+  freeze an RC2 candidate.
+- [x] Pass technical-6 exact Houdini 22.0.368 two-process same-host
+  qualification for active installed manifest
+  `sha256:facf4f0b4dcf63737ebef615654f461446b321c7cce4a0365018d937e4769e4a`.
+  Outer receipt:
+  `sha256:19bfd956b371a99437451d8736dd48e080e4335b73f304468884194dbfb35662`;
+  portable evidence:
+  `sha256:cf9d1e14434a154ef885a5df0236476c13b8c38300a22703959d486ab22891d9`;
+  normalized USDA:
+  `sha256:5bd91213d3cabd33299980ee07e2a043b3571de8239dc2292a4dd4427d2de20d`
+  at 35,588 bytes; observation:
+  `sha256:d439936c0922f3b34e1460c7372828b8bf168368b44f29436b0584e26fa9cc0b`.
+  Run 1 qualification/package/publish:
+  `sha256:b89a1b0294f501418bec8f8478567e078eb0c2e0f596a4fb23ffcf1ed462c5f7`,
+  `sha256:590699d0a3acef15cbc4f2e613ce2696ee57b8e82dede1a070b3358cd1382ac4`,
+  `sha256:c54e3d011e9108eee213cc0cfa69d52902fe94f06c1d75f1e5e6a2630fe4440d`.
+  Run 2 qualification/package/publish:
+  `sha256:69ab271f9fce8c85a928fe847eb2b5afb4f9c464d2f33a6c1ea22c976c4aad02`,
+  `sha256:82d8fa5f264fc55e9d29704183df431da42c4fac0d32ae97fdd8445812cc9008`,
+  `sha256:a80b635156330877f74dd98ce1e5d80f91d7adb76dfac2557d1aca95efacb6e1`.
+  Both processes audited 210 governed modules and returned `accepted=true` with
+  `review_pending` and both readiness flags false. The outer receipt retains
+  `releaseAuthorized=false` and `visualApprovalDigest=null`. External
+  clean-image/VM, human approval, RC1 clean-commit evidence, and RC2 freeze
+  remain pending.
 - [ ] RC1: make authenticated CI/image attestations and externally authored
   visual approvals detached release inputs, verify their candidate/request/
   output/policy bindings, and reject checked-in development fixtures as
   production authority before freezing V1.
-- [x] Record the current repaired same-host two-process technical run.
-  Current technical receipt:
+- [x] Record the last repaired pre-H22 same-host two-process technical run.
+  Historical H21 technical receipt:
   `sha256:5063c88c876822b595d44eafcb25cb43f6b04b78a59424d0a9ebc6f9b0a3a266`;
   portable evidence:
   `sha256:9f2d771da3de3d136f6da60fb415a2886e6260384e41e639aa0f05f37bbf0683`;
@@ -681,11 +737,11 @@ Houdini required: yes
   `sha256:8a835f7af6275fe235aa9c01a418466a8d71fe21dbb5930268e1cbd6e239b703`;
   normalized USDA:
   `sha256:15b2e0961ef43667707fabde87f6bb2517afd44c825818770476b7cfcc609149`.
-  Both Houdini 21.0.729 processes accepted with identical portable evidence,
+  Both historical Houdini 21.0.729 processes accepted with identical portable evidence,
   zero cook warnings/errors, and `releaseAuthorized=false`. The second install
   preserved the bearer token and was a pointer/root/manifest byte-identical
   no-op. This is technical evidence for the governed payload, not external
-  clean-image or human-review authority and not yet RC1 clean-commit evidence.
+  clean-image or human-review authority, and not current H22 qualification.
 - [ ] Obtain external human visual approval and run release qualification.
 
 ## 12. Release and Regression Work

@@ -1,4 +1,4 @@
-"""Real Houdini 21.0.729 acceptance for HS7 editor, runtime, and value lanes."""
+"""Real Houdini 22.0.368 acceptance for HS7 editor, runtime, and value lanes."""
 
 from __future__ import annotations
 
@@ -728,6 +728,11 @@ def run_installed_hs7_acceptance(
 
 
 def main() -> int:
+    if hou.applicationVersionString() != "22.0.368":
+        raise RuntimeError(
+            "HS7 extension acceptance requires Houdini 22.0.368, got "
+            f"{hou.applicationVersionString()}."
+        )
     temporary = tempfile.TemporaryDirectory(prefix="hocuspocus-hs7-ext-")
     try:
         hou.hipFile.clear(suppress_save_prompt=True)

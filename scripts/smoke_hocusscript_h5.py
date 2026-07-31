@@ -1,11 +1,11 @@
 """Qualify installed H5 Bundle 0.3/0.4 workflows in disposable Houdini state.
-This script must run from the repository under Houdini 21.0.729 ``hython``
+This script must run from the repository under Houdini 22.0.368 ``hython``
 after a clean package install and a Houdini restart.  It deliberately imports
 only the installed HocusPocus package, performs no cooks, and destroys its
 temporary scene and files before exit.
 
 Usage:
-    "C:\\Program Files\\Side Effects Software\\Houdini 21.0.729\\bin\\hython.exe" ^
+    "C:\\Program Files\\Side Effects Software\\Houdini 22.0.368\\bin\\hython.exe" ^
         scripts\\smoke_hocusscript_h5.py
 """
 
@@ -194,9 +194,9 @@ def _sha256_file(path: Path) -> str:
     return _sha256_bytes(path.read_bytes())
 
 def _assert_installed_alignment() -> dict[str, Any]:
-    if hou.applicationVersionString() != "21.0.729":
+    if hou.applicationVersionString() != "22.0.368":
         raise RuntimeError(
-            f"H5E requires Houdini 21.0.729, got {hou.applicationVersionString()}."
+            f"H5E requires Houdini 22.0.368, got {hou.applicationVersionString()}."
         )
     if (
         not (REPOSITORY_ROOT / ".git").exists()
@@ -1162,6 +1162,10 @@ def _run_installed_h5e(temporary_root: Path) -> dict[str, Any]:
 
 
 def main() -> int:
+    if hou.applicationVersionString() != "22.0.368":
+        raise RuntimeError(
+            f"H5E requires Houdini 22.0.368, got {hou.applicationVersionString()}."
+        )
     logging.basicConfig(level=logging.INFO)
     temporary = tempfile.TemporaryDirectory(prefix="hocuspocus-h5e-")
     try:

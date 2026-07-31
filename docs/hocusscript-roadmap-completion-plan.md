@@ -1,7 +1,8 @@
 # HocusScript Roadmap Completion Plan
 
-Status: same-host V1 technical qualification passed; RC1 clean-commit evidence
-and external RC2-RC5 release authority remain open
+Status: exact H22.0.368 same-host V1 technical qualification passed for the
+active bootstrap-repaired manifest; RC1 clean-commit evidence and external
+RC2-RC5 release authority remain open
 Owner: HocusPocus engineering
 Source contracts:
 
@@ -9,6 +10,10 @@ Source contracts:
 - `docs/hocusscript-roadmap.md`
 - `docs/hocusscript-task-tracker.md`
 - `docs/hocusscript-hs8-production.md`
+
+Exact Houdini `22.0.368` is the sole supported and release-qualifying live
+runtime for V1. H21 receipts retained by this plan are historical pre-H22
+migration evidence and cannot qualify the current payload.
 
 ## 1. Purpose
 
@@ -28,8 +33,61 @@ stale, or moved to the post-v1 queue.
 
 ## 2. Current Technical Baseline and Candidate State
 
-The repaired governed payload passed a fresh two-process same-host technical
-run on Houdini 21.0.729 and produced:
+The active governed payload uses installed manifest
+`sha256:facf4f0b4dcf63737ebef615654f461446b321c7cce4a0365018d937e4769e4a`.
+Its `pythonrc` installs source-only admission before any governed import and
+uses Houdini-compatible code-filename root derivation. Exact Houdini 22.0.368
+two-process same-host technical qualification for this bootstrap-repaired
+payload passed in technical-6:
+
+- outer two-process receipt:
+  `sha256:19bfd956b371a99437451d8736dd48e080e4335b73f304468884194dbfb35662`
+- portable evidence:
+  `sha256:cf9d1e14434a154ef885a5df0236476c13b8c38300a22703959d486ab22891d9`
+- normalized USDA:
+  `sha256:5bd91213d3cabd33299980ee07e2a043b3571de8239dc2292a4dd4427d2de20d`
+  at 35,588 bytes
+- observation:
+  `sha256:d439936c0922f3b34e1460c7372828b8bf168368b44f29436b0584e26fa9cc0b`
+- run 1 qualification/package/publish:
+  `sha256:b89a1b0294f501418bec8f8478567e078eb0c2e0f596a4fb23ffcf1ed462c5f7`,
+  `sha256:590699d0a3acef15cbc4f2e613ce2696ee57b8e82dede1a070b3358cd1382ac4`,
+  `sha256:c54e3d011e9108eee213cc0cfa69d52902fe94f06c1d75f1e5e6a2630fe4440d`
+- run 2 qualification/package/publish:
+  `sha256:69ab271f9fce8c85a928fe847eb2b5afb4f9c464d2f33a6c1ea22c976c4aad02`,
+  `sha256:82d8fa5f264fc55e9d29704183df431da42c4fac0d32ae97fdd8445812cc9008`,
+  `sha256:a80b635156330877f74dd98ce1e5d80f91d7adb76dfac2557d1aca95efacb6e1`
+
+Both processes audited 210 governed modules and returned `accepted=true` with
+`review_pending` and both readiness flags false. The outer receipt retains
+`releaseAuthorized=false` and `visualApprovalDigest=null`. This is same-host
+technical evidence only, not external clean-image/VM or human authority, RC1
+clean-commit evidence, or an RC2 freeze.
+
+Technical-5 passed its own two-process checks but is superseded diagnostic
+evidence for pre-bootstrap installed manifest
+`sha256:7035092a036ca51b9885981389c74fca773420f862c0f926580ce68c03300279`.
+That run produced:
+
+- outer two-process receipt:
+  `sha256:98fe1498faae2aa0e1b93d29c81cbe57890203d10a8dc286732132a5716ae82b`
+- portable evidence:
+  `sha256:dc2f1b425e4fa8e9d346555d2682af3b59cc1d2cd1c6b04c14ca7fe7cc2ab475`
+- normalized USDA:
+  `sha256:5bd91213d3cabd33299980ee07e2a043b3571de8239dc2292a4dd4427d2de20d`
+  at 35,588 bytes
+- observation:
+  `sha256:d439936c0922f3b34e1460c7372828b8bf168368b44f29436b0584e26fa9cc0b`
+
+Both processes accepted with identical portable evidence, audited 210 governed
+modules per process, and reported zero authored cook warnings/errors.
+`review_pending` remained explicit, with `readyForPackaging=false`,
+`readyForPublish=false`, and `releaseAuthorized=false`. These identities do
+not qualify the active bootstrap-repaired payload.
+
+The last repaired H21 governed payload also passed a two-process same-host
+technical run on Houdini 21.0.729. It is historical pre-H22 evidence and
+produced:
 
 - installed two-process receipt:
   `sha256:5063c88c876822b595d44eafcb25cb43f6b04b78a59424d0a9ebc6f9b0a3a266`
@@ -40,12 +98,12 @@ run on Houdini 21.0.729 and produced:
 - normalized USDA:
   `sha256:15b2e0961ef43667707fabde87f6bb2517afd44c825818770476b7cfcc609149`
 
-Both processes accepted with identical portable evidence and zero cook
+Both historical processes accepted with identical portable evidence and zero cook
 warnings/errors. A consecutive identical install preserved the bearer token
 and left the activation pointer, versioned root, and manifest unchanged. These
-identities qualify the current governed same-host technical payload, but they
-are not a frozen release candidate: RC1 clean-commit evidence and the RC2
-source freeze remain pending. The current offline gates are 43 public
+identities do not qualify the current H22 governed payload. No current H22
+technical receipt is yet a frozen release candidate: RC1 clean-commit evidence
+and the RC2 source freeze remain pending. The current offline gates are 43 public
 workflows, Ruff complexity `12`/`15`, the 1,200-line limit, compileall, and diff
 hygiene. External clean-image and human-review authority remain open, so no
 production release authority is claimed.
@@ -243,7 +301,7 @@ Status: blocked on external CI/image authority
 Tasks:
 
 - create an ephemeral Windows image or VM outside the repository/user session;
-- install the pinned Houdini build and the RC2 candidate from immutable inputs;
+- install exact Houdini `22.0.368` and the RC2 candidate from immutable inputs;
 - generate `hs8-clean-image-environment-v1` evidence binding image, runner,
   source snapshot, dependency, and installed-manifest identities;
 - run the two-process technical qualification inside the clean boundary;
@@ -354,10 +412,13 @@ Priority is product-driven rather than inherited from historical numbering:
 
 ## 8. Immediate Next Action
 
-RC1 remains active: finish the current P1 repair batch, revalidate it, and
-produce clean-commit internal evidence before completing package-provenance,
-compatibility, and detached external-evidence tooling. Only after those tasks
-and their findings are closed does RC2 commit, push, and freeze the single
-candidate. The historical same-host receipt above is not freeze evidence.
+RC1 remains active: use the passing technical-6 H22 same-host evidence for
+active manifest
+`sha256:facf4f0b4dcf63737ebef615654f461446b321c7cce4a0365018d937e4769e4a`
+while finishing clean-commit evidence, package-provenance, compatibility, and
+detached external-evidence tooling. Only after those tasks and their findings
+are closed does RC2 commit, push, and freeze the single candidate. Neither the
+technical-6 same-host receipt, superseded technical-5 receipt, nor any
+historical H21 receipt is freeze evidence.
 Commit and push require explicit user authorization and are not performed by
 this planning update.

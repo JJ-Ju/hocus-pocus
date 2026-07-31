@@ -1,9 +1,13 @@
 # HocusScript HS8 Production Workflow
 
-Status: the repaired governed payload passes fresh two-process same-host
-technical qualification. RC1 clean-commit evidence and the RC2 source freeze
-remain pending; production release authority still requires the external gates
-in `docs/hocusscript-roadmap-completion-plan.md`.
+Status: exact Houdini 22.0.368 two-process same-host technical qualification
+passed for the active bootstrap-repaired manifest. RC1 clean-commit evidence
+and the RC2 source freeze remain pending; production release authority still
+requires the external gates in `docs/hocusscript-roadmap-completion-plan.md`.
+
+Exact Houdini `22.0.368` is the sole supported and release-qualifying live
+runtime for V1. H21 receipts retained below are historical pre-H22 migration
+evidence only and cannot qualify the current payload.
 
 HS8 keeps `.hocus` as the authored graph surface. Production qualification is
 a separate, strict evidence layer around the graph: the source builds the
@@ -103,7 +107,9 @@ It retains these byte-identical compatibility aliases:
 
 Typed HS8 failures use `HOCUS950`–`HOCUS959` for contracts and observations,
 `HOCUS980`–`HOCUS989` for provenance, metrics, comparisons, and gates, and
-`HOCUS990` for the complete qualification envelope.
+`HOCUS990` for the complete qualification envelope. Startup fails with
+`HOCUS998` before server construction unless the host is exact Houdini
+`22.0.368` and governed Python bytecode caching is disabled.
 
 ## Visual review
 
@@ -136,8 +142,56 @@ The retained unique run directory contains the full verified
 `effective-package-search.json` and startup trace. Portable comparison and
 downstream qualification expose only the package-search receipt digest.
 
-The current repaired same-host technical run on Houdini 21.0.729 produced
+The technical-5 exact Houdini 22.0.368 campaign passed its two-process checks,
+but is superseded diagnostic evidence for the pre-bootstrap installed manifest
+`sha256:7035092a036ca51b9885981389c74fca773420f862c0f926580ce68c03300279`.
+Its outer receipt is
+`sha256:98fe1498faae2aa0e1b93d29c81cbe57890203d10a8dc286732132a5716ae82b`.
+Both processes agreed on portable evidence
+`sha256:dc2f1b425e4fa8e9d346555d2682af3b59cc1d2cd1c6b04c14ca7fe7cc2ab475`,
+observation
+`sha256:d439936c0922f3b34e1460c7372828b8bf168368b44f29436b0584e26fa9cc0b`,
+and normalized USDA
+`sha256:5bd91213d3cabd33299980ee07e2a043b3571de8239dc2292a4dd4427d2de20d`
+at 35,588 bytes.
+Each process audited 210 governed modules and reported zero authored cook
+warnings/errors. `review_pending` remained explicit, and
+`readyForPackaging=false`, `readyForPublish=false`, and
+`releaseAuthorized=false`.
+
+The active installed manifest is
+`sha256:facf4f0b4dcf63737ebef615654f461446b321c7cce4a0365018d937e4769e4a`.
+Its `pythonrc` installs source-only admission before any governed import and
+derives the governed root from Houdini-compatible code filenames. Technical-6
+passed exact Houdini 22.0.368 two-process same-host qualification with outer
 receipt
+`sha256:19bfd956b371a99437451d8736dd48e080e4335b73f304468884194dbfb35662`
+and portable evidence
+`sha256:cf9d1e14434a154ef885a5df0236476c13b8c38300a22703959d486ab22891d9`.
+Both processes agreed on normalized USDA
+`sha256:5bd91213d3cabd33299980ee07e2a043b3571de8239dc2292a4dd4427d2de20d`
+at 35,588 bytes and observation
+`sha256:d439936c0922f3b34e1460c7372828b8bf168368b44f29436b0584e26fa9cc0b`,
+and each audited 210 governed modules. Run 1 qualification/package/publish
+digests were
+`sha256:b89a1b0294f501418bec8f8478567e078eb0c2e0f596a4fb23ffcf1ed462c5f7`,
+`sha256:590699d0a3acef15cbc4f2e613ce2696ee57b8e82dede1a070b3358cd1382ac4`,
+and
+`sha256:c54e3d011e9108eee213cc0cfa69d52902fe94f06c1d75f1e5e6a2630fe4440d`.
+Run 2 qualification/package/publish digests were
+`sha256:69ab271f9fce8c85a928fe847eb2b5afb4f9c464d2f33a6c1ea22c976c4aad02`,
+`sha256:82d8fa5f264fc55e9d29704183df431da42c4fac0d32ae97fdd8445812cc9008`,
+and
+`sha256:a80b635156330877f74dd98ce1e5d80f91d7adb76dfac2557d1aca95efacb6e1`.
+Both runs returned `accepted=true` with `review_pending` and both actionable
+readiness flags false. The outer receipt retains `releaseAuthorized=false` and
+`visualApprovalDigest=null`. Host-retained evidence is at
+`C:\Users\jujun\Documents\HocusPocus-V1-Evidence\2026-07-30-h22-technical-6`.
+This is same-host technical evidence, not external clean-image/VM or human
+authority, RC1 clean-commit evidence, or an RC2 freeze.
+
+The last repaired H21 same-host technical run is historical pre-H22 evidence.
+It produced receipt
 `sha256:5063c88c876822b595d44eafcb25cb43f6b04b78a59424d0a9ebc6f9b0a3a266`.
 Its two isolated processes agreed on portable evidence
 `sha256:9f2d771da3de3d136f6da60fb415a2886e6260384e41e639aa0f05f37bbf0683`,
@@ -153,9 +207,8 @@ Both runs reported zero cook warnings/errors. A consecutive identical install
 preserved the bearer token and left the activation pointer, versioned root, and
 manifest unchanged. `review_pending` remained explicit,
 `releaseAuthorized=false`, and both actionable readiness flags remained false.
-This qualifies the governed same-host technical payload, not an external clean
-image or human visual decision; RC1 clean-commit evidence and RC2 freeze remain
-pending.
+This historically qualified that governed H21 same-host technical payload, not
+the current H22 payload, an external clean image, or a human visual decision.
 
 The previous technical run produced historical receipt
 `sha256:e4e0f745421dabee7c4c9c576ee2df3390a19101a13422ee18e6afca87f73591`.

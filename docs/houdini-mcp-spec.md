@@ -3,7 +3,7 @@
 Status: design spec
 
 Target:
-- Houdini 21.x
+- Houdini 22.0.368
 - MCP protocol revision `2025-11-25`
 - Primary host: interactive Houdini GUI session
 - Secondary hosts: `hython` and HAPI/HARS workers

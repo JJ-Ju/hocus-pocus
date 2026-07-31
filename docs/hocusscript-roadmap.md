@@ -1,8 +1,13 @@
 # HocusScript Delivery Roadmap
 
-Status: V1 technical baseline complete; production-release closure active
+Status: V1 implementation and exact H22 two-process same-host technical
+qualification complete for the active bootstrap-repaired manifest
 Source contract: `docs/hocusscript-spec.md`
 Completion plan: `docs/hocusscript-roadmap-completion-plan.md`
+
+Exact Houdini `22.0.368` is the sole supported and release-qualifying live
+runtime for V1. Every H21 receipt retained in this roadmap is historical
+pre-H22 migration evidence only.
 
 ## 1. Outcome
 
@@ -199,11 +204,11 @@ Exit criteria:
 - compile produces no applyable plan while any blocking diagnostic exists
 - bundle previews bind stable project-relative source URIs and manifest/lock digests rather than machine-specific absolute paths
 
-Implementation status (2026-07-11): complete for the HS3 SOP/network-document v1 slice. The pure lowerer, live preview tool, schema resources, persistent identity path, exact connectors, sparse verification, ownership-safe reconcile, content-addressed artifacts, and node-level dirty-scope monitoring are implemented. Offline tests and the checked-in H21.0.729 live preview/monitor smokes are passing. Broader family/value parity remains HS7; immutable plan persistence/apply remains HS4.
+Historical pre-H22 implementation status (2026-07-11): complete for the HS3 SOP/network-document v1 slice. The pure lowerer, live preview tool, schema resources, persistent identity path, exact connectors, sparse verification, ownership-safe reconcile, content-addressed artifacts, and node-level dirty-scope monitoring are implemented. Offline tests and the checked-in H21.0.729 live preview/monitor smokes passed at that checkpoint. Broader family/value parity remains HS7; immutable plan persistence/apply remains HS4.
 
 ## 8. HS4: Immutable Plan and Guarded Apply
 
-Implementation status (2026-07-11): complete for the guarded SOP/network-document v1 slice. Immutable plan v1 schemas, bounded live retention, insert-only SQLite plan persistence, durable lifecycle/audit events, scope leases, dynamic capability and confirmation gates, idempotent replay, cancellation checkpoints, typed failures, apply-owned rollback, structural inverse capture/identity clearing, symmetric provenance verification, quarantine, and explicit baseline/target recovery classification are implemented. The H21.0.729 disposable live matrix passes real apply/verification plus rollback after all nine executor checkpoints and four lifecycle stages. Unsupported network families, opaque network-container replacement/deletion, and broader value parity remain explicitly blocked for HS7.
+Historical pre-H22 implementation status (2026-07-11): complete for the guarded SOP/network-document v1 slice. Immutable plan v1 schemas, bounded live retention, insert-only SQLite plan persistence, durable lifecycle/audit events, scope leases, dynamic capability and confirmation gates, idempotent replay, cancellation checkpoints, typed failures, apply-owned rollback, structural inverse capture/identity clearing, symmetric provenance verification, quarantine, and explicit baseline/target recovery classification are implemented. The H21.0.729 disposable live matrix passed real apply/verification plus rollback after all nine executor checkpoints and four lifecycle stages. Unsupported network families, opaque network-container replacement/deletion, and broader value parity remain explicitly blocked for HS7.
 
 Objectives:
 
@@ -228,7 +233,8 @@ Exit criteria:
 
 ## 9. HS5: Export, Formatter, and Editor Loop
 
-Status: complete (independent review fixes plus actual H21.0.729 registered-endpoint verification)
+Status: complete (independent review fixes plus historical pre-H22
+H21.0.729 registered-endpoint verification)
 
 Objectives:
 
@@ -256,8 +262,8 @@ Delivered evidence:
 - native `hocus write-export` requires the explicit project directory, creates exclusively by default, and replaces only against an expected digest
 - `@id("...")` carries persistent network-document node identity across export destination and symbol changes; provenance records ownership and managed fields
 - unsupported HocusScript 0.1 constructs block the entire export with typed diagnostics and no partial source
-- offline editor/export/schema/compiler suites pass; the actual registered
-  `document.export_source` H21.0.729 smoke used the unmodified force-synced
+- offline editor/export/schema/compiler suites pass; the historical pre-H22
+  registered `document.export_source` H21.0.729 smoke used the unmodified force-synced
   network document and produced byte-identical repeated exports, structural
   recompilation plus exact-catalog semantic and connector validation, an
   explicit unsupported-state blocker, and no filesystem writes; it did not
@@ -483,7 +489,8 @@ deletion of pending or `partial_or_unknown` evidence. The offline 34-workflow,
 Ruff complexity `12`/branch `15`, compileall, diff, 50-test, and 1,200-line
 gates pass without adding a public test.
 
-The repaired H5E run used the installed Houdini 21.0.729 package and hashed 37
+The historical pre-H22 repaired H5E run used the installed Houdini 21.0.729
+package and hashed 37
 critical source/install/runtime modules. It applied distinct newly compiled
 second merge and reconcile plans, preserved exact node and non-node provenance
 plus referenced expansion stacks after save/reopen, replayed a recovered target
@@ -564,7 +571,7 @@ Exit criteria:
 - an unapproved path, stale digest, read-only project, external-library write, generated-file raw edit, or changed authority fails before filesystem mutation
 - no approved physical root leaks into portable artifacts, diagnostics, plans, resources, logs returned to the client, or durable source identity
 
-Final acceptance evidence (2026-07-27): six H6 public workflows remain inside the 40/50 catalogue and cover authority/restart, hostile descriptor-safe IO, guarded publication, native services, MCP/resources/limits/audit, and installed Houdini source-to-live behavior. H6G adds exact public-envelope preflight, terminal commit semantics, native-identity plus two-pass path-set snapshot authority, incremental closure budgets, exhaustive strict cleanup, bounded durable recovery, process and OS-wide account-scoped publication locks, hostile-environment cross-process contention, mandatory strong Linux root identity, Windows namespace durability, scoped sliding-window limits, and corrected MCP metadata. Windows and Ubuntu 24.04 WSL focused acceptance pass. Ruff with cyclomatic/branch limits 12/15, compileall, diff check, the 1,200-line gate, the full 40-workflow suite, and clean build/install pass. The installed Houdini 21.0.729 receipt proves the exact seven-tool surface, bounded HTTP rejection, Bundle `0.4` patch/build/apply, flat `0.1` export structural recompilation and exact-catalog semantic/connector validation followed by reconcile, native editor/Git visibility without project lock artifacts, revocation denial, source/install/running hash alignment including the publication-lock and recovery-record modules, and zero cooks; it does not establish export network-reconstruction equivalence. Final independent P0/P1 closure review is clean.
+Historical pre-H22 final acceptance evidence (2026-07-27): six H6 public workflows remain inside the 40/50 catalogue and cover authority/restart, hostile descriptor-safe IO, guarded publication, native services, MCP/resources/limits/audit, and installed Houdini source-to-live behavior. H6G adds exact public-envelope preflight, terminal commit semantics, native-identity plus two-pass path-set snapshot authority, incremental closure budgets, exhaustive strict cleanup, bounded durable recovery, process and OS-wide account-scoped publication locks, hostile-environment cross-process contention, mandatory strong Linux root identity, Windows namespace durability, scoped sliding-window limits, and corrected MCP metadata. Windows and Ubuntu 24.04 WSL focused acceptance pass. Ruff with cyclomatic/branch limits 12/15, compileall, diff check, the 1,200-line gate, the full 40-workflow suite, and clean build/install pass. The historical installed Houdini 21.0.729 receipt proves the exact seven-tool surface, bounded HTTP rejection, Bundle `0.4` patch/build/apply, flat `0.1` export structural recompilation and exact-catalog semantic/connector validation followed by reconcile, native editor/Git visibility without project lock artifacts, revocation denial, source/install/running hash alignment including the publication-lock and recovery-record modules, and zero cooks; it does not establish export network-reconstruction equivalence or current H22 availability. Its independent P0/P1 closure review was clean.
 
 Unbounded recursion remains permanently forbidden. Explicitly bounded deterministic compile-time recursion is deferred to a separate reviewed contract covering syntax, termination, identity, provenance, and budgets; it is not part of H0-H6.
 
@@ -617,7 +624,8 @@ public scenarios. The full 40-workflow run, Ruff cyclomatic/branch limits
 `12`/`15`, compileall, all JSON schemas, diff check, clean build/install, and
 the 1,200-line gate pass.
 
-Installed Houdini 21.0.729 accepted SOP, fixed-port material/VOP, LOP, and TOP
+Historical pre-H22 installed Houdini 21.0.729 acceptance covered SOP,
+fixed-port material/VOP, LOP, and TOP
 create/reconcile/rollback/save-reopen/export flows; rejected nested/dynamic
 ports, unsupported families, direct USD time samples, and a disposable locked
 HDA boundary; and retained ROP/DOP/COP/CHOP as read-only. The extension matrix
@@ -638,9 +646,60 @@ Final independent P0/P1 closure review is clean.
 
 ## 12. HS8: Production and AAA Hardening
 
-Implementation status: the repaired governed payload passes a fresh
-two-process same-host technical qualification on Houdini 21.0.729. Its current
-technical receipt is
+Implementation status: exact Houdini 22.0.368 two-process same-host technical
+qualification passed for active installed manifest
+`sha256:facf4f0b4dcf63737ebef615654f461446b321c7cce4a0365018d937e4769e4a`.
+The H22 migration repair disables installed bytecode caching, admits only exact
+22.0.368 before server construction, authenticates HDA section and Windows file
+identity through terminal observation, and rejects every undeclared file
+reference except the exact built-in USD output lane. The bootstrap repair also
+makes `pythonrc` install source-only admission before any governed import and
+derive the governed root from Houdini-compatible code filenames.
+
+Technical-6 produced outer receipt
+`sha256:19bfd956b371a99437451d8736dd48e080e4335b73f304468884194dbfb35662`
+and portable evidence
+`sha256:cf9d1e14434a154ef885a5df0236476c13b8c38300a22703959d486ab22891d9`.
+Both processes agreed on normalized USDA
+`sha256:5bd91213d3cabd33299980ee07e2a043b3571de8239dc2292a4dd4427d2de20d`
+at 35,588 bytes and observation
+`sha256:d439936c0922f3b34e1460c7372828b8bf168368b44f29436b0584e26fa9cc0b`,
+audited 210 governed modules each, and returned `accepted=true` with
+`review_pending` and both readiness flags false. Run 1
+qualification/package/publish digests were
+`sha256:b89a1b0294f501418bec8f8478567e078eb0c2e0f596a4fb23ffcf1ed462c5f7`,
+`sha256:590699d0a3acef15cbc4f2e613ce2696ee57b8e82dede1a070b3358cd1382ac4`,
+and
+`sha256:c54e3d011e9108eee213cc0cfa69d52902fe94f06c1d75f1e5e6a2630fe4440d`;
+run 2 used
+`sha256:69ab271f9fce8c85a928fe847eb2b5afb4f9c464d2f33a6c1ea22c976c4aad02`,
+`sha256:82d8fa5f264fc55e9d29704183df431da42c4fac0d32ae97fdd8445812cc9008`,
+and
+`sha256:a80b635156330877f74dd98ce1e5d80f91d7adb76dfac2557d1aca95efacb6e1`.
+The outer receipt retains `releaseAuthorized=false` and
+`visualApprovalDigest=null`. This is current same-host technical evidence only;
+RC1 clean-commit evidence and the RC2 source freeze remain pending.
+
+Technical-5 is superseded diagnostic evidence for pre-bootstrap installed
+manifest
+`sha256:7035092a036ca51b9885981389c74fca773420f862c0f926580ce68c03300279`.
+Its outer receipt is
+`sha256:98fe1498faae2aa0e1b93d29c81cbe57890203d10a8dc286732132a5716ae82b`,
+with portable evidence
+`sha256:dc2f1b425e4fa8e9d346555d2682af3b59cc1d2cd1c6b04c14ca7fe7cc2ab475`,
+normalized USDA
+`sha256:5bd91213d3cabd33299980ee07e2a043b3571de8239dc2292a4dd4427d2de20d`
+at 35,588 bytes, and observation
+`sha256:d439936c0922f3b34e1460c7372828b8bf168368b44f29436b0584e26fa9cc0b`.
+Both processes audited 210 governed modules each and reported zero authored
+cook warnings/errors. `review_pending` remained explicit, with
+`readyForPackaging=false`, `readyForPublish=false`, and
+`releaseAuthorized=false`. These values do not qualify the active
+bootstrap-repaired payload. RC1 clean-commit evidence and the RC2 source freeze
+remain pending.
+
+The last repaired H21 run is historical pre-H22 evidence. Its technical receipt
+was
 `sha256:5063c88c876822b595d44eafcb25cb43f6b04b78a59424d0a9ebc6f9b0a3a266`,
 with portable evidence
 `sha256:9f2d771da3de3d136f6da60fb415a2886e6260384e41e639aa0f05f37bbf0683`,
@@ -648,10 +707,9 @@ installed manifest
 `sha256:8a835f7af6275fe235aa9c01a418466a8d71fe21dbb5930268e1cbd6e239b703`,
 and normalized USDA
 `sha256:15b2e0961ef43667707fabde87f6bb2517afd44c825818770476b7cfcc609149`.
-Both processes accepted with zero cook warnings/errors, and an identical
-second install preserved the token and activation bytes. This is same-host
-technical evidence only; RC1 clean-commit evidence and the RC2 source freeze
-remain pending. The older same-host receipt
+Both historical processes accepted with zero cook warnings/errors, and an
+identical second install preserved the token and activation bytes. The older
+same-host receipt
 `sha256:e4e0f745421dabee7c4c9c576ee2df3390a19101a13422ee18e6afca87f73591`
 is historical because its observer could accept fallback-derived USD,
 material, delivery, dependency, and platform facts and its installed receipt
@@ -850,7 +908,7 @@ Optional `@id("...")` source identity now maps directly to persistent network-do
 
 Status: resolved in HS5 independent review
 
-The first export smoke used a normalized projection and therefore did not prove the registered endpoint against actual root category/default parameter state. The corrected implementation accepts `/obj` as the SOP container while requiring `persistent_user_data` identity for the root anchor and every exported child. Signed per-node `managedFields` survive Houdini user data; live reimport reconstructs ownership on derived bindings, code blobs, data edges, and output edges. Root/default/artist-owned fields are omitted from source and enumerated as `preservedState`, so they remain baseline-preserved merge state rather than being silently promoted to portable source ownership. The final H21.0.729 smoke calls the registered handler over the unmodified force-synced document.
+The first export smoke used a normalized projection and therefore did not prove the registered endpoint against actual root category/default parameter state. The corrected implementation accepts `/obj` as the SOP container while requiring `persistent_user_data` identity for the root anchor and every exported child. Signed per-node `managedFields` survive Houdini user data; live reimport reconstructs ownership on derived bindings, code blobs, data edges, and output edges. Root/default/artist-owned fields are omitted from source and enumerated as `preservedState`, so they remain baseline-preserved merge state rather than being silently promoted to portable source ownership. The historical pre-H22 final H21.0.729 smoke called the registered handler over the unmodified force-synced document.
 
 ### HS-BLOCK-008: Bundle 0.3/0.4 Diagnostic and URI Parity Before Live Acceptance
 

@@ -3,7 +3,7 @@
 Run this gate under a fresh `hython` process, never through the Houdini MCP request path. The exporter accepts an explicit HocusScript project directory and writes only the project-contained catalog path declared by manifest v2.
 
 ```powershell
-$hython = "C:\Program Files\Side Effects Software\Houdini 21.0.729\bin\hython.exe"
+$hython = "C:\Program Files\Side Effects Software\Houdini 22.0.368\bin\hython.exe"
 & $hython scripts/export_houdini_catalog.py --project tests/fixtures/hocusscript/live_project
 ```
 

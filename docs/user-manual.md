@@ -1,6 +1,10 @@
 # HocusPocus Manual
 
-HocusPocus is a Houdini-hosted MCP server for live automation in Houdini 21.x.
+HocusPocus is a Houdini-hosted MCP server for live automation in Houdini 22.0.368.
+
+Houdini `22.0.368` is the sole supported and release-qualifying live runtime
+for V1. Other builds, including Houdini `21.x`, are unsupported. Historical H21
+receipts describe migration evidence, not a currently available runtime.
 
 ## 1. Install
 
@@ -12,8 +16,8 @@ powershell -ExecutionPolicy Bypass -File .\scripts\build.ps1 -Clean -Install
 
 Installed package locations:
 
-- `%USERPROFILE%\Documents\houdini21.0\packages\HocusPocus.<install-id>`
-- `%USERPROFILE%\Documents\houdini21.0\packages\hocuspocus.json`
+- `%USERPROFILE%\Documents\houdini22.0\packages\HocusPocus.<install-id>`
+- `%USERPROFILE%\Documents\houdini22.0\packages\hocuspocus.json`
 
 The package manifest switches to a validated versioned candidate atomically;
 an interrupted install leaves the prior package active. Reinstalling preserves
@@ -56,7 +60,7 @@ http://127.0.0.1:37219/hocuspocus/healthz
 The bearer token is stored at:
 
 ```text
-%USERPROFILE%\Documents\houdini21.0\hocuspocus\runtime\token.txt
+%USERPROFILE%\Documents\houdini22.0\hocuspocus\runtime\token.txt
 ```
 
 ## 3. Connecting an Agent
@@ -221,7 +225,7 @@ It can size the orbit using geometry bounds from a target node.
 `snapshot.capture_viewport` can be called with no path. In that case, HocusPocus writes to a managed location under:
 
 ```text
-%USERPROFILE%\Documents\houdini21.0\hocuspocus\output\snapshots\
+%USERPROFILE%\Documents\houdini22.0\hocuspocus\output\snapshots\
 ```
 
 High-level canned asset macros are intentionally not part of the default tool surface. The current server is meant to help agents build procedural Houdini systems directly from lower-level graph, parm, material, render, Solaris, PDG, packaging, and validation tools.
@@ -364,7 +368,7 @@ The command refuses to overwrite an existing file unless its exact current diges
 `export.alembic` and `export.usd` can be called with no explicit `path`. In that case, HocusPocus writes to a managed location under:
 
 ```text
-%USERPROFILE%\Documents\houdini21.0\hocuspocus\output\exports\
+%USERPROFILE%\Documents\houdini22.0\hocuspocus\output\exports\
 ```
 
 `export.alembic` is intended for SOP geometry sources. `export.usd` is intended for LOP nodes under `/stage`.
@@ -457,15 +461,17 @@ Task, tool, and file activity is also recorded in the runtime audit log.
 Common runtime locations:
 
 - logs:
-  `%USERPROFILE%\Documents\houdini21.0\hocuspocus\logs\`
+  `%USERPROFILE%\Documents\houdini22.0\hocuspocus\logs\`
 - runtime files:
-  `%USERPROFILE%\Documents\houdini21.0\hocuspocus\runtime\`
+  `%USERPROFILE%\Documents\houdini22.0\hocuspocus\runtime\`
+- Python bytecode caching is disabled for the governed installed payload; no
+  runtime bytecode cache is part of the supported execution path.
 - snapshots:
-  `%USERPROFILE%\Documents\houdini21.0\hocuspocus\output\snapshots\`
+  `%USERPROFILE%\Documents\houdini22.0\hocuspocus\output\snapshots\`
 - exports:
-  `%USERPROFILE%\Documents\houdini21.0\hocuspocus\output\exports\`
+  `%USERPROFILE%\Documents\houdini22.0\hocuspocus\output\exports\`
 - render/test outputs:
-  `%USERPROFILE%\Documents\houdini21.0\hocuspocus\output\`
+  `%USERPROFILE%\Documents\houdini22.0\hocuspocus\output\`
 
 ## 11. Troubleshooting
 
@@ -478,7 +484,7 @@ If the server is not running:
 
 - run `import hocuspocus; print(hocuspocus.server_status())`
 - verify the installed config at:
-  `%USERPROFILE%\Documents\houdini21.0\packages\HocusPocus\config\default.toml`
+  `%USERPROFILE%\Documents\houdini22.0\packages\HocusPocus\config\default.toml`
 
 If Codex cannot connect:
 

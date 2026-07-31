@@ -51,7 +51,7 @@ Problem:
 
 Deliver:
 
-- a stable compatibility and deprecation policy for Houdini 21.x and MCP surface changes
+- a stable compatibility and deprecation policy for Houdini 22.0.368 and MCP surface changes
 - canonical workflow guidance for agents and operators
 - stronger output/error contracts for the most important tools
 - end-to-end regression smoke coverage for live Houdini-hosted flows

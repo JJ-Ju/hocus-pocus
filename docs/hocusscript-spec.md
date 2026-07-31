@@ -6,6 +6,11 @@ File extension: `.hocus`
 
 Release-closure plan: `docs/hocusscript-roadmap-completion-plan.md`
 
+The sole supported and release-qualifying live runtime for V1 is exact Houdini
+`22.0.368`. Every other Houdini build, including Houdini `21.x`, is outside the
+V1 support contract. H21 receipts retained below are historical migration
+evidence only.
+
 ## 1. Purpose
 
 HocusScript is a deterministic, TypeScript-shaped source language for authoring Houdini node networks through HocusPocus.
@@ -883,7 +888,7 @@ All H1 carrier decoders are strict, bounded, duplicate-key/non-finite rejecting,
 
 H5 extends the existing guarded document pipeline rather than creating a control-specific mutation engine. Frozen Bundle `0.3` and strict Bundle `0.4` use distinct version paths without coercion, validate GraphSpec `0.4` and expansion-map v2, preserve authenticated module/control provenance, freshly re-resolve semantic selections against the live catalog, and lower to the canonical network document. Exact catalog operator and HDA fingerprints are authoritative; complete effective package-search provenance remains outside the claim while `HS-BLOCK-003` is open. GraphSpec `0.4`, expansion-map v2, resolved-module-set v2, Bundle `0.4`, and the H5 operation schemas are registered and staged as an exact installed compatibility unit. `document.preview_bundle`, `document.plan_bundle`, and `document.apply_plan` retain their content-only and stored-plan contracts. Plans pin exact bundle/compiler/GraphSpec, project/lock, catalog, target-document, policy, capability, ownership, revision, and expansion-provenance identities. Generated symbols map to deterministic legal live names without replacing durable IDs. Apply observes cancellation, preserves signed `managedFields` and artist-owned state, verifies realized state, and rolls back or quarantines failures through the existing lifecycle. The URI/fresh-semantic `HS-BLOCK-008` gate is resolved. Any cook acceptance step remains a separately authorized post-apply action after structural verification. At this historical H5 checkpoint, export remained a normalized flat language-`0.1` semantic handoff and did not claim to reconstruct authored module or control structure; HS7 later added the guarded language-`0.4` family/value export lane.
 
-The repaired H5E run passed in installed Houdini 21.0.729 with exact source/build/install/running-module alignment across 37 critical modules. Three targets exercised Bundle `0.3`, `0.4`, and `0.4` in `merge`, `merge`, and `reconcile` modes. Preview was deterministic; first apply verified realized state, while newly compiled second merge and reconcile operations produced distinct non-replay plans and commits. Exact catalog drift failed with `HOCUS752` until exact restore, stale plans failed with `HOCUS753`, and an injected mid-executor failure returned `HOCUS755` after verified rollback. Target recovery through a reopened SQLite store returned committed idempotent replay. Save/reopen retained exact node, port, edge, binding, code, and referenced module/control expansion provenance across all three targets. Timestamp-controlled retention proved immediate expiry, age pruning, count pressure, byte pressure, preservation of pending and `partial_or_unknown` evidence, and exact mapped `HOCUS759` rejection when protected records exhausted capacity. The installed schema resources resolved; the normalized flat language-`0.1` export structurally recompiled and passed exact-catalog semantic and connector validation without claiming network or authored module/control reconstruction; and 67 live node observations recorded zero cooks. The final status was `passed`, and final independent P0/P1 review was clean.
+The historical pre-H22 repaired H5E run passed in installed Houdini 21.0.729 with exact source/build/install/running-module alignment across 37 critical modules. Three targets exercised Bundle `0.3`, `0.4`, and `0.4` in `merge`, `merge`, and `reconcile` modes. Preview was deterministic; first apply verified realized state, while newly compiled second merge and reconcile operations produced distinct non-replay plans and commits. Exact catalog drift failed with `HOCUS752` until exact restore, stale plans failed with `HOCUS753`, and an injected mid-executor failure returned `HOCUS755` after verified rollback. Target recovery through a reopened SQLite store returned committed idempotent replay. Save/reopen retained exact node, port, edge, binding, code, and referenced module/control expansion provenance across all three targets. Timestamp-controlled retention proved immediate expiry, age pruning, count pressure, byte pressure, preservation of pending and `partial_or_unknown` evidence, and exact mapped `HOCUS759` rejection when protected records exhausted capacity. The installed schema resources resolved; the normalized flat language-`0.1` export structurally recompiled and passed exact-catalog semantic and connector validation without claiming network or authored module/control reconstruction; and 67 live node observations recorded zero cooks. The historical status was `passed`, and its independent P0/P1 review was clean; it does not qualify the current H22 runtime.
 
 H6 adds project filesystem access only through an opt-in `source.*` namespace. The host user MUST approve each canonical project root outside the request channel. The server startup/configuration surface and Houdini approval UI MUST use one canonical host-owned registry. Each approved entry receives a stable opaque `projectId` selector, but the ID is not a bearer capability: every operation and resource read MUST recheck server-side authorization for the current connection/session. Access MUST default to read-only and session-scoped. Optional persistence requires an explicit user choice. Source read, source write, generated-lock update, external-root read, and optional change notification are separate grants; selecting read-write mode MUST NOT silently grant lock updates, external access, or watching. Grants MUST support expiry and immediate revocation. Physical roots MUST NOT be returned to the client or participate in portable identities. External roots require separate grants and are read-only by default. No MCP argument may self-authorize an absolute root, infer one from `$HIP`, CWD, environment variables, lock records, or source text, or access outside an approved project.
 
@@ -908,7 +913,7 @@ Writable compilation uses a temporary compiler closure plus retained descriptor/
 
 H6 rate limits use atomic monotonic sliding windows keyed by authenticated principal, session, authorized project, and category. The monotonic timestamp is sampled while holding the limiter lock so each queue remains ordered. Total and category windows are checked before either is charged; expired empty buckets are pruned with bounded work, resource enumeration uses a reserved session-resource scope, and invalid or unauthorized caller selectors share one bounded denial scope instead of allocating caller-controlled project buckets. Because `source.project.build` includes `lock_update`, its MCP metadata is conservatively mutating and non-idempotent. Its action metadata names the implemented `generated_lock` grant, while the runtime grant check remains authoritative.
 
-H6 is complete and accepted after H6G trust-boundary repair. `HS-BLOCK-001` and `HS-BLOCK-009` are closed for the approved local NTFS/Linux source-workspace lane. The six focused H6 workflows and full 40-workflow catalogue pass, as do Ruff cyclomatic/branch limits `12`/`15`, compileall, diff check, the 50-test ceiling, and the 1,200-line gate. Windows and Ubuntu 24.04 WSL acceptance cover descriptor-safe publication, rollback races, bounded durable recovery, hostile-environment cross-process lock contention, legacy-lock denial, mandatory strong Linux root identity, and project-artifact absence. The clean installed Houdini 21.0.729 run verifies source/build/install/running hash alignment including the publication-lock and recovery-record modules, the exact seven-tool surface, source-to-live apply, flat export structural recompilation and exact-catalog semantic/connector validation followed by reconcile, Git/native-editor visibility, revocation, and zero cooks. It did not establish export network-reconstruction equivalence. Final independent P0/P1 closure review is clean.
+H6 implementation is complete after H6G trust-boundary repair. `HS-BLOCK-001` and `HS-BLOCK-009` are closed for the approved local NTFS/Linux source-workspace lane. The six focused H6 workflows and full 40-workflow catalogue pass, as do Ruff cyclomatic/branch limits `12`/`15`, compileall, diff check, the 50-test ceiling, and the 1,200-line gate. Windows and Ubuntu 24.04 WSL acceptance cover descriptor-safe publication, rollback races, bounded durable recovery, hostile-environment cross-process lock contention, legacy-lock denial, mandatory strong Linux root identity, and project-artifact absence. Historical pre-H22 acceptance in installed Houdini 21.0.729 verified source/build/install/running hash alignment including the publication-lock and recovery-record modules, the exact seven-tool surface, source-to-live apply, flat export structural recompilation and exact-catalog semantic/connector validation followed by reconcile, Git/native-editor visibility, revocation, and zero cooks. It did not establish export network-reconstruction equivalence and does not qualify the current H22 runtime. Its independent P0/P1 closure review was clean.
 
 H6 changes the transport available to an agent, not the source or mutation authority: `.hocus` remains ordinary Git-visible code, native editors and CLI remain fully interoperable, and only authenticated bundles plus stored plans can mutate Houdini. Unbounded loops and recursion remain forbidden. Explicitly bounded deterministic compile-time recursion remains deferred to a separate reviewed syntax, termination, identity, provenance, and budget contract and is not part of language `0.3`.
 
@@ -951,7 +956,7 @@ a network-reconstruction guarantee. Constructs without the required evidence
 remain `read-only`, `preserved-opaque`, or `rejected`; no generic metadata
 escape hatch changes their classification.
 
-HS7 final acceptance passed in installed Houdini 21.0.729. SOP,
+HS7 live acceptance passed in installed Houdini 22.0.368. SOP,
 fixed-port material/VOP, LOP, and TOP fixtures completed guarded create,
 reconcile, injected rollback, save/reopen, and structural export recompilation
 with exact-catalog semantic/connector validation. This did not establish export
@@ -962,10 +967,14 @@ editor/runtime/typed extension preserved artist spare and sticky state,
 restored ramp and multiparm parents to exact Houdini defaults, and completed
 rollback at editor, runtime, and typed executor checkpoints. All managed
 descendants recorded zero cooks. The receipt authenticated 79 critical
-source/install/running modules. The full 40-workflow catalogue, Ruff
+source/install/running modules in the historical H21 campaign; the H22
+migration receipt aligned its 37 acceptance-critical modules, reported no
+unavailable fixture, and rejected all four unsupported family policies. The
+complete H22 catalog measured 44,342,922 UTF-8 bytes across 5,566 operators,
+inside the 64 MiB admission bound. The full 40-workflow catalogue, Ruff
 complexity `12`/branch `15`, compileall, schema parsing, diff check, clean
-build/install, 50-test ceiling, and 1,200-line gate pass; final independent
-P0/P1 review is clean.
+build/install, 50-test ceiling, and 1,200-line gate remain release gates for
+the migrated payload.
 
 | HS6 limit | Default |
 | --- | ---: |
@@ -1107,7 +1116,8 @@ boundaries rather than general graph or filesystem tools. HS8 errors use
 `HOCUS950`-`HOCUS959` for
 contract/observation failures, `HOCUS980`-`HOCUS989` for build evidence and
 gates, and `HOCUS990` for the complete qualification boundary. `HOCUS991`
-remains reserved for private attestation rejection.
+remains reserved for private attestation rejection. `HOCUS998` rejects an
+unsupported Houdini host or ungoverned Python loader before server construction.
 
 Numeric comparison MUST contain exactly the canonical build-metric fields and
 its candidate values MUST equal the measured metrics. Every visual comparison

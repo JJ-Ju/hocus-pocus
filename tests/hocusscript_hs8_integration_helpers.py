@@ -34,7 +34,10 @@ from hocuspocus.hocusscript.port_selectors import connector_evidence_name
 from hocuspocus.live.context import RequestContext
 from hocuspocus.live.ops.base import OperationBaseMixin
 from hocuspocus.live.ops.production import ProductionOperationsMixin
-from hocuspocus.live.production_observation import ProductionFixtureObserver
+from hocuspocus.live.production_observation import (
+    ProductionFixtureObserver,
+    ProductionObservationError,
+)
 from hocuspocus.live.production_usd_observation import (
     ProductionUsdObservationError,
     observe_production_usda,
@@ -689,6 +692,7 @@ def _assert_installed_harness_contract(testcase: Any) -> None:
             "HoudiniDataId",
             "HoudiniEditorNodes",
             "HoudiniPrimEditorNodes",
+            "HoudiniSavePath",
             "HoudiniVolumeFilePaths",
         },
     )
@@ -717,6 +721,7 @@ def _assert_output_representation_measurements(testcase: Any) -> None:
     observer = ProductionFixtureObserver(
         SimpleNamespace(), authorized_roots=("/obj/hs8_rock_family",),
     )
+    _assert_h22_configure_layer_output_classification(testcase, observer)
     assert_required_intrinsic_truth(testcase, observer)
     disconnected = _FakeGeometry(
         primitives=(
@@ -739,6 +744,76 @@ def _assert_output_representation_measurements(testcase: Any) -> None:
         "used": True, "uniqueMeshes": 1, "unpackedInstances": 0,
     })
     testcase.assertEqual(instance_count, 2)
+
+
+def _assert_h22_configure_layer_output_classification(
+    testcase: Any,
+    observer: ProductionFixtureObserver,
+) -> None:
+    named = lambda value: SimpleNamespace(name=lambda: value)
+    template = SimpleNamespace(
+        type=lambda: named("String"),
+        stringType=lambda: named("FileReference"),
+    )
+    def node_type(
+        *,
+        definition: Any = None,
+        source: str = "Internal",
+        source_path: str = "Internal",
+    ) -> Any:
+        return SimpleNamespace(
+            category=lambda: named("Lop"),
+            name=lambda: "configurelayer",
+            nameWithCategory=lambda: "Lop/configurelayer",
+            namespaceOrder=lambda: ("configurelayer",),
+            definition=lambda: definition,
+            source=lambda: named(source),
+            sourcePath=lambda: source_path,
+        )
+
+    def parm(name: str, value: str = "$HIP/usd/output.usda") -> Any:
+        return SimpleNamespace(
+            parmTemplate=lambda: template,
+            unexpandedString=lambda: value,
+            path=lambda: f"/stage/configure_publish_layer/{name}",
+            name=lambda: name,
+        )
+
+    node = SimpleNamespace(
+        parms=lambda: (parm("savepath"),),
+        path=lambda: "/stage/configure_publish_layer",
+        type=lambda: node_type(),
+    )
+    testcase.assertEqual(observer._file_dependencies(node), [])
+    node.parms = lambda: (parm("filepath1"),)
+    with testcase.assertRaisesRegex(
+        ProductionObservationError,
+        "Ambient file dependency",
+    ):
+        observer._file_dependencies(node)
+    for value in ("/obj/input.bgeo", "/stage/input.usd", "/mat/input.tx"):
+        with testcase.subTest(file_reference=value):
+            node.parms = lambda value=value: (parm("filepath1", value),)
+            with testcase.assertRaisesRegex(
+                ProductionObservationError, "Ambient file dependency",
+            ):
+                observer._file_dependencies(node)
+    node.parms = lambda: (parm("savepath"),)
+    hostile_types = (
+        ("same-name HDA", node_type(definition=object())),
+        (
+            "same-name plugin",
+            node_type(source="DSO", source_path="$HOUDINI_DSO_PATH/rogue.dll"),
+        ),
+    )
+    for label, hostile_type in hostile_types:
+        with testcase.subTest(output_identity=label):
+            node.type = lambda hostile_type=hostile_type: hostile_type
+            with testcase.assertRaisesRegex(
+                ProductionObservationError,
+                "Ambient file dependency",
+            ):
+                observer._file_dependencies(node)
 
     explicit = _FakeGeometry(
         points=(

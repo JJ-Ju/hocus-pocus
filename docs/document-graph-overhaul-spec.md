@@ -10,7 +10,7 @@ Scope:
 
 Targets:
 
-- Houdini 21.x
+- Houdini 22.0.368
 - MCP protocol revision `2025-11-25`
 - interactive Houdini session first
 - `hython` compatibility second
