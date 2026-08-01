@@ -86,5 +86,9 @@ def workspace_audit_path() -> Path:
     return runtime_dir() / "source-workspace-audit.sqlite3"
 
 
+def operation_history_path() -> Path:
+    return runtime_dir() / "operation-history.sqlite3"
+
+
 def server_log_path() -> Path:
     return log_dir() / "server.log"

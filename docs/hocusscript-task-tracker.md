@@ -1,8 +1,7 @@
 # HocusScript Engineering Task Tracker
 
-Status: exact H22.0.368 same-host technical qualification passed for the active
-bootstrap-repaired manifest; RC1 clean-commit evidence remains pending before
-RC2 freeze
+Status: HS0-HS8 and M18 implementation accepted on installed Houdini 22;
+production release closure remains open
 Specification: `docs/hocusscript-spec.md`
 Roadmap: `docs/hocusscript-roadmap.md`
 Completion plan: `docs/hocusscript-roadmap-completion-plan.md`
@@ -27,11 +26,15 @@ pre-H22 migration evidence only.
 
 ## 2. Current Slice
 
-Current milestone: use the passing exact Houdini 22.0.368 technical-6
-two-process same-host evidence for active installed manifest
+Current milestone: finish RC1 mutable release evidence, then freeze exactly one
+RC2 candidate and bind external clean-image and human-review authority to that
+unchanged candidate. The technical-6 two-process receipt for installed manifest
 `sha256:facf4f0b4dcf63737ebef615654f461446b321c7cce4a0365018d937e4769e4a`
-to obtain RC1 clean-commit evidence before RC2 freeze, then bind external
-clean-image and human-review authority to that exact candidate
+remains the latest production-fixture qualification, but M18 changed governed
+runtime code afterward. Focused M18 authoring acceptance passed for engineering
+install manifest
+`sha256:57d8515086af5851b3fbcd62cf6ffd48ae4d659aa930935dc0813f6b61b124ec`;
+it is newer engineering evidence, not a replacement production receipt.
 Current scope: complete all mutable internal evidence and detached
 external-evidence tooling, freeze one exact H4-HS8 source/install candidate in
 RC2, then bind externally authenticated clean-image/VM and human-review
@@ -633,10 +636,9 @@ Houdini required: yes
 
 ## 11. HS8: Production and AAA Validation
 
-Status: exact Houdini 22.0.368 installed two-process same-host technical
-qualification passed for the active bootstrap-repaired manifest; RC1
-clean-commit evidence remains before RC2 freeze, while external human review
-and authenticated clean-image/VM qualification remain open
+Status: implementation complete; the last full Houdini 22 two-process HS8
+qualification predates M18, so RC1 must requalify the post-M18 candidate before
+RC2 freeze; external human review and clean-image authority remain open
 
 Dependencies: HS6 and relevant HS7 coverage
 Houdini required: yes
@@ -697,11 +699,11 @@ Houdini required: yes
   Both processes audited 210 governed modules each and reported zero authored
   cook warnings/errors. `review_pending`, `readyForPackaging=false`,
   `readyForPublish=false`, and `releaseAuthorized=false` remain explicit. This
-  does not qualify the active bootstrap-repaired payload, establish external
-  clean-image/VM or human authority, provide RC1 clean-commit evidence, or
-  freeze an RC2 candidate.
+  does not qualify either the later technical-6 manifest or the post-M18 tree,
+  establish external clean-image/VM or human authority, provide RC1 evidence,
+  or freeze an RC2 candidate.
 - [x] Pass technical-6 exact Houdini 22.0.368 two-process same-host
-  qualification for active installed manifest
+  qualification for the then-active pre-M18 installed manifest
   `sha256:facf4f0b4dcf63737ebef615654f461446b321c7cce4a0365018d937e4769e4a`.
   Outer receipt:
   `sha256:19bfd956b371a99437451d8736dd48e080e4335b73f304468884194dbfb35662`;
@@ -724,6 +726,12 @@ Houdini required: yes
   `releaseAuthorized=false` and `visualApprovalDigest=null`. External
   clean-image/VM, human approval, RC1 clean-commit evidence, and RC2 freeze
   remain pending.
+- [x] Pass focused M18 installed Houdini 22 authoring acceptance for engineering
+  install manifest
+  `sha256:57d8515086af5851b3fbcd62cf6ffd48ae4d659aa930935dc0813f6b61b124ec`,
+  including the 43-workflow catalogue, guarded mutation/HDA checks, durable
+  reconnect, and independent P0/P1 review. This does not substitute for a full
+  HS8 two-process qualification of the post-M18 candidate.
 - [ ] RC1: make authenticated CI/image attestations and externally authored
   visual approvals detached release inputs, verify their candidate/request/
   output/policy bindings, and reject checked-in development fixtures as

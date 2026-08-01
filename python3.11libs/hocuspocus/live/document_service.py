@@ -606,7 +606,13 @@ class LiveDocumentService:
         )
         with self._lock:
             self._checkouts[checkout_id] = record
-        self._persist_record(record)
+        try:
+            self._persist_record(record)
+        except Exception:
+            with self._lock:
+                if self._checkouts.get(checkout_id) is record:
+                    self._checkouts.pop(checkout_id, None)
+            raise
         return self.snapshot(checkout_id) or {}
 
     def snapshot(self, checkout_id: str) -> dict[str, Any] | None:
@@ -709,13 +715,14 @@ class LiveDocumentService:
 
     def discard(self, checkout_id: str) -> bool:
         with self._lock:
-            removed = self._checkouts.pop(checkout_id, None)
+            removed = self._checkouts.get(checkout_id)
             if removed is None:
                 removed = self._record_for_checkout(checkout_id)
-                self._checkouts.pop(checkout_id, None)
+            if removed is None:
+                return False
             if self._store is not None:
                 self._store.delete_checkout_record(checkout_id)
-        if removed is not None:
-            self._logger.info("discarded document checkout %s", checkout_id)
-            return True
-        return False
+            if self._checkouts.get(checkout_id) is removed:
+                self._checkouts.pop(checkout_id, None)
+        self._logger.info("discarded document checkout %s", checkout_id)
+        return True

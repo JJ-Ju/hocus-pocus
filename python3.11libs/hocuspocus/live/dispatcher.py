@@ -76,6 +76,7 @@ class LiveCommandDispatcher:
         self._contexts: dict[str, RequestContext] = {}
         self._worker_thread: threading.Thread | None = None
         self._worker_stop = threading.Event()
+        self._monitor: Any = None
 
     @staticmethod
     def _detect_mode() -> DispatchMode:
@@ -90,6 +91,9 @@ class LiveCommandDispatcher:
     @property
     def mode(self) -> str:
         return self._mode.value
+
+    def set_monitor(self, monitor: Any) -> None:
+        self._monitor = monitor
 
     def start(self) -> None:
         self._started = True
@@ -269,7 +273,13 @@ class LiveCommandDispatcher:
                         wait_time,
                     )
                 command.context.raise_if_cancelled()
-                result = command.callback()
+                if self._monitor is None:
+                    result = command.callback()
+                else:
+                    with self._monitor.activate_tool_operation(
+                        command.context.operation_id
+                    ):
+                        result = command.callback()
         except OperationCancelledError as exc:
             self._finish_operation(
                 command.context.operation_id,

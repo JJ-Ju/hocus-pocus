@@ -547,13 +547,15 @@ class DocumentDiffOperationsMixin:
         authored_edges = {
             str(edge.get("uid", "")): edge
             for edge in authored.get("edges", [])
-            if isinstance(edge, dict) and str(edge.get("uid", ""))
+            if isinstance(edge, dict)
+            and edge.get("kind") == "data"
+            and str(edge.get("uid", ""))
         }
         projected_authored["edges"] = [edge_contract(edge) for edge in authored_edges.values()]
         projected_live["edges"] = [
             edge_contract(edge, authored_edges.get(str(edge.get("uid", ""))))
             for edge in live.get("edges", [])
-            if isinstance(edge, dict)
+            if isinstance(edge, dict) and edge.get("kind") == "data"
         ]
         diff = self._document_diff_payload(projected_authored, projected_live)
         expected_expansion = self._document_expansion_from_metadata(authored)

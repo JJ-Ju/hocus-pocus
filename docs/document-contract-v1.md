@@ -10,8 +10,9 @@ Scope:
 
 Related artifacts:
 
-- `docs/document-graph-overhaul-spec.md`
-- `docs/schemas/network-document-v1.schema.json`
+- [document graph overhaul specification](document-graph-overhaul-spec.md)
+- [network document v1 schema](schemas/network-document-v1.schema.json)
+- [network document v2 schema](schemas/network-document-v2.schema.json)
 
 ## 1. Purpose
 
@@ -35,9 +36,10 @@ Schema file:
 
 - `docs/schemas/network-document-v1.schema.json`
 
-Schema resource URI:
+Schema resource URIs:
 
-- `houdini://documents/schema/network-document/v1`
+- canonical: `hocuspocus://schemas/network-document/v1`
+- compatibility alias: `houdini://documents/schema/network-document/v1`
 
 Rules:
 
@@ -53,7 +55,8 @@ These URIs are locked for the first document-centric slice:
 | --- | --- |
 | `houdini://documents/scene` | Read the scene manifest over root networks. |
 | `houdini://documents/network/{path}` | Read a canonical network document for a network or subnetwork. |
-| `houdini://documents/schema/network-document/v1` | Read the locked machine-readable schema for network documents. |
+| `hocuspocus://schemas/network-document/v1` | Read the canonical locked machine-readable schema. |
+| `houdini://documents/schema/network-document/v1` | Read the same schema through the compatibility alias. |
 | `houdini://documents/checkouts/{checkout_id}` | Read a working copy created by `document.checkout`. |
 | `houdini://documents/diagnostics/{checkout_id}` | Read the latest validation or apply diagnostics for a checkout. |
 
@@ -69,7 +72,7 @@ These tool names are locked:
 
 | Tool | Purpose |
 | --- | --- |
-| `document.checkout` | Create a working copy from a scene or network document. |
+| `document.checkout` | Create a working copy from a scene or network document and return it inline when the bounded response fits. |
 | `document.validate` | Validate a supplied document or an existing checkout. |
 | `document.diff` | Diff baseline vs target document or checkout. |
 | `document.apply` | Apply a document or checkout to Houdini and commit the resulting revision. |
@@ -77,7 +80,16 @@ These tool names are locked:
 | `document.query` | Query the embedded graph store without materializing a full document. |
 | `document.sync_from_houdini` | Force a reimport of a scene or network scope after direct live edits. |
 
-Optional later additions may exist, but they do not change this locked first-wave surface.
+Later additions do not change this locked first-wave surface. Network-document
+v2 and the HocusScript Bundle preview/plan/apply lane are versioned successors,
+not silent changes to v1. Use MCP discovery and the canonical schema resources
+instead of inferring v2 fields from this document.
+
+`document.checkout` preserves its durable checkout and diagnostics resource
+URIs. Its response also includes `documentDelivery` with the canonical working
+document digest, UTF-8 byte length, inline limit, and either `mode = inline` or
+`mode = resource`. Inline mode includes the exact working document; resource
+mode omits that field and directs the caller to the existing checkout URI.
 
 ## 5. Apply Modes
 
@@ -141,4 +153,6 @@ This contract does not require immediate parity for:
 - all TOP networks
 - HDA definition editing
 
-Those come later under the same versioned document model.
+Those are outside this locked v1 slice. Current builds provide additional
+versioned support; see the [agent workflows](agent-workflows.md) and
+[Houdini MCP specification](houdini-mcp-spec.md) for the deployed surface.

@@ -11,7 +11,7 @@ from typing import Any
 from uuid import uuid4
 
 from hocuspocus.core.jsonrpc import INVALID_PARAMS, JsonRpcError
-from hocuspocus.core.policy import require_capabilities
+from hocuspocus.core.policy import capability_projection, require_capabilities
 from hocuspocus.hocusscript import (
     BUNDLE_VERSION,
     BundleValidationError,
@@ -23,7 +23,6 @@ from hocuspocus.hocusscript import (
     MODULE_BUNDLE_VERSION,
     VALUE_BUNDLE_VERSION,
     SnapshotCatalogProvider,
-    compile_source,
     complete_source,
     decode_compiled_bundle,
     export_network_document,
@@ -60,11 +59,16 @@ from .hocusscript_apply import (
     REVERSIBLE_CANDIDATE_ACTIONS,
     HocusScriptApplyOperationsMixin,
 )
+from .hocusscript_editor_compile import HocusScriptEditorCompileOperationsMixin
 from .hocusscript_recovery import recovered_apply_result
 from .hocusscript_resources import HocusScriptResourceOperationsMixin
 
 
-class HocusScriptOperationsMixin(HocusScriptApplyOperationsMixin, HocusScriptResourceOperationsMixin):
+class HocusScriptOperationsMixin(
+    HocusScriptEditorCompileOperationsMixin,
+    HocusScriptApplyOperationsMixin,
+    HocusScriptResourceOperationsMixin,
+):
     _HS7_FIDELITY_RESOURCE_URI = "houdini://documents/hocusscript/fidelity/hs7"
     _GRAPH_SPEC_SCHEMA_RESOURCE_URI = "houdini://documents/schema/graph-spec/v0.2"
     _MODULE_GRAPH_SPEC_SCHEMA_RESOURCE_URI = "houdini://documents/schema/graph-spec/v0.3"
@@ -113,30 +117,6 @@ class HocusScriptOperationsMixin(HocusScriptApplyOperationsMixin, HocusScriptRes
                 INVALID_PARAMS,
                 f"source must not exceed {MAX_SOURCE_BYTES} UTF-8 bytes.",
             )
-
-    def document_compile_source(
-        self,
-        arguments: dict[str, Any],
-        context: RequestContext,
-    ) -> dict[str, Any]:
-        del context
-        source = arguments.get("source")
-        source_name = arguments.get("source_name", "<mcp-source>")
-        strict = arguments.get("strict", True)
-        if not isinstance(source, str):
-            raise JsonRpcError(INVALID_PARAMS, "source must be a string.")
-        if not isinstance(source_name, str) or not source_name.strip():
-            raise JsonRpcError(INVALID_PARAMS, "source_name must be a non-empty string when provided.")
-        if len(source_name) > 1024:
-            raise JsonRpcError(INVALID_PARAMS, "source_name must not exceed 1024 characters.")
-        if not isinstance(strict, bool):
-            raise JsonRpcError(INVALID_PARAMS, "strict must be a boolean when provided.")
-        result = compile_source(source, source_name.strip(), strict=strict).to_dict()
-        if result["valid"]:
-            summary = "Compiled HocusScript through the structural preview stage without mutating Houdini."
-        else:
-            summary = f"HocusScript structural compilation reported {result['diagnosticCount']} diagnostic(s)."
-        return self._tool_response(summary, result)
 
     def document_format_source(
         self,
@@ -606,6 +586,8 @@ class HocusScriptOperationsMixin(HocusScriptApplyOperationsMixin, HocusScriptRes
             ),
             context,
         )
+        required = bundle.get("requiredCapabilities", [])
+        data.update(capability_projection(context.permissions, required))
         if not data["valid"]:
             return self._tool_response(
                 f"Bundle preview blocked by {data['diagnosticCount']} diagnostic(s) without mutating Houdini.",

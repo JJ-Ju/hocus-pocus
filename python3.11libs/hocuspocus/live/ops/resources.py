@@ -7,9 +7,11 @@ from ..context import RequestContext
 
 class ResourceOperationsMixin:
     def read_session_info(self, context: RequestContext) -> dict[str, object]:
+        data = self._call_live(self._session_info_impl, context)
+        data["grantedCapabilities"] = sorted(set(context.permissions))
         return self._resource_response(
             "houdini://session/info",
-            self._call_live(self._session_info_impl, context),
+            data,
         )
 
     def read_session_health(self, context: RequestContext) -> dict[str, object]:
@@ -23,6 +25,7 @@ class ResourceOperationsMixin:
             "policy": {
                 "effectivePolicy": self._settings.effective_policy_payload(),
                 "availableProfiles": self._settings.available_policy_profiles_payload(),
+                "grantedCapabilities": sorted(set(context.permissions)),
             },
             "settings": {
                 "host": self._settings.host,
@@ -43,6 +46,7 @@ class ResourceOperationsMixin:
             {
                 "effectivePolicy": self._settings.effective_policy_payload(),
                 "availableProfiles": self._settings.available_policy_profiles_payload(),
+                "grantedCapabilities": sorted(set(context.permissions)),
             },
         )
 

@@ -60,6 +60,11 @@ class HocusScriptControlScenarios(unittest.TestCase):
 
         self.assertTrue(compiled["valid"])
         self.assertFalse(compiled["readyForApply"])
+        self.assertEqual(compiled["lane"], "structural_compatibility")
+        self.assertEqual(compiled["supportedLanguageVersions"], ["0.1"])
+        self.assertFalse(compiled["applyable"])
+        self.assertEqual(compiled["missingCapabilities"], ["edit_scene"])
+        self.assertIn("source.project.build", compiled["nextActions"][0])
         self.assertTrue(formatted["valid"])
         self.assertIn("graph demo {\n", formatted["formattedSource"])
 
@@ -131,6 +136,9 @@ class HocusScriptControlScenarios(unittest.TestCase):
         self.assertTrue(payload["valid"])
         self.assertTrue(payload["readyForPlan"])
         self.assertFalse(payload["readyForApply"])
+        self.assertFalse(payload["capabilityReady"])
+        self.assertEqual(payload["requiredCapabilities"], ["edit_scene"])
+        self.assertEqual(payload["missingCapabilities"], ["edit_scene"])
         self.assertEqual(operations.asserted_root_path, "/obj/geo1")
         self.assertTrue(payload["preview"]["candidatePlan"]["operations"])
 

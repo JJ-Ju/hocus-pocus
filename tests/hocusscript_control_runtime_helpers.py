@@ -261,6 +261,7 @@ class _Undos:
         self.owner.baseline = copy.deepcopy(self.snapshot)
         self.snapshot = None
         self.label = None
+        return True
 
 
 class _Hou:
@@ -311,14 +312,26 @@ class _PlanOperations(_PreviewOperations):
             self.cancel_context.cancel()
         return result
 
-    def _document_execute_apply_plan(self, plan, baseline, *, checkpoint=None):
+    def _document_preflight_apply_plan(self, plan, _baseline, target=None):
+        # Live template behavior is covered by runtime_mutation_integrity.
+        return copy.deepcopy(plan), copy.deepcopy(target)
+
+    def _document_execute_apply_plan(
+        self, plan, baseline, *, checkpoint=None, executed=None,
+    ):
         if checkpoint:
             checkpoint()
         self.baseline = copy.deepcopy(self.target_document)
         if self.fail_execution:
             self.fail_execution = False
             raise RuntimeError("injected execution failure")
-        return [{"type": "fake_apply", "summary": copy.deepcopy(plan.get("summary", {}))}]
+        result = {
+            "type": "fake_apply", "summary": copy.deepcopy(plan.get("summary", {})),
+        }
+        if executed is not None:
+            executed.append(result)
+            return executed
+        return [result]
 
 
 def _apply_arguments(plan: dict, key: str) -> dict:

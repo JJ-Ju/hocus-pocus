@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
-from hocuspocus.core.jsonrpc import INVALID_PARAMS, JsonRpcError
+from hocuspocus.core.jsonrpc import INTERNAL_ERROR, INVALID_PARAMS, JsonRpcError
 
 from ..context import RequestContext
 
 
 class NodeOperationsMixin:
+    _OBJECT_GEOMETRY_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,127}\Z")
+
     def _node_list_impl(self, arguments: dict[str, Any]) -> dict[str, Any]:
         hou_module = self._require_hou()
         parent_path = str(arguments.get("parent_path", "/obj"))
@@ -75,6 +78,271 @@ class NodeOperationsMixin:
     def node_create(self, arguments: dict[str, Any], context: RequestContext) -> dict[str, Any]:
         data = self._call_live(lambda: self._node_create_impl(arguments), context)
         return self._tool_response(f"Created node {data['path']}.", data)
+
+    def _object_geometry_name(
+        self, arguments: dict[str, Any]
+    ) -> tuple[str | None, bool]:
+        supplied_name = arguments.get("name")
+        unique_name = bool(arguments.get("unique_name", False))
+        if supplied_name is None:
+            return None, unique_name
+        if not isinstance(supplied_name, str):
+            raise JsonRpcError(INVALID_PARAMS, "name must be a string.")
+        name = supplied_name
+        if not name or self._OBJECT_GEOMETRY_NAME.fullmatch(name) is None:
+            raise JsonRpcError(
+                INVALID_PARAMS,
+                "name must contain 1-128 ASCII letters, digits, or underscores "
+                "and start with a letter or underscore.",
+            )
+        return name, unique_name
+
+    def _object_create_geometry_impl(
+        self, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        hou_module = self._require_hou()
+        parent = hou_module.node("/obj")
+        if parent is None:
+            raise JsonRpcError(INVALID_PARAMS, "Houdini object network /obj is unavailable.")
+        name, unique_name = self._object_geometry_name(arguments)
+        if name is not None and not unique_name and parent.node(name) is not None:
+            raise JsonRpcError(
+                INVALID_PARAMS,
+                f"An object named {name!r} already exists under /obj. "
+                "Set unique_name to allow Houdini to resolve the collision.",
+            )
+
+        node = None
+        checkout: dict[str, Any] | None = None
+        admitted_document: dict[str, Any] | None = None
+        with hou_module.undos.group("HocusPocus: create Geometry object"):
+            try:
+                node = parent.createNode(
+                    "geo",
+                    node_name=name,
+                    run_init_scripts=True,
+                    load_contents=True,
+                    exact_type_name=True,
+                )
+                node.setUserData("hpmcp.created_by", "hocuspocus")
+                node.setUserData(
+                    "hpmcp.operation_id", "tool:object.create_geometry"
+                )
+                self._place_node_on_grid(parent, node)
+                node_summary = self._node_summary(node)
+                root_path = str(node_summary["path"])
+                snapshot = self._scene_graph_snapshot_build_impl()
+                observed_document = self._document_live_network_payload(
+                    snapshot, root_path
+                )
+                # Houdini has just allocated a previously absent live path.
+                # Force a new durable revision so a historical same-path
+                # checkout can never pass the first apply revision gate.
+                admitted_document = self._graph_store.upsert_document_from_live(
+                    observed_document,
+                    live_revision=int(snapshot.get("revision") or 0),
+                    source="tool:object.create_geometry",
+                    force_new_revision=True,
+                )
+                checkout = self._documents.create_checkout(
+                    document_id=str(admitted_document.get("documentId")),
+                    document_kind=str(admitted_document.get("kind")),
+                    root_path=root_path,
+                    document=admitted_document,
+                )
+                delivery = self._document_checkout_delivery(
+                    checkout,
+                    additional_payload={
+                        "rootPath": root_path,
+                        "node": node_summary,
+                    },
+                )
+            except Exception:
+                self._rollback_object_geometry(
+                    parent, node, checkout, admitted_document
+                )
+                raise
+
+        return delivery
+
+    def _rollback_object_geometry(
+        self,
+        parent: Any,
+        node: Any,
+        checkout: dict[str, Any] | None,
+        admitted_document: dict[str, Any] | None,
+    ) -> None:
+        checkout_id = (
+            str(checkout.get("checkoutId", "")) if checkout is not None else ""
+        )
+        if checkout is not None:
+            root_path = str(
+                (admitted_document or {}).get("rootPath", "")
+            )
+            try:
+                checkout_removed = self._documents.discard(checkout_id)
+            except Exception as exc:
+                raise JsonRpcError(
+                    INTERNAL_ERROR,
+                    "Geometry bootstrap retained coherent state because its "
+                    "checkout could not be retired.",
+                    {
+                        "rootPath": root_path,
+                        "checkoutId": checkout_id,
+                        "retainedState": {
+                            "object": True,
+                            "graphDocument": admitted_document is not None,
+                            "checkout": True,
+                        },
+                        "recoveryRequired": True,
+                    },
+                ) from exc
+            if not checkout_removed:
+                raise JsonRpcError(
+                    INTERNAL_ERROR,
+                    "Geometry bootstrap retained coherent state because its "
+                    "checkout retirement was not confirmed.",
+                    {
+                        "rootPath": root_path,
+                        "checkoutId": checkout_id,
+                        "retainedState": {
+                            "object": True,
+                            "graphDocument": admitted_document is not None,
+                            "checkout": True,
+                        },
+                        "recoveryRequired": True,
+                    },
+                )
+        if node is None:
+            return
+        if admitted_document is not None:
+            self._retire_object_geometry_admission(
+                admitted_document, checkout_id
+            )
+        root_name = str(self._safe_value(node.path, "")).rsplit("/", 1)[-1]
+        try:
+            self._clear_node_grid_cell(node)
+        except Exception:
+            pass
+        node_destroyed = False
+        try:
+            node.destroy()
+            node_destroyed = True
+        except Exception as exc:
+            node_destroyed = parent.node(root_name) is None
+            if not node_destroyed:
+                restored_document = self._restore_object_geometry_admission(
+                    admitted_document, node
+                )
+                raise JsonRpcError(
+                    INTERNAL_ERROR,
+                    "Geometry bootstrap retained coherent state because its "
+                    "object could not be removed.",
+                    {
+                        "rootPath": str(
+                            restored_document.get("rootPath", "")
+                        ),
+                        "checkoutId": checkout_id,
+                        "retainedState": {
+                            "object": True,
+                            "graphDocument": True,
+                            "checkout": False,
+                        },
+                        "recoveryRequired": True,
+                    },
+                ) from exc
+        finally:
+            try:
+                self._sync_grid_state_for_parent(parent)
+            except Exception:
+                pass
+
+    def _retire_object_geometry_admission(
+        self,
+        admitted_document: dict[str, Any],
+        checkout_id: str,
+    ) -> None:
+        root_path = str(admitted_document.get("rootPath", ""))
+        try:
+            removed = self._graph_store.discard_document_admission(
+                admitted_document
+            )
+        except Exception as exc:
+            raise JsonRpcError(
+                INTERNAL_ERROR,
+                "Geometry bootstrap retained coherent state because its graph "
+                "admission could not be retired.",
+                {
+                    "rootPath": root_path,
+                    "checkoutId": checkout_id,
+                    "retainedState": {
+                        "object": True,
+                        "graphDocument": True,
+                        "checkout": False,
+                    },
+                    "recoveryRequired": True,
+                },
+            ) from exc
+        if not removed:
+            raise JsonRpcError(
+                INTERNAL_ERROR,
+                "Geometry bootstrap retained coherent state because its graph "
+                "admission changed before retirement.",
+                {
+                    "rootPath": root_path,
+                    "checkoutId": checkout_id,
+                    "retainedState": {
+                        "object": True,
+                        "graphDocument": True,
+                        "checkout": False,
+                    },
+                    "recoveryRequired": True,
+                },
+            )
+
+    def _restore_object_geometry_admission(
+        self,
+        admitted_document: dict[str, Any] | None,
+        node: Any,
+    ) -> dict[str, Any]:
+        if admitted_document is None:
+            snapshot = self._scene_graph_snapshot_build_impl()
+            admitted_document = self._document_live_network_payload(
+                snapshot, str(node.path())
+            )
+        else:
+            snapshot = None
+        metadata = admitted_document.get("metadata")
+        store = metadata.get("store") if isinstance(metadata, dict) else None
+        live_revision = (
+            int(store.get("liveRevision") or 0)
+            if isinstance(store, dict)
+            else int((snapshot or {}).get("revision") or 0)
+        )
+        try:
+            return self._graph_store.upsert_document_from_live(
+                admitted_document,
+                live_revision=live_revision,
+                source="tool:object.create_geometry:rollback_recovery",
+                force_new_revision=True,
+            )
+        except Exception as exc:
+            raise JsonRpcError(
+                INTERNAL_ERROR,
+                "Geometry bootstrap could not restore graph authority for its "
+                "retained object.",
+            ) from exc
+
+    def object_create_geometry(
+        self, arguments: dict[str, Any], context: RequestContext
+    ) -> dict[str, Any]:
+        data = self._call_live(
+            lambda: self._object_create_geometry_impl(arguments), context
+        )
+        return self._tool_response(
+            f"Created Geometry object {data['rootPath']} with an editable SOP checkout.",
+            data,
+        )
 
     def _node_delete_impl(self, arguments: dict[str, Any]) -> dict[str, Any]:
         hou_module = self._require_hou()

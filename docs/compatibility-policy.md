@@ -6,7 +6,7 @@ Applies to:
 
 - HocusPocus `0.9.x`
 - Houdini `22.0.368`
-- the Streamable HTTP MCP surface served by HocusPocus
+- the durable stdio MCP broker and its private Streamable HTTP host surface
 
 ## 1. Supported Houdini Range
 
@@ -27,8 +27,9 @@ If Houdini `22.0.368` behavior breaks an existing tool, HocusPocus should treat 
 
 HocusPocus currently serves:
 
-- protocol version: `2025-11-25`
-- transport: localhost Streamable HTTP
+- negotiated protocol versions: `2025-06-18` and `2025-11-25`
+- client transport: durable stdio broker
+- host transport: authenticated localhost Streamable HTTP
 - auth model: bearer token by default
 
 Compatibility expectations:
@@ -36,6 +37,8 @@ Compatibility expectations:
 - existing tool names should remain stable within a minor line unless clearly deprecated first
 - existing resource URIs and URI templates should remain stable within a minor line unless clearly deprecated first
 - payload fields may expand, but existing documented fields should not be silently removed from stable tools without a version bump and release note
+- the broker must preserve its client connection across a Houdini restart and
+  must not replay ambiguously delivered tool calls
 
 ## 3. Stability Levels
 
@@ -105,4 +108,4 @@ A build should not be treated as release-ready until:
 - the live smoke script passes against a real Houdini session
 - the installed package behavior matches the committed branch state
 
-See [release-validation.md](C:\Users\jujun\Documents\Source\Houdini\HocusPocus_mcp\docs\release-validation.md).
+See the [release-validation checklist](release-validation.md).

@@ -1,6 +1,8 @@
 # HocusPocus Manual
 
-HocusPocus is a Houdini-hosted MCP server for live automation in Houdini 22.0.368.
+HocusPocus provides a durable agent connection to live automation in Houdini
+22.0.368. The client-facing stdio broker remains alive while the embedded
+Houdini execution host is replaced across restarts.
 
 Houdini `22.0.368` is the sole supported and release-qualifying live runtime
 for V1. Other builds, including Houdini `21.x`, are unsupported. Historical H21
@@ -22,8 +24,9 @@ Installed package locations:
 The package manifest switches to a validated versioned candidate atomically;
 an interrupted install leaves the prior package active. Reinstalling preserves
 the bearer token. Use `-RotateToken` only for an intentional credential
-rotation, then restart Houdini and connected clients. Auto-start is enabled by
-default.
+rotation, then restart Houdini. A running durable broker refreshes the
+credential without a client reconnect. Restart the MCP client once only when
+the installed broker program itself changes. Auto-start is enabled by default.
 
 ## 2. Basic Verification
 
@@ -45,7 +48,7 @@ Typical output includes:
 - `policyProfile`
 - `effectivePolicy`
 
-The current default MCP endpoint is:
+The embedded host's private MCP endpoint is:
 
 ```text
 http://127.0.0.1:37219/hocuspocus/mcp
@@ -57,33 +60,61 @@ The current health endpoint is:
 http://127.0.0.1:37219/hocuspocus/healthz
 ```
 
-The bearer token is stored at:
+The installed package owns the bearer credential in its active versioned
+configuration:
 
 ```text
-%USERPROFILE%\Documents\houdini22.0\hocuspocus\runtime\token.txt
+%USERPROFILE%\Documents\houdini22.0\packages\HocusPocus.<install-id>\config\default.toml
 ```
+
+Use the installer and `-RotateToken` workflow to manage it. Do not copy the
+token into an MCP client configuration.
 
 ## 3. Connecting an Agent
 
-### Codex on Windows
+### Codex or Claude Code on Windows
 
-Use a custom MCP entry with:
+Install the stable broker launcher after installing the Houdini package:
 
-- Transport: `Streamable HTTP`
-- Name: `houdini`
-- URL: `http://127.0.0.1:37219/hocuspocus/mcp`
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\install_hocuspocus_mcp_client.ps1
+```
 
-Auth:
+The installer discovers a standalone Python 3.11-or-newer runtime, copies a
+stable governed launcher beside the active Houdini package pointer, and writes
+ready-to-copy Codex and Claude configuration. Use:
 
-- paste the token directly if the client supports bearer-token input
-- otherwise use:
-  `Authorization: Bearer <your-token>`
+- transport: `stdio`
+- name: `hocuspocus`
+- command and arguments: the exact values returned by the installer
 
-Important validation note:
+The verified stable launcher resolves the credential directly from the active
+installed package. It does not require Codex or Claude to inherit
+`HOCUSPOCUS_TOKEN`, and it never writes the secret into their MCP configuration.
+An explicit source-tree development launch may still provide the variable. The
+generated client snippets are written beside the package pointer as
+`hocuspocus-codex.toml` and `hocuspocus-claude.json`; copy their command,
+arguments, and environment exactly.
 
-- these settings are documented for the Codex app
-- the implemented validation in this repo has proven the Houdini MCP server over its Streamable HTTP JSON-RPC transport
-- it has not proven native Codex runtime tool exposure from inside this agent runtime
+The broker owns the stable MCP session. When Houdini stops, reads return a
+typed retryable `HOCUS999 host_offline` result. After Houdini restarts, the
+next request initializes a fresh host session and resumes unexpired
+session-scoped workspace grants without reconnecting the client. Live
+checkouts are generation-scoped and must be recreated. A `tools/call` whose
+delivery became ambiguous is reported as `ambiguous_delivery` and is never
+silently replayed.
+
+Each call exposes a stable operation ID. After a timeout, disconnect, or host
+replacement, call `session.get_operation` with that ID before attempting
+another mutation. A terminal result is returned without re-execution. An
+old-host pending record is reported as `partial_or_unknown`; inspect live state
+instead of retrying blindly.
+
+The direct HTTP endpoint remains useful for health checks and transport
+diagnostics. It is not the normal Codex or Claude transport, and direct clients
+disconnect with the Houdini process. See the
+[durable transport contract](durable-mcp-transport.md) for restart and
+ambiguous-delivery behavior.
 
 ## 4. Houdini Conventions
 
@@ -122,6 +153,7 @@ These are exposed through:
 - `scene.save_hip`
 - `scene.undo`
 - `scene.redo`
+- `object.create_geometry`
 - `node.create`
 - `node.delete`
 - `node.rename`
@@ -136,6 +168,18 @@ These are exposed through:
 - `parm.revert_to_default`
 - `selection.set`
 - `playbar.set_frame`
+- `hda.set_instance_parms`
+
+Use `hda.set_instance_parms` for artist-facing parameters on a locked digital
+asset. It never unlocks or structurally edits the asset. When promoting an
+internal parameter, `hda.promote_parm` preserves the current source value unless
+you explicitly choose another `default_value` or `initial_value`.
+
+Before authoring VEX or another code blob, read `grantedCapabilities` from
+`session.info` and the required/missing capability projection from document
+validation or preview. Trusted local procedural work must explicitly select the
+`procedural-authoring` policy profile; `local-dev` intentionally does not grant
+`run_code`.
 
 ### Task tools
 
@@ -149,6 +193,10 @@ These are exposed through:
 ### Higher-level tools
 
 - `graph.batch_edit`
+- `document.checkout`
+- `document.validate`
+- `document.diff`
+- `document.apply`
 - `geometry.get_summary`
 - `scene.create_turntable_camera`
 - `snapshot.capture_viewport`
@@ -177,6 +225,29 @@ Accepted path forms:
 These are useful for polling long-running cooks and renders without holding a request open.
 
 ## 7. Higher-Level Workflows
+
+### Bootstrap an empty OBJ scene
+
+Use `object.create_geometry` when no Geometry container exists. The operation is
+deliberately narrower than a generally writable `/obj` document: it creates an
+exact `geo` object under `/obj`, then returns the resolved SOP root and a working
+document checkout for document-centric authoring.
+
+Ordinary bootstrap failure retires the checkout and graph admission before
+removing the Geometry object. If checkout retirement, graph retirement, or
+live-node removal fails, the operation returns a typed recovery error and
+retains coherent recoverable state identified by portable `rootPath`,
+`checkoutId`, and `retainedState` fields.
+
+Small checkout documents are returned inline. Every response includes
+`documentDelivery.mode`, `contentDigest`, `byteLength`, and the inline limit.
+When the complete response would exceed that limit, retrieve the same working
+document through the retained checkout `resourceUri`.
+
+For node-type discovery, `node_types.list_compatible` exposes its canonical
+tasks as an enum. Call it with either one exact `task` or one bounded `intent`;
+intent resolution reports `resolvedTask`, `resolutionKind`, and matched terms,
+and rejects ambiguous descriptions with deterministic candidates.
 
 ### Batch graph edits
 
@@ -232,7 +303,15 @@ High-level canned asset macros are intentionally not part of the default tool su
 
 ### HocusScript source workflow
 
-`.hocus` files are ordinary native project files. Select their project directory explicitly in the offline CLI/editor, or opt in to H6 source access from Houdini's **HocusPocus Source Workspaces** Python Panel (also embedded as the **Source Workspaces** tab in the server dialog). The panel lets the host user choose a directory, inspect the project, select an active MCP client, grant source-read/source-write/generated-lock/external-alias access, choose expiry and persistence, review path-free audit events, and revoke access. MCP receives an opaque `projectId`, portable relative paths, and digests—never the physical root.
+`.hocus` files are ordinary, Git-visible project files. For an MCP agent, the
+preferred saved-project surface is H6 source workspace access. Approve the
+project directory from Houdini's **HocusPocus Source Workspaces** Python Panel,
+also embedded as the **Source Workspaces** tab in the server dialog. The panel
+lets the host user choose a directory, inspect the project, select an active MCP
+client, grant source-read/source-write/generated-lock/external-alias access,
+choose expiry and persistence, review path-free audit events, and revoke
+access. MCP receives an opaque `projectId`, portable relative paths, and
+digests—never the physical root.
 
 Startup configuration can register the same authority without editing server code:
 
@@ -258,6 +337,9 @@ An authenticated MCP client initializes a session, discovers only its approved p
 - `source.project.navigate`
 
 Writes are exact-digest guarded and limited to authored `.hocus` files or a non-authority-changing `hocus.project.toml`; raw lock, catalog, bundle, external-root, delete, rename, and arbitrary filesystem writes are denied. `source.project.build` selects one of `format`, `check`, `compile`, or `lock_update`. A lock update requires the generated-lock grant, literal write intent, complete host-retained external mapping, and `expectedLockState = "absent"` for exclusive bootstrap or `"present"` plus the exact current lock digest for replacement.
+
+The same files remain directly editable by the user, an IDE, Git, or the native
+CLI. From a source checkout, the equivalent offline loop is:
 
 ```powershell
 $env:PYTHONPATH = "python3.11libs"
@@ -308,7 +390,7 @@ graph Motion {
 }
 ```
 
-Named ports require exact unique catalog names and compile to exact indexes. Typed `tuple`, `quantity`, `raw_path`, `reset`, ramp, multiparm, expression, and channel-reference values similarly require catalog-v2 evidence. Managed spares are instance parameters owned by the graph; artist spares and other ownership namespaces are preserved. Numeric float/int keyframes use seconds and fixed interpolation/extrapolation modes. USD time samples, arbitrary keyframe expressions, callbacks/buttons, locked HDA internals, and HDA-definition edits are rejected before planning. See [the HS7 fidelity matrix](C:\Users\jujun\Documents\Source\Houdini\HocusPocus_mcp\docs\hocusscript-hs7-support-matrix.md) for the exact family and construct boundaries.
+Named ports require exact unique catalog names and compile to exact indexes. Typed `tuple`, `quantity`, `raw_path`, `reset`, ramp, multiparm, expression, and channel-reference values similarly require catalog-v2 evidence. Managed spares are instance parameters owned by the graph; artist spares and other ownership namespaces are preserved. Numeric float/int keyframes use seconds and fixed interpolation/extrapolation modes. USD time samples, arbitrary keyframe expressions, callbacks/buttons, locked HDA internals, and HDA-definition edits are rejected before planning. See [the HS7 fidelity matrix](hocusscript-hs7-support-matrix.md) for the exact family and construct boundaries.
 
 ### HS8 production qualification
 
@@ -331,7 +413,7 @@ baseline to pass. A publish pass additionally requires visual comparison
 evidence bound to exact output digests. The corresponding schemas are available
 under canonical `hocuspocus://schemas/...` resources and byte-identical
 `houdini://production/schema/...` aliases. See the
-[HS8 production workflow](C:\Users\jujun\Documents\Source\Houdini\HocusPocus_mcp\docs\hocusscript-hs8-production.md)
+[HS8 production workflow](hocusscript-hs8-production.md)
 for the complete evidence and safety model.
 
 For a language-`0.2` project with manifest-declared external libraries, repeat `--module-root ALIAS=ABSOLUTE_PATH` on every mixed-root `lock --update`, `check`, and `compile` invocation. The options must exactly cover all declared aliases, including aliases not reached by the selected entry. Quote the complete `ALIAS=ABSOLUTE_PATH` argument when a path contains spaces:
@@ -422,7 +504,12 @@ Named profiles:
 
 - `safe`
 - `local-dev`
+- `procedural-authoring`
 - `pipeline`
+
+`procedural-authoring` is the only shipped profile that grants `run_code` for
+trusted authored code. Source workspace grants remain separate from these live
+scene capabilities.
 
 Effects:
 
@@ -483,15 +570,25 @@ If `import hocuspocus` fails in Houdini:
 If the server is not running:
 
 - run `import hocuspocus; print(hocuspocus.server_status())`
-- verify the installed config at:
-  `%USERPROFILE%\Documents\houdini22.0\packages\HocusPocus\config\default.toml`
+- inspect `%USERPROFILE%\Documents\houdini22.0\packages\hocuspocus.json` and
+  verify its selected versioned directory contains `config\default.toml`
 
 If Codex cannot connect:
 
-- verify Houdini reports `running: True`
-- verify the URL is `http://127.0.0.1:37219/hocuspocus/mcp`
-- verify the token matches `token.txt`
-- if the server responds over HTTP but Codex still does not surface tools, treat that as an app-side MCP wiring issue rather than a Houdini server failure
+- verify Codex uses the `hocuspocus` stdio entry generated by
+  `scripts\install_hocuspocus_mcp_client.ps1`, not the private HTTP URL
+- rerun that installer if the stable launcher is missing or differs from the
+  active package, then reload the MCP client once
+- if startup reports `Unauthorized`, remove client-side bearer-token settings;
+  the governed launcher resolves the credential from the active package
+- if calls report `host_offline`, start Houdini and retry on the same MCP
+  connection
+- after intentional token rotation, restart Houdini; the broker refreshes from
+  the active package without a client reconnect
+- verify the private host URL only as a secondary diagnostic:
+  `http://127.0.0.1:37219/hocuspocus/mcp`
+- if the host responds but Codex does not surface tools, treat that as an
+  app-side stdio configuration/reload issue rather than a Houdini server failure
 
 If a snapshot or render path is rejected:
 

@@ -5,6 +5,8 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from contextlib import contextmanager
+from dataclasses import dataclass, field
 from typing import Any
 
 try:
@@ -13,11 +15,22 @@ except ImportError:  # pragma: no cover - exercised outside Houdini
     hou = None  # type: ignore
 
 
+@dataclass(slots=True)
+class _ToolTransaction:
+    tool_name: str
+    structural: bool = False
+    cosmetic: bool = False
+    events: list[str] = field(default_factory=list)
+    scopes: set[str] = field(default_factory=set)
+    event_count: int = 0
+
+
 class SceneEventMonitor:
     def __init__(self, logger: logging.Logger):
         self._logger = logger.getChild("live.monitor")
         self._lock = threading.Lock()
         self._revision = 0
+        self._cosmetic_revision = 0
         self._event_sequence = 0
         self._last_event = "startup"
         self._last_event_time = time.time()
@@ -32,6 +45,8 @@ class SceneEventMonitor:
         self._dirty_scopes: dict[str, int] = {}
         self._listeners: list[Any] = []
         self._observed_nodes: dict[int, Any] = {}
+        self._tool_transactions: dict[str, _ToolTransaction] = {}
+        self._active_operation_id: str | None = None
 
     def start(self) -> None:
         if hou is None:
@@ -125,36 +140,175 @@ class SceneEventMonitor:
         with self._lock:
             self._listeners = [item for item in self._listeners if item is not listener]
 
-    def _bump(self, event_name: str, scope_path: str | None = None) -> None:
-        payload: dict[str, Any]
+    @staticmethod
+    def _is_cosmetic(event_name: str) -> bool:
+        return (
+            event_name in {"node:AppearanceChanged", "node:PositionChanged"}
+            or event_name.startswith("selection:")
+            or event_name.startswith("playbar:")
+        )
+
+    def begin_tool_operation(self, operation_id: str, tool_name: str) -> None:
         with self._lock:
-            self._revision += 1
-            self._event_sequence += 1
-            self._last_event = event_name
-            self._last_event_time = time.time()
+            self._tool_transactions.setdefault(
+                operation_id, _ToolTransaction(tool_name=tool_name)
+            )
+
+    @contextmanager
+    def activate_tool_operation(self, operation_id: str):
+        with self._lock:
+            previous = self._active_operation_id
+            self._active_operation_id = operation_id
+        try:
+            yield
+        finally:
+            with self._lock:
+                self._active_operation_id = previous
+
+    def mark_tool_mutation(
+        self, operation_id: str, scope_path: str | None = None
+    ) -> None:
+        with self._lock:
+            transaction = self._tool_transactions.get(operation_id)
+            if transaction is None:
+                return
+            transaction.structural = True
             normalized_scope = str(scope_path).strip() if scope_path else None
             if normalized_scope:
-                self._dirty_scopes[normalized_scope] = self._revision
+                transaction.scopes.add(normalized_scope)
+            self._record_transaction_event(
+                transaction, f"tool:{transaction.tool_name}"
+            )
+
+    def mark_tool_cosmetic(self, operation_id: str) -> None:
+        with self._lock:
+            transaction = self._tool_transactions.get(operation_id)
+            if transaction is None:
+                return
+            transaction.cosmetic = True
+            self._record_transaction_event(
+                transaction, f"tool:{transaction.tool_name}"
+            )
+
+    @staticmethod
+    def _record_transaction_event(
+        transaction: _ToolTransaction, event_name: str
+    ) -> None:
+        transaction.event_count += 1
+        if len(transaction.events) < 128:
+            transaction.events.append(event_name)
+
+    def finish_tool_operation(self, operation_id: str) -> dict[str, Any]:
+        with self._lock:
+            transaction = self._tool_transactions.pop(operation_id, None)
+            if transaction is None:
+                return {"structuralChanged": False, "cosmeticChanged": False}
+            payload, listeners = self._flush_transaction_locked(
+                operation_id, transaction
+            )
+        self._notify_listeners(payload, listeners)
+        return {
+            "structuralChanged": transaction.structural,
+            "cosmeticChanged": transaction.cosmetic,
+            "revision": self._revision,
+            "cosmeticRevision": self._cosmetic_revision,
+        }
+
+    def _flush_transaction_locked(
+        self, operation_id: str, transaction: _ToolTransaction
+    ) -> tuple[dict[str, Any] | None, list[Any]]:
+        if not transaction.events:
+            return None, []
+        if transaction.structural:
+            self._revision += 1
+            if transaction.scopes:
+                for scope in transaction.scopes:
+                    self._dirty_scopes[scope] = self._revision
             else:
                 self._scene_dirty_revision = self._revision
-            payload = {
-                "sequence": self._event_sequence,
-                "revision": self._revision,
-                "event": event_name,
-                "timestamp": self._last_event_time,
-                "scopePath": normalized_scope,
-            }
-            self._recent_events.append(
-                payload
-            )
-            if len(self._recent_events) > 500:
-                self._recent_events = self._recent_events[-500:]
-            listeners = list(self._listeners)
+        if transaction.cosmetic:
+            self._cosmetic_revision += 1
+        event_name = f"tool:{transaction.tool_name}"
+        payload = self._event_payload_locked(
+            event_name,
+            sorted(transaction.scopes)[0] if len(transaction.scopes) == 1 else None,
+            operation_id=operation_id,
+            tool_name=transaction.tool_name,
+            events=transaction.events,
+        )
+        payload["eventCount"] = transaction.event_count
+        payload["omittedEventCount"] = max(
+            0, transaction.event_count - len(transaction.events)
+        )
+        return payload, list(self._listeners)
+
+    def _event_payload_locked(
+        self,
+        event_name: str,
+        scope_path: str | None,
+        *,
+        operation_id: str | None = None,
+        tool_name: str | None = None,
+        events: list[str] | None = None,
+    ) -> dict[str, Any]:
+        self._event_sequence += 1
+        self._last_event = event_name
+        self._last_event_time = time.time()
+        payload = {
+            "sequence": self._event_sequence,
+            "revision": self._revision,
+            "structuralRevision": self._revision,
+            "cosmeticRevision": self._cosmetic_revision,
+            "event": event_name,
+            "timestamp": self._last_event_time,
+            "scopePath": scope_path,
+            "operationId": operation_id,
+            "transactionId": operation_id,
+            "toolName": tool_name,
+            "eventCount": len(events or [event_name]),
+            "events": list(events or [event_name]),
+        }
+        self._recent_events.append(payload)
+        if len(self._recent_events) > 500:
+            self._recent_events = self._recent_events[-500:]
+        return payload
+
+    def _notify_listeners(
+        self, payload: dict[str, Any] | None, listeners: list[Any]
+    ) -> None:
+        if payload is None:
+            return
         for listener in listeners:
             try:
                 listener(dict(payload))
             except Exception:
                 self._logger.debug("monitor listener failed", exc_info=True)
+
+    def _bump(self, event_name: str, scope_path: str | None = None) -> None:
+        normalized_scope = str(scope_path).strip() if scope_path else None
+        cosmetic = self._is_cosmetic(event_name)
+        with self._lock:
+            transaction = self._tool_transactions.get(
+                self._active_operation_id or ""
+            )
+            if transaction is not None:
+                self._record_transaction_event(transaction, event_name)
+                transaction.cosmetic = transaction.cosmetic or cosmetic
+                transaction.structural = transaction.structural or not cosmetic
+                if normalized_scope and not cosmetic:
+                    transaction.scopes.add(normalized_scope)
+                return
+            if cosmetic:
+                self._cosmetic_revision += 1
+            else:
+                self._revision += 1
+                if normalized_scope:
+                    self._dirty_scopes[normalized_scope] = self._revision
+                else:
+                    self._scene_dirty_revision = self._revision
+            payload = self._event_payload_locked(event_name, normalized_scope)
+            listeners = list(self._listeners)
+        self._notify_listeners(payload, listeners)
 
     def mark_dirty(self, event_name: str, scope_path: str | None = None) -> None:
         self._bump(event_name, scope_path=scope_path)
@@ -317,6 +471,8 @@ class SceneEventMonitor:
         with self._lock:
             return {
                 "revision": self._revision,
+                "structuralRevision": self._revision,
+                "cosmeticRevision": self._cosmetic_revision,
                 "eventSequence": self._event_sequence,
                 "lastEvent": self._last_event,
                 "lastEventTime": self._last_event_time,

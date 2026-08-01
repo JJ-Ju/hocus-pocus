@@ -90,6 +90,7 @@ CRITICAL_MODULES = (
     "hocuspocus.live.operations",
     "hocuspocus.live.document_service",
     "hocuspocus.live.graph_store",
+    "hocuspocus.live.graph_store_documents",
     "hocuspocus.live.graph_store_sqlite",
     "hocuspocus.live.graph_store_live_revisions",
     "hocuspocus.live.graph_store_plans",

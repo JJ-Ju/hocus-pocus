@@ -12,6 +12,59 @@ param(
 
 $ErrorActionPreference = "Stop"
 Add-Type -AssemblyName System.Security
+if (-not ("HocusPocus.NativeFileIdentity" -as [type])) {
+    Add-Type -TypeDefinition @"
+using System;
+using System.ComponentModel;
+using System.IO;
+using System.Runtime.InteropServices;
+using Microsoft.Win32.SafeHandles;
+namespace HocusPocus {
+    public static class NativeFileIdentity {
+        [StructLayout(LayoutKind.Sequential)]
+        private struct BY_HANDLE_FILE_INFORMATION {
+            public uint FileAttributes;
+            public System.Runtime.InteropServices.ComTypes.FILETIME CreationTime;
+            public System.Runtime.InteropServices.ComTypes.FILETIME LastAccessTime;
+            public System.Runtime.InteropServices.ComTypes.FILETIME LastWriteTime;
+            public uint VolumeSerialNumber;
+            public uint FileSizeHigh;
+            public uint FileSizeLow;
+            public uint NumberOfLinks;
+            public uint FileIndexHigh;
+            public uint FileIndexLow;
+        }
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern SafeFileHandle CreateFile(
+            string name, uint access, FileShare share, IntPtr security,
+            FileMode mode, uint flags, IntPtr template);
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool GetFileInformationByHandle(
+            SafeFileHandle handle, out BY_HANDLE_FILE_INFORMATION information);
+        public static string Read(string path) {
+            const uint BackupSemantics = 0x02000000;
+            using (SafeFileHandle handle = CreateFile(
+                path, 0, FileShare.ReadWrite | FileShare.Delete, IntPtr.Zero,
+                FileMode.Open, BackupSemantics, IntPtr.Zero)) {
+                if (handle.IsInvalid) {
+                    throw new Win32Exception(Marshal.GetLastWin32Error());
+                }
+                BY_HANDLE_FILE_INFORMATION information;
+                if (!GetFileInformationByHandle(handle, out information)) {
+                    throw new Win32Exception(Marshal.GetLastWin32Error());
+                }
+                return String.Format(
+                    "{0:x8}:{1:x8}{2:x8}:{3}",
+                    information.VolumeSerialNumber,
+                    information.FileIndexHigh,
+                    information.FileIndexLow,
+                    information.NumberOfLinks);
+            }
+        }
+    }
+}
+"@
+}
 $repoRoot = [System.IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
 $resolvedOutputDir = [System.IO.Path]::GetFullPath(
     $(if ([System.IO.Path]::IsPathRooted($OutputDir)) {
@@ -24,6 +77,45 @@ $stagingRoot = Join-Path $resolvedOutputDir "HocusPocus"
 $packageFilePath = Join-Path $resolvedOutputDir "hocuspocus.json"
 $ownerFile = Join-Path $resolvedOutputDir ".hocuspocus-build-root.json"
 $outputJournal = Join-Path $resolvedOutputDir ".hocuspocus-output-transaction.json"
+$script:manifestPins = @()
+$script:manifestSources = @()
+
+function Add-PinnedManifestSource {
+    param([string]$Name, [string]$Path, [string]$RelativePath)
+    $stream = [System.IO.File]::Open(
+        $Path, [System.IO.FileMode]::Open,
+        [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read
+    )
+    $memory = New-Object System.IO.MemoryStream
+    try {
+        $stream.CopyTo($memory)
+        $bytes = $memory.ToArray()
+    } finally {
+        $memory.Dispose()
+    }
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $digest = "sha256:" + (
+            [BitConverter]::ToString($sha.ComputeHash($bytes))
+        ).Replace("-", "").ToLowerInvariant()
+    } finally {
+        $sha.Dispose()
+    }
+    $script:manifestPins += $stream
+    $script:manifestSources += @{
+        name = $Name
+        source = [Convert]::ToBase64String($bytes)
+        digest = $digest
+        relativePath = $RelativePath
+    }
+}
+
+Add-PinnedManifestSource -Name "hs8_windows_manifest_cleanup" -Path (
+    Join-Path $repoRoot "scripts\hs8_windows_manifest_cleanup.py"
+) -RelativePath "scripts/hs8_windows_manifest_cleanup.py"
+Add-PinnedManifestSource -Name "__main__" -Path (
+    Join-Path $repoRoot "scripts\hs8_install_manifest.py"
+) -RelativePath "scripts/hs8_install_manifest.py"
 
 function Write-Step { param([string]$Message) Write-Host "==> $Message" }
 
@@ -255,7 +347,12 @@ function Copy-RepoPath {
 }
 
 function Build-PackageJson {
-    param([string]$Path, [string]$RootName)
+    param(
+        [string]$Path,
+        [string]$RootName,
+        [string]$ConfigDigest,
+        [string]$ManifestDigest
+    )
     $content = @"
 {
   "env": [
@@ -272,7 +369,12 @@ function Build-PackageJson {
       "PYTHONDONTWRITEBYTECODE": "1"
     }
   ],
-  "hpath": "`$HOCUSPOCUS_ROOT"
+  "hpath": "`$HOCUSPOCUS_ROOT",
+  "hocuspocus": {
+    "schemaVersion": 1,
+    "activeConfigDigest": "$ConfigDigest",
+    "installManifestDigest": "$ManifestDigest"
+  }
 }
 "@
     [System.IO.File]::WriteAllText(
@@ -281,7 +383,12 @@ function Build-PackageJson {
 }
 
 function Assert-PackageActivation {
-    param([string]$Path, [string]$RootName)
+    param(
+        [string]$Path,
+        [string]$RootName,
+        [string]$ConfigDigest,
+        [string]$ManifestDigest
+    )
     $payload = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
     $roots = @()
     foreach ($entry in @($payload.env)) {
@@ -292,6 +399,16 @@ function Assert-PackageActivation {
     $expected = '$HOUDINI_PACKAGE_PATH/' + $RootName
     if ($roots.Count -ne 1 -or $roots[0] -cne $expected) {
         throw "Activated package pointer does not select $RootName."
+    }
+    $authority = $payload.hocuspocus
+    Assert-ExactProperties -Value $authority -Label "package credential authority" `
+        -Names @("schemaVersion", "activeConfigDigest", "installManifestDigest")
+    if (
+        $authority.schemaVersion -ne 1 -or
+        [string]$authority.activeConfigDigest -cne $ConfigDigest -or
+        [string]$authority.installManifestDigest -cne $ManifestDigest
+    ) {
+        throw "Activated package pointer has stale credential authority."
     }
     $bytecodePolicies = @()
     foreach ($entry in @($payload.env)) {
@@ -375,15 +492,85 @@ function Provision-InstallToken {
 }
 
 function Invoke-Manifest {
-    param([string]$Root, [string]$Command = "create")
-    $helper = Join-Path $Root "scripts\hs8_install_manifest.py"
-    $output = & $PythonExe $helper $Command --root $Root
-    if ($LASTEXITCODE -ne 0) { throw "Install manifest $Command failed." }
-    return ($output | Out-String | ConvertFrom-Json)
+    param(
+        [string]$Root,
+        [string]$Command = "create",
+        [string[]]$Arguments = @()
+    )
+    $bootstrap = @'
+import base64,json,sys,types
+p=json.loads(sys.stdin.readline())
+for row in p["modules"]:
+    if row["name"] == "__main__":
+        continue
+    m=types.ModuleType(row["name"])
+    m.__file__="<pinned:"+row["name"]+">"
+    sys.modules[row["name"]]=m
+    exec(compile(base64.b64decode(row["source"]),m.__file__,"exec"),m.__dict__)
+main=next(row for row in p["modules"] if row["name"]=="__main__")
+sys.argv=p["argv"]
+g={"__name__":"__main__","__file__":"<pinned:hs8_install_manifest>"}
+exec(compile(base64.b64decode(main["source"]),g["__file__"],"exec"),g)
+'@
+    $encoded = [Convert]::ToBase64String(
+        [Text.Encoding]::UTF8.GetBytes($bootstrap)
+    )
+    $start = New-Object System.Diagnostics.ProcessStartInfo
+    $start.FileName = $PythonExe
+    $start.Arguments = (
+        '-I -S -c "import base64;exec(base64.b64decode(''' +
+        $encoded + '''))"'
+    )
+    $start.UseShellExecute = $false
+    $start.RedirectStandardInput = $true
+    $start.RedirectStandardOutput = $true
+    $start.RedirectStandardError = $true
+    $process = New-Object System.Diagnostics.Process
+    $process.StartInfo = $start
+    if (-not $process.Start()) { throw "Manifest helper could not start." }
+    $stdout = $process.StandardOutput.ReadToEndAsync()
+    $stderr = $process.StandardError.ReadToEndAsync()
+    $payload = @{
+        argv = @("hs8_install_manifest.py", $Command, "--root", $Root) +
+            $Arguments
+        modules = $script:manifestSources
+    } | ConvertTo-Json -Compress -Depth 6
+    $process.StandardInput.WriteLine($payload)
+    $process.StandardInput.Close()
+    $process.WaitForExit()
+    $output = $stdout.Result
+    $errors = $stderr.Result
+    $exitCode = $process.ExitCode
+    $process.Dispose()
+    if ($output.Length -gt 16777216 -or $errors.Length -gt 65536) {
+        throw "Manifest helper output exceeds its bound."
+    }
+    if ($exitCode -ne 0) {
+        throw "Install manifest $Command failed: $errors"
+    }
+    $result = $output | ConvertFrom-Json
+    if ($Command -ceq "create") {
+        foreach ($source in $script:manifestSources) {
+            $rows = @($result.files | Where-Object {
+                [string]$_.relativePath -ceq [string]$source.relativePath
+            })
+            if (
+                $rows.Count -ne 1 -or
+                [string]$rows[0].contentDigest -cne [string]$source.digest
+            ) {
+                throw "Pinned manifest helper identity differs from the governed tree."
+            }
+        }
+    }
+    return $result
 }
 
-. (Join-Path $PSScriptRoot "build_transaction.ps1")
-Invoke-BuildTransaction
+try {
+    . (Join-Path $PSScriptRoot "build_transaction.ps1")
+    Invoke-BuildTransaction
+} finally {
+    foreach ($pin in $script:manifestPins) { $pin.Dispose() }
+}
 
 Write-Host ""
 Write-Host "Staged package: $stagingRoot"

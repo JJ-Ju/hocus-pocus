@@ -1,0 +1,15 @@
+[mcp_servers.hocuspocus]
+command = "C:/PATH/TO/PYTHON_3_11_OR_NEWER/python.exe"
+args = [
+  "-I",
+  "-B",
+  "C:/Users/YOU/Documents/houdini22.0/packages/hocuspocus-mcp-stdio.py",
+]
+startup_timeout_sec = 120
+tool_timeout_sec = 120
+
+[mcp_servers.hocuspocus.env]
+HOCUSPOCUS_HTTP_URL = "http://127.0.0.1:37219/hocuspocus/mcp"
+HOCUSPOCUS_CONNECT_TIMEOUT_SECONDS = "1.0"
+HOCUSPOCUS_REQUEST_TIMEOUT_SECONDS = "30.0"
+PYTHONDONTWRITEBYTECODE = "1"

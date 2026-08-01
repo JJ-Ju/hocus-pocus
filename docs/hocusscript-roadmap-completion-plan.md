@@ -1,8 +1,8 @@
 # HocusScript Roadmap Completion Plan
 
-Status: exact H22.0.368 same-host V1 technical qualification passed for the
-active bootstrap-repaired manifest; RC1 clean-commit evidence and external
-RC2-RC5 release authority remain open
+Status: V1 implementation and internal Houdini 22 technical acceptance
+complete; RC1 mutable release evidence and RC2-RC5 release authority remain
+open
 Owner: HocusPocus engineering
 Source contracts:
 
@@ -14,6 +14,12 @@ Source contracts:
 Exact Houdini `22.0.368` is the sole supported and release-qualifying live
 runtime for V1. H21 receipts retained by this plan are historical pre-H22
 migration evidence and cannot qualify the current payload.
+
+The later M18 brick-authoring repair passed installed Houdini 22 acceptance,
+the 43-workflow catalogue, durable broker reconnection, and independent P0/P1
+review. It is supplemental engineering evidence. It does not supersede the
+historical production-fixture technical-6 receipt below, qualify the post-M18
+tree, or establish an immutable RC2 candidate.
 
 ## 1. Purpose
 
@@ -33,12 +39,11 @@ stale, or moved to the post-v1 queue.
 
 ## 2. Current Technical Baseline and Candidate State
 
-The active governed payload uses installed manifest
+The last full HS8 two-process qualification used installed manifest
 `sha256:facf4f0b4dcf63737ebef615654f461446b321c7cce4a0365018d937e4769e4a`.
-Its `pythonrc` installs source-only admission before any governed import and
-uses Houdini-compatible code-filename root derivation. Exact Houdini 22.0.368
-two-process same-host technical qualification for this bootstrap-repaired
-payload passed in technical-6:
+Its `pythonrc` installed source-only admission before any governed import and
+used Houdini-compatible code-filename root derivation. Exact Houdini 22.0.368
+same-host technical qualification passed in technical-6:
 
 - outer two-process receipt:
   `sha256:19bfd956b371a99437451d8736dd48e080e4335b73f304468884194dbfb35662`
@@ -61,8 +66,16 @@ payload passed in technical-6:
 Both processes audited 210 governed modules and returned `accepted=true` with
 `review_pending` and both readiness flags false. The outer receipt retains
 `releaseAuthorized=false` and `visualApprovalDigest=null`. This is same-host
-technical evidence only, not external clean-image/VM or human authority, RC1
-clean-commit evidence, or an RC2 freeze.
+technical evidence for that exact pre-M18 manifest only, not external
+clean-image/VM or human authority, post-M18 RC1 evidence, or an RC2 freeze.
+
+M18 subsequently changed governed runtime code. Focused installed Houdini 22
+authoring acceptance passed for engineering install manifest
+`sha256:57d8515086af5851b3fbcd62cf6ffd48ae4d659aa930935dc0813f6b61b124ec`,
+including the 43-workflow catalogue, guarded mutation and HDA checks, durable
+broker reconnection, and independent P0/P1 review. That narrower acceptance is
+not a full HS8 two-process rerun. No full production-fixture receipt currently
+qualifies the post-M18 source tree.
 
 Technical-5 passed its own two-process checks but is superseded diagnostic
 evidence for pre-bootstrap installed manifest
@@ -83,7 +96,7 @@ Both processes accepted with identical portable evidence, audited 210 governed
 modules per process, and reported zero authored cook warnings/errors.
 `review_pending` remained explicit, with `readyForPackaging=false`,
 `readyForPublish=false`, and `releaseAuthorized=false`. These identities do
-not qualify the active bootstrap-repaired payload.
+not qualify either the later technical-6 manifest or the post-M18 tree.
 
 The last repaired H21 governed payload also passed a two-process same-host
 technical run on Houdini 21.0.729. It is historical pre-H22 evidence and
@@ -101,9 +114,9 @@ produced:
 Both historical processes accepted with identical portable evidence and zero cook
 warnings/errors. A consecutive identical install preserved the bearer token
 and left the activation pointer, versioned root, and manifest unchanged. These
-identities do not qualify the current H22 governed payload. No current H22
-technical receipt is yet a frozen release candidate: RC1 clean-commit evidence
-and the RC2 source freeze remain pending. The current offline gates are 43 public
+identities do not qualify the current H22 governed payload. No H22 technical
+receipt is yet a frozen release candidate: post-M18 RC1 evidence and the RC2
+source freeze remain pending. The current offline gates are 43 public
 workflows, Ruff complexity `12`/`15`, the 1,200-line limit, compileall, and diff
 hygiene. External clean-image and human-review authority remain open, so no
 production release authority is claimed.
@@ -412,13 +425,10 @@ Priority is product-driven rather than inherited from historical numbering:
 
 ## 8. Immediate Next Action
 
-RC1 remains active: use the passing technical-6 H22 same-host evidence for
-active manifest
-`sha256:facf4f0b4dcf63737ebef615654f461446b321c7cce4a0365018d937e4769e4a`
-while finishing clean-commit evidence, package-provenance, compatibility, and
-detached external-evidence tooling. Only after those tasks and their findings
-are closed does RC2 commit, push, and freeze the single candidate. Neither the
-technical-6 same-host receipt, superseded technical-5 receipt, nor any
-historical H21 receipt is freeze evidence.
-Commit and push require explicit user authorization and are not performed by
-this planning update.
+RC1 remains active: finish package-provenance, compatibility, performance,
+graph-store, hostile-boundary, and detached external-evidence work on the
+post-M18 tree, then rerun the full internal qualification against its clean
+committed identity. Only after those tasks and findings close does RC2 freeze
+one candidate. The pre-M18 technical-6 receipt, focused M18 authoring receipt,
+superseded technical-5 receipt, and historical H21 receipts are not freeze
+evidence.

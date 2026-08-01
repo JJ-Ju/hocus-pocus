@@ -23,6 +23,7 @@ from hocuspocus.version import (
 )
 
 from .audit import AuditLogger
+from .host_identity import HostIdentity
 from .jsonrpc import (
     INTERNAL_ERROR,
     INVALID_PARAMS,
@@ -35,7 +36,9 @@ from .jsonrpc import (
     success_response,
 )
 from .mcp_types import ResourceRegistry, ToolRegistry
-from .policy import capability_set_from_settings, require_capabilities
+from .operation_execution import execute_tool_call
+from .operation_history import OperationHistory, new_operation_id, valid_operation_id
+from .policy import capability_set_from_settings
 from .settings import ServerSettings
 from .workspace_authority import WorkspaceAuthority
 from .workspace_grants import WorkspaceGrantError, principal_from_bearer
@@ -56,6 +59,19 @@ class RuntimeRequestHandler(BaseHTTPRequestHandler):
 
     def _logger(self) -> logging.Logger:
         return self._runtime().logger.getChild("http")
+
+    def end_headers(self) -> None:
+        for name, value in self._runtime().host_identity.headers():
+            self.send_header(name, value)
+        broker_session_id = getattr(
+            self, "_response_broker_session_id", None
+        )
+        if broker_session_id:
+            self.send_header(
+                "HocusPocus-Broker-Session-Id",
+                broker_session_id,
+            )
+        super().end_headers()
 
     def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
         if self.path == self._runtime().settings.normalized_mcp_route:
@@ -91,6 +107,7 @@ class RuntimeRequestHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
         self._response_session_id: str | None = None
+        self._response_broker_session_id: str | None = None
         if self.path != self._runtime().settings.normalized_mcp_route:
             self.send_error(HTTPStatus.NOT_FOUND)
             return
@@ -126,30 +143,112 @@ class RuntimeRequestHandler(BaseHTTPRequestHandler):
             self._write_plain(HTTPStatus.BAD_REQUEST, protocol_error + "\n")
             return
 
-        session_id = self.headers.get("Mcp-Session-Id")
-        issued_session_id: str | None = None
-        if self._runtime().payload_initializes(payload):
-            client_info = self._runtime().client_info_from_payload(payload)
-            session_id = self._runtime().issue_session(principal_id, client_info).session_id
-            issued_session_id = session_id
+        with self._runtime().host_identity.dispatch_lease():
+            self._dispatch_admitted_payload(payload, principal_id)
+
+    def _dispatch_admitted_payload(
+        self, payload: Any, principal_id: str
+    ) -> None:
+        if self._reject_host_generation_mismatch():
+            return
+        admission = self._admit_request_session(payload, principal_id)
+        if admission is None:
+            return
+        session_id, issued_session_id, resumed = admission
         response = self._runtime().handle_request(
             payload,
             principal_id=principal_id,
             session_id=session_id,
         )
-        if issued_session_id is not None:
-            if self._runtime().initialize_succeeded(response):
-                self._response_session_id = issued_session_id
-            else:
-                self._runtime().workspace_authority.revoke_session(issued_session_id)
-        if response is None:
-            self.send_response(HTTPStatus.ACCEPTED)
-            self.send_header("Content-Length", "0")
-            self.send_header("Connection", "close")
-            self.send_header("MCP-Protocol-Version", PROTOCOL_VERSION)
-            self.end_headers()
+        self._finalize_issued_session(
+            issued_session_id,
+            resumed,
+            response,
+        )
+        if response is not None:
+            self._write_json(HTTPStatus.OK, response)
             return
-        self._write_json(HTTPStatus.OK, response)
+        self.send_response(HTTPStatus.ACCEPTED)
+        self.send_header("Content-Length", "0")
+        self.send_header("Connection", "close")
+        self.send_header("MCP-Protocol-Version", PROTOCOL_VERSION)
+        self.end_headers()
+
+    def _finalize_issued_session(
+        self, issued_session_id: str | None, resumed: bool, response: Any
+    ) -> None:
+        if issued_session_id is None:
+            return
+        if self._runtime().initialize_succeeded(response):
+            self._response_session_id = issued_session_id
+            self._response_broker_session_id = issued_session_id
+        elif resumed:
+            self._runtime().unbind_session(issued_session_id)
+        else:
+            self._runtime().revoke_session(issued_session_id)
+
+    def _admit_request_session(
+        self,
+        payload: Any,
+        principal_id: str,
+    ) -> tuple[str | None, str | None, bool] | None:
+        session_id = self.headers.get("Mcp-Session-Id")
+        if self._runtime().payload_initializes(payload):
+            resume_id = self.headers.get(
+                "HocusPocus-Broker-Session-Id"
+            )
+            try:
+                issued = self._runtime().issue_session(
+                    principal_id,
+                    self._runtime().client_info_from_payload(payload),
+                    resume_session_id=resume_id,
+                )
+            except JsonRpcError as exc:
+                self._write_json(
+                    HTTPStatus.CONFLICT,
+                    error_response(None, exc),
+                )
+                return None
+            return issued.session_id, issued.session_id, resume_id is not None
+        if session_id and not self._runtime().session_is_current(
+            session_id,
+            principal_id,
+        ):
+            self._write_json(
+                HTTPStatus.NOT_FOUND,
+                error_response(
+                    None,
+                    self._runtime().stale_session_error(session_id),
+                ),
+            )
+            return None
+        return session_id, None, False
+
+    def _reject_host_generation_mismatch(self) -> bool:
+        expected_host = self.headers.get(
+            "HocusPocus-Host-Instance-Id"
+        )
+        expected_generation = self.headers.get(
+            "HocusPocus-Host-Generation"
+        )
+        identity = self._runtime().host_identity
+        mismatched = (
+            bool(expected_host)
+            and expected_host != identity.instance_id
+        ) or (
+            bool(expected_generation)
+            and expected_generation != str(identity.generation)
+        )
+        if not mismatched:
+            return False
+        self._write_json(
+            HTTPStatus.CONFLICT,
+            error_response(
+                None,
+                self._runtime().host_generation_changed_error(),
+            ),
+        )
+        return True
 
     def _read_request_payload(self) -> Any | None:
         content_length = self._content_length()
@@ -268,10 +367,16 @@ class HocusPocusRuntime:
     def __init__(self, settings: ServerSettings, logger: logging.Logger):
         self.settings = settings
         self.logger = logger.getChild("runtime")
+        self.host_identity = HostIdentity()
         self.tools = ToolRegistry()
         self.resources = ResourceRegistry()
         self.dispatcher = LiveCommandDispatcher(logger)
         self.monitor = SceneEventMonitor(logger)
+        self.dispatcher.set_monitor(self.monitor)
+        self.operation_history = OperationHistory(
+            host_instance_id=self.host_identity.instance_id,
+            host_generation=self.host_identity.generation,
+        )
         self.tasks = LiveTaskManager(self.dispatcher, logger)
         self._token = settings.resolved_token()
         self.workspace_authority = WorkspaceAuthority(settings, logger)
@@ -286,18 +391,26 @@ class HocusPocusRuntime:
         )
         self.operations._workspace_authority = self.workspace_authority
         self.operations._workspace_rate = self.workspace_rate
+        self.operations._operation_history = self.operation_history
+        self.operations._runtime = self
         self.operations.register(self.tools, self.resources)
         self.audit = AuditLogger(logger)
         self._default_capabilities = capability_set_from_settings(settings)
         self._server: RuntimeHTTPServer | None = None
         self._server_thread: threading.Thread | None = None
         self._state_lock = threading.Lock()
+        self._host_scope_lock = threading.Lock()
+        self._session_generations: dict[str, int] = {}
+        self._generation_checkout_ids: set[str] = set()
+        self._ever_started = False
         self._running = False
 
     def start(self) -> None:
         with self._state_lock:
             if self._running:
                 return
+            if self._ever_started:
+                self._advance_host_generation()
             self.dispatcher.start()
             self.monitor.start()
             self._server = RuntimeHTTPServer(
@@ -312,6 +425,7 @@ class HocusPocusRuntime:
             )
             self._server_thread.start()
             self._running = True
+            self._ever_started = True
             self.logger.info(
                 "server %s started on %s with dispatcher mode=%s",
                 __version__,
@@ -338,6 +452,7 @@ class HocusPocusRuntime:
                 self.logger.info("server stopped")
             if close_authority:
                 self.workspace_authority.close()
+                self.operation_history.close()
 
     def restart(self) -> None:
         self._stop(close_authority=False)
@@ -346,6 +461,8 @@ class HocusPocusRuntime:
     def status(self, *, include_secret: bool = False, include_sensitive: bool = True) -> dict[str, Any]:
         payload = {
             "serverVersion": __version__,
+            "hostInstanceId": self.host_identity.instance_id,
+            "hostGeneration": self.host_identity.generation,
             "running": self._running,
             "host": self.settings.host,
             "port": self.settings.port,
@@ -372,6 +489,7 @@ class HocusPocusRuntime:
     def health_payload(self) -> dict[str, Any]:
         payload = self.status(include_secret=False, include_sensitive=False)
         payload["protocolVersion"] = PROTOCOL_VERSION
+        payload["hostIdentity"] = self.host_identity.payload()
         return payload
 
     def authorize(self, header_value: str) -> bool:
@@ -474,8 +592,102 @@ class HocusPocusRuntime:
         self,
         principal_id: str,
         client_info: dict[str, Any] | None = None,
+        *,
+        resume_session_id: str | None = None,
     ):
-        return self.workspace_authority.issue_session(principal_id, client_info)
+        try:
+            if resume_session_id is None:
+                session = self.workspace_authority.issue_session(
+                    principal_id, client_info
+                )
+            else:
+                session = self.workspace_authority.resume_session(
+                    resume_session_id,
+                    principal_id,
+                    client_info,
+                )
+        except WorkspaceGrantError as exc:
+            raise JsonRpcError(
+                -32002,
+                "Broker session could not be resumed.",
+                {
+                    "hocusCode": exc.code,
+                    "kind": "broker_session_resume_rejected",
+                    "hostInstanceId": self.host_identity.instance_id,
+                    "hostGeneration": self.host_identity.generation,
+                    "reinitializeWithoutResume": True,
+                },
+                family="auth",
+                retryable=True,
+            ) from exc
+        generation = self.host_identity.generation
+        with self._host_scope_lock:
+            self._session_generations[session.session_id] = generation
+        return session
+
+    def revoke_session(self, session_id: str) -> None:
+        self.unbind_session(session_id)
+        self.workspace_authority.revoke_session(session_id)
+
+    def unbind_session(self, session_id: str) -> None:
+        with self._host_scope_lock:
+            self._session_generations.pop(session_id, None)
+
+    def session_is_current(
+        self, session_id: str, principal_id: str
+    ) -> bool:
+        with self._host_scope_lock:
+            generation = self._session_generations.get(session_id)
+        if generation != self.host_identity.generation:
+            return False
+        return self.workspace_authority.session(
+            session_id,
+            principal_id=principal_id,
+        ) is not None
+
+    def stale_session_error(self, session_id: str) -> JsonRpcError:
+        return JsonRpcError(
+            -32002,
+            "MCP session belongs to a replaced host generation; initialize "
+            "a new session.",
+            {
+                "hocusCode": "HOCUS999",
+                "kind": "host_session_stale",
+                "sessionId": session_id,
+                "hostInstanceId": self.host_identity.instance_id,
+                "hostGeneration": self.host_identity.generation,
+                "mutationReplaySupported": False,
+            },
+            family="auth",
+            retryable=True,
+        )
+
+    def host_generation_changed_error(self) -> JsonRpcError:
+        return JsonRpcError(
+            -32009,
+            "Connected Houdini host generation changed before request "
+            "dispatch.",
+            {
+                "hocusCode": "HOCUS999",
+                "kind": "host_generation_changed",
+                "hostInstanceId": self.host_identity.instance_id,
+                "hostGeneration": self.host_identity.generation,
+                "mutationReplaySupported": False,
+            },
+            family="runtime",
+            retryable=True,
+        )
+
+    def _advance_host_generation(self) -> None:
+        def transition() -> None:
+            with self._host_scope_lock:
+                self._session_generations.clear()
+                self._generation_checkout_ids.clear()
+
+        generation = self.host_identity.advance_exclusive(transition)
+        self.operation_history.advance_host(
+            self.host_identity.instance_id, generation
+        )
 
     def list_authorized_projects(
         self, context: RequestContext
@@ -674,16 +886,22 @@ class HocusPocusRuntime:
                 self.settings.production_review_policy_id
             ),
         }
+        identity = getattr(self, "host_identity", None)
+        if identity is not None:
+            metadata["hostInstanceId"] = identity.instance_id
+            metadata["hostGeneration"] = identity.generation
         timeout_seconds = float(
             params.get("_timeout_seconds", self.settings.request_timeout_seconds)
         )
-        operation_id = str(
-            params.get("_operation_id", f"{method}:{request_id}")
-            if request_id is not None
-            else params.get("_operation_id", "")
-        ).strip()
-        if not operation_id:
-            operation_id = RequestContext().operation_id
+        supplied_operation_id = params.get("_operation_id")
+        if supplied_operation_id is not None and not valid_operation_id(
+            supplied_operation_id
+        ):
+            raise JsonRpcError(
+                INVALID_PARAMS, "Broker operation identity is invalid.",
+                family="validation", retryable=False,
+            )
+        operation_id = supplied_operation_id or new_operation_id()
         return RequestContext(
             caller_id=principal_id,
             permissions=self._default_capabilities,
@@ -691,16 +909,28 @@ class HocusPocusRuntime:
             metadata=metadata,
             operation_id=operation_id,
             principal_id=principal_id,
-            session_id=(
-                session_id
-                if self.workspace_authority.session(
-                    session_id,
-                    principal_id=principal_id,
-                )
-                is not None
-                else None
+            session_id=self._current_context_session(
+                session_id,
+                principal_id,
             ),
         )
+
+    def _current_context_session(
+        self,
+        session_id: str | None,
+        principal_id: str,
+    ) -> str | None:
+        generations = getattr(self, "_session_generations", None)
+        if generations is not None and not self.session_is_current(
+            str(session_id or ""),
+            principal_id,
+        ):
+            return None
+        session = self.workspace_authority.session(
+            session_id,
+            principal_id=principal_id,
+        )
+        return session_id if session is not None else None
 
     def _dispatch_method(
         self,
@@ -772,15 +1002,20 @@ class HocusPocusRuntime:
             raise JsonRpcError(INVALID_PARAMS, "Tool call requires a string name.")
         if not isinstance(arguments, dict):
             raise JsonRpcError(INVALID_PARAMS, "Tool arguments must be an object.")
+        self._require_current_checkout(arguments)
         tool = self.tools.get(name)
         if tool is None:
             raise JsonRpcError(METHOD_NOT_FOUND, f"Unknown tool: {name}")
+        context.metadata["toolName"] = name
         return self._call_tool(tool, arguments, context)
 
     def _dispatch_resource_read(self, params: dict[str, Any], context: RequestContext) -> Any:
         uri = params.get("uri")
         if not isinstance(uri, str):
             raise JsonRpcError(INVALID_PARAMS, "Resource read requires a string uri.")
+        checkout_id = self._checkout_id_from_resource_uri(uri)
+        if checkout_id is not None:
+            self._require_generation_checkout(checkout_id)
         resource = self.resources.get(uri)
         if resource is not None:
             return resource.reader(context)
@@ -811,48 +1046,67 @@ class HocusPocusRuntime:
         arguments: dict[str, Any],
         context: RequestContext,
     ) -> dict[str, Any]:
-        try:
-            require_capabilities(context.permissions, tool.required_capabilities)
-            result = tool.handler(arguments, context)
-        except JsonRpcError as exc:
-            self.audit.log_tool_call(
-                operation_id=context.operation_id,
-                caller_id=context.caller_id,
-                tool_name=tool.name,
-                arguments=arguments,
-                success=False,
-                error=exc.to_payload(),
-            )
-            raise
-        except Exception as exc:
-            self.audit.log_tool_call(
-                operation_id=context.operation_id,
-                caller_id=context.caller_id,
-                tool_name=tool.name,
-                arguments=arguments,
-                success=False,
-                error={"message": str(exc)},
-            )
-            raise
+        return execute_tool_call(self, tool, arguments, context)
 
-        self.audit.log_tool_call(
-            operation_id=context.operation_id,
-            caller_id=context.caller_id,
-            tool_name=tool.name,
-            arguments=arguments,
-            success=True,
-            result=result,
+    def _require_current_checkout(self, arguments: dict[str, Any]) -> None:
+        checkout_id = arguments.get("checkout_id")
+        if checkout_id is None:
+            return
+        self._require_generation_checkout(str(checkout_id).strip())
+
+    def _require_generation_checkout(self, checkout_id: str) -> None:
+        with self._host_scope_lock:
+            current = checkout_id in self._generation_checkout_ids
+        if current:
+            return
+        raise JsonRpcError(
+            INVALID_PARAMS,
+            "Document checkout was not issued by the current Houdini host "
+            "generation; create a new checkout.",
+            {
+                "checkoutId": checkout_id,
+                "hostInstanceId": self.host_identity.instance_id,
+                "hostGeneration": self.host_identity.generation,
+                "mutationReplaySupported": False,
+            },
+            family="runtime",
+            retryable=True,
         )
-        if self._should_bump_graph_revision(tool.name):
-            scope_path = None
-            dirty_scope_for_tool = getattr(self.operations, "dirty_scope_for_tool", None)
-            if callable(dirty_scope_for_tool):
-                try:
-                    scope_path = dirty_scope_for_tool(tool.name, arguments, result)
-                except Exception:
-                    self.logger.debug("failed to resolve dirty scope for %s", tool.name, exc_info=True)
-            self.monitor.mark_dirty(f"tool:{tool.name}", scope_path=scope_path)
-        return result
+
+    def _track_generation_checkout(
+        self,
+        tool_name: str,
+        arguments: dict[str, Any],
+        result: dict[str, Any],
+    ) -> None:
+        payload = result.get("structuredContent", result)
+        checkout_id = (
+            str(payload.get("checkoutId", "")).strip()
+            if isinstance(payload, dict)
+            else ""
+        )
+        with self._host_scope_lock:
+            if (
+                tool_name == "document.discard_checkout"
+                and checkout_id
+            ):
+                self._generation_checkout_ids.discard(checkout_id)
+            elif tool_name in {
+                "document.checkout",
+                "object.create_geometry",
+            } and checkout_id:
+                self._generation_checkout_ids.add(checkout_id)
+
+    @staticmethod
+    def _checkout_id_from_resource_uri(uri: str) -> str | None:
+        prefixes = (
+            "houdini://documents/checkouts/",
+            "houdini://documents/diagnostics/",
+        )
+        for prefix in prefixes:
+            if uri.startswith(prefix):
+                return uri[len(prefix) :]
+        return None
 
     @staticmethod
     def _should_bump_graph_revision(tool_name: str) -> bool:
@@ -901,7 +1155,10 @@ class HocusPocusRuntime:
             "serverInfo": {
                 "name": SERVER_NAME,
                 "version": __version__,
+                "hostInstanceId": self.host_identity.instance_id,
+                "hostGeneration": self.host_identity.generation,
             },
+            "hostIdentity": self.host_identity.payload(),
             "capabilities": {
                 "tools": {"listChanged": False},
                 "resources": {"listChanged": False, "subscribe": False},

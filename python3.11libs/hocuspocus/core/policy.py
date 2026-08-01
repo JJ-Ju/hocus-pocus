@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Iterable
+from typing import Any, Iterable
 
 from .jsonrpc import JsonRpcError
 from .settings import ServerSettings
@@ -47,6 +47,23 @@ def require_capabilities(
             family="policy",
             retryable=False,
         )
+
+
+def capability_projection(
+    granted: Iterable[str],
+    required: Iterable[str],
+) -> dict[str, Any]:
+    """Describe authority readiness without enforcing or mutating anything."""
+    granted_values = sorted(set(granted))
+    required_values = sorted(set(required))
+    granted_set = set(granted_values)
+    missing = [item for item in required_values if item not in granted_set]
+    return {
+        "requiredCapabilities": required_values,
+        "grantedCapabilities": granted_values,
+        "missingCapabilities": missing,
+        "capabilityReady": not missing,
+    }
 
 
 def ensure_path_allowed(path: str | Path, settings: ServerSettings) -> Path:

@@ -667,7 +667,14 @@ class DocumentMetadataOperationsMixin:
             },
         }
         if value_mode == "literal":
-            payload["value"] = parm.get("rawValue")
+            template_type = str(parm.get("templateType", "")).strip().lower()
+            evaluated = parm.get("value")
+            payload["value"] = (
+                evaluated
+                if template_type in {"float", "int", "toggle", "menu"}
+                and isinstance(evaluated, (int, float, bool))
+                else parm.get("rawValue")
+            )
         elif value_mode in {"expression", "channel_reference"}:
             payload["expression"] = parm.get("expression")
             payload["expressionLanguage"] = parm.get("expressionLanguage")

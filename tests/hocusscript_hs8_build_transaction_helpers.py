@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -367,12 +368,124 @@ def _assert_cleanup_preserves_transaction_outcome(
             testcase.assertTrue(journal.is_file())
             testcase.assertTrue(previous.is_dir())
             locked.close()
+        swap_target = root / "cleanup-root-swap/target"
+        shutil.copytree(active, swap_target)
+        authority = json.loads(journal.read_text(encoding="utf-8"))
+        rejected_swap = subprocess.run(
+            [
+                sys.executable,
+                os.fspath(source / "scripts/hs8_install_manifest.py"),
+                "cleanup-governed",
+                "--root",
+                os.fspath(swap_target),
+                "--expected-digest",
+                _manifest_digest(
+                    swap_target / "package/install-manifest-v1.json",
+                ),
+                "--output-root-identity",
+                authority["outputRootIdentity"],
+            ],
+            cwd=source,
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+        testcase.assertNotEqual(rejected_swap.returncode, 0)
+        testcase.assertTrue(
+            (swap_target / "package/install-manifest-v1.json").is_file(),
+        )
+        extra = previous / "config/cleanup-intruder.txt"
+        extra.write_text("reject", encoding="utf-8")
+        rejected_extra = _run(build_only, source)
+        testcase.assertNotEqual(rejected_extra.returncode, 0)
+        testcase.assertTrue(journal.is_file())
+        testcase.assertTrue(extra.is_file())
+        extra.unlink()
+        survivor = previous / "scripts/build.ps1"
+        survivor_bytes = survivor.read_bytes()
+        survivor.write_bytes(survivor_bytes + b"\n# cleanup-tamper\n")
+        rejected_change = _run(build_only, source)
+        testcase.assertNotEqual(rejected_change.returncode, 0)
+        testcase.assertTrue(journal.is_file())
+        survivor.write_bytes(survivor_bytes)
         recovered = _run(build_only, source)
         testcase.assertEqual(
             recovered.returncode, 0, recovered.stderr + recovered.stdout,
         )
         testcase.assertFalse(journal.exists())
         testcase.assertFalse(previous.exists())
+
+        governed.write_bytes(
+            original_governed + b"\n# governed-journal-crash-probe\n",
+        )
+        crash_anchor = "        # HS8_TEST_CRASH_AFTER_GOVERNED_JOURNAL"
+        crash_injection = crash_anchor + "\n        Stop-Process -Id $PID -Force"
+        with _patched(transaction, crash_anchor, crash_injection):
+            crashed = _run(build_only, source)
+        testcase.assertNotEqual(crashed.returncode, 0)
+        testcase.assertTrue(journal.is_file())
+        crash_state = json.loads(journal.read_text(encoding="utf-8"))
+        testcase.assertEqual(crash_state["phase"], "cleanup_terminal")
+        crash_residue = output / crash_state["cleanupTargetName"]
+        testcase.assertTrue(
+            (crash_residue / "package/install-manifest-v1.json").is_file(),
+        )
+        crash_recovered = _run(build_only, source)
+        testcase.assertEqual(
+            crash_recovered.returncode,
+            0,
+            crash_recovered.stderr + crash_recovered.stdout,
+        )
+        testcase.assertFalse(journal.exists())
+        testcase.assertFalse(crash_residue.exists())
+
+        governed.write_bytes(
+            original_governed + b"\n# manifestless-terminal-probe\n",
+        )
+        native_cleanup = source / "scripts/hs8_windows_manifest_cleanup.py"
+        native_anchor = "    finally:\n        _close(manifest_handle)"
+        native_injection = native_anchor + "\n        os._exit(91)"
+        with _patched(native_cleanup, native_anchor, native_injection):
+            manifestless = _run(build_only, source)
+        testcase.assertEqual(
+            manifestless.returncode,
+            0,
+            manifestless.stderr + manifestless.stdout,
+        )
+        testcase.assertIn(
+            "cleanup deferred",
+            (manifestless.stderr + manifestless.stdout).casefold(),
+        )
+        testcase.assertTrue(journal.is_file())
+        terminal_state = json.loads(journal.read_text(encoding="utf-8"))
+        testcase.assertEqual(terminal_state["phase"], "cleanup_terminal")
+        terminal_residue = output / terminal_state["cleanupTargetName"]
+        terminal_package = terminal_residue / "package"
+        testcase.assertTrue(terminal_package.is_dir())
+        testcase.assertFalse(
+            (terminal_package / "install-manifest-v1.json").exists(),
+        )
+
+        terminal_extra = terminal_package / "cleanup-intruder.txt"
+        terminal_extra.write_text("reject", encoding="utf-8")
+        blocked_terminal = _run(build_only, source)
+        testcase.assertNotEqual(blocked_terminal.returncode, 0)
+        testcase.assertTrue(journal.is_file())
+        testcase.assertTrue(terminal_extra.is_file())
+        testcase.assertEqual(
+            json.loads(journal.read_text(encoding="utf-8")),
+            terminal_state,
+        )
+        terminal_extra.unlink()
+        terminal_recovered = _run(build_only, source)
+        testcase.assertEqual(
+            terminal_recovered.returncode,
+            0,
+            terminal_recovered.stderr + terminal_recovered.stdout,
+        )
+        testcase.assertFalse(journal.exists())
+        testcase.assertFalse(terminal_residue.exists())
     finally:
         governed.write_bytes(original_governed)
 

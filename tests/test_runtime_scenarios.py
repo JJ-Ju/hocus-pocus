@@ -19,30 +19,30 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "python3.11libs"))
-
 from hocuspocus.core.mcp_types import ResourceRegistry, ToolRegistry
 from hocuspocus.core.jsonrpc import JsonRpcError
 from hocuspocus.hocusscript.document_lowering import _source_map_from_entity
-import hocuspocus.live.monitor as monitor_module
 from hocuspocus.live.catalog_provider import LiveHoudiniCatalogProvider
 from hocuspocus.live.context import RequestContext
 from hocuspocus.live.document_service import ApplyPlanError, LiveDocumentService
 from hocuspocus.live.graph_store import GraphStorePlanError, LiveGraphStore
 from hocuspocus.live.operations import LiveOperations
-from hocuspocus.live.monitor import SceneEventMonitor
 from hocuspocus.live.ops.base import OperationBaseMixin
 from hocuspocus.live.ops.document import DocumentOperationsMixin
-from hocuspocus.live.ops.document_apply_managed import (
-    identity_update_mismatches,
-)
+from hocuspocus.live.ops.document_apply_managed import identity_update_mismatches
 from hocuspocus.live.ops.hocusscript_recovery import recovered_apply_result
 from tests.hocusscript_hs7_resource_helpers import assert_hs7_fidelity_resource
+from tests.runtime_checkout_delivery import assert_checkout_delivery
+from tests.runtime_catalog_fixtures import CatalogHou
+from tests.runtime_hda_capabilities import assert_hda_and_capability_contract
 from tests.runtime_h5_provenance import (
     assert_managed_provenance_round_trip,
     assert_plan_persistence_failure_mapping,
 )
-
-
+from tests.runtime_object_bootstrap import assert_object_geometry_bootstrap
+from tests.runtime_node_type_discovery import assert_node_type_discovery_contract
+from tests.runtime_mutation_integrity import assert_mutation_integrity_contract
+from tests.runtime_monitor_revision import assert_monitor_revision_contract
 class _InlineDispatcher:
     @staticmethod
     def call(callback, _context):
@@ -52,7 +52,6 @@ class _InlineDispatcher:
 class _DocumentTools(OperationBaseMixin, DocumentOperationsMixin):
     def __init__(self):
         self._dispatcher = _InlineDispatcher()
-
 
 class _UserDataNode:
     def __init__(self):
@@ -227,153 +226,6 @@ def _persistent_plan() -> dict:
     return plan
 
 
-class _CatalogDefinition:
-    def __init__(self, path: Path):
-        self._path = path
-
-    def libraryFilePath(self):
-        return str(self._path)
-
-    def version(self):
-        return "1.0"
-
-
-class _CatalogNodeType:
-    def __init__(self, definition: _CatalogDefinition):
-        self._definition = definition
-
-    def name(self):
-        return "studio::asset::1.0"
-
-    def nameComponents(self):
-        return ("Sop", "studio", "asset", "1.0")
-
-    def aliases(self):
-        return ()
-
-    def definition(self):
-        return self._definition
-
-    def parmTemplateGroup(self):
-        return SimpleNamespace(entries=lambda: ())
-
-    def minNumInputs(self):
-        return 1
-
-    def maxNumInputs(self):
-        return 1
-
-    def inputNames(self):
-        return ("geometry",)
-
-    def inputLabels(self):
-        return ("Geometry",)
-
-    def inputDataTypes(self):
-        return (("geometry",),)
-
-    def minNumOutputs(self):
-        return 1
-
-    def maxNumOutputs(self):
-        return 1
-
-    def outputNames(self):
-        return ("result",)
-
-    def outputLabels(self):
-        return ("Result",)
-
-
-class _CatalogCategory:
-    def __init__(self, node_type: _CatalogNodeType):
-        self._node_type = node_type
-
-    def name(self):
-        return "Sop"
-
-    def label(self):
-        return "Geometry"
-
-    def nodeTypes(self):
-        return {self._node_type.name(): self._node_type}
-
-
-class _CatalogHou:
-    def __init__(self, hda_path: Path):
-        category = _CatalogCategory(_CatalogNodeType(_CatalogDefinition(hda_path)))
-        self._categories = {"Sop": category}
-
-    def nodeTypeCategories(self):
-        return self._categories
-
-    def applicationName(self):
-        return "Houdini FX"
-
-    def applicationVersion(self):
-        return (21, 0, 321)
-
-    def applicationPlatformInfo(self):
-        return "windows-x86_64"
-
-    def licenseCategory(self):
-        return SimpleNamespace(name=lambda: "Commercial")
-
-
-class _Event:
-    def __init__(self, name: str):
-        self._name = name
-
-    def name(self):
-        return self._name
-
-    def __str__(self):
-        return f"nodeEventType.{self._name}"
-
-
-class _SceneNode:
-    _next_id = 1
-
-    def __init__(self, path: str, children=()):
-        self._path = path
-        self._children = list(children)
-        self._callbacks = []
-        self._id = _SceneNode._next_id
-        _SceneNode._next_id += 1
-
-    def path(self):
-        return self._path
-
-    def sessionId(self):
-        return self._id
-
-    def allSubChildren(self):
-        return tuple(
-            child
-            for direct_child in self._children
-            for child in (direct_child, *direct_child.allSubChildren())
-        )
-
-    def addEventCallback(self, event_types, callback):
-        self._callbacks.append((tuple(event_types), callback))
-
-    def removeEventCallback(self, callback):
-        self._callbacks = [item for item in self._callbacks if item[1] != callback]
-
-    def emit(self, event, **kwargs):
-        for event_types, callback in list(self._callbacks):
-            if event in event_types:
-                callback(self, event_type=event, **kwargs)
-
-
-class _CallbackHost:
-    def addEventCallback(self, callback):
-        self.callback = callback
-
-    def removeEventCallback(self, _callback):
-        pass
-
-
 class _ExportSnapshot:
     operators = (object(),)
     fingerprint = "sha256:" + "a" * 64
@@ -513,9 +365,23 @@ def _assert_managed_apply_repairs(test, tools, baseline, metadata_plan):
 
 class RuntimeScenarios(unittest.TestCase):
     def test_document_validation_accepts_a_network_and_rejects_an_ambiguous_edge(self):
+        assert_hda_and_capability_contract(self)
         tools = _DocumentTools()
-        valid = tools.document_validate({"document": _network_document()}, RequestContext())
+        assert_mutation_integrity_contract(self, _DocumentTools(), _network_document)
+        valid = tools.document_validate(
+            {"document": _network_document()}, RequestContext(permissions=("edit_scene",)),
+        )
         self.assertTrue(valid["structuredContent"]["valid"])
+        self.assertTrue(valid["structuredContent"]["capabilityReady"])
+        code_document = _network_document()
+        code_document["parameterBindings"] = [{"valueMode": "code_reference"}]
+        code_preflight = tools.document_validate(
+            {"document": code_document}, RequestContext(permissions=("edit_scene",)),
+        )["structuredContent"]
+        self.assertEqual(
+            code_preflight["requiredCapabilities"], ["edit_scene", "run_code"],
+        )
+        self.assertEqual(code_preflight["missingCapabilities"], ["run_code"])
 
         invalid_document = _network_document()
         invalid_document["edges"] = [
@@ -712,6 +578,8 @@ class RuntimeScenarios(unittest.TestCase):
 
     def test_document_artifacts_and_apply_plans_are_content_addressed_and_detached(self):
         service = LiveDocumentService(logging.getLogger("test.documents"))
+        assert_checkout_delivery(self, _DocumentTools(), _network_document())
+        assert_object_geometry_bootstrap(self)
         preview_payload = {
             "kind": "hocus_document_preview",
             "document": {"nodes": [{"uid": "node:a"}]},
@@ -729,6 +597,42 @@ class RuntimeScenarios(unittest.TestCase):
 
         tools, resources = ToolRegistry(), ResourceRegistry()
         LiveOperations.__new__(LiveOperations).register(tools, resources)
+        for operation in ("scene.undo", "scene.redo"):
+            definition = tools.get(operation)
+            self.assertIsNotNone(definition)
+            self.assertEqual(
+                definition.input_schema["properties"]["expected_label"]["maxLength"],
+                512,
+            )
+        self.assertIsNotNone(tools.get("hda.set_instance_parms"))
+        self.assertEqual(
+            tools.get("hda.promote_parm").required_capabilities,
+            ("edit_scene", "write_files"),
+        )
+        self.assertEqual(
+            tools.get("hda.set_definition_version").required_capabilities,
+            ("edit_scene", "write_files"),
+        )
+        hda_schema = tools.get("hda.promote_parm").input_schema
+        self.assertTrue(hda_schema["properties"]["preserve_source_value"]["default"])
+        for tool_name in ("document.validate", "document.diff", "document.apply"):
+            document_schema = tools.get(tool_name).input_schema["properties"]["document"]
+            self.assertEqual(document_schema["x-schemaResources"], [
+                "hocuspocus://schemas/network-document/v1",
+                "hocuspocus://schemas/network-document/v2",
+            ])
+        for version in ("v1", "v2"):
+            alias = resources.get(
+                f"houdini://documents/schema/network-document/{version}",
+            )
+            canonical = resources.get(
+                f"hocuspocus://schemas/network-document/{version}",
+            )
+            self.assertIsNotNone(canonical)
+            alias_text = alias.reader(RequestContext())["contents"][0]["text"]
+            canonical_text = canonical.reader(RequestContext())["contents"][0]["text"]
+            self.assertEqual(canonical_text, alias_text)
+        assert_node_type_discovery_contract(self, tools)
         assert_hs7_fidelity_resource(self, resources)
         control_schemas = {
             "houdini://documents/schema/graph-spec/v0.4": (
@@ -1134,7 +1038,7 @@ class RuntimeScenarios(unittest.TestCase):
                 hda = Path(directory) / "asset.hda"
                 hda.write_bytes(b"same definition")
                 snapshots.append(
-                    LiveHoudiniCatalogProvider(_CatalogHou(hda), package_directories=()).get_catalog()
+                    LiveHoudiniCatalogProvider(CatalogHou(hda), package_directories=()).get_catalog()
                 )
 
             self.assertEqual(snapshots[0].fingerprint, snapshots[1].fingerprint)
@@ -1142,58 +1046,12 @@ class RuntimeScenarios(unittest.TestCase):
             changed_hda = Path(second_dir) / "asset.hda"
             changed_hda.write_bytes(b"changed definition")
             changed = LiveHoudiniCatalogProvider(
-                _CatalogHou(changed_hda), package_directories=()
+                CatalogHou(changed_hda), package_directories=()
             ).get_catalog()
             self.assertNotEqual(snapshots[1].fingerprint, changed.fingerprint)
 
     def test_scene_monitor_coalesces_network_edits_and_observes_new_children(self):
-        names = (
-            "AppearanceChanged",
-            "BeingDeleted",
-            "ChildCreated",
-            "ChildDeleted",
-            "ChildReordered",
-            "CustomDataChanged",
-            "FlagChanged",
-            "IndirectInputCreated",
-            "IndirectInputDeleted",
-            "IndirectInputRewired",
-            "InputRewired",
-            "NameChanged",
-            "ParmTupleAnimated",
-            "ParmTupleChanged",
-            "ParmTupleChannelChanged",
-            "PositionChanged",
-            "SpareParmTemplatesChanged",
-        )
-        events = {name: _Event(name) for name in names}
-        sop = _SceneNode("/obj/geo1/box1")
-        geo = _SceneNode("/obj/geo1", [sop])
-        root = _SceneNode("/", [geo])
-        fake_hou = SimpleNamespace(
-            nodeEventType=SimpleNamespace(**events),
-            node=lambda path: root if path == "/" else None,
-            hipFile=_CallbackHost(),
-            playbar=_CallbackHost(),
-            isUIAvailable=lambda: False,
-        )
-        original_hou = monitor_module.hou
-        monitor_module.hou = fake_hou
-        try:
-            monitor = SceneEventMonitor(logging.getLogger("test.monitor"))
-            monitor.start()
-            sop.emit(events["ParmTupleChanged"])
-            sop.emit(events["InputRewired"])
-            child = _SceneNode("/obj/geo1/new1")
-            geo.emit(events["ChildCreated"], child_node=child)
-            child.emit(events["FlagChanged"])
-
-            snapshot = monitor.snapshot()
-            self.assertEqual(set(snapshot["dirtyScopes"]), {"/obj/geo1"})
-            self.assertEqual(snapshot["observedNodeCount"], 4)
-            self.assertEqual(monitor.recent_events(limit=1)["events"][0]["event"], "node:FlagChanged")
-        finally:
-            monitor_module.hou = original_hou
+        assert_monitor_revision_contract(self)
 
 
 if __name__ == "__main__":

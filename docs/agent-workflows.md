@@ -2,6 +2,12 @@
 
 This guide describes the intended tool-selection patterns for agents using HocusPocus.
 
+Connect through the client-owned `hocuspocus` stdio broker. Treat the localhost
+HTTP endpoint as a private host hop: it disappears with Houdini, while the
+broker remains connected and discovers the replacement host. If a mutation has
+ambiguous delivery, reconcile its operation ID before doing anything else. See
+the [durable transport contract](durable-mcp-transport.md).
+
 ## 1. Inspect a Scene Safely
 
 Use this order:
@@ -43,16 +49,29 @@ over many independent low-level calls.
 
 Use this order:
 
-1. high-level semantic tool if it exists
-2. `document.checkout`
-3. edit the network document JSON
-4. `document.validate`
-5. `document.apply`
-6. low-level node and parm tools only when a workflow is not covered yet
+1. use `object.create_geometry` when an empty scene has no SOP network yet
+2. use a high-level semantic tool if one exists
+3. otherwise call `document.checkout`
+4. edit the returned network document JSON
+5. call `document.validate`
+6. call `document.apply`
+7. use low-level node and parm tools only when a workflow is not covered yet
+
+`object.create_geometry` is the narrow OBJ bootstrap boundary. It creates one
+Geometry container under `/obj` and returns its resolved root path, checkout
+metadata, and exact SOP working document inline when the bounded response fits.
+Do not treat `/obj` itself as a writable SOP-shaped document.
+
+If bootstrap delivery fails, HocusPocus normally retires the checkout and graph
+admission before removing the object. A checkout-retirement, graph-retirement,
+or live-node removal failure instead returns a typed recovery error and retains
+the remaining state coherently; use its portable `rootPath`, `checkoutId`, and
+`retainedState` for inspection or explicit cleanup.
 
 Preferred tools by layer:
 
 - semantic:
+  - `object.create_geometry`
   - `scene.create_turntable_camera`
   - `model.create_house_blockout`
 - document:
@@ -71,9 +90,50 @@ Placement note:
 - new node tiles are automatically placed on the managed integer grid
 - agents should not micromanage tile positions unless layout itself matters
 
+Discovery note:
+
+- `node_types.list_compatible` accepts exactly one of `task` or `intent`
+- `task` is the canonical enum shown in the tool schema
+- `intent` accepts a bounded natural-language phrase and returns the resolved
+  task and matched terms; ambiguous phrases return candidates instead of being
+  guessed
+
+Checkout note:
+
+- `document.checkout` normally returns the exact working document inline
+- `documentDelivery` always reports the document digest, byte length, delivery
+  mode, and inline limit
+- oversized documents use `documentDelivery.mode = resource` and retain
+  `resourceUri`
+
+Mutation note:
+
+- read `grantedCapabilities` from `session.info` before choosing an authored
+  code path
+- inspect `requiredCapabilities`, `missingCapabilities`, and
+  `capabilityReady` from validation or preview before apply
+- treat node display/output flags as authored state; checkout `output_flag`
+  edges are regenerated observations
+- a failed document mutation returns `HOCUS755` only after exact rollback is
+  verified; `HOCUS756` means the scope is quarantined for explicit recovery
+- retain each returned operation ID; after ambiguous delivery, reconcile it
+  through `session.get_operation` before issuing another mutation
+
+HDA note:
+
+- use `hda.promote_parm` with its default `preserve_source_value = true`
+- use `hda.set_instance_parms` for public controls on a locked asset
+- do not unlock HDA internals merely to edit an artist-facing value
+
 ### HocusScript native edit/apply loop
 
-Prefer editing `.hocus` as a normal native workspace file and use the offline CLI/library:
+Prefer editing `.hocus` as a normal, Git-visible workspace file. When the host
+user has approved the project, use the seven `source.*` tools with its opaque
+`projectId`: describe/search/read/patch or export, then check/compile/navigate.
+The server never exposes or accepts an ambient absolute project root through
+MCP. Source edits do not bypass the document preview/plan/apply mutation lane.
+
+The same files remain available to an IDE and the offline CLI/library:
 
 ```powershell
 $env:PYTHONPATH = "python3.11libs"
@@ -82,7 +142,9 @@ python -m hocuspocus.hocusscript format hocus/asset.hocus --project D:/show/proj
 python -m hocuspocus.hocusscript compile hocus/asset.hocus --project D:/show/project -o asset.bundle.json
 ```
 
-The project path belongs to the native compiler/editor surface. The MCP receives source or bundle content, never a project path.
+The absolute project path belongs to the native compiler/editor and host-owned
+workspace registry. MCP receives an opaque `projectId`, portable paths, source
+or Bundle content, and digests; it never receives the physical root.
 
 For a language-`0.2` project with external aliases, pass the complete exact alias/root mapping again to each mixed-root lock, check, or compile request. Repeat `--module-root`; quote the whole value when the absolute path contains spaces:
 
@@ -94,7 +156,13 @@ python -m hocuspocus.hocusscript check hocus/asset.hocus --project D:/show/proje
 python -m hocuspocus.hocusscript compile hocus/asset.hocus --project D:/show/project --module-root $studio --module-root $materials -o asset.bundle.json
 ```
 
-Do not infer roots from lock records, create a module-root environment variable, expand `~` or environment syntax, or persist the mapping. Mixed lock publication requires a valid existing v3 lock and its exact digest. `format` and `write-export` do not accept module roots. External-aware completion and go-to-definition remain native Python `complete_mixed_*` and `definition_mixed_*` APIs for editor integrations; there is no editor CLI or MCP root/file surface.
+Do not infer roots from lock records, create a module-root environment variable,
+expand `~` or environment syntax, or persist the mapping. Mixed lock
+publication requires a valid existing v3 lock and its exact digest. `format`
+and native `write-export` do not accept module roots. External-aware completion
+and go-to-definition are also available through `source.project.navigate` when
+the host has approved every external alias; the native Python `complete_mixed_*`
+and `definition_mixed_*` APIs remain available to editor integrations.
 
 For a supported live SOP network, call `document.export_source` with `root_path`. Save the returned JSON response outside Houdini and let the native CLI validate and create the selected project file:
 
@@ -102,12 +170,17 @@ For a supported live SOP network, call `document.export_source` with `root_path`
 python -m hocuspocus.hocusscript write-export export-response.json hocus/asset.hocus --project D:/show/project
 ```
 
-Creation is exclusive. To intentionally replace an existing file, pass its current `sha256:...` digest as `--expected-digest`. Never use a guessed digest or ask Houdini MCP to write the file.
+Creation is exclusive. To intentionally replace an existing file through the
+native CLI, pass its current `sha256:...` digest as `--expected-digest`. Through
+MCP, use `source.file.write_export` under an approved source-write grant; it
+validates the export handoff and uses the same exact-digest publication model.
+Never use a guessed digest.
 
 The complete loop is:
 
-1. edit the native `.hocus` file
-2. run `check`, `format`, and `compile` against the explicitly selected project
+1. edit the `.hocus` file directly or through `source.file.apply_patch`
+2. run `check`, `format`, and `compile` through `source.project.build`, or use
+   the native CLI against the explicitly selected project
 3. send bundle content to `document.preview_bundle` and inspect the diff
 4. call `document.plan_bundle`, then `document.apply_plan` with its guarded identity/revisions
 5. cook and capture the resulting asset
@@ -126,7 +199,17 @@ the agent's behalf. Read the exact schemas from
 `hocuspocus://schemas/...` or their byte-identical
 `houdini://production/schema/...` aliases instead of guessing carrier fields.
 
-`document.compile_source`, `document.format_source`, and `document.complete_source` remain content-only unsaved-buffer conveniences. Completion is backed by the live catalog; these `document.*` tools do not read project files or external module roots. For saved projects, H6 exposes exactly seven separately authorized `source.*` operations over user-approved roots: describe, search, read, apply patch, write export, build, and navigate. Clients select projects by opaque `projectId`, never physical path. Exact flat Bundle `0.2`, module Bundle `0.3`, control Bundle `0.4`, and value Bundle `0.5` document/live handling remains content-based, so source workspace access does not change the contract of the existing `document.*` tools or bypass preview/plan/apply.
+`document.compile_source`, `document.format_source`, and
+`document.complete_source` remain content-only unsaved-buffer conveniences.
+Completion is backed by the live catalog; these `document.*` tools do not read
+project files or external module roots. For saved projects, H6 exposes exactly
+seven separately authorized `source.*` operations over user-approved roots:
+describe, search, read, apply patch, write export, build, and navigate. Clients
+select projects by opaque `projectId`, never physical path. Exact flat Bundle
+`0.2`, module Bundle `0.3`, control Bundle `0.4`, and value Bundle `0.5`
+document/live handling remains content-based, so source workspace access does
+not change the contract of the existing `document.*` tools or bypass
+preview/plan/apply.
 
 Rules for the current preview:
 

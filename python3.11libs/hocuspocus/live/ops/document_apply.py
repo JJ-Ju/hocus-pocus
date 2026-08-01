@@ -11,11 +11,11 @@ from hocuspocus.core.jsonrpc import INVALID_PARAMS, JsonRpcError
 from ..context import RequestContext
 from .document_apply_planning import structural_context, structural_moves
 from .document_apply_editor import DocumentApplyEditorOperationsMixin
+from .document_mutation_integrity import DocumentMutationIntegrityMixin
 from .document_apply_managed import (
     plan_binding_changes,
     plan_connection_changes,
 )
-from .document_typed_apply import execute_typed_updates
 from .document_runtime_contract import (
     execute_runtime_bindings,
     plan_runtime_changes,
@@ -26,7 +26,10 @@ from .document_network_families import (
     network_family_policy,
 )
 
-class DocumentApplyOperationsMixin(DocumentApplyEditorOperationsMixin):
+class DocumentApplyOperationsMixin(
+    DocumentMutationIntegrityMixin,
+    DocumentApplyEditorOperationsMixin,
+):
     def _document_apply_state(self, baseline: dict[str, Any]) -> dict[str, Any]:
         return {
             "uidToPath": {
@@ -213,47 +216,6 @@ class DocumentApplyOperationsMixin(DocumentApplyEditorOperationsMixin):
             if len(update) > 2:
                 updates.append(update)
         return updates
-
-    @staticmethod
-    def _document_output_source_uid(document: dict[str, Any], root_uid: str | None) -> str | None:
-        for edge in document.get("edges", []):
-            if not isinstance(edge, dict) or edge.get("kind") != "output_flag":
-                continue
-            destination = edge.get("to") if isinstance(edge.get("to"), dict) else {}
-            if destination.get("nodeUid") == root_uid:
-                source = edge.get("from") if isinstance(edge.get("from"), dict) else {}
-                return str(source.get("nodeUid", "")).strip() or None
-        return None
-
-    def _document_plan_output(
-        self,
-        baseline: dict[str, Any],
-        target: dict[str, Any],
-        context: dict[str, Any],
-        network_family: str,
-    ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
-        if network_family_policy(network_family).output_strategy != "sop_display":
-            return None, None
-        baseline_uid = self._document_output_source_uid(baseline, context["rootUid"])
-        target_uid = self._document_output_source_uid(target, context["rootUid"])
-        display_uids = sorted(
-            uid for uid, node in context["after"].items()
-            if uid != context["rootUid"] and bool((node.get("flags") or {}).get("display", False))
-        )
-        guard = {"sourceUid": target_uid, "targetDisplayUids": display_uids}
-        if baseline_uid == target_uid:
-            return guard, None
-        return guard, {
-            "rootUid": context["rootUid"],
-            "rootPath": context["rootPath"],
-            "beforeSourceUid": baseline_uid,
-            "sourceUid": target_uid,
-            "sourcePath": (
-                str(context["after"].get(target_uid, {}).get("path", "")).strip()
-                if target_uid else None
-            ),
-            "targetDisplayUids": display_uids,
-        }
 
     def _document_plan_deletions(
         self, mode: str, target: dict[str, Any], context: dict[str, Any]
@@ -669,84 +631,6 @@ class DocumentApplyOperationsMixin(DocumentApplyEditorOperationsMixin):
                     }
                 )
 
-    def _document_execute_bindings(self, plan, state, executed, checkpoint) -> None:
-        for reset in plan.get("parameterResets", []):
-            checkpoint()
-            path = self._document_binding_parm_path(state, reset)
-            self._parm_revert_to_permanent_default_impl({"parm_path": path})
-            parm = self._require_parm_by_path(path)
-            is_default = getattr(parm, "isAtDefault", None)
-            verified_default = (
-                callable(is_default)
-                and bool(
-                    self._safe_value(
-                        lambda: is_default(
-                            compare_temporary_defaults=False,
-                            compare_expressions=True,
-                        ),
-                        False,
-                    )
-                )
-            )
-            if not verified_default:
-                raise JsonRpcError(
-                    INVALID_PARAMS,
-                    f"Managed parameter reset could not be verified at {path}.",
-                )
-            executed.append(
-                {
-                    "type": "revert_parm",
-                    "bindingUid": reset.get("bindingUid"),
-                    "parmPath": path,
-                    "verifiedDefault": True,
-                }
-            )
-        assignments = [
-            {
-                "parm_path": self._document_binding_parm_path(state, update),
-                "value": update.get("value"),
-            }
-            for update in plan.get("parameterAssignments", [])
-        ]
-        if assignments:
-            checkpoint()
-            self._parm_set_many_impl({"assignments": assignments})
-            executed.append({"type": "set_many_parms", "count": len(assignments)})
-        execute_typed_updates(
-            self,
-            plan.get("typedValueUpdates", []),
-            state,
-            executed,
-            checkpoint,
-        )
-        for update in plan.get("expressionUpdates", []):
-            checkpoint()
-            path = self._document_binding_parm_path(state, update)
-            self._parm_set_expression_impl(
-                {
-                    "parm_path": path,
-                    "expression": update["expression"],
-                    "language": update.get("expressionLanguage", "hscript"),
-                }
-            )
-            executed.append(
-                {"type": "set_expression", "bindingUid": update.get("bindingUid"), "parmPath": path}
-            )
-        for update in plan.get("codeBlobInstalls", []):
-            checkpoint()
-            path = self._document_binding_parm_path(state, update)
-            self._parm_set_impl({"parm_path": path, "value": update.get("body")})
-            executed.append(
-                {
-                    "type": "install_code_blob",
-                    "bindingUid": update.get("bindingUid"),
-                    "codeBlobUid": update.get("codeBlobUid"),
-                    "parmPath": path,
-                    "language": update.get("language"),
-                    "adapter": update.get("adapter"),
-                }
-            )
-
     def _document_execute_finalizers(self, plan, state, executed, checkpoint) -> None:
         output = plan.get("outputChange")
         if isinstance(output, dict):
@@ -824,9 +708,10 @@ class DocumentApplyOperationsMixin(DocumentApplyEditorOperationsMixin):
         baseline: dict[str, Any],
         *,
         checkpoint: Callable[[], None] | None = None,
+        executed: list[dict[str, Any]] | None = None,
     ) -> list[dict[str, Any]]:
         state = self._document_apply_state(baseline)
-        executed: list[dict[str, Any]] = []
+        executed = executed if executed is not None else []
 
         def check_cancelled() -> None:
             if checkpoint is not None:
@@ -940,7 +825,7 @@ class DocumentApplyOperationsMixin(DocumentApplyEditorOperationsMixin):
         diff: dict[str, Any],
         compile_ms: float,
     ) -> dict[str, Any] | None:
-        if mode == "reconcile" and plan.get("protectedDeleteNodes"):
+        if mode in {"reconcile", "validate_only"} and plan.get("protectedDeleteNodes"):
             protected = plan["protectedDeleteNodes"]
             diagnostics = self._document_clean_diagnostics(
                 diagnostics
@@ -1038,7 +923,7 @@ class DocumentApplyOperationsMixin(DocumentApplyEditorOperationsMixin):
         )
         compile_started = time.time()
         diff = self._document_diff_payload(baseline_document, target_document)
-        plan = self._document_build_apply_plan(baseline_document, target_document, mode=mode)
+        plan = self._document_build_apply_plan(baseline_document, target_document, mode="reconcile" if mode == "validate_only" else mode)
         self._document_require_code_capability(plan, context)
         compile_ms = round((time.time() - compile_started) * 1000.0, 3)
         planning_result = self._document_apply_planning_result(
@@ -1054,8 +939,12 @@ class DocumentApplyOperationsMixin(DocumentApplyEditorOperationsMixin):
         if planning_result is not None:
             return planning_result
 
+        plan, target_document, inverse_plan = self._document_prepare_direct_apply(
+            plan, baseline_document, target_document
+        )
         hou_module = self._require_hou()
         label = str(arguments.get("label", f"document apply {root_path}")).strip() or f"document apply {root_path}"
+        undo_label = f"HocusPocus: {label}"
         apply_commit_id = str(uuid4())
         executed: list[dict[str, Any]] = []
         refreshed: dict[str, Any] | None = None
@@ -1068,8 +957,10 @@ class DocumentApplyOperationsMixin(DocumentApplyEditorOperationsMixin):
         error_payload: dict[str, Any] | None = None
         try:
             execute_started = time.time()
-            with hou_module.undos.group(f"HocusPocus: {label}"):
-                executed = self._document_execute_apply_plan(plan, baseline_document)
+            with hou_module.undos.group(undo_label):
+                self._document_execute_apply_plan(
+                    plan, baseline_document, executed=executed
+                )
             execute_ms = round((time.time() - execute_started) * 1000.0, 3)
             self._monitor.mark_dirty("tool:document.apply", scope_path=root_path)
             verify_started = time.time()
@@ -1086,21 +977,31 @@ class DocumentApplyOperationsMixin(DocumentApplyEditorOperationsMixin):
         except Exception as exc:
             error_payload = {"type": exc.__class__.__name__, "message": str(exc)}
             rollback_started = time.time()
-            try:
-                hou_module.undos.undo()
-                rolled_back = True
-            except Exception as rollback_exc:
-                error_payload["rollbackError"] = str(rollback_exc)
+            (
+                rolled_back,
+                rollback_error,
+                rollback_verification,
+                refreshed,
+                rollback_executed,
+            ) = self._document_rollback_direct_apply(
+                root_path=root_path,
+                baseline=baseline_document,
+                undo_label=undo_label,
+                inverse_plan=inverse_plan,
+                forward_target=target_document,
+            )
+            error_payload["rollbackError"] = rollback_error
             rollback_ms = round((time.time() - rollback_started) * 1000.0, 3)
-            self._monitor.mark_dirty("tool:document.apply.rollback", scope_path=root_path)
-            refreshed = self._document_current_network_payload(root_path, force_sync=True)
             failure_diagnostics = diagnostics + [
                 {
                     "severity": "error",
                     "code": "apply.execution_failed",
                     "message": str(exc),
                     "path": root_path,
-                    "details": {"rolledBack": rolled_back},
+                    "details": {
+                        "rolledBack": rolled_back,
+                        "diagnosticCode": "HOCUS755" if rolled_back else "HOCUS756",
+                    },
                 }
             ]
             if checkout_id:
@@ -1116,6 +1017,9 @@ class DocumentApplyOperationsMixin(DocumentApplyEditorOperationsMixin):
                     verified=False,
                     summary={
                         "verification": (verification or diff).get("summary"),
+                        "rollbackVerification": (
+                            rollback_verification or {}
+                        ).get("summary"),
                         "plan": plan.get("summary"),
                         "timingsMs": {"compile": compile_ms, "execute": execute_ms, "verify": verify_ms, "rollback": rollback_ms},
                         "rolledBack": rolled_back,
@@ -1124,7 +1028,7 @@ class DocumentApplyOperationsMixin(DocumentApplyEditorOperationsMixin):
                     diagnostics=failure_diagnostics,
                     error=error_payload,
                 )
-            return {
+            failure = {
                 "checkoutId": checkout_id,
                 "applyCommitId": apply_commit_id,
                 "applied": False,
@@ -1138,12 +1042,24 @@ class DocumentApplyOperationsMixin(DocumentApplyEditorOperationsMixin):
                 "plan": plan,
                 "executedOperations": executed,
                 "verification": verification,
+                "rollbackVerification": rollback_verification,
+                "rollbackExecutedOperations": rollback_executed,
                 "verified": False,
                 "rolledBack": rolled_back,
+                "state": "aborted" if rolled_back else "partial_or_unknown",
+                "diagnosticCode": "HOCUS755" if rolled_back else "HOCUS756",
                 "error": error_payload,
                 "document": refreshed,
                 "timingsMs": {"compile": compile_ms, "execute": execute_ms, "verify": verify_ms, "rollback": rollback_ms},
             }
+            if not rolled_back:
+                self._document_quarantine_direct_apply(
+                    root_path, apply_commit_id, str(exc)
+                )
+            self._document_raise_apply_failure(
+                failure=failure, rolled_back=rolled_back
+            )
+            raise AssertionError("document apply failure must raise")
         if checkout_id:
             self._documents.replace_with_applied_document(checkout_id, refreshed or target_document)
         if hasattr(self._graph_store, "record_apply_result"):

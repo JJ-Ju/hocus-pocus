@@ -5,6 +5,8 @@ from __future__ import annotations
 from typing import Any
 
 from hocuspocus.version import __version__
+from hocuspocus.core.jsonrpc import INVALID_PARAMS, JsonRpcError
+from hocuspocus.core.operation_history import valid_operation_id
 
 from ..context import RequestContext
 from .base import hou
@@ -59,6 +61,7 @@ class SessionOperationsMixin:
 
     def session_info(self, arguments: dict[str, Any], context: RequestContext) -> dict[str, Any]:
         data = self._call_live(self._session_info_impl, context)
+        data["grantedCapabilities"] = sorted(set(context.permissions))
         return self._tool_response("Returned current Houdini session information.", data)
 
     def session_list_operations(
@@ -70,6 +73,26 @@ class SessionOperationsMixin:
         data = {"operations": self._dispatcher.operations_snapshot(limit=limit)}
         return self._tool_response("Returned recent dispatcher operations.", data)
 
+    def session_get_operation(
+        self,
+        arguments: dict[str, Any],
+        context: RequestContext,
+    ) -> dict[str, Any]:
+        operation_id = arguments.get("operation_id")
+        if not valid_operation_id(operation_id):
+            raise JsonRpcError(INVALID_PARAMS, "operation_id is invalid")
+        identity = self._runtime.host_identity
+        operation = self._operation_history.lookup(
+            operation_id,
+            context.principal_id,
+            host_instance_id=identity.instance_id,
+            host_generation=identity.generation,
+        )
+        data = {"operationId": operation_id, "found": operation is not None}
+        if operation is not None:
+            data["operation"] = operation
+        return self._tool_response("Reconciled terminal operation state.", data)
+
     def session_cancel_operation(
         self,
         arguments: dict[str, Any],
@@ -77,8 +100,6 @@ class SessionOperationsMixin:
     ) -> dict[str, Any]:
         operation_id = str(arguments.get("operation_id", "")).strip()
         if not operation_id:
-            from hocuspocus.core.jsonrpc import INVALID_PARAMS, JsonRpcError
-
             raise JsonRpcError(INVALID_PARAMS, "operation_id is required")
         cancelled = self._dispatcher.cancel(operation_id)
         data = {

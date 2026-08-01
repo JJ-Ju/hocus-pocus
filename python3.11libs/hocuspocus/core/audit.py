@@ -9,6 +9,7 @@ import time
 from hashlib import sha256
 from typing import Any
 
+from .operation_history import sanitize_terminal_error, sanitize_terminal_payload
 from .paths import audit_log_path
 
 
@@ -28,18 +29,26 @@ class AuditLogger:
         success: bool,
         result: dict[str, Any] | None = None,
         error: dict[str, Any] | None = None,
+        host_instance_id: str | None = None,
+        host_generation: int | None = None,
+        delivery_stage: str | None = None,
+        commit_state: str | None = None,
     ) -> None:
         payload = {
             "timestamp": time.time(),
             "operationId": operation_id,
             "callerId": caller_id,
             "toolName": tool_name,
+            "hostInstanceId": host_instance_id,
+            "hostGeneration": host_generation,
+            "deliveryStage": delivery_stage,
+            "commitState": commit_state,
             "success": success,
             "argumentsHash": sha256(
                 json.dumps(arguments, sort_keys=True, default=str).encode("utf-8")
             ).hexdigest(),
             "resultSummary": _result_summary(result),
-            "error": error,
+            "error": sanitize_terminal_error(error),
         }
         line = json.dumps(payload, ensure_ascii=True)
         with self._lock:
@@ -57,5 +66,5 @@ def _result_summary(result: dict[str, Any] | None) -> dict[str, Any] | None:
     summary: dict[str, Any] = {}
     for key in ("path", "paths", "deletedPaths", "selectedNodes", "parmPath", "hipFile"):
         if key in structured:
-            summary[key] = structured[key]
+                summary[key] = sanitize_terminal_payload(structured[key])
     return summary or {"keys": sorted(structured.keys())[:10]}
