@@ -13,6 +13,7 @@ from hocuspocus.core.policy import require_capabilities
 from ..context import RequestContext
 from ..document_service import ApplyPlanError
 from ..graph_store import GraphStorePlanError
+from ..houdini_undo import perform_stack_action
 
 DESTRUCTIVE_CANDIDATE_ACTIONS = frozenset({
     "adopt_node", "delete_node", "replace_node", "install_code",
@@ -282,13 +283,9 @@ class HocusScriptApplyOperationsMixin:
     ) -> tuple[bool, str | None, dict[str, Any] | None]:
         verification: dict[str, Any] | None = None
         try:
-            undos = self._require_hou().undos
-            has_label_api = callable(getattr(undos, "undoLabels", None))
-            labels = tuple(undos.undoLabels()) if has_label_api else ()
-            if labels and labels[0] == undo_label:
-                undos.performUndo()
-            elif not has_label_api and callable(getattr(undos, "undo", None)):
-                undos.undo()
+            perform_stack_action(
+                self._require_hou(), "undo", expected_label=undo_label
+            )
             self._monitor.mark_dirty(
                 "tool:document.apply_plan.rollback", scope_path=root_path
             )
@@ -342,6 +339,20 @@ class HocusScriptApplyOperationsMixin:
             )
             if self._hocus_canonical_digest(validated) != self._hocus_canonical_digest(plan["executionPlan"]):
                 self._hocus_fail("HOCUS754", "Ownership or normalized operation validation changed after planning.")
+            prepared_execution, prepared_inverse = (
+                self._document_prepare_hash_bound_apply(
+                    validated,
+                    plan["executionPlan"],
+                    plan["inversePlan"],
+                    current,
+                    plan["targetDocument"],
+                )
+            )
+            runtime_plan = {
+                **plan,
+                "executionPlan": prepared_execution,
+                "inversePlan": prepared_inverse,
+            }
             context.raise_if_cancelled()
             final_gate = self._document_current_network_payload(root_path, force_sync=True)
             if self._hocus_canonical_digest(final_gate) != baseline_guard["digest"]:
@@ -362,8 +373,10 @@ class HocusScriptApplyOperationsMixin:
                 context.raise_if_cancelled()
                 hou_module = self._require_hou()
                 with hou_module.undos.group(undo_label):
-                    executed = self._document_execute_apply_plan(
-                        plan["executionPlan"], current, checkpoint=context.raise_if_cancelled
+                    self._document_execute_apply_plan(
+                        runtime_plan["executionPlan"], current,
+                        checkpoint=context.raise_if_cancelled,
+                        executed=executed,
                     )
                 self._hocus_apply_test_checkpoint("after_execute")
                 context.raise_if_cancelled()
@@ -412,7 +425,7 @@ class HocusScriptApplyOperationsMixin:
             except Exception as exc:
                 rolled_back, rollback_error, rollback_verification = (
                     self._hocus_rollback_apply(
-                        plan, baseline_guard, root_path, undo_label
+                        runtime_plan, baseline_guard, root_path, undo_label
                     )
                 )
                 state = "aborted" if rolled_back else "partial_or_unknown"

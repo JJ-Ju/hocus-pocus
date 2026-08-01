@@ -23,6 +23,10 @@ from tests.hocusscript_hs8_build_transaction_helpers import (
 from tests.hocusscript_hs8_runtime_admission_helpers import (
     assert_hs8_runtime_admission,
 )
+from tests.hs8_package_pointer_helpers import (
+    package_pointer as _package_pointer,
+    pointer_authority_files as _pointer_authority_files,
+)
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from hocuspocus.hocusscript.build_comparison import (
     VisualComparison,
@@ -456,9 +460,12 @@ def _assert_installed_payload_preflight(
         packages = installed / "active-pointer"
         version = packages / "HocusPocus.0123456789ab.01234567"
         version.mkdir(parents=True)
+        config_digest, manifest_digest = _pointer_authority_files(version)
         package_file = packages / "hocuspocus.json"
         canonical_pointer = _package_pointer(
             "HocusPocus.0123456789ab.01234567",
+            config_digest,
+            manifest_digest,
         )
         package_file.write_text(
             json.dumps(canonical_pointer),
@@ -494,8 +501,20 @@ def _assert_installed_payload_preflight(
         package_file.write_text(json.dumps(reordered_pointer), encoding="utf-8")
         with testcase.assertRaises(module.CleanProcessQualificationError):
             module._active_package_root(package_file)
+        stale_authority = copy.deepcopy(canonical_pointer)
+        stale_authority["hocuspocus"]["activeConfigDigest"] = "sha256:" + "0" * 64
+        package_file.write_text(json.dumps(stale_authority), encoding="utf-8")
+        with testcase.assertRaises(module.CleanProcessQualificationError):
+            module._active_package_root(package_file)
+        alternate = packages / "HocusPocus.aaaaaaaaaaaa.aaaaaaaa"
+        alternate.mkdir()
+        alternate_config, alternate_manifest = _pointer_authority_files(alternate)
         package_file.write_text(
-            json.dumps(_package_pointer("HocusPocus.aaaaaaaaaaaa.aaaaaaaa")),
+            json.dumps(_package_pointer(
+                "HocusPocus.aaaaaaaaaaaa.aaaaaaaa",
+                alternate_config,
+                alternate_manifest,
+            )),
             encoding="utf-8",
         )
         testcase.assertNotEqual(module._active_package_root(package_file), version)
@@ -695,6 +714,17 @@ def _assert_build_transaction(testcase: Any) -> None:
         first_config = _active_config(preferences, first_package)
         first_token = _configured_token(first_config)
         installed_root = first_config.parents[1]
+        installed_manifest = helper.verify_manifest(installed_root)
+        testcase.assertEqual(
+            package_payload["hocuspocus"],
+            {
+                "schemaVersion": 1,
+                "activeConfigDigest": (
+                    "sha256:" + hashlib.sha256(first_config.read_bytes()).hexdigest()
+                ),
+                "installManifestDigest": installed_manifest["manifestDigest"],
+            },
+        )
         testcase.assertFalse(_python_bytecode(output / "HocusPocus"))
         testcase.assertFalse(_python_bytecode(installed_root))
         undeclared = installed_root / "python3.11libs/hocuspocus/undeclared.pyc"
@@ -1035,28 +1065,6 @@ def _active_config(preferences: Path, package: bytes) -> Path:
         preferences / "packages" / match.group().decode()
         / "config" / "default.toml"
     )
-
-
-def _package_pointer(root_name: str) -> dict[str, Any]:
-    return {
-        "env": [
-            {
-                "HOCUSPOCUS_ROOT": (
-                    f"$HOUDINI_PACKAGE_PATH/{root_name}"
-                ),
-            },
-            {
-                "PYTHONPATH": {
-                    "method": "prepend",
-                    "value": "$HOCUSPOCUS_ROOT/python3.11libs",
-                },
-            },
-            {
-                "PYTHONDONTWRITEBYTECODE": "1",
-            },
-        ],
-        "hpath": "$HOCUSPOCUS_ROOT",
-    }
 
 
 def _configured_token(path: Path) -> str:

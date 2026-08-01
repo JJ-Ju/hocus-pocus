@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from hocuspocus.core import paths as core_paths
+from .graph_store_documents import GraphStoreDocumentMixin
 from .graph_store_live_revisions import live_revision_fields
 from .graph_store_plans import (
     GraphStorePlanError as _GraphStorePlanError,
@@ -238,7 +239,7 @@ _V3_TABLES = _V2_TABLES | {
 }
 
 
-class LiveGraphStore(GraphStorePlanMixin):
+class LiveGraphStore(GraphStoreDocumentMixin, GraphStorePlanMixin):
     _GLOBAL_SCOPE_KEY = "scene:/"
 
     def __init__(self, logger: logging.Logger, db_path: Path | None = None):
@@ -607,44 +608,13 @@ class LiveGraphStore(GraphStorePlanMixin):
             "cacheMisses": misses,
         }
 
-    def _latest_row_by_document_id(self, connection: sqlite3.Connection, document_id: str) -> sqlite3.Row | None:
-        return connection.execute(
-            "SELECT * FROM documents WHERE document_id = ?",
-            (document_id,),
-        ).fetchone()
-
-    def _latest_row_by_root_path(self, connection: sqlite3.Connection, root_path: str) -> sqlite3.Row | None:
-        return connection.execute(
-            "SELECT * FROM documents WHERE root_path = ?",
-            (root_path,),
-        ).fetchone()
-
-    def get_document_by_id(self, document_id: str) -> dict[str, Any] | None:
-        cached = self._cache_get(document_id)
-        if cached is not None:
-            return cached
-        with self._connect() as connection:
-            row = self._latest_row_by_document_id(connection, document_id)
-            if row is None:
-                return None
-            payload = json.loads(row["payload_json"])
-        self._cache_set(document_id, payload)
-        return payload
-
-    def get_document_by_root_path(self, root_path: str) -> dict[str, Any] | None:
-        with self._connect() as connection:
-            row = self._latest_row_by_root_path(connection, root_path)
-            if row is None:
-                return None
-            document_id = str(row["document_id"])
-        return self.get_document_by_id(document_id)
-
     def upsert_document_from_live(
         self,
         document: dict[str, Any],
         *,
         live_revision: int,
         source: str,
+        force_new_revision: bool = False,
     ) -> dict[str, Any]:
         payload = copy.deepcopy(document)
         document_id = str(payload.get("documentId", "")).strip()
@@ -657,9 +627,19 @@ class LiveGraphStore(GraphStorePlanMixin):
 
         with self._lock, self._connect() as connection:
             latest = self._latest_row_by_document_id(connection, document_id)
-            latest_revision = int(latest["latest_revision"]) if latest is not None else 0
+            latest_revision = (
+                int(latest["latest_revision"])
+                if latest is not None
+                else self._historical_document_revision(
+                    connection, document_id
+                )
+            )
             previous_live_revision = int(latest["live_revision"]) if latest is not None and latest["live_revision"] is not None else 0
-            changed = latest is None or str(latest["content_hash"]) != content_hash
+            changed = (
+                force_new_revision
+                or latest is None
+                or str(latest["content_hash"]) != content_hash
+            )
             document_revision = latest_revision + 1 if changed else max(latest_revision, 1)
 
             payload["documentRevision"] = document_revision

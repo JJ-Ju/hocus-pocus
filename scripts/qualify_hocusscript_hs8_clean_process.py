@@ -798,60 +798,25 @@ def _validate_layout(
         installed_payload,
     )
 def _active_package_root(package_file: Path) -> Path:
+    helper = _package_pointer_helper()
     try:
-        payload = json.loads(package_file.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        return helper.active_package_root(package_file)
+    except helper.PackagePointerError as exc:
         raise CleanProcessQualificationError(
-            "HOCUS991", "Active Houdini package pointer is invalid.",
+            "HOCUS991", str(exc),
         ) from exc
-    if (
-        not isinstance(payload, Mapping)
-        or set(payload) != {"env", "hpath"}
-        or not isinstance(payload.get("env"), list)
-        or len(payload["env"]) != 3
-    ):
+
+
+def _package_pointer_helper() -> ModuleType:
+    path = Path(__file__).resolve().with_name("hs8_package_pointer.py")
+    spec = importlib.util.spec_from_file_location("_hocus_hs8_package_pointer", path)
+    if spec is None or spec.loader is None:
         raise CleanProcessQualificationError(
-            "HOCUS991", "Active Houdini package pointer has an invalid envelope.",
+            "HOCUS991", "Package-pointer verifier is unavailable.",
         )
-    root_entry, python_entry, bytecode_entry = payload["env"]
-    prefix = "$HOUDINI_PACKAGE_PATH/"
-    if (
-        not isinstance(root_entry, Mapping)
-        or set(root_entry) != {"HOCUSPOCUS_ROOT"}
-        or not isinstance(root_entry["HOCUSPOCUS_ROOT"], str)
-        or not root_entry["HOCUSPOCUS_ROOT"].startswith(prefix)
-        or _VERSIONED_INSTALL.fullmatch(
-            root_entry["HOCUSPOCUS_ROOT"][len(prefix):],
-        ) is None
-    ):
-        raise CleanProcessQualificationError(
-            "HOCUS991", "Active Houdini package pointer is ambiguous or unsafe.",
-        )
-    root_name = root_entry["HOCUSPOCUS_ROOT"][len(prefix):]
-    expected = {
-        "env": [
-            {"HOCUSPOCUS_ROOT": prefix + root_name},
-            {
-                "PYTHONPATH": {
-                    "method": "prepend",
-                    "value": "$HOCUSPOCUS_ROOT/python3.11libs",
-                },
-            },
-            {
-                "PYTHONDONTWRITEBYTECODE": "1",
-            },
-        ],
-        "hpath": "$HOCUSPOCUS_ROOT",
-    }
-    if (
-        payload != expected
-        or not isinstance(python_entry, Mapping)
-        or not isinstance(bytecode_entry, Mapping)
-    ):
-        raise CleanProcessQualificationError(
-            "HOCUS991", "Active Houdini package pointer is not canonical.",
-        )
-    return (package_file.parent / root_name).resolve()
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 def _verify_installed_payload(
     source_root: Path,
     installed_root: Path,

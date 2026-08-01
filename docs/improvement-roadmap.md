@@ -1,8 +1,10 @@
 # HocusPocus Improvement Roadmap
 
-Status: active roadmap
+Status: completed delivery record through M18
 
-Branch: `codex/develop`
+Current release work is tracked in `hocusscript-roadmap-completion-plan.md`.
+Sections A-E and M12-M17 describe the historical server-improvement program;
+M18 records the accepted Houdini 22 live-authoring repair.
 
 Scope:
 
@@ -10,7 +12,9 @@ Scope:
 - make the MCP interface easier for agents to use reliably
 - expand the server where that adds practical automation power
 
-This roadmap is intentionally focused on the current Python/HOM server. It does not assume the HDK bridge, Python Panel, or HAPI worker plane are available yet.
+This roadmap is intentionally focused on the Python/HOM server. It predates
+the HocusScript release program and is retained as a concise record of why the
+current surface was built. It is not the source of truth for V1 release gates.
 
 ## 1. Goals
 
@@ -178,9 +182,9 @@ These should come after the low-level surface is safe and stable.
 - Task support will force more explicit state management in the runtime.
 - Refactoring too early can slow progress; refactoring too late can harden bad interfaces.
 
-## 6. Recommended Sequence
+## 6. Completed Sequence
 
-Immediate sequence:
+The program was delivered in this order:
 
 1. Fix auth leakage and enforce write/path permissions.
 2. Add dynamic resources and normalize tool outputs.
@@ -191,9 +195,53 @@ Immediate sequence:
 
 ## 7. Success Criteria
 
-This roadmap phase is successful when:
+This roadmap phase was accepted when:
 
 - an agent can safely connect without hidden auth flaws
 - an agent can browse stable scene state through resources instead of only tool calls
 - an agent can build, inspect, cook, render, and snapshot a scene with clear progress and fewer brittle steps
 - the codebase remains easy to extend without one giant operations file owning everything
+
+## M18. Live authoring trust and recovery
+
+Status: complete and installed in Houdini 22.0.368
+
+Goal:
+
+- turn the successful Houdini 22 brick-HDA authoring workflow into a safe,
+  discoverable, restart-resilient product path
+
+Deliver:
+
+- one verified rollback/quarantine boundary for document mutations
+- parameter-template preflight before any scene mutation
+- Houdini 22 guarded undo/redo
+- derived output-edge verification with node flags as authority
+- value-preserving HDA promotion and locked-interface value editing
+- pre-apply capability readiness and an explicit procedural-authoring profile
+- durable operation IDs and authenticated terminal-outcome reconciliation
+- transaction-coalesced structural revisions distinct from cosmetic activity
+- canonical document schemas and stable category-qualified node type IDs
+
+Done when:
+
+- all eight live brick-HDA findings have narrow automated coverage
+- the 43-test ceiling, 1,200-line gate, and complexity 12/15 remain clean
+- a disposable installed Houdini 22 process completes the repaired workflow
+- an independent P0/P1 review is clean
+
+The detailed execution and acceptance contract is recorded in
+`live-brick-hda-authoring-repair-plan-2026-07-31.md`.
+
+Acceptance evidence:
+
+- all 43 public scenarios passed in one full run
+- the final journal race/recovery workflow and the 12/15 complexity,
+  compile, diff, test-count, and 1,200-line gates passed after stabilization
+- installed first-use and authoring-repair workflows passed in disposable
+  Houdini 22.0.368 processes, including value-preserving HDA promotion,
+  menu-token editing, guarded undo/redo, and one structural revision
+- one stdio broker session survived an offline interval and reconnected to a
+  second disposable Houdini host with a distinct authenticated host identity
+- independent mutation, HDA/capability, and durable-delivery P0/P1 reviews
+  finished clean

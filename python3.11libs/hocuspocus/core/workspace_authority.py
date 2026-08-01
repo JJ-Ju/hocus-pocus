@@ -109,6 +109,27 @@ class WorkspaceAuthority:
         )
         return session
 
+    def resume_session(
+        self,
+        session_id: str,
+        principal_id: str,
+        client_info: dict[str, Any] | None = None,
+    ) -> WorkspaceSession:
+        with self._write_authority_lock:
+            session = self.grants.resume_session(
+                session_id,
+                principal_id,
+                client_info,
+            )
+        self.audit(
+            event="session.resume",
+            project_id=None,
+            principal_id=principal_id,
+            session_id=session.session_id,
+            success=True,
+        )
+        return session
+
     def context_session(self, context: RequestContext) -> WorkspaceSession | None:
         return self.session(
             context.session_id,

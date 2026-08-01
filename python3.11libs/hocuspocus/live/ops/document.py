@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from typing import Any
 
-from hocuspocus.core.jsonrpc import INVALID_PARAMS, JsonRpcError
+from hocuspocus.core.jsonrpc import INTERNAL_ERROR, INVALID_PARAMS, JsonRpcError
 
 from ..context import RequestContext
 from .document_apply import DocumentApplyOperationsMixin
@@ -54,6 +56,51 @@ class DocumentOperationsMixin(
     _VEX_CODE_PARM_NAMES = {"snippet", "vex", "vexpression", "snippet1", "snippet2"}
     _PYTHON_CODE_PARM_NAMES = {"python", "pythoncode"}
     _SCRIPT_CODE_PARM_NAMES = {"script", "prescript", "postscript"}
+    _MAX_INLINE_CHECKOUT_PAYLOAD_BYTES = 1024 * 1024
+
+    @staticmethod
+    def _canonical_checkout_json(payload: dict[str, Any]) -> bytes:
+        try:
+            return json.dumps(
+                payload,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+                allow_nan=False,
+            ).encode("utf-8")
+        except (TypeError, ValueError) as exc:
+            raise JsonRpcError(
+                INTERNAL_ERROR,
+                "The checkout document could not be represented as canonical JSON.",
+            ) from exc
+
+    def _document_checkout_delivery(
+        self,
+        checkout: dict[str, Any],
+        *,
+        additional_payload: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        checkout_id = str(checkout.get("checkoutId", ""))
+        document = self._documents.working_document(checkout_id)
+        if document is None:
+            raise JsonRpcError(INTERNAL_ERROR, "The new document checkout is unavailable.")
+        encoded_document = self._canonical_checkout_json(document)
+        delivery = {
+            "mode": "inline",
+            "contentDigest": f"sha256:{hashlib.sha256(encoded_document).hexdigest()}",
+            "byteLength": len(encoded_document),
+            "inlinePayloadLimitBytes": self._MAX_INLINE_CHECKOUT_PAYLOAD_BYTES,
+        }
+        payload = dict(additional_payload or {})
+        payload.update(checkout)
+        payload["documentDelivery"] = delivery
+        payload["document"] = document
+        if len(self._canonical_checkout_json(payload)) <= self._MAX_INLINE_CHECKOUT_PAYLOAD_BYTES:
+            return payload
+        payload.pop("document")
+        delivery["mode"] = "resource"
+        delivery["reason"] = "document_exceeds_inline_limit"
+        return payload
 
     def _document_checkout_impl(self, arguments: dict[str, Any]) -> dict[str, Any]:
         scope = str(arguments.get("scope", "network")).strip().lower()
@@ -65,12 +112,13 @@ class DocumentOperationsMixin(
             if not root_path:
                 raise JsonRpcError(INVALID_PARAMS, "root_path is required for network document checkouts.")
             document = self._document_current_network_payload(root_path)
-        return self._documents.create_checkout(
+        checkout = self._documents.create_checkout(
             document_id=str(document.get("documentId")),
             document_kind=str(document.get("kind")),
             root_path=root_path,
             document=document,
         )
+        return self._document_checkout_delivery(checkout)
 
     def document_checkout(self, arguments: dict[str, Any], context: RequestContext) -> dict[str, Any]:
         data = self._call_live(lambda: self._document_checkout_impl(arguments), context)

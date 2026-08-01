@@ -1,63 +1,3 @@
-# Private manifest-identity transactions for build.ps1.
-
-if (-not ("HocusPocus.NativeFileIdentity" -as [type])) {
-    Add-Type -TypeDefinition @"
-using System;
-using System.ComponentModel;
-using System.IO;
-using System.Runtime.InteropServices;
-using Microsoft.Win32.SafeHandles;
-
-namespace HocusPocus {
-    public static class NativeFileIdentity {
-        [StructLayout(LayoutKind.Sequential)]
-        private struct BY_HANDLE_FILE_INFORMATION {
-            public uint FileAttributes;
-            public System.Runtime.InteropServices.ComTypes.FILETIME CreationTime;
-            public System.Runtime.InteropServices.ComTypes.FILETIME LastAccessTime;
-            public System.Runtime.InteropServices.ComTypes.FILETIME LastWriteTime;
-            public uint VolumeSerialNumber;
-            public uint FileSizeHigh;
-            public uint FileSizeLow;
-            public uint NumberOfLinks;
-            public uint FileIndexHigh;
-            public uint FileIndexLow;
-        }
-
-        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-        private static extern SafeFileHandle CreateFile(
-            string name, uint access, FileShare share, IntPtr security,
-            FileMode mode, uint flags, IntPtr template);
-
-        [DllImport("kernel32.dll", SetLastError = true)]
-        private static extern bool GetFileInformationByHandle(
-            SafeFileHandle handle, out BY_HANDLE_FILE_INFORMATION information);
-
-        public static string Read(string path) {
-            const uint BackupSemantics = 0x02000000;
-            using (SafeFileHandle handle = CreateFile(
-                path, 0, FileShare.ReadWrite | FileShare.Delete, IntPtr.Zero,
-                FileMode.Open, BackupSemantics, IntPtr.Zero)) {
-                if (handle.IsInvalid) {
-                    throw new Win32Exception(Marshal.GetLastWin32Error());
-                }
-                BY_HANDLE_FILE_INFORMATION information;
-                if (!GetFileInformationByHandle(handle, out information)) {
-                    throw new Win32Exception(Marshal.GetLastWin32Error());
-                }
-                return String.Format(
-                    "{0:x8}:{1:x8}{2:x8}:{3}",
-                    information.VolumeSerialNumber,
-                    information.FileIndexHigh,
-                    information.FileIndexLow,
-                    information.NumberOfLinks);
-            }
-        }
-    }
-}
-"@
-}
-
 function Get-Sha256Bytes {
     param([byte[]]$Value)
     $sha = [System.Security.Cryptography.SHA256]::Create()
@@ -69,17 +9,14 @@ function Get-Sha256Bytes {
         $sha.Dispose()
     }
 }
-
 function Get-Sha256Text {
     param([string]$Value)
     return Get-Sha256Bytes -Value ([Text.Encoding]::UTF8.GetBytes($Value))
 }
-
 function Test-StableToken {
     param([string]$Token)
     return $Token -cmatch '^[A-Za-z0-9_-]{32,128}$'
 }
-
 function Get-PathIdentity {
     param([string]$Path)
     $full = [System.IO.Path]::GetFullPath($Path)
@@ -92,7 +29,14 @@ function Get-PathIdentity {
     $item = Get-Item -LiteralPath $full -Force
     return "$($item.CreationTimeUtc.Ticks):$($item.Length):$full"
 }
-
+function Get-DurablePathIdentity {
+    param([string]$Path)
+    $identity = Get-PathIdentity -Path $Path
+    if ($identity -cnotmatch '^([0-9a-f]{8}):([0-9a-f]{16}):[0-9]+$') {
+        throw "Durable Windows path identity is unavailable."
+    }
+    return "win-fileid-v1:$($Matches[1]):$($Matches[2])"
+}
 function Get-FileSnapshot {
     param([string]$Path, [int64]$MaximumBytes = 65536)
     $full = [System.IO.Path]::GetFullPath($Path)
@@ -117,7 +61,6 @@ function Get-FileSnapshot {
         Bytes = [Convert]::ToBase64String($bytes)
     }
 }
-
 function Assert-ExactProperties {
     param($Value, [string[]]$Names, [string]$Label)
     if ($null -eq $Value) { throw "Invalid $Label." }
@@ -130,7 +73,6 @@ function Assert-ExactProperties {
         throw "Invalid $Label fields."
     }
 }
-
 function ConvertTo-FileSnapshot {
     param($Value)
     Assert-ExactProperties -Value $Value `
@@ -153,7 +95,6 @@ function ConvertTo-FileSnapshot {
         Bytes = [string]$Value.Bytes
     }
 }
-
 function Test-FileSnapshot {
     param([string]$Path, $Expected, [int64]$MaximumBytes = 65536)
     $expectedSnapshot = ConvertTo-FileSnapshot -Value $Expected
@@ -169,7 +110,6 @@ function Test-FileSnapshot {
         $actual.Bytes -ceq $expectedSnapshot.Bytes
     )
 }
-
 function Assert-FileSnapshot {
     param(
         [string]$Path,
@@ -184,7 +124,6 @@ function Assert-FileSnapshot {
         throw "$Label changed outside its transaction authority."
     }
 }
-
 function Replace-FileAtomically {
     param([string]$Candidate, [string]$Active, [string]$Backup)
     if (-not (Test-Path -LiteralPath $Active)) {
@@ -201,14 +140,14 @@ function Replace-FileAtomically {
         [System.IO.File]::Delete($ephemeral)
     }
 }
-
 function New-PackagePointerCandidate {
-    param([string]$Path, [string]$RootName, [string]$Parent)
+    param([string]$Path, [string]$RootName, [string]$Parent,
+        [string]$ConfigDigest, [string]$ManifestDigest)
     Assert-OwnedChild -Parent $Parent -Path $Path
-    Build-PackageJson -Path $Path -RootName $RootName
+    Build-PackageJson -Path $Path -RootName $RootName `
+        -ConfigDigest $ConfigDigest -ManifestDigest $ManifestDigest
     return Get-FileSnapshot -Path $Path
 }
-
 function Publish-PackageCandidate {
     param(
         [string]$Path,
@@ -217,13 +156,16 @@ function Publish-PackageCandidate {
         [string]$Parent,
         $Before,
         $After,
-        [string]$RootName
+        [string]$RootName,
+        [string]$ConfigDigest,
+        [string]$ManifestDigest
     )
     Assert-OwnedChild -Parent $Parent -Path $Path
     Assert-OwnedChild -Parent $Parent -Path $Candidate
     if ($Backup) { Assert-OwnedChild -Parent $Parent -Path $Backup }
     if (Test-FileSnapshot -Path $Path -Expected $After) {
-        Assert-PackageActivation -Path $Path -RootName $RootName
+        Assert-PackageActivation -Path $Path -RootName $RootName `
+            -ConfigDigest $ConfigDigest -ManifestDigest $ManifestDigest
         return
     }
     Assert-FileSnapshot -Path $Candidate -Expected $After `
@@ -243,9 +185,9 @@ function Publish-PackageCandidate {
     }
     Assert-FileSnapshot -Path $Path -Expected $After `
         -Label "Published package pointer"
-    Assert-PackageActivation -Path $Path -RootName $RootName
+    Assert-PackageActivation -Path $Path -RootName $RootName `
+        -ConfigDigest $ConfigDigest -ManifestDigest $ManifestDigest
 }
-
 function Remove-PackagePointerBackup {
     param([string]$Path, [string]$Parent, $Expected)
     if (-not $Path -or -not (Test-Path -LiteralPath $Path)) { return }
@@ -253,7 +195,6 @@ function Remove-PackagePointerBackup {
         -Label "Package pointer backup"
     Remove-OwnedPath -Path $Path -Parent $Parent
 }
-
 function Invoke-BestEffortCleanup {
     param(
         [scriptblock]$Action,
@@ -269,7 +210,6 @@ function Invoke-BestEffortCleanup {
         return $false
     }
 }
-
 function Write-JsonJournal {
     param([string]$Path, [System.Collections.IDictionary]$State)
     $candidate = $Path + ".candidate." + [guid]::NewGuid().ToString("N")
@@ -281,7 +221,6 @@ function Write-JsonJournal {
     )
     Replace-FileAtomically -Candidate $candidate -Active $Path -Backup $null
 }
-
 function Get-VerifiedManifestDigest {
     param([string]$Path, [switch]$AllowAbsent)
     if (-not (Test-Path -LiteralPath $Path)) {
@@ -296,14 +235,76 @@ function Get-VerifiedManifestDigest {
     }
     return $digest
 }
-
 function Assert-ManifestDigest {
     param([string]$Path, [string]$Expected, [string]$Label)
     if ((Get-VerifiedManifestDigest -Path $Path) -cne $Expected) {
         throw "$Label manifest identity changed."
     }
 }
-
+function Assert-CleanupReceipt {
+    param($Receipt, [string]$Kind, [string]$ExpectedDigest,
+        [string]$ExpectedOutputRootIdentity)
+    $terminal = $Kind -ceq "hocus_native_manifest_cleanup_receipt"
+    $names = @("kind", "schemaVersion", "manifestDigest", "outputRootIdentity", "rootIdentity", "packageIdentity", "phase", "complete")
+    if ($terminal) { $names += "alreadyAbsent" } else {
+        $names += @("removedFiles", "removedDirectories")
+    }
+    Assert-ExactProperties -Value $Receipt -Label "manifest cleanup receipt" -Names $names
+    if (
+        [string]$Receipt.kind -cne $Kind -or $Receipt.schemaVersion -ne 1 -or
+        [string]$Receipt.manifestDigest -cne $ExpectedDigest -or
+        [string]$Receipt.outputRootIdentity -cne $ExpectedOutputRootIdentity -or
+        [bool]$Receipt.complete -ne $terminal -or
+        [string]$Receipt.phase -cne $(if ($terminal) { "terminal" } else { "governed" }) -or
+        [string]$Receipt.rootIdentity -notmatch '^win-fileid-v1:[0-9a-f]{8}:[0-9a-f]{16}$' -or
+        [string]$Receipt.packageIdentity -notmatch '^win-fileid-v1:[0-9a-f]{8}:[0-9a-f]{16}$' -or
+        (-not $terminal -and (
+            $Receipt.removedFiles -lt 0 -or $Receipt.removedFiles -gt 20001 -or
+            $Receipt.removedDirectories -lt 0 -or $Receipt.removedDirectories -gt 80000
+        )) -or ($terminal -and $Receipt.alreadyAbsent -notin @($true, $false))
+    ) { throw "Manifest cleanup receipt is invalid." }
+}
+function Complete-CleanupTarget {
+    param([string]$JournalPath, [string]$OutputRoot,
+        [System.Collections.IDictionary]$State, [string]$TargetName,
+        [string]$TargetKind, [string]$ExpectedDigest)
+    if ([string]$State.phase -cne "cleanup_terminal") {
+        $receipt = Invoke-Manifest -Root (Join-Path $OutputRoot $TargetName) `
+            -Command "cleanup-governed" -Arguments @(
+                "--expected-digest", $ExpectedDigest,
+                "--output-root-identity", ([string]$State.outputRootIdentity)
+            )
+        Assert-CleanupReceipt -Receipt $receipt `
+            -Kind "hocus_native_manifest_cleanup_authority" `
+            -ExpectedDigest $ExpectedDigest `
+            -ExpectedOutputRootIdentity ([string]$State.outputRootIdentity)
+        $State.phase = "cleanup_terminal"
+        $State.cleanupTargetName = $TargetName
+        $State.cleanupTargetKind = $TargetKind
+        $State.cleanupManifestDigest = $ExpectedDigest
+        $State.cleanupRootIdentity = [string]$receipt.rootIdentity
+        $State.cleanupPackageIdentity = [string]$receipt.packageIdentity
+        Write-JsonJournal -Path $JournalPath -State $State
+        # HS8_TEST_CRASH_AFTER_GOVERNED_JOURNAL
+    }
+    $terminal = Invoke-Manifest -Root (Join-Path $OutputRoot $TargetName) `
+        -Command "cleanup-terminal" -Arguments @(
+            "--expected-digest", ([string]$State.cleanupManifestDigest),
+            "--output-root-identity", ([string]$State.outputRootIdentity),
+            "--root-identity", ([string]$State.cleanupRootIdentity),
+            "--package-identity", ([string]$State.cleanupPackageIdentity)
+        )
+    Assert-CleanupReceipt -Receipt $terminal -Kind `
+        "hocus_native_manifest_cleanup_receipt" `
+        -ExpectedDigest ([string]$State.cleanupManifestDigest) `
+        -ExpectedOutputRootIdentity ([string]$State.outputRootIdentity)
+    $State["phase"] = "committed"
+    foreach ($field in @(
+        "cleanupTargetName", "cleanupTargetKind", "cleanupManifestDigest",
+        "cleanupRootIdentity", "cleanupPackageIdentity"
+    )) { $State[$field] = "" }
+    Write-JsonJournal -Path $JournalPath -State $State
+}
 function Complete-OutputTransaction {
     param(
         [string]$JournalPath,
@@ -322,13 +323,18 @@ function Complete-OutputTransaction {
     $pointerBackup = $(if ($State.pointerBackupName) {
         Join-Path $OutputRoot ([string]$State.pointerBackupName)
     } else { $null })
+    $committed = [string]$State.phase -in @("committed", "cleanup_terminal")
     $activeDigest = Get-VerifiedManifestDigest -Path $ActiveTree -AllowAbsent
-    $candidateDigest = Get-VerifiedManifestDigest -Path $candidate -AllowAbsent
-    $previousDigest = $(if ($previous) {
+    $candidateDigest = $(if ($committed) { "" } else {
+        Get-VerifiedManifestDigest -Path $candidate -AllowAbsent
+    })
+    $previousDigest = $(if ($committed -or -not $previous) { "" } else {
         Get-VerifiedManifestDigest -Path $previous -AllowAbsent
-    } else { "" })
-
+    })
     if ($activeDigest -cne [string]$State.candidateManifestDigest) {
+        if ($committed) {
+            throw "Committed active output identity changed."
+        }
         if ($candidateDigest -cne [string]$State.candidateManifestDigest) {
             throw "Recoverable output candidate identity is absent."
         }
@@ -356,25 +362,37 @@ function Complete-OutputTransaction {
         -Path $ActivePointer -Candidate $pointerCandidate `
         -Backup $pointerBackup -Parent $OutputRoot `
         -Before $State.pointerBefore -After $State.pointerAfter `
-        -RootName "HocusPocus"
-    $State.phase = "committed"
-    Write-JsonJournal -Path $JournalPath -State $State
-
+        -RootName "HocusPocus" `
+        -ConfigDigest ("sha256:" + (Get-Sha256Hex -Path (
+            Join-Path $ActiveTree "config\default.toml"
+        ))) -ManifestDigest ([string]$State.candidateManifestDigest)
     $clean = $true
+    if ([string]$State.cleanupTargetName) {
+        Complete-CleanupTarget `
+            -JournalPath $JournalPath -OutputRoot $OutputRoot -State $State `
+            -TargetName ([string]$State.cleanupTargetName) `
+            -TargetKind ([string]$State.cleanupTargetKind) `
+            -ExpectedDigest ([string]$State.cleanupManifestDigest)
+    } else {
+        $State.phase = "committed"
+        Write-JsonJournal -Path $JournalPath -State $State
+    }
     if (Test-Path -LiteralPath $candidate) {
         $clean = (Invoke-BestEffortCleanup -Label "redundant output candidate" -Action {
-            Assert-ManifestDigest -Path $candidate `
-                -Expected ([string]$State.candidateManifestDigest) `
-                -Label "Output candidate"
-            Remove-OwnedPath -Path $candidate -Parent $OutputRoot
+            Complete-CleanupTarget `
+                -JournalPath $JournalPath -OutputRoot $OutputRoot -State $State `
+                -TargetName ([string]$State.candidateName) `
+                -TargetKind "candidate" `
+                -ExpectedDigest ([string]$State.candidateManifestDigest)
         }) -and $clean
     }
     if ($previous -and (Test-Path -LiteralPath $previous)) {
         $clean = (Invoke-BestEffortCleanup -Label "previous output tree" -Action {
-            Assert-ManifestDigest -Path $previous `
-                -Expected ([string]$State.previousManifestDigest) `
-                -Label "Previous output"
-            Remove-OwnedPath -Path $previous -Parent $OutputRoot
+            Complete-CleanupTarget `
+                -JournalPath $JournalPath -OutputRoot $OutputRoot -State $State `
+                -TargetName ([string]$State.previousName) `
+                -TargetKind "previous" `
+                -ExpectedDigest ([string]$State.previousManifestDigest)
         }) -and $clean
     }
     if ($pointerBackup -and (Test-Path -LiteralPath $pointerBackup)) {
@@ -397,7 +415,6 @@ function Complete-OutputTransaction {
         } | Out-Null
     }
 }
-
 function Recover-OutputTransaction {
     param(
         [string]$JournalPath,
@@ -412,16 +429,20 @@ function Recover-OutputTransaction {
         }
         $raw = Get-Content -LiteralPath $JournalPath -Raw | ConvertFrom-Json
         Assert-ExactProperties -Value $raw -Label "output journal" -Names @(
-            "schemaVersion", "desired", "phase",
+            "schemaVersion", "desired", "phase", "outputRootIdentity",
             "candidateName", "candidateManifestDigest",
             "previousName", "previousManifestDigest",
             "pointerCandidateName", "pointerBackupName",
-            "pointerBefore", "pointerAfter"
+            "pointerBefore", "pointerAfter", "cleanupTargetName",
+            "cleanupTargetKind", "cleanupManifestDigest",
+            "cleanupRootIdentity", "cleanupPackageIdentity"
         )
         if (
-            $raw.schemaVersion -ne 2 -or
+            $raw.schemaVersion -ne 3 -or
             [string]$raw.desired -cne "commit" -or
-            $raw.phase -notin @("prepared", "committed") -or
+            $raw.phase -notin @("prepared", "committed", "cleanup_terminal") -or
+            [string]$raw.outputRootIdentity -cnotmatch
+                '^win-fileid-v1:[0-9a-f]{8}:[0-9a-f]{16}$' -or
             [string]$raw.candidateName -cnotmatch
                 '^\.HocusPocus\.candidate\.[0-9a-f]{32}$' -or
             [string]$raw.previousName -cnotmatch
@@ -433,14 +454,39 @@ function Recover-OutputTransaction {
             [string]$raw.candidateManifestDigest -notmatch
                 '^sha256:[0-9a-f]{64}$' -or
             [string]$raw.previousManifestDigest -notmatch
-                '^(sha256:[0-9a-f]{64})?$'
+                '^(sha256:[0-9a-f]{64})?$' -or
+            [string]$raw.cleanupTargetKind -cnotmatch '^(candidate|previous)?$' -or
+            [string]$raw.cleanupManifestDigest -cnotmatch
+                '^(sha256:[0-9a-f]{64})?$' -or
+            [string]$raw.cleanupRootIdentity -cnotmatch '^(win-fileid-v1:[0-9a-f]{8}:[0-9a-f]{16})?$' -or
+            [string]$raw.cleanupPackageIdentity -cnotmatch '^(win-fileid-v1:[0-9a-f]{8}:[0-9a-f]{16})?$'
         ) {
             throw "invalid output journal"
         }
+        $terminal = [string]$raw.phase -ceq "cleanup_terminal"
+        $targetKind = [string]$raw.cleanupTargetKind
+        $expectedName = $(if ($targetKind -ceq "candidate") {
+            [string]$raw.candidateName
+        } elseif ($targetKind -ceq "previous") {
+            [string]$raw.previousName
+        } else { "" })
+        $expectedDigest = $(if ($targetKind -ceq "candidate") {
+            [string]$raw.candidateManifestDigest
+        } elseif ($targetKind -ceq "previous") {
+            [string]$raw.previousManifestDigest
+        } else { "" })
+        if (
+            $terminal -ne [bool]([string]$raw.cleanupTargetName) -or
+            [string]$raw.cleanupTargetName -cne $expectedName -or
+            [string]$raw.cleanupManifestDigest -cne $expectedDigest -or
+            $terminal -ne [bool]([string]$raw.cleanupRootIdentity) -or
+            $terminal -ne [bool]([string]$raw.cleanupPackageIdentity)
+        ) { throw "invalid output cleanup authority" }
         $state = [ordered]@{
-            schemaVersion = 2
+            schemaVersion = 3
             desired = "commit"
             phase = [string]$raw.phase
+            outputRootIdentity = [string]$raw.outputRootIdentity
             candidateName = [string]$raw.candidateName
             candidateManifestDigest = [string]$raw.candidateManifestDigest
             previousName = [string]$raw.previousName
@@ -449,16 +495,27 @@ function Recover-OutputTransaction {
             pointerBackupName = [string]$raw.pointerBackupName
             pointerBefore = ConvertTo-FileSnapshot -Value $raw.pointerBefore
             pointerAfter = ConvertTo-FileSnapshot -Value $raw.pointerAfter
+            cleanupTargetName = [string]$raw.cleanupTargetName
+            cleanupTargetKind = $targetKind
+            cleanupManifestDigest = [string]$raw.cleanupManifestDigest
+            cleanupRootIdentity = [string]$raw.cleanupRootIdentity
+            cleanupPackageIdentity = [string]$raw.cleanupPackageIdentity
         }
+        if (
+            (Get-DurablePathIdentity -Path $OutputRoot) -cne
+                [string]$state.outputRootIdentity
+        ) { throw "output root identity changed" }
         Complete-OutputTransaction `
             -JournalPath $JournalPath -OutputRoot $OutputRoot `
             -ActiveTree $ActiveTree -ActivePointer $ActivePointer `
             -State $state
+        if (Test-Path -LiteralPath $JournalPath) {
+            throw "Committed output cleanup remains incomplete."
+        }
     } catch {
         throw "Unfinished staged publication requires manifest-identity recovery."
     }
 }
-
 function Protect-AuthorityEnvelope {
     param([System.Collections.IDictionary]$Envelope)
     $plain = [Text.Encoding]::UTF8.GetBytes(
@@ -471,7 +528,6 @@ function Protect-AuthorityEnvelope {
     )
     return [Convert]::ToBase64String($protected)
 }
-
 function Unprotect-AuthorityEnvelope {
     param([string]$ProtectedEnvelope)
     $protected = [Convert]::FromBase64String($ProtectedEnvelope)
@@ -482,7 +538,6 @@ function Unprotect-AuthorityEnvelope {
     )
     return [Text.Encoding]::UTF8.GetString($plain) | ConvertFrom-Json
 }
-
 function Write-TokenJournal {
     param(
         [string]$Path,
@@ -502,7 +557,6 @@ function Write-TokenJournal {
     Assert-OwnedChild -Parent $AuthorityRoot -Path $candidate
     Replace-FileAtomically -Candidate $candidate -Active $Path -Backup $null
 }
-
 function Read-TokenJournal {
     param([string]$Path)
     if ((Get-Item -LiteralPath $Path).Length -gt 65536) {
@@ -521,7 +575,6 @@ function Read-TokenJournal {
     return Unprotect-AuthorityEnvelope `
         -ProtectedEnvelope ([string]$outer.protectedEnvelope)
 }
-
 function Get-UserToken {
     param([string]$AuthorityRoot)
     if ($env:HOCUSPOCUS_BUILD_USER_TOKEN_FILE) {
@@ -536,7 +589,6 @@ function Get-UserToken {
         "HOCUSPOCUS_TOKEN", "User"
     )
 }
-
 function Set-UserToken {
     param([string]$AuthorityRoot, [string]$Token)
     if ($env:HOCUSPOCUS_BUILD_USER_TOKEN_FILE) {
@@ -574,7 +626,6 @@ function Set-UserToken {
         throw "Persisted HocusPocus token verification failed."
     }
 }
-
 function ConvertTo-TokenEnvelope {
     param($Raw)
     Assert-ExactProperties -Value $Raw -Label "token authority envelope" `
@@ -648,7 +699,6 @@ function ConvertTo-TokenEnvelope {
         newTokenDigest = [string]$Raw.newTokenDigest
     }
 }
-
 function Complete-TokenTransaction {
     param(
         [string]$Path,
@@ -684,7 +734,10 @@ function Complete-TokenTransaction {
         -Path $pointer -Candidate $pointerCandidate `
         -Backup $pointerBackup -Parent $packagesDir `
         -Before $Envelope.pointerBefore -After $Envelope.pointerAfter `
-        -RootName ([string]$Envelope.versionName)
+        -RootName ([string]$Envelope.versionName) `
+        -ConfigDigest ("sha256:" + (Get-Sha256Hex -Path (
+            Join-Path $versionPath "config\default.toml"
+        ))) -ManifestDigest ([string]$Envelope.manifestDigest)
     $Envelope.phase = "pointer_published"
     Write-TokenJournal -Path $Path -AuthorityRoot $AuthorityRoot `
         -Envelope $Envelope
@@ -699,7 +752,6 @@ function Complete-TokenTransaction {
     $Envelope.phase = "committed"
     Write-TokenJournal -Path $Path -AuthorityRoot $AuthorityRoot `
         -Envelope $Envelope
-
     $clean = $true
     if ($pointerBackup -and (Test-Path -LiteralPath $pointerBackup)) {
         $clean = (Invoke-BestEffortCleanup -Label "install pointer backup" -Action {
@@ -721,7 +773,6 @@ function Complete-TokenTransaction {
         } | Out-Null
     }
 }
-
 function Recover-TokenTransaction {
     param([string]$Path, [string]$AuthorityRoot)
     if (-not (Test-Path -LiteralPath $Path)) { return }
@@ -750,7 +801,6 @@ function Recover-TokenTransaction {
         if ($preferenceLock) { $preferenceLock.Dispose() }
     }
 }
-
 function Enter-PathLock {
     param([string]$Parent, [string]$Name)
     $path = Join-Path $Parent $Name
@@ -776,7 +826,6 @@ function Enter-PathLock {
     }
     throw "Timed out waiting for a HocusPocus filesystem lock."
 }
-
 function Assert-FrozenManifestCopy {
     param(
         [string]$SourceRoot,
@@ -805,7 +854,6 @@ function Assert-FrozenManifestCopy {
         throw "Frozen install manifest content changed during snapshot copy."
     }
 }
-
 function Get-ActivePackageName {
     param([string]$Pointer)
     if (-not (Test-Path -LiteralPath $Pointer)) { return "HocusPocus" }
@@ -815,7 +863,6 @@ function Get-ActivePackageName {
     )
     return $(if ($match.Success) { $match.Value } else { "HocusPocus" })
 }
-
 function Invoke-InstallSnapshot {
     param(
         [string]$StagedRoot,
@@ -931,7 +978,9 @@ function Invoke-InstallSnapshot {
             )
             $pointerAfter = New-PackagePointerCandidate `
                 -Path $pointerCandidate -RootName $versionName `
-                -Parent $packagesDir
+                -Parent $packagesDir `
+                -ConfigDigest ("sha256:" + $configDigest) `
+                -ManifestDigest $stagedDigest
             $pointerBackup = $(if ($pointerBefore.Exists) {
                 Join-Path $packagesDir (
                     ".hocuspocus.json.backup." +
@@ -998,7 +1047,6 @@ function Invoke-InstallSnapshot {
         $tokenLock.Dispose()
     }
 }
-
 function Invoke-BuildTransaction {
     Assert-SafeOutputRoot
     Ensure-Directory -Path $resolvedOutputDir
@@ -1055,15 +1103,19 @@ function Invoke-BuildTransaction {
             )
             $pointerAfter = New-PackagePointerCandidate `
                 -Path $pointerCandidate -RootName "HocusPocus" `
-                -Parent $resolvedOutputDir
+                -Parent $resolvedOutputDir `
+                -ConfigDigest ("sha256:" + (Get-Sha256Hex -Path (
+                    Join-Path $candidate "config\default.toml"
+                ))) -ManifestDigest $candidateDigest
             $pointerBackupName = $(if ($pointerBefore.Exists) {
                 "hocuspocus.json.backup." +
                     [guid]::NewGuid().ToString("N")
             } else { "" })
             $state = [ordered]@{
-                schemaVersion = 2
+                schemaVersion = 3
                 desired = "commit"
                 phase = "prepared"
+                outputRootIdentity = Get-DurablePathIdentity -Path $resolvedOutputDir
                 candidateName = Split-Path -Leaf $candidate
                 candidateManifestDigest = $candidateDigest
                 previousName = $previousName
@@ -1072,6 +1124,11 @@ function Invoke-BuildTransaction {
                 pointerBackupName = $pointerBackupName
                 pointerBefore = $pointerBefore
                 pointerAfter = $pointerAfter
+                cleanupTargetName = ""
+                cleanupTargetKind = ""
+                cleanupManifestDigest = ""
+                cleanupRootIdentity = ""
+                cleanupPackageIdentity = ""
             }
             Write-JsonJournal -Path $outputJournal -State $state
             $journalWritten = $true

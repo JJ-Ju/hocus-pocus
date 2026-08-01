@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 import secrets
@@ -40,8 +41,9 @@ WORKSPACE_GRANTS = frozenset(
     {SOURCE_READ, SOURCE_WRITE, GENERATED_LOCK, EXTERNAL_READ, SOURCE_NOTIFY}
 )
 _SESSION_ID = re.compile(r"^hws_[A-Za-z0-9_-]{24,96}$")
-_GRANTS_VERSION = 3
-_SUPPORTED_GRANTS_VERSIONS = frozenset({2, _GRANTS_VERSION})
+_GRANTS_VERSION = 4
+_SUPPORTED_GRANTS_VERSIONS = frozenset({2, 3, _GRANTS_VERSION})
+_MAX_STORED_SESSIONS, _MAX_STORED_SESSION_GRANTS = 256, 4096
 _MAX_MODULE_MANIFEST_BYTES = 1024 * 1024
 
 
@@ -58,6 +60,7 @@ class WorkspaceSession:
     session_id: str
     principal_id: str
     client_info: dict[str, str]
+    client_info_digest: str
     created_at: float
     expires_at: float
     last_seen_at: float
@@ -68,6 +71,7 @@ class WorkspaceSession:
             "sessionId": self.session_id,
             "principalId": self.principal_id,
             "clientInfo": dict(self.client_info),
+            "clientInfoDigest": self.client_info_digest,
             "createdAt": self.created_at,
             "expiresAt": self.expires_at,
             "lastSeenAt": self.last_seen_at,
@@ -143,6 +147,7 @@ class WorkspaceGrantStore:
             "hws_" + secrets.token_urlsafe(32),
             principal,
             _client_info(client_info),
+            _client_info_digest(client_info),
             now,
             now + self._session_ttl,
             now,
@@ -150,8 +155,63 @@ class WorkspaceGrantStore:
         )
         with self._lock:
             self._prune(now)
+            if len(self._sessions) >= _MAX_STORED_SESSIONS:
+                raise WorkspaceGrantError(
+                    "HOCUS918",
+                    "The resumable workspace session store is at capacity.",
+                )
             self._sessions[session.session_id] = session
+            try:
+                self._save()
+            except WorkspaceGrantError:
+                self._sessions.pop(session.session_id, None)
+                raise
         return session
+
+    def resume_session(
+        self,
+        session_id: str,
+        principal_id: str,
+        client_info: dict[str, Any] | None = None,
+    ) -> WorkspaceSession:
+        principal = _principal(principal_id)
+        expected_client = _client_info(client_info)
+        expected_client_digest = _client_info_digest(client_info)
+        now = time.time()
+        with self._lock:
+            self._prune(now)
+            current = self._sessions.get(session_id)
+            if (
+                current is None
+                or current.principal_id != principal
+                or current.client_info != expected_client
+                or not secrets.compare_digest(
+                    current.client_info_digest,
+                    expected_client_digest,
+                )
+            ):
+                raise WorkspaceGrantError(
+                    "HOCUS910",
+                    "The resumable MCP workspace session is missing, expired, "
+                    "revoked, or belongs to a different client.",
+                )
+            resumed = WorkspaceSession(
+                current.session_id,
+                current.principal_id,
+                current.client_info,
+                current.client_info_digest,
+                current.created_at,
+                current.expires_at,
+                now,
+                current.generation + 1,
+            )
+            self._sessions[session_id] = resumed
+            try:
+                self._save()
+            except WorkspaceGrantError:
+                self._sessions[session_id] = current
+                raise
+            return resumed
 
     def session(
         self,
@@ -175,6 +235,7 @@ class WorkspaceGrantStore:
                     current.session_id,
                     current.principal_id,
                     current.client_info,
+                    current.client_info_digest,
                     current.created_at,
                     current.expires_at,
                     now,
@@ -186,6 +247,7 @@ class WorkspaceGrantStore:
     def revoke_session(self, session_id: str) -> bool:
         changed_projects: set[str] = set()
         with self._lock:
+            previous = self._state_snapshot()
             session = self._sessions.pop(session_id, None)
             removed = [
                 key for key in self._session_grants if key[0] == session_id
@@ -194,6 +256,8 @@ class WorkspaceGrantStore:
                 grant = self._session_grants.pop(key)
                 self._bump(grant.principal_id, grant.project_id)
                 changed_projects.add(grant.project_id)
+            if session is not None or removed:
+                self._save_or_restore(previous)
         for project_id in changed_projects:
             self._changed(project_id, "session_revoke")
         return session is not None
@@ -201,14 +265,15 @@ class WorkspaceGrantStore:
     def revoke_project_all(self, project_id: str) -> int:
         removed: list[WorkspaceGrant] = []
         with self._lock:
+            previous = self._state_snapshot()
             for mapping in (self._session_grants, self._persistent_grants):
                 keys = [key for key, grant in mapping.items() if grant.project_id == project_id]
                 for key in keys:
                     removed.append(mapping.pop(key))
             for grant in removed:
                 self._bump(grant.principal_id, grant.project_id)
-            if any(grant.persistent for grant in removed):
-                self._save()
+            if removed:
+                self._save_or_restore(previous)
         if removed:
             self._changed(project_id, "project_remove")
         return len(removed)
@@ -255,7 +320,40 @@ class WorkspaceGrantStore:
                 "grant",
             )
         now = time.time()
+        if (
+            not persistent
+            and session is not None
+            and session.expires_at - now < 1
+        ):
+            raise WorkspaceGrantError(
+                "HOCUS910",
+                "The matching MCP session is too close to expiry.",
+            )
+        grant_expires_at = None if ttl is None else now + ttl
+        if not persistent:
+            assert session is not None
+            assert grant_expires_at is not None
+            grant_expires_at = min(
+                grant_expires_at,
+                session.expires_at,
+            )
         with self._lock:
+            session_key = (
+                (str(session_id), project.project_id)
+                if not persistent
+                else None
+            )
+            if (
+                session_key is not None
+                and session_key not in self._session_grants
+                and len(self._session_grants)
+                >= _MAX_STORED_SESSION_GRANTS
+            ):
+                raise WorkspaceGrantError(
+                    "HOCUS918",
+                    "The resumable session-grant store is at capacity.",
+                )
+            previous = self._state_snapshot()
             generation = self._bump(principal, project.project_id)
             grant = WorkspaceGrant(
                 principal,
@@ -267,15 +365,16 @@ class WorkspaceGrantStore:
                 project.projection.digest,
                 persistent,
                 now,
-                None if ttl is None else now + ttl,
+                grant_expires_at,
                 generation,
             )
             if persistent:
                 self._persistent_grants[(principal, project.project_id)] = grant
-                self._save()
             else:
                 assert session_id is not None
-                self._session_grants[(session_id, project.project_id)] = grant
+                assert session_key is not None
+                self._session_grants[session_key] = grant
+            self._save_or_restore(previous)
         self._changed(project.project_id, "grant")
         return grant
 
@@ -290,6 +389,7 @@ class WorkspaceGrantStore:
         principal = _principal(principal_id)
         removed = False
         with self._lock:
+            previous = self._state_snapshot()
             if persistent is not False:
                 removed |= self._persistent_grants.pop((principal, project_id), None) is not None
             if persistent is not True:
@@ -305,7 +405,7 @@ class WorkspaceGrantStore:
                     removed = True
             if removed:
                 self._bump(principal, project_id)
-                self._save()
+                self._save_or_restore(previous)
         if removed:
             self._changed(project_id, "revoke")
         return removed
@@ -424,10 +524,13 @@ class WorkspaceGrantStore:
         )
 
     def _prune(self, now: float) -> None:
+        previous = self._state_snapshot()
+        changed = False
         expired_sessions = [
             key for key, session in self._sessions.items() if session.expires_at <= now
         ]
         for session_id in expired_sessions:
+            changed = True
             self._sessions.pop(session_id, None)
             for key in [key for key in self._session_grants if key[0] == session_id]:
                 grant = self._session_grants.pop(key)
@@ -439,11 +542,22 @@ class WorkspaceGrantStore:
             if grant.expires_at is not None and grant.expires_at <= now
         ]
         for key in expired:
+            changed = True
             grant = self._persistent_grants.pop(key)
             self._bump(grant.principal_id, grant.project_id)
             self._changed(grant.project_id, "expiry")
-        if expired:
-            self._save()
+        expired_session_grants = [
+            key
+            for key, grant in self._session_grants.items()
+            if grant.expires_at is not None and grant.expires_at <= now
+        ]
+        for key in expired_session_grants:
+            changed = True
+            grant = self._session_grants.pop(key)
+            self._bump(grant.principal_id, grant.project_id)
+            self._changed(grant.project_id, "expiry")
+        if changed:
+            self._save_or_restore(previous)
 
     def _bump(self, principal_id: str, project_id: str) -> int:
         key = (principal_id, project_id)
@@ -455,6 +569,41 @@ class WorkspaceGrantStore:
         if self._on_change is not None:
             self._on_change(project_id, action)
 
+    def _state_snapshot(
+        self,
+    ) -> tuple[
+        dict[str, WorkspaceSession],
+        dict[tuple[str, str], WorkspaceGrant],
+        dict[tuple[str, str], WorkspaceGrant],
+        dict[tuple[str, str], int],
+    ]:
+        return (
+            dict(self._sessions),
+            dict(self._session_grants),
+            dict(self._persistent_grants),
+            dict(self._generations),
+        )
+
+    def _save_or_restore(
+        self,
+        previous: tuple[
+            dict[str, WorkspaceSession],
+            dict[tuple[str, str], WorkspaceGrant],
+            dict[tuple[str, str], WorkspaceGrant],
+            dict[tuple[str, str], int],
+        ],
+    ) -> None:
+        try:
+            self._save()
+        except WorkspaceGrantError:
+            (
+                self._sessions,
+                self._session_grants,
+                self._persistent_grants,
+                self._generations,
+            ) = previous
+            raise
+
     def _load(self) -> None:
         if not self._path.exists():
             return
@@ -463,7 +612,7 @@ class WorkspaceGrantStore:
             if len(raw) > 2 * 1024 * 1024:
                 raise ValueError("grant store exceeds size limit")
             payload = json.loads(raw.decode("utf-8"))
-            grants = _decode_grants(payload)
+            grants, sessions, session_grants = _decode_store(payload)
         except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
             raise WorkspaceGrantError(
                 "HOCUS913",
@@ -476,8 +625,26 @@ class WorkspaceGrantStore:
             for item in grants
             if item.expires_at is None or item.expires_at > now
         }
+        self._sessions = {
+            item.session_id: item
+            for item in sessions
+            if item.expires_at > now
+        }
+        self._session_grants = {
+            (item.session_id or "", item.project_id): item
+            for item in session_grants
+            if item.session_id in self._sessions
+            and item.expires_at is not None
+            and item.expires_at > now
+        }
         for item in self._persistent_grants.values():
             self._generations[(item.principal_id, item.project_id)] = item.generation
+        for item in self._session_grants.values():
+            key = (item.principal_id, item.project_id)
+            self._generations[key] = max(
+                self._generations.get(key, 0),
+                item.generation,
+            )
         if payload.get("version") != _GRANTS_VERSION:
             self._save()
 
@@ -489,6 +656,23 @@ class WorkspaceGrantStore:
                 for item in sorted(
                     self._persistent_grants.values(),
                     key=lambda row: (row.principal_id, row.project_id),
+                )
+            ],
+            "sessions": [
+                item.host_payload()
+                for item in sorted(
+                    self._sessions.values(),
+                    key=lambda row: (row.created_at, row.session_id),
+                )
+            ],
+            "sessionGrants": [
+                _stored_grant(item)
+                for item in sorted(
+                    self._session_grants.values(),
+                    key=lambda row: (
+                        row.session_id or "",
+                        row.project_id,
+                    ),
                 )
             ],
         }
@@ -731,9 +915,34 @@ def _client_info(payload: dict[str, Any] | None) -> dict[str, str]:
     return output
 
 
+def _client_info_digest(payload: dict[str, Any] | None) -> str:
+    material = payload if isinstance(payload, dict) else {}
+    try:
+        encoded = json.dumps(
+            material,
+            ensure_ascii=True,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+    except (TypeError, ValueError) as exc:
+        raise WorkspaceGrantError(
+            "HOCUS914",
+            "MCP client identity is not canonically serializable.",
+        ) from exc
+    if len(encoded) > 4096:
+        raise WorkspaceGrantError(
+            "HOCUS914",
+            "MCP client identity exceeds its size limit.",
+        )
+    return "sha256:" + hashlib.sha256(encoded).hexdigest()
+
+
 def _positive_ttl(value: float, label: str) -> float:
     ttl = float(value)
-    if not 1 <= ttl <= 365 * 24 * 60 * 60:
+    if (
+        not math.isfinite(ttl)
+        or not 1 <= ttl <= 365 * 24 * 60 * 60
+    ):
         raise WorkspaceGrantError("HOCUS917", f"{label} expiry is outside supported bounds.")
     return ttl
 
@@ -746,6 +955,20 @@ def _stored_grant(grant: WorkspaceGrant) -> dict[str, Any]:
     }
 
 
+def _decode_store(payload: Any) -> tuple[
+    tuple[WorkspaceGrant, ...], tuple[WorkspaceSession, ...], tuple[WorkspaceGrant, ...]
+]:
+    grants = _decode_grants(payload)
+    if payload["version"] != _GRANTS_VERSION:
+        return grants, (), ()
+    sessions = _decode_sessions(payload.get("sessions"))
+    session_grants = _decode_session_grants(
+        payload.get("sessionGrants"),
+        sessions,
+    )
+    return grants, sessions, session_grants
+
+
 def _decode_grants(payload: Any) -> tuple[WorkspaceGrant, ...]:
     if (
         not isinstance(payload, dict)
@@ -755,15 +978,100 @@ def _decode_grants(payload: Any) -> tuple[WorkspaceGrant, ...]:
     rows = payload.get("grants")
     if not isinstance(rows, list) or len(rows) > 4096:
         raise ValueError("invalid grant list")
-    grants = tuple(_decode_grant(item, payload["version"]) for item in rows)
+    grants = tuple(
+        _decode_grant(item, payload["version"], persistent=True)
+        for item in rows
+    )
     if len({(item.principal_id, item.project_id) for item in grants}) != len(grants):
         raise ValueError("duplicate persistent grant")
     return grants
 
 
-def _decode_grant(payload: Any, version: int) -> WorkspaceGrant:
-    if not isinstance(payload, dict) or payload.get("persistent") is not True:
-        raise ValueError("invalid persistent grant")
+def _decode_sessions(payload: Any) -> tuple[WorkspaceSession, ...]:
+    if not isinstance(payload, list) or len(payload) > _MAX_STORED_SESSIONS:
+        raise ValueError("invalid resumable session list")
+    sessions = tuple(_decode_session(item) for item in payload)
+    if len({item.session_id for item in sessions}) != len(sessions):
+        raise ValueError("duplicate resumable session")
+    return sessions
+
+
+def _decode_session(payload: Any) -> WorkspaceSession:
+    if not isinstance(payload, dict):
+        raise ValueError("invalid resumable session")
+    session_id = payload.get("sessionId")
+    if not isinstance(session_id, str) or _SESSION_ID.fullmatch(session_id) is None:
+        raise ValueError("invalid resumable session identity")
+    client_info = payload.get("clientInfo")
+    if (
+        not isinstance(client_info, dict)
+        or _client_info(client_info) != client_info
+    ):
+        raise ValueError("invalid resumable client identity")
+    created_at = float(payload.get("createdAt"))
+    expires_at = float(payload.get("expiresAt"))
+    last_seen_at = float(payload.get("lastSeenAt"))
+    generation = int(payload.get("generation"))
+    if (
+        not all(
+            math.isfinite(value)
+            for value in (created_at, expires_at, last_seen_at)
+        )
+        or created_at > last_seen_at
+        or last_seen_at > expires_at
+        or expires_at - created_at < 1
+        or expires_at - created_at > 365 * 24 * 60 * 60
+        or generation < 1
+    ):
+        raise ValueError("invalid resumable session lifetime")
+    return WorkspaceSession(
+        session_id,
+        _principal(payload.get("principalId")),
+        client_info,
+        _stored_identity(payload.get("clientInfoDigest")),
+        created_at,
+        expires_at,
+        last_seen_at,
+        generation,
+    )
+
+
+def _decode_session_grants(
+    payload: Any,
+    sessions: tuple[WorkspaceSession, ...],
+) -> tuple[WorkspaceGrant, ...]:
+    if not isinstance(payload, list) or len(payload) > _MAX_STORED_SESSION_GRANTS:
+        raise ValueError("invalid resumable session grant list")
+    grants = tuple(
+        _decode_grant(item, _GRANTS_VERSION, persistent=False)
+        for item in payload
+    )
+    keys = {(item.session_id, item.project_id) for item in grants}
+    if len(keys) != len(grants):
+        raise ValueError("duplicate resumable session grant")
+    session_map = {item.session_id: item for item in sessions}
+    if any(
+        item.session_id not in session_map
+        or session_map[item.session_id].principal_id != item.principal_id
+        or item.created_at < session_map[item.session_id].created_at
+        or item.expires_at > session_map[item.session_id].expires_at
+        for item in grants
+    ):
+        raise ValueError("orphaned resumable session grant")
+    return grants
+
+
+def _decode_grant(
+    payload: Any,
+    version: int,
+    *,
+    persistent: bool,
+) -> WorkspaceGrant:
+    if (
+        not isinstance(payload, dict)
+        or payload.get("persistent") is not persistent
+    ):
+        raise ValueError("invalid workspace grant")
     roots = payload.get("externalRoots", {})
     identities = payload.get("externalRootIdentities", {})
     if not isinstance(roots, dict) or not isinstance(identities, dict):
@@ -771,18 +1079,39 @@ def _decode_grant(payload: Any, version: int) -> WorkspaceGrant:
     if set(roots) != set(identities):
         raise ValueError("external root identities are incomplete")
     expires_at = payload.get("expiresAt")
-    if version == 2 and expires_at is None:
+    if (version == 2 or not persistent) and expires_at is None:
         raise ValueError("legacy persistent grants require a finite expiry")
     if expires_at is not None:
         expires_at = float(expires_at)
     if version == _GRANTS_VERSION and payload.get("untilRevoked") is not (
         expires_at is None
     ):
-        raise ValueError("persistent grant lifetime metadata is inconsistent")
+        raise ValueError("workspace grant lifetime metadata is inconsistent")
+    session_id = payload.get("sessionId")
+    if persistent:
+        if session_id is not None:
+            raise ValueError("persistent grant cannot bind a session")
+    elif not isinstance(session_id, str) or _SESSION_ID.fullmatch(session_id) is None:
+        raise ValueError("session grant lacks a valid session identity")
+    created_at = float(payload.get("createdAt"))
+    generation = int(payload.get("generation"))
+    if (
+        not math.isfinite(created_at)
+        or generation < 1
+        or (
+            expires_at is not None
+            and (
+                not math.isfinite(expires_at)
+                or expires_at <= created_at
+                or expires_at - created_at > 365 * 24 * 60 * 60
+            )
+        )
+    ):
+        raise ValueError("workspace grant lifetime is invalid")
     return WorkspaceGrant(
         _principal(payload.get("principalId")),
         str(payload.get("projectId")),
-        None,
+        session_id,
         _grant_names(tuple(payload.get("grants", ()))),
         tuple(
             (str(alias), _stored_root(root))
@@ -793,10 +1122,10 @@ def _decode_grant(payload: Any, version: int) -> WorkspaceGrant:
             for alias, identity in sorted(identities.items())
         ),
         str(payload.get("authorityProjectionDigest")),
-        True,
-        float(payload.get("createdAt")),
+        persistent,
+        created_at,
         expires_at,
-        int(payload.get("generation")),
+        generation,
     )
 
 
@@ -804,6 +1133,11 @@ def _atomic_json_write(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(path.name + ".tmp")
     encoded = json.dumps(payload, ensure_ascii=True, indent=2, sort_keys=True).encode("utf-8")
+    if len(encoded) > 2 * 1024 * 1024:
+        raise WorkspaceGrantError(
+            "HOCUS918",
+            "The persistent workspace grant store exceeds its size limit.",
+        )
     try:
         with temporary.open("wb") as handle:
             handle.write(encoded)

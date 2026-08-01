@@ -4,12 +4,30 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import inspect
 import json
 import re
 import sys
 from pathlib import Path
 from typing import Any, Iterable, Mapping
+
+try:
+    from hs8_windows_manifest_cleanup import governed_cleanup, terminal_cleanup
+except ModuleNotFoundError:
+    _native_path = Path(__file__).resolve().with_name(
+        "hs8_windows_manifest_cleanup.py",
+    )
+    _native_spec = importlib.util.spec_from_file_location(
+        "hs8_windows_manifest_cleanup",
+        _native_path,
+    )
+    if _native_spec is None or _native_spec.loader is None:
+        raise
+    _native_module = importlib.util.module_from_spec(_native_spec)
+    _native_spec.loader.exec_module(_native_module)
+    governed_cleanup = _native_module.governed_cleanup
+    terminal_cleanup = _native_module.terminal_cleanup
 
 
 SCHEMA = "hocuspocus://schemas/install-manifest/v1"
@@ -80,6 +98,32 @@ def verify_manifest(root: Path, expected: dict[str, Any] | None = None) -> dict[
         if value != expected:
             raise InstallManifestError("Installed manifest differs from the source candidate.")
     return value
+
+
+def cleanup_manifest(
+    root: Path,
+    expected_digest: str,
+    output_root_identity: str,
+) -> dict[str, Any]:
+    return governed_cleanup(root, expected_digest, output_root_identity)
+
+
+def complete_cleanup(
+    root: Path,
+    expected_digest: str,
+    output_root_identity: str,
+    root_identity: str,
+    package_identity: str,
+) -> dict[str, Any]:
+    return terminal_cleanup(
+        root,
+        {
+            "manifestDigest": expected_digest,
+            "outputRootIdentity": output_root_identity,
+            "rootIdentity": root_identity,
+            "packageIdentity": package_identity,
+        },
+    )
 
 
 def audit_loaded_modules(
@@ -248,18 +292,51 @@ def _digest_json(value: Any) -> str:
 
 def _arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=("create", "verify"))
+    parser.add_argument(
+        "command",
+        choices=("cleanup-governed", "cleanup-terminal", "create", "verify"),
+    )
     parser.add_argument("--root", required=True, type=Path)
+    parser.add_argument("--expected-digest")
+    parser.add_argument("--output-root-identity")
+    parser.add_argument("--root-identity")
+    parser.add_argument("--package-identity")
     return parser.parse_args()
 
 
 def main() -> int:
     arguments = _arguments()
-    payload = (
-        write_manifest(arguments.root)
-        if arguments.command == "create"
-        else verify_manifest(arguments.root)
-    )
+    if arguments.command == "create":
+        payload = write_manifest(arguments.root)
+    elif arguments.command == "verify":
+        payload = verify_manifest(arguments.root)
+    elif (
+        not isinstance(arguments.expected_digest, str)
+        or re.fullmatch(r"sha256:[0-9a-f]{64}", arguments.expected_digest)
+        is None
+    ):
+        raise InstallManifestError(
+            "Cleanup requires an exact expected manifest digest."
+        )
+    elif arguments.command == "cleanup-governed":
+        payload = cleanup_manifest(
+            arguments.root,
+            arguments.expected_digest,
+            arguments.output_root_identity,
+        )
+    elif (
+        not isinstance(arguments.root_identity, str)
+        or not isinstance(arguments.package_identity, str)
+    ):
+        raise InstallManifestError("Terminal cleanup requires exact file identities.")
+    else:
+        payload = complete_cleanup(
+            arguments.root,
+            arguments.expected_digest,
+            arguments.output_root_identity,
+            arguments.root_identity,
+            arguments.package_identity,
+        )
     print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
     return 0
 
@@ -273,6 +350,8 @@ __all__ = [
     "InstallManifestError",
     "MANIFEST_RELATIVE_PATH",
     "audit_loaded_modules",
+    "cleanup_manifest",
+    "complete_cleanup",
     "create_manifest",
     "verify_manifest",
     "write_manifest",

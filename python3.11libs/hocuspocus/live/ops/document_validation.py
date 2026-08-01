@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from hocuspocus.core.policy import EDIT_SCENE, RUN_CODE, capability_projection
 from hocuspocus.hocusscript.document_provenance import (
     DocumentProvenanceError,
     validate_expansion_references,
@@ -139,6 +140,9 @@ class DocumentValidationOperationsMixin:
         )
         self._document_validate_runtime_contract(
             document, set(node_uid_to_path), diagnostics
+        )
+        self._document_validate_output_flags(
+            document, nodes, root_path, diagnostics
         )
         self._document_validate_edges(document, node_uid_to_path, diagnostics)
         if document.get("$schema") == self._NETWORK_DOCUMENT_SCHEMA_URI_V2:
@@ -756,6 +760,40 @@ class DocumentValidationOperationsMixin:
                 )
 
 
+    def _document_validate_output_flags(
+        self,
+        document: dict[str, Any],
+        nodes: list[Any],
+        root_path: str,
+        diagnostics: list[dict[str, Any]],
+    ) -> None:
+        if self._document_network_family(
+            root_path, document.get("category")
+        ) != "sop":
+            return
+        displayed = [
+            node for node in nodes
+            if isinstance(node, dict)
+            and str(node.get("path", "")).strip() != root_path
+            and bool((node.get("flags") or {}).get("display", False))
+        ]
+        if len(displayed) <= 1:
+            return
+        diagnostics.append({
+            "severity": "error",
+            "code": "node.display.multiple",
+            "message": (
+                "A SOP document may author at most one display/output node; "
+                "node flags are the output authority."
+            ),
+            "jsonPointer": "/nodes",
+            "path": root_path,
+            "details": {
+                "displayNodeUids": [node.get("uid") for node in displayed],
+                "displayNodePaths": [node.get("path") for node in displayed],
+            },
+        })
+
     @staticmethod
     def _document_validate_edges(
         document: dict[str, Any],
@@ -821,7 +859,10 @@ class DocumentValidationOperationsMixin:
                     {
                         "severity": "warning",
                         "code": "edge.kind.unspecialized",
-                        "message": "Only data edges participate in document.apply today; other edge kinds are preserved for reads only.",
+                        "message": (
+                            "Only data edges participate in document.apply; "
+                            "observational edges are ignored and regenerated from live node state."
+                        ),
                         "jsonPointer": f"/edges/{index}/kind",
                         "entityUid": str(edge.get("uid", "")).strip() or None,
                         "details": {"received": kind},
@@ -839,6 +880,13 @@ class DocumentValidationOperationsMixin:
         checkout_id = payload["checkoutId"]
         if checkout_id:
             self._documents.set_diagnostics(checkout_id, diagnostics)
+        required_capabilities = [EDIT_SCENE]
+        if any(
+            isinstance(binding, dict)
+            and binding.get("valueMode") == "code_reference"
+            for binding in document.get("parameterBindings", [])
+        ):
+            required_capabilities.append(RUN_CODE)
         return {
             "checkoutId": checkout_id,
             "valid": not any(item.get("severity") == "error" for item in diagnostics),
@@ -848,10 +896,14 @@ class DocumentValidationOperationsMixin:
             "documentId": document.get("documentId"),
             "rootPath": document.get("rootPath"),
             "documentRevision": document.get("documentRevision"),
+            "requiredCapabilities": required_capabilities,
         }
 
     def document_validate(self, arguments: dict[str, Any], context: RequestContext) -> dict[str, Any]:
         data = self._call_live(lambda: self._document_validate_impl(arguments), context)
+        data.update(capability_projection(
+            context.permissions, data["requiredCapabilities"],
+        ))
         if data["valid"]:
             return self._tool_response("Document validation passed.", data)
         return self._tool_response(f"Document validation reported {data['diagnosticCount']} diagnostic(s).", data)

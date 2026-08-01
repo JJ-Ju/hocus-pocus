@@ -1,10 +1,8 @@
 # HocusPocus Improvement Task Tracker
 
-Status: active
+Status: completed through M18; retained as a delivery record
 
 Source roadmap: `docs/improvement-roadmap.md`
-
-Branch: `codex/develop`
 
 Tracking rule:
 
@@ -18,6 +16,7 @@ Tracking rule:
 4. M15 Taskified cooks, renders, and progress
 5. M16 Higher-level agent primitives
 6. M17 Operations module refactor
+7. M18 Live authoring trust and recovery
 
 ## M12. Auth and Health Hardening
 
@@ -34,13 +33,20 @@ Tasks:
 - [x] Ensure no unauthenticated route exposes connection secrets or sensitive scene metadata.
 - [x] Add a clear “auth disabled” indicator when token auth is turned off intentionally.
 - [x] Validate that manual HTTP MCP clients still connect cleanly after the changes.
-- [ ] Validate native Codex app tool exposure end to end, separately from transport-level HTTP checks.
+- [x] Add the client-owned durable stdio broker and stable `hocuspocus` launcher.
+- [x] Validate one broker stream across two disposable Houdini 22 processes.
+- [x] Remove the broker's dependency on Codex/Claude environment-token inheritance and make the active installed credential authoritative.
+- [ ] Client-environment follow-up: validate native Codex app tool exposure in
+  each installed Codex build after switching its local configuration from
+  direct HTTP to the broker. This does not reopen the broker transport
+  milestone; it is client integration evidence.
 
 Done when:
 
 - unauthenticated requests cannot discover the bearer token
 - health/status data is intentionally scoped and non-sensitive
 - transport-level MCP clients can still connect with the documented token flow
+- broker-level restart survival is proven against real Houdini 22
 - native Codex app tool exposure has either been proven separately or is explicitly marked unverified
 
 Manual smoke:
@@ -196,15 +202,13 @@ Manual smoke:
 - rerun the existing live MCP checks after the refactor
 - verify tool names and responses remain stable
 
-## 2. Immediate Next Actions
+## 2. Current Follow-Up
 
-Recommended next implementation order:
-
-1. M12 Auth and health hardening
-2. M13 Safety enforcement and audit
-3. M14 Dynamic resources and interface normalization
-
-Those three items improve safety and agent usability the most with the least product churn.
+M12-M18 are delivered. The only unchecked item in this historical tracker is
+native tool exposure in each client build, which is environment-specific and
+does not alter the proven durable-broker contract. V1 release qualification is
+tracked in `hocusscript-roadmap-completion-plan.md` and
+`release-validation.md`.
 
 ## 3. Session Log
 
@@ -221,3 +225,38 @@ Those three items improve safety and agent usability the most with the least pro
 - Live-validated render-task cancellation against Houdini 21.0. A long render was cancelled mid-run, the task entered `cancelled`, and partial frame outputs remained on disk as expected.
 - Completed M16 with live validation of `graph.batch_edit`, `geometry.get_summary`, `scene.create_turntable_camera`, managed-path `snapshot.capture_viewport`, and `model.create_house_blockout`.
 - Completed M17 by splitting the monolithic live operations implementation into domain mixins under `python3.11libs/hocuspocus/live/ops/` while preserving the public MCP surface.
+
+### 2026-07-30
+
+- Closed the first-use OBJ bootstrap gap with listed `object.create_geometry`,
+  which creates one Geometry container and returns its SOP checkout/document.
+- Bound bootstrap checkout revisions to a force-new graph-store admission,
+  retained monotonic same-path revision history, and added exact CAS rollback;
+  checkout, graph, or node-retirement failure retains or restores coherent
+  recoverable state.
+- Made `document.checkout` return bounded inline working documents with a
+  deterministic resource fallback.
+- Repaired Houdini 22 parameter-template discovery for templates without
+  `defaultValue`.
+- Made compatibility discovery truthful through a canonical task enum plus a
+  bounded, ambiguity-safe intent lane.
+
+### 2026-07-31: M18 live authoring trust repair
+
+- [x] Write the repair plan from the real brick-HDA authoring evidence.
+- [x] Preflight document parameter types against live Houdini templates.
+- [x] Replace unsupported undo/redo calls with guarded Houdini 22 APIs.
+- [x] Verify rollback and quarantine scopes whose restoration is uncertain.
+- [x] Make SOP node flags authoritative over derived `output_flag` edges.
+- [x] Preserve source values during HDA parameter promotion.
+- [x] Add locked-HDA public-interface batch value editing.
+- [x] Expose granted/required/missing capability readiness before apply.
+- [x] Add an explicit opt-in procedural-authoring profile for `run_code`.
+- [x] Prove durable operation reconciliation across a real host restart.
+- [x] Prove one structural revision per logical MCP mutation in Houdini 22.
+- [x] Publish canonical document schemas and stable node-type IDs.
+- [x] Run installed Houdini 22 authoring acceptance and independent final review.
+
+M18 is complete. The installed acceptance used disposable Houdini 22.0.368
+processes and did not mutate the user's open scene. One client-owned stdio
+broker remained connected across two distinct live host identities.

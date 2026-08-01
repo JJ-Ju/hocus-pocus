@@ -1,14 +1,22 @@
 from __future__ import annotations
 
 import hashlib
+import http.client
 import json
 import logging
+import threading
 import unittest
 from contextlib import ExitStack, contextmanager
 from pathlib import Path
+from typing import Any
 from unittest import mock
 
-from hocuspocus.core.server import HocusPocusRuntime
+from hocuspocus.core.server import (
+    HocusPocusRuntime,
+    RuntimeHTTPServer,
+    RuntimeRequestHandler,
+)
+from hocuspocus.core.jsonrpc import JsonRpcError
 from hocuspocus.core.workspace_authority import (
     WorkspaceAuthority,
     WorkspaceAuthorityError,
@@ -242,7 +250,7 @@ def assert_until_revoked_grant(
         case.assertIsNone(grant.expires_at)
         case.assertTrue(grant.host_payload(include_roots=False)["untilRevoked"])
         stored = json.loads((state / "grants.json").read_text(encoding="utf-8"))
-        case.assertEqual(stored["version"], 3)
+        case.assertEqual(stored["version"], 4)
         case.assertIsNone(stored["grants"][0]["expiresAt"])
         case.assertTrue(stored["grants"][0]["untilRevoked"])
         with case.assertRaises(WorkspaceGrantError):
@@ -279,6 +287,8 @@ def exercise_legacy_grant_migration(
         path = state / "grants.json"
         payload = json.loads(path.read_text(encoding="utf-8"))
         payload["version"] = 2
+        payload.pop("sessions", None)
+        payload.pop("sessionGrants", None)
         for row in payload["grants"]:
             row.pop("untilRevoked", None)
         path.write_text(json.dumps(payload), encoding="utf-8")
@@ -288,8 +298,392 @@ def exercise_legacy_grant_migration(
         case.assertFalse(grant["untilRevoked"])
         case.assertEqual(
             json.loads(path.read_text(encoding="utf-8"))["version"],
-            3,
+            4,
         )
+
+
+def exercise_resumable_session_grants(
+    case: unittest.TestCase,
+    *,
+    authority: WorkspaceAuthority,
+    principal: str,
+    project_id: str,
+    state: Path,
+) -> None:
+    with case.subTest(resumable_session_grants=True):
+        path = state / "resumable-grants.json"
+        client_info = {"name": "durable-broker", "version": "1.0"}
+        project = authority.registry.require(project_id)
+        original = WorkspaceGrantStore(path=path)
+        session = original.issue_session(principal, client_info)
+        original.grant(
+            project,
+            principal_id=principal,
+            session_id=session.session_id,
+            grants=(SOURCE_READ,),
+        )
+
+        reopened = WorkspaceGrantStore(path=path)
+        resumed = reopened.resume_session(
+            session.session_id,
+            principal,
+            client_info,
+        )
+        case.assertEqual(resumed.session_id, session.session_id)
+        case.assertGreater(resumed.generation, session.generation)
+        case.assertIn(
+            SOURCE_READ,
+            reopened.require(
+                resumed.session_id,
+                project,
+                SOURCE_READ,
+            ).grants,
+        )
+        with case.assertRaises(WorkspaceGrantError):
+            reopened.resume_session(
+                session.session_id,
+                principal + "-other",
+                client_info,
+            )
+        with case.assertRaises(WorkspaceGrantError):
+            reopened.resume_session(
+                session.session_id,
+                principal,
+                {"name": "different-client", "version": "1.0"},
+            )
+        with case.assertRaises(WorkspaceGrantError):
+            reopened.resume_session(
+                session.session_id,
+                principal,
+                {**client_info, "unrecognized": "different"},
+            )
+
+        case.assertTrue(reopened.revoke_session(session.session_id))
+        revoked = WorkspaceGrantStore(path=path)
+        with case.assertRaises(WorkspaceGrantError):
+            revoked.resume_session(
+                session.session_id,
+                principal,
+                client_info,
+            )
+        expiring = revoked.issue_session(principal, client_info)
+        with mock.patch(
+            "hocuspocus.core.workspace_grants.time.time",
+            return_value=expiring.expires_at + 1,
+        ):
+            expired = WorkspaceGrantStore(path=path)
+            with case.assertRaises(WorkspaceGrantError):
+                expired.resume_session(
+                    expiring.session_id,
+                    principal,
+                    client_info,
+                )
+
+
+def exercise_runtime_host_identity(
+    case: unittest.TestCase,
+    *,
+    runtime: HocusPocusRuntime,
+) -> None:
+    with case.subTest(host_generation_http_contract=True):
+        server = RuntimeHTTPServer(
+            ("127.0.0.1", 0),
+            RuntimeRequestHandler,
+        )
+        server.runtime = runtime  # type: ignore[attr-defined]
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        authorization = {"Authorization": f"Bearer {TOKEN}"}
+        client_info = {
+            "name": "durable-http-client",
+            "version": "1.0",
+        }
+        initialize = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-06-18",
+                "clientInfo": client_info,
+            },
+        }
+        try:
+            health_status, health_headers, health = _runtime_http_request(
+                server.server_address[1],
+                "GET",
+                runtime.settings.normalized_health_route,
+            )
+            case.assertEqual(health_status, 200)
+            instance_id = health["hostInstanceId"]
+            generation = health["hostGeneration"]
+            case.assertEqual(
+                health_headers["hocuspocus-host-instance-id"],
+                instance_id,
+            )
+            case.assertEqual(
+                health_headers["hocuspocus-host-generation"],
+                str(generation),
+            )
+
+            status, headers, initialized = _runtime_http_request(
+                server.server_address[1],
+                "POST",
+                runtime.settings.normalized_mcp_route,
+                initialize,
+                authorization,
+            )
+            case.assertEqual(status, 200)
+            broker_session = headers["hocuspocus-broker-session-id"]
+            case.assertEqual(headers["mcp-session-id"], broker_session)
+            case.assertEqual(
+                initialized["result"]["hostIdentity"]["hostInstanceId"],
+                instance_id,
+            )
+            session_before_rejection = (
+                runtime.workspace_authority.session(
+                    broker_session,
+                    touch=False,
+                )
+            )
+            case.assertIsNotNone(session_before_rejection)
+
+            rejected_status, rejected_headers, rejected = (
+                _runtime_http_request(
+                    server.server_address[1],
+                    "POST",
+                    runtime.settings.normalized_mcp_route,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 2,
+                        "method": "ping",
+                    },
+                    {
+                        **authorization,
+                        "Mcp-Session-Id": broker_session,
+                        "HocusPocus-Host-Instance-Id": "replaced-host",
+                    },
+                )
+            )
+            case.assertEqual(rejected_status, 409)
+            case.assertEqual(
+                rejected["error"]["data"]["hocusCode"],
+                "HOCUS999",
+            )
+            case.assertEqual(
+                rejected["error"]["data"]["kind"],
+                "host_generation_changed",
+            )
+            case.assertEqual(
+                rejected_headers["hocuspocus-host-instance-id"],
+                instance_id,
+            )
+            generation_status, _, generation_rejected = (
+                _runtime_http_request(
+                    server.server_address[1],
+                    "POST",
+                    runtime.settings.normalized_mcp_route,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 3,
+                        "method": "ping",
+                    },
+                    {
+                        **authorization,
+                        "Mcp-Session-Id": broker_session,
+                        "HocusPocus-Host-Instance-Id": instance_id,
+                        "HocusPocus-Host-Generation": str(generation + 1),
+                    },
+                )
+            )
+            case.assertEqual(generation_status, 409)
+            case.assertEqual(
+                generation_rejected["error"]["data"]["hocusCode"],
+                "HOCUS999",
+            )
+            session_after_rejection = runtime.workspace_authority.session(
+                broker_session,
+                touch=False,
+            )
+            case.assertEqual(
+                session_after_rejection.last_seen_at,
+                session_before_rejection.last_seen_at,
+            )
+
+            checkout_id = "generation-scoped-checkout"
+            runtime._track_generation_checkout(
+                "document.checkout",
+                {},
+                {"structuredContent": {"checkoutId": checkout_id}},
+            )
+            runtime._require_generation_checkout(checkout_id)
+            _exercise_shared_generation_lease(
+                case,
+                runtime=runtime,
+                port=server.server_address[1],
+                authorization=authorization,
+                session_id=broker_session,
+            )
+            with case.assertRaises(JsonRpcError):
+                runtime._require_generation_checkout(checkout_id)
+            stale_status, _, stale = _runtime_http_request(
+                server.server_address[1],
+                "POST",
+                runtime.settings.normalized_mcp_route,
+                {"jsonrpc": "2.0", "id": 4, "method": "ping"},
+                {
+                    **authorization,
+                    "Mcp-Session-Id": broker_session,
+                },
+            )
+            case.assertEqual(stale_status, 404)
+            case.assertEqual(
+                stale["error"]["data"]["kind"],
+                "host_session_stale",
+            )
+
+            hostile_initialize = {
+                **initialize,
+                "params": {
+                    **initialize["params"],
+                    "clientInfo": {
+                        **client_info,
+                        "title": "different-client",
+                    },
+                },
+            }
+            hostile_status, _, hostile = _runtime_http_request(
+                server.server_address[1],
+                "POST",
+                runtime.settings.normalized_mcp_route,
+                hostile_initialize,
+                {
+                    **authorization,
+                    "HocusPocus-Broker-Session-Id": broker_session,
+                },
+            )
+            case.assertEqual(hostile_status, 409)
+            case.assertEqual(
+                hostile["error"]["data"]["kind"],
+                "broker_session_resume_rejected",
+            )
+
+            resumed_status, resumed_headers, _ = _runtime_http_request(
+                server.server_address[1],
+                "POST",
+                runtime.settings.normalized_mcp_route,
+                initialize,
+                {
+                    **authorization,
+                    "HocusPocus-Broker-Session-Id": broker_session,
+                },
+            )
+            case.assertEqual(resumed_status, 200)
+            case.assertEqual(
+                resumed_headers["mcp-session-id"],
+                broker_session,
+            )
+            case.assertEqual(
+                resumed_headers["hocuspocus-broker-session-id"],
+                broker_session,
+            )
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+
+def _exercise_shared_generation_lease(
+    case: unittest.TestCase,
+    *,
+    runtime: HocusPocusRuntime,
+    port: int,
+    authorization: dict[str, str],
+    session_id: str,
+) -> None:
+    original = runtime.handle_request
+    blocked = threading.Event()
+    release = threading.Event()
+    cancellation_entered = threading.Event()
+    advance_done = threading.Event()
+    outcomes: list[Any] = []
+
+    def controlled(payload, **kwargs):
+        if isinstance(payload, dict) and payload.get("id") == 90:
+            blocked.set()
+            release.wait(timeout=5)
+        if (
+            isinstance(payload, dict)
+            and payload.get("method") == "notifications/cancelled"
+        ):
+            cancellation_entered.set()
+        return original(payload, **kwargs)
+
+    def blocking_request() -> None:
+        outcomes.append(
+            _runtime_http_request(
+                port,
+                "POST",
+                runtime.settings.normalized_mcp_route,
+                {"jsonrpc": "2.0", "id": 90, "method": "ping"},
+                {**authorization, "Mcp-Session-Id": session_id},
+            )
+        )
+
+    def advance() -> None:
+        runtime._advance_host_generation()
+        advance_done.set()
+
+    runtime.handle_request = controlled
+    request_thread = threading.Thread(target=blocking_request, daemon=True)
+    advance_thread = threading.Thread(target=advance, daemon=True)
+    try:
+        request_thread.start()
+        case.assertTrue(blocked.wait(timeout=2))
+        cancelled_status, _, _ = _runtime_http_request(
+            port,
+            "POST",
+            runtime.settings.normalized_mcp_route,
+            {
+                "jsonrpc": "2.0",
+                "method": "notifications/cancelled",
+                "params": {"requestId": 90},
+            },
+            {**authorization, "Mcp-Session-Id": session_id},
+        )
+        case.assertEqual(cancelled_status, 202)
+        case.assertTrue(cancellation_entered.is_set())
+        case.assertTrue(request_thread.is_alive())
+        advance_thread.start()
+        case.assertFalse(advance_done.wait(timeout=0.05))
+    finally:
+        release.set()
+        request_thread.join(timeout=2)
+        advance_thread.join(timeout=2)
+        runtime.handle_request = original
+    case.assertTrue(advance_done.is_set())
+    case.assertEqual(outcomes[0][0], 200)
+
+
+def _runtime_http_request(
+    port: int,
+    method: str,
+    path: str,
+    payload: dict[str, Any] | None = None,
+    headers: dict[str, str] | None = None,
+) -> tuple[int, dict[str, str], dict[str, Any]]:
+    body = None if payload is None else json.dumps(payload)
+    connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+    try:
+        connection.request(method, path, body=body, headers=headers or {})
+        response = connection.getresponse()
+        raw = response.read()
+        decoded = json.loads(raw) if raw else {}
+        response_headers = {
+            name.lower(): value for name, value in response.getheaders()
+        }
+        return response.status, response_headers, decoded
+    finally:
+        connection.close()
 
 
 def exercise_config_owned_project(

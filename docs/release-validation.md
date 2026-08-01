@@ -18,6 +18,12 @@ Exact Houdini `22.0.368` is the sole supported and release-qualifying live
 runtime for V1. A run under any other build, including Houdini `21.x`, cannot
 produce current candidate evidence.
 
+Current truth: product implementation and internal installed-Houdini acceptance
+are complete. This checklist remains intentionally unchecked because it is run
+against a newly frozen candidate and includes external authority that has not
+been claimed. Historical passing development receipts are evidence inputs, not
+permission to pre-check a future candidate's gates.
+
 ## 1. Current public workflow catalogue
 
 The full suite is six files and 43 public workflows:

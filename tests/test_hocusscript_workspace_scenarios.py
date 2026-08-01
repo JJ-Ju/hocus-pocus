@@ -37,6 +37,8 @@ from tests.hocusscript_h6_authority_helpers import (
     exercise_external_manifest_pin,
     exercise_legacy_grant_migration,
     exercise_project_manifest_identity,
+    exercise_resumable_session_grants,
+    exercise_runtime_host_identity,
     isolated_workspace_state,
     write_project,
 )
@@ -324,6 +326,13 @@ class HocusScriptWorkspaceScenarios(unittest.TestCase):
                     project_id=project_id,
                     state=state,
                 )
+                exercise_resumable_session_grants(
+                    self,
+                    authority=authority,
+                    principal=principal,
+                    project_id=project_id,
+                    state=state,
+                )
                 persistent_grant = authority.host_grant(
                     project_id,
                     principal_id=principal,
@@ -413,6 +422,10 @@ class HocusScriptWorkspaceScenarios(unittest.TestCase):
                         request_context=runtime_context,
                         project_id=project_id,
                         project_root=project_root,
+                    )
+                    exercise_runtime_host_identity(
+                        self,
+                        runtime=runtime,
                     )
 
                     repointed_settings = ServerSettings(

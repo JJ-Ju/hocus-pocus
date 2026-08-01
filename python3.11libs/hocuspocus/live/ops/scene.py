@@ -7,10 +7,26 @@ from typing import Any
 from hocuspocus.core.jsonrpc import INVALID_PARAMS, JsonRpcError
 
 from ..context import RequestContext
+from ..houdini_undo import next_stack_label, perform_stack_action, stack_snapshot
 from .base import hou
 
 
 class SceneOperationsMixin:
+    @staticmethod
+    def _scene_expected_stack_label(
+        arguments: dict[str, Any] | None,
+        hou_module: Any,
+        direction: str,
+    ) -> str:
+        if not arguments or "expected_label" not in arguments:
+            return next_stack_label(hou_module, direction)
+        value = arguments.get("expected_label")
+        if not isinstance(value, str) or not value.strip():
+            raise JsonRpcError(
+                INVALID_PARAMS, "expected_label must be a non-empty string."
+            )
+        return value
+
     def _scene_summary_impl(self) -> dict[str, Any]:
         hou_module = hou
         if hou_module is None:
@@ -117,22 +133,48 @@ class SceneOperationsMixin:
         data = self._call_live(lambda: self._scene_save_hip_impl(arguments), context)
         return self._tool_response(f"Saved hip file to {data['path']}.", data)
 
-    def _scene_undo_impl(self) -> dict[str, Any]:
+    def _scene_undo_impl(
+        self, arguments: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         hou_module = self._require_hou()
-        hou_module.undos.undo()
-        return self._scene_summary_impl()
+        before = stack_snapshot(hou_module)
+        label = SceneOperationsMixin._scene_expected_stack_label(
+            arguments, hou_module, "undo"
+        )
+        result = perform_stack_action(
+            hou_module, "undo", expected_label=label
+        )
+        return {
+            **self._scene_summary_impl(),
+            "stackAction": {
+                **result, "before": before, "after": stack_snapshot(hou_module),
+            },
+        }
 
     def scene_undo(self, arguments: dict[str, Any], context: RequestContext) -> dict[str, Any]:
-        data = self._call_live(self._scene_undo_impl, context)
+        data = self._call_live(lambda: self._scene_undo_impl(arguments), context)
         return self._tool_response("Undid the last Houdini operation.", data)
 
-    def _scene_redo_impl(self) -> dict[str, Any]:
+    def _scene_redo_impl(
+        self, arguments: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         hou_module = self._require_hou()
-        hou_module.undos.redo()
-        return self._scene_summary_impl()
+        before = stack_snapshot(hou_module)
+        label = SceneOperationsMixin._scene_expected_stack_label(
+            arguments, hou_module, "redo"
+        )
+        result = perform_stack_action(
+            hou_module, "redo", expected_label=label
+        )
+        return {
+            **self._scene_summary_impl(),
+            "stackAction": {
+                **result, "before": before, "after": stack_snapshot(hou_module),
+            },
+        }
 
     def scene_redo(self, arguments: dict[str, Any], context: RequestContext) -> dict[str, Any]:
-        data = self._call_live(self._scene_redo_impl, context)
+        data = self._call_live(lambda: self._scene_redo_impl(arguments), context)
         return self._tool_response("Redid the last Houdini operation.", data)
 
     def _selection_get_impl(self) -> dict[str, Any]:

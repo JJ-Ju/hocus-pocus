@@ -1,13 +1,20 @@
 # HocusScript Delivery Roadmap
 
-Status: V1 implementation and exact H22 two-process same-host technical
-qualification complete for the active bootstrap-repaired manifest
+Status: V1 implementation and internal Houdini 22 technical acceptance
+complete; production release authority remains open
 Source contract: `docs/hocusscript-spec.md`
 Completion plan: `docs/hocusscript-roadmap-completion-plan.md`
 
 Exact Houdini `22.0.368` is the sole supported and release-qualifying live
 runtime for V1. Every H21 receipt retained in this roadmap is historical
 pre-H22 migration evidence only.
+
+Current truth: HS0-HS8 and the M18 live-authoring repair are implemented and
+accepted on installed Houdini 22. The exact HS8 technical-6 receipt below
+remains the latest production-fixture qualification evidence. The later M18
+acceptance proves authoring safety and durable reconnection, but does not turn
+that mutable engineering install into an RC2 candidate or satisfy external
+clean-image and human-review gates.
 
 ## 1. Outcome
 
@@ -647,8 +654,14 @@ Final independent P0/P1 closure review is clean.
 ## 12. HS8: Production and AAA Hardening
 
 Implementation status: exact Houdini 22.0.368 two-process same-host technical
-qualification passed for active installed manifest
+qualification passed for the then-current pre-M18 installed manifest
 `sha256:facf4f0b4dcf63737ebef615654f461446b321c7cce4a0365018d937e4769e4a`.
+M18 subsequently changed governed runtime code. Its focused installed acceptance
+passed for engineering install manifest
+`sha256:57d8515086af5851b3fbcd62cf6ffd48ae4d659aa930935dc0813f6b61b124ec`,
+but the full HS8 two-process qualification has not been rerun against that
+payload. Technical-6 therefore remains valid historical production-fixture
+evidence, not current-candidate evidence.
 The H22 migration repair disables installed bytecode caching, admits only exact
 22.0.368 before server construction, authenticates HDA section and Windows file
 identity through terminal observation, and rejects every undeclared file
@@ -677,8 +690,9 @@ run 2 used
 and
 `sha256:a80b635156330877f74dd98ce1e5d80f91d7adb76dfac2557d1aca95efacb6e1`.
 The outer receipt retains `releaseAuthorized=false` and
-`visualApprovalDigest=null`. This is current same-host technical evidence only;
-RC1 clean-commit evidence and the RC2 source freeze remain pending.
+`visualApprovalDigest=null`. This is historical same-host technical evidence
+for its exact manifest only; RC1 evidence and the RC2 source freeze remain
+pending for the post-M18 tree.
 
 Technical-5 is superseded diagnostic evidence for pre-bootstrap installed
 manifest
@@ -694,9 +708,9 @@ at 35,588 bytes, and observation
 Both processes audited 210 governed modules each and reported zero authored
 cook warnings/errors. `review_pending` remained explicit, with
 `readyForPackaging=false`, `readyForPublish=false`, and
-`releaseAuthorized=false`. These values do not qualify the active
-bootstrap-repaired payload. RC1 clean-commit evidence and the RC2 source freeze
-remain pending.
+`releaseAuthorized=false`. These values do not qualify either the later
+technical-6 manifest or the post-M18 tree. RC1 evidence and the RC2 source
+freeze remain pending.
 
 The last repaired H21 run is historical pre-H22 evidence. Its technical receipt
 was

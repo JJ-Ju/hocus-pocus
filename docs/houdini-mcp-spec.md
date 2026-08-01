@@ -1,484 +1,108 @@
-# HocusPocus Houdini MCP Server Spec
+# HocusPocus Houdini MCP Specification
+
+Status: implemented V1 runtime contract
 
-Status: design spec
+Supported host: Houdini `22.0.368`
 
-Target:
-- Houdini 22.0.368
-- MCP protocol revision `2025-11-25`
-- Primary host: interactive Houdini GUI session
-- Secondary hosts: `hython` and HAPI/HARS workers
+Negotiated MCP revisions: `2025-06-18` and `2025-11-25`
 
-## 1. Goal
+This document describes the deployed architecture and the rules that public
+operations must obey. The server's MCP discovery response and canonical schema
+resources are the machine-readable authority for exact tool arguments and
+response shapes. The [user manual](user-manual.md) explains installation and
+the [agent workflows](agent-workflows.md) explain how to use the surface.
 
-Build an MCP server that gives AI agents maximum practical control over Houdini while staying:
+## 1. Product boundary
 
-- fast enough for interactive use
-- safe enough to expose to agentic clients
-- auditable and undo-friendly
-- installable as a normal Houdini plugin
-- usable both from external MCP clients and from a self-contained in-Houdini chat panel
+HocusPocus gives an authenticated agent structured control over the current
+interactive Houdini scene. It is designed around four principles:
 
-The highest-value requirement is full automation of a live Houdini session. The panel/chat/terminal integration is a strong secondary goal, not the architectural center.
+- Houdini Object Model (`hou`) is the authority for live scene state.
+- A client-owned stdio broker survives Houdini process replacement.
+- Documents and compiled HocusScript Bundles are the preferred multi-step
+  authoring surfaces.
+- Every mutation is capability-gated, serialized, auditable, and recoverable or
+  explicitly quarantined.
 
-## 2. Core Design Decision
+Houdini `22.0.368` is the sole V1 release-qualifying runtime. H21 receipts are
+historical migration evidence. HAPI/HARS workers, an HDK bridge, and a general
+chat/terminal panel are not part of the V1 public runtime contract.
 
-The server spine should be **in-process HOM (`hou`) running inside Houdini itself**.
+## 2. Deployed architecture
 
-Reason:
+```text
+Codex / Claude Code / MCP client
+              |
+              | long-lived stdio JSON-RPC
+              v
+      hocuspocus-mcp-stdio
+              |
+              | authenticated loopback Streamable HTTP
+              v
+  embedded Houdini 22 execution host
+              |
+              | serialized main-thread HOM dispatch
+              v
+ live scene + graph/source/plan/history stores
+```
 
-- HOM is the only API surface with broad, direct access to the live scene, UI state, playbar, selection, pane tabs, Python panels, node graphs, and most day-to-day Houdini workflows.
-- HAPI is excellent for headless cooks, asset workflows, SessionSync, and scalable external execution, but it is not a complete replacement for in-process scene automation.
-- HDK should be used selectively for performance, deeper native integration, and capabilities that are awkward or slow in Python.
+### 2.1 Client-facing broker
 
-So the recommended stack is:
+The governed `hocuspocus-mcp-stdio` launcher is started and supervised by the
+MCP client. It owns the stable client connection, client identity, discovery
+snapshot, host-generation mapping, credential resolution, and delivery
+classification.
 
-1. HOM for live session authority
-2. HAPI/HARS for headless and remote execution
-3. HDK for native acceleration and missing low-level hooks
+The broker:
 
-## 3. API Role Split
+- resolves the bearer credential from the verified active package;
+- keeps running while Houdini is absent;
+- returns typed `host_offline` state instead of raw connection failures;
+- initializes a new upstream session when a new Houdini host appears;
+- preserves eligible unexpired source-workspace grants across that replacement;
+- never automatically replays an ambiguously delivered tool call; and
+- bounds messages, cached discovery, timeouts, stdout, and stderr.
 
-| Layer | Use it for | Do not make it the only layer because |
-| --- | --- | --- |
-| HOM / `hou` | Live scene edits, node graph control, parms, playbar, selection, UI, Python panel integration, undo, viewport, scene events | It runs in the Houdini process, so you need strict threading and safety controls |
-| HAPI / `hapi` / HARS | Headless workers, external batch automation, geometry IO, asset loading, SessionSync-backed attach, scalable cooks | It is not the most complete interface for an interactive Houdini session |
-| HDK / C++ | Native plugin pieces, performance-critical inspection, binary streaming, process/PTY helpers, custom pane integrations, bridging to lower-level node internals | ABI-sensitive; higher build and maintenance cost |
+Canonical framing is one UTF-8 JSON-RPC message per line. `Content-Length`
+input framing is accepted for compatibility. Standard output contains protocol
+messages only.
 
-### Important HAPI constraint
+### 2.2 Embedded host transport
 
-Do not design the system around SessionSync alone. SideFX documents that SessionSync only synchronizes nodes created by the Houdini Engine client; nodes created or loaded directly in Houdini are not fully synchronized. That makes SessionSync valuable, but not a complete live-scene automation backbone.
+The embedded server binds to numeric loopback and exposes:
 
-## 4. Deployment Modes
+- `POST /hocuspocus/mcp`
+- `GET /hocuspocus/healthz`
 
-The same product should support four modes.
+This HTTP surface is the private broker-to-host hop and a diagnostic lane. A
+client connected directly to it has the Houdini process lifetime and therefore
+does not receive restart durability.
 
-### A. Live GUI mode
+Each host process publishes a random `hostInstanceId` and opaque
+`hostGeneration`. Expected-identity headers allow the broker to reject a stale
+host before admission or dispatch. Bearer authentication is required by
+default; the bearer secret does not belong in Codex or Claude configuration.
 
-Recommended default.
+The complete lifecycle and no-replay rules are in the
+[durable transport contract](durable-mcp-transport.md).
 
-- Runs inside a normal Houdini GUI session
-- Hosts the MCP server in-process
-- Executes live-scene operations through HOM
-- Provides the optional chat panel and terminal
+### 2.3 Live execution
 
-### B. Headless HOM mode
+Network threads never mutate Houdini directly. The dispatcher validates the
+request, authenticates its session and principal, checks capabilities, then
+marshals live work onto Houdini's main thread. Live mutation is a single-writer
+domain.
 
-- Runs in `hython`
-- Good for CI, offline scene transforms, linting, exports, and render prep
-- Uses the same command model as GUI mode, minus UI-specific tools
+Long cooks, renders, exports, and PDG work return task handles. Their resources
+carry progress, bounded logs, result/error state, outcome details, and recovery
+notes. Cancellation is cooperative and does not imply that partial output is
+absent.
 
-### C. Headless HAPI/HARS mode
+## 3. Authority model
 
-- Runs one or more HARS sessions
-- Good for scalable asset cooking, geometry conversion, and farm-style workloads
-- Used by the GUI-hosted server as a worker plane for expensive jobs
+### 3.1 Live capabilities
 
-### D. SessionSync attach mode
-
-- Attaches a HAPI client to a live Houdini instance with SessionSync enabled
-- Useful for integrations and mirrored workflows
-- Not the primary mode for complete scene control
-
-## 5. Process Architecture
-
-## 5.1 Components
-
-### `hocuspocus_core`
-
-The MCP server core.
-
-- Owns capability negotiation
-- Registers tools, resources, prompts, logging, and progress
-- Routes requests to execution backends
-
-### `hocuspocus_live`
-
-The live Houdini adapter.
-
-- Executes HOM calls against the current session
-- Owns the main-thread command queue
-- Owns scene revision tracking and event subscriptions
-
-### `hocuspocus_workers`
-
-The headless execution plane.
-
-- `hython` workers for full HOM batch execution
-- HARS/HAPI workers for scalable external engine jobs
-- Optional worker pool sizing and queueing
-
-### `hocuspocus_native`
-
-Optional HDK module.
-
-- Fast binary inspection helpers
-- Native PTY / process bridge for the terminal panel
-- Native event hooks if Python callbacks prove too coarse or expensive
-- Optional custom UI/pane helpers
-
-### `hocuspocus_ui`
-
-Optional in-Houdini UX shell.
-
-- Python Panel based on PySide6
-- Chat surface
-- Task/progress log
-- Embedded terminal for agent CLIs
-
-## 5.2 Request flow
-
-1. MCP request arrives over localhost HTTP or stdio bridge.
-2. `hocuspocus_core` validates permissions, args, and capability support.
-3. Router chooses backend:
-   - live HOM
-   - headless `hython`
-   - HAPI/HARS
-   - HDK helper
-4. Long-running work gets a task/progress handle.
-5. Result returns as structured MCP tool output plus optional linked resources.
-
-## 6. Transport Design
-
-## 6.1 Primary transport: Streamable HTTP on localhost
-
-Preferred server endpoint:
-
-- `POST /mcp`
-
-Why:
-
-- It matches the current MCP recommendation for remote servers
-- It works well with the in-Houdini panel, external MCP clients, and local tooling
-- It keeps the server self-contained inside Houdini
-
-Implementation recommendation inside Houdini:
-
-- Host the server on Houdini's embedded `hwebserver`
-- Implement the MCP endpoint either:
-  - directly on `hwebserver.URLHandler` / `AsyncURLHandler`, or
-  - by mounting an ASGI app under `hwebserver.registerASGIApp`
-
-`hwebserver.URLHandler` is explicitly documented as suitable for building other RPC systems, including JSON-RPC, which maps well to MCP's JSON-RPC base.
-
-## 6.2 Secondary transport: stdio bridge
-
-Provide a thin launcher:
-
-- `hocuspocus-mcp-stdio`
-
-Behavior:
-
-- Starts fast
-- Connects to the live in-process HTTP server if Houdini is already running
-- Optionally boots `hython` mode if no GUI server is available
-
-This keeps compatibility with MCP clients that strongly prefer stdio without forcing them to spawn a full GUI host every time.
-
-## 6.3 Internal UI transport
-
-For the chat panel only, allow a private WebSocket channel for:
-
-- streaming logs
-- task updates
-- terminal output
-- progress events
-
-This channel is panel-facing only and is not the public MCP contract.
-
-## 7. Threading and Execution Model
-
-This is a critical part of the design.
-
-### 7.1 Live scene mutations must be serialized
-
-`hwebserver` is multi-threaded, but the live Houdini scene should be treated as a single-writer domain.
-
-Required model:
-
-- network request threads never mutate Houdini directly
-- they enqueue commands into a live command queue
-- execution is marshaled onto the Houdini main/UI thread
-
-Recommended marshalling tools:
-
-- `hou.ui.postEventCallback()` for one-shot dispatch
-- `hou.ui.addEventLoopCallback()` for queue pumping when needed
-
-### 7.2 Undo semantics
-
-All scene-editing tool calls should be wrapped in:
-
-- `hou.undos.group("<operation label>")`
-
-This makes each agent action appear as one user-undoable step.
-
-### 7.3 Long-running jobs
-
-Use:
-
-- `hou.InterruptableOperation` for interactive HOM-side work
-- `hapi.interrupt()` for HAPI cooks/loads
-
-All long jobs should expose:
-
-- task id
-- progress percentage if known
-- state text
-- cancellation support
-
-## 8. Capability Surface
-
-The server should expose high-level tools first, low-level escape hatches second.
-
-## 8.1 Tool naming
-
-Use stable dotted names such as:
-
-- `scene.open_hip`
-- `node.create`
-- `parm.set`
-- `pdg.cook`
-
-This fits MCP naming conventions and keeps discovery clean.
-
-## 8.2 Tool groups
-
-### Session and scene lifecycle
-
-- `session.info`
-- `scene.new`
-- `scene.open_hip`
-- `scene.merge_hip`
-- `scene.save_hip`
-- `scene.revert`
-- `scene.undo`
-- `scene.redo`
-- `scene.get_summary`
-
-### Node graph operations
-
-- `node.list`
-- `node.get`
-- `node.create`
-- `node.delete`
-- `node.rename`
-- `node.move`
-- `node.layout`
-- `node.connect`
-- `node.disconnect`
-- `node.copy`
-- `node.paste`
-- `node.bypass`
-- `node.set_flags`
-- `node.as_code`
-
-### Parameters and animation
-
-- `parm.list`
-- `parm.get`
-- `parm.set`
-- `parm.set_expression`
-- `parm.keyframe_set`
-- `parm.keyframe_delete`
-- `parm.press_button`
-- `parm.revert_to_default`
-
-### Cooks, simulation, render
-
-- `cook.node`
-- `cook.cancel`
-- `render.rop`
-- `cache.save_geometry`
-- `cache.save_hip_debug`
-- `sim.reset`
-- `sim.playbar_control`
-
-### PDG / TOPs
-
-- `pdg.list_graphs`
-- `pdg.cook`
-- `pdg.cancel`
-- `pdg.get_status`
-- `pdg.get_workitems`
-
-### Geometry, USD, and scene inspection
-
-- `geometry.inspect`
-- `geometry.export`
-- `stage.inspect`
-- `material.inspect`
-- `errors.list`
-- `logs.get_recent`
-- `network.diff`
-
-### Viewport, selection, UI context
-
-- `selection.get`
-- `selection.set`
-- `viewport.get_state`
-- `viewport.frame_selection`
-- `viewport.capture`
-- `camera.get_active`
-- `camera.set_active`
-- `pane.open`
-
-### Assets and packages
-
-- `hda.list`
-- `hda.install_library`
-- `hda.reload_all`
-- `package.list`
-- `package.load`
-
-### Controlled escape hatches
-
-- `exec.python`
-- `exec.hscript`
-- `exec.native`
-- `process.launch`
-- `process.read_output`
-- `process.terminate`
-
-These are powerful and should be disabled unless explicitly permitted.
-
-## 8.3 Tool behavior rules
-
-Every tool definition should declare MCP annotations where applicable:
-
-- `readOnlyHint`
-- `destructiveHint`
-- `idempotentHint`
-- `openWorldHint`
-
-Examples:
-
-- `node.get` is read-only
-- `scene.open_hip` is destructive
-- `parm.set` is destructive but not open-world
-- `process.launch` is destructive and open-world
-
-## 8.4 Structured outputs
-
-Every tool should return:
-
-- a concise human-readable summary
-- structured JSON payload for agents
-- optional resource links for large follow-up data
-
-Do not stream giant geometry payloads as normal tool text.
-
-## 9. Resource Model
-
-Resources are how the server should expose durable scene context.
-
-Recommended URIs:
-
-- `houdini://session/info`
-- `houdini://session/selection`
-- `houdini://session/playbar`
-- `houdini://hip/current`
-- `houdini://hip/current/errors`
-- `houdini://nodes/{path}`
-- `houdini://nodes/{path}/parms`
-- `houdini://nodes/{path}/geometry-summary`
-- `houdini://nodes/{path}/cook-state`
-- `houdini://lops/{path}/stage-summary`
-- `houdini://pdg/{graph_name}/status`
-- `houdini://tasks/{task_id}`
-- `houdini://logs/recent`
-
-Rules:
-
-- use pagination for large node/resource lists
-- use templates for node-path resources
-- keep resources cheap to compute by default
-- provide explicit "deep inspect" tools when the expensive path is intentional
-
-## 10. Prompts
-
-Prompts are optional but useful.
-
-Recommended prompts:
-
-- `build_network_from_goal`
-- `analyze_selected_network`
-- `troubleshoot_failed_cook`
-- `refactor_to_hda`
-- `optimize_pdg_graph`
-
-Prompts should never be the only way to reach functionality. They are helpers around the tool surface.
-
-## 11. Tasks, Progress, and Notifications
-
-Long operations are common in Houdini, so the server must treat them as first-class.
-
-### 11.1 Task-worthy operations
-
-- cooking large node networks
-- PDG graph cooks
-- renders
-- simulation resets / recooks
-- geometry exports
-- background process launches
-
-### 11.2 Model
-
-If the client supports MCP tasks, use them.
-
-If not, emulate with:
-
-- normal tool response containing a task id
-- `progress` notifications
-- pollable task resources under `houdini://tasks/{task_id}`
-
-### 11.3 Event sources inside Houdini
-
-Use Houdini callbacks to keep resources and tasks current:
-
-- `hou.hipFile.addEventCallback`
-- `hou.playbar.addEventCallback`
-- `hou.ui.addSelectionCallback`
-- per-node callbacks via `hou.OpNode.addEventCallback`
-- PDG events via `pdg.GraphContext.addEventHandler`
-- HDA events via `hou.hda.addEventCallback`
-
-## 12. Scene Revision and Object Identity
-
-Agents need stable references.
-
-### 12.1 Primary identity
-
-For live HOM work, use:
-
-- node path as the public primary identifier
-
-### 12.2 Metadata tags
-
-Stamp tool-created or tool-touched nodes with user data:
-
-- `hpmcp.created_by`
-- `hpmcp.operation_id`
-- `hpmcp.timestamp`
-
-`hou.Node.setUserData()` stores this with the hip file and includes it in `opscript` / `hou.Node.asCode`, which makes it useful for provenance.
-
-### 12.3 HAPI identity rule
-
-Never treat HAPI node ids as durable across scene reloads. SideFX documents that `hapi.loadHIPFile()` invalidates previously acquired HAPI ids. Re-resolve from path or refresh ids after load/merge boundaries.
-
-## 13. Safety Model
-
-This server can destroy scenes, launch programs, and write data. Default-deny is required.
-
-## 13.1 Default binding
-
-- bind only to `127.0.0.1`
-- random bearer token by default for HTTP mode
-- no public LAN exposure unless explicitly enabled
-
-## 13.2 Permission profiles
-
-Define server-side capability gates:
+Tools declare required capabilities from this set:
 
 - `observe`
 - `edit_scene`
@@ -487,278 +111,279 @@ Define server-side capability gates:
 - `launch_processes`
 - `use_network`
 - `submit_farm_jobs`
+- `review_production`
 
-Each tool must declare which gates it requires.
+Shipped profiles are:
 
-## 13.3 Confirmation policy
+| Profile | Intent |
+| --- | --- |
+| `safe` | Read-only inspection. |
+| `local-dev` | Local scene and file editing without arbitrary code execution. |
+| `procedural-authoring` | Trusted local authoring with explicit `run_code`. |
+| `pipeline` | Scene editing with writes restricted to managed output roots by default. |
+
+`session.info` reports granted capabilities. Document validation and Bundle
+preview report required, missing, and ready capability projections before
+mutation. Authored code never acquires `run_code` merely by appearing in a
+valid document.
 
-Require interactive confirmation for:
+File-producing operations are also constrained by `approved_roots`. HDA
+definition-editing operations require both `edit_scene` and `write_files`;
+external libraries must additionally be inside an approved write root. Editing
+a public parameter on a locked HDA instance does not edit the definition file.
 
-- opening or replacing the current hip
-- deleting nodes outside the tool-created set
-- running arbitrary Python/HScript/native code
-- launching external processes
-- writing outside approved roots
+### 3.2 Source-workspace grants
 
-## 13.4 Audit trail
+Source authority is separate from live-scene capability. The host user approves
+a project through the Source Workspaces panel or startup configuration. The
+registry stores a random project ID, root/manifest identity, projection digest,
+grant generation, expiry, persistence, and separately approved external aliases.
+
+MCP sees only:
+
+- opaque `projectId` values;
+- portable relative paths and `hocus-source://` URIs;
+- content and projection digests; and
+- effective grant/expiry information.
+
+It never receives a physical project root. Source-read, source-write,
+generated-lock publication, and each external alias are independent grants.
+Revocation, expiry, root replacement, manifest-authority changes, or registry
+removal invalidate access.
+
+The seven source operations are exactly:
+
+- `source.project.describe`
+- `source.file.search`
+- `source.file.read`
+- `source.file.apply_patch`
+- `source.file.write_export`
+- `source.project.build`
+- `source.project.navigate`
+
+These operations use descriptor-safe, identity-checked file providers and
+exact-digest publication. They are not a general filesystem API. Source writes
+are limited to authored `.hocus` files and projection-preserving manifest edits;
+external roots and generated artifacts are not generic write targets.
+
+### 3.3 Audit
 
-Persist a structured operation log:
+Tool, task, source, and file activity is recorded in bounded host-state logs.
+Audit records use operation/principal/session identities, portable target
+identity, argument digest, outcome, and resulting digest. Source content,
+search text, dirty buffers, bearer secrets, physical source roots, and
+unsanitized exceptions must not enter the source audit trail.
+
+## 4. Public authoring surfaces
+
+Exact tool schemas are returned by MCP discovery. This section defines how the
+surfaces compose; it is not a substitute for discovery.
 
-- timestamp
-- tool name
-- caller id
-- arguments hash
-- result state
-- created/modified node paths
-- task id if applicable
+### 4.1 Inspect and discover
 
-Store under the Houdini preferences area and expose a read-only resource for recent operations.
+Start with `session.info`, `scene.get_summary`, and the scene or network
+document resources. Use `document.query`, `node.get`, `parm.list`, or
+`geometry.get_summary` only for targeted detail.
+
+Node types have stable category-qualified IDs such as `Sop/copytopoints`.
+`node_types.get_info` accepts that `typeId` without forcing an ambiguous bare
+name. `node_types.list_compatible` accepts exactly one canonical enum task or a
+bounded natural-language intent and returns deterministic candidates when the
+intent is ambiguous.
 
-## 13.5 No direct `hrpyc` exposure
+### 4.2 Bootstrap an empty OBJ scene
+
+The document workflow intentionally does not make `/obj` a writable SOP
+document. `object.create_geometry` is the narrow bootstrap operation: it creates
+one Geometry object under `/obj` and returns the resolved SOP root plus checkout
+delivery metadata. The working document is inline when it fits; otherwise its
+durable checkout resource URI remains available.
 
-Houdini's RPC support is useful as precedent and possibly as a dev-only adapter, but it should not be the main public interface because:
+Bootstrap admission, checkout, graph-store state, and live-node creation are
+one recoverable operation. A cleanup failure returns typed retained-state
+information instead of pretending the bootstrap never happened.
 
-- it has no built-in authentication
-- it proxies Python objects directly
-- it is less MCP-shaped than a purpose-built server
+### 4.3 Network documents
+
+The locked first-wave contract is
+[network document v1](document-contract-v1.md). Current discovery also exposes
+the strict typed-value v2 schema. Canonical resources are:
 
-## 14. Plugin Packaging
+- `hocuspocus://schemas/network-document/v1`
+- `hocuspocus://schemas/network-document/v2`
 
-Install as a normal Houdini package.
+The `houdini://documents/schema/network-document/...` resources are
+compatibility aliases. The ordinary workflow is:
 
-Recommended layout:
+1. `document.checkout`
+2. edit the returned JSON document or read its checkout resource
+3. `document.validate`
+4. `document.diff`
+5. `document.apply` with `validate_only`, `merge`, or `reconcile`
+6. `document.discard_checkout` when finished
 
-```text
-HocusPocus/
-  package/
-    hocuspocus.json
-  pythonX.Ylibs/
-    hocuspocus/
-      core/
-      live/
-      workers/
-      ui/
-      native/
-      startup.py
-  python_panels/
-    HocusPocus.pypanel
-  scripts/
-    python/
-      pythonrc.py
-      456.py
-  toolbar/
-    hocuspocus.shelf
-  dso/
-    hocuspocus_native.dll|so|dylib
-  config/
-    default.toml
-```
+Checkout responses always include `documentDelivery` with content digest, UTF-8
+byte length, inline limit, mode, and resource URI. Small working documents are
+returned inline; large ones require the resource read.
 
-Package file should set `HOUDINI_PATH` to the plugin root using Houdini packages.
+`document.apply` is optimistic-concurrency guarded by the expected document
+revision. `merge` changes represented entities while preserving unspecified
+state where possible. `reconcile` treats compiler-managed state in the target
+as desired truth without claiming artist-owned fields merely through omission.
 
-Startup behavior:
+### 4.4 HocusScript projects and Bundles
 
-- manual start via shelf tool or Python panel button by default
-- optional auto-start from config
-- validate Houdini and HDK API versions at load
+`.hocus` files are ordinary text files. An approved agent edits them through the
+source workspace surface; a user or IDE may edit the same files directly. For
+saved projects, use `source.project.build` for format, check, compile, and
+authorized lock update. `document.compile_source`, `document.format_source`,
+and `document.complete_source` are content-only unsaved-buffer conveniences and
+never read project roots.
 
-For native binaries, gate load by Houdini/HDK compatibility. SideFX exposes `hou.hdkAPIVersion()` specifically because ABI changes require plugin recompiles.
+The live mutation path is:
+
+1. compile an approved entry with `source.project.build`;
+2. pass the exact versioned Bundle to `document.preview_bundle`;
+3. persist an immutable plan with `document.plan_bundle`; and
+4. apply that exact plan with `document.apply_plan`.
 
-## 15. UI Spec: In-Houdini Chat Panel
+Preview is non-mutating. Planning revalidates carrier semantics, provenance,
+catalog/HDA selections, capabilities, ownership, target, and revisions. Apply
+checks the immutable plan and live drift guards; it does not reread or recompile
+the source file.
 
-This is the recommended good-to-have.
+`document.compile_source` is a structural compatibility lane, not a shortcut
+to live apply. Bundle and schema versions remain explicit compatibility units.
+
+### 4.5 HDA operations
+
+Use `hda.set_instance_parms` for artist-facing controls on a locked asset. It
+resolves only definition-interface parameters, preflights the complete batch,
+and never unlocks or structurally edits the asset.
+
+Use `hda.promote_parm` only on a locked instance that matches its current
+definition. Static source values are preserved by default; explicit
+`default_value` and `initial_value` can override that policy. Expressions and
+keyframes are rejected rather than sampled destructively. Menu defaults use
+canonical menu tokens. External-library mutation is file-authority gated.
+
+### 4.6 Production qualification
+
+`production.asset.qualify` is the only public production operation. It is
+read-only and returns content-derived technical gates. Public MCP results are
+`content_only`, so actionable packaging/publish readiness remains false.
+Packaging and release authority belong to the installed private runner and
+detached verifier, which decode the same strict schemas and bind evidence to
+the exact installed payload and output digests.
+
+See the [HS8 production workflow](hocusscript-hs8-production.md).
+
+## 5. Mutation integrity
 
-## 15.1 Host
-
-Use a Houdini Python Panel.
-
-Why:
-
-- it is a first-class pane tab type
-- Houdini ships with PySide6
-- it integrates naturally with the existing desktop layout and pane menus
-
-## 15.2 Panel structure
-
-- Chat tab
-- Tasks tab
-- Scene context tab
-- Terminal tab
-- Settings tab
-
-### Chat tab
-
-- agent conversation
-- tool call timeline
-- approval prompts
-- links to node paths/resources
-
-### Tasks tab
-
-- current cooks/renders/PDG jobs
-- cancel buttons
-- progress and logs
-
-### Scene context tab
-
-- current selection
-- active node path
-- current hip
-- frame/range
-- error/warning summary
-
-### Terminal tab
-
-- embedded shell/PTY
-- can launch `codex`, `claude`, `uv`, `python`, `hython`, etc.
-- inherits Houdini's environment
-- can auto-connect launched agents to the local MCP endpoint
-
-## 15.3 Terminal implementation
-
-Preferred:
-
-- native PTY helper in `hocuspocus_native`
-
-Fallback:
-
-- `QProcess`-backed line-oriented shell
-
-On Windows, native PTY support should use the platform console API rather than pretending a plain pipe is a full terminal.
-
-## 15.4 Threading constraint
-
-SideFX documents that Python Panel interfaces must be created from the main Houdini application thread. The panel must therefore communicate with background server/process work through signals, queues, or RPC-like message passing, not direct cross-thread UI calls.
-
-## 16. Why HDK Is Worth Having
-
-The HDK should remain optional, but it meaningfully improves the product.
-
-Recommended HDK responsibilities:
-
-- fast geometry/stat extraction without Python bottlenecks
-- binary payload generation for screenshots/thumbnails/packed summaries
-- stable PTY/process bridge for the terminal tab
-- optional custom pane helpers
-- optional bridge from HAPI `uniqueHoudiniNodeId` to native `OP_Node` access
-
-That last point is real: SideFX documents that `hapi.NodeInfo.uniqueHoudiniNodeId` can be resolved to `OP_Node` via `OP_Node::lookupNode()` when linked against the HDK.
-
-## 17. Why HAPI Is Still Essential
-
-Even though HOM is the live-scene authority, HAPI should still be a first-class subsystem.
-
-Use HAPI for:
-
-- headless execution workers
-- remote attach to HARS
-- asset library loading from file or memory
-- geometry import/export at engine level
-- SessionSync-backed integrations
-- scalable background cooks detached from the UI thread
-
-Good design rule:
-
-- HOM owns the interactive truth
-- HAPI owns scalable execution
-
-## 18. Recommended Implementation Phases
-
-### Phase 1: live in-process MCP server
-
-Deliver:
-
-- localhost Streamable HTTP endpoint
-- core live-scene tools
-- resources for scene, nodes, selection, logs
-- undo grouping
-- permissions and audit log
-
-### Phase 2: deeper Houdini automation surface
-
-Deliver:
-
-- viewport, camera, capture
-- PDG tools
-- render tools
-- scene event subscriptions
-- destructive confirmation workflow
-
-### Phase 3: headless worker plane
-
-Deliver:
-
-- `hython` worker mode
-- HAPI/HARS worker mode
-- task routing between live and headless contexts
-
-### Phase 4: native bridge
-
-Deliver:
-
-- HDK helper module
-- PTY/process support
-- faster binary/resource extraction
-
-### Phase 5: chat panel and embedded terminal
-
-Deliver:
-
-- Python Panel UI
-- task log
-- approvals
-- embedded agent CLI launcher
-- one-click local MCP connection info
-
-## 19. Risks and Constraints
-
-- Live scene access must be serialized or the server will become flaky.
-- License usage must be budgeted across GUI, `hython`, and HARS workers.
-- SessionSync is useful but not broad enough to be the core automation layer.
-- HAPI ids are not durable across hip reload boundaries.
-- Python-based whole-scene event watching can become expensive on huge scenes; this is where HDK helpers may become necessary.
-- Raw geometry payloads can explode token and bandwidth budgets; default to summaries plus explicit export/fetch tools.
-- Native modules must be rebuilt when HDK ABI changes.
-
-## 20. Bottom Line
-
-If the goal is "maximum automation of Houdini", the correct architecture is:
-
-- **in-process HOM server inside Houdini as the source of truth**
-- **HAPI/HARS worker plane for headless and scalable execution**
-- **optional HDK module for native performance and terminal/process integration**
-- **optional Python Panel chat UI that launches agent CLIs inside Houdini's environment**
-
-Anything centered on HAPI alone will leave too much of interactive Houdini unreachable. Anything centered on arbitrary Python execution alone will be powerful but too unsafe and too hard for agents to use reliably. The best system is layered: curated tools first, escape hatches second, with HOM/HAPI/HDK each doing the part they are actually good at.
-
-## Sources
-
-- SideFX API overview: https://www.sidefx.com/docs/houdini/ref/api.html
-- HOM / Python scripting: https://www.sidefx.com/docs/houdini/hom/
-- Command-line scripting and `hou` import behavior: https://www.sidefx.com/docs/houdini/hom/commandline
-- Houdini RPC notes: https://www.sidefx.com/docs/houdini/hom/rpc.html
-- `hou.ui` event loop callbacks: https://www.sidefx.com/docs/houdini/hom/hou/ui.html
-- Python Panel API: https://www.sidefx.com/docs/houdini/hom/hou/PythonPanel.html
-- Python Panel Editor / PySide6 support: https://www.sidefx.com/docs/houdini/ref/windows/pythonpaneleditor.html
-- Houdini packages: https://www.sidefx.com/docs/houdini/ref/plugins.html
-- `hwebserver`: https://www.sidefx.com/docs/houdini/hwebserver/index.html
-- `hwebserver.URLHandler`: https://www.sidefx.com/docs/houdini/hwebserver/URLHandler_class.html
-- HAPI Python API: https://www.sidefx.com/docs/houdini/hapi/
-- HAPI SessionSync: https://www.sidefx.com/docs/houdini/ref/henginesessionsync.html
-- `hapi.NodeInfo`: https://www.sidefx.com/docs/houdini/hapi/NodeInfo.html
-- `hapi.loadHIPFile`: https://www.sidefx.com/docs/houdini/hapi/loadHIPFile.html
-- `hou.hipFile` callbacks: https://www.sidefx.com/docs/houdini/hom/hou/hipFile.html
-- `hou.playbar` callbacks: https://www.sidefx.com/docs/houdini/hom/hou/playbar.html
-- `hou.nodeEventType`: https://www.sidefx.com/docs/houdini/hom/hou/nodeEventType.html
-- PDG event handling: https://www.sidefx.com/docs/houdini/tops/events.html
-- `hou.undos`: https://www.sidefx.com/docs/houdini/hom/hou/undos.html
-- `hou.InterruptableOperation`: https://www.sidefx.com/docs/houdini/hom/hou/InterruptableOperation.html
-- `hou.Node` user data: https://www.sidefx.com/docs/houdini/hom/hou/Node.html
-- HDK intro: https://www.sidefx.com/docs/hdk/_h_d_k__intro.html
-- HDK plugin intro: https://www.sidefx.com/docs/hdk/_h_d_k__intro__creating_plugins.html
-- Extending `hou` with C++: https://www.sidefx.com/docs/houdini/hom/extendingwithcpp.html
-- MCP overview (`2025-11-25`): https://modelcontextprotocol.io/specification/2025-11-25/basic/index
-- MCP lifecycle: https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle
-- MCP resources: https://modelcontextprotocol.io/specification/2025-11-25/server/resources
-- MCP sampling: https://modelcontextprotocol.io/specification/2025-11-25/client/sampling
-- MCP tasks: https://modelcontextprotocol.io/specification/2025-11-25/basic/utilities/tasks
+Document and HocusScript scene changes are preflighted before their undo group.
+Document parameters are coerced and validated against live Houdini parameter
+templates, including tuple size, numeric bounds, toggle/menu semantics, and
+binding target. A stored immutable plan is never modified to make execution
+convenient.
+
+One logical MCP mutation produces one structural revision. Appearance,
+position, selection, and playbar activity advances cosmetic state separately
+and does not invalidate structural plans.
+
+Node display/render/output flags are authored node state. Checkout
+`output_flag` edges are regenerated observations, not a second competing
+mutation instruction.
+
+Failure behavior is typed:
+
+- `HOCUS755` means the exact baseline was restored and verified.
+- `HOCUS756` means restoration was not proven; the scope is quarantined until
+  explicit recovery.
+
+Houdini 22 undo and redo use `performUndo` and `performRedo`, guarded by the
+expected stack label. A direct mutation keeps an inverse fallback so a failed
+undo attempt does not immediately turn an otherwise recoverable operation into
+unknown state.
+
+## 6. Durable operation reconciliation
+
+Each broker tool call receives a stable operation ID before host transport. Its
+identity is bound to the authenticated principal, tool, and canonical argument
+digest. Bounded terminal results/errors record host generation, delivery stage,
+commit state, and reconciliation metadata.
+
+After a timeout, disconnect, or ambiguous delivery, call
+`session.get_operation` with the operation ID before issuing another mutation:
+
+- a terminal result is returned without re-execution;
+- an operation still owned by a live host lease remains pending;
+- an orphaned old-host operation becomes `partial_or_unknown`; and
+- incompatible tool/argument reuse is rejected.
+
+Post-commit journal or housekeeping failure must not mask a confirmed scene
+commit. The returned result identifies any loss of durable reconciliation
+availability. The broker itself never guesses that a `tools/call` is safe to
+replay from annotations.
+
+## 7. Resources, tasks, and payloads
+
+Prefer resources for reusable bounded snapshots:
+
+- `houdini://documents/scene`
+- `houdini://documents/network/{path}`
+- `houdini://documents/checkouts/{checkout_id}`
+- `houdini://documents/diagnostics/{checkout_id}`
+- `houdini://nodes/{path}` and focused node subresources
+- `houdini://tasks/{task_id}` and bounded task logs
+- `hocus-source://{projectId}` and authorized project-relative files
+- canonical `hocuspocus://schemas/...` resources
+
+Large geometry, source trees, logs, images, and compiled carriers must not be
+silently embedded into unbounded tool text. Operations either return bounded
+summaries/resource links or fail with a typed payload-size error before a write
+commit. Resource reads recheck applicable session, grant, projection, root, and
+content identity.
+
+## 8. Installation and update contract
+
+Build/install creates a validated sibling candidate, installs it to a versioned
+directory, and atomically replaces `packages/hocuspocus.json` last. The prior
+complete installation remains available until activation succeeds. An
+identical install is a verified no-op.
+
+The install manifest governs every shipped file by portable path, role, byte
+length, and SHA-256 digest. The generated token configuration is represented by
+a normalized redacted row. Missing, changed, undeclared, reparse-aliased, or
+bytecode-cache files fail verification.
+
+Normal reinstall preserves the active token. `-RotateToken` is explicit, never
+prints the secret, and rolls back environment/activation changes on failure.
+After installation, the client launcher installer publishes a stable broker and
+generated Codex/Claude snippets beside the active package pointer.
+
+See the [release validation checklist](release-validation.md),
+[compatibility policy](compatibility-policy.md), and
+[durable transport contract](durable-mcp-transport.md).
+
+## 9. Non-contractual extension points
+
+HAPI/HARS worker routing, an optional HDK performance bridge, richer event
+streaming, and a general in-Houdini chat/terminal shell remain possible future
+extensions. They must not be inferred from this specification as shipped tools,
+permissions, transports, or release claims. Any such surface requires explicit
+implementation, discovery metadata, safety review, and versioned documentation.
+
+The current product center is intentionally simpler: a durable client broker,
+an authenticated in-process HOM host, document/HocusScript authoring, narrow
+specialized operations, and fail-closed mutation/recovery semantics.
+
+## 10. SideFX references
+
+- [API overview](https://www.sidefx.com/docs/houdini/ref/api.html)
+- [Houdini Object Model](https://www.sidefx.com/docs/houdini/hom/)
+- [HOM command-line behavior](https://www.sidefx.com/docs/houdini/hom/commandline)
+- [Houdini packages](https://www.sidefx.com/docs/houdini/ref/plugins.html)
+- [`hwebserver`](https://www.sidefx.com/docs/houdini/hwebserver/index.html)
+- [`hou.ui` event callbacks](https://www.sidefx.com/docs/houdini/hom/hou/ui.html)
+- [HAPI](https://www.sidefx.com/docs/houdini/hapi/)
+- [SessionSync](https://www.sidefx.com/docs/houdini/ref/henginesessionsync.html)

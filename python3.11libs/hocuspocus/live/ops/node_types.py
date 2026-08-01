@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -107,6 +108,24 @@ class NodeTypeOperationsMixin:
         "rbd_setup": {"constraint", "sim_prep"},
     }
 
+    _CURATED_KEY_PARMS = {
+        "copytopoints": ("pack", "transform", "pieceattrib", "targetgroup", "sourcegroup"),
+    }
+
+    _COMPATIBILITY_INTENT_ALIASES = {
+        "copying": ("copy", "copies", "copying", "duplicate", "duplicating", "repeat", "repetition"),
+        "instancing": ("instance", "instances", "instancing", "prototype", "prototypes"),
+        "scatter": ("scatter", "scattered", "scattering", "point distribution", "distribute points"),
+        "booleans": ("boolean", "booleans", "union", "subtract geometry", "intersect geometry"),
+        "attributes": ("attribute", "attributes", "normal attribute", "uv attribute", "color attribute"),
+        "vex": ("vex", "wrangle", "wrangles", "vex snippet"),
+        "lighting": ("light", "lights", "lighting", "illumination"),
+        "materials": ("material", "materials", "shader", "shaders", "surface shading"),
+        "render_export": ("render", "rendering", "export render", "render output", "submit render"),
+        "usd_composition": ("usd composition", "usd layer", "usd layering", "reference usd", "sublayer"),
+        "rbd_setup": ("rbd", "rigid body", "collision constraints", "constraint setup"),
+    }
+
     _DISCOVERY_GROUPS = (
         _NodeTypeGroup("sop_geometry_core", "SOP Geometry Core", "Sop", "Core SOP geometry generators and primitive-building nodes.", 10, lambda name, label, tags: bool({"geometry", "primitive"} & tags)),
         _NodeTypeGroup("sop_transforms_alignment", "SOP Transforms and Alignment", "Sop", "Transform, alignment, and bounding-shape helpers.", 20, lambda name, label, tags: "transform" in tags or "alignment" in tags),
@@ -200,6 +219,7 @@ class NodeTypeOperationsMixin:
         if not aliases and "wrangle" in type_name.lower():
             aliases = ["wrangle"]
         return {
+            "typeId": f"{category_name}/{type_name}",
             "typeName": type_name,
             "label": label,
             "category": category_name,
@@ -234,7 +254,10 @@ class NodeTypeOperationsMixin:
                     "templateType": parm_type,
                     "numComponents": self._safe_value(entry.numComponents, 1),
                 }
-                default_value = self._safe_value(entry.defaultValue, None)
+                default_value = self._safe_value(
+                    lambda entry=entry: entry.defaultValue(),
+                    None,
+                )
                 if default_value is not None:
                     record["default"] = list(default_value) if isinstance(default_value, tuple) else default_value
                 menu_items = self._safe_value(lambda entry=entry: entry.menuItems(), ())
@@ -311,6 +334,68 @@ class NodeTypeOperationsMixin:
             )
         return matches[0]
 
+    def _resolve_node_type_selector(
+        self,
+        arguments: dict[str, Any],
+    ) -> tuple[str, Any]:
+        type_id = str(arguments.get("type_id", "")).strip()
+        type_name = str(arguments.get("type_name", "")).strip()
+        category_name = self._normalize_discovery_category(arguments.get("category"))
+        if bool(type_id) == bool(type_name):
+            raise JsonRpcError(INVALID_PARAMS, "Provide exactly one of type_id or type_name")
+        if not type_id:
+            return self._resolve_node_type(type_name, category_name)
+        category_token, separator, selected_name = type_id.partition("/")
+        selected_category = self._normalize_discovery_category(category_token)
+        if not separator or selected_category is None or not selected_name:
+            raise JsonRpcError(
+                INVALID_PARAMS,
+                "type_id must be a category-qualified node type such as Sop/copytopoints",
+                {"typeId": type_id},
+            )
+        if category_name is not None and category_name != selected_category:
+            raise JsonRpcError(
+                INVALID_PARAMS,
+                "type_id and category select different node-type categories",
+                {"typeId": type_id, "category": category_name},
+            )
+        return self._resolve_node_type(selected_name, selected_category)
+
+    @staticmethod
+    def _node_type_query_matches(query: str, record: dict[str, Any]) -> bool:
+        tokens = re.findall(r"[0-9a-z]+", query.lower())
+        if not tokens:
+            return True
+        searchable = " ".join(
+            [
+                str(record["typeName"]),
+                str(record["label"]),
+                " ".join(str(item) for item in record["aliases"]),
+                " ".join(str(item) for item in record["tags"]),
+            ]
+        ).lower()
+        compact_searchable = re.sub(r"[^0-9a-z]+", "", searchable)
+        compact_query = "".join(tokens)
+        return all(token in searchable for token in tokens) or compact_query in compact_searchable
+
+    def _select_key_parms(
+        self,
+        type_name: str,
+        parm_records: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        by_name = {str(item["name"]): item for item in parm_records}
+        selected: list[dict[str, Any]] = []
+        for name in self._CURATED_KEY_PARMS.get(type_name, ()):
+            record = by_name.get(name)
+            if record is not None:
+                selected.append(record)
+        selected_names = {str(item["name"]) for item in selected}
+        fallback = sorted(
+            (item for item in parm_records if str(item["name"]) not in selected_names),
+            key=lambda item: (self._key_parm_priority(str(item["name"])), str(item["name"])),
+        )
+        return (selected + fallback)[:12]
+
     def _node_types_list_groups_impl(self, arguments: dict[str, Any]) -> dict[str, Any]:
         category_name = self._normalize_discovery_category(arguments.get("category"))
         categories = self._supported_discovery_categories()
@@ -378,13 +463,7 @@ class NodeTypeOperationsMixin:
                     continue
                 if group_id and record["groupId"] != group_id:
                     continue
-                haystacks = [
-                    record["typeName"].lower(),
-                    str(record["label"]).lower(),
-                    " ".join(str(item).lower() for item in record["aliases"]),
-                    " ".join(str(item).lower() for item in record["tags"]),
-                ]
-                if query and not any(query in item for item in haystacks):
+                if query and not self._node_type_query_matches(query, record):
                     continue
                 if tags_filter and not tags_filter.issubset(set(record["tags"])):
                     continue
@@ -409,19 +488,16 @@ class NodeTypeOperationsMixin:
         return self._tool_response(f"Listed {data['count']} node types.", data)
 
     def _node_types_get_info_impl(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        type_name = str(arguments.get("type_name", "")).strip()
-        if not type_name:
-            raise JsonRpcError(INVALID_PARAMS, "type_name is required")
-        category_name = self._normalize_discovery_category(arguments.get("category"))
         detail_level = str(arguments.get("detail_level", "summary")).strip().lower() or "summary"
         if detail_level not in {"summary", "key_parms", "full_parms"}:
             raise JsonRpcError(INVALID_PARAMS, "detail_level must be one of: summary, key_parms, full_parms")
 
-        resolved_category, node_type = self._resolve_node_type(type_name, category_name)
+        resolved_category, node_type = self._resolve_node_type_selector(arguments)
         summary = self._node_type_summary(resolved_category, node_type)
         parm_records = self._parm_template_records(node_type)
-        key_parms = sorted(parm_records, key=lambda item: (self._key_parm_priority(str(item["name"])), str(item["name"])))[:12]
+        key_parms = self._select_key_parms(str(summary["typeName"]), parm_records)
         result = {
+            "typeId": summary["typeId"],
             "typeName": summary["typeName"],
             "label": summary["label"],
             "category": summary["category"],
@@ -448,18 +524,63 @@ class NodeTypeOperationsMixin:
         data = self._call_live(lambda: self._node_types_get_info_impl(arguments), context)
         return self._tool_response(f"Returned node-type info for {data['typeName']}.", data)
 
-    def _node_types_list_compatible_impl(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        task = str(arguments.get("task", "")).strip().lower()
-        if not task:
-            raise JsonRpcError(INVALID_PARAMS, "task is required")
-        category_name = self._normalize_discovery_category(arguments.get("category"))
-        desired_tags = self._COMPATIBILITY_TASKS.get(task)
-        if desired_tags is None:
+    @staticmethod
+    def _normalize_compatibility_intent(intent: str) -> str:
+        return " ".join(re.sub(r"[^0-9a-z]+", " ", intent.lower()).split())
+
+    def _resolve_compatibility_intent(self, intent: str) -> tuple[str, list[str]]:
+        normalized = self._normalize_compatibility_intent(intent)
+        if not normalized:
+            raise JsonRpcError(INVALID_PARAMS, "intent must contain searchable words")
+        padded = f" {normalized} "
+        candidates: list[dict[str, Any]] = []
+        for task, aliases in self._COMPATIBILITY_INTENT_ALIASES.items():
+            matched = sorted(alias for alias in aliases if f" {alias} " in padded)
+            if matched:
+                candidates.append({"task": task, "matchedTerms": matched})
+        candidates.sort(key=lambda item: str(item["task"]))
+        if not candidates:
             raise JsonRpcError(
                 INVALID_PARAMS,
-                f"Unknown compatibility task: {task}",
-                {"knownTasks": sorted(self._COMPATIBILITY_TASKS.keys())},
+                "Compatibility intent did not match a supported task",
+                {"knownTasks": sorted(self._COMPATIBILITY_TASKS)},
             )
+        if len(candidates) != 1:
+            raise JsonRpcError(
+                INVALID_PARAMS,
+                "Compatibility intent is ambiguous",
+                {"candidates": candidates},
+            )
+        candidate = candidates[0]
+        return str(candidate["task"]), list(candidate["matchedTerms"])
+
+    def _compatibility_selection(
+        self,
+        arguments: dict[str, Any],
+    ) -> tuple[str, str, str | None, list[str]]:
+        raw_task = str(arguments.get("task", "")).strip()
+        raw_intent = str(arguments.get("intent", "")).strip()
+        if bool(raw_task) == bool(raw_intent):
+            raise JsonRpcError(INVALID_PARAMS, "Provide exactly one of task or intent")
+        if raw_task:
+            task = raw_task.lower()
+            if task not in self._COMPATIBILITY_TASKS:
+                raise JsonRpcError(
+                    INVALID_PARAMS,
+                    f"Unknown compatibility task: {task}",
+                    {"knownTasks": sorted(self._COMPATIBILITY_TASKS)},
+                )
+            return task, "exact_task", None, []
+        if len(raw_intent) > 256:
+            raise JsonRpcError(INVALID_PARAMS, "intent must be at most 256 characters")
+        task, matched_terms = self._resolve_compatibility_intent(raw_intent)
+        return task, "intent_alias", raw_intent, matched_terms
+
+    def _node_types_list_compatible_impl(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        task, resolution_kind, input_intent, matched_terms = self._compatibility_selection(arguments)
+        category_name = self._normalize_discovery_category(arguments.get("category"))
+        desired_tags = self._COMPATIBILITY_TASKS.get(task)
+        assert desired_tags is not None
         data = self._node_types_list_impl(
             {
                 "category": category_name,
@@ -479,6 +600,10 @@ class NodeTypeOperationsMixin:
             items.append(enriched)
         data["items"] = items
         data["task"] = task
+        data["resolvedTask"] = task
+        data["resolutionKind"] = resolution_kind
+        data["inputIntent"] = input_intent
+        data["matchedTerms"] = matched_terms
         return data
 
     def node_types_list_compatible(self, arguments: dict[str, Any], context: RequestContext) -> dict[str, Any]:

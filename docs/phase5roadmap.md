@@ -1,8 +1,12 @@
 # HocusPocus Phase 5 Roadmap
 
-Status: active roadmap
+Status: archived historical roadmap; superseded by the HocusScript V1 roadmap
 
-Branch: `codex/phase5`
+Current implementation and release status live in `hocusscript-roadmap.md`,
+`hocusscript-task-tracker.md`, and `hocusscript-roadmap-completion-plan.md`.
+This file preserves the product direction that led to the present contracts,
+policy profiles, Houdini panel, event model, and runtime architecture; it is not
+an active task list.
 
 Scope:
 

@@ -42,6 +42,15 @@ def available_policy_profiles() -> dict[str, dict[str, Any]]:
             "enable_stdio_bridge": True,
             "approved_roots": [],
         },
+        "procedural-authoring": {
+            "description": "Trusted local authoring with explicit embedded-code execution authority.",
+            "read_only": False,
+            "allow_scene_edit": True,
+            "allow_file_write": True,
+            "enable_exec_tools": True,
+            "enable_stdio_bridge": True,
+            "approved_roots": [],
+        },
         "pipeline": {
             "description": "Pipeline-friendly profile with writes limited to managed output roots by default.",
             "read_only": False,
@@ -334,7 +343,15 @@ def load_settings(config_path: str | Path | None = None) -> ServerSettings:
     if not profile_explicit:
         _apply_policy_values(settings, payload)
     _apply_policy_values(settings, policy_overrides)
+    configured_token = settings.token
+    configured_token_mode = settings.token_mode
+    configured_credential_authoritative = (
+        bool(configured_token) or configured_token_mode == "disabled"
+    )
     _apply_environment(settings)
+    if configured_credential_authoritative:
+        settings.token = configured_token
+        settings.token_mode = configured_token_mode
     settings.production_review_policy_id = _production_review_policy_id(
         settings.production_review_policy_id,
     )
