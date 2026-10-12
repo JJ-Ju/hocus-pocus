@@ -100,6 +100,8 @@ def test_headless_main_process(hython, tmp_path):
     env["PYTHONPATH"] = str(REPO_SRC)
     env["HOUDINI_USER_PREF_DIR"] = (tmp_path / "prefs" / "houdini__HVER__").as_posix()
     env["HOCUSPOCUS_STATE_DIR"] = str(state)
+    work = tmp_path / "work"
+    env["HOCUSPOCUS_WORK_DIR"] = str(work)
     proc = subprocess.Popen(
         [str(hython), "-m", "hocuspocus.host", "--port", "0"],
         cwd=cwd,
@@ -136,7 +138,12 @@ def test_headless_main_process(hython, tmp_path):
         status = post("/call", {"tool": "houdini_status", "args": {}})
         assert status["ok"] is True
         assert status["result"]["port"] == info["port"]
-        assert status["result"]["hip"]["path"].startswith(cwd.as_posix())
+        # The untitled scene lives in the work dir, not the launch cwd or the state dir.
+        hip = status["result"]["hip"]
+        assert hip["path"] == f"{work.as_posix()}/untitled.hip", hip
+        assert hip["note"] == "$HIP is the launch directory until you hip_save."
+        assert status["result"]["env"]["HIP"] == work.as_posix()
+        assert status["result"]["env"]["JOB"] == work.as_posix()
 
         assert post("/shutdown", {})["ok"] is True
         code = proc.wait(timeout=60)

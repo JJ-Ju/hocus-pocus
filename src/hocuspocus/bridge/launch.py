@@ -185,7 +185,9 @@ class Launcher:
             )
         env = self._env()
         env.setdefault("HFS", str(hfs))
-        cwd = paths.ensure_private_dir(paths.state_dir())
+        # The untitled scene's $HIP/$JOB: renders to $HIP/... must not land in the state
+        # dir next to instances/ and logs/ (review 07 papercut 3).
+        cwd = paths.work_dir()
         stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S")
         if mode == "gui":
             exe = gui_executable(hfs)

@@ -64,6 +64,7 @@ def headless_host(hython, tmp_path):
     state = tmp_path / "state"
     prefs = tmp_path / "prefs"
     cwd = tmp_path / "cwd"
+    work = tmp_path / "work"
     for d in (state, prefs, cwd):
         d.mkdir()
     env = dict(os.environ)
@@ -71,7 +72,10 @@ def headless_host(hython, tmp_path):
         {
             "PYTHONPATH": str(SRC),
             "HOCUSPOCUS_STATE_DIR": str(state),
-            "HOUDINI_USER_PREF_DIR": str(prefs),
+            "HOCUSPOCUS_WORK_DIR": str(work),
+            # Houdini ignores HOUDINI_USER_PREF_DIR without the __HVER__ token.
+            "HOUDINI_USER_PREF_DIR": (prefs / "houdini__HVER__").as_posix(),
+            "PYTHONDONTWRITEBYTECODE": "1",
         }
     )
     log = open(tmp_path / "hython.log", "wb")  # noqa: SIM115 - closed in teardown
@@ -139,4 +143,71 @@ def test_stdio_roundtrip(headless_host, tmp_path):
     assert instructions and "Houdini" in instructions
     assert tools, "tools/list is empty"
     assert status.is_error is False, status.content
-    assert status.structured_content["connected"]["pid"] == proc.pid
+    connected = status.structured_content["connected"]
+    assert connected["pid"] == proc.pid
+    # Review 07 papercut 3: the untitled scene lives in the work dir, not the state dir.
+    work = (tmp_path / "work").as_posix()
+    assert connected["env"]["HIP"] == work
+    assert connected["env"]["JOB"] == work
+    assert connected["hip"]["path"] == f"{work}/untitled.hip"
+    assert connected["hip"]["note"] == "$HIP is the launch directory until you hip_save."
+    assert not connected["hip"]["path"].startswith(state.as_posix())
+
+
+def test_bridge_launch_starts_in_the_work_dir(hython, tmp_path):
+    """houdini_connect {launch: headless} through the real launcher: $HIP and $JOB of the
+    untitled scene are HOCUSPOCUS_WORK_DIR, and the state dir only holds bridge state."""
+    import anyio
+    from mcp import Client
+    from mcp.client.stdio import StdioServerParameters
+
+    state = tmp_path / "state"
+    work = tmp_path / "work"
+    env = dict(os.environ)
+    env.update(
+        {
+            "PYTHONPATH": str(SRC),
+            "HOCUSPOCUS_STATE_DIR": str(state),
+            "HOCUSPOCUS_WORK_DIR": str(work),
+            "HOCUSPOCUS_HFS": str(hython.parent.parent),
+            "HOUDINI_USER_PREF_DIR": (tmp_path / "prefs" / "houdini__HVER__").as_posix(),
+            "PYTHONDONTWRITEBYTECODE": "1",
+        }
+    )
+    params = StdioServerParameters(
+        command=sys.executable, args=["-m", "hocuspocus.bridge"], env=env, cwd=str(tmp_path)
+    )
+
+    async def run():
+        async with Client(params, read_timeout_seconds=180) as client:
+            launched = await client.call_tool(
+                "houdini_connect", {"launch": {"mode": "headless", "wait_s": 150}}
+            )
+            status = await client.call_tool("houdini_status", {})
+            return launched, status
+
+    launched, status = None, None
+    try:
+        launched, status = anyio.run(run)
+        assert launched.is_error is False, launched.content
+        connected = status.structured_content["connected"]
+        assert connected["env"]["HIP"] == work.as_posix()
+        assert connected["env"]["JOB"] == work.as_posix()
+        assert connected["hip"]["path"] == f"{work.as_posix()}/untitled.hip"
+        assert "note" in connected["hip"]
+    finally:
+        # Stop only the hython this test launched (found through its own state dir).
+        from hocuspocus.bridge.client import HostClient
+
+        for entry in (state / "instances").glob("*.json"):
+            info = json.loads(entry.read_text(encoding="utf-8"))
+            try:
+                HostClient(info["port"], info["token"]).shutdown()
+            except Exception:  # noqa: BLE001 - fall back to killing that pid
+                subprocess.run(
+                    ["taskkill", "/F", "/PID", str(info["pid"])]
+                    if sys.platform == "win32"
+                    else ["kill", "-9", str(info["pid"])],
+                    capture_output=True,
+                    check=False,
+                )

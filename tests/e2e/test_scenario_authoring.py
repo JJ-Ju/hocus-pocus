@@ -76,6 +76,7 @@ def headless_host(hython: Path, tmp_path: Path):
         {
             "PYTHONPATH": str(SRC),
             "HOCUSPOCUS_STATE_DIR": str(state),
+            "HOCUSPOCUS_WORK_DIR": str(tmp_path / "work"),
             # Houdini ignores HOUDINI_USER_PREF_DIR without the __HVER__ token.
             "HOUDINI_USER_PREF_DIR": (prefs / "houdini__HVER__").as_posix(),
             "PYTHONDONTWRITEBYTECODE": "1",

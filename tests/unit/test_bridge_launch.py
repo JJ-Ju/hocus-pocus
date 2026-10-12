@@ -28,6 +28,7 @@ def fake_hfs(root: Path, gui: bool = True) -> Path:
 @pytest.fixture(autouse=True)
 def isolated_state(tmp_path, monkeypatch):
     monkeypatch.setenv("HOCUSPOCUS_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.delenv("HOCUSPOCUS_WORK_DIR", raising=False)
 
 
 class FakeProc:
@@ -120,8 +121,17 @@ def test_headless_launch_builds_hython_command_and_waits(tmp_path):
     assert env["PYTHONPATH"].split(os.pathsep)[0] == str(launch.package_root())
     assert (launch.package_root() / "hocuspocus" / "bridge").is_dir()
     assert log_path is not None and log_path.name.startswith("launch-headless-")
-    assert Path(cwd) == tmp_path / "state"  # neutral cwd, never the repo
+    assert Path(cwd) == Path.home()  # the untitled $HIP: never the state dir or repo
     assert result.instance.pid == 9001 and result.mode == "headless"
+
+
+def test_launch_work_dir_override(tmp_path, monkeypatch):
+    work = tmp_path / "shots" / "work"
+    monkeypatch.setenv("HOCUSPOCUS_WORK_DIR", str(work))
+    harness = Harness()
+    make_launcher(fake_hfs(tmp_path / "hfs"), harness).launch("headless", None, wait_s=30)
+    _argv, _env, cwd, _log = harness.spawned[0]
+    assert Path(cwd) == work and work.is_dir()
 
 
 def test_gui_launch_uses_houdinifx(tmp_path):

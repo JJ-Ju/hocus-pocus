@@ -239,6 +239,7 @@ def _connected_block() -> dict[str, Any]:
                     "dirty": _t("boolean"),
                     "is_new": _t("boolean"),
                     "recent": _list(),
+                    "note": _t("string"),
                 }
             ),
             "time": _out({"frame": _t("number"), "fps": _t("number"), "range": _list("number")}),

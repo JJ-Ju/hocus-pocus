@@ -1,6 +1,7 @@
 """Filesystem locations shared by host and bridge. Stdlib only. See docs/BIBLE.md §3.2.
 
 ``HOCUSPOCUS_STATE_DIR`` overrides everything (tests use it for isolation).
+``HOCUSPOCUS_WORK_DIR`` sets where a launched Houdini starts (its untitled ``$HIP``).
 """
 
 from __future__ import annotations
@@ -21,6 +22,19 @@ def state_dir() -> Path:
     xdg = os.environ.get("XDG_STATE_HOME")
     base = Path(xdg) if xdg else Path.home() / ".local" / "state"
     return base / "hocuspocus"
+
+
+def work_dir() -> Path:
+    """Where Houdini launched by HocusPocus starts: ``$HIP`` (and ``$JOB``) of an untitled
+    scene. ``HOCUSPOCUS_WORK_DIR`` (created if missing), else the user's home directory,
+    which is also where a GUI Houdini started from the desktop puts an untitled scene.
+    Never the state dir (it holds ``instances/`` and ``logs/``) and never the repo."""
+    override = os.environ.get("HOCUSPOCUS_WORK_DIR")
+    if override:
+        path = Path(override).expanduser()
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+    return Path.home()
 
 
 def instances_dir() -> Path:

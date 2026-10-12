@@ -295,6 +295,13 @@ log_level = "INFO"
 hfs = ""                    # bridge: explicit Houdini install dir for launch
 ```
 
+`HOCUSPOCUS_WORK_DIR` (environment only) is where a Houdini that HocusPocus launches
+starts, and so the `$HIP` and `$JOB` of its untitled scene; default the user's home
+directory, as for a GUI Houdini started from the desktop. Never the state dir (it holds
+`instances/` and `logs/`) and never the repo. `hython -m hocuspocus.host` moves there too
+after start-up (`--work-dir` overrides; hython's own cwd stays off `HOUDINI_PATH` as long
+as it was started from a neutral directory).
+
 ---
 
 ## 4. The tool surface
@@ -349,8 +356,8 @@ hfs = ""                    # bridge: explicit Houdini install dir for launch
 
 | Tool | Args | Returns | Notes |
 |---|---|---|---|
-| `houdini_status` | — | `connected: {pid, port, houdini, ui, hip: {path, name, dirty, is_new}, time: {frame, fps, range}, env: {HIP, JOB, HIPNAME}, scene_generation, host_version}`, `instances: [...]`, `bridge_version`, `profile`, `read_only`, `allow_python` | Works offline (`connected: null`). Read-only. |
-| `houdini_connect` | `pid?`, `launch?: {mode: gui\|headless, hip?, wait_s=90}`, `disconnect?: bool` | the new `connected` block | Launch uses `hfs` config or auto-detect. Headless launches `hython -m hocuspocus.host`. |
+| `houdini_status` | — | `connected: {pid, port, houdini, ui, hip: {path, name, dirty, is_new}, time: {frame, fps, range}, env: {HIP, JOB, HIPNAME}, scene_generation, host_version}`, `instances: [...]`, `bridge_version`, `profile`, `read_only`, `allow_python` | Works offline (`connected: null`). Read-only. An untitled scene's `hip` carries `note: "$HIP is the launch directory until you hip_save."` |
+| `houdini_connect` | `pid?`, `launch?: {mode: gui\|headless, hip?, wait_s=90}`, `disconnect?: bool` | the new `connected` block | Launch uses `hfs` config or auto-detect. Headless launches `hython -m hocuspocus.host`. Both modes start in `HOCUSPOCUS_WORK_DIR` (default home, §3.7). |
 
 ### 4.3 Hip file
 

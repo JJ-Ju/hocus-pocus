@@ -108,10 +108,16 @@ def env_block() -> dict[str, Any]:
     return {name: hou.getenv(name) for name in ("HIP", "JOB", "HIPNAME")}
 
 
+UNTITLED_NOTE = "$HIP is the launch directory until you hip_save."
+
+
 def session_info(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     import hou
 
     config = ctx.config
+    hip = hip_block(ctx)
+    if hip.get("is_new"):
+        hip["note"] = UNTITLED_NOTE
     return {
         "pid": ctx.pid or os.getpid(),
         "port": ctx.port,
@@ -119,7 +125,7 @@ def session_info(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
         "ui": ctx.ui,
         "label": ctx.label,
         "started": ctx.started,
-        "hip": hip_block(ctx),
+        "hip": hip,
         "time": time_block(),
         "env": env_block(),
         "scene_generation": ctx.scene.generation,
