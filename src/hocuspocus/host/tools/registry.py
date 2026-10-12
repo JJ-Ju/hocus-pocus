@@ -23,7 +23,23 @@ ToolFn = Callable[[dict[str, Any], "HostContext"], Any]
 INTERNAL_TOOLS = frozenset({"session_info"})
 """Host-only names the bridge calls that are not in the agent-facing catalogue."""
 
-TOOL_MODULES = ("session", "hip", "code", "state", "parms", "nodes", "network", "cook", "types")
+TOOL_MODULES = (
+    "session",
+    "hip",
+    "code",
+    "state",
+    "parms",
+    "nodes",
+    "network",
+    "cook",
+    "types",
+    "geo",
+    "visual",
+    "hda",
+    "usd",
+    "pdg",
+    "events",
+)
 """Modules under ``hocuspocus.host.tools`` imported by :func:`load_all`."""
 
 
