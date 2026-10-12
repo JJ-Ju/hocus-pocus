@@ -1102,3 +1102,63 @@ def test_parm_not_found_on_a_null_points_at_spare_parms(client):
     assert error["code"] == "parm_not_found" and "spare_parms" in error["hint"]
     error = client.error("parm_get", {"paths": ["/obj/geo1/glue"]})
     assert "spare_parms" in error["hint"]
+
+
+# -- node_create block pairing (review 11 B12) -------------------------------------
+
+
+def test_create_pairs_block_end_with_its_begin(client):
+    geo = hou.node("/obj").createNode("geo", "geo1")
+    parent = geo.path()
+    result = client.ok(
+        "node_create",
+        {
+            "items": [
+                {"parent": parent, "type": "box", "name": "src"},
+                {
+                    "parent": parent,
+                    "type": "block_begin",
+                    "name": "loop_begin",
+                    "parms": {"method": "input"},
+                    "inputs": [{"index": 0, "from": "src"}],
+                },
+                {
+                    "parent": parent,
+                    "type": "xform",
+                    "name": "shift",
+                    "parms": {"tx": 1},
+                    "inputs": [{"index": 0, "from": "loop_begin"}],
+                },
+                {
+                    "parent": parent,
+                    "type": "block_end",
+                    "name": "loop_end",
+                    "parms": {"itermethod": "count", "iterations": 4, "method": "merge"},
+                    "inputs": [{"index": 0, "from": "shift"}],
+                    "flags": {"display": True},
+                },
+            ]
+        },
+    )
+    end_row = result["results"][3]
+    assert end_row["paired_with"] == f"{parent}/loop_begin"
+    assert not end_row.get("errors"), end_row
+    end = geo.node("loop_end")
+    assert end.parm("blockpath").eval() == "../loop_begin"
+    assert end.parm("templatepath").eval() == "../loop_begin"
+    assert geo.node("loop_begin").parm("blockpath").eval() == "../loop_end"
+    assert len(end.geometry().prims()) == 24  # 4 iterations of a 6-face box, merged
+    assert "paired_with" not in result["results"][0]
+
+
+def test_create_pairs_with_the_only_unpaired_begin(client):
+    geo = hou.node("/obj").createNode("geo", "geo1")
+    begin = geo.createNode("block_begin", "b")
+    result = client.ok("node_create", {"items": [{"parent": geo.path(), "type": "block_end"}]})
+    assert result["results"][0]["paired_with"] == begin.path()
+    explicit = client.ok(
+        "node_create",
+        {"items": [{"parent": geo.path(), "type": "block_end", "parms": {"blockpath": "../x"}}]},
+    )
+    assert "paired_with" not in explicit["results"][0]
+    assert hou.node(explicit["created"][0]).parm("blockpath").eval() == "../x"

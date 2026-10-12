@@ -567,9 +567,10 @@ _NODES: tuple[ToolSpec, ...] = (
             "Create nodes in one undo step. Item: parent, type (resolved like createNode so box "
             "gets the current version; exact_type disables), optional name, parms (value or "
             "{expression, language}; {expr, lang} also works), inputs (index or name, from, "
-            "output), flags, position. Items may wire to nodes created earlier in the call. layout "
-            "default good_position. Returns path, type and problems per node; return full gives "
-            "node_info blocks with only the parms the call set. Use network_build for whole graphs."
+            "output), flags, position. Items may wire to earlier items; a block_end pairs with its "
+            "block_begin (paired_with). layout default good_position. Returns path, type and "
+            "problems per node; return full gives node_info blocks with only the parms the call "
+            "set. Use network_build for whole graphs."
         ),
         input_schema=_obj(
             {

@@ -1139,9 +1139,11 @@ def _create_one(
     ctx: HostContext,
     rollback: Rollback,
     created: dict[int, dict[str, tuple[Any, ...]]],
+    pairs: dict[int, str],
 ) -> Any:
     """Create one ``node_create`` item; ``created`` maps the new node's session id to its
-    parm state right after ``createNode`` (see :func:`parm_state`)."""
+    parm state right after ``createNode`` (see :func:`parm_state`), ``pairs`` to the
+    ``block_begin`` a new ``block_end`` was paired with (see :func:`pair_block_end`)."""
     import hou
 
     if not isinstance(item, dict):
@@ -1204,6 +1206,9 @@ def _create_one(
         output = check_output_index(src, link.get("output", 0))
         connect(node, dest_index, src, output, None)
     set_flags(node, item.get("flags"))
+    begin = pair_block_end(node, rollback)
+    if begin is not None:
+        pairs[node.sessionId()] = begin.path()
     position = item.get("position")
     if position is not None:
         node.setPosition(arg_xy(position, f"items[{index}].position"))
@@ -1211,6 +1216,74 @@ def _create_one(
         with contextlib.suppress(Exception):
             node.moveToGoodPosition(move_inputs=False, move_outputs=False, move_unconnected=False)
     return node
+
+
+BLOCK_BEGIN, BLOCK_END = "block_begin", "block_end"
+
+
+def _core_type(node: Any) -> str:
+    try:
+        return node.type().nameComponents()[2]
+    except Exception:
+        return ""
+
+
+def _parm_text(node: Any, name: str) -> str:
+    parm = node.parm(name)
+    if parm is None:
+        return ""
+    try:
+        return parm.unexpandedString().strip()
+    except Exception:
+        return ""
+
+
+def _block_partner(node: Any, parm: str = "blockpath") -> Any:
+    text = _parm_text(node, parm)
+    return node.node(text) if text else None
+
+
+def pair_block_end(node: Any, rollback: Rollback) -> Any:
+    """Pair a new ``block_end`` whose ``blockpath`` is unset with its ``block_begin``, as
+    the Tab menu does (review 11 B12): the nearest begin upstream through the inputs, else
+    the only unpaired begin in the same network. Sets the end's ``blockpath`` and
+    ``templatepath`` and the begin's ``blockpath`` (where unset) to relative paths.
+    Returns the begin, or None when there is nothing unambiguous to pair with."""
+    if _core_type(node) != BLOCK_END or node.parm("blockpath") is None:
+        return None
+    if _parm_text(node, "blockpath"):
+        return None  # the caller chose
+    begin = None
+    seen: set[int] = set()
+    queue = [n for n in node.inputs() if n is not None]
+    while queue and begin is None:
+        current = queue.pop(0)
+        if current.sessionId() in seen:
+            continue
+        seen.add(current.sessionId())
+        partner = _block_partner(current)
+        if _core_type(current) == BLOCK_BEGIN and (partner is None or partner == node):
+            begin = current
+            break
+        queue.extend(n for n in current.inputs() if n is not None)
+    if begin is None:
+        loose = [
+            child
+            for child in node.parent().children()
+            if _core_type(child) == BLOCK_BEGIN and _block_partner(child) is None
+        ]
+        if len(loose) != 1:
+            return None
+        begin = loose[0]
+    node.parm("blockpath").set(node.relativePathTo(begin))
+    template = node.parm("templatepath")
+    if template is not None and not _parm_text(node, "templatepath"):
+        template.set(node.relativePathTo(begin))
+    back = begin.parm("blockpath")
+    if back is not None and not _parm_text(begin, "blockpath"):
+        back.set(begin.relativePathTo(node))
+        rollback.add(lambda: back.set(""))
+    return begin
 
 
 def _create_item_path(item: dict[str, Any]) -> Any:
@@ -1231,11 +1304,12 @@ def node_create(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     mode = return_mode(args)
     rollback = Rollback()
     baselines: dict[int, dict[str, tuple[Any, ...]]] = {}
+    pairs: dict[int, str] = {}
     done, failures = run_batch(
         items,
         partial,
         rollback,
-        lambda item, index: _create_one(item, index, args, ctx, rollback, baselines),
+        lambda item, index: _create_one(item, index, args, ctx, rollback, baselines, pairs),
         _create_item_path,
     )
     created = list(done.items())  # item order
@@ -1250,6 +1324,9 @@ def node_create(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
             )
             block["parms"] = [row for row in block["parms"] if row["name"] in keep]
             blocks[index] = elide_long_values(block)
+    for index, node in created:
+        if node.sessionId() in pairs:
+            blocks[index]["paired_with"] = pairs[node.sessionId()]
     results = [blocks.get(i) or {"error": failures[i]} for i in range(len(items))]
     if mode == "summary":
         collapse_problems(results)
