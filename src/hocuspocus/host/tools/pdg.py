@@ -23,8 +23,8 @@ from typing import Any
 from hocuspocus.tools.errors import ToolError
 
 from ..dispatch import call_timeout
+from ._common import bad_arg, get_node, page, refuse_if_read_only
 from ._diag import a_or_an
-from .nodes import bad_arg, get_node, page
 from .registry import HostContext, tool
 
 ACTIONS = ("cook", "status", "workitems", "cancel", "dirty")
@@ -244,7 +244,7 @@ def _start_cook_job(
                         + status["failed"]
                         + status["states"].get("cooked_cancel", 0)
                     )
-                    job.progress(done / total, f"{done}/{total} work items finished")
+                    job.set_progress(done, total, f"{done}/{total} work items finished")
                 idle = not snapshot["cooking"]
                 if idle and (seen or time.monotonic() - began > START_GRACE_S):
                     return {"path": target, "ok": status["failed"] == 0, "status": status}
@@ -283,23 +283,12 @@ def pdg_tool(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     block = args.get("block", False)
     if not isinstance(block, bool):
         raise bad_arg("'block' must be a boolean.")
-    timeout_s = float(ctx.config.default_timeout_s)
-    raw_timeout = args.get("timeout_s")
-    if (
-        isinstance(raw_timeout, int | float)
-        and not isinstance(raw_timeout, bool)
-        and raw_timeout > 0
-    ):
-        timeout_s = float(raw_timeout)
-    else:
-        # The request-level timeout (the dispatcher's effective timeout).
-        timeout_s = float(call_timeout(timeout_s) or timeout_s)
-    if action in ("cook", "dirty", "cancel") and ctx.config.read_only:
-        raise ToolError(
-            "read_only",
-            f"pdg {action} changes work items, and the host is in read-only mode.",
-            hint="Use action status or workitems, or set read_only = false and restart the host.",
-        )
+    # The dispatcher's effective timeout: args.timeout_s, else the request's, else the
+    # config default (Dispatcher.effective_timeout).
+    default_s = float(ctx.config.default_timeout_s)
+    timeout_s = float(call_timeout(default_s) or default_s)
+    if action in ("cook", "dirty", "cancel"):
+        refuse_if_read_only(ctx, f"pdg {action}")
 
     def run(fn: Any) -> Any:
         if ctx.executor.on_main_thread():
@@ -332,5 +321,7 @@ def pdg_tool(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
         target = _cook_now(path, True)
         status = status_block(resolve_top(target))
         return {"path": target, "ok": status["failed"] == 0, "status": status}
+    # Like cook and render: a blocking call waits at most job_threshold_s, then hands back
+    # the job (BIBLE §7); block: false returns the job at once.
     wait_s = min(timeout_s, float(ctx.config.job_threshold_s)) if block else 0.0
     return _start_cook_job(ctx, path, timeout_s, wait_s)
