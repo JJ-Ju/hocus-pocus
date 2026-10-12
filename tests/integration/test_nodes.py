@@ -588,6 +588,51 @@ def test_edit_lock_unlock_hda(client):
     assert error["code"] == "invalid_argument" and error["hint"]
 
 
+def test_edit_validates_everything_before_locking(client):
+    _geo, mountain = make_locked_mountain()
+    mountain.allowEditingOfContents()
+    mountain.createNode("null", "my_edit")  # unsaved work inside the unlocked asset
+    for bad in (
+        {"name": "bad name!"},
+        {"color": [1, 0]},
+        {"flags": {"bogus": True}},
+        {"comment": 3},
+        {"position": [1]},
+    ):
+        error = client.error(
+            "node_edit", {"items": [{"path": mountain.path(), "lock": True, **bad}]}
+        )
+        assert error["code"] == "invalid_argument", (bad, error)
+        assert not mountain.isLockedHDA(), bad
+        assert mountain.node("my_edit") is not None, bad
+    result = client.ok(
+        "node_edit",
+        {
+            "items": [
+                {"path": mountain.path(), "lock": True, "name": "bad name!"},
+                {"path": mountain.path(), "comment": "kept"},
+            ],
+            "partial": True,
+        },
+    )
+    assert result["failed"] == 1 and result["results"][0]["error"]["code"] == "invalid_argument"
+    assert mountain.node("my_edit") is not None and mountain.comment() == "kept"
+    renamed = client.ok(
+        "node_edit", {"items": [{"path": mountain.path(), "lock": True, "name": "peaks"}]}
+    )
+    block = renamed["results"][0]
+    assert block["path"].endswith("/peaks") and block["hda"]["locked"] is True
+
+
+def test_operation_failed_maps_to_a_stable_code(client):
+    from hocuspocus.host.tools import nodes
+
+    error = nodes.to_tool_error(hou.OperationFailed("The attempted operation failed."))
+    assert error.code == "invalid_argument" and error.hou_exception and error.hint
+    renamed = nodes.to_tool_error(hou.OperationFailed("x"), op="rename")
+    assert renamed.code == "name_collision" and renamed.hou_exception
+
+
 # -- node_copy ---------------------------------------------------------------------
 
 

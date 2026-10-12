@@ -379,7 +379,8 @@ def node_flags(node: Any) -> dict[str, bool]:
     return flags
 
 
-def set_flags(node: Any, flags: Any) -> None:
+def check_flags(node: Any, flags: Any) -> None:
+    """Raise ``invalid_argument`` unless every flag in ``flags`` can be set on ``node``."""
     if flags is None:
         return
     if not isinstance(flags, dict):
@@ -392,14 +393,18 @@ def set_flags(node: Any, flags: Any) -> None:
             )
         if not isinstance(value, bool):
             raise bad_arg(f"Flag {name!r} must be a boolean.")
-        setter = getattr(node, _FLAG_SETTERS[name], None)
-        if not callable(setter):
+        if not callable(getattr(node, _FLAG_SETTERS[name], None)):
             have = ", ".join(sorted(node_flags(node))) or "none"
             raise bad_arg(
                 f"{node.path()} ({node.type().category().name()}) has no {name} flag.",
                 hint=f"Flags on this node: {have}.",
             )
-        setter(value)
+
+
+def set_flags(node: Any, flags: Any) -> None:
+    check_flags(node, flags)
+    for name, value in (flags or {}).items():
+        getattr(node, _FLAG_SETTERS[name])(value)
 
 
 def type_block(node_type: Any) -> dict[str, Any]:
@@ -652,8 +657,13 @@ def item_error(index: int, exc: BaseException) -> dict[str, Any]:
     return payload
 
 
-def to_tool_error(exc: BaseException, *, node: Any = None) -> ToolError:
-    """Map an exception from a node operation to a ToolError (``internal`` if unknown)."""
+def to_tool_error(exc: BaseException, *, node: Any = None, op: str | None = None) -> ToolError:
+    """Map an exception from a node operation to a ToolError (``internal`` if unknown).
+
+    ``hou.OperationFailed`` (``destroy``, ``setName``, ``matchCurrentDefinition``,
+    ``copyItems``...) is Houdini refusing a valid-looking request: ``name_collision`` for
+    ``op="rename"``, else ``invalid_argument``, with ``hou_exception`` set.
+    """
     if isinstance(exc, ToolError):
         return exc
     import hou
@@ -676,6 +686,22 @@ def to_tool_error(exc: BaseException, *, node: Any = None) -> ToolError:
             "invalid_input",
             hou_message(exc),
             hint="Check input indices with node_info include inputs.",
+            hou_exception=text,
+        )
+    if isinstance(exc, hou.OperationFailed):
+        where = f" on {node.path()}" if node is not None else ""
+        if op == "rename":
+            return ToolError(
+                "name_collision",
+                f"Houdini refused the new name{where}: {hou_message(exc)}",
+                hint="The name may be taken by a node, network box or sticky note; pick another.",
+                hou_exception=text,
+            )
+        return ToolError(
+            "invalid_argument",
+            f"Houdini refused the operation{where}: {hou_message(exc)}",
+            hint="Check the node's state (locked asset, type, name) with node_info and retry "
+            "with different arguments.",
             hou_exception=text,
         )
     from ..dispatch import tool_error_from_exception
@@ -1174,7 +1200,10 @@ def node_delete(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
                 if dest is not None:
                     with contextlib.suppress(Exception):
                         dest.setInput(conn.inputIndex(), None)
-        node.destroy()
+        try:
+            node.destroy()
+        except Exception as exc:
+            raise to_tool_error(exc, node=node) from exc
         deleted.append(path)
         touched.pop(path, None)
     result: dict[str, Any] = {"deleted": deleted}
@@ -1185,11 +1214,29 @@ def node_delete(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     return result
 
 
+def _check_color(color: Any) -> tuple[float, float, float]:
+    if (
+        not isinstance(color, list)
+        or len(color) != 3
+        or not all(isinstance(c, int | float) and not isinstance(c, bool) for c in color)
+    ):
+        raise bad_arg("'color' must be [r, g, b] with 0-1 floats.")
+    return float(color[0]), float(color[1]), float(color[2])
+
+
 def _edit_one(item: Any, index: int, rollback: Rollback) -> dict[str, Any]:
+    """Validate every field of one ``node_edit`` item, then apply it with ``lock`` last.
+
+    ``lock: true`` runs ``matchCurrentDefinition()``, which discards edits made inside the
+    asset; compensation cannot bring them back, so nothing may fail after it.
+    """
+    import hou
+
     if not isinstance(item, dict):
         raise bad_arg(f"items[{index}] must be an object.")
     node = get_node(item.get("path"))
     old_path = node.path()
+    # -- validate ------------------------------------------------------------------
     lock = item.get("lock")
     if lock is not None:
         if not isinstance(lock, bool):
@@ -1200,13 +1247,6 @@ def _edit_one(item: Any, index: int, rollback: Rollback) -> dict[str, Any]:
                 hint="Use flags.bypass or the hard-lock flag for ordinary nodes.",
             )
         ensure_editable(node, "lock or unlock")
-        was_locked = _is_locked_hda(node)
-        if lock and not was_locked:
-            node.matchCurrentDefinition()
-            rollback.add(lambda: node.allowEditingOfContents())
-        elif not lock and was_locked:
-            node.allowEditingOfContents()
-            rollback.add(lambda: node.matchCurrentDefinition())
     else:
         ensure_editable(node, "edit")
     name = item.get("name")
@@ -1221,12 +1261,27 @@ def _edit_one(item: Any, index: int, rollback: Rollback) -> dict[str, Any]:
                 hint=f"Pick another name, e.g. {free!r}.",
                 candidates=[free],
             )
-        old_name = node.name()
-        node.setName(name)
-        rollback.add(lambda: node.setName(old_name))
+    else:
+        name = None
     flags = dict(item.get("flags") or {})
     if item.get("bypass") is not None:
         flags["bypass"] = item["bypass"]
+    check_flags(node, flags)
+    color = item.get("color")
+    rgb = _check_color(color) if color is not None else None
+    comment = item.get("comment")
+    if comment is not None and not isinstance(comment, str):
+        raise bad_arg("'comment' must be a string.")
+    position = item.get("position")
+    xy = arg_xy(position, "position") if position is not None else None
+    # -- apply ---------------------------------------------------------------------
+    try:
+        if name is not None:
+            old_name = node.name()
+            node.setName(name)
+            rollback.add(lambda: node.setName(old_name))
+    except hou.OperationFailed as exc:
+        raise to_tool_error(exc, node=node, op="rename") from exc
     if flags:
         before = node_flags(node)
         rollback.keep_display(node.parent())
@@ -1239,35 +1294,28 @@ def _edit_one(item: Any, index: int, rollback: Rollback) -> dict[str, Any]:
 
         rollback.add(restore_flags)
         set_flags(node, flags)
-    color = item.get("color")
-    if color is not None:
-        import hou
-
-        if (
-            not isinstance(color, list)
-            or len(color) != 3
-            or not all(isinstance(c, int | float) and not isinstance(c, bool) for c in color)
-        ):
-            raise bad_arg("'color' must be [r, g, b] with 0-1 floats.")
+    if rgb is not None:
         old_color = node.color()
-        node.setColor(hou.Color(tuple(float(c) for c in color)))
+        node.setColor(hou.Color(rgb))
         rollback.add(lambda: node.setColor(old_color))
-    comment = item.get("comment")
     if comment is not None:
-        if not isinstance(comment, str):
-            raise bad_arg("'comment' must be a string.")
         old_comment = node.comment()
         node.setComment(comment)
         rollback.add(lambda: node.setComment(old_comment))
         with contextlib.suppress(Exception):
-            import hou
-
             node.setGenericFlag(hou.nodeFlag.DisplayComment, bool(comment))
-    position = item.get("position")
-    if position is not None:
+    if xy is not None:
         old_pos = node.position()
-        node.setPosition(arg_xy(position, "position"))
+        node.setPosition(xy)
         rollback.add(lambda: node.setPosition(old_pos))
+    if lock is not None:
+        was_locked = _is_locked_hda(node)
+        if lock and not was_locked:
+            node.matchCurrentDefinition()
+            rollback.add(lambda: node.allowEditingOfContents())
+        elif not lock and was_locked:
+            node.allowEditingOfContents()
+            rollback.add(lambda: node.matchCurrentDefinition())
     extra: dict[str, Any] = {}
     if node.path() != old_path:
         extra["old_path"] = old_path
@@ -1362,7 +1410,10 @@ def node_copy(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
         rollback.destroy_later(copy)
     try:
         for copy, name in zip(copies, names, strict=False):
-            copy.setName(name)
+            try:
+                copy.setName(name)
+            except hou.OperationFailed as exc:
+                raise to_tool_error(exc, node=copy, op="rename") from exc
         for copy in copies:
             if not with_inputs:
                 for conn in copy.inputConnections():
