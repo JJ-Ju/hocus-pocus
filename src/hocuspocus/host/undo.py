@@ -63,10 +63,34 @@ def make_label(tool: str, args: Mapping[str, Any]) -> str:
 
 @contextlib.contextmanager
 def hou_undo_group(label: str) -> Iterator[None]:
+    """One named undo group; if the body raises, the group's partial work is undone.
+
+    ``hou.undos.group`` records whatever ran before an exception, and Houdini refuses
+    ``performUndo()`` inside an open group, so the rollback happens after the group
+    closes. It undoes only when the newest undo entry is this group's (an empty group
+    records nothing, and an identical label from an earlier call leaves the stack
+    unchanged), so it never reverts someone else's work. BIBLE §4.1: a failing call
+    rolls back.
+    """
     import hou
 
-    with hou.undos.group(label):
-        yield
+    before = _undo_labels(hou)
+    try:
+        with hou.undos.group(label):
+            yield
+    except BaseException:
+        after = _undo_labels(hou)
+        if after and after[0] == label and after != before:
+            with contextlib.suppress(Exception):  # never mask the original error
+                hou.undos.performUndo()
+        raise
+
+
+def _undo_labels(hou: Any) -> tuple[str, ...]:
+    try:
+        return tuple(hou.undos.undoLabels())
+    except Exception:  # pragma: no cover - undo disabled or unavailable
+        return ()
 
 
 UndoGroupFactory = Callable[[str], contextlib.AbstractContextManager[Any]]
