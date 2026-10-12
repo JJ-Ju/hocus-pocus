@@ -345,17 +345,17 @@ _HIP: tuple[ToolSpec, ...] = (
             "hip_save with path); discard drops the changes. Bumps scene_generation."
         ),
         input_schema=_obj({"on_unsaved": _on_unsaved()}),
-        # bible-silent: result shape. Report the new scene and where unsaved work went.
+        # bible-silent: result shape. Report the new scene and whether unsaved work was saved.
         output_schema=_out(
             {
                 "path": _t("string"),
-                "saved": {
-                    "type": ["string", "null"],
-                    "description": "Path saved when on_unsaved=save.",
-                },
+                "name": _t("string"),
+                "dirty": _t("boolean"),
+                "is_new": _t("boolean"),
+                "saved_first": _t("boolean"),
                 "scene_generation": _t("integer"),
             },
-            ("path", "scene_generation"),
+            ("path", "saved_first", "scene_generation"),
         ),
         destructive=True,
         examples=({}, {"on_unsaved": "save"}),
@@ -410,7 +410,8 @@ _HIP: tuple[ToolSpec, ...] = (
         name="hip_merge",
         description=(
             "Merge nodes from another hip file into the current scene. node_pattern (default *) "
-            "selects nodes; dry_run only reports collisions. Colliding nodes are renamed unless "
+            "selects nodes; dry_run only reports collisions (no undo step, allowed read-only). "
+            "Colliding nodes are renamed unless "
             "overwrite_on_conflict. Use hip_open to replace the scene instead."
         ),
         input_schema=_obj(

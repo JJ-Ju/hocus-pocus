@@ -41,9 +41,21 @@ def resolve_path(raw: Any, *, field: str = "path") -> str:
     return _norm(os.path.expanduser(expanded))
 
 
+def _real(path: str) -> str:
+    return os.path.normcase(os.path.realpath(os.path.abspath(path)))
+
+
+def expand_root(root: str) -> str:
+    """An ``approved_roots`` entry with ``$VAR``/``${VAR}`` and ``~`` expanded. An unknown
+    variable stays literal, so the root then matches nothing rather than widening."""
+    return os.path.expanduser(os.path.expandvars(root))
+
+
 def is_under(path: str, root: str) -> bool:
-    path_n = os.path.normcase(os.path.abspath(path))
-    root_n = os.path.normcase(os.path.abspath(root))
+    """``path`` is ``root`` or inside it, comparing real paths (links resolved) on both
+    sides, so a link inside a root cannot point out of it."""
+    path_n = _real(path)
+    root_n = _real(expand_root(root))
     try:
         return os.path.commonpath([path_n, root_n]) == root_n
     except ValueError:  # different drives on Windows
@@ -56,12 +68,28 @@ def check_allowed(path: str, ctx: HostContext) -> None:
         return
     if any(is_under(path, root) for root in roots):
         return
+    shown = [_norm(expand_root(r)) for r in roots]
     raise ToolError(
         "path_not_allowed",
         f"{path} is outside the approved roots.",
-        hint="Allowed roots: " + ", ".join(_norm(r) for r in roots),
-        detail={"approved_roots": [_norm(r) for r in roots]},
+        hint="Allowed roots: " + ", ".join(shown),
+        detail={"approved_roots": shown},
     )
+
+
+def _backup_dir() -> str:
+    """Where ``hou.hipFile.saveAndBackup`` writes: ``$HOUDINI_BACKUP_DIR`` (relative to
+    the hip's directory when relative), else ``backup`` next to the hip file."""
+    import hou
+
+    hip_dir = os.path.dirname(hou.hipFile.path())
+    raw = hou.getenv("HOUDINI_BACKUP_DIR") or ""
+    target = hou.text.expandString(raw) if raw else ""
+    if not target:
+        target = "backup"
+    if not os.path.isabs(target):
+        target = os.path.join(hip_dir, target)
+    return _norm(target)
 
 
 def require_file(path: str) -> None:
@@ -243,9 +271,11 @@ def hip_save(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
             )
         check_allowed(_norm(hou.hipFile.path()), ctx)
         if increment:
+            # The incremented file goes next to the current one, checked above.
             hou.hipFile.saveAndIncrementFileName()
-            check_allowed(_norm(hou.hipFile.path()), ctx)
         elif backup:
+            # Check the backup directory before anything is written.
+            check_allowed(_backup_dir() + "/" + os.path.basename(hou.hipFile.path()), ctx)
             made = hou.hipFile.saveAndBackup()
             backup_path = _norm(made) if made else None
         else:
@@ -275,11 +305,14 @@ def hip_merge(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     require_file(path)
     collisions = [node.path() for node in hou.hipFile.collisionNodesIfMerged(path, pattern)]
     if dry_run:
+        # _changed: false tells the dispatcher this call changed nothing: no undo label,
+        # no dirty flag, and it is allowed in read-only mode.
         return {
             "path": path,
             "dry_run": True,
             "collisions": collisions,
             "scene_generation": ctx.scene.generation,
+            "_changed": False,
         }
     before = {node.path() for node in hou.node("/").allSubChildren(recurse_in_locked_nodes=False)}
     warnings: list[str] = []

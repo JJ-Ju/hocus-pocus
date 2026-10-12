@@ -2,7 +2,7 @@
 
 <!-- Generated from src/hocuspocus/tools/catalog.py by `python -m hocuspocus.tools.docs`. Do not edit by hand. -->
 
-35 tools: 31 in the `core` profile, 4 more in `full`. Model-visible `tools/list` text: 26,830 bytes. See `docs/BIBLE.md` §4 for the design.
+35 tools: 31 in the `core` profile, 4 more in `full`. Model-visible `tools/list` text: 26,864 bytes. See `docs/BIBLE.md` §4 for the design.
 
 ## Contents
 
@@ -115,7 +115,10 @@ Clear to a new untitled scene. on_unsaved (default fail) protects unsaved work: 
 ### Returns
 
 - `path` (string) — always present
-- `saved` (string | null) — Path saved when on_unsaved=save.
+- `name` (string)
+- `dirty` (boolean)
+- `is_new` (boolean)
+- `saved_first` (boolean) — always present
 - `scene_generation` (integer) — always present
 
 ### Examples
@@ -199,7 +202,7 @@ Save the hip file. path makes it save-as and creates directories; an untitled sc
 
 `headless ok` · profile `core`
 
-Merge nodes from another hip file into the current scene. node_pattern (default *) selects nodes; dry_run only reports collisions. Colliding nodes are renamed unless overwrite_on_conflict. Use hip_open to replace the scene instead.
+Merge nodes from another hip file into the current scene. node_pattern (default *) selects nodes; dry_run only reports collisions (no undo step, allowed read-only). Colliding nodes are renamed unless overwrite_on_conflict. Use hip_open to replace the scene instead.
 
 ### Arguments
 

@@ -292,7 +292,7 @@ process.
 autostart = true            # GUI sessions start the host on uiready
 allow_python = true         # houdini_python / hscript escape hatch
 read_only = false           # refuse all mutating tools
-approved_roots = []         # if non-empty, file paths for hip/hda/render must be under these
+approved_roots = []         # if non-empty, file paths for hip/hda/render must be under these ($VAR, ~ expanded; links resolved)
 max_response_bytes = 16384
 default_timeout_s = 30
 job_threshold_s = 10        # cook/render longer than this become jobs
