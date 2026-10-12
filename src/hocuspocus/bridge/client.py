@@ -185,6 +185,14 @@ class HostClient:
         self._check_status(status, data)
         return _parse_envelope(data)
 
+    def call_jobs(self, request_id: str, timeout_s: float = 5.0) -> list[dict[str, Any]]:
+        """``GET /hp/v1/calls/{request_id}/jobs``: snapshots of the jobs a call started."""
+        status, data = self._request("GET", f"/calls/{request_id}/jobs", read_timeout_s=timeout_s)
+        self._check_status(status, data)
+        ok, result, _meta = _parse_envelope(data)
+        jobs = result.get("jobs") if ok else None
+        return [j for j in jobs if isinstance(j, dict)] if isinstance(jobs, list) else []
+
     def shutdown(self, timeout_s: float = 5.0) -> None:
         status, data = self._request("POST", "/shutdown", {}, read_timeout_s=timeout_s)
         self._check_status(status, data)

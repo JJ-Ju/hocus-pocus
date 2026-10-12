@@ -667,3 +667,107 @@ def test_prompt_requires_arguments():
     with pytest.raises(MCPError):
         get_prompt("debug_red_node", {})
     assert "/obj" in get_prompt("inspect_scene", None).messages[0].content.text
+
+
+# -- progress notifications (BIBLE §7) ----------------------------------------------------
+
+
+class ProgressClient(FakeClient):
+    """A host whose call blocks while its job advances; call_jobs reports the job."""
+
+    def __init__(self, steps):
+        super().__init__()
+        self.steps = list(steps)
+        self.polls = 0
+        self.request_ids = []
+        self.job_ids = []
+
+    def call(self, tool, args, timeout_s, request_id=None, max_response_bytes=None):
+        import time
+
+        self.request_ids.append(request_id)
+        deadline = time.monotonic() + 5
+        while self.polls < len(self.steps) + 1 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        return True, {"job_id": "j1", "state": "running"}, {}
+
+    def _next(self):
+        snapshot = self.steps[min(self.polls, len(self.steps) - 1)]
+        self.polls += 1
+        return snapshot
+
+    def call_jobs(self, request_id, timeout_s=5.0):
+        assert request_id == self.request_ids[-1]
+        return [self._next()]
+
+    def job(self, job_id, timeout_s=10.0):
+        self.job_ids.append(job_id)
+        return True, self._next(), {}
+
+
+def _progress_run(bridge, tool, args):
+    seen = []
+
+    async def on_progress(progress, total, message):
+        seen.append((progress, total, message))
+
+    async def run():
+        async with Client(build_server(bridge)) as client:
+            return await client.call_tool(tool, args, progress_callback=on_progress)
+
+    return anyio.run(run), seen
+
+
+def test_progress_notifications_follow_the_call_job():
+    steps = [
+        {"state": "running"},  # nothing reported yet
+        {"state": "running", "current": 1, "total": 4, "progress": 0.25, "message": "frame 1/4"},
+        {"state": "running", "current": 1, "total": 4, "progress": 0.25, "message": "frame 1/4"},
+        {"state": "running", "current": 3, "total": 4, "progress": 0.75, "message": "frame 3/4"},
+    ]
+    bridge, _client, _live = make_bridge()
+    client = ProgressClient(steps)
+    bridge.client_factory = lambda port, token: client
+    bridge.progress_interval_s = 0.02
+    result, seen = _progress_run(bridge, "geo_info", {"path": "/obj/geo1"})
+    assert result.is_error is False
+    # Repeated snapshots are not re-sent: progress only ever increases.
+    assert seen == [(1.0, 4.0, "frame 1/4"), (3.0, 4.0, "frame 3/4")]
+    assert client.request_ids[0]  # the bridge names the call so the host can file its job
+
+
+def test_progress_for_the_job_tool_polls_its_job_id():
+    steps = [{"state": "running", "progress": 0.5}, {"state": "running", "progress": 0.9}]
+    tools = (
+        *FAKE_TOOLS,
+        ToolSpec("job", "Job.", dict(OBJ, properties={"job_id": {"type": "string"}})),
+    )
+    bridge, _client, _live = make_bridge(tools=tools)
+    client = ProgressClient(steps)
+    bridge.client_factory = lambda port, token: client
+    bridge.progress_interval_s = 0.02
+    _result, seen = _progress_run(bridge, "job", {"job_id": "abc"})
+    assert set(client.job_ids) == {"abc"}
+    assert seen == [(0.5, 1.0, None), (0.9, 1.0, None)]
+
+
+def test_no_progress_token_means_no_polling():
+    bridge, client, _live = make_bridge()
+    bridge.progress_interval_s = 0.0
+
+    async def run():
+        async with Client(build_server(bridge)) as mcp_client:
+            return await mcp_client.call_tool("node_info", {"paths": ["/obj"]})
+
+    assert anyio.run(run).is_error is False  # FakeClient has no call_jobs: never asked
+
+
+def test_progress_tracker_only_increases():
+    from hocuspocus.bridge.server import ProgressTracker
+
+    tracker = ProgressTracker()
+    assert tracker.update(None) is None
+    assert tracker.update({"message": "starting"}) is None
+    assert tracker.update({"progress": 0.0}) == (0.0, 1.0, None)
+    assert tracker.update({"progress": 0.0, "message": "x"}) is None
+    assert tracker.update({"current": 0, "total": 0, "progress": 0.5}) == (0.5, 1.0, None)

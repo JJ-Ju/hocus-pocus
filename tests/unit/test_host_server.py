@@ -15,7 +15,7 @@ import pytest
 from hocuspocus.host.config import HostConfig
 from hocuspocus.host.dispatch import Dispatcher, error_envelope, ok_envelope
 from hocuspocus.host.executor import MainThreadExecutor
-from hocuspocus.host.jobs import JobManager
+from hocuspocus.host.runtime import CallJobManager
 from hocuspocus.host.server import (
     HostApp,
     HostHTTPServer,
@@ -63,6 +63,11 @@ def _tools():
     def liar(args, ctx):
         return {"did": True}
 
+    def starts_job(args, ctx):
+        job = ctx.jobs.start("starts_job", lambda job_ctx: job_ctx.set_progress(1, 4, "a"))
+        job.done_event.wait(5)
+        return {"job_id": job.id}
+
     tools = {
         "echo_ro": HostTool("echo_ro", echo, read_only=True),
         "mutate": HostTool("mutate", mutate, read_only=False),
@@ -71,6 +76,9 @@ def _tools():
         "maybe": HostTool("maybe", maybe, read_only=False),
         "liar": HostTool("liar", liar, read_only=False),
         "hostonly": HostTool("hostonly", echo, read_only=False, main_thread=False, scene=False),
+        "starts_job": HostTool(
+            "starts_job", starts_job, read_only=True, main_thread=False, scene=False
+        ),
     }
     return tools
 
@@ -90,7 +98,7 @@ def stack():
         executor=InlineExecutor(),
         logger=logging.getLogger("test"),
         scene=SceneState(generation=7),
-        jobs=JobManager(InlineExecutor()),
+        jobs=CallJobManager(InlineExecutor()),
         undo=UndoHistory(),
     )
     tools = _tools()
@@ -109,6 +117,7 @@ def stack():
         },
         job=ctx.jobs.result,
         shutdown=lambda: shutdowns.append(1),
+        call_jobs=ctx.jobs.for_call,
     )
     server = HostHTTPServer(app, port=0)
     thread = serve_in_thread(server, poll_interval=0.01)
@@ -415,3 +424,29 @@ def test_origin_and_bearer_helpers():
     assert not bearer_ok("Bearer abd", "abc")
     assert not bearer_ok(None, "abc")
     assert not bearer_ok("Bearer ", "")
+
+
+# -- progress: the jobs a call started (BIBLE §7) ------------------------------------------
+
+
+def test_jobs_are_filed_under_the_request_that_started_them(stack):
+    server = stack["server"]
+    body = {"tool": "starts_job", "args": {}, "request_id": "req-1"}
+    status, envelope = _request(server, "POST", "/hp/v1/call", body)
+    assert status == 200 and envelope["ok"] is True, envelope
+    job_id = envelope["result"]["job_id"]
+    status, listed = _request(server, "GET", "/hp/v1/calls/req-1/jobs")
+    assert status == 200 and listed["ok"] is True
+    (snapshot,) = listed["result"]["jobs"]
+    assert snapshot["job_id"] == job_id
+    assert snapshot["current"] == 4 and snapshot["total"] == 4  # done: counts complete
+    _status, other = _request(server, "GET", "/hp/v1/calls/req-2/jobs")
+    assert other["result"]["jobs"] == []
+    status, _ = _request(server, "GET", "/hp/v1/calls/req-1/jobs", token=None)
+    assert status == 401
+
+
+def test_a_call_without_request_id_files_nothing(stack):
+    server = stack["server"]
+    _request(server, "POST", "/hp/v1/call", {"tool": "starts_job", "args": {}})
+    assert stack["ctx"].jobs._by_call == {}

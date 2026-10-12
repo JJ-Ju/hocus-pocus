@@ -40,6 +40,9 @@ from .validate import validate
 
 EXIT_GRACE_S = 1.5
 """After a lost response, how long to watch for the Houdini process to exit."""
+PROGRESS_INTERVAL_S = 0.5
+"""How often the bridge polls the host for job progress while a call with a
+``progressToken`` is in flight (BIBLE §7)."""
 
 log = logging.getLogger(__name__)
 
@@ -122,6 +125,9 @@ class Bridge:
         self.detached = False
         self._verified: set[tuple[int, int, str]] = set()
         self._lock = threading.Lock()
+        self.progress_interval_s = PROGRESS_INTERVAL_S
+        self._inflight: dict[str, registry.Instance] = {}
+        """request_id -> the instance a call in flight was sent to (progress polling)."""
 
     # -- instances -----------------------------------------------------------------------
 
@@ -209,7 +215,7 @@ class Bridge:
             time.sleep(0.1)
 
     def forward(
-        self, name: str, args: dict[str, Any]
+        self, name: str, args: dict[str, Any], request_id: str | None = None
     ) -> tuple[bool, dict[str, Any], dict[str, Any]]:
         inst, warnings = self.resolve()
         client = self.client_for(inst)
@@ -217,12 +223,14 @@ class Bridge:
         if key not in self._verified:
             client.health()  # version check before the first call to this instance
             self._verified.add(key)
+        request_id = request_id or uuid.uuid4().hex
+        self._inflight[request_id] = inst
         try:
             ok, payload, meta = client.call(
                 name,
                 args,
                 self._timeout(args),
-                uuid.uuid4().hex,
+                request_id,
                 max_response_bytes=self.config.max_response_bytes,
             )
         except ToolError as exc:
@@ -232,11 +240,34 @@ class Bridge:
                 error.detail = {**error.detail, "transport": exc.message}
                 raise error from exc
             raise
+        finally:
+            self._inflight.pop(request_id, None)
         meta = dict(meta)
         meta.setdefault("pid", inst.pid)
         if warnings:
             meta["warnings"] = warnings
         return ok, payload, meta
+
+    def progress_snapshot(
+        self, name: str, args: dict[str, Any], request_id: str
+    ) -> dict[str, Any] | None:
+        """The job snapshot to report progress from while ``request_id`` is in flight:
+        the job named by ``args.job_id`` (the ``job`` tool), else the newest job the call
+        started on the host. ``None`` when there is none; never raises (best effort)."""
+        inst = self._inflight.get(request_id)
+        if inst is None:
+            return None
+        try:
+            client = self.client_for(inst)
+            job_id = args.get("job_id")
+            if isinstance(job_id, str) and job_id:
+                ok, snapshot, _meta = client.job(job_id, timeout_s=5.0)
+                return snapshot if ok else None
+            jobs = client.call_jobs(request_id)
+        except Exception:  # noqa: BLE001 - progress must never fail the call
+            log.debug("progress poll for %s failed", name, exc_info=True)
+            return None
+        return jobs[-1] if jobs else None
 
     def _timeout(self, args: dict[str, Any]) -> float:
         for key in ("timeout_s", "wait_s"):
@@ -265,7 +296,7 @@ class Bridge:
         return out
 
     def invoke(
-        self, name: str, args: dict[str, Any]
+        self, name: str, args: dict[str, Any], request_id: str | None = None
     ) -> tuple[bool, dict[str, Any], dict[str, Any]]:
         """Run a tool without MCP wrapping: ``(ok, result_or_error, meta)``. Never raises ToolError."""
         spec = self._by_name.get(name)
@@ -278,7 +309,7 @@ class Bridge:
                     )
                 with self._lock:
                     return True, impl(self, args), {}
-            return self.forward(name, args)
+            return self.forward(name, args, request_id)
         except ToolError as exc:
             return False, exc.to_dict(), {}
         except Exception as exc:  # noqa: BLE001 - every failure must be a tool result
@@ -294,8 +325,11 @@ class Bridge:
                 {},
             )
 
-    def call_tool(self, name: str, arguments: dict[str, Any] | None) -> types.CallToolResult:
-        """Validate, dispatch and shape one ``tools/call``. Unknown tools raise ``MCPError``."""
+    def call_tool(
+        self, name: str, arguments: dict[str, Any] | None, request_id: str | None = None
+    ) -> types.CallToolResult:
+        """Validate, dispatch and shape one ``tools/call``. Unknown tools raise ``MCPError``.
+        ``request_id`` names the host call, so progress can be polled while it runs."""
         spec = self._by_name.get(name)
         if spec is None:
             close = difflib.get_close_matches(name, list(self._by_name), n=3, cutoff=0.6)
@@ -316,7 +350,7 @@ class Bridge:
                 detail={"violations": violations},
             )
             return _error_result(error.to_dict())
-        ok, payload, meta = self.invoke(name, args)
+        ok, payload, meta = self.invoke(name, args, request_id)
         pageable = "cursor" in (spec.input_schema.get("properties") or {})
         return self.shape(ok, payload, meta, args=args, pageable=pageable)
 
@@ -545,6 +579,95 @@ def get_prompt(name: str, arguments: dict[str, str] | None) -> types.GetPromptRe
 # -- SDK wiring --------------------------------------------------------------------------
 
 
+class ProgressTracker:
+    """Turns job snapshots into MCP progress values that only ever increase.
+
+    ``current``/``total`` (steps) are reported as they are; a bare ``progress`` fraction
+    as ``progress`` of ``total: 1``. A snapshot that would not increase ``progress`` is
+    skipped, as the spec requires."""
+
+    def __init__(self) -> None:
+        self.last: float | None = None
+
+    def update(
+        self, snapshot: dict[str, Any] | None
+    ) -> tuple[float, float | None, str | None] | None:
+        if not isinstance(snapshot, dict):
+            return None
+        current, total = snapshot.get("current"), snapshot.get("total")
+        fraction = snapshot.get("progress")
+        if _number(current) and _number(total) and total > 0:
+            value, out_total = float(current), float(total)
+        elif _number(fraction):
+            value, out_total = float(fraction), 1.0
+        else:
+            return None
+        if self.last is not None and value <= self.last:
+            return None
+        self.last = value
+        message = snapshot.get("message")
+        return value, out_total, message if isinstance(message, str) and message else None
+
+
+def _wants_progress(ctx: Any) -> bool:
+    """Whether the caller asked for progress: a ``_meta.progressToken`` on the request, or
+    (the SDK's in-process transport) a progress callback on the request's channel."""
+    meta = getattr(ctx, "meta", None)
+    if isinstance(meta, dict) and any(
+        meta.get(key) is not None for key in ("progressToken", "progress_token")
+    ):
+        return True
+    channel = getattr(getattr(ctx, "session", None), "_request_outbound", None)
+    for _ in range(3):  # the SDK wraps the request's dispatch context
+        if channel is None:
+            break
+        if (
+            getattr(channel, "_progress_token", None) is not None
+            or getattr(channel, "_on_progress", None) is not None
+        ):
+            return True
+        channel = getattr(channel, "_inner", None)
+    return False
+
+
+def _number(value: Any) -> bool:
+    return isinstance(value, int | float) and not isinstance(value, bool)
+
+
+async def _call_with_progress(
+    bridge: Bridge, ctx: Any, params: types.CallToolRequestParams
+) -> types.CallToolResult:
+    """Run the call in a worker thread and, while it is in flight, poll the host for the
+    job it started (or the one ``job_id`` names) and emit ``notifications/progress``."""
+    request_id = uuid.uuid4().hex
+    args = dict(params.arguments or {})
+    tracker = ProgressTracker()
+    result: types.CallToolResult | None = None
+
+    async def poll() -> None:
+        while True:
+            await anyio.sleep(bridge.progress_interval_s)
+            snapshot = await anyio.to_thread.run_sync(
+                bridge.progress_snapshot, params.name, args, request_id
+            )
+            update = tracker.update(snapshot)
+            if update is not None:
+                progress, total, message = update
+                try:
+                    await ctx.session.report_progress(progress, total, message)
+                except Exception:  # noqa: BLE001 - a lost notification is not a failure
+                    log.debug("progress notification failed", exc_info=True)
+
+    async with anyio.create_task_group() as group:
+        group.start_soon(poll)
+        result = await anyio.to_thread.run_sync(
+            bridge.call_tool, params.name, params.arguments, request_id
+        )
+        group.cancel_scope.cancel()
+    assert result is not None
+    return result
+
+
 def build_server(bridge: Bridge | None = None) -> Server[Any]:
     bridge = bridge or Bridge()
 
@@ -552,7 +675,10 @@ def build_server(bridge: Bridge | None = None) -> Server[Any]:
         return types.ListToolsResult(tools=bridge.list_tools())
 
     async def on_call_tool(ctx: Any, params: types.CallToolRequestParams) -> types.CallToolResult:
-        return await anyio.to_thread.run_sync(bridge.call_tool, params.name, params.arguments)
+        spec = bridge._by_name.get(params.name)
+        if not _wants_progress(ctx) or spec is None or spec.bridge_local:
+            return await anyio.to_thread.run_sync(bridge.call_tool, params.name, params.arguments)
+        return await _call_with_progress(bridge, ctx, params)
 
     async def on_list_resources(ctx: Any, params: Any) -> types.ListResourcesResult:
         return types.ListResourcesResult(resources=bridge.list_resources())

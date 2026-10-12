@@ -5,6 +5,7 @@ Routes::
     GET  /hp/v1/health      no auth, no hou call
     POST /hp/v1/call        {tool, args, timeout_s, request_id} -> envelope
     GET  /hp/v1/jobs/{id}   job status (and result once done)
+    GET  /hp/v1/calls/{request_id}/jobs   snapshots of the jobs a call started (progress)
     POST /hp/v1/shutdown    stop the host (not Houdini)
 
 Every route rejects a non-loopback ``Origin`` with 403. All routes except health need
@@ -68,11 +69,13 @@ class HostApp:
         job: Callable[[str], dict[str, Any]] | None = None,
         shutdown: Callable[[], None] | None = None,
         meta: Callable[[], dict[str, Any]] | None = None,
+        call_jobs: Callable[[str], list[dict[str, Any]]] | None = None,
     ) -> None:
         self.token = token
         self.call = call
         self.health = health
         self.job = job
+        self.call_jobs = call_jobs
         self.shutdown = shutdown
         self.meta = meta or (lambda: {"scene_generation": 0, "undo_label": None, "elapsed_ms": 0})
 
@@ -168,6 +171,17 @@ class _Handler(BaseHTTPRequestHandler):
             job_id = path[len(f"{API_PREFIX}/jobs/") :]
             self._send_json(HTTPStatus.OK, self._job(job_id))
             return
+        if path.startswith(f"{API_PREFIX}/calls/") and path.endswith("/jobs"):
+            if not self._guard(auth=True):
+                return
+            request_id = path[len(f"{API_PREFIX}/calls/") : -len("/jobs")]
+            call_jobs = self.server.app.call_jobs
+            jobs = call_jobs(request_id) if call_jobs is not None and request_id else []
+            self._send_json(
+                HTTPStatus.OK,
+                {"ok": True, "result": {"jobs": jobs}, "_meta": self.server.app.meta()},
+            )
+            return
         if self._guard(auth=False):
             self._transport_error(HTTPStatus.NOT_FOUND, f"No route {path}.")
 
@@ -204,6 +218,8 @@ class _Handler(BaseHTTPRequestHandler):
             if "max_response_bytes" in body
             else {}
         )
+        if isinstance(body.get("request_id"), str):
+            budget["request_id"] = body["request_id"]
         envelope = self.server.app.call(
             body.get("tool"), body.get("args"), body.get("timeout_s"), **budget
         )

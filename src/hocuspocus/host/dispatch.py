@@ -38,6 +38,13 @@ def call_timeout(default: float | None = None) -> float | None:
     return default if value is None else value
 
 
+def current_request_id() -> str | None:
+    """The running call's ``request_id`` from the ``/hp/v1/call`` envelope, if any. Jobs
+    started during the call are filed under it, so the bridge can follow their progress
+    while it waits for the response (``GET /hp/v1/calls/{request_id}/jobs``, BIBLE §7)."""
+    return getattr(_CALL, "request_id", None)
+
+
 def _pop_changed(result: Any) -> bool | None:
     if isinstance(result, dict) and CHANGED_KEY in result:
         return bool(result.pop(CHANGED_KEY))
@@ -139,11 +146,17 @@ class Dispatcher:
         return int(getattr(self.ctx.config, "max_response_bytes", 16384))
 
     def call(
-        self, tool: Any, args: Any, timeout_s: Any = None, max_response_bytes: Any = None
+        self,
+        tool: Any,
+        args: Any,
+        timeout_s: Any = None,
+        max_response_bytes: Any = None,
+        request_id: Any = None,
     ) -> dict[str, Any]:
         """Run ``tool``. ``max_response_bytes`` (from the request envelope; the config
         value when absent) is exposed to the tool as ``ctx.extras["max_response_bytes"]``
-        so paged tools can cap rows to the client's budget."""
+        so paged tools can cap rows to the client's budget. ``request_id`` (also from the
+        envelope) is what :func:`current_request_id` returns while the tool runs."""
         started = time.perf_counter()
         undo_label: str | None = None
         try:
@@ -186,7 +199,12 @@ class Dispatcher:
                 undo_label = make_label(tool, args)
             effective = self.effective_timeout(args, timeout_s)
             work = self._work(
-                impl, args, undo_label, self.response_budget(max_response_bytes), effective
+                impl,
+                args,
+                undo_label,
+                self.response_budget(max_response_bytes),
+                effective,
+                request_id if isinstance(request_id, str) and request_id else None,
             )
             result = self.ctx.executor.run(work, effective) if impl.main_thread else work()
             changed = _pop_changed(result)
@@ -212,6 +230,7 @@ class Dispatcher:
         undo_label: str | None,
         budget: int,
         timeout_s: float,
+        request_id: str | None = None,
     ) -> Callable[[], Any]:
         ctx = self.ctx
 
@@ -220,10 +239,12 @@ class Dispatcher:
             # value cannot be overwritten by a concurrent request while the tool runs.
             ctx.extras["max_response_bytes"] = budget
             _CALL.timeout_s = timeout_s
+            _CALL.request_id = request_id
             try:
                 return run_tool()
             finally:
                 _CALL.timeout_s = None
+                _CALL.request_id = None
 
         def run_tool() -> Any:
             if undo_label is None:
