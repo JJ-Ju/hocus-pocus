@@ -33,8 +33,9 @@ from hocuspocus.tools.errors import ToolError
 from hocuspocus.tools.paths import captures_dir, ensure_private_dir
 
 from ..dispatch import call_timeout
-from .geo import _not_found, num
-from .hip import check_allowed, resolve_path
+from ._diag import require_node
+from .geo import num
+from .hip import _norm, check_allowed, resolve_path
 from .registry import HostContext, tool
 from .session import scene_dirty
 
@@ -135,10 +136,6 @@ def _hython() -> str:
     hfs = os.environ.get("HFS") or hou.text.expandString("$HFS")
     exe = "hython.exe" if sys.platform == "win32" else "hython"
     return os.path.join(hfs, "bin", exe)
-
-
-def _fwd(path: str | Path) -> str:
-    return str(path).replace("\\", "/")
 
 
 def _mark_internal(node: Any) -> None:
@@ -301,7 +298,7 @@ def snapshot_scene(tmp_dir: str) -> dict[str, Any]:
             continue
         target = os.path.join(tmp_dir, f"{manager.name()}.cpio")
         manager.saveChildrenToFile(children, (), target)
-        files[manager.path()] = _fwd(target)
+        files[manager.path()] = _norm(target)
     hfs = os.path.normcase(os.path.abspath(hou.text.expandString("$HFS")))
     hdas = []
     for lib in hou.hda.loadedFiles():
@@ -483,9 +480,7 @@ def _camera_node(path: Any) -> Any:
 
     if not isinstance(path, str) or not path.strip():
         raise ToolError("invalid_argument", "'camera' must be a camera node path.")
-    node = hou.node(path.strip())
-    if node is None:
-        raise _not_found(path.strip())
+    node = require_node(path, field="camera")
     if not isinstance(node, hou.ObjNode) or node.parm("focal") is None:
         raise ToolError(
             "invalid_argument",
@@ -833,7 +828,7 @@ def _capture_targets(parsed: dict[str, Any], ctx: HostContext) -> tuple[float, A
     if extra_path is not None:
         extra_path = resolve_path(extra_path)
         check_allowed(extra_path, ctx)
-    out_file = _fwd(_captures(ctx) / f"capture_{_stamp()}.png")
+    out_file = _norm(_captures(ctx) / f"capture_{_stamp()}.png")
     return frame, extra_path, out_file
 
 
@@ -1031,9 +1026,7 @@ def _prepare_render(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     rop_path = args.get("rop_path")
     if not isinstance(rop_path, str) or not rop_path.strip():
         raise ToolError("invalid_argument", "'rop_path' must be a ROP node path.")
-    rop = hou.node(rop_path.strip())
-    if rop is None:
-        raise _not_found(rop_path.strip())
+    rop = require_node(rop_path, field="rop_path")
     if not callable(getattr(rop, "render", None)):
         raise ToolError(
             "invalid_argument",
@@ -1067,7 +1060,7 @@ def _prepare_render(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     for path in expected:
         if not path.strip() or path.strip() in MPLAY_OUTPUTS:
             continue
-        full = _fwd(os.path.abspath(path))
+        full = _norm(path)
         folder = os.path.dirname(full)
         if folder not in checked:
             checked.add(folder)
@@ -1085,7 +1078,7 @@ def _prepare_render(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
         "frame_list": _frame_list(frames),
         "parm": parm.name() if parm is not None else None,
         "output": output,
-        "expected": [_fwd(p) for p in expected],
+        "expected": [_norm(p) for p in expected],
         "isolate": needs_isolation(rop, ctx),
         "hfs": hou.text.expandString("$HFS"),
         "lights": scene_has_lights(),

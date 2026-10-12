@@ -355,6 +355,82 @@ def test_one_million_points(client):
     assert elapsed < 2.0
 
 
+# -- review 10 §5 ------------------------------------------------------------------
+
+
+def test_geo_read_vertex_values_follow_linear_vertex_order(client):
+    geo, box = _box()
+    node = _wrangle(geo, box, "v@uv = set(@vtxnum, @primnum, @ptnum);", run_over=3)
+    args = {"path": node.path(), "class": "vertex", "attribs": ["uv"], "count": 24}
+    paged = client.ok("geo_read", args)
+    bulk = client.ok("geo_read", {**args, "stats": True})
+    assert paged["rows"] == bulk["rows"]
+    assert len(paged["rows"]) == 24
+    for vtxnum, primnum, ptnum, uv in paged["rows"]:
+        assert uv == [vtxnum, primnum, ptnum]
+
+
+def test_geo_read_dict_attributes(client):
+    geo, box = _box()
+    node = _wrangle(geo, box, 'dict d; d["id"] = @ptnum; d["tag"] = "c"; d@meta = d;')
+    result = client.ok("geo_read", {"path": node.path(), "attribs": ["meta"], "count": 3})
+    assert result["columns"] == ["ptnum", "meta"]
+    assert [row[1] for row in result["rows"]] == [{"id": i, "tag": "c"} for i in range(3)]
+    stats = client.ok("geo_read", {"path": node.path(), "attribs": ["meta"], "stats": True})
+    assert "meta" not in stats["stats"]  # dicts have no stats
+    assert stats["rows"][7] == [7, {"id": 7, "tag": "c"}]
+
+
+def test_geo_read_page_does_not_load_whole_columns(client, monkeypatch):
+    from hocuspocus.host.tools import geo as geo_mod
+
+    geo, box = _box()
+    scatter = geo.createNode("scatter")
+    scatter.setFirstInput(box)
+    scatter.parm("npts").set(2000)
+    node = _wrangle(geo, scatter, "s@name = itoa(@ptnum % 3); f[]@w = array(@ptnum);")
+    loaded = []
+    real = geo_mod._Column.values
+
+    def spy(self):
+        loaded.append(self.name)
+        return real(self)
+
+    monkeypatch.setattr(geo_mod._Column, "values", spy)
+    result = client.ok("geo_read", {"path": node.path(), "start": 10, "count": 3})
+    assert loaded == []
+    assert result["rows"][0][0] == 10
+    assert result["rows"][0][2:] == ["1", [10.0]]
+    client.ok("geo_read", {"path": node.path(), "count": 3, "stats": True})
+    assert set(loaded) >= {"P", "name"}
+
+
+def test_one_million_points_string_stats_with_a_pattern_group(client):
+    geo, box = _box()
+    scatter = geo.createNode("scatter", "scatter1m")
+    scatter.setFirstInput(box)
+    scatter.parm("npts").set(1_000_000)
+    node = _wrangle(geo, scatter, 's@side = @P.x > 0 ? "right" : "left";')
+    node.cook(force=True)
+    started = time.perf_counter()
+    result = client.ok(
+        "geo_read",
+        {"path": node.path(), "group": "@P.y>0", "stats": True, "count": 5},
+    )
+    elapsed = time.perf_counter() - started
+    print(f"\ngeo_read stats P+side over a 1M-point group expression: {elapsed:.3f}s")
+    assert 400_000 < result["total"] < 600_000
+    assert result["stats"]["side"] == {"unique": ["left", "right"], "unique_count": 2}
+    assert result["stats"]["P"]["min"][1] >= 0
+    assert len(result["rows"]) == 5 and all(row[1][1] > 0 for row in result["rows"])
+    assert elapsed < 5.0
+    started = time.perf_counter()
+    page = client.ok("geo_read", {"path": node.path(), "start": 999_990, "count": 10})
+    elapsed = time.perf_counter() - started
+    assert [row[0] for row in page["rows"]] == list(range(999_990, 1_000_000))
+    assert elapsed < 1.0, elapsed
+
+
 def _broken_then_fixed_outside():
     """box1 -> mountain1 -> copy1 with box1 broken, cooked, then fixed outside
     HocusPocus: Houdini keeps the old error on box1 and fails downstream cooks with

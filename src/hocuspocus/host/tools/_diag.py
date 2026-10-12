@@ -161,6 +161,8 @@ def collect_problems(node: Any, *, cook: bool = False, force: bool = False) -> d
     """
     import hou
 
+    from ._common import hou_message  # _common imports this module
+
     out: dict[str, Any] = {"errors": [], "warnings": [], "messages": [], "cook_state": "unknown"}
     failure: str | None = None
     if cook and not hasattr(node, "cook"):
@@ -177,7 +179,7 @@ def collect_problems(node: Any, *, cook: bool = False, force: bool = False) -> d
         else:
             out["cook_state"] = "error"
             failure = (
-                _exception_text(exc)
+                hou_message(exc)
                 if isinstance(exc, hou.OperationFailed)
                 else f"{type(exc).__name__}: {exc}"
             )
@@ -199,40 +201,25 @@ def collect_problems(node: Any, *, cook: bool = False, force: bool = False) -> d
     return out
 
 
-def _exception_text(exc: BaseException) -> str:
-    getter = getattr(exc, "instanceMessage", None)
-    if callable(getter):
-        with contextlib.suppress(Exception):
-            text = str(getter()).strip()
-            if text:
-                return text
-    return str(exc).strip() or type(exc).__name__
+COOKABLE_CATEGORIES = frozenset({"Sop", "Lop", "Cop", "Cop2", "Chop", "Dop"})
+"""Categories ``problems`` cooks when ``cook_uncooked`` is set (no ROPs, TOPs or OBJs)."""
+
+CHEAP_COOK_CATEGORIES = COOKABLE_CATEGORIES | {"Vop", "Top"}
+"""Categories a mutation result cooks (:func:`cheap_cook_problems`): the node the agent
+just touched, so VOPs (which report wiring and type errors on cook) and TOPs are
+included. ``problems`` walks whole subtrees and leaves those two to their owners: a VOP
+is cooked through its shader or wrangle, and cooking every TOP in a scene could start
+work items."""
 
 
 def cheap_cook_problems(node: Any) -> dict[str, Any]:
-    """Cook ``node`` only when it is a cookable leaf (SOP/LOP/COP...) and report problems.
+    """Cook ``node`` only when it is a cookable leaf (:data:`CHEAP_COOK_CATEGORIES`) and
+    report problems.
 
     Used by mutation results. Managers and networks without a cook (``/obj``, ``geo``
     containers) are reported without cooking.
     """
-    try:
-        cookable = node.type().category().name() in {
-            "Sop",
-            "Lop",
-            "Cop",
-            "Cop2",
-            "Dop",
-            "Chop",
-            "Vop",
-            "Top",
-        }
-    except Exception:
-        cookable = False
-    return collect_problems(node, cook=cookable, force=False)
-
-
-COOKABLE_CATEGORIES = frozenset({"Sop", "Lop", "Cop", "Cop2", "Chop", "Dop"})
-"""Categories ``problems`` cooks when ``cook_uncooked`` is set (no ROPs, TOPs or OBJs)."""
+    return collect_problems(node, cook=_category(node) in CHEAP_COOK_CATEGORIES, force=False)
 
 
 def a_or_an(word: str) -> str:

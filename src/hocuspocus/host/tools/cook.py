@@ -20,6 +20,7 @@ from typing import Any
 from hocuspocus.tools.errors import ToolError
 
 from ..dispatch import call_timeout
+from ._common import bad_arg, number, parse_limit
 from ._diag import (
     COOKABLE_CATEGORIES,
     REFRESH_CATEGORIES,
@@ -44,11 +45,10 @@ def _number(
     value = args.get(key, default)
     if value is None:
         return None
-    if isinstance(value, bool) or not isinstance(value, int | float):
-        raise ToolError("invalid_argument", f"'{key}' must be a number.")
+    value = number(value, key)
     if positive and value <= 0:
-        raise ToolError("invalid_argument", f"'{key}' must be greater than 0.")
-    return float(value)
+        raise bad_arg(f"'{key}' must be greater than 0.")
+    return value
 
 
 def _paths_arg(args: dict[str, Any]) -> list[str]:
@@ -747,9 +747,7 @@ def problems(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     include_warnings = bool(args.get("include_warnings", True))
     cook_uncooked = bool(args.get("cook_uncooked", False))
     recurse_locked = bool(args.get("recurse_locked", False))
-    limit = args.get("limit", 50)
-    if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 1000:
-        raise ToolError("invalid_argument", "'limit' must be an integer from 1 to 1000.")
+    limit = parse_limit(args.get("limit"))
     offset, node_start, node_end = _parse_problems_cursor(args.get("cursor"))
     budget_s = _problems_budget(args)
     deadline = time.monotonic() + budget_s
