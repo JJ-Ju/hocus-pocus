@@ -219,3 +219,15 @@ def test_prune_captures_keeps_the_newest(tmp_path):
         os.utime(path, (1000 + i, 1000 + i))
     assert prune_captures(tmp_path, keep=3) == 4
     assert sorted(p.name for p in tmp_path.iterdir()) == ["c4.png", "c5.png", "c6.png"]
+
+
+def test_last_cook_memory_is_bounded(monkeypatch):
+    from hocuspocus.host.tools import _diag
+
+    monkeypatch.setattr(_diag, "_last_cook_ms", type(_diag._last_cook_ms)())
+    for i in range(_diag.COOK_MEMORY + 50):
+        _diag.remember_cook(i, float(i))
+    assert len(_diag._last_cook_ms) == _diag.COOK_MEMORY
+    assert 0 not in _diag._last_cook_ms and _diag.COOK_MEMORY + 49 in _diag._last_cook_ms
+    _diag.remember_cook(60, 1.0)  # recooked: becomes the most recent
+    assert next(reversed(_diag._last_cook_ms)) == 60

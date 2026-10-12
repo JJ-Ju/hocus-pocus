@@ -606,11 +606,13 @@ def _framing(bbox: tuple[list[float], list[float]] | None, res: tuple[int, int])
 
 
 _last_framing: dict[str, Any] = {}
-"""The last automatic framing; ``fit: none`` reuses it (no camera is kept in the scene)."""
+"""The last automatic framing and the scene generation it was made in; ``fit: none``
+reuses it (no camera is kept in the scene) until a new scene is cleared, loaded or
+merged."""
 
 
 def _capture_spec(
-    camera: Any, res: tuple[int, int], fit: str, out_file: str
+    camera: Any, res: tuple[int, int], fit: str, out_file: str, generation: int | None = None
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """What to build for one capture, and the ``camera_used``/``fit_used`` to report."""
     rop_parms = {"trange": 0, "tres": 1, "res1": res[0], "res2": res[1], "picture": out_file}
@@ -621,11 +623,13 @@ def _capture_spec(
             {"camera_used": cam.path(), "fit_used": "none"},
         )
     fit_used = "none"
+    if _last_framing.get("generation") != generation:
+        _last_framing.clear()  # framed in another scene
     framing = _last_framing.get("framing")
     if fit != "none" or framing is None:
         bbox, fit_used = _fit_bbox(fit if fit != "none" else "all")
         framing = _framing(bbox, res)
-        _last_framing["framing"] = framing
+        _last_framing.update(framing=framing, generation=generation)
     camera_parms = {
         "resx": res[0],
         "resy": res[1],
@@ -689,7 +693,7 @@ def _capture_opengl(
 ) -> dict[str, Any]:
     import hou
 
-    spec, info = _capture_spec(camera, res, fit, out_file)
+    spec, info = _capture_spec(camera, res, fit, out_file, ctx.scene.generation)
     errors: list[str] = []
     if not ctx.ui:
         # Headless: the child hython builds camera and ROP in its own copy of the scene.
@@ -870,7 +874,9 @@ def _capture_headless(parsed: dict[str, Any], ctx: HostContext, timeout_s: float
 
         def prepare() -> dict[str, Any]:
             frame, extra_path, out_file = _capture_targets(parsed, ctx)
-            spec, info = _capture_spec(parsed["camera"], res, parsed["fit"], out_file)
+            spec, info = _capture_spec(
+                parsed["camera"], res, parsed["fit"], out_file, ctx.scene.generation
+            )
             snapshot = snapshot_scene(tmp_dir)
             snapshot["capture"] = spec
             return {

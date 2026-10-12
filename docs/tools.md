@@ -2,7 +2,7 @@
 
 <!-- Generated from src/hocuspocus/tools/catalog.py by `python -m hocuspocus.tools.docs`. Do not edit by hand. -->
 
-35 tools: 31 in the `core` profile, 4 more in `full`. Model-visible `tools/list` text: 28,391 bytes. See `docs/BIBLE.md` §4 for the design.
+35 tools: 31 in the `core` profile, 4 more in `full`. Model-visible `tools/list` text: 28,562 bytes. See `docs/BIBLE.md` §4 for the design.
 
 ## Contents
 
@@ -55,7 +55,7 @@ None.
 ### Returns
 
 - `connected` (object | null): `pid`, `port`, `label`, `houdini`, `ui`, `hip`, `time`, `env`, `scene_generation`, `host_version` — always present
-- `instances` (array<object>): `pid`, `label`, `houdini`, `ui`, `hip`, `started` — always present
+- `instances` (array<object>): `pid`, `label`, `houdini`, `ui`, `hip`, `started`, `launched_by` — always present
 - `bridge_version` (string) — always present
 - `profile` (`core` | `full`)
 - `read_only` (boolean)
@@ -72,7 +72,7 @@ None.
 
 `bridge-local` `headless ok` · profile `core`
 
-Choose which Houdini this session drives. Pass one of: pid to attach to a live instance listed by houdini_status; launch to start one (mode gui or headless hython, optional hip, wait up to wait_s, default 90); or disconnect to drop the selection. The selection lasts for the bridge's lifetime. Returns the new connected block.
+Choose which Houdini this session drives. Pass one of: pid to attach to a live instance listed by houdini_status; launch to start one (mode gui or headless hython, optional hip, wait up to wait_s, default 90); or disconnect to drop the selection. Returns the new connected block. A launched Houdini usually closes when this server exits (launched.outlives_server says); to keep one, start Houdini yourself (after hocuspocus install-houdini) and attach by pid.
 
 ### Arguments
 
@@ -612,7 +612,7 @@ Set parms in one undo step. Each item takes one of value, expression, keyframe, 
 
 `idempotent` `headless ok` · profile `core`
 
-Cook nodes now and report per node ok, errors, warnings, messages, cook_time_ms. Errors left from before a fix are rechecked (the node and its errored inputs are recooked) unless the last cook took over 2 s: then hint says use force, which recooks clean nodes. frame defaults to current. A cook longer than the job threshold returns job_id to poll with job. Use problems to scan a subtree for red nodes.
+Cook nodes now and report per node ok, errors, warnings, messages, cook_time_ms (that node's cook only; upstream may already be cached). Errors left from before a fix are rechecked (the node and its errored inputs recooked) unless the last cook took over 2 s: then hint says use force, which recooks clean nodes. frame defaults to current. A cook longer than the job threshold returns job_id to poll with job. Use problems to scan a subtree.
 
 ### Arguments
 

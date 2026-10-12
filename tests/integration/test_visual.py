@@ -475,3 +475,16 @@ def test_headless_capture_does_not_hold_the_main_thread(client):
     while thread.is_alive():
         client.host.executor.pump_once(0.01)
     assert box["body"]["ok"] is True, box["body"]
+
+
+def test_fit_none_does_not_reuse_framing_from_another_scene(client):
+    far = hou.node("/obj").createNode("geo", "far")
+    far.createNode("box").setDisplayFlag(True)
+    far.parmTuple("t").set((100, 0, 0))
+    client.ok("viewport_capture", {"fit": "all", "resolution": [64, 48]})
+    client.ok("hip_new", {"on_unsaved": "discard"})
+    _toy_scene()
+    result = client.ok("viewport_capture", {"fit": "none", "resolution": [64, 48]})
+    assert result["fit_used"] == "all"  # reframed: the old framing was for another scene
+    again = client.ok("viewport_capture", {"fit": "none", "resolution": [64, 48]})
+    assert again["fit_used"] == "none"

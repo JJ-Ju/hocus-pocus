@@ -1005,11 +1005,12 @@ _COOK: tuple[ToolSpec, ...] = (
     ToolSpec(
         name="cook",
         description=(
-            "Cook nodes now and report per node ok, errors, warnings, messages, cook_time_ms. "
-            "Errors left from before a fix are rechecked (the node and its errored inputs are "
-            "recooked) unless the last cook took over 2 s: then hint says use force, which "
-            "recooks clean nodes. frame defaults to current. A cook longer than the job threshold "
-            "returns job_id to poll with job. Use problems to scan a subtree for red nodes."
+            "Cook nodes now and report per node ok, errors, warnings, messages, cook_time_ms (that "
+            "node's cook only; upstream may already be cached). Errors left from before a fix are "
+            "rechecked (the node and its errored inputs recooked) unless the last cook took over "
+            "2 s: then hint says use force, which recooks clean nodes. frame defaults to current. "
+            "A cook longer than the job threshold returns job_id to poll with job. Use problems to "
+            "scan a subtree."
         ),
         input_schema=_obj(
             {

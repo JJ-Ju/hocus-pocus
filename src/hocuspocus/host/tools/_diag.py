@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import contextlib
 import time
+from collections import OrderedDict
 from typing import Any
 
 SLOW_COOK_MS = 2000.0
@@ -21,8 +22,18 @@ STALE_HINT = (
     "cook took over {seconds:g} s. Run cook with force: true to recheck."
 )
 
-_last_cook_ms: dict[int, float] = {}
-"""``sessionId`` -> duration of the last cook HocusPocus ran on that node."""
+COOK_MEMORY = 2000
+"""Nodes whose last cook duration is remembered (least recently cooked dropped first)."""
+
+_last_cook_ms: OrderedDict[int, float] = OrderedDict()
+"""``sessionId`` -> duration of the last cook HocusPocus ran on that node (LRU-bounded)."""
+
+
+def remember_cook(session_id: int, elapsed_ms: float) -> None:
+    _last_cook_ms[session_id] = elapsed_ms
+    _last_cook_ms.move_to_end(session_id)
+    while len(_last_cook_ms) > COOK_MEMORY:
+        _last_cook_ms.popitem(last=False)
 
 
 def _messages(node: Any, getter: str) -> list[str]:
@@ -61,7 +72,7 @@ def _timed_cook(node: Any, force: bool) -> tuple[float, BaseException | None]:
         failure = exc
     elapsed = (time.perf_counter() - started) * 1000
     with contextlib.suppress(Exception):
-        _last_cook_ms[node.sessionId()] = elapsed
+        remember_cook(node.sessionId(), elapsed)
     return elapsed, failure
 
 
