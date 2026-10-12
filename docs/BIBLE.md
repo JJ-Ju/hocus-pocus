@@ -324,7 +324,10 @@ as it was started from a neutral directory).
 - **Arguments:** flat, typed, `additionalProperties: false`, enums for closed sets,
   defaults stated in the description. Batch tools take `items: [...]` and return
   `results: [...]` in the same order; one failing item fails the whole call and rolls
-  back the undo group unless `partial: true`.
+  back the undo group unless `partial: true`. Every batch error (and each failed row's
+  `error` with `partial`) has one shape: the message starts `items[i] (<path>): ` and
+  `detail` carries `{item, path, rolled_back}`, where `rolled_back` is true only when every
+  change the call (or, with `partial`, the item) had made was actually undone.
 - **Responses:** `structuredContent` **and** the same JSON serialised compactly into the
   text block (clients vary in which they feed the model). `outputSchema` declared where
   the shape is stable. Key casing is `snake_case` in both directions.

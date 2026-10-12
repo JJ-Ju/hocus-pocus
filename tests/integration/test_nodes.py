@@ -151,7 +151,7 @@ def test_create_batch_rolls_back_on_failure(client):
     )
     assert error["code"] == "node_type_not_found"
     assert error["detail"]["item"] == 3 and error["detail"]["rolled_back"] is True
-    assert error["message"].startswith("Item 3:")
+    assert error["message"].startswith("items[3] (/obj/geo1): ")
     assert hou.node("/obj/rollback_geo") is None
     assert [c.name() for c in geo.children()] == ["box1", "xform1", "OUT"]
     assert null.isDisplayFlagSet()  # display flag restored to the original node
@@ -936,3 +936,74 @@ def test_full_echo_omits_values_the_creation_script_set(client):
     assert bare["results"][0]["parms"] == []
     info = client.ok("node_info", {"paths": bare["created"]})["nodes"][0]
     assert {"s", "dimmer"} <= {row["name"] for row in info["parms"]}
+
+
+def test_batch_errors_share_one_shape(client):
+    """Review 10 §4: every batch tool prefixes items[i] (<path>) and reports detail
+    {item, path, rolled_back} with rolled_back as actually performed."""
+    geo, box, xform, null = make_chain()
+    cases = [
+        (
+            "node_create",
+            [{"parent": "/obj/geo1", "type": "sphere"}, {"parent": "/obj/geo1", "type": "nope"}],
+            "/obj/geo1",
+        ),
+        (
+            "node_edit",
+            [{"path": box.path(), "comment": "x"}, {"path": xform.path(), "name": "bad name"}],
+            xform.path(),
+        ),
+        (
+            "node_connect",
+            [
+                {"from": box.path(), "to": null.path()},
+                {"from": box.path(), "to": xform.path(), "to_input": 9},
+            ],
+            xform.path(),
+        ),
+        (
+            "parm_set",
+            [
+                {"path": f"{box.path()}/sizex", "value": 4},
+                {"path": f"{box.path()}/sizey", "value": "x"},
+            ],
+            f"{box.path()}/sizey",
+        ),
+    ]
+    for tool, items, path in cases:
+        error = client.error(tool, {"items": items})
+        assert error["message"].startswith(f"items[1] ({path}): "), (tool, error["message"])
+        detail = error["detail"]
+        assert (detail["item"], detail["path"], detail["rolled_back"]) == (1, path, True), tool
+        result = client.ok(tool, {"items": items, "partial": True})
+        row = result["results"][1]["error"]
+        assert row["message"].startswith(f"items[1] ({path}): "), tool
+        assert row["detail"]["item"] == 1 and row["detail"]["path"] == path, tool
+        assert row["detail"]["rolled_back"] is True, tool
+    assert box.comment() == "x" and null.inputs()[0] == box  # the partial runs kept item 0
+    assert box.parm("sizex").eval() == 4.0
+    # A one-item call has the same shape.
+    error = client.error("node_edit", {"items": [{"path": xform.path(), "name": "bad name"}]})
+    assert error["message"].startswith(f"items[0] ({xform.path()}): ")
+    assert error["detail"]["item"] == 0 and error["detail"]["rolled_back"] is True
+
+
+def test_batch_rollback_reports_a_failed_compensation(client, monkeypatch):
+    """rolled_back is false when an undo step itself fails (never assumed)."""
+    from hocuspocus.host.tools import nodes
+
+    geo, box, xform, null = make_chain()
+    original = nodes.Rollback.add
+
+    def add(self, action):
+        def broken():
+            raise RuntimeError("compensation failed")
+
+        original(self, broken)
+
+    monkeypatch.setattr(nodes.Rollback, "add", add)
+    error = client.error(
+        "node_edit",
+        {"items": [{"path": box.path(), "comment": "x"}, {"path": "/obj/geo1/nope"}]},
+    )
+    assert error["detail"]["rolled_back"] is False
