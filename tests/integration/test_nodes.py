@@ -49,7 +49,8 @@ def test_create_wires_flags_and_resolves_types(client):
                     ],
                     "flags": {"display": True, "render": True},
                 },
-            ]
+            ],
+            "return": "full",
         },
     )
     paths = result["created"]
@@ -80,7 +81,11 @@ def test_create_exact_type(client):
     hou.node("/obj").createNode("geo", "g")
     result = client.ok(
         "node_create",
-        {"items": [{"parent": "/obj/g", "type": "copytopoints"}], "exact_type": True},
+        {
+            "items": [{"parent": "/obj/g", "type": "copytopoints"}],
+            "exact_type": True,
+            "return": "full",
+        },
     )
     assert result["results"][0]["type"]["name"] == "copytopoints"
 
@@ -215,7 +220,8 @@ def test_create_with_parms(client):
                     "inputs": [{"index": 0, "from": "/obj/terrain/grid1"}],
                     "parms": {"ty": {"expr": "ch('../grid1/sizex') * 0.1"}},
                 },
-            ]
+            ],
+            "return": "full",
         },
     )
     grid = hou.node("/obj/terrain/grid1")
@@ -281,11 +287,13 @@ def test_create_full_result_elides_long_snippets(client):
         {
             "items": [
                 {"parent": "/obj/geo1", "type": "attribwrangle", "parms": {"snippet": LONG_VEX}}
-            ]
+            ],
+            "return": "full",
         },
     )
     row = next(p for p in result["results"][0]["parms"] if p["name"] == "snippet")
-    assert row["value"] == {"truncated": True, "chars": len(LONG_VEX), "head": LONG_VEX[:80]}
+    assert row["value"] == {"elided": len(LONG_VEX), "head": LONG_VEX[:80]}
+    assert row["raw"] == {"elided": len(LONG_VEX), "head": LONG_VEX[:80]}
     assert hou.node(result["created"][0]).parm("snippet").eval() == LONG_VEX
     info = client.ok("node_info", {"paths": result["created"]})["nodes"][0]
     assert next(p for p in info["parms"] if p["name"] == "snippet")["value"] == LONG_VEX
@@ -313,7 +321,9 @@ def test_create_copy_and_build_summary_results(client):
     # Downstream nodes repeat the upstream error verbatim: it is reported once.
     assert rows[1]["errors_same_as"] == "/obj/geo1/w0" and "errors" not in rows[1]
     assert rows[2]["errors_same_as"] == "/obj/geo1/w0"
-    full = client.ok("node_create", {"items": [{"parent": "/obj/geo1", "type": "box"}]})
+    full = client.ok(
+        "node_create", {"items": [{"parent": "/obj/geo1", "type": "box"}], "return": "full"}
+    )
     assert "parms" in full["results"][0] and "flags" in full["results"][0]
     copied = client.ok(
         "node_copy",
@@ -889,3 +899,40 @@ def test_locked_means_the_sop_lock_flag(client):
     assert block["flags"]["locked"] is True and "hda_locked" not in block
     data = client.ok("network_describe", {"root": geo.path()})["data"]
     assert "hda_locked" not in data["box1"]
+
+
+def test_mutation_echo_defaults_to_summary(client):
+    """1.1 (review 11 B5): summary is the default echo of node_create, node_copy and
+    network_build."""
+    geo = hou.node("/obj").createNode("geo", "geo1")
+    summary_keys = {"path", "type", "errors", "warnings", "cook_state", "hint", "source"}
+    summary_keys |= {"errors_same_as", "warnings_same_as", "paired_with"}
+    created = client.ok(
+        "node_create", {"items": [{"parent": geo.path(), "type": "box", "name": "b"}]}
+    )
+    assert set(created["results"][0]) <= summary_keys
+    assert created["results"][0]["type"] == "box"
+    copied = client.ok("node_copy", {"paths": [f"{geo.path()}/b"], "to_parent": geo.path()})
+    assert set(copied["results"][0]) <= summary_keys
+    built = client.ok("network_build", {"parent": geo.path(), "data": {"s": {"type": "sphere"}}})
+    assert set(built["nodes"][0]) <= summary_keys
+
+
+def test_full_echo_omits_values_the_creation_script_set(client):
+    """A light's creation script sets s, scale, dimmer and ramps; they are not the call's
+    edits (review 11 B5). node_info still reports them as non-default."""
+    result = client.ok(
+        "node_create",
+        {
+            "items": [{"parent": "/obj", "type": "hlight", "parms": {"light_intensity": 2}}],
+            "return": "full",
+        },
+    )
+    rows = result["results"][0]["parms"]
+    assert [row["name"] for row in rows] == ["light_intensity"]
+    bare = client.ok(
+        "node_create", {"items": [{"parent": "/obj", "type": "hlight"}], "return": "full"}
+    )
+    assert bare["results"][0]["parms"] == []
+    info = client.ok("node_info", {"paths": bare["created"]})["nodes"][0]
+    assert {"s", "dimmer"} <= {row["name"] for row in info["parms"]}

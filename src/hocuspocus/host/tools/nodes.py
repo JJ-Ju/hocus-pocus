@@ -564,6 +564,8 @@ def mutation_block(node: Any, **extra: Any) -> dict[str, Any]:
 
 
 RETURN_MODES = ("full", "summary")
+DEFAULT_RETURN = "summary"
+"""1.1 (review 11 B5): mutation echoes are path, type and problems unless asked for more."""
 ECHO_STRING_CHARS = 200
 """Mutation echoes elide string parm values longer than this (VEX snippets, Python code):
 the agent just wrote them, and node_info / parm_get still return them in full."""
@@ -571,7 +573,7 @@ ECHO_HEAD_CHARS = 80
 
 
 def return_mode(args: dict[str, Any]) -> str:
-    mode = args.get("return", "full") or "full"
+    mode = args.get("return") or DEFAULT_RETURN
     if mode not in RETURN_MODES:
         raise bad_arg("'return' must be 'full' or 'summary'.")
     return mode
@@ -579,19 +581,61 @@ def return_mode(args: dict[str, Any]) -> str:
 
 def _elide(value: Any) -> Any:
     if isinstance(value, str) and len(value) > ECHO_STRING_CHARS:
-        return {"truncated": True, "chars": len(value), "head": value[:ECHO_HEAD_CHARS]}
+        return {"elided": len(value), "head": value[:ECHO_HEAD_CHARS]}
     if isinstance(value, list):
         return [_elide(v) for v in value]
     return value
 
 
 def elide_long_values(block: dict[str, Any]) -> dict[str, Any]:
-    """Replace long string parm values in a mutation echo with ``{truncated, chars, head}``."""
+    """Replace long string parm values in a mutation echo with ``{elided, head}``."""
     for row in block.get("parms") or ():
         for key in ("value", "raw"):
             if key in row:
                 row[key] = _elide(row[key])
     return block
+
+
+def _raw_text(parm: Any) -> Any:
+    for getter in ("unexpandedString", "rawValue"):
+        with contextlib.suppress(Exception):
+            return getattr(parm, getter)()
+    return None
+
+
+def parm_state(node: Any) -> dict[str, tuple[Any, ...]]:
+    """``{tuple name: raw component values}`` for the node's non-default parm tuples.
+
+    Taken right after ``createNode`` (creation scripts have run), it tells the values a
+    creation script set apart from the ones the call set (review 11 B5)."""
+    out: dict[str, tuple[Any, ...]] = {}
+    for parm_tuple in node.parmTuples():
+        with contextlib.suppress(Exception):
+            if not parm_tuple.isAtDefault():
+                out[parm_tuple.name()] = tuple(_raw_text(p) for p in parm_tuple)
+    return out
+
+
+def call_edited_parms(
+    node: Any, baseline: dict[str, tuple[Any, ...]], named: Iterable[str]
+) -> set[str]:
+    """Parm row names the call changed: those it named, and any whose raw value moved from
+    ``baseline`` (a side effect of the call, such as a menu that rewrites another parm)."""
+    keep: set[str] = set()
+    for name in named:
+        target = node.parm(name) or node.parmTuple(name)
+        parm_tuple = target.tuple() if hasattr(target, "tuple") else target
+        if parm_tuple is not None:
+            keep.add(parm_tuple.name())
+            if len(parm_tuple) == 1:
+                keep.add(parm_tuple[0].name())
+    for name, raw in parm_state(node).items():
+        if baseline.get(name) != raw:
+            keep.add(name)
+            parm_tuple = node.parmTuple(name)
+            if parm_tuple is not None and len(parm_tuple) == 1:
+                keep.add(parm_tuple[0].name())
+    return keep
 
 
 def summary_block(
@@ -1047,8 +1091,15 @@ def node_info(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
 
 
 def _create_one(
-    item: Any, index: int, args: dict[str, Any], ctx: HostContext, rollback: Rollback
+    item: Any,
+    index: int,
+    args: dict[str, Any],
+    ctx: HostContext,
+    rollback: Rollback,
+    created: dict[int, dict[str, tuple[Any, ...]]],
 ) -> Any:
+    """Create one ``node_create`` item; ``created`` maps the new node's session id to its
+    parm state right after ``createNode`` (see :func:`parm_state`)."""
     import hou
 
     if not isinstance(item, dict):
@@ -1088,6 +1139,7 @@ def _create_one(
             ) from exc
         raise type_not_found(parent, type_name, parent.childTypeCategory()) from exc
     rollback.destroy_later(node)
+    created[node.sessionId()] = parm_state(node)
     parms = item.get("parms")
     if parms:
         if not isinstance(parms, dict):
@@ -1129,11 +1181,12 @@ def node_create(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     mode = return_mode(args)
     rollback = Rollback()
     created: list[tuple[int, Any]] = []
+    baselines: dict[int, dict[str, tuple[Any, ...]]] = {}
     failures: dict[int, dict[str, Any]] = {}
     for index, item in enumerate(items):
         mark = rollback.mark()
         try:
-            created.append((index, _create_one(item, index, args, ctx, rollback)))
+            created.append((index, _create_one(item, index, args, ctx, rollback, baselines)))
         except Exception as exc:
             if not partial:
                 rollback.run()
@@ -1143,12 +1196,14 @@ def node_create(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     if mode == "summary":
         blocks = {index: summary_block(node) for index, node in created}
     else:
-        blocks = {
-            index: elide_long_values(
-                node_block(node, DEFAULT_INCLUDE, problems=cheap_cook_problems(node))
+        blocks = {}
+        for index, node in created:
+            block = node_block(node, DEFAULT_INCLUDE, problems=cheap_cook_problems(node))
+            keep = call_edited_parms(
+                node, baselines.get(node.sessionId(), {}), items[index].get("parms") or {}
             )
-            for index, node in created
-        }
+            block["parms"] = [row for row in block["parms"] if row["name"] in keep]
+            blocks[index] = elide_long_values(block)
     results = [blocks.get(i) or {"error": failures[i]} for i in range(len(items))]
     if mode == "summary":
         collapse_problems(results)

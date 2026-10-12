@@ -142,12 +142,12 @@ def _flags(*extra: str) -> dict[str, Any]:
 
 def _partial() -> dict[str, Any]:
     # §4.1: batch tools roll back on the first failing item unless partial is true.
-    return _b(False, "Keep successful items when one fails.")
+    return _b(False, "Keep successful items.")
 
 
 def _return() -> dict[str, Any]:
-    # Review 11 B5: lean mutation echoes; identical errors are reported once.
-    return _enum(("full", "summary"), "full")
+    # Review 11 B5: lean mutation echoes (the 1.1 default); identical errors are reported once.
+    return _enum(("full", "summary"), "summary")
 
 
 def _scalar() -> dict[str, Any]:
@@ -216,18 +216,11 @@ def _problems() -> dict[str, Any]:
 
 def _tuple_animation() -> dict[str, Any]:
     """Parm animation keys: a single parm has ``keyed: true``; a tuple has per-component
-    ``expressions`` and ``keyed`` as a list of component names."""
+    ``expressions`` (component name -> {expression, language}) and ``keyed`` as a list of
+    component names. The tool descriptions say so; no schema descriptions (tools/list cap)."""
     return {
-        "expressions": {
-            "type": "object",
-            "additionalProperties": _out({"expression": _t("string"), "language": _t("string")}),
-            "description": "Tuples: component name -> {expression, language}.",
-        },
-        "keyed": {
-            "type": ["boolean", "array"],
-            "items": {"type": "string"},
-            "description": "Parm: true when keyframed. Tuple: keyed component names.",
-        },
+        "expressions": _t("object"),
+        "keyed": {"type": ["boolean", "array"], "items": {"type": "string"}},
     }
 
 
@@ -575,8 +568,8 @@ _NODES: tuple[ToolSpec, ...] = (
             "gets the current version; exact_type disables), optional name, parms (value or "
             "{expression, language}; {expr, lang} also works), inputs (index or name, from, "
             "output), flags, position. Items may wire to nodes created earlier in the call. layout "
-            "default good_position. Returns node_info blocks, or path, type and problems with "
-            "return summary. Use network_build for whole graphs."
+            "default good_position. Returns path, type and problems per node; return full gives "
+            "node_info blocks with only the parms the call set. Use network_build for whole graphs."
         ),
         input_schema=_obj(
             {
@@ -684,8 +677,8 @@ _NODES: tuple[ToolSpec, ...] = (
         description=(
             "Copy nodes into to_parent, which may be their own network. names renames copies in "
             "paths order; with_inputs (default true) keeps wiring among copied nodes; "
-            "position_offset shifts them. Returns the new paths; return summary trims each row "
-            "to path, type and problems."
+            "position_offset shifts them. Returns the new paths and per copy path, type and "
+            "problems (return full adds flags)."
         ),
         input_schema=_obj(
             {
@@ -790,9 +783,8 @@ _NODES: tuple[ToolSpec, ...] = (
             "format (what network_describe returns) in one undo step. Types and inputs are "
             "validated first; dry_run stops there. Input entries are {from, from_index, to_index}; "
             "a missing to_index means the entry's position in the list. on_name_collision: error "
-            "(default), rename, replace. Returns created paths and per-node errors (return "
-            "summary: path, type, problems). Use "
-            "node_create for a few nodes."
+            "(default), rename, replace. Returns created paths and per node path, type and "
+            "problems (return full adds flags). Use node_create for a few nodes."
         ),
         input_schema=_obj(
             {
