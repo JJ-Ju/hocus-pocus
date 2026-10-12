@@ -214,10 +214,25 @@ def test_instructions_cover_launch_lifetime_and_guide_recipes():
     from hocuspocus.bridge.instructions import guide_text
 
     assert "launched.outlives_server" in INSTRUCTIONS and "attach by pid" in INSTRUCTIONS
-    assert 'detail: "folders"' in INSTRUCTIONS and "addSpareParmTuple" in INSTRUCTIONS
+    assert 'detail: "folders"' in INSTRUCTIONS and "spare_parms" in INSTRUCTIONS
+    assert "hocuspocus launch" in INSTRUCTIONS and "houdini://outline" in INSTRUCTIONS
     guide = guide_text()
-    assert guide.index("## Instructions") < guide.index("## Recipes")
-    assert "node.addSpareParmTuple(" in guide
+    assert guide.index("## Instructions") < guide.index("## Resources") < guide.index("## Recipes")
+    assert '"spare_parms": {"add": [' in guide
+    assert 'network_describe {root: "/", format: "outline", depth: 2}' in guide
+
+
+def test_outline_resource_reads_network_describe_outline():
+    from hocuspocus.bridge.server import OUTLINE_ARGS
+
+    bridge, client, _ = make_bridge()
+    assert OUTLINE_ARGS == {"root": "/", "format": "outline", "depth": 2}
+    assert bridge.route_resource("houdini://outline") == ("network_describe", OUTLINE_ARGS)
+    assert "houdini://outline" in [str(r.uri) for r in bridge.list_resources()]
+    client.replies["network_describe"] = (True, {"nodes": [{"path": "/obj"}]}, {})
+    result = bridge.read_resource("houdini://outline")
+    assert json.loads(result.contents[0].text) == {"nodes": [{"path": "/obj"}]}
+    assert client.calls[-1][:2] == ("network_describe", OUTLINE_ARGS)
 
 
 def test_instructions_under_400_words():
@@ -628,6 +643,11 @@ def test_pinned_instance_exit_falls_back_to_new_one():
         ),
         ("houdini://job/abc123", "job", {"action": "status", "job_id": "abc123"}),
         ("houdini://status", "houdini_status", {}),
+        (
+            "houdini://outline",
+            "network_describe",
+            {"root": "/", "format": "outline", "depth": 2},
+        ),
     ],
 )
 def test_resource_routing(uri, tool, args):
@@ -663,7 +683,11 @@ def test_resources_over_mcp_client():
             return resources, templates, guide, status, prompts, prompt
 
     resources, templates, guide, status, prompts, prompt = anyio.run(run)
-    assert {str(r.uri) for r in resources} == {"houdini://status", "hocuspocus://guide"}
+    assert {str(r.uri) for r in resources} == {
+        "houdini://status",
+        "houdini://outline",
+        "hocuspocus://guide",
+    }
     assert "houdini://nodetype/{category}/{name}" in {t.uri_template for t in templates}
     assert "HocusPocus drives a live Houdini" in guide.contents[0].text
     assert json.loads(status.contents[0].text)["connected"] is None

@@ -467,6 +467,7 @@ Count: 2 session + 4 hip + 10 node/network + 2 parm + 4 cook/geo + 2 visual + 1 
 **Resources** (user-attachable context; every critical read is also a tool):
 
 - `houdini://status` (same as `houdini_status`)
+- `houdini://outline` (`network_describe {root: "/", format: "outline", depth: 2}`; 1.1)
 - `houdini://node/{path}` (`node_info` default includes)
 - `houdini://node/{path}/parms`
 - `houdini://node/{path}/geo`

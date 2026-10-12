@@ -26,24 +26,36 @@ repeating it. `_meta.scene_generation` changes when the scene is cleared or load
 paths may be stale. A Houdini started with `houdini_connect {launch}` usually closes when this \
 server exits (`launched.outlives_server` says): `hip_save` before the session ends, keep one \
 session open for long jobs, or attach by pid to one started with `hocuspocus launch`. \
-`viewport_capture` \
-frames the scene per `fit`, in a GUI session too. `node_type_info` is large for FX types: pass \
-`parms` globs, or `detail: "folders"` first. Spare parms need `houdini_python` \
-(`addSpareParmTuple`; recipe in `hocuspocus://guide`)."""
+`viewport_capture` frames the scene per `fit`, in a GUI session too. `node_type_info` is large \
+for FX types: pass `parms` globs, or `detail: "folders"` first. Add spare parms with \
+`node_edit` `spare_parms` (recipe in `hocuspocus://guide`). The resource `houdini://outline` \
+is the whole scene as a compact tree."""
+
+RESOURCES = """## Resources
+
+Attach these to a conversation for context (each is also a tool call):
+
+- `houdini://status`: the connected Houdini, hip file, frame and instances (`houdini_status`).
+- `houdini://outline`: the whole scene as a compact tree two levels deep, with display
+  nodes and error counts (`network_describe {root: "/", format: "outline", depth: 2}`).
+  Start here to learn what a hip contains, then `network_describe` one network.
+- `houdini://node/{path}`, `.../parms`, `.../geo`: `node_info`, its parms, `geo_info`.
+- `houdini://nodetype/{category}/{name}`: `node_type_info` in full.
+- `houdini://job/{id}`: a job's status.
+
+"""
 
 RECIPES = """## Recipes
 
-### Add a spare parm (houdini_python)
+### Add a spare parm (node_edit spare_parms)
 
-No typed tool creates parameters. Add a control parm to a null, subnet, geo object or an
-unlocked HDA with `houdini_python`, then drive other parms from it with `ch()`:
+Add a control parm to a null, subnet, geo object or an unlocked HDA instance with
+`node_edit`, then drive other parms from it with `ch()`:
 
-```python
-node = hou.node("/obj/geo1/CONTROLS")
-node.addSpareParmTuple(
-    hou.FloatParmTemplate("glue_strength", "Glue Strength", 1, default_value=(0.5,))
-)
-result = node.parm("glue_strength").eval()
+```json
+{"items": [{"path": "/obj/geo1/CONTROLS",
+            "spare_parms": {"add": [{"name": "glue_strength", "type": "float",
+                                     "label": "Glue Strength", "default": 0.5}]}}]}
 ```
 
 `parm_set {path: "/obj/geo1/rbd1/strength", expression: 'ch("../CONTROLS/glue_strength")'}`
@@ -66,7 +78,7 @@ def _tools_md() -> Path | None:
 
 def guide_text() -> str:
     """The full operating manual: instructions plus ``docs/tools.md`` when available."""
-    parts = [GUIDE_HEADER, INSTRUCTIONS, "\n\n", RECIPES]
+    parts = [GUIDE_HEADER, INSTRUCTIONS, "\n\n", RESOURCES, RECIPES]
     tools_md = _tools_md()
     if tools_md is not None:
         with contextlib.suppress(OSError):

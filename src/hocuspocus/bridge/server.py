@@ -40,6 +40,8 @@ from .validate import coerce_integers, validate
 
 EXIT_GRACE_S = 1.5
 """After a lost response, how long to watch for the Houdini process to exit."""
+OUTLINE_ARGS = {"root": "/", "format": "outline", "depth": 2}
+"""What ``houdini://outline`` reads (review 11 B11)."""
 MAX_STALE_ENTRIES = 5
 """How many stale registry entries one call may delete before giving up."""
 PROGRESS_INTERVAL_S = 0.5
@@ -470,6 +472,13 @@ class Bridge:
             "Connected Houdini, hip file, frame and instances.",
         ),
         (
+            "houdini://outline",
+            "outline",
+            "application/json",
+            "The whole scene as a compact tree, two levels deep: each node's path, type, "
+            "children count, display node and errors (network_describe format outline).",
+        ),
+        (
             "hocuspocus://guide",
             "guide",
             "text/markdown",
@@ -500,6 +509,8 @@ class Bridge:
         """Map a resource URI to ``(tool, args)``; ``None`` for the static guide/unknown."""
         if uri == "houdini://status":
             return "houdini_status", {}
+        if uri == "houdini://outline":
+            return "network_describe", dict(OUTLINE_ARGS)
         if m := re.fullmatch(r"houdini://node/(.+)/parms", uri):
             return "node_info", {"paths": [_node_path(m.group(1))], "include": ["parms"]}
         if m := re.fullmatch(r"houdini://node/(.+)/geo", uri):

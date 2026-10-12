@@ -130,7 +130,8 @@ catalogue.
 
 The bridge also serves resources and prompts:
 
-- **Resources:** `houdini://status`, `houdini://node/{path}`,
+- **Resources:** `houdini://status`, `houdini://outline` (the whole scene as a compact
+  tree), `houdini://node/{path}`,
   `houdini://node/{path}/parms`, `houdini://node/{path}/geo`,
   `houdini://nodetype/{category}/{name}`, `houdini://job/{id}`, and the full operating
   manual at `hocuspocus://guide`.
