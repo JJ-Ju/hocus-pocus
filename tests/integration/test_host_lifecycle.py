@@ -29,7 +29,14 @@ def test_registry_entry_for_session_host(host):
         "started",
         "generation",
         "label",
+        "launched_by",
     }
+    # Set from HOCUSPOCUS_LAUNCHED_BY only when a bridge launched this Houdini.
+    assert entry["launched_by"] == (
+        int(os.environ["HOCUSPOCUS_LAUNCHED_BY"])
+        if "HOCUSPOCUS_LAUNCHED_BY" in os.environ
+        else None
+    )
     assert entry["hp"] == 1
     assert entry["pid"] == os.getpid()
     assert entry["port"] == host.port
