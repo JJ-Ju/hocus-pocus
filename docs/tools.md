@@ -2,7 +2,7 @@
 
 <!-- Generated from src/hocuspocus/tools/catalog.py by `python -m hocuspocus.tools.docs`. Do not edit by hand. -->
 
-35 tools: 31 in the `core` profile, 4 more in `full`. Model-visible `tools/list` text: 28,958 bytes. See `docs/BIBLE.md` §4 for the design.
+35 tools: 31 in the `core` profile, 4 more in `full`. Model-visible `tools/list` text: 29,050 bytes. See `docs/BIBLE.md` §4 for the design.
 
 ## Contents
 
@@ -484,18 +484,18 @@ Tidy a network. mode children (default) lays out the children of parent, or only
 
 `read-only` `headless ok` · profile `core`
 
-Read a whole network in one call as Houdini's hou.data childrenAsData format: types, non-default parms, expressions, wiring, flags, depth levels deep (default 1). Locked HDAs appear as {type, hda_locked} unless recurse_locked. Pages stop at the response budget (truncated, next_cursor). format python returns asCode for a single node. The data result can be passed to network_build.
+Read a whole network in one call as Houdini's hou.data childrenAsData format: types, non-default parms, expressions, wiring, flags, depth levels deep (default 1; 2 for outline). Locked HDAs appear as {type, hda_locked} unless recurse_locked. Pages stop at the response budget (truncated, next_cursor). format outline is a compact tree (path, name, type, children_count, display, errors); python returns asCode for a single node. The data result can be passed to network_build.
 
 ### Arguments
 
 | Name | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `root` | string | yes |  |  |
-| `depth` | integer |  | `1` | min 1 |
+| `depth` | integer |  |  | min 1 |
 | `include_defaults` | boolean |  | `false` |  |
 | `include_positions` | boolean |  | `false` |  |
 | `recurse_locked` | boolean |  | `false` |  |
-| `format` | `data` \| `python` |  | `"data"` |  |
+| `format` | `data` \| `python` \| `outline` |  | `"data"` |  |
 | `cursor` | string |  |  | next_cursor from the previous page. |
 
 ### Examples
@@ -506,6 +506,10 @@ Read a whole network in one call as Houdini's hou.data childrenAsData format: ty
 
 ```json
 {"root": "/obj/geo1", "depth": 2, "include_positions": true}
+```
+
+```json
+{"root": "/", "format": "outline"}
 ```
 
 
