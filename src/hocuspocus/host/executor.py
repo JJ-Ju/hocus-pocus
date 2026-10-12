@@ -84,7 +84,6 @@ class MainThreadExecutor:
         self.main_thread_ident: int | None = main_thread_ident
         self._running = False
         self._draining = False
-        self._current: _Work | None = None
 
     # -- lifecycle ---------------------------------------------------------------
 
@@ -231,7 +230,6 @@ class MainThreadExecutor:
             if work.state != "pending":
                 return
             work.state = "running"
-        self._current = work
         reraise: BaseException | None = None
         try:
             work.result = work.fn()
@@ -242,16 +240,8 @@ class MainThreadExecutor:
             if isinstance(exc, KeyboardInterrupt | SystemExit):
                 reraise = exc
         finally:
-            self._current = None
             with work.lock:
                 work.state = "done"
             work.done.set()
         if reraise is not None:
             raise reraise
-
-    @property
-    def busy(self) -> bool:
-        return self._current is not None
-
-    def pending(self) -> int:
-        return self._queue.qsize()

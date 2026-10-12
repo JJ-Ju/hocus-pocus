@@ -291,8 +291,8 @@ Optional file `$HOUDINI_USER_PREF_DIR/hocuspocus.toml`, env overrides
 
 **One toml serves both processes, and the environment wins.** The host reads every key;
 the bridge reads `profile`, `max_response_bytes`, `default_timeout_s`, `hfs` and
-`result_content` from the same file and ignores the rest (the host skips
-`result_content`). Inside Houdini the pref dir is
+`result_content` from the same file and ignores the rest (the host skips the
+bridge-only `hfs` and `result_content` without a warning). Inside Houdini the pref dir is
 `hou.homeHoudiniDirectory()`. The bridge starts on every client launch and cannot afford
 a hython query, so it looks in `HOUDINI_USER_PREF_DIR` (`__HVER__` read as `22.0`), then
 the `prefs` that `install-houdini` records in `<state_dir>/install.json`, then the
@@ -679,10 +679,11 @@ src/hocuspocus/
     errors.py                  # error codes + ToolError
     docs.py                    # renders docs/tools.md; tools/list size; example validator
     paths.py                   # state dir (instances/, logs/, captures/)
+    budget.py                  # the response truncator (host and bridge)
   host/                        # INSIDE Houdini. stdlib only. `import hou` lazily.
     __init__.py                # start(), stop(), status(), autostart()
     __main__.py                # hython -m hocuspocus.host
-    config.py executor.py server.py dispatch.py runtime.py registry.py jobs.py budget.py undo.py
+    config.py executor.py server.py dispatch.py runtime.py registry.py jobs.py undo.py
     tools/ registry.py _diag.py session.py hip.py code.py nodes.py network.py parms.py
            cook.py types.py geo.py visual.py state.py hda.py usd.py pdg.py events.py
   bridge/                      # OUTSIDE Houdini. mcp SDK.

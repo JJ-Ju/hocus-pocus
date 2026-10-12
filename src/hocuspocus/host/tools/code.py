@@ -34,9 +34,9 @@ import time
 import traceback
 from typing import Any
 
+from hocuspocus.tools.budget import truncate
 from hocuspocus.tools.errors import ToolError
 
-from ..budget import truncate
 from ..dispatch import call_timeout
 from .registry import HostContext, tool
 
@@ -181,7 +181,7 @@ def run_python(
 def exception_error(payload: dict[str, Any], timeout_s: float | None, budget: int) -> ToolError:
     """The ``python_exception`` (or, past the deadline, ``houdini_busy``) error."""
     exc = payload["exception"]
-    detail = truncate(
+    detail, _cuts = truncate(
         {
             "stdout": payload["stdout"],
             "stderr": payload["stderr"],
@@ -191,7 +191,8 @@ def exception_error(payload: dict[str, Any], timeout_s: float | None, budget: in
         },
         max(1024, budget - 1024),
     )
-    detail.pop("truncated", None)
+    if isinstance(detail, dict):
+        detail.pop("truncated", None)
     if exc.get("timeout"):
         return ToolError(
             "houdini_busy",
@@ -249,4 +250,4 @@ def houdini_python(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
         payload = run_hscript(code)
     else:
         raise ToolError("invalid_argument", "language must be 'python' or 'hscript'.")
-    return truncate(payload, budget)
+    return truncate(payload, budget)[0]

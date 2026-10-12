@@ -17,10 +17,11 @@ src/hocuspocus/
     errors.py                  #   error codes and ToolError
     docs.py                    #   renders docs/tools.md; tools/list size; example validator
     paths.py                   #   state dir (instances/, logs/, captures/)
+    budget.py                  #   the response truncator (host and bridge)
   host/                        # INSIDE Houdini; stdlib only; imports hou lazily
     __init__.py                #   start(), stop(), status(), autostart()
     __main__.py                #   hython -m hocuspocus.host
-    config.py executor.py server.py dispatch.py runtime.py registry.py jobs.py budget.py undo.py
+    config.py executor.py server.py dispatch.py runtime.py registry.py jobs.py undo.py
     tools/                     #   one module per tool family, each registering with @tool
       registry.py _diag.py session.py hip.py code.py nodes.py network.py parms.py cook.py
       types.py geo.py visual.py state.py hda.py usd.py pdg.py events.py

@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import http.client
 import json
-import socket
 import uuid
 from typing import Any
 
@@ -219,11 +218,3 @@ def _parse_envelope(data: Any) -> tuple[bool, dict[str, Any], dict[str, Any]]:
     if not isinstance(error, dict):
         error = {"code": "internal", "message": str(error)}
     return False, error, meta
-
-
-def is_port_open(port: int, host: str = "127.0.0.1", timeout_s: float = 0.5) -> bool:
-    try:
-        with socket.create_connection((host, port), timeout=timeout_s):
-            return True
-    except OSError:
-        return False

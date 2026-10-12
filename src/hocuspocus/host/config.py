@@ -22,7 +22,7 @@ CONFIG_FILE_NAME = "hocuspocus.toml"
 ENV_PREFIX = "HOCUSPOCUS_"
 
 _PROFILES = ("core", "full")
-BRIDGE_ONLY_KEYS = frozenset({"result_content"})
+BRIDGE_ONLY_KEYS = frozenset({"hfs", "result_content"})
 """Keys of the shared ``hocuspocus.toml`` that only the bridge reads; the host skips
 them without the "unknown key" warning."""
 _LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
@@ -41,7 +41,6 @@ class HostConfig:
     job_threshold_s: float = 10.0
     profile: str = "core"
     log_level: str = "INFO"
-    hfs: str = ""
     # Host-only settings (CLI flags / env; not part of the documented toml surface).
     port: int = 0
     state_dir: str = ""
@@ -65,7 +64,6 @@ _FIELD_TYPES: dict[str, type] = {
     "job_threshold_s": float,
     "profile": str,
     "log_level": str,
-    "hfs": str,
     "port": int,
     "state_dir": str,
     "label": str,

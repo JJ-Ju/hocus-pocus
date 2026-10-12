@@ -147,11 +147,3 @@ class UndoHistory:
     def labels(self, limit: int = 20) -> list[str]:
         with self._lock:
             return [entry["label"] for entry in list(self._labels)[-limit:]][::-1]
-
-    def entries(self, limit: int = 20) -> list[dict[str, Any]]:
-        with self._lock:
-            return [dict(entry) for entry in list(self._labels)[-limit:]][::-1]
-
-    def last(self) -> str | None:
-        with self._lock:
-            return self._labels[-1]["label"] if self._labels else None
