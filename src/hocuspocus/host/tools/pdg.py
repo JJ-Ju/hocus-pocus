@@ -5,12 +5,14 @@ network, ``cook`` cooks its display node, ``status``/``workitems`` aggregate eve
 in it, ``dirty`` dirties the whole graph and ``cancel`` cancels the graph's cook.
 
 Registered off the main thread (like ``cook``) so each action decides how to reach
-``hou``: short actions are one executor call; ``cook`` with ``block: true`` is one
-blocking ``cookWorkItems(block=True)`` executor call bounded by the call's timeout
-(``houdini_busy`` past it; the cook still finishes); ``cook`` with ``block: false``
-starts the cook in the background (``cookWorkItems(block=False)``) and returns a job
-that polls the node with short main-thread steps until the graph stops cooking.
-Cancelling that job cancels the cook. No undo group: PDG work items are not hip state.
+``hou``: short actions are one executor call. ``cook`` always starts the cook in the
+background (``cookWorkItems(block=False)``) and runs a job that polls the node with short
+main-thread steps until the graph stops cooking, so the main thread is never held for
+the length of a cook. With ``block: false`` the call returns the job at once; with
+``block: true`` it waits ``min(timeout_s, job_threshold_s)`` (the call's effective
+timeout, as ``cook`` does) and returns the result, or ``{job_id, state: "running"}``.
+Cancelling the job cancels the cook. No undo group: PDG work items are not hip state;
+``cook``, ``dirty`` and ``cancel`` are still refused in read-only mode.
 """
 
 from __future__ import annotations
@@ -20,6 +22,7 @@ from typing import Any
 
 from hocuspocus.tools.errors import ToolError
 
+from ..dispatch import call_timeout
 from ._diag import a_or_an
 from .nodes import bad_arg, get_node, page
 from .registry import HostContext, tool
@@ -27,6 +30,10 @@ from .registry import HostContext, tool
 ACTIONS = ("cook", "status", "workitems", "cancel", "dirty")
 POLL_S = 0.1
 JOB_POLL_TIMEOUT_S = 30.0
+START_GRACE_S = 2.0
+"""How long the job waits for a graph that shows neither cooking nor work items before
+it accepts that the cook produced nothing (right after ``cookWorkItems(block=False)``
+the graph can still look idle)."""
 OUTPUT_FILE_CAP = 20
 ERROR_CAP = 5
 
@@ -212,7 +219,9 @@ def _dirty(path: str) -> dict[str, Any]:
     return status_block(node)
 
 
-def _start_cook_job(ctx: HostContext, path: str, timeout_s: float) -> dict[str, Any]:
+def _start_cook_job(
+    ctx: HostContext, path: str, timeout_s: float, wait_s: float = 0.0
+) -> dict[str, Any]:
     target = ctx.executor.run(lambda: _cook_now(path, False), timeout_s)
 
     def poll() -> dict[str, Any]:
@@ -220,12 +229,15 @@ def _start_cook_job(ctx: HostContext, path: str, timeout_s: float) -> dict[str, 
         return {"cooking": _is_cooking(node), "status": status_block(node)}
 
     def work(job: Any) -> dict[str, Any]:
+        began = time.monotonic()
+        seen = False
         try:
             while True:
                 job.check_cancelled()
                 snapshot = job.run_main(poll, JOB_POLL_TIMEOUT_S)
                 status = snapshot["status"]
                 total = status.get("total") or 0
+                seen = seen or snapshot["cooking"] or total > 0
                 if total:
                     done = (
                         status["cooked"]
@@ -233,7 +245,8 @@ def _start_cook_job(ctx: HostContext, path: str, timeout_s: float) -> dict[str, 
                         + status["states"].get("cooked_cancel", 0)
                     )
                     job.progress(done / total, f"{done}/{total} work items finished")
-                if not snapshot["cooking"]:
+                idle = not snapshot["cooking"]
+                if idle and (seen or time.monotonic() - began > START_GRACE_S):
                     return {"path": target, "ok": status["failed"] == 0, "status": status}
                 time.sleep(POLL_S)
         except ToolError as exc:
@@ -242,6 +255,12 @@ def _start_cook_job(ctx: HostContext, path: str, timeout_s: float) -> dict[str, 
             raise
 
     started = ctx.jobs.start("pdg", work, label=target)
+    if wait_s > 0 and started.done_event.wait(wait_s):
+        # Returned synchronously: the caller never saw a job_id, so keep job list clean.
+        ctx.jobs.discard(started.id)
+        if started.state == "done":
+            return started.result
+        raise ToolError.from_dict(started.error or {"code": "internal", "message": "cook failed"})
     return {
         "job_id": started.id,
         "state": "running",
@@ -272,6 +291,15 @@ def pdg_tool(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
         and raw_timeout > 0
     ):
         timeout_s = float(raw_timeout)
+    else:
+        # The request-level timeout (the dispatcher's effective timeout).
+        timeout_s = float(call_timeout(timeout_s) or timeout_s)
+    if action in ("cook", "dirty", "cancel") and ctx.config.read_only:
+        raise ToolError(
+            "read_only",
+            f"pdg {action} changes work items, and the host is in read-only mode.",
+            hint="Use action status or workitems, or set read_only = false and restart the host.",
+        )
 
     def run(fn: Any) -> Any:
         if ctx.executor.on_main_thread():
@@ -299,12 +327,10 @@ def pdg_tool(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
         return run(lambda: _dirty(path))
 
     # cook
-    if block or ctx.executor.on_main_thread():
-
-        def cook_blocking() -> dict[str, Any]:
-            target = _cook_now(path, True)
-            status = status_block(resolve_top(target))
-            return {"path": target, "ok": status["failed"] == 0, "status": status}
-
-        return run(cook_blocking)
-    return _start_cook_job(ctx, path, timeout_s)
+    if ctx.executor.on_main_thread():
+        # Called inline on the main thread (GUI shell, tests): no job can make progress.
+        target = _cook_now(path, True)
+        status = status_block(resolve_top(target))
+        return {"path": target, "ok": status["failed"] == 0, "status": status}
+    wait_s = min(timeout_s, float(ctx.config.job_threshold_s)) if block else 0.0
+    return _start_cook_job(ctx, path, timeout_s, wait_s)

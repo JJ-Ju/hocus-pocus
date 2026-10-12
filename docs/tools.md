@@ -2,7 +2,7 @@
 
 <!-- Generated from src/hocuspocus/tools/catalog.py by `python -m hocuspocus.tools.docs`. Do not edit by hand. -->
 
-35 tools: 31 in the `core` profile, 4 more in `full`. Model-visible `tools/list` text: 26,720 bytes. See `docs/BIBLE.md` §4 for the design.
+35 tools: 31 in the `core` profile, 4 more in `full`. Model-visible `tools/list` text: 26,830 bytes. See `docs/BIBLE.md` §4 for the design.
 
 ## Contents
 
@@ -1111,7 +1111,7 @@ Read the USD stage of a LOP node: prims under prim (default /) to depth (default
 
 `headless ok` · profile `full`
 
-Drive a TOP node. cook cooks its work items as a job (block waits up to timeout_s, default 30); status reports node state; workitems pages work items with state and output files; cancel stops cooking; dirty dirties the node.
+Drive a TOP node. cook cooks its work items as a job (block waits up to timeout_s, default 30, capped at the 10 s job threshold, then returns the job); status reports node state; workitems pages work items with state and output files; cancel stops cooking; dirty dirties the node. cook, cancel and dirty are refused in read-only mode.
 
 ### Arguments
 

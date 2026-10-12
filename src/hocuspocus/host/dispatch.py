@@ -7,6 +7,7 @@ so the dispatcher is unit-testable on plain CPython.
 from __future__ import annotations
 
 import contextlib
+import threading
 import time
 import traceback
 from collections.abc import Callable, Mapping
@@ -24,6 +25,17 @@ CHANGED_KEY = "_changed"
 example a ``dry_run``): the dispatcher then skips the undo-label record and dirty
 marking, reports ``undo_label: null``, and allows the call in read-only mode when its
 args had ``dry_run: true``. The key is always stripped from the result."""
+
+
+_CALL = threading.local()
+
+
+def call_timeout(default: float | None = None) -> float | None:
+    """The running call's effective timeout (``args.timeout_s``, else the request's
+    ``timeout_s``, else the config default), for tools that wait on jobs off the main
+    thread. Set on the thread that runs the tool; ``default`` outside a call."""
+    value = getattr(_CALL, "timeout_s", None)
+    return default if value is None else value
 
 
 def _pop_changed(result: Any) -> bool | None:
@@ -172,11 +184,11 @@ class Dispatcher:
                 raise _read_only_error(tool)
             if mutating and not read_only_dry_run:
                 undo_label = make_label(tool, args)
-            work = self._work(impl, args, undo_label, self.response_budget(max_response_bytes))
-            if impl.main_thread:
-                result = self.ctx.executor.run(work, self.effective_timeout(args, timeout_s))
-            else:
-                result = work()
+            effective = self.effective_timeout(args, timeout_s)
+            work = self._work(
+                impl, args, undo_label, self.response_budget(max_response_bytes), effective
+            )
+            result = self.ctx.executor.run(work, effective) if impl.main_thread else work()
             changed = _pop_changed(result)
             if read_only_dry_run and changed is not False:
                 raise _read_only_error(tool)
@@ -194,7 +206,12 @@ class Dispatcher:
             )
 
     def _work(
-        self, impl: HostTool, args: dict[str, Any], undo_label: str | None, budget: int
+        self,
+        impl: HostTool,
+        args: dict[str, Any],
+        undo_label: str | None,
+        budget: int,
+        timeout_s: float,
     ) -> Callable[[], Any]:
         ctx = self.ctx
 
@@ -202,6 +219,13 @@ class Dispatcher:
             # Set here, not in call(): main-thread work runs one call at a time, so the
             # value cannot be overwritten by a concurrent request while the tool runs.
             ctx.extras["max_response_bytes"] = budget
+            _CALL.timeout_s = timeout_s
+            try:
+                return run_tool()
+            finally:
+                _CALL.timeout_s = None
+
+        def run_tool() -> Any:
             if undo_label is None:
                 return impl.fn(args, ctx)
             clean_events = ctx.scene.clean_events

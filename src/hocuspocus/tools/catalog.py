@@ -1469,8 +1469,9 @@ _FULL: tuple[ToolSpec, ...] = (
         name="pdg",
         description=(
             "Drive a TOP node. cook cooks its work items as a job (block waits up to timeout_s, "
-            "default 30); status reports node state; workitems pages work items with state and "
-            "output files; cancel stops cooking; dirty dirties the node."
+            "default 30, capped at the 10 s job threshold, then returns the job); status reports "
+            "node state; workitems pages work items with state and output files; cancel stops "
+            "cooking; dirty dirties the node. cook, cancel and dirty are refused in read-only mode."
         ),
         input_schema=_obj(
             {

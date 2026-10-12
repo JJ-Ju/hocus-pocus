@@ -325,6 +325,24 @@ def test_max_response_bytes_reaches_tools(stack):
     assert seen == [4096, 16384, 16384]
 
 
+def test_call_timeout_is_visible_to_off_thread_tools(stack):
+    from hocuspocus.host.dispatch import call_timeout
+
+    d = stack["dispatcher"]
+    seen = []
+    d.lookup = lambda name: HostTool(
+        "peek",
+        lambda a, c: seen.append(call_timeout()) or {},
+        read_only=True,
+        main_thread=False,
+    )
+    d.call("peek", {}, 7)
+    d.call("peek", {"timeout_s": 90}, 7)
+    d.call("peek", {}, None)
+    assert seen == [7.0, 90.0, 30.0]
+    assert call_timeout(5) == 5  # outside a call
+
+
 def test_houdini_busy_through_real_executor(stack):
     executor = MainThreadExecutor("headless", main_thread_ident=threading.get_ident())
     executor.start()

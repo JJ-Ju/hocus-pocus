@@ -99,6 +99,56 @@ def test_cook_as_job(client):
     assert result["status"]["failed"] == 1 and result["status"]["cooked"] == 2
 
 
+@pytest.mark.parametrize("where", ["args", "request"])
+def test_cook_block_never_holds_the_main_thread_past_the_timeout(client, where):
+    _, _, script = _graph(SLEEP, count=2, cook_type=2)
+    args = {"action": "cook", "top_path": script.path(), "block": True}
+    if where == "args":
+        args["timeout_s"] = 2
+        envelope = client.call("pdg", args)
+    else:
+        envelope = client.call("pdg", args, timeout_s=2)
+    started = time.monotonic()
+    assert envelope["ok"] is True, envelope
+    result = envelope["result"]
+    assert result["state"] == "running" and result["job_id"], result
+    # The main thread is free right away (a blocking cookWorkItems would hold it ~8 s).
+    assert client.ok("pdg", {"action": "status", "top_path": script.path()})["path"]
+    assert time.monotonic() - started < 4
+    client.ok("job", {"action": "cancel", "job_id": result["job_id"]})
+    assert _wait_job(client, result["job_id"], timeout=30)["state"] == "cancelled"
+
+
+def test_cook_block_returns_result_within_threshold(client):
+    _, gen, _ = _graph(count=2)
+    before = len(client.ok("job", {"action": "list"})["jobs"])
+    result = client.ok("pdg", {"action": "cook", "top_path": gen.path(), "block": True})
+    assert "job_id" not in result
+    assert result["ok"] is True and result["status"]["cooked"] == 2
+    assert len(client.ok("job", {"action": "list"})["jobs"]) == before  # discarded
+
+
+def test_read_only_refuses_cook_dirty_cancel(client):
+    _, gen, _ = _graph()
+    client.host.config.read_only = True
+    for action in ("cook", "dirty", "cancel"):
+        error = client.error("pdg", {"action": action, "top_path": gen.path()})
+        assert error["code"] == "read_only", action
+    assert client.ok("pdg", {"action": "status", "top_path": gen.path()})["total"] == 0
+    assert client.ok("pdg", {"action": "workitems", "top_path": gen.path()})["total"] == 0
+
+
+def test_cook_job_waits_for_the_graph_to_start(client):
+    """A poll right after cookWorkItems(block=False) can see an idle graph with no items;
+    the job must not report that as the finished cook."""
+    _, _, script = _graph("import time\ntime.sleep(1)\n", count=2, cook_type=2)
+    started = client.ok("pdg", {"action": "cook", "top_path": script.path()})
+    assert _wait_job(client, started["job_id"], timeout=60)["state"] == "done"
+    result = client.ok("job", {"action": "result", "job_id": started["job_id"]})["result"]
+    assert result["status"]["total"] == 2
+    assert result["status"]["cooked"] == 2, result
+
+
 def test_status_before_cook(client):
     _, gen, _ = _graph()
     status = client.ok("pdg", {"action": "status", "top_path": gen.path()})
