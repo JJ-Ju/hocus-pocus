@@ -28,7 +28,8 @@ from typing import Any
 
 from hocuspocus.tools.errors import ToolError
 
-from ._diag import cheap_cook_problems
+from ._diag import cheap_cook_problems, require_node
+from .nodes import hou_exception_text, hou_message
 from .registry import HostContext, tool
 
 INCLUDE_KEYS = ("keys", "menu", "template", "ramp", "multiparm")
@@ -88,29 +89,6 @@ def _json_number(value: Any) -> Any:
             return str(value)
         return float(f"{value:.{FLOAT_DIGITS}g}")
     return value
-
-
-def _hou_message(exc: BaseException) -> str:
-    getter = getattr(exc, "instanceMessage", None)
-    if callable(getter):
-        try:
-            text = str(getter()).strip()
-            if text:
-                return text
-        except Exception:
-            pass
-    return str(exc).strip() or type(exc).__name__
-
-
-def _hou_exception(exc: BaseException) -> str:
-    module = type(exc).__module__
-    name = (
-        type(exc).__name__
-        if module in ("builtins", "__main__")
-        else f"{module}.{type(exc).__name__}"
-    )
-    first = _hou_message(exc).splitlines()[0] if _hou_message(exc) else ""
-    return f"{name}: {first}"
 
 
 def _frame_arg(value: Any, field: str = "frame") -> float | None:
@@ -594,27 +572,6 @@ def parm_not_found(node: Any, name: str) -> ToolError:
     )
 
 
-def _node_not_found(node_path: str) -> ToolError:
-    import hou
-
-    parent_path, _, child = node_path.rstrip("/").rpartition("/")
-    parent = hou.node(parent_path or "/")
-    candidates: list[str] = []
-    if parent is not None and child:
-        names = [c.name() for c in parent.children()]
-        candidates = [
-            f"{parent.path().rstrip('/')}/{n}"
-            for n in difflib.get_close_matches(child, names, n=5, cutoff=0.5)
-        ]
-    return ToolError(
-        "node_not_found",
-        f"No node at {node_path}.",
-        hint="Parm paths are <node path>/<parm name>, e.g. /obj/geo1/box1/sizex. "
-        "Use node_find to locate the node.",
-        candidates=candidates,
-    )
-
-
 def resolve_name(node: Any, name: str) -> Any:
     """``node.parm(name)`` then ``node.parmTuple(name)``; ``parm_not_found`` otherwise."""
     if not isinstance(name, str) or not name:
@@ -630,7 +587,6 @@ def resolve_name(node: Any, name: str) -> Any:
 
 def resolve_path(path: Any) -> tuple[Any, Any]:
     """Resolve an absolute parm/tuple path to ``(node, hou.Parm | hou.ParmTuple)``."""
-    import hou
 
     if not isinstance(path, str) or not path.strip():
         raise ToolError("invalid_argument", "Parm paths must be non-empty strings.")
@@ -642,9 +598,15 @@ def resolve_path(path: Any) -> tuple[Any, Any]:
             hint="Use <node path>/<parm name>, e.g. /obj/geo1/box1/size or /obj/geo1/box1/sizex.",
         )
     node_path, _, name = text.rpartition("/")
-    node = hou.node(node_path)
-    if node is None:
-        raise _node_not_found(node_path)
+    try:
+        node = require_node(node_path)
+    except ToolError as exc:
+        if exc.code == "node_not_found":
+            exc.hint = (
+                f"{exc.hint} Parm paths are <node path>/<parm name>, e.g. "
+                "/obj/geo1/box1/sizex; node_find locates the node."
+            )
+        raise
     return node, resolve_name(node, name)
 
 
@@ -1158,8 +1120,8 @@ def _apply(node: Any, target: Any, item: dict[str, Any], *, frame: float | None)
         raise _invalid(
             parms[0],
             kind,
-            f"Houdini refused {field} for {path}: {_hou_message(exc).splitlines()[0]}",
-            hou_exception=_hou_exception(exc),
+            f"Houdini refused {field} for {path}: {hou_message(exc)}",
+            hou_exception=hou_exception_text(exc),
         ) from exc
     wrote = False
     if count_keys_as_written or (field == "expression" and animation == "key"):
@@ -1208,7 +1170,7 @@ def _snapshot(target: Any) -> Any:
 
 def locked_error(node: Any, target: Any, exc: BaseException | None = None) -> ToolError:
     path = _target_path(target)
-    hou_exc = _hou_exception(exc) if exc is not None else None
+    hou_exc = hou_exception_text(exc) if exc is not None else None
     try:
         inside = bool(node.isInsideLockedHDA())
     except Exception:

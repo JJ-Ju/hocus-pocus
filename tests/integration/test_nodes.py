@@ -449,6 +449,25 @@ def test_info_not_found(client):
     assert error["candidates"][0] == "/obj/geo1/xform1"
 
 
+def test_node_not_found_is_one_shape_across_tools(client):
+    """Node, network, parm and cook tools share _diag.require_node's error."""
+    make_chain()
+    missing = "/obj/geo1/xfrom1"
+    errors = [
+        client.error("node_info", {"paths": [missing]}),
+        client.error("network_describe", {"root": missing}),
+        client.error("parm_get", {"paths": [f"{missing}/tx"]}),
+        client.error("cook", {"paths": [missing]}),
+        client.error(
+            "node_connect", {"items": [{"from": "xfrom1", "to": "/obj/geo1/OUT", "to_input": 0}]}
+        ),
+    ]
+    assert {e["code"] for e in errors} == {"node_not_found"}
+    assert {e["message"] for e in errors[:4]} == {f"No node at {missing}."}
+    assert all(e["candidates"][0] == "/obj/geo1/xform1" for e in errors)
+    assert "Parm paths are" in errors[2]["hint"]
+
+
 # -- node_find ---------------------------------------------------------------------
 
 

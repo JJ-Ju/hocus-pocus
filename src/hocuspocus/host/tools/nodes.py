@@ -19,7 +19,7 @@ from typing import Any
 
 from hocuspocus.tools.errors import ToolError
 
-from ._diag import a_or_an, cheap_cook_problems, collect_problems
+from ._diag import a_or_an, cheap_cook_problems, collect_problems, require_node
 from .registry import HostContext, tool
 
 NODE_INFO_SECTIONS = (
@@ -159,63 +159,22 @@ def unique_name(parent: Any, base: str, taken: Iterable[str] = ()) -> str:
 # -- node lookup ------------------------------------------------------------------
 
 
-def node_not_found(path: str, *, field: str = "path") -> ToolError:
-    import hou
-
-    clean = path.rstrip("/") or "/"
-    parts = [p for p in clean.split("/") if p]
-    ancestor = hou.node("/")
-    depth = 0
-    for depth, part in enumerate(parts):  # noqa: B007
-        child = ancestor.node(part) if ancestor is not None else None
-        if child is None:
-            break
-        ancestor = child
-    missing = parts[depth] if parts else ""
-    names = [c.name() for c in ancestor.children()] if ancestor is not None else []
-    close = difflib.get_close_matches(missing, names, n=5, cutoff=0.5)
-    if not close:
-        close = [n for n in names if missing.lower() in n.lower() or n.lower() in missing.lower()][
-            :5
-        ]
-    base = ancestor.path().rstrip("/") if ancestor is not None else ""
-    candidates = [f"{base}/{n}" for n in close]
-    if candidates:
-        hint = f"Did you mean {candidates[0]}? Paths are absolute and case-sensitive."
-    elif ancestor is not None and ancestor.path() != "/" and names:
-        hint = (
-            f"{ancestor.path()} exists; list its children with node_find root={ancestor.path()!r}."
-        )
-    else:
-        hint = "Use node_find to search for the node by name or type."
-    return ToolError(
-        "node_not_found",
-        f"No node at {path!r} ({field}).",
-        hint=hint,
-        candidates=candidates,
-    )
-
-
 def get_node(path: Any, *, field: str = "path", relative_to: Any = None) -> Any:
-    import hou
-
+    """``_diag.require_node`` (the one node_not_found with candidates), plus paths relative
+    to ``relative_to`` (wiring sources name siblings)."""
     if not isinstance(path, str) or not path:
         raise bad_arg(f"'{field}' must be a non-empty node path.")
-    node = None
     if not path.startswith("/") and relative_to is not None:
         node = relative_to.node(path)
-        if node is None:
-            raise node_not_found(f"{relative_to.path().rstrip('/')}/{path}", field=field)
-        return node
-    if not path.startswith("/"):
+        if node is not None:
+            return node
+        path = f"{relative_to.path().rstrip('/')}/{path}"
+    elif not path.startswith("/"):
         raise bad_arg(
             f"'{field}' must be an absolute node path like /obj/geo1; got {path!r}.",
             hint="Node paths start with '/'.",
         )
-    node = hou.node(path)
-    if node is None:
-        raise node_not_found(path, field=field)
-    return node
+    return require_node(path, field=field)
 
 
 def locked_ancestor(node: Any) -> Any:
@@ -817,9 +776,14 @@ def to_tool_error(exc: BaseException, *, node: Any = None, op: str | None = None
             hint="Check input indices with node_info include inputs.",
             hou_exception=text,
         )
-    if isinstance(exc, hou.OperationFailed):
+    refusals = tuple(
+        getattr(hou, name)
+        for name in ("OperationFailed", "NameConflict", "InvalidNodeName", "MatchDefinitionError")
+        if isinstance(getattr(hou, name, None), type)
+    )
+    if isinstance(exc, refusals):
         where = f" on {node.path()}" if node is not None else ""
-        if op == "rename":
+        if op == "rename" or type(exc).__name__ == "NameConflict":
             return ToolError(
                 "name_collision",
                 f"Houdini refused the new name{where}: {hou_message(exc)}",

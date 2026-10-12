@@ -25,7 +25,7 @@ from typing import Any
 from hocuspocus.tools.errors import ToolError, read_only_error
 
 from ..undo import LABEL_PREFIX, hou_undo_group, make_label
-from .nodes import bad_arg, get_node
+from .nodes import bad_arg, get_node, hou_exception_text, hou_message
 from .registry import HostContext, tool
 from .session import scene_dirty
 
@@ -94,11 +94,10 @@ def undo(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
         try:
             done = perform()
         except hou.Error as exc:
-            text = exc.instanceMessage() if hasattr(exc, "instanceMessage") else str(exc)
             raise ToolError(
                 "internal",
-                f"Houdini refused to {action} {pending[0]!r}: {text}",
-                hou_exception=f"hou.{type(exc).__name__}: {text}",
+                f"Houdini refused to {action} {pending[0]!r}: {hou_message(exc)}",
+                hou_exception=hou_exception_text(exc),
                 hint="Inspect the scene before retrying; detail lists the steps already done.",
                 detail={"performed": performed},
             ) from exc
