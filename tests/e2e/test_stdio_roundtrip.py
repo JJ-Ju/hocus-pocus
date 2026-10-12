@@ -118,6 +118,11 @@ def headless_host(hython, tmp_path):
         log.close()
 
 
+def _json(result) -> dict:
+    """A tool result's JSON from its text block (``result_content = "text"``, the default)."""
+    return json.loads(result.content[0].text)
+
+
 def test_stdio_roundtrip(headless_host, tmp_path):
     import anyio
     from mcp import Client
@@ -125,7 +130,15 @@ def test_stdio_roundtrip(headless_host, tmp_path):
 
     proc, state, _info = headless_host
     env = dict(os.environ)
-    env.update({"HOCUSPOCUS_STATE_DIR": str(state), "PYTHONPATH": str(SRC)})
+    env.update(
+        {
+            "HOCUSPOCUS_STATE_DIR": str(state),
+            "PYTHONPATH": str(SRC),
+            # The bridge reads hocuspocus.toml from the pref dir: never the user's real one
+            # (review 10 section 5), so a personal profile or budget cannot change the test.
+            "HOUDINI_USER_PREF_DIR": (tmp_path / "prefs" / "houdini__HVER__").as_posix(),
+        }
+    )
     params = StdioServerParameters(
         command=sys.executable,
         args=["-m", "hocuspocus.bridge"],
@@ -144,7 +157,10 @@ def test_stdio_roundtrip(headless_host, tmp_path):
     assert instructions and "Houdini" in instructions
     assert tools, "tools/list is empty"
     assert status.is_error is False, status.content
-    connected = status.structured_content["connected"]
+    # result_content = "text": the JSON travels once, and no outputSchema is declared.
+    assert status.structured_content is None
+    assert all(tool.output_schema is None for tool in tools)
+    connected = _json(status)["connected"]
     assert connected["pid"] == proc.pid
     # Review 07 papercut 3: the untitled scene lives in the work dir, not the state dir.
     work = (tmp_path / "work").as_posix()
@@ -186,7 +202,7 @@ def test_bridge_launch_starts_in_the_work_dir(hython, tmp_path):
                 "houdini_connect", {"launch": {"mode": "headless", "wait_s": 150}}
             )
             status = await client.call_tool("houdini_status", {})
-            pid = status.structured_content["connected"]["pid"]
+            pid = _json(status)["connected"]["pid"]
             os.kill(pid, signal.SIGTERM)  # the hython this test launched
             for _ in range(100):
                 if not any((state / "instances").glob(f"{pid}.json")):
@@ -200,16 +216,16 @@ def test_bridge_launch_starts_in_the_work_dir(hython, tmp_path):
     try:
         launched, status, offline = anyio.run(run)
         assert launched.is_error is False, launched.content
-        block = launched.structured_content["launched"]
+        block = _json(launched)["launched"]
         assert isinstance(block["outlives_server"], bool) and block["note"]
-        connected = status.structured_content["connected"]
-        (row,) = [i for i in status.structured_content["instances"] if i["selected"]]
+        connected = _json(status)["connected"]
+        (row,) = [i for i in _json(status)["instances"] if i["selected"]]
         assert isinstance(row["launched_by"], int) and row["launched_by"] != connected["pid"]
         assert connected["env"]["HIP"] == work.as_posix()
         assert connected["env"]["JOB"] == work.as_posix()
         assert connected["hip"]["path"] == f"{work.as_posix()}/untitled.hip"
         assert "note" in connected["hip"]
-        error = offline.structured_content
+        error = _json(offline)
         assert offline.is_error is True and error["code"] == "houdini_offline", error
         assert f"pid {connected['pid']}" in error["message"], error
         assert "lost" in error["message"] and error["retryable"] is False
@@ -287,7 +303,7 @@ def test_a_later_bridge_names_the_server_that_launched_houdini(hython, tmp_path)
     try:
         launched = anyio.run(launch)
         assert launched.is_error is False, launched.content
-        pid = launched.structured_content["launched"]["pid"]
+        pid = _json(launched)["launched"]["pid"]
         entry = state / "instances" / f"{pid}.json"
         if entry.is_file():  # it outlived bridge 1 here: the registry names bridge 1
             launcher = json.loads(entry.read_text(encoding="utf-8"))["launched_by"]
@@ -300,7 +316,7 @@ def test_a_later_bridge_names_the_server_that_launched_houdini(hython, tmp_path)
                 break
             time.sleep(0.1)
         offline = anyio.run(later_call)
-        error = offline.structured_content
+        error = _json(offline)
         assert offline.is_error is True and error["code"] == "houdini_offline", error
         assert (
             f"Houdini pid {pid}" in error["message"]
@@ -308,6 +324,65 @@ def test_a_later_bridge_names_the_server_that_launched_houdini(hython, tmp_path)
         )
         assert "keep one MCP session open" in error["hint"]
         assert error["detail"]["pid"] == pid and isinstance(error["detail"]["launched_by"], int)
+    finally:
+        if pid is not None:
+            _stop(pid, state / "instances" / f"{pid}.json")
+
+
+def test_cli_launch_starts_a_houdini_no_server_owns(hython, tmp_path):
+    """Review 11 B1: `hocuspocus launch --headless` prints the registry entry and exits;
+    the hython it started keeps running, untagged, and a bridge can attach to it."""
+    import anyio
+    from mcp import Client
+    from mcp.client.stdio import StdioServerParameters
+
+    state = tmp_path / "state"
+    env = dict(os.environ)
+    env.pop("HOCUSPOCUS_LAUNCHED_BY", None)
+    env.update(
+        {
+            "PYTHONPATH": str(SRC),
+            "HOCUSPOCUS_STATE_DIR": str(state),
+            "HOCUSPOCUS_WORK_DIR": str(tmp_path / "work"),
+            "HOCUSPOCUS_HFS": str(hython.parent.parent),
+            "HOUDINI_USER_PREF_DIR": (tmp_path / "prefs" / "houdini__HVER__").as_posix(),
+            "PYTHONDONTWRITEBYTECODE": "1",
+        }
+    )
+    pid = None
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-m", "hocuspocus.cli", "launch", "--headless", "--wait", "150"],
+            env=env,
+            cwd=str(tmp_path),
+            capture_output=True,
+            text=True,
+            timeout=200,
+        )
+        assert proc.returncode == 0, proc.stderr
+        entry = json.loads(proc.stdout)
+        pid = entry["pid"]
+        assert entry["mode"] == "headless" and "token" not in entry
+        assert entry["launched_by"] is None  # no MCP server owns it
+        registry = json.loads((state / "instances" / f"{pid}.json").read_text(encoding="utf-8"))
+        assert registry.get("launched_by") is None
+        assert not (state / "launches").exists()
+
+        from hocuspocus.bridge.instances import pid_alive
+
+        assert pid_alive(pid)  # outlived the CLI process
+        params = StdioServerParameters(
+            command=sys.executable, args=["-m", "hocuspocus.bridge"], env=env, cwd=str(tmp_path)
+        )
+
+        async def attach():
+            async with Client(params, read_timeout_seconds=60) as client:
+                return await client.call_tool("houdini_connect", {"pid": pid})
+
+        connected = anyio.run(attach)
+        assert connected.is_error is False, connected.content
+        assert _json(connected)["connected"]["pid"] == pid
+        assert pid_alive(pid)  # and the bridge exiting did not take it down either
     finally:
         if pid is not None:
             _stop(pid, state / "instances" / f"{pid}.json")

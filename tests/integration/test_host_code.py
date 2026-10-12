@@ -32,37 +32,57 @@ def test_stderr_capture(client):
     assert result["stderr"] == "oops"
 
 
-def test_exception_is_reported_not_raised(client):
-    result = client.ok(
+def test_exception_is_a_python_exception_error_and_rolls_back(client):
+    """1.1 contract (review 11 B13b): an uncaught exception is an isError result."""
+    error = client.error(
         "houdini_python",
-        {"code": "print('before')\nhou.node('/obj').createNode('not_a_real_type_xyz')"},
+        {
+            "code": "print('before')\nhou.node('/obj').createNode('geo', 'half_done')\n"
+            "hou.node('/obj').createNode('not_a_real_type_xyz')"
+        },
     )
-    assert result["stdout"] == "before\n"
-    exc = result["exception"]
-    assert exc["type"] == "hou.OperationFailed"
-    assert "Invalid node type" in exc["message"] or exc["message"]
-    assert "<houdini_python>" in exc["traceback"]
+    assert error["code"] == "python_exception"
+    assert error["message"].startswith("hou.OperationFailed: ")
+    assert error["detail"]["stdout"] == "before\n"
+    assert "<houdini_python>" in error["detail"]["traceback"]
+    assert error["detail"]["rolled_back"] is True and "rolled back" in error["hint"]
+    assert hou.node("/obj/half_done") is None  # the partial change was undone
 
 
 @pytest.mark.parametrize(
-    ("code", "kind"),
+    ("code", "message"),
     [
-        ("import sys\nprint('bye')\nsys.exit(3)", "SystemExit"),
+        ("import sys\nprint('bye')\nsys.exit(3)", "SystemExit: 3"),
         ("raise SystemExit", "SystemExit"),
-        ("raise KeyboardInterrupt('stop')", "KeyboardInterrupt"),
+        ("raise KeyboardInterrupt('stop')", "KeyboardInterrupt: stop"),
     ],
 )
-def test_exit_and_interrupt_are_reported_and_the_host_survives(client, code, kind):
-    result = client.ok("houdini_python", {"code": code})
-    assert result["exception"]["type"] == kind
-    assert result["ok"] is False
+def test_exit_and_interrupt_are_errors_and_the_host_survives(client, code, message):
+    error = client.error("houdini_python", {"code": code})
+    assert error["code"] == "python_exception" and error["message"] == message
     # The host is still serving.
     assert client.ok("houdini_python", {"code": "1 + 1"})["result"] == 2
 
 
-def test_ok_flag_only_on_exception(client):
-    assert "ok" not in client.ok("houdini_python", {"code": "1"})
-    assert client.ok("houdini_python", {"code": "1/0"})["ok"] is False
+def test_success_results_are_unchanged(client):
+    result = client.ok("houdini_python", {"code": "1"})
+    assert result["result"] == 1 and "ok" not in result and "exception" not in result
+
+
+def test_deadline_stops_a_runaway_loop_and_frees_houdini(client):
+    """Review 10 §1.6: a while True: no longer wedges every later call."""
+    envelope = client.call(
+        "houdini_python",
+        {"code": "hou.node('/obj').createNode('geo', 'loop_geo')\nwhile True:\n    pass"},
+        timeout_s=2,
+    )
+    assert envelope["ok"] is False
+    error = envelope["error"]
+    assert error["code"] == "houdini_busy"
+    assert error["detail"]["started"] is True and error["detail"]["stopped"] is True
+    assert "timeout_s" in error["hint"]
+    assert hou.node("/obj/loop_geo") is None  # rolled back
+    assert client.ok("houdini_python", {"code": "2 + 2"})["result"] == 4
 
 
 def test_result_variable_when_trailing_expression_is_none(client):
@@ -73,8 +93,8 @@ def test_result_variable_when_trailing_expression_is_none(client):
 
 
 def test_syntax_error(client):
-    result = client.ok("houdini_python", {"code": "def broken(:\n  pass"})
-    assert result["exception"]["type"] == "SyntaxError"
+    error = client.error("houdini_python", {"code": "def broken(:\n  pass"})
+    assert error["code"] == "python_exception" and error["message"].startswith("SyntaxError")
 
 
 def test_hscript(client):

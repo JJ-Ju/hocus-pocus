@@ -22,8 +22,8 @@ from typing import Any
 
 from hocuspocus.tools.errors import ToolError
 
+from ._common import DEFAULT_LIMIT, bad_arg, get_node, page
 from ._diag import a_or_an, collect_problems
-from .nodes import DEFAULT_LIMIT, bad_arg, get_node, page
 from .registry import HostContext, tool
 
 INCLUDE = ("attributes", "xform", "bindings", "layers")

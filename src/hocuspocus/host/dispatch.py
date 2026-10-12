@@ -20,6 +20,12 @@ from .undo import UndoGroupFactory, make_label
 
 NOT_IMPLEMENTED_HINT = "not implemented in this host version"
 
+ROLLED_BACK_KEY = "rolled_back"
+"""A mutating tool that raises a :class:`ToolError` whose ``detail`` has
+``"rolled_back": None`` asks the dispatcher to fill in what its undo group really did
+(review 10 section 1.7). The same value is left in ``ctx.extras["rolled_back"]`` after
+every failed mutating call (None when no group was opened)."""
+
 CHANGED_KEY = "_changed"
 """A tool result may carry ``"_changed": False`` to say the call changed nothing (for
 example a ``dry_run``): the dispatcher then skips the undo-label record and dirty
@@ -38,6 +44,13 @@ def call_timeout(default: float | None = None) -> float | None:
     return default if value is None else value
 
 
+def current_request_id() -> str | None:
+    """The running call's ``request_id`` from the ``/hp/v1/call`` envelope, if any. Jobs
+    started during the call are filed under it, so the bridge can follow their progress
+    while it waits for the response (``GET /hp/v1/calls/{request_id}/jobs``, BIBLE §7)."""
+    return getattr(_CALL, "request_id", None)
+
+
 def _pop_changed(result: Any) -> bool | None:
     if isinstance(result, dict) and CHANGED_KEY in result:
         return bool(result.pop(CHANGED_KEY))
@@ -50,6 +63,14 @@ def _read_only_error(tool: str) -> ToolError:
         f"{tool} changes the scene, and the host is in read-only mode.",
         hint="Set read_only = false in hocuspocus.toml (or HOCUSPOCUS_READ_ONLY=0) and restart the host.",
     )
+
+
+def _report_rollback(error: ToolError, outcome: Any, ctx: HostContext) -> None:
+    rolled_back = getattr(outcome, "rolled_back", None)
+    ctx.extras[ROLLED_BACK_KEY] = rolled_back
+    detail = error.detail
+    if isinstance(detail, dict) and ROLLED_BACK_KEY in detail and detail[ROLLED_BACK_KEY] is None:
+        detail[ROLLED_BACK_KEY] = rolled_back
 
 
 def make_meta(ctx: HostContext, *, undo_label: str | None, started: float) -> dict[str, Any]:
@@ -139,11 +160,17 @@ class Dispatcher:
         return int(getattr(self.ctx.config, "max_response_bytes", 16384))
 
     def call(
-        self, tool: Any, args: Any, timeout_s: Any = None, max_response_bytes: Any = None
+        self,
+        tool: Any,
+        args: Any,
+        timeout_s: Any = None,
+        max_response_bytes: Any = None,
+        request_id: Any = None,
     ) -> dict[str, Any]:
         """Run ``tool``. ``max_response_bytes`` (from the request envelope; the config
         value when absent) is exposed to the tool as ``ctx.extras["max_response_bytes"]``
-        so paged tools can cap rows to the client's budget."""
+        so paged tools can cap rows to the client's budget. ``request_id`` (also from the
+        envelope) is what :func:`current_request_id` returns while the tool runs."""
         started = time.perf_counter()
         undo_label: str | None = None
         try:
@@ -168,6 +195,16 @@ class Dispatcher:
                     f"Unknown tool {tool!r}.",
                     hint=NOT_IMPLEMENTED_HINT,
                 )
+            spec = impl.spec
+            host_profile = getattr(self.ctx.config, "profile", "full")
+            if spec is not None and spec.profile == "full" and host_profile == "core":
+                raise ToolError(
+                    "invalid_argument",
+                    f"{tool} is a full-profile tool, and this Houdini's host runs the core "
+                    "profile.",
+                    hint='Set profile = "full" in hocuspocus.toml (host and bridge read it) or '
+                    "HOCUSPOCUS_PROFILE=full in Houdini's environment, and restart Houdini.",
+                )
             if not impl.headless_ok and not self.ctx.ui:
                 raise ToolError(
                     "ui_required",
@@ -186,7 +223,12 @@ class Dispatcher:
                 undo_label = make_label(tool, args)
             effective = self.effective_timeout(args, timeout_s)
             work = self._work(
-                impl, args, undo_label, self.response_budget(max_response_bytes), effective
+                impl,
+                args,
+                undo_label,
+                self.response_budget(max_response_bytes),
+                effective,
+                request_id if isinstance(request_id, str) and request_id else None,
             )
             result = self.ctx.executor.run(work, effective) if impl.main_thread else work()
             changed = _pop_changed(result)
@@ -212,6 +254,7 @@ class Dispatcher:
         undo_label: str | None,
         budget: int,
         timeout_s: float,
+        request_id: str | None = None,
     ) -> Callable[[], Any]:
         ctx = self.ctx
 
@@ -220,17 +263,25 @@ class Dispatcher:
             # value cannot be overwritten by a concurrent request while the tool runs.
             ctx.extras["max_response_bytes"] = budget
             _CALL.timeout_s = timeout_s
+            _CALL.request_id = request_id
             try:
                 return run_tool()
             finally:
                 _CALL.timeout_s = None
+                _CALL.request_id = None
 
         def run_tool() -> Any:
             if undo_label is None:
                 return impl.fn(args, ctx)
             clean_events = ctx.scene.clean_events
-            with self.undo_group(undo_label):
-                result = impl.fn(args, ctx)
+            ctx.extras[ROLLED_BACK_KEY] = None
+            outcome = None
+            try:
+                with self.undo_group(undo_label) as outcome:
+                    result = impl.fn(args, ctx)
+            except ToolError as exc:
+                _report_rollback(exc, outcome, ctx)
+                raise
             # A tool that says it changed nothing (a dry run) records no label and does
             # not dirty the scene.
             if not (isinstance(result, dict) and result.get(CHANGED_KEY) is False):

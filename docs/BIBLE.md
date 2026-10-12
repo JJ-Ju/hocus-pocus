@@ -1,8 +1,10 @@
 # HocusPocus Design Bible
 
-**Version:** 1.0 shipped 2026-10-12 (master); this document remains the design
-authority for 1.x. **Status:** authoritative. When code and this document disagree, one
-of them is wrong and the disagreement is a bug to fix, not a fact to live with.
+**Version:** 1.1 (2026-10-12, branch `release/1.1`; 1.0 shipped the same day on
+master). This document remains the design authority for 1.x; rows and sentences marked
+(1.1) changed in 1.1, and the 1.1 contract decisions are D16 to D20 (§15).
+**Status:** authoritative. When code and this document disagree, one of them is wrong
+and the disagreement is a bug to fix, not a fact to live with.
 
 **Implementation notes:** the reviews, evaluation logs and image evidence behind 1.0 are
 indexed in [`docs/redesign/README.md`](redesign/README.md).
@@ -147,8 +149,11 @@ full traceback, runs inline if already on the main thread, and raises
 discarded). Requests are serialised: one `hou` operation at a time.
 
 **Undo.** Every mutating tool call runs inside exactly one
-`hou.undos.group("HocusPocus: <tool> <summary>")`. Read-only tools never open a group.
-`undo` exposes the label history so users and agents can revert "the last agent action".
+`hou.undos.group("HocusPocus: <tool> <summary>")` (ASCII, at most 100 characters).
+Read-only tools never open a group. `undo` exposes the label history so users and agents
+can revert "the last agent action". A call that fails is rolled back by undoing its group
+after it closes; the group reports whether that happened (false when undo is disabled or
+the undo failed), and a tool error whose `detail.rolled_back` is `null` gets that value.
 
 **HTTP server.** `http.server.ThreadingHTTPServer` bound to `127.0.0.1` on an
 **ephemeral port** (`port=0`), `allow_reuse_address = False`. Routes:
@@ -158,10 +163,14 @@ discarded). Requests are serialised: one `hou` operation at a time.
 | `/hp/v1/health` | GET | `{ok, pid, houdini, generation}` — no auth, no `hou` call |
 | `/hp/v1/call` | POST | `{tool, args, timeout_s}` → tool result (see §3.4) |
 | `/hp/v1/jobs/{id}` | GET | job status/result |
+| `/hp/v1/calls/{request_id}/jobs` | GET | snapshots of the jobs started by the call with that `request_id` (progress, 1.1) |
 | `/hp/v1/shutdown` | POST | stop the host (not Houdini) |
 
-Auth: `Authorization: Bearer <token>`; 401 otherwise. `Origin` header, if present,
-must be absent or loopback; 403 otherwise. Request body cap 4 MB.
+Auth: `Authorization: Bearer <token>`; 401 otherwise. `Origin` and `Host` headers, if
+present, must name a loopback host; 403 otherwise (the `Host` check stops DNS rebinding
+from reading `/health`). Request body cap 4 MB; idle connections time out after 60 s.
+The host runs only the tools of its own `profile` (§3.7): a `core` host answers a
+full-profile tool with `invalid_argument` and the hint to set `profile = "full"`.
 
 **Instance registry entry.** On start the host writes
 `<state_dir>/instances/<pid>.json`:
@@ -176,7 +185,9 @@ must be absent or loopback; 403 otherwise. Request body cap 4 MB.
 or `~/.local/state/hocuspocus` elsewhere. The file is user-readable only. It is
 rewritten on hip load/save (path changes) and removed on `hou.hipFileEventType.BeforeQuit`
 and at interpreter exit. The bridge treats an entry whose pid is dead as stale and
-deletes it.
+deletes it. Since a pid can be reused after a crash, the bridge (and `doctor`) also
+deletes an entry whose pid is alive but whose port refuses connections, rejects its token
+(401), or answers `/health` with another pid, and selects again.
 
 **Dirty tracking.** Verified on 22.0.466: in hython `hou.hipFile.hasUnsavedChanges()` is
 always `True`, even right after a load, clear or save. Headless, the host therefore
@@ -239,7 +250,8 @@ Response (always HTTP 200 once authenticated; transport errors are 4xx/5xx):
 ```
 
 The bridge maps `ok:false` to an MCP `isError: true` result whose text is the error
-JSON and whose `structuredContent` is the error object. `_meta` is passed through as
+JSON (and whose `structuredContent` is the error object when `result_content` is `both`
+or `structured`, §4.1). `_meta` is passed through as
 tool-result `_meta`. The protocol version `hp/v1` is in the path; incompatible changes
 bump it and the bridge refuses to talk to an older host with `code: version_mismatch`
 and the hint "run `hocuspocus install-houdini` and restart Houdini".
@@ -280,8 +292,9 @@ Optional file `$HOUDINI_USER_PREF_DIR/hocuspocus.toml`, env overrides
 `HOCUSPOCUS_*`, CLI flags last. Everything has a default; the file is not required.
 
 **One toml serves both processes, and the environment wins.** The host reads every key;
-the bridge reads `profile`, `max_response_bytes`, `default_timeout_s` and `hfs` from the
-same file and ignores the rest. Inside Houdini the pref dir is
+the bridge reads `profile`, `max_response_bytes`, `default_timeout_s`, `hfs` and
+`result_content` from the same file and ignores the rest (the host skips the
+bridge-only `hfs` and `result_content` without a warning). Inside Houdini the pref dir is
 `hou.homeHoudiniDirectory()`. The bridge starts on every client launch and cannot afford
 a hython query, so it looks in `HOUDINI_USER_PREF_DIR` (`__HVER__` read as `22.0`), then
 the `prefs` that `install-houdini` records in `<state_dir>/install.json`, then the
@@ -296,9 +309,10 @@ approved_roots = []         # if non-empty, file paths for hip/hda/render must b
 max_response_bytes = 16384
 default_timeout_s = 30
 job_threshold_s = 10        # cook/render longer than this become jobs
-profile = "core"            # core | full (adds usd_stage, pdg, hda, events)
+profile = "core"            # core | full (adds usd_stage, pdg, hda, events); the host refuses full tools on core
 log_level = "INFO"
 hfs = ""                    # bridge: explicit Houdini install dir for launch
+result_content = "text"     # bridge: text | both | structured (§4.1)
 ```
 
 `HOCUSPOCUS_WORK_DIR` (environment only) is where a Houdini that HocusPocus launches
@@ -323,10 +337,20 @@ as it was started from a neutral directory).
 - **Arguments:** flat, typed, `additionalProperties: false`, enums for closed sets,
   defaults stated in the description. Batch tools take `items: [...]` and return
   `results: [...]` in the same order; one failing item fails the whole call and rolls
-  back the undo group unless `partial: true`.
-- **Responses:** `structuredContent` **and** the same JSON serialised compactly into the
-  text block (clients vary in which they feed the model). `outputSchema` declared where
-  the shape is stable. Key casing is `snake_case` in both directions.
+  back the undo group unless `partial: true`. Every batch error (and each failed row's
+  `error` with `partial`) has one shape: the message starts `items[i] (<path>): ` and
+  `detail` carries `{item, path, rolled_back}`, where `rolled_back` is true only when every
+  change the call (or, with `partial`, the item) had made was actually undone.
+- **Responses:** compact JSON in the text block. 1.0 also sent the same JSON as
+  `structuredContent` because clients vary in which they feed the model; measured for 1.1,
+  Claude Code feeds the model only the text block, so the structured copy doubled every
+  result on the wire for nothing. The bridge setting `result_content` (§3.7) now decides:
+  `text` (default) sends no `structuredContent` and therefore declares no `outputSchema`
+  (the spec requires structured results whenever one is declared); `both` is the 1.0
+  shape, with `outputSchema` declared where the shape is stable; `structured` keeps the
+  data in `structuredContent` and puts a one-line summary in the text block
+  (`<tool>: ok`, or `<code>: <message>` for an error). Error results follow the same rule;
+  images are image blocks in every mode. Key casing is `snake_case` in both directions.
 - **Budget:** `tools/list` ≤ 11,000 tokens total, CI-tested on what clients receive: the
   serialised `tools/list` result of the full profile (names, descriptions, input and output
   schemas, annotations) is ≤ 44,000 bytes (names, descriptions and input schemas alone stay
@@ -342,6 +366,9 @@ as it was started from a neutral directory).
   `include_defaults: true`.
 - **Locked HDAs** are opaque by default: `node_find`, `node_info` and
   `network_describe` do not descend into locked assets unless `recurse_locked: true`.
+- **`locked` vs `hda_locked`** (1.1): `locked` always means a lock flag, the SOP hard-lock
+  (`isHardLocked`, `flags.locked`) or a parm lock; `hda_locked` means the node is a locked
+  asset or inside one (`node_info`, `network_describe`, `parm_get`, `hda`).
 - **Every mutation result** includes, for each touched node: `path`, `type`, `errors`,
   `warnings` (after a non-forced cook of that node if it is cheap, else `cook_state:
   "not_cooked"`; errors left from before the change are rechecked with a forced cook,
@@ -369,7 +396,7 @@ as it was started from a neutral directory).
 | Tool | Args | Returns | Notes |
 |---|---|---|---|
 | `houdini_status` | — | `connected: {pid, port, houdini, ui, hip: {path, name, dirty, is_new}, time: {frame, fps, range}, env: {HIP, JOB, HIPNAME}, scene_generation, host_version}`, `instances: [...]`, `bridge_version`, `profile`, `read_only`, `allow_python` | Works offline (`connected: null`). Read-only. An untitled scene's `hip` carries `note: "$HIP is the launch directory until you hip_save."` |
-| `houdini_connect` | `pid?`, `launch?: {mode: gui\|headless, hip?, wait_s=90}`, `disconnect?: bool` | the new `connected` block | Launch uses `hfs` config or auto-detect. Headless launches `hython -m hocuspocus.host`. Both modes start in `HOCUSPOCUS_WORK_DIR` (default home, §3.7). |
+| `houdini_connect` | `pid?`, `launch?: {mode: gui\|headless, hip?, wait_s=90}`, `disconnect?: bool` | the new `connected` block | Launch uses `hfs` config or auto-detect. Headless launches `hython -m hocuspocus.host`. Both modes start in `HOCUSPOCUS_WORK_DIR` (default home, §3.7). A launched Houdini usually ends with the bridge that launched it (`launched.outlives_server` says; §15, launch lifetime); to keep one across sessions, start it with `hocuspocus launch` (§10.2, 1.1) and attach by `pid`. |
 
 ### 4.3 Hip file
 
@@ -390,29 +417,29 @@ Recent files (`hip_info` / status): the hip files saved or loaded in this host s
 | Tool | Args | Behaviour |
 |---|---|---|
 | `node_find` | `root = "/"`, `pattern = "*"` (glob on name, `hou.Node.glob` semantics), `type?` (glob), `category?` (`Sop\|Object\|Lop\|…`), `flags?: {display, render, bypass, template, locked}`, `has_errors?`, `recurse_locked = false`, `limit`, `cursor` | Compact rows: `path, type, category, flags, input_count, child_count, has_errors`. |
-| `node_info` | `paths: [..]`, `include: [parms, inputs, outputs, children, errors, flags, hda, comment, position, userdata]` default `[parms, inputs, errors, flags]`, `include_defaults = false` | Per node: `path, name, type {name, category, version, description, help_url}`, `flags`, `inputs: [{index, name, label, from: {path, output}}]`, `outputs: [{index, name, to: [...]}]`, `parms` (compact: `name, value, raw, expression?, keyed?, locked?, menu_token?`), `errors, warnings, messages, cook_state`, `children_count`, `hda: {locked, definition, library}`, `position`, `comment`, `color`. |
-| `node_create` | `items: [{parent, type, name?, parms?: {name: value\|{expression, language}\|{expr, lang}}, inputs?: [{index\|name, from, output=0}], flags?: {display, render, bypass, template}, position?: [x,y]}]`, `layout = "good_position"\|"none"`, `exact_type = false` | One undo group. Type resolved like `createNode` (namespace order; `box` → current version). Unknown type → `code: node_type_not_found` with `candidates` from fuzzy match over the parent's category. Returns per item the `node_info` compact block. `parms` go through the same engine as `parm_set`; an expression is `{expression, language}` as `parm_set` and the readers spell it, and the short `{expr, lang}` is accepted too. |
+| `node_info` | `paths: [..]`, `include: [parms, inputs, outputs, children, errors, flags, hda, comment, position, userdata]` default `[parms, inputs, errors, flags]`, `include_defaults = false`, `recurse_locked = false` | Per node: `path, name, type {name, category, version, description, help_url}`, `flags`, `inputs: [{index, name, label, from: {path, output}}]`, `outputs: [{index, name, to: [...]}]`, `parms` (compact: `name, value, raw?, expression?, keyed?, locked?, menu_token?`; `raw` only when it differs from `value`, strings over 200 characters as `{elided, head}` as in `parm_get`), `errors, warnings, messages, cook_state`, `children_count`, `hda_locked?` (true at or inside a locked asset), `hda: {hda_locked, definition, library, matches_definition}`, `position`, `comment`, `color`. |
+| `node_create` | `items: [{parent, type, name?, parms?: {name: value\|{expression, language}\|{expr, lang}}, inputs?: [{index\|name, from, output=0}], flags?: {display, render, bypass, template}, position?: [x,y]}]`, `layout = "good_position"\|"none"`, `exact_type = false`, `partial = false`, `return: summary\|full = summary` | One undo group. Type resolved like `createNode` (namespace order; `box` → current version). Unknown type → `code: node_type_not_found` with `candidates` from fuzzy match over the parent's category. Returns per item `{path, type, errors, warnings, cook_state}` (`return: summary`, the 1.1 default; identical error lists after the first become `errors_same_as: <path>`); `return: full` gives the `node_info` compact block, whose `parms` list only the parms the call set (values a creation script set, such as a light's ramps, are not the call's edits; `node_info` still reports them as non-default) and string values over 200 characters as `{elided: <chars>, head: <first 80>}`. `parms` go through the same engine as `parm_set`; an expression is `{expression, language}` as `parm_set` and the readers spell it, and the short `{expr, lang}` is accepted too. A `block_end` whose `blockpath` is unset is paired as the Tab menu does (1.1, review 11 B12): with the nearest `block_begin` upstream through its inputs, else the only unpaired `block_begin` in the same network; the end's `blockpath` and `templatepath` and the begin's `blockpath` are set (where unset) to relative paths before anything cooks, and the row carries `paired_with`. |
 | `node_delete` | `paths`, `keep_connections = true` (reconnect input 0 to outputs when possible) | Destructive. Returns `deleted: [paths]`. |
-| `node_edit` | `items: [{path, name?, flags?, color?: [r,g,b], comment?, position?, lock?: bool (HDA allowEditingOfContents), bypass?}]` | Rename returns `old_path → path`. |
-| `node_copy` | `paths`, `to_parent`, `names?`, `with_inputs = true`, `position_offset?` | `copyItems`/`copyNodesTo`. Returns new paths. |
-| `node_connect` | `items: [{from: path\|null, from_output = 0, to: path, to_input: int\|name\|"next"}]` | `from: null` disconnects. `name` uses `setNamedInput`/`inputNames()`. `"next"` uses `setNextInput` (merge-style nodes). Out-of-range → `code: invalid_input` with `hint` listing `inputLabels()`. |
+| `node_edit` | `items: [{path, name?, flags?, color?: [r,g,b], comment?, position?, lock?: bool (HDA allowEditingOfContents), bypass?, spare_parms?: {add?: [{name, type: float\|int\|string\|toggle\|menu\|button\|vector\|color, label?, default?, size?, min?, max?, menu_items?: [{token, label}], folder?, help?}], remove?: [names]}}]`, `partial = false` | Rename returns `old_path → path`. `spare_parms` (1.1, review 11 B9) builds `hou.*ParmTemplate`s and applies them with `parmTemplateGroup()` + `setParmTemplateGroup()` (a `folder` label is created when missing); it returns `spare_parms: {added: [parm paths], removed: [parm paths]}`. Only spare parms can be removed; a name already on the node is `name_collision`; nodes inside a locked asset are refused with `locked` (a locked asset's own instance takes spare parms, like the wrangle's "Create spare parameters" button). Rollback restores the old template group and the removed parms' values. `parm_not_found` on a `null`, `subnet` or `geo` points here. |
+| `node_copy` | `paths`, `to_parent`, `names?`, `with_inputs = true`, `position_offset?`, `return: summary\|full = summary` | `copyItems`/`copyNodesTo`. Returns new paths and the summary rows of `node_create` (`full` adds flags). |
+| `node_connect` | `items: [{from: path\|null, from_output = 0, to: path, to_input: int\|name\|"next"}]`, `partial = false` | `from: null` disconnects. `name` uses `setNamedInput`/`inputNames()`. `"next"` uses `setNextInput` (merge-style nodes). Out-of-range → `code: invalid_input` with `hint` listing `inputLabels()`. |
 | `node_layout` | `parent`, `paths?` (subset), `mode: children\|good_position` | `layoutChildren()` or per-node `moveToGoodPosition()`. |
-| `network_describe` | `root`, `depth = 1`, `include_defaults = false`, `include_positions = false`, `recurse_locked = false`, `format: data\|python` | `data`: `root.childrenAsData(inputs=True, flags=True, position=…, default_parmvalues=False)` trimmed and with locked-HDA children replaced by `{"type": ..., "locked": true}`. `python`: `asCode(brief=True)` for a single node only. This is how an agent reads a graph in one call. |
-| `network_build` | `parent`, `data` (same shape `network_describe` returns, i.e. Houdini's own `hou.data` format), `on_name_collision: error\|rename\|replace = error`, `layout = true`, `dry_run = false` | `parent.setChildrenFromData(...)` in one undo group after `dry_run`-style validation (type names exist, inputs resolvable). Returns created paths and per-node errors after cook. Input entries are `{from, from_index, to_index}`; a missing `to_index` is the entry's list position (§5.16). This replaces HocusScript and the network document. |
+| `network_describe` | `root`, `depth = 1` (2 for `outline`), `include_defaults = false`, `include_positions = false`, `recurse_locked = false`, `format: data\|python\|outline`, `cursor` | `data`: `root.childrenAsData(inputs=True, flags=True, position=…, default_parmvalues=False)` trimmed and with locked-HDA children replaced by `{"type": ..., "hda_locked": true}`. `python`: `asCode(brief=True)` for a single node only. `outline` (1.1, review 11 B11): `nodes: [{path, name, type, children_count?, display?, errors, hda_locked?, children?}]` to `depth`, where `display` is a network's display node and `errors` a count; `children_count` is left out at 0, and `hda_locked` marks only locked assets whose library is not under `$HFS` (Houdini's own `attribwrangle`, `mountain` and so on are locked assets too, with contents once cooked, and flagged every wrangle in review 12; `node_info` still reports `hda_locked` for them); no parms and no wiring, paged at the response budget like `data` (`truncated`, `next_cursor`). The bridge resource `houdini://outline` is `{root: "/", format: "outline"}`. This is how an agent reads a graph in one call. |
+| `network_build` | `parent`, `data` (same shape `network_describe` returns, i.e. Houdini's own `hou.data` format), `on_name_collision: error\|rename\|replace = error`, `layout = true`, `dry_run = false`, `tag?` (stored as userData `hocuspocus:tag`), `return: summary\|full = summary` | `parent.setChildrenFromData(...)` in one undo group after `dry_run`-style validation (type names exist, inputs resolvable). Returns created paths and per-node summary rows after cook (`full` adds flags). Input entries are `{from, from_index, to_index}`; a missing `to_index` is the entry's list position (§5.16). This replaces HocusScript and the network document. |
 
 ### 4.5 Parms
 
 | Tool | Args | Behaviour |
 |---|---|---|
-| `parm_get` | `paths: [...]` (parm or tuple paths), `frame?`, `include: [keys, menu, template, ramp, multiparm]` | Per parm/tuple: `path, name, tuple, component_names?, type, value` (evaluated at `frame` or current), `raw` (`unexpandedString`/`rawValue`), `expression?`, `language?`, `is_default`, `locked`, `keyframes?: {count, first, last}`, `menu?: {token, label, items: [...]}` (items capped at 50), `ramp?`, `multiparm?: {count, instances}`, `template?: {label, type, default, min, max, help}`. A tuple path returns components. A component path on a tuple returns that component. `code: parm_not_found` carries `candidates` (nearest names on the node, incl. tuple components). |
-| `parm_set` | `items: [{path, value?, expression?, language: hscript\|python = hscript, keyframe?: {frame?, value}, keyframes?: [...], channel_ref?: "/path/to/parm", ramp?: {basis, keys, values}, multiparm_count?: int, revert_to_default?: bool, press?: bool, animation: replace\|key\|keep = replace}]`, `frame?` | Exactly one of the value-ish fields per item. Tuple path + list value sets all components; component path sets one. `animation: replace` deletes keyframes/expression first then `set()` (so the value sticks); `key` sets a keyframe at `frame`; `keep` is plain `set()` (Houdini's own behaviour, which may add a key — reported). Menu values accept token or label (label resolved with a hint). Strings accept `$HIP`-style raw text unexpanded. Returns per item: `path, value, raw, expression?, wrote_keyframe: bool, is_default` and the owning node's `errors/warnings` after a cheap cook. Type mismatch → `code: invalid_value` with the template type and range. Locked HDA → `code: locked` with hint to `node_edit lock:false` or `hda` tool. |
+| `parm_get` | `paths: [...]` (parm or tuple paths), `frame?`, `include: [keys, menu, template, ramp, multiparm]`, `full_strings = false` | Per parm/tuple: `path, name, tuple, component_names?, type, value` (evaluated at `frame` or current), `raw?` (`unexpandedString`/`rawValue`, left out when it equals `value`; 1.1, review 12), string `value`/`raw` over 200 characters as `{elided: <chars>, head: <first 80>}` unless `full_strings`, `expression?`, `language?`, `is_default`, `locked` (the parm lock), `hda_locked` (inside a locked asset), `keyframes?: {count, first, last}`, `menu?: {token, label, items: [...]}` (items capped at 50), `ramp?`, `multiparm?: {count, instances}`, `template?: {label, type, default, min, max, help}`. A tuple path returns components. A component path on a tuple returns that component. `code: parm_not_found` carries `candidates` (nearest names on the node, incl. tuple components). |
+| `parm_set` | `items: [{path, value?, expression?, language: hscript\|python = hscript, keyframe?: {frame?, value}, keyframes?: [...], channel_ref?: "/path/to/parm", ramp?: {basis, keys, values}, multiparm_count?: int, revert_to_default?: bool, press?: bool, animation: replace\|key\|keep = replace}]`, `frame?`, `partial = false` | Exactly one of the value-ish fields per item. Tuple path + list value sets all components; component path sets one. `animation: replace` deletes keyframes/expression first then `set()` (so the value sticks), except that a single `keyframe` only adds or replaces its own key; `key` sets a keyframe at `frame`; `keep` is plain `set()` (Houdini's own behaviour, which may add a key — reported). Menu values accept token or label (label resolved with a hint). Strings accept `$HIP`-style raw text unexpanded. Returns per item: `path, value, raw?, expression?, wrote_keyframe: bool, is_default` (`raw` and long strings as in `parm_get`, which has the only `full_strings`) (a tuple adds per-component `expressions` and the `keyed` component names) and the owning node's `errors/warnings` after a cheap cook. Type mismatch → `code: invalid_value` with the template type and range. Locked HDA → `code: locked` with hint to `node_edit lock:false` or `hda` tool. |
 
 ### 4.6 Cook, problems, geometry
 
 | Tool | Args | Behaviour |
 |---|---|---|
-| `cook` | `paths`, `force = false`, `frame?`, `timeout_s = 30` | `node.cook(force)` on the main thread; catches `OperationFailed` and reports `errors/warnings/messages` per node, `cook_time_ms`, `ok`. Errors left from before a fix, on the node or its inputs, are rechecked (§5.18); `hint` names `force: true` when that was skipped. If the cook exceeds `job_threshold_s` and the client allows, it becomes a job (returns `job_id`). |
-| `problems` | `root = "/"`, `include_warnings = true`, `cook_uncooked = false`, `recurse_locked = false`, `limit` | Walks the subtree, reports nodes with errors/warnings, broken channel references, missing file parms (`file`-type templates whose expanded path does not exist), unconnected required inputs. Errored nodes changed since their last cook are recooked first, so a fixed node is never listed. The "why is my node red" tool. |
+| `cook` | `paths`, `force = false`, `frame?`, `timeout_s = 30`, `profile = false`, `frame_range?: [start, end, step = 1]`, `summary: none\|bbox = none` | `node.cook(force)` on the main thread; catches `OperationFailed` and reports `errors/warnings/messages` per node, `cook_time_ms` (that node's own cook; inputs already cooked are not recooked, and a forced cook under 1 ms on a node with inputs carries a `hint` naming `profile`), `ok`. Errors left from before a fix, on the node or its inputs, are rechecked (§5.18) unless the last cook took over 2 s, and then `hint` names `force: true`. `profile` force-cooks `inputAncestors()` in dependency order and then the node, one main-thread step each, and returns `chain: [{path, type, cook_time_ms, error?}]` sorted by cost (top 10), `chain_total` and `total_ms`. `frame_range` (not with `profile` or `frame`) cooks one frame per main-thread step, so a sim advances incrementally and the GUI stays responsive, with `progress` and `message: "frame 37/96"`; it returns `frame_range`, `frames_cooked`, `total_ms`, and with `summary: bbox` `frames: [{frame, point_count, prim_count, bbox_min, bbox_max}]` from the node's geometry (an OBJ's display SOP; null for other contexts); the current frame is restored afterwards. Every mode runs as a job: the call waits `min(timeout_s, job_threshold_s)` and returns the result, or `{job_id, state: "running"}` for `job`. |
+| `problems` | `root = "/"`, `include_warnings = true`, `cook_uncooked = false`, `recurse_locked = false`, `timeout_s = 30`, `limit`, `cursor` | Walks the subtree, reports nodes with errors/warnings, broken channel references, missing file parms (`file`-type templates whose expanded path does not exist), unconnected required inputs. Errored nodes changed since their last cook are recooked first, so a fixed node is never listed. `cook_uncooked` cooks never-cooked nodes too. The scan stops after a budget (10 s, or half of `timeout_s`) with `incomplete: true` and a `next_cursor` that continues the walk without losing rows. The "why is my node red" tool. |
 | `geo_info` | `path` (SOP, or OBJ → its display SOP), `frame?` | ~1 KB: `point_count, prim_count, vertex_count, bbox: {min, max, size, center}, prim_types: {polygon: n, packed: n, volume: n, …}, attributes: {point: [{name, type, size, type_info}], vertex, prim, detail: [{name, type, value}]}, groups: {point: [{name, count}], prim, edge, vertex}, intrinsics?`. Uses intrinsics and bulk accessors, never Python loops over points. |
 | `geo_read` | `path`, `class: point\|prim\|vertex\|detail`, `attribs?: [..]` (default all), `start = 0`, `cursor?`, `count = 50`, `group?`, `stats = false` | Spreadsheet rows as arrays with a `columns` header. `stats` adds `min/max/mean` per numeric attribute and `unique` (≤ 20) per string attribute over the **whole** class, computed with numpy bulk accessors. `next_cursor` is the next row offset as a string (pass it as `cursor`). |
 
@@ -421,17 +448,17 @@ Recent files (`hip_info` / status): the hip files saved or loaded in this host s
 | Tool | Args | Behaviour |
 |---|---|---|
 | `viewport_capture` | `camera?` (path), `frame?`, `resolution = [1024, 768]`, `fit = "all"\|"selected"\|"none"`, `source: auto\|viewer\|opengl_rop = auto`, `path?` | Returns MCP **image content** (PNG, downscaled so the longest side ≤ 1024) plus `{path, width, height, camera_used}`. `viewer` uses the GUI SceneViewer flipbook of one frame (captures what the user sees, as it is: `fit` is not applied and `fit_used` is `"none"`, so an unhomed view can show an empty grid; home the view first or use `opengl_rop`). `opengl_rop` renders through an OpenGL ROP and, when `camera` is absent, a camera framed on the bbox (`camera_used: "temporary"`; `fit: none` reuses the last framing); works headless. A look is read-only: headless, camera and ROP exist only in the child hython (§8); in the GUI they are created outside undo and deleted after the render, and `notes` says so if Houdini still marked the hip modified. `auto` prefers `viewer` in GUI. |
-| `render` | `rop_path`, `frames?: [start, end, inc]` (default current), `output?`, `wait_s = 20`, `thumbnail = true` | Starts a job that calls `rop.render(...)`. If it finishes within `wait_s` returns `{outputs: [paths], thumbnail: image}`; else `{job_id}` to poll with `job`. Karma/Mantra/OpenGL/any ROP. |
-| `houdini_python` | `code`, `timeout_s = 30`, `language: python\|hscript = python`, `undo_label?` | `exec` in a fresh namespace with `hou` bound, stdout/stderr captured, the value of a trailing expression or a `result` variable JSON-serialised (`repr` fallback). Runs on the main thread inside one undo group. Returns `{stdout, stderr, result, exception?: {type, message, traceback}}`. Output capped at the response budget with `truncated`. Disabled → `code: python_disabled`. Destructive. |
-| `node_type_search` | `query`, `category?`, `limit = 20`, `include_hidden = false` | Ranks exact name = 100, exact label = 95, name prefix, label prefix, all words in the label; a plain-language query is then scored word by word without stop words, a word naming the type (4) or a whole label word (3) outranking a keyword (1.5) or a description word (1), with a short Houdini synonym table at half weight. Marks `is_current_version`. Row: `name, label, category, version, description, inputs: {min, max}, deprecated`. All 18 categories supported. |
-| `node_type_info` | `type` (`category/name` or bare name with `category`), `include_parms = true`, `include_help = false`, `folder?`, `parms?` (glob on name or label), `detail: compact\|full\|folders = compact` | `folders`: `[{folder, parms}]` (visible parm count per folder), no parm rows. `compact`: `parms: {folder: [[name, label, type, default, components?]]}` under `parm_columns`, no menus, ranges, hidden parms, per-parm help, `help_url` or `tags` (Sop/scatter: 3.0 KB against 5.7 KB). `full`: `name, label, category, version, description, help_url, inputs: [{index, name, label}], outputs, parms: [{name, label, type, size, default, min, max, menu?, folder, help?, is_hidden}]` grouped by folder, plus `help_text` (first ~2 KB of the node help from `$HFS/houdini/help/nodes.zip`, best effort) when asked. |
+| `render` | `rop_path`, `frames?: [start, end, inc]` (default current), `output?`, `wait_s?` (default `job_threshold_s`), `thumbnail = true` | Always starts a job that calls `rop.render(...)` (frame by frame in-process, or in a child hython for headless OpenGL, §8). An explicit `wait_s` is the caller's own threshold; without it the call waits `job_threshold_s` (§7). If it finishes in time returns `{state: "done", job_id, outputs: [paths], thumbnail: image, notes?}`; above 5 outputs only `outputs_summary: {count, first, last, pattern, missing_count}` is inline and `job result` returns the full list. `notes` warns when the scene has no light objects or LOP lights (image outputs) and when the thumbnail's mean luminance is under 8/255. Otherwise `{job_id, state: "running"}` to poll with `job`. Every expected output file, the ROP's own parm included, is checked against `approved_roots`. Karma/Mantra/OpenGL/any ROP. |
+| `houdini_python` | `code`, `timeout_s = 30`, `language: python\|hscript = python`, `undo_label?` | `exec` in a fresh namespace with `hou` bound, stdout/stderr captured, the value of a trailing expression or a `result` variable JSON-serialised (`repr` fallback). Runs on the main thread inside one undo group. Returns `{stdout, stderr, result}`. An uncaught exception (`sys.exit()` included) fails with `code: python_exception` (stdout, stderr, traceback in `detail`) and rolls the call back. A `sys.settrace` deadline stops Python code shortly before `timeout_s` (`houdini_busy`, `detail.started` and `stopped` true, rolled back), so a runaway loop cannot wedge Houdini. Output capped at the response budget with `truncated`. Disabled → `code: python_disabled`. Destructive. |
+| `node_type_search` | `query`, `category?`, `limit = 20`, `include_hidden = false`, `current_only = true` | Ranks exact name = 100, exact label = 95, name prefix, label prefix, all words in the label; a plain-language query is then scored word by word without stop words, a word naming the type (4) or a whole label word (3) outranking a keyword (1.5) or a description word (1), with a short Houdini synonym table at half weight. Marks `is_current_version`. Row: `name, label, category, version, description` (clipped to 120 chars), `inputs: {min, max}, deprecated`. With `current_only` (1.1 default) every version of a type folds into its current version's row, ranked by its best-scoring version, and that row carries `other_versions: [...]`; `false` lists each version as its own row (`current` names the head). All 18 categories supported. `node_type_not_found` candidates come from the same ranking, led by known other names (`distantlight` is `hlight` in /obj). |
+| `node_type_info` | `type` (`category/name` or bare name with `category`), `include_parms = true`, `include_help = false`, `folder?` (a label, an `A / B` path, or `""` / `(no folder)` for the top-level parms), `parms?` (glob on name or label; `a\|b` matches either), `detail: compact\|full\|folders = compact` | `folders`: `[{folder, parms}]` (visible parm count per folder), no parm rows; every name it lists is accepted by `folder`. `compact`: `parms: {folder: [[name, label, type, default, components?]]}` under `parm_columns`, no menus, ranges, hidden parms, per-parm help, `help_url` or `tags` (Sop/scatter: 3.0 KB against 5.7 KB). `full`: `name, label, category, version, description, help_url, inputs: [{index, name, label}], outputs, parms: [{name, label, type, size, default, min, max, menu?, folder, help?, is_hidden}]` grouped by folder, plus `help_text` (first ~2 KB of the node help from `$HFS/houdini/help/nodes.zip`, best effort) when asked. |
 | `undo` | `action: undo\|redo\|history`, `steps = 1` | `history` lists the last 20 undo labels (and `redo` labels); `undo`/`redo` returns the labels `performed` plus `next_undo`, `next_redo`, `undo_count`, `redo_count`, `dirty`, `scene_generation`. |
 | `time` | `frame?`, `range?: [start, end]`, `fps?` | Omitting all fields reads. Sets with `hou.setFrame`, `hou.playbar.setFrameRange` (works headless), `hou.setFps`. |
 | `selection` | `paths?` | Omit to read `hou.selectedNodes()`; provide to `setSelected` exactly. |
-| `job` | `action: status\|result\|cancel\|list`, `job_id?` | Jobs are host-side threads for render/pdg/long cook. `status: {state: running\|done\|failed\|cancelled, progress?, message?, started, elapsed_s}`. `result` returns the tool's normal result once done. |
+| `job` | `action: status\|result\|cancel\|list`, `job_id?` | Jobs are host-side threads for render/pdg/long cook. `status: {state: running\|done\|failed\|cancelled, progress?, current?, total?, message?, started, elapsed_s}` (`progress` is 0..1, `current` of `total` steps; 1.0 once done). `result` returns the tool's normal result once done. |
 | `hda` *(full profile)* | `action: create\|save\|unlock\|match\|install\|reload\|list`, plus action-specific fields (`path`, `library_path`, `name`, `label` or `description`, `version`, `min_inputs`, `max_inputs`; `limit`/`cursor` for `list`) | Thin wrappers over `createDigitalAsset`, `definition().updateFromNode`, `allowEditingOfContents`, `matchCurrentDefinition`, `hou.hda.installFile/reloadFile/loadedFiles`. |
-| `usd_stage` *(full)* | `lop_path`, `prim = "/"`, `depth = 1`, `include: [attributes, xform, bindings, layers]`, `time?`, `limit` | Traverses `lop.stage()` read-only. Attribute values at `time` for primitive types; arrays summarised by length. |
-| `pdg` *(full)* | `action: cook\|status\|workitems\|cancel\|dirty`, `top_path`, `block = false`, `timeout_s = 30`, `limit`, `cursor` | `cookWorkItems(block)` as a job; `status` from `getPDGNode()`; `workitems` paged with state and output files. |
+| `usd_stage` *(full)* | `lop_path`, `prim = "/"`, `depth = 1`, `include: [attributes, xform, bindings, layers]`, `time?`, `limit`, `cursor` | Traverses `lop.stage()` read-only, paged by `limit` and `cursor`. Attribute values at `time` for primitive types; arrays summarised by length. |
+| `pdg` *(full)* | `action: cook\|status\|workitems\|cancel\|dirty`, `top_path`, `block = false`, `timeout_s = 30`, `limit`, `cursor` | `cookWorkItems(block=False)` as a job polled in short main-thread steps, with `progress`/`current`/`total` counting finished work items; `block` waits `min(timeout_s, job_threshold_s)` for the result, then returns `{job_id, state: "running"}` (§7); `status` from `getPDGNode()`; `workitems` paged with state and output files. |
 | `events` *(full)* | `since = 0`, `limit` | Host-side ring buffer of hip events and node events (`ChildCreated`, `NameChanged`, `ParmTupleChanged` on nodes the agent touched, `BeingDeleted`) with a monotonic sequence. For "what did the user change since my last call". |
 
 Count: 2 session + 4 hip + 10 node/network + 2 parm + 4 cook/geo + 2 visual + 1 code +
@@ -442,6 +469,7 @@ Count: 2 session + 4 hip + 10 node/network + 2 parm + 4 cook/geo + 2 visual + 1 
 **Resources** (user-attachable context; every critical read is also a tool):
 
 - `houdini://status` (same as `houdini_status`)
+- `houdini://outline` (`network_describe {root: "/", format: "outline", depth: 2}`; 1.1)
 - `houdini://node/{path}` (`node_info` default includes)
 - `houdini://node/{path}/parms`
 - `houdini://node/{path}/geo`
@@ -456,21 +484,30 @@ Count: 2 session + 4 hip + 10 node/network + 2 parm + 4 cook/geo + 2 visual + 1 
 `bridge/instructions.py` and a unit test enforces the cap):
 
 > HocusPocus drives a live Houdini. Identity is Houdini paths. Start with
-> `houdini_status`; if nothing is connected, `houdini_connect` can launch Houdini (GUI or
-> headless hython) or attach to a running one by pid. Build with `node_create` (batch,
-> with parms and inputs) or `network_build` (whole graph from the `network_describe`
-> format). Read with `node_info` and `network_describe`. Change values with `parm_set`;
-> tuple paths like `.../t` take lists, component paths like `.../tx` take scalars;
-> expressions go in `expression`. After building, call `cook` or read `errors` in
-> results, then `geo_info` to check counts and bounds, and `viewport_capture` to look at
-> it. Every mutating call is one undo step. Hip tools refuse to discard unsaved work
-> unless told to. Long cooks and renders return a `job_id`; poll it with `job`. When no
-> tool fits, `houdini_python` runs `hou` code. Results are compact: non-default parms
-> only, lists paged with `cursor`; `truncated: true` means the response budget cut a
-> list, so page or narrow the query. Errors carry `code`, `hint` and `candidates`; read
-> them and adjust. `delivery_unknown` means the call may or may not have run: inspect
-> state before repeating it. `_meta.scene_generation` changes when the scene is cleared
-> or loaded, so cached paths may be stale.
+> `houdini_status`; if nothing is connected, `houdini_connect` can launch Houdini (GUI
+> or headless hython) or attach to a running one by pid. Build with `node_create`
+> (batch, with parms and inputs) or `network_build` (whole graph from the
+> `network_describe` format). Read with `node_info` and `network_describe`. Change
+> values with `parm_set`; tuple paths like `.../t` take lists, component paths like
+> `.../tx` take scalars; expressions go in `expression`. After building, call `cook` or
+> read `errors` in results, then `geo_info` to check counts and bounds, and
+> `viewport_capture` to look at it. Every mutating call is one undo step. Hip tools
+> refuse to discard unsaved work unless told to. Long cooks and renders return a
+> `job_id`; poll it with `job`. When no tool fits, `houdini_python` runs `hou` code.
+> Results are compact: non-default parms only, lists paged with `cursor`; `truncated:
+> true` means the response budget cut a list, so page or narrow the query. Errors carry
+> `code`, `hint` and `candidates`; read them and adjust. `delivery_unknown` means the
+> call may or may not have run: inspect state before repeating it.
+> `_meta.scene_generation` changes when the scene is cleared or loaded, so cached paths
+> may be stale. A Houdini started with `houdini_connect {launch}` usually closes when
+> this server exits (`launched.outlives_server` says): `hip_save` before the session
+> ends, keep one session open for long jobs, or attach by pid to one started with
+> `hocuspocus launch`. `viewport_capture` with `source: opengl_rop` frames the scene per
+> `fit`; the GUI viewer path captures the view as it is (home it first). `node_type_info`
+> is large for FX types: pass `parms` globs, or `detail:
+> "folders"` first. Add spare parms with `node_edit` `spare_parms` (recipe in
+> `hocuspocus://guide`). The resource `houdini://outline` is the whole scene as a
+> compact tree.
 
 ---
 
@@ -561,7 +598,13 @@ synchronous up to `job_threshold_s` (10 s), then the call returns `{job_id, stat
 only through the executor**, so they still respect the main-thread rule; a job is a
 sequence of short main-thread steps (e.g. per-frame render) with progress between them.
 Progress notifications are emitted by the bridge when the client supplied a
-`progressToken`. Jobs are not durable across a Houdini restart; `job status` after a
+`progressToken`: the host files every job under the `request_id` of the `/hp/v1/call`
+that started it, and while that call is in flight the bridge polls
+`/hp/v1/calls/{request_id}/jobs` (for `job` with a `job_id`, `/hp/v1/jobs/{id}`) every
+0.5 s and sends `notifications/progress` from the newest snapshot: `progress`/`total`
+from the job's `current`/`total` steps (else its 0..1 `progress` over `total: 1`) and its
+`message`, only when `progress` increases. Polling is best effort and never fails the
+call. Jobs are not durable across a Houdini restart; `job status` after a
 restart returns `job_not_found` with that explanation.
 
 ---
@@ -621,6 +664,7 @@ Stable codes (the complete set; adding one is a design change):
 | `python_disabled` / `read_only` | config | no |
 | `job_not_found` | job id | no |
 | `cancelled` | job cancelled | — |
+| `python_exception` | `houdini_python` code raised (`SyntaxError` and `SystemExit` included): `message` is `<type>: <text>`, `detail` carries `stdout`, `stderr`, `traceback` and `rolled_back`, and the code's scene changes are undone (1.1; in 1.0 a successful result with `ok: false`) | after fixing the code |
 | `internal` | anything else; **must** carry `hou_exception` and traceback in `detail` | maybe |
 
 Protocol-level JSON-RPC errors are reserved for unknown tools (the message suggests the
@@ -640,16 +684,17 @@ pyproject.toml                 # name hocuspocus, hatchling, requires-python >=3
                                # the wheel ships houdini/ as hocuspocus/_houdini
 src/hocuspocus/
   __init__.py  version.py
-  cli.py                       # install-houdini, uninstall-houdini, doctor, client-config, docs, version
+  cli.py                       # install-houdini, uninstall-houdini, launch, doctor, client-config, docs, version
   tools/                       # shared by host and bridge; stdlib only
     catalog.py                 # the single source of truth for the tool surface
     errors.py                  # error codes + ToolError
     docs.py                    # renders docs/tools.md; tools/list size; example validator
     paths.py                   # state dir (instances/, logs/, captures/)
+    budget.py                  # the response truncator (host and bridge)
   host/                        # INSIDE Houdini. stdlib only. `import hou` lazily.
     __init__.py                # start(), stop(), status(), autostart()
     __main__.py                # hython -m hocuspocus.host
-    config.py executor.py server.py dispatch.py runtime.py registry.py jobs.py budget.py undo.py
+    config.py executor.py server.py dispatch.py runtime.py registry.py jobs.py undo.py
     tools/ registry.py _diag.py session.py hip.py code.py nodes.py network.py parms.py
            cook.py types.py geo.py visual.py state.py hda.py usd.py pdg.py events.py
   bridge/                      # OUTSIDE Houdini. mcp SDK.
@@ -707,7 +752,11 @@ the `claude mcp add` / Codex config lines. `hocuspocus version` prints the bridg
 `mcp` and Python versions. `uninstall-houdini` removes the package JSON, the copied
 versions and the `install.json` record.
 `hocuspocus client-config codex|claude` prints the snippets. `hocuspocus docs tools`
-regenerates `docs/tools.md`.
+regenerates `docs/tools.md`. `hocuspocus launch [--headless] [--hip FILE] [--wait N]`
+starts GUI Houdini (or `hython -m hocuspocus.host`) with the same detection and package
+path rules as `houdini_connect {launch}`, waits for its registry entry, prints it as JSON
+(no token) and exits: that Houdini belongs to no MCP server (no `launched_by`, no launch
+record), so it outlives every client (1.1, review 11 B1).
 
 Houdini version policy: `>= 22.0` supported; builds other than the tested list print a
 warning in `doctor` and the host log, never a refusal.
@@ -799,6 +848,11 @@ overlap (one agent per host tool family).
 - **D13** `install-houdini` copies the package into the pref dir; `--dev` links the checkout. *Houdini must never see the bridge's venv.*
 - **D14** pytest with a real-Houdini integration tier; delete nothing until it is green. *0.9 had zero tools tested against Houdini.*
 - **D15** Version 1.0.0 on `redesign/v1`; `v0.9-archive` tag. *Clean break, history preserved.*
+- **D16** (1.1) Results go to the model once, as text; `result_content` (`text` | `both` | `structured`) keeps the other shapes available. *Measured: Claude Code shows the model only the text block, so `structuredContent` doubled every result for nothing.*
+- **D17** (1.1) `node_create`, `node_copy` and `network_build` return summary rows by default; `return: full` echoes. *In review 08 the full echoes averaged 8.1 KB per build call against about 0.9 KB as summaries, and the agent used only paths and errors (review 11 B5).*
+- **D18** (1.1) An uncaught `houdini_python` exception is an `isError` result with `code: python_exception`, rolled back. *A failure returned as a success was easy to miss (review 07), and its half-applied scene changes stayed behind.*
+- **D19** (1.1) `node_type_search` defaults to `current_only`, with `other_versions` on the row. *Older versions about doubled search results (review 09) without helping the agent choose a type.*
+- **D20** (1.1) A Houdini that outlives its clients comes from the `hocuspocus launch` CLI, not from new process-ownership tricks in the bridge. *Detaching from a client's process tree is not reliable on Windows (review 08); a Houdini the client never started is not in its process tree.*
 
 ### Verified deviations (M5 reconciliation)
 
@@ -818,7 +872,7 @@ Facts found while implementing, now reflected above:
 
 ### Known limitation: launch lifetime
 
-A Houdini started by `houdini_connect {launch}` is launched detached (new process group, and breakaway from the job object where Windows allows it), but in the verified setup (review 08) it still exited when the bridge that launched it exited. Treat it as owned by the bridge: it ends when the MCP client stops the bridge (end of a session, or a one-shot script exiting), and its unsaved work is lost. This is acceptable for interactive sessions; agents should `hip_save` before a session ends, or attach to a Houdini the user started.
+A Houdini started by `houdini_connect {launch}` is launched detached (new process group, and breakaway from the job object where Windows allows it), but in the verified setup (review 08) it still exited when the bridge that launched it exited. Treat it as owned by the bridge: it ends when the MCP client stops the bridge (end of a session, or a one-shot script exiting), and its unsaved work is lost. This is acceptable for interactive sessions; agents should `hip_save` before a session ends, or attach to a Houdini the user started. Since 1.1 `hocuspocus launch` is that "start it yourself" path from a terminal or script.
 
 Since 1.0.1 this is visible rather than discovered: `houdini_connect {launch}` returns `launched.outlives_server` (false when the child shares the bridge's kill-on-close job object, i.e. breakaway was refused; the bridge cannot see a client that kills its whole process tree, so true means "should"); the launcher sets `HOCUSPOCUS_LAUNCHED_BY=<bridge pid>`, the host writes it into its registry entry as `launched_by`, and `houdini_status.instances[]` shows it; the bridge also records each launch in `<state_dir>/launches/<pid>.json`, so a later bridge that finds no live instance answers `houdini_offline` naming the dead Houdini and the server that launched it, with the keep-a-session-open / attach-by-pid hint. No new process-isolation mechanism was added.
 

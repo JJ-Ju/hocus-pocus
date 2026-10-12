@@ -15,22 +15,14 @@
 
 from __future__ import annotations
 
-import copy
-import json
 from dataclasses import dataclass
 from typing import Any
 
+from ..tools.budget import dumps, size, truncate
+
+__all__ = ["Image", "apply_budget", "dumps", "extract_images", "size"]
+
 TRUNCATION_META_KEY = "hocuspocus/truncation"
-STRING_KEEP_CHARS = 2_000
-
-
-def dumps(obj: Any) -> str:
-    """Compact JSON, the form used for the text block and for measuring."""
-    return json.dumps(obj, separators=(",", ":"), ensure_ascii=False, default=str)
-
-
-def size(obj: Any) -> int:
-    return len(dumps(obj).encode("utf-8"))
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,35 +58,6 @@ def extract_images(result: Any) -> tuple[Any, list[Image]]:
         return node
 
     return walk(result), images
-
-
-@dataclass(slots=True)
-class _Slot:
-    """A truncatable list or string reachable from the root through dict keys / list indices."""
-
-    parent: Any
-    key: Any
-    path: str
-    kind: str  # "list" | "str"
-
-
-def _collect(node: Any, path: str, out: list[_Slot]) -> None:
-    if isinstance(node, dict):
-        for key, value in node.items():
-            child = f"{path}.{key}" if path else str(key)
-            if isinstance(value, list):
-                out.append(_Slot(node, key, child, "list"))
-            elif isinstance(value, str) and len(value) > STRING_KEEP_CHARS:
-                out.append(_Slot(node, key, child, "str"))
-            _collect(value, child, out)
-    elif isinstance(node, list):
-        for i, value in enumerate(node):
-            child = f"{path}[{i}]"
-            if isinstance(value, list):
-                out.append(_Slot(node, i, child, "list"))
-            elif isinstance(value, str) and len(value) > STRING_KEEP_CHARS:
-                out.append(_Slot(node, i, child, "str"))
-            _collect(value, child, out)
 
 
 def _offset(cursor: Any) -> int | None:
@@ -161,62 +124,4 @@ def apply_budget(
         return result, []
     if pageable:
         return _apply_paged(result, max_bytes, args or {})
-    work = copy.deepcopy(result)
-    work["truncated"] = True
-    cuts: list[dict[str, Any]] = []
-
-    # Lists first (cut at item boundaries), then oversized strings, each largest-first.
-    cut_strings: set[str] = set()
-    for kind in ("list", "str"):
-        while size(work) > max_bytes:
-            slots = [
-                s
-                for s in _gather(work)
-                if s.kind == kind and _cuttable(s) and s.path not in cut_strings
-            ]
-            if not slots:
-                break
-            slot = max(slots, key=lambda s: size(s.parent[s.key]))
-            over = size(work) - max_bytes
-            cuts.append(_cut(slot, over))
-            if kind == "str":
-                cut_strings.add(slot.path)
-    return work, cuts
-
-
-def _gather(root: dict[str, Any]) -> list[_Slot]:
-    slots: list[_Slot] = []
-    _collect(root, "", slots)
-    return slots
-
-
-def _cuttable(slot: _Slot) -> bool:
-    value = slot.parent[slot.key]
-    if slot.kind == "list":
-        return len(value) > 0
-    return len(value) > STRING_KEEP_CHARS // 4
-
-
-def _cut(slot: _Slot, over: int) -> dict[str, Any]:
-    value = slot.parent[slot.key]
-    if slot.kind == "list":
-        total = len(value)
-        # Largest keep count whose removal frees at least `over` bytes (binary search).
-        lo, hi = 0, total - 1
-        current = size(value)
-        best = 0
-        while lo <= hi:
-            mid = (lo + hi) // 2
-            freed = current - size(value[:mid])
-            if freed >= over:
-                best = mid
-                lo = mid + 1
-            else:
-                hi = mid - 1
-        kept = best
-        slot.parent[slot.key] = value[:kept]
-        return {"path": slot.path, "kept": kept, "total": total}
-    total_chars = len(value)
-    keep = max(STRING_KEEP_CHARS // 4, total_chars - over - 64)
-    slot.parent[slot.key] = value[:keep] + f"…[truncated {total_chars - keep} chars]"
-    return {"path": slot.path, "kept_chars": keep, "total_chars": total_chars}
+    return truncate(result, max_bytes)

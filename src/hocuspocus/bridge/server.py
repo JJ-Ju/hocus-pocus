@@ -36,10 +36,17 @@ from .config import BridgeConfig
 from .instructions import INSTRUCTIONS, guide_text
 from .launch import Launcher
 from .local_tools import LOCAL_TOOLS
-from .validate import validate
+from .validate import coerce_integers, validate
 
 EXIT_GRACE_S = 1.5
 """After a lost response, how long to watch for the Houdini process to exit."""
+OUTLINE_ARGS = {"root": "/", "format": "outline", "depth": 2}
+"""What ``houdini://outline`` reads (review 11 B11)."""
+MAX_STALE_ENTRIES = 5
+"""How many stale registry entries one call may delete before giving up."""
+PROGRESS_INTERVAL_S = 0.5
+"""How often the bridge polls the host for job progress while a call with a
+``progressToken`` is in flight (BIBLE §7)."""
 
 log = logging.getLogger(__name__)
 
@@ -53,8 +60,8 @@ _TRANSPORT_CODES = frozenset(
 
 KEEP_ALIVE_HINT = (
     "One-shot clients: keep one MCP session open for the whole job, or start Houdini "
-    "outside the client (after hocuspocus install-houdini) and attach with "
-    "houdini_connect {pid}. houdini_connect {launch} starts a new one now."
+    "outside the client with `hocuspocus launch` (it outlives every session) and attach "
+    "with houdini_connect {pid}. houdini_connect {launch} starts a new one now."
 )
 
 
@@ -79,13 +86,46 @@ def launcher_exited_error(record: dict[str, Any]) -> ToolError:
     )
 
 
-def _error_result(
-    error: dict[str, Any], meta: dict[str, Any] | None = None
+RESULT_CONTENT_MODES = ("both", "text", "structured")
+"""``result_content`` (BIBLE §4.1): where a tool result's JSON goes.
+
+* ``text`` (default): compact JSON in the text block, no ``structuredContent`` and so no
+  ``outputSchema`` in ``tools/list`` (the spec requires structured results whenever an
+  output schema is declared). Measured for 1.1: Claude Code shows the model only the text
+  block, so a structured copy is pure wire overhead there.
+* ``both``: the 1.0 shape, the same JSON in both places.
+* ``structured``: ``structuredContent`` holds the data and the text block is a one-line
+  summary (``<tool>: ok``, or ``<code>: <message>`` for an error), for clients that feed
+  the model the structured content.
+
+Images are unaffected: they are always image content blocks."""
+
+
+def make_result(
+    mode: str,
+    tool: str,
+    data: dict[str, Any],
+    *,
+    is_error: bool,
+    meta: dict[str, Any] | None = None,
+    images: Sequence[Any] = (),
 ) -> types.CallToolResult:
+    """One ``CallToolResult`` shaped by ``result_content`` (:data:`RESULT_CONTENT_MODES`)."""
+    if mode == "structured":
+        if is_error:
+            text = f"{data.get('code', 'internal')}: {data.get('message', '')}".rstrip(": ")
+        else:
+            text = f"{tool}: ok"
+    else:
+        text = budget.dumps(data)
+    content: list[Any] = [types.TextContent(type="text", text=text)]
+    content += [
+        types.ImageContent(type="image", data=img.data, mime_type=img.mime_type) for img in images
+    ]
     return types.CallToolResult(
-        content=[types.TextContent(type="text", text=budget.dumps(error))],
-        structured_content=error,
-        is_error=True,
+        content=content,
+        structured_content=None if mode == "text" else data,
+        is_error=is_error,
         meta=meta or None,
     )
 
@@ -118,10 +158,14 @@ class Bridge:
         self.preferred_pid: int | None = None
         self.last_target: registry.Instance | None = None
         """The instance the last forwarded call went to, to name it if it exits."""
+        self._previous_target: registry.Instance | None = None
         self.exit_grace_s = EXIT_GRACE_S
         self.detached = False
         self._verified: set[tuple[int, int, str]] = set()
         self._lock = threading.Lock()
+        self.progress_interval_s = PROGRESS_INTERVAL_S
+        self._inflight: dict[str, registry.Instance] = {}
+        """request_id -> the instance a call in flight was sent to (progress polling)."""
 
     # -- instances -----------------------------------------------------------------------
 
@@ -130,6 +174,31 @@ class Bridge:
 
     def mark_verified(self, inst: registry.Instance) -> None:
         self._verified.add((inst.pid, inst.port, inst.token))
+
+    def verify(self, inst: registry.Instance) -> dict[str, Any]:
+        """``/health`` of ``inst`` with the identity check (review 10 section 1.4).
+
+        A stale entry (port refused, or answered by another pid) is deleted from the
+        registry and :class:`~hocuspocus.bridge.instances.StaleEntry` is raised, so the
+        caller selects again."""
+        try:
+            health = registry.check_identity(inst, self.client_for(inst))
+        except registry.StaleEntry as exc:
+            self.forget(inst, str(exc))
+            raise
+        self.mark_verified(inst)
+        return health
+
+    def forget(self, inst: registry.Instance, reason: str) -> None:
+        """Drop a stale registry entry and everything this bridge remembers about it."""
+        log.info("forgetting stale instance: %s", reason)
+        registry.forget(inst)
+        key = (inst.pid, inst.port, inst.token)
+        never_used = key not in self._verified
+        self._verified.discard(key)
+        if never_used and self.last_target is not None and self.last_target.pid == inst.pid:
+            # A ghost entry this bridge never talked to: nothing "exited" from its view.
+            self.last_target = self._previous_target
 
     def resolve(self) -> tuple[registry.Instance, list[str]]:
         """Pick the target instance (BIBLE §3.3 rule 3) or raise ``houdini_offline``."""
@@ -156,6 +225,7 @@ class Bridge:
                 retryable=False,  # repeating cannot work until something is launched
             )
         inst = sel.instance
+        self._previous_target = self.last_target
         if self.preferred_pid is not None and inst.pid != self.preferred_pid:
             self.preferred_pid = None  # the pinned instance exited; fall back to auto-selection
         elif exited is not None and exited.pid != inst.pid:
@@ -209,34 +279,76 @@ class Bridge:
             time.sleep(0.1)
 
     def forward(
-        self, name: str, args: dict[str, Any]
+        self, name: str, args: dict[str, Any], request_id: str | None = None
     ) -> tuple[bool, dict[str, Any], dict[str, Any]]:
-        inst, warnings = self.resolve()
-        client = self.client_for(inst)
-        key = (inst.pid, inst.port, inst.token)
-        if key not in self._verified:
-            client.health()  # version check before the first call to this instance
-            self._verified.add(key)
+        request_id = request_id or uuid.uuid4().hex
+        stale: list[str] = []
+        for _attempt in range(MAX_STALE_ENTRIES):
+            inst, warnings = self.resolve()
+            client = self.client_for(inst)
+            try:
+                if (inst.pid, inst.port, inst.token) not in self._verified:
+                    self.verify(inst)  # identity and version, before the first call
+            except registry.StaleEntry as exc:
+                stale.append(str(exc))
+                continue  # deleted; select again
+            self._inflight[request_id] = inst
+            try:
+                ok, payload, meta = client.call(
+                    name,
+                    args,
+                    self._timeout(args),
+                    request_id,
+                    max_response_bytes=self.config.max_response_bytes,
+                )
+            except ToolError as exc:
+                if registry.is_stale_error(exc):
+                    # Refused or rejected before it ran: the entry is stale, select again.
+                    stale.append(exc.message)
+                    self.forget(inst, exc.message)
+                    continue
+                # A connection reset usually means Houdini died mid-call: say so.
+                if exc.code == "delivery_unknown" and self._wait_exit(inst):
+                    error = self._exited_error(inst, f" while running {name}")
+                    error.detail = {**error.detail, "transport": exc.message}
+                    raise error from exc
+                raise
+            finally:
+                self._inflight.pop(request_id, None)
+            meta = dict(meta)
+            meta.setdefault("pid", inst.pid)
+            if stale:
+                warnings = [f"Removed stale registry entries: {'; '.join(stale)}.", *warnings]
+            if warnings:
+                meta["warnings"] = warnings
+            return ok, payload, meta
+        raise ToolError(
+            "houdini_offline",
+            "Every registered Houdini instance was stale (" + "; ".join(stale) + ").",
+            hint=OFFLINE_HINT,
+            detail={"stale": stale},
+        )
+
+    def progress_snapshot(
+        self, name: str, args: dict[str, Any], request_id: str
+    ) -> dict[str, Any] | None:
+        """The job snapshot to report progress from while ``request_id`` is in flight:
+        the job named by ``args.job_id`` (the ``job`` tool), else the newest job the call
+        started on the host. ``None`` when there is none; never raises (best effort)."""
+        inst = self._inflight.get(request_id)
+        if inst is None:
+            return None
         try:
-            ok, payload, meta = client.call(
-                name,
-                args,
-                self._timeout(args),
-                uuid.uuid4().hex,
-                max_response_bytes=self.config.max_response_bytes,
-            )
-        except ToolError as exc:
-            # A connection reset usually means Houdini died mid-call: say so, not "unknown".
-            if exc.code == "delivery_unknown" and self._wait_exit(inst):
-                error = self._exited_error(inst, f" while running {name}")
-                error.detail = {**error.detail, "transport": exc.message}
-                raise error from exc
-            raise
-        meta = dict(meta)
-        meta.setdefault("pid", inst.pid)
-        if warnings:
-            meta["warnings"] = warnings
-        return ok, payload, meta
+            client = self.client_for(inst)
+            job_id = args.get("job_id")
+            if isinstance(job_id, str) and job_id:
+                ok, snapshot, _meta = client.job(job_id, timeout_s=5.0)
+                return snapshot if ok else None
+            jobs = client.call_jobs(request_id)
+        except Exception:  # noqa: BLE001 - progress must never fail the call
+            log.debug("progress poll for %s failed", name, exc_info=True)
+            return None
+        return jobs[-1] if jobs else None
 
     def _timeout(self, args: dict[str, Any]) -> float:
         for key in ("timeout_s", "wait_s"):
@@ -258,14 +370,17 @@ class Bridge:
                     name=spec.name,
                     description=description,
                     input_schema=spec.input_schema,
-                    output_schema=spec.output_schema,
+                    # No structuredContent in text mode, so no outputSchema either.
+                    output_schema=(
+                        spec.output_schema if self.config.result_content != "text" else None
+                    ),
                     annotations=types.ToolAnnotations.model_validate(spec.annotations()),
                 )
             )
         return out
 
     def invoke(
-        self, name: str, args: dict[str, Any]
+        self, name: str, args: dict[str, Any], request_id: str | None = None
     ) -> tuple[bool, dict[str, Any], dict[str, Any]]:
         """Run a tool without MCP wrapping: ``(ok, result_or_error, meta)``. Never raises ToolError."""
         spec = self._by_name.get(name)
@@ -278,7 +393,7 @@ class Bridge:
                     )
                 with self._lock:
                     return True, impl(self, args), {}
-            return self.forward(name, args)
+            return self.forward(name, args, request_id)
         except ToolError as exc:
             return False, exc.to_dict(), {}
         except Exception as exc:  # noqa: BLE001 - every failure must be a tool result
@@ -294,8 +409,11 @@ class Bridge:
                 {},
             )
 
-    def call_tool(self, name: str, arguments: dict[str, Any] | None) -> types.CallToolResult:
-        """Validate, dispatch and shape one ``tools/call``. Unknown tools raise ``MCPError``."""
+    def call_tool(
+        self, name: str, arguments: dict[str, Any] | None, request_id: str | None = None
+    ) -> types.CallToolResult:
+        """Validate, dispatch and shape one ``tools/call``. Unknown tools raise ``MCPError``.
+        ``request_id`` names the host call, so progress can be polled while it runs."""
         spec = self._by_name.get(name)
         if spec is None:
             close = difflib.get_close_matches(name, list(self._by_name), n=3, cutoff=0.6)
@@ -315,10 +433,12 @@ class Bridge:
                 hint=f"fix the listed arguments; {name}'s inputSchema in tools/list is authoritative",
                 detail={"violations": violations},
             )
-            return _error_result(error.to_dict())
-        ok, payload, meta = self.invoke(name, args)
+            return make_result(self.config.result_content, name, error.to_dict(), is_error=True)
+        # 50.0 validates as an integer; the host checks isinstance(..., int) (review 10).
+        args = coerce_integers(args, spec.input_schema)
+        ok, payload, meta = self.invoke(name, args, request_id)
         pageable = "cursor" in (spec.input_schema.get("properties") or {})
-        return self.shape(ok, payload, meta, args=args, pageable=pageable)
+        return self.shape(ok, payload, meta, args=args, pageable=pageable, tool=name)
 
     def shape(
         self,
@@ -328,24 +448,19 @@ class Bridge:
         *,
         args: dict[str, Any] | None = None,
         pageable: bool = False,
+        tool: str = "",
     ) -> types.CallToolResult:
         meta = dict(meta)
+        mode = self.config.result_content
         if not ok:
-            return _error_result(payload, meta)
+            return make_result(mode, tool, payload, is_error=True, meta=meta)
         result, images = budget.extract_images(payload)
         result, cuts = budget.apply_budget(
             result, self.config.max_response_bytes, args, pageable=pageable
         )
         if cuts:
             meta[budget.TRUNCATION_META_KEY] = cuts
-        content: list[Any] = [types.TextContent(type="text", text=budget.dumps(result))]
-        content += [
-            types.ImageContent(type="image", data=img.data, mime_type=img.mime_type)
-            for img in images
-        ]
-        return types.CallToolResult(
-            content=content, structured_content=result, is_error=False, meta=meta or None
-        )
+        return make_result(mode, tool, result, is_error=False, meta=meta, images=images)
 
     # -- resources -----------------------------------------------------------------------
 
@@ -355,6 +470,13 @@ class Bridge:
             "status",
             "application/json",
             "Connected Houdini, hip file, frame and instances.",
+        ),
+        (
+            "houdini://outline",
+            "outline",
+            "application/json",
+            "The whole scene as a compact tree, two levels deep: each node's path, type, "
+            "children count, display node and errors (network_describe format outline).",
         ),
         (
             "hocuspocus://guide",
@@ -387,6 +509,8 @@ class Bridge:
         """Map a resource URI to ``(tool, args)``; ``None`` for the static guide/unknown."""
         if uri == "houdini://status":
             return "houdini_status", {}
+        if uri == "houdini://outline":
+            return "network_describe", dict(OUTLINE_ARGS)
         if m := re.fullmatch(r"houdini://node/(.+)/parms", uri):
             return "node_info", {"paths": [_node_path(m.group(1))], "include": ["parms"]}
         if m := re.fullmatch(r"houdini://node/(.+)/geo", uri):
@@ -545,6 +669,95 @@ def get_prompt(name: str, arguments: dict[str, str] | None) -> types.GetPromptRe
 # -- SDK wiring --------------------------------------------------------------------------
 
 
+class ProgressTracker:
+    """Turns job snapshots into MCP progress values that only ever increase.
+
+    ``current``/``total`` (steps) are reported as they are; a bare ``progress`` fraction
+    as ``progress`` of ``total: 1``. A snapshot that would not increase ``progress`` is
+    skipped, as the spec requires."""
+
+    def __init__(self) -> None:
+        self.last: float | None = None
+
+    def update(
+        self, snapshot: dict[str, Any] | None
+    ) -> tuple[float, float | None, str | None] | None:
+        if not isinstance(snapshot, dict):
+            return None
+        current, total = snapshot.get("current"), snapshot.get("total")
+        fraction = snapshot.get("progress")
+        if _number(current) and _number(total) and total > 0:
+            value, out_total = float(current), float(total)
+        elif _number(fraction):
+            value, out_total = float(fraction), 1.0
+        else:
+            return None
+        if self.last is not None and value <= self.last:
+            return None
+        self.last = value
+        message = snapshot.get("message")
+        return value, out_total, message if isinstance(message, str) and message else None
+
+
+def _wants_progress(ctx: Any) -> bool:
+    """Whether the caller asked for progress: a ``_meta.progressToken`` on the request, or
+    (the SDK's in-process transport) a progress callback on the request's channel."""
+    meta = getattr(ctx, "meta", None)
+    if isinstance(meta, dict) and any(
+        meta.get(key) is not None for key in ("progressToken", "progress_token")
+    ):
+        return True
+    channel = getattr(getattr(ctx, "session", None), "_request_outbound", None)
+    for _ in range(3):  # the SDK wraps the request's dispatch context
+        if channel is None:
+            break
+        if (
+            getattr(channel, "_progress_token", None) is not None
+            or getattr(channel, "_on_progress", None) is not None
+        ):
+            return True
+        channel = getattr(channel, "_inner", None)
+    return False
+
+
+def _number(value: Any) -> bool:
+    return isinstance(value, int | float) and not isinstance(value, bool)
+
+
+async def _call_with_progress(
+    bridge: Bridge, ctx: Any, params: types.CallToolRequestParams
+) -> types.CallToolResult:
+    """Run the call in a worker thread and, while it is in flight, poll the host for the
+    job it started (or the one ``job_id`` names) and emit ``notifications/progress``."""
+    request_id = uuid.uuid4().hex
+    args = dict(params.arguments or {})
+    tracker = ProgressTracker()
+    result: types.CallToolResult | None = None
+
+    async def poll() -> None:
+        while True:
+            await anyio.sleep(bridge.progress_interval_s)
+            snapshot = await anyio.to_thread.run_sync(
+                bridge.progress_snapshot, params.name, args, request_id
+            )
+            update = tracker.update(snapshot)
+            if update is not None:
+                progress, total, message = update
+                try:
+                    await ctx.session.report_progress(progress, total, message)
+                except Exception:  # noqa: BLE001 - a lost notification is not a failure
+                    log.debug("progress notification failed", exc_info=True)
+
+    async with anyio.create_task_group() as group:
+        group.start_soon(poll)
+        result = await anyio.to_thread.run_sync(
+            bridge.call_tool, params.name, params.arguments, request_id
+        )
+        group.cancel_scope.cancel()
+    assert result is not None
+    return result
+
+
 def build_server(bridge: Bridge | None = None) -> Server[Any]:
     bridge = bridge or Bridge()
 
@@ -552,7 +765,10 @@ def build_server(bridge: Bridge | None = None) -> Server[Any]:
         return types.ListToolsResult(tools=bridge.list_tools())
 
     async def on_call_tool(ctx: Any, params: types.CallToolRequestParams) -> types.CallToolResult:
-        return await anyio.to_thread.run_sync(bridge.call_tool, params.name, params.arguments)
+        spec = bridge._by_name.get(params.name)
+        if not _wants_progress(ctx) or spec is None or spec.bridge_local:
+            return await anyio.to_thread.run_sync(bridge.call_tool, params.name, params.arguments)
+        return await _call_with_progress(bridge, ctx, params)
 
     async def on_list_resources(ctx: Any, params: Any) -> types.ListResourcesResult:
         return types.ListResourcesResult(resources=bridge.list_resources())

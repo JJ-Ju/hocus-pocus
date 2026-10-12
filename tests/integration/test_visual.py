@@ -363,6 +363,95 @@ def test_render_isolated_override_replaces_keyed_output(client, work_dir):
     assert rop.parm("picture").expression() == f"'{original}'"
 
 
+def _bgeo_rop(work_dir: Path, pattern: str = "s.$F4.bgeo.sc"):
+    geo = _toy_scene()
+    rop = hou.node("/out").createNode("geometry", "bgeo")
+    rop.parm("soppath").set(geo.displayNode().path())
+    rop.parm("sopoutput").set(_fwd(work_dir / pattern))
+    return rop
+
+
+def test_render_over_five_outputs_returns_a_summary(client, work_dir):
+    """Review 11 B6: a sequence returns outputs_summary inline, the list via job result."""
+    rop = _bgeo_rop(work_dir)
+    result = client.ok("render", {"rop_path": rop.path(), "frames": [1, 8]})
+    assert result["state"] == "done"
+    assert "outputs" not in result
+    summary = result["outputs_summary"]
+    assert summary["count"] == 8 and summary["missing_count"] == 0
+    assert summary["first"] == _fwd(work_dir / "s.0001.bgeo.sc")
+    assert summary["last"] == _fwd(work_dir / "s.0008.bgeo.sc")
+    assert summary["pattern"] == _fwd(work_dir / "s.####.bgeo.sc")
+    assert "action: result" in result["hint"]
+    full = client.ok("job", {"action": "result", "job_id": result["job_id"]})["result"]
+    assert full["outputs"] == [_fwd(work_dir / f"s.{i:04d}.bgeo.sc") for i in range(1, 9)]
+    few = client.ok("render", {"rop_path": rop.path(), "frames": [1, 5]})
+    assert len(few["outputs"]) == 5 and "outputs_summary" not in few
+
+
+def test_render_waits_job_threshold_by_default(client, work_dir):
+    rop = _bgeo_rop(work_dir)
+    saved = client.host.config.job_threshold_s
+    client.host.config.job_threshold_s = 0
+    try:
+        started = client.ok("render", {"rop_path": rop.path(), "frames": [1, 2]})
+        explicit = client.ok("render", {"rop_path": rop.path(), "frames": [1, 1], "wait_s": 30})
+    finally:
+        client.host.config.job_threshold_s = saved
+    assert started["state"] in ("running", "done")
+    if started["state"] == "running":
+        assert _wait_job(client, started["job_id"])["state"] == "done"
+    assert explicit["state"] == "done"
+
+
+def test_render_notes_no_lights_and_a_black_thumbnail(client, work_dir):
+    """Review 11 B10: an unlit, empty OpenGL render says why it is black."""
+    rop = _opengl_rop(work_dir)
+    result = client.ok("render", {"rop_path": rop.path(), "frames": [1, 1]})
+    notes = " ".join(result.get("notes", []))
+    assert "no lights" in notes, result
+    assert "nearly black" in notes, result
+    hou.node("/obj").createNode("hlight", "key")
+    _toy_scene()
+    lit = client.ok("render", {"rop_path": rop.path(), "frames": [1, 1]})
+    assert "no lights" not in " ".join(lit.get("notes", [])), lit
+
+
+def test_render_rop_own_output_outside_approved_roots_in_process(client, work_dir):
+    """Review 10 §5: the ROP's own output parm is checked, here on an in-process ROP."""
+    rop = _bgeo_rop(work_dir)
+    client.host.config.approved_roots = [_fwd(work_dir / "allowed")]
+    error = client.error("render", {"rop_path": rop.path(), "frames": [1, 2]})
+    assert error["code"] == "path_not_allowed"
+    assert not list(work_dir.glob("s.*.bgeo.sc"))
+    allowed = _fwd(work_dir / "allowed" / "s.$F4.bgeo.sc")
+    rop.parm("sopoutput").set(allowed)
+    result = client.ok("render", {"rop_path": rop.path(), "frames": [1, 1]})
+    assert result["outputs"] == [_fwd(work_dir / "allowed" / "s.0001.bgeo.sc")]
+
+
+def test_capture_after_an_outside_fix(client):
+    """Review 10 §5: a node fixed outside HocusPocus keeps its old error (BIBLE §5.18);
+    the capture's framing refreshes it instead of failing or framing nothing."""
+    geo = hou.node("/obj").createNode("geo", "stale")
+    box = geo.createNode("box", "box1")
+    mountain = geo.createNode("mountain", "mountain1")
+    mountain.setInput(0, box)
+    mountain.setDisplayFlag(True)
+    parm = box.parm("sizex")
+    parm.setExpression("$F*(")
+    with pytest.raises(hou.OperationFailed):
+        mountain.cook()
+    parm.deleteAllKeyframes()
+    parm.revertToDefaults()
+    box.cook()
+    assert box.errors()  # the stale error is still there
+    result = client.ok("viewport_capture", {"resolution": [320, 240]})
+    assert result["camera_used"] == TEMPORARY_CAMERA
+    assert _not_blank(_decode(result["image"]))
+    assert not box.errors() and not mountain.errors()
+
+
 def test_capture_path_must_be_png(client, work_dir):
     error = client.error("viewport_capture", {"path": _fwd(work_dir / "x.jpg")})
     assert error["code"] == "invalid_argument"

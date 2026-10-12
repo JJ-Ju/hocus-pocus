@@ -177,7 +177,10 @@ def host(hp_dirs: dict[str, Path]) -> Any:
     from hocuspocus.host.config import HostConfig
 
     os.environ["HOCUSPOCUS_STATE_DIR"] = str(hp_dirs["state"])
-    config = HostConfig(state_dir=str(hp_dirs["state"]), pref_dir=str(hp_dirs["prefs"]))
+    # profile "full": the host refuses full-profile tools (pdg, hda, ...) otherwise.
+    config = HostConfig(
+        state_dir=str(hp_dirs["state"]), pref_dir=str(hp_dirs["prefs"]), profile="full"
+    )
     info = hp.start(config)
     assert info["running"], info
     running = hp.current()

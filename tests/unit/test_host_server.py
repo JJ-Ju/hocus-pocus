@@ -15,11 +15,13 @@ import pytest
 from hocuspocus.host.config import HostConfig
 from hocuspocus.host.dispatch import Dispatcher, error_envelope, ok_envelope
 from hocuspocus.host.executor import MainThreadExecutor
-from hocuspocus.host.jobs import JobManager
+from hocuspocus.host.runtime import CallJobManager
 from hocuspocus.host.server import (
+    REQUEST_TIMEOUT_S,
     HostApp,
     HostHTTPServer,
     bearer_ok,
+    host_allowed,
     origin_allowed,
     serve_in_thread,
 )
@@ -63,6 +65,11 @@ def _tools():
     def liar(args, ctx):
         return {"did": True}
 
+    def starts_job(args, ctx):
+        job = ctx.jobs.start("starts_job", lambda job_ctx: job_ctx.set_progress(1, 4, "a"))
+        job.done_event.wait(5)
+        return {"job_id": job.id}
+
     tools = {
         "echo_ro": HostTool("echo_ro", echo, read_only=True),
         "mutate": HostTool("mutate", mutate, read_only=False),
@@ -71,6 +78,10 @@ def _tools():
         "maybe": HostTool("maybe", maybe, read_only=False),
         "liar": HostTool("liar", liar, read_only=False),
         "hostonly": HostTool("hostonly", echo, read_only=False, main_thread=False, scene=False),
+        "pdg": HostTool("pdg", echo, read_only=True, main_thread=False, scene=False),
+        "starts_job": HostTool(
+            "starts_job", starts_job, read_only=True, main_thread=False, scene=False
+        ),
     }
     return tools
 
@@ -90,7 +101,7 @@ def stack():
         executor=InlineExecutor(),
         logger=logging.getLogger("test"),
         scene=SceneState(generation=7),
-        jobs=JobManager(InlineExecutor()),
+        jobs=CallJobManager(InlineExecutor()),
         undo=UndoHistory(),
     )
     tools = _tools()
@@ -109,6 +120,7 @@ def stack():
         },
         job=ctx.jobs.result,
         shutdown=lambda: shutdowns.append(1),
+        call_jobs=ctx.jobs.for_call,
     )
     server = HostHTTPServer(app, port=0)
     thread = serve_in_thread(server, poll_interval=0.01)
@@ -415,3 +427,60 @@ def test_origin_and_bearer_helpers():
     assert not bearer_ok("Bearer abd", "abc")
     assert not bearer_ok(None, "abc")
     assert not bearer_ok("Bearer ", "")
+
+
+# -- progress: the jobs a call started (BIBLE §7) ------------------------------------------
+
+
+def test_jobs_are_filed_under_the_request_that_started_them(stack):
+    server = stack["server"]
+    body = {"tool": "starts_job", "args": {}, "request_id": "req-1"}
+    status, envelope = _request(server, "POST", "/hp/v1/call", body)
+    assert status == 200 and envelope["ok"] is True, envelope
+    job_id = envelope["result"]["job_id"]
+    status, listed = _request(server, "GET", "/hp/v1/calls/req-1/jobs")
+    assert status == 200 and listed["ok"] is True
+    (snapshot,) = listed["result"]["jobs"]
+    assert snapshot["job_id"] == job_id
+    assert snapshot["current"] == 4 and snapshot["total"] == 4  # done: counts complete
+    _status, other = _request(server, "GET", "/hp/v1/calls/req-2/jobs")
+    assert other["result"]["jobs"] == []
+    status, _ = _request(server, "GET", "/hp/v1/calls/req-1/jobs", token=None)
+    assert status == 401
+
+
+def test_a_call_without_request_id_files_nothing(stack):
+    server = stack["server"]
+    _request(server, "POST", "/hp/v1/call", {"tool": "starts_job", "args": {}})
+    assert stack["ctx"].jobs._by_call == {}
+
+
+# -- review 10 section 1.8 and host profile enforcement ------------------------------------
+
+
+def test_host_header_must_be_loopback(stack):
+    server = stack["server"]
+    for good in (None, "127.0.0.1:1234", "localhost", "[::1]:80", "app.localhost:9"):
+        assert host_allowed(good), good
+    for bad in ("evil.example:80", "10.0.0.1", "127.0.0.1.nip.io", ""):
+        assert not host_allowed(bad), bad
+    status, body = _request(server, "GET", "/hp/v1/health", headers={"Host": "evil.example"})
+    assert status == 403 and "Host" in body["error"]["message"]
+    status, _ = _request(server, "GET", "/hp/v1/health")
+    assert status == 200
+
+
+def test_idle_connections_time_out():
+    from hocuspocus.host.server import _Handler
+
+    assert _Handler.timeout == REQUEST_TIMEOUT_S == 60
+
+
+def test_a_core_host_refuses_full_profile_tools(stack):
+    dispatcher, ctx = stack["dispatcher"], stack["ctx"]
+    assert ctx.config.profile == "core"
+    error = dispatcher.call("pdg", {})["error"]
+    assert error["code"] == "invalid_argument" and "full-profile" in error["message"]
+    assert 'profile = "full"' in error["hint"]
+    ctx.config.profile = "full"
+    assert dispatcher.call("pdg", {})["ok"] is True

@@ -63,7 +63,7 @@ def is_slow(node: Any) -> bool:
         return False
 
 
-def _timed_cook(node: Any, force: bool) -> tuple[float, BaseException | None]:
+def timed_cook(node: Any, force: bool) -> tuple[float, BaseException | None]:
     started = time.perf_counter()
     failure: BaseException | None = None
     try:
@@ -91,7 +91,7 @@ def _has_stale_errors(node: Any) -> bool:
         return False
 
 
-def _upstream_first(node: Any) -> list[Any]:
+def upstream_first(node: Any) -> list[Any]:
     """Input ancestors of ``node`` ordered so every node comes after its inputs."""
     order: list[Any] = []
     seen: set[int] = set()
@@ -125,11 +125,11 @@ def refresh_stale_inputs(node: Any) -> list[str]:
     only in :data:`REFRESH_CATEGORIES`, and never one whose last cook was slow.
     """
     refreshed: list[str] = []
-    for ancestor in _upstream_first(node):
+    for ancestor in upstream_first(node):
         if _category(ancestor) not in REFRESH_CATEGORIES:
             continue
         if _has_stale_errors(ancestor) and not is_slow(ancestor):
-            _timed_cook(ancestor, True)
+            timed_cook(ancestor, True)
             with contextlib.suppress(Exception):
                 refreshed.append(ancestor.path())
     return refreshed
@@ -144,7 +144,7 @@ def refresh_stale(node: Any) -> list[str]:
         return []
     refreshed = refresh_stale_inputs(node)
     if _has_stale_errors(node) and not is_slow(node):
-        _timed_cook(node, True)
+        timed_cook(node, True)
         with contextlib.suppress(Exception):
             refreshed.append(node.path())
     return refreshed
@@ -161,6 +161,8 @@ def collect_problems(node: Any, *, cook: bool = False, force: bool = False) -> d
     """
     import hou
 
+    from ._common import hou_message  # _common imports this module
+
     out: dict[str, Any] = {"errors": [], "warnings": [], "messages": [], "cook_state": "unknown"}
     failure: str | None = None
     if cook and not hasattr(node, "cook"):
@@ -171,13 +173,13 @@ def collect_problems(node: Any, *, cook: bool = False, force: bool = False) -> d
             refresh_stale_inputs(node)
         stale = _has_stale_errors(node)
         do_force = force or (stale and refreshable and not is_slow(node))
-        elapsed, exc = _timed_cook(node, do_force)
+        elapsed, exc = timed_cook(node, do_force)
         if exc is None:
             out["cook_state"] = "cooked"
         else:
             out["cook_state"] = "error"
             failure = (
-                _exception_text(exc)
+                hou_message(exc)
                 if isinstance(exc, hou.OperationFailed)
                 else f"{type(exc).__name__}: {exc}"
             )
@@ -199,40 +201,25 @@ def collect_problems(node: Any, *, cook: bool = False, force: bool = False) -> d
     return out
 
 
-def _exception_text(exc: BaseException) -> str:
-    getter = getattr(exc, "instanceMessage", None)
-    if callable(getter):
-        with contextlib.suppress(Exception):
-            text = str(getter()).strip()
-            if text:
-                return text
-    return str(exc).strip() or type(exc).__name__
+COOKABLE_CATEGORIES = frozenset({"Sop", "Lop", "Cop", "Cop2", "Chop", "Dop"})
+"""Categories ``problems`` cooks when ``cook_uncooked`` is set (no ROPs, TOPs or OBJs)."""
+
+CHEAP_COOK_CATEGORIES = COOKABLE_CATEGORIES | {"Vop", "Top"}
+"""Categories a mutation result cooks (:func:`cheap_cook_problems`): the node the agent
+just touched, so VOPs (which report wiring and type errors on cook) and TOPs are
+included. ``problems`` walks whole subtrees and leaves those two to their owners: a VOP
+is cooked through its shader or wrangle, and cooking every TOP in a scene could start
+work items."""
 
 
 def cheap_cook_problems(node: Any) -> dict[str, Any]:
-    """Cook ``node`` only when it is a cookable leaf (SOP/LOP/COP...) and report problems.
+    """Cook ``node`` only when it is a cookable leaf (:data:`CHEAP_COOK_CATEGORIES`) and
+    report problems.
 
     Used by mutation results. Managers and networks without a cook (``/obj``, ``geo``
     containers) are reported without cooking.
     """
-    try:
-        cookable = node.type().category().name() in {
-            "Sop",
-            "Lop",
-            "Cop",
-            "Cop2",
-            "Dop",
-            "Chop",
-            "Vop",
-            "Top",
-        }
-    except Exception:
-        cookable = False
-    return collect_problems(node, cook=cookable, force=False)
-
-
-COOKABLE_CATEGORIES = frozenset({"Sop", "Lop", "Cop", "Cop2", "Chop", "Dop"})
-"""Categories ``problems`` cooks when ``cook_uncooked`` is set (no ROPs, TOPs or OBJs)."""
+    return collect_problems(node, cook=_category(node) in CHEAP_COOK_CATEGORIES, force=False)
 
 
 def a_or_an(word: str) -> str:

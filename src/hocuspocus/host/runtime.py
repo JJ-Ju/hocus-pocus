@@ -14,16 +14,18 @@ import os
 import sys
 import threading
 import time
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any
 
 from hocuspocus.tools import catalog, paths
+from hocuspocus.tools.errors import ToolError
 from hocuspocus.version import __version__
 
 from .config import HostConfig
-from .dispatch import Dispatcher
+from .dispatch import Dispatcher, current_request_id
 from .executor import MainThreadExecutor
-from .jobs import JobManager
+from .jobs import Job, JobManager
 from .registry import InstanceRegistry, new_token, prune_stale
 from .server import HostApp, HostHTTPServer, serve_in_thread
 from .tools import registry as tool_registry
@@ -46,6 +48,43 @@ def _launched_by() -> int | None:
     except ValueError:
         return None
     return pid if pid > 0 else None
+
+
+class CallJobManager(JobManager):
+    """A :class:`JobManager` that files each job under the request that started it.
+
+    ``GET /hp/v1/calls/{request_id}/jobs`` reads the index, so the bridge can send MCP
+    progress notifications for a call that is still waiting on its job (BIBLE §7)."""
+
+    KEEP_CALLS = 200
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._by_call: OrderedDict[str, list[str]] = OrderedDict()
+        self._index_lock = threading.Lock()
+
+    def start(self, tool: str, fn: Any, **kwargs: Any) -> Job:
+        job = super().start(tool, fn, **kwargs)
+        request_id = current_request_id()
+        if request_id:
+            with self._index_lock:
+                self._by_call.setdefault(request_id, []).append(job.id)
+                self._by_call.move_to_end(request_id)
+                while len(self._by_call) > self.KEEP_CALLS:
+                    self._by_call.popitem(last=False)
+        return job
+
+    def for_call(self, request_id: str) -> list[dict[str, Any]]:
+        """Snapshots of the jobs ``request_id`` started that still exist, oldest first."""
+        with self._index_lock:
+            ids = list(self._by_call.get(request_id, ()))
+        out = []
+        for job_id in ids:
+            try:
+                out.append(self.status(job_id))
+            except ToolError:
+                continue  # evicted or discarded
+        return out
 
 
 def setup_logging(config: HostConfig, logs_dir: Path, pid: int) -> logging.Logger:
@@ -79,7 +118,7 @@ class Host:
         self.executor = executor or MainThreadExecutor()
         self.scene = SceneState()
         self.undo = UndoHistory()
-        self.jobs = JobManager(self.executor, default_timeout_s=config.default_timeout_s)
+        self.jobs = CallJobManager(self.executor, default_timeout_s=config.default_timeout_s)
         self.registry = InstanceRegistry(self.state_dir / "instances", self.pid)
         self.shutdown_event = threading.Event()
         self.server: HostHTTPServer | None = None
@@ -139,6 +178,7 @@ class Host:
             job=self.jobs.result,
             shutdown=self.request_shutdown,
             meta=self.meta,
+            call_jobs=self.jobs.for_call,
         )
         self.server = HostHTTPServer(app, "127.0.0.1", int(self.config.port))
         self.ctx.port = self.server.port

@@ -26,7 +26,7 @@ you get two commands on your `PATH`: `hocuspocus` and `hocuspocus-mcp`.
 
 ```text
 $ hocuspocus version
-hocuspocus 1.0.0 (hp/v1, mcp 2.3.x, Python 3.12.x)
+hocuspocus 1.1.0 (hp/v1, mcp 2.3.x, Python 3.12.x)
 ```
 
 ## 2. Install the Houdini package (1 minute)
@@ -34,7 +34,7 @@ hocuspocus 1.0.0 (hp/v1, mcp 2.3.x, Python 3.12.x)
 ```text
 $ hocuspocus install-houdini
 Houdini pref dir: C:\Users\you\houdini22.0 (from hython (C:\Program Files\Side Effects Software\Houdini 22.0.466))
-copied hocuspocus 1.0.0 to C:\Users\you\houdini22.0\hocuspocus\1.0.0\python\hocuspocus
+copied hocuspocus 1.1.0 to C:\Users\you\houdini22.0\hocuspocus\1.0.0\python\hocuspocus
 copied the Houdini payload to C:\Users\you\houdini22.0\hocuspocus\1.0.0\houdini
 wrote C:\Users\you\houdini22.0\packages\hocuspocus.json (template: ...\houdini\hocuspocus.json.template)
 recorded the pref dir in C:\Users\you\AppData\Local\HocusPocus\install.json (the bridge reads hocuspocus.toml from there)
@@ -84,13 +84,13 @@ the UI is up, the host starts by itself. Then run:
 
 ```text
 $ hocuspocus doctor
-hocuspocus 1.0.0 (bridge, hp/v1)
+hocuspocus 1.1.0 (bridge, hp/v1)
 [ok]   Houdini install: C:\Program Files\Side Effects Software\Houdini 22.0.466
 [ok]   Houdini version: 22.0.466
 [ok]   Houdini pref dir: C:\Users\you\houdini22.0 (from hython (...))
 [ok]   hocuspocus.toml: none (defaults)
 [ok]   package JSON: C:\Users\you\houdini22.0\packages\hocuspocus.json -> C:\Users\you\houdini22.0\hocuspocus\1.0.0\python
-[ok]   host/bridge version: 1.0.0
+[ok]   host/bridge version: 1.1.0
 [ok]   instance /health: pid 18244 port 52311 GUI (untitled) Houdini 22.0.466
 
 Register with Claude Code:
@@ -105,6 +105,10 @@ doctor: all checks passed
 
 A tested Houdini build shows `[ok]` on the version line. Any other 22.x build shows
 `[warn]`, and that is fine.
+
+Opening Houdini yourself is right for an interactive session. If a script or a short
+MCP session will drive it instead, start it with `hocuspocus launch` (see
+[Scripted clients](#scripted-clients)) so that it outlives them.
 
 ## 5. Ask for a mountain (2 minutes)
 
@@ -149,7 +153,8 @@ That calls `houdini_connect {"launch": {"mode": "headless"}}`, which runs
 A Houdini launched this way, GUI or headless, belongs to the bridge that launched it.
 When your client stops the bridge (for example when the Claude Code session ends), that
 Houdini exits and its unsaved work is lost. Ask the agent to `hip_save` before you
-finish, or start Houdini yourself and let the bridge attach to it.
+finish, or start Houdini with `hocuspocus launch` (next section) and let the bridge
+attach to it.
 
 You can also start the host yourself from an empty directory:
 
@@ -158,6 +163,44 @@ mkdir -p /tmp/hp && cd /tmp/hp
 hython -m hocuspocus.host --hip C:/work/shot.hip
 {"pid": 23310, "port": 53120, "token_file": "..."}
 ```
+
+## Scripted clients
+
+`hocuspocus launch` is the recommended way to start Houdini for a one-shot script (or any
+MCP session shorter than the work). Do not let the script launch it with
+`houdini_connect {launch}`: that Houdini closes when the script's MCP server exits. A
+Houdini started from a terminal with `hocuspocus launch` belongs to no server and keeps
+running across sessions:
+
+```bash
+$ hocuspocus launch --headless --hip C:/work/shot.hip
+{"pid": 23310, "port": 53120, "label": "hython", "hip": "C:/work/shot.hip", ..., "mode": "headless"}
+```
+
+Leave out `--headless` for a GUI Houdini. The command waits up to `--wait` seconds
+(default 90) for the host to register, prints its registry entry and exits. Each session
+then attaches with `houdini_connect {"pid": 23310}` (or automatically, when it is the only
+Houdini running), and `hip_save` keeps the work between sessions.
+
+## Configuration
+
+Nothing needs configuring for this guide. Two settings in
+`$HOUDINI_USER_PREF_DIR/hocuspocus.toml` (or `HOCUSPOCUS_*` environment variables, which
+win) matter most for scripts and other clients:
+
+```toml
+profile = "full"            # list and allow hda, usd_stage, pdg and events (default "core")
+result_content = "both"     # also send structuredContent (default "text")
+```
+
+- `profile` is read by the bridge, which lists the tools, and by the host inside Houdini,
+  which refuses the four `full` tools on `core`. Restart Houdini after changing it.
+- `result_content` decides where a result's JSON goes. The default `text` sends it once,
+  in the text block, which is what Claude Code shows the model. Use `both` for a client
+  that reads `structuredContent` or `outputSchema`, or `structured` for structured data
+  with a one-line text summary.
+
+The README lists every key.
 
 ## Troubleshooting
 
@@ -187,6 +230,12 @@ registered. Start Houdini, or let the agent call
 `houdini_connect {"launch": {"mode": "gui"}}` (or `"headless"`). The bridge picks the
 new instance up by itself, with no client restart. If several instances are running,
 `houdini_status` lists them and `houdini_connect {"pid": N}` selects one.
+
+**`invalid_argument`: "hda is a full-profile tool, and this Houdini's host runs the core profile"**
+
+The bridge lists the `full` tools but the host in Houdini still runs `core`. Put
+`profile = "full"` in `hocuspocus.toml`, which both read (or set `HOCUSPOCUS_PROFILE=full`
+in Houdini's environment), and restart Houdini.
 
 **Version mismatch: `[FAIL] host/bridge version: Houdini has X, bridge is Y`, or a `version_mismatch` error**
 

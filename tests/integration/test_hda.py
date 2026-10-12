@@ -32,7 +32,7 @@ def test_create_save_match_unlock(client, tmp_path):
     assert result["definition"] == "hptest::rock::1.0"
     assert result["library"] == library
     assert result["label"] == "Rock"
-    assert result["locked"] is False
+    assert result["hda_locked"] is False and "locked" not in result
     assert result["undo_label"].startswith("HocusPocus: hda create")
     assert (tmp_path / "otls" / "rock.hda").is_file()
     node = hou.node(path)
@@ -43,12 +43,12 @@ def test_create_save_match_unlock(client, tmp_path):
     saved = client.ok("hda", {"action": "save", "path": path})
     assert saved["saved"] is True
     matched = client.ok("hda", {"action": "match", "path": path})
-    assert matched["locked"] is True
+    assert matched["hda_locked"] is True
     assert hou.node(path).isLockedHDA()
     assert hou.node(f"{path}/added") is not None  # the save captured it
 
     unlocked = client.ok("hda", {"action": "unlock", "path": path})
-    assert unlocked["locked"] is False
+    assert unlocked["hda_locked"] is False
     assert not hou.node(path).isLockedHDA()
 
 

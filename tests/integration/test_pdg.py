@@ -93,6 +93,7 @@ def test_cook_as_job(client):
     assert started["state"] == "running" and started["job_id"]
     status = _wait_job(client, started["job_id"])
     assert status["state"] == "done", status
+    assert status["progress"] == 1.0 and status["current"] == status["total"] == 3, status
     result = client.ok("job", {"action": "result", "job_id": started["job_id"]})["result"]
     assert result["path"] == script.path()
     assert result["ok"] is False
@@ -115,6 +116,24 @@ def test_cook_block_never_holds_the_main_thread_past_the_timeout(client, where):
     # The main thread is free right away (a blocking cookWorkItems would hold it ~8 s).
     assert client.ok("pdg", {"action": "status", "top_path": script.path()})["path"]
     assert time.monotonic() - started < 4
+    client.ok("job", {"action": "cancel", "job_id": result["job_id"]})
+    assert _wait_job(client, result["job_id"], timeout=30)["state"] == "cancelled"
+
+
+def test_cook_block_honours_job_threshold(client):
+    """block waits min(timeout_s, job_threshold_s), as cook does (BIBLE §7)."""
+    _, _, script = _graph(SLEEP, count=2, cook_type=2)
+    saved = client.host.config.job_threshold_s
+    client.host.config.job_threshold_s = 0.5
+    try:
+        started = time.monotonic()
+        args = {"action": "cook", "top_path": script.path(), "block": True, "timeout_s": 60}
+        result = client.ok("pdg", args)
+        elapsed = time.monotonic() - started
+    finally:
+        client.host.config.job_threshold_s = saved
+    assert result["state"] == "running" and result["job_id"], result
+    assert elapsed < 4, elapsed
     client.ok("job", {"action": "cancel", "job_id": result["job_id"]})
     assert _wait_job(client, result["job_id"], timeout=30)["state"] == "cancelled"
 

@@ -33,8 +33,9 @@ from hocuspocus.tools.errors import ToolError
 from hocuspocus.tools.paths import captures_dir, ensure_private_dir
 
 from ..dispatch import call_timeout
-from .geo import _not_found, num
-from .hip import check_allowed, resolve_path
+from ._diag import require_node
+from .geo import num
+from .hip import _norm, check_allowed, resolve_path
 from .registry import HostContext, tool
 from .session import scene_dirty
 
@@ -73,6 +74,14 @@ NOT_CARRIED_VARS = frozenset(
 through the environment, the rest are Houdini's own."""
 FRAME_TIMEOUT_S = 24 * 3600.0
 JOB_POLL_S = 0.1
+INLINE_OUTPUTS = 5
+"""A render result lists at most this many outputs; above it, ``outputs_summary`` only."""
+DARK_MEAN = 8.0
+"""A thumbnail whose mean luminance (0..255) is below this is reported as nearly black."""
+NO_LIGHTS_NOTE = (
+    "Scene has no lights; an OpenGL render relies on the ROP's headlight setting and other "
+    "renderers may render black."
+)
 
 
 # -- small helpers ------------------------------------------------------------------
@@ -129,19 +138,19 @@ def _hython() -> str:
     return os.path.join(hfs, "bin", exe)
 
 
-def _fwd(path: str | Path) -> str:
-    return str(path).replace("\\", "/")
-
-
 def _mark_internal(node: Any) -> None:
     with contextlib.suppress(Exception):
         node.setUserData(INTERNAL_KEY, "1")
 
 
-def encode_png(path: str, max_side: int, *, hfs: str | None = None) -> dict[str, Any]:
+def encode_png(
+    path: str, max_side: int, *, hfs: str | None = None, measure: bool = False
+) -> dict[str, Any]:
     """Load an image file, flatten alpha onto grey, downscale, return the image dict.
 
     Formats PIL cannot read (EXR, .pic, ...) are converted with ``$HFS/bin/iconvert``.
+    ``measure`` adds ``mean_luma``: the mean luminance (0..255) of the colour channels
+    before alpha is flattened, so an empty render over transparency reads as black.
     """
     from PIL import Image
 
@@ -172,6 +181,11 @@ def encode_png(path: str, max_side: int, *, hfs: str | None = None) -> dict[str,
                 )
         with Image.open(source) as im:
             im.load()
+            mean_luma = None
+            if measure:
+                from PIL import ImageStat
+
+                mean_luma = float(ImageStat.Stat(im.convert("RGB").convert("L")).mean[0])
             if im.mode in ("RGBA", "LA") or (im.mode == "P" and "transparency" in im.info):
                 rgba = im.convert("RGBA")
                 flat = Image.new("RGB", rgba.size, BACKGROUND)
@@ -182,12 +196,15 @@ def encode_png(path: str, max_side: int, *, hfs: str | None = None) -> dict[str,
                 flat.thumbnail((max_side, max_side), Image.Resampling.LANCZOS)
             buf = io.BytesIO()
             flat.save(buf, format="PNG", optimize=True)
-            return {
+            out = {
                 "png_base64": base64.b64encode(buf.getvalue()).decode("ascii"),
                 "mime_type": "image/png",
                 "width": flat.size[0],
                 "height": flat.size[1],
             }
+            if mean_luma is not None:
+                out["mean_luma"] = mean_luma
+            return out
     finally:
         if tmp_dir:
             shutil.rmtree(tmp_dir, ignore_errors=True)
@@ -281,7 +298,7 @@ def snapshot_scene(tmp_dir: str) -> dict[str, Any]:
             continue
         target = os.path.join(tmp_dir, f"{manager.name()}.cpio")
         manager.saveChildrenToFile(children, (), target)
-        files[manager.path()] = _fwd(target)
+        files[manager.path()] = _norm(target)
     hfs = os.path.normcase(os.path.abspath(hou.text.expandString("$HFS")))
     hdas = []
     for lib in hou.hda.loadedFiles():
@@ -463,9 +480,7 @@ def _camera_node(path: Any) -> Any:
 
     if not isinstance(path, str) or not path.strip():
         raise ToolError("invalid_argument", "'camera' must be a camera node path.")
-    node = hou.node(path.strip())
-    if node is None:
-        raise _not_found(path.strip())
+    node = require_node(path, field="camera")
     if not isinstance(node, hou.ObjNode) or node.parm("focal") is None:
         raise ToolError(
             "invalid_argument",
@@ -813,7 +828,7 @@ def _capture_targets(parsed: dict[str, Any], ctx: HostContext) -> tuple[float, A
     if extra_path is not None:
         extra_path = resolve_path(extra_path)
         check_allowed(extra_path, ctx)
-    out_file = _fwd(_captures(ctx) / f"capture_{_stamp()}.png")
+    out_file = _norm(_captures(ctx) / f"capture_{_stamp()}.png")
     return frame, extra_path, out_file
 
 
@@ -959,6 +974,43 @@ def _frame_list(frames: list[float]) -> list[float]:
     return out
 
 
+_LIGHT_TYPES_EXTRA = frozenset({"ambient"})
+
+
+def scene_has_lights() -> bool:
+    """Whether any light object or LOP light exists (``NodeType.instances()``, no walk)."""
+    import hou
+
+    for category in (hou.objNodeTypeCategory(), hou.lopNodeTypeCategory()):
+        for node_type in category.nodeTypes().values():
+            try:
+                base = node_type.nameComponents()[2].lower()
+                if (base.endswith("light") or base in _LIGHT_TYPES_EXTRA) and node_type.instances():
+                    return True
+            except Exception:
+                continue
+    return False
+
+
+def output_pattern(first: str, last: str) -> str:
+    """``render/s.####.png`` from the first and last outputs: the digit run that differs
+    becomes ``#`` per digit of the first. Falls back to ``first … last``."""
+    if first == last:
+        return first
+    prefix = len(os.path.commonprefix([first, last]))
+    suffix = len(os.path.commonprefix([first[::-1], last[::-1]]))
+    suffix = min(suffix, len(first) - prefix, len(last) - prefix)
+    start, end = prefix, len(first) - suffix
+    while start > 0 and first[start - 1].isdigit():
+        start -= 1
+    while end < len(first) and first[end].isdigit():
+        end += 1
+    run = first[start:end]
+    if not run.isdigit():
+        return f"{first} … {last}"
+    return first[:start] + "#" * len(run) + first[end:]
+
+
 def _output_parm(rop: Any) -> Any:
     for name in OUTPUT_PARMS:
         parm = rop.parm(name)
@@ -974,9 +1026,7 @@ def _prepare_render(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     rop_path = args.get("rop_path")
     if not isinstance(rop_path, str) or not rop_path.strip():
         raise ToolError("invalid_argument", "'rop_path' must be a ROP node path.")
-    rop = hou.node(rop_path.strip())
-    if rop is None:
-        raise _not_found(rop_path.strip())
+    rop = require_node(rop_path, field="rop_path")
     if not callable(getattr(rop, "render", None)):
         raise ToolError(
             "invalid_argument",
@@ -1010,7 +1060,7 @@ def _prepare_render(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     for path in expected:
         if not path.strip() or path.strip() in MPLAY_OUTPUTS:
             continue
-        full = _fwd(os.path.abspath(path))
+        full = _norm(path)
         folder = os.path.dirname(full)
         if folder not in checked:
             checked.add(folder)
@@ -1028,9 +1078,10 @@ def _prepare_render(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
         "frame_list": _frame_list(frames),
         "parm": parm.name() if parm is not None else None,
         "output": output,
-        "expected": [_fwd(p) for p in expected],
+        "expected": [_norm(p) for p in expected],
         "isolate": needs_isolation(rop, ctx),
         "hfs": hou.text.expandString("$HFS"),
+        "lights": scene_has_lights(),
     }
 
 
@@ -1044,12 +1095,35 @@ def _render_result(plan: dict[str, Any], thumbnail: bool) -> dict[str, Any]:
     }
     if missing:
         result["missing"] = missing[:20]
+    if len(outputs) > INLINE_OUTPUTS:
+        result["outputs_summary"] = {
+            "count": len(outputs),
+            "first": outputs[0],
+            "last": outputs[-1],
+            "pattern": output_pattern(outputs[0], outputs[-1]),
+            "missing_count": len(missing),
+        }
+    notes: list[str] = []
+    images = [
+        p for p in plan["expected"] if os.path.splitext(p)[1].lower() in IMAGE_EXTS | CONVERT_EXTS
+    ]
+    if images and not plan.get("lights", True):
+        notes.append(NO_LIGHTS_NOTE)
+    if notes:
+        result["notes"] = notes
     if thumbnail and outputs:
         last = outputs[-1]
         ext = os.path.splitext(last)[1].lower()
         if ext in IMAGE_EXTS or ext in CONVERT_EXTS:
             try:
-                image = encode_png(last, THUMB_MAX_SIDE, hfs=plan["hfs"])
+                image = encode_png(last, THUMB_MAX_SIDE, hfs=plan["hfs"], measure=True)
+                mean = image.pop("mean_luma", None)
+                if mean is not None and mean < DARK_MEAN:
+                    notes.append(
+                        f"The thumbnail is nearly black (mean luminance {mean:.1f}/255): check "
+                        "lights, camera framing and exposure."
+                    )
+                    result["notes"] = notes
                 result["thumbnail"] = {
                     "path": last,
                     "width": image["width"],
@@ -1097,7 +1171,7 @@ def _render_job(plan: dict[str, Any], ctx: HostContext, thumbnail: bool) -> Any:
             job.progress(1.0, "done")
             result = _render_result(plan, thumbnail)
             if outcome.get("notes"):
-                result["notes"] = outcome["notes"]
+                result["notes"] = [*outcome["notes"], *result.get("notes", [])]
             return result
         finally:
             shutil.rmtree(tmp_dir, ignore_errors=True)
@@ -1159,7 +1233,7 @@ def _render_job(plan: dict[str, Any], ctx: HostContext, thumbnail: bool) -> Any:
                     notes.append(f"Restoring {plan['rop']} {plan['parm']} failed: {note}.")
         result = _render_result(plan, thumbnail)
         if notes:
-            result["notes"] = notes
+            result["notes"] = [*notes, *result.get("notes", [])]
         return result
 
     return run_isolated if plan["isolate"] else run_in_process
@@ -1174,9 +1248,11 @@ def render(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
             "render writes files and changes ROP state, and the host is in read-only mode.",
             hint="Set read_only = false in hocuspocus.toml (or HOCUSPOCUS_READ_ONLY=0) and restart the host.",
         )
-    wait_s = args.get("wait_s", 20)
+    # An explicit wait_s is the caller's own threshold; without one, job_threshold_s
+    # decides as for cook and pdg (BIBLE §7).
+    wait_s = args.get("wait_s")
     if wait_s is None:
-        wait_s = 20
+        wait_s = float(ctx.config.job_threshold_s)
     if isinstance(wait_s, bool) or not isinstance(wait_s, int | float) or wait_s < 0:
         raise ToolError("invalid_argument", "'wait_s' must be a number >= 0.")
     thumbnail = args.get("thumbnail", True)
@@ -1189,6 +1265,10 @@ def render(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
         result = dict(job.result)
         result["job_id"] = job.id
         result["state"] = "done"
+        if "outputs_summary" in result:
+            # The full list stays on the job (review 11 B6).
+            result.pop("outputs", None)
+            result["hint"] = "job {action: result, job_id} lists every output."
         return result
     if job.state in ("failed", "cancelled") and job.error:
         raise ToolError.from_dict(job.error)

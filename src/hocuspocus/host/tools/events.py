@@ -33,7 +33,7 @@ from collections import deque
 from collections.abc import Iterator
 from typing import Any
 
-from .nodes import bad_arg
+from ._common import int_arg
 from .registry import HostContext, tool
 
 log = logging.getLogger("hocuspocus.host.events")
@@ -136,7 +136,6 @@ class _Hooks:
         self.muted = 0
         self.watched: dict[int, Any] = {}
         self.managers: list[Any] = []
-        self.watch_overflow = 0
         self.post: Any = None
         self.pending: set[int] = set()
 
@@ -250,7 +249,6 @@ def watch_node(node: Any) -> bool:
         if sid in _HOOKS.watched:
             return True
         if len(_HOOKS.watched) >= WATCH_CAP:
-            _HOOKS.watch_overflow += 1
             return False
         node.addEventCallback(_node_types(), _on_node_event)
         _HOOKS.watched[sid] = node
@@ -284,10 +282,6 @@ def _flush_pending() -> None:
         node = hou.nodeBySessionId(sid)
         if node is not None:
             watch_node(node)
-
-
-def watched_count() -> int:
-    return len(_HOOKS.watched)
 
 
 def _attach_managers() -> None:
@@ -376,19 +370,8 @@ def uninstall() -> None:
 # -- the tool ---------------------------------------------------------------------------
 
 
-def _int_arg(args: dict[str, Any], key: str, default: int, low: int, high: int | None) -> int:
-    value = args.get(key, default)
-    if value is None:
-        return default
-    if isinstance(value, bool) or not isinstance(value, int) or value < low:
-        raise bad_arg(f"'{key}' must be an integer >= {low}.")
-    if high is not None and value > high:
-        raise bad_arg(f"'{key}' must be at most {high}.")
-    return value
-
-
 @tool("events", main_thread=False)
 def events(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
-    since = _int_arg(args, "since", 0, 0, None)
-    limit = _int_arg(args, "limit", DEFAULT_LIMIT, 1, 1000)
+    since = int_arg(args, "since", 0, 0)
+    limit = int_arg(args, "limit", DEFAULT_LIMIT, 1, 1000)
     return LOG.read(since, limit)

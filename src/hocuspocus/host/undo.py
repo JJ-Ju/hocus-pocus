@@ -15,12 +15,18 @@ from collections.abc import Callable, Iterator, Mapping
 from typing import Any
 
 LABEL_PREFIX = "HocusPocus: "
-LABEL_MAX_CHARS = 120
+LABEL_MAX_CHARS = 100
+"""Labels are ASCII and at most this long, so Houdini stores them verbatim and the
+rollback check (newest label == ours) holds (review 10 section 1.7)."""
+
+
+def _ascii(text: str) -> str:
+    return text.encode("ascii", "replace").decode("ascii")
 
 
 def _short(text: str, limit: int = 48) -> str:
     text = " ".join(str(text).split())
-    return text if len(text) <= limit else text[: limit - 1] + "…"
+    return text if len(text) <= limit else text[: limit - 3] + "..."
 
 
 def summarize(tool: str, args: Mapping[str, Any]) -> str:
@@ -57,12 +63,28 @@ def summarize(tool: str, args: Mapping[str, Any]) -> str:
 
 def make_label(tool: str, args: Mapping[str, Any]) -> str:
     summary = summarize(tool, args)
-    label = f"{LABEL_PREFIX}{tool}" + (f" {summary}" if summary else "")
-    return label if len(label) <= LABEL_MAX_CHARS else label[: LABEL_MAX_CHARS - 1] + "…"
+    label = _ascii(f"{LABEL_PREFIX}{tool}" + (f" {summary}" if summary else ""))
+    return label if len(label) <= LABEL_MAX_CHARS else label[: LABEL_MAX_CHARS - 3] + "..."
+
+
+class UndoOutcome:
+    """What :func:`hou_undo_group` did, readable after the ``with`` block.
+
+    ``rolled_back`` is True only when the call failed and the scene is back where it
+    started: the group's undo entry was undone (verified on the undo stack), or the group
+    recorded nothing. It is False when undo is disabled (``hou.undos.areEnabled()``
+    false, or a ``disabler`` left active), because then nothing could be undone."""
+
+    __slots__ = ("failed", "rolled_back", "undo_enabled")
+
+    def __init__(self) -> None:
+        self.failed = False
+        self.rolled_back = False
+        self.undo_enabled = True
 
 
 @contextlib.contextmanager
-def hou_undo_group(label: str) -> Iterator[None]:
+def hou_undo_group(label: str) -> Iterator[UndoOutcome]:
     """One named undo group; if the body raises, the group's partial work is undone.
 
     ``hou.undos.group`` records whatever ran before an exception, and Houdini refuses
@@ -70,20 +92,35 @@ def hou_undo_group(label: str) -> Iterator[None]:
     closes. It undoes only when the newest undo entry is this group's (an empty group
     records nothing, and an identical label from an earlier call leaves the stack
     unchanged), so it never reverts someone else's work. BIBLE §4.1: a failing call
-    rolls back.
+    rolls back. The yielded :class:`UndoOutcome` says whether it did.
     """
     import hou
 
+    outcome = UndoOutcome()
+    outcome.undo_enabled = _undo_enabled(hou)
     before = _undo_labels(hou)
     try:
         with hou.undos.group(label):
-            yield
+            yield outcome
     except BaseException:
+        outcome.failed = True
         after = _undo_labels(hou)
-        if after and after[0] == label and after != before:
+        if not outcome.undo_enabled:
+            outcome.rolled_back = False
+        elif after and after[0] == label and after != before:
             with contextlib.suppress(Exception):  # never mask the original error
                 hou.undos.performUndo()
+                outcome.rolled_back = _undo_labels(hou) != after
+        else:
+            outcome.rolled_back = True  # the group recorded nothing to undo
         raise
+
+
+def _undo_enabled(hou: Any) -> bool:
+    try:
+        return bool(hou.undos.areEnabled())
+    except Exception:  # pragma: no cover - older builds without areEnabled()
+        return True
 
 
 def _undo_labels(hou: Any) -> tuple[str, ...]:
@@ -110,11 +147,3 @@ class UndoHistory:
     def labels(self, limit: int = 20) -> list[str]:
         with self._lock:
             return [entry["label"] for entry in list(self._labels)[-limit:]][::-1]
-
-    def entries(self, limit: int = 20) -> list[dict[str, Any]]:
-        with self._lock:
-            return [dict(entry) for entry in list(self._labels)[-limit:]][::-1]
-
-    def last(self) -> str | None:
-        with self._lock:
-            return self._labels[-1]["label"] if self._labels else None

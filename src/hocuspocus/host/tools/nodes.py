@@ -19,7 +19,22 @@ from typing import Any
 
 from hocuspocus.tools.errors import ToolError
 
-from ._diag import a_or_an, cheap_cook_problems, collect_problems, require_node
+from ._common import (  # noqa: F401 (re-exported for the other tool modules)
+    CURSOR_HINT,
+    DEFAULT_LIMIT,
+    ROW_ENVELOPE_BYTES,
+    arg_bool,
+    arg_list,
+    bad_arg,
+    compact_size,
+    get_node,
+    hou_exception_text,
+    hou_message,
+    page,
+    parse_limit,
+    response_budget,
+)
+from ._diag import a_or_an, cheap_cook_problems, collect_problems
 from .registry import HostContext, tool
 
 NODE_INFO_SECTIONS = (
@@ -31,7 +46,6 @@ FLAG_NAMES = ("display", "render", "bypass", "template", "locked")
 SETTABLE_FLAGS = ("display", "render", "bypass", "template")
 NAME_RE = re.compile(r"^[A-Za-z0-9_.\-]+$")
 CHILDREN_LIST_LIMIT = 200
-DEFAULT_LIMIT = 50
 
 _FLAG_GETTERS = {
     "display": "isDisplayFlagSet",
@@ -51,49 +65,6 @@ _FLAG_SETTERS = {
 # -- generic helpers --------------------------------------------------------------
 
 
-ARG_HINT = "Check the argument against the tool's schema (docs/tools.md)."
-
-
-def bad_arg(message: str, **kw: Any) -> ToolError:
-    """An ``invalid_argument`` error; every error carries a hint (docs/BIBLE.md §1.5)."""
-    kw.setdefault("hint", ARG_HINT)
-    return ToolError("invalid_argument", message, **kw)
-
-
-def hou_message(exc: BaseException) -> str:
-    getter = getattr(exc, "instanceMessage", None)
-    if callable(getter):
-        with contextlib.suppress(Exception):
-            text = str(getter()).strip()
-            if text:
-                return " ".join(text.split())
-    return str(exc).strip() or type(exc).__name__
-
-
-def hou_exception_text(exc: BaseException) -> str:
-    module = type(exc).__module__
-    prefix = "" if module in ("builtins", "__main__") else f"{module}."
-    return f"{prefix}{type(exc).__name__}: {hou_message(exc)}"
-
-
-def arg_bool(args: dict[str, Any], key: str, default: bool) -> bool:
-    value = args.get(key, default)
-    if value is None:
-        return default
-    if not isinstance(value, bool):
-        raise bad_arg(f"'{key}' must be a boolean.")
-    return value
-
-
-def arg_list(args: dict[str, Any], key: str, *, required: bool = True) -> list[Any]:
-    value = args.get(key)
-    if value is None and not required:
-        return []
-    if not isinstance(value, list) or (required and not value):
-        raise bad_arg(f"'{key}' must be a non-empty array.")
-    return value
-
-
 def arg_xy(value: Any, key: str) -> tuple[float, float]:
     if (
         not isinstance(value, list | tuple)
@@ -102,27 +73,6 @@ def arg_xy(value: Any, key: str) -> tuple[float, float]:
     ):
         raise bad_arg(f"'{key}' must be [x, y] numbers.")
     return float(value[0]), float(value[1])
-
-
-def page(rows: list[Any], limit: Any, cursor: Any) -> tuple[list[Any], str | None]:
-    if limit is None:
-        limit = DEFAULT_LIMIT
-    if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 1000:
-        raise bad_arg("'limit' must be an integer between 1 and 1000.")
-    start = 0
-    if cursor not in (None, ""):
-        try:
-            start = int(str(cursor))
-        except ValueError:
-            start = -1
-        if start < 0:
-            raise bad_arg(
-                f"Invalid cursor {cursor!r}.",
-                hint="Pass next_cursor from the previous page unchanged, or omit cursor.",
-            )
-    chunk = rows[start : start + limit]
-    nxt = str(start + limit) if start + limit < len(rows) else None
-    return chunk, nxt
 
 
 def check_name(name: Any, field: str = "name") -> str:
@@ -157,24 +107,6 @@ def unique_name(parent: Any, base: str, taken: Iterable[str] = ()) -> str:
 
 
 # -- node lookup ------------------------------------------------------------------
-
-
-def get_node(path: Any, *, field: str = "path", relative_to: Any = None) -> Any:
-    """``_diag.require_node`` (the one node_not_found with candidates), plus paths relative
-    to ``relative_to`` (wiring sources name siblings)."""
-    if not isinstance(path, str) or not path:
-        raise bad_arg(f"'{field}' must be a non-empty node path.")
-    if not path.startswith("/") and relative_to is not None:
-        node = relative_to.node(path)
-        if node is not None:
-            return node
-        path = f"{relative_to.path().rstrip('/')}/{path}"
-    elif not path.startswith("/"):
-        raise bad_arg(
-            f"'{field}' must be an absolute node path like /obj/geo1; got {path!r}.",
-            hint="Node paths start with '/'.",
-        )
-    return require_node(path, field=field)
 
 
 def locked_ancestor(node: Any) -> Any:
@@ -460,8 +392,7 @@ def hda_block(node: Any) -> dict[str, Any] | None:
         return None
     locked = _is_locked_hda(node)
     out: dict[str, Any] = {
-        "locked": locked,
-        "hda_locked": locked,  # unambiguous next to flags.locked (the hard lock); 1.1 drops locked
+        "hda_locked": locked,  # BIBLE §4.1: locked is the SOP lock flag (flags.locked)
         "definition": definition.nodeTypeName(),
         "library": definition.libraryFilePath(),
     }
@@ -544,7 +475,7 @@ def _is_multiparm_block(template: Any) -> bool:
 def parm_rows(node: Any, include_defaults: bool) -> list[dict[str, Any]]:
     import hou
 
-    from .parms import summarize_parm  # lazy: filled by the parms task
+    from .parms import summarize_parm  # lazy: parms imports this module
 
     skip = {
         getattr(hou.parmTemplateType, n)
@@ -562,7 +493,7 @@ def parm_rows(node: Any, include_defaults: bool) -> list[dict[str, Any]]:
                 continue
         except Exception:
             continue
-        rows.append(summarize_parm(parm_tuple, detail="compact"))
+        rows.append(summarize_parm(parm_tuple))
     return rows
 
 
@@ -592,6 +523,8 @@ def node_block(
         out["parms"] = parm_rows(node, include_defaults)
     if "errors" in sections or problems is not None:
         out.update(problems if problems is not None else collect_problems(node, cook=False))
+    if _is_locked_hda(node) or inside_locked(node):
+        out["hda_locked"] = True
     opaque = _is_locked_hda(node) and not recurse_locked
     if not opaque:
         with contextlib.suppress(Exception):
@@ -631,34 +564,57 @@ def mutation_block(node: Any, **extra: Any) -> dict[str, Any]:
 
 
 RETURN_MODES = ("full", "summary")
-ECHO_STRING_CHARS = 200
-"""Mutation echoes elide string parm values longer than this (VEX snippets, Python code):
-the agent just wrote them, and node_info / parm_get still return them in full."""
-ECHO_HEAD_CHARS = 80
+DEFAULT_RETURN = "summary"
+"""1.1 (review 11 B5): mutation echoes are path, type and problems unless asked for more."""
 
 
 def return_mode(args: dict[str, Any]) -> str:
-    mode = args.get("return", "full") or "full"
+    mode = args.get("return") or DEFAULT_RETURN
     if mode not in RETURN_MODES:
         raise bad_arg("'return' must be 'full' or 'summary'.")
     return mode
 
 
-def _elide(value: Any) -> Any:
-    if isinstance(value, str) and len(value) > ECHO_STRING_CHARS:
-        return {"truncated": True, "chars": len(value), "head": value[:ECHO_HEAD_CHARS]}
-    if isinstance(value, list):
-        return [_elide(v) for v in value]
-    return value
+def _raw_text(parm: Any) -> Any:
+    for getter in ("unexpandedString", "rawValue"):
+        with contextlib.suppress(Exception):
+            return getattr(parm, getter)()
+    return None
 
 
-def elide_long_values(block: dict[str, Any]) -> dict[str, Any]:
-    """Replace long string parm values in a mutation echo with ``{truncated, chars, head}``."""
-    for row in block.get("parms") or ():
-        for key in ("value", "raw"):
-            if key in row:
-                row[key] = _elide(row[key])
-    return block
+def parm_state(node: Any) -> dict[str, tuple[Any, ...]]:
+    """``{tuple name: raw component values}`` for the node's non-default parm tuples.
+
+    Taken right after ``createNode`` (creation scripts have run), it tells the values a
+    creation script set apart from the ones the call set (review 11 B5)."""
+    out: dict[str, tuple[Any, ...]] = {}
+    for parm_tuple in node.parmTuples():
+        with contextlib.suppress(Exception):
+            if not parm_tuple.isAtDefault():
+                out[parm_tuple.name()] = tuple(_raw_text(p) for p in parm_tuple)
+    return out
+
+
+def call_edited_parms(
+    node: Any, baseline: dict[str, tuple[Any, ...]], named: Iterable[str]
+) -> set[str]:
+    """Parm row names the call changed: those it named, and any whose raw value moved from
+    ``baseline`` (a side effect of the call, such as a menu that rewrites another parm)."""
+    keep: set[str] = set()
+    for name in named:
+        target = node.parm(name) or node.parmTuple(name)
+        parm_tuple = target.tuple() if hasattr(target, "tuple") else target
+        if parm_tuple is not None:
+            keep.add(parm_tuple.name())
+            if len(parm_tuple) == 1:
+                keep.add(parm_tuple[0].name())
+    for name, raw in parm_state(node).items():
+        if baseline.get(name) != raw:
+            keep.add(name)
+            parm_tuple = node.parmTuple(name)
+            if parm_tuple is not None and len(parm_tuple) == 1:
+                keep.add(parm_tuple[0].name())
+    return keep
 
 
 def summary_block(
@@ -718,11 +674,18 @@ class Rollback:
     def mark(self) -> int:
         return len(self._actions)
 
-    def run(self, since: int = 0) -> None:
+    def run(self, since: int = 0) -> bool:
+        """Undo newest-first back to ``since``. Returns whether every compensating action
+        succeeded (vacuously true when there was nothing to undo): the ``rolled_back`` a
+        batch error reports, never assumed."""
+        ok = True
         while len(self._actions) > since:
             action = self._actions.pop()
-            with contextlib.suppress(Exception):
+            try:
                 action()
+            except Exception:
+                ok = False
+        return ok
 
     def destroy_later(self, node: Any) -> None:
         self.add(lambda: node.destroy())
@@ -737,12 +700,6 @@ class Rollback:
                 current = fn()
                 if current is not None:
                     self.add(lambda current=current, setter=setter: getattr(current, setter)(True))
-
-
-def item_error(index: int, exc: BaseException) -> dict[str, Any]:
-    payload = to_tool_error(exc).to_dict()
-    payload["item"] = index
-    return payload
 
 
 def to_tool_error(exc: BaseException, *, node: Any = None, op: str | None = None) -> ToolError:
@@ -802,15 +759,56 @@ def to_tool_error(exc: BaseException, *, node: Any = None, op: str | None = None
     return tool_error_from_exception(exc)
 
 
-def raise_with_item(index: int, exc: BaseException, count: int) -> None:
+def batch_error(index: int, path: Any, exc: BaseException, *, rolled_back: bool) -> ToolError:
+    """The one batch error shape (review 10 §4): ``items[i] (<path>): <message>`` and
+    ``detail: {item, path, rolled_back}``, ``rolled_back`` as actually performed.
+
+    A message that already names the item (``items[i].type ...``) or starts with its path
+    is not repeated: the path appears once."""
     error = to_tool_error(exc)
-    if count > 1:
-        error.message = f"Item {index}: {error.message}"
-        error.args = (error.message,)
+    message = error.message
+    tag = f"items[{index}]"
+    if message.startswith(tag):
+        message = message[len(tag) :].lstrip(".: ")
+    elif isinstance(path, str) and path and message.startswith(path):
+        rest = message[len(path) :]
+        if rest.startswith(": "):
+            message = rest[2:]
+        elif rest.startswith(" "):
+            message = "it" + rest
+    shown = path if isinstance(path, str) and path else None
+    error.message = f"{tag} ({shown}): {message}" if shown else f"{tag}: {message}"
+    error.args = (error.message,)
     detail = error.detail if isinstance(error.detail, dict) else {}
-    detail = {**detail, "item": index, "rolled_back": True}
-    error.detail = detail
-    raise error
+    error.detail = {**detail, "item": index, "path": shown, "rolled_back": rolled_back}
+    return error
+
+
+def run_batch(
+    items: list[Any],
+    partial: bool,
+    rollback: Rollback,
+    apply: Callable[[Any, int], Any],
+    path_of: Callable[[Any], Any],
+) -> tuple[dict[int, Any], dict[int, dict[str, Any]]]:
+    """Apply ``apply(item, index)`` to every item (BIBLE §4.1 batch semantics).
+
+    A failure rolls back the whole call and raises :func:`batch_error`, or with
+    ``partial`` rolls back that item only and records the error dict in ``failures``."""
+    done: dict[int, Any] = {}
+    failures: dict[int, dict[str, Any]] = {}
+    for index, item in enumerate(items):
+        mark = rollback.mark()
+        try:
+            done[index] = apply(item, index)
+        except Exception as exc:
+            path = path_of(item) if isinstance(item, dict) else None
+            if not partial:
+                ok = rollback.run()
+                raise batch_error(index, path, exc, rolled_back=ok) from exc
+            ok = rollback.run(mark)
+            failures[index] = batch_error(index, path, exc, rolled_back=ok).to_dict()
+    return done, failures
 
 
 # -- wiring helpers ---------------------------------------------------------------
@@ -969,29 +967,8 @@ def _find_cursor(cursor: Any) -> tuple[str, ...] | int | None:
         return int(cursor)  # an offset cursor from an older host; still honoured
     raise bad_arg(
         f"Invalid cursor {cursor!r}.",
-        hint="Pass next_cursor from the previous page unchanged, or omit cursor.",
+        hint=CURSOR_HINT,
     )
-
-
-def response_budget(ctx: HostContext) -> int:
-    """The caller's byte budget for one result (BIBLE §4.1; default 16 KB)."""
-    for value in (
-        (ctx.extras or {}).get("max_response_bytes"),
-        getattr(ctx.config, "max_response_bytes", None),
-    ):
-        if isinstance(value, int) and not isinstance(value, bool) and value > 0:
-            return value
-    return 16384
-
-
-def compact_size(value: Any) -> int:
-    import json
-
-    return len(json.dumps(value, separators=(",", ":"), default=str).encode("utf-8"))
-
-
-ROW_ENVELOPE_BYTES = 256
-"""Room left in the budget for a paged result's non-row fields and the bridge's wrapping."""
 
 
 def _has_errors(node: Any) -> bool:
@@ -1037,11 +1014,7 @@ def node_find(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
         raise bad_arg(f"'flags' keys must be among {', '.join(FLAG_NAMES)}.")
     if not recurse_locked and (inside_locked(root) or _is_locked_hda(root)):
         raise _locked_root_error(root)
-    limit = args.get("limit")
-    if limit is None:
-        limit = DEFAULT_LIMIT
-    if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 1000:
-        raise bad_arg("'limit' must be an integer between 1 and 1000.")
+    limit = parse_limit(args.get("limit"))
     after = _find_cursor(args.get("cursor"))
     # Pass 1: filter cheaply. errors() can be expensive, so it is read here only when
     # has_errors filters; otherwise only for the rows on the returned page.
@@ -1139,8 +1112,17 @@ def node_info(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
 
 
 def _create_one(
-    item: Any, index: int, args: dict[str, Any], ctx: HostContext, rollback: Rollback
+    item: Any,
+    index: int,
+    args: dict[str, Any],
+    ctx: HostContext,
+    rollback: Rollback,
+    created: dict[int, dict[str, tuple[Any, ...]]],
+    pairs: dict[int, str],
 ) -> Any:
+    """Create one ``node_create`` item; ``created`` maps the new node's session id to its
+    parm state right after ``createNode`` (see :func:`parm_state`), ``pairs`` to the
+    ``block_begin`` a new ``block_end`` was paired with (see :func:`pair_block_end`)."""
     import hou
 
     if not isinstance(item, dict):
@@ -1180,11 +1162,12 @@ def _create_one(
             ) from exc
         raise type_not_found(parent, type_name, parent.childTypeCategory()) from exc
     rollback.destroy_later(node)
+    created[node.sessionId()] = parm_state(node)
     parms = item.get("parms")
     if parms:
         if not isinstance(parms, dict):
             raise bad_arg(f"items[{index}].parms must be an object.")
-        from .parms import set_parm_items  # lazy: filled by the parms task
+        from .parms import set_parm_items  # lazy: parms imports this module
 
         set_parm_items(node, parms, ctx, animation="replace")
     for link_index, link in enumerate(item.get("inputs") or []):
@@ -1202,6 +1185,9 @@ def _create_one(
         output = check_output_index(src, link.get("output", 0))
         connect(node, dest_index, src, output, None)
     set_flags(node, item.get("flags"))
+    begin = pair_block_end(node, rollback)
+    if begin is not None:
+        pairs[node.sessionId()] = begin.path()
     position = item.get("position")
     if position is not None:
         node.setPosition(arg_xy(position, f"items[{index}].position"))
@@ -1209,6 +1195,82 @@ def _create_one(
         with contextlib.suppress(Exception):
             node.moveToGoodPosition(move_inputs=False, move_outputs=False, move_unconnected=False)
     return node
+
+
+BLOCK_BEGIN, BLOCK_END = "block_begin", "block_end"
+
+
+def _core_type(node: Any) -> str:
+    try:
+        return node.type().nameComponents()[2]
+    except Exception:
+        return ""
+
+
+def _parm_text(node: Any, name: str) -> str:
+    parm = node.parm(name)
+    if parm is None:
+        return ""
+    try:
+        return parm.unexpandedString().strip()
+    except Exception:
+        return ""
+
+
+def _block_partner(node: Any, parm: str = "blockpath") -> Any:
+    text = _parm_text(node, parm)
+    return node.node(text) if text else None
+
+
+def pair_block_end(node: Any, rollback: Rollback) -> Any:
+    """Pair a new ``block_end`` whose ``blockpath`` is unset with its ``block_begin``, as
+    the Tab menu does (review 11 B12): the nearest begin upstream through the inputs, else
+    the only unpaired begin in the same network. Sets the end's ``blockpath`` and
+    ``templatepath`` and the begin's ``blockpath`` (where unset) to relative paths.
+    Returns the begin, or None when there is nothing unambiguous to pair with."""
+    if _core_type(node) != BLOCK_END or node.parm("blockpath") is None:
+        return None
+    if _parm_text(node, "blockpath"):
+        return None  # the caller chose
+    begin = None
+    seen: set[int] = set()
+    queue = [n for n in node.inputs() if n is not None]
+    while queue and begin is None:
+        current = queue.pop(0)
+        if current.sessionId() in seen:
+            continue
+        seen.add(current.sessionId())
+        partner = _block_partner(current)
+        if _core_type(current) == BLOCK_BEGIN and (partner is None or partner == node):
+            begin = current
+            break
+        queue.extend(n for n in current.inputs() if n is not None)
+    if begin is None:
+        loose = [
+            child
+            for child in node.parent().children()
+            if _core_type(child) == BLOCK_BEGIN and _block_partner(child) is None
+        ]
+        if len(loose) != 1:
+            return None
+        begin = loose[0]
+    node.parm("blockpath").set(node.relativePathTo(begin))
+    template = node.parm("templatepath")
+    if template is not None and not _parm_text(node, "templatepath"):
+        template.set(node.relativePathTo(begin))
+    back = begin.parm("blockpath")
+    if back is not None and not _parm_text(begin, "blockpath"):
+        back.set(begin.relativePathTo(node))
+        rollback.add(lambda: back.set(""))
+    return begin
+
+
+def _create_item_path(item: dict[str, Any]) -> Any:
+    """What a ``node_create`` error names: ``parent/name``, else the parent."""
+    parent, name = item.get("parent"), item.get("name")
+    if isinstance(parent, str) and isinstance(name, str) and name:
+        return f"{parent.rstrip('/')}/{name}"
+    return parent
 
 
 @tool("node_create")
@@ -1220,27 +1282,30 @@ def node_create(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     partial = arg_bool(args, "partial", False)
     mode = return_mode(args)
     rollback = Rollback()
-    created: list[tuple[int, Any]] = []
-    failures: dict[int, dict[str, Any]] = {}
-    for index, item in enumerate(items):
-        mark = rollback.mark()
-        try:
-            created.append((index, _create_one(item, index, args, ctx, rollback)))
-        except Exception as exc:
-            if not partial:
-                rollback.run()
-                raise_with_item(index, exc, len(items))
-            rollback.run(mark)
-            failures[index] = item_error(index, exc)
+    baselines: dict[int, dict[str, tuple[Any, ...]]] = {}
+    pairs: dict[int, str] = {}
+    done, failures = run_batch(
+        items,
+        partial,
+        rollback,
+        lambda item, index: _create_one(item, index, args, ctx, rollback, baselines, pairs),
+        _create_item_path,
+    )
+    created = list(done.items())  # item order
     if mode == "summary":
         blocks = {index: summary_block(node) for index, node in created}
     else:
-        blocks = {
-            index: elide_long_values(
-                node_block(node, DEFAULT_INCLUDE, problems=cheap_cook_problems(node))
+        blocks = {}
+        for index, node in created:
+            block = node_block(node, DEFAULT_INCLUDE, problems=cheap_cook_problems(node))
+            keep = call_edited_parms(
+                node, baselines.get(node.sessionId(), {}), items[index].get("parms") or {}
             )
-            for index, node in created
-        }
+            block["parms"] = [row for row in block["parms"] if row["name"] in keep]
+            blocks[index] = block  # parm rows elide long strings (summarize_parm)
+    for index, node in created:
+        if node.sessionId() in pairs:
+            blocks[index]["paired_with"] = pairs[node.sessionId()]
     results = [blocks.get(i) or {"error": failures[i]} for i in range(len(items))]
     if mode == "summary":
         collapse_problems(results)
@@ -1375,6 +1440,13 @@ def _edit_one(item: Any, index: int, rollback: Rollback) -> dict[str, Any]:
         raise bad_arg("'comment' must be a string.")
     position = item.get("position")
     xy = arg_xy(position, "position") if position is not None else None
+    spare_plan = None
+    if item.get("spare_parms") is not None:
+        from .parms import plan_spare_parms  # lazy: parms imports this module
+
+        # A locked asset's own instance takes spare parms (the wrangle "Create spare
+        # parameters" button does that); nodes inside a locked asset were refused above.
+        spare_plan = plan_spare_parms(node, item["spare_parms"])
     # -- apply ---------------------------------------------------------------------
     try:
         if name is not None:
@@ -1409,6 +1481,11 @@ def _edit_one(item: Any, index: int, rollback: Rollback) -> dict[str, Any]:
         old_pos = node.position()
         node.setPosition(xy)
         rollback.add(lambda: node.setPosition(old_pos))
+    spare = None
+    if spare_plan is not None:
+        from .parms import apply_spare_parms
+
+        spare = apply_spare_parms(node, spare_plan, rollback)
     if lock is not None:
         was_locked = _is_locked_hda(node)
         if lock and not was_locked:
@@ -1422,6 +1499,8 @@ def _edit_one(item: Any, index: int, rollback: Rollback) -> dict[str, Any]:
         extra["old_path"] = old_path
     if lock is not None:
         extra["hda"] = hda_block(node)
+    if spare is not None:
+        extra["spare_parms"] = spare
     return {"node": node, "extra": extra}
 
 
@@ -1430,18 +1509,13 @@ def node_edit(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     items = arg_list(args, "items")
     partial = arg_bool(args, "partial", False)
     rollback = Rollback()
-    done: dict[int, dict[str, Any]] = {}
-    failures: dict[int, dict[str, Any]] = {}
-    for index, item in enumerate(items):
-        mark = rollback.mark()
-        try:
-            done[index] = _edit_one(item, index, rollback)
-        except Exception as exc:
-            if not partial:
-                rollback.run()
-                raise_with_item(index, exc, len(items))
-            rollback.run(mark)
-            failures[index] = item_error(index, exc)
+    done, failures = run_batch(
+        items,
+        partial,
+        rollback,
+        lambda item, index: _edit_one(item, index, rollback),
+        lambda item: item.get("path"),
+    )
     results = []
     for index in range(len(items)):
         if index in failures:
@@ -1571,18 +1645,13 @@ def node_connect(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     items = arg_list(args, "items")
     partial = arg_bool(args, "partial", False)
     rollback = Rollback()
-    done: dict[int, dict[str, Any]] = {}
-    failures: dict[int, dict[str, Any]] = {}
-    for index, item in enumerate(items):
-        mark = rollback.mark()
-        try:
-            done[index] = _connect_one(item, index, rollback)
-        except Exception as exc:
-            if not partial:
-                rollback.run()
-                raise_with_item(index, exc, len(items))
-            rollback.run(mark)
-            failures[index] = item_error(index, exc)
+    done, failures = run_batch(
+        items,
+        partial,
+        rollback,
+        lambda item, index: _connect_one(item, index, rollback),
+        lambda item: item.get("to"),
+    )
     results = []
     for index in range(len(items)):
         if index in failures:

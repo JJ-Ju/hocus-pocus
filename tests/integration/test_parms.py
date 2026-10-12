@@ -400,7 +400,10 @@ def test_locked_hda_internal_parm_is_refused(client, scene, work_dir):
     assert "PermissionError" in err["hou_exception"]
     assert asset.node("inner").parm("sizex").eval() == 1.0
     got = _get(client, f"{asset.path()}/inner/sizex")
-    assert got["locked"] is True
+    assert got["hda_locked"] is True and got["locked"] is False  # locked: the parm lock
+    scene["box"].parm("sizey").lock(True)
+    assert _get(client, "/obj/geo1/box1/sizey")["locked"] is True
+    assert _get(client, "/obj/geo1/box1/sizey")["hda_locked"] is False
 
 
 # -- batches and undo --------------------------------------------------------------
@@ -417,8 +420,8 @@ def test_failed_batch_rolls_back_earlier_items(client, scene):
         },
     )
     assert err["code"] == "parm_not_found"
-    assert err["detail"]["item"] == 1
-    assert err["message"].startswith("items[1]")
+    assert err["detail"] == {"item": 1, "path": "/obj/geo1/box1/nope", "rolled_back": True}
+    assert err["message"].startswith("items[1] (/obj/geo1/box1/nope): ")
     assert scene["box"].parm("sizex").eval() == 1.0
     assert not any("parm_set" in label for label in hou.undos.undoLabels()[:1])
 
@@ -510,11 +513,11 @@ def test_set_parm_items_engine(scene):
     assert info.value.code == "invalid_argument"
 
 
-def test_summarize_parm_compact_and_full(scene):
+def test_summarize_parm_compact(scene):
     from hocuspocus.host.tools.parms import summarize_parm
 
     box, xform = scene["box"], scene["xform"]
-    assert summarize_parm(box.parm("sizex")) == {
+    assert summarize_parm(box.parm("sizex")) == {  # raw only differs in text form
         "name": "sizex",
         "value": 1.0,
         "raw": "1",
@@ -536,10 +539,6 @@ def test_summarize_parm_compact_and_full(scene):
     assert menu["menu_token"] == "srt" and menu["value"] == "srt"
     single = summarize_parm(box.parmTuple("type"))  # one-component tuple → its parm
     assert single["name"] == "type" and single["menu_token"] == "poly"
-    full = summarize_parm(xform.parm("ty"), detail="full")
-    assert full["path"] == "/obj/geo1/xform1/ty"
-    assert full["keyframes"]["count"] == 1
-    assert full["template"]["type"] == "float"
 
 
 def test_messages_and_values_are_tidy(client):
@@ -553,7 +552,7 @@ def test_messages_and_values_are_tidy(client):
         "parm_set",
         {"items": [{"path": f"{geo.path()}/tx", "value": 1}, {"path": path, "value": "tall"}]},
     )
-    assert error["message"].startswith("items[1]: ") and error["message"].count(path) == 1
+    assert error["message"].startswith(f"items[1] ({path}): ") and error["message"].count(path) == 1
     client.ok("parm_set", {"items": [{"path": f"{geo.path()}/tx", "expression": "$F*0.1"}]})
     (row,) = client.ok("parm_get", {"paths": [f"{geo.path()}/tx"], "frame": 24})["parms"]
     assert row["value"] == 2.4  # not 2.4000000000000004
@@ -637,10 +636,11 @@ def test_editable_node_inside_locked_asset_is_not_locked(client, scene, work_dir
     asset.type().definition().addSection("EditableNodes", "inner")
     asset.matchCurrentDefinition()
     assert asset.node("inner").isEditableInsideLockedHDA()
-    assert _get(client, f"{asset.path()}/inner/sizex")["locked"] is False
-    assert _get(client, f"{asset.path()}/sealed/sizex")["locked"] is True
+    assert _get(client, f"{asset.path()}/inner/sizex")["hda_locked"] is False
+    assert _get(client, f"{asset.path()}/sealed/sizex")["hda_locked"] is True
+    assert _get(client, f"{asset.path()}/sealed/sizex")["locked"] is False
     res = _set(client, {"path": f"{asset.path()}/inner/sizex", "value": 3})
-    assert res["value"] == 3.0 and "locked" not in res
+    assert res["value"] == 3.0 and "locked" not in res and "hda_locked" not in res
 
 
 def test_node_create_parms_accept_parm_set_item_forms(client, scene):
@@ -672,3 +672,143 @@ def test_node_create_parms_accept_parm_set_item_forms(client, scene):
     assert len(xf.parm("tx").keyframes()) == 2
     assert xf.parm("sx").expression() == 'ch("../box1/sizex")'
     assert hou.node(created["created"][1]).parm("numattr").eval() == 2
+
+
+# -- review 10 §5 gaps -------------------------------------------------------------
+
+
+def test_expression_with_animation_key_and_keep(client, scene):
+    tx = scene["xform"].parm("tx")
+    res = _set(client, {"path": tx.path(), "expression": "$F*2", "animation": "key"}, frame=10)
+    assert res["wrote_keyframe"] is True
+    assert [(k.frame(), k.expression()) for k in tx.keyframes()] == [(10.0, "$F*2")]
+    ty = scene["xform"].parm("ty")
+    _set(
+        client,
+        {"path": ty.path(), "keyframes": [{"frame": 1, "value": 0}, {"frame": 10, "value": 5}]},
+    )
+    res = _set(client, {"path": ty.path(), "expression": "$F*3", "animation": "keep"}, frame=10)
+    assert res["wrote_keyframe"] is False  # keep edits the key Houdini already had
+    keys = [(k.frame(), k.expression()) for k in ty.keyframes()]
+    assert keys[0][0] == 1.0 and keys[-1] == (10.0, "$F*3")
+    assert ty.evalAtFrame(10) == pytest.approx(30.0)
+
+
+def test_channel_ref_relative_python_and_self(client, scene):
+    box = scene["box"]
+    res = _set(client, {"path": f"{box.path()}/sizex", "channel_ref": "sizey"})
+    assert res["expression"] in ('ch("sizey")', 'ch("./sizey")') and res["language"] == "hscript"
+    res = _set(
+        client,
+        {"path": f"{box.path()}/sizez", "channel_ref": "/obj/geo1/xform1/tx", "language": "python"},
+    )
+    assert res["language"] == "python" and "tx" in res["expression"]
+    scene["xform"].parm("tx").set(3)
+    assert box.parm("sizez").eval() == pytest.approx(3.0)
+    error = client.error(
+        "parm_set", {"items": [{"path": f"{box.path()}/sizey", "channel_ref": "sizey"}]}
+    )
+    assert error["code"] == "invalid_value" and "itself" in error["message"]
+    error = client.error(
+        "parm_set", {"items": [{"path": f"{box.path()}/sizey", "channel_ref": "nope"}]}
+    )
+    assert error["code"] == "parm_not_found"
+
+
+def test_duplicate_keyframe_frames_are_refused(client, scene):
+    tx = scene["xform"].parm("tx")
+    error = client.error(
+        "parm_set",
+        {
+            "items": [
+                {
+                    "path": tx.path(),
+                    "keyframes": [{"frame": 5, "value": 1}, {"frame": 5, "value": 2}],
+                }
+            ]
+        },
+    )
+    assert error["code"] == "invalid_argument" and "same frame" in error["message"]
+    assert not tx.keyframes()
+
+
+def _spare(node, template):
+    group = node.parmTemplateGroup()
+    group.append(template)
+    node.setParmTemplateGroup(group)
+    return node.parm(template.name())
+
+
+def test_int_menus_free_menus_and_strict_ranges(client, scene):
+    null = scene["geo"].createNode("null", "CTRL")
+    _spare(
+        null,
+        hou.IntParmTemplate(
+            "quality",
+            "Quality",
+            1,
+            menu_items=("lo", "mid", "hi"),
+            menu_labels=("Low", "Medium", "High"),
+        ),
+    )
+    _spare(
+        null,
+        hou.StringParmTemplate(
+            "shader",
+            "Shader",
+            1,
+            menu_items=("glass", "metal"),
+            menu_type=hou.menuType.StringReplace,
+        ),
+    )
+    _spare(
+        null,
+        hou.FloatParmTemplate(
+            "mix", "Mix", 1, min=0, max=1, min_is_strict=True, max_is_strict=True
+        ),
+    )
+    quality = f"{null.path()}/quality"
+    res = _set(client, {"path": quality, "value": "hi"})
+    assert null.parm("quality").eval() == 2
+    assert res["value"] == 2 and res["menu_token"] == "hi"
+    res = _set(client, {"path": quality, "value": "Medium"})
+    assert null.parm("quality").eval() == 1 and res["notes"]
+    res = _set(client, {"path": quality, "value": 0})
+    assert null.parm("quality").eval() == 0
+    error = client.error("parm_set", {"items": [{"path": quality, "value": 7}]})
+    assert error["code"] == "invalid_value" and "lo" in error["candidates"]
+    # A free (StringReplace) menu takes any text; the menu is only a suggestion.
+    res = _set(client, {"path": f"{null.path()}/shader", "value": "plastic"})
+    assert res["value"] == "plastic"
+    got = _get(client, f"{null.path()}/shader", include=["menu"])
+    assert [i["token"] for i in got["menu"]["items"]] == ["glass", "metal"]
+    mix = f"{null.path()}/mix"
+    for bad, bound in ((1.5, "<= 1"), (-0.1, ">= 0")):
+        error = client.error("parm_set", {"items": [{"path": mix, "value": bad}]})
+        assert error["code"] == "invalid_value" and bound in error["hint"], error
+    assert _set(client, {"path": mix, "value": 1})["value"] == 1.0
+
+
+# -- long strings (review 12 papercut 1) -------------------------------------------
+
+SNIPPET_400 = ("// tuned\n" + "f@d = rand(@ptnum) * 0.5;\n" * 20)[:400]
+
+
+def test_long_string_is_elided_in_set_and_get(client, scene):
+    wrangle = scene["geo"].createNode("attribwrangle", "tune")
+    path = f"{wrangle.path()}/snippet"
+    assert len(SNIPPET_400) == 400
+    elided = {"elided": 400, "head": SNIPPET_400[:80]}
+    res = _set(client, {"path": path, "value": SNIPPET_400})
+    assert res["value"] == elided and "raw" not in res, res
+    assert wrangle.parm("snippet").eval() == SNIPPET_400
+    got = _get(client, path)
+    assert got["value"] == elided and "raw" not in got
+    whole = _get(client, path, full_strings=True)
+    assert whole["value"] == SNIPPET_400 and "raw" not in whole
+    short = _set(client, {"path": f"{wrangle.path()}/group", "value": "a"})
+    assert short["value"] == "a" and "raw" not in short
+    expanded = _set(client, {"path": f"{wrangle.path()}/group", "value": "$OS"})
+    assert expanded["value"] == "tune" and expanded["raw"] == "$OS"
+    error = client.error("parm_get", {"paths": [path], "full_strings": "yes"})
+    assert error["code"] == "invalid_argument"

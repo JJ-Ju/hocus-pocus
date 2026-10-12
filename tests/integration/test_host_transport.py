@@ -140,3 +140,16 @@ def test_custom_undo_label(client):
 def test_read_only_tool_opens_no_undo_group(client):
     envelope = client.call("houdini_status")
     assert envelope["_meta"]["undo_label"] is None
+
+
+def test_rollback_is_reported_honestly_when_undo_is_disabled(client):
+    """Review 10 section 1.7: with undo disabled nothing can be rolled back; say so."""
+    code = "hou.node('/obj').createNode('geo', 'kept_geo')\n1/0"
+    with hou.undos.disabler():
+        error = client.error("houdini_python", {"code": code})
+    assert error["code"] == "python_exception"
+    assert error["detail"]["rolled_back"] is False
+    assert hou.node("/obj/kept_geo") is not None
+    error = client.error("houdini_python", {"code": code.replace("kept_geo", "gone_geo")})
+    assert error["detail"]["rolled_back"] is True
+    assert hou.node("/obj/gone_geo") is None

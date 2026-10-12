@@ -24,6 +24,7 @@ from typing import Any
 from hocuspocus.tools.catalog import CATEGORIES
 from hocuspocus.tools.errors import ToolError
 
+from ._common import arg_bool, int_arg
 from .registry import HostContext, tool
 
 # -- help archive -----------------------------------------------------------------
@@ -38,7 +39,8 @@ HELP_DIRS = {
 
 HELP_HEAD_BYTES = 1500
 HELP_TEXT_CHARS = 2000
-DESCRIPTION_CHARS = 160
+DESCRIPTION_CHARS = 120
+"""Search rows clip descriptions here (review 11 B6); node_type_info keeps them whole."""
 
 
 class _HelpArchive:
@@ -285,6 +287,7 @@ def _build_rows() -> list[dict[str, Any]]:
                     "hidden": bool(node_type.hidden()) or bool(scope),
                     "deprecated": bool(node_type.deprecated()),
                     "current": order[0] if order else name,
+                    "_order": tuple(order),
                 }
             except Exception:
                 continue
@@ -320,15 +323,6 @@ def get_index() -> list[dict[str, Any]]:
             _INDEX.build_ms = round((time.perf_counter() - started) * 1000, 1)
             _INDEX.builds += 1
         return _INDEX.rows
-
-
-def index_stats() -> dict[str, Any]:
-    return {
-        "types": len(_INDEX.rows or ()),
-        "build_ms": _INDEX.build_ms,
-        "builds": _INDEX.builds,
-        "help_archive": _HELP.path,
-    }
 
 
 # -- ranking --------------------------------------------------------------------------
@@ -469,7 +463,9 @@ def score_row(row: dict[str, Any], query: str) -> float:
     return max(score, 1.0)
 
 
-def public_row(row: dict[str, Any]) -> dict[str, Any]:
+def public_row(row: dict[str, Any], *, fold_versions: bool = False) -> dict[str, Any]:
+    """The search row an agent sees. With ``fold_versions`` a current row names the
+    type's other versions (``other_versions``) instead of listing them as rows."""
     out: dict[str, Any] = {
         "name": row["name"],
         "label": row["label"],
@@ -482,6 +478,10 @@ def public_row(row: dict[str, Any]) -> dict[str, Any]:
     }
     if not row["is_current_version"]:
         out["current"] = row["current"]
+    elif fold_versions:
+        others = [name for name in row["_order"] if name != row["name"]]
+        if others:
+            out["other_versions"] = others
     if row["hidden"]:
         out["hidden"] = True
     return out
@@ -492,26 +492,68 @@ def _clip(text: str, limit: int) -> str:
 
 
 def search(
-    query: str, category: str | None = None, limit: int = 20, include_hidden: bool = False
+    query: str,
+    category: str | None = None,
+    limit: int = 20,
+    include_hidden: bool = False,
+    current_only: bool = False,
 ) -> tuple[list[dict[str, Any]], int]:
-    """Ranked index rows (main thread). Returns ``(rows, total_matches)``."""
-    scored: list[tuple[float, int, int, str, dict[str, Any]]] = []
-    for row in get_index():
+    """Ranked index rows (main thread). Returns ``(rows, total_matches)``.
+
+    ``current_only`` folds every version of a type into its current version's row,
+    ranked by the best-scoring version (an old version's label can be the one that
+    matches).
+    """
+    rows = get_index()
+    current: dict[tuple[str, str], dict[str, Any]] = {}
+    if current_only:
+        current = {(r["category"], r["name"]): r for r in rows if r["is_current_version"]}
+    best: dict[tuple[str, str], tuple[float, dict[str, Any]]] = {}
+    for row in rows:
         if category and row["category"] != category:
             continue
         if row["hidden"] and not include_hidden:
             continue
         score = score_row(row, query)
-        if score > 0:
-            rank = CATEGORY_RANK.get(row["category"], len(CATEGORY_RANK))
-            scored.append((-score, rank, len(row["name"]), row["name"], row))
+        if score <= 0:
+            continue
+        key = (row["category"], row["name"])
+        if current_only and not row["is_current_version"]:
+            head = current.get((row["category"], row["current"]))
+            if head is not None and (include_hidden or not head["hidden"]):
+                key, row = (head["category"], head["name"]), head
+        if key not in best or score > best[key][0]:
+            best[key] = (score, row)
+    scored = [
+        (-score, CATEGORY_RANK.get(row["category"], len(CATEGORY_RANK)), len(row["name"]),
+         row["name"], row)
+        for score, row in best.values()
+    ]  # fmt: skip
     scored.sort(key=lambda item: item[:4])
     return [item[4] for item in scored[:limit]], len(scored)
 
 
 def suggest_types(query: str, category: str | None = None, limit: int = 5) -> list[str]:
-    """``Category/name`` candidates for a type name that did not resolve (main thread)."""
-    rows, _ = search(query, category, limit)
+    """``Category/name`` candidates for a type name that did not resolve (main thread).
+
+    Known other names come first (``distantlight`` is ``hlight`` in /obj, through
+    ``nodes.type_synonym``), then ranked search rows; a query nothing matches falls back
+    to ``nodes.type_candidates`` (close names and labels) or close index keys.
+    """
+    import hou
+
+    from .nodes import type_candidates, type_synonym
+
+    categories = hou.nodeTypeCategories()
+    scope = [category] if category else list(categories)
+    named: list[str] = []
+    for cat_name in scope:
+        cat = categories.get(cat_name)
+        synonym = type_synonym(cat, query) if cat is not None else None
+        if synonym is not None:
+            named.append(synonym[0] if category else f"{cat_name}/{synonym[0]}")
+    rows, _ = search(query, category, limit, current_only=True)
+    extra: list[str] = []
     if not rows:
         # Typos ("scater"): fall back to close matches on base names and labels.
         pool = [
@@ -531,9 +573,11 @@ def suggest_types(query: str, category: str | None = None, limit: int = 5) -> li
                     seen.add(id(row))
                     rows.append(row)
         rows = rows[:limit]
-    if category:
-        return [row["name"] for row in rows]
-    return [f"{row['category']}/{row['name']}" for row in rows]
+        if category and categories.get(category) is not None:
+            # Labels inside the query ("spot_light" -> Light), as node_create suggests.
+            extra = type_candidates(categories[category], query, limit)
+    found = [row["name"] if category else f"{row['category']}/{row['name']}" for row in rows]
+    return list(dict.fromkeys([*named, *found, *extra]))[:limit]
 
 
 # -- resolution -----------------------------------------------------------------------
@@ -777,7 +821,10 @@ def _json_value(value: Any) -> Any:
 def parm_template_rows(
     group: Any, *, folder: str | None = None, parm_help: dict[str, str] | None = None
 ) -> tuple[list[dict[str, Any]], list[str]]:
-    """Flatten a ParmTemplateGroup into parm rows in folder order. Returns ``(rows, folders)``."""
+    """Flatten a ParmTemplateGroup into parm rows in folder order. Returns ``(rows, folders)``.
+
+    ``folder`` keeps the rows in that folder (a label or a ``A / B`` path, any case); ``""``
+    keeps the top-level rows, the ones ``detail: folders`` lists as ``(no folder)``."""
     import hou
 
     folder_kinds = (hou.parmTemplateType.Folder, hou.parmTemplateType.FolderSet)
@@ -789,7 +836,7 @@ def parm_template_rows(
     }
     rows: list[dict[str, Any]] = []
     folders: list[str] = []
-    wanted = folder.strip().lower() if folder else None
+    wanted = folder.strip().lower() if folder is not None else None
 
     def visit(templates: Any, path: list[str]) -> None:
         for template in templates:
@@ -812,6 +859,10 @@ def parm_template_rows(
             _maybe_add(_template_row(template, path, parm_help), path)
 
     def _maybe_add(row: dict[str, Any], path: list[str]) -> None:
+        if wanted == "":
+            if not path:
+                rows.append(row)
+            return
         if (
             wanted is not None
             and not any(wanted == p.lower().rstrip("[]") for p in path)
@@ -900,15 +951,6 @@ def _template_row(
 # -- tools ------------------------------------------------------------------------------
 
 
-def _int_arg(args: dict[str, Any], key: str, default: int, lo: int, hi: int) -> int:
-    value = args.get(key, default)
-    if value is None:
-        return default
-    if isinstance(value, bool) or not isinstance(value, int) or not lo <= value <= hi:
-        raise ToolError("invalid_argument", f"'{key}' must be an integer from {lo} to {hi}.")
-    return value
-
-
 def _category_arg(args: dict[str, Any]) -> str | None:
     category = args.get("category")
     if category is None or category == "":
@@ -929,10 +971,14 @@ def node_type_search(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     if not isinstance(query, str) or not query.strip():
         raise ToolError("invalid_argument", "'query' must be a non-empty string.")
     category = _category_arg(args)
-    limit = _int_arg(args, "limit", 20, 1, 1000)
-    include_hidden = bool(args.get("include_hidden", False))
-    rows, total = search(query, category, limit, include_hidden)
-    result: dict[str, Any] = {"results": [public_row(r) for r in rows], "total": total}
+    limit = int_arg(args, "limit", 20, 1, 1000)
+    include_hidden = arg_bool(args, "include_hidden", False)
+    current_only = arg_bool(args, "current_only", True)
+    rows, total = search(query, category, limit, include_hidden, current_only)
+    result: dict[str, Any] = {
+        "results": [public_row(r, fold_versions=current_only) for r in rows],
+        "total": total,
+    }
     if not rows:
         result["hint"] = (
             "No match. Try a shorter word, the node's label (e.g. 'copy to points'), "
@@ -952,15 +998,19 @@ PARM_COLUMNS = ["name", "label", "type", "default", "components"]
 
 def filter_parms(rows: list[dict[str, Any]], pattern: str) -> list[dict[str, Any]]:
     """Rows whose name or label matches the glob ``pattern`` (case-insensitive); a
-    pattern without wildcards matches the whole name or label."""
+    pattern without wildcards matches the whole name or label, and ``a|b`` matches
+    either glob (review 12 papercut 2)."""
     import fnmatch
 
-    pat = pattern.strip().lower()
+    pats = [p.strip().lower() for p in pattern.split("|") if p.strip()]
     return [
         row
         for row in rows
-        if fnmatch.fnmatchcase(row["name"].lower(), pat)
-        or fnmatch.fnmatchcase((row.get("label") or "").lower(), pat)
+        if any(
+            fnmatch.fnmatchcase(row["name"].lower(), pat)
+            or fnmatch.fnmatchcase((row.get("label") or "").lower(), pat)
+            for pat in pats
+        )
     ]
 
 
@@ -1007,9 +1057,15 @@ def node_type_info(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     folder = args.get("folder")
     if folder is not None and not isinstance(folder, str):
         raise ToolError("invalid_argument", "'folder' must be a string.")
+    if folder is not None and folder.strip().lower() in ("", NO_FOLDER):
+        folder = ""  # the top-level parms, listed by detail: folders as "(no folder)"
     parm_glob = args.get("parms")
-    if parm_glob is not None and (not isinstance(parm_glob, str) or not parm_glob.strip()):
-        raise ToolError("invalid_argument", "'parms' must be a non-empty glob such as *seed*.")
+    if parm_glob is not None and (
+        not isinstance(parm_glob, str) or not parm_glob.replace("|", "").strip()
+    ):
+        raise ToolError(
+            "invalid_argument", "'parms' must be a non-empty glob such as *seed* or dist|inset."
+        )
 
     cat_name = node_type.category().name()
     components = node_type.nameComponents()
@@ -1053,22 +1109,23 @@ def node_type_info(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     if include_parms:
         wants_parm_help = include_help and raw_help and detail == "full"
         parm_help = parse_parm_help(raw_help) if wants_parm_help else None
-        rows, folders = parm_template_rows(
-            node_type.parmTemplateGroup(), folder=folder, parm_help=parm_help
-        )
-        if folder and not rows:
+        group = node_type.parmTemplateGroup()
+        rows, folders = parm_template_rows(group, folder=folder, parm_help=parm_help)
+        if folder is not None and not rows:
+            every, _ = parm_template_rows(group)
+            label = args.get("folder")
             raise ToolError(
                 "invalid_argument",
-                f"No folder {folder!r} on {node_type.nameWithCategory()}.",
-                hint="Pass one folder label from candidates (a single segment).",
-                candidates=folders,
+                f"No folder {label!r} on {node_type.nameWithCategory()}.",
+                hint="Pass one folder from candidates, or a single segment of one.",
+                candidates=[row["folder"] for row in folder_counts(every, folders)],
             )
         if parm_glob is not None:
             rows = filter_parms(rows, parm_glob)
             if not rows:
                 result["hint"] = (
                     f"No parm name or label matches {parm_glob!r}; globs are case-insensitive, "
-                    "e.g. *seed*."
+                    "e.g. *seed* or dist|inset."
                 )
         if detail == "folders":
             result["folders"] = folder_counts(rows, folders)

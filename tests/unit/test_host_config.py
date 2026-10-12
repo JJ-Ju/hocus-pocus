@@ -16,7 +16,7 @@ def test_defaults_match_bible(tmp_path):
     assert config.job_threshold_s == 10
     assert config.profile == "core"
     assert config.log_level == "INFO"
-    assert config.hfs == ""
+    assert not hasattr(config, "hfs")  # a bridge-only key (review 10 section 4)
     assert config.port == 0
     assert config.pref_dir == str(tmp_path)
 
@@ -96,3 +96,13 @@ def test_unexpanded_hver_pref_dir_is_not_used(monkeypatch, tmp_path):
 
 def test_with_overrides():
     assert HostConfig().with_overrides(read_only=True, nonsense=1).read_only is True
+
+
+def test_bridge_only_keys_are_skipped_quietly(tmp_path, caplog):
+    (tmp_path / "hocuspocus.toml").write_text(
+        'hfs = "C:/Houdini"\nresult_content = "both"\nbogus = 1\n', encoding="utf-8"
+    )
+    with caplog.at_level(logging.WARNING):
+        load_config(tmp_path, environ={"HOCUSPOCUS_HFS": "C:/H"})
+    assert "bogus" in caplog.text
+    assert "hfs" not in caplog.text and "result_content" not in caplog.text

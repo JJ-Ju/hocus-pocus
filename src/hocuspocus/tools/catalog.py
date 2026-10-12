@@ -142,12 +142,12 @@ def _flags(*extra: str) -> dict[str, Any]:
 
 def _partial() -> dict[str, Any]:
     # §4.1: batch tools roll back on the first failing item unless partial is true.
-    return _b(False, "Keep successful items when one fails.")
+    return _b(False, "Keep successful items.")
 
 
 def _return() -> dict[str, Any]:
-    # Review 11 B5: lean mutation echoes; identical errors are reported once.
-    return _enum(("full", "summary"), "full")
+    # Review 11 B5: lean mutation echoes (the 1.1 default); identical errors are reported once.
+    return _enum(("full", "summary"), "summary")
 
 
 def _scalar() -> dict[str, Any]:
@@ -216,18 +216,11 @@ def _problems() -> dict[str, Any]:
 
 def _tuple_animation() -> dict[str, Any]:
     """Parm animation keys: a single parm has ``keyed: true``; a tuple has per-component
-    ``expressions`` and ``keyed`` as a list of component names."""
+    ``expressions`` (component name -> {expression, language}) and ``keyed`` as a list of
+    component names. The tool descriptions say so; no schema descriptions (tools/list cap)."""
     return {
-        "expressions": {
-            "type": "object",
-            "additionalProperties": _out({"expression": _t("string"), "language": _t("string")}),
-            "description": "Tuples: component name -> {expression, language}.",
-        },
-        "keyed": {
-            "type": ["boolean", "array"],
-            "items": {"type": "string"},
-            "description": "Parm: true when keyframed. Tuple: keyed component names.",
-        },
+        "expressions": _t("object"),
+        "keyed": {"type": ["boolean", "array"], "items": {"type": "string"}},
     }
 
 
@@ -238,7 +231,7 @@ def _image() -> dict[str, Any]:
             "mime_type": _t("string"),
             "width": _t("integer"),
             "height": _t("integer"),
-            "attached": {"type": "boolean", "description": "Sent as MCP image content."},
+            "attached": {"type": "boolean", "description": "Sent as image content."},
         }
     )
 
@@ -321,9 +314,9 @@ _SESSION: tuple[ToolSpec, ...] = (
             "Choose which Houdini this session drives. Pass one of: pid to attach to a live "
             "instance listed by houdini_status; launch to start one (mode gui or headless hython, "
             "optional hip, wait up to wait_s, default 90); or disconnect to drop the selection. "
-            "A launched Houdini usually closes when this server "
-            "exits (launched.outlives_server says); to keep one, start Houdini yourself (after "
-            "hocuspocus install-houdini) and attach by pid."
+            "A launched Houdini usually closes when this server exits (launched.outlives_server "
+            "says); to keep Houdini alive across sessions, start it with `hocuspocus launch` and "
+            "attach by pid."
         ),
         input_schema=_obj(
             {
@@ -516,7 +509,7 @@ _NODES: tuple[ToolSpec, ...] = (
         name="node_info",
         description=(
             "Read nodes in detail: type, flags, inputs with names and sources, non-default parms "
-            "(value, raw, expression), errors, warnings, cook state. include picks sections "
+            "(value, raw, expression; long strings elided), errors, warnings, cook state. include picks sections "
             "(default parms, inputs, errors, flags); include_defaults adds parms at default. Use "
             "parm_get for keyframes, menus and templates; network_describe for a whole network."
         ),
@@ -550,6 +543,7 @@ _NODES: tuple[ToolSpec, ...] = (
                             **_problems(),
                             "cook_state": _t("string"),
                             "children_count": _t("integer"),
+                            "hda_locked": _t("boolean"),
                             "hda": _t(["object", "null"]),
                             "position": _list("number"),
                             "comment": _t("string"),
@@ -573,9 +567,10 @@ _NODES: tuple[ToolSpec, ...] = (
             "Create nodes in one undo step. Item: parent, type (resolved like createNode so box "
             "gets the current version; exact_type disables), optional name, parms (value or "
             "{expression, language}; {expr, lang} also works), inputs (index or name, from, "
-            "output), flags, position. Items may wire to nodes created earlier in the call. layout "
-            "default good_position. Returns node_info blocks, or path, type and problems with "
-            "return summary. Use network_build for whole graphs."
+            "output), flags, position. Items may wire to earlier items; a block_end pairs with its "
+            "block_begin (paired_with). layout default good_position. Returns path, type and "
+            "problems per node; return full gives node_info blocks with only the parms the call "
+            "set. Use network_build for whole graphs."
         ),
         input_schema=_obj(
             {
@@ -645,8 +640,10 @@ _NODES: tuple[ToolSpec, ...] = (
         name="node_edit",
         description=(
             "Change node properties in one undo step: rename, flags, bypass, color, comment, "
-            "position, and lock (false allows editing a locked HDA's contents). A rename returns "
-            "old_path and path. Use parm_set for parameter values and node_connect for wiring."
+            "position, and lock (false allows editing a locked HDA's contents). spare_parms adds "
+            "{name, type: float|int|string|toggle|menu|button|vector|color, label, default, size, "
+            "min, max, menu_items [{token, label}], folder, help} or removes spare parms by name; "
+            "returns their paths. A rename returns old_path and path. Use parm_set for values."
         ),
         input_schema=_obj(
             {
@@ -663,6 +660,10 @@ _NODES: tuple[ToolSpec, ...] = (
                             "position": _xy("[x, y]"),
                             "lock": {"type": "boolean"},
                             "bypass": {"type": "boolean"},
+                            # Review 11 B9; entries are validated by the host (parms.py).
+                            "spare_parms": _obj(
+                                {"add": _arr(_t("object")), "remove": _arr(_t("string"))}
+                            ),
                         },
                         ("path",),
                     ),
@@ -676,6 +677,16 @@ _NODES: tuple[ToolSpec, ...] = (
         examples=(
             {"items": [{"path": "/obj/geo1/box1", "name": "base_box"}]},
             {"items": [{"path": "/obj/geo1/null1", "color": [1, 0, 0], "comment": "OUT"}]},
+            {
+                "items": [
+                    {
+                        "path": "/obj/geo1/wrangle1",
+                        "spare_parms": {
+                            "add": [{"name": "glue", "type": "float", "default": 1, "max": 10}]
+                        },
+                    }
+                ]
+            },
         ),
     ),
     ToolSpec(
@@ -683,8 +694,8 @@ _NODES: tuple[ToolSpec, ...] = (
         description=(
             "Copy nodes into to_parent, which may be their own network. names renames copies in "
             "paths order; with_inputs (default true) keeps wiring among copied nodes; "
-            "position_offset shifts them. Returns the new paths; return summary trims each row "
-            "to path, type and problems."
+            "position_offset shifts them. Returns the new paths and per copy path, type and "
+            "problems (return full adds flags)."
         ),
         input_schema=_obj(
             {
@@ -759,19 +770,20 @@ _NODES: tuple[ToolSpec, ...] = (
         name="network_describe",
         description=(
             "Read a whole network in one call as Houdini's hou.data childrenAsData format: types, "
-            "non-default parms, expressions, wiring, flags, depth levels deep (default 1). Locked "
-            "HDAs appear as {type, locked, hda_locked} unless recurse_locked. Pages stop at the "
-            "response budget (truncated, next_cursor). format python returns asCode for a single "
-            "node. The data result can be passed to network_build."
+            "non-default parms, expressions, wiring, flags, depth levels deep (default 1; 2 for "
+            "outline). Locked HDAs appear as {type, hda_locked} unless recurse_locked. Pages stop "
+            "at the response budget (truncated, next_cursor). format outline is a compact tree "
+            "(path, name, type, children_count, display, errors, hda_locked for non-Houdini "
+            "assets); python returns asCode for one node. data feeds network_build."
         ),
         input_schema=_obj(
             {
                 "root": _s(),
-                "depth": _i(None, minimum=1, default=1),
+                "depth": _i(None, minimum=1),
                 "include_defaults": _b(False),
                 "include_positions": _b(False),
                 "recurse_locked": _b(False),
-                "format": _enum(("data", "python"), "data"),
+                "format": _enum(("data", "python", "outline"), "data"),
                 "cursor": _cursor(),
             },
             ("root",),
@@ -780,6 +792,7 @@ _NODES: tuple[ToolSpec, ...] = (
         examples=(
             {"root": "/obj/geo1"},
             {"root": "/obj/geo1", "depth": 2, "include_positions": True},
+            {"root": "/", "format": "outline"},
         ),
     ),
     ToolSpec(
@@ -789,9 +802,8 @@ _NODES: tuple[ToolSpec, ...] = (
             "format (what network_describe returns) in one undo step. Types and inputs are "
             "validated first; dry_run stops there. Input entries are {from, from_index, to_index}; "
             "a missing to_index means the entry's position in the list. on_name_collision: error "
-            "(default), rename, replace. Returns created paths and per-node errors (return "
-            "summary: path, type, problems). Use "
-            "node_create for a few nodes."
+            "(default), rename, replace. Returns created paths and per node path, type and "
+            "problems (return full adds flags). Use node_create for a few nodes."
         ),
         input_schema=_obj(
             {
@@ -844,11 +856,11 @@ _PARMS: tuple[ToolSpec, ...] = (
     ToolSpec(
         name="parm_get",
         description=(
-            "Read parms by parm path (.../tx), tuple path (.../t, returns components) or component "
-            "path. Each: value at frame (default current), raw text, expression and language, "
-            "is_default, locked. include adds keys, menu (token and label), template (label, type, "
-            "default, range, help), ramp, multiparm. Tuples report expressions per component and "
-            "keyed component names. Unknown names fail with nearest candidates."
+            "Read parms by parm (.../tx), tuple (.../t: all components) or component path. Each: "
+            "value at frame (default current), raw if different, expression and language, "
+            "is_default, locked (parm lock), hda_locked. Strings over 200 chars are {elided, head} "
+            "unless full_strings. include adds keys, menu, template (label, type, default, range, "
+            "help), ramp, multiparm. Tuples add per-component expressions and keyed names."
         ),
         input_schema=_obj(
             {
@@ -857,6 +869,7 @@ _PARMS: tuple[ToolSpec, ...] = (
                 "include": _arr(
                     _enum(("keys", "menu", "template", "ramp", "multiparm")), default=[]
                 ),
+                "full_strings": _b(False),
             },
             ("paths",),
         ),
@@ -878,6 +891,7 @@ _PARMS: tuple[ToolSpec, ...] = (
                             **_tuple_animation(),
                             "is_default": _t("boolean"),
                             "locked": _t("boolean"),
+                            "hda_locked": _t("boolean"),
                             # {count, first, last}; per component for a tuple.
                             "keyframes": _t("object"),
                             "menu": _t("object"),
@@ -905,8 +919,8 @@ _PARMS: tuple[ToolSpec, ...] = (
             "button). Tuple paths take lists, component paths scalars; menus take token or label. "
             "animation: replace (default) clears keys and expressions first, except that one "
             "keyframe only adds or replaces its key; key keys at frame; keep is plain set. "
-            "Returns values (tuples add per-component expressions and keyed), wrote_keyframe, "
-            "node errors."
+            "Returns value, raw if different (long strings elided), tuple expressions and keyed, "
+            "wrote_keyframe, node errors."
         ),
         input_schema=_obj(
             {
@@ -997,12 +1011,12 @@ _COOK: tuple[ToolSpec, ...] = (
     ToolSpec(
         name="cook",
         description=(
-            "Cook nodes now and report per node ok, errors, warnings, messages, cook_time_ms (that "
-            "node's cook only; upstream may already be cached). Errors left from before a fix are "
-            "rechecked (the node and its errored inputs recooked) unless the last cook took over "
-            "2 s: then hint says use force, which recooks clean nodes. frame defaults to current. "
-            "A cook longer than the job threshold returns job_id to poll with job. Use problems to "
-            "scan a subtree."
+            "Cook nodes and report per node ok, errors, warnings, cook_time_ms (its own cook; "
+            "cached inputs are not recooked). profile force-cooks each input chain in dependency "
+            "order: chain (top 10 by cost), total_ms. frame_range [start, end, step] cooks frame "
+            "by frame (sims advance, frame restored); summary bbox adds per-frame counts and "
+            "bbox. Errors left from before a fix are rechecked unless the last cook took over 2 "
+            "s (hint: force). Past the job threshold returns job_id for job."
         ),
         input_schema=_obj(
             {
@@ -1010,12 +1024,18 @@ _COOK: tuple[ToolSpec, ...] = (
                 "force": _b(False),
                 "frame": _frame(),
                 "timeout_s": _n(None, minimum=1, default=30),
+                "profile": _b(False),
+                "frame_range": _arr({"type": "number"}, None, minItems=2, maxItems=3),
+                "summary": _enum(("none", "bbox"), "none"),
             },
             ("paths",),
         ),
         output_schema=_out(
             {
                 "ok": _t("boolean"),
+                "chain": _objs(),
+                "total_ms": _t("number"),
+                "frames": _objs(),
                 "results": {
                     "type": "array",
                     "items": _out(
@@ -1038,7 +1058,8 @@ _COOK: tuple[ToolSpec, ...] = (
         idempotent=True,
         examples=(
             {"paths": ["/obj/geo1/OUT"]},
-            {"paths": ["/obj/geo1/OUT"], "force": True, "frame": 12},
+            {"paths": ["/obj/geo1/OUT"], "profile": True},
+            {"paths": ["/obj/sim/OUT"], "frame_range": [1, 96], "summary": "bbox"},
         ),
     ),
     ToolSpec(
@@ -1191,10 +1212,11 @@ _VISUAL: tuple[ToolSpec, ...] = (
         name="render",
         description=(
             "Render any ROP (Karma, Mantra, OpenGL, ...) for frames [start, end, inc] (default "
-            "current frame), optionally overriding output. Waits up to wait_s (default 20): if "
-            "done, returns outputs (file paths), thumbnail {path, width, height} with the image "
-            "attached, and job_id; else job_id and state to poll with job. Use viewport_capture "
-            "for a quick look."
+            "current frame), optionally overriding output. Waits up to wait_s (default the job "
+            "threshold, 10 s): if done, returns state, outputs (above 5 only outputs_summary; job "
+            "result lists all), thumbnail with the image attached, notes (no lights, nearly "
+            "black), job_id; else job_id and state to poll with job. Use viewport_capture for a "
+            "quick look."
         ),
         input_schema=_obj(
             {
@@ -1203,7 +1225,7 @@ _VISUAL: tuple[ToolSpec, ...] = (
                     {"type": "number"}, "[start, end] or [start, end, inc]", minItems=2, maxItems=3
                 ),
                 "output": _s("Output path override."),
-                "wait_s": _n(None, minimum=0, default=20),
+                "wait_s": _n(None, minimum=0),
                 "thumbnail": _b(True),
             },
             ("rop_path",),
@@ -1215,6 +1237,7 @@ _VISUAL: tuple[ToolSpec, ...] = (
                 "rop_path": _t("string"),
                 "frames": _list("number"),
                 "outputs": _list(),
+                "outputs_summary": _t("object"),
                 "missing": _list(),
                 "thumbnail": _out(
                     {
@@ -1238,9 +1261,11 @@ _VISUAL: tuple[ToolSpec, ...] = (
         name="houdini_python",
         description=(
             "Run Python (hou bound) or HScript on Houdini's main thread in one undo step, for "
-            "anything no other tool covers. Returns stdout, stderr, result (a trailing expression "
-            "or a result variable, JSON-serialised) and exception with traceback plus ok: false "
-            "(sys.exit included). Output is capped. Fails with python_disabled when turned off."
+            "anything no other tool covers. Returns stdout, stderr and result (a trailing "
+            "expression or a result variable, JSON-serialised). An uncaught exception (sys.exit "
+            "included) fails with python_exception (stdout, stderr, traceback in detail) and is "
+            "rolled back; code still running near timeout_s is stopped (houdini_busy). Output is "
+            "capped. Fails with python_disabled when turned off."
         ),
         input_schema=_obj(
             {
@@ -1261,8 +1286,9 @@ _VISUAL: tuple[ToolSpec, ...] = (
         name="node_type_search",
         description=(
             "Find node types by name, label, description or keyword across all 18 categories, or "
-            "one category. Rows: name, label, category, version, is_current_version, description, "
-            "input range, deprecated. Exact names rank first; limit defaults to 20. Use "
+            "one category. Rows: name, label, category, version, description (clipped), input "
+            "range, deprecated. Current versions only, older ones named in other_versions, unless "
+            "current_only is false. Exact names rank first; limit defaults to 20. Use "
             "node_type_info for one type's parms and help."
         ),
         input_schema=_obj(
@@ -1271,6 +1297,7 @@ _VISUAL: tuple[ToolSpec, ...] = (
                 "category": _enum(CATEGORIES),
                 "limit": _limit(20),
                 "include_hidden": _b(False),
+                "current_only": _b(True),
             },
             ("query",),
         ),
@@ -1284,10 +1311,8 @@ _VISUAL: tuple[ToolSpec, ...] = (
                             "label": _t("string"),
                             "category": _t("string"),
                             "version": _t("string"),
-                            "is_current_version": _t("boolean"),
                             "description": _t("string"),
-                            "inputs": _out({"min": _t("integer"), "max": _t("integer")}),
-                            "deprecated": _t("boolean"),
+                            "other_versions": _list(),
                         },
                         ("name", "category"),
                     ),
@@ -1303,10 +1328,11 @@ _VISUAL: tuple[ToolSpec, ...] = (
         name="node_type_info",
         description=(
             "Describe one node type: label, version, named inputs and outputs, and parms grouped "
-            "by folder. detail compact (default) gives rows of name, label, type, default; full "
-            "lists every parm row with size, range, menu and folder; folders lists folder names "
+            "by folder. detail compact (default): rows of name, label, type, default; full "
+            "lists every parm with size, range, menu and folder; folders lists folder names "
             "with parm counts. type is category/name, or a bare name with category. folder limits "
-            "parms to one folder, parms to a name or label glob; include_help adds help text."
+            "parms to one folder ((no folder): top level), parms to name or label globs (a|b); "
+            "include_help adds help text."
         ),
         input_schema=_obj(
             {
@@ -1315,7 +1341,7 @@ _VISUAL: tuple[ToolSpec, ...] = (
                 "include_parms": _b(True),
                 "include_help": _b(False),
                 "folder": _s(),
-                "parms": _s("Glob on parm name or label, e.g. *seed*."),
+                "parms": _s("Name or label glob, e.g. *seed* or dist|inset."),
                 "detail": _enum(("compact", "full", "folders"), "compact"),
             },
             ("type",),
@@ -1416,7 +1442,7 @@ _STATE: tuple[ToolSpec, ...] = (
                 "message": _t("string"),
                 "started": _t("string"),
                 "elapsed_s": _t("number"),
-                "result": {"description": "The original tool's result (action result, done)."},
+                "result": {"description": "The tool's result (action result, done)."},
                 "jobs": _objs(),
             }
         ),

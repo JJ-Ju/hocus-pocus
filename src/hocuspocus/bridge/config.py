@@ -1,7 +1,8 @@
 """Bridge configuration. See docs/BIBLE.md §3.7.
 
 One ``hocuspocus.toml`` serves host and bridge. The bridge reads the keys it uses
-(``profile``, ``max_response_bytes``, ``default_timeout_s``, ``hfs``) from the same file
+(``profile``, ``max_response_bytes``, ``default_timeout_s``, ``hfs``, ``result_content``)
+from the same file
 the host reads, ``<prefs>/hocuspocus.toml``, and ``HOCUSPOCUS_*`` environment variables
 override it. Host-only keys (``allow_python``, ``read_only``, …) are ignored here; the
 host reports them through ``houdini_status``.
@@ -34,6 +35,8 @@ log = logging.getLogger(__name__)
 DEFAULT_MAX_RESPONSE_BYTES = 16_384
 DEFAULT_TIMEOUT_S = 30.0
 PROFILES = ("core", "full")
+RESULT_CONTENT = ("text", "both", "structured")
+"""``result_content`` values; the first is the default (BIBLE §4.1)."""
 HOUDINI_MAJOR_MINOR = "22.0"
 INSTALL_STATE_FILE = "install.json"
 """Written by ``hocuspocus install-houdini`` into the state dir: ``{"prefs": ...}``."""
@@ -46,6 +49,10 @@ class BridgeConfig:
     default_timeout_s: float = DEFAULT_TIMEOUT_S
     hfs: str = ""
     """Explicit Houdini install dir for launching; empty means auto-detect."""
+    result_content: str = RESULT_CONTENT[0]
+    """Where tool results go: ``text`` (compact JSON in the text block only), ``both``
+    (text and ``structuredContent``) or ``structured`` (data in ``structuredContent``,
+    a one-line summary in the text block)."""
     config_file: str = ""
     """The ``hocuspocus.toml`` that was read, or empty when none was found."""
 
@@ -83,11 +90,12 @@ class BridgeConfig:
             ),
             default_timeout_s=_positive(values, "default_timeout_s", DEFAULT_TIMEOUT_S, float),
             hfs=str(values.get("hfs") or "").strip(),
+            result_content=_choice(values.get("result_content"), "result_content", RESULT_CONTENT),
             config_file=config_file,
         )
 
 
-_KEYS = ("profile", "max_response_bytes", "default_timeout_s", "hfs")
+_KEYS = ("profile", "max_response_bytes", "default_timeout_s", "hfs", "result_content")
 
 
 # -- locating hocuspocus.toml ---------------------------------------------------------
@@ -165,6 +173,17 @@ def _profile(raw: Any) -> str:
         log.warning("profile=%r is not one of %s; using 'core'", raw, PROFILES)
         return "core"
     return profile
+
+
+def _choice(raw: Any, key: str, choices: tuple[str, ...]) -> str:
+    """``raw`` normalised and checked against ``choices``; the first choice by default."""
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        return choices[0]
+    value = str(raw).strip().lower()
+    if value not in choices:
+        log.warning("%s=%r is not one of %s; using %r", key, raw, choices, choices[0])
+        return choices[0]
+    return value
 
 
 def _positive(values: Mapping[str, Any], key: str, default, kind):

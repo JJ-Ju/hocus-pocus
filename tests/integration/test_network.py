@@ -53,7 +53,8 @@ def test_describe_chain_is_compact(client, capsys):
     assert data["xform1"]["parms"]["t"][1] == {"expression": "$F*0.1"}
     assert data["xform1"]["inputs"] == [{"from": "box1", "from_index": 0, "to_index": 0}]
     assert data["merge1"]["flags"] == {"display": True, "render": True}
-    assert data["mountain1"]["locked"] is True and "children" not in data["mountain1"]
+    assert data["mountain1"]["hda_locked"] is True and "children" not in data["mountain1"]
+    assert "locked" not in data["mountain1"]  # locked is the SOP lock flag (BIBLE §4.1)
     size = len(json.dumps(data, separators=(",", ":")))
     assert result["bytes"] == size
     assert size < 2000, size
@@ -77,7 +78,7 @@ def test_describe_positions_depth_and_locked(client):
         "network_describe", {"root": "/obj/geo1", "depth": 2, "recurse_locked": True}
     )
     assert opened["data"]["mountain1"]["children"]
-    assert opened["data"]["mountain1"]["locked"] is True
+    assert opened["data"]["mountain1"]["hda_locked"] is True
     error = client.error("network_describe", {"root": "/obj/geo1/mountain1"})
     assert error["code"] == "locked" and "recurse_locked" in error["hint"]
 
@@ -385,3 +386,120 @@ def test_describe_depth_is_budgeted_and_paged(client, host):
     finally:
         host.config.max_response_bytes = saved
     assert seen == [f"sub{i:02d}" for i in range(12)]
+
+
+# -- outline (review 11 B11) -------------------------------------------------------
+
+
+def test_describe_outline_is_a_compact_tree(client):
+    geo = hou.node("/obj").createNode("geo", "city")
+    box = geo.createNode("box", "base")
+    out = geo.createNode("null", "OUT")
+    out.setInput(0, box)
+    out.setDisplayFlag(True)
+    broken = geo.createNode("attribwrangle", "broken")
+    broken.parm("snippet").set("x(")
+    with pytest.raises(hou.OperationFailed):
+        broken.cook(force=True)
+    terrain = hou.node("/obj").createNode("geo", "terrain")
+    mountain = terrain.createNode("mountain", "peaks")
+    mountain.setInput(0, terrain.createNode("grid", "grid1"))
+    mountain.cook(force=True)
+    result = client.ok("network_describe", {"root": "/obj", "format": "outline"})
+    assert result["format"] == "outline" and result["root"] == "/obj"
+    nodes = {n["name"]: n for n in result["nodes"]}
+    city = nodes["city"]
+    assert city == {
+        "path": "/obj/city",
+        "name": "city",
+        "type": "geo",
+        "children_count": 3,
+        "display": "/obj/city/OUT",
+        "errors": 0,
+        "children": city["children"],
+    }
+    kids = {n["name"]: n for n in city["children"]}  # depth 2 by default for outline
+    assert kids["broken"]["errors"] >= 1
+    assert set(kids["base"]) == {"path", "name", "type", "errors"}  # no children_count: 0
+    assert "parms" not in kids["base"] and "inputs" not in kids["base"]
+    # Houdini's own locked assets (wrangles, mountain) are not flagged (review 12 papercut 4).
+    assert "hda_locked" not in kids["broken"]
+    peaks = next(n for n in nodes["terrain"]["children"] if n["name"] == "peaks")
+    assert "hda_locked" not in peaks and "children" not in peaks
+    assert result["node_count"] == 7
+    shallow = client.ok("network_describe", {"root": "/obj", "format": "outline", "depth": 1})
+    assert all("children" not in n for n in shallow["nodes"])
+    whole = client.ok("network_describe", {"root": "/", "format": "outline"})
+    assert "/obj" in [n["path"] for n in whole["nodes"]]
+
+
+def test_describe_outline_flags_user_locked_assets(client, work_dir):
+    geo = hou.node("/obj").createNode("geo", "geo1")
+    sub = geo.createNode("subnet", "asset1")
+    sub.createNode("box", "inner")
+    hda_path = (work_dir / "hp_outline_test.hda").as_posix()
+    asset = sub.createDigitalAsset(name="hp_outline_test", hda_file_name=hda_path)
+    asset.matchCurrentDefinition()  # lock it
+    assert asset.isLockedHDA() and asset.children()
+    result = client.ok("network_describe", {"root": geo.path(), "format": "outline"})
+    row = next(n for n in result["nodes"] if n["path"] == asset.path())
+    assert row["hda_locked"] is True and "children" not in row and "children_count" not in row
+    opened = client.ok(
+        "network_describe", {"root": geo.path(), "format": "outline", "recurse_locked": True}
+    )
+    row = next(n for n in opened["nodes"] if n["path"] == asset.path())
+    assert row["hda_locked"] is True and row["children_count"] == 1
+
+
+def test_describe_outline_is_budgeted_and_paged(client, host):
+    geo = hou.node("/obj").createNode("geo", "geo1")
+    for index in range(80):
+        geo.createNode("null", f"a_rather_long_node_name_number_{index:03d}")
+    saved = host.config.max_response_bytes
+    host.config.max_response_bytes = 2048
+    try:
+        first = client.ok("network_describe", {"root": geo.path(), "format": "outline"})
+        assert first["truncated"] is True and first["next_cursor"]
+        names = [n["name"] for n in first["nodes"]]
+        cursor = first["next_cursor"]
+        while cursor:
+            page = client.ok(
+                "network_describe", {"root": geo.path(), "format": "outline", "cursor": cursor}
+            )
+            names += [n["name"] for n in page["nodes"]]
+            cursor = page.get("next_cursor")
+    finally:
+        host.config.max_response_bytes = saved
+    assert len(names) == 80 == len(set(names))
+
+
+def test_build_accepts_to_index_by_input_name(client):
+    hou.node("/obj").createNode("geo", "g")
+    result = client.ok(
+        "network_build",
+        {
+            "parent": "/obj/g",
+            "data": {
+                "b": {"type": "box"},
+                "pts": {"type": "scatter", "inputs": [{"from": "b"}]},
+                "copy": {
+                    "type": "copytopoints",
+                    "inputs": [
+                        {"from": "b", "to_index": "input1"},
+                        {"from": "pts", "to_index": "input2"},
+                    ],
+                },
+            },
+        },
+    )
+    assert "/obj/g/copy" in result["created"]
+    copy = hou.node("/obj/g/copy")
+    assert [n.name() for n in copy.inputs()] == ["b", "pts"]
+    error = client.error(
+        "network_build",
+        {
+            "parent": "/obj/g",
+            "data": {"c2": {"type": "copytopoints", "inputs": [{"from": "b", "to_index": "nope"}]}},
+        },
+    )
+    assert error["code"] == "invalid_input"

@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import http.client
 import json
-import socket
 import uuid
 from typing import Any
 
@@ -21,7 +20,10 @@ CONNECT_TIMEOUT_S = 3.0
 RESPONSE_GRACE_S = 15.0
 """Extra seconds the bridge waits beyond the call's own ``timeout_s`` before giving up."""
 
-OFFLINE_HINT = "call houdini_connect with launch to start one"
+OFFLINE_HINT = (
+    "call houdini_connect with launch to start one; to keep Houdini alive across sessions, "
+    "start it with `hocuspocus launch` and attach by pid"
+)
 REINSTALL_HINT = "run `hocuspocus install-houdini` and restart Houdini"
 DELIVERY_HINT = (
     "The call may or may not have run in Houdini. Inspect state (houdini_status, node_info, "
@@ -57,10 +59,13 @@ class HostClient:
             conn.connect()
         except (TimeoutError, OSError) as exc:
             conn.close()
+            refused = isinstance(exc, ConnectionRefusedError)
             raise ToolError(
                 "houdini_offline",
                 f"No HocusPocus host is listening on {self.host}:{self.port} ({exc.__class__.__name__}).",
                 hint=OFFLINE_HINT,
+                # "refused": nothing listens there, so the request never left (review 10 1.4).
+                detail={"reason": "refused" if refused else "unreachable", "port": self.port},
             ) from exc
         return conn
 
@@ -114,6 +119,7 @@ class HostClient:
                 f"The Houdini host on port {self.port} rejected the bridge's credentials (HTTP {status}); "
                 "its registry entry is stale or belongs to another process.",
                 hint="call houdini_status, then houdini_connect to attach to a live instance",
+                detail={"reason": "unauthorized", "status": status, "port": self.port},
             )
         if status == 404:
             raise ToolError(
@@ -182,6 +188,14 @@ class HostClient:
         self._check_status(status, data)
         return _parse_envelope(data)
 
+    def call_jobs(self, request_id: str, timeout_s: float = 5.0) -> list[dict[str, Any]]:
+        """``GET /hp/v1/calls/{request_id}/jobs``: snapshots of the jobs a call started."""
+        status, data = self._request("GET", f"/calls/{request_id}/jobs", read_timeout_s=timeout_s)
+        self._check_status(status, data)
+        ok, result, _meta = _parse_envelope(data)
+        jobs = result.get("jobs") if ok else None
+        return [j for j in jobs if isinstance(j, dict)] if isinstance(jobs, list) else []
+
     def shutdown(self, timeout_s: float = 5.0) -> None:
         status, data = self._request("POST", "/shutdown", {}, read_timeout_s=timeout_s)
         self._check_status(status, data)
@@ -204,11 +218,3 @@ def _parse_envelope(data: Any) -> tuple[bool, dict[str, Any], dict[str, Any]]:
     if not isinstance(error, dict):
         error = {"code": "internal", "message": str(error)}
     return False, error, meta
-
-
-def is_port_open(port: int, host: str = "127.0.0.1", timeout_s: float = 0.5) -> bool:
-    try:
-        with socket.create_connection((host, port), timeout=timeout_s):
-            return True
-    except OSError:
-        return False

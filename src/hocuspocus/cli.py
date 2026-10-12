@@ -1,4 +1,5 @@
-"""``hocuspocus`` command line: install the Houdini package, diagnose, print client config.
+"""``hocuspocus`` command line: install the Houdini package, launch Houdini, diagnose, print
+client config.
 
 See docs/BIBLE.md §10.2. Stdlib only (the bridge modules imported here are stdlib too),
 so ``hocuspocus doctor`` works even when the MCP SDK is broken.
@@ -230,6 +231,27 @@ def _ignore_build_junk(_dir: str, names: list[str]) -> set[str]:
     return {n for n in names if n == "__pycache__" or n.endswith((".pyc", ".pyo"))}
 
 
+def _write_atomic(target: Path, text: str) -> None:
+    """Write ``text`` to ``target`` through a temp file and ``os.replace``."""
+    tmp = target.with_name(f".{target.name}.{os.getpid()}.tmp")
+    try:
+        with open(tmp, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(text)
+        os.replace(tmp, target)
+    finally:
+        with contextlib.suppress(OSError):
+            tmp.unlink()
+
+
+def copied_installs(prefs: Path) -> list[Path]:
+    """Version directories a non-dev ``install-houdini`` copied into ``<prefs>/hocuspocus``."""
+    root = prefs / INSTALL_DIR_NAME
+    try:
+        return sorted(p for p in root.iterdir() if p.is_dir())
+    except OSError:
+        return []
+
+
 def install(prefs: Path, *, dev: bool, out: Callable[[str], None] = print) -> int:
     install_root = prefs / INSTALL_DIR_NAME
     payload = payload_source()
@@ -241,6 +263,10 @@ def install(prefs: Path, *, dev: bool, out: Callable[[str], None] = print) -> in
         python_dir = root / "src"
         payload_dir = payload
         out(f"dev install: Houdini will import hocuspocus from {python_dir}")
+        for old in copied_installs(prefs):
+            # A copy from an earlier non-dev install would only confuse doctor and users.
+            shutil.rmtree(old, ignore_errors=True)
+            out(f"removed copied install {old} (the dev install uses the checkout)")
     else:
         version_dir = install_root / __version__
         python_dir = version_dir / "python"
@@ -264,7 +290,7 @@ def install(prefs: Path, *, dev: bool, out: Callable[[str], None] = print) -> in
     packages = prefs / "packages"
     packages.mkdir(parents=True, exist_ok=True)
     target = packages / PACKAGE_JSON_NAME
-    target.write_text(text, encoding="utf-8")
+    _write_atomic(target, text)
     out(f"wrote {target} (template: {used})")
     record = write_install_state(prefs, python_dir, dev=dev)
     if record is not None:
@@ -291,7 +317,7 @@ def write_install_state(prefs: Path, python_dir: Path, *, dev: bool) -> Path | N
     }
     try:
         target = ensure_private_dir(state_dir()) / INSTALL_STATE_FILE
-        target.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+        _write_atomic(target, json.dumps(data, indent=2) + "\n")
     except OSError:
         return None
     return target
@@ -317,7 +343,14 @@ def uninstall(prefs: Path, *, out: Callable[[str], None] = print) -> int:
         removed = True
     install_root = prefs / INSTALL_DIR_NAME
     if install_root.is_dir():
-        shutil.rmtree(install_root)
+        try:
+            shutil.rmtree(install_root)
+        except OSError as exc:
+            out(
+                f"error: cannot remove {install_root} ({exc}). A running Houdini may hold its "
+                "files open: close Houdini and run uninstall-houdini again."
+            )
+            return 1
         out(f"removed {install_root}")
         removed = True
     if not removed:
@@ -418,6 +451,14 @@ def doctor(args: argparse.Namespace, out: Callable[[str], None] = print) -> int:
                 )
             else:
                 report.ok("package JSON", f"{pkg_json} -> {python_dir}")
+                leftovers = [p for p in copied_installs(prefs.path) if p not in python_dir.parents]
+                if leftovers:
+                    report.warn(
+                        "copied installs",
+                        f"{', '.join(str(p) for p in leftovers)} not used by the package "
+                        "JSON (left by an earlier install); run `hocuspocus install-houdini` "
+                        "(with --dev for a checkout) to remove them",
+                    )
                 host_version = _read_version(python_dir / "hocuspocus")
                 if host_version == __version__:
                     report.ok("host/bridge version", host_version)
@@ -442,7 +483,12 @@ def doctor(args: argparse.Namespace, out: Callable[[str], None] = print) -> int:
     for inst in live:
         where = f"pid {inst.pid} port {inst.port} {'GUI' if inst.ui else 'headless'} {inst.hip or '(untitled)'}"
         try:
-            health = HostClient(inst.port, inst.token).health()
+            health = registry.check_identity(inst, HostClient(inst.port, inst.token))
+        except registry.StaleEntry as exc:
+            # The pid is alive but is not that host (reused after a crash): review 10 1.4.
+            registry.forget(inst)
+            report.warn("instance", f"{exc}; removed the stale registry entry")
+            continue
         except ToolError as exc:
             report.fail("instance", f"{where}: {exc.code}: {exc.message}")
             continue
@@ -463,6 +509,55 @@ def doctor(args: argparse.Namespace, out: Callable[[str], None] = print) -> int:
 
 
 # -- other commands ----------------------------------------------------------------------
+
+
+def _launcher(hfs: str | None) -> Any:
+    from .bridge.config import BridgeConfig
+    from .bridge.launch import Launcher
+
+    return Launcher(hfs or BridgeConfig.load().hfs or None, owned=False)
+
+
+def launch_houdini(
+    mode: str,
+    hip: str | None,
+    wait_s: float,
+    *,
+    hfs: str | None = None,
+    out: Callable[[str], None] = print,
+    err: Callable[[str], None] | None = None,
+) -> int:
+    """``hocuspocus launch``: start a Houdini that belongs to no MCP server.
+
+    The Houdini is started detached from this process, which exits once its host has
+    registered (or at once with ``--wait 0``), so it outlives every MCP client. stdout
+    gets one JSON object: the registry entry (no token), the mode and, headless, the log.
+    """
+    from .tools.errors import ToolError
+
+    err = err or (lambda text: print(text, file=sys.stderr))
+    launcher = _launcher(hfs)
+    try:
+        spawned = launcher.spawn(mode, hip)
+        if wait_s <= 0:
+            out(json.dumps({"pid": spawned.proc.pid, "mode": mode, "log": spawned.log}))
+            err("Started without waiting; houdini_status lists it once its host registers.")
+            return 0
+        result = launcher.wait(spawned, wait_s)
+    except ToolError as exc:
+        err(f"error: {exc.message}")
+        if exc.hint:
+            err(f"hint: {exc.hint}")
+        return 1
+    entry = dict(result.instance.public(), mode=result.mode)
+    if result.log:
+        entry["log"] = result.log
+    out(json.dumps(entry))
+    err(
+        f"Houdini pid {result.instance.pid} is running and outlives this command; attach "
+        f'from an MCP client with houdini_connect {{"pid": {result.instance.pid}}}.'
+    )
+    return 0
 
 
 def client_config(client: str, out: Callable[[str], None] = print) -> int:
@@ -550,6 +645,24 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("what", choices=["tools"])
     p.add_argument("--output", "-o", help="output path ('-' for stdout; default docs/tools.md)")
 
+    p = sub.add_parser(
+        "launch",
+        help="start a Houdini with HocusPocus that outlives any MCP client",
+        description="Start GUI Houdini (or headless hython with --headless) with the "
+        "HocusPocus host, wait for it to register, print its registry entry as JSON and "
+        "exit. The Houdini keeps running; attach to it with houdini_connect {pid}.",
+    )
+    p.add_argument("--headless", action="store_true", help="run hython -m hocuspocus.host")
+    p.add_argument("--hip", help="hip file to open")
+    p.add_argument(
+        "--wait",
+        type=float,
+        default=90.0,
+        metavar="N",
+        help="seconds to wait for the host to register (default 90; 0 returns at once)",
+    )
+    p.add_argument("--hfs", help="Houdini install dir (default: HOCUSPOCUS_HFS, HFS, newest 22.x)")
+
     sub.add_parser("version", help="print versions")
     return parser
 
@@ -569,6 +682,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         return client_config(args.client)
     if args.command == "docs":
         return docs_tools(args.output)
+    if args.command == "launch":
+        return launch_houdini(
+            "headless" if args.headless else "gui", args.hip, args.wait, hfs=args.hfs
+        )
     if args.command == "version":
         return version()
     return 2

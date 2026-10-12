@@ -25,6 +25,7 @@ def env(tmp_path, monkeypatch):
 def test_defaults_without_file_or_env(env):
     config = BridgeConfig.load(env)
     assert config == BridgeConfig()
+    assert config.result_content == "text"
     assert config.config_file == ""
 
 
@@ -100,3 +101,24 @@ def test_from_env_ignores_files(tmp_path, env):
     (tmp_path / "hocuspocus.toml").write_text(TOML, encoding="utf-8")
     env["HOUDINI_USER_PREF_DIR"] = str(tmp_path)
     assert BridgeConfig.from_env(env).profile == "core"
+
+
+def test_result_content_from_file_and_env(tmp_path):
+    prefs = tmp_path / "prefs"
+    prefs.mkdir()
+    (prefs / "hocuspocus.toml").write_text('result_content = "both"\n', encoding="utf-8")
+    env = {"HOUDINI_USER_PREF_DIR": str(prefs)}
+    assert BridgeConfig.load(env).result_content == "both"
+    env["HOCUSPOCUS_RESULT_CONTENT"] = "Structured"
+    assert BridgeConfig.load(env).result_content == "structured"
+    env["HOCUSPOCUS_RESULT_CONTENT"] = "json"
+    assert BridgeConfig.load(env).result_content == "text"  # invalid: the default
+
+
+def test_host_ignores_the_bridge_only_result_content_key(tmp_path, caplog):
+    from hocuspocus.host.config import load_config
+
+    (tmp_path / "hocuspocus.toml").write_text('result_content = "both"\n', encoding="utf-8")
+    with caplog.at_level("WARNING"):
+        load_config(tmp_path, environ={})
+    assert "result_content" not in caplog.text

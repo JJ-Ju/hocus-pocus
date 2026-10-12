@@ -7,15 +7,6 @@ import pytest
 hou = pytest.importorskip("hou")
 
 
-def ok_or_skip_parms(client, tool, args):
-    """Call a tool whose result depends on the parms helpers; skip while they are stubs."""
-    envelope = client.call(tool, args)
-    if not envelope["ok"] and "NotImplementedError" in envelope["error"].get("message", ""):
-        pytest.skip("parms.set_parm_items/summarize_parm are still stubs (M1 parms task)")
-    assert envelope["ok"], envelope
-    return envelope["result"]
-
-
 def make_chain():
     geo = hou.node("/obj").createNode("geo", "geo1")
     box = geo.createNode("box", "box1")
@@ -58,7 +49,8 @@ def test_create_wires_flags_and_resolves_types(client):
                     ],
                     "flags": {"display": True, "render": True},
                 },
-            ]
+            ],
+            "return": "full",
         },
     )
     paths = result["created"]
@@ -89,7 +81,11 @@ def test_create_exact_type(client):
     hou.node("/obj").createNode("geo", "g")
     result = client.ok(
         "node_create",
-        {"items": [{"parent": "/obj/g", "type": "copytopoints"}], "exact_type": True},
+        {
+            "items": [{"parent": "/obj/g", "type": "copytopoints"}],
+            "exact_type": True,
+            "return": "full",
+        },
     )
     assert result["results"][0]["type"]["name"] == "copytopoints"
 
@@ -155,7 +151,7 @@ def test_create_batch_rolls_back_on_failure(client):
     )
     assert error["code"] == "node_type_not_found"
     assert error["detail"]["item"] == 3 and error["detail"]["rolled_back"] is True
-    assert error["message"].startswith("Item 3:")
+    assert error["message"].startswith("items[3] (/obj/geo1): ")
     assert hou.node("/obj/rollback_geo") is None
     assert [c.name() for c in geo.children()] == ["box1", "xform1", "OUT"]
     assert null.isDisplayFlagSet()  # display flag restored to the original node
@@ -208,8 +204,7 @@ def test_create_bad_input_lists_labels(client):
 
 
 def test_create_with_parms(client):
-    result = ok_or_skip_parms(
-        client,
+    result = client.ok(
         "node_create",
         {
             "items": [
@@ -225,7 +220,8 @@ def test_create_with_parms(client):
                     "inputs": [{"index": 0, "from": "/obj/terrain/grid1"}],
                     "parms": {"ty": {"expr": "ch('../grid1/sizex') * 0.1"}},
                 },
-            ]
+            ],
+            "return": "full",
         },
     )
     grid = hou.node("/obj/terrain/grid1")
@@ -291,14 +287,21 @@ def test_create_full_result_elides_long_snippets(client):
         {
             "items": [
                 {"parent": "/obj/geo1", "type": "attribwrangle", "parms": {"snippet": LONG_VEX}}
-            ]
+            ],
+            "return": "full",
         },
     )
     row = next(p for p in result["results"][0]["parms"] if p["name"] == "snippet")
-    assert row["value"] == {"truncated": True, "chars": len(LONG_VEX), "head": LONG_VEX[:80]}
+    assert row["value"] == {"elided": len(LONG_VEX), "head": LONG_VEX[:80]}
+    assert "raw" not in row  # the same text as value (review 12 papercut 1)
     assert hou.node(result["created"][0]).parm("snippet").eval() == LONG_VEX
     info = client.ok("node_info", {"paths": result["created"]})["nodes"][0]
-    assert next(p for p in info["parms"] if p["name"] == "snippet")["value"] == LONG_VEX
+    info_row = next(p for p in info["parms"] if p["name"] == "snippet")
+    assert info_row["value"] == {"elided": len(LONG_VEX), "head": LONG_VEX[:80]}
+    whole = client.ok(
+        "parm_get", {"paths": [f"{result['created'][0]}/snippet"], "full_strings": True}
+    )
+    assert whole["parms"][0]["value"] == LONG_VEX
 
 
 def test_create_copy_and_build_summary_results(client):
@@ -323,7 +326,9 @@ def test_create_copy_and_build_summary_results(client):
     # Downstream nodes repeat the upstream error verbatim: it is reported once.
     assert rows[1]["errors_same_as"] == "/obj/geo1/w0" and "errors" not in rows[1]
     assert rows[2]["errors_same_as"] == "/obj/geo1/w0"
-    full = client.ok("node_create", {"items": [{"parent": "/obj/geo1", "type": "box"}]})
+    full = client.ok(
+        "node_create", {"items": [{"parent": "/obj/geo1", "type": "box"}], "return": "full"}
+    )
     assert "parms" in full["results"][0] and "flags" in full["results"][0]
     copied = client.ok(
         "node_copy",
@@ -398,12 +403,10 @@ def test_info_sections(client):
 def test_info_default_includes_parms(client):
     geo, box, xform, null = make_chain()
     xform.parm("tx").set(2)
-    result = ok_or_skip_parms(client, "node_info", {"paths": ["/obj/geo1/xform1"]})
+    result = client.ok("node_info", {"paths": ["/obj/geo1/xform1"]})
     parms = result["nodes"][0]["parms"]
     assert [p["name"] for p in parms] == ["t"]
-    everything = ok_or_skip_parms(
-        client, "node_info", {"paths": ["/obj/geo1/xform1"], "include_defaults": True}
-    )
+    everything = client.ok("node_info", {"paths": ["/obj/geo1/xform1"], "include_defaults": True})
     assert len(everything["nodes"][0]["parms"]) > 5
 
 
@@ -420,14 +423,15 @@ def test_info_lists_non_default_multiparm_counts(client):
     plain_rows = client.ok("node_info", {"paths": [plain.path()], "include_defaults": True})[
         "nodes"
     ][0]["parms"]
-    assert not [p for p in plain_rows if p["value"] is None and p["raw"] in ("", None)]
+    assert not [p for p in plain_rows if p["value"] is None and p.get("raw") in ("", None)]
 
 
 def test_info_hda_and_locked_contents(client):
     _geo, mountain = make_locked_mountain()
     result = client.ok("node_info", {"paths": [mountain.path()], "include": ["hda", "children"]})
     block = result["nodes"][0]
-    assert block["hda"]["locked"] is True and block["hda"]["hda_locked"] is True
+    assert block["hda"]["hda_locked"] is True and "locked" not in block["hda"]
+    assert block["hda_locked"] is True
     assert block["hda"]["definition"] == "mountain::2.0"
     assert block["hda"]["library"].lower().endswith(".hda")
     assert block["children"] == [] and "children_count" not in block
@@ -684,12 +688,12 @@ def test_edit_object_has_no_bypass_flag(client):
 def test_edit_lock_unlock_hda(client):
     _geo, mountain = make_locked_mountain()
     result = client.ok("node_edit", {"items": [{"path": mountain.path(), "lock": False}]})
-    assert result["results"][0]["hda"]["locked"] is False
+    assert result["results"][0]["hda"]["hda_locked"] is False
     assert not mountain.isLockedHDA()
     created = client.ok("node_create", {"items": [{"parent": mountain.path(), "type": "null"}]})
     assert created["created"][0].startswith(mountain.path() + "/")
     relocked = client.ok("node_edit", {"items": [{"path": mountain.path(), "lock": True}]})
-    assert relocked["results"][0]["hda"]["locked"] is True
+    assert relocked["results"][0]["hda"]["hda_locked"] is True
     error = client.error("node_edit", {"items": [{"path": "/obj/terrain/grid1", "lock": False}]})
     assert error["code"] == "invalid_argument" and error["hint"]
 
@@ -727,7 +731,7 @@ def test_edit_validates_everything_before_locking(client):
         "node_edit", {"items": [{"path": mountain.path(), "lock": True, "name": "peaks"}]}
     )
     block = renamed["results"][0]
-    assert block["path"].endswith("/peaks") and block["hda"]["locked"] is True
+    assert block["path"].endswith("/peaks") and block["hda"]["hda_locked"] is True
 
 
 def test_operation_failed_maps_to_a_stable_code(client):
@@ -888,3 +892,278 @@ def test_layout_modes(client):
     assert list(extra.position()) != [0.0, 0.0]
     error = client.error("node_layout", {"parent": "/obj/geo1", "paths": ["/obj/geo1"]})
     assert error["code"] == "invalid_argument"
+
+
+def test_locked_means_the_sop_lock_flag(client):
+    """BIBLE §4.1 (1.1): locked is the hard-lock flag; hda_locked is the asset lock."""
+    geo, box, _xform, _null = make_chain()
+    box.setHardLocked(True)
+    found = client.ok("node_find", {"root": geo.path(), "flags": {"locked": True}})
+    assert [row["path"] for row in found["nodes"]] == [box.path()]
+    (block,) = client.ok("node_info", {"paths": [box.path()]})["nodes"]
+    assert block["flags"]["locked"] is True and "hda_locked" not in block
+    data = client.ok("network_describe", {"root": geo.path()})["data"]
+    assert "hda_locked" not in data["box1"]
+
+
+def test_mutation_echo_defaults_to_summary(client):
+    """1.1 (review 11 B5): summary is the default echo of node_create, node_copy and
+    network_build."""
+    geo = hou.node("/obj").createNode("geo", "geo1")
+    summary_keys = {"path", "type", "errors", "warnings", "cook_state", "hint", "source"}
+    summary_keys |= {"errors_same_as", "warnings_same_as", "paired_with"}
+    created = client.ok(
+        "node_create", {"items": [{"parent": geo.path(), "type": "box", "name": "b"}]}
+    )
+    assert set(created["results"][0]) <= summary_keys
+    assert created["results"][0]["type"] == "box"
+    copied = client.ok("node_copy", {"paths": [f"{geo.path()}/b"], "to_parent": geo.path()})
+    assert set(copied["results"][0]) <= summary_keys
+    built = client.ok("network_build", {"parent": geo.path(), "data": {"s": {"type": "sphere"}}})
+    assert set(built["nodes"][0]) <= summary_keys
+
+
+def test_full_echo_omits_values_the_creation_script_set(client):
+    """A light's creation script sets s, scale, dimmer and ramps; they are not the call's
+    edits (review 11 B5). node_info still reports them as non-default."""
+    result = client.ok(
+        "node_create",
+        {
+            "items": [{"parent": "/obj", "type": "hlight", "parms": {"light_intensity": 2}}],
+            "return": "full",
+        },
+    )
+    rows = result["results"][0]["parms"]
+    assert [row["name"] for row in rows] == ["light_intensity"]
+    bare = client.ok(
+        "node_create", {"items": [{"parent": "/obj", "type": "hlight"}], "return": "full"}
+    )
+    assert bare["results"][0]["parms"] == []
+    info = client.ok("node_info", {"paths": bare["created"]})["nodes"][0]
+    assert {"s", "dimmer"} <= {row["name"] for row in info["parms"]}
+
+
+def test_batch_errors_share_one_shape(client):
+    """Review 10 §4: every batch tool prefixes items[i] (<path>) and reports detail
+    {item, path, rolled_back} with rolled_back as actually performed."""
+    geo, box, xform, null = make_chain()
+    cases = [
+        (
+            "node_create",
+            [{"parent": "/obj/geo1", "type": "sphere"}, {"parent": "/obj/geo1", "type": "nope"}],
+            "/obj/geo1",
+        ),
+        (
+            "node_edit",
+            [{"path": box.path(), "comment": "x"}, {"path": xform.path(), "name": "bad name"}],
+            xform.path(),
+        ),
+        (
+            "node_connect",
+            [
+                {"from": box.path(), "to": null.path()},
+                {"from": box.path(), "to": xform.path(), "to_input": 9},
+            ],
+            xform.path(),
+        ),
+        (
+            "parm_set",
+            [
+                {"path": f"{box.path()}/sizex", "value": 4},
+                {"path": f"{box.path()}/sizey", "value": "x"},
+            ],
+            f"{box.path()}/sizey",
+        ),
+    ]
+    for tool, items, path in cases:
+        error = client.error(tool, {"items": items})
+        assert error["message"].startswith(f"items[1] ({path}): "), (tool, error["message"])
+        detail = error["detail"]
+        assert (detail["item"], detail["path"], detail["rolled_back"]) == (1, path, True), tool
+        result = client.ok(tool, {"items": items, "partial": True})
+        row = result["results"][1]["error"]
+        assert row["message"].startswith(f"items[1] ({path}): "), tool
+        assert row["detail"]["item"] == 1 and row["detail"]["path"] == path, tool
+        assert row["detail"]["rolled_back"] is True, tool
+    assert box.comment() == "x" and null.inputs()[0] == box  # the partial runs kept item 0
+    assert box.parm("sizex").eval() == 4.0
+    # A one-item call has the same shape.
+    error = client.error("node_edit", {"items": [{"path": xform.path(), "name": "bad name"}]})
+    assert error["message"].startswith(f"items[0] ({xform.path()}): ")
+    assert error["detail"]["item"] == 0 and error["detail"]["rolled_back"] is True
+
+
+def test_batch_rollback_reports_a_failed_compensation(client, monkeypatch):
+    """rolled_back is false when an undo step itself fails (never assumed)."""
+    from hocuspocus.host.tools import nodes
+
+    geo, box, xform, null = make_chain()
+    original = nodes.Rollback.add
+
+    def add(self, action):
+        def broken():
+            raise RuntimeError("compensation failed")
+
+        original(self, broken)
+
+    monkeypatch.setattr(nodes.Rollback, "add", add)
+    error = client.error(
+        "node_edit",
+        {"items": [{"path": box.path(), "comment": "x"}, {"path": "/obj/geo1/nope"}]},
+    )
+    assert error["detail"]["rolled_back"] is False
+
+
+# -- node_edit spare_parms (review 11 B9) ------------------------------------------
+
+
+def test_edit_adds_and_removes_spare_parms(client):
+    geo = hou.node("/obj").createNode("geo", "geo1")
+    grid = geo.createNode("grid", "grid1")
+    wrangle = geo.createNode("attribwrangle", "w")
+    wrangle.setInput(0, grid)
+    wrangle.parm("snippet").set('f@glue = chf("glue");\ni@mode = chi("mode");')
+    spare = {
+        "add": [
+            {"name": "glue", "type": "float", "label": "Glue", "default": 2.5, "min": 0,
+             "max": 10, "help": "Glue strength.", "folder": "Controls"},
+            {"name": "mode", "type": "menu", "menu_items": [
+                {"token": "soft", "label": "Soft"}, {"token": "hard", "label": "Hard"}],
+             "default": "hard", "folder": "Controls"},
+            {"name": "enable", "type": "toggle", "default": True},
+            {"name": "offset", "type": "vector", "default": [0, 1, 0]},
+            {"name": "tint", "type": "color"},
+            {"name": "reset", "type": "button"},
+        ]
+    }  # fmt: skip
+    result = client.ok("node_edit", {"items": [{"path": wrangle.path(), "spare_parms": spare}]})
+    added = result["results"][0]["spare_parms"]["added"]
+    assert added == [
+        f"{wrangle.path()}/{n}" for n in ("glue", "mode", "enable", "offset", "tint", "reset")
+    ]
+    glue = wrangle.parm("glue")
+    assert glue.eval() == 2.5 and glue.isSpare()
+    template = glue.parmTemplate()
+    assert (template.minValue(), template.maxValue(), template.help()) == (0, 10, "Glue strength.")
+    assert wrangle.parm("mode").evalAsString() == "hard"
+    assert wrangle.parm("enable").eval() == 1
+    assert wrangle.parmTuple("offset").eval() == (0.0, 1.0, 0.0)
+    assert len(wrangle.parmTuple("tint")) == 3
+    assert wrangle.parmTemplateGroup().findFolder("Controls") is not None
+    geometry = wrangle.geometry()
+    assert geometry.points()[0].attribValue("glue") == 2.5  # chf("glue") resolves
+    assert geometry.points()[0].attribValue("mode") == 1
+    got = client.ok("parm_get", {"paths": [f"{wrangle.path()}/glue"], "include": ["template"]})
+    assert got["parms"][0]["template"]["max"] == 10
+    removed = client.ok(
+        "node_edit",
+        {"items": [{"path": wrangle.path(), "spare_parms": {"remove": ["glue", "tint"]}}]},
+    )
+    assert removed["results"][0]["spare_parms"]["removed"] == [
+        f"{wrangle.path()}/glue",
+        f"{wrangle.path()}/tint",
+    ]
+    assert wrangle.parm("glue") is None and wrangle.parm("mode") is not None
+    undone = client.ok("undo", {"action": "undo"})
+    assert undone["performed"] and wrangle.parm("glue") is not None
+
+
+def test_edit_spare_parms_validation_and_rollback(client):
+    geo = hou.node("/obj").createNode("geo", "geo1")
+    null = geo.createNode("null", "CTRL")
+    error = client.error(
+        "node_edit",
+        {
+            "items": [
+                {"path": null.path(), "spare_parms": {"add": [{"name": "a", "type": "float"}]}},
+                {"path": null.path(), "spare_parms": {"add": [{"name": "b", "type": "ramp"}]}},
+            ]
+        },
+    )
+    assert error["code"] == "invalid_argument" and "float" in error["hint"]
+    assert error["detail"]["rolled_back"] is True and null.parm("a") is None
+    for bad, code in (
+        ({"add": [{"name": "1x", "type": "float"}]}, "invalid_argument"),
+        ({"add": [{"name": "copyinput", "type": "float"}]}, "name_collision"),
+        ({"add": [{"name": "m", "type": "menu"}]}, "invalid_argument"),
+        ({"add": [{"name": "f", "type": "float", "min": 2, "max": 1}]}, "invalid_argument"),
+        ({"add": [{"name": "f", "type": "float", "default": "x"}]}, "invalid_value"),
+        ({"remove": ["copyinput"]}, "invalid_argument"),
+        ({"remove": ["nope"]}, "parm_not_found"),
+    ):
+        error = client.error("node_edit", {"items": [{"path": null.path(), "spare_parms": bad}]})
+        assert error["code"] == code, (bad, error)
+    _geo, mountain = make_locked_mountain()
+    inner = mountain.children()[0].path()
+    add = {"add": [{"name": "g", "type": "float"}]}
+    error = client.error("node_edit", {"items": [{"path": inner, "spare_parms": add}]})
+    assert error["code"] == "locked"
+
+
+def test_parm_not_found_on_a_null_points_at_spare_parms(client):
+    geo = hou.node("/obj").createNode("geo", "geo1")
+    null = geo.createNode("null", "CTRL")
+    error = client.error("parm_set", {"items": [{"path": f"{null.path()}/glue", "value": 1}]})
+    assert error["code"] == "parm_not_found" and "spare_parms" in error["hint"]
+    error = client.error("parm_get", {"paths": ["/obj/geo1/glue"]})
+    assert "spare_parms" in error["hint"]
+
+
+# -- node_create block pairing (review 11 B12) -------------------------------------
+
+
+def test_create_pairs_block_end_with_its_begin(client):
+    geo = hou.node("/obj").createNode("geo", "geo1")
+    parent = geo.path()
+    result = client.ok(
+        "node_create",
+        {
+            "items": [
+                {"parent": parent, "type": "box", "name": "src"},
+                {
+                    "parent": parent,
+                    "type": "block_begin",
+                    "name": "loop_begin",
+                    "parms": {"method": "input"},
+                    "inputs": [{"index": 0, "from": "src"}],
+                },
+                {
+                    "parent": parent,
+                    "type": "xform",
+                    "name": "shift",
+                    "parms": {"tx": 1},
+                    "inputs": [{"index": 0, "from": "loop_begin"}],
+                },
+                {
+                    "parent": parent,
+                    "type": "block_end",
+                    "name": "loop_end",
+                    "parms": {"itermethod": "count", "iterations": 4, "method": "merge"},
+                    "inputs": [{"index": 0, "from": "shift"}],
+                    "flags": {"display": True},
+                },
+            ]
+        },
+    )
+    end_row = result["results"][3]
+    assert end_row["paired_with"] == f"{parent}/loop_begin"
+    assert not end_row.get("errors"), end_row
+    end = geo.node("loop_end")
+    assert end.parm("blockpath").eval() == "../loop_begin"
+    assert end.parm("templatepath").eval() == "../loop_begin"
+    assert geo.node("loop_begin").parm("blockpath").eval() == "../loop_end"
+    assert len(end.geometry().prims()) == 24  # 4 iterations of a 6-face box, merged
+    assert "paired_with" not in result["results"][0]
+
+
+def test_create_pairs_with_the_only_unpaired_begin(client):
+    geo = hou.node("/obj").createNode("geo", "geo1")
+    begin = geo.createNode("block_begin", "b")
+    result = client.ok("node_create", {"items": [{"parent": geo.path(), "type": "block_end"}]})
+    assert result["results"][0]["paired_with"] == begin.path()
+    explicit = client.ok(
+        "node_create",
+        {"items": [{"parent": geo.path(), "type": "block_end", "parms": {"blockpath": "../x"}}]},
+    )
+    assert "paired_with" not in explicit["results"][0]
+    assert hou.node(explicit["created"][0]).parm("blockpath").eval() == "../x"

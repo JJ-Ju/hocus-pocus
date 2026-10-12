@@ -44,6 +44,27 @@ class _Work:
         self.exc: BaseException | None = None
 
 
+def _busy(timeout_s: float, *, started: bool) -> ToolError:
+    if started:
+        message = (
+            f"Houdini's main thread did not finish the call within {timeout_s:g}s. "
+            "The call is still running; its result will be discarded."
+        )
+        hint = (
+            "Inspect the scene before repeating a mutation. Raise timeout_s for long "
+            "operations, or use a job."
+        )
+    else:
+        message = (
+            f"Houdini's main thread was busy for {timeout_s:g}s (a modal dialog, a "
+            "long cook, or another call); the call was not started."
+        )
+        hint = "Retry shortly; the call had no effect."
+    return ToolError(
+        "houdini_busy", message, hint=hint, detail={"started": started, "timeout_s": timeout_s}
+    )
+
+
 class MainThreadExecutor:
     """Marshal callables onto the main thread with a bounded wait."""
 
@@ -63,7 +84,6 @@ class MainThreadExecutor:
         self.main_thread_ident: int | None = main_thread_ident
         self._running = False
         self._draining = False
-        self._current: _Work | None = None
 
     # -- lifecycle ---------------------------------------------------------------
 
@@ -151,30 +171,14 @@ class MainThreadExecutor:
         self._queue.put(work)
         if not work.done.wait(timeout_s):
             with work.lock:
-                started = work.state != "pending"
-                if not started:
+                state = work.state
+                if state == "pending":
                     work.state = "cancelled"
-            if started:
-                message = (
-                    f"Houdini's main thread did not finish the call within {timeout_s:g}s. "
-                    "The call is still running; its result will be discarded."
-                )
-                hint = (
-                    "Inspect the scene before repeating a mutation. Raise timeout_s for long "
-                    "operations, or use a job."
-                )
-            else:
-                message = (
-                    f"Houdini's main thread was busy for {timeout_s:g}s (a modal dialog, a "
-                    "long cook, or another call); the call was not started."
-                )
-                hint = "Retry shortly; the call had no effect."
-            raise ToolError(
-                "houdini_busy",
-                message,
-                hint=hint,
-                detail={"started": started, "timeout_s": timeout_s},
-            )
+            if state != "done":
+                raise _busy(timeout_s, started=state != "pending")
+            # It finished between the wait timing out and the lock (review 10 section 1.5):
+            # report its result, not "still running".
+            work.done.wait()
         if work.exc is not None:
             raise work.exc
         return work.result
@@ -226,7 +230,6 @@ class MainThreadExecutor:
             if work.state != "pending":
                 return
             work.state = "running"
-        self._current = work
         reraise: BaseException | None = None
         try:
             work.result = work.fn()
@@ -237,15 +240,8 @@ class MainThreadExecutor:
             if isinstance(exc, KeyboardInterrupt | SystemExit):
                 reraise = exc
         finally:
-            self._current = None
-            work.state = "done"
+            with work.lock:
+                work.state = "done"
             work.done.set()
         if reraise is not None:
             raise reraise
-
-    @property
-    def busy(self) -> bool:
-        return self._current is not None
-
-    def pending(self) -> int:
-        return self._queue.qsize()

@@ -1,6 +1,13 @@
+"""The one response truncator (tools/budget.py), used by host and bridge."""
+
 from __future__ import annotations
 
-from hocuspocus.host.budget import encoded_size, truncate
+from hocuspocus.tools.budget import size as encoded_size
+from hocuspocus.tools.budget import truncate as _truncate
+
+
+def truncate(payload, max_bytes):
+    return _truncate(payload, max_bytes)[0]
 
 
 def test_small_payload_is_returned_unchanged():
@@ -56,3 +63,14 @@ def test_non_json_values_use_repr():
 
     result = truncate({"v": [Thing()] * 1000}, 1024)
     assert result["v"][0] == "<thing>"
+
+
+def test_cuts_name_what_was_trimmed():
+    payload = {"rows": list(range(1000)), "text": "y" * 50_000}
+    result, cuts = _truncate(payload, 2048)
+    assert encoded_size(result) <= 2048
+    by_path = {cut["path"]: cut for cut in cuts}
+    assert by_path["rows"]["total"] == 1000 and by_path["rows"]["kept"] == len(result["rows"])
+    assert by_path["text"]["total_chars"] == 50_000
+    assert result["text"].startswith("y" * by_path["text"]["kept_chars"] + "…[truncated")
+    assert _truncate(payload, 10**6) == (payload, [])

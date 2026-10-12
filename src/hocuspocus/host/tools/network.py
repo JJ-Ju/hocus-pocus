@@ -21,6 +21,7 @@ from __future__ import annotations
 import contextlib
 import difflib
 import json
+import os
 from typing import Any
 
 from hocuspocus.tools.errors import ToolError
@@ -34,10 +35,6 @@ TAG_KEY = "hocuspocus:tag"
 CHANGED_KEY = "_changed"
 """Result marker the dispatcher reads (``host/dispatch.py``): False means nothing changed."""
 MAX_PROBLEMS = 20
-
-
-def _compact_bytes(value: Any) -> int:
-    return len(json.dumps(value, separators=(",", ":"), default=str).encode("utf-8"))
 
 
 # -- network_describe ---------------------------------------------------------------
@@ -137,8 +134,7 @@ def _expand(
         return 0
     locked = N._is_locked_hda(node)
     if locked:
-        entry["locked"] = True
-        entry["hda_locked"] = True  # review 07/11: unambiguous name; locked kept for 1.0
+        entry["hda_locked"] = True  # BIBLE §4.1: locked is the SOP lock flag, not this
     if level >= depth or (locked and not recurse_locked):
         return 0
     try:
@@ -177,32 +173,178 @@ def _expand(
 
 
 DESCRIBE_CURSOR = "after:"
+FORMATS = ("data", "python", "outline")
+OUTLINE_DEPTH = 2
+"""``format: outline`` reads two levels unless ``depth`` says otherwise (review 11 B11)."""
+
+
+def _error_count(node: Any) -> int:
+    try:
+        return len(node.errors())
+    except Exception:
+        return 0
+
+
+_SHIPPED_LIBRARIES: dict[str, bool] = {}
+
+
+def _shipped_asset(node: Any) -> bool:
+    """True when ``node``'s asset definition comes from a library under ``$HFS``."""
+    try:
+        library = node.type().definition().libraryFilePath()
+    except Exception:
+        return False
+    if library not in _SHIPPED_LIBRARIES:
+        shipped = False
+        with contextlib.suppress(Exception):
+            import hou
+
+            hfs = os.path.normcase(os.path.realpath(hou.text.expandString("$HFS")))
+            lib = os.path.normcase(os.path.realpath(library))
+            shipped = lib.startswith(os.path.join(hfs, ""))
+        _SHIPPED_LIBRARIES[library] = shipped
+    return _SHIPPED_LIBRARIES[library]
+
+
+def _outline_entry(
+    node: Any, level: int, *, depth: int, recurse_locked: bool, budget: _Budget
+) -> dict[str, Any]:
+    """``{path, name, type, children_count?, display?, errors, hda_locked?, children?}``:
+    no parms and no wiring, so a whole scene fits in one page (``houdini://outline``).
+
+    ``children_count`` is left out at 0. ``hda_locked`` marks only locked assets that are
+    not shipped with Houdini: ``attribwrangle``, ``mountain`` and other SOPs from
+    ``$HFS/houdini/otls`` are locked assets too (BIBLE §4.1; their contents appear once
+    they cook), which flagged every wrangle of review 12 (papercut 4) and told the agent
+    nothing it could act on. ``node_info`` still reports ``hda_locked`` for them."""
+    locked = N._is_locked_hda(node)
+    opaque = locked and not recurse_locked
+    try:
+        children = [] if opaque else list(node.children())
+    except Exception:
+        children = []
+    entry: dict[str, Any] = {
+        "path": node.path(),
+        "name": node.name(),
+        "type": node.type().name(),
+    }
+    if children:
+        entry["children_count"] = len(children)
+    display = getattr(node, "displayNode", None)
+    if callable(display) and children:
+        with contextlib.suppress(Exception):
+            shown = display()
+            if shown is not None:
+                entry["display"] = shown.path()
+    entry["errors"] = _error_count(node)
+    if locked and not _shipped_asset(node):
+        entry["hda_locked"] = True
+    if level < depth and children:
+        if not budget.nodes_left:
+            entry["children_truncated"] = True
+            return entry
+        rows = []
+        for child in children:
+            budget.nodes += 1
+            rows.append(
+                _outline_entry(
+                    child, level + 1, depth=depth, recurse_locked=recurse_locked, budget=budget
+                )
+            )
+            if not budget.nodes_left:
+                break
+        if len(rows) < len(children):
+            entry["children_truncated"] = True
+        entry["children"] = rows
+    return entry
+
+
+def _outline(
+    root: Any, *, depth: int, recurse_locked: bool, cursor: Any, ctx: HostContext
+) -> dict[str, Any]:
+    """``network_describe format: outline``: one compact row per node, paged at the
+    response budget by top-level child like ``format: data``."""
+    if N._is_locked_hda(root) and not recurse_locked:
+        children: list[Any] = []
+    else:
+        children = list(root.children())
+    names = [c.name() for c in children]
+    start = 0
+    if cursor:
+        after = cursor[len(DESCRIBE_CURSOR) :]
+        if after not in names:
+            raise N.bad_arg(
+                f"The cursor's node {after!r} is no longer in {root.path()}.",
+                hint="The network changed between pages; call network_describe again without cursor.",
+            )
+        start = names.index(after) + 1
+    budget = _Budget(N.response_budget(ctx))
+    used = N.ROW_ENVELOPE_BYTES + len(root.path())
+    rows: list[dict[str, Any]] = []
+    count = 0
+    truncated = False
+    more = False
+    for child in children[start:]:
+        if rows and not budget.nodes_left:
+            truncated = more = True
+            break
+        before = budget.nodes
+        budget.nodes += 1
+        entry = _outline_entry(child, 1, depth=depth, recurse_locked=recurse_locked, budget=budget)
+        size = N.compact_size(entry) + 1
+        if rows and used + size > budget.max_bytes:
+            budget.nodes = before
+            truncated = more = True
+            break
+        if used + size > budget.max_bytes and "children" in entry:
+            entry.pop("children")  # one entry alone overflows: keep it, without its subtree
+            entry["children_truncated"] = True
+            budget.nodes = before + 1
+            size = N.compact_size(entry) + 1
+        rows.append(entry)
+        count = budget.nodes
+        used += size
+    result: dict[str, Any] = {
+        "root": root.path(),
+        "format": "outline",
+        "nodes": rows,
+        "node_count": count,
+    }
+    if truncated or any(_has_truncated_children(e) for e in rows):
+        result["truncated"] = True
+    if more and rows:
+        result["next_cursor"] = DESCRIBE_CURSOR + rows[-1]["name"]
+    return result
 
 
 @tool("network_describe")
 def network_describe(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     root = N.get_node(args.get("root"), field="root")
-    depth = args.get("depth", 1)
+    fmt = args.get("format", "data") or "data"
+    if fmt not in FORMATS:
+        raise N.bad_arg(f"'format' must be one of {', '.join(FORMATS)}.")
+    depth = args.get("depth")
     if depth is None:
-        depth = 1
+        depth = OUTLINE_DEPTH if fmt == "outline" else 1
     if not isinstance(depth, int) or isinstance(depth, bool) or depth < 1:
         raise N.bad_arg("'depth' must be an integer >= 1.")
     include_defaults = N.arg_bool(args, "include_defaults", False)
     positions = N.arg_bool(args, "include_positions", False)
     recurse_locked = N.arg_bool(args, "recurse_locked", False)
-    fmt = args.get("format", "data") or "data"
-    if fmt not in ("data", "python"):
-        raise N.bad_arg("'format' must be 'data' or 'python'.")
     cursor = args.get("cursor")
     if cursor not in (None, "") and (
         not isinstance(cursor, str) or not cursor.startswith(DESCRIBE_CURSOR)
     ):
         raise N.bad_arg(
             f"Invalid cursor {cursor!r}.",
-            hint="Pass next_cursor from the previous page unchanged, or omit cursor.",
+            hint=N.CURSOR_HINT,
         )
-    if not recurse_locked and (N.inside_locked(root) or (fmt == "data" and N._is_locked_hda(root))):
+    if not recurse_locked and (
+        N.inside_locked(root) or (fmt != "python" and N._is_locked_hda(root))
+    ):
         raise N._locked_root_error(root)
+    if fmt == "outline":
+        return _outline(root, depth=depth, recurse_locked=recurse_locked, cursor=cursor, ctx=ctx)
     if fmt == "python":
         code = root.asCode(brief=True, recurse=False)
         return {"root": root.path(), "format": "python", "code": code, "bytes": len(code.encode())}
@@ -261,7 +403,7 @@ def network_describe(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
             opts=opts,
             budget=budget,
         )
-        size = _compact_bytes({name: entry})
+        size = N.compact_size({name: entry})
         if data and used + size > budget.max_bytes:
             budget.nodes = before_nodes
             truncated, next_name = True, name
@@ -271,7 +413,7 @@ def network_describe(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
             entry["children_truncated"] = True
             truncated = True
             added = 1
-            size = _compact_bytes({name: entry})
+            size = N.compact_size({name: entry})
         data[name] = entry
         count += added
         used += size
@@ -280,7 +422,7 @@ def network_describe(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
         "format": "data",
         "data": data,
         "node_count": count,
-        "bytes": _compact_bytes(data),
+        "bytes": N.compact_size(data),
     }
     if truncated or any(isinstance(e, dict) and _has_truncated_children(e) for e in data.values()):
         result["truncated"] = True
@@ -293,8 +435,10 @@ def _has_truncated_children(entry: dict[str, Any]) -> bool:
     if entry.get("children_truncated"):
         return True
     children = entry.get("children")
-    return isinstance(children, dict) and any(
-        isinstance(c, dict) and _has_truncated_children(c) for c in children.values()
+    if isinstance(children, dict):  # format data
+        children = list(children.values())
+    return isinstance(children, list) and any(
+        isinstance(c, dict) and _has_truncated_children(c) for c in children
     )
 
 
@@ -436,7 +580,7 @@ def _validate_level(
         children = entry.get("children")
         if children is not None:
             child_category = node_type.childTypeCategory()
-            if entry.get("locked") or entry.get("hda_locked"):
+            if entry.get("hda_locked"):
                 entry.pop("children")
                 warnings.append(
                     f"{where}: children of the locked asset {node_type.name()} were ignored; "

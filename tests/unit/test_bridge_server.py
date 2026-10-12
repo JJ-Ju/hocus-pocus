@@ -103,16 +103,25 @@ class FakeClient:
             "pid": 4242,
             "houdini": "22.0.466",
             "generation": 2,
-            "host_version": "1.0.0",
+            "host_version": "1.1.0",
         }
         self.replies: dict[str, Any] = {}
         self.calls: list[tuple[str, dict, float]] = []
         self.budgets: list[int | None] = []
 
+    live: list[Instance] = []
+    port: int | None = None
+    follow_registry = True
+    """Answer /health with the pid registered for the port asked (a healthy registry)."""
+
     def health(self, timeout_s: float = 5.0) -> dict[str, Any]:
         if isinstance(self.health_reply, Exception):
             raise self.health_reply
-        return self.health_reply
+        reply = dict(self.health_reply)
+        match = next((i.pid for i in self.live if i.port == self.port), None)
+        if self.follow_registry and match is not None:
+            reply["pid"] = match
+        return reply
 
     def call(self, tool, args, timeout_s, request_id=None, max_response_bytes=None):
         self.calls.append((tool, args, timeout_s))
@@ -138,10 +147,16 @@ INSTANCE = Instance(
 def make_bridge(instances=(INSTANCE,), config=None, launcher=None, tools=FAKE_TOOLS):
     client = FakeClient()
     live = list(instances)
+    client.live = live
+
+    def factory(port, token):
+        client.port = port
+        return client
+
     bridge = Bridge(
         config or BridgeConfig(),
         tools=tools,
-        client_factory=lambda port, token: client,
+        client_factory=factory,
         scan=lambda: list(live),
         launcher=launcher,
     )
@@ -150,7 +165,9 @@ def make_bridge(instances=(INSTANCE,), config=None, launcher=None, tools=FAKE_TO
 
 
 def structured(result) -> dict:
-    return result.structured_content
+    """The result's JSON as the model sees it (the text block; ``result_content = "text"``,
+    the default, sends no structuredContent)."""
+    return json.loads(result.content[0].text)
 
 
 # -- tools/list ------------------------------------------------------------------------------
@@ -175,8 +192,8 @@ def test_tools_list_with_no_houdini_over_mcp_client():
     assert by_name["viewport_capture"].description.endswith("(GUI only)")
     assert by_name["node_info"].input_schema["required"] == ["paths"]
     assert status.is_error is False
-    assert status.structured_content["connected"] is None
-    assert status.structured_content["instances"] == []
+    assert structured(status)["connected"] is None
+    assert structured(status)["instances"] == []
 
 
 def test_profile_filters_real_catalogue():
@@ -197,10 +214,25 @@ def test_instructions_cover_launch_lifetime_and_guide_recipes():
     from hocuspocus.bridge.instructions import guide_text
 
     assert "launched.outlives_server" in INSTRUCTIONS and "attach by pid" in INSTRUCTIONS
-    assert 'detail: "folders"' in INSTRUCTIONS and "addSpareParmTuple" in INSTRUCTIONS
+    assert 'detail: "folders"' in INSTRUCTIONS and "spare_parms" in INSTRUCTIONS
+    assert "hocuspocus launch" in INSTRUCTIONS and "houdini://outline" in INSTRUCTIONS
     guide = guide_text()
-    assert guide.index("## Instructions") < guide.index("## Recipes")
-    assert "node.addSpareParmTuple(" in guide
+    assert guide.index("## Instructions") < guide.index("## Resources") < guide.index("## Recipes")
+    assert '"spare_parms": {"add": [' in guide
+    assert 'network_describe {root: "/", format: "outline", depth: 2}' in guide
+
+
+def test_outline_resource_reads_network_describe_outline():
+    from hocuspocus.bridge.server import OUTLINE_ARGS
+
+    bridge, client, _ = make_bridge()
+    assert OUTLINE_ARGS == {"root": "/", "format": "outline", "depth": 2}
+    assert bridge.route_resource("houdini://outline") == ("network_describe", OUTLINE_ARGS)
+    assert "houdini://outline" in [str(r.uri) for r in bridge.list_resources()]
+    client.replies["network_describe"] = (True, {"nodes": [{"path": "/obj"}]}, {})
+    result = bridge.read_resource("houdini://outline")
+    assert json.loads(result.contents[0].text) == {"nodes": [{"path": "/obj"}]}
+    assert client.calls[-1][:2] == ("network_describe", OUTLINE_ARGS)
 
 
 def test_instructions_under_400_words():
@@ -247,9 +279,8 @@ def test_forward_ok_structured_and_text_and_meta():
     )
     result = bridge.call_tool("node_info", {"paths": ["/obj/geo1"]})
     assert result.is_error is False
-    assert result.structured_content == {"nodes": [{"path": "/obj/geo1"}]}
-    assert json.loads(result.content[0].text) == result.structured_content
-    assert result.content[0].text == budget.dumps(result.structured_content)
+    assert result.content[0].text == budget.dumps({"nodes": [{"path": "/obj/geo1"}]})
+    assert result.structured_content is None  # result_content = "text" (the default)
     assert result.meta["scene_generation"] == 7
     assert result.meta["pid"] == 4242
     assert client.calls == [("node_info", {"paths": ["/obj/geo1"]}, 30.0)]
@@ -272,7 +303,7 @@ def test_host_error_maps_to_is_error():
     client.replies["node_info"] = (False, error, {"scene_generation": 2})
     result = bridge.call_tool("node_info", {"paths": ["/obj/nope"]})
     assert result.is_error is True
-    assert result.structured_content == error
+    assert structured(result) == error
     assert json.loads(result.content[0].text) == error
     assert result.meta["scene_generation"] == 2
 
@@ -283,16 +314,16 @@ def test_transport_errors_map_to_is_error(code):
     client.replies["node_delete"] = ToolError(code, "boom")
     result = bridge.call_tool("node_delete", {"paths": ["/obj/a"]})
     assert result.is_error is True
-    assert result.structured_content["code"] == code
+    assert structured(result)["code"] == code
     assert len(client.calls) == 1  # one attempt, never retried
 
 
 def test_offline_when_no_instances():
     bridge, client, _ = make_bridge(instances=())
     result = bridge.call_tool("node_info", {"paths": ["/obj"]})
-    assert result.structured_content["code"] == "houdini_offline"
-    assert "houdini_connect" in result.structured_content["hint"]
-    assert result.structured_content["retryable"] is False  # nothing to retry against
+    assert structured(result)["code"] == "houdini_offline"
+    assert "houdini_connect" in structured(result)["hint"]
+    assert structured(result)["retryable"] is False  # nothing to retry against
 
 
 def test_offline_names_the_houdini_that_exited():
@@ -300,7 +331,7 @@ def test_offline_names_the_houdini_that_exited():
     bridge, client, live = make_bridge()
     assert bridge.call_tool("node_info", {"paths": ["/obj"]}).is_error is False
     live.clear()
-    error = bridge.call_tool("node_info", {"paths": ["/obj"]}).structured_content
+    error = structured(bridge.call_tool("node_info", {"paths": ["/obj"]}))
     assert error["code"] == "houdini_offline"
     assert "pid 4242" in error["message"] and "since its last save are lost" in error["message"]
     assert error["retryable"] is False
@@ -325,12 +356,12 @@ def test_offline_names_the_earlier_server_that_launched_houdini(tmp_path):
         scan=lambda: [],
         launches=launches,
     )
-    error = bridge.call_tool("node_info", {"paths": ["/obj"]}).structured_content
+    error = structured(bridge.call_tool("node_info", {"paths": ["/obj"]}))
     assert error["code"] == "houdini_offline" and error["retryable"] is False
     assert "pid 22740" in error["message"] and "server (pid 51010)" in error["message"]
     assert "keep one MCP session open" in error["hint"] and "{pid}" in error["hint"]
     assert error["detail"]["launched_by"] == 51010
-    again = bridge.call_tool("node_info", {"paths": ["/obj"]}).structured_content
+    again = structured(bridge.call_tool("node_info", {"paths": ["/obj"]}))
     assert "22740" not in again["message"]  # reported once
 
 
@@ -342,7 +373,7 @@ def test_exit_mid_call_is_reported_as_an_exit():
         raise ToolError("delivery_unknown", "ConnectionResetError: [WinError 10054]")
 
     client.call = die
-    error = bridge.call_tool("node_delete", {"paths": ["/obj/a"]}).structured_content
+    error = structured(bridge.call_tool("node_delete", {"paths": ["/obj/a"]}))
     assert error["code"] == "houdini_offline"
     assert "exited while running node_delete" in error["message"]
     assert error["retryable"] is False
@@ -352,7 +383,7 @@ def test_exit_mid_call_is_reported_as_an_exit():
 def test_lost_response_from_a_live_houdini_stays_delivery_unknown():
     bridge, client, _ = make_bridge()
     client.replies["node_delete"] = ToolError("delivery_unknown", "timed out")
-    error = bridge.call_tool("node_delete", {"paths": ["/obj/a"]}).structured_content
+    error = structured(bridge.call_tool("node_delete", {"paths": ["/obj/a"]}))
     assert error["code"] == "delivery_unknown"
     assert error["retryable"] is False
 
@@ -373,7 +404,7 @@ def test_registry_hp_mismatch_refuses():
 
     bridge, client, _ = make_bridge(instances=(replace(INSTANCE, hp=2),))
     result = bridge.call_tool("node_info", {"paths": ["/obj"]})
-    assert result.structured_content["code"] == "version_mismatch"
+    assert structured(result)["code"] == "version_mismatch"
     assert client.calls == []
 
 
@@ -381,7 +412,7 @@ def test_health_version_mismatch_refuses_before_call():
     bridge, client, _ = make_bridge()
     client.health_reply = ToolError("version_mismatch", "hp/v2")
     result = bridge.call_tool("node_info", {"paths": ["/obj"]})
-    assert result.structured_content["code"] == "version_mismatch"
+    assert structured(result)["code"] == "version_mismatch"
     assert client.calls == []
 
 
@@ -398,8 +429,8 @@ def test_bridge_exception_becomes_internal():
     client.replies["node_info"] = RuntimeError("kaboom")
     result = bridge.call_tool("node_info", {"paths": ["/obj"]})
     assert result.is_error is True
-    assert result.structured_content["code"] == "internal"
-    assert "traceback" in result.structured_content["detail"]
+    assert structured(result)["code"] == "internal"
+    assert "traceback" in structured(result)["detail"]
 
 
 # -- budget and images -----------------------------------------------------------------------
@@ -410,7 +441,7 @@ def test_truncation_cuts_lists_at_item_boundaries():
     rows = [{"path": f"/obj/geo{i}", "type": "geo", "pad": "x" * 40} for i in range(200)]
     client.replies["node_info"] = (True, {"nodes": rows, "total": 200}, {})
     result = bridge.call_tool("node_info", {"paths": ["/obj"]})
-    out = result.structured_content
+    out = structured(result)
     assert out["truncated"] is True and "next_cursor" not in out
     assert 0 < len(out["nodes"]) < 200
     assert out["nodes"] == rows[: len(out["nodes"])]  # whole items, original order
@@ -452,7 +483,7 @@ def test_small_results_are_not_marked_truncated():
     bridge, client, _ = make_bridge()
     client.replies["node_info"] = (True, {"nodes": []}, {})
     result = bridge.call_tool("node_info", {"paths": ["/obj"]})
-    assert "truncated" not in result.structured_content
+    assert "truncated" not in structured(result)
 
 
 def test_budget_truncates_huge_strings_last():
@@ -486,7 +517,7 @@ def test_image_is_converted_to_image_content_and_exempt_from_budget():
     assert kinds == ["text", "image"]
     assert result.content[1].data == png
     assert result.content[1].mime_type == "image/png"
-    sc = result.structured_content
+    sc = structured(result)
     assert "png_base64" not in json.dumps(sc)
     assert sc["image"]["width"] == 1024 and sc["path"] == "C:/cap.png"
     assert "truncated" not in sc
@@ -513,7 +544,7 @@ def test_status_merges_registry_health_and_host():
             "time": {"frame": 1, "fps": 24, "range": [1, 240]},
             "env": {"HIP": "C:/work"},
             "scene_generation": 5,
-            "host_version": "1.0.0",
+            "host_version": "1.1.0",
             "read_only": False,
             "allow_python": True,
         },
@@ -552,7 +583,7 @@ def test_connect_pid_pins_selection():
     bridge, client, _ = make_bridge(instances=(INSTANCE, newer))
     result = bridge.call_tool("houdini_connect", {"pid": 4242})
     assert result.is_error is False
-    assert result.structured_content["connected"]["pid"] == 4242
+    assert structured(result)["connected"]["pid"] == 4242
     forwarded = bridge.call_tool("node_info", {"paths": ["/obj"]})
     assert forwarded.meta["pid"] == 4242
     assert "warnings" not in forwarded.meta
@@ -612,6 +643,11 @@ def test_pinned_instance_exit_falls_back_to_new_one():
         ),
         ("houdini://job/abc123", "job", {"action": "status", "job_id": "abc123"}),
         ("houdini://status", "houdini_status", {}),
+        (
+            "houdini://outline",
+            "network_describe",
+            {"root": "/", "format": "outline", "depth": 2},
+        ),
     ],
 )
 def test_resource_routing(uri, tool, args):
@@ -647,7 +683,11 @@ def test_resources_over_mcp_client():
             return resources, templates, guide, status, prompts, prompt
 
     resources, templates, guide, status, prompts, prompt = anyio.run(run)
-    assert {str(r.uri) for r in resources} == {"houdini://status", "hocuspocus://guide"}
+    assert {str(r.uri) for r in resources} == {
+        "houdini://status",
+        "houdini://outline",
+        "hocuspocus://guide",
+    }
     assert "houdini://nodetype/{category}/{name}" in {t.uri_template for t in templates}
     assert "HocusPocus drives a live Houdini" in guide.contents[0].text
     assert json.loads(status.contents[0].text)["connected"] is None
@@ -667,3 +707,244 @@ def test_prompt_requires_arguments():
     with pytest.raises(MCPError):
         get_prompt("debug_red_node", {})
     assert "/obj" in get_prompt("inspect_scene", None).messages[0].content.text
+
+
+# -- progress notifications (BIBLE §7) ----------------------------------------------------
+
+
+class ProgressClient(FakeClient):
+    """A host whose call blocks while its job advances; call_jobs reports the job."""
+
+    def __init__(self, steps):
+        super().__init__()
+        self.steps = list(steps)
+        self.polls = 0
+        self.request_ids = []
+        self.job_ids = []
+
+    def call(self, tool, args, timeout_s, request_id=None, max_response_bytes=None):
+        import time
+
+        self.request_ids.append(request_id)
+        deadline = time.monotonic() + 5
+        while self.polls < len(self.steps) + 1 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        return True, {"job_id": "j1", "state": "running"}, {}
+
+    def _next(self):
+        snapshot = self.steps[min(self.polls, len(self.steps) - 1)]
+        self.polls += 1
+        return snapshot
+
+    def call_jobs(self, request_id, timeout_s=5.0):
+        assert request_id == self.request_ids[-1]
+        return [self._next()]
+
+    def job(self, job_id, timeout_s=10.0):
+        self.job_ids.append(job_id)
+        return True, self._next(), {}
+
+
+def _progress_run(bridge, tool, args):
+    seen = []
+
+    async def on_progress(progress, total, message):
+        seen.append((progress, total, message))
+
+    async def run():
+        async with Client(build_server(bridge)) as client:
+            return await client.call_tool(tool, args, progress_callback=on_progress)
+
+    return anyio.run(run), seen
+
+
+def test_progress_notifications_follow_the_call_job():
+    steps = [
+        {"state": "running"},  # nothing reported yet
+        {"state": "running", "current": 1, "total": 4, "progress": 0.25, "message": "frame 1/4"},
+        {"state": "running", "current": 1, "total": 4, "progress": 0.25, "message": "frame 1/4"},
+        {"state": "running", "current": 3, "total": 4, "progress": 0.75, "message": "frame 3/4"},
+    ]
+    bridge, _client, _live = make_bridge()
+    client = ProgressClient(steps)
+    bridge.client_factory = lambda port, token: client
+    bridge.progress_interval_s = 0.02
+    result, seen = _progress_run(bridge, "geo_info", {"path": "/obj/geo1"})
+    assert result.is_error is False
+    # Repeated snapshots are not re-sent: progress only ever increases.
+    assert seen == [(1.0, 4.0, "frame 1/4"), (3.0, 4.0, "frame 3/4")]
+    assert client.request_ids[0]  # the bridge names the call so the host can file its job
+
+
+def test_progress_for_the_job_tool_polls_its_job_id():
+    steps = [{"state": "running", "progress": 0.5}, {"state": "running", "progress": 0.9}]
+    tools = (
+        *FAKE_TOOLS,
+        ToolSpec("job", "Job.", dict(OBJ, properties={"job_id": {"type": "string"}})),
+    )
+    bridge, _client, _live = make_bridge(tools=tools)
+    client = ProgressClient(steps)
+    bridge.client_factory = lambda port, token: client
+    bridge.progress_interval_s = 0.02
+    _result, seen = _progress_run(bridge, "job", {"job_id": "abc"})
+    assert set(client.job_ids) == {"abc"}
+    assert seen == [(0.5, 1.0, None), (0.9, 1.0, None)]
+
+
+def test_no_progress_token_means_no_polling():
+    bridge, client, _live = make_bridge()
+    bridge.progress_interval_s = 0.0
+
+    async def run():
+        async with Client(build_server(bridge)) as mcp_client:
+            return await mcp_client.call_tool("node_info", {"paths": ["/obj"]})
+
+    assert anyio.run(run).is_error is False  # FakeClient has no call_jobs: never asked
+
+
+def test_progress_tracker_only_increases():
+    from hocuspocus.bridge.server import ProgressTracker
+
+    tracker = ProgressTracker()
+    assert tracker.update(None) is None
+    assert tracker.update({"message": "starting"}) is None
+    assert tracker.update({"progress": 0.0}) == (0.0, 1.0, None)
+    assert tracker.update({"progress": 0.0, "message": "x"}) is None
+    assert tracker.update({"current": 0, "total": 0, "progress": 0.5}) == (0.5, 1.0, None)
+
+
+# -- result_content (BIBLE §4.1, review 11 B13a) -------------------------------------------
+
+
+def _mode_bridge(mode):
+    bridge, client, _ = make_bridge(config=BridgeConfig(result_content=mode))
+    client.replies["node_info"] = (True, {"nodes": [{"path": "/obj/geo1"}]}, {})
+    client.replies["node_delete"] = (
+        False,
+        {"code": "node_not_found", "message": "No node at /obj/x.", "retryable": False},
+        {},
+    )
+    return bridge
+
+
+def test_result_content_text_is_the_default_and_drops_output_schemas():
+    assert BridgeConfig().result_content == "text"
+    bridge = _mode_bridge("text")
+    ok = bridge.call_tool("node_info", {"paths": ["/obj/geo1"]})
+    assert ok.structured_content is None
+    assert json.loads(ok.content[0].text) == {"nodes": [{"path": "/obj/geo1"}]}
+    error = bridge.call_tool("node_delete", {"paths": ["/obj/x"]})
+    assert error.is_error is True and error.structured_content is None
+    assert json.loads(error.content[0].text)["code"] == "node_not_found"
+    # The spec requires structuredContent whenever outputSchema is declared.
+    assert all(tool.output_schema is None for tool in bridge.list_tools())
+
+
+def test_result_content_both_duplicates_and_declares_output_schemas():
+    from hocuspocus.tools import catalog
+
+    bridge = _mode_bridge("both")
+    ok = bridge.call_tool("node_info", {"paths": ["/obj/geo1"]})
+    assert ok.structured_content == {"nodes": [{"path": "/obj/geo1"}]}
+    assert json.loads(ok.content[0].text) == ok.structured_content
+    error = bridge.call_tool("node_delete", {"paths": ["/obj/x"]})
+    assert error.structured_content["code"] == "node_not_found"
+    assert json.loads(error.content[0].text) == error.structured_content
+    real = Bridge(BridgeConfig(result_content="both"), scan=lambda: [])
+    by_name = {tool.name: tool for tool in real.list_tools()}
+    with_schema = [spec.name for spec in real.tools if spec.output_schema is not None]
+    assert with_schema and all(by_name[name].output_schema for name in with_schema)
+    assert catalog.get(with_schema[0]).output_schema == by_name[with_schema[0]].output_schema
+
+
+def test_result_content_structured_summarises_the_text_block():
+    bridge = _mode_bridge("structured")
+    ok = bridge.call_tool("node_info", {"paths": ["/obj/geo1"]})
+    assert ok.content[0].text == "node_info: ok"
+    assert ok.structured_content == {"nodes": [{"path": "/obj/geo1"}]}
+    error = bridge.call_tool("node_delete", {"paths": ["/obj/x"]})
+    assert error.content[0].text == "node_not_found: No node at /obj/x."
+    assert error.structured_content["code"] == "node_not_found"
+    invalid = bridge.call_tool("node_info", {})
+    assert invalid.content[0].text.startswith("invalid_argument: ")
+
+
+def test_result_content_keeps_images_as_image_blocks():
+    import base64
+
+    png = base64.b64encode(b"png").decode()
+    for mode in ("text", "both", "structured"):
+        bridge, client, _ = make_bridge(config=BridgeConfig(result_content=mode))
+        client.replies["viewport_capture"] = (True, {"image": {"png_base64": png}}, {})
+        result = bridge.call_tool("viewport_capture", {})
+        assert [c.type for c in result.content] == ["text", "image"], mode
+
+
+# -- registry identity (review 10 section 1.4) ---------------------------------------------
+
+
+def _entries(tmp_path):
+    from dataclasses import replace
+
+    ghost = replace(INSTANCE, pid=5555, port=51005, started="2026-10-12T12:00:00Z")
+    ghost = replace(ghost, file=tmp_path / "5555.json")
+    real = replace(INSTANCE, file=tmp_path / "4242.json")
+    for inst in (ghost, real):
+        inst.file.write_text("{}")
+    return ghost, real
+
+
+def test_a_reused_pid_is_detected_and_its_entry_deleted(tmp_path):
+    ghost, real = _entries(tmp_path)
+    bridge, client, live = make_bridge(instances=(ghost, real))
+    client.follow_registry = False  # every port answers as pid 4242: the ghost's is reused
+
+    def scan():
+        return [i for i in live if i.file.exists()]
+
+    bridge.scan = scan
+    result = bridge.call_tool("node_info", {"paths": ["/obj"]})
+    assert result.is_error is False
+    assert result.meta["pid"] == 4242
+    assert not ghost.file.exists() and real.file.exists()
+    assert any("stale" in w for w in result.meta["warnings"])
+
+
+def test_a_refused_call_drops_the_entry_and_selects_again(tmp_path):
+    ghost, real = _entries(tmp_path)
+    bridge, client, live = make_bridge(instances=(ghost, real))
+    bridge.scan = lambda: [i for i in live if i.file.exists()]
+    bridge.mark_verified(ghost)  # it answered once; now nothing listens there
+    refused = ToolError("houdini_offline", "refused", detail={"reason": "refused"})
+    calls = []
+
+    def call(tool, args, timeout_s, request_id=None, max_response_bytes=None):
+        calls.append(client.port)
+        if client.port == ghost.port:
+            raise refused
+        return True, {"ok": 1}, {}
+
+    client.call = call
+    result = bridge.call_tool("node_info", {"paths": ["/obj"]})
+    assert result.is_error is False and calls == [ghost.port, real.port]
+    assert not ghost.file.exists()
+
+
+def test_status_removes_a_stale_entry(tmp_path):
+    ghost, real = _entries(tmp_path)
+    bridge, client, live = make_bridge(instances=(ghost, real))
+    client.follow_registry = False
+    bridge.scan = lambda: [i for i in live if i.file.exists()]
+    status = structured(bridge.call_tool("houdini_status", {}))
+    assert status["connected"]["pid"] == 4242
+    assert [i["pid"] for i in status["instances"]] == [4242]
+    assert any("stale registry entry" in w for w in status["warnings"])
+
+
+def test_connect_to_a_stale_pid_is_offline(tmp_path):
+    ghost, real = _entries(tmp_path)
+    bridge, client, live = make_bridge(instances=(ghost, real))
+    client.follow_registry = False
+    error = structured(bridge.call_tool("houdini_connect", {"pid": 5555}))
+    assert error["code"] == "houdini_offline" and "removed" in error["message"]
+    assert not ghost.file.exists()

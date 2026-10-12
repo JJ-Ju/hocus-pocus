@@ -22,16 +22,17 @@ from typing import Any
 from hocuspocus.tools.errors import ToolError
 
 from ..undo import hou_undo_group, make_label
-from .hip import check_allowed, resolve_path
-from .nodes import (
+from ._common import (
     bad_arg,
-    ensure_editable,
     get_node,
-    hda_block,
     hou_exception_text,
     hou_message,
     page,
+    refuse_if_read_only,
+    response_budget,
 )
+from .hip import check_allowed, resolve_path
+from .nodes import ensure_editable, hda_block
 from .registry import HostContext, tool
 
 ACTIONS = ("create", "save", "unlock", "match", "install", "reload", "list")
@@ -323,7 +324,7 @@ def _list(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
         library = _library(args, ctx)  # extension and approved_roots, like install
         _require_library_file(library)
         rows = [_definition_row(d) for d in _definitions(library)]
-        chunk, nxt = page(rows, args.get("limit"), args.get("cursor"))
+        chunk, nxt = page(rows, args.get("limit"), args.get("cursor"), budget=response_budget(ctx))
         out: dict[str, Any] = {"library": library, "total": len(rows), "definitions": chunk}
         if nxt is not None:
             out["next_cursor"] = nxt
@@ -342,7 +343,7 @@ def _list(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
         libraries.append(row)
     # User libraries first; Houdini's own ($HFS) libraries after, without type names.
     libraries.sort(key=lambda r: bool(r.get("builtin")))
-    chunk, nxt = page(libraries, args.get("limit"), args.get("cursor"))
+    chunk, nxt = page(libraries, args.get("limit"), args.get("cursor"), budget=response_budget(ctx))
     out = {
         "libraries": chunk,
         "total": len(libraries),
@@ -381,13 +382,7 @@ def hda(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     handler = HANDLERS[action]
     if action == "list":
         return handler(args, ctx)
-    if ctx.config.read_only:
-        raise ToolError(
-            "read_only",
-            f"hda {action} changes the scene, and the host is in read-only mode.",
-            hint="Set read_only = false in hocuspocus.toml (or HOCUSPOCUS_READ_ONLY=0) and "
-            "restart the host.",
-        )
+    refuse_if_read_only(ctx, f"hda {action}")
     label = make_label(
         "hda", {"undo_label": f"{action} {args.get('path') or args.get('library_path')}"}
     )

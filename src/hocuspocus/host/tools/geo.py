@@ -19,7 +19,8 @@ from typing import Any
 
 from hocuspocus.tools.errors import ToolError
 
-from ._diag import a_or_an, collect_problems, refresh_stale
+from ._common import int_arg, parse_offset
+from ._diag import a_or_an, collect_problems, refresh_stale, require_node
 from .registry import HostContext, tool
 
 CLASSES = ("point", "prim", "vertex", "detail")
@@ -65,36 +66,11 @@ _PLAIN_GROUP = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 # -- node resolution --------------------------------------------------------------
 
 
-def _not_found(path: str) -> ToolError:
-    import hou
-
-    parent_path, _, name = path.rstrip("/").rpartition("/")
-    parent = hou.node(parent_path or "/")
-    candidates: list[str] = []
-    if parent is not None:
-        names = [child.name() for child in parent.children()]
-        candidates = [
-            f"{parent.path().rstrip('/')}/{n}"
-            for n in difflib.get_close_matches(name, names, n=5, cutoff=0.5)
-        ]
-    hint = (
-        "Check the path; node names are case-sensitive."
-        if parent is not None
-        else f"The parent {parent_path or '/'} does not exist either."
-    )
-    return ToolError("node_not_found", f"No node at {path}.", hint=hint, candidates=candidates)
-
-
 def resolve_sop(path: Any) -> Any:
     """Return the SOP for ``path``: a SOP itself, or an OBJ's display SOP."""
     import hou
 
-    if not isinstance(path, str) or not path.strip():
-        raise ToolError("invalid_argument", "'path' must be a non-empty node path.")
-    path = path.strip()
-    node = hou.node(path)
-    if node is None:
-        raise _not_found(path)
+    node = require_node(path)
     if isinstance(node, hou.SopNode):
         return node
     if isinstance(node, hou.ObjNode):
@@ -541,13 +517,20 @@ class _Column:
             self._cache = None  # dicts: read per row
         return self._cache
 
-    def cells(self, indices: Any) -> list[Any]:
-        values = self.values()
+    def cells(self, indices: Any, *, bulk: bool = True) -> list[Any]:
+        """Values for ``indices``. Without ``bulk`` (and no column already loaded) each
+        element is read on its own, so a page never builds a whole-class column."""
+        values = self.values() if bulk or self._cache is not None else None
         if values is None:
             element = {"point": self.geo.point, "prim": self.geo.prim, "vertex": self.geo.vertex}[
                 self.cls
             ]
-            return [jsonable(element(int(i)).attribValue(self.name)) for i in indices]
+            raw = [element(int(i)).attribValue(self.name) for i in indices]
+            if self.numeric:
+                if self.size == 1:
+                    return [num(v) for v in raw]
+                return [[num(x) for x in v] for v in raw]
+            return [jsonable(v) for v in raw]
         if self.numeric:
             block = values[indices]
             if self.size == 1:
@@ -615,32 +598,9 @@ def _resolve_attribs(geo: Any, cls: str, wanted: Any) -> list[Any]:
     return picked
 
 
-def _int_arg(args: dict[str, Any], key: str, default: int, *, minimum: int) -> int:
-    value = args.get(key, default)
-    if value is None:
-        value = default
-    if isinstance(value, bool) or not isinstance(value, int | float) or int(value) != value:
-        raise ToolError("invalid_argument", f"'{key}' must be an integer.")
-    if value < minimum:
-        raise ToolError("invalid_argument", f"'{key}' must be >= {minimum}.")
-    return int(value)
-
-
-def _cursor_arg(cursor: Any) -> int | None:
-    """``cursor`` (an opaque string, like every cursor) as a row offset; None if absent."""
-    if cursor is None or cursor == "":
-        return None
-    try:
-        start = int(str(cursor))
-    except ValueError:
-        start = -1
-    if start < 0:
-        raise ToolError(
-            "invalid_argument",
-            f"Invalid cursor {cursor!r}.",
-            hint="Pass next_cursor from the previous page unchanged, or omit cursor.",
-        )
-    return start
+BULK_SHARE = 4
+"""A page covering at least 1/BULK_SHARE of the class reads whole columns (cheaper than
+per-element reads); smaller pages read only their own rows."""
 
 
 @tool("geo_read")
@@ -655,10 +615,9 @@ def geo_read(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
             candidates=difflib.get_close_matches(str(cls), CLASSES, n=2, cutoff=0.3)
             or list(CLASSES),
         )
-    start = _cursor_arg(args.get("cursor"))
-    if start is None:
-        start = _int_arg(args, "start", 0, minimum=0)
-    count = min(_int_arg(args, "count", 50, minimum=1), 10_000)
+    cursor = args.get("cursor")
+    start = parse_offset(cursor) if cursor not in (None, "") else int_arg(args, "start", 0, 0)
+    count = min(int_arg(args, "count", 50, 1), 10_000)
     stats = args.get("stats", False)
     if not isinstance(stats, bool):
         raise ToolError("invalid_argument", "'stats' must be a boolean.")
@@ -689,7 +648,9 @@ def geo_read(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     out["columns"] = index_cols[cls] + [c.name for c in columns]
     if group:
         out["group"] = group
-    cells = [c.cells(indices) for c in columns]
+    # Whole columns only when stats need them anyway or the page is a large share.
+    bulk = stats or len(indices) * BULK_SHARE >= max(total, 1)
+    cells = [c.cells(indices, bulk=bulk) for c in columns]
     if cls == "vertex":
         owners = []
         for i in indices.tolist():

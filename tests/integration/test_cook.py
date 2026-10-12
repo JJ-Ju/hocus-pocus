@@ -134,6 +134,168 @@ def test_cook_becomes_job_after_job_threshold(client):
     assert [r["path"] for r in final["results"]] == [first.path(), second.path()]
 
 
+# -- cook profile (review 11 B7) ----------------------------------------------------
+
+
+def _chain(geo, slow_s: float = 0.15):
+    box = geo.createNode("box")
+    slow = _slow_python_sop(geo, slow_s)
+    slow.setInput(0, box)
+    sub = geo.createNode("subdivide")
+    sub.setInput(0, slow)
+    out = geo.createNode("null", "OUT")
+    out.setInput(0, sub)
+    return box, slow, sub, out
+
+
+def test_cook_warm_cache_hint_points_at_profile(client):
+    _box, _slow, _sub, out = _chain(_geo(), 0.05)
+    out.cook(force=True)  # upstream now cached, as after node_create
+    row = client.ok("cook", {"paths": [out.path()], "force": True})["results"][0]
+    assert row["cook_time_ms"] < 1, row
+    assert "profile: true" in row["hint"], row
+
+
+def test_cook_profile_times_the_input_chain(client):
+    box, slow, sub, out = _chain(_geo())
+    out.cook(force=True)  # a warm cache must not hide the slow node
+    result = client.ok("cook", {"paths": [out.path()], "profile": True})
+    assert result["ok"] is True
+    assert result["chain_total"] == 4
+    chain = result["chain"]
+    assert {row["path"] for row in chain} == {box.path(), slow.path(), sub.path(), out.path()}
+    assert chain[0]["path"] == slow.path(), chain
+    assert chain[0]["type"] == "python"
+    assert chain[0]["cook_time_ms"] >= 140
+    times = [row["cook_time_ms"] for row in chain]
+    assert times == sorted(times, reverse=True)
+    assert result["total_ms"] >= chain[0]["cook_time_ms"]
+    assert result["results"][0]["path"] == out.path()
+    assert "hint" not in result["results"][0]
+
+
+def test_cook_profile_caps_the_chain_at_ten(client):
+    geo = _geo()
+    node = geo.createNode("box")
+    for _ in range(12):
+        nxt = geo.createNode("null")
+        nxt.setInput(0, node)
+        node = nxt
+    result = client.ok("cook", {"paths": [node.path()], "profile": True})
+    assert result["chain_total"] == 13
+    assert len(result["chain"]) == 10
+
+
+def test_cook_profile_as_a_job_reports_progress(client):
+    _box, slow, _sub, out = _chain(_geo(), 0.4)
+    saved = client.host.config.job_threshold_s
+    client.host.config.job_threshold_s = 0.1
+    try:
+        result = client.ok("cook", {"paths": [out.path()], "profile": True})
+    finally:
+        client.host.config.job_threshold_s = saved
+    assert result["state"] == "running"
+    status = _wait_job(client, result["job_id"])
+    assert status["state"] == "done"
+    # 4 chain steps + 1 check of the named node
+    assert status["progress"] == 1.0 and status["current"] == status["total"] == 5
+    final = client.ok("job", {"action": "result", "job_id": result["job_id"]})["result"]
+    assert final["chain"][0]["path"] == slow.path()
+
+
+def test_cook_profile_and_frame_range_errors(client):
+    box = _geo().createNode("box")
+    path = box.path()
+    for args in (
+        {"profile": True, "frame_range": [1, 3]},
+        {"frame": 2, "frame_range": [1, 3]},
+        {"frame_range": [5, 1]},
+        {"frame_range": [1, 3, 0]},
+        {"frame_range": [1]},
+        {"frame_range": [1, 3], "summary": "boxes"},
+    ):
+        error = client.error("cook", {"paths": [path], **args})
+        assert error["code"] == "invalid_argument", (args, error)
+
+
+# -- cook frame_range (review 11 B8) ---------------------------------------------------
+
+
+def _animated_scatter(geo):
+    grid = geo.createNode("grid")
+    grid.parm("sizex").setExpression("1 + $F * 0.25")
+    scatter = geo.createNode("scatter")
+    scatter.setInput(0, grid)
+    scatter.parm("npts").set(200)
+    scatter.setDisplayFlag(True)
+    return scatter
+
+
+def test_cook_frame_range_bbox_summary(client):
+    geo = _geo()
+    scatter = _animated_scatter(geo)
+    hou.setFrame(5)
+    try:
+        result = client.ok(
+            "cook", {"paths": [scatter.path()], "frame_range": [1, 24], "summary": "bbox"}
+        )
+        assert hou.frame() == 5
+    finally:
+        hou.setFrame(1)
+    assert result["ok"] is True
+    assert result["frame_range"] == [1, 24, 1]
+    frames = result["frames"]
+    assert [row["frame"] for row in frames] == list(range(1, 25))
+    assert all(row["point_count"] == 200 for row in frames)
+    widths = [row["bbox_max"][0] - row["bbox_min"][0] for row in frames]
+    assert widths[-1] > widths[0] + 4, widths
+    assert len({round(w, 3) for w in widths}) > 20
+    assert result["results"][0]["path"] == scatter.path()
+
+    # An object reads its display SOP; step thins the frames; summary none drops them.
+    by_obj = client.ok(
+        "cook", {"paths": [geo.path()], "frame_range": [1, 24, 6], "summary": "bbox"}
+    )
+    assert [row["frame"] for row in by_obj["frames"]] == [1, 7, 13, 19]
+    assert by_obj["frames"][1]["bbox_max"] == frames[6]["bbox_max"]
+    plain = client.ok("cook", {"paths": [scatter.path()], "frame_range": [1, 4]})
+    assert "frames" not in plain and plain["frames_cooked"] == 4
+
+
+def test_cook_frame_range_as_a_job_reports_frame_progress(client):
+    geo = _geo()
+    scatter = _animated_scatter(geo)
+    slow = _slow_python_sop(geo, 0.03)
+    slow.setInput(0, scatter)
+    saved = client.host.config.job_threshold_s
+    client.host.config.job_threshold_s = 0.1
+    try:
+        result = client.ok(
+            "cook", {"paths": [slow.path()], "frame_range": [1, 24], "summary": "bbox"}
+        )
+    finally:
+        client.host.config.job_threshold_s = saved
+    assert result["state"] == "running"
+    job_id = result["job_id"]
+    messages = set()
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        status = client.ok("job", {"action": "status", "job_id": job_id})
+        if status.get("message"):
+            messages.add(status["message"])
+        if status["state"] != "running":
+            break
+        assert status.get("total") in (None, 24)
+        client.host.executor.pump_once(0.02)
+    assert status["state"] == "done", status
+    assert status["progress"] == 1.0 and status["current"] == 24 and status["total"] == 24
+    assert any(m.startswith("frame ") and m.endswith("/24") for m in messages), messages
+    final = client.ok("job", {"action": "result", "job_id": job_id})["result"]
+    assert len(final["frames"]) == 24
+    assert final["frames"][0]["bbox_min"] != final["frames"][-1]["bbox_min"]
+    assert hou.frame() == 1
+
+
 # -- problems ------------------------------------------------------------------------
 
 
@@ -249,6 +411,72 @@ def test_problems_locked_hda_is_opaque(client):
 def test_problems_root_errors(client):
     assert client.error("problems", {"root": "/obj/none"})["code"] == "node_not_found"
     assert client.error("problems", {"limit": 0})["code"] == "invalid_argument"
+
+
+# -- review 10 §5 ------------------------------------------------------------------
+
+
+def test_problems_cook_uncooked_over_a_dop_network(client):
+    dopnet = hou.node("/obj").createNode("dopnet", "sim")
+    obj = dopnet.createNode("rbdobject", "rbd")
+    obj.parm("soppath").set("/obj/nowhere/OUT")
+    solver = dopnet.createNode("rigidbodysolver", "solver")
+    solver.setInput(0, obj)
+    out = dopnet.createNode("output", "out")
+    out.setInput(0, solver)
+    out.setDisplayFlag(True)
+    quiet = client.ok("problems", {"root": dopnet.path()})
+    assert "cooked" not in quiet
+    assert out.needsToCook()
+    cooked = client.ok("problems", {"root": dopnet.path(), "cook_uncooked": True})
+    # Every DOP under the network is cooked; the dopnet object itself is not.
+    assert cooked["cooked"] == cooked["nodes_scanned"] - 1 >= 3
+    assert cooked["nodes_scanned"] == quiet["nodes_scanned"]
+    assert [(r["path"], r["kind"]) for r in cooked["problems"]] == [
+        (obj.path(), "broken_reference")
+    ]
+
+
+def test_problems_budget_holds_on_two_thousand_nodes(client):
+    geo = _geo()
+    nodes = [geo.createNode("box", "source")]
+    for i in range(1999):
+        node = geo.createNode("xform", f"n{i}")
+        if nodes:
+            node.setInput(0, nodes[-1])
+        if i % 100 == 0:
+            node.parm("scale").setExpression('ch("../nope/tx")')
+        nodes.append(node)
+    started = time.perf_counter()
+    whole = client.ok("problems", {"root": geo.path(), "limit": 100})
+    full_s = time.perf_counter() - started
+    print(f"\nproblems over 2,000 nodes: {full_s:.3f}s, incomplete={whole.get('incomplete')}")
+    assert whole.get("incomplete") is not True
+    assert whole["nodes_scanned"] == 2001
+    assert whole["counts"]["broken_reference"] == 20
+    assert full_s < 10
+
+    # A tiny budget (half of timeout_s) stops early, and the cursor finishes the walk.
+    started = time.perf_counter()
+    first = client.ok("problems", {"root": geo.path(), "timeout_s": 0.05, "limit": 100})
+    tiny_s = time.perf_counter() - started
+    assert tiny_s < max(1.0, full_s), (tiny_s, full_s)
+
+    def refs(result):
+        return sum(1 for row in result["problems"] if row["kind"] == "broken_reference")
+
+    scanned, page, seen = first["nodes_scanned"], first, refs(first)
+    while page.get("next_cursor"):
+        page = client.ok(
+            "problems",
+            {"root": geo.path(), "timeout_s": 0.05, "limit": 100, "cursor": page["next_cursor"]},
+        )
+        if page.get("node_offset") is not None and page["node_offset"] >= scanned:
+            scanned += page["nodes_scanned"]
+        seen += refs(page)
+    assert first.get("incomplete") is True, first
+    assert scanned == 2001
+    assert seen == 20
 
 
 # -- stale errors after the cause is fixed (review 07, papercut 1) -------------------

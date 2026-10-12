@@ -11,16 +11,17 @@ dependency is a design change, so it goes in the bible first.
 pyproject.toml                 # hatchling; console scripts hocuspocus, hocuspocus-mcp; ruff + pytest config
 src/hocuspocus/
   __init__.py  version.py
-  cli.py                       # install-houdini, uninstall-houdini, doctor, client-config, docs, version
+  cli.py                       # install-houdini, uninstall-houdini, launch, doctor, client-config, docs, version
   tools/                       # shared by host and bridge; stdlib only
     catalog.py                 #   the single source of truth for the tool surface
     errors.py                  #   error codes and ToolError
     docs.py                    #   renders docs/tools.md; tools/list size; example validator
     paths.py                   #   state dir (instances/, logs/, captures/)
+    budget.py                  #   the response truncator (host and bridge)
   host/                        # INSIDE Houdini; stdlib only; imports hou lazily
     __init__.py                #   start(), stop(), status(), autostart()
     __main__.py                #   hython -m hocuspocus.host
-    config.py executor.py server.py dispatch.py runtime.py registry.py jobs.py budget.py undo.py
+    config.py executor.py server.py dispatch.py runtime.py registry.py jobs.py undo.py
     tools/                     #   one module per tool family, each registering with @tool
       registry.py _diag.py session.py hip.py code.py nodes.py network.py parms.py cook.py
       types.py geo.py visual.py state.py hda.py usd.py pdg.py events.py
@@ -69,7 +70,10 @@ macOS the path is `.venv/bin/...`.
    - A `description` of at most 80 words, with defaults stated.
    - `input_schema`, built with `_obj` / `_s` / `_enum` / ... and
      `additionalProperties: false`.
-   - An `output_schema` if the shape is stable.
+   - An `output_schema` if the shape is stable. The bridge declares it only when
+     `result_content` is `both` or `structured`; with the default `text` the model sees
+     just the description and the result JSON in the text block (BIBLE §4.1), so put
+     anything the model must know about the result in the description.
    - `read_only` / `destructive` / `idempotent`, `profile`, and `headless_ok`.
    - At least one entry in `examples`.
 
@@ -116,8 +120,12 @@ macOS the path is `.venv/bin/...`.
    - The description stays under the word cap.
    - The schema shape and annotations are valid.
    - The examples validate.
-   - The serialised `tools/list` result (full profile: names, descriptions, input and
-     output schemas, annotations) stays at 44,000 bytes or less; the test prints the size.
+   - The serialised `tools/list` result stays at 44,000 bytes or less
+     (`test_tools_list_budget`). It measures the largest shape a client can receive: the
+     full profile with `result_content = "both"`, so output schemas count even though the
+     `text` default leaves them out. The test prints the core, full and text-default
+     sizes. When a new tool pushes it over, shorten descriptions in the output schemas
+     before cutting words the model needs from the tool description.
    - `docs/tools.md` is current.
 
    `tests/unit/test_host_tools.py` checks that every `@tool` name exists in the
@@ -277,3 +285,20 @@ After the first PyPI release, update the install instructions in `README.md`,
   integration tier before you merge anything that touches `host/`.
 - Never commit test or runtime state (`.hocuspocus/`, captures, `__pycache__`).
 - When a milestone from BIBLE §14 lands, add a line to `docs/redesign/progress.md`.
+
+### Several people, one checkout
+
+When several people or agents commit from the same working tree (as the 1.1 streams
+did), the index is shared and a commit takes whatever is staged, including someone
+else's half-finished files or an index read before their last commit:
+
+- Stage only your own changes, by explicit path (`git add docs/BIBLE.md src/...`) or
+  hunk by hunk with `git add -p`. Never `git add -A`, `git add .` or `git commit -a`.
+- Run `git status` and `git diff --cached` right before committing, and never commit
+  from a stale index: if a file you edited was committed or changed by someone else
+  since you read it, re-read it and reapply your edit on top. Committing an old copy
+  silently reverts their commit (1.1 needed `1d21a40` and `51500d8` to restore such
+  reverts).
+- Keep shared files such as `docs/BIBLE.md` and `docs/tools.md` to small, separate
+  commits, and regenerate `docs/tools.md` from the current catalogue just before
+  committing it.

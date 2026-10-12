@@ -73,7 +73,7 @@ def test_undo_labels():
         make_label("houdini_python", {"code": "x", "undo_label": "build rig"})
         == "HocusPocus: houdini_python build rig"
     )
-    assert len(make_label("t", {"path": "/" + "a" * 500})) <= 120
+    assert len(make_label("t", {"path": "/" + "a" * 500})) <= 100
     assert summarize("x", None) == ""
 
 
@@ -179,6 +179,33 @@ def test_job_manager_lifecycle():
     with pytest.raises(ToolError) as info:
         jobs.status("missing")
     assert info.value.code == "job_not_found"
+
+
+def test_job_set_progress_snapshot():
+    jobs = JobManager(InlineExecutor())
+    gate = threading.Event()
+    seen = threading.Event()
+
+    def work(ctx):
+        ctx.set_progress(37, 96, "frame 37/96")
+        seen.set()
+        gate.wait(5)
+        return {"ok": 1}
+
+    job = jobs.start("cook", work)
+    seen.wait(5)
+    status = jobs.status(job.id)
+    assert status["current"] == 37 and status["total"] == 96
+    assert status["progress"] == round(37 / 96, 4)
+    assert status["message"] == "frame 37/96"
+    gate.set()
+    job.done_event.wait(5)
+    status = jobs.status(job.id)
+    assert status["state"] == "done"
+    assert status["progress"] == 1.0 and status["current"] == 96
+
+    job.set_progress(3, 0)
+    assert job.status()["total"] == 0 and job.status()["progress"] == 1.0
 
 
 def test_run_with_fallback_queues_a_retry_and_never_raises():
