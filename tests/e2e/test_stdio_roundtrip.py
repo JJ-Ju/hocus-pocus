@@ -200,7 +200,11 @@ def test_bridge_launch_starts_in_the_work_dir(hython, tmp_path):
     try:
         launched, status, offline = anyio.run(run)
         assert launched.is_error is False, launched.content
+        block = launched.structured_content["launched"]
+        assert isinstance(block["outlives_server"], bool) and block["note"]
         connected = status.structured_content["connected"]
+        (row,) = [i for i in status.structured_content["instances"] if i["selected"]]
+        assert isinstance(row["launched_by"], int) and row["launched_by"] != connected["pid"]
         assert connected["env"]["HIP"] == work.as_posix()
         assert connected["env"]["JOB"] == work.as_posix()
         assert connected["hip"]["path"] == f"{work.as_posix()}/untitled.hip"
@@ -225,3 +229,85 @@ def test_bridge_launch_starts_in_the_work_dir(hython, tmp_path):
                     capture_output=True,
                     check=False,
                 )
+
+
+def _stop(pid: int, entry: Path) -> None:
+    """Stop a hython this test launched: over HTTP when it still answers, else by pid."""
+    from hocuspocus.bridge.client import HostClient
+
+    try:
+        info = json.loads(entry.read_text(encoding="utf-8"))
+        HostClient(info["port"], info["token"]).shutdown()
+        return
+    except Exception:  # noqa: BLE001 - fall back to killing that pid
+        pass
+    subprocess.run(
+        ["taskkill", "/F", "/PID", str(pid)]
+        if sys.platform == "win32"
+        else ["kill", "-9", str(pid)],
+        capture_output=True,
+        check=False,
+    )
+
+
+def test_a_later_bridge_names_the_server_that_launched_houdini(hython, tmp_path):
+    """Review 11 B1: bridge 1 launches a headless Houdini and exits; once that Houdini is
+    gone, bridge 2's houdini_offline names it and bridge 1's pid, with the keep-alive hint."""
+    import anyio
+    from mcp import Client
+    from mcp.client.stdio import StdioServerParameters
+
+    state = tmp_path / "state"
+    env = dict(os.environ)
+    env.update(
+        {
+            "PYTHONPATH": str(SRC),
+            "HOCUSPOCUS_STATE_DIR": str(state),
+            "HOCUSPOCUS_WORK_DIR": str(tmp_path / "work"),
+            "HOCUSPOCUS_HFS": str(hython.parent.parent),
+            "HOUDINI_USER_PREF_DIR": (tmp_path / "prefs" / "houdini__HVER__").as_posix(),
+            "PYTHONDONTWRITEBYTECODE": "1",
+        }
+    )
+    params = StdioServerParameters(
+        command=sys.executable, args=["-m", "hocuspocus.bridge"], env=env, cwd=str(tmp_path)
+    )
+
+    async def launch():
+        async with Client(params, read_timeout_seconds=180) as client:
+            return await client.call_tool(
+                "houdini_connect", {"launch": {"mode": "headless", "wait_s": 150}}
+            )
+
+    async def later_call():
+        async with Client(params, read_timeout_seconds=60) as client:
+            return await client.call_tool("node_find", {"root": "/obj"})
+
+    pid = None
+    try:
+        launched = anyio.run(launch)
+        assert launched.is_error is False, launched.content
+        pid = launched.structured_content["launched"]["pid"]
+        entry = state / "instances" / f"{pid}.json"
+        if entry.is_file():  # it outlived bridge 1 here: the registry names bridge 1
+            launcher = json.loads(entry.read_text(encoding="utf-8"))["launched_by"]
+            assert isinstance(launcher, int) and launcher != pid
+            _stop(pid, entry)
+        from hocuspocus.bridge.instances import pid_alive
+
+        for _ in range(100):
+            if not pid_alive(pid):
+                break
+            time.sleep(0.1)
+        offline = anyio.run(later_call)
+        error = offline.structured_content
+        assert offline.is_error is True and error["code"] == "houdini_offline", error
+        assert (
+            f"Houdini pid {pid}" in error["message"]
+            and "HocusPocus server (pid" in error["message"]
+        )
+        assert "keep one MCP session open" in error["hint"]
+        assert error["detail"]["pid"] == pid and isinstance(error["detail"]["launched_by"], int)
+    finally:
+        if pid is not None:
+            _stop(pid, state / "instances" / f"{pid}.json")
