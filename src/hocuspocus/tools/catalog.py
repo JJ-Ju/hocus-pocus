@@ -639,8 +639,10 @@ _NODES: tuple[ToolSpec, ...] = (
         name="node_edit",
         description=(
             "Change node properties in one undo step: rename, flags, bypass, color, comment, "
-            "position, and lock (false allows editing a locked HDA's contents). A rename returns "
-            "old_path and path. Use parm_set for parameter values and node_connect for wiring."
+            "position, and lock (false allows editing a locked HDA's contents). spare_parms adds "
+            "{name, type: float|int|string|toggle|menu|button|vector|color, label, default, size, "
+            "min, max, menu_items [{token, label}], folder, help} or removes spare parms by name; "
+            "returns their paths. A rename returns old_path and path. Use parm_set for values."
         ),
         input_schema=_obj(
             {
@@ -657,6 +659,10 @@ _NODES: tuple[ToolSpec, ...] = (
                             "position": _xy("[x, y]"),
                             "lock": {"type": "boolean"},
                             "bypass": {"type": "boolean"},
+                            # Review 11 B9; entries are validated by the host (parms.py).
+                            "spare_parms": _obj(
+                                {"add": _arr(_t("object")), "remove": _arr(_t("string"))}
+                            ),
                         },
                         ("path",),
                     ),
@@ -670,6 +676,16 @@ _NODES: tuple[ToolSpec, ...] = (
         examples=(
             {"items": [{"path": "/obj/geo1/box1", "name": "base_box"}]},
             {"items": [{"path": "/obj/geo1/null1", "color": [1, 0, 0], "comment": "OUT"}]},
+            {
+                "items": [
+                    {
+                        "path": "/obj/geo1/wrangle1",
+                        "spare_parms": {
+                            "add": [{"name": "glue", "type": "float", "default": 1, "max": 10}]
+                        },
+                    }
+                ]
+            },
         ),
     ),
     ToolSpec(

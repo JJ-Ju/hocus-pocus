@@ -1007,3 +1007,98 @@ def test_batch_rollback_reports_a_failed_compensation(client, monkeypatch):
         {"items": [{"path": box.path(), "comment": "x"}, {"path": "/obj/geo1/nope"}]},
     )
     assert error["detail"]["rolled_back"] is False
+
+
+# -- node_edit spare_parms (review 11 B9) ------------------------------------------
+
+
+def test_edit_adds_and_removes_spare_parms(client):
+    geo = hou.node("/obj").createNode("geo", "geo1")
+    grid = geo.createNode("grid", "grid1")
+    wrangle = geo.createNode("attribwrangle", "w")
+    wrangle.setInput(0, grid)
+    wrangle.parm("snippet").set('f@glue = chf("glue");\ni@mode = chi("mode");')
+    spare = {
+        "add": [
+            {"name": "glue", "type": "float", "label": "Glue", "default": 2.5, "min": 0,
+             "max": 10, "help": "Glue strength.", "folder": "Controls"},
+            {"name": "mode", "type": "menu", "menu_items": [
+                {"token": "soft", "label": "Soft"}, {"token": "hard", "label": "Hard"}],
+             "default": "hard", "folder": "Controls"},
+            {"name": "enable", "type": "toggle", "default": True},
+            {"name": "offset", "type": "vector", "default": [0, 1, 0]},
+            {"name": "tint", "type": "color"},
+            {"name": "reset", "type": "button"},
+        ]
+    }  # fmt: skip
+    result = client.ok("node_edit", {"items": [{"path": wrangle.path(), "spare_parms": spare}]})
+    added = result["results"][0]["spare_parms"]["added"]
+    assert added == [
+        f"{wrangle.path()}/{n}" for n in ("glue", "mode", "enable", "offset", "tint", "reset")
+    ]
+    glue = wrangle.parm("glue")
+    assert glue.eval() == 2.5 and glue.isSpare()
+    template = glue.parmTemplate()
+    assert (template.minValue(), template.maxValue(), template.help()) == (0, 10, "Glue strength.")
+    assert wrangle.parm("mode").evalAsString() == "hard"
+    assert wrangle.parm("enable").eval() == 1
+    assert wrangle.parmTuple("offset").eval() == (0.0, 1.0, 0.0)
+    assert len(wrangle.parmTuple("tint")) == 3
+    assert wrangle.parmTemplateGroup().findFolder("Controls") is not None
+    geometry = wrangle.geometry()
+    assert geometry.points()[0].attribValue("glue") == 2.5  # chf("glue") resolves
+    assert geometry.points()[0].attribValue("mode") == 1
+    got = client.ok("parm_get", {"paths": [f"{wrangle.path()}/glue"], "include": ["template"]})
+    assert got["parms"][0]["template"]["max"] == 10
+    removed = client.ok(
+        "node_edit",
+        {"items": [{"path": wrangle.path(), "spare_parms": {"remove": ["glue", "tint"]}}]},
+    )
+    assert removed["results"][0]["spare_parms"]["removed"] == [
+        f"{wrangle.path()}/glue",
+        f"{wrangle.path()}/tint",
+    ]
+    assert wrangle.parm("glue") is None and wrangle.parm("mode") is not None
+    undone = client.ok("undo", {"action": "undo"})
+    assert undone["performed"] and wrangle.parm("glue") is not None
+
+
+def test_edit_spare_parms_validation_and_rollback(client):
+    geo = hou.node("/obj").createNode("geo", "geo1")
+    null = geo.createNode("null", "CTRL")
+    error = client.error(
+        "node_edit",
+        {
+            "items": [
+                {"path": null.path(), "spare_parms": {"add": [{"name": "a", "type": "float"}]}},
+                {"path": null.path(), "spare_parms": {"add": [{"name": "b", "type": "ramp"}]}},
+            ]
+        },
+    )
+    assert error["code"] == "invalid_argument" and "float" in error["hint"]
+    assert error["detail"]["rolled_back"] is True and null.parm("a") is None
+    for bad, code in (
+        ({"add": [{"name": "1x", "type": "float"}]}, "invalid_argument"),
+        ({"add": [{"name": "copyinput", "type": "float"}]}, "name_collision"),
+        ({"add": [{"name": "m", "type": "menu"}]}, "invalid_argument"),
+        ({"add": [{"name": "f", "type": "float", "min": 2, "max": 1}]}, "invalid_argument"),
+        ({"add": [{"name": "f", "type": "float", "default": "x"}]}, "invalid_value"),
+        ({"remove": ["copyinput"]}, "invalid_argument"),
+        ({"remove": ["nope"]}, "parm_not_found"),
+    ):
+        error = client.error("node_edit", {"items": [{"path": null.path(), "spare_parms": bad}]})
+        assert error["code"] == code, (bad, error)
+    _geo, mountain = make_locked_mountain()
+    inner = mountain.children()[0].path()
+    add = {"add": [{"name": "g", "type": "float"}]}
+    error = client.error("node_edit", {"items": [{"path": inner, "spare_parms": add}]})
+    assert error["code"] == "locked"
+
+
+def test_parm_not_found_on_a_null_points_at_spare_parms(client):
+    geo = hou.node("/obj").createNode("geo", "geo1")
+    null = geo.createNode("null", "CTRL")
+    error = client.error("parm_set", {"items": [{"path": f"{null.path()}/glue", "value": 1}]})
+    assert error["code"] == "parm_not_found" and "spare_parms" in error["hint"]
+    error = client.error("parm_get", {"paths": ["/obj/geo1/glue"]})
+    assert "spare_parms" in error["hint"]

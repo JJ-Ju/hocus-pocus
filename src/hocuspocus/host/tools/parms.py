@@ -564,6 +564,9 @@ def parm_not_found(node: Any, name: str) -> ToolError:
             hint = f"Did you mean {first}?"
     else:
         hint = "List the node's parm names with node_info (include_defaults: true)."
+    with contextlib.suppress(Exception):
+        if node.type().nameComponents()[2] in CONTROL_NODE_TYPES:
+            hint = f"{hint} {SPARE_PARMS_HINT}"
     return ToolError(
         "parm_not_found",
         f"No parm or parm tuple '{name}' on {node.path()}.",
@@ -1381,3 +1384,279 @@ def parm_set(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     if partial:
         out["failed"] = failed
     return out
+
+
+# -- spare parms (node_edit spare_parms; review 11 B9) -----------------------------------
+
+SPARE_TYPES = ("float", "int", "string", "toggle", "menu", "button", "vector", "color")
+SPARE_KEYS = frozenset(
+    ("name", "type", "label", "default", "size", "min", "max", "menu_items", "folder", "help")
+)
+_PARM_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+SPARE_HINT = (
+    "spare_parms is {add: [{name, type: " + "|".join(SPARE_TYPES) + ", label?, default?, "
+    "size?, min?, max?, menu_items?: [{token, label}], folder?, help?}], remove: [names]}."
+)
+SPARE_PARMS_HINT = "To add a control parm, use node_edit spare_parms."
+"""Appended to ``parm_not_found`` on nodes that hold controls (null, subnet, geo)."""
+CONTROL_NODE_TYPES = frozenset(("null", "subnet", "geo"))
+
+
+def _spare_bad(message: str) -> ToolError:
+    return ToolError("invalid_argument", message, hint=SPARE_HINT)
+
+
+def _spare_values(default: Any, kind: str, size: int, where: str) -> tuple[Any, ...]:
+    """Default values of a float/int/string/vector/color spare parm, one per component."""
+    if default is None:
+        fill: Any = 1.0 if kind == "color" else "" if kind == "string" else 0
+        values = [fill] * size
+    else:
+        values = default if isinstance(default, list) else [default]
+        if len(values) == 1 and size > 1:
+            values = values * size
+    if len(values) != size:
+        raise ToolError(
+            "invalid_value", f"{where}: default has {len(values)} values; size is {size}."
+        )
+    if kind == "string":
+        if not all(isinstance(v, str) for v in values):
+            raise ToolError("invalid_value", f"{where}: a string default must be text.")
+        return tuple(values)
+    if not all(_is_number(v) for v in values):
+        raise ToolError("invalid_value", f"{where}: a {kind} default must be numbers.")
+    if kind == "int":
+        if not all(float(v).is_integer() for v in values):
+            raise ToolError("invalid_value", f"{where}: an int default must be whole numbers.")
+        return tuple(int(v) for v in values)
+    return tuple(float(v) for v in values)
+
+
+def _spare_default(spec: dict[str, Any], kind: str, size: int, where: str) -> Any:
+    default = spec.get("default")
+    if kind == "button":
+        if default is not None:
+            raise _spare_bad(f"{where}: a button takes no default.")
+        return None
+    if kind == "toggle":
+        if default is not None and not isinstance(default, bool):
+            raise ToolError("invalid_value", f"{where}: a toggle default is true or false.")
+        return bool(default)
+    if kind == "menu":
+        tokens = [i["token"] for i in spec["menu_items"]]
+        if default is None:
+            return 0
+        if isinstance(default, str) and default in tokens:
+            return tokens.index(default)
+        if _is_number(default) and float(default).is_integer() and 0 <= default < len(tokens):
+            return int(default)
+        raise ToolError(
+            "invalid_value",
+            f"{where}: default {default!r} is not one of the menu tokens.",
+            hint=f"Tokens: {', '.join(tokens)} (or an index).",
+        )
+    return _spare_values(default, kind, size, where)
+
+
+def _spare_template(spec: Any, where: str) -> tuple[str, Any, str | None]:
+    """Validate one ``add`` entry; return ``(name, hou.ParmTemplate, folder label)``."""
+    import hou
+
+    if not isinstance(spec, dict):
+        raise _spare_bad(f"{where} must be an object.")
+    unknown = set(spec) - SPARE_KEYS
+    if unknown:
+        raise _spare_bad(f"{where}: unexpected keys {sorted(unknown)}.")
+    name = spec.get("name")
+    if not isinstance(name, str) or not _PARM_NAME.match(name):
+        raise _spare_bad(f"{where}: {name!r} is not a parm name (letters, digits and _).")
+    kind = spec.get("type")
+    if kind not in SPARE_TYPES:
+        raise _spare_bad(f"{where}: type must be one of {', '.join(SPARE_TYPES)}; got {kind!r}.")
+    label = spec.get("label", name)
+    folder = spec.get("folder")
+    help_text = spec.get("help")
+    for key, value in (("label", label), ("folder", folder), ("help", help_text)):
+        if value is not None and not isinstance(value, str):
+            raise _spare_bad(f"{where}: {key} must be a string.")
+    size = spec.get("size", 3 if kind in ("vector", "color") else 1)
+    if isinstance(size, bool) or not isinstance(size, int) or not 1 <= size <= 4:
+        raise _spare_bad(f"{where}: size must be an integer from 1 to 4.")
+    if size != 1 and kind in ("toggle", "menu", "button"):
+        raise _spare_bad(f"{where}: a {kind} has size 1.")
+    low, high = spec.get("min"), spec.get("max")
+    for key, value in (("min", low), ("max", high)):
+        if value is not None and (kind not in ("float", "int", "vector") or not _is_number(value)):
+            raise _spare_bad(f"{where}: {key} is a number, for float, int and vector parms.")
+    if low is not None and high is not None and low > high:
+        raise _spare_bad(f"{where}: min {low} is above max {high}.")
+    items = spec.get("menu_items")
+    if kind == "menu":
+        if (
+            not isinstance(items, list)
+            or not items
+            or not all(isinstance(i, dict) and isinstance(i.get("token"), str) for i in items)
+        ):
+            raise _spare_bad(f"{where}: a menu needs menu_items: [{{token, label}}, ...].")
+    elif items is not None:
+        raise _spare_bad(f"{where}: menu_items is for type menu.")
+    default = _spare_default(spec, kind, size, where)
+    if kind in ("float", "vector", "color"):
+        extra: dict[str, Any] = {}
+        if kind == "vector":
+            extra["naming_scheme"] = hou.parmNamingScheme.XYZW
+        elif kind == "color":
+            extra["naming_scheme"] = hou.parmNamingScheme.RGBA
+            extra["look"] = hou.parmLook.ColorSquare
+        template = hou.FloatParmTemplate(
+            name,
+            label,
+            size,
+            default_value=default,
+            min=0.0 if low is None else float(low),
+            max=(10.0 if kind == "vector" else 1.0) if high is None else float(high),
+            **extra,
+        )
+    elif kind == "int":
+        template = hou.IntParmTemplate(
+            name,
+            label,
+            size,
+            default_value=default,
+            min=0 if low is None else int(low),
+            max=10 if high is None else int(high),
+        )
+    elif kind == "string":
+        template = hou.StringParmTemplate(name, label, size, default_value=default)
+    elif kind == "toggle":
+        template = hou.ToggleParmTemplate(name, label, default_value=default)
+    elif kind == "menu":
+        template = hou.MenuParmTemplate(
+            name,
+            label,
+            tuple(i["token"] for i in items),
+            menu_labels=tuple(str(i.get("label") or i["token"]) for i in items),
+            default_value=default,
+        )
+    else:
+        template = hou.ButtonParmTemplate(name, label)
+    if help_text:
+        template.setHelp(help_text)
+    return name, template, folder
+
+
+def plan_spare_parms(node: Any, spec: Any) -> dict[str, Any]:
+    """Validate ``node_edit``'s ``spare_parms`` against ``node`` without changing it."""
+    if not isinstance(spec, dict) or not spec or set(spec) - {"add", "remove"}:
+        raise _spare_bad("spare_parms must be an object with add and/or remove.")
+    adds = spec.get("add") or []
+    removes = spec.get("remove") or []
+    if not isinstance(adds, list) or not isinstance(removes, list):
+        raise _spare_bad("spare_parms add and remove must be lists.")
+    if not all(isinstance(n, str) and n for n in removes):
+        raise _spare_bad("spare_parms.remove lists parm names.")
+    remove_tuples: list[Any] = []
+    for name in removes:
+        target = node.parm(name) or node.parmTuple(name)
+        if target is None:
+            raise parm_not_found(node, name)
+        ptuple = target.tuple() if isinstance(target, _parm_class()) else target
+        if not ptuple.isSpare():
+            raise _spare_bad(
+                f"{node.path()}/{ptuple.name()} belongs to the {node.type().name()} type; only "
+                "spare parms can be removed."
+            )
+        if all(t.name() != ptuple.name() for t in remove_tuples):
+            remove_tuples.append(ptuple)
+    removing = {t.name() for t in remove_tuples} | {p.name() for t in remove_tuples for p in t}
+    templates = []
+    seen: set[str] = set()
+    for i, entry in enumerate(adds):
+        name, template, folder = _spare_template(entry, f"spare_parms.add[{i}]")
+        if name in seen:
+            raise _spare_bad(f"spare_parms.add[{i}]: {name!r} is added twice.")
+        seen.add(name)
+        if (node.parm(name) or node.parmTuple(name)) is not None and name not in removing:
+            raise ToolError(
+                "name_collision",
+                f"{node.path()} already has a parm {name!r}.",
+                hint="Pick another name, or remove that spare parm in the same call.",
+            )
+        templates.append((name, template, folder))
+    return {"add": templates, "remove": remove_tuples}
+
+
+def _parm_class() -> Any:
+    import hou
+
+    return hou.Parm
+
+
+def apply_spare_parms(node: Any, plan: dict[str, Any], rollback: Any) -> dict[str, Any]:
+    """Apply a :func:`plan_spare_parms` plan with ``setParmTemplateGroup``. On rollback the
+    old template group comes back, and so do the removed parms' values."""
+    import hou
+
+    before = node.parmTemplateGroup()
+    saved = []
+    for ptuple in plan["remove"]:
+        for parm in ptuple:
+            with contextlib.suppress(Exception):
+                keys = tuple(parm.keyframes())
+                saved.append((parm.name(), keys, None if keys else _plain_value(parm)))
+
+    def restore() -> None:
+        node.setParmTemplateGroup(before)
+        for name, keys, value in saved:
+            parm = node.parm(name)
+            if parm is not None and keys:
+                parm.setKeyframes(keys)
+            elif parm is not None and value is not None:
+                parm.set(value)
+
+    group = node.parmTemplateGroup()
+    removed = []
+    for ptuple in plan["remove"]:
+        group.remove(ptuple.name())
+        removed.append(f"{node.path()}/{ptuple.name()}")
+    for _name, template, folder in plan["add"]:
+        if folder:
+            if group.findFolder(folder) is None:
+                group.append(hou.FolderParmTemplate(_folder_name(folder), folder))
+            group.appendToFolder(folder, template)
+        else:
+            group.append(template)
+    try:
+        node.setParmTemplateGroup(group)
+    except hou.PermissionError as exc:
+        raise ToolError(
+            "locked",
+            f"Cannot change the parms of {node.path()}: {hou_message(exc)}",
+            hint="Unlock the asset with node_edit lock: false first.",
+            hou_exception=hou_exception_text(exc),
+        ) from exc
+    except hou.Error as exc:
+        raise ToolError(
+            "invalid_argument",
+            f"Houdini refused the spare parms on {node.path()}: {hou_message(exc)}",
+            hint=SPARE_HINT,
+            hou_exception=hou_exception_text(exc),
+        ) from exc
+    rollback.add(restore)
+    return {"added": [f"{node.path()}/{name}" for name, _t, _f in plan["add"]], "removed": removed}
+
+
+def _plain_value(parm: Any) -> Any:
+    kind = _kind(parm.parmTemplate())
+    if kind in ("button", "folder", "label", "data"):
+        return None
+    if kind == "string":
+        return parm.unexpandedString()
+    if kind == "ramp":
+        return parm.evalAsRamp()
+    return parm.eval()
+
+
+def _folder_name(label: str) -> str:
+    stem = re.sub(r"[^A-Za-z0-9_]", "_", label).strip("_").lower() or "folder"
+    return f"hp_{stem}"

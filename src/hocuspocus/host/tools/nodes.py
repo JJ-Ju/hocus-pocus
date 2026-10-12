@@ -1384,6 +1384,13 @@ def _edit_one(item: Any, index: int, rollback: Rollback) -> dict[str, Any]:
         raise bad_arg("'comment' must be a string.")
     position = item.get("position")
     xy = arg_xy(position, "position") if position is not None else None
+    spare_plan = None
+    if item.get("spare_parms") is not None:
+        from .parms import plan_spare_parms  # lazy: parms imports this module
+
+        # A locked asset's own instance takes spare parms (the wrangle "Create spare
+        # parameters" button does that); nodes inside a locked asset were refused above.
+        spare_plan = plan_spare_parms(node, item["spare_parms"])
     # -- apply ---------------------------------------------------------------------
     try:
         if name is not None:
@@ -1418,6 +1425,11 @@ def _edit_one(item: Any, index: int, rollback: Rollback) -> dict[str, Any]:
         old_pos = node.position()
         node.setPosition(xy)
         rollback.add(lambda: node.setPosition(old_pos))
+    spare = None
+    if spare_plan is not None:
+        from .parms import apply_spare_parms
+
+        spare = apply_spare_parms(node, spare_plan, rollback)
     if lock is not None:
         was_locked = _is_locked_hda(node)
         if lock and not was_locked:
@@ -1431,6 +1443,8 @@ def _edit_one(item: Any, index: int, rollback: Rollback) -> dict[str, Any]:
         extra["old_path"] = old_path
     if lock is not None:
         extra["hda"] = hda_block(node)
+    if spare is not None:
+        extra["spare_parms"] = spare
     return {"node": node, "extra": extra}
 
 
