@@ -313,6 +313,18 @@ def test_read_only_allows_dry_run_that_reports_unchanged(stack):
     assert stack["ctx"].scene.dirty is False
 
 
+def test_max_response_bytes_reaches_tools(stack):
+    d = stack["dispatcher"]
+    seen = []
+    d.lookup = lambda name: HostTool(
+        "peek", lambda a, c: seen.append(c.extras["max_response_bytes"]) or {}, read_only=True
+    )
+    d.call("peek", {}, None, 4096)
+    d.call("peek", {}, None)
+    d.call("peek", {}, None, "junk")
+    assert seen == [4096, 16384, 16384]
+
+
 def test_houdini_busy_through_real_executor(stack):
     executor = MainThreadExecutor("headless", main_thread_ident=threading.get_ident())
     executor.start()

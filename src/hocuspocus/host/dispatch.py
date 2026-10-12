@@ -117,7 +117,21 @@ class Dispatcher:
                 return float(candidate)
         return float(self.ctx.config.default_timeout_s)
 
-    def call(self, tool: Any, args: Any, timeout_s: Any = None) -> dict[str, Any]:
+    def response_budget(self, max_response_bytes: Any) -> int:
+        if (
+            isinstance(max_response_bytes, int)
+            and not isinstance(max_response_bytes, bool)
+            and max_response_bytes > 0
+        ):
+            return max_response_bytes
+        return int(getattr(self.ctx.config, "max_response_bytes", 16384))
+
+    def call(
+        self, tool: Any, args: Any, timeout_s: Any = None, max_response_bytes: Any = None
+    ) -> dict[str, Any]:
+        """Run ``tool``. ``max_response_bytes`` (from the request envelope; the config
+        value when absent) is exposed to the tool as ``ctx.extras["max_response_bytes"]``
+        so paged tools can cap rows to the client's budget."""
         started = time.perf_counter()
         undo_label: str | None = None
         try:
@@ -158,7 +172,7 @@ class Dispatcher:
                 raise _read_only_error(tool)
             if mutating and not read_only_dry_run:
                 undo_label = make_label(tool, args)
-            work = self._work(impl, args, undo_label)
+            work = self._work(impl, args, undo_label, self.response_budget(max_response_bytes))
             if impl.main_thread:
                 result = self.ctx.executor.run(work, self.effective_timeout(args, timeout_s))
             else:
@@ -180,11 +194,14 @@ class Dispatcher:
             )
 
     def _work(
-        self, impl: HostTool, args: dict[str, Any], undo_label: str | None
+        self, impl: HostTool, args: dict[str, Any], undo_label: str | None, budget: int
     ) -> Callable[[], Any]:
         ctx = self.ctx
 
         def run() -> Any:
+            # Set here, not in call(): main-thread work runs one call at a time, so the
+            # value cannot be overwritten by a concurrent request while the tool runs.
+            ctx.extras["max_response_bytes"] = budget
             if undo_label is None:
                 return impl.fn(args, ctx)
             clean_events = ctx.scene.clean_events
