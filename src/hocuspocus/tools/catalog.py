@@ -770,19 +770,20 @@ _NODES: tuple[ToolSpec, ...] = (
         name="network_describe",
         description=(
             "Read a whole network in one call as Houdini's hou.data childrenAsData format: types, "
-            "non-default parms, expressions, wiring, flags, depth levels deep (default 1). Locked "
-            "HDAs appear as {type, hda_locked} unless recurse_locked. Pages stop at the "
-            "response budget (truncated, next_cursor). format python returns asCode for a single "
-            "node. The data result can be passed to network_build."
+            "non-default parms, expressions, wiring, flags, depth levels deep (default 1; 2 for "
+            "outline). Locked HDAs appear as {type, hda_locked} unless recurse_locked. Pages stop "
+            "at the response budget (truncated, next_cursor). format outline is a compact tree "
+            "(path, name, type, children_count, display, errors); python returns asCode for a "
+            "single node. The data result can be passed to network_build."
         ),
         input_schema=_obj(
             {
                 "root": _s(),
-                "depth": _i(None, minimum=1, default=1),
+                "depth": _i(None, minimum=1),
                 "include_defaults": _b(False),
                 "include_positions": _b(False),
                 "recurse_locked": _b(False),
-                "format": _enum(("data", "python"), "data"),
+                "format": _enum(("data", "python", "outline"), "data"),
                 "cursor": _cursor(),
             },
             ("root",),
@@ -791,6 +792,7 @@ _NODES: tuple[ToolSpec, ...] = (
         examples=(
             {"root": "/obj/geo1"},
             {"root": "/obj/geo1", "depth": 2, "include_positions": True},
+            {"root": "/", "format": "outline"},
         ),
     ),
     ToolSpec(

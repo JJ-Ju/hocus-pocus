@@ -386,3 +386,68 @@ def test_describe_depth_is_budgeted_and_paged(client, host):
     finally:
         host.config.max_response_bytes = saved
     assert seen == [f"sub{i:02d}" for i in range(12)]
+
+
+# -- outline (review 11 B11) -------------------------------------------------------
+
+
+def test_describe_outline_is_a_compact_tree(client):
+    geo = hou.node("/obj").createNode("geo", "city")
+    box = geo.createNode("box", "base")
+    out = geo.createNode("null", "OUT")
+    out.setInput(0, box)
+    out.setDisplayFlag(True)
+    broken = geo.createNode("attribwrangle", "broken")
+    broken.parm("snippet").set("x(")
+    with pytest.raises(hou.OperationFailed):
+        broken.cook(force=True)
+    terrain = hou.node("/obj").createNode("geo", "terrain")
+    mountain = terrain.createNode("mountain", "peaks")
+    mountain.setInput(0, terrain.createNode("grid", "grid1"))
+    mountain.cook(force=True)
+    result = client.ok("network_describe", {"root": "/obj", "format": "outline"})
+    assert result["format"] == "outline" and result["root"] == "/obj"
+    nodes = {n["name"]: n for n in result["nodes"]}
+    city = nodes["city"]
+    assert city == {
+        "path": "/obj/city",
+        "name": "city",
+        "type": "geo",
+        "children_count": 3,
+        "display": "/obj/city/OUT",
+        "errors": 0,
+        "children": city["children"],
+    }
+    kids = {n["name"]: n for n in city["children"]}  # depth 2 by default for outline
+    assert kids["broken"]["errors"] >= 1
+    assert set(kids["base"]) == {"path", "name", "type", "children_count", "errors"}
+    assert "parms" not in kids["base"] and "inputs" not in kids["base"]
+    peaks = next(n for n in nodes["terrain"]["children"] if n["name"] == "peaks")
+    assert peaks["hda_locked"] is True and "children" not in peaks
+    assert result["node_count"] == 7
+    shallow = client.ok("network_describe", {"root": "/obj", "format": "outline", "depth": 1})
+    assert all("children" not in n for n in shallow["nodes"])
+    whole = client.ok("network_describe", {"root": "/", "format": "outline"})
+    assert "/obj" in [n["path"] for n in whole["nodes"]]
+
+
+def test_describe_outline_is_budgeted_and_paged(client, host):
+    geo = hou.node("/obj").createNode("geo", "geo1")
+    for index in range(80):
+        geo.createNode("null", f"a_rather_long_node_name_number_{index:03d}")
+    saved = host.config.max_response_bytes
+    host.config.max_response_bytes = 2048
+    try:
+        first = client.ok("network_describe", {"root": geo.path(), "format": "outline"})
+        assert first["truncated"] is True and first["next_cursor"]
+        names = [n["name"] for n in first["nodes"]]
+        cursor = first["next_cursor"]
+        while cursor:
+            page = client.ok(
+                "network_describe", {"root": geo.path(), "format": "outline", "cursor": cursor}
+            )
+            names += [n["name"] for n in page["nodes"]]
+            cursor = page.get("next_cursor")
+    finally:
+        host.config.max_response_bytes = saved
+    assert len(names) == 80 == len(set(names))
