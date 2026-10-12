@@ -451,3 +451,35 @@ def test_describe_outline_is_budgeted_and_paged(client, host):
     finally:
         host.config.max_response_bytes = saved
     assert len(names) == 80 == len(set(names))
+
+
+def test_build_accepts_to_index_by_input_name(client):
+    hou.node("/obj").createNode("geo", "g")
+    result = client.ok(
+        "network_build",
+        {
+            "parent": "/obj/g",
+            "data": {
+                "b": {"type": "box"},
+                "pts": {"type": "scatter", "inputs": [{"from": "b"}]},
+                "copy": {
+                    "type": "copytopoints",
+                    "inputs": [
+                        {"from": "b", "to_index": "input1"},
+                        {"from": "pts", "to_index": "input2"},
+                    ],
+                },
+            },
+        },
+    )
+    assert "/obj/g/copy" in result["created"]
+    copy = hou.node("/obj/g/copy")
+    assert [n.name() for n in copy.inputs()] == ["b", "pts"]
+    error = client.error(
+        "network_build",
+        {
+            "parent": "/obj/g",
+            "data": {"c2": {"type": "copytopoints", "inputs": [{"from": "b", "to_index": "nope"}]}},
+        },
+    )
+    assert error["code"] == "invalid_input"

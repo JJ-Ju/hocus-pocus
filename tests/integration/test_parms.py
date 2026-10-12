@@ -672,3 +672,118 @@ def test_node_create_parms_accept_parm_set_item_forms(client, scene):
     assert len(xf.parm("tx").keyframes()) == 2
     assert xf.parm("sx").expression() == 'ch("../box1/sizex")'
     assert hou.node(created["created"][1]).parm("numattr").eval() == 2
+
+
+# -- review 10 §5 gaps -------------------------------------------------------------
+
+
+def test_expression_with_animation_key_and_keep(client, scene):
+    tx = scene["xform"].parm("tx")
+    res = _set(client, {"path": tx.path(), "expression": "$F*2", "animation": "key"}, frame=10)
+    assert res["wrote_keyframe"] is True
+    assert [(k.frame(), k.expression()) for k in tx.keyframes()] == [(10.0, "$F*2")]
+    ty = scene["xform"].parm("ty")
+    _set(
+        client,
+        {"path": ty.path(), "keyframes": [{"frame": 1, "value": 0}, {"frame": 10, "value": 5}]},
+    )
+    res = _set(client, {"path": ty.path(), "expression": "$F*3", "animation": "keep"}, frame=10)
+    assert res["wrote_keyframe"] is False  # keep edits the key Houdini already had
+    keys = [(k.frame(), k.expression()) for k in ty.keyframes()]
+    assert keys[0][0] == 1.0 and keys[-1] == (10.0, "$F*3")
+    assert ty.evalAtFrame(10) == pytest.approx(30.0)
+
+
+def test_channel_ref_relative_python_and_self(client, scene):
+    box = scene["box"]
+    res = _set(client, {"path": f"{box.path()}/sizex", "channel_ref": "sizey"})
+    assert res["expression"] in ('ch("sizey")', 'ch("./sizey")') and res["language"] == "hscript"
+    res = _set(
+        client,
+        {"path": f"{box.path()}/sizez", "channel_ref": "/obj/geo1/xform1/tx", "language": "python"},
+    )
+    assert res["language"] == "python" and "tx" in res["expression"]
+    scene["xform"].parm("tx").set(3)
+    assert box.parm("sizez").eval() == pytest.approx(3.0)
+    error = client.error(
+        "parm_set", {"items": [{"path": f"{box.path()}/sizey", "channel_ref": "sizey"}]}
+    )
+    assert error["code"] == "invalid_value" and "itself" in error["message"]
+    error = client.error(
+        "parm_set", {"items": [{"path": f"{box.path()}/sizey", "channel_ref": "nope"}]}
+    )
+    assert error["code"] == "parm_not_found"
+
+
+def test_duplicate_keyframe_frames_are_refused(client, scene):
+    tx = scene["xform"].parm("tx")
+    error = client.error(
+        "parm_set",
+        {
+            "items": [
+                {
+                    "path": tx.path(),
+                    "keyframes": [{"frame": 5, "value": 1}, {"frame": 5, "value": 2}],
+                }
+            ]
+        },
+    )
+    assert error["code"] == "invalid_argument" and "same frame" in error["message"]
+    assert not tx.keyframes()
+
+
+def _spare(node, template):
+    group = node.parmTemplateGroup()
+    group.append(template)
+    node.setParmTemplateGroup(group)
+    return node.parm(template.name())
+
+
+def test_int_menus_free_menus_and_strict_ranges(client, scene):
+    null = scene["geo"].createNode("null", "CTRL")
+    _spare(
+        null,
+        hou.IntParmTemplate(
+            "quality",
+            "Quality",
+            1,
+            menu_items=("lo", "mid", "hi"),
+            menu_labels=("Low", "Medium", "High"),
+        ),
+    )
+    _spare(
+        null,
+        hou.StringParmTemplate(
+            "shader",
+            "Shader",
+            1,
+            menu_items=("glass", "metal"),
+            menu_type=hou.menuType.StringReplace,
+        ),
+    )
+    _spare(
+        null,
+        hou.FloatParmTemplate(
+            "mix", "Mix", 1, min=0, max=1, min_is_strict=True, max_is_strict=True
+        ),
+    )
+    quality = f"{null.path()}/quality"
+    res = _set(client, {"path": quality, "value": "hi"})
+    assert null.parm("quality").eval() == 2
+    assert res["value"] == 2 and res["menu_token"] == "hi"
+    res = _set(client, {"path": quality, "value": "Medium"})
+    assert null.parm("quality").eval() == 1 and res["notes"]
+    res = _set(client, {"path": quality, "value": 0})
+    assert null.parm("quality").eval() == 0
+    error = client.error("parm_set", {"items": [{"path": quality, "value": 7}]})
+    assert error["code"] == "invalid_value" and "lo" in error["candidates"]
+    # A free (StringReplace) menu takes any text; the menu is only a suggestion.
+    res = _set(client, {"path": f"{null.path()}/shader", "value": "plastic"})
+    assert res["value"] == "plastic"
+    got = _get(client, f"{null.path()}/shader", include=["menu"])
+    assert [i["token"] for i in got["menu"]["items"]] == ["glass", "metal"]
+    mix = f"{null.path()}/mix"
+    for bad, bound in ((1.5, "<= 1"), (-0.1, ">= 0")):
+        error = client.error("parm_set", {"items": [{"path": mix, "value": bad}]})
+        assert error["code"] == "invalid_value" and bound in error["hint"], error
+    assert _set(client, {"path": mix, "value": 1})["value"] == 1.0

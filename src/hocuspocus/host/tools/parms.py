@@ -300,7 +300,7 @@ def _eval(parm: Any, kind: str, menu_mode: str | None, frame: float | None) -> A
     try:
         if kind == "ramp":
             return _ramp_dict(parm.eval() if frame is None else parm.evalAtFrame(frame))
-        if kind in ("string", "data") or menu_mode == "strict":
+        if kind in ("string", "data") or (menu_mode == "strict" and kind != "int"):
             return parm.evalAsString() if frame is None else parm.evalAsStringAtFrame(frame)
         value = parm.eval() if frame is None else parm.evalAtFrame(frame)
     except Exception:
@@ -308,6 +308,18 @@ def _eval(parm: Any, kind: str, menu_mode: str | None, frame: float | None) -> A
     if kind == "toggle":
         return bool(value)
     return _json_number(value)
+
+
+def _int_menu_token(parm: Any, value: Any) -> Any:
+    """An int parm with a menu stores the item index: its token is ``menuItems()[value]``
+    (``evalAsString`` would give the number)."""
+    try:
+        items = parm.menuItems()
+        if isinstance(value, int) and 0 <= value < len(items):
+            return items[value]
+    except Exception:
+        pass
+    return value
 
 
 def _raw(parm: Any, kind: str) -> Any:
@@ -411,8 +423,9 @@ def _describe_parm(
         out["language"] = keys["language"]
     if keys.get("keyed"):
         out["keyed"] = True
+    token = _int_menu_token(parm, value) if kind == "int" and menu_mode else value
     if menu_mode == "strict":
-        out["menu_token"] = value
+        out["menu_token"] = token
     try:
         out["is_default"] = bool(parm.isAtDefault())
     except Exception:
@@ -427,7 +440,7 @@ def _describe_parm(
                 else {"count": 0, "first": None, "last": None}
             )
         if "menu" in include and menu_mode is not None:
-            menu = _menu_dict(parm, value)
+            menu = _menu_dict(parm, token)
             if menu is not None:
                 out["menu"] = menu
         if "template" in include:
