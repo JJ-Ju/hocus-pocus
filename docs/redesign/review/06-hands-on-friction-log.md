@@ -1,3 +1,5 @@
+> **Status: historical.** Describes HocusPocus 0.9, archived at tag `v0.9-archive`. See [`../README.md`](../README.md).
+
 # 06 — Hands-on Friction Log: driving HocusPocus 0.9.0 as an agent
 
 **Reviewer seat:** an AI agent with only `tools/list`, `resources/list`, README, `docs/agent-workflows.md` and `docs/user-manual.md` to go on.

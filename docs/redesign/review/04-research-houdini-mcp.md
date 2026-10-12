@@ -1,3 +1,5 @@
+> **Status: historical.** Describes HocusPocus 0.9, archived at tag `v0.9-archive`. See [`../README.md`](../README.md).
+
 # 04 - Research: Houdini 22 HOM, Houdini MCP prior art, MCP design practice
 
 Status: research input for the HocusPocus redesign. Date: 2026-10-12.

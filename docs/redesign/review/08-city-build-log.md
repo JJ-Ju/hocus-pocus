@@ -1,3 +1,5 @@
+> **Status: historical.** Evaluation record of 1.0 at commit `b56666d` on 2026-10-12. See [`../README.md`](../README.md).
+
 # 08 — City build log: a building generator and a city generator driven through HocusPocus 1.0
 
 **Seat:** an AI agent working as a Houdini TD. I used only the MCP tool surface, `docs/tools.md`, `README.md` and `docs/quickstart.md`. I did not read the server source.

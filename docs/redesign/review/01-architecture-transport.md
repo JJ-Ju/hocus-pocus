@@ -1,3 +1,5 @@
+> **Status: historical.** Describes HocusPocus 0.9, archived at tag `v0.9-archive`. See [`../README.md`](../README.md).
+
 # Review 01: Architecture and Transport (current system)
 
 Reviewer scope: `core/*`, `startup.py`, `live/{context,dispatcher,operations,monitor,houdini_undo,graph_*}.py`, launcher and broker scripts, build and install scripts, and the transport, spec and compatibility docs.

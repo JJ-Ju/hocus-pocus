@@ -1,3 +1,5 @@
+> **Status: historical.** Describes HocusPocus 0.9, archived at tag `v0.9-archive`. See [`../README.md`](../README.md).
+
 # 02 — MCP Tool Surface Audit and Gap Analysis
 
 Reviewer: senior review, tool-surface track

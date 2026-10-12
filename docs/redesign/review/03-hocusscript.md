@@ -1,3 +1,5 @@
+> **Status: historical.** Describes HocusPocus 0.9, archived at tag `v0.9-archive`. See [`../README.md`](../README.md).
+
 # Review 03: HocusScript and the network-document carrier
 
 Reviewer scope: `python3.11libs/hocuspocus/hocusscript/` (128 modules, 55,896 LOC), `live/ops/hocusscript*.py`, `live/ops/document*.py`, `live/ops/source_*.py`, `live/production_*.py`, the HS-series scripts, tests, docs and schemas. Measurements were taken from the `master` working tree at `cab2430`.

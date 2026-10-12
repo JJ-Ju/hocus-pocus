@@ -1,3 +1,5 @@
+> **Status: historical.** Evaluation record of 1.0 at commit `3a0df8a` on 2026-10-12. See [`../README.md`](../README.md).
+
 # 07 — Friction re-run: driving HocusPocus 1.0 as an agent
 
 **Reviewer seat:** a fresh AI agent with only the MCP surface (the `server/discover` instructions, `tools/list` descriptions and schemas, and error messages) plus `README.md` and `docs/quickstart.md`. I did not read the server source. The one repo file I read besides those was `tests/e2e/test_stdio_roundtrip.py`, to see the client pattern.

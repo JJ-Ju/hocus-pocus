@@ -1,3 +1,5 @@
+> **Status: historical.** Describes HocusPocus 0.9, archived at tag `v0.9-archive`. See [`../README.md`](../README.md).
+
 # Review 05: Tests, Scripts, Docs and Developer/User Experience
 
 Reviewer scope: `tests/`, `scripts/`, `docs/`, in-Houdini UI, first-use path, repo layout, git history.

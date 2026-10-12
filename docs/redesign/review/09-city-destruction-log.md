@@ -1,3 +1,5 @@
+> **Status: historical.** Evaluation record of 1.0 at commit `d18a621` on 2026-10-12. See [`../README.md`](../README.md).
+
 # 09 — City destruction log: fracture + SOP-level RBD sim driven through HocusPocus 1.0
 
 **Seat:** an AI agent working as a Houdini FX TD. I used only the MCP tool surface, `docs/tools.md` and review 08. I did not read the server source.
