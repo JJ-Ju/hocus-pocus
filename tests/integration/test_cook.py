@@ -197,7 +197,8 @@ def test_cook_profile_as_a_job_reports_progress(client):
     assert result["state"] == "running"
     status = _wait_job(client, result["job_id"])
     assert status["state"] == "done"
-    assert status["progress"] == 1.0 and status["current"] == status["total"] == 5  # 4 chain steps + 1 check
+    # 4 chain steps + 1 check of the named node
+    assert status["progress"] == 1.0 and status["current"] == status["total"] == 5
     final = client.ok("job", {"action": "result", "job_id": result["job_id"]})["result"]
     assert final["chain"][0]["path"] == slow.path()
 

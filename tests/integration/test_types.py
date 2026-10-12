@@ -23,12 +23,12 @@ def test_search_index_is_cached(client):
     started = time.perf_counter()
     client.ok("node_type_search", {"query": "box"})
     first = time.perf_counter() - started
-    builds = types.index_stats()["builds"]
+    builds = types._INDEX.builds
     started = time.perf_counter()
     client.ok("node_type_search", {"query": "sphere"})
     second = time.perf_counter() - started
-    assert types.index_stats()["builds"] == builds
-    assert types.index_stats()["types"] > 4000
+    assert types._INDEX.builds == builds
+    assert len(types._INDEX.rows) > 4000
     assert second < 1.0, (first, second)
 
 
@@ -82,7 +82,10 @@ def test_search_plain_language(client, query, top):
 
 
 def test_search_rows_and_older_versions(client):
-    result = client.ok("node_type_search", {"query": "scatter", "category": "Sop", "limit": 3})
+    result = client.ok(
+        "node_type_search",
+        {"query": "scatter", "category": "Sop", "limit": 3, "current_only": False},
+    )
     first, second = result["results"][:2]
     assert first["name"] == "scatter::2.0"
     assert first["label"] == "Scatter"
@@ -94,6 +97,39 @@ def test_search_rows_and_older_versions(client):
     assert second["name"] == "scatter"
     assert second["is_current_version"] is False
     assert second["current"] == "scatter::2.0"
+
+
+def test_search_current_only_folds_older_versions(client):
+    """Review 11 B6: current versions only by default, older ones named on the row."""
+    result = client.ok("node_type_search", {"query": "scatter", "category": "Sop", "limit": 10})
+    names = [r["name"] for r in result["results"]]
+    assert names[0] == "scatter::2.0"
+    assert "scatter" not in names
+    assert result["results"][0]["other_versions"] == ["scatter"]
+    assert all(r["is_current_version"] for r in result["results"])
+    every = client.ok(
+        "node_type_search",
+        {"query": "scatter", "category": "Sop", "limit": 10, "current_only": False},
+    )
+    assert "scatter" in [r["name"] for r in every["results"]]
+    assert every["total"] > result["total"]
+    assert "other_versions" not in every["results"][0]
+
+
+def test_search_descriptions_are_capped(client):
+    result = client.ok("node_type_search", {"query": "noise", "limit": 50})
+    assert result["results"]
+    assert all(len(r["description"]) <= 120 for r in result["results"])
+    assert any(r["description"].endswith("…") for r in result["results"])
+
+
+def test_type_not_found_candidates_use_synonyms(client):
+    """Review 11 B10: distantlight is hlight in /obj."""
+    error = client.error("node_type_info", {"type": "distantlight", "category": "Object"})
+    assert error["code"] == "node_type_not_found"
+    assert error["candidates"][0] == "hlight", error
+    spot = client.error("node_type_info", {"type": "spot_light", "category": "Object"})
+    assert "hlight" in spot["candidates"][:3], spot
 
 
 def test_search_by_label_words_and_category_filter(client):
@@ -113,7 +149,8 @@ def test_search_hidden(client):
     default = client.ok("node_type_search", {"query": target, "category": "Sop"})
     assert target not in [r["name"] for r in default["results"]]
     shown = client.ok(
-        "node_type_search", {"query": target, "category": "Sop", "include_hidden": True}
+        "node_type_search",
+        {"query": target, "category": "Sop", "include_hidden": True, "current_only": False},
     )
     row = next(r for r in shown["results"] if r["name"] == target)
     assert row["hidden"] is True

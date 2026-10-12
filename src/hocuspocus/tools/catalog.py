@@ -1271,8 +1271,9 @@ _VISUAL: tuple[ToolSpec, ...] = (
         name="node_type_search",
         description=(
             "Find node types by name, label, description or keyword across all 18 categories, or "
-            "one category. Rows: name, label, category, version, is_current_version, description, "
-            "input range, deprecated. Exact names rank first; limit defaults to 20. Use "
+            "one category. Rows: name, label, category, version, description (clipped), input "
+            "range, deprecated. Current versions only, older ones named in other_versions, unless "
+            "current_only is false. Exact names rank first; limit defaults to 20. Use "
             "node_type_info for one type's parms and help."
         ),
         input_schema=_obj(
@@ -1281,6 +1282,7 @@ _VISUAL: tuple[ToolSpec, ...] = (
                 "category": _enum(CATEGORIES),
                 "limit": _limit(20),
                 "include_hidden": _b(False),
+                "current_only": _b(True),
             },
             ("query",),
         ),
@@ -1294,10 +1296,8 @@ _VISUAL: tuple[ToolSpec, ...] = (
                             "label": _t("string"),
                             "category": _t("string"),
                             "version": _t("string"),
-                            "is_current_version": _t("boolean"),
                             "description": _t("string"),
-                            "inputs": _out({"min": _t("integer"), "max": _t("integer")}),
-                            "deprecated": _t("boolean"),
+                            "other_versions": _list(),
                         },
                         ("name", "category"),
                     ),
