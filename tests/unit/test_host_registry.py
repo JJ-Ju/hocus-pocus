@@ -114,3 +114,62 @@ def test_prune_stale(tmp_path):
 
 def test_prune_missing_dir(tmp_path):
     assert prune_stale(tmp_path / "nope") == []
+
+
+def test_replace_retries_transient_permission_error(tmp_path, monkeypatch):
+    import hocuspocus.host.registry as reg
+
+    real_replace = os.replace
+    calls = []
+
+    def flaky(src, dst):
+        calls.append(1)
+        if len(calls) <= 2:
+            raise PermissionError(13, "being read by the bridge")
+        real_replace(src, dst)
+
+    monkeypatch.setattr(reg.os, "replace", flaky)
+    monkeypatch.setattr(reg, "REPLACE_DELAY_S", 0.001)
+    registry = InstanceRegistry(tmp_path / "instances", pid=4242)
+    path = registry.write({"port": 1, "hip": "a"})
+    assert len(calls) == 3
+    assert json.loads(path.read_text(encoding="utf-8"))["port"] == 1
+
+
+def test_failed_update_is_rewritten_on_next_update(tmp_path, monkeypatch):
+    import hocuspocus.host.registry as reg
+
+    monkeypatch.setattr(reg, "REPLACE_DELAY_S", 0.001)
+    registry = InstanceRegistry(tmp_path / "instances", pid=4242)
+    path = registry.write({"port": 1, "hip": "a", "generation": 0})
+    real_replace = os.replace
+
+    def locked(src, dst):
+        raise PermissionError(13, "locked")
+
+    monkeypatch.setattr(reg.os, "replace", locked)
+    registry.update(hip="b")  # must not raise; the file is stale for now
+    assert json.loads(path.read_text(encoding="utf-8"))["hip"] == "a"
+    assert [p.name for p in path.parent.iterdir()] == ["4242.json"]  # temp file cleaned
+    monkeypatch.setattr(reg.os, "replace", real_replace)
+    registry.update(hip="b")  # nothing new in memory, but the pending write lands
+    assert json.loads(path.read_text(encoding="utf-8"))["hip"] == "b"
+    registry.update(generation=1)
+    assert json.loads(path.read_text(encoding="utf-8"))["generation"] == 1
+
+
+def test_prune_keeps_unreadable_entry_of_live_pid(tmp_path):
+    instances = tmp_path / "instances"
+    instances.mkdir()
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    try:
+        # Half-written (mid-replace) or unparseable for a moment: not proof of death.
+        (instances / f"{child.pid}.json").write_text("{corrupt", encoding="utf-8")
+        (instances / f"{os.getpid()}.json").write_text("{}", encoding="utf-8")  # no pid key
+        assert prune_stale(instances) == []
+        assert len(list(instances.iterdir())) == 2
+    finally:
+        child.kill()
+        child.wait()
+    removed = prune_stale(instances)
+    assert [p.name for p in removed] == [f"{child.pid}.json"]

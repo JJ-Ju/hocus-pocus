@@ -15,6 +15,7 @@ import os
 import secrets
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -35,6 +36,13 @@ ENTRY_FIELDS = (
     "generation",
     "label",
 )
+
+
+REPLACE_TRIES = 10
+REPLACE_DELAY_S = 0.02
+"""Backoff for ``os.replace``: on Windows it raises PermissionError while a reader (the
+bridge) has the target open. 10 tries, doubling from 20 ms and capped at 250 ms, wait
+about 1.3 s in total."""
 
 
 def new_token() -> str:
@@ -101,11 +109,24 @@ def _write_private_atomic(path: Path, text: str) -> None:
             handle.write(text.encode("utf-8"))
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(tmp, path)
+        _replace_with_retry(tmp, path)
     except BaseException:
         with contextlib.suppress(OSError):
             os.unlink(tmp)
         raise
+
+
+def _replace_with_retry(src: Path, dst: Path) -> None:
+    delay = REPLACE_DELAY_S
+    for attempt in range(REPLACE_TRIES):
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError:
+            if attempt == REPLACE_TRIES - 1:
+                raise
+            time.sleep(delay)
+            delay = min(delay * 2, 0.25)
 
 
 def read_entry(path: Path) -> dict[str, Any] | None:
@@ -129,7 +150,12 @@ def list_entries(directory: Path) -> list[dict[str, Any]]:
 
 
 def prune_stale(directory: Path, *, alive=pid_alive) -> list[Path]:
-    """Delete entries whose pid is dead or whose file is unreadable. Returns removed paths."""
+    """Delete entries whose pid is provably dead. Returns removed paths.
+
+    An entry that cannot be read or parsed may be mid-replace or held open by another
+    reader; it is judged by the pid in its file name, so a transient failure never
+    deletes a live host's entry.
+    """
     removed: list[Path] = []
     if not directory.is_dir():
         return removed
@@ -138,7 +164,9 @@ def prune_stale(directory: Path, *, alive=pid_alive) -> list[Path]:
             continue  # not a registry entry
         entry = read_entry(path)
         pid = entry.get("pid") if entry else None
-        if entry is None or not isinstance(pid, int) or not alive(pid):
+        if not isinstance(pid, int) or isinstance(pid, bool):
+            pid = int(path.stem)
+        if not alive(pid):
             try:
                 path.unlink()
                 removed.append(path)
@@ -157,6 +185,8 @@ class InstanceRegistry:
         self.pid = os.getpid() if pid is None else pid
         self.path = self.directory / f"{self.pid}.json"
         self._entry: dict[str, Any] = {}
+        self._pending = False
+        """True when the last write failed: the file is stale and the next update rewrites it."""
         self._lock = threading.Lock()
 
     @property
@@ -169,7 +199,9 @@ class InstanceRegistry:
             data = {"hp": HP_RPC_VERSION, "pid": self.pid}
             data.update(entry)
             self._entry = data
+            self._pending = True
             _write_private_atomic(self.path, json.dumps(data, indent=1, sort_keys=False))
+            self._pending = False
         return self.path
 
     def update(self, **fields: Any) -> None:
@@ -177,15 +209,26 @@ class InstanceRegistry:
             if not self._entry:
                 return
             changed = {k: v for k, v in fields.items() if self._entry.get(k) != v}
-            if not changed:
+            if not changed and not self._pending:
                 return
             self._entry.update(changed)
             data = dict(self._entry)
-            _write_private_atomic(self.path, json.dumps(data, indent=1))
+            try:
+                _write_private_atomic(self.path, json.dumps(data, indent=1))
+            except OSError as exc:
+                self._pending = True
+                log.warning(
+                    "cannot rewrite registry entry %s (%s); retrying on the next update",
+                    self.path,
+                    exc,
+                )
+            else:
+                self._pending = False
 
     def remove(self) -> None:
         with self._lock:
             self._entry = {}
+            self._pending = False
             try:
                 self.path.unlink()
             except FileNotFoundError:
