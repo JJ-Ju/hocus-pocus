@@ -2,9 +2,10 @@
 
 Python runs with ``exec`` in a fresh namespace with ``hou`` bound, on the main thread,
 inside the dispatcher's undo group. ``stdout``/``stderr`` are captured; the value of a
-trailing expression (or a variable named ``result``) is returned JSON-serialised, with a
-``repr`` fallback for anything JSON cannot hold. An exception in the user's code is a
-successful call whose result carries ``exception``. ``language: hscript`` runs
+trailing expression (or, when there is none or it is ``None``, a variable named
+``result``) is returned JSON-serialised, with a ``repr`` fallback for anything JSON cannot
+hold. An exception in the user's code (``SystemExit`` and ``KeyboardInterrupt``
+included) is a successful call whose result carries ``exception`` and ``ok: false``. ``language: hscript`` runs
 ``hou.hscript``. Output is capped at ``max_response_bytes``.
 """
 
@@ -84,13 +85,18 @@ def run_python(code: str) -> dict[str, Any]:
             "message": str(exc),
             "traceback": "".join(traceback.format_exception_only(type(exc), exc)),
         }
+        payload["ok"] = False
         return payload
     value: Any = None
     with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
         try:
             exec(body, namespace)
-            value = eval(tail, namespace) if tail is not None else namespace.get("result")
-        except Exception as exc:  # the user's exception is data, not a tool failure
+            value = eval(tail, namespace) if tail is not None else None
+            if value is None:
+                value = namespace.get("result")
+        # The user's exception is data, not a tool failure. sys.exit() and a raised
+        # KeyboardInterrupt are caught too: they must never take the host down.
+        except (Exception, SystemExit, KeyboardInterrupt) as exc:
             module = type(exc).__module__
             name = type(exc).__name__ if module == "builtins" else f"{module}.{type(exc).__name__}"
             message = str(exc)
@@ -106,6 +112,8 @@ def run_python(code: str) -> dict[str, Any]:
     payload["stdout"] = stdout.getvalue()
     payload["stderr"] = stderr.getvalue()
     payload["result"] = to_jsonable(value)
+    if "exception" in payload:
+        payload["ok"] = False
     return payload
 
 

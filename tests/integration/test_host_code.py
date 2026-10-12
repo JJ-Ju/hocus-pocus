@@ -44,6 +44,34 @@ def test_exception_is_reported_not_raised(client):
     assert "<houdini_python>" in exc["traceback"]
 
 
+@pytest.mark.parametrize(
+    ("code", "kind"),
+    [
+        ("import sys\nprint('bye')\nsys.exit(3)", "SystemExit"),
+        ("raise SystemExit", "SystemExit"),
+        ("raise KeyboardInterrupt('stop')", "KeyboardInterrupt"),
+    ],
+)
+def test_exit_and_interrupt_are_reported_and_the_host_survives(client, code, kind):
+    result = client.ok("houdini_python", {"code": code})
+    assert result["exception"]["type"] == kind
+    assert result["ok"] is False
+    # The host is still serving.
+    assert client.ok("houdini_python", {"code": "1 + 1"})["result"] == 2
+
+
+def test_ok_flag_only_on_exception(client):
+    assert "ok" not in client.ok("houdini_python", {"code": "1"})
+    assert client.ok("houdini_python", {"code": "1/0"})["ok"] is False
+
+
+def test_result_variable_when_trailing_expression_is_none(client):
+    result = client.ok("houdini_python", {"code": "result = 42\nprint('x')"})
+    assert result["result"] == 42
+    result = client.ok("houdini_python", {"code": "result = 'kept'\nNone"})
+    assert result["result"] == "kept"
+
+
 def test_syntax_error(client):
     result = client.ok("houdini_python", {"code": "def broken(:\n  pass"})
     assert result["exception"]["type"] == "SyntaxError"

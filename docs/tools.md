@@ -2,7 +2,7 @@
 
 <!-- Generated from src/hocuspocus/tools/catalog.py by `python -m hocuspocus.tools.docs`. Do not edit by hand. -->
 
-35 tools: 31 in the `core` profile, 4 more in `full`. Model-visible `tools/list` text: 26,685 bytes. See `docs/BIBLE.md` §4 for the design.
+35 tools: 31 in the `core` profile, 4 more in `full`. Model-visible `tools/list` text: 26,720 bytes. See `docs/BIBLE.md` §4 for the design.
 
 ## Contents
 
@@ -824,7 +824,7 @@ Render any ROP (Karma, Mantra, OpenGL, ...) for frames [start, end, inc] (defaul
 
 `destructive` `headless ok` · profile `core`
 
-Run Python (hou bound) or HScript on Houdini's main thread in one undo step, for anything no other tool covers. Returns stdout, stderr, result (a trailing expression or a result variable, JSON-serialised) and exception with traceback. Output is capped. Fails with python_disabled when turned off.
+Run Python (hou bound) or HScript on Houdini's main thread in one undo step, for anything no other tool covers. Returns stdout, stderr, result (a trailing expression or a result variable, JSON-serialised) and exception with traceback plus ok: false (sys.exit included). Output is capped. Fails with python_disabled when turned off.
 
 ### Arguments
 
