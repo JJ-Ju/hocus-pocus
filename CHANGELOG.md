@@ -3,7 +3,46 @@
 This project uses [Semantic Versioning](https://semver.org/). The 0.9 compatibility
 policy does not apply to 1.0.
 
-## 1.0.0 (unreleased)
+## Unreleased (1.0.1)
+
+Nothing yet.
+
+## 1.0.0 (2026-10-12)
+
+Merged to `master` in PR #7 on 2026-10-12. The package version string in this checkout is
+still `1.0.0a0`; it becomes `1.0.0` when the release is tagged `v1.0.0`.
+
+### Summary
+
+- A stdio MCP bridge (`hocuspocus-mcp`, official `mcp` SDK) outside Houdini and a
+  stdlib-only host inside Houdini (GUI or `hython`), talking `hp/v1` over loopback HTTP
+  with a token per instance.
+- 35 tools in Houdini vocabulary, 31 in the default `core` profile, each mutating call
+  one undo group, errors with a stable `code`, `hint` and `candidates`.
+- Three-command install: `uv tool install -e .` (from a checkout; not on PyPI yet),
+  `hocuspocus install-houdini [--dev]`, `claude mcp add -s user hocuspocus --
+  hocuspocus-mcp`; `hocuspocus doctor` checks the result.
+- Tested in three tiers: unit (system Python), integration (inside hython) and e2e
+  (stdio bridge driving a hython host), plus a manual GUI smoke and three agent
+  evaluations (`docs/redesign/review/07`–`09`).
+- The 0.9 tree is removed and preserved at the git tag **`v0.9-archive`**.
+
+### Known limitations
+
+- **Launch lifetime.** A Houdini started by `houdini_connect {launch}` exits when the
+  bridge that launched it exits (end of a client session, or a one-shot script). Save
+  with `hip_save` first, or attach to a Houdini you started yourself.
+- **Windows only qualified.** 1.0 is tested on Windows with Houdini 22.0.466. The code
+  is not Windows-specific, but Linux and macOS are untested.
+- **GUI viewer capture needs a homed view.** `viewport_capture` with `source: viewer`
+  (the GUI default) captures the view as it is and ignores `fit`. Home the view first
+  or use `source: opengl_rop`.
+- **Headless OpenGL capture runs in a child hython**, about 3 s per capture or OpenGL
+  render, because a second OpenGL render in one hython process crashes 22.0.466.
+- **`node_type_info` is large for big HDAs.** The compact view of RBD and similar
+  assets is 10 to 26 KB; filter with `folder`.
+
+### Details
 
 1.0 is a rewrite and a clean break from 0.9. Scenes made with 0.9 are ordinary Houdini
 scenes and still open. Any `hpmcp.*` userData that 0.9 left in a scene is ignored. The
@@ -24,7 +63,7 @@ HocusScript was 57% of the code and nobody used it outside fixtures, no tool was
 | Network documents (checkout / validate / diff / apply) | Direct primitives: `node_create`, `node_edit`, `node_connect`, `parm_set`, `network_build` |
 | Source workspaces, workspace grants, and the "Source Workspaces" Python panel | Nothing. Agents edit files with their own tools. |
 | Production qualification: HS8/RC release ceremony, attestation, install manifests, the source-admission import finder | Normal pip/uv integrity plus `hocuspocus doctor` |
-| `scripts/build.ps1`, `build_transaction.ps1`, `install_hocuspocus_mcp_client.ps1`, the 676-line governed stdio launcher | `uv tool install`, `hocuspocus install-houdini`, `claude mcp add hocuspocus -- hocuspocus-mcp` |
+| `scripts/build.ps1`, `build_transaction.ps1`, `install_hocuspocus_mcp_client.ps1`, the 676-line governed stdio launcher | `uv tool install`, `hocuspocus install-houdini`, `claude mcp add -s user hocuspocus -- hocuspocus-mcp` |
 | Hand-written MCP protocol code inside Houdini, and the fixed port 37219 with a shared token | `hocuspocus-mcp` bridge on the official `mcp` SDK; a stdlib-only host on an ephemeral loopback port with a token per instance |
 | Exact pin to Houdini 22.0.368 | Houdini `>= 22.0`; untested builds get a warning, not a refusal |
 | 103 listed tools with dotted names (`node.create`, `scene.get_summary`, …) | 31 `core` tools (35 in `full`) with snake_case names; see `docs/tools.md` |

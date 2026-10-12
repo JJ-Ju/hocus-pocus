@@ -36,7 +36,8 @@ tests/
   unit/  integration/  e2e/
 docs/
   BIBLE.md  quickstart.md  tools.md (generated)  CONTRIBUTING.md
-  redesign/review/*.md  redesign/progress.md
+  redesign/README.md             # index of the historical reviews and 1.0 evaluations
+  redesign/review/*.md  redesign/progress.md  redesign/evidence/
 README.md  CHANGELOG.md  LICENSE
 .github/workflows/ci.yml  houdini.yml
 ```
@@ -129,7 +130,7 @@ or into your real Houdini preferences, and they never use port 37219.
 
 | Tier | Runs in | Command | Budget |
 |---|---|---|---|
-| `tests/unit` | system Python | `.venv/Scripts/python -m pytest tests/unit -q` | < 10 s |
+| `tests/unit` | system Python | `.venv/Scripts/python -m pytest tests/unit -q` | about 10 s |
 | `tests/integration` | hython | see below | < 90 s |
 | `tests/e2e` | system Python spawning hython | `.venv/Scripts/python -m pytest tests/e2e -q` | < 60 s |
 
@@ -225,6 +226,43 @@ HOUDINI_HYTHON="C:/Program Files/Side Effects Software/Houdini 22.0.466/bin/hyth
 - `.github/workflows/houdini.yml` runs the integration and e2e tiers. It needs a
   **self-hosted runner labelled `houdini`** with a licensed Houdini 22. It runs nightly,
   on manual dispatch and on PRs labelled `houdini`.
+
+## Release
+
+1. Bump the version in both `pyproject.toml` (`[project] version`) and
+   `src/hocuspocus/version.py` (`__version__`). They must match: `doctor` compares the
+   host's `version.py` with the bridge's, and `install-houdini` installs into
+   `<prefs>/hocuspocus/<version>/`.
+2. In `CHANGELOG.md`, turn the `Unreleased` section into `## X.Y.Z (YYYY-MM-DD)` and add
+   a new empty `Unreleased` section above it.
+3. Run the unit tier, and the integration and e2e tiers on a machine with Houdini.
+   Regenerate `docs/tools.md` if the catalogue changed.
+4. Commit, then tag and push the tag:
+
+   ```bash
+   git tag vX.Y.Z
+   git push origin vX.Y.Z
+   ```
+
+5. Build the sdist and wheel into `dist/`. The wheel includes the `houdini/` payload as
+   `hocuspocus/_houdini`.
+
+   ```bash
+   uv build
+   ```
+
+6. Publish to PyPI. This needs a PyPI API token in `UV_PUBLISH_TOKEN`:
+
+   ```bash
+   UV_PUBLISH_TOKEN=pypi-... uv publish
+   ```
+
+7. Create a GitHub release for the tag with the changelog section as notes and the wheel
+   attached, for example
+   `gh release create vX.Y.Z dist/hocuspocus-X.Y.Z-py3-none-any.whl --notes-file <notes>`.
+
+After the first PyPI release, update the install instructions in `README.md`,
+`docs/quickstart.md` and BIBLE §10.2 to `uv tool install hocuspocus`.
 
 ## Commit conventions
 
