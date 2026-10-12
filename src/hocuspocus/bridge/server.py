@@ -69,7 +69,7 @@ class Bridge:
         scan: Callable[[], list[registry.Instance]] | None = None,
         launcher: Launcher | None = None,
     ) -> None:
-        self.config = config or BridgeConfig.from_env()
+        self.config = config or BridgeConfig.load()
         profile = self.config.profile if self.config.profile in ("core", "full") else "core"
         self.tools: tuple[ToolSpec, ...] = (
             tuple(tools) if tools is not None else catalog.for_profile(profile)

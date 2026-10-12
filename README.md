@@ -168,27 +168,34 @@ itself, `houdini_status` lists them all, and `houdini_connect {"pid": N}` picks 
 
 Everything has a default, and no configuration file is required.
 
-**Host (inside Houdini):** settings come from the optional
-`$HOUDINI_USER_PREF_DIR/hocuspocus.toml`. Each key can be overridden by an environment
-variable named `HOCUSPOCUS_<KEY>`, for example `HOCUSPOCUS_ALLOW_PYTHON=0`. A
-`[hocuspocus]` table is also accepted. Unknown or invalid keys are logged and ignored.
+One optional file, `$HOUDINI_USER_PREF_DIR/hocuspocus.toml`, serves both the host
+(inside Houdini) and the bridge (`hocuspocus-mcp`). Each key can be overridden by an
+environment variable named `HOCUSPOCUS_<KEY>`, for example `HOCUSPOCUS_ALLOW_PYTHON=0`;
+**the environment always wins over the file**. A `[hocuspocus]` table is also accepted.
+Unknown or invalid keys are logged and ignored.
 
 ```toml
-autostart = true            # GUI sessions start the host when the UI is ready
-allow_python = true         # houdini_python escape hatch
-read_only = false           # refuse all mutating tools
-approved_roots = []         # if non-empty, hip/hda/render paths must be under these
-max_response_bytes = 16384
-default_timeout_s = 30
-job_threshold_s = 10        # cooks longer than this become jobs
-log_level = "INFO"
+autostart = true            # host: GUI sessions start the host when the UI is ready
+allow_python = true         # host: houdini_python escape hatch
+read_only = false           # host: refuse all mutating tools
+approved_roots = []         # host: if non-empty, hip/hda/render paths must be under these
+max_response_bytes = 16384  # both: response budget
+default_timeout_s = 30      # both: per-call timeout
+job_threshold_s = 10        # host: cooks longer than this become jobs
+profile = "core"            # bridge: "full" also lists hda, usd_stage, pdg, events
+hfs = ""                    # bridge: Houdini install used by houdini_connect launch
+log_level = "INFO"          # host
 ```
 
-**Bridge (`hocuspocus-mcp`):** the bridge has no config file. It reads environment
-variables, which you set in the MCP client config, for example
+Houdini resolves the pref dir itself. The bridge cannot ask Houdini, so it looks in
+`HOUDINI_USER_PREF_DIR` (with `__HVER__` read as `22.0`), then in the pref dir that
+`hocuspocus install-houdini` recorded in `<state dir>/install.json`, then in the default
+locations (`%USERPROFILE%\houdini22.0` and `Documents\houdini22.0` on Windows).
+`hocuspocus doctor` prints which file the bridge reads. Bridge settings can also be set
+per client, for example
 `claude mcp add hocuspocus -e HOCUSPOCUS_PROFILE=full -- hocuspocus-mcp`.
 
-| Variable | Default | Meaning |
+| Bridge variable | Default | Meaning |
 |---|---|---|
 | `HOCUSPOCUS_PROFILE` | `core` | `full` also lists `hda`, `usd_stage`, `pdg`, `events` |
 | `HOCUSPOCUS_MAX_RESPONSE_BYTES` | `16384` | response budget; lists are truncated with `truncated: true` |

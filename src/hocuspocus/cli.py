@@ -7,6 +7,7 @@ so ``hocuspocus doctor`` works even when the MCP SDK is broken.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import re
@@ -266,12 +267,49 @@ def install(prefs: Path, *, dev: bool, out: Callable[[str], None] = print) -> in
     target = packages / PACKAGE_JSON_NAME
     target.write_text(text, encoding="utf-8")
     out(f"wrote {target} (template: {used})")
+    record = write_install_state(prefs, python_dir, dev=dev)
+    if record is not None:
+        out(f"recorded the pref dir in {record} (the bridge reads hocuspocus.toml from there)")
     out("Restart Houdini to load HocusPocus.")
     out(f"Then register the MCP server with your client, e.g.: {CLAUDE_SNIPPET}")
     return 0
 
 
+def write_install_state(prefs: Path, python_dir: Path, *, dev: bool) -> Path | None:
+    """Record ``prefs`` in ``<state_dir>/install.json`` for the bridge (BIBLE §3.7).
+
+    The bridge starts on every MCP client launch and cannot afford a hython query to find
+    the pref dir, so ``install-houdini`` remembers where it installed. Best effort.
+    """
+    from .bridge.config import INSTALL_STATE_FILE
+    from .tools.paths import ensure_private_dir, state_dir
+
+    data = {
+        "prefs": _posix(prefs.resolve()),
+        "python_dir": _posix(python_dir),
+        "version": __version__,
+        "dev": dev,
+    }
+    try:
+        target = ensure_private_dir(state_dir()) / INSTALL_STATE_FILE
+        target.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    except OSError:
+        return None
+    return target
+
+
+def _forget_install_state(prefs: Path) -> None:
+    from .bridge.config import INSTALL_STATE_FILE, installed_pref_dir
+    from .tools.paths import state_dir
+
+    recorded = installed_pref_dir()
+    if recorded is not None and recorded.resolve() == prefs.resolve():
+        with contextlib.suppress(OSError):
+            (state_dir() / INSTALL_STATE_FILE).unlink()
+
+
 def uninstall(prefs: Path, *, out: Callable[[str], None] = print) -> int:
+    _forget_install_state(prefs)
     removed = False
     target = prefs / "packages" / PACKAGE_JSON_NAME
     if target.is_file():
@@ -348,6 +386,21 @@ def doctor(args: argparse.Namespace, out: Callable[[str], None] = print) -> int:
 
     prefs = resolve_pref_dir(args.prefs, hfs=args.hfs)
     report.ok("Houdini pref dir", f"{prefs.path} (from {prefs.source})")
+    from .bridge.config import find_config_file
+
+    toml = find_config_file()
+    expected = prefs.path / "hocuspocus.toml"
+    if toml is None and expected.is_file():
+        report.warn(
+            "hocuspocus.toml",
+            f"{expected} exists but the bridge cannot find it; run `hocuspocus install-houdini` "
+            "or set HOUDINI_USER_PREF_DIR for the MCP client",
+        )
+    else:
+        report.ok(
+            "hocuspocus.toml",
+            f"{toml} (host and bridge; HOCUSPOCUS_* env overrides)" if toml else "none (defaults)",
+        )
     pkg_json = prefs.path / "packages" / PACKAGE_JSON_NAME
     if not pkg_json.is_file():
         report.fail("package JSON", f"{pkg_json} missing; run `hocuspocus install-houdini`")
