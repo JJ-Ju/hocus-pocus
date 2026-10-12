@@ -31,6 +31,8 @@ from .registry import HostContext, tool
 SPECIAL_TYPES = frozenset({"StickyNote", "NetworkDot", "NetworkBox", "SubnetIndirectInput"})
 ON_COLLISION = ("error", "rename", "replace")
 TAG_KEY = "hocuspocus:tag"
+CHANGED_KEY = "_changed"
+"""Result marker the dispatcher reads (``host/dispatch.py``): False means nothing changed."""
 MAX_PROBLEMS = 20
 
 
@@ -87,62 +89,94 @@ def _locked_children_data(node: Any, opts: dict[str, Any]) -> dict[str, Any]:
     return data
 
 
-def _postprocess(
-    data: dict[str, Any],
-    container: Any,
+DESCRIBE_MAX_NODES = 2000
+"""Node cap for one ``network_describe`` page, whatever the byte budget allows."""
+
+
+class _Budget:
+    """Byte and node budget for one ``network_describe`` page (BIBLE §4.1, default 16 KB)."""
+
+    def __init__(self, max_bytes: int) -> None:
+        self.max_bytes = max_bytes
+        self.nodes = 0
+
+    @property
+    def nodes_left(self) -> bool:
+        return self.nodes < DESCRIBE_MAX_NODES
+
+
+def _clean_entry(entry: dict[str, Any], positions: bool) -> None:
+    if not positions:
+        entry.pop("position", None)
+    if "parmtemplates" in entry:
+        keep = set((entry.get("parms") or {}).keys())
+        trimmed = _trim_templates(entry["parmtemplates"], keep)
+        if trimmed:
+            entry["parmtemplates"] = trimmed
+        else:
+            entry.pop("parmtemplates")
+
+
+def _expand(
+    entry: dict[str, Any],
+    node: Any,
     level: int,
     *,
     depth: int,
     positions: bool,
     recurse_locked: bool,
     opts: dict[str, Any],
+    budget: _Budget,
 ) -> int:
-    count = 0
-    for name, entry in list(data.items()):
-        if not isinstance(entry, dict):
+    """Clean one entry and, while ``level < depth``, read and attach its children one level
+    at a time (``childrenAsData`` never serialises more than the level it is asked for).
+    Returns the number of nodes added below ``entry``."""
+    _clean_entry(entry, positions)
+    entry.pop("children", None)
+    if node is None:
+        return 0
+    locked = N._is_locked_hda(node)
+    if locked:
+        entry["locked"] = True
+        entry["hda_locked"] = True  # review 07/11: unambiguous name; locked kept for 1.0
+    if level >= depth or (locked and not recurse_locked):
+        return 0
+    try:
+        if not node.children():
+            return 0
+    except Exception:
+        return 0
+    if not budget.nodes_left:
+        entry["children_truncated"] = True
+        return 0
+    try:
+        children = (
+            _locked_children_data(node, opts) if locked else node.childrenAsData(**opts)
+        ) or {}
+    except Exception:
+        return 0
+    added = 0
+    for name, child in children.items():
+        if not isinstance(child, dict):
             continue
-        count += 1
-        if not positions:
-            entry.pop("position", None)
-        if "parmtemplates" in entry:
-            keep = set((entry.get("parms") or {}).keys())
-            trimmed = _trim_templates(entry["parmtemplates"], keep)
-            if trimmed:
-                entry["parmtemplates"] = trimmed
-            else:
-                entry.pop("parmtemplates")
-        node = container.node(name) if container is not None else None
-        if node is not None and N._is_locked_hda(node):
-            entry["locked"] = True
-            entry.pop("children", None)
-            if recurse_locked and level < depth:
-                children = _locked_children_data(node, opts)
-                count += _postprocess(
-                    children,
-                    node,
-                    level + 1,
-                    depth=depth,
-                    positions=positions,
-                    recurse_locked=recurse_locked,
-                    opts=opts,
-                )
-                if children:
-                    entry["children"] = children
-            continue
-        if "children" in entry:
-            if level >= depth or not isinstance(entry["children"], dict):
-                entry.pop("children")
-            else:
-                count += _postprocess(
-                    entry["children"],
-                    node,
-                    level + 1,
-                    depth=depth,
-                    positions=positions,
-                    recurse_locked=recurse_locked,
-                    opts=opts,
-                )
-    return count
+        added += 1
+        budget.nodes += 1
+        added += _expand(
+            child,
+            node.node(name),
+            level + 1,
+            depth=depth,
+            positions=positions,
+            recurse_locked=recurse_locked,
+            opts=opts,
+            budget=budget,
+        )
+    if children:
+        entry["children"] = children
+    return added
+
+
+DESCRIBE_CURSOR = "after:"
 
 
 @tool("network_describe")
@@ -159,14 +193,16 @@ def network_describe(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     fmt = args.get("format", "data") or "data"
     if fmt not in ("data", "python"):
         raise N.bad_arg("'format' must be 'data' or 'python'.")
-    if not recurse_locked and (N.inside_locked(root) or (fmt == "data" and N._is_locked_hda(root))):
-        asset = root if N._is_locked_hda(root) else (N.locked_ancestor(root) or root)
-        raise ToolError(
-            "locked",
-            f"{root.path()} is {'a' if asset is root else 'inside the'} locked asset "
-            f"{asset.path()}; locked assets are opaque by default.",
-            hint="Pass recurse_locked: true to read its contents.",
+    cursor = args.get("cursor")
+    if cursor not in (None, "") and (
+        not isinstance(cursor, str) or not cursor.startswith(DESCRIBE_CURSOR)
+    ):
+        raise N.bad_arg(
+            f"Invalid cursor {cursor!r}.",
+            hint="Pass next_cursor from the previous page unchanged, or omit cursor.",
         )
+    if not recurse_locked and (N.inside_locked(root) or (fmt == "data" and N._is_locked_hda(root))):
+        raise N._locked_root_error(root)
     if fmt == "python":
         code = root.asCode(brief=True, recurse=False)
         return {"root": root.path(), "format": "python", "code": code, "bytes": len(code.encode())}
@@ -176,30 +212,90 @@ def network_describe(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
         "position": positions,
         "default_parmvalues": include_defaults,
         "parmtemplates": "spare_only",
-        "children": depth > 1,
+        "children": False,
     }
     if N._is_locked_hda(root):
-        data = _locked_children_data(root, opts)
+        top = _locked_children_data(root, opts)
     else:
         try:
-            data = root.childrenAsData(**opts)
+            top = root.childrenAsData(**opts)
         except Exception as exc:  # e.g. a node that is not a network
             raise N.bad_arg(
                 f"Cannot describe {root.path()} as a network.",
                 hint="root must be a network (e.g. /obj, a geo object, a subnet); use node_info for a leaf node.",
                 hou_exception=N.hou_exception_text(exc),
             ) from exc
-    data = data or {}
-    count = _postprocess(
-        data, root, 1, depth=depth, positions=positions, recurse_locked=recurse_locked, opts=opts
-    )
-    return {
+    top = top or {}
+    names = list(top)
+    start = 0
+    if cursor:
+        after = cursor[len(DESCRIBE_CURSOR) :]
+        if after not in top:
+            raise N.bad_arg(
+                f"The cursor's node {after!r} is no longer in {root.path()}.",
+                hint="The network changed between pages; call network_describe again without cursor.",
+            )
+        start = names.index(after) + 1
+    budget = _Budget(N.response_budget(ctx))
+    used = N.ROW_ENVELOPE_BYTES + len(root.path())
+    data: dict[str, Any] = {}
+    count = 0
+    truncated = False
+    next_name: str | None = None
+    for name in names[start:]:
+        entry = top[name]
+        if not isinstance(entry, dict):
+            continue
+        if data and not budget.nodes_left:
+            truncated, next_name = True, name
+            break
+        before_nodes = budget.nodes
+        budget.nodes += 1
+        added = 1 + _expand(
+            entry,
+            root.node(name),
+            1,
+            depth=depth,
+            positions=positions,
+            recurse_locked=recurse_locked,
+            opts=opts,
+            budget=budget,
+        )
+        size = _compact_bytes({name: entry})
+        if data and used + size > budget.max_bytes:
+            budget.nodes = before_nodes
+            truncated, next_name = True, name
+            break
+        if used + size > budget.max_bytes and "children" in entry:
+            entry.pop("children")  # one entry alone overflows: keep it, without its subtree
+            entry["children_truncated"] = True
+            truncated = True
+            added = 1
+            size = _compact_bytes({name: entry})
+        data[name] = entry
+        count += added
+        used += size
+    result: dict[str, Any] = {
         "root": root.path(),
         "format": "data",
         "data": data,
         "node_count": count,
         "bytes": _compact_bytes(data),
     }
+    if truncated or any(isinstance(e, dict) and _has_truncated_children(e) for e in data.values()):
+        result["truncated"] = True
+    if next_name is not None and data:
+        result["next_cursor"] = DESCRIBE_CURSOR + list(data)[-1]
+    return result
+
+
+def _has_truncated_children(entry: dict[str, Any]) -> bool:
+    if entry.get("children_truncated"):
+        return True
+    children = entry.get("children")
+    return isinstance(children, dict) and any(
+        isinstance(c, dict) and _has_truncated_children(c) for c in children.values()
+    )
 
 
 # -- network_build --------------------------------------------------------------------
@@ -232,6 +328,16 @@ class _Problems:
         raise first
 
 
+def _output_count(node_type: Any = None, node: Any = None) -> int:
+    counts = []
+    with contextlib.suppress(Exception):
+        counts.append(int((node_type or node.type()).maxNumOutputs()))
+    if node is not None:
+        with contextlib.suppress(Exception):
+            counts.append(len(node.outputNames()))
+    return max(counts) if counts else 1
+
+
 def _validate_level(
     data: Any,
     *,
@@ -255,25 +361,23 @@ def _validate_level(
         )
         return
     names = set(data)
+    # Pass 1 resolves every type, so input checks can size a sibling's outputs; problems
+    # are reported in entry order (pass 2).
+    resolved: dict[str, Any] = {}
+    early: dict[str, ToolError] = {}
     for name, entry in data.items():
         where = f"{prefix}{name}"
         if not isinstance(name, str) or not N.NAME_RE.match(name):
-            problems.add(
-                N.bad_arg(
-                    f"{name!r} is not a valid node name.",
-                    hint="Node names use letters, digits, '_', '.' and '-' only.",
-                ),
-                where,
+            early[name] = N.bad_arg(
+                f"{name!r} is not a valid node name.",
+                hint="Node names use letters, digits, '_', '.' and '-' only.",
             )
             continue
         if not isinstance(entry, dict) or not isinstance(entry.get("type"), str):
-            problems.add(
-                N.bad_arg(
-                    f"{where}: each entry needs a string 'type'.",
-                    hint="data maps node names to {type, parms?, inputs?, flags?, children?}; "
-                    "pass the 'data' field of network_describe.",
-                ),
-                where,
+            early[name] = N.bad_arg(
+                f"{where}: each entry needs a string 'type'.",
+                hint="data maps node names to {type, parms?, inputs?, flags?, children?}; "
+                "pass the 'data' field of network_describe.",
             )
             continue
         type_name = entry["type"]
@@ -286,23 +390,30 @@ def _validate_level(
             )
         if node_type is None:
             candidates = N.type_candidates(category, type_name)
-            problems.add(
-                ToolError(
-                    "node_type_not_found",
-                    f"{where}: no {category.name()} node type {type_name!r}.",
-                    hint=(
-                        f"Closest {category.name()} types: {', '.join(candidates[:5])}."
-                        if candidates
-                        else "Use node_type_search to find the type name."
-                    ),
-                    candidates=candidates,
+            early[name] = ToolError(
+                "node_type_not_found",
+                f"{where}: no {category.name()} node type {type_name!r}.",
+                hint=(
+                    f"Closest {category.name()} types: {', '.join(candidates[:5])}."
+                    if candidates
+                    else "Use node_type_search to find the type name."
                 ),
-                where,
+                candidates=candidates,
             )
             continue
         if node_type.name() != type_name:
             entry["type"] = node_type.name()
+        resolved[name] = node_type
         plan.append({"name": where, "type": node_type.name()})
+    for name in data:
+        where = f"{prefix}{name}"
+        if name in early:
+            problems.add(early[name], where)
+            continue
+        if name not in resolved:
+            continue  # a network box, sticky note, dot or indirect input
+        node_type = resolved[name]
+        entry = data[name]
         parms = entry.get("parms")
         if parms is not None and not isinstance(parms, dict):
             problems.add(N.bad_arg(f"{where}: 'parms' must be an object."), where)
@@ -311,64 +422,21 @@ def _validate_level(
             if not isinstance(inputs, list):
                 problems.add(N.bad_arg(f"{where}: 'inputs' must be a list."), where)
             else:
-                max_inputs = node_type.maxNumInputs()
-                for position, link in enumerate(inputs):
-                    if not isinstance(link, dict) or not isinstance(link.get("from"), str):
-                        problems.add(
-                            N.bad_arg(
-                                f"{where}: inputs[{position}] needs a string 'from'.",
-                                hint="Input entries look like {from: 'box1', from_index: 0, to_index: 0}.",
-                            ),
-                            where,
-                        )
-                        continue
-                    source = link["from"]
-                    if (
-                        source not in names
-                        and source not in existing_names
-                        and not ("/" in source and container is not None and container.node(source))
-                    ):
-                        known = sorted(names | existing_names)
-
-                        problems.add(
-                            ToolError(
-                                "node_not_found",
-                                f"{where}: input source {source!r} is neither in data nor in "
-                                f"{prefix.rstrip('/') or 'the parent'}.",
-                                hint="'from' names a sibling in data or an existing child of parent.",
-                                candidates=difflib.get_close_matches(
-                                    source, known, n=5, cutoff=0.5
-                                ),
-                            ),
-                            where,
-                        )
-                    if "to_index" not in link:
-                        link["to_index"] = position
-                    to_index = link["to_index"]
-                    if isinstance(to_index, int) and not isinstance(to_index, bool):
-                        if to_index < 0 or to_index >= max_inputs:
-                            problems.add(
-                                ToolError(
-                                    "invalid_input",
-                                    f"{where}: {node_type.name()} has no input {to_index} "
-                                    f"(it takes {max_inputs}).",
-                                    hint=f"Valid to_index values are 0..{max_inputs - 1}."
-                                    if max_inputs
-                                    else f"{node_type.name()} takes no inputs.",
-                                ),
-                                where,
-                            )
-                    elif not isinstance(to_index, str):
-                        problems.add(
-                            N.bad_arg(
-                                f"{where}: to_index must be an integer or an input name.",
-                            ),
-                            where,
-                        )
+                _validate_inputs(
+                    inputs,
+                    node_type,
+                    where=where,
+                    prefix=prefix,
+                    names=names,
+                    resolved=resolved,
+                    existing_names=existing_names,
+                    container=container,
+                    problems=problems,
+                )
         children = entry.get("children")
         if children is not None:
             child_category = node_type.childTypeCategory()
-            if entry.get("locked"):
+            if entry.get("locked") or entry.get("hda_locked"):
                 entry.pop("children")
                 warnings.append(
                     f"{where}: children of the locked asset {node_type.name()} were ignored; "
@@ -392,7 +460,106 @@ def _validate_level(
                     warnings=warnings,
                     existing_names=set(),
                 )
-        entry.pop("locked", None)
+        for key in ("locked", "hda_locked", "children_truncated"):
+            entry.pop(key, None)
+
+
+def _validate_inputs(
+    inputs: list[Any],
+    node_type: Any,
+    *,
+    where: str,
+    prefix: str,
+    names: set[str],
+    resolved: dict[str, Any],
+    existing_names: set[str],
+    container: Any,
+    problems: _Problems,
+) -> None:
+    max_inputs = node_type.maxNumInputs()
+    seen: dict[Any, int] = {}
+    for position, link in enumerate(inputs):
+        if not isinstance(link, dict) or not isinstance(link.get("from"), str):
+            problems.add(
+                N.bad_arg(
+                    f"{where}: inputs[{position}] needs a string 'from'.",
+                    hint="Input entries look like {from: 'box1', from_index: 0, to_index: 0}.",
+                ),
+                where,
+            )
+            continue
+        source = link["from"]
+        existing = None
+        if source not in names and container is not None:
+            with contextlib.suppress(Exception):
+                existing = container.node(source)
+        if source not in names and source not in existing_names and existing is None:
+            known = sorted(names | existing_names)
+            problems.add(
+                ToolError(
+                    "node_not_found",
+                    f"{where}: input source {source!r} is neither in data nor in "
+                    f"{prefix.rstrip('/') or 'the parent'}.",
+                    hint="'from' names a sibling in data or an existing child of parent.",
+                    candidates=difflib.get_close_matches(source, known, n=5, cutoff=0.5),
+                ),
+                where,
+            )
+        from_index = link.get("from_index", 0)
+        if not isinstance(from_index, int) or isinstance(from_index, bool) or from_index < 0:
+            problems.add(
+                N.bad_arg(f"{where}: inputs[{position}].from_index must be an integer >= 0."),
+                where,
+            )
+        else:
+            outputs = None
+            if source in resolved:
+                outputs = _output_count(resolved[source])
+            elif existing is not None:
+                outputs = _output_count(node=existing)
+            if outputs is not None and from_index >= max(outputs, 1):
+                problems.add(
+                    ToolError(
+                        "invalid_input",
+                        f"{where}: {source} has no output {from_index} (it has {outputs}).",
+                        hint=f"Valid from_index values for {source} are 0..{max(outputs, 1) - 1}.",
+                    ),
+                    where,
+                )
+        if "to_index" not in link:
+            link["to_index"] = position
+        to_index = link["to_index"]
+        if isinstance(to_index, int) and not isinstance(to_index, bool):
+            if to_index < 0 or to_index >= max_inputs:
+                problems.add(
+                    ToolError(
+                        "invalid_input",
+                        f"{where}: {node_type.name()} has no input {to_index} "
+                        f"(it takes {max_inputs}).",
+                        hint=f"Valid to_index values are 0..{max_inputs - 1}."
+                        if max_inputs
+                        else f"{node_type.name()} takes no inputs.",
+                    ),
+                    where,
+                )
+        elif not isinstance(to_index, str):
+            problems.add(
+                N.bad_arg(f"{where}: to_index must be an integer or an input name."),
+                where,
+            )
+            continue
+        if to_index in seen:
+            problems.add(
+                ToolError(
+                    "invalid_input",
+                    f"{where}: inputs[{seen[to_index]}] and inputs[{position}] both feed "
+                    f"to_index {to_index}.",
+                    hint="Each input takes one connection; give every entry its own to_index.",
+                ),
+                where,
+            )
+        else:
+            seen[to_index] = position
 
 
 def _rename_refs(data: dict[str, Any], mapping: dict[str, str]) -> dict[str, Any]:
@@ -457,6 +624,28 @@ def _verify_level(
                     ),
                     where,
                 )
+                continue
+            conn = connected[index]
+            fed = conn.inputItem() if hasattr(conn, "inputItem") else conn.inputNode()
+            expected = None
+            with contextlib.suppress(Exception):
+                expected = container.node(link.get("from")) or container.item(link.get("from"))
+            if expected is None:
+                continue  # e.g. a subnet's indirect input: nothing to compare against
+            want_output = link.get("from_index", 0)
+            if fed is None or fed != expected or conn.outputIndex() != want_output:
+                got = fed.name() if fed is not None and hasattr(fed, "name") else "nothing"
+                problems.add(
+                    ToolError(
+                        "invalid_input",
+                        f"{where}: input {to_index!r} is fed by {got} output "
+                        f"{conn.outputIndex()}, not {link.get('from')!r} output {want_output}.",
+                        hint="Check the entry's inputs: from names a sibling in data or an "
+                        "existing child of parent.",
+                        candidates=input_names,
+                    ),
+                    where,
+                )
         children = entry.get("children")
         if isinstance(children, dict):
             made.extend(_verify_level(children, node, f"{where}/", problems))
@@ -490,26 +679,31 @@ def network_build(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
         raise N.bad_arg("'tag' must be a string.")
 
     data = json.loads(json.dumps(data))  # private copy: validation normalises in place
-    existing = (
-        {item.name() for item in parent.allItems()}
+    existing = {c.name() for c in parent.children()}
+    # Network boxes, sticky notes and dots share the namespace (Houdini would give the
+    # new node another name) but are not nodes: they are never "replaced".
+    items = (
+        {item.name() for item in parent.allItems()} - existing
         if hasattr(parent, "allItems")
-        else {c.name() for c in parent.children()}
+        else set()
     )
     collisions = [name for name in data if name in existing]
+    item_collisions = [name for name in data if name in items]
     problems = _Problems()
     renamed: dict[str, str] = {}
-    if collisions and on_collision == "error":
+    if (collisions or item_collisions) and on_collision == "error":
+        clashing = collisions + item_collisions
         suggestions = []
-        taken = set(data)
-        for name in collisions:
+        taken = set(data) | items
+        for name in clashing:
             free = N.unique_name(parent, name, taken)
             taken.add(free)
             suggestions.append(free)
         problems.add(
             ToolError(
                 "name_collision",
-                f"{len(collisions)} name(s) already exist in {parent.path()}: "
-                + ", ".join(collisions[:10]),
+                f"{len(clashing)} name(s) already exist in {parent.path()}: "
+                + ", ".join(clashing[:10]),
                 hint="Pass on_name_collision: 'rename' to build under free names, 'replace' to "
                 "swap the existing nodes out (downstream wires move to the new ones), or "
                 "rename the entries in data.",
@@ -517,9 +711,20 @@ def network_build(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
             ),
             parent.path(),
         )
-    elif collisions and on_collision == "rename":
-        taken = set(data) | existing
-        for name in collisions:
+    elif item_collisions and on_collision == "replace":
+        problems.add(
+            ToolError(
+                "name_collision",
+                f"{', '.join(item_collisions[:10])} in {parent.path()} is a network box, sticky "
+                "note or dot, not a node; replace only swaps nodes.",
+                hint="Rename the entries in data, or pass on_name_collision: 'rename'.",
+                candidates=[N.unique_name(parent, n, set(data) | items) for n in item_collisions],
+            ),
+            parent.path(),
+        )
+    elif (collisions or item_collisions) and on_collision == "rename":
+        taken = set(data) | existing | items
+        for name in collisions + item_collisions:
             free = N.unique_name(parent, name, taken)
             taken.add(free)
             renamed[name] = free
@@ -553,13 +758,14 @@ def network_build(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
             out["replaces"] = [f"{parent.path().rstrip('/')}/{n}" for n in replaced]
         if warnings:
             out["warnings"] = warnings
+        out[CHANGED_KEY] = False  # a dry run changes nothing: no undo step, no dirty
         return out
 
     rollback = N.Rollback()
     rollback.keep_display(parent)
     originals: dict[str, Any] = {}
     for name in replaced:
-        old = parent.item(name)
+        old = parent.node(name)
         temp = N.unique_name(parent, f"{name}_hp_replaced", set(data))
         old.setName(temp)
         rollback.add(lambda old=old, name=name: old.setName(name))

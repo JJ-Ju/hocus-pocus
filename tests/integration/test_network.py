@@ -256,3 +256,132 @@ def test_build_subnet_children(client):
     built = client.ok("network_build", {"parent": "/obj/g", "data": data})
     assert built["created_count"] == 3
     assert hou.node("/obj/g/sub/b").inputs()[0].path() == "/obj/g/sub/a"
+
+
+# -- review 10 / 11 fixes ----------------------------------------------------------
+
+
+def test_build_dry_run_changes_nothing_even_read_only(client, host):
+    hou.node("/obj").createNode("geo", "g")
+    host.scene.mark_clean()
+    data = {"box1": {"type": "box"}, "x": {"type": "xform", "inputs": [{"from": "box1"}]}}
+    envelope = client.call("network_build", {"parent": "/obj/g", "data": data, "dry_run": True})
+    assert envelope["ok"] is True, envelope
+    assert envelope["_meta"]["undo_label"] is None
+    assert envelope["result"].get("dirty") in (None, False)
+    assert "_changed" not in envelope["result"]
+    assert host.scene.dirty is False
+    host.config.read_only = True
+    plan = client.ok("network_build", {"parent": "/obj/g", "data": data, "dry_run": True})
+    assert plan["dry_run"] is True and plan["node_count"] == 2
+    refused = client.error("network_build", {"parent": "/obj/g", "data": data})
+    assert refused["code"] == "read_only"
+    assert hou.node("/obj/g").children() == ()
+
+
+def test_build_validates_from_index_and_duplicate_to_index(client):
+    geo = hou.node("/obj").createNode("geo", "g")
+    geo.createNode("box", "existing")
+    error = client.error(
+        "network_build",
+        {
+            "parent": "/obj/g",
+            "data": {
+                "b": {"type": "box"},
+                "x": {"type": "xform", "inputs": [{"from": "b", "from_index": 3}]},
+                "y": {"type": "xform", "inputs": [{"from": "existing", "from_index": 1}]},
+            },
+        },
+    )
+    assert error["code"] == "invalid_input"
+    problems = error["detail"]["problems"]
+    assert len(problems) == 2 and all("output" in p["message"] for p in problems)
+    error = client.error(
+        "network_build",
+        {
+            "parent": "/obj/g",
+            "data": {
+                "b": {"type": "box"},
+                "s": {"type": "sphere"},
+                "m": {
+                    "type": "merge",
+                    "inputs": [{"from": "b", "to_index": 0}, {"from": "s", "to_index": 0}],
+                },
+            },
+        },
+    )
+    assert error["code"] == "invalid_input" and "to_index 0" in error["message"]
+    assert [c.name() for c in geo.children()] == ["existing"]
+
+
+def test_build_verifies_each_input_source(client):
+    from hocuspocus.host.tools import network
+
+    geo = hou.node("/obj").createNode("geo", "g")
+    a = geo.createNode("box", "a")
+    b = geo.createNode("box", "b")
+    x = geo.createNode("xform", "x")
+    x.setInput(0, b)
+    data = {"x": {"type": "xform", "inputs": [{"from": "a", "from_index": 0, "to_index": 0}]}}
+    problems = network._Problems()
+    network._verify_level(data, geo, "/obj/g/", problems)
+    assert len(problems.items) == 1 and a.path() not in problems.items[0].message
+    assert "fed by b" in problems.items[0].message
+
+
+def test_build_replace_ignores_network_box_names(client):
+    geo = hou.node("/obj").createNode("geo", "g")
+    geo.createNetworkBox("box1")
+    geo.createStickyNote("note1")
+    old = geo.createNode("null", "keep")
+    error = client.error(
+        "network_build",
+        {
+            "parent": "/obj/g",
+            "data": {"box1": {"type": "box"}, "keep": {"type": "null"}},
+            "on_name_collision": "replace",
+        },
+    )
+    assert error["code"] == "name_collision" and "network box" in error["message"]
+    assert geo.node("keep") == old
+    built = client.ok(
+        "network_build",
+        {
+            "parent": "/obj/g",
+            "data": {"keep": {"type": "box"}},
+            "on_name_collision": "replace",
+        },
+    )
+    assert built["replaced"] == ["/obj/g/keep"] and geo.node("keep").type().name() == "box"
+    renamed = client.ok(
+        "network_build",
+        {"parent": "/obj/g", "data": {"box1": {"type": "box"}}, "on_name_collision": "rename"},
+    )
+    assert renamed["renamed"]["/obj/g/box1"] != "/obj/g/box1"
+
+
+def test_describe_depth_is_budgeted_and_paged(client, host):
+    geo = hou.node("/obj").createNode("geo", "geo1")
+    for index in range(12):
+        sub = geo.createNode("subnet", f"sub{index:02d}")
+        for inner in range(6):
+            sub.createNode("null", f"inner_with_a_long_name_{inner}")
+    full = client.ok("network_describe", {"root": "/obj/geo1", "depth": 3})
+    assert full["node_count"] == 12 * 7 and "truncated" not in full
+    saved = host.config.max_response_bytes
+    host.config.max_response_bytes = 2048
+    try:
+        first = client.ok("network_describe", {"root": "/obj/geo1", "depth": 3})
+        assert first["truncated"] is True and first["next_cursor"]
+        assert first["bytes"] <= 2048
+        seen = list(first["data"])
+        cursor = first["next_cursor"]
+        while cursor:
+            more = client.ok(
+                "network_describe", {"root": "/obj/geo1", "depth": 3, "cursor": cursor}
+            )
+            seen += list(more["data"])
+            cursor = more.get("next_cursor")
+    finally:
+        host.config.max_response_bytes = saved
+    assert seen == [f"sub{i:02d}" for i in range(12)]

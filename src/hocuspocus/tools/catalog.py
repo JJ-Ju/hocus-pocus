@@ -741,8 +741,9 @@ _NODES: tuple[ToolSpec, ...] = (
         description=(
             "Read a whole network in one call as Houdini's hou.data childrenAsData format: types, "
             "non-default parms, expressions, wiring, flags, depth levels deep (default 1). Locked "
-            "HDAs appear as {type, locked} unless recurse_locked. format python returns asCode for "
-            "a single node. The data result can be passed to network_build."
+            "HDAs appear as {type, locked, hda_locked} unless recurse_locked. Pages stop at the "
+            "response budget (truncated, next_cursor). format python returns asCode for a single "
+            "node. The data result can be passed to network_build."
         ),
         input_schema=_obj(
             {
@@ -752,6 +753,7 @@ _NODES: tuple[ToolSpec, ...] = (
                 "include_positions": _b(False),
                 "recurse_locked": _b(False),
                 "format": _enum(("data", "python"), "data"),
+                "cursor": _cursor(),
             },
             ("root",),
         ),
