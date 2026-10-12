@@ -420,8 +420,8 @@ def test_failed_batch_rolls_back_earlier_items(client, scene):
         },
     )
     assert err["code"] == "parm_not_found"
-    assert err["detail"]["item"] == 1
-    assert err["message"].startswith("items[1]")
+    assert err["detail"] == {"item": 1, "path": "/obj/geo1/box1/nope", "rolled_back": True}
+    assert err["message"].startswith("items[1] (/obj/geo1/box1/nope): ")
     assert scene["box"].parm("sizex").eval() == 1.0
     assert not any("parm_set" in label for label in hou.undos.undoLabels()[:1])
 
@@ -552,7 +552,7 @@ def test_messages_and_values_are_tidy(client):
         "parm_set",
         {"items": [{"path": f"{geo.path()}/tx", "value": 1}, {"path": path, "value": "tall"}]},
     )
-    assert error["message"].startswith("items[1]: ") and error["message"].count(path) == 1
+    assert error["message"].startswith(f"items[1] ({path}): ") and error["message"].count(path) == 1
     client.ok("parm_set", {"items": [{"path": f"{geo.path()}/tx", "expression": "$F*0.1"}]})
     (row,) = client.ok("parm_get", {"paths": [f"{geo.path()}/tx"], "frame": 24})["parms"]
     assert row["value"] == 2.4  # not 2.4000000000000004
