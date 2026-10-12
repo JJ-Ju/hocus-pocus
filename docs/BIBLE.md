@@ -174,6 +174,12 @@ rewritten on hip load/save (path changes) and removed on `hou.hipFileEventType.B
 and at interpreter exit. The bridge treats an entry whose pid is dead as stale and
 deletes it.
 
+**Dirty tracking.** Verified on 22.0.466: in hython `hou.hipFile.hasUnsavedChanges()` is
+always `True`, even right after a load, clear or save. Headless, the host therefore
+tracks dirtiness itself: the dispatcher marks the scene dirty after every successful
+mutating call, the `scene=False` tools mark it where they change the scene, and save,
+load and clear mark it clean. In the GUI the host asks Houdini.
+
 **Scene generation.** A monotonically increasing integer bumped on
 `AfterClear`, `AfterLoad`, `AfterMerge`. Returned in every tool result's `_meta` as
 `scene_generation`. Agents that cache node paths can detect that the world changed.
@@ -267,6 +273,15 @@ under the word cap, and a passing example.
 Optional file `$HOUDINI_USER_PREF_DIR/hocuspocus.toml`, env overrides
 `HOCUSPOCUS_*`, CLI flags last. Everything has a default; the file is not required.
 
+**One toml serves both processes, and the environment wins.** The host reads every key;
+the bridge reads `profile`, `max_response_bytes`, `default_timeout_s` and `hfs` from the
+same file and ignores the rest. Inside Houdini the pref dir is
+`hou.homeHoudiniDirectory()`. The bridge starts on every client launch and cannot afford
+a hython query, so it looks in `HOUDINI_USER_PREF_DIR` (`__HVER__` read as `22.0`), then
+the `prefs` that `install-houdini` records in `<state_dir>/install.json`, then the
+platform default locations. A `HOCUSPOCUS_<KEY>` variable overrides the file in either
+process.
+
 ```toml
 autostart = true            # GUI sessions start the host on uiready
 allow_python = true         # houdini_python / hscript escape hatch
@@ -313,7 +328,18 @@ hfs = ""                    # bridge: explicit Houdini install dir for launch
   "not_cooked"`).
 - **Annotations:** read tools `readOnlyHint: true`; `node_delete`, `hip_new`,
   `hip_open`, `houdini_python` `destructiveHint: true`; `parm_set`, `node_connect`,
-  `node_edit`, `time` `idempotentHint: true`; all `openWorldHint: false`.
+  `node_edit`, `time`, `selection`, `cook`, `job`, `viewport_capture`
+  `idempotentHint: true`; all `openWorldHint: false`. A tool whose only side effect is a
+  cook, a capture ROP or host-side job state is `readOnlyHint: false`,
+  `destructiveHint: false`, `idempotentHint: true`.
+- **`scene=False` registration.** By default the dispatcher wraps every tool that is not
+  `read_only` in one undo group, refuses it in read-only mode and marks the scene dirty.
+  `undo`, `time`, `selection`, `hda`, `cook`, `pdg`, `render` and `job` register with
+  `scene=False` and do that work themselves where it applies: `performUndo` raises
+  inside an undo group; reads (`time` with no arguments, `hda list`) must not open a
+  group or dirty the scene; cooks, work items, renders and jobs are not hip state. Their
+  annotations still say `readOnlyHint: false`. `host/tools/registry.py` documents the
+  convention and a unit test pins the set.
 - **Headless:** tools with `headless_ok: false` are listed with "(GUI only)" in the
   description; calling them headless returns `ui_required`.
 
@@ -349,7 +375,7 @@ when present, best effort, under `recent: [...]` in `houdini_status.connected.hi
 | `node_connect` | `items: [{from: path\|null, from_output = 0, to: path, to_input: int\|name\|"next"}]` | `from: null` disconnects. `name` uses `setNamedInput`/`inputNames()`. `"next"` uses `setNextInput` (merge-style nodes). Out-of-range → `code: invalid_input` with `hint` listing `inputLabels()`. |
 | `node_layout` | `parent`, `paths?` (subset), `mode: children\|good_position` | `layoutChildren()` or per-node `moveToGoodPosition()`. |
 | `network_describe` | `root`, `depth = 1`, `include_defaults = false`, `include_positions = false`, `recurse_locked = false`, `format: data\|python` | `data`: `root.childrenAsData(inputs=True, flags=True, position=…, default_parmvalues=False)` trimmed and with locked-HDA children replaced by `{"type": ..., "locked": true}`. `python`: `asCode(brief=True)` for a single node only. This is how an agent reads a graph in one call. |
-| `network_build` | `parent`, `data` (same shape `network_describe` returns, i.e. Houdini's own `hou.data` format), `on_name_collision: error\|rename\|replace = error`, `layout = true`, `dry_run = false` | `parent.setChildrenFromData(...)` in one undo group after `dry_run`-style validation (type names exist, inputs resolvable). Returns created paths and per-node errors after cook. This replaces HocusScript and the network document. |
+| `network_build` | `parent`, `data` (same shape `network_describe` returns, i.e. Houdini's own `hou.data` format), `on_name_collision: error\|rename\|replace = error`, `layout = true`, `dry_run = false` | `parent.setChildrenFromData(...)` in one undo group after `dry_run`-style validation (type names exist, inputs resolvable). Returns created paths and per-node errors after cook. Input entries are `{from, from_index, to_index}`; a missing `to_index` is the entry's list position (§5.16). This replaces HocusScript and the network document. |
 
 ### 4.5 Parms
 
@@ -365,7 +391,7 @@ when present, best effort, under `recent: [...]` in `houdini_status.connected.hi
 | `cook` | `paths`, `force = false`, `frame?`, `timeout_s = 30` | `node.cook(force)` on the main thread; catches `OperationFailed` and reports `errors/warnings/messages` per node, `cook_time_ms`, `ok`. If the cook exceeds `job_threshold_s` and the client allows, it becomes a job (returns `job_id`). |
 | `problems` | `root = "/"`, `include_warnings = true`, `cook_uncooked = false`, `recurse_locked = false`, `limit` | Walks the subtree, reports nodes with errors/warnings, broken channel references, missing file parms (`file`-type templates whose expanded path does not exist), unconnected required inputs. The "why is my node red" tool. |
 | `geo_info` | `path` (SOP, or OBJ → its display SOP), `frame?` | ~1 KB: `point_count, prim_count, vertex_count, bbox: {min, max, size, center}, prim_types: {polygon: n, packed: n, volume: n, …}, attributes: {point: [{name, type, size, type_info}], vertex, prim, detail: [{name, type, value}]}, groups: {point: [{name, count}], prim, edge, vertex}, intrinsics?`. Uses intrinsics and bulk accessors, never Python loops over points. |
-| `geo_read` | `path`, `class: point\|prim\|vertex\|detail`, `attribs?: [..]` (default all), `start = 0`, `count = 50`, `group?`, `stats = false` | Spreadsheet rows as arrays with a `columns` header. `stats` adds `min/max/mean` per numeric attribute and `unique` (≤ 20) per string attribute over the **whole** class, computed with numpy bulk accessors. `next_cursor` as `start + count`. |
+| `geo_read` | `path`, `class: point\|prim\|vertex\|detail`, `attribs?: [..]` (default all), `start = 0`, `cursor?`, `count = 50`, `group?`, `stats = false` | Spreadsheet rows as arrays with a `columns` header. `stats` adds `min/max/mean` per numeric attribute and `unique` (≤ 20) per string attribute over the **whole** class, computed with numpy bulk accessors. `next_cursor` is the next row offset as a string (pass it as `cursor`). |
 
 ### 4.7 Visual feedback, code, types, state, contexts
 
@@ -376,13 +402,13 @@ when present, best effort, under `recent: [...]` in `houdini_status.connected.hi
 | `houdini_python` | `code`, `timeout_s = 30`, `language: python\|hscript = python`, `undo_label?` | `exec` in a fresh namespace with `hou` bound, stdout/stderr captured, the value of a trailing expression or a `result` variable JSON-serialised (`repr` fallback). Runs on the main thread inside one undo group. Returns `{stdout, stderr, result, exception?: {type, message, traceback}}`. Output capped at the response budget with `truncated`. Disabled → `code: python_disabled`. Destructive. |
 | `node_type_search` | `query`, `category?`, `limit = 20`, `include_hidden = false` | Ranks exact name = 100, exact label = 95, name prefix, label prefix, word match in description, then tag/keyword. Marks `is_current_version`. Row: `name, label, category, version, description, inputs: {min, max}, deprecated`. All 18 categories supported. |
 | `node_type_info` | `type` (`category/name` or bare name with `category`), `include_parms = true`, `include_help = false`, `folder?` | `name, label, category, version, description, help_url, inputs: [{index, name, label}], outputs, parms: [{name, label, type, size, default, min, max, menu?, folder, help?, is_hidden}]` grouped by folder, plus `help_text` (first ~2 KB of the node help from `$HFS/houdini/help/nodes.zip`, best effort) when asked. |
-| `undo` | `action: undo\|redo\|history`, `steps = 1` | `history` lists the last 20 undo labels; `undo`/`redo` returns the labels performed. |
+| `undo` | `action: undo\|redo\|history`, `steps = 1` | `history` lists the last 20 undo labels (and `redo` labels); `undo`/`redo` returns the labels `performed` plus `next_undo`, `next_redo`, `undo_count`, `redo_count`, `dirty`, `scene_generation`. |
 | `time` | `frame?`, `range?: [start, end]`, `fps?` | Omitting all fields reads. Sets with `hou.setFrame`, `hou.playbar.setFrameRange` (works headless), `hou.setFps`. |
 | `selection` | `paths?` | Omit to read `hou.selectedNodes()`; provide to `setSelected` exactly. |
 | `job` | `action: status\|result\|cancel\|list`, `job_id?` | Jobs are host-side threads for render/pdg/long cook. `status: {state: running\|done\|failed\|cancelled, progress?, message?, started, elapsed_s}`. `result` returns the tool's normal result once done. |
-| `hda` *(full profile)* | `action: create\|save\|unlock\|match\|install\|reload\|list`, plus action-specific fields (`path`, `library_path`, `name`, `label`, `version`) | Thin wrappers over `createDigitalAsset`, `definition().updateFromNode`, `allowEditingOfContents`, `matchCurrentDefinition`, `hou.hda.installFile/reloadFile/loadedFiles`. |
+| `hda` *(full profile)* | `action: create\|save\|unlock\|match\|install\|reload\|list`, plus action-specific fields (`path`, `library_path`, `name`, `label` or `description`, `version`, `min_inputs`, `max_inputs`; `limit`/`cursor` for `list`) | Thin wrappers over `createDigitalAsset`, `definition().updateFromNode`, `allowEditingOfContents`, `matchCurrentDefinition`, `hou.hda.installFile/reloadFile/loadedFiles`. |
 | `usd_stage` *(full)* | `lop_path`, `prim = "/"`, `depth = 1`, `include: [attributes, xform, bindings, layers]`, `time?`, `limit` | Traverses `lop.stage()` read-only. Attribute values at `time` for primitive types; arrays summarised by length. |
-| `pdg` *(full)* | `action: cook\|status\|workitems\|cancel\|dirty`, `top_path`, `block = false` | `cookWorkItems(block)` as a job; `status` from `getPDGNode()`; `workitems` paged with state and output files. |
+| `pdg` *(full)* | `action: cook\|status\|workitems\|cancel\|dirty`, `top_path`, `block = false`, `timeout_s = 30`, `limit`, `cursor` | `cookWorkItems(block)` as a job; `status` from `getPDGNode()`; `workitems` paged with state and output files. |
 | `events` *(full)* | `since = 0`, `limit` | Host-side ring buffer of hip events and node events (`ChildCreated`, `NameChanged`, `ParmTupleChanged` on nodes the agent touched, `BeingDeleted`) with a monotonic sequence. For "what did the user change since my last call". |
 
 Count: 2 session + 4 hip + 10 node/network + 2 parm + 4 cook/geo + 2 visual + 1 code +
@@ -455,6 +481,15 @@ Verified in review 04 against 22.0.466; each is a test case.
     `network_build` (`hocuspocus:tag`) that the user asked for.
 15. **Categories.** `Chop, ChopNet, Cop, Cop2, CopNet, Data, Director, Dop, Driver, Lop,
     Manager, Object, Shop, Sop, Top, TopNet, Vop, VopNet`. Discovery covers all of them.
+16. **`setChildrenFromData` is lenient and destructive by default.** It silently skips
+    unknown types, unknown parms, unresolvable input sources and out-of-range input
+    indices; it defaults to `clear_content=True` (deleting the parent's existing
+    children); and it puts every input entry without `to_index` on input 0.
+    `network_build` validates first, always passes `clear_content=False`, and fills a
+    missing `to_index` from the entry's list position.
+17. **`hou.setFps` rescales the frame range.** By default it keeps the range's duration
+    in seconds and moves the end frame. `time` calls `hou.setFps(fps, False, False,
+    True)` and sets fps before the range.
 
 ---
 
@@ -500,6 +535,15 @@ camera). `render` covers Karma and other ROPs as jobs with a thumbnail. Images a
 PNG, downscaled to ≤ 1024 px on the long side, and also written to
 `<state_dir>/captures/` with the path returned. Image bytes count toward the client's
 output limit, so one image per call.
+
+**Headless OpenGL renders run in a child hython.** Verified on 22.0.466: in hython the
+second `RopNode.render()` of any OpenGL ROP in one process segfaults in the Vulkan
+viewport renderer, whatever the node, frame or output; one multi-frame `render()` is
+fine. So headless, `viewport_capture` and `render` of OpenGL ROPs snapshot the scene
+(`saveChildrenToFile` per manager: no hip save, no event side effects) and render it in a
+short-lived child `hython` (about 3 s per call). In the GUI, OpenGL ROPs render
+in-process; every other ROP type renders in-process frame by frame through the
+executor.
 
 ---
 
@@ -567,7 +611,7 @@ src/hocuspocus/
   cli.py                       # install-houdini, uninstall-houdini, doctor, docs, client-config
 houdini/                       # Houdini package payload; NOT the repo root
   hocuspocus.json.template     # → $HOUDINI_USER_PREF_DIR/packages/hocuspocus.json
-  scripts/uiready.py           # GUI autostart (location per Houdini 22 docs; verify at M0)
+  scripts/python/uiready.py    # GUI autostart (verified location for Houdini 22)
   toolbar/hocuspocus.shelf     # optional: Status / Start / Stop
 tests/
   unit/  integration/  e2e/  conftest.py
@@ -682,7 +726,7 @@ overlap (one agent per host tool family).
 - **D1** Two processes; stdlib host, SDK bridge. *Dependency isolation and offline tools.*
 - **D2** Official `mcp>=2.3` SDK, `MCPServer`, stdio only. *No hand-rolled protocol.*
 - **D3** Ephemeral ports + registry files; no fixed port. *Multi-instance correctness.*
-- **D4** Tool names `snake_case`, no dots, ~30 in `core`. *Client compatibility, model recall.*
+- **D4** Tool names `snake_case`, no dots, 35 tools, 31 in `core`. *Client compatibility, model recall.*
 - **D5** Direct primitives are the surface; HocusScript and network documents are deleted, not deprecated. *Nobody used them; they cost 60 % of the code.*
 - **D6** Declarative graph build uses Houdini's `hou.data` format verbatim. *Native, round-trips, no schema to maintain.*
 - **D7** `houdini_python` is on by default with an off switch. *The agent already has a shell; a blocklist is theatre; the undo group and output cap are the real guards.*
@@ -694,6 +738,20 @@ overlap (one agent per host tool family).
 - **D13** `install-houdini` copies the package into the pref dir; `--dev` links the checkout. *Houdini must never see the bridge's venv.*
 - **D14** pytest with a real-Houdini integration tier; delete nothing until it is green. *0.9 had zero tools tested against Houdini.*
 - **D15** Version 1.0.0 on `redesign/v1`; `v0.9-archive` tag. *Clean break, history preserved.*
+
+### Verified deviations (M5 reconciliation)
+
+Facts found while implementing, now reflected above:
+
+- GUI autostart lives at `houdini/scripts/python/uiready.py` (§10.1).
+- `hasUnsavedChanges()` is always `True` in hython; the host tracks dirtiness headless (§3.2).
+- A second OpenGL ROP render in one hython segfaults; headless OpenGL renders use a child hython (§8).
+- `undo`, `time`, `selection`, `hda`, `cook`, `pdg`, `render`, `job` register with `scene=False` (§4.1).
+- One `hocuspocus.toml` configures host and bridge; `HOCUSPOCUS_*` env wins (§3.7).
+- `setChildrenFromData` skips unknown types and parms silently, defaults `clear_content=True`, and puts inputs without `to_index` on input 0 (§5.16).
+- `hou.setFps` rescales the frame range unless told not to (§5.17).
+- The surface is 35 tools, 31 in `core` (§4.7, D4).
+- All cursors, including `geo_read.next_cursor`, are opaque strings (§4.1).
 
 ---
 
