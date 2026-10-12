@@ -232,3 +232,32 @@ def test_invalid_arguments(client):
     assert client.error("events", {"since": -1})["code"] == "invalid_argument"
     assert client.error("events", {"limit": 0})["code"] == "invalid_argument"
     assert client.error("events", {"since": "3"})["code"] == "invalid_argument"
+
+
+@pytest.mark.parametrize("tool", ["hip_open", "hip_merge"])
+def test_failed_hip_load_does_not_silence_events(client, work_dir, tool, monkeypatch):
+    client.ok("events", {})
+    source = work_dir / "source.hip"
+    client.ok("hip_save", {"path": str(source).replace("\\", "/")})
+
+    def dies_after_before_event(*args, **kwargs):
+        # What a load that fails after BeforeLoad/BeforeMerge looks like to the hooks:
+        # the Before event fired, the After event never comes.
+        ev._HOOKS.hip_busy = True
+        raise hou.OperationFailed("simulated load failure")
+
+    attr = "load" if tool == "hip_open" else "merge"
+    try:
+        monkeypatch.setattr(hou.hipFile, attr, dies_after_before_event)
+    except (AttributeError, TypeError):
+        pytest.skip("hou.hipFile cannot be patched in this build")
+    args = {"path": str(source).replace("\\", "/")}
+    if tool == "hip_open":
+        args["on_unsaved"] = "discard"
+    assert client.error(tool, args)["code"] == "invalid_value"
+    monkeypatch.undo()
+    assert ev._HOOKS.hip_busy is False
+    since = _since()
+    hou.node("/obj").createNode("geo", "after_failure")
+    _settle(client)
+    assert ("ChildCreated", "/obj/after_failure") in _kinds(_read(client, since))

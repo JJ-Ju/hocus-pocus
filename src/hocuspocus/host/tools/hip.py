@@ -196,8 +196,13 @@ def _bool_arg(args: dict[str, Any], key: str, default: bool) -> bool:
 def hip_new(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     import hou
 
+    from .events import hip_done
+
     saved = handle_unsaved(args.get("on_unsaved"), ctx, "clear it")
-    hou.hipFile.clear(suppress_save_prompt=True)
+    try:
+        hou.hipFile.clear(suppress_save_prompt=True)
+    finally:
+        hip_done()
     result = _scene_result(ctx)
     result["saved_first"] = saved
     return result
@@ -206,6 +211,8 @@ def hip_new(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
 @tool("hip_open")
 def hip_open(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     import hou
+
+    from .events import hip_done
 
     path = resolve_path(args.get("path"))
     ignore_warnings = _bool_arg(args, "ignore_load_warnings", True)
@@ -226,6 +233,8 @@ def hip_open(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
             hint="The file may be corrupt, from a newer Houdini, or not a hip file.",
             hou_exception=f"hou.OperationFailed: {_load_message(exc).strip()}",
         ) from exc
+    finally:
+        hip_done()
     result = _scene_result(ctx)
     result["warnings"] = warnings
     result["saved_first"] = saved
@@ -295,6 +304,8 @@ def hip_save(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
 def hip_merge(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     import hou
 
+    from .events import hip_done
+
     path = resolve_path(args.get("path"))
     pattern = args.get("node_pattern", "*")
     if not isinstance(pattern, str) or not pattern:
@@ -328,6 +339,8 @@ def hip_merge(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
             f"Houdini could not merge {path}.",
             hou_exception=f"hou.OperationFailed: {_load_message(exc).strip()}",
         ) from exc
+    finally:
+        hip_done()
     after = [node.path() for node in hou.node("/").allSubChildren(recurse_in_locked_nodes=False)]
     created = [p for p in after if p not in before]
     created_set = set(created)

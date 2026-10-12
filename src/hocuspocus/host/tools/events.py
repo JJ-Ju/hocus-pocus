@@ -154,6 +154,12 @@ def muted() -> Iterator[None]:
         _HOOKS.muted -= 1
 
 
+def hip_done() -> None:
+    """A hip load, merge or clear is over, whether or not it succeeded. A failed load
+    never sends ``AfterLoad``/``AfterMerge``, which would leave node events silenced."""
+    _HOOKS.hip_busy = False
+
+
 def _node_types() -> tuple[Any, ...]:
     import hou
 

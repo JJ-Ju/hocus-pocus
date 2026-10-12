@@ -320,7 +320,7 @@ def _list(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     import hou
 
     if isinstance(args.get("library_path"), str) and args["library_path"].strip():
-        library = resolve_path(args["library_path"], field="library_path")
+        library = _library(args, ctx)  # extension and approved_roots, like install
         _require_library_file(library)
         rows = [_definition_row(d) for d in _definitions(library)]
         chunk, nxt = page(rows, args.get("limit"), args.get("cursor"))

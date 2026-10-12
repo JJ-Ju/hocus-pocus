@@ -6,20 +6,24 @@ under ``prim`` (the prim itself first unless it is the pseudo-root), paged by
 ``limit``/``cursor``. ``prim`` may be a pattern: ``*`` matches within one path segment,
 ``**`` across segments; matching prims are listed with their subtrees to ``depth``.
 
-Attribute values are authored values only, read at ``time`` (default: current frame),
-arrays summarised as ``{len, first}``. Houdini's bookkeeping prim ``/HoudiniLayerInfo``
+Attribute values are authored values only, read at ``time`` (default: current frame;
+the LOP is cooked at that frame, which is then restored), arrays summarised as
+``{len, first}``. ``depth`` is at most 16, and the walk stops once it has the page plus
+one prim, so ``total`` is reported only on the last page. Houdini's bookkeeping prim ``/HoudiniLayerInfo``
 is skipped, as in the scene graph tree.
 """
 
 from __future__ import annotations
 
+import contextlib
 import re
+from collections.abc import Iterator
 from typing import Any
 
 from hocuspocus.tools.errors import ToolError
 
 from ._diag import a_or_an, collect_problems
-from .nodes import bad_arg, get_node, page
+from .nodes import DEFAULT_LIMIT, bad_arg, get_node, page
 from .registry import HostContext, tool
 
 INCLUDE = ("attributes", "xform", "bindings", "layers")
@@ -44,21 +48,26 @@ def _include(args: dict[str, Any]) -> set[str]:
     return set(value)
 
 
+MAX_DEPTH = 16
+
+
 def _depth(args: dict[str, Any]) -> int:
     depth = args.get("depth", 1)
     if depth is None:
         return 1
-    if isinstance(depth, bool) or not isinstance(depth, int) or depth < 1:
-        raise bad_arg("'depth' must be an integer >= 1.")
+    if isinstance(depth, bool) or not isinstance(depth, int) or not 1 <= depth <= MAX_DEPTH:
+        raise bad_arg(
+            f"'depth' must be an integer from 1 to {MAX_DEPTH}.",
+            hint="Page deep hierarchies with prim (a subtree or a ** pattern) instead.",
+        )
     return depth
 
 
-def _time(args: dict[str, Any]) -> float:
-    import hou
-
+def _time(args: dict[str, Any]) -> float | None:
+    """The requested time code, or None for the current frame."""
     value = args.get("time")
     if value is None:
-        return float(hou.frame())
+        return None
     if isinstance(value, bool) or not isinstance(value, int | float):
         raise bad_arg("'time' must be a number (a USD time code; Houdini frames).")
     return float(value)
@@ -246,10 +255,15 @@ def prim_row(prim: Any, include: set[str], time: Any, cache: Any) -> dict[str, A
 # -- traversal --------------------------------------------------------------------------
 
 
-def _walk(prim: Any, depth: int, out: list[Any], *, include_self: bool) -> None:
-    """Depth-first: ``prim`` (if asked) then descendants up to ``depth`` levels below it."""
+def _walk(
+    prim: Any, depth: int, out: list[Any], *, include_self: bool, stop: int | None = None
+) -> None:
+    """Depth-first: ``prim`` (if asked) then descendants up to ``depth`` levels below it.
+    Stops once ``out`` holds ``stop`` prims."""
     stack = [(prim, 0)]
     while stack:
+        if stop is not None and len(out) >= stop:
+            return
         current, level = stack.pop()
         if level > 0 or include_self:
             if str(current.GetPath()) not in HIDDEN_PRIMS:
@@ -287,19 +301,23 @@ def _missing_prim(stage: Any, path: str) -> ToolError:
     )
 
 
-def collect_prims(stage: Any, prim: str, depth: int) -> list[Any]:
+def collect_prims(stage: Any, prim: str, depth: int, stop: int | None = None) -> list[Any]:
+    """Prims to list, in order; at most ``stop`` of them (the page plus one, so the caller
+    knows whether more exist without walking the whole stage)."""
     pattern = _pattern(prim)
     out: list[Any] = []
     if pattern is None:
         target = stage.GetPseudoRoot() if prim == "/" else stage.GetPrimAtPath(prim)
         if not target:
             raise _missing_prim(stage, prim)
-        _walk(target, depth, out, include_self=prim != "/")
+        _walk(target, depth, out, include_self=prim != "/", stop=stop)
         return out
     from pxr import Usd
 
     seen: set[str] = set()
     for candidate in stage.Traverse(Usd.PrimAllPrimsPredicate):
+        if stop is not None and len(out) >= stop:
+            break
         path = str(candidate.GetPath())
         if path in seen or path in HIDDEN_PRIMS or not pattern.match(path):
             continue
@@ -310,7 +328,7 @@ def collect_prims(stage: Any, prim: str, depth: int) -> list[Any]:
             if key not in seen:
                 seen.add(key)
                 out.append(p)
-    return out
+    return out if stop is None else out[:stop]
 
 
 def layers_block(stage: Any, lop: Any) -> dict[str, Any]:
@@ -327,8 +345,25 @@ def layers_block(stage: Any, lop: Any) -> dict[str, Any]:
     return block
 
 
+@contextlib.contextmanager
+def _at_frame(frame: float | None) -> Iterator[None]:
+    """Evaluate at ``frame`` (the LOP cooks there), restoring the current frame."""
+    import hou
+
+    previous = hou.frame()
+    switch = frame is not None and frame != previous
+    if switch:
+        hou.setFrame(frame)
+    try:
+        yield
+    finally:
+        if switch:
+            hou.setFrame(previous)
+
+
 @tool("usd_stage")
 def usd_stage(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
+    import hou
     from pxr import Usd, UsdGeom
 
     include = _include(args)
@@ -338,21 +373,28 @@ def usd_stage(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
         raise bad_arg("'prim' must be an absolute prim path (or pattern) like /geo.")
     if prim != "/":
         prim = prim.rstrip("/")
-    frame = _time(args)
+    requested = _time(args)
+    limit, cursor = args.get("limit"), args.get("cursor")
+    page([], limit, cursor)  # validate before cooking
+    start = int(cursor) if cursor not in (None, "") else 0
+    size = DEFAULT_LIMIT if limit is None else limit
     lop = resolve_lop(args.get("lop_path"))
-    stage = cooked_stage(lop)
-    prims = collect_prims(stage, prim, depth)
-    chunk, nxt = page(prims, args.get("limit"), args.get("cursor"))
-    time = Usd.TimeCode(frame)
-    cache = UsdGeom.XformCache(time)
-    result: dict[str, Any] = {
-        "lop_path": lop.path(),
-        "time": _num(frame),
-        "prims": [prim_row(p, include, time, cache) for p in chunk],
-        "total": len(prims),
-    }
-    if nxt is not None:
-        result["next_cursor"] = nxt
-    if "layers" in include:
-        result["layers"] = layers_block(stage, lop)
+    with _at_frame(requested):
+        frame = float(hou.frame())
+        stage = cooked_stage(lop)
+        prims = collect_prims(stage, prim, depth, stop=start + size + 1)
+        chunk, nxt = page(prims, limit, cursor)
+        time = Usd.TimeCode(frame)
+        cache = UsdGeom.XformCache(time)
+        result: dict[str, Any] = {
+            "lop_path": lop.path(),
+            "time": _num(frame),
+            "prims": [prim_row(p, include, time, cache) for p in chunk],
+        }
+        if nxt is None:
+            result["total"] = len(prims)  # the walk ended: the count is exact
+        else:
+            result["next_cursor"] = nxt
+        if "layers" in include:
+            result["layers"] = layers_block(stage, lop)
     return result

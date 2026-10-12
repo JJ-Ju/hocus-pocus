@@ -225,3 +225,15 @@ def test_create_is_one_undo_step(client, tmp_path):
     undone = client.ok("undo", {"action": "undo"})
     assert undone["performed"][0].startswith("HocusPocus: hda create")
     assert hou.node("/obj/geo1/rock").type().name() == "subnet"
+
+
+def test_list_library_path_is_checked(client, host, tmp_path):
+    _result, library = _create(client, tmp_path, "hptest::listed::1.0")
+    host.config.approved_roots = [str(tmp_path / "allowed")]
+    error = client.error("hda", {"action": "list", "library_path": library})
+    assert error["code"] == "path_not_allowed"
+    host.config.approved_roots = []
+    hip = tmp_path / "scene.hip"
+    hip.write_text("not an asset", encoding="utf-8")
+    error = client.error("hda", {"action": "list", "library_path": hip.as_posix()})
+    assert error["code"] == "invalid_argument"

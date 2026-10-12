@@ -138,7 +138,7 @@ def test_paging(client):
         prev = node
     args = {"lop_path": prev.path(), "prim": "/geo", "depth": 1, "limit": 3}
     first = client.ok("usd_stage", args)
-    assert first["total"] == 8  # /geo + 7 spheres
+    assert "total" not in first  # the walk stopped after the page (review 10)
     assert [p["path"] for p in first["prims"]] == ["/geo", "/geo/s0", "/geo/s1"]
     seen = [p["path"] for p in first["prims"]]
     cursor = first["next_cursor"]
@@ -146,6 +146,7 @@ def test_paging(client):
         page = client.ok("usd_stage", {**args, "cursor": cursor})
         seen += [p["path"] for p in page["prims"]]
         cursor = page.get("next_cursor")
+    assert page["total"] == 8  # /geo + 7 spheres, known once the walk ends
     assert seen == ["/geo"] + [f"/geo/s{i}" for i in range(7)]
     bad = client.error("usd_stage", {**args, "cursor": "nope"})
     assert bad["code"] == "invalid_argument"
@@ -205,3 +206,65 @@ def test_result_size_is_compact(client):
     print(f"usd_stage sphere+materiallibrary: plain {plain_bytes} B, all includes {full_bytes} B")
     assert plain_bytes < 2_000
     assert full_bytes < 16_000
+
+
+def test_depth_is_capped(client):
+    out = _scene()
+    error = client.error("usd_stage", {"lop_path": out.path(), "depth": 17})
+    assert error["code"] == "invalid_argument"
+    assert client.ok("usd_stage", {"lop_path": out.path(), "depth": 16})["prims"]
+
+
+def test_collection_stops_after_the_page(client, monkeypatch):
+    from hocuspocus.host.tools import usd
+
+    stage = hou.node("/stage")
+    prev = None
+    for i in range(20):
+        node = stage.createNode("sphere", f"s{i}")
+        node.parm("primpath").set(f"/geo/s{i}")
+        if prev is not None:
+            node.setInput(0, prev)
+        prev = node
+    rows = []
+    real = usd.prim_row
+
+    def counting(*a, **kw):
+        rows.append(1)
+        return real(*a, **kw)
+
+    monkeypatch.setattr(usd, "prim_row", counting)
+    walked = []
+    real_walk = usd._walk
+
+    def spy_walk(prim, depth, out, *, include_self, stop=None):
+        real_walk(prim, depth, out, include_self=include_self, stop=stop)
+        walked.append(len(out))
+
+    monkeypatch.setattr(usd, "_walk", spy_walk)
+    result = client.ok("usd_stage", {"lop_path": prev.path(), "prim": "/geo", "limit": 3})
+    assert [p["path"] for p in result["prims"]] == ["/geo", "/geo/s0", "/geo/s1"]
+    assert result["next_cursor"] == "3"
+    assert walked == [4]  # cursor + limit + 1, not all 21 prims
+    assert "total" not in result
+    last = client.ok(
+        "usd_stage", {"lop_path": prev.path(), "prim": "/geo", "limit": 50, "cursor": "18"}
+    )
+    assert [p["path"] for p in last["prims"]] == ["/geo/s17", "/geo/s18", "/geo/s19"]
+    assert last["total"] == 21 and "next_cursor" not in last
+
+
+def test_time_cooks_the_lop_at_that_frame(client):
+    stage = hou.node("/stage")
+    sphere = stage.createNode("sphere", "sphere1")
+    sphere.parm("radius").setExpression("$F")
+    sphere.setDisplayFlag(True)
+    hou.setFrame(1)
+    args = {"lop_path": sphere.path(), "prim": "/sphere1", "include": ["attributes"]}
+    now = client.ok("usd_stage", args)["prims"][0]
+    later = client.ok("usd_stage", {**args, "time": 5})["prims"][0]
+    radius = {a["name"]: a for a in now["attributes"]}["radius"]
+    assert radius["value"] == 1
+    radius = {a["name"]: a for a in later["attributes"]}["radius"]
+    assert radius["value"] == 5
+    assert hou.frame() == 1  # the current frame is restored
