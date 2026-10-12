@@ -299,6 +299,7 @@ _SESSION: tuple[ToolSpec, ...] = (
                             "ui": _t("boolean"),
                             "hip": _t("string"),
                             "started": _t("string"),
+                            "launched_by": _t(["integer", "null"]),
                         }
                     ),
                 },
@@ -318,8 +319,10 @@ _SESSION: tuple[ToolSpec, ...] = (
         description=(
             "Choose which Houdini this session drives. Pass one of: pid to attach to a live "
             "instance listed by houdini_status; launch to start one (mode gui or headless hython, "
-            "optional hip, wait up to wait_s, default 90); or disconnect to drop the selection. The "
-            "selection lasts for the bridge's lifetime. Returns the new connected block."
+            "optional hip, wait up to wait_s, default 90); or disconnect to drop the selection. "
+            "Returns the new connected block. A launched Houdini usually closes when this server "
+            "exits (launched.outlives_server says); to keep one, start Houdini yourself (after "
+            "hocuspocus install-houdini) and attach by pid."
         ),
         input_schema=_obj(
             {

@@ -51,6 +51,34 @@ _TRANSPORT_CODES = frozenset(
 )
 
 
+KEEP_ALIVE_HINT = (
+    "One-shot clients: keep one MCP session open for the whole job, or start Houdini "
+    "outside the client (after hocuspocus install-houdini) and attach with "
+    "houdini_connect {pid}. houdini_connect {launch} starts a new one now."
+)
+
+
+def launcher_exited_error(record: dict[str, Any]) -> ToolError:
+    """``houdini_offline`` for a Houdini an earlier bridge launched and that has exited."""
+    pid, launcher = record.get("pid"), record.get("launched_by")
+    if record.get("launcher_alive"):
+        cause = f"was launched by another HocusPocus server (pid {launcher}) and has exited"
+    else:
+        cause = f"was launched by an earlier HocusPocus server (pid {launcher}) and exited with it"
+    return ToolError(
+        "houdini_offline",
+        f"No Houdini is running: Houdini pid {pid} {cause}; its unsaved changes are lost.",
+        hint=KEEP_ALIVE_HINT,
+        retryable=False,
+        detail={
+            "pid": pid,
+            "launched_by": launcher,
+            "hip": record.get("hip") or None,
+            "mode": record.get("mode"),
+        },
+    )
+
+
 def _error_result(
     error: dict[str, Any], meta: dict[str, Any] | None = None
 ) -> types.CallToolResult:
@@ -73,6 +101,7 @@ class Bridge:
         client_factory: Callable[[int, str], HostClient] = HostClient,
         scan: Callable[[], list[registry.Instance]] | None = None,
         launcher: Launcher | None = None,
+        launches: registry.LaunchLog | None = None,
     ) -> None:
         self.config = config or BridgeConfig.load()
         profile = self.config.profile if self.config.profile in ("core", "full") else "core"
@@ -82,7 +111,10 @@ class Bridge:
         self._by_name = {spec.name: spec for spec in self.tools}
         self.client_factory = client_factory
         self.scan: Callable[[], list[registry.Instance]] = scan or (lambda: registry.scan())
-        self.launcher = launcher or Launcher(self.config.hfs or None, scan=self.scan)
+        self.launches = launches or registry.LaunchLog()
+        self.launcher = launcher or Launcher(
+            self.config.hfs or None, scan=self.scan, launches=self.launches
+        )
         self.preferred_pid: int | None = None
         self.last_target: registry.Instance | None = None
         """The instance the last forwarded call went to, to name it if it exits."""
@@ -114,6 +146,9 @@ class Bridge:
         if sel.instance is None:
             if exited is not None:
                 raise self._exited_error(exited, "")
+            orphans = self.launches.take_orphans()
+            if orphans:
+                raise launcher_exited_error(orphans[0])
             raise ToolError(
                 "houdini_offline",
                 "No live Houdini instance with HocusPocus is running.",

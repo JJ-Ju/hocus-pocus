@@ -21,6 +21,13 @@ from hocuspocus.tools.errors import ToolError
 
 pytestmark = pytest.mark.unit
 
+
+@pytest.fixture(autouse=True)
+def isolated_state(tmp_path, monkeypatch):
+    """Launch records and registry reads stay in a temp state dir."""
+    monkeypatch.setenv("HOCUSPOCUS_STATE_DIR", str(tmp_path / "state"))
+
+
 OBJ = {"type": "object", "additionalProperties": False}
 
 FAKE_TOOLS = (
@@ -287,6 +294,32 @@ def test_offline_names_the_houdini_that_exited():
     assert error["retryable"] is False
     assert "hip: 'C:/work/a.hip'" in error["hint"]
     assert error["detail"] == {"pid": 4242, "hip": "C:/work/a.hip"}
+
+
+def test_offline_names_the_earlier_server_that_launched_houdini(tmp_path):
+    """Review 11 B1: a later bridge says why nothing runs and how to keep Houdini alive."""
+    from hocuspocus.bridge.instances import LaunchLog
+
+    launches = LaunchLog(tmp_path / "launches")
+    launches.directory.mkdir(parents=True)
+    (launches.directory / "22740.json").write_text(
+        json.dumps({"pid": 22740, "launched_by": 51010, "mode": "headless", "hip": ""})
+    )
+    client = FakeClient()
+    bridge = Bridge(
+        BridgeConfig(),
+        tools=FAKE_TOOLS,
+        client_factory=lambda port, token: client,
+        scan=lambda: [],
+        launches=launches,
+    )
+    error = bridge.call_tool("node_info", {"paths": ["/obj"]}).structured_content
+    assert error["code"] == "houdini_offline" and error["retryable"] is False
+    assert "pid 22740" in error["message"] and "server (pid 51010)" in error["message"]
+    assert "keep one MCP session open" in error["hint"] and "{pid}" in error["hint"]
+    assert error["detail"]["launched_by"] == 51010
+    again = bridge.call_tool("node_info", {"paths": ["/obj"]}).structured_content
+    assert "22740" not in again["message"]  # reported once
 
 
 def test_exit_mid_call_is_reported_as_an_exit():

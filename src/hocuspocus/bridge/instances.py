@@ -6,10 +6,12 @@ deletes entries whose pid is dead, and picks a target with :func:`select`.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
 import sys
+import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -32,6 +34,8 @@ class Instance:
     started: str = ""
     generation: int = 0
     label: str = ""
+    launched_by: int | None = None
+    """The pid of the HocusPocus bridge that launched this Houdini, if one did."""
     file: Path | None = field(default=None, compare=False)
 
     @classmethod
@@ -47,6 +51,7 @@ class Instance:
             started=str(data.get("started") or ""),
             generation=int(data.get("generation") or 0),
             label=str(data.get("label") or ""),
+            launched_by=_optional_pid(data.get("launched_by")),
             file=file,
         )
 
@@ -61,7 +66,16 @@ class Instance:
             "hip": self.hip,
             "started": self.started,
             "generation": self.generation,
+            "launched_by": self.launched_by,
         }
+
+
+def _optional_pid(value: Any) -> int | None:
+    try:
+        pid = int(value)
+    except (TypeError, ValueError):
+        return None
+    return pid if pid > 0 else None
 
 
 # -- liveness ------------------------------------------------------------------------------
@@ -193,3 +207,76 @@ def select(instances: list[Instance], preferred_pid: int | None = None) -> Selec
             f"Others: {others}. Pin one with houdini_connect {{pid}}."
         )
     return Selection(chosen, tuple(warnings), len(ordered))
+
+
+# -- launch records ----------------------------------------------------------------------
+
+LAUNCH_RECORD_MAX_AGE_S = 7 * 24 * 3600.0
+
+
+class LaunchLog:
+    """``<state_dir>/launches/<pid>.json``: which bridge launched which Houdini.
+
+    The registry entry of a Houdini that died with the bridge that launched it is gone (or
+    pruned) by the time a later bridge starts, so the launch is recorded separately: the
+    later bridge can then say *why* nothing is running (review 11 B1).
+    """
+
+    def __init__(self, directory: Path | None = None) -> None:
+        self.directory = directory if directory is not None else paths.state_dir() / "launches"
+
+    def record(self, inst: Instance, *, mode: str, outlives_server: bool) -> None:
+        data = {
+            "pid": inst.pid,
+            "launched_by": os.getpid(),
+            "mode": mode,
+            "hip": inst.hip,
+            "started": inst.started,
+            "outlives_server": outlives_server,
+            "recorded": time.time(),
+        }
+        try:
+            paths.ensure_private_dir(self.directory)
+            (self.directory / f"{inst.pid}.json").write_text(json.dumps(data), encoding="utf-8")
+        except OSError as exc:
+            log.debug("cannot record launch of pid %s: %s", inst.pid, exc)
+
+    def _entries(self) -> list[tuple[Path, dict[str, Any]]]:
+        out = []
+        try:
+            files = sorted(self.directory.glob("*.json"))
+        except OSError:
+            return out
+        for file in files:
+            try:
+                data = json.loads(file.read_text(encoding="utf-8"))
+                int(data["pid"])
+            except (OSError, ValueError, KeyError, TypeError):
+                continue
+            out.append((file, data))
+        return out
+
+    def take_orphans(
+        self, *, own_pid: int | None = None, alive: Callable[[int], bool] = pid_alive
+    ) -> list[dict[str, Any]]:
+        """Records of launched Houdinis that have exited, launched by another bridge;
+        each is reported once (its file is removed). Stale records are pruned."""
+        own_pid = os.getpid() if own_pid is None else own_pid
+        found: list[dict[str, Any]] = []
+        now = time.time()
+        for file, data in self._entries():
+            pid = int(data["pid"])
+            if alive(pid):
+                continue
+            launcher = _optional_pid(data.get("launched_by"))
+            if launcher is not None and launcher != own_pid:
+                recorded = data.get("recorded")
+                fresh = not isinstance(recorded, int | float) or (
+                    now - recorded < LAUNCH_RECORD_MAX_AGE_S
+                )
+                if fresh:
+                    found.append(dict(data, launcher_alive=alive(launcher)))
+            with contextlib.suppress(OSError):
+                file.unlink()
+        found.sort(key=lambda d: str(d.get("started") or ""), reverse=True)
+        return found

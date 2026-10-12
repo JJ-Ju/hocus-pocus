@@ -26,6 +26,9 @@ from . import instances as registry
 EXE = ".exe" if sys.platform == "win32" else ""
 DEFAULT_WAIT_S = 90.0
 POLL_INTERVAL_S = 0.5
+LAUNCHED_BY_ENV = "HOCUSPOCUS_LAUNCHED_BY"
+"""Set in a launched Houdini's environment to this bridge's pid; the host copies it into
+its registry entry as ``launched_by`` (shown in ``houdini_status.instances[]``)."""
 
 
 # -- HFS detection -------------------------------------------------------------------------
@@ -130,18 +133,108 @@ def default_spawner(argv: list[str], env: dict[str, str], cwd: Path, log_path: P
         kwargs["start_new_session"] = True
     try:
         try:
-            return subprocess.Popen(argv, **kwargs)
+            proc = subprocess.Popen(argv, **kwargs)
         except OSError:
             if sys.platform == "win32" and kwargs["creationflags"] & getattr(
                 subprocess, "CREATE_BREAKAWAY_FROM_JOB", 0
             ):
-                # Breakaway is refused inside some job objects; launch without it.
+                # Breakaway is refused inside some job objects; launch without it (and
+                # report it: the child then shares the bridge's job and its fate).
                 kwargs["creationflags"] &= ~subprocess.CREATE_BREAKAWAY_FROM_JOB
-                return subprocess.Popen(argv, **kwargs)
+                proc = subprocess.Popen(argv, **kwargs)
+                proc.hp_breakaway = False  # type: ignore[attr-defined]
+                return proc
             raise
+        proc.hp_breakaway = sys.platform == "win32" and bool(  # type: ignore[attr-defined]
+            kwargs["creationflags"] & getattr(subprocess, "CREATE_BREAKAWAY_FROM_JOB", 0)
+        )
+        return proc
     finally:
         if log_path is not None:
             out.close()
+
+
+JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x2000
+
+
+def child_outlives_server(proc: Any) -> bool:
+    """Whether a launched child should survive this bridge process exiting.
+
+    POSIX: the child runs in its own session, so the bridge's exit (and signals to its
+    process group) do not reach it. Windows: the child survives unless it shares a job
+    object that kills its processes when the job closes (breakaway refused). Neither can
+    see a client that kills the bridge's whole process tree, hence "should".
+    """
+    if sys.platform != "win32":
+        return True
+    try:
+        in_job = _process_in_job(proc._handle)
+    except Exception:
+        return bool(getattr(proc, "hp_breakaway", False))
+    if not in_job:
+        return True
+    try:
+        return not _own_job_kills_on_close()
+    except Exception:
+        return False
+
+
+def _process_in_job(handle: Any) -> bool:
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.IsProcessInJob.argtypes = (
+        wintypes.HANDLE,
+        wintypes.HANDLE,
+        ctypes.POINTER(wintypes.BOOL),
+    )
+    result = wintypes.BOOL()
+    if not kernel32.IsProcessInJob(wintypes.HANDLE(int(handle)), None, ctypes.byref(result)):
+        raise OSError(ctypes.get_last_error(), "IsProcessInJob failed")
+    return bool(result.value)
+
+
+def _own_job_kills_on_close() -> bool:
+    """True when the job this process runs in kills every member when it closes."""
+    import ctypes
+    from ctypes import wintypes
+
+    class BasicLimits(ctypes.Structure):
+        _fields_ = [
+            ("PerProcessUserTimeLimit", ctypes.c_int64),
+            ("PerJobUserTimeLimit", ctypes.c_int64),
+            ("LimitFlags", wintypes.DWORD),
+            ("MinimumWorkingSetSize", ctypes.c_size_t),
+            ("MaximumWorkingSetSize", ctypes.c_size_t),
+            ("ActiveProcessLimit", wintypes.DWORD),
+            ("Affinity", ctypes.c_size_t),
+            ("PriorityClass", wintypes.DWORD),
+            ("SchedulingClass", wintypes.DWORD),
+        ]
+
+    class ExtendedLimits(ctypes.Structure):
+        _fields_ = [
+            ("BasicLimitInformation", BasicLimits),
+            ("IoInfo", ctypes.c_uint64 * 6),
+            ("ProcessMemoryLimit", ctypes.c_size_t),
+            ("JobMemoryLimit", ctypes.c_size_t),
+            ("PeakProcessMemoryUsed", ctypes.c_size_t),
+            ("PeakJobMemoryUsed", ctypes.c_size_t),
+        ]
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    info = ExtendedLimits()
+    job_object_extended_limit_information = 9
+    if not kernel32.QueryInformationJobObject(
+        None,
+        job_object_extended_limit_information,
+        ctypes.byref(info),
+        ctypes.sizeof(info),
+        None,
+    ):
+        raise OSError(ctypes.get_last_error(), "QueryInformationJobObject failed")
+    return bool(info.BasicLimitInformation.LimitFlags & JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE)
 
 
 @dataclass(frozen=True, slots=True)
@@ -150,6 +243,8 @@ class LaunchResult:
     mode: str
     argv: tuple[str, ...]
     log: str | None
+    outlives_server: bool = False
+    """Whether the child should survive this bridge's exit (:func:`child_outlives_server`)."""
 
 
 class Launcher:
@@ -162,9 +257,13 @@ class Launcher:
         sleep: Callable[[float], None] = time.sleep,
         clock: Callable[[], float] = time.monotonic,
         environ: Mapping[str, str] | None = None,
+        outlives: Callable[[Any], bool] = child_outlives_server,
+        launches: registry.LaunchLog | None = None,
     ) -> None:
         self.config_hfs = config_hfs
         self.spawner = spawner
+        self.outlives = outlives
+        self._launches = launches
         self.scan = scan or (lambda: registry.scan())
         self.sleep = sleep
         self.clock = clock
@@ -172,6 +271,10 @@ class Launcher:
 
     def _env(self) -> dict[str, str]:
         return dict(os.environ if self.environ is None else self.environ)
+
+    @property
+    def launches(self) -> registry.LaunchLog:
+        return self._launches or registry.LaunchLog()
 
     def build(
         self, mode: str, hip: str | None
@@ -185,6 +288,7 @@ class Launcher:
             )
         env = self._env()
         env.setdefault("HFS", str(hfs))
+        env[LAUNCHED_BY_ENV] = str(os.getpid())
         # The untitled scene's $HIP/$JOB: renders to $HIP/... must not land in the state
         # dir next to instances/ and logs/ (review 07 papercut 3).
         cwd = paths.work_dir()
@@ -234,16 +338,20 @@ class Launcher:
                 hint="check the Houdini install and licence",
             ) from exc
         log_text = str(log_path) if log_path else None
+        try:
+            outlives = bool(self.outlives(proc))
+        except Exception:
+            outlives = False
         deadline = self.clock() + max(0.0, float(wait_s))
         while True:
             live = self.scan()
-            for inst in live:
-                if inst.pid == proc.pid:
-                    return LaunchResult(inst, mode, tuple(argv), log_text)
             # GUI launchers can hand off to a child process: accept any new registration.
-            fresh = [inst for inst in live if inst.pid not in before]
-            if fresh:
-                return LaunchResult(fresh[0], mode, tuple(argv), log_text)
+            found = next((inst for inst in live if inst.pid == proc.pid), None) or next(
+                (inst for inst in live if inst.pid not in before), None
+            )
+            if found is not None:
+                self.launches.record(found, mode=mode, outlives_server=outlives)
+                return LaunchResult(found, mode, tuple(argv), log_text, outlives)
             code = proc.poll()
             if code is not None:
                 raise ToolError(

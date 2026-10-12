@@ -39,6 +39,15 @@ def _utc_now() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
+def _launched_by() -> int | None:
+    """``HOCUSPOCUS_LAUNCHED_BY`` (set by the bridge launcher) as a pid, else None."""
+    try:
+        pid = int(os.environ.get("HOCUSPOCUS_LAUNCHED_BY", ""))
+    except ValueError:
+        return None
+    return pid if pid > 0 else None
+
+
 def setup_logging(config: HostConfig, logs_dir: Path, pid: int) -> logging.Logger:
     logger = logging.getLogger(LOGGER_NAME)
     logger.setLevel(getattr(logging, str(config.log_level).upper(), logging.INFO))
@@ -156,6 +165,8 @@ class Host:
                 "started": self.started,
                 "generation": self.scene.generation,
                 "label": self.label,
+                # The bridge pid that launched this Houdini (houdini_connect launch), if any.
+                "launched_by": _launched_by(),
             }
         )
         if not self._atexit_registered:

@@ -18,6 +18,17 @@ if TYPE_CHECKING:
 
 HOST_STATUS_TIMEOUT_S = 10.0
 
+DIES_WITH_SERVER_NOTE = (
+    "This Houdini shares this MCP server's job object and closes when the server exits "
+    "(the client ends both together): save with hip_save before the session ends, or start "
+    "Houdini yourself (after hocuspocus install-houdini) and attach with houdini_connect {pid}."
+)
+OUTLIVES_NOTE = (
+    "This Houdini is detached from this MCP server and should keep running after it exits, "
+    "unless the client kills the whole process tree; save with hip_save before the session "
+    "ends. A later session can attach to it with houdini_connect {pid}."
+)
+
 # Fields the host's own ``houdini_status`` answer may contribute to the connected block.
 _HOST_FIELDS = ("hip", "time", "env", "scene_generation", "host_version", "houdini", "ui", "recent")
 
@@ -133,11 +144,12 @@ def houdini_connect(bridge: Bridge, args: dict[str, Any]) -> dict[str, Any]:
         bridge.last_target = result.instance
         bridge.detached = False
         _split_settings(block)
-        launched: dict[str, Any] = {"mode": result.mode, "pid": result.instance.pid}
-        launched["note"] = (
-            "A Houdini started here lives as long as this MCP server process (the client "
-            "ends both together); save with hip_save before the session ends."
-        )
+        launched: dict[str, Any] = {
+            "mode": result.mode,
+            "pid": result.instance.pid,
+            "outlives_server": result.outlives_server,
+            "note": OUTLIVES_NOTE if result.outlives_server else DIES_WITH_SERVER_NOTE,
+        }
         if result.log:
             launched["log"] = result.log
         return {"connected": block, "launched": launched}

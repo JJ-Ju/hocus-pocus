@@ -69,7 +69,9 @@ class Harness:
         return list(self.live)
 
 
-def make_launcher(hfs: Path, harness: Harness, clock_step: float = 1.0) -> Launcher:
+def make_launcher(
+    hfs: Path, harness: Harness, clock_step: float = 1.0, outlives: bool | None = None
+) -> Launcher:
     t = [0.0]
 
     def clock():
@@ -78,8 +80,15 @@ def make_launcher(hfs: Path, harness: Harness, clock_step: float = 1.0) -> Launc
     def sleep(seconds):
         t[0] += clock_step
 
+    extra = {} if outlives is None else {"outlives": lambda proc: outlives}
     return Launcher(
-        str(hfs), spawner=harness.spawner, scan=harness.scan, sleep=sleep, clock=clock, environ={}
+        str(hfs),
+        spawner=harness.spawner,
+        scan=harness.scan,
+        sleep=sleep,
+        clock=clock,
+        environ={},
+        **extra,
     )
 
 
@@ -205,3 +214,57 @@ def test_houdini_connect_launch_path(tmp_path):
     assert out["launched"]["mode"] == "headless" and out["launched"]["pid"] == 9001
     assert bridge.preferred_pid == 9001
     assert len(harness.spawned) == 1
+    launched = out["launched"]
+    assert (
+        launched["outlives_server"] is False and "closes when the server exits" in launched["note"]
+    )
+
+
+def test_launch_marks_the_child_and_records_who_launched_it(tmp_path):
+    from hocuspocus.bridge.instances import LaunchLog
+    from hocuspocus.tools import paths
+
+    harness = Harness()
+    result = make_launcher(fake_hfs(tmp_path / "hfs"), harness, outlives=True).launch(
+        "headless", None, wait_s=30
+    )
+    _argv, env, _cwd, _log = harness.spawned[0]
+    assert env[launch.LAUNCHED_BY_ENV] == str(os.getpid())
+    assert result.outlives_server is True
+    record = paths.state_dir() / "launches" / "9001.json"
+    assert record.is_file()
+    (orphan,) = LaunchLog().take_orphans(own_pid=1, alive=lambda pid: False)
+    assert orphan["launched_by"] == os.getpid() and orphan["outlives_server"] is True
+
+
+def test_outlives_probe_failure_means_false(tmp_path):
+    def broken(proc):
+        raise OSError("no job api")
+
+    harness = Harness()
+    launcher = make_launcher(fake_hfs(tmp_path / "hfs"), harness)
+    launcher.outlives = broken
+    assert launcher.launch("headless", None, wait_s=30).outlives_server is False
+
+
+def test_child_outlives_server_reads_the_job(monkeypatch):
+    class Proc:
+        _handle = 1
+        hp_breakaway = True
+
+    monkeypatch.setattr(launch.sys, "platform", "win32")
+    monkeypatch.setattr(launch, "_process_in_job", lambda handle: False)
+    assert launch.child_outlives_server(Proc()) is True
+    monkeypatch.setattr(launch, "_process_in_job", lambda handle: True)
+    monkeypatch.setattr(launch, "_own_job_kills_on_close", lambda: True)
+    assert launch.child_outlives_server(Proc()) is False
+    monkeypatch.setattr(launch, "_own_job_kills_on_close", lambda: False)
+    assert launch.child_outlives_server(Proc()) is True
+
+    def fails(handle):
+        raise OSError("denied")
+
+    monkeypatch.setattr(launch, "_process_in_job", fails)
+    assert launch.child_outlives_server(Proc()) is True  # falls back to the breakaway flag
+    monkeypatch.setattr(launch.sys, "platform", "linux")
+    assert launch.child_outlives_server(object()) is True

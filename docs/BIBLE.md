@@ -814,6 +814,8 @@ Facts found while implementing, now reflected above:
 
 A Houdini started by `houdini_connect {launch}` is launched detached (new process group, and breakaway from the job object where Windows allows it), but in the verified setup (review 08) it still exited when the bridge that launched it exited. Treat it as owned by the bridge: it ends when the MCP client stops the bridge (end of a session, or a one-shot script exiting), and its unsaved work is lost. This is acceptable for interactive sessions; agents should `hip_save` before a session ends, or attach to a Houdini the user started.
 
+Since 1.0.1 this is visible rather than discovered: `houdini_connect {launch}` returns `launched.outlives_server` (false when the child shares the bridge's kill-on-close job object, i.e. breakaway was refused; the bridge cannot see a client that kills its whole process tree, so true means "should"); the launcher sets `HOCUSPOCUS_LAUNCHED_BY=<bridge pid>`, the host writes it into its registry entry as `launched_by`, and `houdini_status.instances[]` shows it; the bridge also records each launch in `<state_dir>/launches/<pid>.json`, so a later bridge that finds no live instance answers `houdini_offline` naming the dead Houdini and the server that launched it, with the keep-a-session-open / attach-by-pid hint. No new process-isolation mechanism was added.
+
 ## 16. Non-goals for 1.0
 
 HocusScript or any custom language; multi-user or remote (non-loopback) access;

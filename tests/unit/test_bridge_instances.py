@@ -121,3 +121,38 @@ def test_pid_alive_real_processes():
     assert not registry.pid_alive(proc.pid)
     assert not registry.pid_alive(0)
     assert not registry.pid_alive(-5)
+
+
+def test_launched_by_round_trips_and_is_public():
+    inst = registry.Instance.from_dict({"pid": 5, "port": 1, "token": "t", "launched_by": 77})
+    assert inst.launched_by == 77 and inst.public()["launched_by"] == 77
+    plain = registry.Instance.from_dict({"pid": 5, "port": 1, "token": "t"})
+    assert plain.launched_by is None and plain.public()["launched_by"] is None
+    assert "token" not in plain.public()
+
+
+def test_launch_log_reports_dead_launches_of_other_bridges_once(tmp_path):
+    log = registry.LaunchLog(tmp_path / "launches")
+    log.record(
+        registry.Instance(pid=101, port=1, token="t", hip="C:/w/a.hip", started="2026-10-12T10"),
+        mode="headless",
+        outlives_server=False,
+    )
+    log.record(registry.Instance(pid=102, port=1, token="t"), mode="gui", outlives_server=True)
+    me = os.getpid()
+    # Recorded by this process: never an orphan of "another" bridge, but pruned once dead.
+    assert log.take_orphans(own_pid=me, alive=lambda pid: False) == []
+    assert list((tmp_path / "launches").glob("*.json")) == []
+
+    log.record(
+        registry.Instance(pid=101, port=1, token="t", hip="C:/w/a.hip"),
+        mode="headless",
+        outlives_server=False,
+    )
+    alive = {101: True, me: False}
+    assert log.take_orphans(own_pid=999, alive=lambda pid: alive.get(pid, False)) == []
+    alive[101] = False
+    (orphan,) = log.take_orphans(own_pid=999, alive=lambda pid: alive.get(pid, False))
+    assert orphan["pid"] == 101 and orphan["launched_by"] == me
+    assert orphan["launcher_alive"] is False and orphan["hip"] == "C:/w/a.hip"
+    assert log.take_orphans(own_pid=999, alive=lambda pid: False) == []  # reported once
