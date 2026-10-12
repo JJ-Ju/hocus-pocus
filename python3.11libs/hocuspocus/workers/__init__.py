@@ -1,1 +1,0 @@
-"""Worker execution plane scaffolding."""

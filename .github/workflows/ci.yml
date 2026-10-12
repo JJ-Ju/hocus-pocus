@@ -1,0 +1,62 @@
+# Lint (ruff check + ruff format --check) + unit tier + docs/tools.md freshness.
+# No Houdini needed (docs/BIBLE.md §11).
+name: ci
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint-unit:
+    name: lint + unit (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: astral-sh/setup-uv@v6
+
+      - name: Install (uv venv + editable dev install)
+        run: |
+          uv venv .venv
+          uv pip install -e ".[dev]"
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            echo "$GITHUB_WORKSPACE/.venv/Scripts" >> "$GITHUB_PATH"
+          else
+            echo "$GITHUB_WORKSPACE/.venv/bin" >> "$GITHUB_PATH"
+          fi
+
+      - name: ruff check
+        run: ruff check src tests
+
+      - name: ruff format --check
+        run: ruff format --check src tests
+
+      - name: Unit tests
+        run: python -m pytest tests/unit -q -p no:cacheprovider
+
+      - name: docs/tools.md is fresh
+        run: |
+          python -m hocuspocus.tools.docs "$RUNNER_TEMP/tools.md"
+          if ! git diff --no-index --exit-code docs/tools.md "$RUNNER_TEMP/tools.md"; then
+            echo "::error file=docs/tools.md::docs/tools.md is stale; run 'hocuspocus docs tools' and commit it"
+            exit 1
+          fi

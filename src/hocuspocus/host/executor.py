@@ -1,0 +1,251 @@
+"""Run callables on Houdini's main thread. Stdlib only. See docs/BIBLE.md §3.2.
+
+One class, two backends:
+
+* ``gui``: a ``hou.ui.addEventLoopCallback`` pump drains the queue on idle ticks
+  (what ``hdefereval`` is built on, without its missing timeout, main-thread deadlock
+  and lost tracebacks).
+* ``headless``: the main thread *is* the pump; the owner calls :meth:`pump_forever`
+  (``hython -m hocuspocus.host``) or :meth:`pump_once` (tests).
+
+Requests are serialised: the main thread executes one callable at a time.
+The scheduling primitive is injectable so both backends are unit-testable without ``hou``.
+"""
+
+from __future__ import annotations
+
+import contextlib
+import logging
+import queue
+import threading
+import time
+import traceback
+from collections.abc import Callable
+from typing import Any, Literal
+
+from hocuspocus.tools.errors import ToolError
+
+Backend = Literal["auto", "gui", "headless"]
+
+log = logging.getLogger("hocuspocus.host.executor")
+
+_GUI_DRAIN_BUDGET_S = 0.05
+
+
+class _Work:
+    __slots__ = ("fn", "done", "lock", "state", "result", "exc")
+
+    def __init__(self, fn: Callable[[], Any]) -> None:
+        self.fn = fn
+        self.done = threading.Event()
+        self.lock = threading.Lock()
+        self.state = "pending"  # pending | running | done | cancelled
+        self.result: Any = None
+        self.exc: BaseException | None = None
+
+
+class MainThreadExecutor:
+    """Marshal callables onto the main thread with a bounded wait."""
+
+    def __init__(
+        self,
+        backend: Backend = "auto",
+        *,
+        add_callback: Callable[[Callable[[], None]], Any] | None = None,
+        remove_callback: Callable[[Callable[[], None]], Any] | None = None,
+        main_thread_ident: int | None = None,
+    ) -> None:
+        self._queue: queue.Queue[_Work] = queue.Queue()
+        self._add_callback = add_callback
+        self._remove_callback = remove_callback
+        self._requested_backend = backend
+        self.backend: Literal["gui", "headless"] = "headless"
+        self.main_thread_ident: int | None = main_thread_ident
+        self._running = False
+        self._draining = False
+        self._current: _Work | None = None
+
+    # -- lifecycle ---------------------------------------------------------------
+
+    @property
+    def running(self) -> bool:
+        return self._running
+
+    def start(self) -> None:
+        """Choose the backend and begin accepting work. Idempotent."""
+        if self._running:
+            return
+        if self.main_thread_ident is None:
+            # Inside Houdini the interpreter's main thread is Houdini's main thread.
+            self.main_thread_ident = threading.main_thread().ident
+        self.backend = self._resolve_backend()
+        if self.backend == "gui":
+            if self._add_callback is None:
+                import hou
+
+                self._add_callback = hou.ui.addEventLoopCallback
+                self._remove_callback = hou.ui.removeEventLoopCallback
+            self._add_callback(self._on_idle)
+        self._running = True
+        log.debug("executor started (%s backend)", self.backend)
+
+    def stop(self) -> None:
+        """Stop accepting work and fail anything still queued. Idempotent."""
+        if not self._running:
+            return
+        self._running = False
+        if self.backend == "gui" and self._remove_callback is not None:
+            try:
+                self._remove_callback(self._on_idle)
+            except Exception:  # pragma: no cover - Houdini may already be tearing down
+                log.debug("removeEventLoopCallback failed", exc_info=True)
+        while True:
+            try:
+                work = self._queue.get_nowait()
+            except queue.Empty:
+                break
+            with work.lock:
+                if work.state == "pending":
+                    work.state = "cancelled"
+                    work.exc = ToolError("houdini_offline", "The HocusPocus host stopped.")
+                    work.done.set()
+
+    def _resolve_backend(self) -> Literal["gui", "headless"]:
+        if self._requested_backend == "gui":
+            return "gui"
+        if self._requested_backend == "headless":
+            return "headless"
+        if self._add_callback is not None:
+            return "gui"
+        try:
+            import hou
+
+            return "gui" if hou.isUIAvailable() else "headless"
+        except ImportError:
+            return "headless"
+
+    # -- submission --------------------------------------------------------------
+
+    def on_main_thread(self) -> bool:
+        ident = self.main_thread_ident or threading.main_thread().ident
+        return threading.get_ident() == ident
+
+    def run(self, fn: Callable[[], Any], timeout_s: float) -> Any:
+        """Execute ``fn`` on the main thread and return its result.
+
+        Runs inline when already on the main thread. Raises ``ToolError("houdini_busy")``
+        when the main thread does not finish within ``timeout_s``: work that had not
+        started is cancelled; work that had started still completes and its result is
+        discarded. Exceptions raised by ``fn`` are re-raised here with the main-thread
+        traceback text attached as ``exc.hp_traceback``.
+        """
+        if self.on_main_thread():
+            return fn()
+        if not self._running:
+            raise ToolError(
+                "houdini_offline",
+                "The HocusPocus host is not running.",
+                hint="Restart the host (hocuspocus.host.start()) or call houdini_connect.",
+            )
+        work = _Work(fn)
+        self._queue.put(work)
+        if not work.done.wait(timeout_s):
+            with work.lock:
+                started = work.state != "pending"
+                if not started:
+                    work.state = "cancelled"
+            if started:
+                message = (
+                    f"Houdini's main thread did not finish the call within {timeout_s:g}s. "
+                    "The call is still running; its result will be discarded."
+                )
+                hint = (
+                    "Inspect the scene before repeating a mutation. Raise timeout_s for long "
+                    "operations, or use a job."
+                )
+            else:
+                message = (
+                    f"Houdini's main thread was busy for {timeout_s:g}s (a modal dialog, a "
+                    "long cook, or another call); the call was not started."
+                )
+                hint = "Retry shortly; the call had no effect."
+            raise ToolError(
+                "houdini_busy",
+                message,
+                hint=hint,
+                detail={"started": started, "timeout_s": timeout_s},
+            )
+        if work.exc is not None:
+            raise work.exc
+        return work.result
+
+    def post(self, fn: Callable[[], Any]) -> None:
+        """Queue ``fn`` for the main thread without waiting (fire and forget)."""
+        self._queue.put(_Work(fn))
+
+    # -- pumping -----------------------------------------------------------------
+
+    def pump_once(self, timeout_s: float = 0.0) -> bool:
+        """Execute at most one queued callable. Returns True when one ran.
+
+        Must be called on the main thread (headless backend, or tests).
+        """
+        try:
+            work = self._queue.get(timeout=timeout_s) if timeout_s > 0 else self._queue.get_nowait()
+        except queue.Empty:
+            return False
+        self._execute(work)
+        return True
+
+    def pump_forever(self, stop_event: threading.Event, poll_s: float = 0.05) -> None:
+        """Headless main loop: drain the queue until ``stop_event`` is set."""
+        while not stop_event.is_set():
+            self.pump_once(poll_s)
+        # Drain whatever arrived before shutdown so no caller waits for its timeout.
+        while self.pump_once(0.0):
+            pass
+
+    def _on_idle(self) -> None:
+        """GUI event-loop callback. Not re-entrant: a nested event loop skips draining."""
+        if self._draining:
+            return
+        self._draining = True
+        try:
+            deadline = time.monotonic() + _GUI_DRAIN_BUDGET_S
+            while time.monotonic() < deadline:
+                try:
+                    work = self._queue.get_nowait()
+                except queue.Empty:
+                    break
+                self._execute(work)
+        finally:
+            self._draining = False
+
+    def _execute(self, work: _Work) -> None:
+        with work.lock:
+            if work.state != "pending":
+                return
+            work.state = "running"
+        self._current = work
+        reraise: BaseException | None = None
+        try:
+            work.result = work.fn()
+        except BaseException as exc:  # transported to the caller
+            work.exc = exc
+            with contextlib.suppress(Exception):  # exceptions that reject attributes
+                exc.hp_traceback = traceback.format_exc()  # type: ignore[attr-defined]
+            if isinstance(exc, KeyboardInterrupt | SystemExit):
+                reraise = exc
+        finally:
+            self._current = None
+            work.state = "done"
+            work.done.set()
+        if reraise is not None:
+            raise reraise
+
+    @property
+    def busy(self) -> bool:
+        return self._current is not None
+
+    def pending(self) -> int:
+        return self._queue.qsize()

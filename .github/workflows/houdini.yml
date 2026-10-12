@@ -1,0 +1,91 @@
+# Integration (inside hython) + e2e tiers against a real, licensed Houdini.
+#
+# REQUIRES A SELF-HOSTED RUNNER labelled `houdini` (Windows, Houdini 22 installed and
+# licensed). GitHub-hosted runners cannot run hython. Runs nightly, on manual dispatch and
+# on PRs carrying the `houdini` label. See docs/CONTRIBUTING.md, "Running tests".
+#
+# hython is taken from the repository/organisation variable HOUDINI_HYTHON, else from a
+# HOUDINI_HYTHON environment variable set on the runner, else auto-detected by
+# tests/conftest.py ($HFS/bin or the newest Side Effects Software/Houdini 22.*).
+# Every run uses an isolated HOUDINI_USER_PREF_DIR, an isolated HOCUSPOCUS_STATE_DIR and a
+# neutral working directory under $RUNNER_TEMP; nothing touches the runner user's real
+# Houdini prefs, and port 37219 is never used.
+name: houdini
+
+on:
+  schedule:
+    - cron: "17 3 * * *"   # nightly, 03:17 UTC (BIBLE §11)
+  workflow_dispatch:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: houdini-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  houdini-tiers:
+    name: integration + e2e (self-hosted Houdini)
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' || contains(github.event.pull_request.labels.*.name, 'houdini')
+    runs-on: [self-hosted, houdini]
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+
+      - name: Resolve hython
+        run: |
+          $hython = "${{ vars.HOUDINI_HYTHON }}"
+          if (-not $hython) { $hython = $env:HOUDINI_HYTHON }
+          if (-not $hython) {
+            $hython = Get-ChildItem "$env:ProgramFiles\Side Effects Software\Houdini 22.*\bin\hython.exe" -ErrorAction SilentlyContinue |
+              Sort-Object { [version]($_.Directory.Parent.Name -replace '^Houdini ', '') } |
+              Select-Object -Last 1 -ExpandProperty FullName
+          }
+          if (-not $hython -or -not (Test-Path $hython)) {
+            Write-Error "hython not found; set the HOUDINI_HYTHON variable for this runner"
+            exit 1
+          }
+          "HOUDINI_HYTHON=$hython" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          & $hython -c "import hou; print(hou.applicationVersionString())"
+
+      - name: Install (uv venv + editable dev install)
+        run: |
+          uv venv .venv --python 3.12
+          uv pip install -e ".[dev]"
+
+      - name: Install pytest for hython (scratch dir, outside the repo)
+        run: |
+          $deps = Join-Path $env:RUNNER_TEMP "hy-deps"
+          & $env:HOUDINI_HYTHON -m pip install --disable-pip-version-check --target $deps pytest pytest-timeout
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Integration tier (hython -m pytest tests/integration)
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP "hp-it"
+          $cwd = Join-Path $root "cwd"
+          New-Item -ItemType Directory -Force $cwd | Out-Null
+          $env:HOUDINI_USER_PREF_DIR = Join-Path $root "prefs\houdini__HVER__"
+          $env:HOCUSPOCUS_STATE_DIR = Join-Path $root "state"
+          $env:PYTHONPATH = "$(Join-Path $env:RUNNER_TEMP 'hy-deps');$env:GITHUB_WORKSPACE\src"
+          Set-Location $cwd
+          & $env:HOUDINI_HYTHON -m pytest "$env:GITHUB_WORKSPACE\tests\integration" -q `
+            -p no:cacheprovider --rootdir "$env:GITHUB_WORKSPACE"
+          exit $LASTEXITCODE
+
+      - name: E2E tier (official MCP client -> hocuspocus-mcp -> hython host)
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP "hp-e2e"
+          New-Item -ItemType Directory -Force $root | Out-Null
+          $env:HOCUSPOCUS_STATE_DIR = Join-Path $root "state"
+          & "$env:GITHUB_WORKSPACE\.venv\Scripts\python.exe" -m pytest tests/e2e -q -p no:cacheprovider
+          exit $LASTEXITCODE

@@ -1,0 +1,194 @@
+"""Per-instance registry files: ``<state_dir>/instances/<pid>.json``. Stdlib only.
+
+See docs/BIBLE.md §3.2. Each live host writes one entry with its port and token; the
+bridge discovers hosts by listing the directory and treats entries whose pid is dead as
+stale. Writes are atomic (temp file + ``os.replace``) and user-private where the OS
+allows (POSIX mode 0600; on Windows the per-user ``%LOCALAPPDATA%`` ACL applies).
+"""
+
+from __future__ import annotations
+
+import contextlib
+import json
+import logging
+import os
+import secrets
+import sys
+import threading
+from pathlib import Path
+from typing import Any
+
+from hocuspocus.tools.catalog import HP_RPC_VERSION
+from hocuspocus.tools.paths import ensure_private_dir
+
+log = logging.getLogger("hocuspocus.host.registry")
+
+ENTRY_FIELDS = (
+    "hp",
+    "pid",
+    "port",
+    "token",
+    "houdini",
+    "ui",
+    "hip",
+    "started",
+    "generation",
+    "label",
+)
+
+
+def new_token() -> str:
+    return secrets.token_urlsafe(32)
+
+
+def pid_alive(pid: int) -> bool:
+    """True when a process with ``pid`` exists. Never signals or terminates anything.
+
+    Windows: ``OpenProcess`` + ``GetExitCodeProcess`` (``os.kill`` there would *terminate*
+    the process). POSIX: ``os.kill(pid, 0)``. A process that exited with code 259
+    (``STILL_ACTIVE``) is indistinguishable from a live one; that is acceptable here.
+    """
+    if not isinstance(pid, int) or pid <= 0:
+        return False
+    if sys.platform == "win32":
+        return _pid_alive_windows(pid)
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def _pid_alive_windows(pid: int) -> bool:
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+    kernel32.GetExitCodeProcess.argtypes = (wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD))
+    kernel32.GetExitCodeProcess.restype = wintypes.BOOL
+    kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+
+    process_query_limited_information = 0x1000
+    error_access_denied = 5
+    still_active = 259
+
+    handle = kernel32.OpenProcess(process_query_limited_information, False, pid)
+    if not handle:
+        # Access denied means the process exists but belongs to someone else.
+        return ctypes.get_last_error() == error_access_denied
+    try:
+        code = wintypes.DWORD()
+        if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+            return True
+        return code.value == still_active
+    finally:
+        kernel32.CloseHandle(handle)
+
+
+def _write_private_atomic(path: Path, text: str) -> None:
+    ensure_private_dir(path.parent)
+    tmp = path.with_name(f".{path.name}.{secrets.token_hex(4)}.tmp")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
+    fd = os.open(tmp, flags, 0o600)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(text.encode("utf-8"))
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+        raise
+
+
+def read_entry(path: Path) -> dict[str, Any] | None:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def list_entries(directory: Path) -> list[dict[str, Any]]:
+    """All parseable entries, without liveness filtering."""
+    entries = []
+    if not directory.is_dir():
+        return entries
+    for path in sorted(directory.glob("*.json")):
+        entry = read_entry(path)
+        if entry is not None:
+            entries.append(entry)
+    return entries
+
+
+def prune_stale(directory: Path, *, alive=pid_alive) -> list[Path]:
+    """Delete entries whose pid is dead or whose file is unreadable. Returns removed paths."""
+    removed: list[Path] = []
+    if not directory.is_dir():
+        return removed
+    for path in directory.glob("*.json"):
+        if not path.stem.isdigit():
+            continue  # not a registry entry
+        entry = read_entry(path)
+        pid = entry.get("pid") if entry else None
+        if entry is None or not isinstance(pid, int) or not alive(pid):
+            try:
+                path.unlink()
+                removed.append(path)
+            except FileNotFoundError:
+                pass
+            except OSError as exc:
+                log.debug("cannot remove stale registry entry %s: %s", path, exc)
+    return removed
+
+
+class InstanceRegistry:
+    """This process's registry entry."""
+
+    def __init__(self, directory: Path, pid: int | None = None) -> None:
+        self.directory = Path(directory)
+        self.pid = os.getpid() if pid is None else pid
+        self.path = self.directory / f"{self.pid}.json"
+        self._entry: dict[str, Any] = {}
+        self._lock = threading.Lock()
+
+    @property
+    def entry(self) -> dict[str, Any]:
+        with self._lock:
+            return dict(self._entry)
+
+    def write(self, entry: dict[str, Any]) -> Path:
+        with self._lock:
+            data = {"hp": HP_RPC_VERSION, "pid": self.pid}
+            data.update(entry)
+            self._entry = data
+            _write_private_atomic(self.path, json.dumps(data, indent=1, sort_keys=False))
+        return self.path
+
+    def update(self, **fields: Any) -> None:
+        with self._lock:
+            if not self._entry:
+                return
+            changed = {k: v for k, v in fields.items() if self._entry.get(k) != v}
+            if not changed:
+                return
+            self._entry.update(changed)
+            data = dict(self._entry)
+            _write_private_atomic(self.path, json.dumps(data, indent=1))
+
+    def remove(self) -> None:
+        with self._lock:
+            self._entry = {}
+            try:
+                self.path.unlink()
+            except FileNotFoundError:
+                pass
+            except OSError as exc:
+                log.warning("cannot remove registry entry %s: %s", self.path, exc)

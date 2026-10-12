@@ -1,2 +1,0 @@
-# Offline HS8 release-authority signature verification.
-cryptography==45.0.3

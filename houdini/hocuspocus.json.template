@@ -1,0 +1,7 @@
+{
+    "load_package_once": true,
+    "env": [
+        {"PYTHONPATH": {"value": "{{PYTHON_DIR}}", "method": "prepend"}}
+    ],
+    "hpath": "{{PAYLOAD_DIR}}"
+}
