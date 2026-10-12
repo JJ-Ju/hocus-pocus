@@ -22,19 +22,14 @@ from __future__ import annotations
 
 from typing import Any
 
-from hocuspocus.tools.errors import ToolError, read_only_error
+from hocuspocus.tools.errors import ToolError
 
 from ..undo import LABEL_PREFIX, hou_undo_group, make_label
-from .nodes import bad_arg, get_node, hou_exception_text, hou_message
+from ._common import bad_arg, get_node, hou_exception_text, hou_message, number, refuse_if_read_only
 from .registry import HostContext, tool
-from .session import scene_dirty
+from .session import scene_dirty, time_block
 
 HISTORY_LIMIT = 20
-
-
-def _refuse_if_read_only(ctx: HostContext, what: str) -> None:
-    if ctx.config.read_only:
-        raise read_only_error(what)
 
 
 def _labels(fn: Any) -> list[str]:
@@ -83,7 +78,7 @@ def undo(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     steps = args.get("steps", 1)
     if isinstance(steps, bool) or not isinstance(steps, int) or steps < 1:
         raise bad_arg(f"steps must be an integer >= 1; got {steps!r}.")
-    _refuse_if_read_only(ctx, action.capitalize())
+    refuse_if_read_only(ctx, action.capitalize())
     labels_fn = hou.undos.undoLabels if action == "undo" else hou.undos.redoLabels
     perform = hou.undos.performUndo if action == "undo" else hou.undos.performRedo
     performed: list[str] = []
@@ -116,28 +111,6 @@ def undo(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
 # -- time -------------------------------------------------------------------------------
 
 
-def _number(value: Any, field: str) -> float:
-    if isinstance(value, bool) or not isinstance(value, int | float):
-        raise bad_arg(f"'{field}' must be a number; got {value!r}.")
-    return float(value)
-
-
-def _num_out(value: float) -> float | int:
-    value = float(value)
-    return int(value) if value.is_integer() else round(value, 6)
-
-
-def time_block() -> dict[str, Any]:
-    import hou
-
-    return {
-        "frame": _num_out(hou.frame()),
-        "fps": _num_out(hou.fps()),
-        "range": [_num_out(v) for v in hou.playbar.frameRange()],
-        "playback_range": [_num_out(v) for v in hou.playbar.playbackRange()],
-    }
-
-
 @tool("time", scene=False)
 def time_(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     import hou
@@ -146,9 +119,9 @@ def time_(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     frame_range = args.get("range")
     fps = args.get("fps")
     if frame is not None:
-        frame = _number(frame, "frame")
+        frame = number(frame, "frame")
     if fps is not None:
-        fps = _number(fps, "fps")
+        fps = number(fps, "fps")
         if fps <= 0:
             raise bad_arg(f"'fps' must be greater than 0; got {fps:g}.")
     if frame_range is not None:
@@ -157,7 +130,7 @@ def time_(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
                 f"'range' must be [start, end]; got {frame_range!r}.",
                 hint="Pass two frame numbers, e.g. range: [1, 120].",
             )
-        start, end = (_number(v, "range") for v in frame_range)
+        start, end = (number(v, "range") for v in frame_range)
         if end < start:
             raise bad_arg(
                 f"'range' end ({end:g}) is before its start ({start:g}).",
@@ -166,7 +139,7 @@ def time_(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
         frame_range = (start, end)
     changes_settings = fps is not None or frame_range is not None
     if changes_settings:
-        _refuse_if_read_only(ctx, "Changing the frame range or fps")
+        refuse_if_read_only(ctx, "Changing the frame range or fps")
     # Order matters: setFps rescales the frame range, so fps first, then the range, then
     # the current frame.
     if fps is not None and fps != hou.fps():

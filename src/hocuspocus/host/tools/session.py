@@ -103,11 +103,22 @@ def hip_block(ctx: HostContext, *, include_recent: bool = True) -> dict[str, Any
     return block
 
 
+def _num_out(value: float) -> float | int:
+    value = float(value)
+    return int(value) if value.is_integer() else round(value, 6)
+
+
 def time_block() -> dict[str, Any]:
+    """The one time block (``houdini_status`` and ``time``): frame, fps, frame range and
+    playback range, integral values as integers."""
     import hou
 
-    start, end = hou.playbar.frameRange()
-    return {"frame": hou.frame(), "fps": hou.fps(), "range": [start, end]}
+    return {
+        "frame": _num_out(hou.frame()),
+        "fps": _num_out(hou.fps()),
+        "range": [_num_out(v) for v in hou.playbar.frameRange()],
+        "playback_range": [_num_out(v) for v in hou.playbar.playbackRange()],
+    }
 
 
 def env_block() -> dict[str, Any]:

@@ -19,7 +19,22 @@ from typing import Any
 
 from hocuspocus.tools.errors import ToolError
 
-from ._diag import a_or_an, cheap_cook_problems, collect_problems, require_node
+from ._common import (  # noqa: F401 (re-exported for the other tool modules)
+    CURSOR_HINT,
+    DEFAULT_LIMIT,
+    ROW_ENVELOPE_BYTES,
+    arg_bool,
+    arg_list,
+    bad_arg,
+    compact_size,
+    get_node,
+    hou_exception_text,
+    hou_message,
+    page,
+    parse_limit,
+    response_budget,
+)
+from ._diag import a_or_an, cheap_cook_problems, collect_problems
 from .registry import HostContext, tool
 
 NODE_INFO_SECTIONS = (
@@ -31,7 +46,6 @@ FLAG_NAMES = ("display", "render", "bypass", "template", "locked")
 SETTABLE_FLAGS = ("display", "render", "bypass", "template")
 NAME_RE = re.compile(r"^[A-Za-z0-9_.\-]+$")
 CHILDREN_LIST_LIMIT = 200
-DEFAULT_LIMIT = 50
 
 _FLAG_GETTERS = {
     "display": "isDisplayFlagSet",
@@ -51,49 +65,6 @@ _FLAG_SETTERS = {
 # -- generic helpers --------------------------------------------------------------
 
 
-ARG_HINT = "Check the argument against the tool's schema (docs/tools.md)."
-
-
-def bad_arg(message: str, **kw: Any) -> ToolError:
-    """An ``invalid_argument`` error; every error carries a hint (docs/BIBLE.md §1.5)."""
-    kw.setdefault("hint", ARG_HINT)
-    return ToolError("invalid_argument", message, **kw)
-
-
-def hou_message(exc: BaseException) -> str:
-    getter = getattr(exc, "instanceMessage", None)
-    if callable(getter):
-        with contextlib.suppress(Exception):
-            text = str(getter()).strip()
-            if text:
-                return " ".join(text.split())
-    return str(exc).strip() or type(exc).__name__
-
-
-def hou_exception_text(exc: BaseException) -> str:
-    module = type(exc).__module__
-    prefix = "" if module in ("builtins", "__main__") else f"{module}."
-    return f"{prefix}{type(exc).__name__}: {hou_message(exc)}"
-
-
-def arg_bool(args: dict[str, Any], key: str, default: bool) -> bool:
-    value = args.get(key, default)
-    if value is None:
-        return default
-    if not isinstance(value, bool):
-        raise bad_arg(f"'{key}' must be a boolean.")
-    return value
-
-
-def arg_list(args: dict[str, Any], key: str, *, required: bool = True) -> list[Any]:
-    value = args.get(key)
-    if value is None and not required:
-        return []
-    if not isinstance(value, list) or (required and not value):
-        raise bad_arg(f"'{key}' must be a non-empty array.")
-    return value
-
-
 def arg_xy(value: Any, key: str) -> tuple[float, float]:
     if (
         not isinstance(value, list | tuple)
@@ -102,27 +73,6 @@ def arg_xy(value: Any, key: str) -> tuple[float, float]:
     ):
         raise bad_arg(f"'{key}' must be [x, y] numbers.")
     return float(value[0]), float(value[1])
-
-
-def page(rows: list[Any], limit: Any, cursor: Any) -> tuple[list[Any], str | None]:
-    if limit is None:
-        limit = DEFAULT_LIMIT
-    if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 1000:
-        raise bad_arg("'limit' must be an integer between 1 and 1000.")
-    start = 0
-    if cursor not in (None, ""):
-        try:
-            start = int(str(cursor))
-        except ValueError:
-            start = -1
-        if start < 0:
-            raise bad_arg(
-                f"Invalid cursor {cursor!r}.",
-                hint="Pass next_cursor from the previous page unchanged, or omit cursor.",
-            )
-    chunk = rows[start : start + limit]
-    nxt = str(start + limit) if start + limit < len(rows) else None
-    return chunk, nxt
 
 
 def check_name(name: Any, field: str = "name") -> str:
@@ -157,24 +107,6 @@ def unique_name(parent: Any, base: str, taken: Iterable[str] = ()) -> str:
 
 
 # -- node lookup ------------------------------------------------------------------
-
-
-def get_node(path: Any, *, field: str = "path", relative_to: Any = None) -> Any:
-    """``_diag.require_node`` (the one node_not_found with candidates), plus paths relative
-    to ``relative_to`` (wiring sources name siblings)."""
-    if not isinstance(path, str) or not path:
-        raise bad_arg(f"'{field}' must be a non-empty node path.")
-    if not path.startswith("/") and relative_to is not None:
-        node = relative_to.node(path)
-        if node is not None:
-            return node
-        path = f"{relative_to.path().rstrip('/')}/{path}"
-    elif not path.startswith("/"):
-        raise bad_arg(
-            f"'{field}' must be an absolute node path like /obj/geo1; got {path!r}.",
-            hint="Node paths start with '/'.",
-        )
-    return require_node(path, field=field)
 
 
 def locked_ancestor(node: Any) -> Any:
@@ -544,7 +476,7 @@ def _is_multiparm_block(template: Any) -> bool:
 def parm_rows(node: Any, include_defaults: bool) -> list[dict[str, Any]]:
     import hou
 
-    from .parms import summarize_parm  # lazy: filled by the parms task
+    from .parms import summarize_parm  # lazy: parms imports this module
 
     skip = {
         getattr(hou.parmTemplateType, n)
@@ -562,7 +494,7 @@ def parm_rows(node: Any, include_defaults: bool) -> list[dict[str, Any]]:
                 continue
         except Exception:
             continue
-        rows.append(summarize_parm(parm_tuple, detail="compact"))
+        rows.append(summarize_parm(parm_tuple))
     return rows
 
 
@@ -973,27 +905,6 @@ def _find_cursor(cursor: Any) -> tuple[str, ...] | int | None:
     )
 
 
-def response_budget(ctx: HostContext) -> int:
-    """The caller's byte budget for one result (BIBLE §4.1; default 16 KB)."""
-    for value in (
-        (ctx.extras or {}).get("max_response_bytes"),
-        getattr(ctx.config, "max_response_bytes", None),
-    ):
-        if isinstance(value, int) and not isinstance(value, bool) and value > 0:
-            return value
-    return 16384
-
-
-def compact_size(value: Any) -> int:
-    import json
-
-    return len(json.dumps(value, separators=(",", ":"), default=str).encode("utf-8"))
-
-
-ROW_ENVELOPE_BYTES = 256
-"""Room left in the budget for a paged result's non-row fields and the bridge's wrapping."""
-
-
 def _has_errors(node: Any) -> bool:
     try:
         return bool(node.errors())
@@ -1037,11 +948,7 @@ def node_find(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
         raise bad_arg(f"'flags' keys must be among {', '.join(FLAG_NAMES)}.")
     if not recurse_locked and (inside_locked(root) or _is_locked_hda(root)):
         raise _locked_root_error(root)
-    limit = args.get("limit")
-    if limit is None:
-        limit = DEFAULT_LIMIT
-    if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 1000:
-        raise bad_arg("'limit' must be an integer between 1 and 1000.")
+    limit = parse_limit(args.get("limit"))
     after = _find_cursor(args.get("cursor"))
     # Pass 1: filter cheaply. errors() can be expensive, so it is read here only when
     # has_errors filters; otherwise only for the rows on the returned page.
@@ -1184,7 +1091,7 @@ def _create_one(
     if parms:
         if not isinstance(parms, dict):
             raise bad_arg(f"items[{index}].parms must be an object.")
-        from .parms import set_parm_items  # lazy: filled by the parms task
+        from .parms import set_parm_items  # lazy: parms imports this module
 
         set_parm_items(node, parms, ctx, animation="replace")
     for link_index, link in enumerate(item.get("inputs") or []):

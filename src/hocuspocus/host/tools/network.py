@@ -36,10 +36,6 @@ CHANGED_KEY = "_changed"
 MAX_PROBLEMS = 20
 
 
-def _compact_bytes(value: Any) -> int:
-    return len(json.dumps(value, separators=(",", ":"), default=str).encode("utf-8"))
-
-
 # -- network_describe ---------------------------------------------------------------
 
 
@@ -261,7 +257,7 @@ def network_describe(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
             opts=opts,
             budget=budget,
         )
-        size = _compact_bytes({name: entry})
+        size = N.compact_size({name: entry})
         if data and used + size > budget.max_bytes:
             budget.nodes = before_nodes
             truncated, next_name = True, name
@@ -271,7 +267,7 @@ def network_describe(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
             entry["children_truncated"] = True
             truncated = True
             added = 1
-            size = _compact_bytes({name: entry})
+            size = N.compact_size({name: entry})
         data[name] = entry
         count += added
         used += size
@@ -280,7 +276,7 @@ def network_describe(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
         "format": "data",
         "data": data,
         "node_count": count,
-        "bytes": _compact_bytes(data),
+        "bytes": N.compact_size(data),
     }
     if truncated or any(isinstance(e, dict) and _has_truncated_children(e) for e in data.values()):
         result["truncated"] = True

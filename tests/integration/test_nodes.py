@@ -7,15 +7,6 @@ import pytest
 hou = pytest.importorskip("hou")
 
 
-def ok_or_skip_parms(client, tool, args):
-    """Call a tool whose result depends on the parms helpers; skip while they are stubs."""
-    envelope = client.call(tool, args)
-    if not envelope["ok"] and "NotImplementedError" in envelope["error"].get("message", ""):
-        pytest.skip("parms.set_parm_items/summarize_parm are still stubs (M1 parms task)")
-    assert envelope["ok"], envelope
-    return envelope["result"]
-
-
 def make_chain():
     geo = hou.node("/obj").createNode("geo", "geo1")
     box = geo.createNode("box", "box1")
@@ -208,8 +199,7 @@ def test_create_bad_input_lists_labels(client):
 
 
 def test_create_with_parms(client):
-    result = ok_or_skip_parms(
-        client,
+    result = client.ok(
         "node_create",
         {
             "items": [
@@ -398,12 +388,10 @@ def test_info_sections(client):
 def test_info_default_includes_parms(client):
     geo, box, xform, null = make_chain()
     xform.parm("tx").set(2)
-    result = ok_or_skip_parms(client, "node_info", {"paths": ["/obj/geo1/xform1"]})
+    result = client.ok("node_info", {"paths": ["/obj/geo1/xform1"]})
     parms = result["nodes"][0]["parms"]
     assert [p["name"] for p in parms] == ["t"]
-    everything = ok_or_skip_parms(
-        client, "node_info", {"paths": ["/obj/geo1/xform1"], "include_defaults": True}
-    )
+    everything = client.ok("node_info", {"paths": ["/obj/geo1/xform1"], "include_defaults": True})
     assert len(everything["nodes"][0]["parms"]) > 5
 
 

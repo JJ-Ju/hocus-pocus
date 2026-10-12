@@ -28,8 +28,8 @@ from typing import Any
 
 from hocuspocus.tools.errors import ToolError
 
-from ._diag import cheap_cook_problems, require_node
-from .nodes import hou_exception_text, hou_message
+from ._common import hou_exception_text, hou_message, require_node
+from ._diag import cheap_cook_problems
 from .registry import HostContext, tool
 
 INCLUDE_KEYS = ("keys", "menu", "template", "ramp", "multiparm")
@@ -496,23 +496,17 @@ def _describe_tuple(
     return out
 
 
-def summarize_parm(
-    parm_or_tuple: Any, *, frame: float | None = None, detail: str = "compact"
-) -> dict[str, Any]:
+def summarize_parm(parm_or_tuple: Any, *, frame: float | None = None) -> dict[str, Any]:
     """Compact ``{name, value, raw, expression?, language?, keyed?, locked?, menu_token?,
     is_default}`` for a ``hou.Parm`` or ``hou.ParmTuple``.
 
     A tuple gives lists for ``value``/``raw``, ``expressions: {component: {expression,
-    language}}`` and ``keyed: [component names]``. ``detail="full"`` returns the
-    ``parm_get`` shape with every include section.
+    language}}`` and ``keyed: [component names]``.
     """
-    if detail not in ("compact", "full"):
-        raise ValueError(f"detail must be 'compact' or 'full', not {detail!r}")
-    include = frozenset(INCLUDE_KEYS) if detail == "full" else None
     target = _normalize(parm_or_tuple)
     if _is_tuple(target):
-        return _describe_tuple(target, frame=frame, include=include)
-    return _describe_parm(target, frame=frame, include=include)
+        return _describe_tuple(target, frame=frame, include=None)
+    return _describe_parm(target, frame=frame, include=None)
 
 
 # -- resolving --------------------------------------------------------------------

@@ -510,7 +510,7 @@ def test_set_parm_items_engine(scene):
     assert info.value.code == "invalid_argument"
 
 
-def test_summarize_parm_compact_and_full(scene):
+def test_summarize_parm_compact(scene):
     from hocuspocus.host.tools.parms import summarize_parm
 
     box, xform = scene["box"], scene["xform"]
@@ -536,10 +536,6 @@ def test_summarize_parm_compact_and_full(scene):
     assert menu["menu_token"] == "srt" and menu["value"] == "srt"
     single = summarize_parm(box.parmTuple("type"))  # one-component tuple → its parm
     assert single["name"] == "type" and single["menu_token"] == "poly"
-    full = summarize_parm(xform.parm("ty"), detail="full")
-    assert full["path"] == "/obj/geo1/xform1/ty"
-    assert full["keyframes"]["count"] == 1
-    assert full["template"]["type"] == "float"
 
 
 def test_messages_and_values_are_tidy(client):
