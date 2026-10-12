@@ -1,8 +1,11 @@
 # HocusPocus Design Bible
 
-**Version:** 1.0 design, 2026-10-12. **Status:** authoritative. When code and this
-document disagree, one of them is wrong and the disagreement is a bug to fix, not a
-fact to live with.
+**Version:** 1.0 shipped 2026-10-12 (master); this document remains the design
+authority for 1.x. **Status:** authoritative. When code and this document disagree, one
+of them is wrong and the disagreement is a bug to fix, not a fact to live with.
+
+**Implementation notes:** the reviews, evaluation logs and image evidence behind 1.0 are
+indexed in [`docs/redesign/README.md`](redesign/README.md).
 
 HocusPocus is an MCP server that lets AI agents drive a live SideFX Houdini session
 and manage its scene files. This document describes how HocusPocus **should** be,
@@ -125,8 +128,9 @@ option: its ASGI adapter segfaults 22.0.466 and its handlers run off the main th
 ### 3.2 The host (inside Houdini)
 
 **Package:** `hocuspocus.host`. **Dependencies:** Python stdlib only. **Entry
-points:** `hocuspocus.host.start()` / `stop()` / `status()`; `hython -m hocuspocus.host
-[--hip FILE] [--port N]` for headless.
+points:** `hocuspocus.host.start()` / `stop()` / `status()` / `autostart()`; `hython -m
+hocuspocus.host [--hip FILE] [--port N] [--state-dir DIR] [--label NAME] [--read-only]
+[--no-python] [--work-dir DIR]` for headless.
 
 **MainThreadExecutor.** One class, two backends, chosen by `hou.isUIAvailable()`:
 
@@ -189,8 +193,9 @@ No SQLite, no journal, no shared files between instances.
 
 ### 3.3 The bridge (outside Houdini)
 
-**Package:** `hocuspocus.bridge`. **Dependencies:** `mcp>=2.3`. **Entry point:**
-console script `hocuspocus-mcp` (stdio). Installed with `uv tool install hocuspocus`.
+**Package:** `hocuspocus.bridge`. **Dependencies:** `mcp>=2.3,<3`. **Entry point:**
+console script `hocuspocus-mcp` (stdio). Installed with `uv tool install -e .` from a
+checkout; `uv tool install hocuspocus` once it is on PyPI.
 
 Responsibilities:
 
@@ -253,7 +258,8 @@ under the word cap, and a passing example.
 ### 3.6 Lifecycle and multiple instances
 
 - **GUI autostart.** The installed Houdini package adds the payload to `HOUDINI_PATH`
-  and `src/` to `PYTHONPATH`. A `uiready.py` hook (runs once the UI exists) calls
+  (`hpath`) and the copied package directory (with `--dev`, the checkout's `src/`) to
+  `PYTHONPATH`. A `uiready.py` hook (runs once the UI exists) calls
   `hocuspocus.host.start()` unless `autostart = false`. Startup never raises into
   Houdini; failures go to the host log and `hou.ui.setStatusMessage`.
 - **Headless.** `hython -m hocuspocus.host --hip file.hip` registers like any instance
@@ -408,7 +414,7 @@ Recent files (`hip_info` / status): the hip files saved or loaded in this host s
 
 | Tool | Args | Behaviour |
 |---|---|---|
-| `viewport_capture` | `camera?` (path), `frame?`, `resolution = [1024, 768]`, `fit = "all"\|"selected"\|"none"`, `source: auto\|viewer\|opengl_rop = auto`, `path?` | Returns MCP **image content** (PNG, downscaled so the longest side ≤ 1024) plus `{path, width, height, camera_used}`. `viewer` uses the GUI SceneViewer flipbook of one frame (captures what the user sees). `opengl_rop` renders through an OpenGL ROP and, when `camera` is absent, a camera framed on the bbox (`camera_used: "temporary"`; `fit: none` reuses the last framing); works headless. A look is read-only: headless, camera and ROP exist only in the child hython (§8); in the GUI they are created outside undo and deleted after the render, and `notes` says so if Houdini still marked the hip modified. `auto` prefers `viewer` in GUI. |
+| `viewport_capture` | `camera?` (path), `frame?`, `resolution = [1024, 768]`, `fit = "all"\|"selected"\|"none"`, `source: auto\|viewer\|opengl_rop = auto`, `path?` | Returns MCP **image content** (PNG, downscaled so the longest side ≤ 1024) plus `{path, width, height, camera_used}`. `viewer` uses the GUI SceneViewer flipbook of one frame (captures what the user sees, as it is: `fit` is not applied and `fit_used` is `"none"`, so an unhomed view can show an empty grid; home the view first or use `opengl_rop`). `opengl_rop` renders through an OpenGL ROP and, when `camera` is absent, a camera framed on the bbox (`camera_used: "temporary"`; `fit: none` reuses the last framing); works headless. A look is read-only: headless, camera and ROP exist only in the child hython (§8); in the GUI they are created outside undo and deleted after the render, and `notes` says so if Houdini still marked the hip modified. `auto` prefers `viewer` in GUI. |
 | `render` | `rop_path`, `frames?: [start, end, inc]` (default current), `output?`, `wait_s = 20`, `thumbnail = true` | Starts a job that calls `rop.render(...)`. If it finishes within `wait_s` returns `{outputs: [paths], thumbnail: image}`; else `{job_id}` to poll with `job`. Karma/Mantra/OpenGL/any ROP. |
 | `houdini_python` | `code`, `timeout_s = 30`, `language: python\|hscript = python`, `undo_label?` | `exec` in a fresh namespace with `hou` bound, stdout/stderr captured, the value of a trailing expression or a `result` variable JSON-serialised (`repr` fallback). Runs on the main thread inside one undo group. Returns `{stdout, stderr, result, exception?: {type, message, traceback}}`. Output capped at the response budget with `truncated`. Disabled → `code: python_disabled`. Destructive. |
 | `node_type_search` | `query`, `category?`, `limit = 20`, `include_hidden = false` | Ranks exact name = 100, exact label = 95, name prefix, label prefix, all words in the label; a plain-language query is then scored word by word without stop words, a word naming the type (4) or a whole label word (3) outranking a keyword (1.5) or a description word (1), with a short Houdini synonym table at half weight. Marks `is_current_version`. Row: `name, label, category, version, description, inputs: {min, max}, deprecated`. All 18 categories supported. |
@@ -440,19 +446,25 @@ Count: 2 session + 4 hip + 10 node/network + 2 parm + 4 cook/geo + 2 visual + 1 
 **Prompts** (slash commands in Claude Code): `inspect_scene`, `build_sop_chain`,
 `debug_red_node`, `turntable_preview`.
 
-**Server `instructions`** (≤ 400 words, shipped in `initialize`):
+**Server `instructions`** (≤ 400 words, shipped in `initialize`; the text lives in
+`bridge/instructions.py` and a unit test enforces the cap):
 
 > HocusPocus drives a live Houdini. Identity is Houdini paths. Start with
-> `houdini_status`; if nothing is connected, `houdini_connect` can launch Houdini.
-> Build with `node_create` (batch, with parms and inputs) or `network_build` (whole graph
-> from the `network_describe` format). Read with `node_info` and `network_describe`.
-> Change values with `parm_set`; tuple paths like `.../t` take lists, component paths
-> like `.../tx` take scalars; expressions go in `expression`. After building, call `cook`
-> or read `errors` in results, then `geo_info` to check counts and bounds, and
-> `viewport_capture` to look at it. Every mutating call is one undo step. Hip tools
-> refuse to discard unsaved work unless told to. When no tool fits, `houdini_python`
-> runs `hou` code. Results are compact: non-default parms only, lists paged with
-> `cursor`. Errors carry `code`, `hint` and `candidates`; read them and adjust.
+> `houdini_status`; if nothing is connected, `houdini_connect` can launch Houdini (GUI or
+> headless hython) or attach to a running one by pid. Build with `node_create` (batch,
+> with parms and inputs) or `network_build` (whole graph from the `network_describe`
+> format). Read with `node_info` and `network_describe`. Change values with `parm_set`;
+> tuple paths like `.../t` take lists, component paths like `.../tx` take scalars;
+> expressions go in `expression`. After building, call `cook` or read `errors` in
+> results, then `geo_info` to check counts and bounds, and `viewport_capture` to look at
+> it. Every mutating call is one undo step. Hip tools refuse to discard unsaved work
+> unless told to. Long cooks and renders return a `job_id`; poll it with `job`. When no
+> tool fits, `houdini_python` runs `hou` code. Results are compact: non-default parms
+> only, lists paged with `cursor`; `truncated: true` means the response budget cut a
+> list, so page or narrow the query. Errors carry `code`, `hint` and `candidates`; read
+> them and adjust. `delivery_unknown` means the call may or may not have run: inspect
+> state before repeating it. `_meta.scene_generation` changes when the scene is cleared
+> or loaded, so cached paths may be stale.
 
 ---
 
@@ -618,29 +630,36 @@ nearest names, also in `data.candidates`) and malformed requests.
 pyproject.toml                 # name hocuspocus, hatchling, requires-python >=3.11
                                # [project.scripts] hocuspocus = hocuspocus.cli:main
                                #                   hocuspocus-mcp = hocuspocus.bridge.__main__:main
-                               # dependencies: mcp>=2.3 ; optional: dev (pytest, ruff)
+                               # dependencies: mcp>=2.3,<3 ; optional: dev (pytest, pytest-timeout, ruff)
+                               # the wheel ships houdini/ as hocuspocus/_houdini
 src/hocuspocus/
   __init__.py  version.py
-  tools/catalog.py             # the single source of truth for the tool surface (stdlib)
-  tools/errors.py              # error codes + helpers (stdlib)
+  cli.py                       # install-houdini, uninstall-houdini, doctor, client-config, docs, version
+  tools/                       # shared by host and bridge; stdlib only
+    catalog.py                 # the single source of truth for the tool surface
+    errors.py                  # error codes + ToolError
+    docs.py                    # renders docs/tools.md; tools/list size; example validator
+    paths.py                   # state dir (instances/, logs/, captures/)
   host/                        # INSIDE Houdini. stdlib only. `import hou` lazily.
-    __init__.py                # start(), stop(), status()
+    __init__.py                # start(), stop(), status(), autostart()
     __main__.py                # hython -m hocuspocus.host
-    executor.py registry.py server.py config.py undo.py jobs.py budget.py
-    tools/ session.py hip.py nodes.py network.py parms.py cook.py geo.py visual.py
-           code.py types.py state.py hda.py usd.py pdg.py events.py
+    config.py executor.py server.py dispatch.py runtime.py registry.py jobs.py budget.py undo.py
+    tools/ registry.py _diag.py session.py hip.py code.py nodes.py network.py parms.py
+           cook.py types.py geo.py visual.py state.py hda.py usd.py pdg.py events.py
   bridge/                      # OUTSIDE Houdini. mcp SDK.
-    __main__.py server.py client.py instances.py launch.py
-  cli.py                       # install-houdini, uninstall-houdini, doctor, docs, client-config
+    __main__.py server.py client.py instances.py launch.py local_tools.py
+    validate.py budget.py config.py instructions.py
 houdini/                       # Houdini package payload; NOT the repo root
-  hocuspocus.json.template     # → $HOUDINI_USER_PREF_DIR/packages/hocuspocus.json
+  hocuspocus.json.template     # -> <prefs>/packages/hocuspocus.json
   scripts/python/uiready.py    # GUI autostart (verified location for Houdini 22)
-  toolbar/hocuspocus.shelf     # optional: Status / Start / Stop
+  toolbar/hocuspocus.shelf     # HP Status / HP Start / HP Stop
 tests/
-  unit/  integration/  e2e/  conftest.py
+  conftest.py  unit/  integration/ (with its own conftest.py)  e2e/
 docs/
-  BIBLE.md  quickstart.md  tools.md (generated)  CONTRIBUTING.md  redesign/review/*.md
+  BIBLE.md  quickstart.md  tools.md (generated)  CONTRIBUTING.md
+  redesign/README.md  redesign/progress.md  redesign/review/*.md  redesign/evidence/
 README.md  LICENSE  CHANGELOG.md
+.github/workflows/ci.yml  houdini.yml
 ```
 
 The repo root is **not** on `HOUDINI_PATH`: hython puts `$HIP` (its cwd) on
@@ -654,23 +673,33 @@ written to run on 3.11+ so a 3.11 Houdini build also works.
 ### 10.2 Install (the three commands)
 
 ```bash
-uv tool install hocuspocus            # or: uv tool install -e . from a checkout
+uv tool install -e .                  # from a checkout; `uv tool install hocuspocus` once on PyPI
 hocuspocus install-houdini            # writes the package JSON, copies host code
-claude mcp add hocuspocus -- hocuspocus-mcp
+claude mcp add -s user hocuspocus -- hocuspocus-mcp
 ```
+
+`-s user` registers the server for every directory; without it Claude Code registers it
+for the current project only.
 
 `install-houdini`:
 
 1. Resolves the pref dir: `--prefs`, else `HOUDINI_USER_PREF_DIR`, else asks hython
    (`hou.homeHoudiniDirectory()`) from the detected HFS, else the platform default.
 2. Copies `src/hocuspocus` (all of it; Houdini only imports `host` and `tools`) to
-   `<prefs>/hocuspocus/<version>/python/` and writes `<prefs>/packages/hocuspocus.json`
-   pointing at it. `--dev` points at the checkout's `src/` instead of copying.
-3. Prints what it did and the restart note. Idempotent; replaces older versions.
+   `<prefs>/hocuspocus/<version>/python/` and the `houdini/` payload to
+   `<prefs>/hocuspocus/<version>/houdini/`, and writes `<prefs>/packages/hocuspocus.json`
+   pointing at both. `--dev` points at the checkout's `src/` and `houdini/` instead of
+   copying.
+3. Records the pref dir in `<state_dir>/install.json` so the bridge can find
+   `hocuspocus.toml` without asking hython (§3.7).
+4. Prints what it did and the restart note. Idempotent; replaces older versions.
 
-`hocuspocus doctor` checks: HFS found, Houdini version, package JSON present and
-pointing at an existing dir, host/bridge version match, live instances, a `/health`
-round trip, and prints the `claude mcp add` / Codex config lines.
+`hocuspocus doctor` checks: HFS found, Houdini version, the resolved pref dir, which
+`hocuspocus.toml` the bridge reads, package JSON present and pointing at an existing
+dir, host/bridge version match, live instances with a `/health` round trip, and prints
+the `claude mcp add` / Codex config lines. `hocuspocus version` prints the bridge, RPC,
+`mcp` and Python versions. `uninstall-houdini` removes the package JSON, the copied
+versions and the `install.json` record.
 `hocuspocus client-config codex|claude` prints the snippets. `hocuspocus docs tools`
 regenerates `docs/tools.md`.
 
@@ -689,13 +718,15 @@ pytest everywhere. Markers `unit`, `houdini`, `e2e`; `conftest.py` finds hython 
 |---|---|---|---|
 | `tests/unit` | system Python | catalogue integrity (every tool has impl, schema, annotations, ≤ 80-word description, `tools/list` ≤ 48 KB), bridge instance selection and offline behaviour with a fake host, error mapping, budget truncation, config parsing, `cli` path resolution | < 10 s |
 | `tests/integration` | `hython -m pytest` | in-process host: one `hou` session per run, `hipFile.clear()` per test, every tool exercised against real nodes; the idioms in §5 each have a test | < 90 s |
-| `tests/e2e` | system Python spawning hython | official `mcp` client → `hocuspocus-mcp` stdio → `hython -m hocuspocus.host` on an ephemeral port with an isolated `HOUDINI_USER_PREF_DIR` and a neutral cwd; the ten tasks from review 06 as a scripted scenario | < 60 s |
-| `tests/gui` (manual) | checklist | package loads in `houdinifx`, autostart, viewer capture | — |
+| `tests/e2e` | system Python spawning hython | official `mcp` client → `hocuspocus-mcp` stdio → `hython -m hocuspocus.host` on an ephemeral port with an isolated `HOUDINI_USER_PREF_DIR` and a neutral cwd: a stdio round trip, review 06 tasks 2, 3, 4, 6 and 9 as one scripted scenario, and a bridge launch that checks the work dir | < 60 s |
+| GUI (manual; no `tests/gui` directory) | checklist | package loads in `houdinifx`, autostart, viewer capture; run before a release and logged in `docs/redesign/progress.md` | — |
 
 Hygiene rules: never write into the repo at test time; never use port 37219; isolated
 pref dir per run; clean interpreter exit. CI: GitHub Actions `windows-latest` and
-`ubuntu-latest` run lint + unit; a self-hosted Windows runner with Houdini runs
-integration + e2e nightly and on PRs labelled `houdini`.
+`ubuntu-latest` run `ruff check`, `ruff format --check`, the unit tier and a
+`docs/tools.md` freshness check (`ci.yml`); a self-hosted Windows runner labelled
+`houdini` runs integration + e2e nightly, on manual dispatch and on PRs labelled
+`houdini` (`houdini.yml`).
 
 ---
 
@@ -705,7 +736,8 @@ integration + e2e nightly and on PRs labelled `houdini`.
 `docs/quickstart.md` (5 minutes to a box with a mountain and a screenshot),
 `docs/tools.md` (generated from the catalogue with examples), `docs/BIBLE.md` (this),
 `docs/CONTRIBUTING.md` (layout, tests, how to add a tool: catalogue entry + host impl +
-integration test + regenerate docs), `CHANGELOG.md`. Everything else in `docs/` from 0.9
+integration test + regenerate docs, release steps), `CHANGELOG.md`. `docs/redesign/`
+holds the historical review and evaluation record, indexed by its `README.md`. Everything else in `docs/` from 0.9
 is archived with the tag, not carried forward.
 
 ---
@@ -780,7 +812,7 @@ Facts found while implementing, now reflected above:
 
 ### Known limitation: launch lifetime
 
-A Houdini started by `houdini_connect {launch}` is a child process of the bridge and ends when the MCP client stops the bridge. This is acceptable for interactive sessions; agents should `hip_save` before a session ends, or attach to a Houdini the user started.
+A Houdini started by `houdini_connect {launch}` is launched detached (new process group, and breakaway from the job object where Windows allows it), but in the verified setup (review 08) it still exited when the bridge that launched it exited. Treat it as owned by the bridge: it ends when the MCP client stops the bridge (end of a session, or a one-shot script exiting), and its unsaved work is lost. This is acceptable for interactive sessions; agents should `hip_save` before a session ends, or attach to a Houdini the user started.
 
 ## 16. Non-goals for 1.0
 
