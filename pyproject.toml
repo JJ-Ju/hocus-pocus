@@ -47,7 +47,6 @@ timeout = 300
 line-length = 100
 target-version = "py311"
 src = ["src", "tests"]
-extend-exclude = ["python3.11libs", "scripts", "docs", "tests/*.py", "tests/fixtures"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "C4", "SIM"]
