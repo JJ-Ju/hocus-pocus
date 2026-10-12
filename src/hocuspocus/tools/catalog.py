@@ -1040,8 +1040,9 @@ _COOK: tuple[ToolSpec, ...] = (
             "Explain red nodes: walks a subtree listing nodes with errors or warnings, broken "
             "channel references, missing files in file parms, unconnected required inputs. "
             "Errored nodes changed since their last cook are recooked first. cook_uncooked cooks "
-            "never-cooked nodes too (slower, more complete). Locked HDAs are "
-            "skipped unless recurse_locked. Paged by limit and cursor. Use cook for specific nodes."
+            "never-cooked nodes too. Locked HDAs are skipped unless recurse_locked. Paged by limit "
+            "and cursor; scanning stops after a budget (10 s, or half of timeout_s) with "
+            "incomplete: true and a next_cursor that continues the walk."
         ),
         input_schema=_obj(
             {
@@ -1049,6 +1050,7 @@ _COOK: tuple[ToolSpec, ...] = (
                 "include_warnings": _b(True),
                 "cook_uncooked": _b(False),
                 "recurse_locked": _b(False),
+                "timeout_s": _n(None, minimum=1, default=30),
                 "limit": _limit(),
                 # §4.1: list tools take limit and cursor; the §4.6 row lists only limit.
                 "cursor": _cursor(),

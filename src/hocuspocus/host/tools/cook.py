@@ -14,10 +14,12 @@ from __future__ import annotations
 
 import os
 import re
+import time
 from typing import Any
 
 from hocuspocus.tools.errors import ToolError
 
+from ..dispatch import call_timeout
 from ._diag import (
     COOKABLE_CATEGORIES,
     REFRESH_CATEGORIES,
@@ -156,12 +158,9 @@ _OP_RE = re.compile(
 _PY_RE = re.compile(r"\bhou\.(parm|parmTuple|node)\(\s*[\"']([^\"']+)[\"']\s*[,)]")
 _BACKTICK_RE = re.compile(r"`([^`]*)`")
 _DYNAMIC = ("$", "`", "*", "?", "@", "^", "{", "[", " ")
+_SEQUENCE_VAR_RE = re.compile(r"\$\{?(?:FF|SF|F\d*|T)(?![A-Za-z0-9_])")
+"""Frame/time variables ($F, $F4, ${F}, $FF, $SF, $T) mark a sequence; $TEMP or $FOO do not."""
 _SEQUENCE_MARKERS = (
-    "$F",
-    "${F",
-    "$T",
-    "$SF",
-    "$FF",
     "<UDIM>",
     "<udim>",
     "%(UDIM",
@@ -318,7 +317,7 @@ def _missing_file(node: Any, parm: Any) -> dict[str, Any] | None:
         return None
     if not raw or raw.lower() in _SKIP_FILE_VALUES or raw.lower().startswith(_SKIP_FILE_PREFIXES):
         return None
-    if any(marker in raw for marker in _SEQUENCE_MARKERS):
+    if _SEQUENCE_VAR_RE.search(raw) or any(marker in raw for marker in _SEQUENCE_MARKERS):
         return None
     mode = node.parm("filemode")
     if mode is not None and mode.evalAsString() == "write":
@@ -396,18 +395,70 @@ def node_problems(
     if include_warnings:
         for text in report["warnings"]:
             rows.append(_row(node, "warning", f"{node.path()}: {text}"))
-    check_files = node.type().category().name() not in _NO_FILE_CHECK_CATEGORIES
-    for parm in node.parms():
-        try:
-            rows.extend(_broken_references(node, parm))
-            if check_files:
-                missing = _missing_file(node, parm)
-                if missing is not None:
-                    rows.append(missing)
-        except Exception:
-            continue
+    try:
+        # Parms inside a locked asset are the asset's own (often non-default, often
+        # referencing parents the asset expects); scanning them is slow and noisy.
+        in_locked = bool(node.isInsideLockedHDA())
+    except Exception:
+        in_locked = False
+    if not in_locked:
+        check_files = node.type().category().name() not in _NO_FILE_CHECK_CATEGORIES
+        for parm in node.parms():
+            try:
+                if parm.isAtDefault():
+                    continue  # only values the user set are worth checking
+                rows.extend(_broken_references(node, parm))
+                if check_files:
+                    missing = _missing_file(node, parm)
+                    if missing is not None:
+                        rows.append(missing)
+            except Exception:
+                continue
     rows.extend(_unconnected_inputs(node))
     return rows, should_cook
+
+
+def _mirrored_texts(node: Any, texts: dict[str, set[str]]) -> set[str]:
+    """Error/warning texts already reported by an object's display SOP."""
+    try:
+        display = node.displayNode() if node.type().category().name() == "Object" else None
+    except Exception:
+        display = None
+    return texts.get(display.path(), set()) if display is not None else set()
+
+
+PROBLEMS_BUDGET_S = 10.0
+"""Default scan budget; ``timeout_s`` sets it to half the call's timeout instead."""
+
+
+def _parse_problems_cursor(cursor: Any) -> tuple[int, int, int | None]:
+    """``"<rows>"``, ``"<rows>@<start>"`` or ``"<rows>@<start>:<end>"`` -> (row offset,
+    first node, end node or None). ``start``/``end`` index the walk order; an ``end``
+    rescans exactly that slice (a later page of rows within a partial scan)."""
+    if cursor in (None, ""):
+        return 0, 0, None
+    end: int | None = None
+    try:
+        rows, _, nodes = str(cursor).partition("@")
+        start, _, stop = nodes.partition(":")
+        offset, node_start = int(rows), int(start or 0)
+        end = int(stop) if stop else None
+    except ValueError:
+        offset = node_start = -1
+    if offset < 0 or node_start < 0 or (end is not None and end <= node_start):
+        raise ToolError(
+            "invalid_argument",
+            f"Invalid cursor {cursor!r}.",
+            hint="Pass next_cursor from the previous problems result unchanged.",
+        )
+    return offset, node_start, end
+
+
+def _problems_budget(args: dict[str, Any]) -> float:
+    raw = args.get("timeout_s")
+    if isinstance(raw, int | float) and not isinstance(raw, bool) and raw > 0:
+        return float(raw) * 0.5
+    return min(PROBLEMS_BUDGET_S, float(call_timeout(60.0) or 60.0) * 0.5)
 
 
 @tool("problems")
@@ -419,19 +470,9 @@ def problems(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     limit = args.get("limit", 50)
     if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 1000:
         raise ToolError("invalid_argument", "'limit' must be an integer from 1 to 1000.")
-    cursor = args.get("cursor")
-    offset = 0
-    if cursor not in (None, ""):
-        try:
-            offset = int(str(cursor))
-        except ValueError:
-            offset = -1
-        if offset < 0:
-            raise ToolError(
-                "invalid_argument",
-                f"Invalid cursor {cursor!r}.",
-                hint="Pass next_cursor from the previous problems result unchanged.",
-            )
+    offset, node_start, node_end = _parse_problems_cursor(args.get("cursor"))
+    budget_s = _problems_budget(args)
+    deadline = time.monotonic() + budget_s
     root = require_node(root_path, field="root")
     nodes = [] if root.path() == "/" else [root]
     nodes.extend(
@@ -445,34 +486,71 @@ def problems(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     ranked: list[tuple[int, int, dict[str, Any]]] = []
     cooked = 0
     flagged: set[str] = set()
+    texts: dict[str, set[str]] = {}
+    seen_rows: set[tuple[str, str, str]] = set()
     # Children before their containers, so a rechecked object sees its fresh SOPs.
-    for position, node in reversed(list(enumerate(nodes))):
+    order = list(reversed(list(enumerate(nodes))))
+    scan_end = len(order) if node_end is None else min(node_end, len(order))
+    for index in range(node_start, scan_end):
+        if node_end is None and index > node_start and time.monotonic() > deadline:
+            scan_end = index
+            break
+        position, node = order[index]
         node_rows, was_cooked = node_problems(
             node, include_warnings=include_warnings, cook_uncooked=cook_uncooked
         )
         cooked += int(was_cooked)
-        if node_rows:
+        mirrored = _mirrored_texts(node, texts)
+        kept = []
+        for row in node_rows:
+            text = row["message"].split(": ", 1)[-1]
+            if row["kind"] in ("error", "warning"):
+                if text in mirrored:
+                    continue  # an object repeating its display SOP's message
+                texts.setdefault(row["path"], set()).add(text)
+            key = (row["path"], row["kind"], row["message"])
+            if key in seen_rows:
+                continue
+            seen_rows.add(key)
+            kept.append(row)
+        if kept:
             flagged.add(node.path())
-        ranked.extend((KIND_ORDER.get(row["kind"], 9), position, row) for row in node_rows)
+        ranked.extend((KIND_ORDER.get(row["kind"], 9), position, row) for row in kept)
     ranked.sort(key=lambda item: item[:2])
     ordered = [item[2] for item in ranked]
     counts: dict[str, int] = {}
     for row in ordered:
         counts[row["kind"]] = counts.get(row["kind"], 0) + 1
     page = ordered[offset : offset + limit]
+    incomplete = scan_end < len(order)
+    partial = incomplete or node_start > 0
     result: dict[str, Any] = {
         "root": root.path(),
         "problems": page,
         "total": len(ordered),
         "counts": counts,
-        "nodes_scanned": len(nodes),
+        "nodes_scanned": scan_end - node_start,
         "nodes_with_problems": len(flagged),
     }
     if cook_uncooked or cooked:
         result["cooked"] = cooked
+    suffix = f"@{node_start}:{scan_end}" if partial else ""
     if offset + limit < len(ordered):
-        result["next_cursor"] = str(offset + limit)
-    if not ordered:
+        # More rows in this slice of nodes: the next page rescans the same slice.
+        result["next_cursor"] = f"{offset + limit}{suffix}"
+    elif incomplete:
+        result["next_cursor"] = f"0@{scan_end}"
+    if partial:
+        # total, counts and nodes_with_problems cover only this slice of the walk.
+        result["nodes_total"] = len(order)
+        result["node_offset"] = node_start
+    if incomplete:
+        result["incomplete"] = True
+        result["message"] = (
+            f"Stopped after {budget_s:g} s with {len(order) - scan_end} of {len(order)} nodes "
+            "left to scan; pass next_cursor to continue."
+        )
+    elif not ordered:
         result["message"] = f"No problems under {root.path()}." + (
             ""
             if cook_uncooked

@@ -384,3 +384,136 @@ def test_slow_node_with_old_errors_gets_a_force_hint(client):
         assert forced["errors"] == [] and "hint" not in forced, forced
     finally:
         _diag._last_cook_ms.pop(box.sessionId(), None)
+
+
+# -- problems: budget, locked assets, defaults, dedupe, $TEMP (review 10) -------------
+
+
+def test_problems_time_budget_returns_incomplete_with_node_cursor(client, monkeypatch):
+    from hocuspocus.host.tools import cook as cook_module
+
+    geo = _geo()
+    for i in range(30):
+        geo.createNode("xform", f"x{i:02d}")
+    full = client.ok("problems", {"root": geo.path(), "limit": 1000})
+    assert full["total"] == 30 and "incomplete" not in full
+
+    real = cook_module.node_problems
+
+    def slow(node, **kw):
+        time.sleep(0.05)
+        return real(node, **kw)
+
+    monkeypatch.setattr(cook_module, "node_problems", slow)
+    seen = []
+    cursor = None
+    calls = 0
+    while True:
+        args = {"root": geo.path(), "limit": 1000, "timeout_s": 1}
+        if cursor:
+            args["cursor"] = cursor
+        page = client.ok("problems", args)
+        calls += 1
+        seen.extend((r["path"], r["kind"]) for r in page["problems"])
+        cursor = page.get("next_cursor")
+        if not page.get("incomplete"):
+            assert cursor is None
+            break
+        assert cursor and page["nodes_scanned"] >= 1
+        assert calls < 20
+    assert calls > 1
+    assert sorted(seen) == sorted((r["path"], r["kind"]) for r in full["problems"])
+
+
+def test_problems_budget_pages_rows_inside_a_partial_scan(client, monkeypatch):
+    from hocuspocus.host.tools import cook as cook_module
+
+    geo = _geo()
+    for i in range(12):
+        geo.createNode("xform", f"x{i:02d}")
+    real = cook_module.node_problems
+
+    def slow(node, **kw):
+        time.sleep(0.1)
+        return real(node, **kw)
+
+    monkeypatch.setattr(cook_module, "node_problems", slow)
+    seen = []
+    cursor = None
+    for _ in range(40):
+        args = {"root": geo.path(), "limit": 2, "timeout_s": 1}
+        if cursor:
+            args["cursor"] = cursor
+        page = client.ok("problems", args)
+        assert len(page["problems"]) <= 2
+        seen.extend(r["path"] for r in page["problems"])
+        cursor = page.get("next_cursor")
+        if cursor is None:
+            break
+    assert sorted(seen) == sorted(f"{geo.path()}/x{i:02d}" for i in range(12))
+
+
+def test_problems_skips_parms_inside_locked_assets(client):
+    from hocuspocus.host.tools import cook as cook_module
+
+    geo = _geo()
+    geo.createNode("attribnoise::2.0")
+    scanned = []
+    real = cook_module._broken_references
+
+    def spy(node, parm):
+        scanned.append(node.path())
+        return real(node, parm)
+
+    cook_module._broken_references = spy
+    try:
+        client.ok("problems", {"root": "/obj", "recurse_locked": True})
+    finally:
+        cook_module._broken_references = real
+    inside = [p for p in scanned if p.startswith(f"{geo.path()}/attribnoise") and p.count("/") > 3]
+    assert inside == []
+
+
+def test_problems_skips_parms_at_default(client):
+    from hocuspocus.host.tools import cook as cook_module
+
+    box = _geo().createNode("box")
+    box.parm("sizex").set(2)
+    checked = []
+    real = cook_module._missing_file
+
+    def spy(node, parm):
+        checked.append(parm.name())
+        return real(node, parm)
+
+    cook_module._missing_file = spy
+    try:
+        client.ok("problems", {"root": box.path()})
+    finally:
+        cook_module._missing_file = real
+    assert checked == ["sizex"]
+
+
+def test_problems_dedupes_identical_rows(client):
+    geo = _geo()
+    box = geo.createNode("box")
+    box.setDisplayFlag(True)
+    box.parm("sizex").setExpression("$F*(")
+    result = client.ok("problems", {"root": "/obj", "cook_uncooked": True})
+    keys = [(r["path"], r["kind"], r["message"]) for r in result["problems"]]
+    assert len(keys) == len(set(keys)), keys
+    texts = [r["message"].split(": ", 1)[1] for r in result["problems"] if r["kind"] == "error"]
+    assert len(texts) == len(set(texts)), result["problems"]  # the object mirror is dropped
+
+
+def test_problems_checks_paths_under_temp_variables(client):
+    geo = _geo()
+    reader = geo.createNode("file", "tmpread")
+    reader.parm("file").set("$TEMP/hp_definitely_missing_9f2c.bgeo.sc")
+    sequence = geo.createNode("file", "seq")
+    sequence.parm("file").set("$TEMP/hp_seq.$F4.bgeo.sc")
+    padded = geo.createNode("file", "fseq")
+    padded.parm("file").set("$TEMP/hp_seq.${F}.bgeo.sc")
+    result = client.ok("problems", {"root": geo.path()})
+    files = [r["path"] for r in result["problems"] if r["kind"] == "missing_file"]
+    assert files == [reader.path()]

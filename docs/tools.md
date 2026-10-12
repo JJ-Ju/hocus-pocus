@@ -2,7 +2,7 @@
 
 <!-- Generated from src/hocuspocus/tools/catalog.py by `python -m hocuspocus.tools.docs`. Do not edit by hand. -->
 
-35 tools: 31 in the `core` profile, 4 more in `full`. Model-visible `tools/list` text: 27,034 bytes. See `docs/BIBLE.md` §4 for the design.
+35 tools: 31 in the `core` profile, 4 more in `full`. Model-visible `tools/list` text: 27,891 bytes. See `docs/BIBLE.md` §4 for the design.
 
 ## Contents
 
@@ -312,7 +312,7 @@ Create nodes in one undo step. Item: parent, type (resolved like createNode so b
 | `items[].parent` | string | yes |  |  |
 | `items[].type` | string | yes |  |  |
 | `items[].name` | string |  |  |  |
-| `items[].parms` | object<string, string \| number \| boolean \| array<string \| number \| boolean> \| object \| object> |  |  | Parm or tuple name to value or {expression, language}. |
+| `items[].parms` | object<string, string \| number \| boolean \| array<string \| number \| boolean> \| object \| object> |  |  | Parm or tuple name to a value or a parm_set item without path. |
 | `items[].inputs` | array<object> |  |  | each item: exactly one of index, name |
 | `items[].inputs[].index` | integer |  |  | min 0 |
 | `items[].inputs[].name` | string |  |  | Input name. |
@@ -557,7 +557,7 @@ Read parms by parm path (.../tx), tuple path (.../t, returns components) or comp
 
 `idempotent` `headless ok` · profile `core`
 
-Set parms in one undo step. Each item takes one of value, expression, keyframe, keyframes, channel_ref, ramp, multiparm_count, revert_to_default, press. Tuple paths take lists, component paths scalars; menus take token or label. animation: replace (default) clears keys and expressions first; key keys at frame; keep is plain set. Returns values (tuples add per-component expressions and keyed), wrote_keyframe, node errors.
+Set parms in one undo step. Each item takes one of value, expression, keyframe, keyframes, channel_ref, ramp, multiparm_count, revert_to_default, press (clicks a button). Tuple paths take lists, component paths scalars; menus take token or label. animation: replace (default) clears keys and expressions first, except that one keyframe only adds or replaces its key; key keys at frame; keep is plain set. Returns values (tuples add per-component expressions and keyed), wrote_keyframe, node errors.
 
 ### Arguments
 
@@ -642,7 +642,7 @@ Cook nodes now and report per node ok, errors, warnings, messages, cook_time_ms.
 
 `read-only` `headless ok` · profile `core`
 
-Explain red nodes: walks a subtree listing nodes with errors or warnings, broken channel references, missing files in file parms, unconnected required inputs. Errored nodes changed since their last cook are recooked first. cook_uncooked cooks never-cooked nodes too (slower, more complete). Locked HDAs are skipped unless recurse_locked. Paged by limit and cursor. Use cook for specific nodes.
+Explain red nodes: walks a subtree listing nodes with errors or warnings, broken channel references, missing files in file parms, unconnected required inputs. Errored nodes changed since their last cook are recooked first. cook_uncooked cooks never-cooked nodes too. Locked HDAs are skipped unless recurse_locked. Paged by limit and cursor; scanning stops after a budget (10 s, or half of timeout_s) with incomplete: true and a next_cursor that continues the walk.
 
 ### Arguments
 
@@ -652,6 +652,7 @@ Explain red nodes: walks a subtree listing nodes with errors or warnings, broken
 | `include_warnings` | boolean |  | `true` |  |
 | `cook_uncooked` | boolean |  | `false` |  |
 | `recurse_locked` | boolean |  | `false` |  |
+| `timeout_s` | number |  | `30` | min 1 |
 | `limit` | integer |  | `50` | min 1; max 1000 |
 | `cursor` | string |  |  | next_cursor from the previous page. |
 
