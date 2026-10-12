@@ -1201,10 +1201,11 @@ _VISUAL: tuple[ToolSpec, ...] = (
         name="render",
         description=(
             "Render any ROP (Karma, Mantra, OpenGL, ...) for frames [start, end, inc] (default "
-            "current frame), optionally overriding output. Waits up to wait_s (default 20): if "
-            "done, returns outputs (file paths), thumbnail {path, width, height} with the image "
-            "attached, and job_id; else job_id and state to poll with job. Use viewport_capture "
-            "for a quick look."
+            "current frame), optionally overriding output. Waits up to wait_s (default the job "
+            "threshold, 10 s): if done, returns state, outputs (above 5 only outputs_summary; job "
+            "result lists all), thumbnail with the image attached, notes (no lights, nearly "
+            "black), job_id; else job_id and state to poll with job. Use viewport_capture for a "
+            "quick look."
         ),
         input_schema=_obj(
             {
@@ -1213,7 +1214,7 @@ _VISUAL: tuple[ToolSpec, ...] = (
                     {"type": "number"}, "[start, end] or [start, end, inc]", minItems=2, maxItems=3
                 ),
                 "output": _s("Output path override."),
-                "wait_s": _n(None, minimum=0, default=20),
+                "wait_s": _n(None, minimum=0),
                 "thumbnail": _b(True),
             },
             ("rop_path",),
@@ -1225,6 +1226,7 @@ _VISUAL: tuple[ToolSpec, ...] = (
                 "rop_path": _t("string"),
                 "frames": _list("number"),
                 "outputs": _list(),
+                "outputs_summary": _t("object"),
                 "missing": _list(),
                 "thumbnail": _out(
                     {
