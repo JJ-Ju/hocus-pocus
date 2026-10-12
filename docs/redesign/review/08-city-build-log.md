@@ -4,7 +4,7 @@
 
 **Seat:** an AI agent working as a Houdini TD. I used only the MCP tool surface, `docs/tools.md`, `README.md` and `docs/quickstart.md`. I did not read the server source.
 **Build:** `redesign/v1` @ `b56666d`, bridge `1.0.0a0`, profile `core`.
-**Host:** Houdini FX 22.0.466 GUI, pid **63324**, launched by `houdini_connect {"launch":{"mode":"gui"}}` (see §0 for why it is not the planned pid 63360).
+**Host:** Houdini FX 22.0.466 GUI, pid **63324**, launched by `houdini_connect {"launch":{"mode":"gui"}}` (see §0 for why it is not the planned pid 63360). It is no longer running: it exited when its bridge was stopped after the session.
 **Date:** 2026-10-12, about 09:46 to 10:03 local time (roughly 17 minutes of wall clock, including diagnosis).
 **Result:** `/obj/building_gen` and `/obj/city_gen` built and cooked with 0 problems. The city has **191 buildings** and **80,123 polygons** (79,738 of them in buildings), a 30-building `district` group, and three evidence PNGs. The hip is saved as `<scratch>/city/city_v01.hip` (241,977 bytes, `dirty: false`).
 
@@ -22,7 +22,7 @@ Byte counts below are the size of the pretty-printed `structuredContent` (indent
    ```
    The hint was correct but did not help here, because launching again from a one-shot bridge has the same outcome. Nothing in the `houdini_connect` description says that a launched instance is owned by the bridge and dies with it. I found out by observing it.
 3. **A plain `houdinifx.exe` does not load the host.** `Documents/houdini22.0/packages` is empty, so the bridge must inject the package at launch. The instance I started by hand sat on "Houdini Console" and never registered, so I killed it. That was my own process.
-4. **Workaround:** I wrote a small persistent client in my scratch dir (`city/drv.py`). It is the same `mcp.Client` and `hocuspocus-mcp` command and environment as `hp.py`, but it stays alive and reads requests from an inbox dir. Through it I called `houdini_connect launch gui` once (pid 63324), and that instance has served every call since. **Consequence:** Houdini 63324 stays alive only while that driver process runs. I left both running, as asked. If the driver is stopped, Houdini goes with it.
+4. **Workaround:** I wrote a small persistent client in my scratch dir (`city/drv.py`). It is the same `mcp.Client` and `hocuspocus-mcp` command and environment as `hp.py`, but it stays alive and reads requests from an inbox dir. Through it I called `houdini_connect launch gui` once (pid 63324), and that instance served every call. **Consequence:** Houdini 63324 stayed alive only while that driver process ran. After the build, the agent harness stopped the driver as a background task (exit 255), and Houdini 63324 exited with it. The saved hip is intact. So the "leave Houdini running" requirement could not be met with a bridge-launched instance. Reopening `city_v01.hip` needs a host that outlives its client: a GUI with the package installed, or a detachable launch (improvement 2).
 
 ---
 
