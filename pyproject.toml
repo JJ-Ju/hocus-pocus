@@ -1,0 +1,51 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "hocuspocus"
+version = "1.0.0a0"
+description = "MCP server that lets AI agents drive a live SideFX Houdini session."
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.11"
+dependencies = [
+    "mcp>=2.3,<3",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "pytest-timeout>=2.3",
+    "ruff>=0.8",
+]
+
+[project.scripts]
+hocuspocus = "hocuspocus.cli:main"
+hocuspocus-mcp = "hocuspocus.bridge.__main__:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/hocuspocus"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/hocuspocus", "houdini", "docs/BIBLE.md", "README.md", "LICENSE"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "unit: pure-Python tests, no Houdini",
+    "houdini: needs hython (run with `hython -m pytest tests/integration`)",
+    "e2e: spawns hython and the stdio bridge",
+]
+addopts = "-ra"
+timeout = 300
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+extend-exclude = ["python3.11libs", "scripts", "docs"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "C4", "SIM"]
+ignore = ["E501"]
