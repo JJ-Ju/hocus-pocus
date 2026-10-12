@@ -138,6 +138,10 @@ class Host:
         self.scene.mark_clean()
         hou.hipFile.addEventCallback(self._on_hip_event)
         self._hip_callback_installed = True
+        # The events ring buffer (tool ``events``) records hip and node events from here on.
+        from .tools import events as tool_events
+
+        tool_events.install(self.executor.post)
 
         removed = prune_stale(self.registry.directory)
         if removed:
@@ -180,6 +184,9 @@ class Host:
             except Exception:
                 self.logger.debug("removeEventCallback failed", exc_info=True)
             self._hip_callback_installed = False
+            from .tools import events as tool_events
+
+            tool_events.uninstall()
         self.registry.remove()
         server = self.server
         if server is not None:
