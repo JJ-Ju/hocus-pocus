@@ -76,9 +76,15 @@ def _is_number(value: Any) -> bool:
     return isinstance(value, int | float) and not isinstance(value, bool)
 
 
+FLOAT_DIGITS = 12
+"""Significant digits for evaluated floats: 2.4000000000000004 reads as 2.4."""
+
+
 def _json_number(value: Any) -> Any:
-    if isinstance(value, float) and not math.isfinite(value):
-        return str(value)
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            return str(value)
+        return float(f"{value:.{FLOAT_DIGITS}g}")
     return value
 
 
@@ -1200,7 +1206,7 @@ def locked_error(node: Any, target: Any, exc: BaseException | None = None) -> To
     )
 
 
-def _with_context(exc: ToolError, prefix: str, extra: dict[str, Any]) -> ToolError:
+def _with_context(exc: ToolError, prefix: str | None, extra: dict[str, Any]) -> ToolError:
     detail = (
         exc.detail
         if isinstance(exc.detail, dict)
@@ -1208,7 +1214,7 @@ def _with_context(exc: ToolError, prefix: str, extra: dict[str, Any]) -> ToolErr
     )
     return ToolError(
         exc.code,
-        f"{prefix}: {exc.message}",
+        f"{prefix}: {exc.message}" if prefix else exc.message,
         hint=exc.hint,
         candidates=exc.candidates,
         hou_exception=exc.hou_exception,
@@ -1271,9 +1277,12 @@ def set_parm_items(
         except ToolError as exc:
             if exc.message.startswith(f"parms.{name}:"):
                 raise
-            raise _with_context(
-                exc, f"parms.{name} on {node.path()}", {"parm": name, "node": node.path()}
-            ) from exc
+            where = (
+                f"parms.{name}"
+                if exc.message.startswith(node.path())
+                else f"parms.{name} on {node.path()}"
+            )
+            raise _with_context(exc, where, {"parm": name, "node": node.path()}) from exc
     return results
 
 
@@ -1336,7 +1345,12 @@ def parm_set(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
             rows.append((node.path(), result))
         except ToolError as exc:
             if not partial:
-                prefix = f"items[{index}] ({path})" if len(items) > 1 else str(path)
+                # Messages usually start with the parm path already; do not repeat it.
+                named = isinstance(path, str) and exc.message.startswith(path)
+                if len(items) > 1:
+                    prefix = f"items[{index}]" if named else f"items[{index}] ({path})"
+                else:
+                    prefix = None if named else str(path)
                 extra = {"item": index, "path": path}
                 if len(items) > 1:
                     extra["rolled_back"] = True

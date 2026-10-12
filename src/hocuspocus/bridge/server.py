@@ -9,6 +9,7 @@ verbatim, return ``structuredContent`` for arbitrary dicts, and own argument val
 
 from __future__ import annotations
 
+import difflib
 import logging
 import re
 import threading
@@ -256,9 +257,14 @@ class Bridge:
         """Validate, dispatch and shape one ``tools/call``. Unknown tools raise ``MCPError``."""
         spec = self._by_name.get(name)
         if spec is None:
-            raise MCPError(
-                types.INVALID_PARAMS, f"Unknown tool: {name}", {"tools": sorted(self._by_name)}
+            close = difflib.get_close_matches(name, list(self._by_name), n=3, cutoff=0.6)
+            message = f"Unknown tool: {name}." + (
+                f" Did you mean {' or '.join(close)}?" if close else ""
             )
+            data: dict[str, Any] = {"tools": sorted(self._by_name)}
+            if close:
+                data["candidates"] = close
+            raise MCPError(types.INVALID_PARAMS, message, data)
         args = dict(arguments or {})
         violations = validate(args, spec.input_schema)
         if violations:

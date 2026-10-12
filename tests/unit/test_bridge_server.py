@@ -209,6 +209,11 @@ def test_unknown_tool_is_protocol_error():
     bridge, _c, _l = make_bridge()
     with pytest.raises(MCPError):
         bridge.call_tool("usd_stage_typo", {})
+    # Review 07 papercut 10: suggest the nearest tool like every other error does.
+    with pytest.raises(MCPError) as info:
+        bridge.call_tool("node_inf", {})
+    assert "Did you mean node_info" in str(info.value)
+    assert info.value.error.data["candidates"][0] == "node_info"
 
 
 # -- forwarding ------------------------------------------------------------------------------

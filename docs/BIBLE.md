@@ -605,7 +605,8 @@ Stable codes (the complete set; adding one is a design change):
 | `cancelled` | job cancelled | — |
 | `internal` | anything else; **must** carry `hou_exception` and traceback in `detail` | maybe |
 
-Protocol-level JSON-RPC errors are reserved for unknown tools and malformed requests.
+Protocol-level JSON-RPC errors are reserved for unknown tools (the message suggests the
+nearest names, also in `data.candidates`) and malformed requests.
 
 ---
 

@@ -209,6 +209,11 @@ COOKABLE_CATEGORIES = frozenset({"Sop", "Lop", "Cop", "Cop2", "Chop", "Dop"})
 """Categories ``problems`` cooks when ``cook_uncooked`` is set (no ROPs, TOPs or OBJs)."""
 
 
+def a_or_an(word: str) -> str:
+    """``"an Object"``, ``"a Sop"``: the article for a category or class name."""
+    return f"{'an' if word[:1].lower() in 'aeiou' else 'a'} {word}"
+
+
 def require_node(path: Any, *, field: str = "path") -> Any:
     """Return ``hou.node(path)`` or raise ``node_not_found`` with sibling candidates."""
     import difflib

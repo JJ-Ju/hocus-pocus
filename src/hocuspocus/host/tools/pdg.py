@@ -20,6 +20,7 @@ from typing import Any
 
 from hocuspocus.tools.errors import ToolError
 
+from ._diag import a_or_an
 from .nodes import bad_arg, get_node, page
 from .registry import HostContext, tool
 
@@ -49,7 +50,8 @@ def resolve_top(path: Any) -> Any:
     if not isinstance(node, hou.TopNode) and not _is_top_network(node):
         raise ToolError(
             "invalid_argument",
-            f"{node.path()} is a {node.type().category().name()} node, not a TOP node or network.",
+            f"{node.path()} is {a_or_an(node.type().category().name())} node, not a TOP node or "
+            "network.",
             hint="Pass a TOP node (e.g. /obj/topnet1/ropfetch1) or a TOP network path.",
         )
     return node

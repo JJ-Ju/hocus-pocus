@@ -19,7 +19,7 @@ from typing import Any
 
 from hocuspocus.tools.errors import ToolError
 
-from ._diag import collect_problems
+from ._diag import a_or_an, collect_problems
 from .registry import HostContext, tool
 
 CLASSES = ("point", "prim", "vertex", "detail")
@@ -114,7 +114,7 @@ def resolve_sop(path: Any) -> Any:
         )
     raise ToolError(
         "invalid_argument",
-        f"{node.path()} is a {node.type().category().name()} node, not a SOP or OBJ.",
+        f"{node.path()} is {a_or_an(node.type().category().name())} node, not a SOP or OBJ.",
         hint="Pass a SOP path such as /obj/geo1/OUT, or a geometry object such as /obj/geo1.",
     )
 
@@ -437,7 +437,7 @@ def group_members(geo: Any, cls: str, group: str) -> Any:
                 if other != cls and group in _class_groups(geo, other)
             ]
             hint = (
-                f"{group!r} is a {others[0]} group; read class {others[0]!r} or promote it."
+                f"{group!r} is {a_or_an(others[0])} group; read class {others[0]!r} or promote it."
                 if others
                 else f"Available {cls} groups are listed in candidates; patterns like '0-9' or "
                 "'@P.y>0' also work."
@@ -597,7 +597,7 @@ def _resolve_attribs(geo: Any, cls: str, wanted: Any) -> list[Any]:
                 if other != cls and any(a.name() == name for a in _class_attribs(geo, other))
             ]
             hint = (
-                f"{name!r} is a {elsewhere[0]} attribute; pass class {elsewhere[0]!r}."
+                f"{name!r} is {a_or_an(elsewhere[0])} attribute; pass class {elsewhere[0]!r}."
                 if elsewhere
                 else f"Available {cls} attributes: {', '.join(sorted(by_name)) or 'none'}."
             )

@@ -18,7 +18,7 @@ from typing import Any
 
 from hocuspocus.tools.errors import ToolError
 
-from ._diag import collect_problems
+from ._diag import a_or_an, collect_problems
 from .nodes import bad_arg, get_node, page
 from .registry import HostContext, tool
 
@@ -104,7 +104,7 @@ def resolve_lop(path: Any) -> Any:
     if not isinstance(node, hou.LopNode):
         raise ToolError(
             "invalid_argument",
-            f"{node.path()} is a {node.type().category().name()} node, not a LOP.",
+            f"{node.path()} is {a_or_an(node.type().category().name())} node, not a LOP.",
             hint="usd_stage reads LOP (Solaris) nodes, e.g. /stage/OUT.",
         )
     return node

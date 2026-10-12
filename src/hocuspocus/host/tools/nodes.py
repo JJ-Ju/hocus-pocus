@@ -19,7 +19,7 @@ from typing import Any
 
 from hocuspocus.tools.errors import ToolError
 
-from ._diag import cheap_cook_problems, collect_problems
+from ._diag import a_or_an, cheap_cook_problems, collect_problems
 from .registry import HostContext, tool
 
 NODE_INFO_SECTIONS = (
@@ -331,7 +331,7 @@ def type_not_found(parent: Any, type_name: str, category: Any) -> ToolError:
     others = other_categories_with(type_name, category)
     if others:
         hint = (
-            f"{type_name} is a {'/'.join(others)} node type, but {parent.path()} holds "
+            f"{type_name} is {a_or_an('/'.join(others))} node type, but {parent.path()} holds "
             f"{category.name()} nodes."
         )
         if "Sop" in others and category.name() == "Object":
@@ -1237,7 +1237,7 @@ def node_copy(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     for src in sources:
         if src.type().category() != category:
             raise bad_arg(
-                f"{src.path()} is a {src.type().category().name()} node; {dest.path()} holds "
+                f"{src.path()} is {a_or_an(src.type().category().name())} node; {dest.path()} holds "
                 f"{category.name()} nodes.",
                 hint="Copy into a network of the same context.",
             )

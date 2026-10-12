@@ -540,3 +540,22 @@ def test_summarize_parm_compact_and_full(scene):
     assert full["path"] == "/obj/geo1/xform1/ty"
     assert full["keyframes"]["count"] == 1
     assert full["template"]["type"] == "float"
+
+
+def test_messages_and_values_are_tidy(client):
+    """Review 07 papercut 10: no repeated path in messages, no float noise in values."""
+    geo = hou.node("/obj").createNode("geo", "terrain")
+    mountain = geo.createNode("mountain::2.0", "mountain1")
+    path = f"{mountain.path()}/height"
+    error = client.error("parm_set", {"items": [{"path": path, "value": "tall"}]})
+    assert error["message"].count(path) == 1, error["message"]
+    error = client.error(
+        "parm_set",
+        {"items": [{"path": f"{geo.path()}/tx", "value": 1}, {"path": path, "value": "tall"}]},
+    )
+    assert error["message"].startswith("items[1]: ") and error["message"].count(path) == 1
+    client.ok("parm_set", {"items": [{"path": f"{geo.path()}/tx", "expression": "$F*0.1"}]})
+    (row,) = client.ok("parm_get", {"paths": [f"{geo.path()}/tx"], "frame": 24})["parms"]
+    assert row["value"] == 2.4  # not 2.4000000000000004
+    error = client.error("node_create", {"items": [{"parent": geo.path(), "type": "geo"}]})
+    assert "is an Object node type" in error["hint"], error
