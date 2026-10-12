@@ -155,14 +155,20 @@ class HostClient:
         args: dict[str, Any] | None,
         timeout_s: float,
         request_id: str | None = None,
+        max_response_bytes: int | None = None,
     ) -> tuple[bool, dict[str, Any], dict[str, Any]]:
-        """``POST /hp/v1/call`` once. Returns ``(ok, result_or_error, meta)``."""
-        body = {
+        """``POST /hp/v1/call`` once. Returns ``(ok, result_or_error, meta)``.
+
+        ``max_response_bytes`` tells the host the client's budget, so paged tools stop a
+        page there and set ``next_cursor`` to the first row not returned."""
+        body: dict[str, Any] = {
             "tool": tool,
             "args": args or {},
             "timeout_s": timeout_s,
             "request_id": request_id or uuid.uuid4().hex,
         }
+        if max_response_bytes:
+            body["max_response_bytes"] = int(max_response_bytes)
         status, data = self._request(
             "POST", "/call", body, read_timeout_s=float(timeout_s) + RESPONSE_GRACE_S
         )

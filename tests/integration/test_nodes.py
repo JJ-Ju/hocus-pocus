@@ -591,6 +591,14 @@ def test_find_caps_rows_to_the_response_budget(client, host):
     )
     paths = [r["path"] for r in first["nodes"] + rest["nodes"]]
     assert len(paths) == 60 == len(set(paths))
+    # The bridge sends its budget in the /hp/v1/call envelope; the host pages by it.
+    body = {
+        "tool": "node_find",
+        "args": {"root": "/obj/geo1", "limit": 1000},
+        "max_response_bytes": 2048,
+    }
+    enveloped = client.request("POST", "/hp/v1/call", body).body["result"]
+    assert enveloped["nodes"] == first["nodes"] and enveloped["next_cursor"]
 
 
 def test_find_root_not_found(client):

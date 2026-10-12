@@ -218,7 +218,13 @@ class Bridge:
             client.health()  # version check before the first call to this instance
             self._verified.add(key)
         try:
-            ok, payload, meta = client.call(name, args, self._timeout(args), uuid.uuid4().hex)
+            ok, payload, meta = client.call(
+                name,
+                args,
+                self._timeout(args),
+                uuid.uuid4().hex,
+                max_response_bytes=self.config.max_response_bytes,
+            )
         except ToolError as exc:
             # A connection reset usually means Houdini died mid-call: say so, not "unknown".
             if exc.code == "delivery_unknown" and self._wait_exit(inst):
@@ -311,16 +317,25 @@ class Bridge:
             )
             return _error_result(error.to_dict())
         ok, payload, meta = self.invoke(name, args)
-        return self.shape(ok, payload, meta)
+        pageable = "cursor" in (spec.input_schema.get("properties") or {})
+        return self.shape(ok, payload, meta, args=args, pageable=pageable)
 
     def shape(
-        self, ok: bool, payload: dict[str, Any], meta: dict[str, Any]
+        self,
+        ok: bool,
+        payload: dict[str, Any],
+        meta: dict[str, Any],
+        *,
+        args: dict[str, Any] | None = None,
+        pageable: bool = False,
     ) -> types.CallToolResult:
         meta = dict(meta)
         if not ok:
             return _error_result(payload, meta)
         result, images = budget.extract_images(payload)
-        result, cuts = budget.apply_budget(result, self.config.max_response_bytes)
+        result, cuts = budget.apply_budget(
+            result, self.config.max_response_bytes, args, pageable=pageable
+        )
         if cuts:
             meta[budget.TRUNCATION_META_KEY] = cuts
         content: list[Any] = [types.TextContent(type="text", text=budget.dumps(result))]

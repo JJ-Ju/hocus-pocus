@@ -332,7 +332,12 @@ as it was started from a neutral directory).
   schemas, annotations) is ≤ 44,000 bytes (names, descriptions and input schemas alone stay
   ≤ 48 KB). Each description ≤ 80 words. Examples live in `docs/tools.md` and the resource `hocuspocus://guide`, not in
   descriptions. Default result ≤ 16 KB. List tools take `limit` (default 50) and
-  `cursor`; results carry `next_cursor` when more exist and `total` when cheap.
+  `cursor`; results carry `next_cursor` when more exist and `total` when cheap. A budget
+  cut never loses rows: the bridge sends `max_response_bytes` in the `/hp/v1/call`
+  envelope, list tools end a page at that budget with `next_cursor` at the first row not
+  returned, and the bridge trims a still-oversized page only when its cursor is an integer
+  offset (rewriting `next_cursor` to offset + rows kept), else returns it whole with
+  `over_budget: true`.
 - **Non-default only:** parm listings show parms where `isAtDefault()` is false unless
   `include_defaults: true`.
 - **Locked HDAs** are opaque by default: `node_find`, `node_info` and

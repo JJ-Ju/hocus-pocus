@@ -107,14 +107,16 @@ class FakeClient:
         }
         self.replies: dict[str, Any] = {}
         self.calls: list[tuple[str, dict, float]] = []
+        self.budgets: list[int | None] = []
 
     def health(self, timeout_s: float = 5.0) -> dict[str, Any]:
         if isinstance(self.health_reply, Exception):
             raise self.health_reply
         return self.health_reply
 
-    def call(self, tool, args, timeout_s, request_id=None):
+    def call(self, tool, args, timeout_s, request_id=None, max_response_bytes=None):
         self.calls.append((tool, args, timeout_s))
+        self.budgets.append(max_response_bytes)
         reply = self.replies.get(tool, (True, {"echo": tool}, {"scene_generation": 2}))
         if isinstance(reply, Exception):
             raise reply
@@ -335,7 +337,7 @@ def test_offline_names_the_earlier_server_that_launched_houdini(tmp_path):
 def test_exit_mid_call_is_reported_as_an_exit():
     bridge, client, live = make_bridge()
 
-    def die(*_args):
+    def die(*_args, **_kwargs):
         live.clear()
         raise ToolError("delivery_unknown", "ConnectionResetError: [WinError 10054]")
 
@@ -406,16 +408,44 @@ def test_bridge_exception_becomes_internal():
 def test_truncation_cuts_lists_at_item_boundaries():
     bridge, client, _ = make_bridge(config=BridgeConfig(max_response_bytes=2048))
     rows = [{"path": f"/obj/geo{i}", "type": "geo", "pad": "x" * 40} for i in range(200)]
-    client.replies["node_info"] = (True, {"nodes": rows, "next_cursor": "c1", "total": 200}, {})
+    client.replies["node_info"] = (True, {"nodes": rows, "total": 200}, {})
     result = bridge.call_tool("node_info", {"paths": ["/obj"]})
     out = result.structured_content
-    assert out["truncated"] is True
-    assert out["next_cursor"] == "c1"
+    assert out["truncated"] is True and "next_cursor" not in out
     assert 0 < len(out["nodes"]) < 200
     assert out["nodes"] == rows[: len(out["nodes"])]  # whole items, original order
     assert len(result.content[0].text.encode()) <= 2048
     cut = result.meta[budget.TRUNCATION_META_KEY][0]
     assert cut["path"] == "nodes" and cut["total"] == 200 and cut["kept"] == len(out["nodes"])
+    assert client.budgets[-1] == 2048  # the host learns the budget and pages by it
+
+
+ROWS = [{"path": f"/obj/geo{i}", "type": "geo", "pad": "x" * 40} for i in range(1000)]
+
+
+def test_paged_trim_rewrites_an_offset_cursor_so_no_row_is_skipped():
+    """Review 10 #3: 1,000 rows kept 96 and the cursor still said 1000."""
+    page = {"nodes": ROWS[:1000], "total": 1000}
+    out, cuts = budget.apply_budget(page, 16_384, {"limit": 1000}, pageable=True)
+    kept = len(out["nodes"])
+    assert 0 < kept < 1000 and out["truncated"] is True
+    assert out["next_cursor"] == str(kept) and cuts[0]["kept"] == kept
+    assert len(budget.dumps(out)) <= 16_384
+    # A later page: the host said "1100"; the bridge resumes right after the kept rows.
+    middle = {"nodes": ROWS[100:600], "next_cursor": "600", "total": 1000}
+    out, _ = budget.apply_budget(middle, 4096, {"cursor": "100", "limit": 500}, pageable=True)
+    assert out["next_cursor"] == str(100 + len(out["nodes"]))
+    assert out["nodes"] == ROWS[100 : 100 + len(out["nodes"])]
+
+
+def test_paged_result_with_an_opaque_cursor_is_never_trimmed():
+    page = {"nodes": ROWS[:300], "next_cursor": "after:/obj/geo299", "total": 1000}
+    out, cuts = budget.apply_budget(page, 4096, {"cursor": "after:/obj/a"}, pageable=True)
+    assert out["nodes"] == ROWS[:300] and out["next_cursor"] == "after:/obj/geo299"
+    assert out["over_budget"] is True and "truncated" not in out
+    assert cuts == [{"over_budget": True, "bytes": budget.size(page), "max_bytes": 4096}]
+    problems = {"problems": ROWS[:300], "next_cursor": "50@1200"}
+    assert budget.apply_budget(problems, 4096, {}, pageable=True)[0]["problems"] == ROWS[:300]
 
 
 def test_small_results_are_not_marked_truncated():

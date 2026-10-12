@@ -198,7 +198,15 @@ class _Handler(BaseHTTPRequestHandler):
             )
             return
         started = time.perf_counter()
-        envelope = self.server.app.call(body.get("tool"), body.get("args"), body.get("timeout_s"))
+        # The bridge sends its byte budget; paged tools stop a page there (BIBLE §4.1).
+        budget = (
+            {"max_response_bytes": body["max_response_bytes"]}
+            if "max_response_bytes" in body
+            else {}
+        )
+        envelope = self.server.app.call(
+            body.get("tool"), body.get("args"), body.get("timeout_s"), **budget
+        )
         log.debug(
             "call %s request_id=%s ok=%s %.1f ms",
             body.get("tool"),
