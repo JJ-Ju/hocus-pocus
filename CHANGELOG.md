@@ -26,6 +26,11 @@ Each contract change is recorded in `docs/BIBLE.md` (decisions D16 to D20).
   (`node_info` flags) or the parm lock (`parm_get`). Being a locked asset or inside one
   is `hda_locked`, in `node_info`, `network_describe` (locked children appear as
   `{type, hda_locked: true}`), `parm_get` and `hda`.
+- **Parm rows are leaner** (review 12 papercut 1). `parm_get`, `parm_set` and the
+  `node_info` parm rows leave out `raw` when it equals `value`, and show string values
+  over 200 characters as `{elided, head}`, as `node_create return: full` does. A
+  `snippet` edit no longer echoes the whole VEX twice. `parm_get {full_strings: true}`
+  returns long strings whole.
 - **`node_type_search current_only`** defaults to true: every version of a type folds
   into its current version's row, which names the rest in `other_versions`.
   Descriptions are clipped to 120 characters. `current_only: false` lists each version.
@@ -74,9 +79,13 @@ Each contract change is recorded in `docs/BIBLE.md` (decisions D16 to D20).
   else the only unpaired one in the network) as the Tab menu does; the row carries
   `paired_with`.
 - `network_describe {format: "outline"}`: a compact tree of path, name, type,
-  `children_count`, display node, error count and `hda_locked`, two levels deep by
-  default and paged at the response budget. The resource `houdini://outline` returns it
-  for the whole scene.
+  `children_count` (left out at 0), display node, error count and `hda_locked` (only for
+  locked assets not shipped with Houdini, so wrangles are not flagged), two levels deep
+  by default and paged at the response budget. The resource `houdini://outline` returns
+  it for the whole scene.
+- `node_type_info` takes `folder: "(no folder)"` or `""` for a type's top-level parms
+  (every name `detail: folders` lists is now accepted), and `parms: "dist|inset"` matches
+  either glob (review 12 papercut 2).
 - `hocuspocus launch [--headless] [--hip FILE] [--wait N] [--hfs DIR]` starts GUI
   Houdini or a headless hython host, waits for it to register, prints its registry entry
   as JSON (never the token) and exits. That Houdini belongs to no MCP server and outlives
@@ -130,6 +139,8 @@ An agent prompt or script written for 1.0 must change:
   asset; in `parm_get`, `locked` is now only the parm lock.
 - Expect `houdini_python` failures as `isError` results with `code: python_exception`
   (traceback in `detail.traceback`) instead of a successful result with `ok: false`.
+- Read `value` where `raw` is missing (it equals `value`), and pass
+  `parm_get {full_strings: true}` to read a string over 200 characters whole.
 - Pass `current_only: false` to `node_type_search` to get each version as its own row.
 - Read `outputs_summary` (or `job result`) from a `render` with more than 5 outputs.
 - Set `result_content = "both"` (or `HOCUSPOCUS_RESULT_CONTENT=both`) if a client reads
