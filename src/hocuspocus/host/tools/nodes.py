@@ -814,6 +814,68 @@ def _walk(root: Any, recurse_locked: bool) -> Iterable[Any]:
             stack.extend(reversed(node.children()))
 
 
+CURSOR_AFTER = "after:"
+"""``node_find`` cursors name the last returned path: rows are in path order, so inserts
+and deletes between pages neither skip nor repeat rows."""
+
+
+def path_key(path: str) -> tuple[str, ...]:
+    """Sort key that keeps a node directly before its subtree."""
+    return tuple(path.split("/"))
+
+
+def _find_cursor(cursor: Any) -> tuple[str, ...] | int | None:
+    if cursor in (None, ""):
+        return None
+    if isinstance(cursor, str) and cursor.startswith(CURSOR_AFTER + "/"):
+        return path_key(cursor[len(CURSOR_AFTER) :])
+    if isinstance(cursor, str) and cursor.isdigit():
+        return int(cursor)  # an offset cursor from an older host; still honoured
+    raise bad_arg(
+        f"Invalid cursor {cursor!r}.",
+        hint="Pass next_cursor from the previous page unchanged, or omit cursor.",
+    )
+
+
+def response_budget(ctx: HostContext) -> int:
+    """The caller's byte budget for one result (BIBLE §4.1; default 16 KB)."""
+    for value in (
+        (ctx.extras or {}).get("max_response_bytes"),
+        getattr(ctx.config, "max_response_bytes", None),
+    ):
+        if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+            return value
+    return 16384
+
+
+def compact_size(value: Any) -> int:
+    import json
+
+    return len(json.dumps(value, separators=(",", ":"), default=str).encode("utf-8"))
+
+
+ROW_ENVELOPE_BYTES = 256
+"""Room left in the budget for a paged result's non-row fields and the bridge's wrapping."""
+
+
+def _has_errors(node: Any) -> bool:
+    try:
+        return bool(node.errors())
+    except Exception:
+        return False
+
+
+def _locked_root_error(root: Any) -> ToolError:
+    """The refusal ``node_find`` and ``network_describe`` share for a locked-asset root."""
+    asset = root if _is_locked_hda(root) else (locked_ancestor(root) or root)
+    return ToolError(
+        "locked",
+        f"{root.path()} is {'a' if asset is root else 'inside the'} locked asset "
+        f"{asset.path()}; locked assets are opaque by default.",
+        hint="Pass recurse_locked: true to read its contents.",
+    )
+
+
 @tool("node_find")
 def node_find(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     from hocuspocus.tools.catalog import CATEGORIES
@@ -837,13 +899,17 @@ def node_find(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
         )
     if not isinstance(flags, dict) or any(k not in FLAG_NAMES for k in flags):
         raise bad_arg(f"'flags' keys must be among {', '.join(FLAG_NAMES)}.")
-    if inside_locked(root) and not recurse_locked:
-        raise ToolError(
-            "locked",
-            f"{root.path()} is inside a locked asset; locked assets are opaque by default.",
-            hint="Pass recurse_locked: true to search inside it.",
-        )
-    rows: list[dict[str, Any]] = []
+    if not recurse_locked and (inside_locked(root) or _is_locked_hda(root)):
+        raise _locked_root_error(root)
+    limit = args.get("limit")
+    if limit is None:
+        limit = DEFAULT_LIMIT
+    if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 1000:
+        raise bad_arg("'limit' must be an integer between 1 and 1000.")
+    after = _find_cursor(args.get("cursor"))
+    # Pass 1: filter cheaply. errors() can be expensive, so it is read here only when
+    # has_errors filters; otherwise only for the rows on the returned page.
+    matches: list[tuple[Any, dict[str, bool], bool | None]] = []
     for node in _walk(root, recurse_locked):
         if pattern != "*" and not _match(pattern, node.name()):
             continue
@@ -858,31 +924,45 @@ def node_find(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
         node_flag_values = node_flags(node)
         if any(bool(node_flag_values.get(k, False)) != bool(v) for k, v in flags.items()):
             continue
-        try:
-            errored = bool(node.errors())
-        except Exception:
-            errored = False
-        if has_errors is not None and errored != bool(has_errors):
-            continue
+        errored = None
+        if has_errors is not None:
+            errored = _has_errors(node)
+            if errored != bool(has_errors):
+                continue
+        matches.append((node, node_flag_values, errored))
+    matches.sort(key=lambda m: path_key(m[0].path()))
+    if isinstance(after, int):
+        start = after
+    elif after is not None:
+        start = next((i for i, m in enumerate(matches) if path_key(m[0].path()) > after), None)
+        start = len(matches) if start is None else start
+    else:
+        start = 0
+    budget = response_budget(ctx)
+    used = ROW_ENVELOPE_BYTES + len(root.path())
+    rows: list[dict[str, Any]] = []
+    for node, node_flag_values, errored in matches[start : start + limit]:
         try:
             child_count = 0 if _is_locked_hda(node) and not recurse_locked else len(node.children())
         except Exception:
             child_count = 0
-        rows.append(
-            {
-                "path": node.path(),
-                "type": node_type.name(),
-                "category": node_type.category().name(),
-                "flags": {k: True for k, v in node_flag_values.items() if v},
-                "input_count": len(node.inputConnections()),
-                "child_count": child_count,
-                "has_errors": errored,
-            }
-        )
-    chunk, nxt = page(rows, args.get("limit"), args.get("cursor"))
-    result: dict[str, Any] = {"root": root.path(), "nodes": chunk, "total": len(rows)}
-    if nxt is not None:
-        result["next_cursor"] = nxt
+        node_type = node.type()
+        row = {
+            "path": node.path(),
+            "type": node_type.name(),
+            "category": node_type.category().name(),
+            "flags": {k: True for k, v in node_flag_values.items() if v},
+            "input_count": len(node.inputConnections()),
+            "child_count": child_count,
+            "has_errors": _has_errors(node) if errored is None else errored,
+        }
+        used += compact_size(row) + 1
+        if rows and used > budget:
+            break  # BIBLE §4.1: page by the byte budget too; next_cursor resumes here
+        rows.append(row)
+    result: dict[str, Any] = {"root": root.path(), "nodes": rows, "total": len(matches)}
+    if rows and start + len(rows) < len(matches):
+        result["next_cursor"] = CURSOR_AFTER + rows[-1]["path"]
     return result
 
 

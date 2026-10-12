@@ -385,13 +385,56 @@ def test_find_filters_and_pages(client):
     objs = client.ok("node_find", {"root": "/obj", "category": "Object"})
     assert [r["path"] for r in objs["nodes"]] == ["/obj/geo1"]
     first = client.ok("node_find", {"root": "/obj/geo1", "limit": 2})
-    assert first["total"] == 4 and len(first["nodes"]) == 2 and first["next_cursor"] == "2"
+    assert first["total"] == 4 and len(first["nodes"]) == 2 and first["next_cursor"]
     second = client.ok(
         "node_find", {"root": "/obj/geo1", "limit": 2, "cursor": first["next_cursor"]}
     )
     assert len(second["nodes"]) == 2 and "next_cursor" not in second
     bad = client.error("node_find", {"cursor": "abc"})
     assert bad["code"] == "invalid_argument" and bad["hint"]
+
+
+def test_find_cursor_survives_inserts_and_deletes(client):
+    geo = hou.node("/obj").createNode("geo", "geo1")
+    for name in ("a", "b", "c", "d", "e"):
+        geo.createNode("null", name)
+    first = client.ok("node_find", {"root": "/obj/geo1", "limit": 2})
+    assert [r["path"] for r in first["nodes"]] == ["/obj/geo1/a", "/obj/geo1/b"]
+    # Between pages: delete a row already returned (offsets would skip c) and add one
+    # that sorts before the cursor (offsets would return b again).
+    geo.node("a").destroy()
+    geo.createNode("null", "aa")
+    second = client.ok(
+        "node_find", {"root": "/obj/geo1", "limit": 2, "cursor": first["next_cursor"]}
+    )
+    assert [r["path"] for r in second["nodes"]] == ["/obj/geo1/c", "/obj/geo1/d"]
+    # The node the cursor names may itself be gone: paging continues after its position.
+    geo.node("d").destroy()
+    third = client.ok(
+        "node_find", {"root": "/obj/geo1", "limit": 2, "cursor": second["next_cursor"]}
+    )
+    assert [r["path"] for r in third["nodes"]] == ["/obj/geo1/e"]
+    assert "next_cursor" not in third
+
+
+def test_find_reads_errors_only_for_returned_rows(client, monkeypatch):
+    geo = hou.node("/obj").createNode("geo", "geo1")
+    for index in range(30):
+        geo.createNode("null", f"n{index:02d}")
+    calls = []
+    original = hou.Node.errors
+
+    def counting(node):
+        calls.append(node.path())
+        return original(node)
+
+    monkeypatch.setattr(hou.Node, "errors", counting)
+    rows = client.ok("node_find", {"root": "/obj/geo1", "limit": 5})
+    assert len(rows["nodes"]) == 5 and rows["total"] == 30
+    assert sorted(set(calls)) == [r["path"] for r in rows["nodes"]]
+    calls.clear()
+    client.ok("node_find", {"root": "/obj/geo1", "limit": 5, "has_errors": False})
+    assert len(set(calls)) == 30  # the filter needs every node's errors
 
 
 def test_find_does_not_enter_locked_assets(client):
@@ -402,6 +445,38 @@ def test_find_does_not_enter_locked_assets(client):
     assert mountain.path() in paths and not (paths & inner)
     deep = client.ok("node_find", {"root": "/obj", "limit": 1000, "recurse_locked": True})
     assert inner <= {r["path"] for r in deep["nodes"]}
+
+
+def test_find_refuses_a_locked_asset_root(client):
+    _geo, mountain = make_locked_mountain()
+    error = client.error("node_find", {"root": mountain.path()})
+    assert error["code"] == "locked"
+    assert "locked asset" in error["message"] and "recurse_locked" in error["hint"]
+    described = client.error("network_describe", {"root": mountain.path()})
+    assert error["message"] == described["message"]
+    inside = client.ok("node_find", {"root": mountain.path(), "recurse_locked": True})
+    assert inside["total"] == len(mountain.allSubChildren())
+
+
+def test_find_caps_rows_to_the_response_budget(client, host):
+    geo = hou.node("/obj").createNode("geo", "geo1")
+    for index in range(60):
+        geo.createNode("null", f"node_with_a_fairly_long_name_{index:03d}")
+    saved = host.config.max_response_bytes
+    host.config.max_response_bytes = 2048
+    try:
+        first = client.ok("node_find", {"root": "/obj/geo1", "limit": 1000})
+    finally:
+        host.config.max_response_bytes = saved
+    import json
+
+    assert len(json.dumps(first, separators=(",", ":"))) <= 2048
+    assert 0 < len(first["nodes"]) < 60 and first["total"] == 60
+    rest = client.ok(
+        "node_find", {"root": "/obj/geo1", "limit": 1000, "cursor": first["next_cursor"]}
+    )
+    paths = [r["path"] for r in first["nodes"] + rest["nodes"]]
+    assert len(paths) == 60 == len(set(paths))
 
 
 def test_find_root_not_found(client):
