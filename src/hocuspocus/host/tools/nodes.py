@@ -604,6 +604,68 @@ def mutation_block(node: Any, **extra: Any) -> dict[str, Any]:
     return out
 
 
+RETURN_MODES = ("full", "summary")
+ECHO_STRING_CHARS = 200
+"""Mutation echoes elide string parm values longer than this (VEX snippets, Python code):
+the agent just wrote them, and node_info / parm_get still return them in full."""
+ECHO_HEAD_CHARS = 80
+
+
+def return_mode(args: dict[str, Any]) -> str:
+    mode = args.get("return", "full") or "full"
+    if mode not in RETURN_MODES:
+        raise bad_arg("'return' must be 'full' or 'summary'.")
+    return mode
+
+
+def _elide(value: Any) -> Any:
+    if isinstance(value, str) and len(value) > ECHO_STRING_CHARS:
+        return {"truncated": True, "chars": len(value), "head": value[:ECHO_HEAD_CHARS]}
+    if isinstance(value, list):
+        return [_elide(v) for v in value]
+    return value
+
+
+def elide_long_values(block: dict[str, Any]) -> dict[str, Any]:
+    """Replace long string parm values in a mutation echo with ``{truncated, chars, head}``."""
+    for row in block.get("parms") or ():
+        for key in ("value", "raw"):
+            if key in row:
+                row[key] = _elide(row[key])
+    return block
+
+
+def summary_block(
+    node: Any, problems: dict[str, Any] | None = None, **extra: Any
+) -> dict[str, Any]:
+    """``return: summary`` row: path, type and problems only."""
+    problems = problems if problems is not None else cheap_cook_problems(node)
+    out: dict[str, Any] = {"path": node.path(), "type": node.type().name(), **extra}
+    for key in ("errors", "warnings", "cook_state", "hint"):
+        if key in problems:
+            out[key] = problems[key]
+    return out
+
+
+def collapse_problems(blocks: Iterable[dict[str, Any]]) -> None:
+    """Report an identical errors/warnings list once: later rows point at the first one
+    with ``errors_same_as`` / ``warnings_same_as`` (one upstream error repeats downstream)."""
+    seen: dict[str, dict[tuple[str, ...], str]] = {"errors": {}, "warnings": {}}
+    for block in blocks:
+        if not isinstance(block, dict) or "path" not in block:
+            continue
+        for key, first in seen.items():
+            values = block.get(key)
+            if not values:
+                continue
+            signature = tuple(values)
+            if signature in first:
+                del block[key]
+                block[f"{key}_same_as"] = first[signature]
+            else:
+                first[signature] = block["path"]
+
+
 def watch_nodes(nodes: Iterable[Any]) -> None:
     """Have the ``events`` ring buffer record later changes to ``nodes`` (bible §4.7:
     "parms changed on nodes HocusPocus touched"). Call after the call's own changes, so
@@ -1125,6 +1187,7 @@ def node_create(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     if layout not in ("good_position", "none"):
         raise bad_arg("'layout' must be 'good_position' or 'none'.")
     partial = arg_bool(args, "partial", False)
+    mode = return_mode(args)
     rollback = Rollback()
     created: list[tuple[int, Any]] = []
     failures: dict[int, dict[str, Any]] = {}
@@ -1138,11 +1201,18 @@ def node_create(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
                 raise_with_item(index, exc, len(items))
             rollback.run(mark)
             failures[index] = item_error(index, exc)
-    blocks = {
-        index: node_block(node, DEFAULT_INCLUDE, problems=cheap_cook_problems(node))
-        for index, node in created
-    }
+    if mode == "summary":
+        blocks = {index: summary_block(node) for index, node in created}
+    else:
+        blocks = {
+            index: elide_long_values(
+                node_block(node, DEFAULT_INCLUDE, problems=cheap_cook_problems(node))
+            )
+            for index, node in created
+        }
     results = [blocks.get(i) or {"error": failures[i]} for i in range(len(items))]
+    if mode == "summary":
+        collapse_problems(results)
     out: dict[str, Any] = {"results": results, "created": [b["path"] for b in blocks.values()]}
     watch_nodes(node for _, node in created)
     if failures:
@@ -1375,6 +1445,7 @@ def node_copy(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     if len(set(names)) != len(names):
         raise bad_arg("'names' must not repeat.")
     with_inputs = arg_bool(args, "with_inputs", True)
+    mode = return_mode(args)
     offset = args.get("position_offset")
     offset_xy = arg_xy(offset, "position_offset") if offset is not None else None
     sources = [get_node(p, field="paths") for p in paths]
@@ -1424,9 +1495,10 @@ def node_copy(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     except Exception as exc:
         rollback.run()
         raise to_tool_error(exc) from exc
-    results = [
-        mutation_block(copy, source=src.path()) for src, copy in zip(sources, copies, strict=False)
-    ]
+    block = summary_block if mode == "summary" else mutation_block
+    results = [block(copy, source=src.path()) for src, copy in zip(sources, copies, strict=False)]
+    if mode == "summary":
+        collapse_problems(results)
     watch_nodes(copies)
     return {"paths": [c.path() for c in copies], "results": results}
 

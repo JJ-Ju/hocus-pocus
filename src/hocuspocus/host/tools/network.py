@@ -674,6 +674,7 @@ def network_build(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
         raise N.bad_arg(f"on_name_collision must be one of {', '.join(ON_COLLISION)}.")
     layout = N.arg_bool(args, "layout", True)
     dry_run = N.arg_bool(args, "dry_run", False)
+    mode = N.return_mode(args)
     tag = args.get("tag")
     if tag is not None and not isinstance(tag, str):
         raise N.bad_arg("'tag' must be a string.")
@@ -821,8 +822,12 @@ def network_build(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
         "dry_run": False,
         "created": [n.path() for n in top_nodes],
         "created_count": len(made),
-        "nodes": [N.mutation_block(n) for n in top_nodes],
+        "nodes": [
+            N.summary_block(n) if mode == "summary" else N.mutation_block(n) for n in top_nodes
+        ],
     }
+    if mode == "summary":
+        N.collapse_problems(result["nodes"])
     if renamed:
         result["renamed"] = {
             f"{parent.path().rstrip('/')}/{k}": f"{parent.path().rstrip('/')}/{v}"

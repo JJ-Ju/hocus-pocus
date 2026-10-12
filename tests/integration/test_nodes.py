@@ -268,6 +268,72 @@ def test_create_accepts_both_expression_spellings(client):
     assert "{expression, language}" in error["hint"] and "{expr, lang}" in error["hint"]
 
 
+LONG_VEX = "// generated\n" + "\n".join(f"float v{i} = {i} * @P.x;" for i in range(30)) + "\nx("
+
+
+def test_create_full_result_elides_long_snippets(client):
+    hou.node("/obj").createNode("geo", "geo1")
+    result = client.ok(
+        "node_create",
+        {
+            "items": [
+                {"parent": "/obj/geo1", "type": "attribwrangle", "parms": {"snippet": LONG_VEX}}
+            ]
+        },
+    )
+    row = next(p for p in result["results"][0]["parms"] if p["name"] == "snippet")
+    assert row["value"] == {"truncated": True, "chars": len(LONG_VEX), "head": LONG_VEX[:80]}
+    assert hou.node(result["created"][0]).parm("snippet").eval() == LONG_VEX
+    info = client.ok("node_info", {"paths": result["created"]})["nodes"][0]
+    assert next(p for p in info["parms"] if p["name"] == "snippet")["value"] == LONG_VEX
+
+
+def test_create_copy_and_build_summary_results(client):
+    geo = hou.node("/obj").createNode("geo", "geo1")
+    items = [
+        {"parent": "/obj/geo1", "type": "attribwrangle", "name": "w0", "parms": {"snippet": "x("}}
+    ]
+    items += [
+        {
+            "parent": "/obj/geo1",
+            "type": "xform",
+            "name": f"x{i}",
+            "inputs": [{"index": 0, "from": "w0"}],
+        }
+        for i in range(2)
+    ]
+    summary = client.ok("node_create", {"items": items, "return": "summary"})
+    rows = summary["results"]
+    assert summary["created"] == ["/obj/geo1/w0", "/obj/geo1/x0", "/obj/geo1/x1"]
+    assert set(rows[0]) <= {"path", "type", "errors", "warnings", "cook_state", "hint"}
+    assert rows[0]["type"] == "attribwrangle" and rows[0]["errors"]
+    # Downstream nodes repeat the upstream error verbatim: it is reported once.
+    assert rows[1]["errors_same_as"] == "/obj/geo1/w0" and "errors" not in rows[1]
+    assert rows[2]["errors_same_as"] == "/obj/geo1/w0"
+    full = client.ok("node_create", {"items": [{"parent": "/obj/geo1", "type": "box"}]})
+    assert "parms" in full["results"][0] and "flags" in full["results"][0]
+    copied = client.ok(
+        "node_copy",
+        {"paths": ["/obj/geo1/x0", "/obj/geo1/x1"], "to_parent": "/obj/geo1", "return": "summary"},
+    )
+    keys = {"path", "type", "errors", "warnings", "cook_state", "hint", "source"}
+    keys |= {"errors_same_as", "warnings_same_as"}
+    assert all(set(row) <= keys for row in copied["results"])
+    texts = [tuple(row["errors"]) for row in copied["results"] if row.get("errors")]
+    assert len(texts) == len(set(texts))
+    built = client.ok(
+        "network_build",
+        {
+            "parent": "/obj/geo1",
+            "data": {"b1": {"type": "box"}, "b2": {"type": "box"}},
+            "return": "summary",
+        },
+    )
+    assert [n["path"] for n in built["nodes"]] == ["/obj/geo1/b1", "/obj/geo1/b2"]
+    assert "flags" not in built["nodes"][0]
+    assert geo.node("b2") is not None
+
+
 # -- node_info ---------------------------------------------------------------------
 
 

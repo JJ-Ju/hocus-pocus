@@ -145,6 +145,11 @@ def _partial() -> dict[str, Any]:
     return _b(False, "Keep successful items when one fails.")
 
 
+def _return() -> dict[str, Any]:
+    # Review 11 B5: lean mutation echoes; identical errors are reported once.
+    return _enum(("full", "summary"), "full")
+
+
 def _scalar() -> dict[str, Any]:
     return {"type": ["string", "number", "boolean"]}
 
@@ -572,7 +577,8 @@ _NODES: tuple[ToolSpec, ...] = (
             "gets the current version; exact_type disables), optional name, parms (value or "
             "{expression, language}; {expr, lang} also works), inputs (index or name, from, "
             "output), flags, position. Items may wire to nodes created earlier in the call. layout "
-            "default good_position. Returns node_info blocks. Use network_build for whole graphs."
+            "default good_position. Returns node_info blocks, or path, type and problems with "
+            "return summary. Use network_build for whole graphs."
         ),
         input_schema=_obj(
             {
@@ -600,6 +606,7 @@ _NODES: tuple[ToolSpec, ...] = (
                 "layout": _enum(("good_position", "none"), "good_position"),
                 "exact_type": _b(False),
                 "partial": _partial(),
+                "return": _return(),
             },
             ("items",),
         ),
@@ -679,7 +686,8 @@ _NODES: tuple[ToolSpec, ...] = (
         description=(
             "Copy nodes into to_parent, which may be their own network. names renames copies in "
             "paths order; with_inputs (default true) keeps wiring among copied nodes; "
-            "position_offset shifts them. Returns the new paths."
+            "position_offset shifts them. Returns the new paths; return summary trims each row "
+            "to path, type and problems."
         ),
         input_schema=_obj(
             {
@@ -688,6 +696,7 @@ _NODES: tuple[ToolSpec, ...] = (
                 "names": _arr({"type": "string"}),
                 "with_inputs": _b(True),
                 "position_offset": _xy("[dx, dy]"),
+                "return": _return(),
             },
             ("paths", "to_parent"),
         ),
@@ -783,7 +792,8 @@ _NODES: tuple[ToolSpec, ...] = (
             "format (what network_describe returns) in one undo step. Types and inputs are "
             "validated first; dry_run stops there. Input entries are {from, from_index, to_index}; "
             "a missing to_index means the entry's position in the list. on_name_collision: error "
-            "(default), rename, replace. Returns created paths and per-node errors. Use "
+            "(default), rename, replace. Returns created paths and per-node errors (return "
+            "summary: path, type, problems). Use "
             "node_create for a few nodes."
         ),
         input_schema=_obj(
@@ -798,6 +808,7 @@ _NODES: tuple[ToolSpec, ...] = (
                 "dry_run": _b(False),
                 # bible §5.14: the only userData HocusPocus may write into a scene.
                 "tag": _s("Stored as userData hocuspocus:tag."),
+                "return": _return(),
             },
             ("parent", "data"),
         ),
