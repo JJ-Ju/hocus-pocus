@@ -268,3 +268,54 @@ def test_launch_failure_exits_1_with_hint(tmp_path, monkeypatch, capsys):
     captured = capsys.readouterr()
     assert captured.out == ""
     assert "did not register within 3s" in captured.err and "hint:" in captured.err
+
+
+# -- review 10 section 1.11 and 1.4 ---------------------------------------------------------
+
+
+def test_install_dev_removes_copied_installs(tmp_path, capsys):
+    prefs = tmp_path / "prefs"
+    assert cli.main(["install-houdini", "--prefs", str(prefs)]) == 0
+    assert (prefs / "hocuspocus" / __version__).is_dir()
+    assert cli.main(["install-houdini", "--prefs", str(prefs), "--dev"]) == 0
+    assert cli.copied_installs(prefs) == []
+    assert "removed copied install" in capsys.readouterr().out
+
+
+def test_uninstall_reports_a_locked_install(tmp_path, monkeypatch, capsys):
+    prefs = tmp_path / "prefs"
+    cli.main(["install-houdini", "--prefs", str(prefs)])
+
+    def locked(path, *args, **kwargs):
+        raise PermissionError(13, "in use", str(path))
+
+    monkeypatch.setattr(cli.shutil, "rmtree", locked)
+    assert cli.main(["uninstall-houdini", "--prefs", str(prefs)]) == 1
+    assert "close Houdini" in capsys.readouterr().out
+
+
+def test_doctor_flags_leftover_copies(tmp_path, capsys):
+    prefs = tmp_path / "prefs"
+    cli.main(["install-houdini", "--prefs", str(prefs), "--dev"])
+    (prefs / "hocuspocus" / "0.9.0" / "python").mkdir(parents=True)
+    cli.main(["doctor", "--prefs", str(prefs)])
+    out = capsys.readouterr().out
+    assert "[warn] copied installs" in out and "0.9.0" in out
+
+
+def test_doctor_removes_an_entry_whose_port_refuses(tmp_path, capsys):
+    import os
+    import socket
+
+    from hocuspocus.tools import paths
+
+    with socket.socket() as sock:  # a port nothing listens on once closed
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+    entry = paths.instances_dir() / f"{os.getpid()}.json"  # a live pid: this process
+    entry.parent.mkdir(parents=True)
+    entry.write_text(json.dumps({"pid": os.getpid(), "port": port, "token": "t"}))
+    cli.main(["doctor", "--prefs", str(tmp_path / "prefs")])
+    out = capsys.readouterr().out
+    assert "removed the stale registry entry" in out
+    assert not entry.exists()

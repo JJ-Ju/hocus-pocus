@@ -35,10 +35,11 @@ _HOST_FIELDS = ("hip", "time", "env", "scene_generation", "host_version", "houdi
 
 
 def connected_block(bridge: Bridge, inst: registry.Instance) -> dict[str, Any]:
-    """Registry entry + ``/health`` + the host's ``houdini_status``. Raises if ``/health`` fails."""
+    """Registry entry + ``/health`` + the host's ``houdini_status``. Raises if ``/health``
+    fails, and :class:`~hocuspocus.bridge.instances.StaleEntry` (after deleting the entry)
+    when the port is not that host."""
     client = bridge.client_for(inst)
-    health = client.health()
-    bridge.mark_verified(inst)
+    health = bridge.verify(inst)
     block: dict[str, Any] = {
         "pid": inst.pid,
         "port": inst.port,
@@ -79,25 +80,47 @@ def _split_settings(block: dict[str, Any] | None) -> dict[str, Any]:
     return block.pop("_settings", {}) or {}
 
 
-def houdini_status(bridge: Bridge, args: dict[str, Any]) -> dict[str, Any]:
+def _select_verified(
+    bridge: Bridge, warnings: list[str]
+) -> tuple[list[registry.Instance], registry.Selection, dict[str, Any] | None]:
+    """Scan, select and connect, deleting stale entries on the way (review 10 1.4).
+
+    Returns ``(live, selection, connected_block_or_None)``; a selected instance that is
+    registered but unusable is reported in ``warnings``."""
+    for _attempt in range(5):
+        live = bridge.scan()
+        sel = registry.select(live, bridge.preferred_pid)
+        if sel.instance is None:
+            return live, sel, None
+        try:
+            block = connected_block(bridge, sel.instance)
+        except registry.StaleEntry as exc:
+            warnings.append(f"Removed a stale registry entry: {exc}.")
+            continue
+        except ToolError as exc:
+            warnings.extend(sel.warnings)
+            warnings.append(
+                f"pid {sel.instance.pid} is registered but unusable: {exc.code}: {exc.message}"
+            )
+            return live, sel, None
+        warnings.extend(sel.warnings)
+        bridge.last_target = sel.instance
+        return live, sel, block
     live = bridge.scan()
+    return live, registry.select(live, bridge.preferred_pid), None
+
+
+def houdini_status(bridge: Bridge, args: dict[str, Any]) -> dict[str, Any]:
     warnings: list[str] = []
     connected: dict[str, Any] | None = None
     chosen_pid: int | None = None
     if bridge.detached:
+        live = bridge.scan()
         warnings.append("The bridge is disconnected; call houdini_connect to attach.")
     else:
-        sel = registry.select(live, bridge.preferred_pid)
-        warnings.extend(sel.warnings)
+        live, sel, connected = _select_verified(bridge, warnings)
         if sel.instance is not None:
             chosen_pid = sel.instance.pid
-            try:
-                connected = connected_block(bridge, sel.instance)
-                bridge.last_target = sel.instance
-            except ToolError as exc:
-                warnings.append(
-                    f"pid {sel.instance.pid} is registered but unusable: {exc.code}: {exc.message}"
-                )
     settings = _split_settings(connected)
     status: dict[str, Any] = {
         "connected": connected,
@@ -140,7 +163,7 @@ def houdini_connect(bridge: Bridge, args: dict[str, Any]) -> dict[str, Any]:
             launch.get("hip"),
             float(launch.get("wait_s", 90)),
         )
-        block = connected_block(bridge, result.instance)
+        block = _connect_block(bridge, result.instance)
         bridge.preferred_pid = result.instance.pid
         bridge.last_target = result.instance
         bridge.detached = False
@@ -166,7 +189,7 @@ def houdini_connect(bridge: Bridge, args: dict[str, Any]) -> dict[str, Any]:
                 hint="pick a pid from houdini_status.instances, or launch one with houdini_connect {launch}",
                 candidates=[str(inst.pid) for inst in live],
             )
-        block = connected_block(bridge, match)
+        block = _connect_block(bridge, match)
         bridge.preferred_pid = pid
         bridge.last_target = match
         bridge.detached = False
@@ -174,21 +197,35 @@ def houdini_connect(bridge: Bridge, args: dict[str, Any]) -> dict[str, Any]:
         return {"connected": block}
 
     # No arguments: (re)enable automatic selection and report what it picks.
-    sel = registry.select(live, bridge.preferred_pid)
-    if sel.instance is None:
+    warnings: list[str] = []
+    _live, sel, block = _select_verified(bridge, warnings)
+    if sel.instance is None or block is None:
         raise ToolError(
             "houdini_offline",
-            "No live Houdini instance with HocusPocus is running.",
+            "No live Houdini instance with HocusPocus is running."
+            if sel.instance is None
+            else f"Houdini pid {sel.instance.pid} is registered but unusable.",
             hint=OFFLINE_HINT,
+            detail={"warnings": warnings} if warnings else None,
         )
-    block = connected_block(bridge, sel.instance)
-    bridge.last_target = sel.instance
     bridge.detached = False
     _split_settings(block)
     out: dict[str, Any] = {"connected": block}
-    if sel.warnings:
-        out["warnings"] = list(sel.warnings)
+    if warnings:
+        out["warnings"] = warnings
     return out
+
+
+def _connect_block(bridge: Bridge, inst: registry.Instance) -> dict[str, Any]:
+    """:func:`connected_block` for an explicit target: a stale entry is an offline error."""
+    try:
+        return connected_block(bridge, inst)
+    except registry.StaleEntry as exc:
+        raise ToolError(
+            "houdini_offline",
+            f"No live HocusPocus instance with pid {inst.pid}: {exc}; the entry was removed.",
+            hint="pick a pid from houdini_status.instances, or launch one with houdini_connect {launch}",
+        ) from exc
 
 
 LOCAL_TOOLS: dict[str, Callable[[Bridge, dict[str, Any]], dict[str, Any]]] = {

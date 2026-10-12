@@ -215,7 +215,7 @@ approved_roots = []         # host: if non-empty, hip/hda/render paths must be u
 max_response_bytes = 16384  # both: response budget
 default_timeout_s = 30      # both: per-call timeout
 job_threshold_s = 10        # host: cooks longer than this become jobs
-profile = "core"            # bridge: "full" also lists hda, usd_stage, pdg, events
+profile = "core"            # both: "full" also lists (bridge) and allows (host) hda, usd_stage, pdg, events
 hfs = ""                    # bridge: Houdini install used by houdini_connect launch
 result_content = "text"     # bridge: text | both | structured (see below)
 log_level = "INFO"          # host
@@ -235,7 +235,11 @@ Houdini resolves the pref dir itself. The bridge cannot ask Houdini, so it looks
 locations (`%USERPROFILE%\houdini22.0` and `Documents\houdini22.0` on Windows).
 `hocuspocus doctor` prints which file the bridge reads. Bridge settings can also be set
 per client, for example
-`claude mcp add -s user hocuspocus -e HOCUSPOCUS_PROFILE=full -- hocuspocus-mcp`.
+`claude mcp add -s user hocuspocus -e HOCUSPOCUS_PROFILE=full -- hocuspocus-mcp`. The host
+enforces `profile` too (1.1): a `core` host refuses `hda`, `usd_stage`, `pdg` and `events`
+with `invalid_argument`, so set `profile = "full"` in `hocuspocus.toml`, which both read, or
+in Houdini's environment. A Houdini that the bridge or `hocuspocus launch` starts inherits
+the environment it was started from.
 
 | Bridge variable | Default | Meaning |
 |---|---|---|

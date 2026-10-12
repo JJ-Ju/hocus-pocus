@@ -73,7 +73,7 @@ def test_undo_labels():
         make_label("houdini_python", {"code": "x", "undo_label": "build rig"})
         == "HocusPocus: houdini_python build rig"
     )
-    assert len(make_label("t", {"path": "/" + "a" * 500})) <= 120
+    assert len(make_label("t", {"path": "/" + "a" * 500})) <= 100
     assert summarize("x", None) == ""
 
 

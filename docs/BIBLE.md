@@ -147,8 +147,11 @@ full traceback, runs inline if already on the main thread, and raises
 discarded). Requests are serialised: one `hou` operation at a time.
 
 **Undo.** Every mutating tool call runs inside exactly one
-`hou.undos.group("HocusPocus: <tool> <summary>")`. Read-only tools never open a group.
-`undo` exposes the label history so users and agents can revert "the last agent action".
+`hou.undos.group("HocusPocus: <tool> <summary>")` (ASCII, at most 100 characters).
+Read-only tools never open a group. `undo` exposes the label history so users and agents
+can revert "the last agent action". A call that fails is rolled back by undoing its group
+after it closes; the group reports whether that happened (false when undo is disabled or
+the undo failed), and a tool error whose `detail.rolled_back` is `null` gets that value.
 
 **HTTP server.** `http.server.ThreadingHTTPServer` bound to `127.0.0.1` on an
 **ephemeral port** (`port=0`), `allow_reuse_address = False`. Routes:
@@ -161,8 +164,11 @@ discarded). Requests are serialised: one `hou` operation at a time.
 | `/hp/v1/calls/{request_id}/jobs` | GET | snapshots of the jobs started by the call with that `request_id` (progress, 1.1) |
 | `/hp/v1/shutdown` | POST | stop the host (not Houdini) |
 
-Auth: `Authorization: Bearer <token>`; 401 otherwise. `Origin` header, if present,
-must be absent or loopback; 403 otherwise. Request body cap 4 MB.
+Auth: `Authorization: Bearer <token>`; 401 otherwise. `Origin` and `Host` headers, if
+present, must name a loopback host; 403 otherwise (the `Host` check stops DNS rebinding
+from reading `/health`). Request body cap 4 MB; idle connections time out after 60 s.
+The host runs only the tools of its own `profile` (§3.7): a `core` host answers a
+full-profile tool with `invalid_argument` and the hint to set `profile = "full"`.
 
 **Instance registry entry.** On start the host writes
 `<state_dir>/instances/<pid>.json`:
@@ -177,7 +183,9 @@ must be absent or loopback; 403 otherwise. Request body cap 4 MB.
 or `~/.local/state/hocuspocus` elsewhere. The file is user-readable only. It is
 rewritten on hip load/save (path changes) and removed on `hou.hipFileEventType.BeforeQuit`
 and at interpreter exit. The bridge treats an entry whose pid is dead as stale and
-deletes it.
+deletes it. Since a pid can be reused after a crash, the bridge (and `doctor`) also
+deletes an entry whose pid is alive but whose port refuses connections, rejects its token
+(401), or answers `/health` with another pid, and selects again.
 
 **Dirty tracking.** Verified on 22.0.466: in hython `hou.hipFile.hasUnsavedChanges()` is
 always `True`, even right after a load, clear or save. Headless, the host therefore
@@ -299,7 +307,7 @@ approved_roots = []         # if non-empty, file paths for hip/hda/render must b
 max_response_bytes = 16384
 default_timeout_s = 30
 job_threshold_s = 10        # cook/render longer than this become jobs
-profile = "core"            # core | full (adds usd_stage, pdg, hda, events)
+profile = "core"            # core | full (adds usd_stage, pdg, hda, events); the host refuses full tools on core
 log_level = "INFO"
 hfs = ""                    # bridge: explicit Houdini install dir for launch
 result_content = "text"     # bridge: text | both | structured (§4.1)

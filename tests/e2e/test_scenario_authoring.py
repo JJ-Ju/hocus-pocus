@@ -302,7 +302,14 @@ def test_scenario_authoring(headless_host, tmp_path):
 
     _proc, state = headless_host
     env = dict(os.environ)
-    env.update({"HOCUSPOCUS_STATE_DIR": str(state), "PYTHONPATH": str(SRC)})
+    env.update(
+        {
+            "HOCUSPOCUS_STATE_DIR": str(state),
+            "PYTHONPATH": str(SRC),
+            # Never the user's real pref dir (and its hocuspocus.toml) for the bridge.
+            "HOUDINI_USER_PREF_DIR": (tmp_path / "bridge-prefs" / "houdini__HVER__").as_posix(),
+        }
+    )
     params = StdioServerParameters(
         command=sys.executable,
         args=["-m", "hocuspocus.bridge"],

@@ -36,10 +36,12 @@ from .config import BridgeConfig
 from .instructions import INSTRUCTIONS, guide_text
 from .launch import Launcher
 from .local_tools import LOCAL_TOOLS
-from .validate import validate
+from .validate import coerce_integers, validate
 
 EXIT_GRACE_S = 1.5
 """After a lost response, how long to watch for the Houdini process to exit."""
+MAX_STALE_ENTRIES = 5
+"""How many stale registry entries one call may delete before giving up."""
 PROGRESS_INTERVAL_S = 0.5
 """How often the bridge polls the host for job progress while a call with a
 ``progressToken`` is in flight (BIBLE §7)."""
@@ -154,6 +156,7 @@ class Bridge:
         self.preferred_pid: int | None = None
         self.last_target: registry.Instance | None = None
         """The instance the last forwarded call went to, to name it if it exits."""
+        self._previous_target: registry.Instance | None = None
         self.exit_grace_s = EXIT_GRACE_S
         self.detached = False
         self._verified: set[tuple[int, int, str]] = set()
@@ -169,6 +172,31 @@ class Bridge:
 
     def mark_verified(self, inst: registry.Instance) -> None:
         self._verified.add((inst.pid, inst.port, inst.token))
+
+    def verify(self, inst: registry.Instance) -> dict[str, Any]:
+        """``/health`` of ``inst`` with the identity check (review 10 section 1.4).
+
+        A stale entry (port refused, or answered by another pid) is deleted from the
+        registry and :class:`~hocuspocus.bridge.instances.StaleEntry` is raised, so the
+        caller selects again."""
+        try:
+            health = registry.check_identity(inst, self.client_for(inst))
+        except registry.StaleEntry as exc:
+            self.forget(inst, str(exc))
+            raise
+        self.mark_verified(inst)
+        return health
+
+    def forget(self, inst: registry.Instance, reason: str) -> None:
+        """Drop a stale registry entry and everything this bridge remembers about it."""
+        log.info("forgetting stale instance: %s", reason)
+        registry.forget(inst)
+        key = (inst.pid, inst.port, inst.token)
+        never_used = key not in self._verified
+        self._verified.discard(key)
+        if never_used and self.last_target is not None and self.last_target.pid == inst.pid:
+            # A ghost entry this bridge never talked to: nothing "exited" from its view.
+            self.last_target = self._previous_target
 
     def resolve(self) -> tuple[registry.Instance, list[str]]:
         """Pick the target instance (BIBLE §3.3 rule 3) or raise ``houdini_offline``."""
@@ -195,6 +223,7 @@ class Bridge:
                 retryable=False,  # repeating cannot work until something is launched
             )
         inst = sel.instance
+        self._previous_target = self.last_target
         if self.preferred_pid is not None and inst.pid != self.preferred_pid:
             self.preferred_pid = None  # the pinned instance exited; fall back to auto-selection
         elif exited is not None and exited.pid != inst.pid:
@@ -250,36 +279,53 @@ class Bridge:
     def forward(
         self, name: str, args: dict[str, Any], request_id: str | None = None
     ) -> tuple[bool, dict[str, Any], dict[str, Any]]:
-        inst, warnings = self.resolve()
-        client = self.client_for(inst)
-        key = (inst.pid, inst.port, inst.token)
-        if key not in self._verified:
-            client.health()  # version check before the first call to this instance
-            self._verified.add(key)
         request_id = request_id or uuid.uuid4().hex
-        self._inflight[request_id] = inst
-        try:
-            ok, payload, meta = client.call(
-                name,
-                args,
-                self._timeout(args),
-                request_id,
-                max_response_bytes=self.config.max_response_bytes,
-            )
-        except ToolError as exc:
-            # A connection reset usually means Houdini died mid-call: say so, not "unknown".
-            if exc.code == "delivery_unknown" and self._wait_exit(inst):
-                error = self._exited_error(inst, f" while running {name}")
-                error.detail = {**error.detail, "transport": exc.message}
-                raise error from exc
-            raise
-        finally:
-            self._inflight.pop(request_id, None)
-        meta = dict(meta)
-        meta.setdefault("pid", inst.pid)
-        if warnings:
-            meta["warnings"] = warnings
-        return ok, payload, meta
+        stale: list[str] = []
+        for _attempt in range(MAX_STALE_ENTRIES):
+            inst, warnings = self.resolve()
+            client = self.client_for(inst)
+            try:
+                if (inst.pid, inst.port, inst.token) not in self._verified:
+                    self.verify(inst)  # identity and version, before the first call
+            except registry.StaleEntry as exc:
+                stale.append(str(exc))
+                continue  # deleted; select again
+            self._inflight[request_id] = inst
+            try:
+                ok, payload, meta = client.call(
+                    name,
+                    args,
+                    self._timeout(args),
+                    request_id,
+                    max_response_bytes=self.config.max_response_bytes,
+                )
+            except ToolError as exc:
+                if registry.is_stale_error(exc):
+                    # Refused or rejected before it ran: the entry is stale, select again.
+                    stale.append(exc.message)
+                    self.forget(inst, exc.message)
+                    continue
+                # A connection reset usually means Houdini died mid-call: say so.
+                if exc.code == "delivery_unknown" and self._wait_exit(inst):
+                    error = self._exited_error(inst, f" while running {name}")
+                    error.detail = {**error.detail, "transport": exc.message}
+                    raise error from exc
+                raise
+            finally:
+                self._inflight.pop(request_id, None)
+            meta = dict(meta)
+            meta.setdefault("pid", inst.pid)
+            if stale:
+                warnings = [f"Removed stale registry entries: {'; '.join(stale)}.", *warnings]
+            if warnings:
+                meta["warnings"] = warnings
+            return ok, payload, meta
+        raise ToolError(
+            "houdini_offline",
+            "Every registered Houdini instance was stale (" + "; ".join(stale) + ").",
+            hint=OFFLINE_HINT,
+            detail={"stale": stale},
+        )
 
     def progress_snapshot(
         self, name: str, args: dict[str, Any], request_id: str
@@ -386,6 +432,8 @@ class Bridge:
                 detail={"violations": violations},
             )
             return make_result(self.config.result_content, name, error.to_dict(), is_error=True)
+        # 50.0 validates as an integer; the host checks isinstance(..., int) (review 10).
+        args = coerce_integers(args, spec.input_schema)
         ok, payload, meta = self.invoke(name, args, request_id)
         pageable = "cursor" in (spec.input_schema.get("properties") or {})
         return self.shape(ok, payload, meta, args=args, pageable=pageable, tool=name)

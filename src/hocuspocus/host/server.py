@@ -8,7 +8,9 @@ Routes::
     GET  /hp/v1/calls/{request_id}/jobs   snapshots of the jobs a call started (progress)
     POST /hp/v1/shutdown    stop the host (not Houdini)
 
-Every route rejects a non-loopback ``Origin`` with 403. All routes except health need
+Every route rejects a non-loopback ``Origin`` or ``Host`` with 403 (the ``Host`` check
+closes DNS rebinding, which sends same-origin GETs with no ``Origin``). Idle connections
+time out after :data:`REQUEST_TIMEOUT_S`. All routes except health need
 ``Authorization: Bearer <token>`` (401 otherwise). Bodies are capped at 4 MB (413).
 Once authenticated, tool outcomes are always HTTP 200 with ``ok`` true/false.
 """
@@ -33,6 +35,9 @@ from .dispatch import error_envelope
 API_PREFIX = "/hp/v1"
 MAX_BODY_BYTES = 4 * 1024 * 1024
 LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+REQUEST_TIMEOUT_S = 60
+"""Socket timeout per connection: an idle keep-alive or slow client cannot hold a handler
+thread for ever (review 10 section 1.8)."""
 
 log = logging.getLogger("hocuspocus.host.server")
 
@@ -43,6 +48,17 @@ def origin_allowed(origin: str | None) -> bool:
         return True
     try:
         host = urlsplit(origin.strip()).hostname
+    except ValueError:
+        return False
+    return host is not None and (host in LOOPBACK_HOSTS or host.endswith(".localhost"))
+
+
+def host_allowed(host_header: str | None) -> bool:
+    """An absent ``Host`` (HTTP/1.0) is allowed; a present one must name a loopback host."""
+    if host_header is None:
+        return True
+    try:
+        host = urlsplit("//" + host_header.strip()).hostname
     except ValueError:
         return False
     return host is not None and (host in LOOPBACK_HOSTS or host.endswith(".localhost"))
@@ -97,6 +113,7 @@ class _Handler(BaseHTTPRequestHandler):
     server: HostHTTPServer
     server_version = "HocusPocusHost/1"
     protocol_version = "HTTP/1.1"
+    timeout = REQUEST_TIMEOUT_S
 
     # -- plumbing ---------------------------------------------------------------
 
@@ -127,6 +144,9 @@ class _Handler(BaseHTTPRequestHandler):
     def _guard(self, *, auth: bool) -> bool:
         if not origin_allowed(self.headers.get("Origin")):
             self._transport_error(HTTPStatus.FORBIDDEN, "Origin is not loopback.")
+            return False
+        if not host_allowed(self.headers.get("Host")):
+            self._transport_error(HTTPStatus.FORBIDDEN, "Host is not loopback.")
             return False
         if auth and not bearer_ok(self.headers.get("Authorization"), self.server.app.token):
             self._transport_error(HTTPStatus.UNAUTHORIZED, "Missing or invalid bearer token.")

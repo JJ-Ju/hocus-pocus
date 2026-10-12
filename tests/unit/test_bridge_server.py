@@ -109,10 +109,19 @@ class FakeClient:
         self.calls: list[tuple[str, dict, float]] = []
         self.budgets: list[int | None] = []
 
+    live: list[Instance] = []
+    port: int | None = None
+    follow_registry = True
+    """Answer /health with the pid registered for the port asked (a healthy registry)."""
+
     def health(self, timeout_s: float = 5.0) -> dict[str, Any]:
         if isinstance(self.health_reply, Exception):
             raise self.health_reply
-        return self.health_reply
+        reply = dict(self.health_reply)
+        match = next((i.pid for i in self.live if i.port == self.port), None)
+        if self.follow_registry and match is not None:
+            reply["pid"] = match
+        return reply
 
     def call(self, tool, args, timeout_s, request_id=None, max_response_bytes=None):
         self.calls.append((tool, args, timeout_s))
@@ -138,10 +147,16 @@ INSTANCE = Instance(
 def make_bridge(instances=(INSTANCE,), config=None, launcher=None, tools=FAKE_TOOLS):
     client = FakeClient()
     live = list(instances)
+    client.live = live
+
+    def factory(port, token):
+        client.port = port
+        return client
+
     bridge = Bridge(
         config or BridgeConfig(),
         tools=tools,
-        client_factory=lambda port, token: client,
+        client_factory=factory,
         scan=lambda: list(live),
         launcher=launcher,
     )
@@ -839,3 +854,73 @@ def test_result_content_keeps_images_as_image_blocks():
         client.replies["viewport_capture"] = (True, {"image": {"png_base64": png}}, {})
         result = bridge.call_tool("viewport_capture", {})
         assert [c.type for c in result.content] == ["text", "image"], mode
+
+
+# -- registry identity (review 10 section 1.4) ---------------------------------------------
+
+
+def _entries(tmp_path):
+    from dataclasses import replace
+
+    ghost = replace(INSTANCE, pid=5555, port=51005, started="2026-10-12T12:00:00Z")
+    ghost = replace(ghost, file=tmp_path / "5555.json")
+    real = replace(INSTANCE, file=tmp_path / "4242.json")
+    for inst in (ghost, real):
+        inst.file.write_text("{}")
+    return ghost, real
+
+
+def test_a_reused_pid_is_detected_and_its_entry_deleted(tmp_path):
+    ghost, real = _entries(tmp_path)
+    bridge, client, live = make_bridge(instances=(ghost, real))
+    client.follow_registry = False  # every port answers as pid 4242: the ghost's is reused
+
+    def scan():
+        return [i for i in live if i.file.exists()]
+
+    bridge.scan = scan
+    result = bridge.call_tool("node_info", {"paths": ["/obj"]})
+    assert result.is_error is False
+    assert result.meta["pid"] == 4242
+    assert not ghost.file.exists() and real.file.exists()
+    assert any("stale" in w for w in result.meta["warnings"])
+
+
+def test_a_refused_call_drops_the_entry_and_selects_again(tmp_path):
+    ghost, real = _entries(tmp_path)
+    bridge, client, live = make_bridge(instances=(ghost, real))
+    bridge.scan = lambda: [i for i in live if i.file.exists()]
+    bridge.mark_verified(ghost)  # it answered once; now nothing listens there
+    refused = ToolError("houdini_offline", "refused", detail={"reason": "refused"})
+    calls = []
+
+    def call(tool, args, timeout_s, request_id=None, max_response_bytes=None):
+        calls.append(client.port)
+        if client.port == ghost.port:
+            raise refused
+        return True, {"ok": 1}, {}
+
+    client.call = call
+    result = bridge.call_tool("node_info", {"paths": ["/obj"]})
+    assert result.is_error is False and calls == [ghost.port, real.port]
+    assert not ghost.file.exists()
+
+
+def test_status_removes_a_stale_entry(tmp_path):
+    ghost, real = _entries(tmp_path)
+    bridge, client, live = make_bridge(instances=(ghost, real))
+    client.follow_registry = False
+    bridge.scan = lambda: [i for i in live if i.file.exists()]
+    status = structured(bridge.call_tool("houdini_status", {}))
+    assert status["connected"]["pid"] == 4242
+    assert [i["pid"] for i in status["instances"]] == [4242]
+    assert any("stale registry entry" in w for w in status["warnings"])
+
+
+def test_connect_to_a_stale_pid_is_offline(tmp_path):
+    ghost, real = _entries(tmp_path)
+    bridge, client, live = make_bridge(instances=(ghost, real))
+    client.follow_registry = False
+    error = structured(bridge.call_tool("houdini_connect", {"pid": 5555}))
+    assert error["code"] == "houdini_offline" and "removed" in error["message"]
+    assert not ghost.file.exists()

@@ -186,8 +186,8 @@ def exception_error(payload: dict[str, Any], timeout_s: float | None, budget: in
             "stdout": payload["stdout"],
             "stderr": payload["stderr"],
             "traceback": exc["traceback"],
-            # The dispatcher replaces this with what the undo group really did.
-            "rolled_back": True,
+            # None asks the dispatcher to fill in what the undo group really did.
+            "rolled_back": None,
         },
         max(1024, budget - 1024),
     )
@@ -196,9 +196,10 @@ def exception_error(payload: dict[str, Any], timeout_s: float | None, budget: in
         return ToolError(
             "houdini_busy",
             f"houdini_python ran past timeout_s ({timeout_s:g}s) and was stopped after "
-            f"{payload.get('elapsed_s', 0):g}s; its scene changes were rolled back.",
+            f"{payload.get('elapsed_s', 0):g}s.",
             hint="The code did not finish: raise timeout_s for long work, make it finish "
-            "sooner, or split it into several calls. Houdini is free again.",
+            "sooner, or split it into several calls. Houdini is free again; detail.rolled_back "
+            "says whether its scene changes were undone.",
             retryable=False,
             detail={**detail, "started": True, "stopped": True, "timeout_s": timeout_s},
         )
@@ -206,13 +207,14 @@ def exception_error(payload: dict[str, Any], timeout_s: float | None, budget: in
     if exc["type"] == "SystemExit":
         hint = (
             "Do not call exit() or sys.exit(): set a variable named result (or end with an "
-            "expression) to return a value. The call's scene changes were rolled back."
+            "expression) to return a value. detail.rolled_back says whether the call's "
+            "scene changes were undone."
         )
     else:
         hint = (
-            "The code raised, so its scene changes were rolled back (the call is one undo "
-            "step). Fix the code from detail.traceback and run it again; print() output is "
-            "in detail.stdout."
+            "The code raised, so the call's undo step was rolled back (detail.rolled_back "
+            "says whether that worked). Fix the code from detail.traceback and run it again; "
+            "print() output is in detail.stdout."
         )
     return ToolError("python_exception", message, hint=hint, detail=detail)
 

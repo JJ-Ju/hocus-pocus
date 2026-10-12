@@ -91,18 +91,52 @@ def test_timeout_before_start_cancels(headless):
 
 
 def test_timeout_after_start_still_completes(headless):
+    """No timing race (review 10 section 5): the pump is already waiting when the work is
+    queued, and the work holds the main thread until the caller has given up."""
+    gave_up = threading.Event()
     done = []
 
     def slow():
-        time.sleep(0.4)
+        assert gave_up.wait(10)
         done.append(1)
         return "late"
 
-    thread, box = _in_thread(lambda: headless.run(slow, 0.1))
-    _pump_until(headless, thread)  # pump executes slow() on this thread
+    def caller():
+        try:
+            return headless.run(slow, 0.5)
+        finally:
+            gave_up.set()
+
+    thread, box = _in_thread(caller)
+    assert headless.pump_once(10) is True  # blocks until queued, then runs slow()
+    thread.join(5)
     assert box["error"].code == "houdini_busy"
     assert box["error"].detail["started"] is True
     assert done == [1]
+
+
+def test_work_finishing_at_the_timeout_returns_its_result(headless, monkeypatch):
+    """Review 10 section 1.5: done between the wait timing out and the lock is a result."""
+    from hocuspocus.host import executor as module
+
+    class LateEvent(threading.Event):
+        def wait(self, timeout=None):
+            if timeout is None:
+                return super().wait()
+            super().wait()  # the work finishes ...
+            return False  # ... but the caller's wait still reports a timeout
+
+    original = module._Work.__init__
+
+    def init(self, fn):
+        original(self, fn)
+        self.done = LateEvent()
+
+    monkeypatch.setattr(module._Work, "__init__", init)
+    thread, box = _in_thread(lambda: headless.run(lambda: "value", 0.1))
+    assert headless.pump_once(10) is True
+    thread.join(5)
+    assert box == {"value": "value"}
 
 
 def test_stopped_executor_reports_offline():

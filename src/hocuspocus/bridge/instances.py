@@ -10,14 +10,15 @@ import contextlib
 import json
 import logging
 import os
-import sys
 import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from ..host.registry import pid_alive
 from ..tools import paths
+from ..tools.errors import ToolError
 
 log = logging.getLogger(__name__)
 
@@ -78,51 +79,59 @@ def _optional_pid(value: Any) -> int | None:
     return pid if pid > 0 else None
 
 
-# -- liveness ------------------------------------------------------------------------------
+# -- liveness and identity ------------------------------------------------------------------
+#
+# ``pid_alive`` is the host's stdlib-only helper (one implementation for both processes).
 
 
-def pid_alive(pid: int) -> bool:
-    """Cross-platform "is this process running" check."""
-    if pid <= 0:
-        return False
-    if sys.platform == "win32":
-        return _pid_alive_windows(pid)
+class StaleEntry(Exception):
+    """A registry entry whose pid is alive but whose port is not that host (review 10
+    section 1.4): the pid was reused after a crash, or the port by another host."""
+
+
+STALE_REASONS = frozenset({"refused", "unauthorized"})
+"""``houdini_offline`` reasons that prove an entry stale: nothing listens on its port, or
+the listener rejects its token. Either way the request never ran."""
+
+
+def is_stale_error(exc: ToolError) -> bool:
+    detail = exc.detail if isinstance(exc.detail, dict) else {}
+    return exc.code == "houdini_offline" and detail.get("reason") in STALE_REASONS
+
+
+def check_identity(inst: Instance, client: Any) -> dict[str, Any]:
+    """``/health`` of ``inst``; raises :class:`StaleEntry` when the answer is not that host.
+
+    Stale: the port refuses connections, or answers with another pid. A host whose
+    ``/health`` carries no pid is taken at its word."""
     try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
+        health = client.health()
+    except ToolError as exc:
+        if is_stale_error(exc):
+            raise StaleEntry(f"pid {inst.pid}: {exc.message}") from exc
+        raise
+    pid = health.get("pid") if isinstance(health, dict) else None
+    if isinstance(pid, int) and not isinstance(pid, bool) and pid != inst.pid:
+        raise StaleEntry(
+            f"the registry entry for pid {inst.pid} is stale: port {inst.port} is served by "
+            f"pid {pid}"
+        )
+    return health
+
+
+def forget(inst: Instance) -> bool:
+    """Delete ``inst``'s registry file. Returns whether it was removed."""
+    if inst.file is None:
         return False
-    except PermissionError:
-        return True
-    except OSError:
+    try:
+        inst.file.unlink()
+    except FileNotFoundError:
         return False
+    except OSError as exc:
+        log.debug("cannot remove stale registry entry %s: %s", inst.file, exc)
+        return False
+    log.info("removed stale registry entry for pid %s", inst.pid)
     return True
-
-
-def _pid_alive_windows(pid: int) -> bool:
-    import ctypes
-    from ctypes import wintypes
-
-    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
-    STILL_ACTIVE = 259
-    ERROR_ACCESS_DENIED = 5
-
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    kernel32.OpenProcess.restype = wintypes.HANDLE
-    kernel32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
-    kernel32.GetExitCodeProcess.argtypes = (wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD))
-    kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
-
-    handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
-    if not handle:
-        # Access denied means it exists but belongs to someone else.
-        return ctypes.get_last_error() == ERROR_ACCESS_DENIED
-    try:
-        code = wintypes.DWORD()
-        if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
-            return True
-        return code.value == STILL_ACTIVE
-    finally:
-        kernel32.CloseHandle(handle)
 
 
 # -- scanning --------------------------------------------------------------------------------

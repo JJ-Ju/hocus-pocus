@@ -60,10 +60,13 @@ class HostClient:
             conn.connect()
         except (TimeoutError, OSError) as exc:
             conn.close()
+            refused = isinstance(exc, ConnectionRefusedError)
             raise ToolError(
                 "houdini_offline",
                 f"No HocusPocus host is listening on {self.host}:{self.port} ({exc.__class__.__name__}).",
                 hint=OFFLINE_HINT,
+                # "refused": nothing listens there, so the request never left (review 10 1.4).
+                detail={"reason": "refused" if refused else "unreachable", "port": self.port},
             ) from exc
         return conn
 
@@ -117,6 +120,7 @@ class HostClient:
                 f"The Houdini host on port {self.port} rejected the bridge's credentials (HTTP {status}); "
                 "its registry entry is stale or belongs to another process.",
                 hint="call houdini_status, then houdini_connect to attach to a live instance",
+                detail={"reason": "unauthorized", "status": status, "port": self.port},
             )
         if status == 404:
             raise ToolError(

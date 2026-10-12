@@ -17,9 +17,11 @@ from hocuspocus.host.dispatch import Dispatcher, error_envelope, ok_envelope
 from hocuspocus.host.executor import MainThreadExecutor
 from hocuspocus.host.runtime import CallJobManager
 from hocuspocus.host.server import (
+    REQUEST_TIMEOUT_S,
     HostApp,
     HostHTTPServer,
     bearer_ok,
+    host_allowed,
     origin_allowed,
     serve_in_thread,
 )
@@ -76,6 +78,7 @@ def _tools():
         "maybe": HostTool("maybe", maybe, read_only=False),
         "liar": HostTool("liar", liar, read_only=False),
         "hostonly": HostTool("hostonly", echo, read_only=False, main_thread=False, scene=False),
+        "pdg": HostTool("pdg", echo, read_only=True, main_thread=False, scene=False),
         "starts_job": HostTool(
             "starts_job", starts_job, read_only=True, main_thread=False, scene=False
         ),
@@ -450,3 +453,34 @@ def test_a_call_without_request_id_files_nothing(stack):
     server = stack["server"]
     _request(server, "POST", "/hp/v1/call", {"tool": "starts_job", "args": {}})
     assert stack["ctx"].jobs._by_call == {}
+
+
+# -- review 10 section 1.8 and host profile enforcement ------------------------------------
+
+
+def test_host_header_must_be_loopback(stack):
+    server = stack["server"]
+    for good in (None, "127.0.0.1:1234", "localhost", "[::1]:80", "app.localhost:9"):
+        assert host_allowed(good), good
+    for bad in ("evil.example:80", "10.0.0.1", "127.0.0.1.nip.io", ""):
+        assert not host_allowed(bad), bad
+    status, body = _request(server, "GET", "/hp/v1/health", headers={"Host": "evil.example"})
+    assert status == 403 and "Host" in body["error"]["message"]
+    status, _ = _request(server, "GET", "/hp/v1/health")
+    assert status == 200
+
+
+def test_idle_connections_time_out():
+    from hocuspocus.host.server import _Handler
+
+    assert _Handler.timeout == REQUEST_TIMEOUT_S == 60
+
+
+def test_a_core_host_refuses_full_profile_tools(stack):
+    dispatcher, ctx = stack["dispatcher"], stack["ctx"]
+    assert ctx.config.profile == "core"
+    error = dispatcher.call("pdg", {})["error"]
+    assert error["code"] == "invalid_argument" and "full-profile" in error["message"]
+    assert 'profile = "full"' in error["hint"]
+    ctx.config.profile = "full"
+    assert dispatcher.call("pdg", {})["ok"] is True

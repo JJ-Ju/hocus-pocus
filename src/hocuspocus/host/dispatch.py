@@ -20,6 +20,12 @@ from .undo import UndoGroupFactory, make_label
 
 NOT_IMPLEMENTED_HINT = "not implemented in this host version"
 
+ROLLED_BACK_KEY = "rolled_back"
+"""A mutating tool that raises a :class:`ToolError` whose ``detail`` has
+``"rolled_back": None`` asks the dispatcher to fill in what its undo group really did
+(review 10 section 1.7). The same value is left in ``ctx.extras["rolled_back"]`` after
+every failed mutating call (None when no group was opened)."""
+
 CHANGED_KEY = "_changed"
 """A tool result may carry ``"_changed": False`` to say the call changed nothing (for
 example a ``dry_run``): the dispatcher then skips the undo-label record and dirty
@@ -57,6 +63,14 @@ def _read_only_error(tool: str) -> ToolError:
         f"{tool} changes the scene, and the host is in read-only mode.",
         hint="Set read_only = false in hocuspocus.toml (or HOCUSPOCUS_READ_ONLY=0) and restart the host.",
     )
+
+
+def _report_rollback(error: ToolError, outcome: Any, ctx: HostContext) -> None:
+    rolled_back = getattr(outcome, "rolled_back", None)
+    ctx.extras[ROLLED_BACK_KEY] = rolled_back
+    detail = error.detail
+    if isinstance(detail, dict) and ROLLED_BACK_KEY in detail and detail[ROLLED_BACK_KEY] is None:
+        detail[ROLLED_BACK_KEY] = rolled_back
 
 
 def make_meta(ctx: HostContext, *, undo_label: str | None, started: float) -> dict[str, Any]:
@@ -181,6 +195,16 @@ class Dispatcher:
                     f"Unknown tool {tool!r}.",
                     hint=NOT_IMPLEMENTED_HINT,
                 )
+            spec = impl.spec
+            host_profile = getattr(self.ctx.config, "profile", "full")
+            if spec is not None and spec.profile == "full" and host_profile == "core":
+                raise ToolError(
+                    "invalid_argument",
+                    f"{tool} is a full-profile tool, and this Houdini's host runs the core "
+                    "profile.",
+                    hint='Set profile = "full" in hocuspocus.toml (host and bridge read it) or '
+                    "HOCUSPOCUS_PROFILE=full in Houdini's environment, and restart Houdini.",
+                )
             if not impl.headless_ok and not self.ctx.ui:
                 raise ToolError(
                     "ui_required",
@@ -250,8 +274,14 @@ class Dispatcher:
             if undo_label is None:
                 return impl.fn(args, ctx)
             clean_events = ctx.scene.clean_events
-            with self.undo_group(undo_label):
-                result = impl.fn(args, ctx)
+            ctx.extras[ROLLED_BACK_KEY] = None
+            outcome = None
+            try:
+                with self.undo_group(undo_label) as outcome:
+                    result = impl.fn(args, ctx)
+            except ToolError as exc:
+                _report_rollback(exc, outcome, ctx)
+                raise
             # A tool that says it changed nothing (a dry run) records no label and does
             # not dirty the scene.
             if not (isinstance(result, dict) and result.get(CHANGED_KEY) is False):

@@ -136,3 +136,61 @@ def test_node_create_parms_take_both_expression_spellings():
     assert check({"ramp": {"ramp": {"keys": [0, 1], "values": [0, 1]}}}) == []
     (error,) = check({"sizex": {"expr": "$F", "language": "python"}})
     assert "did you mean lang" in error
+
+
+# -- review 10 section 1.10 --------------------------------------------------------------
+
+
+def test_enum_and_const_compare_json_values():
+    assert validate(True, {"enum": [0, 1]})
+    assert validate(1, {"enum": [True]})
+    assert validate(False, {"const": 0})
+    assert not validate(1, {"enum": [0, 1]})
+    assert not validate(1.0, {"enum": [1]})  # numbers compare as numbers
+    assert not validate([True], {"const": [True]})
+    assert validate([1], {"const": [True]})
+
+
+def test_integral_floats_are_coerced_where_the_schema_says_integer():
+    from hocuspocus.bridge.validate import coerce_integers
+
+    schema = {
+        "type": "object",
+        "properties": {
+            "limit": {"type": "integer"},
+            "scale": {"type": "number"},
+            "frames": {"type": "array", "items": {"type": "integer"}},
+            "nested": {"$ref": "#/$defs/n"},
+        },
+        "$defs": {"n": {"type": "object", "properties": {"count": {"type": "integer"}}}},
+    }
+    args = {"limit": 50.0, "scale": 2.0, "frames": [1.0, 24.0], "nested": {"count": 3.0}}
+    assert validate(args, schema) == []
+    out = coerce_integers(args, schema)
+    assert out == {"limit": 50, "scale": 2.0, "frames": [1, 24], "nested": {"count": 3}}
+    assert type(out["limit"]) is int and type(out["scale"]) is float
+    assert type(out["frames"][0]) is int and args["limit"] == 50.0  # input untouched
+
+
+def _defaults(schema, path=""):
+    if isinstance(schema, dict):
+        if "default" in schema:
+            yield path, schema
+        for key, value in schema.items():
+            yield from _defaults(value, f"{path}.{key}")
+    elif isinstance(schema, list):
+        for i, value in enumerate(schema):
+            yield from _defaults(value, f"{path}[{i}]")
+
+
+def test_every_catalogue_example_and_default_passes_the_runtime_validator():
+    """The strict docs validator checks the examples; the bridge's runtime one must agree."""
+    from hocuspocus.tools.catalog import TOOLS
+
+    for spec in TOOLS:
+        for example in spec.examples:
+            assert validate(example, spec.input_schema) == [], (spec.name, example)
+        for where, prop in _defaults(spec.input_schema):
+            sub = {k: v for k, v in prop.items() if k != "default"}
+            sub["$defs"] = spec.input_schema.get("$defs", {})
+            assert validate(prop["default"], sub) == [], (spec.name, where)

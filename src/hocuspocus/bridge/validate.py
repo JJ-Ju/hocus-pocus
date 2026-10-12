@@ -6,6 +6,10 @@ does. Supported keywords: ``type``, ``properties``, ``required``, ``additionalPr
 ``minimum``/``maximum``/``exclusiveMinimum``/``exclusiveMaximum``, ``minLength``/``maxLength``,
 ``pattern``, ``minProperties``, ``oneOf``/``anyOf``/``allOf``/``not`` and local ``$ref``
 (``#/$defs/...``). Unknown keywords are ignored, never fatal.
+
+``enum`` and ``const`` compare JSON values, not Python ones: ``true`` is not ``1``.
+:func:`coerce_integers` turns integral floats (``50.0``) into ints where the schema says
+``integer``, so the host's ``isinstance(x, int)`` checks agree with the validator.
 """
 
 from __future__ import annotations
@@ -36,6 +40,17 @@ def _type_of(value: Any) -> str:
     if isinstance(value, dict):
         return "object"
     return type(value).__name__
+
+
+def _json_equal(a: Any, b: Any) -> bool:
+    """JSON equality: booleans never equal numbers (``True == 1`` in Python)."""
+    if isinstance(a, bool) or isinstance(b, bool):
+        return isinstance(a, bool) and isinstance(b, bool) and a == b
+    if isinstance(a, list) and isinstance(b, list):
+        return len(a) == len(b) and all(_json_equal(x, y) for x, y in zip(a, b, strict=True))
+    if isinstance(a, dict) and isinstance(b, dict):
+        return a.keys() == b.keys() and all(_json_equal(a[k], b[k]) for k in a)
+    return a == b
 
 
 def _matches_type(value: Any, expected: str) -> bool:
@@ -107,9 +122,9 @@ class _Validator:
                 )
                 return
 
-        if "const" in schema and value != schema["const"]:
+        if "const" in schema and not _json_equal(value, schema["const"]):
             self.errors.append(f"{_label(path)}: must be {_short(schema['const'])}")
-        if "enum" in schema and value not in schema["enum"]:
+        if "enum" in schema and not any(_json_equal(value, m) for m in schema["enum"]):
             allowed = ", ".join(_short(v) for v in schema["enum"])
             self.errors.append(f"{_label(path)}: {_short(value)} is not one of [{allowed}]")
 
@@ -262,6 +277,48 @@ class _Validator:
             bound = schema.get(keyword)
             if isinstance(bound, int | float) and not isinstance(bound, bool) and fails(bound):
                 self.errors.append(f"{_label(path)}: must be {op} {bound}, got {value}")
+
+
+def coerce_integers(value: Any, schema: dict[str, Any] | None) -> Any:
+    """A copy of ``value`` with integral floats made ints where ``schema`` says
+    ``integer`` (through properties, items, prefixItems, additionalProperties and local
+    ``$ref``). Call it on arguments that already validated."""
+    if not schema:
+        return value
+    return _Coercer(schema).walk(value, schema)
+
+
+class _Coercer(_Validator):
+    def walk(self, value: Any, schema: Any) -> Any:
+        schema = self._resolve(schema) if isinstance(schema, dict) else {}
+        if not schema:
+            return value
+        expected = schema.get("type")
+        if (
+            isinstance(value, float)
+            and value.is_integer()
+            and (expected == "integer" or (isinstance(expected, list) and "integer" in expected))
+            and "number" not in (expected if isinstance(expected, list) else [expected])
+        ):
+            return int(value)
+        if isinstance(value, dict):
+            props = schema.get("properties") or {}
+            additional = schema.get("additionalProperties")
+            out = {}
+            for key, item in value.items():
+                sub = props.get(key, additional if isinstance(additional, dict) else None)
+                out[key] = self.walk(item, sub) if isinstance(sub, dict) else item
+            return out
+        if isinstance(value, list):
+            prefix = schema.get("prefixItems")
+            prefix = prefix if isinstance(prefix, list) else []
+            items = schema.get("items")
+            out_list = []
+            for i, item in enumerate(value):
+                sub = prefix[i] if i < len(prefix) else items
+                out_list.append(self.walk(item, sub) if isinstance(sub, dict) else item)
+            return out_list
+        return value
 
 
 def validate(value: Any, schema: dict[str, Any] | None) -> list[str]:

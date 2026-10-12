@@ -130,7 +130,15 @@ def test_stdio_roundtrip(headless_host, tmp_path):
 
     proc, state, _info = headless_host
     env = dict(os.environ)
-    env.update({"HOCUSPOCUS_STATE_DIR": str(state), "PYTHONPATH": str(SRC)})
+    env.update(
+        {
+            "HOCUSPOCUS_STATE_DIR": str(state),
+            "PYTHONPATH": str(SRC),
+            # The bridge reads hocuspocus.toml from the pref dir: never the user's real one
+            # (review 10 section 5), so a personal profile or budget cannot change the test.
+            "HOUDINI_USER_PREF_DIR": (tmp_path / "prefs" / "houdini__HVER__").as_posix(),
+        }
+    )
     params = StdioServerParameters(
         command=sys.executable,
         args=["-m", "hocuspocus.bridge"],

@@ -231,6 +231,27 @@ def _ignore_build_junk(_dir: str, names: list[str]) -> set[str]:
     return {n for n in names if n == "__pycache__" or n.endswith((".pyc", ".pyo"))}
 
 
+def _write_atomic(target: Path, text: str) -> None:
+    """Write ``text`` to ``target`` through a temp file and ``os.replace``."""
+    tmp = target.with_name(f".{target.name}.{os.getpid()}.tmp")
+    try:
+        with open(tmp, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(text)
+        os.replace(tmp, target)
+    finally:
+        with contextlib.suppress(OSError):
+            tmp.unlink()
+
+
+def copied_installs(prefs: Path) -> list[Path]:
+    """Version directories a non-dev ``install-houdini`` copied into ``<prefs>/hocuspocus``."""
+    root = prefs / INSTALL_DIR_NAME
+    try:
+        return sorted(p for p in root.iterdir() if p.is_dir())
+    except OSError:
+        return []
+
+
 def install(prefs: Path, *, dev: bool, out: Callable[[str], None] = print) -> int:
     install_root = prefs / INSTALL_DIR_NAME
     payload = payload_source()
@@ -242,6 +263,10 @@ def install(prefs: Path, *, dev: bool, out: Callable[[str], None] = print) -> in
         python_dir = root / "src"
         payload_dir = payload
         out(f"dev install: Houdini will import hocuspocus from {python_dir}")
+        for old in copied_installs(prefs):
+            # A copy from an earlier non-dev install would only confuse doctor and users.
+            shutil.rmtree(old, ignore_errors=True)
+            out(f"removed copied install {old} (the dev install uses the checkout)")
     else:
         version_dir = install_root / __version__
         python_dir = version_dir / "python"
@@ -265,7 +290,7 @@ def install(prefs: Path, *, dev: bool, out: Callable[[str], None] = print) -> in
     packages = prefs / "packages"
     packages.mkdir(parents=True, exist_ok=True)
     target = packages / PACKAGE_JSON_NAME
-    target.write_text(text, encoding="utf-8")
+    _write_atomic(target, text)
     out(f"wrote {target} (template: {used})")
     record = write_install_state(prefs, python_dir, dev=dev)
     if record is not None:
@@ -292,7 +317,7 @@ def write_install_state(prefs: Path, python_dir: Path, *, dev: bool) -> Path | N
     }
     try:
         target = ensure_private_dir(state_dir()) / INSTALL_STATE_FILE
-        target.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+        _write_atomic(target, json.dumps(data, indent=2) + "\n")
     except OSError:
         return None
     return target
@@ -318,7 +343,14 @@ def uninstall(prefs: Path, *, out: Callable[[str], None] = print) -> int:
         removed = True
     install_root = prefs / INSTALL_DIR_NAME
     if install_root.is_dir():
-        shutil.rmtree(install_root)
+        try:
+            shutil.rmtree(install_root)
+        except OSError as exc:
+            out(
+                f"error: cannot remove {install_root} ({exc}). A running Houdini may hold its "
+                "files open: close Houdini and run uninstall-houdini again."
+            )
+            return 1
         out(f"removed {install_root}")
         removed = True
     if not removed:
@@ -419,6 +451,14 @@ def doctor(args: argparse.Namespace, out: Callable[[str], None] = print) -> int:
                 )
             else:
                 report.ok("package JSON", f"{pkg_json} -> {python_dir}")
+                leftovers = [p for p in copied_installs(prefs.path) if p not in python_dir.parents]
+                if leftovers:
+                    report.warn(
+                        "copied installs",
+                        f"{', '.join(str(p) for p in leftovers)} not used by the package "
+                        "JSON (left by an earlier install); run `hocuspocus install-houdini` "
+                        "(with --dev for a checkout) to remove them",
+                    )
                 host_version = _read_version(python_dir / "hocuspocus")
                 if host_version == __version__:
                     report.ok("host/bridge version", host_version)
@@ -443,7 +483,12 @@ def doctor(args: argparse.Namespace, out: Callable[[str], None] = print) -> int:
     for inst in live:
         where = f"pid {inst.pid} port {inst.port} {'GUI' if inst.ui else 'headless'} {inst.hip or '(untitled)'}"
         try:
-            health = HostClient(inst.port, inst.token).health()
+            health = registry.check_identity(inst, HostClient(inst.port, inst.token))
+        except registry.StaleEntry as exc:
+            # The pid is alive but is not that host (reused after a crash): review 10 1.4.
+            registry.forget(inst)
+            report.warn("instance", f"{exc}; removed the stale registry entry")
+            continue
         except ToolError as exc:
             report.fail("instance", f"{where}: {exc.code}: {exc.message}")
             continue
