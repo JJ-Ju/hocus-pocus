@@ -25,6 +25,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -34,9 +35,10 @@ from hocuspocus.tools.paths import captures_dir, ensure_private_dir
 from .geo import _not_found, num
 from .hip import check_allowed, resolve_path
 from .registry import HostContext, tool
+from .session import scene_dirty
 
-CAPTURE_ROP = "/out/hocuspocus_capture"
-CAPTURE_CAM = "/obj/hocuspocus_capture_cam"
+TEMPORARY_CAMERA = "temporary"
+"""``camera_used`` when the camera was built for one capture and deleted afterwards."""
 INTERNAL_KEY = "hocuspocus:internal"
 IMAGE_MAX_SIDE = 1024
 THUMB_MAX_SIDE = 512
@@ -157,6 +159,22 @@ def encode_png(path: str, max_side: int, *, hfs: str | None = None) -> dict[str,
 _CHILD_SCRIPT = r"""
 import json, sys
 
+def build_capture(hou, capture):
+    # viewport_capture's camera and ROP, created in the child scene only.
+    camera = capture.get("camera")
+    if camera is None:
+        cam = hou.node("/obj").createNode("cam")
+        cam.setDisplayFlag(False)
+        for name, value in capture["camera_parms"].items():
+            cam.parm(name).set(value)
+        cam.setWorldTransform(hou.Matrix4(capture["camera_xform"]))
+        camera = cam.path()
+    rop = hou.node("/out").createNode("opengl")
+    for name, value in capture["rop_parms"].items():
+        rop.parm(name).set(value)
+    rop.parm("camera").set(camera)
+    return rop.path()
+
 def main():
     with open(sys.argv[1], encoding="utf-8") as fh:
         spec = json.load(fh)
@@ -176,6 +194,9 @@ def main():
     hou.setFps(spec["fps"])
     hou.playbar.setFrameRange(spec["range"][0], spec["range"][1])
     hou.setFrame(spec["frame"])
+    capture = spec.get("capture")
+    if capture:
+        spec["rop"] = build_capture(hou, capture)
     rop = hou.node(spec["rop"])
     result = {"errors": [], "warnings": []}
     if rop is None:
@@ -318,16 +339,24 @@ class ChildRender:
 
 
 def render_isolated(
-    rop: str,
+    rop: str | None,
     frames: list[float],
     parms: dict[str, Any] | None = None,
     *,
+    capture: dict[str, Any] | None = None,
     timeout_s: float = CHILD_TIMEOUT_S,
 ) -> dict[str, Any]:
-    """Snapshot and render synchronously in a child hython. Main thread (snapshot)."""
+    """Snapshot and render synchronously in a child hython. Main thread (snapshot).
+
+    With ``capture`` the child builds viewport_capture's camera and ROP in its own scene
+    (``rop`` is then None), so the live scene gains no nodes.
+    """
     tmp_dir = tempfile.mkdtemp(prefix="hp-render-")
     try:
-        child = ChildRender(snapshot_scene(tmp_dir), tmp_dir, rop, frames, parms)
+        snapshot = snapshot_scene(tmp_dir)
+        if capture is not None:
+            snapshot["capture"] = capture
+        child = ChildRender(snapshot, tmp_dir, rop or "", frames, parms)
         child.start()
         try:
             return child.wait(timeout_s=timeout_s)
@@ -415,7 +444,7 @@ def _displayed_objects() -> list[Any]:
 
     objs = []
     for node in hou.node("/obj").allSubChildren(recurse_in_locked_nodes=False):
-        if not isinstance(node, hou.ObjNode) or node.path() == CAPTURE_CAM:
+        if not isinstance(node, hou.ObjNode) or node.userData(INTERNAL_KEY):
             continue
         try:
             if not node.isObjectDisplayed():
@@ -457,10 +486,14 @@ def _fit_bbox(fit: str) -> tuple[tuple[list[float], list[float]] | None, str]:
     return ((mins, maxs) if found else None), used
 
 
-def _frame_camera(
-    cam: Any, bbox: tuple[list[float], list[float]] | None, res: tuple[int, int]
-) -> None:
-    """Aim ``cam`` at ``bbox`` from :data:`VIEW_DIRECTION`, as close as fits all 8 corners."""
+CAMERA_LENS = (50.0, 41.4214)
+"""``focal`` and ``aperture`` of a new OBJ camera in 22.0 (the cam type's template group
+does not list them; they are added when the node is created)."""
+
+
+def _framing(bbox: tuple[list[float], list[float]] | None, res: tuple[int, int]) -> dict[str, Any]:
+    """Camera world transform, near and far that frame ``bbox`` from :data:`VIEW_DIRECTION`,
+    as close as fits all 8 corners, for a default-lens camera."""
     import math
 
     import hou
@@ -470,8 +503,7 @@ def _frame_camera(
     lo, hi = bbox
     center = hou.Vector3([(lo[i] + hi[i]) / 2 for i in range(3)])
     radius = max(0.5 * math.dist(lo, hi), 1e-3)
-    focal = cam.evalParm("focal")
-    aperture = cam.evalParm("aperture")
+    focal, aperture = CAMERA_LENS
     tan_h = aperture / (2 * focal)
     tan_v = tan_h * res[1] / res[0]
     back = hou.Vector3(VIEW_DIRECTION).normalized()  # camera +Z (it looks down -Z)
@@ -491,49 +523,91 @@ def _frame_camera(
     distance = max(distance * 1.08, radius * 0.1, 1e-3)
     eye = center + back * distance
     rotate = hou.hmath.buildRotateLookAt(eye, center, hou.Vector3(0, 1, 0))
-    cam.setWorldTransform(rotate * hou.hmath.buildTranslate(eye))
-    cam.parm("near").set(max(min(0.01, distance * 0.001), (distance - radius) * 0.5, 1e-4))
-    cam.parm("far").set(max(10000.0, (distance + radius) * 2))
+    xform = rotate * hou.hmath.buildTranslate(eye)
+    return {
+        "camera_xform": list(xform.asTuple()),
+        "near": max(min(0.01, distance * 0.001), (distance - radius) * 0.5, 1e-4),
+        "far": max(10000.0, (distance + radius) * 2),
+    }
 
 
-def _ensure_capture_camera() -> tuple[Any, bool]:
+_last_framing: dict[str, Any] = {}
+"""The last automatic framing; ``fit: none`` reuses it (no camera is kept in the scene)."""
+
+
+def _capture_spec(
+    camera: Any, res: tuple[int, int], fit: str, out_file: str
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """What to build for one capture, and the ``camera_used``/``fit_used`` to report."""
+    rop_parms = {"trange": 0, "tres": 1, "res1": res[0], "res2": res[1], "picture": out_file}
+    if camera is not None:
+        cam = _camera_node(camera)
+        return (
+            {"camera": cam.path(), "rop_parms": rop_parms},
+            {"camera_used": cam.path(), "fit_used": "none"},
+        )
+    fit_used = "none"
+    framing = _last_framing.get("framing")
+    if fit != "none" or framing is None:
+        bbox, fit_used = _fit_bbox(fit if fit != "none" else "all")
+        framing = _framing(bbox, res)
+        _last_framing["framing"] = framing
+    camera_parms = {
+        "resx": res[0],
+        "resy": res[1],
+        "near": framing["near"],
+        "far": framing["far"],
+    }
+    return (
+        {
+            "camera": None,
+            "camera_xform": framing["camera_xform"],
+            "camera_parms": camera_parms,
+            "rop_parms": rop_parms,
+        },
+        {"camera_used": TEMPORARY_CAMERA, "fit_used": fit_used},
+    )
+
+
+@contextlib.contextmanager
+def temporary_capture_nodes(spec: dict[str, Any]) -> Iterator[Any]:
+    """Create the capture camera (unless the spec names one) and OpenGL ROP in the live
+    scene for an in-process render, outside undo, and delete them afterwards, restoring
+    the selection. Yields the ROP. Main thread."""
     import hou
 
-    cam = hou.node(CAPTURE_CAM)
-    if cam is not None and cam.type().name() != "cam":
-        raise ToolError(
-            "name_collision",
-            f"{CAPTURE_CAM} exists and is not a camera.",
-            hint="Rename or delete it; viewport_capture reserves that name for its framing camera.",
-        )
-    created = cam is None
-    if created:
-        cam = hou.node("/obj").createNode("cam", CAPTURE_CAM.rsplit("/", 1)[1])
-        cam.setDisplayFlag(False)
-        with contextlib.suppress(Exception):
-            cam.moveToGoodPosition()
-        cam.setComment("HocusPocus viewport_capture camera (safe to delete)")
-        _mark_internal(cam)
-    return cam, created
+    from .events import muted
 
-
-def _ensure_capture_rop() -> Any:
-    import hou
-
-    rop = hou.node(CAPTURE_ROP)
-    if rop is not None and rop.type().name() != "opengl":
-        raise ToolError(
-            "name_collision",
-            f"{CAPTURE_ROP} exists and is not an OpenGL ROP.",
-            hint="Rename or delete it; viewport_capture reserves that name.",
-        )
-    if rop is None:
-        rop = hou.node("/out").createNode("opengl", CAPTURE_ROP.rsplit("/", 1)[1])
-        with contextlib.suppress(Exception):
-            rop.moveToGoodPosition()
-        rop.setComment("HocusPocus viewport_capture ROP (safe to delete)")
-        _mark_internal(rop)
-    return rop
+    selected = hou.selectedNodes()
+    created: list[Any] = []
+    try:
+        with hou.undos.disabler(), muted():
+            camera = spec.get("camera")
+            if camera is None:
+                cam = hou.node("/obj").createNode("cam")
+                created.append(cam)
+                _mark_internal(cam)
+                cam.setDisplayFlag(False)
+                for name, value in spec["camera_parms"].items():
+                    cam.parm(name).set(value)
+                cam.setWorldTransform(hou.Matrix4(spec["camera_xform"]))
+                camera = cam.path()
+            rop = hou.node("/out").createNode("opengl")
+            created.append(rop)
+            _mark_internal(rop)
+            for name, value in spec["rop_parms"].items():
+                rop.parm(name).set(value)
+            rop.parm("camera").set(camera)
+        yield rop
+    finally:
+        with hou.undos.disabler(), muted():
+            for node in reversed(created):
+                with contextlib.suppress(Exception):
+                    node.destroy()
+            with contextlib.suppress(Exception):
+                hou.clearAllSelected()
+                for node in selected:
+                    node.setSelected(True)
 
 
 def _capture_opengl(
@@ -541,41 +615,33 @@ def _capture_opengl(
 ) -> dict[str, Any]:
     import hou
 
-    fit_used = "none"
-    if camera is not None:
-        cam = _camera_node(camera)
-    else:
-        cam, created = _ensure_capture_camera()
-        cam.parm("resx").set(res[0])
-        cam.parm("resy").set(res[1])
-        if fit != "none" or created:
-            bbox, fit_used = _fit_bbox(fit if fit != "none" else "all")
-            _frame_camera(cam, bbox, res)
-    rop = _ensure_capture_rop()
-    rop.parm("camera").set(cam.path())
-    rop.parm("trange").set(0)
-    rop.parm("tres").set(1)
-    rop.parm("res1").set(res[0])
-    rop.parm("res2").set(res[1])
-    rop.parm("picture").set(out_file)
-    if needs_isolation(rop, ctx):
-        outcome = render_isolated(rop.path(), [frame, frame, 1])
+    spec, info = _capture_spec(camera, res, fit, out_file)
+    errors: list[str] = []
+    if not ctx.ui:
+        # Headless: the child hython builds camera and ROP in its own copy of the scene.
+        outcome = render_isolated(None, [frame, frame, 1], capture=spec)
         errors = outcome.get("errors") or []
     else:
-        errors = []
-        try:
-            rop.render(frame_range=(frame, frame), verbose=False)
-        except hou.OperationFailed as exc:
-            errors.append(str(exc).strip())
-        errors += [str(e) for e in rop.errors()]
+        was_dirty = scene_dirty(ctx)
+        with temporary_capture_nodes(spec) as rop:
+            try:
+                rop.render(frame_range=(frame, frame), verbose=False)
+            except hou.OperationFailed as exc:
+                errors.append(str(exc).strip())
+            errors += [str(e) for e in rop.errors()]
+        if not was_dirty and scene_dirty(ctx):
+            info["notes"] = [
+                "Houdini marks the hip modified when the temporary capture camera and ROP are "
+                "created, although both were deleted and nothing else changed."
+            ]
     if errors or not os.path.isfile(out_file):
         raise ToolError(
             "cook_failed",
             f"The OpenGL ROP did not produce an image: {errors[0] if errors else 'no output file'}",
             hint="Check that the scene cooks (problems tool) and that a GPU is available.",
-            detail={"errors": errors, "rop": rop.path()},
+            detail={"errors": errors},
         )
-    return {"camera_used": cam.path(), "fit_used": fit_used}
+    return info
 
 
 def _scene_viewer() -> Any:
@@ -623,7 +689,7 @@ def _capture_viewer(
     }
 
 
-@tool("viewport_capture")
+@tool("viewport_capture", scene=False)
 def viewport_capture(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     import hou
 

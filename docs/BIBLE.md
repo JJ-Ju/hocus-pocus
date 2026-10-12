@@ -331,14 +331,15 @@ hfs = ""                    # bridge: explicit Houdini install dir for launch
   `hip_open`, `houdini_python` `destructiveHint: true`; `parm_set`, `node_connect`,
   `node_edit`, `time`, `selection`, `cook`, `job`, `viewport_capture`
   `idempotentHint: true`; all `openWorldHint: false`. A tool whose only side effect is a
-  cook, a capture ROP or host-side job state is `readOnlyHint: false`,
+  cook, a temporary capture ROP or host-side job state is `readOnlyHint: false`,
   `destructiveHint: false`, `idempotentHint: true`.
 - **`scene=False` registration.** By default the dispatcher wraps every tool that is not
   `read_only` in one undo group, refuses it in read-only mode and marks the scene dirty.
-  `undo`, `time`, `selection`, `hda`, `cook`, `pdg`, `render` and `job` register with
-  `scene=False` and do that work themselves where it applies: `performUndo` raises
+  `undo`, `time`, `selection`, `hda`, `cook`, `pdg`, `render`, `job` and
+  `viewport_capture` register with `scene=False` and do that work themselves where it applies: `performUndo` raises
   inside an undo group; reads (`time` with no arguments, `hda list`) must not open a
-  group or dirty the scene; cooks, work items, renders and jobs are not hip state. Their
+  group or dirty the scene; cooks, work items, renders, captures and jobs are not hip
+  state. Their
   annotations still say `readOnlyHint: false`. `host/tools/registry.py` documents the
   convention and a unit test pins the set.
 - **Headless:** tools with `headless_ok: false` are listed with "(GUI only)" in the
@@ -398,7 +399,7 @@ when present, best effort, under `recent: [...]` in `houdini_status.connected.hi
 
 | Tool | Args | Behaviour |
 |---|---|---|
-| `viewport_capture` | `camera?` (path), `frame?`, `resolution = [1024, 768]`, `fit = "all"\|"selected"\|"none"`, `source: auto\|viewer\|opengl_rop = auto`, `path?` | Returns MCP **image content** (PNG, downscaled so the longest side ≤ 1024) plus `{path, width, height, camera_used}`. `viewer` uses the GUI SceneViewer flipbook of one frame (captures what the user sees). `opengl_rop` creates/reuses `/out/hocuspocus_capture` with a temporary camera framed on the bbox when `camera` is absent; works headless. `auto` prefers `viewer` in GUI. |
+| `viewport_capture` | `camera?` (path), `frame?`, `resolution = [1024, 768]`, `fit = "all"\|"selected"\|"none"`, `source: auto\|viewer\|opengl_rop = auto`, `path?` | Returns MCP **image content** (PNG, downscaled so the longest side ≤ 1024) plus `{path, width, height, camera_used}`. `viewer` uses the GUI SceneViewer flipbook of one frame (captures what the user sees). `opengl_rop` renders through an OpenGL ROP and, when `camera` is absent, a camera framed on the bbox (`camera_used: "temporary"`; `fit: none` reuses the last framing); works headless. A look is read-only: headless, camera and ROP exist only in the child hython (§8); in the GUI they are created outside undo and deleted after the render, and `notes` says so if Houdini still marked the hip modified. `auto` prefers `viewer` in GUI. |
 | `render` | `rop_path`, `frames?: [start, end, inc]` (default current), `output?`, `wait_s = 20`, `thumbnail = true` | Starts a job that calls `rop.render(...)`. If it finishes within `wait_s` returns `{outputs: [paths], thumbnail: image}`; else `{job_id}` to poll with `job`. Karma/Mantra/OpenGL/any ROP. |
 | `houdini_python` | `code`, `timeout_s = 30`, `language: python\|hscript = python`, `undo_label?` | `exec` in a fresh namespace with `hou` bound, stdout/stderr captured, the value of a trailing expression or a `result` variable JSON-serialised (`repr` fallback). Runs on the main thread inside one undo group. Returns `{stdout, stderr, result, exception?: {type, message, traceback}}`. Output capped at the response budget with `truncated`. Disabled → `code: python_disabled`. Destructive. |
 | `node_type_search` | `query`, `category?`, `limit = 20`, `include_hidden = false` | Ranks exact name = 100, exact label = 95, name prefix, label prefix, word match in description, then tag/keyword. Marks `is_current_version`. Row: `name, label, category, version, description, inputs: {min, max}, deprecated`. All 18 categories supported. |
@@ -758,7 +759,7 @@ Facts found while implementing, now reflected above:
 - GUI autostart lives at `houdini/scripts/python/uiready.py` (§10.1).
 - `hasUnsavedChanges()` is always `True` in hython; the host tracks dirtiness headless (§3.2).
 - A second OpenGL ROP render in one hython segfaults; headless OpenGL renders use a child hython (§8).
-- `undo`, `time`, `selection`, `hda`, `cook`, `pdg`, `render`, `job` register with `scene=False` (§4.1).
+- `undo`, `time`, `selection`, `hda`, `cook`, `pdg`, `render`, `job`, `viewport_capture` register with `scene=False` (§4.1).
 - One `hocuspocus.toml` configures host and bridge; `HOCUSPOCUS_*` env wins (§3.7).
 - `setChildrenFromData` skips unknown types and parms silently, defaults `clear_content=True`, and puts inputs without `to_index` on input 0 (§5.16).
 - `hou.setFps` rescales the frame range unless told not to (§5.17).

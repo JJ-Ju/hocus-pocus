@@ -30,6 +30,7 @@ import logging
 import threading
 import time
 from collections import deque
+from collections.abc import Iterator
 from typing import Any
 
 from .nodes import bad_arg
@@ -132,6 +133,7 @@ class _Hooks:
     def __init__(self) -> None:
         self.installed = False
         self.hip_busy = False
+        self.muted = 0
         self.watched: dict[int, Any] = {}
         self.managers: list[Any] = []
         self.watch_overflow = 0
@@ -140,6 +142,16 @@ class _Hooks:
 
 
 _HOOKS = _Hooks()
+
+
+@contextlib.contextmanager
+def muted() -> Iterator[None]:
+    """Record no node events inside the block (HocusPocus's own temporary nodes)."""
+    _HOOKS.muted += 1
+    try:
+        yield
+    finally:
+        _HOOKS.muted -= 1
 
 
 def _node_types() -> tuple[Any, ...]:
@@ -179,7 +191,7 @@ def _child_detail(child: Any) -> dict[str, Any] | None:
 
 def _on_manager_event(**kwargs: Any) -> None:
     try:
-        if _HOOKS.hip_busy:
+        if _HOOKS.hip_busy or _HOOKS.muted:
             return
         import hou
 
@@ -194,7 +206,7 @@ def _on_manager_event(**kwargs: Any) -> None:
 
 def _on_node_event(**kwargs: Any) -> None:
     try:
-        if _HOOKS.hip_busy:
+        if _HOOKS.hip_busy or _HOOKS.muted:
             return
         node = kwargs.get("node")
         kind = kwargs["event_type"].name()

@@ -2,7 +2,7 @@
 
 <!-- Generated from src/hocuspocus/tools/catalog.py by `python -m hocuspocus.tools.docs`. Do not edit by hand. -->
 
-35 tools: 31 in the `core` profile, 4 more in `full`. Model-visible `tools/list` text: 26,219 bytes. See `docs/BIBLE.md` §4 for the design.
+35 tools: 31 in the `core` profile, 4 more in `full`. Model-visible `tools/list` text: 26,291 bytes. See `docs/BIBLE.md` §4 for the design.
 
 ## Contents
 
@@ -744,7 +744,7 @@ Read attribute values like the geometry spreadsheet: count rows (default 50) of 
 
 `idempotent` `headless ok` · profile `core`
 
-Look at the scene. Returns a PNG image (long side at most 1024) plus path, width, height, camera_used. source auto (default) uses the GUI viewer when present, else an OpenGL ROP that works headless, framing a temporary camera per fit (default all) unless camera is given. Use render for final-quality images.
+Look at the scene. Returns a PNG image (long side at most 1024) plus path, width, height, camera_used. source auto (default) uses the GUI viewer when present, else an OpenGL ROP that works headless, framing a temporary camera per fit (default all; none reuses the last framing) unless camera is given. Leaves no nodes, undo step or dirty flag. Use render for final-quality images.
 
 ### Arguments
 
@@ -768,6 +768,8 @@ Look at the scene. Returns a PNG image (long side at most 1024) plus path, width
 - `frame` (number)
 - `rendered` (array<integer>)
 - `also_written` (string)
+- `fit_used` (string)
+- `notes` (array<string>)
 
 ### Examples
 

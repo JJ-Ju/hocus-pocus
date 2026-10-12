@@ -1118,8 +1118,9 @@ _VISUAL: tuple[ToolSpec, ...] = (
         description=(
             "Look at the scene. Returns a PNG image (long side at most 1024) plus path, width, "
             "height, camera_used. source auto (default) uses the GUI viewer when present, else an "
-            "OpenGL ROP that works headless, framing a temporary camera per fit (default all) "
-            "unless camera is given. Use render for final-quality images."
+            "OpenGL ROP that works headless, framing a temporary camera per fit (default all; none "
+            "reuses the last framing) unless camera is given. Leaves no nodes, undo step or dirty "
+            "flag. Use render for final-quality images."
         ),
         input_schema=_obj(
             {
@@ -1144,11 +1145,13 @@ _VISUAL: tuple[ToolSpec, ...] = (
                 "frame": _t("number"),
                 "rendered": _list("integer"),
                 "also_written": _t("string"),
+                "fit_used": _t("string"),
+                "notes": _list(),
             },
             ("path", "width", "height"),
         ),
-        # Not read_only: the opengl_rop source creates/reuses /out/hocuspocus_capture (§4.7).
-        # Repeating a capture reuses that ROP, so it is idempotent.
+        # Not read_only: in the GUI the opengl_rop source creates a temporary camera and ROP
+        # (deleted afterwards, outside undo) and Houdini may mark the hip modified (§4.7).
         idempotent=True,
         examples=({}, {"camera": "/obj/cam1", "frame": 48, "source": "opengl_rop"}),
     ),

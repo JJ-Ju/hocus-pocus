@@ -99,7 +99,17 @@ def test_registered_host_tools_exist_in_catalogue():
         assert tools["job"].mutating is False  # host-state only
 
 
-SCENE_FALSE = {"undo", "time", "selection", "hda", "cook", "pdg", "render", "job"}
+SCENE_FALSE = {
+    "undo",
+    "time",
+    "selection",
+    "hda",
+    "cook",
+    "pdg",
+    "render",
+    "job",
+    "viewport_capture",
+}
 """Tools the dispatcher must not wrap in an undo group (registry.py docstring, BIBLE §4.1)."""
 
 

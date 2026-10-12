@@ -18,6 +18,8 @@ those duties apply themselves:
   host-side jobs are not hip state; these also run off the main thread
   (``main_thread=False``) so they can wait on jobs and reach ``hou`` only through the
   executor.
+* ``viewport_capture`` — a look leaves the scene as it was (its camera and ROP are
+  temporary), so it must not add an undo step or dirty the scene.
 
 The catalogue annotations describe what the agent sees, not the registration: these
 tools are ``readOnlyHint: false`` (they can change something), ``destructiveHint:

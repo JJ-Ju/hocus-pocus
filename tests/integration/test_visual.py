@@ -18,7 +18,11 @@ import pytest
 hou = pytest.importorskip("hou")
 Image = pytest.importorskip("PIL.Image")
 
-from hocuspocus.host.tools.visual import CAPTURE_CAM, CAPTURE_ROP, INTERNAL_KEY  # noqa: E402
+from hocuspocus.host.tools.visual import (  # noqa: E402
+    INTERNAL_KEY,
+    TEMPORARY_CAMERA,
+    temporary_capture_nodes,
+)
 
 
 def _fwd(path) -> str:
@@ -70,7 +74,7 @@ def test_capture_headless_opengl_twice(client):
     print(f"\nviewport_capture headless: first {timings[0]:.2f}s, second {timings[1]:.2f}s")
     for result in results:
         assert result["source_used"] == "opengl_rop"
-        assert result["camera_used"] == CAPTURE_CAM
+        assert result["camera_used"] == TEMPORARY_CAMERA
         assert result["fit_used"] == "all"
         assert (result["width"], result["height"]) == (1024, 768)
         assert result["rendered"] == [1024, 768]
@@ -80,12 +84,68 @@ def test_capture_headless_opengl_twice(client):
         assert img.size == (1024, 768)
         assert _not_blank(img)
     assert results[0]["path"] != results[1]["path"]
-    rop = hou.node(CAPTURE_ROP)
-    cam = hou.node(CAPTURE_CAM)
-    assert rop.type().name() == "opengl"
-    assert cam.type().name() == "cam"
-    assert rop.userData(INTERNAL_KEY) == "1"
-    assert cam.userData(INTERNAL_KEY) == "1"
+
+
+def _all_nodes() -> list[str]:
+    # Locked HDA contents load lazily on first cook, so they are not counted.
+    return sorted(n.path() for n in hou.node("/").allSubChildren(recurse_in_locked_nodes=False))
+
+
+def test_capture_leaves_the_scene_untouched(client, work_dir):
+    """Review 07 papercut 2: a look is read-only. Headless, the camera and ROP exist only
+    in the child hython; the live scene gains no nodes, no undo entry and no dirty flag."""
+    _toy_scene()
+    cam = hou.node("/obj").createNode("cam", "shotcam")
+    cam.parmTuple("t").set((0, 0.5, 5))
+    hip = work_dir / "look.hip"
+    client.ok("hip_save", {"path": _fwd(hip)})
+    nodes = _all_nodes()
+    history = client.ok("undo", {"action": "history"})
+    assert client.host.scene.dirty is False
+    client.ok("viewport_capture", {"resolution": [160, 120]})
+    client.ok("viewport_capture", {"camera": cam.path(), "resolution": [160, 120]})
+    after = _all_nodes()
+    assert after == nodes, (set(after) - set(nodes), set(nodes) - set(after))
+    assert client.ok("undo", {"action": "history"}) == history
+    assert client.host.scene.dirty is False
+    assert client.ok("hip_new", {})["saved_first"] is False  # nothing unsaved to refuse
+    # The user camera was used as-is.
+    assert hou.node("/obj/shotcam") is None  # hip_new cleared the scene
+    hou.hipFile.load(_fwd(hip), suppress_save_prompt=True)
+    assert _all_nodes() == nodes
+    assert tuple(hou.node("/obj/shotcam").parmTuple("t").eval()) == (0, 0.5, 5)
+
+
+def test_temporary_capture_nodes_are_removed_outside_undo(client):
+    """The in-process (GUI) path: nodes exist only during the render, and the selection
+    is restored. Rendering in-process is not exercised here (a second OpenGL render in
+    one hython segfaults); the context manager is."""
+    from hocuspocus.host.tools import events
+
+    geo = _toy_scene()
+    geo.setSelected(True, clear_all_selected=True)
+    nodes = _all_nodes()
+    undo_before = hou.undos.undoLabels()
+    client.ok("events", {})  # installs the hooks
+    since = events.LOG.last_seq
+    spec = {
+        "camera": None,
+        "camera_xform": list(hou.hmath.buildTranslate(0, 0, 5).asTuple()),
+        "camera_parms": {"resx": 64, "resy": 48},
+        "rop_parms": {"res1": 64, "res2": 48},
+    }
+    with temporary_capture_nodes(spec) as rop:
+        assert rop.type().name() == "opengl"
+        cam = hou.node(rop.parm("camera").eval())
+        assert cam.type().name() == "cam"
+        assert cam.userData(INTERNAL_KEY) == "1"
+        assert cam.worldTransform().extractTranslates()[2] == pytest.approx(5)
+        assert {rop.path(), cam.path()} <= set(_all_nodes())
+    assert _all_nodes() == nodes
+    assert hou.undos.undoLabels() == undo_before
+    recorded = client.ok("events", {"since": since})["events"]
+    assert not [e for e in recorded if e["kind"] in ("ChildCreated", "ChildDeleted")], recorded
+    assert [n.path() for n in hou.selectedNodes()] == [geo.path()]
 
 
 def test_capture_frames_the_geometry(client):
@@ -134,10 +194,11 @@ def test_capture_fit_selected_and_none(client):
     hou.clearAllSelected()
     result = client.ok("viewport_capture", {"fit": "selected", "resolution": [160, 120]})
     assert result["fit_used"] == "all"  # nothing selected: falls back to everything
-    before = hou.node(CAPTURE_CAM).worldTransform()
+    framed = client.ok("viewport_capture", {"fit": "all", "resolution": [160, 120]})
     result = client.ok("viewport_capture", {"fit": "none", "resolution": [160, 120]})
-    assert result["fit_used"] == "none"
-    assert hou.node(CAPTURE_CAM).worldTransform().isAlmostEqual(before)
+    assert result["fit_used"] == "none"  # reuses the last automatic framing
+    with Image.open(framed["path"]) as a, Image.open(result["path"]) as b:
+        assert a.convert("L").tobytes() == b.convert("L").tobytes()
 
 
 def test_capture_viewer_headless_is_ui_required(client):
