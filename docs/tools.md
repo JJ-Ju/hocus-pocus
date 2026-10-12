@@ -2,7 +2,7 @@
 
 <!-- Generated from src/hocuspocus/tools/catalog.py by `python -m hocuspocus.tools.docs`. Do not edit by hand. -->
 
-35 tools: 31 in the `core` profile, 4 more in `full`. Model-visible `tools/list` text: 28,018 bytes. See `docs/BIBLE.md` §4 for the design.
+35 tools: 31 in the `core` profile, 4 more in `full`. Model-visible `tools/list` text: 28,958 bytes. See `docs/BIBLE.md` §4 for the design.
 
 ## Contents
 
@@ -72,7 +72,7 @@ None.
 
 `bridge-local` `headless ok` · profile `core`
 
-Choose which Houdini this session drives. Pass one of: pid to attach to a live instance listed by houdini_status; launch to start one (mode gui or headless hython, optional hip, wait up to wait_s, default 90); or disconnect to drop the selection. A launched Houdini usually closes when this server exits (launched.outlives_server says); to keep one, start Houdini yourself (after hocuspocus install-houdini) and attach by pid.
+Choose which Houdini this session drives. Pass one of: pid to attach to a live instance listed by houdini_status; launch to start one (mode gui or headless hython, optional hip, wait up to wait_s, default 90); or disconnect to drop the selection. A launched Houdini usually closes when this server exits (launched.outlives_server says); to keep Houdini alive across sessions, start it with `hocuspocus launch` and attach by pid.
 
 ### Arguments
 
@@ -285,7 +285,7 @@ Read nodes in detail: type, flags, inputs with names and sources, non-default pa
 
 ### Returns
 
-- `nodes` (array<object>): `path`, `name`, `session_id`, `type`, `flags`, `inputs`, `outputs`, `parms`, `errors`, `warnings`, `messages`, `cook_state`, `children_count`, `hda`, `position`, `comment`, `color` — always present
+- `nodes` (array<object>): `path`, `name`, `session_id`, `type`, `flags`, `inputs`, `outputs`, `parms`, `errors`, `warnings`, `messages`, `cook_state`, `children_count`, `hda_locked`, `hda`, `position`, `comment`, `color` — always present
 
 ### Examples
 
@@ -302,7 +302,7 @@ Read nodes in detail: type, flags, inputs with names and sources, non-default pa
 
 `headless ok` · profile `core`
 
-Create nodes in one undo step. Item: parent, type (resolved like createNode so box gets the current version; exact_type disables), optional name, parms (value or {expression, language}; {expr, lang} also works), inputs (index or name, from, output), flags, position. Items may wire to nodes created earlier in the call. layout default good_position. Returns node_info blocks, or path, type and problems with return summary. Use network_build for whole graphs.
+Create nodes in one undo step. Item: parent, type (resolved like createNode so box gets the current version; exact_type disables), optional name, parms (value or {expression, language}; {expr, lang} also works), inputs (index or name, from, output), flags, position. Items may wire to earlier items; a block_end pairs with its block_begin (paired_with). layout default good_position. Returns path, type and problems per node; return full gives node_info blocks with only the parms the call set. Use network_build for whole graphs.
 
 ### Arguments
 
@@ -326,8 +326,8 @@ Create nodes in one undo step. Item: parent, type (resolved like createNode so b
 | `items[].position` | array<number> |  |  | [x, y] (min items 2; max items 2) |
 | `layout` | `good_position` \| `none` |  | `"good_position"` |  |
 | `exact_type` | boolean |  | `false` |  |
-| `partial` | boolean |  | `false` | Keep successful items when one fails. |
-| `return` | `full` \| `summary` |  | `"full"` |  |
+| `partial` | boolean |  | `false` | Keep successful items. |
+| `return` | `full` \| `summary` |  | `"summary"` |  |
 
 ### Examples
 
@@ -368,7 +368,7 @@ Delete nodes in one undo step. keep_connections (default true) reconnects input 
 
 `idempotent` `headless ok` · profile `core`
 
-Change node properties in one undo step: rename, flags, bypass, color, comment, position, and lock (false allows editing a locked HDA's contents). A rename returns old_path and path. Use parm_set for parameter values and node_connect for wiring.
+Change node properties in one undo step: rename, flags, bypass, color, comment, position, and lock (false allows editing a locked HDA's contents). spare_parms adds {name, type: float|int|string|toggle|menu|button|vector|color, label, default, size, min, max, menu_items [{token, label}], folder, help} or removes spare parms by name; returns their paths. A rename returns old_path and path. Use parm_set for values.
 
 ### Arguments
 
@@ -387,7 +387,10 @@ Change node properties in one undo step: rename, flags, bypass, color, comment, 
 | `items[].position` | array<number> |  |  | [x, y] (min items 2; max items 2) |
 | `items[].lock` | boolean |  |  |  |
 | `items[].bypass` | boolean |  |  |  |
-| `partial` | boolean |  | `false` | Keep successful items when one fails. |
+| `items[].spare_parms` | object |  |  |  |
+| `items[].spare_parms.add` | array<object> |  |  |  |
+| `items[].spare_parms.remove` | array<string> |  |  |  |
+| `partial` | boolean |  | `false` | Keep successful items. |
 
 ### Examples
 
@@ -399,12 +402,16 @@ Change node properties in one undo step: rename, flags, bypass, color, comment, 
 {"items": [{"path": "/obj/geo1/null1", "color": [1, 0, 0], "comment": "OUT"}]}
 ```
 
+```json
+{"items": [{"path": "/obj/geo1/wrangle1", "spare_parms": {"add": [{"name": "glue", "type": "float", "default": 1, "max": 10}]}}]}
+```
+
 
 ## node_copy
 
 `headless ok` · profile `core`
 
-Copy nodes into to_parent, which may be their own network. names renames copies in paths order; with_inputs (default true) keeps wiring among copied nodes; position_offset shifts them. Returns the new paths; return summary trims each row to path, type and problems.
+Copy nodes into to_parent, which may be their own network. names renames copies in paths order; with_inputs (default true) keeps wiring among copied nodes; position_offset shifts them. Returns the new paths and per copy path, type and problems (return full adds flags).
 
 ### Arguments
 
@@ -415,7 +422,7 @@ Copy nodes into to_parent, which may be their own network. names renames copies 
 | `names` | array<string> |  |  |  |
 | `with_inputs` | boolean |  | `true` |  |
 | `position_offset` | array<number> |  |  | [dx, dy] (min items 2; max items 2) |
-| `return` | `full` \| `summary` |  | `"full"` |  |
+| `return` | `full` \| `summary` |  | `"summary"` |  |
 
 ### Examples
 
@@ -439,7 +446,7 @@ Wire or unwire inputs in one undo step. Each item connects output from_output (d
 | `items[].from_output` | integer |  | `0` | min 0 |
 | `items[].to` | string | yes |  |  |
 | `items[].to_input` | integer \| string |  | `0` | Index, input name, or "next". |
-| `partial` | boolean |  | `false` | Keep successful items when one fails. |
+| `partial` | boolean |  | `false` | Keep successful items. |
 
 ### Examples
 
@@ -477,7 +484,7 @@ Tidy a network. mode children (default) lays out the children of parent, or only
 
 `read-only` `headless ok` · profile `core`
 
-Read a whole network in one call as Houdini's hou.data childrenAsData format: types, non-default parms, expressions, wiring, flags, depth levels deep (default 1). Locked HDAs appear as {type, locked, hda_locked} unless recurse_locked. Pages stop at the response budget (truncated, next_cursor). format python returns asCode for a single node. The data result can be passed to network_build.
+Read a whole network in one call as Houdini's hou.data childrenAsData format: types, non-default parms, expressions, wiring, flags, depth levels deep (default 1). Locked HDAs appear as {type, hda_locked} unless recurse_locked. Pages stop at the response budget (truncated, next_cursor). format python returns asCode for a single node. The data result can be passed to network_build.
 
 ### Arguments
 
@@ -506,7 +513,7 @@ Read a whole network in one call as Houdini's hou.data childrenAsData format: ty
 
 `headless ok` · profile `core`
 
-Build or update a whole network under parent from Houdini's hou.data childrenAsData format (what network_describe returns) in one undo step. Types and inputs are validated first; dry_run stops there. Input entries are {from, from_index, to_index}; a missing to_index means the entry's position in the list. on_name_collision: error (default), rename, replace. Returns created paths and per-node errors (return summary: path, type, problems). Use node_create for a few nodes.
+Build or update a whole network under parent from Houdini's hou.data childrenAsData format (what network_describe returns) in one undo step. Types and inputs are validated first; dry_run stops there. Input entries are {from, from_index, to_index}; a missing to_index means the entry's position in the list. on_name_collision: error (default), rename, replace. Returns created paths and per node path, type and problems (return full adds flags). Use node_create for a few nodes.
 
 ### Arguments
 
@@ -518,7 +525,7 @@ Build or update a whole network under parent from Houdini's hou.data childrenAsD
 | `layout` | boolean |  | `true` |  |
 | `dry_run` | boolean |  | `false` |  |
 | `tag` | string |  |  | Stored as userData hocuspocus:tag. |
-| `return` | `full` \| `summary` |  | `"full"` |  |
+| `return` | `full` \| `summary` |  | `"summary"` |  |
 
 ### Examples
 
@@ -531,7 +538,7 @@ Build or update a whole network under parent from Houdini's hou.data childrenAsD
 
 `read-only` `headless ok` · profile `core`
 
-Read parms by parm path (.../tx), tuple path (.../t, returns components) or component path. Each: value at frame (default current), raw text, expression and language, is_default, locked. include adds keys, menu (token and label), template (label, type, default, range, help), ramp, multiparm. Tuples report expressions per component and keyed component names. Unknown names fail with nearest candidates.
+Read parms by parm path (.../tx), tuple path (.../t, returns components) or component path. Each: value at frame (default current), raw text, expression and language, is_default, locked (parm lock), hda_locked. include adds keys, menu (token and label), template (label, type, default, range, help), ramp, multiparm. Tuples report expressions per component and keyed component names. Unknown names fail with nearest candidates.
 
 ### Arguments
 
@@ -543,7 +550,7 @@ Read parms by parm path (.../tx), tuple path (.../t, returns components) or comp
 
 ### Returns
 
-- `parms` (array<object>): `path`, `name`, `tuple`, `component_names`, `type`, `value`, `raw`, `expression`, `language`, `expressions`, `keyed`, `is_default`, `locked`, `keyframes`, `menu`, `ramp`, `multiparm`, `template` — always present
+- `parms` (array<object>): `path`, `name`, `tuple`, `component_names`, `type`, `value`, `raw`, `expression`, `language`, `expressions`, `keyed`, `is_default`, `locked`, `hda_locked`, `keyframes`, `menu`, `ramp`, `multiparm`, `template` — always present
 
 ### Examples
 
@@ -587,7 +594,7 @@ Set parms in one undo step. Each item takes one of value, expression, keyframe, 
 | `items[].press` | boolean |  |  | Press a button parm. |
 | `items[].animation` | `replace` \| `key` \| `keep` |  | `"replace"` |  |
 | `frame` | number |  |  | Default current frame. |
-| `partial` | boolean |  | `false` | Keep successful items when one fails. |
+| `partial` | boolean |  | `false` | Keep successful items. |
 
 ### Returns
 
@@ -612,7 +619,7 @@ Set parms in one undo step. Each item takes one of value, expression, keyframe, 
 
 `idempotent` `headless ok` · profile `core`
 
-Cook nodes now and report per node ok, errors, warnings, messages, cook_time_ms (that node's cook only; upstream may already be cached). Errors left from before a fix are rechecked (the node and its errored inputs recooked) unless the last cook took over 2 s: then hint says use force, which recooks clean nodes. frame defaults to current. A cook longer than the job threshold returns job_id to poll with job. Use problems to scan a subtree.
+Cook nodes and report per node ok, errors, warnings, cook_time_ms (its own cook; cached inputs are not recooked). profile force-cooks each input chain in dependency order: chain (top 10 by cost), total_ms. frame_range [start, end, step] cooks frame by frame (sims advance, frame restored); summary bbox adds per-frame counts and bbox. Errors left from before a fix are rechecked unless the last cook took over 2 s (hint: force). Past the job threshold returns job_id for job.
 
 ### Arguments
 
@@ -622,10 +629,16 @@ Cook nodes now and report per node ok, errors, warnings, messages, cook_time_ms 
 | `force` | boolean |  | `false` |  |
 | `frame` | number |  |  | Default current frame. |
 | `timeout_s` | number |  | `30` | min 1 |
+| `profile` | boolean |  | `false` |  |
+| `frame_range` | array<number> |  |  | min items 2; max items 3 |
+| `summary` | `none` \| `bbox` |  | `"none"` |  |
 
 ### Returns
 
 - `ok` (boolean)
+- `chain` (array<object>)
+- `total_ms` (number)
+- `frames` (array<object>)
 - `results` (array<object>): `path`, `ok`, `errors`, `warnings`, `messages`, `cook_time_ms`, `hint`
 - `job_id` (string)
 - `state` (`running` | `done` | `failed` | `cancelled`)
@@ -637,7 +650,11 @@ Cook nodes now and report per node ok, errors, warnings, messages, cook_time_ms 
 ```
 
 ```json
-{"paths": ["/obj/geo1/OUT"], "force": true, "frame": 12}
+{"paths": ["/obj/geo1/OUT"], "profile": true}
+```
+
+```json
+{"paths": ["/obj/sim/OUT"], "frame_range": [1, 96], "summary": "bbox"}
 ```
 
 
@@ -794,7 +811,7 @@ Look at the scene. Returns a PNG image (long side at most 1024) plus path, width
 
 `headless ok` · profile `core`
 
-Render any ROP (Karma, Mantra, OpenGL, ...) for frames [start, end, inc] (default current frame), optionally overriding output. Waits up to wait_s (default 20): if done, returns outputs (file paths), thumbnail {path, width, height} with the image attached, and job_id; else job_id and state to poll with job. Use viewport_capture for a quick look.
+Render any ROP (Karma, Mantra, OpenGL, ...) for frames [start, end, inc] (default current frame), optionally overriding output. Waits up to wait_s (default the job threshold, 10 s): if done, returns state, outputs (above 5 only outputs_summary; job result lists all), thumbnail with the image attached, notes (no lights, nearly black), job_id; else job_id and state to poll with job. Use viewport_capture for a quick look.
 
 ### Arguments
 
@@ -803,7 +820,7 @@ Render any ROP (Karma, Mantra, OpenGL, ...) for frames [start, end, inc] (defaul
 | `rop_path` | string | yes |  |  |
 | `frames` | array<number> |  |  | [start, end] or [start, end, inc] (min items 2; max items 3) |
 | `output` | string |  |  | Output path override. |
-| `wait_s` | number |  | `20` | min 0 |
+| `wait_s` | number |  |  | min 0 |
 | `thumbnail` | boolean |  | `true` |  |
 
 ### Returns
@@ -813,6 +830,7 @@ Render any ROP (Karma, Mantra, OpenGL, ...) for frames [start, end, inc] (defaul
 - `rop_path` (string)
 - `frames` (array<number>)
 - `outputs` (array<string>)
+- `outputs_summary` (object)
 - `missing` (array<string>)
 - `thumbnail` (object): `path`, `width`, `height`, `image`
 - `thumbnail_error` (string)
@@ -833,7 +851,7 @@ Render any ROP (Karma, Mantra, OpenGL, ...) for frames [start, end, inc] (defaul
 
 `destructive` `headless ok` · profile `core`
 
-Run Python (hou bound) or HScript on Houdini's main thread in one undo step, for anything no other tool covers. Returns stdout, stderr, result (a trailing expression or a result variable, JSON-serialised) and exception with traceback plus ok: false (sys.exit included). Output is capped. Fails with python_disabled when turned off.
+Run Python (hou bound) or HScript on Houdini's main thread in one undo step, for anything no other tool covers. Returns stdout, stderr and result (a trailing expression or a result variable, JSON-serialised). An uncaught exception (sys.exit included) fails with python_exception (stdout, stderr, traceback in detail) and is rolled back; code still running near timeout_s is stopped (houdini_busy). Output is capped. Fails with python_disabled when turned off.
 
 ### Arguments
 
@@ -859,7 +877,7 @@ Run Python (hou bound) or HScript on Houdini's main thread in one undo step, for
 
 `read-only` `headless ok` · profile `core`
 
-Find node types by name, label, description or keyword across all 18 categories, or one category. Rows: name, label, category, version, is_current_version, description, input range, deprecated. Exact names rank first; limit defaults to 20. Use node_type_info for one type's parms and help.
+Find node types by name, label, description or keyword across all 18 categories, or one category. Rows: name, label, category, version, description (clipped), input range, deprecated. Current versions only, older ones named in other_versions, unless current_only is false. Exact names rank first; limit defaults to 20. Use node_type_info for one type's parms and help.
 
 ### Arguments
 
@@ -869,10 +887,11 @@ Find node types by name, label, description or keyword across all 18 categories,
 | `category` | `Chop` \| `ChopNet` \| `Cop` \| `Cop2` \| `CopNet` \| `Data` \| `Director` \| `Dop` \| `Driver` \| `Lop` \| `Manager` \| `Object` \| `Shop` \| `Sop` \| `Top` \| `TopNet` \| `Vop` \| `VopNet` |  |  |  |
 | `limit` | integer |  | `20` | min 1; max 1000 |
 | `include_hidden` | boolean |  | `false` |  |
+| `current_only` | boolean |  | `true` |  |
 
 ### Returns
 
-- `results` (array<object>): `name`, `label`, `category`, `version`, `is_current_version`, `description`, `inputs`, `deprecated` — always present
+- `results` (array<object>): `name`, `label`, `category`, `version`, `description`, `other_versions` — always present
 - `total` (integer)
 
 ### Examples
