@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
@@ -80,7 +81,9 @@ def make_launcher(
     def sleep(seconds):
         t[0] += clock_step
 
-    extra = {} if outlives is None else {"outlives": lambda proc: outlives}
+    extra: dict = {"python_dir": lambda environ: (hfs.parent / "hostpkg", "test")}
+    if outlives is not None:
+        extra["outlives"] = lambda proc: outlives
     return Launcher(
         str(hfs),
         spawner=harness.spawner,
@@ -127,8 +130,7 @@ def test_headless_launch_builds_hython_command_and_waits(tmp_path):
         "--hip",
         str(hip),
     ]
-    assert env["PYTHONPATH"].split(os.pathsep)[0] == str(launch.package_root())
-    assert (launch.package_root() / "hocuspocus" / "bridge").is_dir()
+    assert env["PYTHONPATH"].split(os.pathsep)[0] == str(hfs.parent / "hostpkg")
     assert log_path is not None and log_path.name.startswith("launch-headless-")
     assert Path(cwd) == Path.home()  # the untitled $HIP: never the state dir or repo
     assert result.instance.pid == 9001 and result.mode == "headless"
@@ -268,3 +270,89 @@ def test_child_outlives_server_reads_the_job(monkeypatch):
     assert launch.child_outlives_server(Proc()) is True  # falls back to the breakaway flag
     monkeypatch.setattr(launch.sys, "platform", "linux")
     assert launch.child_outlives_server(object()) is True
+
+
+# -- the package a headless hython imports (review 10: never site-packages) -----------
+
+
+def fake_package(base: Path, version: str = "9.9.9", *, with_bridge: bool = True) -> Path:
+    pkg = base / "hocuspocus"
+    for sub in ("host", "tools"):
+        (pkg / sub).mkdir(parents=True)
+        (pkg / sub / "__init__.py").write_text("")
+    if with_bridge:
+        (pkg / "bridge").mkdir()
+        (pkg / "bridge" / "server.py").write_text("import mcp\n")
+        (pkg / "cli.py").write_text("")
+    (pkg / "__init__.py").write_text("")
+    (pkg / "version.py").write_text(f'__version__ = "{version}"\n')
+    return base
+
+
+def resolve(tmp_path, environ=None, *, root=None):
+    return launch.host_python_dir(
+        environ if environ is not None else {"HOUDINI_USER_PREF_DIR": str(tmp_path / "prefs")},
+        state=tmp_path / "state",
+        root=root if root is not None else fake_package(tmp_path / "venv" / "site-packages"),
+        version="9.9.9",
+    )
+
+
+def write_package_json(prefs: Path, python_dir: Path) -> None:
+    (prefs / "packages").mkdir(parents=True, exist_ok=True)
+    data = {"env": [{"PYTHONPATH": {"value": python_dir.as_posix(), "method": "prepend"}}]}
+    (prefs / "packages" / "hocuspocus.json").write_text(json.dumps(data))
+
+
+def test_host_package_prefers_the_install_record(tmp_path):
+    installed = fake_package(tmp_path / "prefs" / "hocuspocus" / "9.9.9" / "python")
+    write_package_json(tmp_path / "prefs", fake_package(tmp_path / "other"))
+    (tmp_path / "state").mkdir()
+    (tmp_path / "state" / "install.json").write_text(json.dumps({"python_dir": str(installed)}))
+    assert resolve(tmp_path) == (installed, "install.json")
+
+
+def test_host_package_then_the_package_json(tmp_path):
+    other = fake_package(tmp_path / "other")
+    write_package_json(tmp_path / "prefs", other)
+    stale = fake_package(tmp_path / "old", version="0.9.0")
+    (tmp_path / "state").mkdir()
+    (tmp_path / "state" / "install.json").write_text(json.dumps({"python_dir": str(stale)}))
+    assert resolve(tmp_path) == (other, "package json")  # a stale version never qualifies
+
+
+def test_host_package_then_the_checkout(tmp_path):
+    checkout = tmp_path / "repo"
+    fake_package(checkout / "src")
+    (checkout / "pyproject.toml").write_text("")
+    assert resolve(tmp_path, root=checkout / "src") == (checkout / "src", "checkout")
+
+
+def test_host_package_never_site_packages_copies_host_side_only(tmp_path):
+    site = fake_package(tmp_path / "venv" / "Lib" / "site-packages")
+    write_package_json(tmp_path / "prefs", site)  # a package json pointing into a venv
+    found, source = resolve(tmp_path, root=site)
+    assert source == "launch-pkg" and "site-packages" not in found.parts
+    assert found == tmp_path / "state" / "launch-pkg" / "9.9.9"
+    copied = found / "hocuspocus"
+    assert (copied / "host").is_dir() and (copied / "tools").is_dir()
+    assert not (copied / "bridge").exists() and not (copied / "cli.py").exists()
+    assert resolve(tmp_path, root=site) == (found, "launch-pkg")  # reused, not recopied
+
+
+def test_headless_launch_pythonpath_never_names_site_packages(tmp_path, monkeypatch):
+    site = fake_package(tmp_path / "venv" / "Lib" / "site-packages")
+    monkeypatch.setattr(launch, "package_root", lambda: site)
+    monkeypatch.setenv("HOUDINI_USER_PREF_DIR", str(tmp_path / "prefs"))
+    harness = Harness()
+    launcher = Launcher(
+        str(fake_hfs(tmp_path / "hfs")),
+        spawner=harness.spawner,
+        scan=harness.scan,
+        sleep=lambda s: None,
+        environ={"HOUDINI_USER_PREF_DIR": str(tmp_path / "prefs")},
+        python_dir=lambda environ: launch.host_python_dir(environ, version="9.9.9"),
+    )
+    launcher.launch("headless", None, wait_s=30)
+    _argv, env, _cwd, _log = harness.spawned[0]
+    assert "site-packages" not in env["PYTHONPATH"]

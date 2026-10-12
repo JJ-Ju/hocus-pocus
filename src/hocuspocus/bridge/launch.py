@@ -8,8 +8,10 @@ Tests inject ``spawner``/``scan``/``sleep`` so nothing is actually launched.
 from __future__ import annotations
 
 import glob
+import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -92,8 +94,117 @@ def gui_executable(hfs: Path) -> Path | None:
 
 
 def package_root() -> Path:
-    """The directory that contains the ``hocuspocus`` package (goes on hython's PYTHONPATH)."""
+    """The directory that contains the running ``hocuspocus`` package."""
     return Path(__file__).resolve().parents[2]
+
+
+LAUNCH_PKG_DIR = "launch-pkg"
+_HOST_SIDE_SKIP = frozenset({"bridge", "cli.py", "_houdini", "__pycache__"})
+
+
+def _read_version(pkg_dir: Path) -> str | None:
+    try:
+        text = (pkg_dir / "version.py").read_text(encoding="utf-8")
+    except OSError:
+        return None
+    m = re.search(r"__version__\s*=\s*['\"]([^'\"]+)['\"]", text)
+    return m.group(1) if m else None
+
+
+def _usable(python_dir: Path | None, version: str) -> bool:
+    """A dir to put on hython's PYTHONPATH: it holds this version's ``hocuspocus`` and is not
+    a site-packages directory (which would shadow Houdini's own attrs, click, pydantic...)."""
+    if python_dir is None:
+        return False
+    if any(part.lower() in ("site-packages", "dist-packages") for part in python_dir.parts):
+        return False
+    return _read_version(python_dir / "hocuspocus") == version
+
+
+def _installed_python_dir(state: Path) -> Path | None:
+    from .config import INSTALL_STATE_FILE
+
+    try:
+        data = json.loads((state / INSTALL_STATE_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    value = data.get("python_dir") if isinstance(data, dict) else None
+    return Path(value) if isinstance(value, str) and value else None
+
+
+def _package_json_python_dir(environ: Mapping[str, str] | None) -> Path | None:
+    from ..cli import PACKAGE_JSON_NAME, package_python_dir
+    from .config import default_pref_dirs, resolve_pref_dir
+
+    resolved, _source = resolve_pref_dir(environ)
+    for prefs in [resolved] if resolved is not None else default_pref_dirs(environ):
+        try:
+            data = json.loads((prefs / "packages" / PACKAGE_JSON_NAME).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        found = package_python_dir(data)
+        if found is not None:
+            return found
+    return None
+
+
+def _checkout_src(root: Path) -> Path | None:
+    """``<checkout>/src`` when the running package is a source checkout (editable install)."""
+    if root.name == "src" and (root.parent / "pyproject.toml").is_file():
+        return root
+    return None
+
+
+def _copy_host_package(root: Path, state: Path, version: str) -> Path:
+    """Copy ``hocuspocus`` without the bridge into ``<state>/launch-pkg/<version>/``."""
+    target = state / LAUNCH_PKG_DIR / version
+    if _read_version(target / "hocuspocus") == version:
+        return target
+    staging = state / LAUNCH_PKG_DIR / f".{version}-{os.getpid()}"
+    shutil.rmtree(staging, ignore_errors=True)
+    shutil.copytree(
+        root / "hocuspocus",
+        staging / "hocuspocus",
+        ignore=lambda _dir, names: {
+            n for n in names if n in _HOST_SIDE_SKIP or n.endswith((".pyc", ".pyo"))
+        },
+    )
+    shutil.rmtree(target, ignore_errors=True)
+    try:
+        staging.rename(target)
+    except OSError:  # another bridge won the race; use its copy
+        shutil.rmtree(staging, ignore_errors=True)
+    return target
+
+
+def host_python_dir(
+    environ: Mapping[str, str] | None = None,
+    *,
+    state: Path | None = None,
+    root: Path | None = None,
+    version: str | None = None,
+) -> tuple[Path, str]:
+    """The directory a headless hython gets on ``PYTHONPATH``, and where it came from.
+
+    Order: the ``python_dir`` ``install-houdini`` recorded in ``install.json`` -> the
+    ``PYTHONPATH`` entry of ``<prefs>/packages/hocuspocus.json`` -> the checkout's ``src/``
+    for an editable install -> a host-only copy under ``<state_dir>/launch-pkg/<version>``.
+    Each candidate must hold this version's package; a site-packages directory never
+    qualifies, because it would shadow SideFX's own packages (BIBLE §3.1).
+    """
+    from ..version import __version__
+
+    version = version or __version__
+    state = state if state is not None else paths.state_dir()
+    root = root if root is not None else package_root()
+    for source, candidate in (
+        ("install.json", _installed_python_dir(state)),
+        ("package json", _package_json_python_dir(environ)),
+        ("checkout", _checkout_src(root)),
+    ):
+        if _usable(candidate, version):
+            return candidate, source
+    return _copy_host_package(root, state, version), LAUNCH_PKG_DIR
 
 
 # -- spawning ------------------------------------------------------------------------------
@@ -259,9 +370,11 @@ class Launcher:
         environ: Mapping[str, str] | None = None,
         outlives: Callable[[Any], bool] = child_outlives_server,
         launches: registry.LaunchLog | None = None,
+        python_dir: Callable[[Mapping[str, str] | None], tuple[Path, str]] = host_python_dir,
     ) -> None:
         self.config_hfs = config_hfs
         self.spawner = spawner
+        self.python_dir = python_dir
         self.outlives = outlives
         self._launches = launches
         self.scan = scan or (lambda: registry.scan())
@@ -309,9 +422,9 @@ class Launcher:
             argv = [str(hython_path(hfs)), "-m", "hocuspocus.host"]
             if hip:
                 argv += ["--hip", hip]
-            root = str(package_root())
+            python_dir, _source = self.python_dir(self.environ)
             existing = env.get("PYTHONPATH", "")
-            env["PYTHONPATH"] = root + (os.pathsep + existing if existing else "")
+            env["PYTHONPATH"] = str(python_dir) + (os.pathsep + existing if existing else "")
             log_path = paths.logs_dir() / f"launch-headless-{stamp}.log"
             return argv, env, cwd, log_path
         raise ToolError(
