@@ -162,6 +162,19 @@ class JobManager:
             job.message = "cancellation requested"
         return job.status()
 
+    def discard(self, job_id: str) -> bool:
+        """Forget a finished job (e.g. one whose result was returned synchronously).
+
+        Running jobs are kept so they can still be polled or cancelled. Returns whether
+        the job was removed.
+        """
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if job is None or job.state == "running":
+                return False
+            del self._jobs[job_id]
+            return True
+
     def list(self) -> list[dict[str, Any]]:
         with self._lock:
             jobs = list(self._jobs.values())

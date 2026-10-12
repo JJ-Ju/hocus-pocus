@@ -113,6 +113,8 @@ def cook(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     started = ctx.jobs.start("cook", work, label=label)
     wait_s = min(timeout_s, float(ctx.config.job_threshold_s))
     if started.done_event.wait(wait_s):
+        # Returned synchronously: the caller never saw a job_id, so keep job list clean.
+        ctx.jobs.discard(started.id)
         if started.state == "done":
             return started.result
         raise ToolError.from_dict(started.error or {"code": "internal", "message": "cook failed"})
