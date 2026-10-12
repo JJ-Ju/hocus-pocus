@@ -988,7 +988,7 @@ def _find_cursor(cursor: Any) -> tuple[str, ...] | int | None:
         return int(cursor)  # an offset cursor from an older host; still honoured
     raise bad_arg(
         f"Invalid cursor {cursor!r}.",
-        hint="Pass next_cursor from the previous page unchanged, or omit cursor.",
+        hint=CURSOR_HINT,
     )
 
 

@@ -308,7 +308,7 @@ def network_describe(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     ):
         raise N.bad_arg(
             f"Invalid cursor {cursor!r}.",
-            hint="Pass next_cursor from the previous page unchanged, or omit cursor.",
+            hint=N.CURSOR_HINT,
         )
     if not recurse_locked and (
         N.inside_locked(root) or (fmt != "python" and N._is_locked_hda(root))
