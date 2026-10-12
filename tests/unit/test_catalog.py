@@ -54,7 +54,8 @@ BIBLE_ERROR_CODES = {
     "invalid_argument", "node_not_found", "parm_not_found", "node_type_not_found",
     "invalid_input", "invalid_value", "name_collision", "locked", "cook_failed",
     "unsaved_changes", "file_not_found", "path_not_allowed", "ui_required",
-    "python_disabled", "read_only", "job_not_found", "cancelled", "internal",
+    "python_disabled", "read_only", "job_not_found", "cancelled", "python_exception",
+    "internal",
 }  # fmt: skip
 
 # BIBLE §4.1 annotations.

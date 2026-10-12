@@ -30,6 +30,7 @@ ERROR_CODES: dict[str, str] = {
     "read_only": "The host is in read-only mode.",
     "job_not_found": "No job with that id (jobs do not survive a Houdini restart).",
     "cancelled": "The job was cancelled.",
+    "python_exception": "houdini_python code raised; stdout, stderr and traceback are in detail.",
     "internal": "Unexpected failure; hou_exception and detail are attached.",
 }
 

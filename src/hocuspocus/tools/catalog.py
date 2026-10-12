@@ -1248,9 +1248,11 @@ _VISUAL: tuple[ToolSpec, ...] = (
         name="houdini_python",
         description=(
             "Run Python (hou bound) or HScript on Houdini's main thread in one undo step, for "
-            "anything no other tool covers. Returns stdout, stderr, result (a trailing expression "
-            "or a result variable, JSON-serialised) and exception with traceback plus ok: false "
-            "(sys.exit included). Output is capped. Fails with python_disabled when turned off."
+            "anything no other tool covers. Returns stdout, stderr and result (a trailing "
+            "expression or a result variable, JSON-serialised). An uncaught exception (sys.exit "
+            "included) fails with python_exception (stdout, stderr, traceback in detail) and is "
+            "rolled back; code still running near timeout_s is stopped (houdini_busy). Output is "
+            "capped. Fails with python_disabled when turned off."
         ),
         input_schema=_obj(
             {
