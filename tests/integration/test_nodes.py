@@ -328,11 +328,27 @@ def test_info_default_includes_parms(client):
     assert len(everything["nodes"][0]["parms"]) > 5
 
 
+def test_info_lists_non_default_multiparm_counts(client):
+    geo = hou.node("/obj").createNode("geo", "geo1")
+    create = geo.createNode("attribcreate", "ac")
+    rows = client.ok("node_info", {"paths": [create.path()]})["nodes"][0]["parms"]
+    assert "numattr" not in [p["name"] for p in rows]
+    create.parm("numattr").set(3)
+    rows = client.ok("node_info", {"paths": [create.path()]})["nodes"][0]["parms"]
+    count = next(p for p in rows if p["name"] == "numattr")
+    assert count["value"] == 3 and count["is_default"] is False
+    plain = geo.createNode("box", "b")
+    plain_rows = client.ok("node_info", {"paths": [plain.path()], "include_defaults": True})[
+        "nodes"
+    ][0]["parms"]
+    assert not [p for p in plain_rows if p["value"] is None and p["raw"] in ("", None)]
+
+
 def test_info_hda_and_locked_contents(client):
     _geo, mountain = make_locked_mountain()
     result = client.ok("node_info", {"paths": [mountain.path()], "include": ["hda", "children"]})
     block = result["nodes"][0]
-    assert block["hda"]["locked"] is True
+    assert block["hda"]["locked"] is True and block["hda"]["hda_locked"] is True
     assert block["hda"]["definition"] == "mountain::2.0"
     assert block["hda"]["library"].lower().endswith(".hda")
     assert block["children"] == [] and "children_count" not in block

@@ -427,8 +427,10 @@ def hda_block(node: Any) -> dict[str, Any] | None:
         definition = None
     if definition is None:
         return None
+    locked = _is_locked_hda(node)
     out: dict[str, Any] = {
-        "locked": _is_locked_hda(node),
+        "locked": locked,
+        "hda_locked": locked,  # unambiguous next to flags.locked (the hard lock); 1.1 drops locked
         "definition": definition.nodeTypeName(),
         "library": definition.libraryFilePath(),
     }
@@ -495,6 +497,19 @@ def output_rows(node: Any) -> list[dict[str, Any]]:
 _VALUELESS_TEMPLATES = ("Folder", "FolderSet", "Separator", "Label", "Button")
 
 
+def _is_multiparm_block(template: Any) -> bool:
+    import hou
+
+    try:
+        return template.folderType() in (
+            hou.folderType.MultiparmBlock,
+            hou.folderType.ScrollingMultiparmBlock,
+            hou.folderType.TabbedMultiparmBlock,
+        )
+    except Exception:
+        return False
+
+
 def parm_rows(node: Any, include_defaults: bool) -> list[dict[str, Any]]:
     import hou
 
@@ -508,7 +523,9 @@ def parm_rows(node: Any, include_defaults: bool) -> list[dict[str, Any]]:
     rows = []
     for parm_tuple in node.parmTuples():
         try:
-            if parm_tuple.parmTemplate().type() in skip:
+            template = parm_tuple.parmTemplate()
+            # A multiparm's instance count is a Folder template too, and has a value.
+            if template.type() in skip and not _is_multiparm_block(template):
                 continue
             if not include_defaults and parm_tuple.isAtDefault():
                 continue
