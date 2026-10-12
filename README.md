@@ -1,268 +1,235 @@
 # HocusPocus
 
-HocusPocus is a durable Model Context Protocol (MCP) connection to a live
-Houdini session. It gives Codex, Claude Code, and other MCP clients two useful
-authoring surfaces:
+HocusPocus is an [MCP](https://modelcontextprotocol.io) server that lets AI agents
+(Claude Code, Codex, any MCP client) drive a live SideFX Houdini session: create and
+wire nodes, set parms, cook, inspect geometry, look at the viewport, and open, save and
+merge hip files. It speaks Houdini's own vocabulary. Identity is node paths and parm
+paths, graphs are read and written in Houdini's native `hou.data` format, and there is
+a Python escape hatch for everything else.
 
-- a document-centric API for inspecting and changing live Houdini networks;
-- HocusScript (`.hocus`), a Git-visible text format for declarative procedural
-  graphs and managed state.
+It runs as two processes. A thin **bridge** (`hocuspocus-mcp`, standard CPython plus the
+official `mcp` SDK) talks MCP over stdio to your client. A small stdlib-only **host**
+runs inside Houdini, GUI or headless `hython`. The bridge finds or launches a Houdini
+and forwards each tool call over an authenticated loopback HTTP channel. The host runs
+every `hou` call on Houdini's main thread inside one named undo group and returns
+compact JSON. Errors carry a stable `code`, a `hint` and, when a name was close,
+`candidates`. The design is in [`docs/BIBLE.md`](docs/BIBLE.md).
 
-The client talks over stdio to a stable local broker. Houdini hosts the
-replaceable execution process behind that broker. Closing, restarting, or
-upgrading the scene host therefore does not permanently break the MCP client
-connection: while Houdini is offline, calls return typed `HOCUS999 host_offline`
-status; after Houdini starts, the broker reconnects automatically.
+## Requirements
 
-Houdini **22.0.368** is the sole supported and release-qualified live runtime
-for V1. Houdini 21 and other Houdini 22 builds are not supported by the V1
-compatibility promise.
+- SideFX Houdini **22.0 or newer**. Tested on 22.0.466. Other 22.x builds work, and
+  `hocuspocus doctor` prints a warning for them.
+- [uv](https://docs.astral.sh/uv/). The bridge needs Python 3.11 or newer, and uv
+  provides one.
+- An MCP client such as Claude Code or Codex.
 
 ## Install
 
-Prerequisites:
-
-- Windows with Houdini 22.0.368 installed;
-- PowerShell;
-- a standalone Python 3.11 or newer runtime for the stdio broker. The launcher
-  installer finds Houdini's compatible Python first and falls back to `python`.
-
-From the repository root, build and install the Houdini package:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\build.ps1 -Clean -Install
+```bash
+uv tool install hocuspocus                    # not on PyPI yet: use the checkout form below
+hocuspocus install-houdini
+claude mcp add hocuspocus -- hocuspocus-mcp
 ```
 
-The installer validates a versioned candidate before atomically switching
-`%USERPROFILE%\Documents\houdini22.0\packages\hocuspocus.json`. Reinstalling
-preserves the active bearer credential. Use `-RotateToken` only when you
-intentionally want to invalidate it.
+HocusPocus is not on PyPI yet, so install it from a checkout:
 
-Then install the stable client-facing broker and generate client configuration:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\install_hocuspocus_mcp_client.ps1
+```bash
+git clone https://github.com/JJ-Ju/hocus-pocus && cd hocus-pocus
+uv tool install -e .
 ```
 
-The command reports the launcher and these generated configuration files:
+`hocuspocus install-houdini` finds your Houdini user pref dir in this order: `--prefs`,
+`$HOUDINI_USER_PREF_DIR`, what `hython` reports for `hou.homeHoudiniDirectory()`, then
+the platform default. It then does two things:
+
+1. Copies the package to `<prefs>/hocuspocus/<version>/`.
+2. Writes `<prefs>/packages/hocuspocus.json`.
+
+The command is idempotent and removes older versions. To develop against a checkout,
+`--dev` points Houdini at the checkout's `src/` instead of copying. Use `--hfs` to say
+which Houdini install to ask. `hocuspocus uninstall-houdini` removes both pieces.
+
+For Codex, print the snippet and add it to `~/.codex/config.toml`:
+
+```bash
+hocuspocus client-config codex
+```
+
+```toml
+[mcp_servers.hocuspocus]
+command = "hocuspocus-mcp"
+args = []
+```
+
+**Restart Houdini** after `install-houdini`. The package loads at startup. In a GUI
+session, the host starts by itself once the UI is ready. The HocusPocus shelf has Status,
+Start and Stop buttons.
+
+Check everything with:
+
+```bash
+hocuspocus doctor
+```
+
+`doctor` checks that:
+
+- Houdini is found and its version is 22.0 or newer.
+- The package JSON exists and points at an installed `hocuspocus`.
+- The host and bridge versions match.
+- Live instances answer `/health`.
+
+It ends with `doctor: all checks passed` or `doctor: N problem(s)`. Each failure says
+what to run. [`docs/quickstart.md`](docs/quickstart.md) has the full walkthrough and a
+troubleshooting list.
+
+## First session
+
+You ask: *"Make a terrain from a grid with a mountain on it and show me."* The agent
+then makes these calls:
 
 ```text
-%USERPROFILE%\Documents\houdini22.0\packages\hocuspocus-codex.toml
-%USERPROFILE%\Documents\houdini22.0\packages\hocuspocus-claude.json
+houdini_status   {}
+  -> {"connected": {"pid": 18244, "houdini": "22.0.466", "ui": true,
+       "hip": {"name": "untitled.hip", "dirty": false}, ...}, "instances": [...]}
+node_create      {"items": [
+                   {"parent": "/obj", "type": "geo", "name": "terrain"},
+                   {"parent": "/obj/terrain", "type": "grid", "parms": {"size": [10, 10], "rows": 100, "cols": 100}},
+                   {"parent": "/obj/terrain", "type": "mountain", "inputs": [{"index": 0, "from": "/obj/terrain/grid1"}],
+                    "flags": {"display": true, "render": true}}]}
+  -> {"results": [{"path": "/obj/terrain", ...}, {"path": "/obj/terrain/grid1", ...},
+                  {"path": "/obj/terrain/mountain1", "errors": [], "warnings": []}]}
+cook             {"paths": ["/obj/terrain/mountain1"]}
+  -> {"ok": true, "results": [{"path": "/obj/terrain/mountain1", "errors": [], "cook_time_ms": 41}]}
+viewport_capture {}
+  -> [PNG image] + {"path": ".../captures/....png", "width": 1024, "height": 768, "camera_used": "..."}
 ```
 
-Merge the generated `[mcp_servers.hocuspocus]` block into Codex's
-`%USERPROFILE%\.codex\config.toml`, or merge the generated `hocuspocus` entry
-into Claude Code's MCP configuration. Keep the generated command, arguments,
-and environment unchanged. The canonical MCP server name is `hocuspocus` and
-the canonical client transport is **stdio**.
+The `node_create` call is one undo step. Ctrl+Z in Houdini, or the `undo` tool, takes it
+back. The output above is shortened. [`docs/tools.md`](docs/tools.md) has the real
+schemas and examples.
 
-Finally:
+## Tools
 
-1. Restart Houdini once so it loads the newly installed package.
-2. Restart or reload the MCP client once so it starts the broker.
+There are 31 tools in the default `core` profile. The `full` profile adds 4 more. Every
+tool is documented in [`docs/tools.md`](docs/tools.md), which is generated from the
+catalogue.
 
-Subsequent Houdini restarts do not require reconnecting the MCP client. A
-package reinstall requires a Houdini restart; also restart or reload the MCP
-client when the installed broker or its configuration changed.
+| Group | Tools |
+|---|---|
+| Session and instances | `houdini_status`, `houdini_connect` |
+| Hip file | `hip_new`, `hip_open`, `hip_save`, `hip_merge` |
+| Nodes and networks | `node_find`, `node_info`, `node_create`, `node_delete`, `node_edit`, `node_copy`, `node_connect`, `node_layout`, `network_describe`, `network_build` |
+| Parms | `parm_get`, `parm_set` |
+| Cook, problems, geometry | `cook`, `problems`, `geo_info`, `geo_read` |
+| Visual feedback | `viewport_capture`, `render` |
+| Code | `houdini_python` |
+| Node types | `node_type_search`, `node_type_info` |
+| State and jobs | `undo`, `time`, `selection`, `job` |
+| `full` profile only | `hda`, `usd_stage`, `pdg`, `events` |
 
-> The loopback HTTP URL is the private broker-to-Houdini transport and a
-> diagnostic surface. Do not configure Codex or Claude to use it directly;
-> direct HTTP clients are tied to one Houdini process and are not restart
-> durable.
+The bridge also serves resources and prompts:
 
-## Verify the connection
+- **Resources:** `houdini://status`, `houdini://node/{path}`,
+  `houdini://node/{path}/parms`, `houdini://node/{path}/geo`,
+  `houdini://nodetype/{category}/{name}`, `houdini://job/{id}`, and the full operating
+  manual at `hocuspocus://guide`.
+- **Prompts:** `inspect_scene`, `build_sop_chain`, `debug_red_node`,
+  `turntable_preview`.
 
-Launch Houdini and run this in its Python shell:
+`tools/list` works with no Houdini running.
 
-```python
-import hocuspocus
-print(hocuspocus.server_status())
-```
+## Headless use
 
-The result should include `running: True`, `serverVersion: 0.9.0`, and:
+An agent can start its own headless Houdini:
 
 ```text
-http://127.0.0.1:37219/hocuspocus/mcp
+houdini_connect {"launch": {"mode": "headless", "hip": "C:/work/shot.hip"}}
 ```
 
-The health-only diagnostic route is:
+That runs `hython -m hocuspocus.host` from the detected Houdini install. Detection uses
+`HOCUSPOCUS_HFS`, then `HFS`, then the newest `Side Effects Software/Houdini 22.*`. The
+bridge waits until the new instance registers.
 
-```text
-http://127.0.0.1:37219/hocuspocus/healthz
+You can also start the host yourself. Do it from a neutral working directory, because
+hython puts its cwd on `HOUDINI_PATH`:
+
+```bash
+hython -m hocuspocus.host [--hip FILE] [--port N] [--state-dir DIR] [--label NAME] [--read-only] [--no-python]
 ```
 
-From the MCP client, call `session.info` first. It reports the live Houdini
-version, coordinate conventions, policy profile, granted capabilities, and
-host/session identity.
+The host prints one JSON line (`{"pid", "port", "token_file"}`) and serves until it is
+interrupted or shut down. The port defaults to 0, which picks a free ephemeral port.
 
-## Live document authoring
+Tools that need the UI return `ui_required` headless. `viewport_capture` still works
+headless through an OpenGL ROP. Several Houdinis can run at once. Each one registers
+itself, `houdini_status` lists them all, and `houdini_connect {"pid": N}` picks one.
 
-For multi-node work, use one network document instead of a long sequence of
-fragile node edits:
+## Configuration
 
-1. Inspect `scene.get_summary` and the relevant
-   `houdini://documents/network/{path}` resource.
-2. If an empty scene has no SOP network, call `object.create_geometry`; `/obj`
-   itself is not a writable SOP document.
-3. Call `document.checkout`. The working document is returned inline when it
-   fits the response limit; larger documents include a resource URI.
-4. Edit the network-document JSON in the client.
-5. Call `document.validate`, then `document.diff`.
-6. Call `document.apply` with `mode = validate_only`, then apply the intended
-   merge or reconcile operation.
+Everything has a default, and no configuration file is required.
 
-The same JSON shape is used for reading, validation, diffing, and applying.
-Apply preflights live Houdini parameter templates before mutation, groups a
-logical change into one guarded undo step, and returns an operation ID. If a
-call times out or delivery becomes ambiguous, query `session.get_operation`
-with that ID before attempting another mutation.
+**Host (inside Houdini):** settings come from the optional
+`$HOUDINI_USER_PREF_DIR/hocuspocus.toml`. Each key can be overridden by an environment
+variable named `HOCUSPOCUS_<KEY>`, for example `HOCUSPOCUS_ALLOW_PYTHON=0`. A
+`[hocuspocus]` table is also accepted. Unknown or invalid keys are logged and ignored.
 
-Use low-level `node.*` and `parm.*` operations for focused edits. Use
-`node_types.list_compatible` and `node_types.get_info` before inventing type or
-parameter names. Artist-facing parameters on locked assets use
-`hda.set_instance_parms`; HDA interface changes are separately authorized.
-
-See [Agent Workflows](docs/agent-workflows.md) for practical tool-selection
-patterns and [Network Document Contract](docs/document-contract-v1.md) for the
-exact carrier.
-
-## HocusScript source workspace
-
-`.hocus` files are ordinary UTF-8 project files. They stay in the user's chosen
-directory, are edited like code, and remain visible to Git and native editors.
-HocusPocus does not expose a general filesystem tool or send physical project
-roots to MCP clients.
-
-To use a project through MCP:
-
-1. Open Houdini's **HocusPocus Source Workspaces** Python Panel, also available
-   in the server dialog.
-2. Register the directory containing `hocus.project.toml`.
-3. Select the active MCP client and grant only the required access.
-4. In the client, call `source.project.describe` to receive the opaque
-   `projectId`.
-5. Use `source.file.search`, `source.file.read`, and
-   `source.file.apply_patch` for bounded source editing.
-6. Use `source.project.build` with `format`, `check`, or `compile`.
-7. Send the compiled Bundle to `document.preview_bundle`, then
-   `document.plan_bundle`, and finally `document.apply_plan`.
-
-The full source surface is deliberately limited to seven operations:
-
-- `source.project.describe`
-- `source.file.search`
-- `source.file.read`
-- `source.file.apply_patch`
-- `source.file.write_export`
-- `source.project.build`
-- `source.project.navigate`
-
-The offline CLI uses the same native compiler without granting MCP access to a
-project root:
-
-```powershell
-$env:PYTHONPATH = "python3.11libs"
-python -m hocuspocus.hocusscript check hocus/asset.hocus --project D:/show/project
-python -m hocuspocus.hocusscript format hocus/asset.hocus --project D:/show/project --write
-python -m hocuspocus.hocusscript compile hocus/asset.hocus --project D:/show/project -o asset.bundle.json
+```toml
+autostart = true            # GUI sessions start the host when the UI is ready
+allow_python = true         # houdini_python escape hatch
+read_only = false           # refuse all mutating tools
+approved_roots = []         # if non-empty, hip/hda/render paths must be under these
+max_response_bytes = 16384
+default_timeout_s = 30
+job_threshold_s = 10        # cooks longer than this become jobs
+log_level = "INFO"
 ```
 
-See the [HocusScript Specification](docs/hocusscript-spec.md),
-[HS7 Fidelity Matrix](docs/hocusscript-hs7-support-matrix.md), and
-[HocusScript section of the manual](docs/user-manual.md#hocusscript-source-workflow)
-for language versions, typed values, external modules, and export boundaries.
+**Bridge (`hocuspocus-mcp`):** the bridge has no config file. It reads environment
+variables, which you set in the MCP client config, for example
+`claude mcp add hocuspocus -e HOCUSPOCUS_PROFILE=full -- hocuspocus-mcp`.
 
-## Security and policy defaults
+| Variable | Default | Meaning |
+|---|---|---|
+| `HOCUSPOCUS_PROFILE` | `core` | `full` also lists `hda`, `usd_stage`, `pdg`, `events` |
+| `HOCUSPOCUS_MAX_RESPONSE_BYTES` | `16384` | response budget; lists are truncated with `truncated: true` |
+| `HOCUSPOCUS_DEFAULT_TIMEOUT_S` | `30` | per-call timeout sent to the host |
+| `HOCUSPOCUS_HFS` | auto | Houdini install used by `houdini_connect` launch |
 
-- The installed bearer credential stays in the active Houdini package. The
-  governed broker launcher resolves it without copying it into Codex or Claude
-  configuration and never prints it.
-- The server binds to numeric loopback. Physical source roots and source
-  contents are excluded from audit records and authorization responses.
-- The default `local-dev` profile does not grant `run_code`. Select the
-  explicit `procedural-authoring` profile only for trusted VEX or other authored
-  code workflows, then confirm `grantedCapabilities` through `session.info`.
-- Source-workspace grants default to read-only, current-session access with an
-  eight-hour expiry. Source write, generated-lock update, persistence, and each
-  external alias require distinct host approval.
-- Source writes use exact content digests and descriptor-safe containment.
-  Arbitrary files, external roots, generated bundles/catalogs, deletes, renames,
-  and blind overwrites are not exposed.
-- Scene and document mutations remain subject to policy, revision, ownership,
-  capability, and live-drift checks. HocusScript never bypasses the guarded
-  preview/plan/apply pipeline.
+`HOCUSPOCUS_STATE_DIR` moves the shared state directory. That directory holds the
+instance registry, logs and captures. The default is `%LOCALAPPDATA%\HocusPocus` on
+Windows and `$XDG_STATE_HOME/hocuspocus` (or `~/.local/state/hocuspocus`) elsewhere.
 
-Read [Compatibility Policy](docs/compatibility-policy.md) and the
-[Houdini MCP Specification](docs/houdini-mcp-spec.md) for the formal support
-and trust boundaries.
+## Security model
 
-## Troubleshooting
+HocusPocus is a localhost developer tool, and its protection is scoped to match:
 
-**`Unauthorized` during MCP startup**
+- **Network.** The host binds only to `127.0.0.1`, on an ephemeral port.
+- **Token.** Each instance has its own bearer token. It is stored in a registry file
+  that only your user can read.
+- **Browser requests.** Requests with a non-loopback `Origin` header are refused.
+- **Settings.** `allow_python = false` disables the Python escape hatch,
+  `read_only = true` refuses every mutation, and `approved_roots` restricts the file
+  paths that hip, HDA and render tools may touch.
+- **Undo and unsaved work.** Every mutating call is exactly one undo group. Hip tools
+  never discard unsaved work unless told to with `on_unsaved`.
 
-Rerun `scripts\install_hocuspocus_mcp_client.ps1`, merge its newly generated
-configuration, and restart the MCP client. Do not paste a token into the client
-config or point the client directly at the HTTP endpoint. After an intentional
-`-RotateToken`, restart Houdini; the durable broker refreshes its credential
-from the active package.
+There are no integrity manifests or rate limits. Those would not stop an agent that
+already has a shell on your machine.
 
-**`HOCUS999 host_offline`**
+## Status and versioning
 
-The broker is healthy but no Houdini execution host is available. Start
-Houdini and wait for package auto-start. The next request reconnects; do not
-replace the stdio configuration with a direct HTTP connection.
+The current version is **1.0.0** (pre-release, `1.0.0a0` in `pyproject.toml`), developed
+on the `redesign/v1` branch. 1.0 is qualified on Windows with Houdini 22.0.466. The code
+is not Windows-only, but 1.0 is not tested on Linux or macOS.
 
-**`import hocuspocus` fails or `running` is false**
+The host/bridge protocol is versioned (`hp/v1`). A version mismatch returns
+`version_mismatch`; run `hocuspocus install-houdini` and restart Houdini to fix it.
 
-Reinstall with `scripts\build.ps1 -Clean -Install`, restart Houdini, and inspect
-`hocuspocus.server_status()`. Confirm the active package pointer exists at
-`%USERPROFILE%\Documents\houdini22.0\packages\hocuspocus.json`.
+The 0.9 line (HocusScript, network documents, source workspaces) is preserved at the
+`v0.9-archive` tag. [`CHANGELOG.md`](CHANGELOG.md) lists what changed.
 
-**A mutation timed out or the host restarted mid-call**
-
-Use its operation ID with `session.get_operation`. A terminal result is
-returned without re-execution. Treat `partial_or_unknown` as a reason to inspect
-live state, not permission to retry blindly.
-
-**A source project is missing or access is denied**
-
-Open **Source Workspaces**, select the current MCP client, and inspect the
-project grant, expiry, requested access, and external-alias approvals. Moving a
-root or changing its authority-bearing manifest fields intentionally requires
-reapproval.
-
-The complete operational guide is in the
-[HocusPocus Manual](docs/user-manual.md). Release and contributor checks are in
-[Release Validation](docs/release-validation.md).
-
-## Development
-
-Use the fast gates while iterating:
-
-```powershell
-python -m pip install -r requirements-lint.txt
-powershell -ExecutionPolicy Bypass -File .\scripts\lint.ps1
-python .\tests\test_hocusscript_control_scenarios.py -q
-```
-
-The linter enforces a maximum of 50 public workflow tests, 1,200 physical lines
-per governed file, cyclomatic complexity 12, and branch complexity 15. Run the
-full release campaign only for a stabilized candidate; follow
-[Release Validation](docs/release-validation.md).
-
-## Documentation
-
-- [User Manual](docs/user-manual.md)
-- [Agent Workflows](docs/agent-workflows.md)
-- [Durable MCP Transport](docs/durable-mcp-transport.md)
-- [Network Document Contract](docs/document-contract-v1.md)
-- [HocusScript Specification](docs/hocusscript-spec.md)
-- [HS7 Fidelity Matrix](docs/hocusscript-hs7-support-matrix.md)
-- [HS8 Production Qualification](docs/hocusscript-hs8-production.md)
-- [Compatibility Policy](docs/compatibility-policy.md)
-- [Release Validation](docs/release-validation.md)
+Contributing: see [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md).
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+MIT. See [`LICENSE`](LICENSE).
