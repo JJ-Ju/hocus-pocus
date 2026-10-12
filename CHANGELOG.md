@@ -5,6 +5,8 @@ policy does not apply to 1.0.
 
 ## 1.1.0 (2026-10-12)
 
+Measured on the review-08 city workload rebuilt headless (`docs/redesign/review/12-city-rebuild-1.1.md`): 58 tool calls instead of 74, 0 `houdini_python` calls instead of 2, `node_create` results about 10x smaller (172 B per node instead of ~1,690 B), `tools/list` 30.6 KB as the model sees it, and a Houdini started with `hocuspocus launch` that outlived every client session.
+
 1.1 acts on the post-1.0 code review and ergonomics review (`docs/redesign/review/10`,
 `11`; plan in `docs/redesign/plan-1.1.md`). Results are smaller by default, a few
 ambiguous fields and error shapes are settled, long cooks report progress, and
