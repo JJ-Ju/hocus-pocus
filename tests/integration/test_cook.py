@@ -413,6 +413,72 @@ def test_problems_root_errors(client):
     assert client.error("problems", {"limit": 0})["code"] == "invalid_argument"
 
 
+# -- review 10 §5 ------------------------------------------------------------------
+
+
+def test_problems_cook_uncooked_over_a_dop_network(client):
+    dopnet = hou.node("/obj").createNode("dopnet", "sim")
+    obj = dopnet.createNode("rbdobject", "rbd")
+    obj.parm("soppath").set("/obj/nowhere/OUT")
+    solver = dopnet.createNode("rigidbodysolver", "solver")
+    solver.setInput(0, obj)
+    out = dopnet.createNode("output", "out")
+    out.setInput(0, solver)
+    out.setDisplayFlag(True)
+    quiet = client.ok("problems", {"root": dopnet.path()})
+    assert "cooked" not in quiet
+    assert out.needsToCook()
+    cooked = client.ok("problems", {"root": dopnet.path(), "cook_uncooked": True})
+    # Every DOP under the network is cooked; the dopnet object itself is not.
+    assert cooked["cooked"] == cooked["nodes_scanned"] - 1 >= 3
+    assert cooked["nodes_scanned"] == quiet["nodes_scanned"]
+    assert [(r["path"], r["kind"]) for r in cooked["problems"]] == [
+        (obj.path(), "broken_reference")
+    ]
+
+
+def test_problems_budget_holds_on_two_thousand_nodes(client):
+    geo = _geo()
+    nodes = [geo.createNode("box", "source")]
+    for i in range(1999):
+        node = geo.createNode("xform", f"n{i}")
+        if nodes:
+            node.setInput(0, nodes[-1])
+        if i % 100 == 0:
+            node.parm("scale").setExpression('ch("../nope/tx")')
+        nodes.append(node)
+    started = time.perf_counter()
+    whole = client.ok("problems", {"root": geo.path(), "limit": 100})
+    full_s = time.perf_counter() - started
+    print(f"\nproblems over 2,000 nodes: {full_s:.3f}s, incomplete={whole.get('incomplete')}")
+    assert whole.get("incomplete") is not True
+    assert whole["nodes_scanned"] == 2001
+    assert whole["counts"]["broken_reference"] == 20
+    assert full_s < 10
+
+    # A tiny budget (half of timeout_s) stops early, and the cursor finishes the walk.
+    started = time.perf_counter()
+    first = client.ok("problems", {"root": geo.path(), "timeout_s": 0.05, "limit": 100})
+    tiny_s = time.perf_counter() - started
+    assert tiny_s < max(1.0, full_s), (tiny_s, full_s)
+
+    def refs(result):
+        return sum(1 for row in result["problems"] if row["kind"] == "broken_reference")
+
+    scanned, page, seen = first["nodes_scanned"], first, refs(first)
+    while page.get("next_cursor"):
+        page = client.ok(
+            "problems",
+            {"root": geo.path(), "timeout_s": 0.05, "limit": 100, "cursor": page["next_cursor"]},
+        )
+        if page.get("node_offset") is not None and page["node_offset"] >= scanned:
+            scanned += page["nodes_scanned"]
+        seen += refs(page)
+    assert first.get("incomplete") is True, first
+    assert scanned == 2001
+    assert seen == 20
+
+
 # -- stale errors after the cause is fixed (review 07, papercut 1) -------------------
 
 

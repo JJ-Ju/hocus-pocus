@@ -430,6 +430,28 @@ def test_render_rop_own_output_outside_approved_roots_in_process(client, work_di
     assert result["outputs"] == [_fwd(work_dir / "allowed" / "s.0001.bgeo.sc")]
 
 
+def test_capture_after_an_outside_fix(client):
+    """Review 10 §5: a node fixed outside HocusPocus keeps its old error (BIBLE §5.18);
+    the capture's framing refreshes it instead of failing or framing nothing."""
+    geo = hou.node("/obj").createNode("geo", "stale")
+    box = geo.createNode("box", "box1")
+    mountain = geo.createNode("mountain", "mountain1")
+    mountain.setInput(0, box)
+    mountain.setDisplayFlag(True)
+    parm = box.parm("sizex")
+    parm.setExpression("$F*(")
+    with pytest.raises(hou.OperationFailed):
+        mountain.cook()
+    parm.deleteAllKeyframes()
+    parm.revertToDefaults()
+    box.cook()
+    assert box.errors()  # the stale error is still there
+    result = client.ok("viewport_capture", {"resolution": [320, 240]})
+    assert result["camera_used"] == TEMPORARY_CAMERA
+    assert _not_blank(_decode(result["image"]))
+    assert not box.errors() and not mountain.errors()
+
+
 def test_capture_path_must_be_png(client, work_dir):
     error = client.error("viewport_capture", {"path": _fwd(work_dir / "x.jpg")})
     assert error["code"] == "invalid_argument"
