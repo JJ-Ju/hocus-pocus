@@ -2,7 +2,7 @@
 
 <!-- Generated from src/hocuspocus/tools/catalog.py by `python -m hocuspocus.tools.docs`. Do not edit by hand. -->
 
-35 tools: 31 in the `core` profile, 4 more in `full`. Model-visible `tools/list` text: 26,864 bytes. See `docs/BIBLE.md` §4 for the design.
+35 tools: 31 in the `core` profile, 4 more in `full`. Model-visible `tools/list` text: 27,034 bytes. See `docs/BIBLE.md` §4 for the design.
 
 ## Contents
 
@@ -475,7 +475,7 @@ Tidy a network. mode children (default) lays out the children of parent, or only
 
 `read-only` `headless ok` · profile `core`
 
-Read a whole network in one call as Houdini's hou.data childrenAsData format: types, non-default parms, expressions, wiring, flags, depth levels deep (default 1). Locked HDAs appear as {type, locked} unless recurse_locked. format python returns asCode for a single node. The data result can be passed to network_build.
+Read a whole network in one call as Houdini's hou.data childrenAsData format: types, non-default parms, expressions, wiring, flags, depth levels deep (default 1). Locked HDAs appear as {type, locked, hda_locked} unless recurse_locked. Pages stop at the response budget (truncated, next_cursor). format python returns asCode for a single node. The data result can be passed to network_build.
 
 ### Arguments
 
@@ -487,6 +487,7 @@ Read a whole network in one call as Houdini's hou.data childrenAsData format: ty
 | `include_positions` | boolean |  | `false` |  |
 | `recurse_locked` | boolean |  | `false` |  |
 | `format` | `data` \| `python` |  | `"data"` |  |
+| `cursor` | string |  |  | next_cursor from the previous page. |
 
 ### Examples
 
@@ -758,7 +759,7 @@ Look at the scene. Returns a PNG image (long side at most 1024) plus path, width
 | `resolution` | array<integer> |  | `[1024,768]` | min items 2; max items 2 |
 | `fit` | `all` \| `selected` \| `none` |  | `"all"` |  |
 | `source` | `auto` \| `viewer` \| `opengl_rop` |  | `"auto"` |  |
-| `path` | string |  |  | Also write the PNG here. |
+| `path` | string |  |  | Also write the PNG here (must end in .png). |
 
 ### Returns
 
@@ -804,13 +805,14 @@ Render any ROP (Karma, Mantra, OpenGL, ...) for frames [start, end, inc] (defaul
 ### Returns
 
 - `job_id` (string) — always present
-- `state` (`running` | `done` | `failed` | `cancelled`)
+- `state` (`running` | `done` | `failed` | `cancelled`) — always present
 - `rop_path` (string)
 - `frames` (array<number>)
 - `outputs` (array<string>)
 - `missing` (array<string>)
 - `thumbnail` (object): `path`, `width`, `height`, `image`
 - `thumbnail_error` (string)
+- `notes` (array<string>)
 
 ### Examples
 

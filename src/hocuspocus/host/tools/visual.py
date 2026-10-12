@@ -32,6 +32,7 @@ from typing import Any
 from hocuspocus.tools.errors import ToolError
 from hocuspocus.tools.paths import captures_dir, ensure_private_dir
 
+from ..dispatch import call_timeout
 from .geo import _not_found, num
 from .hip import check_allowed, resolve_path
 from .registry import HostContext, tool
@@ -63,6 +64,13 @@ MPLAY_OUTPUTS = {"ip", "md", "imdisplay"}
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".tga"}
 CONVERT_EXTS = {".exr", ".pic", ".rat", ".hdr", ".dpx", ".cin", ".sgi", ".rgb"}
 CHILD_TIMEOUT_S = 600.0
+CAPTURES_KEEP = 50
+"""``<state_dir>/captures`` keeps the newest this many files."""
+NOT_CARRIED_VARS = frozenset(
+    {"HIP", "HIPFILE", "HIPNAME", "JOB", "ACTIVETAKE", "E", "PI", "EYE", "POSE", "status"}
+)
+"""Global hscript variables the child does not get from ``set -s``: the hip/job ones go
+through the environment, the rest are Houdini's own."""
 FRAME_TIMEOUT_S = 24 * 3600.0
 JOB_POLL_S = 0.1
 
@@ -73,6 +81,37 @@ JOB_POLL_S = 0.1
 def _captures(ctx: HostContext) -> Path:
     base = Path(ctx.config.state_dir) / "captures" if ctx.config.state_dir else captures_dir()
     return ensure_private_dir(base)
+
+
+def prune_captures(directory: Path, keep: int = CAPTURES_KEEP) -> int:
+    """Delete all but the newest ``keep`` files in ``directory``. Returns how many went."""
+    try:
+        files = [p for p in directory.iterdir() if p.is_file()]
+    except OSError:
+        return 0
+    files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    removed = 0
+    for path in files[keep:]:
+        with contextlib.suppress(OSError):
+            path.unlink()
+            removed += 1
+    return removed
+
+
+def run_with_fallback(executor: Any, fn: Any, timeout_s: float) -> str | None:
+    """Run ``fn`` on the main thread; if that fails (busy, timeout), queue it with
+    ``post`` instead. Never raises, so a caller's own error is not replaced. Returns a
+    note when ``fn`` did not run synchronously."""
+    try:
+        executor.run(fn, timeout_s)
+        return None
+    except Exception as exc:
+        first = f"{type(exc).__name__}: {exc}"
+    try:
+        executor.post(fn)
+    except Exception as exc:
+        return f"{first}; queueing a retry also failed ({type(exc).__name__}: {exc})"
+    return f"{first}; a retry was queued for the main thread"
 
 
 def _stamp() -> str:
@@ -179,9 +218,22 @@ def main():
     with open(sys.argv[1], encoding="utf-8") as fh:
         spec = json.load(fh)
     import hou
+    notes = []
     for key, value in spec["env"].items():
         if value:
             hou.putenv(key, value)
+    # fps first, keeping keys and range where they are: loading at the default 24 fps and
+    # calling setFps afterwards would retime the loaded keys.
+    hou.setFps(spec["fps"], False, False, True)
+    for line in spec.get("hscript_vars", []):
+        out, err = hou.hscript(line)
+        if err.strip():
+            notes.append("hscript variable not carried: %s (%s)" % (line, err.strip()))
+    if spec.get("session_source"):
+        try:
+            hou.setSessionModuleSource(spec["session_source"])
+        except Exception as exc:
+            notes.append("hou.session not carried: %s: %s" % (type(exc).__name__, exc))
     for lib in spec["hdas"]:
         try:
             hou.hda.installFile(lib)
@@ -191,19 +243,20 @@ def main():
         node = hou.node(manager)
         if node is not None:
             node.loadChildrenFromFile(path, ignore_load_warnings=True)
-    hou.setFps(spec["fps"])
     hou.playbar.setFrameRange(spec["range"][0], spec["range"][1])
     hou.setFrame(spec["frame"])
     capture = spec.get("capture")
     if capture:
         spec["rop"] = build_capture(hou, capture)
     rop = hou.node(spec["rop"])
-    result = {"errors": [], "warnings": []}
+    result = {"errors": [], "warnings": [], "notes": notes}
     if rop is None:
         result["errors"].append("ROP %s missing in the snapshot" % spec["rop"])
     else:
         for name, value in spec.get("parms", {}).items():
-            rop.parm(name).set(value)
+            parm = rop.parm(name)
+            parm.deleteAllKeyframes()  # set() on a keyed or expression parm would not stick
+            parm.set(value)
         try:
             rop.render(frame_range=tuple(spec["frames"]), verbose=False)
         except hou.OperationFailed as exc:
@@ -238,10 +291,25 @@ def snapshot_scene(tmp_dir: str) -> dict[str, Any]:
             continue
         hdas.append(lib)
     start, end = hou.playbar.frameRange()
+    hscript_vars = []
+    for line in hou.hscript("set -s")[0].splitlines():
+        parts = line.split()
+        if len(parts) >= 3 and parts[:2] == ["set", "-g"] and parts[2] not in NOT_CARRIED_VARS:
+            hscript_vars.append(line)
+    notes = []
+    with contextlib.suppress(Exception):
+        if hou.takes.currentTake() != hou.takes.rootTake():
+            notes.append(
+                f"The headless render uses the root take; take "
+                f"{hou.takes.currentTake().name()!r} is not carried."
+            )
     return {
         "files": files,
         "hdas": hdas,
         "env": {k: hou.getenv(k) or "" for k in ("HIP", "HIPFILE", "HIPNAME", "JOB")},
+        "hscript_vars": hscript_vars,
+        "session_source": hou.sessionModuleSource(),
+        "notes": notes,
         "fps": hou.fps(),
         "range": [start, end],
         "frame": hou.frame(),
@@ -328,7 +396,10 @@ class ChildRender:
                 hou_exception=f"render process exit {self.proc.returncode}",
                 detail={"log": log[-4000:]},
             )
-        return json.loads(marker[len("HPRESULT ") :])
+        outcome = json.loads(marker[len("HPRESULT ") :])
+        notes = list(self.spec.get("notes") or []) + list(outcome.get("notes") or [])
+        outcome["notes"] = notes
+        return outcome
 
     def _log_tail(self, limit: int = 4000) -> str:
         try:
@@ -621,6 +692,8 @@ def _capture_opengl(
         # Headless: the child hython builds camera and ROP in its own copy of the scene.
         outcome = render_isolated(None, [frame, frame, 1], capture=spec)
         errors = outcome.get("errors") or []
+        if outcome.get("notes"):
+            info["notes"] = outcome["notes"]
     else:
         was_dirty = scene_dirty(ctx)
         with temporary_capture_nodes(spec) as rop:
@@ -634,6 +707,11 @@ def _capture_opengl(
                 "Houdini marks the hip modified when the temporary capture camera and ROP are "
                 "created, although both were deleted and nothing else changed."
             ]
+    _check_capture_output(errors, out_file)
+    return info
+
+
+def _check_capture_output(errors: list[str], out_file: str) -> None:
     if errors or not os.path.isfile(out_file):
         raise ToolError(
             "cook_failed",
@@ -641,7 +719,6 @@ def _capture_opengl(
             hint="Check that the scene cooks (problems tool) and that a GPU is available.",
             detail={"errors": errors},
         )
-    return info
 
 
 def _scene_viewer() -> Any:
@@ -689,10 +766,8 @@ def _capture_viewer(
     }
 
 
-@tool("viewport_capture", scene=False)
-def viewport_capture(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
-    import hou
-
+def _capture_args(args: dict[str, Any]) -> dict[str, Any]:
+    """Validate viewport_capture's arguments without touching ``hou``."""
     source = args.get("source", "auto") or "auto"
     if source not in SOURCES:
         raise ToolError("invalid_argument", f"'source' must be one of {', '.join(SOURCES)}.")
@@ -703,38 +778,42 @@ def viewport_capture(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     frame = args.get("frame")
     if frame is not None and (isinstance(frame, bool) or not isinstance(frame, int | float)):
         raise ToolError("invalid_argument", "'frame' must be a number.")
-    frame = float(hou.frame() if frame is None else frame)
-    camera = args.get("camera")
     extra_path = args.get("path")
+    if extra_path is not None and (
+        not isinstance(extra_path, str) or not extra_path.strip().lower().endswith(".png")
+    ):
+        raise ToolError(
+            "invalid_argument",
+            "'path' must be a .png file: the capture is always a PNG.",
+            hint="Use a path ending in .png, or render with a ROP for other formats.",
+        )
+    return {
+        "source": source,
+        "fit": fit,
+        "res": res,
+        "frame": frame,
+        "camera": args.get("camera"),
+        "path": extra_path,
+    }
+
+
+def _capture_targets(parsed: dict[str, Any], ctx: HostContext) -> tuple[float, Any, str]:
+    """Frame, checked extra path and capture file for one capture. Main thread."""
+    import hou
+
+    frame = float(hou.frame() if parsed["frame"] is None else parsed["frame"])
+    extra_path = parsed["path"]
     if extra_path is not None:
         extra_path = resolve_path(extra_path)
         check_allowed(extra_path, ctx)
-
-    viewer = None
-    if source == "viewer":
-        if not ctx.ui:
-            raise ToolError(
-                "ui_required",
-                "source 'viewer' captures the GUI Scene Viewer, and this Houdini is headless.",
-                hint="Use source 'opengl_rop' (or 'auto'), which renders headless.",
-            )
-        viewer = _scene_viewer()
-        if viewer is None:
-            raise ToolError(
-                "invalid_value",
-                "No Scene Viewer pane is open.",
-                hint="Open a Scene Viewer, or use source 'opengl_rop'.",
-            )
-    elif source == "auto" and ctx.ui:
-        viewer = _scene_viewer()
-
     out_file = _fwd(_captures(ctx) / f"capture_{_stamp()}.png")
-    if viewer is not None:
-        info = _capture_viewer(viewer, camera, frame, res, out_file)
-        info["source_used"] = "viewer"
-    else:
-        info = _capture_opengl(ctx, camera, frame, res, fit, out_file)
-        info["source_used"] = "opengl_rop"
+    return frame, extra_path, out_file
+
+
+def _finish_capture(
+    out_file: str, res: tuple[int, int], frame: float, info: dict[str, Any], extra_path: Any
+) -> dict[str, Any]:
+    """Encode the capture and copy it to ``path``. No ``hou``."""
     image = encode_png(out_file, IMAGE_MAX_SIDE)
     result: dict[str, Any] = {
         "image": image,
@@ -749,7 +828,90 @@ def viewport_capture(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
         Path(extra_path).parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(out_file, extra_path)
         result["also_written"] = extra_path
+    prune_captures(Path(out_file).parent)
     return result
+
+
+def _capture_main(parsed: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
+    """The whole capture on the main thread: the GUI path (viewer or in-process OpenGL
+    ROP), and headless when called inline on the main thread."""
+    source, camera, res = parsed["source"], parsed["camera"], parsed["res"]
+    frame, extra_path, out_file = _capture_targets(parsed, ctx)
+    viewer = None
+    if source == "viewer":
+        viewer = _scene_viewer()
+        if viewer is None:
+            raise ToolError(
+                "invalid_value",
+                "No Scene Viewer pane is open.",
+                hint="Open a Scene Viewer, or use source 'opengl_rop'.",
+            )
+    elif source == "auto" and ctx.ui:
+        viewer = _scene_viewer()
+    if viewer is not None:
+        info = _capture_viewer(viewer, camera, frame, res, out_file)
+        info["source_used"] = "viewer"
+    else:
+        info = _capture_opengl(ctx, camera, frame, res, parsed["fit"], out_file)
+        info["source_used"] = "opengl_rop"
+    return _finish_capture(out_file, res, frame, info, extra_path)
+
+
+def _capture_headless(parsed: dict[str, Any], ctx: HostContext, timeout_s: float) -> dict[str, Any]:
+    """Headless, off the main thread: snapshot in one short main-thread step, then wait
+    for the child hython here so the main thread stays free."""
+    deadline = time.monotonic() + timeout_s
+    res = parsed["res"]
+    tmp_dir = tempfile.mkdtemp(prefix="hp-render-")
+    try:
+
+        def prepare() -> dict[str, Any]:
+            frame, extra_path, out_file = _capture_targets(parsed, ctx)
+            spec, info = _capture_spec(parsed["camera"], res, parsed["fit"], out_file)
+            snapshot = snapshot_scene(tmp_dir)
+            snapshot["capture"] = spec
+            return {
+                "frame": frame,
+                "extra_path": extra_path,
+                "out_file": out_file,
+                "info": info,
+                "snapshot": snapshot,
+            }
+
+        prep = ctx.executor.run(prepare, timeout_s)
+        frame = prep["frame"]
+        child = ChildRender(prep["snapshot"], tmp_dir, "", [frame, frame, 1])
+        child.start()
+        try:
+            outcome = child.wait(timeout_s=max(1.0, deadline - time.monotonic()))
+        finally:
+            child.kill()
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+    _check_capture_output(outcome.get("errors") or [], prep["out_file"])
+    info = dict(prep["info"], source_used="opengl_rop")
+    if outcome.get("notes"):
+        info["notes"] = outcome["notes"]
+    return _finish_capture(prep["out_file"], res, frame, info, prep["extra_path"])
+
+
+@tool("viewport_capture", scene=False, main_thread=False)
+def viewport_capture(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
+    """Off the main thread so a headless capture does not hold it while the child hython
+    renders; the GUI path runs as one main-thread call, as before."""
+    parsed = _capture_args(args)
+    if parsed["source"] == "viewer" and not ctx.ui:
+        raise ToolError(
+            "ui_required",
+            "source 'viewer' captures the GUI Scene Viewer, and this Houdini is headless.",
+            hint="Use source 'opengl_rop' (or 'auto'), which renders headless.",
+        )
+    timeout_s = float(call_timeout(None) or ctx.config.default_timeout_s)
+    if ctx.executor.on_main_thread():
+        return _capture_main(parsed, ctx)
+    if ctx.ui:
+        return ctx.executor.run(lambda: _capture_main(parsed, ctx), timeout_s)
+    return _capture_headless(parsed, ctx, timeout_s)
 
 
 # -- render ---------------------------------------------------------------------------
@@ -834,6 +996,16 @@ def _prepare_render(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
             expected.append(hou.text.expandStringAtFrame(output, f))
         elif parm is not None:
             expected.append(parm.evalAtFrame(f))
+    # Every file the render will write, not only an override (one check per directory).
+    checked: set[str] = set()
+    for path in expected:
+        if not path.strip() or path.strip() in MPLAY_OUTPUTS:
+            continue
+        full = _fwd(os.path.abspath(path))
+        folder = os.path.dirname(full)
+        if folder not in checked:
+            checked.add(folder)
+            check_allowed(full, ctx)
     if parm is not None and any(p.strip() in MPLAY_OUTPUTS for p in expected):
         raise ToolError(
             "invalid_value",
@@ -914,12 +1086,16 @@ def _render_job(plan: dict[str, Any], ctx: HostContext, thumbnail: bool) -> Any:
                     detail={"errors": outcome["errors"], "warnings": outcome.get("warnings", [])},
                 )
             job.progress(1.0, "done")
-            return _render_result(plan, thumbnail)
+            result = _render_result(plan, thumbnail)
+            if outcome.get("notes"):
+                result["notes"] = outcome["notes"]
+            return result
         finally:
             shutil.rmtree(tmp_dir, ignore_errors=True)
 
     def run_in_process(job: Any) -> dict[str, Any]:
         saved: dict[str, Any] = {}
+        notes: list[str] = []
 
         def apply_override() -> None:
             parm = hou.node(plan["rop"]).parm(plan["parm"])
@@ -968,8 +1144,14 @@ def _render_job(plan: dict[str, Any], ctx: HostContext, thumbnail: bool) -> Any:
             job.progress(1.0, "done")
         finally:
             if "raw" in saved:
-                ctx.executor.run(restore, 60.0)
-        return _render_result(plan, thumbnail)
+                # Never raises: a render error stays the error the caller sees.
+                note = run_with_fallback(ctx.executor, restore, 60.0)
+                if note:
+                    notes.append(f"Restoring {plan['rop']} {plan['parm']} failed: {note}.")
+        result = _render_result(plan, thumbnail)
+        if notes:
+            result["notes"] = notes
+        return result
 
     return run_isolated if plan["isolate"] else run_in_process
 
@@ -997,6 +1179,7 @@ def render(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     if job.state == "done":
         result = dict(job.result)
         result["job_id"] = job.id
+        result["state"] = "done"
         return result
     if job.state in ("failed", "cancelled") and job.error:
         raise ToolError.from_dict(job.error)

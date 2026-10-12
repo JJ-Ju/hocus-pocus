@@ -1140,7 +1140,7 @@ _VISUAL: tuple[ToolSpec, ...] = (
                 ),
                 "fit": _enum(("all", "selected", "none"), "all"),
                 "source": _enum(("auto", "viewer", "opengl_rop"), "auto"),
-                "path": _s("Also write the PNG here."),
+                "path": _s("Also write the PNG here (must end in .png)."),
             }
         ),
         output_schema=_out(
@@ -1202,8 +1202,9 @@ _VISUAL: tuple[ToolSpec, ...] = (
                     }
                 ),
                 "thumbnail_error": _t("string"),
+                "notes": _list(),
             },
-            ("job_id",),
+            ("job_id", "state"),
         ),
         examples=(
             {"rop_path": "/out/karma1"},

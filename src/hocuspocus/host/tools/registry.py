@@ -19,7 +19,9 @@ those duties apply themselves:
   (``main_thread=False``) so they can wait on jobs and reach ``hou`` only through the
   executor.
 * ``viewport_capture`` — a look leaves the scene as it was (its camera and ROP are
-  temporary), so it must not add an undo step or dirty the scene.
+  temporary), so it must not add an undo step or dirty the scene. It also runs off the
+  main thread: headless, it snapshots the scene in one executor call and waits for the
+  child hython without holding the main thread; the GUI path is one executor call.
 
 A mutating tool whose call turned out to change nothing (a ``dry_run``) returns
 ``"_changed": False`` in its result dict: the dispatcher strips it, records no undo

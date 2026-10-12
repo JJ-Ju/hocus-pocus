@@ -179,3 +179,43 @@ def test_job_manager_lifecycle():
     with pytest.raises(ToolError) as info:
         jobs.status("missing")
     assert info.value.code == "job_not_found"
+
+
+def test_run_with_fallback_queues_a_retry_and_never_raises():
+    from hocuspocus.host.tools.visual import run_with_fallback
+
+    class Busy:
+        def __init__(self, post_fails=False):
+            self.posted = []
+            self.post_fails = post_fails
+
+        def run(self, fn, timeout_s):
+            raise ToolError("houdini_busy", "busy")
+
+        def post(self, fn):
+            if self.post_fails:
+                raise RuntimeError("stopped")
+            self.posted.append(fn)
+
+    calls = []
+    assert run_with_fallback(InlineExecutor(), lambda: calls.append(1), 1.0) is None
+    assert calls == [1]
+    busy = Busy()
+    note = run_with_fallback(busy, lambda: None, 1.0)
+    assert "busy" in note and "retry was queued" in note
+    assert len(busy.posted) == 1
+    note = run_with_fallback(Busy(post_fails=True), lambda: None, 1.0)
+    assert "also failed" in note
+
+
+def test_prune_captures_keeps_the_newest(tmp_path):
+    import os
+
+    from hocuspocus.host.tools.visual import prune_captures
+
+    for i in range(7):
+        path = tmp_path / f"c{i}.png"
+        path.write_bytes(b"x")
+        os.utime(path, (1000 + i, 1000 + i))
+    assert prune_captures(tmp_path, keep=3) == 4
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["c4.png", "c5.png", "c6.png"]

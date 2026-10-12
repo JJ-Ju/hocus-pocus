@@ -327,3 +327,151 @@ def test_render_karma_starts_as_job_and_cancels(client, work_dir):
     assert final["state"] == "cancelled", final
     rendered = sorted(os.listdir(work_dir)) if work_dir.exists() else []
     assert len([n for n in rendered if n.startswith("karma.")]) < 50
+
+
+# -- review 10 fixes ------------------------------------------------------------------
+
+
+def test_render_checks_every_expected_output_against_approved_roots(client, work_dir):
+    _toy_scene()
+    rop = _opengl_rop(work_dir)  # picture under work_dir, no output override
+    client.host.config.approved_roots = [_fwd(work_dir / "allowed")]
+    error = client.error("render", {"rop_path": rop.path()})
+    assert error["code"] == "path_not_allowed"
+    assert not list(work_dir.glob("gl.*.png"))
+
+
+def test_render_result_always_has_state(client, work_dir):
+    geo = _toy_scene()
+    rop = hou.node("/out").createNode("geometry", "bgeo")
+    rop.parm("soppath").set(geo.displayNode().path())
+    rop.parm("sopoutput").set(_fwd(work_dir / "s.$F4.bgeo.sc"))
+    result = client.ok("render", {"rop_path": rop.path(), "frames": [1, 1]})
+    assert result["state"] == "done"
+    assert result["job_id"]
+
+
+def test_render_isolated_override_replaces_keyed_output(client, work_dir):
+    _toy_scene()
+    rop = _opengl_rop(work_dir)
+    original = _fwd(work_dir / "keyed.$F4.png")
+    rop.parm("picture").setExpression(f"'{original}'", hou.exprLanguage.Python)
+    out = _fwd(work_dir / "over.$F4.png")
+    result = client.ok("render", {"rop_path": rop.path(), "output": out, "frames": [1, 1]})
+    assert result["outputs"] == [_fwd(work_dir / "over.0001.png")]
+    assert not list(work_dir.glob("keyed.*"))
+    assert rop.parm("picture").expression() == f"'{original}'"
+
+
+def test_capture_path_must_be_png(client, work_dir):
+    error = client.error("viewport_capture", {"path": _fwd(work_dir / "x.jpg")})
+    assert error["code"] == "invalid_argument"
+    assert ".png" in error["message"]
+
+
+def test_captures_dir_is_pruned_to_newest_50(client):
+    from hocuspocus.host.tools.visual import _captures
+
+    captures = _captures(client.host.ctx)
+    old = []
+    for i in range(60):
+        path = captures / f"capture_old_{i:03d}.png"
+        path.write_bytes(b"x")
+        os.utime(path, (1_000_000 + i, 1_000_000 + i))
+        old.append(path)
+    _toy_scene()
+    result = client.ok("viewport_capture", {"resolution": [64, 48]})
+    remaining = sorted(captures.iterdir())
+    assert len(remaining) == 50
+    assert Path(result["path"]) in remaining
+    assert not old[0].exists() and old[-1].exists()
+
+
+def _centroid_x(image: dict) -> float:
+    img = _decode(image).convert("L")
+    width, height = img.size
+    bg = img.getpixel((0, 0))
+    xs = [x for y in range(height) for x in range(width) if abs(img.getpixel((x, y)) - bg) > 20]
+    assert xs, "nothing rendered"
+    return sum(xs) / len(xs)
+
+
+def _sliding_box(name: str = "slide"):
+    geo = hou.node("/obj").createNode("geo", name)
+    geo.createNode("box").setDisplayFlag(True)
+    cam = hou.node("/obj").createNode("cam", "fixedcam")
+    cam.parmTuple("t").set((0, 0, 20))
+    return geo, cam
+
+
+@pytest.mark.parametrize("driver", ["keys_at_30fps", "hscript_global", "hou_session"])
+def test_headless_capture_matches_the_live_scene(client, driver):
+    """The child hython must evaluate the scene as the live session does: keys at the
+    scene's fps (not retimed by setFps), global hscript variables and hou.session."""
+    geo, cam = _sliding_box()
+    hou.setFps(30, False, False, True)
+    hou.playbar.setFrameRange(1, 60)
+    frame = 46
+    tx = geo.parm("tx")
+    if driver == "keys_at_30fps":
+        for f, value in ((1, -6.0), (61, 6.0)):
+            key = hou.Keyframe()
+            key.setFrame(f)
+            key.setValue(value)
+            key.setExpression("linear()")
+            tx.setKeyframe(key)
+    elif driver == "hscript_global":
+        hou.hscript("set -g HP_OFFSET = 4.5")
+        tx.setExpression("$HP_OFFSET")
+    else:
+        hou.setSessionModuleSource("HP_OFFSET = -3.5\n")
+        tx.setExpression("hou.session.HP_OFFSET", hou.exprLanguage.Python)
+    expected = tx.evalAtFrame(frame)
+    assert abs(expected) > 1  # the object is visibly off-centre
+    try:
+        live = client.ok(
+            "viewport_capture", {"camera": cam.path(), "frame": frame, "resolution": [160, 120]}
+        )
+        tx.deleteAllKeyframes()
+        tx.set(expected)
+        static = client.ok(
+            "viewport_capture", {"camera": cam.path(), "frame": frame, "resolution": [160, 120]}
+        )
+    finally:
+        hou.setFps(24, False, False, True)
+        hou.hscript("set -u HP_OFFSET")
+        hou.setSessionModuleSource("")
+    assert _centroid_x(live["image"]) == pytest.approx(_centroid_x(static["image"]), abs=1.0)
+
+
+def test_headless_capture_does_not_hold_the_main_thread(client):
+    import http.client
+    import json
+    import threading
+
+    _toy_scene()
+    box: dict = {}
+
+    def capture() -> None:
+        conn = http.client.HTTPConnection("127.0.0.1", client.port, timeout=120)
+        body = {"tool": "viewport_capture", "args": {"resolution": [160, 120]}}
+        conn.request(
+            "POST",
+            "/hp/v1/call",
+            json.dumps(body),
+            {"Authorization": f"Bearer {client.token}", "Content-Type": "application/json"},
+        )
+        box["body"] = json.loads(conn.getresponse().read())
+        conn.close()
+
+    thread = threading.Thread(target=capture, daemon=True)
+    thread.start()
+    deadline = time.monotonic() + 0.7  # let the snapshot step run on the main thread
+    while time.monotonic() < deadline:
+        client.host.executor.pump_once(0.01)
+    assert thread.is_alive()
+    assert client.ok("houdini_python", {"code": "2 + 2"})["result"] == 4
+    assert thread.is_alive(), "the call above only completed after the capture"
+    while thread.is_alive():
+        client.host.executor.pump_once(0.01)
+    assert box["body"]["ok"] is True, box["body"]
