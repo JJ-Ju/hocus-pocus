@@ -2,7 +2,7 @@
 
 <!-- Generated from src/hocuspocus/tools/catalog.py by `python -m hocuspocus.tools.docs`. Do not edit by hand. -->
 
-35 tools: 31 in the `core` profile, 4 more in `full`. Model-visible `tools/list` text: 28,562 bytes. See `docs/BIBLE.md` §4 for the design.
+35 tools: 31 in the `core` profile, 4 more in `full`. Model-visible `tools/list` text: 28,018 bytes. See `docs/BIBLE.md` §4 for the design.
 
 ## Contents
 
@@ -72,7 +72,7 @@ None.
 
 `bridge-local` `headless ok` · profile `core`
 
-Choose which Houdini this session drives. Pass one of: pid to attach to a live instance listed by houdini_status; launch to start one (mode gui or headless hython, optional hip, wait up to wait_s, default 90); or disconnect to drop the selection. Returns the new connected block. A launched Houdini usually closes when this server exits (launched.outlives_server says); to keep one, start Houdini yourself (after hocuspocus install-houdini) and attach by pid.
+Choose which Houdini this session drives. Pass one of: pid to attach to a live instance listed by houdini_status; launch to start one (mode gui or headless hython, optional hip, wait up to wait_s, default 90); or disconnect to drop the selection. A launched Houdini usually closes when this server exits (launched.outlives_server says); to keep one, start Houdini yourself (after hocuspocus install-houdini) and attach by pid.
 
 ### Arguments
 
@@ -236,7 +236,7 @@ Merge nodes from another hip file into the current scene. node_pattern (default 
 
 `read-only` `headless ok` · profile `core`
 
-Search a subtree for nodes. pattern globs names (default *), type globs type names; category, flags and has_errors filter. Rows: path, type, category, flags, input_count, child_count, has_errors. Locked HDAs are not entered unless recurse_locked. Paged by limit and cursor. Use network_describe to read one network's wiring and parms.
+Search a subtree for nodes. pattern globs names (default *), type globs type names; category, flags and has_errors filter. Rows: path, type, category, flags, input_count, child_count, has_errors. Locked HDAs are not entered unless recurse_locked. Paged by limit and cursor.
 
 ### Arguments
 
@@ -312,7 +312,7 @@ Create nodes in one undo step. Item: parent, type (resolved like createNode so b
 | `items[].parent` | string | yes |  |  |
 | `items[].type` | string | yes |  |  |
 | `items[].name` | string |  |  |  |
-| `items[].parms` | object<string, string \| number \| boolean \| array<string \| number \| boolean> \| object \| object> |  |  | Parm or tuple name to a value or a parm_set item without path. |
+| `items[].parms` | object<string, string \| number \| boolean \| array<string \| number \| boolean> \| object \| object> |  |  | Parm name to a value or a parm_set item without path. |
 | `items[].inputs` | array<object> |  |  | each item: exactly one of index, name |
 | `items[].inputs[].index` | integer |  |  | min 0 |
 | `items[].inputs[].name` | string |  |  | Input name. |
@@ -385,7 +385,7 @@ Change node properties in one undo step: rename, flags, bypass, color, comment, 
 | `items[].color` | array<number> |  |  | [r, g, b] 0-1 (min items 3; max items 3) |
 | `items[].comment` | string |  |  |  |
 | `items[].position` | array<number> |  |  | [x, y] (min items 2; max items 2) |
-| `items[].lock` | boolean |  |  | HDA contents locked. |
+| `items[].lock` | boolean |  |  |  |
 | `items[].bypass` | boolean |  |  |  |
 | `partial` | boolean |  | `false` | Keep successful items when one fails. |
 
