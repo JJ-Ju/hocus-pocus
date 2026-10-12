@@ -478,7 +478,10 @@ def _camera_node(path: Any) -> Any:
 def _world_bbox(obj: Any, sop: Any) -> tuple[list[float], list[float]] | None:
     import hou
 
+    from ._diag import refresh_stale
+
     try:
+        refresh_stale(sop)  # §5.18: stale errors upstream would fail the cook
         geo = sop.geometry()
     except hou.OperationFailed:
         return None

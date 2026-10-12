@@ -19,7 +19,7 @@ from typing import Any
 
 from hocuspocus.tools.errors import ToolError
 
-from ._diag import a_or_an, collect_problems
+from ._diag import a_or_an, collect_problems, refresh_stale
 from .registry import HostContext, tool
 
 CLASSES = ("point", "prim", "vertex", "detail")
@@ -125,6 +125,9 @@ def cooked_geometry(sop: Any, frame: Any = None) -> Any:
 
     if frame is not None and (isinstance(frame, bool) or not isinstance(frame, int | float)):
         raise ToolError("invalid_argument", "'frame' must be a number.")
+    # A node fixed outside HocusPocus can keep its old error and fail every downstream
+    # cook until it is cooked again (§5.18): refresh before fetching the geometry.
+    refresh_stale(sop)
     try:
         geo = sop.geometry() if frame is None else sop.geometryAtFrame(float(frame))
     except hou.OperationFailed as exc:

@@ -124,6 +124,21 @@ def refresh_stale_inputs(node: Any) -> list[str]:
     return refreshed
 
 
+def refresh_stale(node: Any) -> list[str]:
+    """Clear errors left from before a fix on ``node`` and its inputs before reading its
+    geometry (docs/BIBLE.md §5.18). Errored upstream nodes are force-cooked as in
+    :func:`refresh_stale_inputs`, and ``node`` itself when its errors predate a cook that
+    is not pending, unless its last cook was slow. Returns the paths force-cooked."""
+    if _category(node) not in REFRESH_CATEGORIES:
+        return []
+    refreshed = refresh_stale_inputs(node)
+    if _has_stale_errors(node) and not is_slow(node):
+        _timed_cook(node, True)
+        with contextlib.suppress(Exception):
+            refreshed.append(node.path())
+    return refreshed
+
+
 def collect_problems(node: Any, *, cook: bool = False, force: bool = False) -> dict[str, Any]:
     """Return ``{errors, warnings, messages, cook_state, cook_time_ms?}`` for ``node``.
 

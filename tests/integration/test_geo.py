@@ -353,3 +353,41 @@ def test_one_million_points(client):
     assert 400_000 < grouped["total"] < 600_000
     print(f"geo_read stats P over a 1M-point group expression: {elapsed:.3f}s")
     assert elapsed < 2.0
+
+
+def _broken_then_fixed_outside():
+    """box1 -> mountain1 -> copy1 with box1 broken, cooked, then fixed outside
+    HocusPocus: Houdini keeps the old error on box1 and fails downstream cooks with
+    'Invalid source' until box1 is cooked again (bible §5.18)."""
+    geo = hou.node("/obj").createNode("geo", "stale")
+    box = geo.createNode("box", "box1")
+    mountain = geo.createNode("mountain", "mountain1")
+    mountain.setInput(0, box)
+    sphere = geo.createNode("sphere", "sphere1")
+    copy1 = geo.createNode("copytopoints", "copy1")
+    copy1.setInput(0, sphere)
+    copy1.setInput(1, mountain)
+    copy1.setDisplayFlag(True)
+    parm = box.parm("sizex")
+    parm.setExpression("$F*(")
+    with pytest.raises(hou.OperationFailed):
+        copy1.cook()
+    parm.deleteAllKeyframes()
+    parm.revertToDefaults()
+    box.cook()
+    assert box.errors()  # the stale error is still there
+    return geo, copy1
+
+
+@pytest.mark.parametrize("tool", ["geo_info", "geo_read"])
+def test_geo_tools_refresh_errors_left_by_an_outside_fix(client, tool):
+    _, copy1 = _broken_then_fixed_outside()
+    result = client.ok(tool, {"path": copy1.path()})
+    assert result["path"] == copy1.path()
+
+
+def test_capture_framing_bbox_refreshes_stale_errors(client):
+    from hocuspocus.host.tools.visual import _world_bbox
+
+    geo, copy1 = _broken_then_fixed_outside()
+    assert _world_bbox(geo, copy1) is not None
