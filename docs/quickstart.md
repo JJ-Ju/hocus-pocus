@@ -26,7 +26,7 @@ you get two commands on your `PATH`: `hocuspocus` and `hocuspocus-mcp`.
 
 ```text
 $ hocuspocus version
-hocuspocus 1.0.0 (hp/v1, mcp 2.3.x, Python 3.12.x)
+hocuspocus 1.1.0 (hp/v1, mcp 2.3.x, Python 3.12.x)
 ```
 
 ## 2. Install the Houdini package (1 minute)
@@ -34,7 +34,7 @@ hocuspocus 1.0.0 (hp/v1, mcp 2.3.x, Python 3.12.x)
 ```text
 $ hocuspocus install-houdini
 Houdini pref dir: C:\Users\you\houdini22.0 (from hython (C:\Program Files\Side Effects Software\Houdini 22.0.466))
-copied hocuspocus 1.0.0 to C:\Users\you\houdini22.0\hocuspocus\1.0.0\python\hocuspocus
+copied hocuspocus 1.1.0 to C:\Users\you\houdini22.0\hocuspocus\1.0.0\python\hocuspocus
 copied the Houdini payload to C:\Users\you\houdini22.0\hocuspocus\1.0.0\houdini
 wrote C:\Users\you\houdini22.0\packages\hocuspocus.json (template: ...\houdini\hocuspocus.json.template)
 recorded the pref dir in C:\Users\you\AppData\Local\HocusPocus\install.json (the bridge reads hocuspocus.toml from there)
@@ -84,13 +84,13 @@ the UI is up, the host starts by itself. Then run:
 
 ```text
 $ hocuspocus doctor
-hocuspocus 1.0.0 (bridge, hp/v1)
+hocuspocus 1.1.0 (bridge, hp/v1)
 [ok]   Houdini install: C:\Program Files\Side Effects Software\Houdini 22.0.466
 [ok]   Houdini version: 22.0.466
 [ok]   Houdini pref dir: C:\Users\you\houdini22.0 (from hython (...))
 [ok]   hocuspocus.toml: none (defaults)
 [ok]   package JSON: C:\Users\you\houdini22.0\packages\hocuspocus.json -> C:\Users\you\houdini22.0\hocuspocus\1.0.0\python
-[ok]   host/bridge version: 1.0.0
+[ok]   host/bridge version: 1.1.0
 [ok]   instance /health: pid 18244 port 52311 GUI (untitled) Houdini 22.0.466
 
 Register with Claude Code:
