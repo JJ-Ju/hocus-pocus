@@ -22,6 +22,9 @@ CONFIG_FILE_NAME = "hocuspocus.toml"
 ENV_PREFIX = "HOCUSPOCUS_"
 
 _PROFILES = ("core", "full")
+BRIDGE_ONLY_KEYS = frozenset({"result_content"})
+"""Keys of the shared ``hocuspocus.toml`` that only the bridge reads; the host skips
+them without the "unknown key" warning."""
 _LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
 
 
@@ -130,6 +133,8 @@ def _apply(
 ) -> HostConfig:
     updates: dict[str, Any] = {}
     for key, raw in values.items():
+        if key in BRIDGE_ONLY_KEYS:
+            continue
         if key not in _FIELD_TYPES:
             log.warning("hocuspocus config: ignoring unknown key %r from %s", key, source)
             continue

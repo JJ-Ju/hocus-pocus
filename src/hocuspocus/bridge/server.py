@@ -82,13 +82,46 @@ def launcher_exited_error(record: dict[str, Any]) -> ToolError:
     )
 
 
-def _error_result(
-    error: dict[str, Any], meta: dict[str, Any] | None = None
+RESULT_CONTENT_MODES = ("both", "text", "structured")
+"""``result_content`` (BIBLE §4.1): where a tool result's JSON goes.
+
+* ``text`` (default): compact JSON in the text block, no ``structuredContent`` and so no
+  ``outputSchema`` in ``tools/list`` (the spec requires structured results whenever an
+  output schema is declared). Measured for 1.1: Claude Code shows the model only the text
+  block, so a structured copy is pure wire overhead there.
+* ``both``: the 1.0 shape, the same JSON in both places.
+* ``structured``: ``structuredContent`` holds the data and the text block is a one-line
+  summary (``<tool>: ok``, or ``<code>: <message>`` for an error), for clients that feed
+  the model the structured content.
+
+Images are unaffected: they are always image content blocks."""
+
+
+def make_result(
+    mode: str,
+    tool: str,
+    data: dict[str, Any],
+    *,
+    is_error: bool,
+    meta: dict[str, Any] | None = None,
+    images: Sequence[Any] = (),
 ) -> types.CallToolResult:
+    """One ``CallToolResult`` shaped by ``result_content`` (:data:`RESULT_CONTENT_MODES`)."""
+    if mode == "structured":
+        if is_error:
+            text = f"{data.get('code', 'internal')}: {data.get('message', '')}".rstrip(": ")
+        else:
+            text = f"{tool}: ok"
+    else:
+        text = budget.dumps(data)
+    content: list[Any] = [types.TextContent(type="text", text=text)]
+    content += [
+        types.ImageContent(type="image", data=img.data, mime_type=img.mime_type) for img in images
+    ]
     return types.CallToolResult(
-        content=[types.TextContent(type="text", text=budget.dumps(error))],
-        structured_content=error,
-        is_error=True,
+        content=content,
+        structured_content=None if mode == "text" else data,
+        is_error=is_error,
         meta=meta or None,
     )
 
@@ -289,7 +322,10 @@ class Bridge:
                     name=spec.name,
                     description=description,
                     input_schema=spec.input_schema,
-                    output_schema=spec.output_schema,
+                    # No structuredContent in text mode, so no outputSchema either.
+                    output_schema=(
+                        spec.output_schema if self.config.result_content != "text" else None
+                    ),
                     annotations=types.ToolAnnotations.model_validate(spec.annotations()),
                 )
             )
@@ -349,10 +385,10 @@ class Bridge:
                 hint=f"fix the listed arguments; {name}'s inputSchema in tools/list is authoritative",
                 detail={"violations": violations},
             )
-            return _error_result(error.to_dict())
+            return make_result(self.config.result_content, name, error.to_dict(), is_error=True)
         ok, payload, meta = self.invoke(name, args, request_id)
         pageable = "cursor" in (spec.input_schema.get("properties") or {})
-        return self.shape(ok, payload, meta, args=args, pageable=pageable)
+        return self.shape(ok, payload, meta, args=args, pageable=pageable, tool=name)
 
     def shape(
         self,
@@ -362,24 +398,19 @@ class Bridge:
         *,
         args: dict[str, Any] | None = None,
         pageable: bool = False,
+        tool: str = "",
     ) -> types.CallToolResult:
         meta = dict(meta)
+        mode = self.config.result_content
         if not ok:
-            return _error_result(payload, meta)
+            return make_result(mode, tool, payload, is_error=True, meta=meta)
         result, images = budget.extract_images(payload)
         result, cuts = budget.apply_budget(
             result, self.config.max_response_bytes, args, pageable=pageable
         )
         if cuts:
             meta[budget.TRUNCATION_META_KEY] = cuts
-        content: list[Any] = [types.TextContent(type="text", text=budget.dumps(result))]
-        content += [
-            types.ImageContent(type="image", data=img.data, mime_type=img.mime_type)
-            for img in images
-        ]
-        return types.CallToolResult(
-            content=content, structured_content=result, is_error=False, meta=meta or None
-        )
+        return make_result(mode, tool, result, is_error=False, meta=meta, images=images)
 
     # -- resources -----------------------------------------------------------------------
 

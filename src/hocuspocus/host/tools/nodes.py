@@ -695,18 +695,11 @@ class Rollback:
     def mark(self) -> int:
         return len(self._actions)
 
-    def run(self, since: int = 0) -> bool:
-        """Undo newest-first back to ``since``. Returns whether every compensating action
-        succeeded (vacuously true when there was nothing to undo): the ``rolled_back`` a
-        batch error reports, never assumed."""
-        ok = True
+    def run(self, since: int = 0) -> None:
         while len(self._actions) > since:
             action = self._actions.pop()
-            try:
+            with contextlib.suppress(Exception):
                 action()
-            except Exception:
-                ok = False
-        return ok
 
     def destroy_later(self, node: Any) -> None:
         self.add(lambda: node.destroy())
@@ -721,6 +714,12 @@ class Rollback:
                 current = fn()
                 if current is not None:
                     self.add(lambda current=current, setter=setter: getattr(current, setter)(True))
+
+
+def item_error(index: int, exc: BaseException) -> dict[str, Any]:
+    payload = to_tool_error(exc).to_dict()
+    payload["item"] = index
+    return payload
 
 
 def to_tool_error(exc: BaseException, *, node: Any = None, op: str | None = None) -> ToolError:
@@ -780,56 +779,15 @@ def to_tool_error(exc: BaseException, *, node: Any = None, op: str | None = None
     return tool_error_from_exception(exc)
 
 
-def batch_error(index: int, path: Any, exc: BaseException, *, rolled_back: bool) -> ToolError:
-    """The one batch error shape (review 10 §4): ``items[i] (<path>): <message>`` and
-    ``detail: {item, path, rolled_back}``, ``rolled_back`` as actually performed.
-
-    A message that already names the item (``items[i].type ...``) or starts with its path
-    is not repeated: the path appears once."""
+def raise_with_item(index: int, exc: BaseException, count: int) -> None:
     error = to_tool_error(exc)
-    message = error.message
-    tag = f"items[{index}]"
-    if message.startswith(tag):
-        message = message[len(tag) :].lstrip(".: ")
-    elif isinstance(path, str) and path and message.startswith(path):
-        rest = message[len(path) :]
-        if rest.startswith(": "):
-            message = rest[2:]
-        elif rest.startswith(" "):
-            message = "it" + rest
-    shown = path if isinstance(path, str) and path else None
-    error.message = f"{tag} ({shown}): {message}" if shown else f"{tag}: {message}"
-    error.args = (error.message,)
+    if count > 1:
+        error.message = f"Item {index}: {error.message}"
+        error.args = (error.message,)
     detail = error.detail if isinstance(error.detail, dict) else {}
-    error.detail = {**detail, "item": index, "path": shown, "rolled_back": rolled_back}
-    return error
-
-
-def run_batch(
-    items: list[Any],
-    partial: bool,
-    rollback: Rollback,
-    apply: Callable[[Any, int], Any],
-    path_of: Callable[[Any], Any],
-) -> tuple[dict[int, Any], dict[int, dict[str, Any]]]:
-    """Apply ``apply(item, index)`` to every item (BIBLE §4.1 batch semantics).
-
-    A failure rolls back the whole call and raises :func:`batch_error`, or with
-    ``partial`` rolls back that item only and records the error dict in ``failures``."""
-    done: dict[int, Any] = {}
-    failures: dict[int, dict[str, Any]] = {}
-    for index, item in enumerate(items):
-        mark = rollback.mark()
-        try:
-            done[index] = apply(item, index)
-        except Exception as exc:
-            path = path_of(item) if isinstance(item, dict) else None
-            if not partial:
-                ok = rollback.run()
-                raise batch_error(index, path, exc, rolled_back=ok) from exc
-            ok = rollback.run(mark)
-            failures[index] = batch_error(index, path, exc, rolled_back=ok).to_dict()
-    return done, failures
+    detail = {**detail, "item": index, "rolled_back": True}
+    error.detail = detail
+    raise error
 
 
 # -- wiring helpers ---------------------------------------------------------------
@@ -1213,14 +1171,6 @@ def _create_one(
     return node
 
 
-def _create_item_path(item: dict[str, Any]) -> Any:
-    """What a ``node_create`` error names: ``parent/name``, else the parent."""
-    parent, name = item.get("parent"), item.get("name")
-    if isinstance(parent, str) and isinstance(name, str) and name:
-        return f"{parent.rstrip('/')}/{name}"
-    return parent
-
-
 @tool("node_create")
 def node_create(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     items = arg_list(args, "items")
@@ -1230,15 +1180,19 @@ def node_create(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     partial = arg_bool(args, "partial", False)
     mode = return_mode(args)
     rollback = Rollback()
+    created: list[tuple[int, Any]] = []
     baselines: dict[int, dict[str, tuple[Any, ...]]] = {}
-    done, failures = run_batch(
-        items,
-        partial,
-        rollback,
-        lambda item, index: _create_one(item, index, args, ctx, rollback, baselines),
-        _create_item_path,
-    )
-    created = list(done.items())  # item order
+    failures: dict[int, dict[str, Any]] = {}
+    for index, item in enumerate(items):
+        mark = rollback.mark()
+        try:
+            created.append((index, _create_one(item, index, args, ctx, rollback, baselines)))
+        except Exception as exc:
+            if not partial:
+                rollback.run()
+                raise_with_item(index, exc, len(items))
+            rollback.run(mark)
+            failures[index] = item_error(index, exc)
     if mode == "summary":
         blocks = {index: summary_block(node) for index, node in created}
     else:
@@ -1439,13 +1393,18 @@ def node_edit(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     items = arg_list(args, "items")
     partial = arg_bool(args, "partial", False)
     rollback = Rollback()
-    done, failures = run_batch(
-        items,
-        partial,
-        rollback,
-        lambda item, index: _edit_one(item, index, rollback),
-        lambda item: item.get("path"),
-    )
+    done: dict[int, dict[str, Any]] = {}
+    failures: dict[int, dict[str, Any]] = {}
+    for index, item in enumerate(items):
+        mark = rollback.mark()
+        try:
+            done[index] = _edit_one(item, index, rollback)
+        except Exception as exc:
+            if not partial:
+                rollback.run()
+                raise_with_item(index, exc, len(items))
+            rollback.run(mark)
+            failures[index] = item_error(index, exc)
     results = []
     for index in range(len(items)):
         if index in failures:
@@ -1575,13 +1534,18 @@ def node_connect(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     items = arg_list(args, "items")
     partial = arg_bool(args, "partial", False)
     rollback = Rollback()
-    done, failures = run_batch(
-        items,
-        partial,
-        rollback,
-        lambda item, index: _connect_one(item, index, rollback),
-        lambda item: item.get("to"),
-    )
+    done: dict[int, dict[str, Any]] = {}
+    failures: dict[int, dict[str, Any]] = {}
+    for index, item in enumerate(items):
+        mark = rollback.mark()
+        try:
+            done[index] = _connect_one(item, index, rollback)
+        except Exception as exc:
+            if not partial:
+                rollback.run()
+                raise_with_item(index, exc, len(items))
+            rollback.run(mark)
+            failures[index] = item_error(index, exc)
     results = []
     for index in range(len(items)):
         if index in failures:

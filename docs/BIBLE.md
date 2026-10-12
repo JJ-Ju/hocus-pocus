@@ -240,7 +240,8 @@ Response (always HTTP 200 once authenticated; transport errors are 4xx/5xx):
 ```
 
 The bridge maps `ok:false` to an MCP `isError: true` result whose text is the error
-JSON and whose `structuredContent` is the error object. `_meta` is passed through as
+JSON (and whose `structuredContent` is the error object when `result_content` is `both`
+or `structured`, §4.1). `_meta` is passed through as
 tool-result `_meta`. The protocol version `hp/v1` is in the path; incompatible changes
 bump it and the bridge refuses to talk to an older host with `code: version_mismatch`
 and the hint "run `hocuspocus install-houdini` and restart Houdini".
@@ -281,8 +282,9 @@ Optional file `$HOUDINI_USER_PREF_DIR/hocuspocus.toml`, env overrides
 `HOCUSPOCUS_*`, CLI flags last. Everything has a default; the file is not required.
 
 **One toml serves both processes, and the environment wins.** The host reads every key;
-the bridge reads `profile`, `max_response_bytes`, `default_timeout_s` and `hfs` from the
-same file and ignores the rest. Inside Houdini the pref dir is
+the bridge reads `profile`, `max_response_bytes`, `default_timeout_s`, `hfs` and
+`result_content` from the same file and ignores the rest (the host skips
+`result_content`). Inside Houdini the pref dir is
 `hou.homeHoudiniDirectory()`. The bridge starts on every client launch and cannot afford
 a hython query, so it looks in `HOUDINI_USER_PREF_DIR` (`__HVER__` read as `22.0`), then
 the `prefs` that `install-houdini` records in `<state_dir>/install.json`, then the
@@ -300,6 +302,7 @@ job_threshold_s = 10        # cook/render longer than this become jobs
 profile = "core"            # core | full (adds usd_stage, pdg, hda, events)
 log_level = "INFO"
 hfs = ""                    # bridge: explicit Houdini install dir for launch
+result_content = "text"     # bridge: text | both | structured (§4.1)
 ```
 
 `HOCUSPOCUS_WORK_DIR` (environment only) is where a Houdini that HocusPocus launches
@@ -324,13 +327,17 @@ as it was started from a neutral directory).
 - **Arguments:** flat, typed, `additionalProperties: false`, enums for closed sets,
   defaults stated in the description. Batch tools take `items: [...]` and return
   `results: [...]` in the same order; one failing item fails the whole call and rolls
-  back the undo group unless `partial: true`. Every batch error (and each failed row's
-  `error` with `partial`) has one shape: the message starts `items[i] (<path>): ` and
-  `detail` carries `{item, path, rolled_back}`, where `rolled_back` is true only when every
-  change the call (or, with `partial`, the item) had made was actually undone.
-- **Responses:** `structuredContent` **and** the same JSON serialised compactly into the
-  text block (clients vary in which they feed the model). `outputSchema` declared where
-  the shape is stable. Key casing is `snake_case` in both directions.
+  back the undo group unless `partial: true`.
+- **Responses:** compact JSON in the text block. 1.0 also sent the same JSON as
+  `structuredContent` because clients vary in which they feed the model; measured for 1.1,
+  Claude Code feeds the model only the text block, so the structured copy doubled every
+  result on the wire for nothing. The bridge setting `result_content` (§3.7) now decides:
+  `text` (default) sends no `structuredContent` and therefore declares no `outputSchema`
+  (the spec requires structured results whenever one is declared); `both` is the 1.0
+  shape, with `outputSchema` declared where the shape is stable; `structured` keeps the
+  data in `structuredContent` and puts a one-line summary in the text block
+  (`<tool>: ok`, or `<code>: <message>` for an error). Error results follow the same rule;
+  images are image blocks in every mode. Key casing is `snake_case` in both directions.
 - **Budget:** `tools/list` ≤ 11,000 tokens total, CI-tested on what clients receive: the
   serialised `tools/list` result of the full profile (names, descriptions, input and output
   schemas, annotations) is ≤ 44,000 bytes (names, descriptions and input schemas alone stay

@@ -210,8 +210,8 @@ def test_houdini_connect_launch_path(tmp_path):
     if bridge._by_name.get("houdini_connect") is None:
         pytest.skip("catalogue has no houdini_connect yet")
     result = bridge.call_tool("houdini_connect", {"launch": {"mode": "headless", "wait_s": 30}})
-    assert result.is_error is False, result.structured_content
-    out = result.structured_content
+    out = json.loads(result.content[0].text)
+    assert result.is_error is False, out
     assert out["connected"]["pid"] == 9001
     assert out["launched"]["mode"] == "headless" and out["launched"]["pid"] == 9001
     assert bridge.preferred_pid == 9001

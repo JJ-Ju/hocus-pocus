@@ -1136,9 +1136,8 @@ def _apply(node: Any, target: Any, item: dict[str, Any], *, frame: float | None)
 def _snapshot(target: Any) -> Any:
     """Capture each component's keys, expression or value; returns a restore function.
 
-    A failed item puts its own earlier components back (say, component 2 of a tuple is
-    locked), and a failed batch restores every earlier item, newest first, so the error's
-    ``rolled_back`` says what actually happened (the dispatcher's undo group is undone too).
+    ``partial: true`` keeps the call's undo group, so an item that fails half-way (say,
+    component 2 of a tuple is locked) must put its own earlier components back.
     """
     saved = []
     for parm in _components(target):
@@ -1156,20 +1155,15 @@ def _snapshot(target: Any) -> Any:
             continue
         saved.append((parm, keys, value))
 
-    def restore() -> bool:
-        """Put every component back; False when one could not be restored."""
-        ok = True
+    def restore() -> None:
         for parm, keys, value in saved:
-            try:
+            with contextlib.suppress(Exception):
                 if parm.keyframes():
                     parm.deleteAllKeyframes()
                 if keys:
                     parm.setKeyframes(keys)
                 elif value is not None:
                     parm.set(value)
-            except Exception:
-                ok = False
-        return ok
 
     return restore
 
@@ -1336,36 +1330,42 @@ def parm_set(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     partial = args.get("partial", False)
     if not isinstance(partial, bool):
         raise ToolError("invalid_argument", "'partial' must be a boolean.")
-    from .nodes import batch_error, watch_nodes  # lazy: nodes imports this module lazily too
-
     rows: list[tuple[Any, dict[str, Any]]] = []
     nodes: dict[str, Any] = {}
-    applied: list[Any] = []  # restore functions of the items done so far
     failed = 0
     for index, item in enumerate(items):
         path = item.get("path")
-        restore = None
         try:
             unknown = set(item) - ITEM_KEYS
             if unknown:
                 raise ToolError("invalid_argument", f"Unexpected item keys {sorted(unknown)}.")
             node, target = resolve_path(path)
-            restore = _snapshot(target)
-            result = _apply(node, target, item, frame=frame)
+            restore = _snapshot(target) if partial else None
+            try:
+                result = _apply(node, target, item, frame=frame)
+            except ToolError:
+                if restore is not None:
+                    restore()  # leave a failed item as it was, not half-applied
+                raise
+            nodes.setdefault(node.path(), node)
+            rows.append((node.path(), result))
         except ToolError as exc:
-            ok = restore() if restore is not None else True  # never leave it half-applied
             if not partial:
-                for undo in reversed(applied):
-                    ok = undo() and ok
-                raise batch_error(index, path, exc, rolled_back=ok) from exc
+                # Messages usually start with the parm path already; do not repeat it.
+                named = isinstance(path, str) and exc.message.startswith(path)
+                if len(items) > 1:
+                    prefix = f"items[{index}]" if named else f"items[{index}] ({path})"
+                else:
+                    prefix = None if named else str(path)
+                extra = {"item": index, "path": path}
+                if len(items) > 1:
+                    extra["rolled_back"] = True
+                raise _with_context(exc, prefix, extra) from exc
             failed += 1
-            error = batch_error(index, path, exc, rolled_back=ok).to_dict()
-            rows.append((None, {"path": path, "wrote_keyframe": False, "error": error}))
-            continue
-        applied.append(restore)
-        nodes.setdefault(node.path(), node)
-        rows.append((node.path(), result))
+            rows.append((None, {"path": path, "wrote_keyframe": False, "error": exc.to_dict()}))
     problems = {path: cheap_cook_problems(node) for path, node in nodes.items()}
+    from .nodes import watch_nodes  # lazy: nodes imports this module lazily too
+
     watch_nodes(nodes.values())
     results: list[dict[str, Any]] = []
     for node_path, result in rows:

@@ -163,8 +163,9 @@ TOOLS_LIST_WIRE_MAX_BYTES = 44_000
 descriptions, input and output schemas and annotations, for the full profile."""
 
 
-def tools_list_wire_size(profile: str) -> int:
-    """Bytes of the ``ListToolsResult`` the bridge sends, serialised as the SDK does."""
+def tools_list_wire_size(profile: str, result_content: str = "both") -> int:
+    """Bytes of the ``ListToolsResult`` the bridge sends, serialised as the SDK does.
+    ``both`` (output schemas declared) is the largest; the ``text`` default omits them."""
     import json
 
     import mcp_types as types
@@ -172,7 +173,7 @@ def tools_list_wire_size(profile: str) -> int:
     from hocuspocus.bridge.config import BridgeConfig
     from hocuspocus.bridge.server import Bridge
 
-    bridge = Bridge(BridgeConfig(profile=profile), scan=lambda: [])
+    bridge = Bridge(BridgeConfig(profile=profile, result_content=result_content), scan=lambda: [])
     result = types.ListToolsResult(tools=bridge.list_tools())
     payload = result.model_dump(by_alias=True, mode="json", exclude_none=True)
     return len(json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8"))
@@ -183,7 +184,8 @@ def test_tools_list_budget(capsys: pytest.CaptureFixture[str]) -> None:
     with capsys.disabled():
         print(
             f"\n[tools/list] serialised: core {sizes['core']:,} B, full {sizes['full']:,} B "
-            f"(cap {TOOLS_LIST_WIRE_MAX_BYTES:,} B); "
+            f"(cap {TOOLS_LIST_WIRE_MAX_BYTES:,} B; full without output schemas, the "
+            f"text default: {tools_list_wire_size('full', 'text'):,} B); "
             f"names+descriptions+input schemas {tools_list_text_size(TOOLS):,} B"
         )
     assert sizes["core"] < sizes["full"] <= TOOLS_LIST_WIRE_MAX_BYTES, sizes

@@ -217,8 +217,17 @@ default_timeout_s = 30      # both: per-call timeout
 job_threshold_s = 10        # host: cooks longer than this become jobs
 profile = "core"            # bridge: "full" also lists hda, usd_stage, pdg, events
 hfs = ""                    # bridge: Houdini install used by houdini_connect launch
+result_content = "text"     # bridge: text | both | structured (see below)
 log_level = "INFO"          # host
 ```
+
+`result_content` decides where a tool result's JSON goes. `text` (the default) sends the
+compact JSON in the text block only, with no `structuredContent` and no `outputSchema` in
+`tools/list`: measured in 1.1, Claude Code shows the model only the text block, so a
+structured copy only doubled every result on the wire. `both` restores the 1.0 shape (the
+same JSON in both places) for clients that read `structuredContent`; `structured` keeps
+the data in `structuredContent` and puts a one-line summary (`node_info: ok`, or
+`<code>: <message>` for an error) in the text block. Images are image blocks in every mode.
 
 Houdini resolves the pref dir itself. The bridge cannot ask Houdini, so it looks in
 `HOUDINI_USER_PREF_DIR` (with `__HVER__` read as `22.0`), then in the pref dir that
@@ -234,6 +243,7 @@ per client, for example
 | `HOCUSPOCUS_MAX_RESPONSE_BYTES` | `16384` | response budget; lists are truncated with `truncated: true` |
 | `HOCUSPOCUS_DEFAULT_TIMEOUT_S` | `30` | per-call timeout sent to the host |
 | `HOCUSPOCUS_HFS` | auto | Houdini install used by `houdini_connect` launch |
+| `HOCUSPOCUS_RESULT_CONTENT` | `text` | `text`, `both` or `structured`: where result JSON goes |
 | `HOCUSPOCUS_WORK_DIR` | home | where a launched Houdini starts (environment only) |
 
 `HOCUSPOCUS_STATE_DIR` moves the shared state directory. That directory holds the

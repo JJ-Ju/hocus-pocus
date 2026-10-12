@@ -118,6 +118,11 @@ def headless_host(hython, tmp_path):
         log.close()
 
 
+def _json(result) -> dict:
+    """A tool result's JSON from its text block (``result_content = "text"``, the default)."""
+    return json.loads(result.content[0].text)
+
+
 def test_stdio_roundtrip(headless_host, tmp_path):
     import anyio
     from mcp import Client
@@ -144,7 +149,10 @@ def test_stdio_roundtrip(headless_host, tmp_path):
     assert instructions and "Houdini" in instructions
     assert tools, "tools/list is empty"
     assert status.is_error is False, status.content
-    connected = status.structured_content["connected"]
+    # result_content = "text": the JSON travels once, and no outputSchema is declared.
+    assert status.structured_content is None
+    assert all(tool.output_schema is None for tool in tools)
+    connected = _json(status)["connected"]
     assert connected["pid"] == proc.pid
     # Review 07 papercut 3: the untitled scene lives in the work dir, not the state dir.
     work = (tmp_path / "work").as_posix()
@@ -186,7 +194,7 @@ def test_bridge_launch_starts_in_the_work_dir(hython, tmp_path):
                 "houdini_connect", {"launch": {"mode": "headless", "wait_s": 150}}
             )
             status = await client.call_tool("houdini_status", {})
-            pid = status.structured_content["connected"]["pid"]
+            pid = _json(status)["connected"]["pid"]
             os.kill(pid, signal.SIGTERM)  # the hython this test launched
             for _ in range(100):
                 if not any((state / "instances").glob(f"{pid}.json")):
@@ -200,16 +208,16 @@ def test_bridge_launch_starts_in_the_work_dir(hython, tmp_path):
     try:
         launched, status, offline = anyio.run(run)
         assert launched.is_error is False, launched.content
-        block = launched.structured_content["launched"]
+        block = _json(launched)["launched"]
         assert isinstance(block["outlives_server"], bool) and block["note"]
-        connected = status.structured_content["connected"]
-        (row,) = [i for i in status.structured_content["instances"] if i["selected"]]
+        connected = _json(status)["connected"]
+        (row,) = [i for i in _json(status)["instances"] if i["selected"]]
         assert isinstance(row["launched_by"], int) and row["launched_by"] != connected["pid"]
         assert connected["env"]["HIP"] == work.as_posix()
         assert connected["env"]["JOB"] == work.as_posix()
         assert connected["hip"]["path"] == f"{work.as_posix()}/untitled.hip"
         assert "note" in connected["hip"]
-        error = offline.structured_content
+        error = _json(offline)
         assert offline.is_error is True and error["code"] == "houdini_offline", error
         assert f"pid {connected['pid']}" in error["message"], error
         assert "lost" in error["message"] and error["retryable"] is False
@@ -287,7 +295,7 @@ def test_a_later_bridge_names_the_server_that_launched_houdini(hython, tmp_path)
     try:
         launched = anyio.run(launch)
         assert launched.is_error is False, launched.content
-        pid = launched.structured_content["launched"]["pid"]
+        pid = _json(launched)["launched"]["pid"]
         entry = state / "instances" / f"{pid}.json"
         if entry.is_file():  # it outlived bridge 1 here: the registry names bridge 1
             launcher = json.loads(entry.read_text(encoding="utf-8"))["launched_by"]
@@ -300,7 +308,7 @@ def test_a_later_bridge_names_the_server_that_launched_houdini(hython, tmp_path)
                 break
             time.sleep(0.1)
         offline = anyio.run(later_call)
-        error = offline.structured_content
+        error = _json(offline)
         assert offline.is_error is True and error["code"] == "houdini_offline", error
         assert (
             f"Houdini pid {pid}" in error["message"]
