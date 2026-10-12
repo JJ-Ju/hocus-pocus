@@ -1,0 +1,542 @@
+"""parm_get / parm_set and the shared parm engine against real Houdini (BIBLE §4.5, §5)."""
+
+from __future__ import annotations
+
+import pytest
+
+hou = pytest.importorskip("hou")
+
+
+@pytest.fixture
+def scene():
+    hou.hipFile.clear(suppress_save_prompt=True)
+    geo = hou.node("/obj").createNode("geo", "geo1")
+    box = geo.createNode("box", "box1")
+    xform = geo.createNode("xform", "xform1")
+    xform.setInput(0, box)
+    hou.setFrame(1)
+    return {"geo": geo, "box": box, "xform": xform}
+
+
+def _get(client, path, **kw):
+    result = client.ok("parm_get", {"paths": [path], **kw})
+    assert len(result["parms"]) == 1
+    return result["parms"][0]
+
+
+def _set(client, item, **kw):
+    result = client.ok("parm_set", {"items": [item], **kw})
+    assert len(result["results"]) == 1
+    return result["results"][0]
+
+
+# -- resolution: tuple vs component ------------------------------------------------
+
+
+def test_tuple_path_reads_all_components(client, scene):
+    parm = _get(client, "/obj/geo1/box1/size")
+    assert parm["kind"] == "tuple"
+    assert parm["component_names"] == ["sizex", "sizey", "sizez"]
+    assert parm["value"] == [1.0, 1.0, 1.0]
+    assert parm["type"] == "float"
+    assert parm["is_default"] is True
+    assert parm["locked"] is False
+
+
+def test_component_path_reads_one_component(client, scene):
+    parm = _get(client, "/obj/geo1/box1/sizex")
+    assert parm["kind"] == "parm"
+    assert parm["tuple"] == "size"
+    assert parm["name"] == "sizex"
+    assert parm["value"] == 1.0
+    assert parm["raw"] == "1"
+
+
+def test_tuple_set_list_and_component_set_scalar(client, scene):
+    res = _set(client, {"path": "/obj/geo1/box1/size", "value": [2, 3, 4]})
+    assert res["value"] == [2.0, 3.0, 4.0]
+    assert res["wrote_keyframe"] is False
+    assert res["is_default"] is False
+    assert res["errors"] == [] and "warnings" in res
+    res = _set(client, {"path": "/obj/geo1/box1/sizey", "value": 5})
+    assert res["value"] == 5.0
+    assert scene["box"].parmTuple("size").eval() == (2.0, 5.0, 4.0)
+
+
+def test_tuple_shape_mismatches_are_invalid_value(client, scene):
+    err = client.error("parm_set", {"items": [{"path": "/obj/geo1/box1/size", "value": 2}]})
+    assert err["code"] == "invalid_value"
+    assert "sizex" in err["hint"]
+    err = client.error("parm_set", {"items": [{"path": "/obj/geo1/box1/size", "value": [1, 2]}]})
+    assert err["code"] == "invalid_value"
+    err = client.error("parm_set", {"items": [{"path": "/obj/geo1/box1/sizex", "value": [1, 2]}]})
+    assert err["code"] == "invalid_value"
+    assert "tuple path" in err["hint"]
+
+
+def test_parm_not_found_carries_candidates(client, scene):
+    err = client.error("parm_get", {"paths": ["/obj/geo1/xform1/translate"]})
+    assert err["code"] == "parm_not_found"
+    assert err["candidates"][0] == "t"
+    assert "tuple" in err["hint"] and "tx/ty/tz" in err["hint"]
+    err = client.error("parm_set", {"items": [{"path": "/obj/geo1/box1/sise", "value": [1, 1, 1]}]})
+    assert err["code"] == "parm_not_found"
+    assert "size" in err["candidates"]
+    err = client.error("parm_get", {"paths": ["/obj/geo1/box2/sizex"]})
+    assert err["code"] == "node_not_found"
+    assert "/obj/geo1/box1" in err["candidates"]
+
+
+# -- expressions and animation -----------------------------------------------------
+
+
+def test_expression_set_and_read_at_frames(client, scene):
+    res = _set(client, {"path": "/obj/geo1/xform1/ty", "expression": "$F*0.1"})
+    assert res["expression"] == "$F*0.1"
+    assert res["language"] == "hscript"
+    assert res["wrote_keyframe"] is False
+    at10 = _get(client, "/obj/geo1/xform1/ty", frame=10)
+    assert at10["value"] == pytest.approx(1.0)
+    assert at10["raw"] == "$F*0.1"
+    assert at10["is_default"] is False
+    at24 = client.ok("parm_get", {"paths": ["/obj/geo1/xform1/ty"], "frame": 24})
+    assert at24["frame"] == 24
+    assert at24["parms"][0]["value"] == pytest.approx(2.4)
+    assert hou.frame() == 1  # reading at a frame does not move the playbar
+
+
+def test_python_expression(client, scene):
+    res = _set(
+        client,
+        {"path": "/obj/geo1/xform1/tx", "expression": "hou.frame() * 2", "language": "python"},
+    )
+    assert res["language"] == "python"
+    assert _get(client, "/obj/geo1/xform1/tx", frame=5)["value"] == pytest.approx(10.0)
+
+
+def test_animation_replace_makes_value_stick(client, scene):
+    ty = scene["xform"].parm("ty")
+    ty.setExpression("$F*0.1")
+    res = _set(client, {"path": "/obj/geo1/xform1/ty", "value": 3})
+    assert res["value"] == 3.0
+    assert "expression" not in res and "keyed" not in res
+    assert res["wrote_keyframe"] is False
+    assert len(ty.keyframes()) == 0
+    assert ty.evalAtFrame(50) == 3.0
+
+
+def test_animation_keep_reports_what_houdini_did(client, scene):
+    ty = scene["xform"].parm("ty")
+    ty.setExpression("$F*0.1")
+    res = _set(client, {"path": "/obj/geo1/xform1/ty", "value": 3, "animation": "keep"}, frame=10)
+    # Houdini adds a key but the expression still drives the parm.
+    assert res["wrote_keyframe"] is True
+    assert res["value"] == pytest.approx(1.0)
+    assert res["expression"] == "$F*0.1"
+    assert any("animation: replace" in note for note in res["notes"])
+    assert len(ty.keyframes()) == 2
+
+
+def test_animation_keep_on_keyed_parm_inserts_key(client, scene):
+    tz = scene["xform"].parm("tz")
+    for frame, value in ((1, 0.0), (24, 5.0)):
+        key = hou.Keyframe()
+        key.setFrame(frame)
+        key.setValue(value)
+        tz.setKeyframe(key)
+    res = _set(client, {"path": "/obj/geo1/xform1/tz", "value": 9, "animation": "keep"}, frame=10)
+    assert res["wrote_keyframe"] is True
+    assert res["value"] == pytest.approx(9.0)
+    assert res["keyed"] is True
+    assert [k.frame() for k in tz.keyframes()] == [1.0, 10.0, 24.0]
+
+
+def test_animation_key_and_keyframes(client, scene):
+    res = _set(client, {"path": "/obj/geo1/xform1/tx", "value": 5, "animation": "key"}, frame=10)
+    assert res["wrote_keyframe"] is True
+    res = _set(client, {"path": "/obj/geo1/xform1/tx", "keyframe": {"frame": 20, "value": 9}})
+    assert res["wrote_keyframe"] is True
+    assert res["keyed"] is True
+    got = _get(client, "/obj/geo1/xform1/tx", frame=10, include=["keys"])
+    assert got["keyframes"] == {"count": 2, "first": 10.0, "last": 20.0}
+    assert got["value"] == pytest.approx(5.0)
+    assert _get(client, "/obj/geo1/xform1/tx", frame=20)["value"] == pytest.approx(9.0)
+    # keyframes with replace swaps the whole animation
+    res = _set(
+        client,
+        {
+            "path": "/obj/geo1/xform1/tx",
+            "keyframes": [{"frame": 1, "value": 0}, {"frame": 48, "value": 2}],
+        },
+    )
+    assert res["wrote_keyframe"] is True
+    assert [k.frame() for k in scene["xform"].parm("tx").keyframes()] == [1.0, 48.0]
+    # key on a tuple path is refused with a component hint
+    err = client.error(
+        "parm_set", {"items": [{"path": "/obj/geo1/xform1/t", "keyframe": {"value": 1}}]}
+    )
+    assert err["code"] == "invalid_argument"
+    assert "/obj/geo1/xform1/tx" in err["hint"]
+
+
+def test_keyframe_replace_drops_expression(client, scene):
+    tx = scene["xform"].parm("tx")
+    tx.setExpression("$F")
+    res = _set(client, {"path": "/obj/geo1/xform1/tx", "keyframe": {"frame": 10, "value": 3}})
+    assert res["wrote_keyframe"] is True
+    assert any("Removed the expression" in n for n in res["notes"])
+    assert tx.evalAtFrame(10) == pytest.approx(3.0)
+
+
+def test_channel_ref(client, scene):
+    res = _set(client, {"path": "/obj/geo1/xform1/sx", "channel_ref": "/obj/geo1/box1/sizex"})
+    assert res["expression"] == 'ch("../box1/sizex")'
+    assert res["wrote_keyframe"] is False
+    scene["box"].parm("sizex").set(4)
+    assert _get(client, "/obj/geo1/xform1/sx")["value"] == pytest.approx(4.0)
+    # tuple to tuple
+    other = scene["geo"].createNode("xform", "xform2")
+    other.parmTuple("t").set((1, 2, 3))
+    res = _set(client, {"path": "/obj/geo1/xform1/t", "channel_ref": "/obj/geo1/xform2/t"})
+    assert res["value"] == [1.0, 2.0, 3.0]
+    assert set(res["expressions"]) == {"tx", "ty", "tz"}
+    err = client.error(
+        "parm_set",
+        {"items": [{"path": "/obj/geo1/xform1/tx", "channel_ref": "/obj/geo1/xform2/t"}]},
+    )
+    assert err["code"] == "invalid_value"
+
+
+def test_broken_expression_surfaces_node_errors(client, scene):
+    res = _set(client, {"path": "/obj/geo1/box1/sizex", "expression": "foo("})
+    assert res["expression"] == "foo("
+    assert res["errors"], res
+    assert res["cook_state"] == "error"
+
+
+# -- menus, strings ----------------------------------------------------------------
+
+
+def test_menu_by_token_label_and_index(client, scene):
+    res = _set(client, {"path": "/obj/geo1/xform1/xOrd", "value": "trs"})
+    assert res["value"] == "trs" and res["menu_token"] == "trs"
+    assert "notes" not in res
+    res = _set(client, {"path": "/obj/geo1/xform1/xOrd", "value": "Rot Scale Trans"})
+    assert res["value"] == "rst"
+    assert "rst" in res["notes"][0]
+    res = _set(client, {"path": "/obj/geo1/xform1/xOrd", "value": 0})
+    assert res["value"] == "srt"
+    assert res["is_default"] is True
+    err = client.error("parm_set", {"items": [{"path": "/obj/geo1/xform1/xOrd", "value": "zzz"}]})
+    assert err["code"] == "invalid_value"
+    assert "srt" in err["candidates"]
+    assert "Scale Rot Trans" in err["hint"]
+    err = client.error("parm_set", {"items": [{"path": "/obj/geo1/xform1/xOrd", "value": 99}]})
+    assert err["code"] == "invalid_value"
+    got = _get(client, "/obj/geo1/xform1/xOrd", include=["menu", "template"])
+    assert got["type"] == "menu"
+    assert got["menu"]["token"] == "srt" and got["menu"]["label"] == "Scale Rot Trans"
+    assert got["menu"]["index"] == 0
+    assert {"token": "trs", "label": "Trans Rot Scale"} in got["menu"]["items"]
+    assert got["template"]["default"] == "srt"
+
+
+def test_string_raw_vs_expanded(client, scene):
+    file_sop = scene["geo"].createNode("file", "file1")
+    res = _set(client, {"path": "/obj/geo1/file1/file", "value": "$HIP/geo/foo.bgeo"})
+    assert res["raw"] == "$HIP/geo/foo.bgeo"
+    assert "$HIP" not in res["value"]
+    assert res["value"] == hou.text.expandString("$HIP/geo/foo.bgeo")
+    assert file_sop.parm("file").unexpandedString() == "$HIP/geo/foo.bgeo"
+    got = _get(client, "/obj/geo1/file1/file", include=["template"])
+    assert got["type"] == "string"
+    assert got["template"]["string_type"] == "FileReference"
+
+
+# -- ramps, multiparms, buttons, defaults ------------------------------------------
+
+
+def test_ramp(client, scene):
+    node = scene["geo"].createNode("attribremap", "remap1")
+    res = _set(
+        client,
+        {
+            "path": "/obj/geo1/remap1/remap",
+            "ramp": {
+                "basis": ["linear", "constant", "linear"],
+                "keys": [0, 0.5, 1],
+                "values": [0, 1, 0.25],
+            },
+        },
+    )
+    assert res["value"]["keys"] == [0.0, 0.5, 1.0]
+    assert res["value"]["basis"] == ["linear", "constant", "linear"]
+    assert res["is_default"] is False
+    assert node.parm("remap").eval().lookup(0.25) == pytest.approx(0.5)
+    got = _get(client, "/obj/geo1/remap1/remap", include=["ramp", "multiparm"])
+    assert got["type"] == "ramp"
+    assert got["ramp"]["count"] == 3 and got["ramp"]["is_color"] is False
+    assert got["multiparm"]["count"] == 3
+    err = client.error(
+        "parm_set",
+        {
+            "items": [
+                {
+                    "path": "/obj/geo1/remap1/remap",
+                    "ramp": {"basis": "wobbly", "keys": [0], "values": [1]},
+                }
+            ]
+        },
+    )
+    assert err["code"] == "invalid_value" and "linear" in err["candidates"]
+    scene["geo"].createNode("color", "color1")
+    res = _set(
+        client,
+        {
+            "path": "/obj/geo1/color1/ramp",
+            "ramp": {"keys": [0, 1], "values": [[1, 0, 0], [0, 0, 1]]},
+        },
+    )
+    assert res["value"]["is_color"] is True
+    assert res["value"]["values"] == [[1.0, 0.0, 0.0], [0.0, 0.0, 1.0]]
+
+
+def test_multiparm_count(client, scene):
+    node = scene["geo"].createNode("attribcreate", "attribcreate1")
+    res = _set(client, {"path": "/obj/geo1/attribcreate1/numattr", "multiparm_count": 3})
+    assert res["value"] == 3
+    got = _get(client, "/obj/geo1/attribcreate1/numattr", include=["multiparm"])
+    assert got["type"] == "multiparm"
+    assert got["multiparm"]["count"] == 3
+    assert len(got["multiparm"]["instances"]) == 3
+    assert "name3" in got["multiparm"]["instances"][2]
+    assert node.parm("name3") is not None
+    err = client.error(
+        "parm_set", {"items": [{"path": "/obj/geo1/box1/sizex", "multiparm_count": 2}]}
+    )
+    assert err["code"] == "invalid_value"
+
+
+def test_revert_to_default(client, scene):
+    box = scene["box"]
+    box.parm("sizex").setExpression("$F*3")
+    res = _set(client, {"path": "/obj/geo1/box1/sizex", "revert_to_default": True})
+    assert res["is_default"] is True and res["value"] == 1.0
+    assert len(box.parm("sizex").keyframes()) == 0
+    box.parmTuple("t").set((1, 2, 3))
+    res = _set(client, {"path": "/obj/geo1/box1/t", "revert_to_default": True})
+    assert res["value"] == [0.0, 0.0, 0.0] and res["is_default"] is True
+
+
+def test_press_button(client, scene):
+    scene["geo"].createNode("file", "file1")
+    res = _set(client, {"path": "/obj/geo1/file1/reload", "press": True})
+    assert res["wrote_keyframe"] is False
+    assert res["value"] is None
+    err = client.error("parm_set", {"items": [{"path": "/obj/geo1/box1/sizex", "press": True}]})
+    assert err["code"] == "invalid_value"
+    err = client.error("parm_set", {"items": [{"path": "/obj/geo1/file1/reload", "value": 1}]})
+    assert err["code"] == "invalid_value" and "press" in err["hint"]
+
+
+def test_is_default_behaviour(client, scene):
+    assert _get(client, "/obj/geo1/box1/sizex")["is_default"] is True
+    _set(client, {"path": "/obj/geo1/box1/sizex", "value": 2})
+    assert _get(client, "/obj/geo1/box1/sizex")["is_default"] is False
+    assert _get(client, "/obj/geo1/box1/size")["is_default"] is False
+    assert _get(client, "/obj/geo1/box1/sizey")["is_default"] is True
+    _set(client, {"path": "/obj/geo1/box1/sizex", "value": 1})
+    assert _get(client, "/obj/geo1/box1/size")["is_default"] is True
+    # an expression is never "at default", even when it evaluates to the default
+    _set(client, {"path": "/obj/geo1/box1/sizex", "expression": "1"})
+    assert _get(client, "/obj/geo1/box1/sizex")["is_default"] is False
+
+
+# -- validation ---------------------------------------------------------------------
+
+
+def test_invalid_value_type_and_strict_range(client, scene):
+    err = client.error("parm_set", {"items": [{"path": "/obj/geo1/box1/sizex", "value": "abc"}]})
+    assert err["code"] == "invalid_value"
+    assert err["detail"]["type"] == "float"
+    assert "expression" in err["hint"]
+    # divrate has a strict minimum of 1; Houdini would clamp 0 silently
+    err = client.error(
+        "parm_set", {"items": [{"path": "/obj/geo1/box1/divrate", "value": [0, 4, 4]}]}
+    )
+    assert err["code"] == "invalid_value"
+    assert err["detail"]["min"] == 1 and err["detail"]["min_strict"] is True
+    assert ">= 1" in err["hint"]
+    assert scene["box"].parmTuple("divrate").eval() == (4, 4, 4)
+    err = client.error("parm_set", {"items": [{"path": "/obj/geo1/box1/sizex"}]})
+    assert err["code"] == "invalid_argument"
+    err = client.error(
+        "parm_set", {"items": [{"path": "/obj/geo1/box1/sizex", "value": 1, "expression": "$F"}]}
+    )
+    assert err["code"] == "invalid_argument"
+
+
+def test_template_include(client, scene):
+    got = _get(client, "/obj/geo1/box1/divrate", include=["template"])
+    tmpl = got["template"]
+    assert tmpl["type"] == "int" and tmpl["size"] == 3
+    assert tmpl["default"] == [4, 4, 4]
+    assert tmpl["min"] == 1 and tmpl["min_strict"] is True
+    assert tmpl["label"]
+
+
+def test_locked_hda_internal_parm_is_refused(client, scene, work_dir):
+    sub = scene["geo"].createNode("subnet", "asset1")
+    sub.createNode("box", "inner")
+    hda_path = (work_dir / "hp_parms_test.hda").as_posix()
+    asset = sub.createDigitalAsset(
+        name="hp_parms_test_asset", hda_file_name=hda_path, description="HP parms test"
+    )
+    asset.matchCurrentDefinition()
+    assert asset.isLockedHDA()
+    err = client.error("parm_set", {"items": [{"path": f"{asset.path()}/inner/sizex", "value": 3}]})
+    assert err["code"] == "locked"
+    assert "node_edit" in err["hint"] and asset.path() in err["hint"]
+    assert "PermissionError" in err["hou_exception"]
+    assert asset.node("inner").parm("sizex").eval() == 1.0
+    got = _get(client, f"{asset.path()}/inner/sizex")
+    assert got["locked"] is True
+
+
+# -- batches and undo --------------------------------------------------------------
+
+
+def test_failed_batch_rolls_back_earlier_items(client, scene):
+    err = client.error(
+        "parm_set",
+        {
+            "items": [
+                {"path": "/obj/geo1/box1/sizex", "value": 7},
+                {"path": "/obj/geo1/box1/nope", "value": 1},
+            ]
+        },
+    )
+    assert err["code"] == "parm_not_found"
+    assert err["detail"]["item"] == 1
+    assert err["message"].startswith("items[1]")
+    assert scene["box"].parm("sizex").eval() == 1.0
+    assert not any("parm_set" in label for label in hou.undos.undoLabels()[:1])
+
+
+def test_partial_batch_keeps_good_items(client, scene):
+    result = client.ok(
+        "parm_set",
+        {
+            "items": [
+                {"path": "/obj/geo1/box1/sizex", "value": 7},
+                {"path": "/obj/geo1/box1/nope", "value": 1},
+                {"path": "/obj/geo1/box1/sizez", "value": 3},
+            ],
+            "partial": True,
+        },
+    )
+    assert result["failed"] == 1
+    good, bad, good2 = result["results"]
+    assert good["value"] == 7.0 and good2["value"] == 3.0
+    assert bad["error"]["code"] == "parm_not_found"
+    assert bad["wrote_keyframe"] is False
+    assert scene["box"].parmTuple("size").eval() == (7.0, 1.0, 3.0)
+
+
+def test_one_undo_group_per_call(client, scene):
+    envelope = client.call(
+        "parm_set",
+        {
+            "items": [
+                {"path": "/obj/geo1/box1/sizex", "value": 2},
+                {"path": "/obj/geo1/xform1/ty", "expression": "$F"},
+            ]
+        },
+    )
+    assert envelope["ok"], envelope
+    label = envelope["_meta"]["undo_label"]
+    assert label == "HocusPocus: parm_set 2 parms"
+    assert hou.undos.undoLabels()[0] == label
+    hou.undos.performUndo()
+    assert scene["box"].parm("sizex").eval() == 1.0
+    assert len(scene["xform"].parm("ty").keyframes()) == 0
+
+
+def test_parm_get_is_read_only(client, scene):
+    envelope = client.call("parm_get", {"paths": ["/obj/geo1/box1/size"]})
+    assert envelope["ok"] and envelope["_meta"]["undo_label"] is None
+
+
+# -- shared helpers (in-process) -----------------------------------------------------
+
+
+def test_set_parm_items_engine(scene):
+    from hocuspocus.host.tools.parms import set_parm_items
+    from hocuspocus.tools.errors import ToolError
+
+    box, xform = scene["box"], scene["xform"]
+    xform.parm("ry").setExpression("$F")
+    results = set_parm_items(
+        xform,
+        {
+            "t": [1, 2, 3],
+            "ry": 45,
+            "rx": {"expr": "$F*2"},
+            "xOrd": "Trans Rot Scale",
+            "sx": {"channel_ref": "/obj/geo1/box1/sizex"},
+        },
+        None,
+    )
+    assert [r["path"] for r in results] == [
+        "/obj/geo1/xform1/t",
+        "/obj/geo1/xform1/ry",
+        "/obj/geo1/xform1/rx",
+        "/obj/geo1/xform1/xOrd",
+        "/obj/geo1/xform1/sx",
+    ]
+    assert xform.parmTuple("t").eval() == (1.0, 2.0, 3.0)
+    assert xform.parm("ry").evalAtFrame(99) == 45.0  # replace removed the expression
+    assert xform.parm("rx").expression() == "$F*2"
+    assert xform.parm("xOrd").evalAsString() == "trs"
+    assert results[3]["notes"]
+    assert xform.parm("sx").expression() == 'ch("../box1/sizex")'
+    with pytest.raises(ToolError) as info:
+        set_parm_items(box, {"sizex": 2, "bogus": 1}, None)
+    assert info.value.code == "parm_not_found"
+    assert info.value.message.startswith("parms.bogus")
+    assert info.value.detail == {"parm": "bogus", "node": "/obj/geo1/box1"}
+    with pytest.raises(ToolError) as info:
+        set_parm_items(box, {"sizex": {"expr": "$F", "language": "python"}}, None)
+    assert info.value.code == "invalid_argument"
+
+
+def test_summarize_parm_compact_and_full(scene):
+    from hocuspocus.host.tools.parms import summarize_parm
+
+    box, xform = scene["box"], scene["xform"]
+    assert summarize_parm(box.parm("sizex")) == {
+        "name": "sizex",
+        "value": 1.0,
+        "raw": "1",
+        "is_default": True,
+    }
+    box.parmTuple("size").set((2, 1, 1))
+    xform.parm("ty").setExpression("$F*2")
+    compact = summarize_parm(box.parmTuple("size"))
+    assert compact == {
+        "name": "size",
+        "value": [2.0, 1.0, 1.0],
+        "raw": ["2", "1", "1"],
+        "is_default": False,
+    }
+    animated = summarize_parm(xform.parmTuple("t"), frame=5)
+    assert animated["value"] == [0.0, 10.0, 0.0]
+    assert animated["expressions"] == {"ty": {"expression": "$F*2", "language": "hscript"}}
+    menu = summarize_parm(xform.parm("xOrd"))
+    assert menu["menu_token"] == "srt" and menu["value"] == "srt"
+    single = summarize_parm(box.parmTuple("type"))  # one-component tuple → its parm
+    assert single["name"] == "type" and single["menu_token"] == "poly"
+    full = summarize_parm(xform.parm("ty"), detail="full")
+    assert full["path"] == "/obj/geo1/xform1/ty"
+    assert full["keyframes"]["count"] == 1
+    assert full["template"]["type"] == "float"
