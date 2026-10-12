@@ -191,6 +191,16 @@ def test_tools_list_is_deterministic():
     ]
 
 
+def test_instructions_cover_launch_lifetime_and_guide_recipes():
+    from hocuspocus.bridge.instructions import guide_text
+
+    assert "launched.outlives_server" in INSTRUCTIONS and "attach by pid" in INSTRUCTIONS
+    assert 'detail: "folders"' in INSTRUCTIONS and "addSpareParmTuple" in INSTRUCTIONS
+    guide = guide_text()
+    assert guide.index("## Instructions") < guide.index("## Recipes")
+    assert "node.addSpareParmTuple(" in guide
+
+
 def test_instructions_under_400_words():
     assert len(INSTRUCTIONS.split()) <= 400
 

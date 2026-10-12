@@ -164,17 +164,18 @@ def _parm_value() -> dict[str, Any]:
     ``{channel_ref}``, ``{ramp}``, ``{multiparm_count}``...), as ``set_parm_items`` takes."""
     literal = _literal_value()
     languages = ("hscript", "python")
-    key = _obj({"frame": _n(), "value": _n()}, ("value",))
     literal["anyOf"].append(_obj({"expr": _s(), "lang": _enum(languages, "hscript")}, ("expr",)))
+    # The item fields' own shapes are parm_set's (and checked by the host); listing the
+    # names keeps typos caught here without repeating every sub-schema in tools/list.
     item = {
-        "value": _literal_value(),
+        "value": {},
         "expression": _s(),
-        "language": _enum(languages, "hscript"),
-        "keyframe": key,
-        "keyframes": _arr(key),
+        "language": _enum(languages),
+        "keyframe": {"type": "object"},
+        "keyframes": {"type": "array"},
         "channel_ref": _s(),
         "ramp": {"type": "object"},
-        "multiparm_count": _i(None, minimum=0),
+        "multiparm_count": {"type": "integer"},
         "revert_to_default": {"type": "boolean"},
         "press": {"type": "boolean"},
         "animation": _enum(("replace", "key", "keep")),
@@ -320,7 +321,7 @@ _SESSION: tuple[ToolSpec, ...] = (
             "Choose which Houdini this session drives. Pass one of: pid to attach to a live "
             "instance listed by houdini_status; launch to start one (mode gui or headless hython, "
             "optional hip, wait up to wait_s, default 90); or disconnect to drop the selection. "
-            "Returns the new connected block. A launched Houdini usually closes when this server "
+            "A launched Houdini usually closes when this server "
             "exits (launched.outlives_server says); to keep one, start Houdini yourself (after "
             "hocuspocus install-houdini) and attach by pid."
         ),
@@ -493,7 +494,7 @@ _NODES: tuple[ToolSpec, ...] = (
             "Search a subtree for nodes. pattern globs names (default *), type globs type names; "
             "category, flags and has_errors filter. Rows: path, type, category, flags, input_count, "
             "child_count, has_errors. Locked HDAs are not entered unless recurse_locked. Paged by "
-            "limit and cursor. Use network_describe to read one network's wiring and parms."
+            "limit and cursor."
         ),
         input_schema=_obj(
             {
@@ -540,15 +541,8 @@ _NODES: tuple[ToolSpec, ...] = (
                             "path": _t("string"),
                             "name": _t("string"),
                             "session_id": _t("integer"),
-                            "type": _out(
-                                {
-                                    "name": _t("string"),
-                                    "category": _t("string"),
-                                    "version": _t("string"),
-                                    "description": _t("string"),
-                                    "help_url": _t("string"),
-                                }
-                            ),
+                            # {name, category, version, description, help_url}
+                            "type": _t("object"),
                             "flags": _t("object"),
                             "inputs": _objs(),
                             "outputs": _objs(),
@@ -595,7 +589,7 @@ _NODES: tuple[ToolSpec, ...] = (
                                 "type": "object",
                                 "additionalProperties": _parm_value(),
                                 "description": (
-                                    "Parm or tuple name to a value or a parm_set item without path."
+                                    "Parm name to a value or a parm_set item without path."
                                 ),
                             },
                             "inputs": _arr(_input_link()),
@@ -667,7 +661,7 @@ _NODES: tuple[ToolSpec, ...] = (
                             ),
                             "comment": _s(),
                             "position": _xy("[x, y]"),
-                            "lock": {"type": "boolean", "description": "HDA contents locked."},
+                            "lock": {"type": "boolean"},
                             "bypass": {"type": "boolean"},
                         },
                         ("path",),
@@ -884,10 +878,8 @@ _PARMS: tuple[ToolSpec, ...] = (
                             **_tuple_animation(),
                             "is_default": _t("boolean"),
                             "locked": _t("boolean"),
-                            "keyframes": {
-                                "type": "object",
-                                "description": "{count, first, last}; per component for a tuple.",
-                            },
+                            # {count, first, last}; per component for a tuple.
+                            "keyframes": _t("object"),
                             "menu": _t("object"),
                             "ramp": _t("object"),
                             "multiparm": _t("object"),

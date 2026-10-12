@@ -116,7 +116,8 @@ macOS the path is `.venv/bin/...`.
    - The description stays under the word cap.
    - The schema shape and annotations are valid.
    - The examples validate.
-   - Total `tools/list` text stays at 48 KB or less.
+   - The serialised `tools/list` result (full profile: names, descriptions, input and
+     output schemas, annotations) stays at 44,000 bytes or less; the test prints the size.
    - `docs/tools.md` is current.
 
    `tests/unit/test_host_tools.py` checks that every `@tool` name exists in the

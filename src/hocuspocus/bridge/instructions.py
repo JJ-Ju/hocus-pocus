@@ -23,7 +23,31 @@ parms only, lists paged with `cursor`; `truncated: true` means the response budg
 so page or narrow the query. Errors carry `code`, `hint` and `candidates`; read them and \
 adjust. `delivery_unknown` means the call may or may not have run: inspect state before \
 repeating it. `_meta.scene_generation` changes when the scene is cleared or loaded, so cached \
-paths may be stale."""
+paths may be stale. A Houdini started with `houdini_connect {launch}` usually closes when this \
+server exits (`launched.outlives_server` says): `hip_save` before the session ends, keep one \
+session open for long jobs, or attach by pid to a Houdini the user started. `viewport_capture` \
+frames the scene per `fit`, in a GUI session too. `node_type_info` is large for FX types: pass \
+`parms` globs, or `detail: "folders"` first. Spare parms need `houdini_python` \
+(`addSpareParmTuple`; recipe in `hocuspocus://guide`)."""
+
+RECIPES = """## Recipes
+
+### Add a spare parm (houdini_python)
+
+No typed tool creates parameters. Add a control parm to a null, subnet, geo object or an
+unlocked HDA with `houdini_python`, then drive other parms from it with `ch()`:
+
+```python
+node = hou.node("/obj/geo1/CONTROLS")
+node.addSpareParmTuple(
+    hou.FloatParmTemplate("glue_strength", "Glue Strength", 1, default_value=(0.5,))
+)
+result = node.parm("glue_strength").eval()
+```
+
+`parm_set {path: "/obj/geo1/rbd1/strength", expression: 'ch("../CONTROLS/glue_strength")'}`
+then links to it. A `ch()` to a parm that does not exist evaluates to 0 silently.
+"""
 
 GUIDE_HEADER = """\
 # HocusPocus operating guide
@@ -41,7 +65,7 @@ def _tools_md() -> Path | None:
 
 def guide_text() -> str:
     """The full operating manual: instructions plus ``docs/tools.md`` when available."""
-    parts = [GUIDE_HEADER, INSTRUCTIONS, "\n"]
+    parts = [GUIDE_HEADER, INSTRUCTIONS, "\n\n", RECIPES]
     tools_md = _tools_md()
     if tools_md is not None:
         with contextlib.suppress(OSError):

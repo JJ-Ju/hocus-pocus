@@ -327,9 +327,10 @@ as it was started from a neutral directory).
 - **Responses:** `structuredContent` **and** the same JSON serialised compactly into the
   text block (clients vary in which they feed the model). `outputSchema` declared where
   the shape is stable. Key casing is `snake_case` in both directions.
-- **Budget:** `tools/list` ≤ 12,000 tokens total (CI-tested with a tokenizer
-  approximation of 4 chars/token: ≤ 48 KB of model-visible text). Each description ≤ 80
-  words. Examples live in `docs/tools.md` and the resource `hocuspocus://guide`, not in
+- **Budget:** `tools/list` ≤ 11,000 tokens total, CI-tested on what clients receive: the
+  serialised `tools/list` result of the full profile (names, descriptions, input and output
+  schemas, annotations) is ≤ 44,000 bytes (names, descriptions and input schemas alone stay
+  ≤ 48 KB). Each description ≤ 80 words. Examples live in `docs/tools.md` and the resource `hocuspocus://guide`, not in
   descriptions. Default result ≤ 16 KB. List tools take `limit` (default 50) and
   `cursor`; results carry `next_cursor` when more exist and `total` when cheap.
 - **Non-default only:** parm listings show parms where `isAtDefault()` is false unless
@@ -716,7 +717,7 @@ pytest everywhere. Markers `unit`, `houdini`, `e2e`; `conftest.py` finds hython 
 
 | Tier | Runner | Scope | Budget |
 |---|---|---|---|
-| `tests/unit` | system Python | catalogue integrity (every tool has impl, schema, annotations, ≤ 80-word description, `tools/list` ≤ 48 KB), bridge instance selection and offline behaviour with a fake host, error mapping, budget truncation, config parsing, `cli` path resolution | < 10 s |
+| `tests/unit` | system Python | catalogue integrity (every tool has impl, schema, annotations, ≤ 80-word description, serialised `tools/list` ≤ 44,000 B), bridge instance selection and offline behaviour with a fake host, error mapping, budget truncation, config parsing, `cli` path resolution | < 10 s |
 | `tests/integration` | `hython -m pytest` | in-process host: one `hou` session per run, `hipFile.clear()` per test, every tool exercised against real nodes; the idioms in §5 each have a test | < 90 s |
 | `tests/e2e` | system Python spawning hython | official `mcp` client → `hocuspocus-mcp` stdio → `hython -m hocuspocus.host` on an ephemeral port with an isolated `HOUDINI_USER_PREF_DIR` and a neutral cwd: a stdio round trip, review 06 tasks 2, 3, 4, 6 and 9 as one scripted scenario, and a bridge launch that checks the work dir | < 60 s |
 | GUI (manual; no `tests/gui` directory) | checklist | package loads in `houdinifx`, autostart, viewer capture; run before a release and logged in `docs/redesign/progress.md` | — |
