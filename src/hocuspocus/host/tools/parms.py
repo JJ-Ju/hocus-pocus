@@ -1343,6 +1343,8 @@ def parm_set(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
             result["errors"] = diag["errors"]
             result["warnings"] = diag["warnings"]
             result["cook_state"] = diag["cook_state"]
+            if "hint" in diag:
+                result["hint"] = diag["hint"]
         results.append(result)
     out: dict[str, Any] = {"results": results}
     if partial:

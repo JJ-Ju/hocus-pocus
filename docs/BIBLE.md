@@ -325,7 +325,8 @@ hfs = ""                    # bridge: explicit Houdini install dir for launch
   `network_describe` do not descend into locked assets unless `recurse_locked: true`.
 - **Every mutation result** includes, for each touched node: `path`, `type`, `errors`,
   `warnings` (after a non-forced cook of that node if it is cheap, else `cook_state:
-  "not_cooked"`).
+  "not_cooked"`; errors left from before the change are rechecked with a forced cook,
+  §5.18).
 - **Annotations:** read tools `readOnlyHint: true`; `node_delete`, `hip_new`,
   `hip_open`, `houdini_python` `destructiveHint: true`; `parm_set`, `node_connect`,
   `node_edit`, `time`, `selection`, `cook`, `job`, `viewport_capture`
@@ -388,8 +389,8 @@ when present, best effort, under `recent: [...]` in `houdini_status.connected.hi
 
 | Tool | Args | Behaviour |
 |---|---|---|
-| `cook` | `paths`, `force = false`, `frame?`, `timeout_s = 30` | `node.cook(force)` on the main thread; catches `OperationFailed` and reports `errors/warnings/messages` per node, `cook_time_ms`, `ok`. If the cook exceeds `job_threshold_s` and the client allows, it becomes a job (returns `job_id`). |
-| `problems` | `root = "/"`, `include_warnings = true`, `cook_uncooked = false`, `recurse_locked = false`, `limit` | Walks the subtree, reports nodes with errors/warnings, broken channel references, missing file parms (`file`-type templates whose expanded path does not exist), unconnected required inputs. The "why is my node red" tool. |
+| `cook` | `paths`, `force = false`, `frame?`, `timeout_s = 30` | `node.cook(force)` on the main thread; catches `OperationFailed` and reports `errors/warnings/messages` per node, `cook_time_ms`, `ok`. Errors left from before a fix, on the node or its inputs, are rechecked (§5.18); `hint` names `force: true` when that was skipped. If the cook exceeds `job_threshold_s` and the client allows, it becomes a job (returns `job_id`). |
+| `problems` | `root = "/"`, `include_warnings = true`, `cook_uncooked = false`, `recurse_locked = false`, `limit` | Walks the subtree, reports nodes with errors/warnings, broken channel references, missing file parms (`file`-type templates whose expanded path does not exist), unconnected required inputs. Errored nodes changed since their last cook are recooked first, so a fixed node is never listed. The "why is my node red" tool. |
 | `geo_info` | `path` (SOP, or OBJ → its display SOP), `frame?` | ~1 KB: `point_count, prim_count, vertex_count, bbox: {min, max, size, center}, prim_types: {polygon: n, packed: n, volume: n, …}, attributes: {point: [{name, type, size, type_info}], vertex, prim, detail: [{name, type, value}]}, groups: {point: [{name, count}], prim, edge, vertex}, intrinsics?`. Uses intrinsics and bulk accessors, never Python loops over points. |
 | `geo_read` | `path`, `class: point\|prim\|vertex\|detail`, `attribs?: [..]` (default all), `start = 0`, `cursor?`, `count = 50`, `group?`, `stats = false` | Spreadsheet rows as arrays with a `columns` header. `stats` adds `min/max/mean` per numeric attribute and `unique` (≤ 20) per string attribute over the **whole** class, computed with numpy bulk accessors. `next_cursor` is the next row offset as a string (pass it as `cursor`). |
 
@@ -490,6 +491,17 @@ Verified in review 04 against 22.0.466; each is a test case.
 17. **`hou.setFps` rescales the frame range.** By default it keeps the range's duration
     in seconds and moves the end frame. `time` calls `hou.setFps(fps, False, False,
     True)` and sets fps before the range.
+18. **Errors outlive their cause until `errors()` is read.** After a broken expression
+    (`$F*(`) is replaced by a constant (`set`, `revertToDefaults`), the next cook of that
+    node succeeds but `errors()` still returns the old message, and every downstream cook
+    then fails with "Invalid source" — forced or not — until the node itself is cooked
+    again. Reading `errors()` (or `warnings()`) *before* that cook avoids it; a node
+    already in that state clears with one more `cook(force=True)`. Replacing the
+    expression with another expression is not affected. `_diag.collect_problems` reads
+    errors before every cook, force-cooks a node (and errored upstream nodes, in Sop, Lop,
+    Cop and Chop networks) whose errors predate a cook that is not pending, and says
+    `hint: "...cook with force: true"` when it skipped that because the last cook took
+    over 2 s.
 
 ---
 

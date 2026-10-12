@@ -968,9 +968,11 @@ _COOK: tuple[ToolSpec, ...] = (
     ToolSpec(
         name="cook",
         description=(
-            "Cook nodes now and report per node ok, errors, warnings, messages, cook_time_ms. force "
-            "recooks clean nodes; frame defaults to current. A cook longer than the job threshold "
-            "returns job_id to poll with job. Use problems to scan a whole subtree for red nodes."
+            "Cook nodes now and report per node ok, errors, warnings, messages, cook_time_ms. "
+            "Errors left from before a fix are rechecked (the node and its errored inputs are "
+            "recooked) unless the last cook took over 2 s: then hint says use force, which "
+            "recooks clean nodes. frame defaults to current. A cook longer than the job threshold "
+            "returns job_id to poll with job. Use problems to scan a subtree for red nodes."
         ),
         input_schema=_obj(
             {
@@ -992,6 +994,7 @@ _COOK: tuple[ToolSpec, ...] = (
                             "ok": _t("boolean"),
                             **_problems(),
                             "cook_time_ms": _t("number"),
+                            "hint": _t("string"),
                         },
                         ("path", "ok"),
                     ),
@@ -1013,7 +1016,8 @@ _COOK: tuple[ToolSpec, ...] = (
         description=(
             "Explain red nodes: walks a subtree listing nodes with errors or warnings, broken "
             "channel references, missing files in file parms, unconnected required inputs. "
-            "cook_uncooked cooks never-cooked nodes first (slower, more complete). Locked HDAs are "
+            "Errored nodes changed since their last cook are recooked first. cook_uncooked cooks "
+            "never-cooked nodes too (slower, more complete). Locked HDAs are "
             "skipped unless recurse_locked. Paged by limit and cursor. Use cook for specific nodes."
         ),
         input_schema=_obj(

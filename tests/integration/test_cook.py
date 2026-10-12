@@ -249,3 +249,138 @@ def test_problems_locked_hda_is_opaque(client):
 def test_problems_root_errors(client):
     assert client.error("problems", {"root": "/obj/none"})["code"] == "node_not_found"
     assert client.error("problems", {"limit": 0})["code"] == "invalid_argument"
+
+
+# -- stale errors after the cause is fixed (review 07, papercut 1) -------------------
+
+
+def _terrain_chain(client):
+    """The evaluator's chain: box1 -> mountain -> scatter; sphere + scatter -> copy1."""
+    result = client.ok(
+        "node_create",
+        {
+            "items": [
+                {"parent": "/obj", "type": "geo", "name": "terrain"},
+                {"parent": "/obj/terrain", "type": "box", "name": "box1"},
+                {
+                    "parent": "/obj/terrain",
+                    "type": "mountain",
+                    "name": "mountain1",
+                    "inputs": [{"index": 0, "from": "/obj/terrain/box1"}],
+                },
+                {
+                    "parent": "/obj/terrain",
+                    "type": "scatter",
+                    "name": "scatter1",
+                    "parms": {"npts": 50},
+                    "inputs": [{"index": 0, "from": "/obj/terrain/mountain1"}],
+                },
+                {"parent": "/obj/terrain", "type": "sphere", "name": "sphere1"},
+                {
+                    "parent": "/obj/terrain",
+                    "type": "copytopoints",
+                    "name": "copy1",
+                    "inputs": [
+                        {"index": 0, "from": "/obj/terrain/sphere1"},
+                        {"index": 1, "from": "/obj/terrain/scatter1"},
+                    ],
+                    "flags": {"display": True},
+                },
+            ]
+        },
+    )
+    assert all(not r["errors"] for r in result["results"]), result
+    return "/obj/terrain"
+
+
+def _problem_keys(result):
+    return [(r["path"], r["kind"], r["message"]) for r in result["problems"]]
+
+
+@pytest.mark.parametrize(
+    "fix",
+    [
+        {"revert_to_default": True},
+        {"value": 2.0},
+    ],
+    ids=["revert_to_default", "value"],
+)
+def test_fixing_an_expression_clears_errors_downstream(client, fix):
+    root = _terrain_chain(client)
+    sizex = f"{root}/box1/sizex"
+    broken = client.ok("parm_set", {"items": [{"path": sizex, "expression": "$F*("}]})
+    assert broken["results"][0]["errors"], broken
+    failed = client.ok("cook", {"paths": [f"{root}/copy1"]})
+    assert failed["ok"] is False
+    before = client.ok("problems", {"root": root})
+    keys = _problem_keys(before)
+    assert len(keys) == len(set(keys)), keys  # no duplicate rows
+
+    fixed = client.ok("parm_set", {"items": [{"path": sizex, **fix}]})
+    row = fixed["results"][0]
+    assert row["errors"] == [], row
+    assert row["cook_state"] == "cooked"
+
+    cooked = client.ok("cook", {"paths": [f"{root}/copy1"]})
+    assert cooked["ok"] is True, cooked
+    assert cooked["results"][0]["errors"] == []
+    after = client.ok("problems", {"root": root})
+    assert after["total"] == 0, after["problems"]
+
+
+def test_cook_clears_errors_left_by_an_outside_fix(client):
+    """A fix made outside HocusPocus (GUI, houdini_python) followed by a plain cook of the
+    broken node itself: Houdini keeps the old error on it and fails every downstream cook
+    until the node is cooked again. A non-forced ``cook`` downstream must still be right."""
+    root = _terrain_chain(client)
+    box = hou.node(f"{root}/box1")
+    copy1 = hou.node(f"{root}/copy1")
+    parm = box.parm("sizex")
+    parm.setExpression("$F*(")
+    with pytest.raises(hou.OperationFailed):
+        copy1.cook()
+    parm.deleteAllKeyframes()
+    parm.revertToDefaults()
+    box.cook()  # succeeds, yet Houdini still reports the bracing error on box1
+    assert box.errors()
+    cooked = client.ok("cook", {"paths": [copy1.path()]})
+    assert cooked["ok"] is True, cooked
+    assert client.ok("cook", {"paths": [box.path()]})["results"][0]["errors"] == []
+    assert client.ok("problems", {"root": root})["total"] == 0
+
+
+def test_problems_rechecks_errored_nodes_changed_since_their_cook(client):
+    root = _terrain_chain(client)
+    sizex = f"{root}/box1/sizex"
+    client.ok("parm_set", {"items": [{"path": sizex, "expression": "$F*("}]})
+    assert client.ok("cook", {"paths": [f"{root}/copy1"]})["ok"] is False
+    broken = client.ok("problems", {"root": root})
+    assert {r["path"] for r in broken["problems"] if r["kind"] == "error"} >= {
+        f"{root}/box1",
+        f"{root}/copy1",
+    }
+    client.ok("parm_set", {"items": [{"path": sizex, "revert_to_default": True}]})
+    # Downstream nodes still hold "Invalid source" from the old cook; problems rechecks them.
+    after = client.ok("problems", {"root": root})
+    assert after["total"] == 0, after["problems"]
+    assert after["cooked"] >= 1
+
+
+def test_slow_node_with_old_errors_gets_a_force_hint(client):
+    from hocuspocus.host.tools import _diag
+
+    geo = _geo()
+    box = geo.createNode("box")
+    box.parm("sizex").setExpression("$F*(")
+    client.ok("cook", {"paths": [box.path()]})
+    box.parm("sizex").deleteAllKeyframes()
+    box.parm("sizex").set(2.0)
+    box.cook()  # Houdini keeps the old error (bible §5.18)
+    _diag._last_cook_ms[box.sessionId()] = _diag.SLOW_COOK_MS + 1
+    try:
+        row = client.ok("cook", {"paths": [box.path()]})["results"][0]
+        assert row["errors"] and "force: true" in row["hint"], row
+        forced = client.ok("cook", {"paths": [box.path()], "force": True})["results"][0]
+        assert forced["errors"] == [] and "hint" not in forced, forced
+    finally:
+        _diag._last_cook_ms.pop(box.sessionId(), None)

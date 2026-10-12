@@ -18,7 +18,13 @@ from typing import Any
 
 from hocuspocus.tools.errors import ToolError
 
-from ._diag import COOKABLE_CATEGORIES, collect_problems, require_node
+from ._diag import (
+    COOKABLE_CATEGORIES,
+    REFRESH_CATEGORIES,
+    collect_problems,
+    is_slow,
+    require_node,
+)
 from .registry import HostContext, tool
 
 JOB_STEP_TIMEOUT_S = 24 * 3600.0
@@ -362,18 +368,28 @@ def _unconnected_inputs(node: Any) -> list[dict[str, Any]]:
     return rows
 
 
+_RECHECK_CATEGORIES = REFRESH_CATEGORIES | {"Object"}
+"""An object's errors and warnings mirror its display SOP's, so it is rechecked too."""
+
+
 def node_problems(
     node: Any, *, include_warnings: bool, cook_uncooked: bool
 ) -> tuple[list[dict[str, Any]], bool]:
     """All problem rows for one node and whether it was cooked. Main thread."""
     rows: list[dict[str, Any]] = []
-    cookable = node.type().category().name() in COOKABLE_CATEGORIES
+    category = node.type().category().name()
     should_cook = False
-    if cook_uncooked and cookable:
-        try:
-            should_cook = node.needsToCook()
-        except Exception:
-            should_cook = False
+    try:
+        if node.needsToCook():
+            # Errors on a node changed since its last cook may be gone: recheck them
+            # (cheap categories only) so problems never lists a fixed node.
+            should_cook = (cook_uncooked and category in COOKABLE_CATEGORIES) or (
+                category in _RECHECK_CATEGORIES
+                and bool(node.errors() or node.warnings())
+                and not is_slow(node)
+            )
+    except Exception:
+        should_cook = False
     report = collect_problems(node, cook=should_cook)
     for text in report["errors"]:
         rows.append(_row(node, "error", f"{node.path()}: {text}"))
@@ -429,7 +445,8 @@ def problems(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     ranked: list[tuple[int, int, dict[str, Any]]] = []
     cooked = 0
     flagged: set[str] = set()
-    for position, node in enumerate(nodes):
+    # Children before their containers, so a rechecked object sees its fresh SOPs.
+    for position, node in reversed(list(enumerate(nodes))):
         node_rows, was_cooked = node_problems(
             node, include_warnings=include_warnings, cook_uncooked=cook_uncooked
         )
@@ -451,7 +468,7 @@ def problems(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
         "nodes_scanned": len(nodes),
         "nodes_with_problems": len(flagged),
     }
-    if cook_uncooked:
+    if cook_uncooked or cooked:
         result["cooked"] = cooked
     if offset + limit < len(ordered):
         result["next_cursor"] = str(offset + limit)
