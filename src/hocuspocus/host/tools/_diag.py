@@ -63,7 +63,7 @@ def is_slow(node: Any) -> bool:
         return False
 
 
-def _timed_cook(node: Any, force: bool) -> tuple[float, BaseException | None]:
+def timed_cook(node: Any, force: bool) -> tuple[float, BaseException | None]:
     started = time.perf_counter()
     failure: BaseException | None = None
     try:
@@ -91,7 +91,7 @@ def _has_stale_errors(node: Any) -> bool:
         return False
 
 
-def _upstream_first(node: Any) -> list[Any]:
+def upstream_first(node: Any) -> list[Any]:
     """Input ancestors of ``node`` ordered so every node comes after its inputs."""
     order: list[Any] = []
     seen: set[int] = set()
@@ -125,11 +125,11 @@ def refresh_stale_inputs(node: Any) -> list[str]:
     only in :data:`REFRESH_CATEGORIES`, and never one whose last cook was slow.
     """
     refreshed: list[str] = []
-    for ancestor in _upstream_first(node):
+    for ancestor in upstream_first(node):
         if _category(ancestor) not in REFRESH_CATEGORIES:
             continue
         if _has_stale_errors(ancestor) and not is_slow(ancestor):
-            _timed_cook(ancestor, True)
+            timed_cook(ancestor, True)
             with contextlib.suppress(Exception):
                 refreshed.append(ancestor.path())
     return refreshed
@@ -144,7 +144,7 @@ def refresh_stale(node: Any) -> list[str]:
         return []
     refreshed = refresh_stale_inputs(node)
     if _has_stale_errors(node) and not is_slow(node):
-        _timed_cook(node, True)
+        timed_cook(node, True)
         with contextlib.suppress(Exception):
             refreshed.append(node.path())
     return refreshed
@@ -171,7 +171,7 @@ def collect_problems(node: Any, *, cook: bool = False, force: bool = False) -> d
             refresh_stale_inputs(node)
         stale = _has_stale_errors(node)
         do_force = force or (stale and refreshable and not is_slow(node))
-        elapsed, exc = _timed_cook(node, do_force)
+        elapsed, exc = timed_cook(node, do_force)
         if exc is None:
             out["cook_state"] = "cooked"
         else:

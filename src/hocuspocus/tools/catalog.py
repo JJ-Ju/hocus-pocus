@@ -997,12 +997,12 @@ _COOK: tuple[ToolSpec, ...] = (
     ToolSpec(
         name="cook",
         description=(
-            "Cook nodes now and report per node ok, errors, warnings, messages, cook_time_ms (that "
-            "node's cook only; upstream may already be cached). Errors left from before a fix are "
-            "rechecked (the node and its errored inputs recooked) unless the last cook took over "
-            "2 s: then hint says use force, which recooks clean nodes. frame defaults to current. "
-            "A cook longer than the job threshold returns job_id to poll with job. Use problems to "
-            "scan a subtree."
+            "Cook nodes and report per node ok, errors, warnings, cook_time_ms (its own cook; "
+            "cached inputs are not recooked). profile force-cooks each input chain in dependency "
+            "order: chain (top 10 by cost), total_ms. frame_range [start, end, step] cooks frame "
+            "by frame (sims advance, frame restored); summary bbox adds per-frame counts and "
+            "bbox. Errors left from before a fix are rechecked unless the last cook took over 2 "
+            "s (hint: force). Past the job threshold returns job_id for job."
         ),
         input_schema=_obj(
             {
@@ -1010,12 +1010,18 @@ _COOK: tuple[ToolSpec, ...] = (
                 "force": _b(False),
                 "frame": _frame(),
                 "timeout_s": _n(None, minimum=1, default=30),
+                "profile": _b(False),
+                "frame_range": _arr({"type": "number"}, None, minItems=2, maxItems=3),
+                "summary": _enum(("none", "bbox"), "none"),
             },
             ("paths",),
         ),
         output_schema=_out(
             {
                 "ok": _t("boolean"),
+                "chain": _objs(),
+                "total_ms": _t("number"),
+                "frames": _objs(),
                 "results": {
                     "type": "array",
                     "items": _out(
@@ -1038,7 +1044,8 @@ _COOK: tuple[ToolSpec, ...] = (
         idempotent=True,
         examples=(
             {"paths": ["/obj/geo1/OUT"]},
-            {"paths": ["/obj/geo1/OUT"], "force": True, "frame": 12},
+            {"paths": ["/obj/geo1/OUT"], "profile": True},
+            {"paths": ["/obj/sim/OUT"], "frame_range": [1, 96], "summary": "bbox"},
         ),
     ),
     ToolSpec(

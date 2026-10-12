@@ -26,6 +26,8 @@ from ._diag import (
     collect_problems,
     is_slow,
     require_node,
+    timed_cook,
+    upstream_first,
 )
 from .registry import HostContext, tool
 
@@ -61,6 +63,15 @@ def _paths_arg(args: dict[str, Any]) -> list[str]:
     return [p.strip() for p in paths]
 
 
+WARM_CACHE_HINT = (
+    "cook_time_ms is this node's own cook; its inputs were already cooked and are not "
+    "included. Use profile: true to time the whole input chain."
+)
+
+SUMMARIES = ("none", "bbox")
+MAX_FRAMES = 10000
+
+
 def cook_node(path: str, *, force: bool, frame: float | None) -> dict[str, Any]:
     """Cook one node at ``frame`` (restoring the current frame) and report it. Main thread."""
     import hou
@@ -79,7 +90,271 @@ def cook_node(path: str, *, force: bool, frame: float | None) -> dict[str, Any]:
     row.update(report)
     if report["cook_state"] == "error":
         row["ok"] = False
+    if force and "hint" not in row and report.get("cook_time_ms", 1.0) < 1.0 and _has_inputs(node):
+        # Review 11 B7: a warm cache makes a forced cook look free.
+        row["hint"] = WARM_CACHE_HINT
     return row
+
+
+def _has_inputs(node: Any) -> bool:
+    try:
+        return any(i is not None for i in node.inputs())
+    except Exception:
+        return False
+
+
+def dependency_order(node: Any) -> list[Any]:
+    """``node.inputAncestors()`` ordered so every node comes after its inputs, then ``node``.
+
+    Wired inputs are walked depth first; ancestors reached only through reference inputs
+    come first (they feed the wired chain). Nodes that cannot cook are left out.
+    """
+    wired = upstream_first(node)
+    seen = {n.sessionId() for n in wired}
+    try:
+        ancestors = list(node.inputAncestors())
+    except Exception:
+        ancestors = []
+    extra = [a for a in reversed(ancestors) if a.sessionId() not in seen]
+    return [n for n in [*extra, *wired, node] if hasattr(n, "cook")]
+
+
+def _profile_step(node_path: str) -> dict[str, Any]:
+    """Force-cook one chain node and time it. Main thread."""
+    node = require_node(node_path)
+    elapsed, failure = timed_cook(node, True)
+    row: dict[str, Any] = {
+        "path": node.path(),
+        "type": node.type().name(),
+        "cook_time_ms": round(elapsed, 1),
+    }
+    if failure is not None:
+        try:
+            errors = [str(e).strip() for e in node.errors() if str(e).strip()]
+        except Exception:
+            errors = []
+        row["error"] = errors[0] if errors else f"{type(failure).__name__}: {failure}"
+    return row
+
+
+def _frame_list(raw: Any) -> list[float]:
+    hint = "For example [1, 96] or [1, 96, 2]."
+    if (
+        not isinstance(raw, list)
+        or len(raw) not in (2, 3)
+        or any(isinstance(v, bool) or not isinstance(v, int | float) for v in raw)
+    ):
+        raise ToolError(
+            "invalid_argument",
+            "'frame_range' must be [start, end] or [start, end, step] numbers.",
+            hint=hint,
+        )
+    start, end = float(raw[0]), float(raw[1])
+    step = float(raw[2]) if len(raw) == 3 else 1.0
+    if step <= 0 or end < start:
+        raise ToolError(
+            "invalid_argument", f"'frame_range' {raw} needs start <= end and step > 0.", hint=hint
+        )
+    count = int((end - start) / step + 1e-9) + 1
+    if count > MAX_FRAMES:
+        raise ToolError(
+            "invalid_argument",
+            f"'frame_range' {raw} covers {count} frames; at most {MAX_FRAMES} per call.",
+            hint="Use a larger step or split the range.",
+        )
+    return [start + i * step for i in range(count)]
+
+
+def _num(value: float) -> float | int:
+    return int(value) if float(value).is_integer() else round(value, 4)
+
+
+def _geometry_of(node: Any) -> Any:
+    """The node's geometry: a SOP's own, an object's display SOP's, else None."""
+    try:
+        category = node.type().category().name()
+        if category == "Object":
+            node = node.displayNode()
+        elif category != "Sop":
+            return None
+        return node.geometry() if node is not None else None
+    except Exception:
+        return None
+
+
+def _bbox_row(node: Any) -> dict[str, Any]:
+    geo = _geometry_of(node)
+    if geo is None:
+        return {"point_count": None, "prim_count": None, "bbox_min": None, "bbox_max": None}
+    points = geo.intrinsicValue("pointcount")
+    row: dict[str, Any] = {
+        "point_count": points,
+        "prim_count": geo.intrinsicValue("primitivecount"),
+    }
+    if points:
+        box = geo.boundingBox()
+        row["bbox_min"] = [round(v, 5) for v in box.minvec()]
+        row["bbox_max"] = [round(v, 5) for v in box.maxvec()]
+    else:
+        row["bbox_min"] = row["bbox_max"] = None
+    return row
+
+
+def _frame_step(
+    paths: list[str], frame: float, force: bool, summary: str
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Cook every path at ``frame`` (leaving the frame set). Main thread."""
+    import hou
+
+    hou.setFrame(frame)
+    reports, rows = [], []
+    for path in paths:
+        node = require_node(path)
+        report = collect_problems(node, cook=True, force=force)
+        report["path"] = node.path()
+        reports.append(report)
+        if summary == "bbox":
+            row: dict[str, Any] = {"frame": _num(frame)}
+            if len(paths) > 1:
+                row["path"] = node.path()
+            row.update(_bbox_row(node))
+            if report["errors"]:
+                row["errors"] = report["errors"][:3]
+            rows.append(row)
+    return reports, rows
+
+
+def _merge_frame_report(
+    merged: dict[str, dict[str, Any]], report: dict[str, Any], frame: float
+) -> None:
+    """Fold one frame's report into the node's row: the first failing frame's errors win,
+    warnings and messages are the last frame's, cook_time_ms is summed."""
+    path = report["path"]
+    row = merged.get(path)
+    if row is None:
+        row = merged[path] = {"path": path, "ok": True, "cook_time_ms": 0.0}
+    row["cook_time_ms"] = round(row["cook_time_ms"] + report.get("cook_time_ms", 0.0), 1)
+    if report["errors"] and row["ok"]:
+        row["ok"] = False
+        row["errors"] = report["errors"]
+        row["first_error_frame"] = _num(frame)
+    if row["ok"]:
+        row["errors"] = report["errors"]
+    row["warnings"] = report["warnings"]
+    row["messages"] = report["messages"]
+    row["cook_state"] = report["cook_state"] if row["ok"] else "error"
+
+
+def _restore_frame(ctx: HostContext, previous: float) -> None:
+    """Put the playhead back, even after a cancel (which refuses further job steps)."""
+    import hou
+
+    from .visual import run_with_fallback
+
+    run_with_fallback(ctx.executor, lambda: hou.setFrame(previous), 60.0)
+
+
+class _Inline:
+    """Stands in for a job when ``cook`` runs on the main thread itself (GUI shell, tests)."""
+
+    def run_main(self, fn: Any, timeout_s: float | None = None) -> Any:
+        return fn()
+
+    def set_progress(self, current: int, total: int, message: str | None = None) -> None:
+        pass
+
+
+def _plain(job: Any, paths: list[str], force: bool, frame: float | None) -> list[dict[str, Any]]:
+    results = []
+    for index, path in enumerate(paths):
+        job.set_progress(index, len(paths), f"cooking {path}")
+        results.append(
+            job.run_main(lambda p=path: cook_node(p, force=force, frame=frame), JOB_STEP_TIMEOUT_S)
+        )
+    job.set_progress(len(paths), len(paths), "done")
+    return results
+
+
+def _profiled(
+    job: Any, ctx: HostContext, paths: list[str], frame: float | None, timeout_s: float
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Force-cook every node's input chain in dependency order, one step per node."""
+    import hou
+
+    def chain_paths() -> list[str]:
+        ordered: list[str] = []
+        for path in paths:
+            for node in dependency_order(require_node(path)):
+                if node.path() not in ordered:
+                    ordered.append(node.path())
+        return ordered
+
+    chain = job.run_main(chain_paths, timeout_s)
+    previous = job.run_main(hou.frame, timeout_s)
+    steps = len(chain) + len(paths)
+    rows: list[dict[str, Any]] = []
+    results: list[dict[str, Any]] = []
+    try:
+        if frame is not None:
+            job.run_main(lambda: hou.setFrame(frame), timeout_s)
+        for index, path in enumerate(chain):
+            job.set_progress(index, steps, f"cooking {path} ({index + 1}/{len(chain)})")
+            rows.append(job.run_main(lambda p=path: _profile_step(p), JOB_STEP_TIMEOUT_S))
+        for index, path in enumerate(paths):
+            # Already cooked by the chain: this reads its errors and warnings.
+            job.set_progress(len(chain) + index, steps, f"checking {path}")
+            results.append(
+                job.run_main(
+                    lambda p=path: cook_node(p, force=False, frame=None), JOB_STEP_TIMEOUT_S
+                )
+            )
+    finally:
+        if frame is not None:
+            _restore_frame(ctx, previous)
+    job.set_progress(steps, steps, "done")
+    total_ms = round(sum(r["cook_time_ms"] for r in rows), 1)
+    rows.sort(key=lambda r: r["cook_time_ms"], reverse=True)
+    return results, {"chain": rows[:10], "chain_total": len(rows), "total_ms": total_ms}
+
+
+def _ranged(
+    job: Any,
+    ctx: HostContext,
+    paths: list[str],
+    frames: list[float],
+    force: bool,
+    summary: str,
+    timeout_s: float,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Cook every frame as its own main-thread step (a sim advances one frame per step)."""
+    import hou
+
+    previous = job.run_main(hou.frame, timeout_s)
+    total = len(frames)
+    frame_rows: list[dict[str, Any]] = []
+    merged: dict[str, dict[str, Any]] = {}
+    started = time.perf_counter()
+    try:
+        for index, value in enumerate(frames):
+            job.set_progress(index, total, f"frame {index + 1}/{total}")
+            reports, rows = job.run_main(
+                lambda f=value: _frame_step(paths, f, force, summary), JOB_STEP_TIMEOUT_S
+            )
+            frame_rows.extend(rows)
+            for report in reports:
+                _merge_frame_report(merged, report, value)
+    finally:
+        _restore_frame(ctx, previous)
+    job.set_progress(total, total, "done")
+    step = frames[1] - frames[0] if total > 1 else 1.0
+    extra: dict[str, Any] = {
+        "frame_range": [_num(frames[0]), _num(frames[-1]), _num(step)],
+        "frames_cooked": total,
+        "total_ms": round((time.perf_counter() - started) * 1000, 1),
+    }
+    if summary == "bbox":
+        extra["frames"] = frame_rows
+    return [merged[p] for p in paths], extra
 
 
 @tool("cook", main_thread=False, scene=False)
@@ -88,37 +363,42 @@ def cook(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     force = bool(args.get("force", False))
     frame = _number(args, "frame", None)
     timeout_s = _number(args, "timeout_s", 30.0, positive=True)
+    profile = bool(args.get("profile", False))
+    summary = args.get("summary", "none")
+    if summary not in SUMMARIES:
+        raise ToolError("invalid_argument", "'summary' must be 'bbox' or 'none'.")
+    frames = None if args.get("frame_range") is None else _frame_list(args["frame_range"])
+    if frames is not None and (profile or frame is not None):
+        raise ToolError(
+            "invalid_argument",
+            "'frame_range' cannot be combined with 'profile' or 'frame'.",
+            hint="Profile at one frame, or cook a range without profile.",
+        )
 
     def resolve() -> list[str]:
         return [require_node(p).path() for p in paths]
 
-    def finish(results: list[dict[str, Any]]) -> dict[str, Any]:
+    def work(job: Any, resolved: list[str]) -> dict[str, Any]:
+        extra: dict[str, Any] = {}
+        if frames is not None:
+            results, extra = _ranged(job, ctx, resolved, frames, force, summary, timeout_s)
+        elif profile:
+            results, extra = _profiled(job, ctx, resolved, frame, timeout_s)
+        else:
+            results = _plain(job, resolved, force, frame)
         out: dict[str, Any] = {"ok": all(r["ok"] for r in results), "results": results}
         if frame is not None:
             out["frame"] = frame
+        out.update(extra)
         return out
 
     if ctx.executor.on_main_thread():
         # Called inline on the main thread (GUI shell, tests): no job can make progress.
-        resolved = resolve()
-        return finish([cook_node(p, force=force, frame=frame) for p in resolved])
+        return work(_Inline(), resolve())
 
     resolved = ctx.executor.run(resolve, timeout_s)
-
-    def work(job: Any) -> dict[str, Any]:
-        results = []
-        for index, path in enumerate(resolved):
-            job.progress(index / len(resolved), f"cooking {path}")
-            results.append(
-                job.run_main(
-                    lambda p=path: cook_node(p, force=force, frame=frame), JOB_STEP_TIMEOUT_S
-                )
-            )
-        job.progress(1.0, "done")
-        return finish(results)
-
     label = resolved[0] if len(resolved) == 1 else f"{len(resolved)} nodes"
-    started = ctx.jobs.start("cook", work, label=label)
+    started = ctx.jobs.start("cook", lambda job: work(job, resolved), label=label)
     wait_s = min(timeout_s, float(ctx.config.job_threshold_s))
     if started.done_event.wait(wait_s):
         # Returned synchronously: the caller never saw a job_id, so keep job list clean.
