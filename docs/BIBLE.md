@@ -778,6 +778,10 @@ Facts found while implementing, now reflected above:
 
 ---
 
+### Known limitation: launch lifetime
+
+A Houdini started by `houdini_connect {launch}` is a child process of the bridge and ends when the MCP client stops the bridge. This is acceptable for interactive sessions; agents should `hip_save` before a session ends, or attach to a Houdini the user started.
+
 ## 16. Non-goals for 1.0
 
 HocusScript or any custom language; multi-user or remote (non-loopback) access;

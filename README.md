@@ -138,6 +138,9 @@ The bridge also serves resources and prompts:
 
 `tools/list` works with no Houdini running.
 
+
+> **Launch lifetime.** A Houdini started with `houdini_connect {launch}` is a child of the MCP server process. When the client stops that server (end of a Claude Code session, or a one-shot script exiting), Houdini closes with it. Save with `hip_save` first, or start Houdini yourself and let the bridge attach to it.
+
 ## Headless use
 
 An agent can start its own headless Houdini:

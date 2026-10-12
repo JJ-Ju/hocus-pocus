@@ -134,6 +134,10 @@ def houdini_connect(bridge: Bridge, args: dict[str, Any]) -> dict[str, Any]:
         bridge.detached = False
         _split_settings(block)
         launched: dict[str, Any] = {"mode": result.mode, "pid": result.instance.pid}
+        launched["note"] = (
+            "A Houdini started here lives as long as this MCP server process (the client "
+            "ends both together); save with hip_save before the session ends."
+        )
         if result.log:
             launched["log"] = result.log
         return {"connected": block, "launched": launched}
