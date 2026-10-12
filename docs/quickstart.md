@@ -39,7 +39,7 @@ copied the Houdini payload to C:\Users\you\houdini22.0\hocuspocus\1.0.0a0\houdin
 wrote C:\Users\you\houdini22.0\packages\hocuspocus.json (template: ...\houdini\hocuspocus.json.template)
 recorded the pref dir in C:\Users\you\AppData\Local\HocusPocus\install.json (the bridge reads hocuspocus.toml from there)
 Restart Houdini to load HocusPocus.
-Then register the MCP server with your client, e.g.: claude mcp add hocuspocus -- hocuspocus-mcp
+Then register the MCP server with your client, e.g.: claude mcp add -s user hocuspocus -- hocuspocus-mcp
 ```
 
 The first line tells you which pref dir it chose and why. Depending on how Houdini was
@@ -94,7 +94,7 @@ hocuspocus 1.0.0a0 (bridge, hp/v1)
 [ok]   instance /health: pid 18244 port 52311 GUI (untitled) Houdini 22.0.466
 
 Register with Claude Code:
-  claude mcp add hocuspocus -- hocuspocus-mcp
+  claude mcp add -s user hocuspocus -- hocuspocus-mcp
 Register with Codex (~/.codex/config.toml):
   [mcp_servers.hocuspocus]
   command = "hocuspocus-mcp"

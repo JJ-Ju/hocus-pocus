@@ -29,7 +29,8 @@ TESTED_HOUDINI = ("22.0.466",)
 HYTHON_QUERY_TIMEOUT_S = 90.0
 HYTHON_VERSION_TIMEOUT_S = 60.0
 
-CLAUDE_SNIPPET = "claude mcp add hocuspocus -- hocuspocus-mcp"
+CLAUDE_SNIPPET = "claude mcp add -s user hocuspocus -- hocuspocus-mcp"
+"""User scope: the server is available in every project, not only the current directory."""
 CODEX_SNIPPET = '[mcp_servers.hocuspocus]\ncommand = "hocuspocus-mcp"\nargs = []'
 
 
@@ -117,14 +118,12 @@ class PrefDir:
 
 
 def platform_default_pref_dir(environ: Mapping[str, str] | None = None) -> Path:
-    env = os.environ if environ is None else environ
-    major_minor = "22.0"
-    if sys.platform == "win32":
-        home = Path(env.get("USERPROFILE") or Path.home())
-        return home / "Documents" / f"houdini{major_minor}"
-    if sys.platform == "darwin":
-        return Path.home() / "Library" / "Preferences" / "houdini" / major_minor
-    return Path.home() / f"houdini{major_minor}"
+    """The first existing default pref dir, in the bridge's order (``%USERPROFILE%`` then
+    ``Documents`` on Windows), else the first: install and bridge must agree on it."""
+    from .bridge.config import default_pref_dirs
+
+    candidates = default_pref_dirs(environ)
+    return next((path for path in candidates if path.is_dir()), candidates[0])
 
 
 def resolve_pref_dir(

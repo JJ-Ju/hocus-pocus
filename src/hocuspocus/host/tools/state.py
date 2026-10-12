@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from hocuspocus.tools.errors import ToolError
+from hocuspocus.tools.errors import ToolError, read_only_error
 
 from ..undo import LABEL_PREFIX, hou_undo_group, make_label
 from .nodes import bad_arg, get_node
@@ -30,18 +30,11 @@ from .registry import HostContext, tool
 from .session import scene_dirty
 
 HISTORY_LIMIT = 20
-READ_ONLY_HINT = (
-    "Set read_only = false in hocuspocus.toml (or HOCUSPOCUS_READ_ONLY=0) and restart the host."
-)
 
 
 def _refuse_if_read_only(ctx: HostContext, what: str) -> None:
     if ctx.config.read_only:
-        raise ToolError(
-            "read_only",
-            f"{what} changes the scene, and the host is in read-only mode.",
-            hint=READ_ONLY_HINT,
-        )
+        raise read_only_error(what)
 
 
 def _labels(fn: Any) -> list[str]:

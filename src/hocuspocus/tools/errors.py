@@ -35,6 +35,10 @@ ERROR_CODES: dict[str, str] = {
 
 RETRYABLE: frozenset[str] = frozenset({"houdini_offline", "houdini_busy"})
 
+READ_ONLY_HINT = (
+    "Set read_only = false in hocuspocus.toml (or HOCUSPOCUS_READ_ONLY=0) and restart the host."
+)
+
 
 class ToolError(Exception):
     """Raise from a tool implementation to produce a structured ``isError`` result."""
@@ -95,3 +99,13 @@ class ToolError(Exception):
             detail=data.get("detail"),
             retryable=data.get("retryable") if isinstance(data.get("retryable"), bool) else None,
         )
+
+
+def read_only_error(what: str) -> ToolError:
+    """The one ``read_only`` refusal: ``<what> changes the scene, and the host is in
+    read-only mode.`` with :data:`READ_ONLY_HINT`."""
+    return ToolError(
+        "read_only",
+        f"{what} changes the scene, and the host is in read-only mode.",
+        hint=READ_ONLY_HINT,
+    )

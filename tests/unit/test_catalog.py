@@ -166,6 +166,14 @@ def test_error_codes_match_bible() -> None:
     assert set(ERROR_CODES) == BIBLE_ERROR_CODES
 
 
+def test_read_only_refusal_is_one_text() -> None:
+    from hocuspocus.tools.errors import READ_ONLY_HINT, read_only_error
+
+    error = read_only_error("undo")
+    assert error.code == "read_only" and error.hint == READ_ONLY_HINT
+    assert error.message == "undo changes the scene, and the host is in read-only mode."
+
+
 def test_tools_md_is_current() -> None:
     path = REPO / "docs" / "tools.md"
     assert path.exists(), "run `python -m hocuspocus.tools.docs`"

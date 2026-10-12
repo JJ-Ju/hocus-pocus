@@ -123,6 +123,26 @@ def test_pref_dir_resolution_order(tmp_path, monkeypatch):
     assert fallback.source == "platform default"
 
 
+def test_platform_default_matches_the_bridge_order(tmp_path, monkeypatch):
+    """install-houdini and the bridge probe the same default pref dirs, in the same order."""
+    from hocuspocus.bridge.config import default_pref_dirs
+
+    env = {"USERPROFILE": str(tmp_path)}
+    monkeypatch.setattr(cli.Path, "home", classmethod(lambda cls: tmp_path))
+    first, *rest = default_pref_dirs(env)
+    assert cli.platform_default_pref_dir(env) == first  # nothing exists: the first one
+    for later in rest:
+        later.mkdir(parents=True)
+        assert cli.platform_default_pref_dir(env) == later  # the first that exists
+    first.mkdir(parents=True)
+    assert cli.platform_default_pref_dir(env) == first
+
+
+def test_install_prints_the_user_scope_snippet(tmp_path, capsys):
+    assert cli.main(["install-houdini", "--prefs", str(tmp_path / "prefs")]) == 0
+    assert "claude mcp add -s user hocuspocus -- hocuspocus-mcp" in capsys.readouterr().out
+
+
 def test_doctor_with_no_houdini(tmp_path, capsys):
     rc = cli.main(["doctor", "--prefs", str(tmp_path / "prefs")])
     out = capsys.readouterr().out
@@ -130,7 +150,7 @@ def test_doctor_with_no_houdini(tmp_path, capsys):
     assert "[FAIL] Houdini install" in out
     assert "[FAIL] package JSON" in out
     assert "[warn] live instances" in out
-    assert "claude mcp add hocuspocus -- hocuspocus-mcp" in out
+    assert "claude mcp add -s user hocuspocus -- hocuspocus-mcp" in out
     assert "[mcp_servers.hocuspocus]" in out
 
 
@@ -146,7 +166,7 @@ def test_doctor_after_install_checks_package(tmp_path, capsys):
 
 def test_client_config(capsys):
     assert cli.main(["client-config", "claude"]) == 0
-    assert "claude mcp add hocuspocus -- hocuspocus-mcp" in capsys.readouterr().out
+    assert "claude mcp add -s user hocuspocus -- hocuspocus-mcp" in capsys.readouterr().out
     assert cli.main(["client-config", "codex"]) == 0
     assert 'command = "hocuspocus-mcp"' in capsys.readouterr().out
 
