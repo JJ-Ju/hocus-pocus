@@ -21,7 +21,10 @@ In one test session an agent built a procedural building generator and a 191-bui
 city, then fractured 30 buildings and ran a 96-frame rigid-body simulation of meteors
 hitting them, using two `houdini_python` calls (to add spare parms) and otherwise only
 the typed tools. The logs are reviews [08](docs/redesign/review/08-city-build-log.md)
-and [09](docs/redesign/review/09-city-destruction-log.md).
+and [09](docs/redesign/review/09-city-destruction-log.md). Since 1.1, `node_edit` adds
+spare parms itself, `network_describe {format: "outline"}` (or the `houdini://outline`
+resource) shows a whole scene as a compact tree, and `cook` can profile an input chain
+or step a simulation over a frame range with progress.
 
 ![City overview captured with viewport_capture](docs/redesign/evidence/city-destruction/02_city_overview.png)
 
@@ -44,44 +47,36 @@ git clone https://github.com/JJ-Ju/hocus-pocus && cd hocus-pocus
 uv tool install -e .                          # puts hocuspocus and hocuspocus-mcp on PATH
 hocuspocus install-houdini                    # add --dev to load this checkout's src/
 claude mcp add -s user hocuspocus -- hocuspocus-mcp
+hocuspocus launch                             # scripted clients: a Houdini no client owns
 ```
 
 `-s user` registers the server for every directory. Without it, Claude Code registers it
 for the current project only. Once HocusPocus is published, `uv tool install hocuspocus`
-will replace the first two lines.
+will replace the first two lines. Interactive users can simply open Houdini; one-shot
+scripts and short sessions should start it with `hocuspocus launch`
+([below](#scripted-clients-hocuspocus-launch)), so it outlives them.
 
-`hocuspocus install-houdini` finds your Houdini user pref dir in this order: `--prefs`,
-`$HOUDINI_USER_PREF_DIR`, what `hython` reports for `hou.homeHoudiniDirectory()`, then
-the platform default. Its first output line says which one it used and why, for example
-`C:\Users\you\houdini22.0 (from hython (...))`. It copies the package and the Houdini
-payload to `<prefs>/hocuspocus/<version>/`, writes `<prefs>/packages/hocuspocus.json`,
-and records the pref dir in `<state dir>/install.json` so the bridge can find
-`hocuspocus.toml`.
+`hocuspocus install-houdini` finds your Houdini user pref dir (`--prefs`,
+`$HOUDINI_USER_PREF_DIR`, what `hython` reports, then the platform default) and says
+which it used and why on its first line. It copies the package and the Houdini payload
+to `<prefs>/hocuspocus/<version>/`, writes `<prefs>/packages/hocuspocus.json`, and
+records the pref dir in `<state dir>/install.json` so the bridge can find
+`hocuspocus.toml`. It is idempotent and removes older versions; `--dev` points Houdini
+at the checkout's `src/` and `houdini/` instead of copying, and `--hfs` says which
+Houdini install to ask. `hocuspocus uninstall-houdini` removes the package, the JSON and
+the record.
 
-The command is idempotent and removes older versions. `--dev` points Houdini at the
-checkout's `src/` and `houdini/` instead of copying, so edits take effect on the next
-Houdini start. Use `--hfs` to say which Houdini install to ask.
-`hocuspocus uninstall-houdini` removes the package, the JSON and the record.
-
-For Codex, add this to `~/.codex/config.toml` (`hocuspocus client-config codex` prints
-it):
-
-```toml
-[mcp_servers.hocuspocus]
-command = "hocuspocus-mcp"
-args = []
-```
+For Codex, `hocuspocus client-config codex` prints the `~/.codex/config.toml` entry
+(`[mcp_servers.hocuspocus]` with `command = "hocuspocus-mcp"`).
 
 **Restart Houdini** after `install-houdini`. The package loads at startup. In a GUI
 session, the host starts by itself once the UI is ready. The HocusPocus shelf has
 HP Status, HP Start and HP Stop buttons.
 
-Then check everything with `hocuspocus doctor`. It checks that Houdini is found and is
-22.0 or newer, shows the pref dir and which `hocuspocus.toml` the bridge reads, checks
-that the package JSON points at an installed `hocuspocus` whose version matches the
-bridge, and asks each live instance for `/health`. It ends with `doctor: all checks passed` or `doctor: N problem(s)`. Each failure says
-what to run. [`docs/quickstart.md`](docs/quickstart.md) has the full walkthrough and a
-troubleshooting list.
+Then run `hocuspocus doctor`. It checks the Houdini install and version, the pref dir
+and `hocuspocus.toml` the bridge reads, that the package JSON points at a `hocuspocus`
+matching the bridge, and each live instance's `/health`; every failure says what to run.
+[`docs/quickstart.md`](docs/quickstart.md) has the full walkthrough and troubleshooting.
 
 ## First session
 
@@ -111,34 +106,33 @@ schemas and examples.
 
 ## Tools
 
-There are 31 tools in the default `core` profile. The `full` profile adds 4 more. Every
-tool is documented in [`docs/tools.md`](docs/tools.md), which is generated from the
-catalogue.
+There are 31 tools in the default `core` profile, and the `full` profile adds 4. Each is
+documented in [`docs/tools.md`](docs/tools.md), generated from the catalogue.
 
 | Group | Tools |
 |---|---|
 | Session and instances | `houdini_status`, `houdini_connect` |
 | Hip file | `hip_new`, `hip_open`, `hip_save`, `hip_merge` |
-| Nodes and networks | `node_find`, `node_info`, `node_create`, `node_delete`, `node_edit`, `node_copy`, `node_connect`, `node_layout`, `network_describe`, `network_build` |
+| Nodes and networks | `node_find`, `node_info`, `node_create`, `node_delete`, `node_edit` (incl. spare parms), `node_copy`, `node_connect`, `node_layout`, `network_describe` (`data`, `python` or `outline`), `network_build` |
 | Parms | `parm_get`, `parm_set` |
-| Cook, problems, geometry | `cook`, `problems`, `geo_info`, `geo_read` |
+| Cook, problems, geometry | `cook` (incl. `profile` and `frame_range`), `problems`, `geo_info`, `geo_read` |
 | Visual feedback | `viewport_capture`, `render` |
 | Code | `houdini_python` |
 | Node types | `node_type_search`, `node_type_info` |
 | State and jobs | `undo`, `time`, `selection`, `job` |
 | `full` profile only | `hda`, `usd_stage`, `pdg`, `events` |
 
+`node_create`, `node_copy` and `network_build` return per-node summaries (`return:
+"full"` for the 1.0 echoes); a failed `houdini_python` run is a `python_exception` error.
+
 The bridge also serves resources and prompts:
 
 - **Resources:** `houdini://status`, `houdini://outline` (the whole scene as a compact
-  tree), `houdini://node/{path}`,
-  `houdini://node/{path}/parms`, `houdini://node/{path}/geo`,
+  tree), `houdini://node/{path}`, `.../parms`, `.../geo`,
   `houdini://nodetype/{category}/{name}`, `houdini://job/{id}`, and the full operating
   manual at `hocuspocus://guide`.
 - **Prompts:** `inspect_scene`, `build_sop_chain`, `debug_red_node`,
-  `turntable_preview`.
-
-`tools/list` works with no Houdini running.
+  `turntable_preview`. `tools/list` works with no Houdini running.
 
 In a GUI session, `viewport_capture` defaults to the Scene Viewer and captures the view
 as it is: it does not frame the scene. Home the view first, or pass
@@ -158,16 +152,14 @@ then `HFS`, then the newest `Side Effects Software/Houdini 22.*`. The bridge wai
 until the new instance registers. A launched Houdini starts in `HOCUSPOCUS_WORK_DIR`
 (default: your home directory), which is the `$HIP` of its untitled scene.
 
-> **Launch lifetime.** A Houdini started with `houdini_connect {launch}` belongs to the
-> bridge that launched it. When the client stops that bridge (the end of a Claude Code
-> session, or a one-shot script exiting), that Houdini exits too and unsaved work is
-> lost. Save with `hip_save` first, or start Houdini with `hocuspocus launch` (below) and
-> let the bridge attach to it.
+> **Launch lifetime.** A Houdini started with `houdini_connect {launch}` exits with the
+> bridge that launched it (the end of a session, or a one-shot script exiting), losing
+> unsaved work. `hip_save` first, or start it with `hocuspocus launch` (below).
 
 ### Scripted clients: `hocuspocus launch`
 
-One-shot scripts and short MCP sessions should not own the Houdini they drive. Start it
-from a terminal instead, where it belongs to no MCP server and keeps running:
+This is the recommended way to start Houdini for one-shot scripts and short MCP
+sessions. The Houdini it starts belongs to no MCP server and keeps running:
 
 ```bash
 hocuspocus launch                      # GUI houdinifx with the package loaded
@@ -177,26 +169,16 @@ hocuspocus launch --headless --hip C:/work/shot.hip --wait 120
 
 It uses the same Houdini detection and package path rules as `houdini_connect {launch}`,
 waits up to `--wait` seconds (default 90; `0` returns at once) for the host to register,
-prints the registry entry (never the token) as one JSON line, and exits. Any later
-session attaches with `houdini_connect {"pid": 23310}`, or picks it automatically when it
-is the only one running. Close a GUI one as usual; end a headless one's process (its pid
-is in the JSON) once its work is saved.
+prints the registry entry (never the token) as one JSON line, and exits. Later sessions
+attach with `houdini_connect {"pid": 23310}`, or pick it automatically when it is the
+only one running. Close a GUI one as usual; end a headless one's process once its work
+is saved. To run the host by hand instead, use `hython -m hocuspocus.host [--hip FILE]
+[--port N] [--read-only] [--no-python] ...` from a neutral directory (hython puts its cwd
+on `HOUDINI_PATH`); it prints `{"pid", "port", "token_file"}` and serves until stopped.
 
-You can also start the host yourself. Do it from a neutral working directory, because
-hython puts its cwd on `HOUDINI_PATH`:
-
-```bash
-hython -m hocuspocus.host [--hip FILE] [--port N] [--state-dir DIR] [--label NAME] \
-  [--read-only] [--no-python] [--work-dir DIR]
-```
-
-The host prints one JSON line (`{"pid", "port", "token_file"}`) and serves until it is
-interrupted or shut down. The port defaults to 0, which picks a free ephemeral port.
-
-Tools that need the UI return `ui_required` headless. `viewport_capture` still works
-headless through an OpenGL ROP; each capture renders in a short-lived child hython and
-takes about 3 s. Several Houdinis can run at once. Each one registers itself,
-`houdini_status` lists them all, and `houdini_connect {"pid": N}` picks one.
+Tools that need the UI return `ui_required` headless; `viewport_capture` works through
+an OpenGL ROP in a short-lived child hython (about 3 s). Several Houdinis can run at
+once: `houdini_status` lists them and `houdini_connect {"pid": N}` picks one.
 
 ## Configuration
 
@@ -222,25 +204,19 @@ result_content = "text"     # bridge: text | both | structured (see below)
 log_level = "INFO"          # host
 ```
 
-`result_content` decides where a tool result's JSON goes. `text` (the default) sends the
-compact JSON in the text block only, with no `structuredContent` and no `outputSchema` in
-`tools/list`: measured in 1.1, Claude Code shows the model only the text block, so a
-structured copy only doubled every result on the wire. `both` restores the 1.0 shape (the
-same JSON in both places) for clients that read `structuredContent`; `structured` keeps
-the data in `structuredContent` and puts a one-line summary (`node_info: ok`, or
-`<code>: <message>` for an error) in the text block. Images are image blocks in every mode.
+`result_content` (1.1) decides where a result's JSON goes. `text` (default) sends it
+once, in the text block, with no `structuredContent` or `outputSchema`: Claude Code shows
+the model only the text block. `both` is the 1.0 shape for clients that read
+`structuredContent`; `structured` puts the data there and a one-line summary in the text.
 
-Houdini resolves the pref dir itself. The bridge cannot ask Houdini, so it looks in
-`HOUDINI_USER_PREF_DIR` (with `__HVER__` read as `22.0`), then in the pref dir that
-`hocuspocus install-houdini` recorded in `<state dir>/install.json`, then in the default
-locations (`%USERPROFILE%\houdini22.0` and `Documents\houdini22.0` on Windows).
-`hocuspocus doctor` prints which file the bridge reads. Bridge settings can also be set
+The bridge finds the file through `HOUDINI_USER_PREF_DIR` (`__HVER__` read as `22.0`),
+then the pref dir recorded in `<state dir>/install.json`, then the default locations;
+`hocuspocus doctor` prints which file it reads. Bridge settings can also be set
 per client, for example
-`claude mcp add -s user hocuspocus -e HOCUSPOCUS_PROFILE=full -- hocuspocus-mcp`. The host
-enforces `profile` too (1.1): a `core` host refuses `hda`, `usd_stage`, `pdg` and `events`
-with `invalid_argument`, so set `profile = "full"` in `hocuspocus.toml`, which both read, or
-in Houdini's environment. A Houdini that the bridge or `hocuspocus launch` starts inherits
-the environment it was started from.
+`claude mcp add -s user hocuspocus -e HOCUSPOCUS_PROFILE=full -- hocuspocus-mcp`. Since
+1.1 the host enforces `profile` too, refusing the `full` tools on `core` with
+`invalid_argument`: set `profile = "full"` in `hocuspocus.toml`, which both read, or in
+Houdini's environment (a launched Houdini inherits the launcher's), and restart Houdini.
 
 | Bridge variable | Default | Meaning |
 |---|---|---|
@@ -262,7 +238,8 @@ HocusPocus is a localhost developer tool, and its protection is scoped to match:
 - **Network.** The host binds only to `127.0.0.1`, on an ephemeral port.
 - **Token.** Each instance has its own bearer token. It is stored in a registry file
   that only your user can read.
-- **Browser requests.** Requests with a non-loopback `Origin` header are refused.
+- **Browser requests.** Requests with a non-loopback `Origin` or `Host` header are
+  refused, which also stops DNS rebinding.
 - **Settings.** `allow_python = false` disables the Python escape hatch,
   `read_only = true` refuses every mutation, and `approved_roots` restricts the file
   paths that hip, HDA and render tools may touch.
@@ -274,10 +251,10 @@ already has a shell on your machine.
 
 ## Status and versioning
 
-1.0 was merged to `master` on 2026-10-12. The package version string is still
-`1.0.0` (tag `v1.0.0`); it is not on PyPI yet. 1.0 is qualified on
-Windows with Houdini 22.0.466. The code is not Windows-only, but 1.0 is not tested on
-Linux or macOS. [`CHANGELOG.md`](CHANGELOG.md) lists known limitations.
+1.0 was merged to `master` on 2026-10-12 (tag `v1.0.0`). 1.1 changes some result
+shapes; [`CHANGELOG.md`](CHANGELOG.md) lists them with upgrade notes and known
+limitations. HocusPocus is not on PyPI yet. It is qualified on Windows with Houdini
+22.0.466; the code is not Windows-only, but Linux and macOS are untested.
 
 The host/bridge protocol is versioned (`hp/v1`). A version mismatch returns
 `version_mismatch`; run `hocuspocus install-houdini` and restart Houdini to fix it.

@@ -106,6 +106,10 @@ doctor: all checks passed
 A tested Houdini build shows `[ok]` on the version line. Any other 22.x build shows
 `[warn]`, and that is fine.
 
+Opening Houdini yourself is right for an interactive session. If a script or a short
+MCP session will drive it instead, start it with `hocuspocus launch` (see
+[Scripted clients](#scripted-clients)) so that it outlives them.
+
 ## 5. Ask for a mountain (2 minutes)
 
 Start `claude` in any directory and type:
@@ -162,9 +166,10 @@ hython -m hocuspocus.host --hip C:/work/shot.hip
 
 ## Scripted clients
 
-A one-shot script (or any MCP session shorter than the work) should not launch the
-Houdini it drives with `houdini_connect {launch}`: that Houdini closes when the script's
-MCP server exits. Start it from a terminal instead; it belongs to no server and keeps
+`hocuspocus launch` is the recommended way to start Houdini for a one-shot script (or any
+MCP session shorter than the work). Do not let the script launch it with
+`houdini_connect {launch}`: that Houdini closes when the script's MCP server exits. A
+Houdini started from a terminal with `hocuspocus launch` belongs to no server and keeps
 running across sessions:
 
 ```bash
@@ -176,6 +181,26 @@ Leave out `--headless` for a GUI Houdini. The command waits up to `--wait` secon
 (default 90) for the host to register, prints its registry entry and exits. Each session
 then attaches with `houdini_connect {"pid": 23310}` (or automatically, when it is the only
 Houdini running), and `hip_save` keeps the work between sessions.
+
+## Configuration
+
+Nothing needs configuring for this guide. Two settings in
+`$HOUDINI_USER_PREF_DIR/hocuspocus.toml` (or `HOCUSPOCUS_*` environment variables, which
+win) matter most for scripts and other clients:
+
+```toml
+profile = "full"            # list and allow hda, usd_stage, pdg and events (default "core")
+result_content = "both"     # also send structuredContent (default "text")
+```
+
+- `profile` is read by the bridge, which lists the tools, and by the host inside Houdini,
+  which refuses the four `full` tools on `core`. Restart Houdini after changing it.
+- `result_content` decides where a result's JSON goes. The default `text` sends it once,
+  in the text block, which is what Claude Code shows the model. Use `both` for a client
+  that reads `structuredContent` or `outputSchema`, or `structured` for structured data
+  with a one-line text summary.
+
+The README lists every key.
 
 ## Troubleshooting
 
@@ -205,6 +230,12 @@ registered. Start Houdini, or let the agent call
 `houdini_connect {"launch": {"mode": "gui"}}` (or `"headless"`). The bridge picks the
 new instance up by itself, with no client restart. If several instances are running,
 `houdini_status` lists them and `houdini_connect {"pid": N}` selects one.
+
+**`invalid_argument`: "hda is a full-profile tool, and this Houdini's host runs the core profile"**
+
+The bridge lists the `full` tools but the host in Houdini still runs `core`. Put
+`profile = "full"` in `hocuspocus.toml`, which both read (or set `HOCUSPOCUS_PROFILE=full`
+in Houdini's environment), and restart Houdini.
 
 **Version mismatch: `[FAIL] host/bridge version: Houdini has X, bridge is Y`, or a `version_mismatch` error**
 
