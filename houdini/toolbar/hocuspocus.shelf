@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<shelfDocument>
+  <!-- HocusPocus status shelf: Status / Start / Stop for the in-Houdini host. -->
+  <toolshelf name="hocuspocus" label="HocusPocus">
+    <memberTool name="hocuspocus_status"/>
+    <memberTool name="hocuspocus_start"/>
+    <memberTool name="hocuspocus_stop"/>
+  </toolshelf>
+
+  <tool name="hocuspocus_status" label="HP Status" icon="MISC_python">
+    <helpText><![CDATA[Show whether the HocusPocus host is running, its port and pid.]]></helpText>
+    <script scriptType="python"><![CDATA[
+import json
+import hocuspocus.host as hp
+hou.ui.displayMessage(json.dumps(hp.status(), indent=2), title="HocusPocus")
+]]></script>
+  </tool>
+
+  <tool name="hocuspocus_start" label="HP Start" icon="MISC_python">
+    <helpText><![CDATA[Start the HocusPocus host (agents can connect to this Houdini).]]></helpText>
+    <script scriptType="python"><![CDATA[
+import hocuspocus.host as hp
+info = hp.start()
+if info.get("running"):
+    hou.ui.setStatusMessage("HocusPocus listening on 127.0.0.1:%s" % info["port"])
+else:
+    hou.ui.displayMessage("HocusPocus failed to start: %s" % info.get("error"), severity=hou.severityType.Error)
+]]></script>
+  </tool>
+
+  <tool name="hocuspocus_stop" label="HP Stop" icon="MISC_python">
+    <helpText><![CDATA[Stop the HocusPocus host. Houdini keeps running.]]></helpText>
+    <script scriptType="python"><![CDATA[
+import hocuspocus.host as hp
+hp.stop()
+hou.ui.setStatusMessage("HocusPocus stopped")
+]]></script>
+  </tool>
+</shelfDocument>
