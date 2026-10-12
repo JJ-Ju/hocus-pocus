@@ -19,6 +19,26 @@ from .undo import UndoGroupFactory, make_label
 
 NOT_IMPLEMENTED_HINT = "not implemented in this host version"
 
+CHANGED_KEY = "_changed"
+"""A tool result may carry ``"_changed": False`` to say the call changed nothing (for
+example a ``dry_run``): the dispatcher then skips the undo-label record and dirty
+marking, reports ``undo_label: null``, and allows the call in read-only mode when its
+args had ``dry_run: true``. The key is always stripped from the result."""
+
+
+def _pop_changed(result: Any) -> bool | None:
+    if isinstance(result, dict) and CHANGED_KEY in result:
+        return bool(result.pop(CHANGED_KEY))
+    return None
+
+
+def _read_only_error(tool: str) -> ToolError:
+    return ToolError(
+        "read_only",
+        f"{tool} changes the scene, and the host is in read-only mode.",
+        hint="Set read_only = false in hocuspocus.toml (or HOCUSPOCUS_READ_ONLY=0) and restart the host.",
+    )
+
 
 def make_meta(ctx: HostContext, *, undo_label: str | None, started: float) -> dict[str, Any]:
     return {
@@ -129,19 +149,25 @@ class Dispatcher:
                     hint="Connect to a GUI Houdini (houdini_connect), or use the headless alternative.",
                 )
             mutating = impl.mutating
-            if mutating and self.ctx.config.read_only:
-                raise ToolError(
-                    "read_only",
-                    f"{tool} changes the scene, and the host is in read-only mode.",
-                    hint="Set read_only = false in hocuspocus.toml (or HOCUSPOCUS_READ_ONLY=0) and restart the host.",
-                )
-            if mutating:
+            # A dry run may proceed in read-only mode, without an undo group, provided the
+            # tool then reports ``_changed: false`` (checked below).
+            read_only_dry_run = (
+                mutating and self.ctx.config.read_only and args.get("dry_run") is True
+            )
+            if mutating and self.ctx.config.read_only and not read_only_dry_run:
+                raise _read_only_error(tool)
+            if mutating and not read_only_dry_run:
                 undo_label = make_label(tool, args)
             work = self._work(impl, args, undo_label)
             if impl.main_thread:
                 result = self.ctx.executor.run(work, self.effective_timeout(args, timeout_s))
             else:
                 result = work()
+            changed = _pop_changed(result)
+            if read_only_dry_run and changed is not False:
+                raise _read_only_error(tool)
+            if changed is False:
+                undo_label = None
             return ok_envelope(result, make_meta(self.ctx, undo_label=undo_label, started=started))
         except BaseException as exc:
             if isinstance(exc, KeyboardInterrupt | SystemExit):
@@ -164,10 +190,13 @@ class Dispatcher:
             clean_events = ctx.scene.clean_events
             with self.undo_group(undo_label):
                 result = impl.fn(args, ctx)
-            ctx.undo.record(undo_label, impl.name)
-            # A successful mutation dirties the scene unless it saved/loaded/cleared it.
-            if ctx.scene.clean_events == clean_events:
-                ctx.scene.mark_dirty()
+            # A tool that says it changed nothing (a dry run) records no label and does
+            # not dirty the scene.
+            if not (isinstance(result, dict) and result.get(CHANGED_KEY) is False):
+                ctx.undo.record(undo_label, impl.name)
+                # A successful mutation dirties the scene unless it saved/loaded/cleared it.
+                if ctx.scene.clean_events == clean_events:
+                    ctx.scene.mark_dirty()
             if isinstance(result, dict) and "dirty" not in result:
                 # Review 07 papercut 9: the agent sees the dirty flag without houdini_status.
                 from .tools.session import scene_dirty

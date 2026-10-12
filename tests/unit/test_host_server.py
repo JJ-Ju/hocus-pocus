@@ -55,11 +55,21 @@ def _tools():
     def gui_only(args, ctx):
         return {}
 
+    def maybe(args, ctx):
+        if args.get("dry_run"):
+            return {"would": True, "_changed": False}
+        return {"did": True, "_changed": True}
+
+    def liar(args, ctx):
+        return {"did": True}
+
     tools = {
         "echo_ro": HostTool("echo_ro", echo, read_only=True),
         "mutate": HostTool("mutate", mutate, read_only=False),
         "fail": HostTool("fail", fail, read_only=True),
         "crash": HostTool("crash", crash, read_only=True),
+        "maybe": HostTool("maybe", maybe, read_only=False),
+        "liar": HostTool("liar", liar, read_only=False),
         "hostonly": HostTool("hostonly", echo, read_only=False, main_thread=False, scene=False),
     }
     return tools
@@ -268,6 +278,39 @@ def test_read_only_config_blocks_mutations(stack):
     assert body["ok"] is True
     _, body = _request(stack["server"], "POST", "/hp/v1/call", {"tool": "hostonly"})
     assert body["ok"] is True  # host-state tools (job) are not scene mutations
+
+
+def test_changed_false_skips_dirty_and_undo(stack):
+    _, body = _request(
+        stack["server"], "POST", "/hp/v1/call", {"tool": "maybe", "args": {"dry_run": True}}
+    )
+    assert body["ok"] is True
+    assert body["result"] == {"would": True, "dirty": False}  # marker stripped
+    assert body["_meta"]["undo_label"] is None
+    assert stack["ctx"].undo.labels() == []
+    assert stack["ctx"].scene.dirty is False
+    _, body = _request(stack["server"], "POST", "/hp/v1/call", {"tool": "maybe", "args": {}})
+    assert "_changed" not in body["result"]
+    assert body["_meta"]["undo_label"] == "HocusPocus: maybe"
+    assert stack["ctx"].scene.dirty is True
+
+
+def test_read_only_allows_dry_run_that_reports_unchanged(stack):
+    stack["ctx"].config.read_only = True
+    _, body = _request(
+        stack["server"], "POST", "/hp/v1/call", {"tool": "maybe", "args": {"dry_run": True}}
+    )
+    assert body["ok"] is True
+    assert body["result"]["would"] is True
+    assert stack["groups"] == []
+    _, body = _request(stack["server"], "POST", "/hp/v1/call", {"tool": "maybe", "args": {}})
+    assert body["error"]["code"] == "read_only"
+    # A tool that ignores dry_run and does not report _changed: false is still refused.
+    _, body = _request(
+        stack["server"], "POST", "/hp/v1/call", {"tool": "liar", "args": {"dry_run": True}}
+    )
+    assert body["error"]["code"] == "read_only"
+    assert stack["ctx"].scene.dirty is False
 
 
 def test_houdini_busy_through_real_executor(stack):

@@ -21,6 +21,11 @@ those duties apply themselves:
 * ``viewport_capture`` — a look leaves the scene as it was (its camera and ROP are
   temporary), so it must not add an undo step or dirty the scene.
 
+A mutating tool whose call turned out to change nothing (a ``dry_run``) returns
+``"_changed": False`` in its result dict: the dispatcher strips it, records no undo
+label, leaves the dirty flag alone, and lets ``dry_run: true`` calls through in
+read-only mode (refusing them afterwards if the marker is missing).
+
 The catalogue annotations describe what the agent sees, not the registration: these
 tools are ``readOnlyHint: false`` (they can change something), ``destructiveHint:
 false``, and ``idempotentHint: true`` when repeating the call is harmless (``time``,
