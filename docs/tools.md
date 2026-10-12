@@ -2,7 +2,7 @@
 
 <!-- Generated from src/hocuspocus/tools/catalog.py by `python -m hocuspocus.tools.docs`. Do not edit by hand. -->
 
-35 tools: 31 in the `core` profile, 4 more in `full`. Model-visible `tools/list` text: 25,116 bytes. See `docs/BIBLE.md` §4 for the design.
+35 tools: 31 in the `core` profile, 4 more in `full`. Model-visible `tools/list` text: 26,010 bytes. See `docs/BIBLE.md` §4 for the design.
 
 ## Contents
 
@@ -500,7 +500,7 @@ Read a whole network in one call as Houdini's hou.data childrenAsData format: ty
 
 `headless ok` · profile `core`
 
-Build or update a whole network under parent from Houdini's hou.data childrenAsData format (what network_describe returns) in one undo step. Types and inputs are validated first; dry_run stops there. on_name_collision: error (default), rename, replace. Returns created paths and per-node errors. Use node_create for a few nodes.
+Build or update a whole network under parent from Houdini's hou.data childrenAsData format (what network_describe returns) in one undo step. Types and inputs are validated first; dry_run stops there. Input entries are {from, from_index, to_index}; a missing to_index means the entry's position in the list. on_name_collision: error (default), rename, replace. Returns created paths and per-node errors. Use node_create for a few nodes.
 
 ### Arguments
 
@@ -516,7 +516,7 @@ Build or update a whole network under parent from Houdini's hou.data childrenAsD
 ### Examples
 
 ```json
-{"parent": "/obj/geo1", "data": {"box1": {"type": "box"}, "xform1": {"type": "xform", "inputs": [{"from": "box1"}], "flags": {"display": true}}}, "dry_run": true}
+{"parent": "/obj/geo1", "data": {"box1": {"type": "box"}, "sphere1": {"type": "sphere"}, "merge1": {"type": "merge", "inputs": [{"from": "box1", "from_index": 0, "to_index": 0}, {"from": "sphere1", "from_index": 0, "to_index": 1}], "flags": {"display": true}}}, "dry_run": true}
 ```
 
 
@@ -524,7 +524,7 @@ Build or update a whole network under parent from Houdini's hou.data childrenAsD
 
 `read-only` `headless ok` · profile `core`
 
-Read parms by parm path (.../tx), tuple path (.../t, returns components) or component path. Each: value at frame (default current), raw text, expression and language, is_default, locked. include adds keys, menu (token and label), template (label, type, default, range, help), ramp, multiparm. Unknown names fail with nearest candidates.
+Read parms by parm path (.../tx), tuple path (.../t, returns components) or component path. Each: value at frame (default current), raw text, expression and language, is_default, locked. include adds keys, menu (token and label), template (label, type, default, range, help), ramp, multiparm. Tuples report expressions per component and keyed component names. Unknown names fail with nearest candidates.
 
 ### Arguments
 
@@ -536,7 +536,7 @@ Read parms by parm path (.../tx), tuple path (.../t, returns components) or comp
 
 ### Returns
 
-- `parms` (array<object>): `path`, `name`, `tuple`, `component_names`, `type`, `value`, `raw`, `expression`, `language`, `is_default`, `locked`, `keyframes`, `menu`, `ramp`, `multiparm`, `template` — always present
+- `parms` (array<object>): `path`, `name`, `tuple`, `component_names`, `type`, `value`, `raw`, `expression`, `language`, `expressions`, `keyed`, `is_default`, `locked`, `keyframes`, `menu`, `ramp`, `multiparm`, `template` — always present
 
 ### Examples
 
@@ -553,7 +553,7 @@ Read parms by parm path (.../tx), tuple path (.../t, returns components) or comp
 
 `idempotent` `headless ok` · profile `core`
 
-Set parms in one undo step. Each item takes one of value, expression, keyframe, keyframes, channel_ref, ramp, multiparm_count, revert_to_default, press. Tuple paths take lists, component paths scalars; menus take token or label. animation: replace (default) clears keys and expressions first; key keys at frame; keep is plain set. Returns values, wrote_keyframe, node errors.
+Set parms in one undo step. Each item takes one of value, expression, keyframe, keyframes, channel_ref, ramp, multiparm_count, revert_to_default, press. Tuple paths take lists, component paths scalars; menus take token or label. animation: replace (default) clears keys and expressions first; key keys at frame; keep is plain set. Returns values (tuples add per-component expressions and keyed), wrote_keyframe, node errors.
 
 ### Arguments
 
@@ -584,7 +584,7 @@ Set parms in one undo step. Each item takes one of value, expression, keyframe, 
 
 ### Returns
 
-- `results` (array<object>): `path`, `value`, `raw`, `expression`, `wrote_keyframe`, `is_default`, `errors`, `warnings` — always present
+- `results` (array<object>): `path`, `value`, `raw`, `expression`, `language`, `expressions`, `keyed`, `wrote_keyframe`, `is_default`, `errors`, `warnings` — always present
 
 ### Examples
 
@@ -603,7 +603,7 @@ Set parms in one undo step. Each item takes one of value, expression, keyframe, 
 
 ## cook
 
-`headless ok` · profile `core`
+`idempotent` `headless ok` · profile `core`
 
 Cook nodes now and report per node ok, errors, warnings, messages, cook_time_ms. force recooks clean nodes; frame defaults to current. A cook longer than the job threshold returns job_id to poll with job. Use problems to scan a whole subtree for red nodes.
 
@@ -681,7 +681,7 @@ Summarise the geometry of a SOP (or an OBJ's display SOP) in about 1 KB: point, 
 - `point_count` (integer) — always present
 - `prim_count` (integer) — always present
 - `vertex_count` (integer) — always present
-- `bbox` (object): `min`, `max`, `size`, `center`
+- `bbox` (object | null): `min`, `max`, `size`, `center`
 - `prim_types` (object<string, integer>)
 - `attributes` (object): `point`, `vertex`, `prim`, `detail`
 - `groups` (object): `point`, `prim`, `edge`, `vertex`
@@ -702,7 +702,7 @@ Summarise the geometry of a SOP (or an OBJ's display SOP) in about 1 KB: point, 
 
 `read-only` `headless ok` · profile `core`
 
-Read attribute values like the geometry spreadsheet: count rows (default 50) of one class (default point) from start, with a columns header, for attribs (default all), optionally within group. stats adds min/max/mean and unique strings over the whole class. Page by passing next_cursor as start.
+Read attribute values like the geometry spreadsheet: count rows (default 50) of one class (default point) from start, with a columns header, for attribs (default all), optionally within group. stats adds min/max/mean and unique strings over the whole class. Page by passing next_cursor as cursor (or its number as start).
 
 ### Arguments
 
@@ -715,6 +715,19 @@ Read attribute values like the geometry spreadsheet: count rows (default 50) of 
 | `count` | integer |  | `50` | min 1; max 10000 |
 | `group` | string |  |  |  |
 | `stats` | boolean |  | `false` |  |
+| `cursor` | string |  |  | next_cursor from the previous page. |
+
+### Returns
+
+- `path` (string)
+- `class` (string)
+- `columns` (array<string>) — always present
+- `rows` (array<array>) — always present
+- `start` (integer)
+- `total` (integer) — always present
+- `next_cursor` (string)
+- `truncated` (boolean)
+- `stats` (object)
 
 ### Examples
 
@@ -729,7 +742,7 @@ Read attribute values like the geometry spreadsheet: count rows (default 50) of 
 
 ## viewport_capture
 
-`headless ok` · profile `core`
+`idempotent` `headless ok` · profile `core`
 
 Look at the scene. Returns a PNG image (long side at most 1024) plus path, width, height, camera_used. source auto (default) uses the GUI viewer when present, else an OpenGL ROP that works headless, framing a temporary camera per fit (default all) unless camera is given. Use render for final-quality images.
 
@@ -743,6 +756,18 @@ Look at the scene. Returns a PNG image (long side at most 1024) plus path, width
 | `fit` | `all` \| `selected` \| `none` |  | `"all"` |  |
 | `source` | `auto` \| `viewer` \| `opengl_rop` |  | `"auto"` |  |
 | `path` | string |  |  | Also write the PNG here. |
+
+### Returns
+
+- `image` (object): `mime_type`, `width`, `height`, `attached`
+- `path` (string) — always present
+- `width` (integer) — always present
+- `height` (integer) — always present
+- `camera_used` (string)
+- `source_used` (`viewer` | `opengl_rop`)
+- `frame` (number)
+- `rendered` (array<integer>)
+- `also_written` (string)
 
 ### Examples
 
@@ -759,7 +784,7 @@ Look at the scene. Returns a PNG image (long side at most 1024) plus path, width
 
 `headless ok` · profile `core`
 
-Render any ROP (Karma, Mantra, OpenGL, ...) for frames [start, end, inc] (default current frame), optionally overriding output. Waits up to wait_s (default 20): if done, returns output paths and a thumbnail image, else job_id to poll with job. Use viewport_capture for a quick look.
+Render any ROP (Karma, Mantra, OpenGL, ...) for frames [start, end, inc] (default current frame), optionally overriding output. Waits up to wait_s (default 20): if done, returns outputs (file paths), thumbnail {path, width, height} with the image attached, and job_id; else job_id and state to poll with job. Use viewport_capture for a quick look.
 
 ### Arguments
 
@@ -770,6 +795,17 @@ Render any ROP (Karma, Mantra, OpenGL, ...) for frames [start, end, inc] (defaul
 | `output` | string |  |  | Output path override. |
 | `wait_s` | number |  | `20` | min 0 |
 | `thumbnail` | boolean |  | `true` |  |
+
+### Returns
+
+- `job_id` (string) — always present
+- `state` (`running` | `done` | `failed` | `cancelled`)
+- `rop_path` (string)
+- `frames` (array<number>)
+- `outputs` (array<string>)
+- `missing` (array<string>)
+- `thumbnail` (object): `path`, `width`, `height`, `image`
+- `thumbnail_error` (string)
 
 ### Examples
 
@@ -883,6 +919,15 @@ Undo or redo steps (default 1) and return the labels performed, or list the last
 
 - `performed` (array<string>)
 - `history` (array<string>)
+- `redo` (array<string>) — history only.
+- `enabled` (boolean)
+- `next_undo` (string | null)
+- `next_redo` (string | null)
+- `undo_count` (integer)
+- `redo_count` (integer)
+- `dirty` (boolean)
+- `scene_generation` (integer)
+- `note` (string)
 
 ### Examples
 
@@ -932,7 +977,7 @@ Read or set playbar time. With no arguments returns frame, fps and range. frame 
 
 ## selection
 
-`headless ok` · profile `core`
+`idempotent` `headless ok` · profile `core`
 
 Read or set the node selection. Omit paths to get the selected node paths; pass paths to select exactly those (an empty list clears the selection).
 
@@ -941,6 +986,10 @@ Read or set the node selection. Omit paths to get the selected node paths; pass 
 | Name | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `paths` | array<string> |  |  |  |
+
+### Returns
+
+- `selected` (array<string>) — always present
 
 ### Examples
 
@@ -955,7 +1004,7 @@ Read or set the node selection. Omit paths to get the selected node paths; pass 
 
 ## job
 
-`headless ok` · profile `core`
+`idempotent` `headless ok` · profile `core`
 
 Manage long work started by render, cook or pdg. status returns state (running, done, failed, cancelled), progress, message, elapsed_s; result returns the original tool's result once done; cancel stops it; list shows all jobs. Jobs do not survive a Houdini restart.
 
@@ -975,7 +1024,7 @@ Manage long work started by render, cook or pdg. status returns state (running, 
 - `message` (string)
 - `started` (string)
 - `elapsed_s` (number)
-- `result` (object)
+- `result` (any) — The original tool's result (action result, done).
 - `jobs` (array<object>)
 
 ### Examples
@@ -993,7 +1042,7 @@ Manage long work started by render, cook or pdg. status returns state (running, 
 
 `headless ok` · profile `full`
 
-Digital asset operations. create turns subnet path into an HDA (name, label, version, library_path); save updates the definition from path; unlock allows editing path's contents; match reverts path to its definition and locks it; install and reload take library_path; list shows loaded libraries.
+Digital asset operations. create turns subnet path into an HDA (name, label, version, library_path, optional min_inputs/max_inputs); save updates the definition from path; unlock allows editing path's contents; match reverts path to its definition and locks it; install and reload take library_path; list shows loaded libraries (or library_path's definitions), paged by limit and cursor.
 
 ### Arguments
 
@@ -1004,7 +1053,12 @@ Digital asset operations. create turns subnet path into an HDA (name, label, ver
 | `library_path` | string |  |  | .hda file. |
 | `name` | string |  |  | Type name. |
 | `label` | string |  |  |  |
+| `description` | string |  |  | Same as label. |
 | `version` | string |  |  |  |
+| `min_inputs` | integer |  |  | min 0; max 9999 |
+| `max_inputs` | integer |  |  | min 0; max 9999 |
+| `limit` | integer |  | `50` | min 1; max 1000 |
+| `cursor` | string |  |  | next_cursor from the previous page. |
 
 ### Examples
 
@@ -1050,7 +1104,7 @@ Read the USD stage of a LOP node: prims under prim (default /) to depth (default
 
 `headless ok` · profile `full`
 
-Drive a TOP node. cook cooks its work items as a job (block waits); status reports node state; workitems pages work items with state and output files; cancel stops cooking; dirty dirties the node.
+Drive a TOP node. cook cooks its work items as a job (block waits up to timeout_s, default 30); status reports node state; workitems pages work items with state and output files; cancel stops cooking; dirty dirties the node.
 
 ### Arguments
 
@@ -1059,6 +1113,7 @@ Drive a TOP node. cook cooks its work items as a job (block waits); status repor
 | `action` | `cook` \| `status` \| `workitems` \| `cancel` \| `dirty` | yes |  |  |
 | `top_path` | string | yes |  |  |
 | `block` | boolean |  | `false` |  |
+| `timeout_s` | number |  | `30` | min 1 |
 | `limit` | integer |  | `50` | min 1; max 1000 |
 | `cursor` | string |  |  | next_cursor from the previous page. |
 

@@ -23,7 +23,15 @@ from hocuspocus.tools.errors import ToolError
 
 from ..undo import hou_undo_group, make_label
 from .hip import check_allowed, resolve_path
-from .nodes import bad_arg, ensure_editable, get_node, hda_block, hou_exception_text, hou_message
+from .nodes import (
+    bad_arg,
+    ensure_editable,
+    get_node,
+    hda_block,
+    hou_exception_text,
+    hou_message,
+    page,
+)
 from .registry import HostContext, tool
 
 ACTIONS = ("create", "save", "unlock", "match", "install", "reload", "list")
@@ -48,7 +56,6 @@ EXAMPLES = {
 }
 HDA_EXTENSIONS = (".hda", ".otl", ".hdanc", ".hdalc", ".otlnc", ".otllc")
 LIST_TYPES_LIMIT = 20
-LIST_DEFINITIONS_LIMIT = 200
 
 
 def _require(args: dict[str, Any], action: str) -> None:
@@ -60,9 +67,27 @@ def _require(args: dict[str, Any], action: str) -> None:
                 hint=f"Required for {action}: {', '.join(REQUIRED[action])}. "
                 f"Example: {EXAMPLES[action]}",
             )
-    for key in ("label", "version"):
+    for key in ("min_inputs", "max_inputs"):
+        value = args.get(key)
+        if value is not None and (
+            isinstance(value, bool) or not isinstance(value, int) or value < 0
+        ):
+            raise bad_arg(f"'{key}' must be an integer >= 0.")
+    for key in ("label", "description", "version"):
         if key in args and not isinstance(args[key], str):
             raise bad_arg(f"'{key}' must be a string.")
+
+
+def _label(args: dict[str, Any]) -> str | None:
+    """The asset label: ``label`` or Houdini's own name for it, ``description``."""
+    label = (args.get("label") or "").strip()
+    description = (args.get("description") or "").strip()
+    if label and description and label != description:
+        raise bad_arg(
+            f"label {label!r} and description {description!r} disagree.",
+            hint="They are the same field (Houdini calls the label 'description'); pass one.",
+        )
+    return label or description or None
 
 
 def _norm_key(path: str) -> str:
@@ -184,13 +209,24 @@ def _create(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
             hint="Pick another name or a new version (e.g. studio::rock::2.0); to update the "
             "existing asset from an instance use hda action 'save'.",
         )
+    label = _label(args)
+    min_inputs = args.get("min_inputs")
+    min_inputs = 0 if min_inputs is None else int(min_inputs)
+    max_inputs = args.get("max_inputs")
+    if max_inputs is None:
+        max_inputs = max(len(node.inputs()), int(node.type().maxNumInputs()), min_inputs)
+    max_inputs = int(max_inputs)
+    if min_inputs > max_inputs:
+        raise bad_arg(
+            f"min_inputs ({min_inputs}) is greater than max_inputs ({max_inputs}).",
+            hint="Pass min_inputs <= max_inputs.",
+        )
     os.makedirs(os.path.dirname(library) or ".", exist_ok=True)
-    max_inputs = max(len(node.inputs()), int(node.type().maxNumInputs()))
     kwargs: dict[str, Any] = {
         "name": name,
         "hda_file_name": library,
-        "description": (args.get("label") or "").strip() or None,
-        "min_num_inputs": 0,
+        "description": label,
+        "min_num_inputs": min_inputs,
         "max_num_inputs": max_inputs,
     }
     if version:
@@ -203,7 +239,7 @@ def _create(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     out = _instance_result(asset)
     out.update(_definition_row(definition))
     out["type"] = asset.type().name()
-    out["inputs"] = {"min": 0, "max": max_inputs}
+    out["inputs"] = {"min": min_inputs, "max": max_inputs}
     out["note"] = (
         "The node is now an unlocked instance; edit its contents, then hda save. "
         "hda match locks it to the saved definition."
@@ -218,7 +254,7 @@ def _save(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     library = definition.libraryFilePath()
     if library and library != "Embedded" and os.path.isabs(library):
         check_allowed(resolve_path(library, field="library_path"), ctx)
-    label = (args.get("label") or "").strip()
+    label = _label(args) or ""
     try:
         if label:
             definition.setDescription(label)
@@ -287,13 +323,10 @@ def _list(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
         library = resolve_path(args["library_path"], field="library_path")
         _require_library_file(library)
         rows = [_definition_row(d) for d in _definitions(library)]
-        out: dict[str, Any] = {
-            "library": library,
-            "total": len(rows),
-            "definitions": rows[:LIST_DEFINITIONS_LIMIT],
-        }
-        if len(rows) > LIST_DEFINITIONS_LIMIT:
-            out["truncated"] = True
+        chunk, nxt = page(rows, args.get("limit"), args.get("cursor"))
+        out: dict[str, Any] = {"library": library, "total": len(rows), "definitions": chunk}
+        if nxt is not None:
+            out["next_cursor"] = nxt
         return out
     libraries: list[dict[str, Any]] = []
     for path in hou.hda.loadedFiles():
@@ -309,11 +342,15 @@ def _list(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
         libraries.append(row)
     # User libraries first; Houdini's own ($HFS) libraries after, without type names.
     libraries.sort(key=lambda r: bool(r.get("builtin")))
-    return {
-        "libraries": libraries,
+    chunk, nxt = page(libraries, args.get("limit"), args.get("cursor"))
+    out = {
+        "libraries": chunk,
         "total": len(libraries),
         "hint": "Pass library_path to list one library's definitions.",
     }
+    if nxt is not None:
+        out["next_cursor"] = nxt
+    return out
 
 
 HANDLERS = {

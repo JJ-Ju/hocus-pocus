@@ -89,7 +89,18 @@ macOS the path is `.venv/bin/...`.
      mutates.
    - Raise `ToolError(code, message, hint=..., candidates=...)` for user mistakes. Use
      only codes from `tools/errors.py` (BIBLE §9).
-   - Use `main_thread=False, scene=False` only for tools that never touch `hou`.
+   - Register with `scene=False` when the dispatcher's undo group, read-only refusal or
+     dirty marking would be wrong for the tool: `performUndo` raises inside an undo
+     group (`undo`); reads must not dirty the scene (`time`, `selection`, `hda list`);
+     cooks, work items, renders and jobs are not hip state (`cook`, `pdg`, `render`,
+     `job`). Where such a tool changes the scene it does the dispatcher's work itself:
+     the read-only refusal, its own `hou_undo_group`, and `ctx.scene.mark_dirty()`. Its catalogue entry stays
+     `read_only=False`, with `idempotent=True` if repeating it is harmless (BIBLE §4.1).
+     The `scene=False` set is pinned in `tests/unit/test_host_tools.py`.
+   - Add `main_thread=False` only for tools that wait on jobs or never touch `hou`;
+     they reach `hou` through `ctx.executor.run(...)`.
+   - Tools that create or change nodes call `watch_nodes(...)` from `nodes.py` after
+     their own changes, so `events` reports later edits to those nodes.
    - A new module must also be added to `TOOL_MODULES` in `host/tools/registry.py`.
 4. **Integration test.** Add a test in `tests/integration/test_<family>.py` that calls
    the tool through the real host (see `tests/integration/conftest.py`) against real

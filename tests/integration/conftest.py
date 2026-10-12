@@ -29,6 +29,19 @@ except ImportError:  # plain CPython: every integration test module skips itself
     hou = None
 
 
+def check_output_schema(tool: str, result: Any) -> None:
+    """Every successful result must satisfy the catalogue's outputSchema: MCP clients
+    (the official SDK among them) validate ``structuredContent`` against it. Bridge-local
+    tools are skipped (the bridge, not the host, builds their result)."""
+    from hocuspocus.tools.catalog import get
+    from hocuspocus.tools.docs import validate
+
+    spec = get(tool)
+    if spec is None or spec.bridge_local or spec.output_schema is None:
+        return
+    validate(result, spec.output_schema, f"{tool}")
+
+
 def pytest_sessionstart(session: pytest.Session) -> None:
     if hou is None:
         return
@@ -138,6 +151,7 @@ class HostClient:
     def ok(self, tool: str, args: dict[str, Any] | None = None, **kw: Any) -> dict[str, Any]:
         envelope = self.call(tool, args, **kw)
         assert envelope["ok"] is True, envelope
+        check_output_schema(tool, envelope["result"])
         return envelope["result"]
 
     def error(self, tool: str, args: dict[str, Any] | None = None, **kw: Any) -> dict[str, Any]:

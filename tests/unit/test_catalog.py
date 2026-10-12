@@ -59,10 +59,14 @@ BIBLE_ERROR_CODES = {
 
 # BIBLE §4.1 annotations.
 DESTRUCTIVE = {"node_delete", "hip_new", "hip_open", "houdini_python"}
-IDEMPOTENT = {"parm_set", "node_connect", "node_edit", "time"}
+IDEMPOTENT = {
+    "parm_set", "node_connect", "node_edit", "time", "selection", "cook", "job",
+    "viewport_capture",
+}  # fmt: skip
 WITH_OUTPUT_SCHEMA = {
     "houdini_status", "hip_new", "hip_open", "hip_save", "hip_merge", "node_info",
-    "parm_get", "parm_set", "cook", "geo_info", "node_type_search", "time", "undo", "job",
+    "parm_get", "parm_set", "cook", "geo_info", "geo_read", "viewport_capture", "render",
+    "node_type_search", "time", "selection", "undo", "job",
 }  # fmt: skip
 
 NAME_RE = re.compile(r"^[a-z][a-z0-9_]*$")

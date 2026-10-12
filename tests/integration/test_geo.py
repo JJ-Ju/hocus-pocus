@@ -204,9 +204,13 @@ def test_geo_read_paging(client):
     _, box = _box()
     first = client.ok("geo_read", {"path": box.path(), "count": 3})
     assert [r[0] for r in first["rows"]] == [0, 1, 2]
-    assert first["next_cursor"] == 3
-    second = client.ok("geo_read", {"path": box.path(), "start": first["next_cursor"], "count": 3})
+    assert first["next_cursor"] == "3"
+    second = client.ok("geo_read", {"path": box.path(), "cursor": first["next_cursor"], "count": 3})
     assert [r[0] for r in second["rows"]] == [3, 4, 5]
+    by_start = client.ok("geo_read", {"path": box.path(), "start": 3, "count": 3})
+    assert by_start["rows"] == second["rows"]
+    bad = client.error("geo_read", {"path": box.path(), "cursor": "x"})
+    assert bad["code"] == "invalid_argument"
     last = client.ok("geo_read", {"path": box.path(), "start": 6, "count": 3})
     assert [r[0] for r in last["rows"]] == [6, 7]
     assert "next_cursor" not in last
@@ -278,7 +282,7 @@ def test_geo_read_groups(client):
     pattern = client.ok("geo_read", {"path": node.path(), "group": "0-2"})
     assert [r[0] for r in pattern["rows"]] == [0, 1, 2]
     expression = client.ok("geo_read", {"path": node.path(), "group": "@P.x>0", "count": 2})
-    assert expression["total"] == 4 and expression["next_cursor"] == 2
+    assert expression["total"] == 4 and expression["next_cursor"] == "2"
     error = client.error("geo_read", {"path": node.path(), "group": "tpo"})
     assert error["code"] == "invalid_argument"
     assert "top" in error["candidates"]
@@ -311,7 +315,7 @@ def test_geo_read_large_count_stays_under_budget(client):
     scatter.setDisplayFlag(True)
     result = client.ok("geo_read", {"path": scatter.path(), "count": 5000})
     assert result["truncated"] is True
-    assert result["next_cursor"] == len(result["rows"])
+    assert result["next_cursor"] == str(len(result["rows"]))
     assert _size(result) < 16_384
 
 

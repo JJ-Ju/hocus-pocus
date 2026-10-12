@@ -176,6 +176,10 @@ def _t(type_: str | list[str]) -> dict[str, Any]:
     return {"type": type_}
 
 
+def _nullable(schema: dict[str, Any]) -> dict[str, Any]:
+    return {**schema, "type": [schema["type"], "null"]}
+
+
 def _list(item_type: str = "string") -> dict[str, Any]:
     return {"type": "array", "items": {"type": item_type}}
 
@@ -186,6 +190,35 @@ def _objs() -> dict[str, Any]:
 
 def _problems() -> dict[str, Any]:
     return {"errors": _list(), "warnings": _list(), "messages": _list()}
+
+
+def _tuple_animation() -> dict[str, Any]:
+    """Parm animation keys: a single parm has ``keyed: true``; a tuple has per-component
+    ``expressions`` and ``keyed`` as a list of component names."""
+    return {
+        "expressions": {
+            "type": "object",
+            "additionalProperties": _out({"expression": _t("string"), "language": _t("string")}),
+            "description": "Tuples: component name -> {expression, language}.",
+        },
+        "keyed": {
+            "type": ["boolean", "array"],
+            "items": {"type": "string"},
+            "description": "Parm: true when keyframed. Tuple: keyed component names.",
+        },
+    }
+
+
+def _image() -> dict[str, Any]:
+    """An image the bridge moved into MCP image content (the base64 is removed)."""
+    return _out(
+        {
+            "mime_type": _t("string"),
+            "width": _t("integer"),
+            "height": _t("integer"),
+            "attached": {"type": "boolean", "description": "Sent as MCP image content."},
+        }
+    )
 
 
 _JOB_STATES = ["running", "done", "failed", "cancelled"]
@@ -497,7 +530,7 @@ _NODES: tuple[ToolSpec, ...] = (
                             **_problems(),
                             "cook_state": _t("string"),
                             "children_count": _t("integer"),
-                            "hda": _t("object"),
+                            "hda": _t(["object", "null"]),
                             "position": _list("number"),
                             "comment": _t("string"),
                             "color": _list("number"),
@@ -726,13 +759,17 @@ _NODES: tuple[ToolSpec, ...] = (
         description=(
             "Build or update a whole network under parent from Houdini's hou.data childrenAsData "
             "format (what network_describe returns) in one undo step. Types and inputs are "
-            "validated first; dry_run stops there. on_name_collision: error (default), rename, "
-            "replace. Returns created paths and per-node errors. Use node_create for a few nodes."
+            "validated first; dry_run stops there. Input entries are {from, from_index, to_index}; "
+            "a missing to_index means the entry's position in the list. on_name_collision: error "
+            "(default), rename, replace. Returns created paths and per-node errors. Use "
+            "node_create for a few nodes."
         ),
         input_schema=_obj(
             {
                 "parent": _s(),
                 # Inner shape is Houdini's own hou.data format (bible D6); left open on purpose.
+                # setChildrenFromData itself puts inputs without to_index on input 0; the host
+                # fills to_index from the list position first (bible §5.10).
                 "data": {"type": "object", "description": "hou.data childrenAsData dict."},
                 "on_name_collision": _enum(("error", "rename", "replace"), "error"),
                 "layout": _b(True),
@@ -747,9 +784,13 @@ _NODES: tuple[ToolSpec, ...] = (
                 "parent": "/obj/geo1",
                 "data": {
                     "box1": {"type": "box"},
-                    "xform1": {
-                        "type": "xform",
-                        "inputs": [{"from": "box1"}],
+                    "sphere1": {"type": "sphere"},
+                    "merge1": {
+                        "type": "merge",
+                        "inputs": [
+                            {"from": "box1", "from_index": 0, "to_index": 0},
+                            {"from": "sphere1", "from_index": 0, "to_index": 1},
+                        ],
                         "flags": {"display": True},
                     },
                 },
@@ -776,7 +817,8 @@ _PARMS: tuple[ToolSpec, ...] = (
             "Read parms by parm path (.../tx), tuple path (.../t, returns components) or component "
             "path. Each: value at frame (default current), raw text, expression and language, "
             "is_default, locked. include adds keys, menu (token and label), template (label, type, "
-            "default, range, help), ramp, multiparm. Unknown names fail with nearest candidates."
+            "default, range, help), ramp, multiparm. Tuples report expressions per component and "
+            "keyed component names. Unknown names fail with nearest candidates."
         ),
         input_schema=_obj(
             {
@@ -803,15 +845,13 @@ _PARMS: tuple[ToolSpec, ...] = (
                             "raw": {},
                             "expression": _t("string"),
                             "language": _t("string"),
+                            **_tuple_animation(),
                             "is_default": _t("boolean"),
                             "locked": _t("boolean"),
-                            "keyframes": _out(
-                                {
-                                    "count": _t("integer"),
-                                    "first": _t("number"),
-                                    "last": _t("number"),
-                                }
-                            ),
+                            "keyframes": {
+                                "type": "object",
+                                "description": "{count, first, last}; per component for a tuple.",
+                            },
                             "menu": _t("object"),
                             "ramp": _t("object"),
                             "multiparm": _t("object"),
@@ -836,7 +876,8 @@ _PARMS: tuple[ToolSpec, ...] = (
             "keyframes, channel_ref, ramp, multiparm_count, revert_to_default, press. Tuple paths "
             "take lists, component paths scalars; menus take token or label. animation: replace "
             "(default) clears keys and expressions first; key keys at frame; keep is plain set. "
-            "Returns values, wrote_keyframe, node errors."
+            "Returns values (tuples add per-component expressions and keyed), wrote_keyframe, "
+            "node errors."
         ),
         input_schema=_obj(
             {
@@ -888,6 +929,8 @@ _PARMS: tuple[ToolSpec, ...] = (
                             "value": {},
                             "raw": {},
                             "expression": _t("string"),
+                            "language": _t("string"),
+                            **_tuple_animation(),
                             "wrote_keyframe": _t("boolean"),
                             "is_default": _t("boolean"),
                             "errors": _list(),
@@ -957,6 +1000,9 @@ _COOK: tuple[ToolSpec, ...] = (
                 "state": {"type": "string", "enum": _JOB_STATES},
             }
         ),
+        # §4.1: a cook changes no hip state but is not a pure read (it computes, may run
+        # Python SOPs); repeating it is harmless.
+        idempotent=True,
         examples=(
             {"paths": ["/obj/geo1/OUT"]},
             {"paths": ["/obj/geo1/OUT"], "force": True, "frame": 12},
@@ -999,7 +1045,9 @@ _COOK: tuple[ToolSpec, ...] = (
                 "point_count": _t("integer"),
                 "prim_count": _t("integer"),
                 "vertex_count": _t("integer"),
-                "bbox": _out({k: _list("number") for k in ("min", "max", "size", "center")}),
+                "bbox": _nullable(
+                    _out({k: _list("number") for k in ("min", "max", "size", "center")})
+                ),
                 "prim_types": {"type": "object", "additionalProperties": _t("integer")},
                 "attributes": _out({k: _objs() for k in ("point", "vertex", "prim", "detail")}),
                 "groups": _out({k: _objs() for k in ("point", "prim", "edge", "vertex")}),
@@ -1016,7 +1064,7 @@ _COOK: tuple[ToolSpec, ...] = (
             "Read attribute values like the geometry spreadsheet: count rows (default 50) of one "
             "class (default point) from start, with a columns header, for attribs (default all), "
             "optionally within group. stats adds min/max/mean and unique strings over the whole "
-            "class. Page by passing next_cursor as start."
+            "class. Page by passing next_cursor as cursor (or its number as start)."
         ),
         input_schema=_obj(
             {
@@ -1028,8 +1076,24 @@ _COOK: tuple[ToolSpec, ...] = (
                 "count": _i(None, minimum=1, maximum=10000, default=50),
                 "group": _s(),
                 "stats": _b(False),
+                # §4.1: cursors are opaque strings everywhere; overrides start.
+                "cursor": _cursor(),
             },
             ("path",),
+        ),
+        output_schema=_out(
+            {
+                "path": _t("string"),
+                "class": _t("string"),
+                "columns": _list(),
+                "rows": {"type": "array", "items": {"type": "array"}},
+                "start": _t("integer"),
+                "total": _t("integer"),
+                "next_cursor": _t("string"),
+                "truncated": _t("boolean"),
+                "stats": _t("object"),
+            },
+            ("columns", "rows", "total"),
         ),
         read_only=True,
         examples=(
@@ -1065,7 +1129,23 @@ _VISUAL: tuple[ToolSpec, ...] = (
                 "path": _s("Also write the PNG here."),
             }
         ),
+        output_schema=_out(
+            {
+                "image": _image(),
+                "path": _t("string"),
+                "width": _t("integer"),
+                "height": _t("integer"),
+                "camera_used": _t("string"),
+                "source_used": {"type": "string", "enum": ["viewer", "opengl_rop"]},
+                "frame": _t("number"),
+                "rendered": _list("integer"),
+                "also_written": _t("string"),
+            },
+            ("path", "width", "height"),
+        ),
         # Not read_only: the opengl_rop source creates/reuses /out/hocuspocus_capture (§4.7).
+        # Repeating a capture reuses that ROP, so it is idempotent.
+        idempotent=True,
         examples=({}, {"camera": "/obj/cam1", "frame": 48, "source": "opengl_rop"}),
     ),
     ToolSpec(
@@ -1073,8 +1153,9 @@ _VISUAL: tuple[ToolSpec, ...] = (
         description=(
             "Render any ROP (Karma, Mantra, OpenGL, ...) for frames [start, end, inc] (default "
             "current frame), optionally overriding output. Waits up to wait_s (default 20): if "
-            "done, returns output paths and a thumbnail image, else job_id to poll with job. Use "
-            "viewport_capture for a quick look."
+            "done, returns outputs (file paths), thumbnail {path, width, height} with the image "
+            "attached, and job_id; else job_id and state to poll with job. Use viewport_capture "
+            "for a quick look."
         ),
         input_schema=_obj(
             {
@@ -1087,6 +1168,26 @@ _VISUAL: tuple[ToolSpec, ...] = (
                 "thumbnail": _b(True),
             },
             ("rop_path",),
+        ),
+        output_schema=_out(
+            {
+                "job_id": _t("string"),
+                "state": {"type": "string", "enum": _JOB_STATES},
+                "rop_path": _t("string"),
+                "frames": _list("number"),
+                "outputs": _list(),
+                "missing": _list(),
+                "thumbnail": _out(
+                    {
+                        "path": _t("string"),
+                        "width": _t("integer"),
+                        "height": _t("integer"),
+                        "image": _image(),
+                    }
+                ),
+                "thumbnail_error": _t("string"),
+            },
+            ("job_id",),
         ),
         examples=(
             {"rop_path": "/out/karma1"},
@@ -1196,7 +1297,22 @@ _STATE: tuple[ToolSpec, ...] = (
             {"action": _enum(("undo", "redo", "history")), "steps": _i(None, minimum=1, default=1)},
             ("action",),
         ),
-        output_schema=_out({"performed": _list(), "history": _list()}),
+        output_schema=_out(
+            {
+                "performed": _list(),
+                "history": _list(),
+                "redo": {"type": "array", "items": _t("string"), "description": "history only."},
+                "enabled": _t("boolean"),
+                "next_undo": _t(["string", "null"]),
+                "next_redo": _t(["string", "null"]),
+                "undo_count": _t("integer"),
+                "redo_count": _t("integer"),
+                "dirty": _t("boolean"),
+                "scene_generation": _t("integer"),
+                "note": _t("string"),
+            }
+        ),
+        # Registered scene=False (performUndo raises inside an undo group); not idempotent.
         examples=({"action": "history"}, {"action": "undo", "steps": 2}),
     ),
     ToolSpec(
@@ -1216,6 +1332,8 @@ _STATE: tuple[ToolSpec, ...] = (
             {"frame": _t("number"), "fps": _t("number"), "range": _list("number")},
             ("frame", "fps", "range"),
         ),
+        # Not read_only: setting changes the scene. Reads must not dirty it, so the host
+        # registers time with scene=False and marks dirty itself (§4.1).
         idempotent=True,
         examples=({}, {"frame": 24}, {"range": [1, 120], "fps": 24}),
     ),
@@ -1226,6 +1344,8 @@ _STATE: tuple[ToolSpec, ...] = (
             "to select exactly those (an empty list clears the selection)."
         ),
         input_schema=_obj({"paths": _arr({"type": "string"})}),
+        output_schema=_out({"selected": _list()}, ("selected",)),
+        idempotent=True,
         examples=({}, {"paths": ["/obj/geo1/box1"]}),
     ),
     ToolSpec(
@@ -1252,10 +1372,12 @@ _STATE: tuple[ToolSpec, ...] = (
                 "message": _t("string"),
                 "started": _t("string"),
                 "elapsed_s": _t("number"),
-                "result": _t("object"),
+                "result": {"description": "The original tool's result (action result, done)."},
                 "jobs": _objs(),
             }
         ),
+        # Reads and cancel only touch host-side jobs; repeating any action is harmless.
+        idempotent=True,
         examples=({"action": "status", "job_id": "j-3f2a"}, {"action": "list"}),
     ),
 )
@@ -1265,9 +1387,10 @@ _FULL: tuple[ToolSpec, ...] = (
         name="hda",
         description=(
             "Digital asset operations. create turns subnet path into an HDA (name, label, version, "
-            "library_path); save updates the definition from path; unlock allows editing path's "
-            "contents; match reverts path to its definition and locks it; install and reload take "
-            "library_path; list shows loaded libraries."
+            "library_path, optional min_inputs/max_inputs); save updates the definition from "
+            "path; unlock allows editing path's contents; match reverts path to its definition "
+            "and locks it; install and reload take library_path; list shows loaded libraries (or "
+            "library_path's definitions), paged by limit and cursor."
         ),
         input_schema=_obj(
             {
@@ -1276,10 +1399,18 @@ _FULL: tuple[ToolSpec, ...] = (
                 "library_path": _s(".hda file."),
                 "name": _s("Type name."),
                 "label": _s(),
+                # Houdini's own name for the label (createDigitalAsset description=).
+                "description": _s("Same as label."),
                 "version": _s(),
+                "min_inputs": _i(None, minimum=0, maximum=9999),
+                "max_inputs": _i(None, minimum=0, maximum=9999),
+                "limit": _limit(),
+                "cursor": _cursor(),
             },
             ("action",),
         ),
+        # Registered scene=False: list must not open an undo group or dirty the scene; the
+        # mutating actions open their own group (§4.1).
         profile="full",
         examples=(
             {
@@ -1321,21 +1452,23 @@ _FULL: tuple[ToolSpec, ...] = (
     ToolSpec(
         name="pdg",
         description=(
-            "Drive a TOP node. cook cooks its work items as a job (block waits); status reports "
-            "node state; workitems pages work items with state and output files; cancel stops "
-            "cooking; dirty dirties the node."
+            "Drive a TOP node. cook cooks its work items as a job (block waits up to timeout_s, "
+            "default 30); status reports node state; workitems pages work items with state and "
+            "output files; cancel stops cooking; dirty dirties the node."
         ),
         input_schema=_obj(
             {
                 "action": _enum(("cook", "status", "workitems", "cancel", "dirty")),
                 "top_path": _s(),
                 "block": _b(False),
+                "timeout_s": _n(None, minimum=1, default=30),
                 # bible-silent: "workitems paged" uses the §4.1 limit/cursor convention.
                 "limit": _limit(),
                 "cursor": _cursor(),
             },
             ("action", "top_path"),
         ),
+        # Registered scene=False: work items are not hip state (no undo group).
         profile="full",
         examples=(
             {"action": "cook", "top_path": "/tasks/topnet1/ropfetch1"},

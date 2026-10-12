@@ -57,6 +57,46 @@ def test_create_version_field(client, tmp_path):
     assert result["version"] == "2.0"
 
 
+def test_create_inputs_and_description(client, tmp_path):
+    result, _ = _create(
+        client,
+        tmp_path,
+        "hptest::gravel::1.0",
+        description="Gravel",
+        min_inputs=1,
+        max_inputs=2,
+    )
+    assert result["label"] == "Gravel"
+    assert result["inputs"] == {"min": 1, "max": 2}
+    node_type = hou.node(result["path"]).type()
+    assert (node_type.minNumInputs(), node_type.maxNumInputs()) == (1, 2)
+    assert node_type.description() == "Gravel"
+    bad = client.error(
+        "hda",
+        {
+            "action": "create",
+            "path": hou.node("/obj/geo1").createNode("subnet", "other").path(),
+            "name": "hptest::bad::1.0",
+            "library_path": (tmp_path / "bad.hda").as_posix(),
+            "min_inputs": 3,
+            "max_inputs": 1,
+        },
+    )
+    assert bad["code"] == "invalid_argument"
+    clash = client.error(
+        "hda",
+        {
+            "action": "create",
+            "path": hou.node("/obj/geo1").createNode("subnet", "third").path(),
+            "name": "hptest::bad2::1.0",
+            "library_path": (tmp_path / "bad2.hda").as_posix(),
+            "label": "A",
+            "description": "B",
+        },
+    )
+    assert clash["code"] == "invalid_argument"
+
+
 def test_create_name_collision(client, tmp_path):
     _create(client, tmp_path, "hptest::dup::1.0")
     other = hou.node("/obj/geo1").createNode("subnet", "other")
@@ -136,13 +176,21 @@ def test_install_reload_list(client, tmp_path):
     installed = client.ok("hda", {"action": "install", "library_path": library})
     assert installed["action"] == "installed"
 
-    listing = client.ok("hda", {"action": "list"})
+    listing = client.ok("hda", {"action": "list", "limit": 1000})
     assert listing["total"] == len(listing["libraries"])
+    assert "next_cursor" not in listing
     ours = [row for row in listing["libraries"] if row["path"].lower() == library.lower()]
     assert ours and "hptest::stone::1.0" in ours[0]["types"]
     # User libraries come before Houdini's own.
     flags = [bool(row.get("builtin")) for row in listing["libraries"]]
     assert flags == sorted(flags)
+    # Paged by limit and cursor (bible §4.1).
+    first = client.ok("hda", {"action": "list", "limit": 1})
+    assert len(first["libraries"]) == 1 and first["total"] == listing["total"]
+    if listing["total"] > 1:
+        assert first["next_cursor"] == "1"
+        second = client.ok("hda", {"action": "list", "limit": 1, "cursor": first["next_cursor"]})
+        assert second["libraries"][0] == listing["libraries"][1]
 
     one = client.ok("hda", {"action": "list", "library_path": library})
     assert one["total"] == 1

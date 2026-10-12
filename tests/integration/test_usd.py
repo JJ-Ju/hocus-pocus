@@ -172,6 +172,7 @@ def test_errors(client):
     missing = client.error("usd_stage", {"lop_path": out.path(), "prim": "/sphere2"})
     assert missing["code"] == "invalid_argument"
     assert "/sphere1" in missing["candidates"]
+    assert all(c in missing["hint"] for c in missing["candidates"])
     not_lop = client.error("usd_stage", {"lop_path": "/obj"})
     assert not_lop["code"] == "invalid_argument"
     gone = client.error("usd_stage", {"lop_path": "/stage/nope"})

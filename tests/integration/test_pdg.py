@@ -56,6 +56,13 @@ def test_cook_blocking_generator(client):
     assert status["cooking"] is False
 
 
+def test_cook_blocking_takes_timeout(client):
+    _, gen, _ = _graph(count=2)
+    args = {"action": "cook", "top_path": gen.path(), "block": True, "timeout_s": 120}
+    result = client.ok("pdg", args)
+    assert result["ok"] is True and result["status"]["cooked"] == 2
+
+
 def test_cook_blocking_with_failed_item(client):
     _, _, script = _graph()
     result = client.ok("pdg", {"action": "cook", "top_path": script.path(), "block": True})

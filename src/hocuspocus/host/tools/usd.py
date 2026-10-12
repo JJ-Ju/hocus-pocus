@@ -281,7 +281,7 @@ def _missing_prim(stage: Any, path: str) -> ToolError:
     return ToolError(
         "invalid_argument",
         f"No prim at {path!r} on this stage.",
-        hint=(f"Did you mean {candidates[0]}? " if candidates else "")
+        hint=(f"Prims that exist near it: {', '.join(candidates)}. " if candidates else "")
         + "List the stage from prim '/' to see what exists.",
         candidates=candidates,
     )

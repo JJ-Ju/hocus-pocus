@@ -623,6 +623,23 @@ def _int_arg(args: dict[str, Any], key: str, default: int, *, minimum: int) -> i
     return int(value)
 
 
+def _cursor_arg(cursor: Any) -> int | None:
+    """``cursor`` (an opaque string, like every cursor) as a row offset; None if absent."""
+    if cursor is None or cursor == "":
+        return None
+    try:
+        start = int(str(cursor))
+    except ValueError:
+        start = -1
+    if start < 0:
+        raise ToolError(
+            "invalid_argument",
+            f"Invalid cursor {cursor!r}.",
+            hint="Pass next_cursor from the previous page unchanged, or omit cursor.",
+        )
+    return start
+
+
 @tool("geo_read")
 def geo_read(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     import numpy as np
@@ -635,7 +652,9 @@ def geo_read(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
             candidates=difflib.get_close_matches(str(cls), CLASSES, n=2, cutoff=0.3)
             or list(CLASSES),
         )
-    start = _int_arg(args, "start", 0, minimum=0)
+    start = _cursor_arg(args.get("cursor"))
+    if start is None:
+        start = _int_arg(args, "start", 0, minimum=0)
     count = min(_int_arg(args, "count", 50, minimum=1), 10_000)
     stats = args.get("stats", False)
     if not isinstance(stats, bool):
@@ -690,7 +709,7 @@ def geo_read(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     out["start"] = start
     out["total"] = total
     if start + len(rows) < total:
-        out["next_cursor"] = start + len(rows)
+        out["next_cursor"] = str(start + len(rows))
     if stats:
         stat_rows: dict[str, Any] = {}
         for column in columns:

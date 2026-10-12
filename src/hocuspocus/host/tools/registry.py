@@ -3,6 +3,26 @@
 An implementation is ``fn(args: dict, ctx: HostContext) -> dict``. It runs on Houdini's
 main thread (unless registered with ``main_thread=False``) and raises
 :class:`~hocuspocus.tools.errors.ToolError` for user-level failures.
+
+The ``scene=False`` convention (docs/BIBLE.md §4.1). By default a tool whose catalogue
+entry is not ``read_only`` is *mutating*: the dispatcher refuses it in read-only mode,
+wraps it in one labelled undo group, records the label and marks the scene dirty. Some
+tools cannot live with that and register with ``scene=False``, taking on whichever of
+those duties apply themselves:
+
+* ``undo`` — ``hou.undos.performUndo``/``performRedo`` raise inside an undo group.
+* ``time``, ``selection``, ``hda`` — reads (``time`` with no arguments, ``hda list``)
+  must not open an undo group or dirty the scene; setting opens its own group and marks
+  dirty.
+* ``cook``, ``pdg``, ``render``, ``job`` — a cook, PDG work items, rendered files and
+  host-side jobs are not hip state; these also run off the main thread
+  (``main_thread=False``) so they can wait on jobs and reach ``hou`` only through the
+  executor.
+
+The catalogue annotations describe what the agent sees, not the registration: these
+tools are ``readOnlyHint: false`` (they can change something), ``destructiveHint:
+false``, and ``idempotentHint: true`` when repeating the call is harmless (``time``,
+``selection``, ``cook``, ``job``). A unit test pins the ``scene=False`` set.
 """
 
 from __future__ import annotations
@@ -52,8 +72,9 @@ class HostTool:
     main_thread: bool = True
     """False for tools that never touch ``hou`` (e.g. ``job``): they skip the executor."""
     scene: bool = True
-    """False for tools that change host state only (``job``): no undo group, no
-    ``read_only`` refusal, no dirty marking."""
+    """False when the dispatcher must not open an undo group, refuse in read-only mode or
+    mark the scene dirty for this tool; it does whatever applies itself (see the module
+    docstring)."""
 
     @property
     def spec(self) -> catalog.ToolSpec | None:

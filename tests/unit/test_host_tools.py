@@ -99,6 +99,43 @@ def test_registered_host_tools_exist_in_catalogue():
         assert tools["job"].mutating is False  # host-state only
 
 
+SCENE_FALSE = {"undo", "time", "selection", "hda", "cook", "pdg", "render", "job"}
+"""Tools the dispatcher must not wrap in an undo group (registry.py docstring, BIBLE §4.1)."""
+
+
+def test_registry_matches_catalogue_exactly():
+    """BIBLE §3.5/§11: every non-bridge-local catalogue tool has a host implementation,
+    and the host implements nothing the catalogue does not list (bar INTERNAL_TOOLS)."""
+    registry.load_all()
+    result = registry.validate(logging.getLogger("test"))
+    assert result == {"unknown": [], "missing": []}
+
+
+def test_host_tool_modules_import_hou_lazily():
+    """Host tool modules must import on plain CPython: ``hou`` only inside functions."""
+    import importlib
+    import sys
+
+    assert "hou" not in sys.modules
+    for module in registry.TOOL_MODULES:
+        importlib.import_module(f"hocuspocus.host.tools.{module}")
+    assert "hou" not in sys.modules
+    assert "pxr" not in sys.modules and "pdg" not in sys.modules
+
+
+def test_scene_false_convention():
+    tools = registry.load_all()
+    assert {name for name, t in tools.items() if not t.scene} == SCENE_FALSE
+    for name in SCENE_FALSE:
+        spec = catalog.get(name)
+        assert spec is not None
+        # They can change something, so the agent must not see them as pure reads.
+        assert spec.read_only is False, name
+        assert spec.destructive is False, name
+    for name in ("time", "selection", "cook", "job"):
+        assert catalog.get(name).idempotent is True, name
+
+
 def test_job_manager_lifecycle():
     jobs = JobManager(InlineExecutor())
     gate = threading.Event()
