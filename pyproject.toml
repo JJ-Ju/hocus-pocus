@@ -27,6 +27,9 @@ hocuspocus-mcp = "hocuspocus.bridge.__main__:main"
 [tool.hatch.build.targets.wheel]
 packages = ["src/hocuspocus"]
 
+[tool.hatch.build.targets.wheel.force-include]
+"houdini" = "hocuspocus/_houdini"
+
 [tool.hatch.build.targets.sdist]
 include = ["src/hocuspocus", "houdini", "docs/BIBLE.md", "README.md", "LICENSE"]
 
@@ -44,7 +47,7 @@ timeout = 300
 line-length = 100
 target-version = "py311"
 src = ["src", "tests"]
-extend-exclude = ["python3.11libs", "scripts", "docs"]
+extend-exclude = ["python3.11libs", "scripts", "docs", "tests/*.py", "tests/fixtures"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "C4", "SIM"]

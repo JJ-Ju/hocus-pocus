@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
 import sys
 from pathlib import Path
@@ -38,8 +39,6 @@ def ensure_private_dir(path: Path) -> Path:
     """Create ``path`` (and parents) readable only by the current user where the OS allows."""
     path.mkdir(parents=True, exist_ok=True)
     if sys.platform != "win32":
-        try:
+        with contextlib.suppress(OSError):
             os.chmod(path, 0o700)
-        except OSError:
-            pass
     return path
