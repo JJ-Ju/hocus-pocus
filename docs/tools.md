@@ -2,7 +2,7 @@
 
 <!-- Generated from src/hocuspocus/tools/catalog.py by `python -m hocuspocus.tools.docs`. Do not edit by hand. -->
 
-35 tools: 31 in the `core` profile, 4 more in `full`. Model-visible `tools/list` text: 27,891 bytes. See `docs/BIBLE.md` §4 for the design.
+35 tools: 31 in the `core` profile, 4 more in `full`. Model-visible `tools/list` text: 28,391 bytes. See `docs/BIBLE.md` §4 for the design.
 
 ## Contents
 
@@ -302,7 +302,7 @@ Read nodes in detail: type, flags, inputs with names and sources, non-default pa
 
 `headless ok` · profile `core`
 
-Create nodes in one undo step. Item: parent, type (resolved like createNode so box gets the current version; exact_type disables), optional name, parms (value or {expression, language}; {expr, lang} also works), inputs (index or name, from, output), flags, position. Items may wire to nodes created earlier in the call. layout default good_position. Returns node_info blocks. Use network_build for whole graphs.
+Create nodes in one undo step. Item: parent, type (resolved like createNode so box gets the current version; exact_type disables), optional name, parms (value or {expression, language}; {expr, lang} also works), inputs (index or name, from, output), flags, position. Items may wire to nodes created earlier in the call. layout default good_position. Returns node_info blocks, or path, type and problems with return summary. Use network_build for whole graphs.
 
 ### Arguments
 
@@ -327,6 +327,7 @@ Create nodes in one undo step. Item: parent, type (resolved like createNode so b
 | `layout` | `good_position` \| `none` |  | `"good_position"` |  |
 | `exact_type` | boolean |  | `false` |  |
 | `partial` | boolean |  | `false` | Keep successful items when one fails. |
+| `return` | `full` \| `summary` |  | `"full"` |  |
 
 ### Examples
 
@@ -403,7 +404,7 @@ Change node properties in one undo step: rename, flags, bypass, color, comment, 
 
 `headless ok` · profile `core`
 
-Copy nodes into to_parent, which may be their own network. names renames copies in paths order; with_inputs (default true) keeps wiring among copied nodes; position_offset shifts them. Returns the new paths.
+Copy nodes into to_parent, which may be their own network. names renames copies in paths order; with_inputs (default true) keeps wiring among copied nodes; position_offset shifts them. Returns the new paths; return summary trims each row to path, type and problems.
 
 ### Arguments
 
@@ -414,6 +415,7 @@ Copy nodes into to_parent, which may be their own network. names renames copies 
 | `names` | array<string> |  |  |  |
 | `with_inputs` | boolean |  | `true` |  |
 | `position_offset` | array<number> |  |  | [dx, dy] (min items 2; max items 2) |
+| `return` | `full` \| `summary` |  | `"full"` |  |
 
 ### Examples
 
@@ -504,7 +506,7 @@ Read a whole network in one call as Houdini's hou.data childrenAsData format: ty
 
 `headless ok` · profile `core`
 
-Build or update a whole network under parent from Houdini's hou.data childrenAsData format (what network_describe returns) in one undo step. Types and inputs are validated first; dry_run stops there. Input entries are {from, from_index, to_index}; a missing to_index means the entry's position in the list. on_name_collision: error (default), rename, replace. Returns created paths and per-node errors. Use node_create for a few nodes.
+Build or update a whole network under parent from Houdini's hou.data childrenAsData format (what network_describe returns) in one undo step. Types and inputs are validated first; dry_run stops there. Input entries are {from, from_index, to_index}; a missing to_index means the entry's position in the list. on_name_collision: error (default), rename, replace. Returns created paths and per-node errors (return summary: path, type, problems). Use node_create for a few nodes.
 
 ### Arguments
 
@@ -516,6 +518,7 @@ Build or update a whole network under parent from Houdini's hou.data childrenAsD
 | `layout` | boolean |  | `true` |  |
 | `dry_run` | boolean |  | `false` |  |
 | `tag` | string |  |  | Stored as userData hocuspocus:tag. |
+| `return` | `full` \| `summary` |  | `"full"` |  |
 
 ### Examples
 
@@ -887,7 +890,7 @@ Find node types by name, label, description or keyword across all 18 categories,
 
 `read-only` `headless ok` · profile `core`
 
-Describe one node type: label, version, named inputs and outputs, and parms grouped by folder. detail compact (default) gives rows of name, label, type, default; full lists every parm row with size, range, menu and folder. type is category/name, or a bare name with category. folder limits parms to one folder; include_help adds the start of the node's help text.
+Describe one node type: label, version, named inputs and outputs, and parms grouped by folder. detail compact (default) gives rows of name, label, type, default; full lists every parm row with size, range, menu and folder; folders lists folder names with parm counts. type is category/name, or a bare name with category. folder limits parms to one folder, parms to a name or label glob; include_help adds help text.
 
 ### Arguments
 
@@ -898,7 +901,8 @@ Describe one node type: label, version, named inputs and outputs, and parms grou
 | `include_parms` | boolean |  | `true` |  |
 | `include_help` | boolean |  | `false` |  |
 | `folder` | string |  |  |  |
-| `detail` | `compact` \| `full` |  | `"compact"` |  |
+| `parms` | string |  |  | Glob on parm name or label, e.g. *seed*. |
+| `detail` | `compact` \| `full` \| `folders` |  | `"compact"` |  |
 
 ### Examples
 
@@ -907,11 +911,11 @@ Describe one node type: label, version, named inputs and outputs, and parms grou
 ```
 
 ```json
-{"type": "mountain", "category": "Sop", "include_help": true}
+{"type": "Sop/scatter", "parms": "*seed*"}
 ```
 
 ```json
-{"type": "Sop/scatter", "detail": "full", "folder": "Options"}
+{"type": "Sop/rbdmaterialfracture", "detail": "folders"}
 ```
 
 

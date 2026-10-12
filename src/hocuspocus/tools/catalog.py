@@ -1308,9 +1308,9 @@ _VISUAL: tuple[ToolSpec, ...] = (
         description=(
             "Describe one node type: label, version, named inputs and outputs, and parms grouped "
             "by folder. detail compact (default) gives rows of name, label, type, default; full "
-            "lists every parm row with size, range, menu and folder. type is category/name, or a "
-            "bare name with category. folder limits parms to one folder; include_help adds the "
-            "start of the node's help text."
+            "lists every parm row with size, range, menu and folder; folders lists folder names "
+            "with parm counts. type is category/name, or a bare name with category. folder limits "
+            "parms to one folder, parms to a name or label glob; include_help adds help text."
         ),
         input_schema=_obj(
             {
@@ -1319,15 +1319,16 @@ _VISUAL: tuple[ToolSpec, ...] = (
                 "include_parms": _b(True),
                 "include_help": _b(False),
                 "folder": _s(),
-                "detail": _enum(("compact", "full"), "compact"),
+                "parms": _s("Glob on parm name or label, e.g. *seed*."),
+                "detail": _enum(("compact", "full", "folders"), "compact"),
             },
             ("type",),
         ),
         read_only=True,
         examples=(
             {"type": "Sop/scatter"},
-            {"type": "mountain", "category": "Sop", "include_help": True},
-            {"type": "Sop/scatter", "detail": "full", "folder": "Options"},
+            {"type": "Sop/scatter", "parms": "*seed*"},
+            {"type": "Sop/rbdmaterialfracture", "detail": "folders"},
         ),
     ),
 )

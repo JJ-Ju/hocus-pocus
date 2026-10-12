@@ -225,6 +225,7 @@ class _Index:
         self.type_count = -1
         self.dirty = True
         self.callback_installed = False
+        self.callback_ok = False
         self.build_ms = 0.0
         self.builds = 0
         self.lock = threading.Lock()
@@ -237,9 +238,10 @@ def _on_hda_event(**_kwargs: Any) -> None:
     _INDEX.dirty = True
 
 
-def _install_hda_callback() -> None:
+def _install_hda_callback() -> bool:
+    """Install the HDA event callback once. Returns whether it is in place."""
     if _INDEX.callback_installed:
-        return
+        return _INDEX.callback_ok
     _INDEX.callback_installed = True
     try:
         import hou
@@ -250,8 +252,10 @@ def _install_hda_callback() -> None:
             if hasattr(hou.hdaEventType, name)
         )
         hou.hda.addEventCallback(events, _on_hda_event)
+        _INDEX.callback_ok = True
     except Exception:
-        pass  # the type-count check still catches most changes
+        _INDEX.callback_ok = False  # fall back to counting types on every call
+    return _INDEX.callback_ok
 
 
 def _type_count() -> int:
@@ -305,8 +309,9 @@ def _build_rows() -> list[dict[str, Any]]:
 def get_index() -> list[dict[str, Any]]:
     """The cached type index (main thread). Rebuilt when HDA libraries change."""
     with _INDEX.lock:
-        _install_hda_callback()
-        count = _type_count()
+        # The HDA event callback sets the dirty flag; counting every type of every
+        # category on each call is only the fallback when the callback is missing.
+        count = _INDEX.type_count if _install_hda_callback() else _type_count()
         if _INDEX.rows is None or _INDEX.dirty or count != _INDEX.type_count:
             started = time.perf_counter()
             _INDEX.rows = _build_rows()
@@ -652,7 +657,15 @@ def _probe_parent(cat_name: str) -> tuple[Any, Any]:
     if root is None:
         return None, None
     container = root.createNode(spec[1], TMP_NAME, run_init_scripts=False)
+    _mark_internal(container)
     return container, container
+
+
+def _mark_internal(node: Any) -> None:
+    from .visual import INTERNAL_KEY
+
+    with contextlib.suppress(Exception):
+        node.setUserData(INTERNAL_KEY, "1")
 
 
 def type_io(node_type: Any) -> dict[str, Any]:
@@ -667,17 +680,23 @@ def type_io(node_type: Any) -> dict[str, Any]:
         return cached
     import hou
 
+    from .events import muted
+
     data: dict[str, Any] | None = None
     try:
-        with hou.undos.disabler():
+        # Outside undo and muted: the probe never shows in ``events`` or the undo stack.
+        with hou.undos.disabler(), muted():
             parent, cleanup = _probe_parent(node_type.category().name())
             if parent is not None:
                 node = None
                 try:
+                    # load_contents: an HDA's outputs come from its contents (a
+                    # multi-output asset reports one output without them).
                     node = parent.createNode(
                         node_type.name(), TMP_NAME if cleanup is None else None,
-                        run_init_scripts=False, load_contents=False,
+                        run_init_scripts=False, load_contents=True,
                     )  # fmt: skip
+                    _mark_internal(node)
                     data = {
                         "inputs": _io_rows(node.inputNames(), node.inputLabels()),
                         "outputs": _io_rows(node.outputNames(), node.outputLabels()),
@@ -922,13 +941,42 @@ def node_type_search(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     return result
 
 
-DETAILS = ("compact", "full")
+DETAILS = ("compact", "full", "folders")
 NO_FOLDER = "(no folder)"
 COMPACT_HINT = "detail: full adds menus, ranges, hidden parms and per-parm help."
 
 
 PARM_COLUMNS = ["name", "label", "type", "default", "components"]
 """Columns of a compact parm row; ``components`` only on tuples."""
+
+
+def filter_parms(rows: list[dict[str, Any]], pattern: str) -> list[dict[str, Any]]:
+    """Rows whose name or label matches the glob ``pattern`` (case-insensitive); a
+    pattern without wildcards matches the whole name or label."""
+    import fnmatch
+
+    pat = pattern.strip().lower()
+    return [
+        row
+        for row in rows
+        if fnmatch.fnmatchcase(row["name"].lower(), pat)
+        or fnmatch.fnmatchcase((row.get("label") or "").lower(), pat)
+    ]
+
+
+def folder_counts(rows: list[dict[str, Any]], folders: list[str]) -> list[dict[str, Any]]:
+    """``[{folder, parms}]`` in folder order: visible parms directly in each folder."""
+    counts: dict[str, int] = {}
+    for row in rows:
+        if row.get("is_hidden"):
+            continue
+        key = row.get("folder") or NO_FOLDER
+        counts[key] = counts.get(key, 0) + 1
+    ordered = [NO_FOLDER, *folders] if NO_FOLDER in counts else list(folders)
+    for key in counts:  # multiparm instance folders ("Points[]") are not in folders
+        if key not in ordered:
+            ordered.append(key)
+    return [{"folder": f, "parms": counts.get(f, 0)} for f in ordered]
 
 
 def compact_parms(rows: list[dict[str, Any]]) -> dict[str, list[list[Any]]]:
@@ -959,6 +1007,9 @@ def node_type_info(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     folder = args.get("folder")
     if folder is not None and not isinstance(folder, str):
         raise ToolError("invalid_argument", "'folder' must be a string.")
+    parm_glob = args.get("parms")
+    if parm_glob is not None and (not isinstance(parm_glob, str) or not parm_glob.strip()):
+        raise ToolError("invalid_argument", "'parms' must be a non-empty glob such as *seed*.")
 
     cat_name = node_type.category().name()
     components = node_type.nameComponents()
@@ -1012,7 +1063,17 @@ def node_type_info(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
                 hint="Pass one folder label from candidates (a single segment).",
                 candidates=folders,
             )
-        if detail == "full":
+        if parm_glob is not None:
+            rows = filter_parms(rows, parm_glob)
+            if not rows:
+                result["hint"] = (
+                    f"No parm name or label matches {parm_glob!r}; globs are case-insensitive, "
+                    "e.g. *seed*."
+                )
+        if detail == "folders":
+            result["folders"] = folder_counts(rows, folders)
+            result["hint"] = "Pass folder with one of these to list its parms."
+        elif detail == "full":
             result["folders"] = folders
             result["parms"] = rows
         else:
@@ -1021,7 +1082,7 @@ def node_type_info(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
             result["parm_columns"] = PARM_COLUMNS
             result["parms"] = compact_parms(rows)
             result["detail"] = "compact"
-            result["hint"] = COMPACT_HINT
+            result.setdefault("hint", COMPACT_HINT)
     if include_help:
         if raw_help:
             text, truncated = help_to_text(raw_help)

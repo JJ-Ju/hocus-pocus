@@ -267,3 +267,65 @@ def test_info_compact_is_the_default(client):
     assert by_name["type"][3] == "poly"  # a menu's default is its token
     copy = client.ok("node_type_info", {"type": "Sop/copytopoints"})
     assert len(json.dumps(copy, separators=(",", ":"))) < 2000
+
+
+# -- review 10 ----------------------------------------------------------------------
+
+
+def test_info_multi_output_hda_lists_every_output(client):
+    info = client.ok("node_type_info", {"type": "Sop/rbdmaterialfracture", "include_parms": False})
+    assert [o["label"] for o in info["outputs"]] == [
+        "Geometry",
+        "Constraint Geometry",
+        "Proxy Geometry",
+    ]
+
+
+def test_info_probe_never_shows_in_events(client):
+    from hocuspocus.host.tools import events
+
+    client.ok("events", {})  # installs the hooks
+    since = events.LOG.last_seq
+    # Uncached types in categories whose probe needs a temporary container.
+    for type_name in ("Sop/polyextrude::2.0", "Dop/rbdsolver", "Chop/wave"):
+        client.ok("node_type_info", {"type": type_name, "include_parms": False})
+    recorded = client.ok("events", {"since": since})["events"]
+    assert recorded == [], recorded
+    assert not [n for n in hou.node("/").allSubChildren() if "type_probe" in n.name()]
+
+
+def test_info_parms_glob_filters_by_name_or_label(client):
+    info = client.ok("node_type_info", {"type": "Sop/scatter", "parms": "npts"})
+    rows = [row for folder in info["parms"].values() for row in folder]
+    assert [row[0] for row in rows] == ["npts"]
+    by_label = client.ok(
+        "node_type_info", {"type": "Sop/scatter", "parms": "*seed*", "detail": "full"}
+    )
+    assert by_label["parms"] and all(
+        "seed" in p["name"].lower() or "seed" in p["label"].lower() for p in by_label["parms"]
+    )
+    none = client.ok("node_type_info", {"type": "Sop/box", "parms": "zzz*"})
+    assert none["parms"] == {} and "zzz*" in none["hint"]
+
+
+def test_info_folders_mode(client):
+    info = client.ok("node_type_info", {"type": "Sop/scatter", "detail": "folders"})
+    folders = {row["folder"]: row["parms"] for row in info["folders"]}
+    assert "Options" in folders and folders["Options"] > 0
+    assert "parms" not in info
+    full = client.ok("node_type_info", {"type": "Sop/scatter", "detail": "full"})
+    visible = [p for p in full["parms"] if not p.get("is_hidden")]
+    assert sum(folders.values()) == len(visible)
+
+
+def test_info_does_not_recount_types(client, monkeypatch):
+    from hocuspocus.host.tools import types
+
+    client.ok("node_type_search", {"query": "box"})
+
+    def boom():
+        raise AssertionError("_type_count called")
+
+    monkeypatch.setattr(types, "_type_count", boom, raising=False)
+    client.ok("node_type_search", {"query": "sphere"})
+    client.ok("node_type_info", {"type": "Sop/box", "include_parms": False})
