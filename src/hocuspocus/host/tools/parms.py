@@ -323,11 +323,15 @@ def _raw(parm: Any, kind: str) -> Any:
 
 
 def _parm_locked(parm: Any) -> bool:
+    """The parm's own lock (``locked``; BIBLE §4.1)."""
     try:
-        if parm.isLocked():
-            return True
+        return bool(parm.isLocked())
     except Exception:
-        pass
+        return False
+
+
+def _hda_locked(parm: Any) -> bool:
+    """The parm's node is inside a locked asset and not editable (``hda_locked``)."""
     try:
         node = parm.node()
         return bool(node.isInsideLockedHDA()) and not bool(node.isEditableInsideLockedHDA())
@@ -415,6 +419,7 @@ def _describe_parm(
         out["is_default"] = False
     if full:
         out["locked"] = locked
+        out["hda_locked"] = _hda_locked(parm)
         if "keys" in include:
             out["keyframes"] = (
                 {"count": keys["count"], "first": keys["first"], "last": keys["last"]}
@@ -484,6 +489,7 @@ def _describe_tuple(
     locked = any(_parm_locked(p) for p in parms)
     if full:
         out["locked"] = locked
+        out["hda_locked"] = _hda_locked(parms[0])
         if "keys" in include:
             out["keyframes"] = {
                 name: {"count": i["count"], "first": i["first"], "last": i["last"]}

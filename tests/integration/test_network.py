@@ -53,7 +53,8 @@ def test_describe_chain_is_compact(client, capsys):
     assert data["xform1"]["parms"]["t"][1] == {"expression": "$F*0.1"}
     assert data["xform1"]["inputs"] == [{"from": "box1", "from_index": 0, "to_index": 0}]
     assert data["merge1"]["flags"] == {"display": True, "render": True}
-    assert data["mountain1"]["locked"] is True and "children" not in data["mountain1"]
+    assert data["mountain1"]["hda_locked"] is True and "children" not in data["mountain1"]
+    assert "locked" not in data["mountain1"]  # locked is the SOP lock flag (BIBLE §4.1)
     size = len(json.dumps(data, separators=(",", ":")))
     assert result["bytes"] == size
     assert size < 2000, size
@@ -77,7 +78,7 @@ def test_describe_positions_depth_and_locked(client):
         "network_describe", {"root": "/obj/geo1", "depth": 2, "recurse_locked": True}
     )
     assert opened["data"]["mountain1"]["children"]
-    assert opened["data"]["mountain1"]["locked"] is True
+    assert opened["data"]["mountain1"]["hda_locked"] is True
     error = client.error("network_describe", {"root": "/obj/geo1/mountain1"})
     assert error["code"] == "locked" and "recurse_locked" in error["hint"]
 

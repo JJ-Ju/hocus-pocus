@@ -133,8 +133,7 @@ def _expand(
         return 0
     locked = N._is_locked_hda(node)
     if locked:
-        entry["locked"] = True
-        entry["hda_locked"] = True  # review 07/11: unambiguous name; locked kept for 1.0
+        entry["hda_locked"] = True  # BIBLE §4.1: locked is the SOP lock flag, not this
     if level >= depth or (locked and not recurse_locked):
         return 0
     try:
@@ -432,7 +431,7 @@ def _validate_level(
         children = entry.get("children")
         if children is not None:
             child_category = node_type.childTypeCategory()
-            if entry.get("locked") or entry.get("hda_locked"):
+            if entry.get("hda_locked"):
                 entry.pop("children")
                 warnings.append(
                     f"{where}: children of the locked asset {node_type.name()} were ignored; "

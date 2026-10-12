@@ -400,7 +400,10 @@ def test_locked_hda_internal_parm_is_refused(client, scene, work_dir):
     assert "PermissionError" in err["hou_exception"]
     assert asset.node("inner").parm("sizex").eval() == 1.0
     got = _get(client, f"{asset.path()}/inner/sizex")
-    assert got["locked"] is True
+    assert got["hda_locked"] is True and got["locked"] is False  # locked: the parm lock
+    scene["box"].parm("sizey").lock(True)
+    assert _get(client, "/obj/geo1/box1/sizey")["locked"] is True
+    assert _get(client, "/obj/geo1/box1/sizey")["hda_locked"] is False
 
 
 # -- batches and undo --------------------------------------------------------------
@@ -633,10 +636,11 @@ def test_editable_node_inside_locked_asset_is_not_locked(client, scene, work_dir
     asset.type().definition().addSection("EditableNodes", "inner")
     asset.matchCurrentDefinition()
     assert asset.node("inner").isEditableInsideLockedHDA()
-    assert _get(client, f"{asset.path()}/inner/sizex")["locked"] is False
-    assert _get(client, f"{asset.path()}/sealed/sizex")["locked"] is True
+    assert _get(client, f"{asset.path()}/inner/sizex")["hda_locked"] is False
+    assert _get(client, f"{asset.path()}/sealed/sizex")["hda_locked"] is True
+    assert _get(client, f"{asset.path()}/sealed/sizex")["locked"] is False
     res = _set(client, {"path": f"{asset.path()}/inner/sizex", "value": 3})
-    assert res["value"] == 3.0 and "locked" not in res
+    assert res["value"] == 3.0 and "locked" not in res and "hda_locked" not in res
 
 
 def test_node_create_parms_accept_parm_set_item_forms(client, scene):

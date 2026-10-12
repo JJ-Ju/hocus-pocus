@@ -415,7 +415,8 @@ def test_info_hda_and_locked_contents(client):
     _geo, mountain = make_locked_mountain()
     result = client.ok("node_info", {"paths": [mountain.path()], "include": ["hda", "children"]})
     block = result["nodes"][0]
-    assert block["hda"]["locked"] is True and block["hda"]["hda_locked"] is True
+    assert block["hda"]["hda_locked"] is True and "locked" not in block["hda"]
+    assert block["hda_locked"] is True
     assert block["hda"]["definition"] == "mountain::2.0"
     assert block["hda"]["library"].lower().endswith(".hda")
     assert block["children"] == [] and "children_count" not in block
@@ -672,12 +673,12 @@ def test_edit_object_has_no_bypass_flag(client):
 def test_edit_lock_unlock_hda(client):
     _geo, mountain = make_locked_mountain()
     result = client.ok("node_edit", {"items": [{"path": mountain.path(), "lock": False}]})
-    assert result["results"][0]["hda"]["locked"] is False
+    assert result["results"][0]["hda"]["hda_locked"] is False
     assert not mountain.isLockedHDA()
     created = client.ok("node_create", {"items": [{"parent": mountain.path(), "type": "null"}]})
     assert created["created"][0].startswith(mountain.path() + "/")
     relocked = client.ok("node_edit", {"items": [{"path": mountain.path(), "lock": True}]})
-    assert relocked["results"][0]["hda"]["locked"] is True
+    assert relocked["results"][0]["hda"]["hda_locked"] is True
     error = client.error("node_edit", {"items": [{"path": "/obj/terrain/grid1", "lock": False}]})
     assert error["code"] == "invalid_argument" and error["hint"]
 
@@ -715,7 +716,7 @@ def test_edit_validates_everything_before_locking(client):
         "node_edit", {"items": [{"path": mountain.path(), "lock": True, "name": "peaks"}]}
     )
     block = renamed["results"][0]
-    assert block["path"].endswith("/peaks") and block["hda"]["locked"] is True
+    assert block["path"].endswith("/peaks") and block["hda"]["hda_locked"] is True
 
 
 def test_operation_failed_maps_to_a_stable_code(client):
@@ -876,3 +877,15 @@ def test_layout_modes(client):
     assert list(extra.position()) != [0.0, 0.0]
     error = client.error("node_layout", {"parent": "/obj/geo1", "paths": ["/obj/geo1"]})
     assert error["code"] == "invalid_argument"
+
+
+def test_locked_means_the_sop_lock_flag(client):
+    """BIBLE §4.1 (1.1): locked is the hard-lock flag; hda_locked is the asset lock."""
+    geo, box, _xform, _null = make_chain()
+    box.setHardLocked(True)
+    found = client.ok("node_find", {"root": geo.path(), "flags": {"locked": True}})
+    assert [row["path"] for row in found["nodes"]] == [box.path()]
+    (block,) = client.ok("node_info", {"paths": [box.path()]})["nodes"]
+    assert block["flags"]["locked"] is True and "hda_locked" not in block
+    data = client.ok("network_describe", {"root": geo.path()})["data"]
+    assert "hda_locked" not in data["box1"]

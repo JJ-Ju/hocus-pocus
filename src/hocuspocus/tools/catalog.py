@@ -550,6 +550,7 @@ _NODES: tuple[ToolSpec, ...] = (
                             **_problems(),
                             "cook_state": _t("string"),
                             "children_count": _t("integer"),
+                            "hda_locked": _t("boolean"),
                             "hda": _t(["object", "null"]),
                             "position": _list("number"),
                             "comment": _t("string"),
@@ -760,7 +761,7 @@ _NODES: tuple[ToolSpec, ...] = (
         description=(
             "Read a whole network in one call as Houdini's hou.data childrenAsData format: types, "
             "non-default parms, expressions, wiring, flags, depth levels deep (default 1). Locked "
-            "HDAs appear as {type, locked, hda_locked} unless recurse_locked. Pages stop at the "
+            "HDAs appear as {type, hda_locked} unless recurse_locked. Pages stop at the "
             "response budget (truncated, next_cursor). format python returns asCode for a single "
             "node. The data result can be passed to network_build."
         ),
@@ -846,9 +847,10 @@ _PARMS: tuple[ToolSpec, ...] = (
         description=(
             "Read parms by parm path (.../tx), tuple path (.../t, returns components) or component "
             "path. Each: value at frame (default current), raw text, expression and language, "
-            "is_default, locked. include adds keys, menu (token and label), template (label, type, "
-            "default, range, help), ramp, multiparm. Tuples report expressions per component and "
-            "keyed component names. Unknown names fail with nearest candidates."
+            "is_default, locked (parm lock), hda_locked. include adds keys, menu (token and label), "
+            "template (label, type, default, range, help), ramp, multiparm. Tuples report "
+            "expressions per component and keyed component names. Unknown names fail with nearest "
+            "candidates."
         ),
         input_schema=_obj(
             {
@@ -878,6 +880,7 @@ _PARMS: tuple[ToolSpec, ...] = (
                             **_tuple_animation(),
                             "is_default": _t("boolean"),
                             "locked": _t("boolean"),
+                            "hda_locked": _t("boolean"),
                             # {count, first, last}; per component for a tuple.
                             "keyframes": _t("object"),
                             "menu": _t("object"),

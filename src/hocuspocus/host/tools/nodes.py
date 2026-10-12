@@ -392,8 +392,7 @@ def hda_block(node: Any) -> dict[str, Any] | None:
         return None
     locked = _is_locked_hda(node)
     out: dict[str, Any] = {
-        "locked": locked,
-        "hda_locked": locked,  # unambiguous next to flags.locked (the hard lock); 1.1 drops locked
+        "hda_locked": locked,  # BIBLE §4.1: locked is the SOP lock flag (flags.locked)
         "definition": definition.nodeTypeName(),
         "library": definition.libraryFilePath(),
     }
@@ -524,6 +523,8 @@ def node_block(
         out["parms"] = parm_rows(node, include_defaults)
     if "errors" in sections or problems is not None:
         out.update(problems if problems is not None else collect_problems(node, cook=False))
+    if _is_locked_hda(node) or inside_locked(node):
+        out["hda_locked"] = True
     opaque = _is_locked_hda(node) and not recurse_locked
     if not opaque:
         with contextlib.suppress(Exception):
