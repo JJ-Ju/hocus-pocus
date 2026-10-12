@@ -2,7 +2,7 @@
 
 <!-- Generated from src/hocuspocus/tools/catalog.py by `python -m hocuspocus.tools.docs`. Do not edit by hand. -->
 
-35 tools: 31 in the `core` profile, 4 more in `full`. Model-visible `tools/list` text: 26,532 bytes. See `docs/BIBLE.md` §4 for the design.
+35 tools: 31 in the `core` profile, 4 more in `full`. Model-visible `tools/list` text: 26,685 bytes. See `docs/BIBLE.md` §4 for the design.
 
 ## Contents
 
@@ -881,7 +881,7 @@ Find node types by name, label, description or keyword across all 18 categories,
 
 `read-only` `headless ok` · profile `core`
 
-Describe one node type: label, version, named inputs and outputs, and parms (name, label, type, size, default, range, menu) grouped by folder. type is category/name, or a bare name with category. folder limits parms to one folder; include_help adds the start of the node's help text.
+Describe one node type: label, version, named inputs and outputs, and parms grouped by folder. detail compact (default) gives rows of name, label, type, default; full lists every parm row with size, range, menu and folder. type is category/name, or a bare name with category. folder limits parms to one folder; include_help adds the start of the node's help text.
 
 ### Arguments
 
@@ -892,6 +892,7 @@ Describe one node type: label, version, named inputs and outputs, and parms (nam
 | `include_parms` | boolean |  | `true` |  |
 | `include_help` | boolean |  | `false` |  |
 | `folder` | string |  |  |  |
+| `detail` | `compact` \| `full` |  | `"compact"` |  |
 
 ### Examples
 
@@ -901,6 +902,10 @@ Describe one node type: label, version, named inputs and outputs, and parms (nam
 
 ```json
 {"type": "mountain", "category": "Sop", "include_help": true}
+```
+
+```json
+{"type": "Sop/scatter", "detail": "full", "folder": "Options"}
 ```
 
 

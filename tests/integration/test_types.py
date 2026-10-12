@@ -55,6 +55,32 @@ def test_search_ranks_exact_current_version_first(client, query, category, expec
     assert result["total"] >= len(result["results"])
 
 
+@pytest.mark.parametrize(
+    ("query", "top"),
+    [
+        ("scatter points on a surface", 1),
+        ("noise on a surface", 4),
+        ("smooth geometry", 1),
+        ("extrude faces", 1),
+    ],
+)
+def test_search_plain_language(client, query, top):
+    """Review 07 papercut 5: a word that names the type or a word of its label outranks
+    description-only matches; stop words do not count."""
+    expected = {
+        "scatter points on a surface": {"Sop/scatter::2.0"},
+        "noise on a surface": {"Sop/attribnoise::2.0", "Sop/mountain"},
+        "smooth geometry": {"Sop/smooth::2.0"},
+        "extrude faces": {"Sop/polyextrude::2.0"},
+    }[query]
+    names = _names(client.ok("node_type_search", {"query": query, "category": "Sop", "limit": 10}))
+    assert expected & set(names[:top]), names
+    if query == "scatter points on a surface":
+        assert _names(client.ok("node_type_search", {"query": query, "limit": 5}))[0] == (
+            "Sop/scatter::2.0"
+        )
+
+
 def test_search_rows_and_older_versions(client):
     result = client.ok("node_type_search", {"query": "scatter", "category": "Sop", "limit": 3})
     first, second = result["results"][:2]
@@ -112,7 +138,7 @@ def _assert_no_side_effects(before_children: int, before_undo: tuple) -> None:
 
 def test_info_box(client):
     before = (len(hou.node("/obj").children()), hou.undos.undoLabels())
-    info = client.ok("node_type_info", {"type": "Sop/box"})
+    info = client.ok("node_type_info", {"type": "Sop/box", "detail": "full"})
     _assert_no_side_effects(*before)
     assert info["name"] == "box" and info["category"] == "Sop" and info["label"] == "Box"
     assert info["help_url"] == "operator:Sop/box"
@@ -136,7 +162,7 @@ def test_info_component_names_match_real_parms(client):
     geo = hou.node("/obj").createNode("geo")
     for type_name in ("box", "scatter", "xform", "copytopoints"):
         node = geo.createNode(type_name)
-        info = client.ok("node_type_info", {"type": type_name, "category": "Sop"})
+        info = client.ok("node_type_info", {"type": type_name, "category": "Sop", "detail": "full"})
         assert info["name"] == node.type().name()
         for parm in info["parms"]:
             if "#" in parm["name"] or parm["type"] == "multiparm":
@@ -149,7 +175,7 @@ def test_info_component_names_match_real_parms(client):
 
 
 def test_info_bare_name_resolves_like_create_node(client):
-    info = client.ok("node_type_info", {"type": "scatter", "category": "Sop"})
+    info = client.ok("node_type_info", {"type": "scatter", "category": "Sop", "detail": "full"})
     assert info["name"] == "scatter::2.0"
     assert info["is_current_version"] is True
     assert info["versions"] == ["scatter::2.0", "scatter"]
@@ -165,8 +191,12 @@ def test_info_bare_name_resolves_like_create_node(client):
 
 
 def test_info_folder_filter(client):
-    info = client.ok("node_type_info", {"type": "Sop/scatter", "folder": "Output Attributes"})
+    info = client.ok(
+        "node_type_info", {"type": "Sop/scatter", "folder": "Output Attributes", "detail": "full"}
+    )
     assert info["parms"] and all(p["folder"] == "Output Attributes" for p in info["parms"])
+    compact = client.ok("node_type_info", {"type": "Sop/scatter", "folder": "Output Attributes"})
+    assert list(compact["parms"]) == ["Output Attributes"]
     error = client.error("node_type_info", {"type": "Sop/scatter", "folder": "Nope"})
     assert error["code"] == "invalid_argument" and "Options" in error["candidates"]
 
@@ -188,7 +218,9 @@ def test_info_cop_types(client):
 
 
 def test_info_help_text(client):
-    info = client.ok("node_type_info", {"type": "Sop/scatter", "include_help": True})
+    info = client.ok(
+        "node_type_info", {"type": "Sop/scatter", "include_help": True, "detail": "full"}
+    )
     assert info["help_source"] == "nodes.zip:sop/scatter.txt"
     text = info["help_text"]
     assert text.startswith("Scatter")
@@ -210,3 +242,28 @@ def test_info_errors(client):
     assert error["code"] == "invalid_argument"
     assert error["candidates"] == ["Sop/copytopoints::2.0", "Lop/copytopoints"]
     assert client.error("node_type_info", {"type": ""})["code"] == "invalid_argument"
+    error = client.error("node_type_info", {"type": "Sop/box", "detail": "brief"})
+    assert error["code"] == "invalid_argument"
+
+
+def test_info_compact_is_the_default(client):
+    """Review 07 papercut 5/6: 12.6 KB of scatter to find npts was too much."""
+    full = client.ok("node_type_info", {"type": "Sop/scatter", "detail": "full"})
+    info = client.ok("node_type_info", {"type": "Sop/scatter"})
+    size = len(json.dumps(info, separators=(",", ":")))
+    full_size = len(json.dumps(full, separators=(",", ":")))
+    print(f"node_type_info Sop/scatter: compact {size} B, full {full_size} B")
+    assert size < full_size * 0.6 and size < 3200, (size, full_size)
+    assert info["detail"] == "compact" and "full" in info["hint"]
+    assert "folders" not in info
+    assert info["parm_columns"] == ["name", "label", "type", "default", "components"]
+    options = {row[0]: row for row in info["parms"]["Options"]}
+    assert options["npts"] == ["npts", "Force Total Count", "int", 1000]
+    rows = [row for group in info["parms"].values() for row in group]
+    assert all(len(row) in (4, 5) for row in rows)
+    box = client.ok("node_type_info", {"type": "Sop/box"})
+    by_name = {row[0]: row for group in box["parms"].values() for row in group}
+    assert by_name["size"][4] == ["sizex", "sizey", "sizez"]
+    assert by_name["type"][3] == "poly"  # a menu's default is its token
+    copy = client.ok("node_type_info", {"type": "Sop/copytopoints"})
+    assert len(json.dumps(copy, separators=(",", ":"))) < 2000

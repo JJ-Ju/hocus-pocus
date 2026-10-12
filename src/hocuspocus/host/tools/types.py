@@ -336,6 +336,90 @@ CATEGORY_RANK = {
 }
 
 
+STOP_WORDS = frozenset(
+    [
+        "a",
+        "an",
+        "the",
+        "on",
+        "onto",
+        "of",
+        "to",
+        "in",
+        "into",
+        "for",
+        "with",
+        "by",
+        "from",
+        "and",
+        "or",
+        "at",
+        "as",
+        "its",
+        "it",
+        "is",
+        "are",
+        "be",
+        "some",
+        "all",
+        "each",
+        "every",
+        "my",
+        "this",
+        "that",
+    ]
+)
+"""Words a plain-language query carries that say nothing about the node type."""
+
+TOKEN_WEIGHTS = {"name": 4.0, "label": 3.0, "in_name": 2.0, "tag": 1.5, "description": 1.0}
+
+SYNONYMS = {
+    "surface": ("geometry", "mesh", "polygon", "point"),
+    "mesh": ("geometry", "polygon", "surface"),
+    "geometry": ("mesh", "polygon", "surface"),
+    "object": ("geometry",),
+    "transform": ("xform",),
+    "move": ("transform", "xform", "translate"),
+    "image": ("texture", "picture"),
+    "particle": ("point",),
+}
+"""Houdini wording for words agents use; a synonym hit counts half."""
+
+
+def _token_weight(row: dict[str, Any], word: str) -> float:
+    """How strongly one query word points at ``row``: the type name or a whole word of
+    the label outranks a keyword, which outranks a word of the description."""
+    if word in (row["_basec"], _stem(row["_basec"])):
+        return TOKEN_WEIGHTS["name"]
+    if word in row["_labelw"]:
+        return TOKEN_WEIGHTS["label"]
+    if len(word) >= 4 and word in row["_basec"]:
+        return TOKEN_WEIGHTS["in_name"]
+    if word in row["_tagw"] or word in row["_tags"] or word in row["_bestbet"]:
+        return TOKEN_WEIGHTS["tag"]
+    if word in row["_descw"]:
+        return TOKEN_WEIGHTS["description"]
+    return 0.0
+
+
+def _token_score(row: dict[str, Any], qwords: list[str]) -> float:
+    """Score a multi-word, plain-language query ("scatter points on a surface") word by
+    word, ignoring stop words. 0 when fewer than half the words match."""
+    words = [w for w in qwords if w not in STOP_WORDS] or qwords
+    weights = [
+        _token_weight(row, w)
+        or 0.5 * max((_token_weight(row, s) for s in SYNONYMS.get(w, ())), default=0.0)
+        for w in words
+    ]
+    hits = sum(1 for w in weights if w)
+    if not hits or hits * 2 < len(words):
+        return 0.0
+    strength = sum(weights) / (TOKEN_WEIGHTS["name"] * len(words))
+    if hits == len(words):
+        return 20 + 25 * strength
+    return 5 + 20 * strength * hits / len(words)
+
+
 def score_row(row: dict[str, Any], query: str) -> float:
     """Rank one index row against ``query`` (bible §4.7). 0 means no match."""
     q = " ".join(query.lower().split())
@@ -367,17 +451,8 @@ def score_row(row: dict[str, Any], query: str) -> float:
             score = 55
         elif len(q) >= 3 and q in label:
             score = 50
-        elif qwords and all(w in row["_descw"] for w in qwords):
-            score = 40
-        elif qwords and all(w in row["_tagw"] or w in row["_tags"] for w in qwords):
-            score = 35
         elif qwords:
-            pool = set(labelw) | row["_descw"] | row["_tagw"] | {row["_basec"]}
-            hits = sum(1 for w in qwords if w in pool)
-            if hits == len(qwords):
-                score = 30
-            elif hits and hits * 2 >= len(qwords):
-                score = 10 + 10 * hits / len(qwords)
+            score = _token_score(row, qwords)
     if not score:
         return 0.0
     if row["deprecated"]:
@@ -847,12 +922,40 @@ def node_type_search(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     return result
 
 
+DETAILS = ("compact", "full")
+NO_FOLDER = "(no folder)"
+COMPACT_HINT = "detail: full adds menus, ranges, hidden parms and per-parm help."
+
+
+PARM_COLUMNS = ["name", "label", "type", "default", "components"]
+"""Columns of a compact parm row; ``components`` only on tuples."""
+
+
+def compact_parms(rows: list[dict[str, Any]]) -> dict[str, list[list[Any]]]:
+    """``{folder: [[name, label, type, default, components?]]}`` from full parm rows: what
+    an agent needs to set parms, without menus, ranges, help or hidden parms. A menu's
+    default is its token."""
+    grouped: dict[str, list[list[Any]]] = {}
+    for row in rows:
+        if row.get("is_hidden"):
+            continue
+        default = row.get("default_token", row.get("default"))
+        out = [row["name"], row["label"], row["type"], default]
+        if "components" in row:
+            out.append(row["components"])
+        grouped.setdefault(row.get("folder") or NO_FOLDER, []).append(out)
+    return grouped
+
+
 @tool("node_type_info")
 def node_type_info(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     category = _category_arg(args)
     node_type = resolve_type(args.get("type"), category)
     include_parms = bool(args.get("include_parms", True))
     include_help = bool(args.get("include_help", False))
+    detail = args.get("detail") or "compact"
+    if detail not in DETAILS:
+        raise ToolError("invalid_argument", f"'detail' must be one of {', '.join(DETAILS)}.")
     folder = args.get("folder")
     if folder is not None and not isinstance(folder, str):
         raise ToolError("invalid_argument", "'folder' must be a string.")
@@ -897,7 +1000,8 @@ def node_type_info(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
         result["unordered_inputs"] = True
     result["outputs"] = io["outputs"]
     if include_parms:
-        parm_help = parse_parm_help(raw_help) if (include_help and raw_help) else None
+        wants_parm_help = include_help and raw_help and detail == "full"
+        parm_help = parse_parm_help(raw_help) if wants_parm_help else None
         rows, folders = parm_template_rows(
             node_type.parmTemplateGroup(), folder=folder, parm_help=parm_help
         )
@@ -908,8 +1012,16 @@ def node_type_info(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
                 hint="Pass one folder label from candidates (a single segment).",
                 candidates=folders,
             )
-        result["folders"] = folders
-        result["parms"] = rows
+        if detail == "full":
+            result["folders"] = folders
+            result["parms"] = rows
+        else:
+            for key in ("help_url", "tags"):  # rarely needed to build with the type
+                result.pop(key, None)
+            result["parm_columns"] = PARM_COLUMNS
+            result["parms"] = compact_parms(rows)
+            result["detail"] = "compact"
+            result["hint"] = COMPACT_HINT
     if include_help:
         if raw_help:
             text, truncated = help_to_text(raw_help)

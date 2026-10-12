@@ -276,7 +276,10 @@ class Bridge:
         if m := re.fullmatch(r"houdini://node/(.+)", uri):
             return "node_info", {"paths": [_node_path(m.group(1))]}
         if m := re.fullmatch(r"houdini://nodetype/([^/]+)/(.+)", uri):
-            return "node_type_info", {"type": f"{unquote(m.group(1))}/{unquote(m.group(2))}"}
+            return "node_type_info", {
+                "type": f"{unquote(m.group(1))}/{unquote(m.group(2))}",
+                "detail": "full",
+            }
         if m := re.fullmatch(r"houdini://job/(.+)", uri):
             return "job", {"action": "status", "job_id": unquote(m.group(1))}
         return None

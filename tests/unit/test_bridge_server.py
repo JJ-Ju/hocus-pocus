@@ -478,7 +478,11 @@ def test_pinned_instance_exit_falls_back_to_new_one():
             {"paths": ["/obj/geo1"], "include": ["parms"]},
         ),
         ("houdini://node/%2Fobj%2Fgeo1%2Fbox1/geo", "geo_info", {"path": "/obj/geo1/box1"}),
-        ("houdini://nodetype/Sop/scatter", "node_type_info", {"type": "Sop/scatter"}),
+        (
+            "houdini://nodetype/Sop/scatter",
+            "node_type_info",
+            {"type": "Sop/scatter", "detail": "full"},
+        ),
         ("houdini://job/abc123", "job", {"action": "status", "job_id": "abc123"}),
         ("houdini://status", "houdini_status", {}),
     ],
