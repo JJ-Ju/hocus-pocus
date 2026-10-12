@@ -103,7 +103,7 @@ class FakeClient:
             "pid": 4242,
             "houdini": "22.0.466",
             "generation": 2,
-            "host_version": "1.0.0a0",
+            "host_version": "1.0.0",
         }
         self.replies: dict[str, Any] = {}
         self.calls: list[tuple[str, dict, float]] = []
@@ -513,7 +513,7 @@ def test_status_merges_registry_health_and_host():
             "time": {"frame": 1, "fps": 24, "range": [1, 240]},
             "env": {"HIP": "C:/work"},
             "scene_generation": 5,
-            "host_version": "1.0.0a0",
+            "host_version": "1.0.0",
             "read_only": False,
             "allow_python": True,
         },

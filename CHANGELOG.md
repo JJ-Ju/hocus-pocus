@@ -9,8 +9,7 @@ Nothing yet.
 
 ## 1.0.0 (2026-10-12)
 
-Merged to `master` in PR #7 on 2026-10-12. The package version string in this checkout is
-still `1.0.0a0`; it becomes `1.0.0` when the release is tagged `v1.0.0`.
+Merged to `master` in PR #7 on 2026-10-12 and tagged `v1.0.0` after the post-merge review.
 
 ### Summary
 
@@ -26,6 +25,27 @@ still `1.0.0a0`; it becomes `1.0.0` when the release is tagged `v1.0.0`.
   (stdio bridge driving a hython host), plus a manual GUI smoke and three agent
   evaluations (`docs/redesign/review/07`–`09`).
 - The 0.9 tree is removed and preserved at the git tag **`v0.9-archive`**.
+
+### Post-merge review fixes (included in 1.0.0)
+
+Two code reviews and an ergonomics review (`docs/redesign/review/10`, `11`) ran after the
+merge; the fixes landed before tagging:
+
+- `houdini_python` survives `sys.exit()`/`KeyboardInterrupt` and reports them; results carry `ok`.
+- `pdg cook` never holds the main thread past its timeout (always a job); `pdg` respects `read_only`.
+- `render` checks every output path against `approved_roots`; always returns `state`.
+- Headless capture child sets fps before loading, carries hscript globals and `hou.session`.
+- `viewport_capture` waits for the child off the main thread; `problems` has a time budget and cursor.
+- `geo_info`/`geo_read` refresh stale node errors like `cook` does.
+- `node_type_info` reports all outputs of multi-output HDAs, mutes its probe node, adds `parms` filter and `detail: folders`.
+- `hip_merge`/`network_build` `dry_run` no longer dirty the scene; `approved_roots` expand `$VAR`/`~` and compare real paths.
+- `node_find` refuses a locked-asset root, pages by path cursor; `node_info` lists multiparm counts and `hda_locked`.
+- `node_create`/`node_copy`/`network_build` accept `return: summary`; long code strings are truncated in results.
+- Launch lifetime is visible: `launched.outlives_server`, `launched_by` in the registry, and a named hint when a launched Houdini is gone.
+- Headless launch never puts a site-packages dir on hython's `PYTHONPATH`.
+- The bridge sends `max_response_bytes` to the host; paged results keep correct cursors.
+- Registry writes retry on Windows share violations; stale pruning only on a provably dead pid.
+- CLI snippets use `claude mcp add -s user`; budget test measures the real `tools/list` (44 KB cap).
 
 ### Known limitations
 

@@ -242,7 +242,7 @@ already has a shell on your machine.
 ## Status and versioning
 
 1.0 was merged to `master` on 2026-10-12. The package version string is still
-`1.0.0a0` until the release is tagged, and it is not on PyPI yet. 1.0 is qualified on
+`1.0.0` (tag `v1.0.0`); it is not on PyPI yet. 1.0 is qualified on
 Windows with Houdini 22.0.466. The code is not Windows-only, but 1.0 is not tested on
 Linux or macOS. [`CHANGELOG.md`](CHANGELOG.md) lists known limitations.
 
