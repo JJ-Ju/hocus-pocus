@@ -1333,6 +1333,9 @@ def parm_set(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
             failed += 1
             rows.append((None, {"path": path, "wrote_keyframe": False, "error": exc.to_dict()}))
     problems = {path: cheap_cook_problems(node) for path, node in nodes.items()}
+    from .nodes import watch_nodes  # lazy: nodes imports this module lazily too
+
+    watch_nodes(nodes.values())
     results: list[dict[str, Any]] = []
     for node_path, result in rows:
         if node_path is not None:

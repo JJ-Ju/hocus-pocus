@@ -582,6 +582,17 @@ def mutation_block(node: Any, **extra: Any) -> dict[str, Any]:
     return out
 
 
+def watch_nodes(nodes: Iterable[Any]) -> None:
+    """Have the ``events`` ring buffer record later changes to ``nodes`` (bible §4.7:
+    "parms changed on nodes HocusPocus touched"). Call after the call's own changes, so
+    they are not recorded. Main thread; never raises."""
+    from . import events  # lazy: events imports this module
+
+    for node in nodes:
+        if node is not None:
+            events.watch_node(node)
+
+
 # -- rollback ---------------------------------------------------------------------
 
 
@@ -1010,6 +1021,7 @@ def node_create(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     }
     results = [blocks.get(i) or {"error": failures[i]} for i in range(len(items))]
     out: dict[str, Any] = {"results": results, "created": [b["path"] for b in blocks.values()]}
+    watch_nodes(node for _, node in created)
     if failures:
         out["failed"] = len(failures)
     return out
@@ -1196,6 +1208,7 @@ def node_edit(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
         block["position"] = _round(node.position())
         block["color"] = _round(node.color().rgb())
         results.append(block)
+    watch_nodes(entry["node"] for entry in done.values())
     out: dict[str, Any] = {"results": results}
     if failures:
         out["failed"] = len(failures)
@@ -1266,6 +1279,7 @@ def node_copy(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     results = [
         mutation_block(copy, source=src.path()) for src, copy in zip(sources, copies, strict=False)
     ]
+    watch_nodes(copies)
     return {"paths": [c.path() for c in copies], "results": results}
 
 
@@ -1327,6 +1341,7 @@ def node_connect(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
         block = mutation_block(entry["node"], **entry["extra"])
         block["to"] = block["path"]
         results.append(block)
+    watch_nodes(entry["node"] for entry in done.values())
     out: dict[str, Any] = {"results": results}
     if failures:
         out["failed"] = len(failures)

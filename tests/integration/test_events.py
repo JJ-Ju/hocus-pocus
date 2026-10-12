@@ -134,6 +134,31 @@ def test_agent_created_nodes(client):
     assert ("NameChanged", "/obj/land") in _kinds(_read(client, since))
 
 
+def test_agent_touched_nodes_are_watched(client):
+    """node_create/network_build/node_copy watch what they make (bible §4.7), so later
+    changes to nested nodes, which no context-manager callback sees, are reported."""
+    client.ok("node_create", {"items": [{"parent": "/obj", "type": "geo", "name": "g"}]})
+    client.ok("node_create", {"items": [{"parent": "/obj/g", "type": "box", "name": "b"}]})
+    since = _since()
+    client.ok("parm_set", {"items": [{"path": "/obj/g/b/size", "value": [2, 2, 2]}]})
+    events = _read(client, since)
+    assert _kinds(events) == [("ParmTupleChanged", "/obj/g/b")]
+    assert events[0]["detail"]["parm"] == "size"
+
+    client.ok(
+        "network_build",
+        {"parent": "/obj/g", "data": {"s": {"type": "sphere"}}, "layout": False},
+    )
+    client.ok("node_copy", {"paths": ["/obj/g/b"], "to_parent": "/obj/g", "names": ["b2"]})
+    since = _since()
+    hou.parm("/obj/g/s/radx").set(3)
+    hou.parm("/obj/g/b2/sizex").set(4)
+    assert _kinds(_read(client, since)) == [
+        ("ParmTupleChanged", "/obj/g/s"),
+        ("ParmTupleChanged", "/obj/g/b2"),
+    ]
+
+
 def test_hip_save_clear_load(client, work_dir):
     hou.node("/obj").createNode("geo", "g")
     path = (work_dir / "events.hip").as_posix()

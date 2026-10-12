@@ -609,6 +609,7 @@ def network_build(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     if tag:
         for node in top_nodes:
             node.setUserData(TAG_KEY, tag)
+    N.watch_nodes(made)
     result: dict[str, Any] = {
         "parent": parent.path(),
         "dry_run": False,
