@@ -420,15 +420,35 @@ def test_describe_outline_is_a_compact_tree(client):
     }
     kids = {n["name"]: n for n in city["children"]}  # depth 2 by default for outline
     assert kids["broken"]["errors"] >= 1
-    assert set(kids["base"]) == {"path", "name", "type", "children_count", "errors"}
+    assert set(kids["base"]) == {"path", "name", "type", "errors"}  # no children_count: 0
     assert "parms" not in kids["base"] and "inputs" not in kids["base"]
+    # Houdini's own locked assets (wrangles, mountain) are not flagged (review 12 papercut 4).
+    assert "hda_locked" not in kids["broken"]
     peaks = next(n for n in nodes["terrain"]["children"] if n["name"] == "peaks")
-    assert peaks["hda_locked"] is True and "children" not in peaks
+    assert "hda_locked" not in peaks and "children" not in peaks
     assert result["node_count"] == 7
     shallow = client.ok("network_describe", {"root": "/obj", "format": "outline", "depth": 1})
     assert all("children" not in n for n in shallow["nodes"])
     whole = client.ok("network_describe", {"root": "/", "format": "outline"})
     assert "/obj" in [n["path"] for n in whole["nodes"]]
+
+
+def test_describe_outline_flags_user_locked_assets(client, work_dir):
+    geo = hou.node("/obj").createNode("geo", "geo1")
+    sub = geo.createNode("subnet", "asset1")
+    sub.createNode("box", "inner")
+    hda_path = (work_dir / "hp_outline_test.hda").as_posix()
+    asset = sub.createDigitalAsset(name="hp_outline_test", hda_file_name=hda_path)
+    asset.matchCurrentDefinition()  # lock it
+    assert asset.isLockedHDA() and asset.children()
+    result = client.ok("network_describe", {"root": geo.path(), "format": "outline"})
+    row = next(n for n in result["nodes"] if n["path"] == asset.path())
+    assert row["hda_locked"] is True and "children" not in row and "children_count" not in row
+    opened = client.ok(
+        "network_describe", {"root": geo.path(), "format": "outline", "recurse_locked": True}
+    )
+    row = next(n for n in opened["nodes"] if n["path"] == asset.path())
+    assert row["hda_locked"] is True and row["children_count"] == 1
 
 
 def test_describe_outline_is_budgeted_and_paged(client, host):

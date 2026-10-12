@@ -566,10 +566,6 @@ def mutation_block(node: Any, **extra: Any) -> dict[str, Any]:
 RETURN_MODES = ("full", "summary")
 DEFAULT_RETURN = "summary"
 """1.1 (review 11 B5): mutation echoes are path, type and problems unless asked for more."""
-ECHO_STRING_CHARS = 200
-"""Mutation echoes elide string parm values longer than this (VEX snippets, Python code):
-the agent just wrote them, and node_info / parm_get still return them in full."""
-ECHO_HEAD_CHARS = 80
 
 
 def return_mode(args: dict[str, Any]) -> str:
@@ -577,23 +573,6 @@ def return_mode(args: dict[str, Any]) -> str:
     if mode not in RETURN_MODES:
         raise bad_arg("'return' must be 'full' or 'summary'.")
     return mode
-
-
-def _elide(value: Any) -> Any:
-    if isinstance(value, str) and len(value) > ECHO_STRING_CHARS:
-        return {"elided": len(value), "head": value[:ECHO_HEAD_CHARS]}
-    if isinstance(value, list):
-        return [_elide(v) for v in value]
-    return value
-
-
-def elide_long_values(block: dict[str, Any]) -> dict[str, Any]:
-    """Replace long string parm values in a mutation echo with ``{elided, head}``."""
-    for row in block.get("parms") or ():
-        for key in ("value", "raw"):
-            if key in row:
-                row[key] = _elide(row[key])
-    return block
 
 
 def _raw_text(parm: Any) -> Any:
@@ -1323,7 +1302,7 @@ def node_create(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
                 node, baselines.get(node.sessionId(), {}), items[index].get("parms") or {}
             )
             block["parms"] = [row for row in block["parms"] if row["name"] in keep]
-            blocks[index] = elide_long_values(block)
+            blocks[index] = block  # parm rows elide long strings (summarize_parm)
     for index, node in created:
         if node.sessionId() in pairs:
             blocks[index]["paired_with"] = pairs[node.sessionId()]

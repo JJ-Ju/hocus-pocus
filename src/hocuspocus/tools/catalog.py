@@ -231,7 +231,7 @@ def _image() -> dict[str, Any]:
             "mime_type": _t("string"),
             "width": _t("integer"),
             "height": _t("integer"),
-            "attached": {"type": "boolean", "description": "Sent as MCP image content."},
+            "attached": {"type": "boolean", "description": "Sent as image content."},
         }
     )
 
@@ -509,7 +509,7 @@ _NODES: tuple[ToolSpec, ...] = (
         name="node_info",
         description=(
             "Read nodes in detail: type, flags, inputs with names and sources, non-default parms "
-            "(value, raw, expression), errors, warnings, cook state. include picks sections "
+            "(value, raw, expression; long strings elided), errors, warnings, cook state. include picks sections "
             "(default parms, inputs, errors, flags); include_defaults adds parms at default. Use "
             "parm_get for keyframes, menus and templates; network_describe for a whole network."
         ),
@@ -773,8 +773,8 @@ _NODES: tuple[ToolSpec, ...] = (
             "non-default parms, expressions, wiring, flags, depth levels deep (default 1; 2 for "
             "outline). Locked HDAs appear as {type, hda_locked} unless recurse_locked. Pages stop "
             "at the response budget (truncated, next_cursor). format outline is a compact tree "
-            "(path, name, type, children_count, display, errors); python returns asCode for a "
-            "single node. The data result can be passed to network_build."
+            "(path, name, type, children_count, display, errors, hda_locked for non-Houdini "
+            "assets); python returns asCode for one node. data feeds network_build."
         ),
         input_schema=_obj(
             {
@@ -856,12 +856,11 @@ _PARMS: tuple[ToolSpec, ...] = (
     ToolSpec(
         name="parm_get",
         description=(
-            "Read parms by parm path (.../tx), tuple path (.../t, returns components) or component "
-            "path. Each: value at frame (default current), raw text, expression and language, "
-            "is_default, locked (parm lock), hda_locked. include adds keys, menu (token and label), "
-            "template (label, type, default, range, help), ramp, multiparm. Tuples report "
-            "expressions per component and keyed component names. Unknown names fail with nearest "
-            "candidates."
+            "Read parms by parm (.../tx), tuple (.../t: all components) or component path. Each: "
+            "value at frame (default current), raw if different, expression and language, "
+            "is_default, locked (parm lock), hda_locked. Strings over 200 chars are {elided, head} "
+            "unless full_strings. include adds keys, menu, template (label, type, default, range, "
+            "help), ramp, multiparm. Tuples add per-component expressions and keyed names."
         ),
         input_schema=_obj(
             {
@@ -870,6 +869,7 @@ _PARMS: tuple[ToolSpec, ...] = (
                 "include": _arr(
                     _enum(("keys", "menu", "template", "ramp", "multiparm")), default=[]
                 ),
+                "full_strings": _b(False),
             },
             ("paths",),
         ),
@@ -919,8 +919,8 @@ _PARMS: tuple[ToolSpec, ...] = (
             "button). Tuple paths take lists, component paths scalars; menus take token or label. "
             "animation: replace (default) clears keys and expressions first, except that one "
             "keyframe only adds or replaces its key; key keys at frame; keep is plain set. "
-            "Returns values (tuples add per-component expressions and keyed), wrote_keyframe, "
-            "node errors."
+            "Returns value, raw if different (long strings elided), tuple expressions and keyed, "
+            "wrote_keyframe, node errors."
         ),
         input_schema=_obj(
             {
@@ -1328,10 +1328,11 @@ _VISUAL: tuple[ToolSpec, ...] = (
         name="node_type_info",
         description=(
             "Describe one node type: label, version, named inputs and outputs, and parms grouped "
-            "by folder. detail compact (default) gives rows of name, label, type, default; full "
-            "lists every parm row with size, range, menu and folder; folders lists folder names "
+            "by folder. detail compact (default): rows of name, label, type, default; full "
+            "lists every parm with size, range, menu and folder; folders lists folder names "
             "with parm counts. type is category/name, or a bare name with category. folder limits "
-            "parms to one folder, parms to a name or label glob; include_help adds help text."
+            "parms to one folder ((no folder): top level), parms to name or label globs (a|b); "
+            "include_help adds help text."
         ),
         input_schema=_obj(
             {
@@ -1340,7 +1341,7 @@ _VISUAL: tuple[ToolSpec, ...] = (
                 "include_parms": _b(True),
                 "include_help": _b(False),
                 "folder": _s(),
-                "parms": _s("Glob on parm name or label, e.g. *seed*."),
+                "parms": _s("Name or label glob, e.g. *seed* or dist|inset."),
                 "detail": _enum(("compact", "full", "folders"), "compact"),
             },
             ("type",),
@@ -1441,7 +1442,7 @@ _STATE: tuple[ToolSpec, ...] = (
                 "message": _t("string"),
                 "started": _t("string"),
                 "elapsed_s": _t("number"),
-                "result": {"description": "The original tool's result (action result, done)."},
+                "result": {"description": "The tool's result (action result, done)."},
                 "jobs": _objs(),
             }
         ),

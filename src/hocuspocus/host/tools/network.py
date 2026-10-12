@@ -21,6 +21,7 @@ from __future__ import annotations
 import contextlib
 import difflib
 import json
+import os
 from typing import Any
 
 from hocuspocus.tools.errors import ToolError
@@ -184,11 +185,38 @@ def _error_count(node: Any) -> int:
         return 0
 
 
+_SHIPPED_LIBRARIES: dict[str, bool] = {}
+
+
+def _shipped_asset(node: Any) -> bool:
+    """True when ``node``'s asset definition comes from a library under ``$HFS``."""
+    try:
+        library = node.type().definition().libraryFilePath()
+    except Exception:
+        return False
+    if library not in _SHIPPED_LIBRARIES:
+        shipped = False
+        with contextlib.suppress(Exception):
+            import hou
+
+            hfs = os.path.normcase(os.path.realpath(hou.text.expandString("$HFS")))
+            lib = os.path.normcase(os.path.realpath(library))
+            shipped = lib.startswith(os.path.join(hfs, ""))
+        _SHIPPED_LIBRARIES[library] = shipped
+    return _SHIPPED_LIBRARIES[library]
+
+
 def _outline_entry(
     node: Any, level: int, *, depth: int, recurse_locked: bool, budget: _Budget
 ) -> dict[str, Any]:
-    """``{path, name, type, children_count, display?, errors, hda_locked?, children?}``:
-    no parms and no wiring, so a whole scene fits in one page (``houdini://outline``)."""
+    """``{path, name, type, children_count?, display?, errors, hda_locked?, children?}``:
+    no parms and no wiring, so a whole scene fits in one page (``houdini://outline``).
+
+    ``children_count`` is left out at 0. ``hda_locked`` marks only locked assets that are
+    not shipped with Houdini: ``attribwrangle``, ``mountain`` and other SOPs from
+    ``$HFS/houdini/otls`` are locked assets too (BIBLE §4.1; their contents appear once
+    they cook), which flagged every wrangle of review 12 (papercut 4) and told the agent
+    nothing it could act on. ``node_info`` still reports ``hda_locked`` for them."""
     locked = N._is_locked_hda(node)
     opaque = locked and not recurse_locked
     try:
@@ -199,8 +227,9 @@ def _outline_entry(
         "path": node.path(),
         "name": node.name(),
         "type": node.type().name(),
-        "children_count": len(children),
     }
+    if children:
+        entry["children_count"] = len(children)
     display = getattr(node, "displayNode", None)
     if callable(display) and children:
         with contextlib.suppress(Exception):
@@ -208,7 +237,7 @@ def _outline_entry(
             if shown is not None:
                 entry["display"] = shown.path()
     entry["errors"] = _error_count(node)
-    if locked:
+    if locked and not _shipped_asset(node):
         entry["hda_locked"] = True
     if level < depth and children:
         if not budget.nodes_left:

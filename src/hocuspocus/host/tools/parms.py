@@ -28,7 +28,7 @@ from typing import Any
 
 from hocuspocus.tools.errors import ToolError
 
-from ._common import hou_exception_text, hou_message, require_node
+from ._common import arg_bool, elide_string, hou_exception_text, hou_message, require_node
 from ._diag import cheap_cook_problems
 from .registry import HostContext, tool
 
@@ -396,8 +396,22 @@ def _multiparm_dict(parm: Any) -> dict[str, Any] | None:
     return out
 
 
+def _value_and_raw(out: dict[str, Any], value: Any, raw: Any, full_strings: bool) -> None:
+    """``value``, then ``raw`` only when it differs (unexpanded text, an expression's
+    source); strings over 200 characters become ``{elided, head}`` unless
+    ``full_strings`` (review 12 papercut 1: a 5 KB snippet was echoed twice)."""
+    shape = (lambda v: v) if full_strings else elide_string
+    out["value"] = shape(value)
+    if raw != value:
+        out["raw"] = shape(raw)
+
+
 def _describe_parm(
-    parm: Any, *, frame: float | None, include: frozenset[str] | None
+    parm: Any,
+    *,
+    frame: float | None,
+    include: frozenset[str] | None,
+    full_strings: bool = False,
 ) -> dict[str, Any]:
     """Compact summary (``include is None``) or the full ``parm_get`` shape."""
     template = parm.parmTemplate()
@@ -416,8 +430,7 @@ def _describe_parm(
         out["type"] = kind
     else:
         out["name"] = parm.name()
-    out["value"] = value
-    out["raw"] = _raw(parm, kind)
+    _value_and_raw(out, value, _raw(parm, kind), full_strings)
     if "expression" in keys:
         out["expression"] = keys["expression"]
         out["language"] = keys["language"]
@@ -457,7 +470,11 @@ def _describe_parm(
 
 
 def _describe_tuple(
-    ptuple: Any, *, frame: float | None, include: frozenset[str] | None
+    ptuple: Any,
+    *,
+    frame: float | None,
+    include: frozenset[str] | None,
+    full_strings: bool = False,
 ) -> dict[str, Any]:
     template = ptuple.parmTemplate()
     kind = _kind(template)
@@ -474,8 +491,12 @@ def _describe_tuple(
         out["type"] = kind
     else:
         out["name"] = ptuple.name()
-    out["value"] = [_eval(p, kind, menu_mode, frame) for p in parms]
-    out["raw"] = [_raw(p, kind) for p in parms]
+    _value_and_raw(
+        out,
+        [_eval(p, kind, menu_mode, frame) for p in parms],
+        [_raw(p, kind) for p in parms],
+        full_strings,
+    )
     expressions: dict[str, Any] = {}
     keyed: list[str] = []
     key_infos: dict[str, Any] = {}
@@ -516,11 +537,12 @@ def _describe_tuple(
 
 
 def summarize_parm(parm_or_tuple: Any, *, frame: float | None = None) -> dict[str, Any]:
-    """Compact ``{name, value, raw, expression?, language?, keyed?, locked?, menu_token?,
+    """Compact ``{name, value, raw?, expression?, language?, keyed?, locked?, menu_token?,
     is_default}`` for a ``hou.Parm`` or ``hou.ParmTuple``.
 
     A tuple gives lists for ``value``/``raw``, ``expressions: {component: {expression,
-    language}}`` and ``keyed: [component names]``.
+    language}}`` and ``keyed: [component names]``. ``raw`` is left out when it equals
+    ``value``; strings over 200 characters are ``{elided, head}``.
     """
     target = _normalize(parm_or_tuple)
     if _is_tuple(target):
@@ -1330,13 +1352,12 @@ def parm_get(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
             "invalid_argument", f"'include' entries must be among {', '.join(INCLUDE_KEYS)}."
         )
     wanted = frozenset(include)
+    full_strings = arg_bool(args, "full_strings", False)
     out: list[dict[str, Any]] = []
     for path in paths:
         _node, target = resolve_path(path)
-        if _is_tuple(target):
-            out.append(_describe_tuple(target, frame=frame, include=wanted))
-        else:
-            out.append(_describe_parm(target, frame=frame, include=wanted))
+        describe = _describe_tuple if _is_tuple(target) else _describe_parm
+        out.append(describe(target, frame=frame, include=wanted, full_strings=full_strings))
     result: dict[str, Any] = {"parms": out}
     if frame is not None:
         result["frame"] = frame

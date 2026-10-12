@@ -821,7 +821,10 @@ def _json_value(value: Any) -> Any:
 def parm_template_rows(
     group: Any, *, folder: str | None = None, parm_help: dict[str, str] | None = None
 ) -> tuple[list[dict[str, Any]], list[str]]:
-    """Flatten a ParmTemplateGroup into parm rows in folder order. Returns ``(rows, folders)``."""
+    """Flatten a ParmTemplateGroup into parm rows in folder order. Returns ``(rows, folders)``.
+
+    ``folder`` keeps the rows in that folder (a label or a ``A / B`` path, any case); ``""``
+    keeps the top-level rows, the ones ``detail: folders`` lists as ``(no folder)``."""
     import hou
 
     folder_kinds = (hou.parmTemplateType.Folder, hou.parmTemplateType.FolderSet)
@@ -833,7 +836,7 @@ def parm_template_rows(
     }
     rows: list[dict[str, Any]] = []
     folders: list[str] = []
-    wanted = folder.strip().lower() if folder else None
+    wanted = folder.strip().lower() if folder is not None else None
 
     def visit(templates: Any, path: list[str]) -> None:
         for template in templates:
@@ -856,6 +859,10 @@ def parm_template_rows(
             _maybe_add(_template_row(template, path, parm_help), path)
 
     def _maybe_add(row: dict[str, Any], path: list[str]) -> None:
+        if wanted == "":
+            if not path:
+                rows.append(row)
+            return
         if (
             wanted is not None
             and not any(wanted == p.lower().rstrip("[]") for p in path)
@@ -991,15 +998,19 @@ PARM_COLUMNS = ["name", "label", "type", "default", "components"]
 
 def filter_parms(rows: list[dict[str, Any]], pattern: str) -> list[dict[str, Any]]:
     """Rows whose name or label matches the glob ``pattern`` (case-insensitive); a
-    pattern without wildcards matches the whole name or label."""
+    pattern without wildcards matches the whole name or label, and ``a|b`` matches
+    either glob (review 12 papercut 2)."""
     import fnmatch
 
-    pat = pattern.strip().lower()
+    pats = [p.strip().lower() for p in pattern.split("|") if p.strip()]
     return [
         row
         for row in rows
-        if fnmatch.fnmatchcase(row["name"].lower(), pat)
-        or fnmatch.fnmatchcase((row.get("label") or "").lower(), pat)
+        if any(
+            fnmatch.fnmatchcase(row["name"].lower(), pat)
+            or fnmatch.fnmatchcase((row.get("label") or "").lower(), pat)
+            for pat in pats
+        )
     ]
 
 
@@ -1046,9 +1057,15 @@ def node_type_info(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     folder = args.get("folder")
     if folder is not None and not isinstance(folder, str):
         raise ToolError("invalid_argument", "'folder' must be a string.")
+    if folder is not None and folder.strip().lower() in ("", NO_FOLDER):
+        folder = ""  # the top-level parms, listed by detail: folders as "(no folder)"
     parm_glob = args.get("parms")
-    if parm_glob is not None and (not isinstance(parm_glob, str) or not parm_glob.strip()):
-        raise ToolError("invalid_argument", "'parms' must be a non-empty glob such as *seed*.")
+    if parm_glob is not None and (
+        not isinstance(parm_glob, str) or not parm_glob.replace("|", "").strip()
+    ):
+        raise ToolError(
+            "invalid_argument", "'parms' must be a non-empty glob such as *seed* or dist|inset."
+        )
 
     cat_name = node_type.category().name()
     components = node_type.nameComponents()
@@ -1092,22 +1109,23 @@ def node_type_info(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     if include_parms:
         wants_parm_help = include_help and raw_help and detail == "full"
         parm_help = parse_parm_help(raw_help) if wants_parm_help else None
-        rows, folders = parm_template_rows(
-            node_type.parmTemplateGroup(), folder=folder, parm_help=parm_help
-        )
-        if folder and not rows:
+        group = node_type.parmTemplateGroup()
+        rows, folders = parm_template_rows(group, folder=folder, parm_help=parm_help)
+        if folder is not None and not rows:
+            every, _ = parm_template_rows(group)
+            label = args.get("folder")
             raise ToolError(
                 "invalid_argument",
-                f"No folder {folder!r} on {node_type.nameWithCategory()}.",
-                hint="Pass one folder label from candidates (a single segment).",
-                candidates=folders,
+                f"No folder {label!r} on {node_type.nameWithCategory()}.",
+                hint="Pass one folder from candidates, or a single segment of one.",
+                candidates=[row["folder"] for row in folder_counts(every, folders)],
             )
         if parm_glob is not None:
             rows = filter_parms(rows, parm_glob)
             if not rows:
                 result["hint"] = (
                     f"No parm name or label matches {parm_glob!r}; globs are case-insensitive, "
-                    "e.g. *seed*."
+                    "e.g. *seed* or dist|inset."
                 )
         if detail == "folders":
             result["folders"] = folder_counts(rows, folders)

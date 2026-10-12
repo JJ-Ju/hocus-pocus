@@ -366,3 +366,31 @@ def test_info_does_not_recount_types(client, monkeypatch):
     monkeypatch.setattr(types, "_type_count", boom, raising=False)
     client.ok("node_type_search", {"query": "sphere"})
     client.ok("node_type_info", {"type": "Sop/box", "include_parms": False})
+
+
+def test_info_top_level_folder_and_parm_alternatives(client):
+    """Review 12 papercut 2: the (no folder) label is accepted, and parms takes a|b."""
+    folders = client.ok("node_type_info", {"type": "Sop/polyextrude", "detail": "folders"})
+    names = [row["folder"] for row in folders["folders"]]
+    assert names[0] == "(no folder)"
+    for label in ("(no folder)", "", "(No Folder)"):
+        info = client.ok(
+            "node_type_info", {"type": "Sop/polyextrude", "folder": label, "detail": "full"}
+        )
+        top = [p["name"] for p in info["parms"]]
+        assert {"dist", "inset"} <= set(top), (label, top)
+        assert all(not p.get("folder") for p in info["parms"])
+    for name in names:  # detail: folders lists only names folder accepts
+        assert client.ok("node_type_info", {"type": "Sop/polyextrude", "folder": name})["parms"]
+    pair = client.ok("node_type_info", {"type": "Sop/polyextrude", "parms": "dist|inset"})
+    rows = [row[0] for rows in pair["parms"].values() for row in rows]
+    assert sorted(rows) == ["dist", "inset"]
+    both = client.ok(
+        "node_type_info", {"type": "Sop/polyextrude", "folder": "", "parms": "Dist | *inset*"}
+    )
+    assert {row[0] for row in both["parms"]["(no folder)"]} >= {"dist", "inset"}
+    error = client.error("node_type_info", {"type": "Sop/polyextrude", "folder": "Nope"})
+    assert error["code"] == "invalid_argument" and error["candidates"] == names
+    assert client.error("node_type_info", {"type": "Sop/box", "parms": "|"})["code"] == (
+        "invalid_argument"
+    )

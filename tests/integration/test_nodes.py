@@ -293,10 +293,15 @@ def test_create_full_result_elides_long_snippets(client):
     )
     row = next(p for p in result["results"][0]["parms"] if p["name"] == "snippet")
     assert row["value"] == {"elided": len(LONG_VEX), "head": LONG_VEX[:80]}
-    assert row["raw"] == {"elided": len(LONG_VEX), "head": LONG_VEX[:80]}
+    assert "raw" not in row  # the same text as value (review 12 papercut 1)
     assert hou.node(result["created"][0]).parm("snippet").eval() == LONG_VEX
     info = client.ok("node_info", {"paths": result["created"]})["nodes"][0]
-    assert next(p for p in info["parms"] if p["name"] == "snippet")["value"] == LONG_VEX
+    info_row = next(p for p in info["parms"] if p["name"] == "snippet")
+    assert info_row["value"] == {"elided": len(LONG_VEX), "head": LONG_VEX[:80]}
+    whole = client.ok(
+        "parm_get", {"paths": [f"{result['created'][0]}/snippet"], "full_strings": True}
+    )
+    assert whole["parms"][0]["value"] == LONG_VEX
 
 
 def test_create_copy_and_build_summary_results(client):
@@ -418,7 +423,7 @@ def test_info_lists_non_default_multiparm_counts(client):
     plain_rows = client.ok("node_info", {"paths": [plain.path()], "include_defaults": True})[
         "nodes"
     ][0]["parms"]
-    assert not [p for p in plain_rows if p["value"] is None and p["raw"] in ("", None)]
+    assert not [p for p in plain_rows if p["value"] is None and p.get("raw") in ("", None)]
 
 
 def test_info_hda_and_locked_contents(client):

@@ -19,11 +19,13 @@ from ._diag import require_node
 __all__ = [
     "ARG_HINT",
     "DEFAULT_LIMIT",
+    "LONG_STRING_CHARS",
     "ROW_ENVELOPE_BYTES",
     "arg_bool",
     "arg_list",
     "bad_arg",
     "compact_size",
+    "elide_string",
     "get_node",
     "hou_exception_text",
     "hou_message",
@@ -75,6 +77,25 @@ def refuse_if_read_only(ctx: Any, what: str) -> None:
     """Raise the one ``read_only`` refusal when the host is in read-only mode."""
     if ctx.config.read_only:
         raise read_only_error(what)
+
+
+# -- long strings -----------------------------------------------------------------------
+
+LONG_STRING_CHARS = 200
+"""Parm rows (``parm_get``, ``parm_set``, ``node_info``, ``node_create return: full``)
+elide string values longer than this, VEX snippets and Python code (review 12 papercut
+1); ``parm_get full_strings`` returns them whole."""
+STRING_HEAD_CHARS = 80
+
+
+def elide_string(value: Any) -> Any:
+    """``{elided: <chars>, head: <first 80>}`` for a string over ``LONG_STRING_CHARS``
+    (each component of a list); anything else unchanged."""
+    if isinstance(value, str) and len(value) > LONG_STRING_CHARS:
+        return {"elided": len(value), "head": value[:STRING_HEAD_CHARS]}
+    if isinstance(value, list):
+        return [elide_string(v) for v in value]
+    return value
 
 
 # -- arguments --------------------------------------------------------------------------

@@ -517,7 +517,7 @@ def test_summarize_parm_compact(scene):
     from hocuspocus.host.tools.parms import summarize_parm
 
     box, xform = scene["box"], scene["xform"]
-    assert summarize_parm(box.parm("sizex")) == {
+    assert summarize_parm(box.parm("sizex")) == {  # raw only differs in text form
         "name": "sizex",
         "value": 1.0,
         "raw": "1",
@@ -787,3 +787,28 @@ def test_int_menus_free_menus_and_strict_ranges(client, scene):
         error = client.error("parm_set", {"items": [{"path": mix, "value": bad}]})
         assert error["code"] == "invalid_value" and bound in error["hint"], error
     assert _set(client, {"path": mix, "value": 1})["value"] == 1.0
+
+
+# -- long strings (review 12 papercut 1) -------------------------------------------
+
+SNIPPET_400 = ("// tuned\n" + "f@d = rand(@ptnum) * 0.5;\n" * 20)[:400]
+
+
+def test_long_string_is_elided_in_set_and_get(client, scene):
+    wrangle = scene["geo"].createNode("attribwrangle", "tune")
+    path = f"{wrangle.path()}/snippet"
+    assert len(SNIPPET_400) == 400
+    elided = {"elided": 400, "head": SNIPPET_400[:80]}
+    res = _set(client, {"path": path, "value": SNIPPET_400})
+    assert res["value"] == elided and "raw" not in res, res
+    assert wrangle.parm("snippet").eval() == SNIPPET_400
+    got = _get(client, path)
+    assert got["value"] == elided and "raw" not in got
+    whole = _get(client, path, full_strings=True)
+    assert whole["value"] == SNIPPET_400 and "raw" not in whole
+    short = _set(client, {"path": f"{wrangle.path()}/group", "value": "a"})
+    assert short["value"] == "a" and "raw" not in short
+    expanded = _set(client, {"path": f"{wrangle.path()}/group", "value": "$OS"})
+    assert expanded["value"] == "tune" and expanded["raw"] == "$OS"
+    error = client.error("parm_get", {"paths": [path], "full_strings": "yes"})
+    assert error["code"] == "invalid_argument"

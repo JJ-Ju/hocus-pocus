@@ -2,7 +2,7 @@
 
 <!-- Generated from src/hocuspocus/tools/catalog.py by `python -m hocuspocus.tools.docs`. Do not edit by hand. -->
 
-35 tools: 31 in the `core` profile, 4 more in `full`. Model-visible `tools/list` text: 29,050 bytes. See `docs/BIBLE.md` §4 for the design.
+35 tools: 31 in the `core` profile, 4 more in `full`. Model-visible `tools/list` text: 29,157 bytes. See `docs/BIBLE.md` §4 for the design.
 
 ## Contents
 
@@ -272,7 +272,7 @@ Search a subtree for nodes. pattern globs names (default *), type globs type nam
 
 `read-only` `headless ok` · profile `core`
 
-Read nodes in detail: type, flags, inputs with names and sources, non-default parms (value, raw, expression), errors, warnings, cook state. include picks sections (default parms, inputs, errors, flags); include_defaults adds parms at default. Use parm_get for keyframes, menus and templates; network_describe for a whole network.
+Read nodes in detail: type, flags, inputs with names and sources, non-default parms (value, raw, expression; long strings elided), errors, warnings, cook state. include picks sections (default parms, inputs, errors, flags); include_defaults adds parms at default. Use parm_get for keyframes, menus and templates; network_describe for a whole network.
 
 ### Arguments
 
@@ -484,7 +484,7 @@ Tidy a network. mode children (default) lays out the children of parent, or only
 
 `read-only` `headless ok` · profile `core`
 
-Read a whole network in one call as Houdini's hou.data childrenAsData format: types, non-default parms, expressions, wiring, flags, depth levels deep (default 1; 2 for outline). Locked HDAs appear as {type, hda_locked} unless recurse_locked. Pages stop at the response budget (truncated, next_cursor). format outline is a compact tree (path, name, type, children_count, display, errors); python returns asCode for a single node. The data result can be passed to network_build.
+Read a whole network in one call as Houdini's hou.data childrenAsData format: types, non-default parms, expressions, wiring, flags, depth levels deep (default 1; 2 for outline). Locked HDAs appear as {type, hda_locked} unless recurse_locked. Pages stop at the response budget (truncated, next_cursor). format outline is a compact tree (path, name, type, children_count, display, errors, hda_locked for non-Houdini assets); python returns asCode for one node. data feeds network_build.
 
 ### Arguments
 
@@ -542,7 +542,7 @@ Build or update a whole network under parent from Houdini's hou.data childrenAsD
 
 `read-only` `headless ok` · profile `core`
 
-Read parms by parm path (.../tx), tuple path (.../t, returns components) or component path. Each: value at frame (default current), raw text, expression and language, is_default, locked (parm lock), hda_locked. include adds keys, menu (token and label), template (label, type, default, range, help), ramp, multiparm. Tuples report expressions per component and keyed component names. Unknown names fail with nearest candidates.
+Read parms by parm (.../tx), tuple (.../t: all components) or component path. Each: value at frame (default current), raw if different, expression and language, is_default, locked (parm lock), hda_locked. Strings over 200 chars are {elided, head} unless full_strings. include adds keys, menu, template (label, type, default, range, help), ramp, multiparm. Tuples add per-component expressions and keyed names.
 
 ### Arguments
 
@@ -551,6 +551,7 @@ Read parms by parm path (.../tx), tuple path (.../t, returns components) or comp
 | `paths` | array<string> | yes |  | Parm or tuple paths. (min items 1) |
 | `frame` | number |  |  | Default current frame. |
 | `include` | array<`keys` \| `menu` \| `template` \| `ramp` \| `multiparm`> |  | `[]` |  |
+| `full_strings` | boolean |  | `false` |  |
 
 ### Returns
 
@@ -571,7 +572,7 @@ Read parms by parm path (.../tx), tuple path (.../t, returns components) or comp
 
 `idempotent` `headless ok` · profile `core`
 
-Set parms in one undo step. Each item takes one of value, expression, keyframe, keyframes, channel_ref, ramp, multiparm_count, revert_to_default, press (clicks a button). Tuple paths take lists, component paths scalars; menus take token or label. animation: replace (default) clears keys and expressions first, except that one keyframe only adds or replaces its key; key keys at frame; keep is plain set. Returns values (tuples add per-component expressions and keyed), wrote_keyframe, node errors.
+Set parms in one undo step. Each item takes one of value, expression, keyframe, keyframes, channel_ref, ramp, multiparm_count, revert_to_default, press (clicks a button). Tuple paths take lists, component paths scalars; menus take token or label. animation: replace (default) clears keys and expressions first, except that one keyframe only adds or replaces its key; key keys at frame; keep is plain set. Returns value, raw if different (long strings elided), tuple expressions and keyed, wrote_keyframe, node errors.
 
 ### Arguments
 
@@ -913,7 +914,7 @@ Find node types by name, label, description or keyword across all 18 categories,
 
 `read-only` `headless ok` · profile `core`
 
-Describe one node type: label, version, named inputs and outputs, and parms grouped by folder. detail compact (default) gives rows of name, label, type, default; full lists every parm row with size, range, menu and folder; folders lists folder names with parm counts. type is category/name, or a bare name with category. folder limits parms to one folder, parms to a name or label glob; include_help adds help text.
+Describe one node type: label, version, named inputs and outputs, and parms grouped by folder. detail compact (default): rows of name, label, type, default; full lists every parm with size, range, menu and folder; folders lists folder names with parm counts. type is category/name, or a bare name with category. folder limits parms to one folder ((no folder): top level), parms to name or label globs (a|b); include_help adds help text.
 
 ### Arguments
 
@@ -924,7 +925,7 @@ Describe one node type: label, version, named inputs and outputs, and parms grou
 | `include_parms` | boolean |  | `true` |  |
 | `include_help` | boolean |  | `false` |  |
 | `folder` | string |  |  |  |
-| `parms` | string |  |  | Glob on parm name or label, e.g. *seed*. |
+| `parms` | string |  |  | Name or label glob, e.g. *seed* or dist\|inset. |
 | `detail` | `compact` \| `full` \| `folders` |  | `"compact"` |  |
 
 ### Examples
@@ -1064,7 +1065,7 @@ Manage long work started by render, cook or pdg. status returns state (running, 
 - `message` (string)
 - `started` (string)
 - `elapsed_s` (number)
-- `result` (any) — The original tool's result (action result, done).
+- `result` (any) — The tool's result (action result, done).
 - `jobs` (array<object>)
 
 ### Examples
