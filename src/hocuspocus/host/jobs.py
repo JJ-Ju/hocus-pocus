@@ -52,6 +52,10 @@ class JobContext:
         if message is not None:
             self._job.message = message
 
+    def set_progress(self, current: int, total: int, message: str | None = None) -> None:
+        """Report step ``current`` of ``total`` (see :meth:`Job.set_progress`)."""
+        self._job.set_progress(current, total, message)
+
 
 class Job:
     def __init__(self, tool: str, label: str = "") -> None:
@@ -59,7 +63,9 @@ class Job:
         self.tool = tool
         self.label = label
         self.state = "running"  # running | done | failed | cancelled
-        self.progress: float | None = None
+        self.progress: float | None = None  # 0..1
+        self.current: int | None = None  # steps finished
+        self.total: int | None = None  # steps in all
         self.message: str | None = None
         self.started = time.time()
         self.finished: float | None = None
@@ -69,7 +75,23 @@ class Job:
         self.thread: threading.Thread | None = None
         self.done_event = threading.Event()
 
+    def set_progress(self, current: int, total: int, message: str | None = None) -> None:
+        """Record ``current`` of ``total`` steps finished; ``progress`` is their ratio.
+
+        ``total`` of 0 or less leaves ``progress`` unknown but still records the counts.
+        """
+        current = max(0, int(current))
+        total = int(total)
+        self.current = current
+        self.total = total
+        if total > 0:
+            self.progress = max(0.0, min(1.0, current / total))
+        if message is not None:
+            self.message = message
+
     def status(self) -> dict[str, Any]:
+        """The job snapshot. ``progress`` (0..1), ``current``, ``total`` and ``message``
+        appear once the job has reported them."""
         end = self.finished or time.time()
         data: dict[str, Any] = {
             "job_id": self.id,
@@ -81,7 +103,11 @@ class Job:
         if self.label:
             data["label"] = self.label
         if self.progress is not None:
-            data["progress"] = self.progress
+            data["progress"] = round(self.progress, 4)
+        if self.current is not None:
+            data["current"] = self.current
+        if self.total is not None:
+            data["total"] = self.total
         if self.message:
             data["message"] = self.message
         if self.error is not None:
@@ -108,6 +134,10 @@ class JobManager:
                     job.state = "cancelled"
                 else:
                     job.result = result
+                    if job.progress is not None:
+                        job.progress = 1.0
+                    if job.total is not None and job.total > 0:
+                        job.current = job.total
                     job.state = "done"
             except ToolError as exc:
                 job.state = "cancelled" if exc.code == "cancelled" else "failed"
