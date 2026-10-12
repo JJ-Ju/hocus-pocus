@@ -1,8 +1,8 @@
 # Integration (inside hython) + e2e tiers against a real, licensed Houdini.
 #
 # REQUIRES A SELF-HOSTED RUNNER labelled `houdini` (Windows, Houdini 22 installed and
-# licensed). GitHub-hosted runners cannot run hython. Runs on manual dispatch and on PRs
-# carrying the `houdini` label. See docs/CONTRIBUTING.md, "Running tests".
+# licensed). GitHub-hosted runners cannot run hython. Runs nightly, on manual dispatch and
+# on PRs carrying the `houdini` label. See docs/CONTRIBUTING.md, "Running tests".
 #
 # hython is taken from the repository/organisation variable HOUDINI_HYTHON, else from a
 # HOUDINI_HYTHON environment variable set on the runner, else auto-detected by
@@ -13,6 +13,8 @@
 name: houdini
 
 on:
+  schedule:
+    - cron: "17 3 * * *"   # nightly, 03:17 UTC (BIBLE §11)
   workflow_dispatch:
   pull_request:
     types: [opened, synchronize, reopened, labeled]
@@ -27,7 +29,7 @@ concurrency:
 jobs:
   houdini-tiers:
     name: integration + e2e (self-hosted Houdini)
-    if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'houdini')
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' || contains(github.event.pull_request.labels.*.name, 'houdini')
     runs-on: [self-hosted, houdini]
     timeout-minutes: 30
     defaults:

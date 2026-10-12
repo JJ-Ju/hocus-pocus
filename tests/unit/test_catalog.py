@@ -91,7 +91,10 @@ def test_profiles() -> None:
 
 
 def test_bridge_local_tools() -> None:
-    assert {spec.name for spec in TOOLS if spec.bridge_local} == {"houdini_status", "houdini_connect"}
+    assert {spec.name for spec in TOOLS if spec.bridge_local} == {
+        "houdini_status",
+        "houdini_connect",
+    }
 
 
 @pytest.mark.parametrize("spec", TOOLS, ids=_ids)
@@ -139,7 +142,9 @@ def test_validator_rejects_bad_arguments() -> None:
         validate({"items": [], "bogus": 1}, parm_set)
     node_create = get("node_create").input_schema
     with pytest.raises(SchemaError):  # input link needs exactly one of index or name
-        validate({"items": [{"parent": "/obj", "type": "geo", "inputs": [{"from": "/a"}]}]}, node_create)
+        validate(
+            {"items": [{"parent": "/obj", "type": "geo", "inputs": [{"from": "/a"}]}]}, node_create
+        )
     with pytest.raises(SchemaError):
         validate({"on_unsaved": "save"}, get("hip_open").input_schema)  # path required
     with pytest.raises(SchemaError):
@@ -161,4 +166,6 @@ def test_tools_md_is_current() -> None:
     path = REPO / "docs" / "tools.md"
     assert path.exists(), "run `python -m hocuspocus.tools.docs`"
     committed = path.read_text(encoding="utf-8").replace("\r\n", "\n")
-    assert committed == render_tools_markdown(TOOLS), "docs/tools.md is stale; run `python -m hocuspocus.tools.docs`"
+    assert committed == render_tools_markdown(TOOLS), (
+        "docs/tools.md is stale; run `python -m hocuspocus.tools.docs`"
+    )

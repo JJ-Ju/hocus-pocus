@@ -1,6 +1,5 @@
-# Lint + unit tier + docs/tools.md freshness. No Houdini needed (docs/BIBLE.md §11).
-# `ruff format --check` is deliberately not run yet: the tree is not format-clean
-# (see docs/CONTRIBUTING.md, "Lint and unit tests"). Add it once `ruff format` is applied.
+# Lint (ruff check + ruff format --check) + unit tier + docs/tools.md freshness.
+# No Houdini needed (docs/BIBLE.md §11).
 name: ci
 
 on:
@@ -47,6 +46,9 @@ jobs:
 
       - name: ruff check
         run: ruff check src tests
+
+      - name: ruff format --check
+        run: ruff format --check src tests
 
       - name: Unit tests
         run: python -m pytest tests/unit -q -p no:cacheprovider

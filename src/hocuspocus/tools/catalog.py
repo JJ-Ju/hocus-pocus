@@ -68,7 +68,9 @@ CATEGORIES: tuple[str, ...] = (
 """All 18 Houdini node type categories (bible §5.15)."""
 
 
-def _obj(properties: dict[str, Any], required: tuple[str, ...] = (), **extra: Any) -> dict[str, Any]:
+def _obj(
+    properties: dict[str, Any], required: tuple[str, ...] = (), **extra: Any
+) -> dict[str, Any]:
     schema: dict[str, Any] = {"type": "object", "properties": properties}
     if required:
         schema["required"] = list(required)
@@ -310,7 +312,10 @@ _HIP: tuple[ToolSpec, ...] = (
         output_schema=_out(
             {
                 "path": _t("string"),
-                "saved": {"type": ["string", "null"], "description": "Path saved when on_unsaved=save."},
+                "saved": {
+                    "type": ["string", "null"],
+                    "description": "Path saved when on_unsaved=save.",
+                },
                 "scene_generation": _t("integer"),
             },
             ("path", "scene_generation"),
@@ -574,7 +579,10 @@ _NODES: tuple[ToolSpec, ...] = (
         ),
         input_schema=_obj({"paths": _paths(), "keep_connections": _b(True)}, ("paths",)),
         destructive=True,
-        examples=({"paths": ["/obj/geo1/box1"]}, {"paths": ["/obj/geo1"], "keep_connections": False}),
+        examples=(
+            {"paths": ["/obj/geo1/box1"]},
+            {"paths": ["/obj/geo1"], "keep_connections": False},
+        ),
     ),
     ToolSpec(
         name="node_edit",
@@ -591,7 +599,9 @@ _NODES: tuple[ToolSpec, ...] = (
                             "path": _s(),
                             "name": _s("New name."),
                             "flags": _flags(),
-                            "color": _arr({"type": "number"}, "[r, g, b] 0-1", minItems=3, maxItems=3),
+                            "color": _arr(
+                                {"type": "number"}, "[r, g, b] 0-1", minItems=3, maxItems=3
+                            ),
                             "comment": _s(),
                             "position": _xy("[x, y]"),
                             "lock": {"type": "boolean", "description": "HDA contents locked."},
@@ -635,7 +645,7 @@ _NODES: tuple[ToolSpec, ...] = (
         description=(
             "Wire or unwire inputs in one undo step. Each item connects output from_output "
             "(default 0) of from into to at to_input: an index (default 0), an input name, or "
-            "\"next\" for the next free input of merge-style nodes. from null disconnects. Bad "
+            '"next" for the next free input of merge-style nodes. from null disconnects. Bad '
             "inputs fail with invalid_input listing the input labels."
         ),
         input_schema=_obj(
@@ -643,14 +653,17 @@ _NODES: tuple[ToolSpec, ...] = (
                 "items": _arr(
                     _obj(
                         {
-                            "from": {"type": ["string", "null"], "description": "Source node or null."},
+                            "from": {
+                                "type": ["string", "null"],
+                                "description": "Source node or null.",
+                            },
                             "from_output": _i(None, minimum=0, default=0),
                             "to": _s(),
                             # bible-silent: to_input default; 0 is the common case.
                             "to_input": {
                                 "type": ["integer", "string"],
                                 "default": 0,
-                                "description": "Index, input name, or \"next\".",
+                                "description": 'Index, input name, or "next".',
                             },
                         },
                         ("from", "to"),
@@ -734,7 +747,11 @@ _NODES: tuple[ToolSpec, ...] = (
                 "parent": "/obj/geo1",
                 "data": {
                     "box1": {"type": "box"},
-                    "xform1": {"type": "xform", "inputs": [{"from": "box1"}], "flags": {"display": True}},
+                    "xform1": {
+                        "type": "xform",
+                        "inputs": [{"from": "box1"}],
+                        "flags": {"display": True},
+                    },
                 },
                 "dry_run": True,
             },
@@ -765,7 +782,9 @@ _PARMS: tuple[ToolSpec, ...] = (
             {
                 "paths": _paths("Parm or tuple paths."),
                 "frame": _frame(),
-                "include": _arr(_enum(("keys", "menu", "template", "ramp", "multiparm")), default=[]),
+                "include": _arr(
+                    _enum(("keys", "menu", "template", "ramp", "multiparm")), default=[]
+                ),
             },
             ("paths",),
         ),
@@ -787,7 +806,11 @@ _PARMS: tuple[ToolSpec, ...] = (
                             "is_default": _t("boolean"),
                             "locked": _t("boolean"),
                             "keyframes": _out(
-                                {"count": _t("integer"), "first": _t("number"), "last": _t("number")}
+                                {
+                                    "count": _t("integer"),
+                                    "first": _t("number"),
+                                    "last": _t("number"),
+                                }
                             ),
                             "menu": _t("object"),
                             "ramp": _t("object"),
@@ -882,7 +905,11 @@ _PARMS: tuple[ToolSpec, ...] = (
             {"items": [{"path": "/obj/geo1/xform1/ry", "expression": "$F * 3"}]},
             {
                 "items": [
-                    {"path": "/obj/geo1/xform1/ty", "keyframe": {"frame": 1, "value": 0}, "animation": "key"}
+                    {
+                        "path": "/obj/geo1/xform1/ty",
+                        "keyframe": {"frame": 1, "value": 0},
+                        "animation": "key",
+                    }
                 ]
             },
         ),
@@ -930,7 +957,10 @@ _COOK: tuple[ToolSpec, ...] = (
                 "state": {"type": "string", "enum": _JOB_STATES},
             }
         ),
-        examples=({"paths": ["/obj/geo1/OUT"]}, {"paths": ["/obj/geo1/OUT"], "force": True, "frame": 12}),
+        examples=(
+            {"paths": ["/obj/geo1/OUT"]},
+            {"paths": ["/obj/geo1/OUT"], "force": True, "frame": 12},
+        ),
     ),
     ToolSpec(
         name="problems",
@@ -1049,14 +1079,19 @@ _VISUAL: tuple[ToolSpec, ...] = (
         input_schema=_obj(
             {
                 "rop_path": _s(),
-                "frames": _arr({"type": "number"}, "[start, end] or [start, end, inc]", minItems=2, maxItems=3),
+                "frames": _arr(
+                    {"type": "number"}, "[start, end] or [start, end, inc]", minItems=2, maxItems=3
+                ),
                 "output": _s("Output path override."),
                 "wait_s": _n(None, minimum=0, default=20),
                 "thumbnail": _b(True),
             },
             ("rop_path",),
         ),
-        examples=({"rop_path": "/out/karma1"}, {"rop_path": "/out/karma1", "frames": [1, 24], "wait_s": 0}),
+        examples=(
+            {"rop_path": "/out/karma1"},
+            {"rop_path": "/out/karma1", "frames": [1, 24], "wait_s": 0},
+        ),
     ),
     ToolSpec(
         name="houdini_python",
@@ -1142,7 +1177,10 @@ _VISUAL: tuple[ToolSpec, ...] = (
             ("type",),
         ),
         read_only=True,
-        examples=({"type": "Sop/scatter"}, {"type": "mountain", "category": "Sop", "include_help": True}),
+        examples=(
+            {"type": "Sop/scatter"},
+            {"type": "mountain", "category": "Sop", "include_help": True},
+        ),
     ),
 )
 
@@ -1152,7 +1190,7 @@ _STATE: tuple[ToolSpec, ...] = (
         description=(
             "Undo or redo steps (default 1) and return the labels performed, or list the last 20 "
             "undo labels with history. Every HocusPocus mutation is one step labelled "
-            "\"HocusPocus: <tool> ...\"."
+            '"HocusPocus: <tool> ...".'
         ),
         input_schema=_obj(
             {"action": _enum(("undo", "redo", "history")), "steps": _i(None, minimum=1, default=1)},
@@ -1319,7 +1357,16 @@ _FULL: tuple[ToolSpec, ...] = (
 )
 
 
-TOOLS: tuple[ToolSpec, ...] = (*_SESSION, *_HIP, *_NODES, *_PARMS, *_COOK, *_VISUAL, *_STATE, *_FULL)
+TOOLS: tuple[ToolSpec, ...] = (
+    *_SESSION,
+    *_HIP,
+    *_NODES,
+    *_PARMS,
+    *_COOK,
+    *_VISUAL,
+    *_STATE,
+    *_FULL,
+)
 """All tools, in the order of BIBLE §4.2–§4.7 (deterministic ``tools/list``)."""
 
 

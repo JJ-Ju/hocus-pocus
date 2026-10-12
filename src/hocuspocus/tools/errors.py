@@ -50,7 +50,9 @@ class ToolError(Exception):
         detail: Any = None,
     ) -> None:
         if code not in ERROR_CODES:
-            raise ValueError(f"unknown error code {code!r}; see hocuspocus.tools.errors.ERROR_CODES")
+            raise ValueError(
+                f"unknown error code {code!r}; see hocuspocus.tools.errors.ERROR_CODES"
+            )
         super().__init__(message)
         self.code = code
         self.message = message

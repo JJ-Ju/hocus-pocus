@@ -246,7 +246,12 @@ def _cell(text: str) -> str:
 
 def _constraints(schema: dict[str, Any]) -> str:
     parts = []
-    bounds = (("minimum", "min"), ("maximum", "max"), ("minItems", "min items"), ("maxItems", "max items"))
+    bounds = (
+        ("minimum", "min"),
+        ("maximum", "max"),
+        ("minItems", "min items"),
+        ("maxItems", "max items"),
+    )
     for key, label in bounds:
         if key in schema:
             parts.append(f"{label} {schema[key]}")
@@ -258,7 +263,9 @@ def _constraints(schema: dict[str, Any]) -> str:
     return "; ".join(parts)
 
 
-def _argument_rows(schema: dict[str, Any], prefix: str = "") -> list[tuple[str, str, str, str, str]]:
+def _argument_rows(
+    schema: dict[str, Any], prefix: str = ""
+) -> list[tuple[str, str, str, str, str]]:
     rows: list[tuple[str, str, str, str, str]] = []
     required = set(schema.get("required", ()))
     for name, sub in schema.get("properties", {}).items():
@@ -268,7 +275,9 @@ def _argument_rows(schema: dict[str, Any], prefix: str = "") -> list[tuple[str, 
         if extra:
             description = f"{description} ({extra})" if description else extra
         default = f"`{_compact(sub['default'])}`" if "default" in sub else ""
-        rows.append((f"`{full}`", _type_label(sub), "yes" if name in required else "", default, description))
+        rows.append(
+            (f"`{full}`", _type_label(sub), "yes" if name in required else "", default, description)
+        )
         if sub.get("type") == "object" and sub.get("properties"):
             rows.extend(_argument_rows(sub, f"{full}."))
         items = sub.get("items")
@@ -330,7 +339,15 @@ def render_tools_markdown(tools: Sequence[ToolSpec]) -> str:
         suffix = " *(full)*" if spec.profile == "full" else ""
         out.append(f"- [`{spec.name}`](#{spec.name}){suffix}")
     for spec in tools:
-        out += ["", f"## {spec.name}", "", f"{_badges(spec)} · profile `{spec.profile}`", "", spec.description, ""]
+        out += [
+            "",
+            f"## {spec.name}",
+            "",
+            f"{_badges(spec)} · profile `{spec.profile}`",
+            "",
+            spec.description,
+            "",
+        ]
         rows = _argument_rows(spec.input_schema)
         out += ["### Arguments", ""]
         if rows:

@@ -130,12 +130,9 @@ lets contributors without a licence get a green run.
 
 ```bash
 .venv/Scripts/ruff check src tests
+.venv/Scripts/ruff format src tests              # CI runs `ruff format --check src tests`
 .venv/Scripts/python -m pytest tests/unit -q      # Linux/macOS: .venv/bin/python
 ```
-
-`ruff format` is not enforced yet, because a few files in `src/hocuspocus/tools/` and
-`tests/unit/test_catalog.py` are not format-clean. Run `ruff format` on new files anyway.
-Once the tree is clean, add `ruff format --check` to CI.
 
 ### Integration tests (inside `hython`)
 
@@ -212,11 +209,11 @@ HOUDINI_HYTHON="C:/Program Files/Side Effects Software/Houdini 22.0.466/bin/hyth
 ### CI
 
 - `.github/workflows/ci.yml` runs on every push and PR, on `windows-latest` and
-  `ubuntu-latest`. It runs `ruff check`, the unit tier, and a check that `docs/tools.md`
-  is fresh. It does not need Houdini.
+  `ubuntu-latest`. It runs `ruff check`, `ruff format --check`, the unit tier, and a
+  check that `docs/tools.md` is fresh. It does not need Houdini.
 - `.github/workflows/houdini.yml` runs the integration and e2e tiers. It needs a
-  **self-hosted runner labelled `houdini`** with a licensed Houdini 22. It runs on manual
-  dispatch and on PRs labelled `houdini`.
+  **self-hosted runner labelled `houdini`** with a licensed Houdini 22. It runs nightly,
+  on manual dispatch and on PRs labelled `houdini`.
 
 ## Commit conventions
 
@@ -225,7 +222,8 @@ HOUDINI_HYTHON="C:/Program Files/Side Effects Software/Houdini 22.0.466/bin/hyth
 - In the body, explain *why*, and reference BIBLE sections where relevant.
 - Keep each commit to one logical change. Don't mix generated `docs/tools.md` churn with
   unrelated edits.
-- `ruff check src tests` and `pytest tests/unit` must pass at every commit. Run the
+- `ruff check src tests`, `ruff format --check src tests` and `pytest tests/unit` must
+  pass at every commit. Run the
   integration tier before you merge anything that touches `host/`.
 - Never commit test or runtime state (`.hocuspocus/`, captures, `__pycache__`).
 - When a milestone from BIBLE §14 lands, add a line to `docs/redesign/progress.md`.
