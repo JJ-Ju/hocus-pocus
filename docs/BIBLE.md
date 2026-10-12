@@ -333,7 +333,7 @@ as it was started from a neutral directory).
 - **Every mutation result** includes, for each touched node: `path`, `type`, `errors`,
   `warnings` (after a non-forced cook of that node if it is cheap, else `cook_state:
   "not_cooked"`; errors left from before the change are rechecked with a forced cook,
-  §5.18).
+  §5.18). The result also carries the scene's `dirty` flag after the call.
 - **Annotations:** read tools `readOnlyHint: true`; `node_delete`, `hip_new`,
   `hip_open`, `houdini_python` `destructiveHint: true`; `parm_set`, `node_connect`,
   `node_edit`, `time`, `selection`, `cook`, `job`, `viewport_capture`
@@ -368,8 +368,10 @@ as it was started from a neutral directory).
 | `hip_save` | `path?`, `increment = false`, `backup = false` | `save(path)` is save-as when `path` given; `increment` uses `saveAndIncrementFileName()`; `backup` uses `saveAndBackup()`. Returns the real saved `path`, `dirty` after save, `bytes`. Creates directories. |
 | `hip_merge` | `path`, `node_pattern = "*"`, `overwrite_on_conflict = false`, `dry_run = false` | `dry_run` returns `collisions` from `collisionNodesIfMerged()` only. |
 
-Recent files (`hip_info` / status): read from `$HOUDINI_USER_PREF_DIR/file.history`
-when present, best effort, under `recent: [...]` in `houdini_status.connected.hip`.
+Recent files (`hip_info` / status): the hip files saved or loaded in this host session
+(newest first; hython never writes `file.history`), then
+`$HOUDINI_USER_PREF_DIR/file.history` when present, best effort, under `recent: [...]` in
+`houdini_status.connected.hip`.
 
 ### 4.4 Nodes and networks
 

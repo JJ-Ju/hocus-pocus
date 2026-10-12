@@ -168,6 +168,11 @@ class Dispatcher:
             # A successful mutation dirties the scene unless it saved/loaded/cleared it.
             if ctx.scene.clean_events == clean_events:
                 ctx.scene.mark_dirty()
+            if isinstance(result, dict) and "dirty" not in result:
+                # Review 07 papercut 9: the agent sees the dirty flag without houdini_status.
+                from .tools.session import scene_dirty
+
+                result["dirty"] = scene_dirty(ctx)
             return result
 
         return run

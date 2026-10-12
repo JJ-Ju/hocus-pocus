@@ -281,6 +281,7 @@ class Host:
         elif event_type == events.AfterLoad:
             self.scene.bump()
             self.scene.mark_clean()
+            self.scene.note_file(hou.hipFile.path())
             changed = True
         elif event_type == events.AfterMerge:
             self.scene.bump()
@@ -288,6 +289,7 @@ class Host:
             changed = True
         elif event_type == events.AfterSave:
             self.scene.mark_clean()
+            self.scene.note_file(hou.hipFile.path())
             changed = True
         if changed and not self._stopped:
             try:

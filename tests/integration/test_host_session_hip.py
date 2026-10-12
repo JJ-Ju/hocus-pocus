@@ -52,11 +52,27 @@ def test_status_fields(client, tool):
 
 def test_recent_files_from_file_history(client, hp_dirs):
     history = hp_dirs["prefs"] / "file.history"
+    client.host.scene.recent.clear()  # files saved or loaded by earlier tests
     history.write_text("HIP\n{\nC:/a/old.hip\nC:/a/new.hip\n}\nOBJ\n{\nC:/x.obj\n}\n")
     try:
         assert client.ok("houdini_status")["hip"]["recent"] == ["C:/a/new.hip", "C:/a/old.hip"]
     finally:
         history.unlink()
+
+
+def test_recent_and_dirty_without_houdini_status(client, work_dir):
+    """Review 07 papercut 9: mutations report dirty, and recent lists the files saved and
+    loaded in this session although hython never writes file.history."""
+    first = (work_dir / "first.hip").as_posix()
+    second = (work_dir / "second.hip").as_posix()
+    client.ok("hip_save", {"path": first})
+    created = client.ok("node_create", {"items": [{"parent": "/obj", "type": "geo"}]})
+    assert created["dirty"] is True
+    client.ok("hip_save", {"path": second})
+    assert client.ok("parm_set", {"items": [{"path": "/obj/geo1/tx", "value": 1}]})["dirty"] is True
+    client.ok("hip_open", {"path": first, "on_unsaved": "discard"})
+    recent = client.ok("houdini_status")["hip"]["recent"]
+    assert recent[:2] == [first, second], recent
 
 
 # -- hip_save -----------------------------------------------------------------------

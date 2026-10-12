@@ -53,14 +53,22 @@ def parse_file_history(text: str, section: str = "HIP") -> list[str]:
 
 
 def recent_files(ctx: HostContext, limit: int = RECENT_LIMIT) -> list[str]:
+    """Hip files saved or loaded in this session (newest first), then Houdini's
+    ``file.history`` (which only a GUI session writes)."""
+    history: list[str] = []
     pref = resolve_pref_dir(getattr(ctx.config, "pref_dir", "") or None)
-    if pref is None:
-        return []
-    try:
-        text = (Path(pref) / "file.history").read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return []
-    return parse_file_history(text)[:limit]
+    if pref is not None:
+        try:
+            text = (Path(pref) / "file.history").read_text(encoding="utf-8", errors="replace")
+            history = parse_file_history(text)
+        except OSError:
+            pass
+    out: list[str] = []
+    for path in [*getattr(ctx.scene, "recent", []), *history]:
+        key = path.replace("\\", "/")
+        if key not in out:
+            out.append(key)
+    return out[:limit]
 
 
 def scene_dirty(ctx: HostContext) -> bool:

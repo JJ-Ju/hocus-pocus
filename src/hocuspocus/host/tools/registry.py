@@ -108,7 +108,17 @@ class SceneState:
     clean_events: int = 0
     """Incremented on every save/load/clear so the dispatcher can tell whether a
     mutating call left the scene clean."""
+    recent: list[str] = field(default_factory=list)
+    """Hip files saved or loaded in this session, newest first. hython never writes
+    ``file.history``, so ``recent`` would otherwise stay empty headless."""
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+
+    def note_file(self, path: str, limit: int = 10) -> None:
+        if not path:
+            return
+        with self._lock:
+            key = path.replace("\\", "/")
+            self.recent = [key, *[p for p in self.recent if p != key]][:limit]
 
     def bump(self) -> int:
         with self._lock:
