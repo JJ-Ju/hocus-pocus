@@ -3,3 +3,7 @@
 One line per milestone event. Newest at the bottom.
 
 - 2026-10-12 Reviews 01–06 complete; `docs/BIBLE.md` written; `v0.9-archive` tagged; branch `redesign/v1` created; package skeleton laid down.
+- 2026-10-12 M0 Foundations landed (`46ee365`…`712416f`): catalogue of 35 tools and generated `docs/tools.md`; bridge (client, instance registry, launcher, stdio MCP server); `hocuspocus` CLI and e2e scaffold; host core (executor, server, registry, config, undo, jobs, budget); session/hip/code/job tools; Houdini package payload; hython integration tier.
+- 2026-10-12 M1 Authoring core landed (`da032f5`…`9981485`): shared node diagnostics; undo-group rollback on failure; `parm_get`/`parm_set`; `node_type_search`/`node_type_info`; `cook`/`problems`; the eight node tools; `network_describe`/`network_build` over `hou.data`.
+- 2026-10-12 M2 Seeing and M3 State and contexts in progress (stub modules registered in `5e53287`; `geo`, `visual`, `state`, `hda`, `usd`, `pdg`, `events` being implemented in parallel).
+- 2026-10-12 M4 Cut-over and docs: 0.9 tree deleted (441 files; archived at `v0.9-archive`); README, `docs/quickstart.md`, CHANGELOG, extended CONTRIBUTING; CI workflows (`ci.yml` lint + unit + tools.md freshness on Windows/Ubuntu; `houdini.yml` integration + e2e on a self-hosted `houdini` runner). Open for M4 exit: fresh-clone run of the quickstart, `ruff format` clean-up.
