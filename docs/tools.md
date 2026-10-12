@@ -2,7 +2,7 @@
 
 <!-- Generated from src/hocuspocus/tools/catalog.py by `python -m hocuspocus.tools.docs`. Do not edit by hand. -->
 
-35 tools: 31 in the `core` profile, 4 more in `full`. Model-visible `tools/list` text: 26,291 bytes. See `docs/BIBLE.md` §4 for the design.
+35 tools: 31 in the `core` profile, 4 more in `full`. Model-visible `tools/list` text: 26,532 bytes. See `docs/BIBLE.md` §4 for the design.
 
 ## Contents
 
@@ -299,7 +299,7 @@ Read nodes in detail: type, flags, inputs with names and sources, non-default pa
 
 `headless ok` · profile `core`
 
-Create nodes in one undo step. Item: parent, type (resolved like createNode so box gets the current version; exact_type disables), optional name, parms (value or {expr, lang}), inputs (index or name, from, output), flags, position. Items may wire to nodes created earlier in the call. layout default good_position. Returns node_info blocks. Use network_build for whole graphs.
+Create nodes in one undo step. Item: parent, type (resolved like createNode so box gets the current version; exact_type disables), optional name, parms (value or {expression, language}; {expr, lang} also works), inputs (index or name, from, output), flags, position. Items may wire to nodes created earlier in the call. layout default good_position. Returns node_info blocks. Use network_build for whole graphs.
 
 ### Arguments
 
@@ -309,7 +309,7 @@ Create nodes in one undo step. Item: parent, type (resolved like createNode so b
 | `items[].parent` | string | yes |  |  |
 | `items[].type` | string | yes |  |  |
 | `items[].name` | string |  |  |  |
-| `items[].parms` | object<string, string \| number \| boolean \| array<string \| number \| boolean> \| object> |  |  | Parm or tuple name to value or {expr, lang}. |
+| `items[].parms` | object<string, string \| number \| boolean \| array<string \| number \| boolean> \| object \| object> |  |  | Parm or tuple name to value or {expression, language}. |
 | `items[].inputs` | array<object> |  |  | each item: exactly one of index, name |
 | `items[].inputs[].index` | integer |  |  | min 0 |
 | `items[].inputs[].name` | string |  |  | Input name. |
@@ -332,7 +332,7 @@ Create nodes in one undo step. Item: parent, type (resolved like createNode so b
 ```
 
 ```json
-{"items": [{"parent": "/obj/terrain", "type": "grid", "parms": {"size": [10, 10], "rows": 100, "cols": 100}}, {"parent": "/obj/terrain", "type": "mountain", "inputs": [{"index": 0, "from": "/obj/terrain/grid1"}], "parms": {"height": {"expr": "ch('../grid1/sizex') * 0.1"}}, "flags": {"display": true, "render": true}}]}
+{"items": [{"parent": "/obj/terrain", "type": "grid", "parms": {"size": [10, 10], "rows": 100, "cols": 100}}, {"parent": "/obj/terrain", "type": "mountain", "inputs": [{"index": 0, "from": "/obj/terrain/grid1"}], "parms": {"height": {"expression": "ch('../grid1/sizex') * 0.1"}}, "flags": {"display": true, "render": true}}]}
 ```
 
 

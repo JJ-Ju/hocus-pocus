@@ -154,11 +154,14 @@ def _literal_value() -> dict[str, Any]:
 
 
 def _parm_value() -> dict[str, Any]:
-    """Literal scalar/array, or an expression object ``{expr, lang}`` (node_create parms)."""
+    """Literal scalar/array, or an expression object (node_create parms): ``{expression,
+    language}`` as parm_set and the readers spell it, or the short ``{expr, lang}``."""
     literal = _literal_value()
+    languages = ("hscript", "python")
     literal["anyOf"].append(
-        _obj({"expr": _s(), "lang": _enum(("hscript", "python"), "hscript")}, ("expr",))
+        _obj({"expression": _s(), "language": _enum(languages, "hscript")}, ("expression",))
     )
+    literal["anyOf"].append(_obj({"expr": _s(), "lang": _enum(languages, "hscript")}, ("expr",)))
     return literal
 
 
@@ -552,10 +555,10 @@ _NODES: tuple[ToolSpec, ...] = (
         name="node_create",
         description=(
             "Create nodes in one undo step. Item: parent, type (resolved like createNode so box "
-            "gets the current version; exact_type disables), optional name, parms (value or {expr, "
-            "lang}), inputs (index or name, from, output), flags, position. Items may wire to "
-            "nodes created earlier in the call. layout default good_position. Returns node_info "
-            "blocks. Use network_build for whole graphs."
+            "gets the current version; exact_type disables), optional name, parms (value or "
+            "{expression, language}; {expr, lang} also works), inputs (index or name, from, "
+            "output), flags, position. Items may wire to nodes created earlier in the call. layout "
+            "default good_position. Returns node_info blocks. Use network_build for whole graphs."
         ),
         input_schema=_obj(
             {
@@ -568,7 +571,9 @@ _NODES: tuple[ToolSpec, ...] = (
                             "parms": {
                                 "type": "object",
                                 "additionalProperties": _parm_value(),
-                                "description": "Parm or tuple name to value or {expr, lang}.",
+                                "description": (
+                                    "Parm or tuple name to value or {expression, language}."
+                                ),
                             },
                             "inputs": _arr(_input_link()),
                             "flags": _flags(),
@@ -597,7 +602,7 @@ _NODES: tuple[ToolSpec, ...] = (
                         "parent": "/obj/terrain",
                         "type": "mountain",
                         "inputs": [{"index": 0, "from": "/obj/terrain/grid1"}],
-                        "parms": {"height": {"expr": "ch('../grid1/sizex') * 0.1"}},
+                        "parms": {"height": {"expression": "ch('../grid1/sizex') * 0.1"}},
                         "flags": {"display": True, "render": True},
                     },
                 ]

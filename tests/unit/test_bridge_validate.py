@@ -116,3 +116,19 @@ def test_root_type_error_is_labelled():
 def test_empty_schema_accepts_anything():
     assert validate({"anything": 1}, {}) == []
     assert validate({"anything": 1}, None) == []
+
+
+def test_node_create_parms_take_both_expression_spellings():
+    from hocuspocus.tools.catalog import get
+
+    schema = get("node_create").input_schema
+
+    def check(parms):
+        return validate({"items": [{"parent": "/obj", "type": "box", "parms": parms}]}, schema)
+
+    assert check({"sizex": {"expression": "$F", "language": "python"}}) == []
+    assert check({"sizex": {"expr": "$F", "lang": "hscript"}}) == []
+    (error,) = check({"sizex": {"exp": "$F"}})
+    assert "{expression, language}" in error and "{expr, lang}" in error
+    (error,) = check({"sizex": {"expr": "$F", "language": "python"}})
+    assert "did you mean lang" in error

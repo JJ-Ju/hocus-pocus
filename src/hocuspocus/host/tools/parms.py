@@ -809,7 +809,12 @@ def _coerce(parm: Any, value: Any, notes: list[str], *, for_key: bool = False) -
         raise _invalid(parm, kind, f"{path} is a toggle; pass true or false.")
     if kind in ("int", "float", "multiparm"):
         if not _is_number(value):
-            hint = "Use the expression field for expressions." if isinstance(value, str) else None
+            hint = (
+                "For an expression use the expression field in parm_set, or "
+                f"{EXPRESSION_SPELLINGS} as the value in node_create parms."
+                if isinstance(value, str)
+                else None
+            )
             raise _invalid(parm, kind, f"{path} is a {kind} parm; got {value!r}.", hint=hint)
         if not math.isfinite(value):
             raise _invalid(parm, kind, f"{path} cannot be set to {value}.")
@@ -1211,6 +1216,9 @@ def _with_context(exc: ToolError, prefix: str, extra: dict[str, Any]) -> ToolErr
     )
 
 
+EXPRESSION_SPELLINGS = "{expression, language} (or the short {expr, lang})"
+
+
 def _item_from_spec(name: str, spec: Any, animation: str) -> dict[str, Any]:
     if isinstance(spec, dict):
         if "expr" in spec:
@@ -1218,7 +1226,9 @@ def _item_from_spec(name: str, spec: Any, animation: str) -> dict[str, Any]:
             if extra:
                 raise ToolError(
                     "invalid_argument",
-                    f"parms.{name}: an expression object is {{expr, lang}}; unexpected {sorted(extra)}.",
+                    f"parms.{name}: an expression object is {EXPRESSION_SPELLINGS}; "
+                    f"unexpected {sorted(extra)} next to expr.",
+                    hint="Use expression with language, or expr with lang; do not mix them.",
                 )
             return {
                 "expression": spec["expr"],
@@ -1230,8 +1240,9 @@ def _item_from_spec(name: str, spec: Any, animation: str) -> dict[str, Any]:
             raise ToolError(
                 "invalid_argument",
                 f"parms.{name}: unexpected keys {sorted(extra)}.",
-                hint="Pass a value, a list for a tuple, {expr, lang}, or one parm_set item field "
-                "(value, expression, keyframes, channel_ref, ramp, multiparm_count, ...).",
+                hint=f"Pass a value, a list for a tuple, an expression as {EXPRESSION_SPELLINGS}, "
+                "or one parm_set item field (value, keyframes, channel_ref, ramp, "
+                "multiparm_count, ...).",
             )
         return {"animation": animation, **spec}
     return {"value": spec, "animation": animation}
@@ -1240,11 +1251,11 @@ def _item_from_spec(name: str, spec: Any, animation: str) -> dict[str, Any]:
 def set_parm_items(
     node: Any, parms: dict[str, Any], ctx: Any, *, animation: str = "replace"
 ) -> list[dict[str, Any]]:
-    """Apply ``{parm_name: value | {expr, lang}}`` to ``node`` and return per-parm results.
+    """Apply ``{parm_name: value | {expression, language} | {expr, lang}}`` to ``node`` and return per-parm results.
 
     Used by ``node_create`` (``items[].parms``) and ``network_build``. Same semantics as
     one ``parm_set`` item per entry; raises ToolError on the first failure. A dict value
-    other than ``{expr, lang}`` is treated as a ``parm_set`` item without ``path`` (e.g.
+    other than ``{expr, lang}`` (including ``{expression, language}``) is treated as a ``parm_set`` item without ``path`` (e.g.
     ``{"ramp": {...}}``, ``{"channel_ref": "/obj/..."}``). Results are the compact
     summary plus ``path`` and ``wrote_keyframe`` (no node errors: callers report those).
     """

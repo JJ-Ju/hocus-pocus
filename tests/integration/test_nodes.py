@@ -222,6 +222,52 @@ def test_create_with_parms(client):
     assert {"size", "rows"} <= names
 
 
+def test_create_accepts_both_expression_spellings(client):
+    """Review 07 papercut 4: {expression, language} (what parm_set takes and the readers
+    emit) and the short {expr, lang} both work; a mix is refused naming both."""
+    geo = hou.node("/obj").createNode("geo", "terrain")
+    result = client.ok(
+        "node_create",
+        {
+            "items": [
+                {
+                    "parent": geo.path(),
+                    "type": "box",
+                    "parms": {
+                        "sizex": {"expression": "$F*2"},
+                        "sizey": {"expression": "hou.frame() * 3", "language": "python"},
+                        "sizez": {"expr": "$F*4", "lang": "hscript"},
+                    },
+                }
+            ]
+        },
+    )
+    box = hou.node(result["created"][0])
+    assert box.parm("sizex").expression() == "$F*2"
+    assert box.parm("sizey").expressionLanguage() == hou.exprLanguage.Python
+    assert box.parm("sizez").eval() == pytest.approx(4 * hou.frame())
+    error = client.error(
+        "node_create",
+        {
+            "items": [
+                {
+                    "parent": geo.path(),
+                    "type": "box",
+                    "parms": {"sizex": {"expr": "$F", "language": "python"}},
+                }
+            ]
+        },
+    )
+    assert error["code"] == "invalid_argument"
+    assert "{expression, language}" in error["message"] and "{expr, lang}" in error["message"]
+    error = client.error(
+        "node_create",
+        {"items": [{"parent": geo.path(), "type": "box", "parms": {"sizex": "$F*2"}}]},
+    )
+    assert error["code"] == "invalid_value"
+    assert "{expression, language}" in error["hint"] and "{expr, lang}" in error["hint"]
+
+
 # -- node_info ---------------------------------------------------------------------
 
 

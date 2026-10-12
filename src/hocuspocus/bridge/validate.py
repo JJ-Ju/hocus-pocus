@@ -140,7 +140,18 @@ class _Validator:
         results = [self._sub_errors(value, opt, path) for opt in options]
         if not results or any(not errs for errs in results):
             return
-        self.errors.append(self._best_branch(results, path, "anyOf"))
+        message = self._best_branch(results, path, "anyOf")
+        if isinstance(value, dict):
+            # Name every object form the caller could have meant (e.g. both expression
+            # spellings in node_create parms).
+            forms = [
+                "{" + ", ".join(opt["properties"]) + "}"
+                for opt in options
+                if isinstance(opt, dict) and isinstance(opt.get("properties"), dict)
+            ]
+            if forms:
+                message += f"; object forms: {' or '.join(forms)}"
+        self.errors.append(message)
 
     def _one_of(self, value: Any, options: list[Any], path: str) -> None:
         results = [self._sub_errors(value, opt, path) for opt in options]
@@ -156,8 +167,12 @@ class _Validator:
 
     @staticmethod
     def _best_branch(results: list[list[str]], path: str, keyword: str) -> str:
-        # The alternative with the fewest violations is usually the one the caller meant.
-        best = min(results, key=len)
+        # The alternative with the fewest violations is usually the one the caller meant,
+        # but one of the value's own type (an object for an object branch) beats a bare
+        # "expected string, got object": its errors name the properties that are wrong.
+        wrong_type = f"{_label(path)}: expected "
+        same_type = [errs for errs in results if not errs[0].startswith(wrong_type)]
+        best = min(same_type or results, key=len)
         return f"{best[0]} (no alternative of {keyword} matched)"
 
     def _object(self, value: dict[str, Any], schema: dict[str, Any], path: str) -> None:
