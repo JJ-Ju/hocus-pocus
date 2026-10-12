@@ -33,15 +33,19 @@ hocuspocus 1.0.0a0 (hp/v1, mcp 2.3.x, Python 3.12.x)
 
 ```text
 $ hocuspocus install-houdini
-Houdini pref dir: C:\Users\you\Documents\houdini22.0 (from hython (C:\Program Files\Side Effects Software\Houdini 22.0.466))
-copied hocuspocus 1.0.0a0 to C:\Users\you\Documents\houdini22.0\hocuspocus\1.0.0a0\python\hocuspocus
-copied the Houdini payload to C:\Users\you\Documents\houdini22.0\hocuspocus\1.0.0a0\houdini
-wrote C:\Users\you\Documents\houdini22.0\packages\hocuspocus.json (template: ...\houdini\hocuspocus.json.template)
+Houdini pref dir: C:\Users\you\houdini22.0 (from hython (C:\Program Files\Side Effects Software\Houdini 22.0.466))
+copied hocuspocus 1.0.0a0 to C:\Users\you\houdini22.0\hocuspocus\1.0.0a0\python\hocuspocus
+copied the Houdini payload to C:\Users\you\houdini22.0\hocuspocus\1.0.0a0\houdini
+wrote C:\Users\you\houdini22.0\packages\hocuspocus.json (template: ...\houdini\hocuspocus.json.template)
+recorded the pref dir in C:\Users\you\AppData\Local\HocusPocus\install.json (the bridge reads hocuspocus.toml from there)
 Restart Houdini to load HocusPocus.
 Then register the MCP server with your client, e.g.: claude mcp add hocuspocus -- hocuspocus-mcp
 ```
 
-The first line tells you which pref dir it chose and why. The search order is:
+The first line tells you which pref dir it chose and why. Depending on how Houdini was
+set up, hython may report `C:\Users\you\houdini22.0` or
+`C:\Users\you\Documents\houdini22.0`; whatever it reports is the one Houdini uses. The
+search order is:
 
 1. `--prefs`.
 2. `$HOUDINI_USER_PREF_DIR`.
@@ -51,13 +55,18 @@ The first line tells you which pref dir it chose and why. The search order is:
 
 If the first line shows the wrong directory, run the command again with
 `--prefs <dir>`. If several Houdinis are installed, `--hfs <install dir>` chooses which
-one to ask.
+one to ask. To develop HocusPocus itself, `hocuspocus install-houdini --dev` points
+Houdini at the checkout's `src/` instead of copying it.
 
 ## 3. Register with your client (10 seconds)
 
 ```bash
-claude mcp add hocuspocus -- hocuspocus-mcp
+claude mcp add -s user hocuspocus -- hocuspocus-mcp
 ```
+
+`-s user` makes the server available in every directory. Without it, Claude Code
+registers it only for the directory you ran the command in. (The hint that
+`install-houdini` and `doctor` print omits `-s user`.)
 
 For Codex, add the output of `hocuspocus client-config codex` to
 `~/.codex/config.toml`:
@@ -78,8 +87,9 @@ $ hocuspocus doctor
 hocuspocus 1.0.0a0 (bridge, hp/v1)
 [ok]   Houdini install: C:\Program Files\Side Effects Software\Houdini 22.0.466
 [ok]   Houdini version: 22.0.466
-[ok]   Houdini pref dir: C:\Users\you\Documents\houdini22.0 (from hython (...))
-[ok]   package JSON: C:\Users\you\Documents\houdini22.0\packages\hocuspocus.json -> C:\Users\you\Documents\houdini22.0\hocuspocus\1.0.0a0\python
+[ok]   Houdini pref dir: C:\Users\you\houdini22.0 (from hython (...))
+[ok]   hocuspocus.toml: none (defaults)
+[ok]   package JSON: C:\Users\you\houdini22.0\packages\hocuspocus.json -> C:\Users\you\houdini22.0\hocuspocus\1.0.0a0\python
 [ok]   host/bridge version: 1.0.0a0
 [ok]   instance /health: pid 18244 port 52311 GUI (untitled) Houdini 22.0.466
 
@@ -114,7 +124,10 @@ Expect a sequence close to this one:
 4. `geo_info` on the display node. Gives point counts and a bounding box, so the agent
    can check that the box sits above the terrain.
 5. `viewport_capture`. Returns a PNG that the agent can see, plus the file path under
-   `%LOCALAPPDATA%\HocusPocus\captures\`.
+   `%LOCALAPPDATA%\HocusPocus\captures\`. In the GUI it captures the Scene Viewer as it
+   is, without framing, so if the picture shows an empty grid, home the view (press H
+   over the viewer) or ask for `"source": "opengl_rop"`, which frames the
+   scene with a temporary camera.
 
 The nodes appear in your network editor as they are created. To revert the whole build,
 press Ctrl+Z in Houdini once, or ask the agent to call `undo`. To keep the scene, ask it
@@ -130,8 +143,15 @@ The agent can start its own hython:
 > Launch a headless Houdini and build the same thing.
 
 That calls `houdini_connect {"launch": {"mode": "headless"}}`, which runs
-`hython -m hocuspocus.host` and waits for it to register. You can also start the host
-yourself from an empty directory:
+`hython -m hocuspocus.host` and waits for it to register. The new Houdini starts in
+`HOCUSPOCUS_WORK_DIR` (default: your home directory).
+
+A Houdini launched this way, GUI or headless, belongs to the bridge that launched it.
+When your client stops the bridge (for example when the Claude Code session ends), that
+Houdini exits and its unsaved work is lost. Ask the agent to `hip_save` before you
+finish, or start Houdini yourself and let the bridge attach to it.
+
+You can also start the host yourself from an empty directory:
 
 ```bash
 mkdir -p /tmp/hp && cd /tmp/hp
@@ -173,12 +193,14 @@ new instance up by itself, with no client restart. If several instances are runn
 You upgraded the tool but Houdini still loads the old host. Run
 `hocuspocus install-houdini`, which replaces older versions, and then restart Houdini.
 
-**Headless capture: `viewport_capture` returns `ui_required`, or the first one is slow**
+**Headless capture: `viewport_capture` returns `ui_required`, or each capture takes seconds**
 
 hython has no scene viewer, so `source: "viewer"` needs the GUI. Use the default
-`source: "auto"` or `"opengl_rop"`. These render through `/out/hocuspocus_capture` with a
-temporary camera framed on the scene, and they work headless. The first OpenGL render in
-a fresh hython takes several seconds. Later ones are fast.
+`source: "auto"` or `"opengl_rop"`. These render through a temporary OpenGL ROP and,
+without `camera`, a temporary camera framed on the scene, and they work headless.
+Headless, each capture renders in a short-lived child hython (a second OpenGL render in
+one hython process crashes Houdini 22.0.466), so every capture takes about 3 s. Nothing
+is left in your scene.
 
 **Other errors.** Every tool error has a `code` and a `hint`. Agents normally act on the
 hint themselves. The full list of codes is in [`BIBLE.md`](BIBLE.md) §9.
