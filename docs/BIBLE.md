@@ -76,7 +76,7 @@ Summary of `docs/redesign/review/01…06`. Read those for evidence; this is the 
 
 | Finding | Consequence for 1.0 |
 |---|---|
-| 130 registered tools (103 listed, 27 hidden), ~100 KB `tools/list`, ~25k tokens before the first call | ~30 tools, ≤ 12k tokens, generated from one catalogue |
+| 130 registered tools (103 listed, 27 hidden), ~100 KB `tools/list`, ~25k tokens before the first call | ~35 tools, ≤ 12k tokens, generated from one catalogue |
 | The only *listed* way to change a parm is a "network document" checkout; a 5-node chain checked out at 1.37 MB; a cooked HDA pushed a read to 2 MB (~520k tokens) | Direct primitives (`node_create`, `parm_set`, …) are the surface. The document model is deleted. |
 | The primitives that worked first try (`node.create`, `parm.set`, `node.connect`) were hidden from `tools/list` | They become the core, in Houdini vocabulary |
 | HocusScript: 56k LOC (57 % of the package), 61 schemas, 481 diagnostic codes, 25 tools, used by no one outside fixtures | Deleted. Declarative graph build is done with Houdini's native `hou.data` JSON instead (§4.4) |
@@ -385,8 +385,8 @@ when present, best effort, under `recent: [...]` in `houdini_status.connected.hi
 | `pdg` *(full)* | `action: cook\|status\|workitems\|cancel\|dirty`, `top_path`, `block = false` | `cookWorkItems(block)` as a job; `status` from `getPDGNode()`; `workitems` paged with state and output files. |
 | `events` *(full)* | `since = 0`, `limit` | Host-side ring buffer of hip events and node events (`ChildCreated`, `NameChanged`, `ParmTupleChanged` on nodes the agent touched, `BeingDeleted`) with a monotonic sequence. For "what did the user change since my last call". |
 
-Count: 2 session + 4 hip + 9 node/network + 2 parm + 4 cook/geo + 2 visual + 1 code +
-2 types + 4 state/job = **30 in `core`**, plus 4 in `full` = 34.
+Count: 2 session + 4 hip + 10 node/network + 2 parm + 4 cook/geo + 2 visual + 1 code +
+2 types + 4 state/job = **31 in `core`**, plus 4 in `full` = 35.
 
 ### 4.8 Resources, prompts, instructions
 
