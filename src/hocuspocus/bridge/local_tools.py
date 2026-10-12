@@ -81,6 +81,7 @@ def houdini_status(bridge: Bridge, args: dict[str, Any]) -> dict[str, Any]:
             chosen_pid = sel.instance.pid
             try:
                 connected = connected_block(bridge, sel.instance)
+                bridge.last_target = sel.instance
             except ToolError as exc:
                 warnings.append(
                     f"pid {sel.instance.pid} is registered but unusable: {exc.code}: {exc.message}"
@@ -129,6 +130,7 @@ def houdini_connect(bridge: Bridge, args: dict[str, Any]) -> dict[str, Any]:
         )
         block = connected_block(bridge, result.instance)
         bridge.preferred_pid = result.instance.pid
+        bridge.last_target = result.instance
         bridge.detached = False
         _split_settings(block)
         launched: dict[str, Any] = {"mode": result.mode, "pid": result.instance.pid}
@@ -149,6 +151,7 @@ def houdini_connect(bridge: Bridge, args: dict[str, Any]) -> dict[str, Any]:
             )
         block = connected_block(bridge, match)
         bridge.preferred_pid = pid
+        bridge.last_target = match
         bridge.detached = False
         _split_settings(block)
         return {"connected": block}
@@ -162,6 +165,7 @@ def houdini_connect(bridge: Bridge, args: dict[str, Any]) -> dict[str, Any]:
             hint=OFFLINE_HINT,
         )
     block = connected_block(bridge, sel.instance)
+    bridge.last_target = sel.instance
     bridge.detached = False
     _split_settings(block)
     out: dict[str, Any] = {"connected": block}

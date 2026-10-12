@@ -180,7 +180,8 @@ def select(instances: list[Instance], preferred_pid: int | None = None) -> Selec
             if inst.pid == preferred_pid:
                 return Selection(inst, (), len(ordered))
         warnings.append(
-            f"The connected Houdini (pid {preferred_pid}) is gone; selecting another live instance."
+            f"The Houdini you were driving (pid {preferred_pid}) has exited; changes made in it "
+            "since its last save are lost. Selecting another live instance."
         )
     if not ordered:
         return Selection(None, tuple(warnings), 0)

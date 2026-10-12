@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 import re
 import threading
+import time
 import traceback
 import uuid
 from collections.abc import Callable, Sequence
@@ -35,6 +36,9 @@ from .instructions import INSTRUCTIONS, guide_text
 from .launch import Launcher
 from .local_tools import LOCAL_TOOLS
 from .validate import validate
+
+EXIT_GRACE_S = 1.5
+"""After a lost response, how long to watch for the Houdini process to exit."""
 
 log = logging.getLogger(__name__)
 
@@ -79,6 +83,9 @@ class Bridge:
         self.scan: Callable[[], list[registry.Instance]] = scan or (lambda: registry.scan())
         self.launcher = launcher or Launcher(self.config.hfs or None, scan=self.scan)
         self.preferred_pid: int | None = None
+        self.last_target: registry.Instance | None = None
+        """The instance the last forwarded call went to, to name it if it exits."""
+        self.exit_grace_s = EXIT_GRACE_S
         self.detached = False
         self._verified: set[tuple[int, int, str]] = set()
         self._lock = threading.Lock()
@@ -99,16 +106,28 @@ class Bridge:
                 "The bridge was disconnected with houdini_connect {disconnect: true}.",
                 hint="call houdini_connect (with pid, launch, or no arguments) to attach again",
             )
-        sel = registry.select(self.scan(), self.preferred_pid)
+        live = self.scan()
+        sel = registry.select(live, self.preferred_pid)
+        warnings = list(sel.warnings)
+        exited = self._exited_target(live)
         if sel.instance is None:
+            if exited is not None:
+                raise self._exited_error(exited, "")
             raise ToolError(
                 "houdini_offline",
                 "No live Houdini instance with HocusPocus is running.",
                 hint=OFFLINE_HINT,
+                retryable=False,  # repeating cannot work until something is launched
             )
         inst = sel.instance
         if self.preferred_pid is not None and inst.pid != self.preferred_pid:
             self.preferred_pid = None  # the pinned instance exited; fall back to auto-selection
+        elif exited is not None and exited.pid != inst.pid:
+            warnings.append(
+                f"The Houdini you were driving (pid {exited.pid}) has exited; changes made in it "
+                f"since its last save are lost. Now using pid {inst.pid}."
+            )
+        self.last_target = inst
         if inst.hp != catalog.HP_RPC_VERSION:
             raise ToolError(
                 "version_mismatch",
@@ -116,7 +135,42 @@ class Bridge:
                 f"hp/v{catalog.HP_RPC_VERSION}.",
                 hint=REINSTALL_HINT,
             )
-        return inst, list(sel.warnings)
+        return inst, warnings
+
+    def _exited_target(self, live: list[registry.Instance]) -> registry.Instance | None:
+        last = self.last_target
+        if last is None or any(inst.pid == last.pid for inst in live):
+            return None
+        return last
+
+    @staticmethod
+    def _exited_error(inst: registry.Instance, during: str) -> ToolError:
+        hip = inst.hip or ""
+        saved = hip and not hip.replace("\\", "/").endswith("/untitled.hip")
+        launch = (
+            f"houdini_connect {{launch: {{mode: 'headless', hip: '{hip}'}}}} reopens its last "
+            "saved scene"
+            if saved
+            else "houdini_connect {launch: {mode}} starts a new Houdini"
+        )
+        return ToolError(
+            "houdini_offline",
+            f"The Houdini you were driving (pid {inst.pid}) exited{during}; changes made in it "
+            "since its last save are lost.",
+            hint=f"{launch}; repeating the call without that cannot work.",
+            retryable=False,
+            detail={"pid": inst.pid, "hip": hip or None},
+        )
+
+    def _wait_exit(self, inst: registry.Instance) -> bool:
+        """True when ``inst`` has exited (checked for up to ``exit_grace_s``)."""
+        deadline = time.monotonic() + self.exit_grace_s
+        while True:
+            if not any(live.pid == inst.pid for live in self.scan()):
+                return True
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(0.1)
 
     def forward(
         self, name: str, args: dict[str, Any]
@@ -127,7 +181,15 @@ class Bridge:
         if key not in self._verified:
             client.health()  # version check before the first call to this instance
             self._verified.add(key)
-        ok, payload, meta = client.call(name, args, self._timeout(args), uuid.uuid4().hex)
+        try:
+            ok, payload, meta = client.call(name, args, self._timeout(args), uuid.uuid4().hex)
+        except ToolError as exc:
+            # A connection reset usually means Houdini died mid-call: say so, not "unknown".
+            if exc.code == "delivery_unknown" and self._wait_exit(inst):
+                error = self._exited_error(inst, f" while running {name}")
+                error.detail = {**error.detail, "transport": exc.message}
+                raise error from exc
+            raise
         meta = dict(meta)
         meta.setdefault("pid", inst.pid)
         if warnings:

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import subprocess
 import sys
 import tempfile
@@ -156,7 +157,8 @@ def test_stdio_roundtrip(headless_host, tmp_path):
 
 def test_bridge_launch_starts_in_the_work_dir(hython, tmp_path):
     """houdini_connect {launch: headless} through the real launcher: $HIP and $JOB of the
-    untitled scene are HOCUSPOCUS_WORK_DIR, and the state dir only holds bridge state."""
+    untitled scene are HOCUSPOCUS_WORK_DIR (review 07 papercut 3). Then that Houdini is
+    killed: the next call names it and says its unsaved changes are lost (papercut 8)."""
     import anyio
     from mcp import Client
     from mcp.client.stdio import StdioServerParameters
@@ -184,17 +186,29 @@ def test_bridge_launch_starts_in_the_work_dir(hython, tmp_path):
                 "houdini_connect", {"launch": {"mode": "headless", "wait_s": 150}}
             )
             status = await client.call_tool("houdini_status", {})
-            return launched, status
+            pid = status.structured_content["connected"]["pid"]
+            os.kill(pid, signal.SIGTERM)  # the hython this test launched
+            for _ in range(100):
+                if not any((state / "instances").glob(f"{pid}.json")):
+                    break
+                await anyio.sleep(0.1)
+            await anyio.sleep(0.5)
+            offline = await client.call_tool("node_find", {"root": "/obj"})
+            return launched, status, offline
 
-    launched, status = None, None
+    launched, status, offline = None, None, None
     try:
-        launched, status = anyio.run(run)
+        launched, status, offline = anyio.run(run)
         assert launched.is_error is False, launched.content
         connected = status.structured_content["connected"]
         assert connected["env"]["HIP"] == work.as_posix()
         assert connected["env"]["JOB"] == work.as_posix()
         assert connected["hip"]["path"] == f"{work.as_posix()}/untitled.hip"
         assert "note" in connected["hip"]
+        error = offline.structured_content
+        assert offline.is_error is True and error["code"] == "houdini_offline", error
+        assert f"pid {connected['pid']}" in error["message"], error
+        assert "lost" in error["message"] and error["retryable"] is False
     finally:
         # Stop only the hython this test launched (found through its own state dir).
         from hocuspocus.bridge.client import HostClient

@@ -136,6 +136,7 @@ def make_bridge(instances=(INSTANCE,), config=None, launcher=None, tools=FAKE_TO
         scan=lambda: list(live),
         launcher=launcher,
     )
+    bridge.exit_grace_s = 0.0
     return bridge, client, live
 
 
@@ -267,6 +268,54 @@ def test_offline_when_no_instances():
     result = bridge.call_tool("node_info", {"paths": ["/obj"]})
     assert result.structured_content["code"] == "houdini_offline"
     assert "houdini_connect" in result.structured_content["hint"]
+    assert result.structured_content["retryable"] is False  # nothing to retry against
+
+
+def test_offline_names_the_houdini_that_exited():
+    """Review 07 papercut 8: say which Houdini died and that its unsaved work is gone."""
+    bridge, client, live = make_bridge()
+    assert bridge.call_tool("node_info", {"paths": ["/obj"]}).is_error is False
+    live.clear()
+    error = bridge.call_tool("node_info", {"paths": ["/obj"]}).structured_content
+    assert error["code"] == "houdini_offline"
+    assert "pid 4242" in error["message"] and "since its last save are lost" in error["message"]
+    assert error["retryable"] is False
+    assert "hip: 'C:/work/a.hip'" in error["hint"]
+    assert error["detail"] == {"pid": 4242, "hip": "C:/work/a.hip"}
+
+
+def test_exit_mid_call_is_reported_as_an_exit():
+    bridge, client, live = make_bridge()
+
+    def die(*_args):
+        live.clear()
+        raise ToolError("delivery_unknown", "ConnectionResetError: [WinError 10054]")
+
+    client.call = die
+    error = bridge.call_tool("node_delete", {"paths": ["/obj/a"]}).structured_content
+    assert error["code"] == "houdini_offline"
+    assert "exited while running node_delete" in error["message"]
+    assert error["retryable"] is False
+    assert "ConnectionResetError" in error["detail"]["transport"]
+
+
+def test_lost_response_from_a_live_houdini_stays_delivery_unknown():
+    bridge, client, _ = make_bridge()
+    client.replies["node_delete"] = ToolError("delivery_unknown", "timed out")
+    error = bridge.call_tool("node_delete", {"paths": ["/obj/a"]}).structured_content
+    assert error["code"] == "delivery_unknown"
+    assert error["retryable"] is False
+
+
+def test_switch_after_exit_warns_once_with_the_old_pid():
+    bridge, client, live = make_bridge()
+    bridge.call_tool("node_info", {"paths": ["/obj"]})
+    live[:] = [Instance(pid=7777, port=51002, token="t3", started="2026-10-12T12:00:00Z")]
+    result = bridge.call_tool("node_info", {"paths": ["/obj"]})
+    assert result.meta["pid"] == 7777
+    assert any("pid 4242" in w and "lost" in w for w in result.meta["warnings"])
+    again = bridge.call_tool("node_info", {"paths": ["/obj"]})
+    assert not again.meta.get("warnings")
 
 
 def test_registry_hp_mismatch_refuses():

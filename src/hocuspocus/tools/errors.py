@@ -48,6 +48,7 @@ class ToolError(Exception):
         candidates: list[str] | None = None,
         hou_exception: str | None = None,
         detail: Any = None,
+        retryable: bool | None = None,
     ) -> None:
         if code not in ERROR_CODES:
             raise ValueError(
@@ -60,12 +61,15 @@ class ToolError(Exception):
         self.candidates = candidates or []
         self.hou_exception = hou_exception
         self.detail = detail
+        self.retryable = code in RETRYABLE if retryable is None else retryable
+        """Defaults to the code's (BIBLE §9); False where repeating cannot work, e.g.
+        ``houdini_offline`` when no Houdini is running at all."""
 
     def to_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "code": self.code,
             "message": self.message,
-            "retryable": self.code in RETRYABLE,
+            "retryable": self.retryable,
         }
         if self.hint:
             payload["hint"] = self.hint
@@ -89,4 +93,5 @@ class ToolError(Exception):
             candidates=list(data.get("candidates") or []),
             hou_exception=data.get("hou_exception"),
             detail=data.get("detail"),
+            retryable=data.get("retryable") if isinstance(data.get("retryable"), bool) else None,
         )

@@ -581,9 +581,9 @@ Stable codes (the complete set; adding one is a design change):
 
 | code | when | retryable |
 |---|---|---|
-| `houdini_offline` | no live instance | after connect |
+| `houdini_offline` | no live instance; names the pid (and hip) the bridge was driving if it exited, and says its unsaved changes are lost | after connect (`retryable: false` when nothing is running) |
 | `houdini_busy` | main-thread timeout | yes |
-| `delivery_unknown` | request sent, response lost | inspect first |
+| `delivery_unknown` | request sent, response lost (becomes `houdini_offline` "exited while running <tool>" when the process is gone within 1.5 s) | inspect first |
 | `version_mismatch` | host `hp/vN` ≠ bridge | after reinstall |
 | `invalid_argument` | schema / shape | no |
 | `node_not_found` | path | no |
