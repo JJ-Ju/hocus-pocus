@@ -53,8 +53,8 @@ _TRANSPORT_CODES = frozenset(
 
 KEEP_ALIVE_HINT = (
     "One-shot clients: keep one MCP session open for the whole job, or start Houdini "
-    "outside the client (after hocuspocus install-houdini) and attach with "
-    "houdini_connect {pid}. houdini_connect {launch} starts a new one now."
+    "outside the client with `hocuspocus launch` (it outlives every session) and attach "
+    "with houdini_connect {pid}. houdini_connect {launch} starts a new one now."
 )
 
 

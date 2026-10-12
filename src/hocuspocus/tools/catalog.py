@@ -321,9 +321,9 @@ _SESSION: tuple[ToolSpec, ...] = (
             "Choose which Houdini this session drives. Pass one of: pid to attach to a live "
             "instance listed by houdini_status; launch to start one (mode gui or headless hython, "
             "optional hip, wait up to wait_s, default 90); or disconnect to drop the selection. "
-            "A launched Houdini usually closes when this server "
-            "exits (launched.outlives_server says); to keep one, start Houdini yourself (after "
-            "hocuspocus install-houdini) and attach by pid."
+            "A launched Houdini usually closes when this server exits (launched.outlives_server "
+            "says); to keep Houdini alive across sessions, start it with `hocuspocus launch` and "
+            "attach by pid."
         ),
         input_schema=_obj(
             {

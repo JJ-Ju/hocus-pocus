@@ -356,3 +356,43 @@ def test_headless_launch_pythonpath_never_names_site_packages(tmp_path, monkeypa
     launcher.launch("headless", None, wait_s=30)
     _argv, env, _cwd, _log = harness.spawned[0]
     assert "site-packages" not in env["PYTHONPATH"]
+
+
+# -- hocuspocus launch (review 11 B1): a Houdini no server owns ------------------------
+
+
+def test_unowned_launch_is_not_tagged_or_recorded(tmp_path):
+    from hocuspocus.tools import paths
+
+    harness = Harness()
+    launcher = make_launcher(fake_hfs(tmp_path / "hfs"), harness)
+    launcher.owned = False
+    launcher.environ = {launch.LAUNCHED_BY_ENV: "123"}  # inherited from a bridge: dropped
+    launcher.launch("headless", None, wait_s=30)
+    _argv, env, _cwd, _log = harness.spawned[0]
+    assert launch.LAUNCHED_BY_ENV not in env
+    assert not (paths.state_dir() / "launches").exists()
+
+
+def test_headless_launch_waits_for_its_own_pid(tmp_path):
+    """Review 10 §1.9: a GUI the user starts during the wait is not the launched hython."""
+    harness = Harness()
+    stranger = Instance(pid=7777, port=1, token="x", started="2026-10-12T12:00:01Z")
+    original = harness.scan
+
+    def scan():
+        live = original()
+        return [*live, stranger] if harness.spawned else live
+
+    launcher = make_launcher(fake_hfs(tmp_path / "hfs"), harness)
+    launcher.scan = scan
+    assert launcher.launch("headless", None, wait_s=30).instance.pid == 9001
+
+
+def test_relative_hip_is_resolved_before_launch(tmp_path, monkeypatch):
+    (tmp_path / "shot.hip").write_text("")
+    monkeypatch.chdir(tmp_path)
+    harness = Harness()
+    make_launcher(fake_hfs(tmp_path / "hfs"), harness).launch("headless", "shot.hip", wait_s=30)
+    argv = harness.spawned[0][0]
+    assert argv[-1] == str((tmp_path / "shot.hip").resolve())

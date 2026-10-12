@@ -21,7 +21,10 @@ CONNECT_TIMEOUT_S = 3.0
 RESPONSE_GRACE_S = 15.0
 """Extra seconds the bridge waits beyond the call's own ``timeout_s`` before giving up."""
 
-OFFLINE_HINT = "call houdini_connect with launch to start one"
+OFFLINE_HINT = (
+    "call houdini_connect with launch to start one; to keep Houdini alive across sessions, "
+    "start it with `hocuspocus launch` and attach by pid"
+)
 REINSTALL_HINT = "run `hocuspocus install-houdini` and restart Houdini"
 DELIVERY_HINT = (
     "The call may or may not have run in Houdini. Inspect state (houdini_status, node_info, "

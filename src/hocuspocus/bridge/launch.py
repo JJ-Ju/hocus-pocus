@@ -358,6 +358,19 @@ class LaunchResult:
     """Whether the child should survive this bridge's exit (:func:`child_outlives_server`)."""
 
 
+@dataclass(frozen=True, slots=True)
+class Spawned:
+    """A started Houdini that may not have registered yet."""
+
+    proc: Any
+    mode: str
+    argv: tuple[str, ...]
+    log: str | None
+    outlives: bool
+    before: frozenset[int]
+    """Pids registered before the spawn (a GUI hand-off registers under a new pid)."""
+
+
 class Launcher:
     def __init__(
         self,
@@ -371,8 +384,13 @@ class Launcher:
         outlives: Callable[[Any], bool] = child_outlives_server,
         launches: registry.LaunchLog | None = None,
         python_dir: Callable[[Mapping[str, str] | None], tuple[Path, str]] = host_python_dir,
+        owned: bool = True,
     ) -> None:
         self.config_hfs = config_hfs
+        self.owned = owned
+        """True for a bridge launch: the child is tagged with ``HOCUSPOCUS_LAUNCHED_BY`` and
+        recorded in the launch log. False for ``hocuspocus launch``, whose Houdini belongs
+        to no server (the CLI exits at once)."""
         self.spawner = spawner
         self.python_dir = python_dir
         self.outlives = outlives
@@ -401,7 +419,10 @@ class Launcher:
             )
         env = self._env()
         env.setdefault("HFS", str(hfs))
-        env[LAUNCHED_BY_ENV] = str(os.getpid())
+        if self.owned:
+            env[LAUNCHED_BY_ENV] = str(os.getpid())
+        else:
+            env.pop(LAUNCHED_BY_ENV, None)
         # The untitled scene's $HIP/$JOB: renders to $HIP/... must not land in the state
         # dir next to instances/ and logs/ (review 07 papercut 3).
         cwd = paths.work_dir()
@@ -431,17 +452,19 @@ class Launcher:
             "invalid_argument", f"Unknown launch mode {mode!r}.", hint="use 'gui' or 'headless'"
         )
 
-    def launch(
-        self, mode: str, hip: str | None = None, wait_s: float = DEFAULT_WAIT_S
-    ) -> LaunchResult:
-        if hip and not Path(hip).is_file():
-            raise ToolError(
-                "file_not_found",
-                f"Hip file not found: {hip}",
-                hint="pass an existing .hip path or omit hip",
-            )
+    def spawn(self, mode: str, hip: str | None = None) -> Spawned:
+        """Start Houdini without waiting for it to register."""
+        if hip:
+            # Resolved here: the child starts in the work dir, not this process's cwd.
+            hip = str(Path(hip).expanduser().resolve())
+            if not Path(hip).is_file():
+                raise ToolError(
+                    "file_not_found",
+                    f"Hip file not found: {hip}",
+                    hint="pass an existing .hip path or omit hip",
+                )
         argv, env, cwd, log_path = self.build(mode, hip)
-        before = {inst.pid for inst in self.scan()}
+        before = frozenset(inst.pid for inst in self.scan())
         try:
             proc = self.spawner(argv, env, cwd, log_path)
         except OSError as exc:
@@ -450,28 +473,36 @@ class Launcher:
                 f"Failed to start {argv[0]}: {exc}",
                 hint="check the Houdini install and licence",
             ) from exc
-        log_text = str(log_path) if log_path else None
         try:
             outlives = bool(self.outlives(proc))
         except Exception:
             outlives = False
+        return Spawned(
+            proc, mode, tuple(argv), str(log_path) if log_path else None, outlives, before
+        )
+
+    def wait(self, spawned: Spawned, wait_s: float = DEFAULT_WAIT_S) -> LaunchResult:
+        """Poll the registry until the spawned Houdini's host registers."""
+        proc, mode, log_text = spawned.proc, spawned.mode, spawned.log
         deadline = self.clock() + max(0.0, float(wait_s))
         while True:
             live = self.scan()
-            # GUI launchers can hand off to a child process: accept any new registration.
-            found = next((inst for inst in live if inst.pid == proc.pid), None) or next(
-                (inst for inst in live if inst.pid not in before), None
-            )
+            found = next((inst for inst in live if inst.pid == proc.pid), None)
+            if found is None and mode == "gui":
+                # GUI launchers can hand off to a child process: accept a new registration.
+                # Headless hython never does, so only its own pid counts there.
+                found = next((inst for inst in live if inst.pid not in spawned.before), None)
             if found is not None:
-                self.launches.record(found, mode=mode, outlives_server=outlives)
-                return LaunchResult(found, mode, tuple(argv), log_text, outlives)
+                if self.owned:
+                    self.launches.record(found, mode=mode, outlives_server=spawned.outlives)
+                return LaunchResult(found, mode, spawned.argv, log_text, spawned.outlives)
             code = proc.poll()
             if code is not None:
                 raise ToolError(
                     "houdini_offline",
                     f"Houdini (pid {proc.pid}) exited with code {code} before HocusPocus registered.",
                     hint=_failure_hint(mode, log_text),
-                    detail={"argv": argv, "log": log_text},
+                    detail={"argv": list(spawned.argv), "log": log_text},
                 )
             if self.clock() >= deadline:
                 raise ToolError(
@@ -479,9 +510,14 @@ class Launcher:
                     f"Started Houdini (pid {proc.pid}) but its HocusPocus host did not register within "
                     f"{wait_s:g}s. It may still be starting (licence check, large hip).",
                     hint=_failure_hint(mode, log_text),
-                    detail={"pid": proc.pid, "argv": argv, "log": log_text},
+                    detail={"pid": proc.pid, "argv": list(spawned.argv), "log": log_text},
                 )
             self.sleep(POLL_INTERVAL_S)
+
+    def launch(
+        self, mode: str, hip: str | None = None, wait_s: float = DEFAULT_WAIT_S
+    ) -> LaunchResult:
+        return self.wait(self.spawn(mode, hip), wait_s)
 
 
 def _failure_hint(mode: str, log_path: str | None) -> str:

@@ -160,8 +160,26 @@ until the new instance registers. A launched Houdini starts in `HOCUSPOCUS_WORK_
 > **Launch lifetime.** A Houdini started with `houdini_connect {launch}` belongs to the
 > bridge that launched it. When the client stops that bridge (the end of a Claude Code
 > session, or a one-shot script exiting), that Houdini exits too and unsaved work is
-> lost. Save with `hip_save` first, or start Houdini yourself and let the bridge attach
-> to it.
+> lost. Save with `hip_save` first, or start Houdini with `hocuspocus launch` (below) and
+> let the bridge attach to it.
+
+### Scripted clients: `hocuspocus launch`
+
+One-shot scripts and short MCP sessions should not own the Houdini they drive. Start it
+from a terminal instead, where it belongs to no MCP server and keeps running:
+
+```bash
+hocuspocus launch                      # GUI houdinifx with the package loaded
+hocuspocus launch --headless --hip C:/work/shot.hip --wait 120
+{"pid": 23310, "port": 53120, "label": "hython", "hip": "C:/work/shot.hip", ..., "mode": "headless"}
+```
+
+It uses the same Houdini detection and package path rules as `houdini_connect {launch}`,
+waits up to `--wait` seconds (default 90; `0` returns at once) for the host to register,
+prints the registry entry (never the token) as one JSON line, and exits. Any later
+session attaches with `houdini_connect {"pid": 23310}`, or picks it automatically when it
+is the only one running. Close a GUI one as usual; end a headless one's process (its pid
+is in the JSON) once its work is saved.
 
 You can also start the host yourself. Do it from a neutral working directory, because
 hython puts its cwd on `HOUDINI_PATH`:

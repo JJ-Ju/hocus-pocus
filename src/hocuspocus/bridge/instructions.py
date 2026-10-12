@@ -25,7 +25,8 @@ adjust. `delivery_unknown` means the call may or may not have run: inspect state
 repeating it. `_meta.scene_generation` changes when the scene is cleared or loaded, so cached \
 paths may be stale. A Houdini started with `houdini_connect {launch}` usually closes when this \
 server exits (`launched.outlives_server` says): `hip_save` before the session ends, keep one \
-session open for long jobs, or attach by pid to a Houdini the user started. `viewport_capture` \
+session open for long jobs, or attach by pid to one started with `hocuspocus launch`. \
+`viewport_capture` \
 frames the scene per `fit`, in a GUI session too. `node_type_info` is large for FX types: pass \
 `parms` globs, or `detail: "folders"` first. Spare parms need `houdini_python` \
 (`addSpareParmTuple`; recipe in `hocuspocus://guide`)."""

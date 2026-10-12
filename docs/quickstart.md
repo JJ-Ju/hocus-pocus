@@ -149,7 +149,8 @@ That calls `houdini_connect {"launch": {"mode": "headless"}}`, which runs
 A Houdini launched this way, GUI or headless, belongs to the bridge that launched it.
 When your client stops the bridge (for example when the Claude Code session ends), that
 Houdini exits and its unsaved work is lost. Ask the agent to `hip_save` before you
-finish, or start Houdini yourself and let the bridge attach to it.
+finish, or start Houdini with `hocuspocus launch` (next section) and let the bridge
+attach to it.
 
 You can also start the host yourself from an empty directory:
 
@@ -158,6 +159,23 @@ mkdir -p /tmp/hp && cd /tmp/hp
 hython -m hocuspocus.host --hip C:/work/shot.hip
 {"pid": 23310, "port": 53120, "token_file": "..."}
 ```
+
+## Scripted clients
+
+A one-shot script (or any MCP session shorter than the work) should not launch the
+Houdini it drives with `houdini_connect {launch}`: that Houdini closes when the script's
+MCP server exits. Start it from a terminal instead; it belongs to no server and keeps
+running across sessions:
+
+```bash
+$ hocuspocus launch --headless --hip C:/work/shot.hip
+{"pid": 23310, "port": 53120, "label": "hython", "hip": "C:/work/shot.hip", ..., "mode": "headless"}
+```
+
+Leave out `--headless` for a GUI Houdini. The command waits up to `--wait` seconds
+(default 90) for the host to register, prints its registry entry and exits. Each session
+then attaches with `houdini_connect {"pid": 23310}` (or automatically, when it is the only
+Houdini running), and `hip_save` keeps the work between sessions.
 
 ## Troubleshooting
 

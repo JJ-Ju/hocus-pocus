@@ -1,4 +1,5 @@
-"""``hocuspocus`` command line: install the Houdini package, diagnose, print client config.
+"""``hocuspocus`` command line: install the Houdini package, launch Houdini, diagnose, print
+client config.
 
 See docs/BIBLE.md §10.2. Stdlib only (the bridge modules imported here are stdlib too),
 so ``hocuspocus doctor`` works even when the MCP SDK is broken.
@@ -465,6 +466,55 @@ def doctor(args: argparse.Namespace, out: Callable[[str], None] = print) -> int:
 # -- other commands ----------------------------------------------------------------------
 
 
+def _launcher(hfs: str | None) -> Any:
+    from .bridge.config import BridgeConfig
+    from .bridge.launch import Launcher
+
+    return Launcher(hfs or BridgeConfig.load().hfs or None, owned=False)
+
+
+def launch_houdini(
+    mode: str,
+    hip: str | None,
+    wait_s: float,
+    *,
+    hfs: str | None = None,
+    out: Callable[[str], None] = print,
+    err: Callable[[str], None] | None = None,
+) -> int:
+    """``hocuspocus launch``: start a Houdini that belongs to no MCP server.
+
+    The Houdini is started detached from this process, which exits once its host has
+    registered (or at once with ``--wait 0``), so it outlives every MCP client. stdout
+    gets one JSON object: the registry entry (no token), the mode and, headless, the log.
+    """
+    from .tools.errors import ToolError
+
+    err = err or (lambda text: print(text, file=sys.stderr))
+    launcher = _launcher(hfs)
+    try:
+        spawned = launcher.spawn(mode, hip)
+        if wait_s <= 0:
+            out(json.dumps({"pid": spawned.proc.pid, "mode": mode, "log": spawned.log}))
+            err("Started without waiting; houdini_status lists it once its host registers.")
+            return 0
+        result = launcher.wait(spawned, wait_s)
+    except ToolError as exc:
+        err(f"error: {exc.message}")
+        if exc.hint:
+            err(f"hint: {exc.hint}")
+        return 1
+    entry = dict(result.instance.public(), mode=result.mode)
+    if result.log:
+        entry["log"] = result.log
+    out(json.dumps(entry))
+    err(
+        f"Houdini pid {result.instance.pid} is running and outlives this command; attach "
+        f'from an MCP client with houdini_connect {{"pid": {result.instance.pid}}}.'
+    )
+    return 0
+
+
 def client_config(client: str, out: Callable[[str], None] = print) -> int:
     if client == "claude":
         out(CLAUDE_SNIPPET)
@@ -550,6 +600,24 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("what", choices=["tools"])
     p.add_argument("--output", "-o", help="output path ('-' for stdout; default docs/tools.md)")
 
+    p = sub.add_parser(
+        "launch",
+        help="start a Houdini with HocusPocus that outlives any MCP client",
+        description="Start GUI Houdini (or headless hython with --headless) with the "
+        "HocusPocus host, wait for it to register, print its registry entry as JSON and "
+        "exit. The Houdini keeps running; attach to it with houdini_connect {pid}.",
+    )
+    p.add_argument("--headless", action="store_true", help="run hython -m hocuspocus.host")
+    p.add_argument("--hip", help="hip file to open")
+    p.add_argument(
+        "--wait",
+        type=float,
+        default=90.0,
+        metavar="N",
+        help="seconds to wait for the host to register (default 90; 0 returns at once)",
+    )
+    p.add_argument("--hfs", help="Houdini install dir (default: HOCUSPOCUS_HFS, HFS, newest 22.x)")
+
     sub.add_parser("version", help="print versions")
     return parser
 
@@ -569,6 +637,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         return client_config(args.client)
     if args.command == "docs":
         return docs_tools(args.output)
+    if args.command == "launch":
+        return launch_houdini(
+            "headless" if args.headless else "gui", args.hip, args.wait, hfs=args.hfs
+        )
     if args.command == "version":
         return version()
     return 2

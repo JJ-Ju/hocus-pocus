@@ -11,7 +11,7 @@ dependency is a design change, so it goes in the bible first.
 pyproject.toml                 # hatchling; console scripts hocuspocus, hocuspocus-mcp; ruff + pytest config
 src/hocuspocus/
   __init__.py  version.py
-  cli.py                       # install-houdini, uninstall-houdini, doctor, client-config, docs, version
+  cli.py                       # install-houdini, uninstall-houdini, launch, doctor, client-config, docs, version
   tools/                       # shared by host and bridge; stdlib only
     catalog.py                 #   the single source of truth for the tool surface
     errors.py                  #   error codes and ToolError

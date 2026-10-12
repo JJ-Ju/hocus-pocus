@@ -184,3 +184,87 @@ def test_docs_tools_to_file(tmp_path, capsys):
         assert "not available" in out
     else:
         assert target.read_text(encoding="utf-8").strip()
+
+
+# -- hocuspocus launch -------------------------------------------------------------------
+
+
+class _Proc:
+    pid = 9001
+
+    def poll(self):
+        return None
+
+
+def _fake_launcher(tmp_path, *, register=True):
+    from hocuspocus.bridge import launch
+    from hocuspocus.bridge.instances import Instance
+
+    hfs = tmp_path / "hfs"
+    (hfs / "bin").mkdir(parents=True)
+    (hfs / "bin" / f"hython{launch.EXE}").write_text("")
+    (hfs / "bin" / f"houdinifx{launch.EXE}").write_text("")
+    spawned = []
+    live = []
+
+    def spawner(argv, env, cwd, log_path):
+        spawned.append((argv, env))
+        if register:
+            live.append(
+                Instance(pid=9001, port=52000, token="secret", started="2026-10-12T12:00:00Z")
+            )
+        return _Proc()
+
+    t = [0.0]
+    launcher = launch.Launcher(
+        str(hfs),
+        spawner=spawner,
+        scan=lambda: list(live),
+        sleep=lambda s: t.__setitem__(0, t[0] + 1),
+        clock=lambda: t[0],
+        environ={},
+        python_dir=lambda environ: (tmp_path / "pkg", "test"),
+        owned=False,
+    )
+    return launcher, spawned
+
+
+def test_launch_prints_the_registry_entry(tmp_path, monkeypatch, capsys):
+    launcher, spawned = _fake_launcher(tmp_path)
+    monkeypatch.setattr(cli, "_launcher", lambda hfs: launcher)
+    assert cli.main(["launch", "--headless", "--wait", "30"]) == 0
+    captured = capsys.readouterr()
+    entry = json.loads(captured.out)
+    assert entry["pid"] == 9001 and entry["port"] == 52000 and entry["mode"] == "headless"
+    assert "token" not in entry and "secret" not in captured.out
+    assert "houdini_connect" in captured.err
+    argv, env = spawned[0]
+    assert argv[1:3] == ["-m", "hocuspocus.host"]
+    assert "HOCUSPOCUS_LAUNCHED_BY" not in env  # no MCP server owns it
+
+
+def test_launch_gui_with_hip(tmp_path, monkeypatch, capsys):
+    hip = tmp_path / "shot.hip"
+    hip.write_text("")
+    launcher, spawned = _fake_launcher(tmp_path)
+    monkeypatch.setattr(cli, "_launcher", lambda hfs: launcher)
+    assert cli.main(["launch", "--hip", str(hip)]) == 0
+    argv, _env = spawned[0]
+    assert Path(argv[0]).stem == "houdinifx" and argv[1] == str(hip.resolve())
+    assert json.loads(capsys.readouterr().out)["mode"] == "gui"
+
+
+def test_launch_wait_zero_returns_at_once(tmp_path, monkeypatch, capsys):
+    launcher, _spawned = _fake_launcher(tmp_path, register=False)
+    monkeypatch.setattr(cli, "_launcher", lambda hfs: launcher)
+    assert cli.main(["launch", "--headless", "--wait", "0"]) == 0
+    assert json.loads(capsys.readouterr().out)["pid"] == 9001
+
+
+def test_launch_failure_exits_1_with_hint(tmp_path, monkeypatch, capsys):
+    launcher, _spawned = _fake_launcher(tmp_path, register=False)
+    monkeypatch.setattr(cli, "_launcher", lambda hfs: launcher)
+    assert cli.main(["launch", "--headless", "--wait", "3"]) == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "did not register within 3s" in captured.err and "hint:" in captured.err

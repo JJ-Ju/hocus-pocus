@@ -20,8 +20,9 @@ HOST_STATUS_TIMEOUT_S = 10.0
 
 DIES_WITH_SERVER_NOTE = (
     "This Houdini shares this MCP server's job object and closes when the server exits "
-    "(the client ends both together): save with hip_save before the session ends, or start "
-    "Houdini yourself (after hocuspocus install-houdini) and attach with houdini_connect {pid}."
+    "(the client ends both together): save with hip_save before the session ends. To keep "
+    "Houdini alive across sessions, start it with `hocuspocus launch` and attach with "
+    "houdini_connect {pid}."
 )
 OUTLIVES_NOTE = (
     "This Houdini is detached from this MCP server and should keep running after it exits, "
