@@ -102,6 +102,19 @@ def test_create_unknown_type_has_candidates(client):
     assert error["hint"]
 
 
+def test_unknown_light_type_suggests_hlight(client):
+    """Review 11 B10: candidates come from labels and synonyms, not only names."""
+    error = client.error("node_create", {"items": [{"parent": "/obj", "type": "distantlight"}]})
+    assert error["code"] == "node_type_not_found"
+    assert error["candidates"][0] == "hlight"
+    assert "light_type" in error["hint"]
+    spot = client.error("node_create", {"items": [{"parent": "/obj", "type": "spot_light"}]})
+    assert spot["candidates"][0] == "hlight"
+    # A label match: "Environment Light" is envlight.
+    env = client.error("node_create", {"items": [{"parent": "/obj", "type": "environmentlight"}]})
+    assert env["candidates"][0] == "envlight"
+
+
 def test_create_sop_in_obj_hints_the_category(client):
     error = client.error("node_create", {"items": [{"parent": "/obj", "type": "box"}]})
     assert error["code"] == "node_type_not_found"

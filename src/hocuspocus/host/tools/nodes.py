@@ -282,14 +282,58 @@ def _type_short_name(node_type: Any) -> str:
     return f"{namespace}::{core}" if namespace else core
 
 
+TYPE_SYNONYMS: dict[str, dict[str, tuple[str, str]]] = {
+    # Names other packages (and the LOP context) use for what one OBJ type does here.
+    "Object": {
+        **{
+            name: ("hlight", f"set light_type to {kind}")
+            for kind, names in (
+                ("distant", ("distantlight", "directionallight", "sunlight", "dirlight")),
+                ("point", ("pointlight", "omnilight")),
+                ("spot", ("spotlight",)),
+                ("grid", ("arealight", "rectlight", "gridlight", "quadlight")),
+                ("sphere", ("spherelight",)),
+                ("disk", ("disklight",)),
+            )
+            for name in names
+        },
+        "domelight": ("envlight", "an environment light (envlight) lights from a dome"),
+    },
+}
+"""``{category: {query: (type, note)}}`` for type names an agent reaches for that the
+category spells differently (review 11 B10: ``distantlight`` is ``hlight`` in /obj)."""
+
+
+def _squash(text: str) -> str:
+    return "".join(ch for ch in text.lower() if ch.isalnum())
+
+
+def type_synonym(category: Any, query: str) -> tuple[str, str] | None:
+    """``(type, note)`` when ``query`` is a known other name for a type in ``category``."""
+    import hou
+
+    table = TYPE_SYNONYMS.get(category.name(), {})
+    hit = table.get(_squash(query.split("::")[0].split("/")[-1]))
+    if hit is None:
+        return None
+    with contextlib.suppress(Exception):
+        if hou.nodeType(category, hit[0]) is not None:
+            return hit
+    return None
+
+
 def type_candidates(category: Any, query: str, n: int = 8) -> list[str]:
+    """Nearest type names for ``query``: synonyms, then names and labels (UI descriptions)
+    close to it, then types whose whole label occurs in it (``distant light`` -> Light)."""
     q = (
         query.lower().split("::")[-1]
         if "::" in query and not query.endswith("::")
         else query.lower()
     )
     q = q.split("/")[-1]
+    squashed = _squash(q)
     pool: dict[str, str] = {}
+    labels: dict[str, str] = {}
     for node_type in category.nodeTypes().values():
         try:
             if node_type.hidden():
@@ -297,17 +341,32 @@ def type_candidates(category: Any, query: str, n: int = 8) -> list[str]:
             short = _type_short_name(node_type)
             pool.setdefault(short.lower(), short)
             pool.setdefault(node_type.nameComponents()[2].lower(), short)
-            pool.setdefault(node_type.description().lower(), short)
+            label = node_type.description().lower()
+            pool.setdefault(label, short)
+            labels.setdefault(_squash(label), short)
         except Exception:
             continue
     out: list[str] = []
+
+    def add(name: str) -> None:
+        if name not in out:
+            out.append(name)
+
+    synonym = type_synonym(category, query)
+    if synonym is not None:
+        add(synonym[0])
+    if squashed in labels:
+        add(labels[squashed])  # the label typed without spaces: "environmentlight"
     for match in difflib.get_close_matches(q, list(pool), n=n * 2, cutoff=0.6):
-        if pool[match] not in out:
-            out.append(pool[match])
+        add(pool[match])
+    # A label that occurs whole inside the query, longest first ("light" in "spot_light").
+    for label in sorted(labels, key=len, reverse=True):
+        if len(label) >= 4 and label in squashed:
+            add(labels[label])
     if len(out) < n:
         for key in sorted(pool, key=len):
-            if q and q in key and pool[key] not in out:
-                out.append(pool[key])
+            if q and q in key:
+                add(pool[key])
             if len(out) >= n:
                 break
     return out[:n]
@@ -329,7 +388,15 @@ def other_categories_with(name: str, exclude: Any) -> list[str]:
 def type_not_found(parent: Any, type_name: str, category: Any) -> ToolError:
     candidates = type_candidates(category, type_name)
     others = other_categories_with(type_name, category)
-    if others:
+    synonym = type_synonym(category, type_name)
+    if synonym is not None:
+        hint = (
+            f"{category.name()} networks spell {type_name} as {synonym[0]}: create "
+            f"{synonym[0]} and {synonym[1]}."
+        )
+        if others:
+            hint += f" ({type_name} itself is {a_or_an('/'.join(others))} node type.)"
+    elif others:
         hint = (
             f"{type_name} is {a_or_an('/'.join(others))} node type, but {parent.path()} holds "
             f"{category.name()} nodes."
