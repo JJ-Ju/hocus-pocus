@@ -44,6 +44,8 @@ VALUE_FIELDS = (
     "press",
 )
 ITEM_KEYS = frozenset((*VALUE_FIELDS, "path", "language", "animation"))
+_FLAG_FIELDS = ("revert_to_default", "press")
+"""Value fields that act only when ``true``; ``false``, ``0`` or null mean "not given"."""
 ANIMATION_MODES = ("replace", "key", "keep")
 LANGUAGES = ("hscript", "python")
 MENU_ITEMS_LIMIT = 50
@@ -349,7 +351,8 @@ def _parm_locked(parm: Any) -> bool:
     except Exception:
         pass
     try:
-        return bool(parm.node().isInsideLockedHDA())
+        node = parm.node()
+        return bool(node.isInsideLockedHDA()) and not bool(node.isEditableInsideLockedHDA())
     except Exception:
         return False
 
@@ -953,7 +956,8 @@ def _resolve_ref(node: Any, ref: Any) -> Any:
     if ref.startswith("/"):
         target = hou.parm(ref) or hou.parmTuple(ref)
         if target is None:
-            resolve_path(ref)  # raises node_not_found / parm_not_found with candidates
+            # Normalises a trailing slash; raises node_not_found / parm_not_found otherwise.
+            target = resolve_path(ref)[1]
     else:
         target = node.parm(ref) or node.parmTuple(ref)
         if target is None:
@@ -973,8 +977,7 @@ def _apply(node: Any, target: Any, item: dict[str, Any], *, frame: float | None)
     present = [
         f
         for f in VALUE_FIELDS
-        if item.get(f) is not None
-        and not (f in ("revert_to_default", "press") and item[f] is False)
+        if (item.get(f) is True if f in _FLAG_FIELDS else item.get(f) is not None)
     ]
     if len(present) != 1:
         got = ", ".join(present) if present else "none"
@@ -1150,7 +1153,7 @@ def _apply(node: Any, target: Any, item: dict[str, Any], *, frame: float | None)
         raise
     except hou.PermissionError as exc:
         raise locked_error(node, target, exc) from exc
-    except (hou.OperationFailed, hou.InvalidSize, TypeError, ValueError) as exc:
+    except hou.Error as exc:  # any other Houdini refusal is about the value, not a bug
         kind = _kind(parms[0].parmTemplate())
         raise _invalid(
             parms[0],
@@ -1166,6 +1169,41 @@ def _apply(node: Any, target: Any, item: dict[str, Any], *, frame: float | None)
     if notes:
         result["notes"] = notes
     return result
+
+
+def _snapshot(target: Any) -> Any:
+    """Capture each component's keys, expression or value; returns a restore function.
+
+    ``partial: true`` keeps the call's undo group, so an item that fails half-way (say,
+    component 2 of a tuple is locked) must put its own earlier components back.
+    """
+    saved = []
+    for parm in _components(target):
+        try:
+            kind = _kind(parm.parmTemplate())
+            keys = tuple(parm.keyframes())
+            value = None
+            if not keys and kind == "ramp":
+                value = parm.evalAsRamp()
+            elif not keys and kind == "string":
+                value = parm.unexpandedString()
+            elif not keys and kind not in ("button", "folder", "label", "data"):
+                value = parm.eval()
+        except Exception:
+            continue
+        saved.append((parm, keys, value))
+
+    def restore() -> None:
+        for parm, keys, value in saved:
+            with contextlib.suppress(Exception):
+                if parm.keyframes():
+                    parm.deleteAllKeyframes()
+                if keys:
+                    parm.setKeyframes(keys)
+                elif value is not None:
+                    parm.set(value)
+
+    return restore
 
 
 def locked_error(node: Any, target: Any, exc: BaseException | None = None) -> ToolError:
@@ -1340,7 +1378,13 @@ def parm_set(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
             if unknown:
                 raise ToolError("invalid_argument", f"Unexpected item keys {sorted(unknown)}.")
             node, target = resolve_path(path)
-            result = _apply(node, target, item, frame=frame)
+            restore = _snapshot(target) if partial else None
+            try:
+                result = _apply(node, target, item, frame=frame)
+            except ToolError:
+                if restore is not None:
+                    restore()  # leave a failed item as it was, not half-applied
+                raise
             nodes.setdefault(node.path(), node)
             rows.append((node.path(), result))
         except ToolError as exc:

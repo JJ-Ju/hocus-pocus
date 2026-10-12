@@ -129,6 +129,10 @@ def test_node_create_parms_take_both_expression_spellings():
     assert check({"sizex": {"expression": "$F", "language": "python"}}) == []
     assert check({"sizex": {"expr": "$F", "lang": "hscript"}}) == []
     (error,) = check({"sizex": {"exp": "$F"}})
-    assert "{expression, language}" in error and "{expr, lang}" in error
+    assert "{expr, lang}" in error and "expression, language" in error
+    # node_create parms also take any parm_set item field without path (review 10).
+    assert check({"tx": {"keyframes": [{"frame": 1, "value": 0}]}}) == []
+    assert check({"sx": {"channel_ref": "/obj/geo1/box1/sizex"}}) == []
+    assert check({"ramp": {"ramp": {"keys": [0, 1], "values": [0, 1]}}}) == []
     (error,) = check({"sizex": {"expr": "$F", "language": "python"}})
     assert "did you mean lang" in error

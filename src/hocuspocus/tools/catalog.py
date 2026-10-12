@@ -154,14 +154,27 @@ def _literal_value() -> dict[str, Any]:
 
 
 def _parm_value() -> dict[str, Any]:
-    """Literal scalar/array, or an expression object (node_create parms): ``{expression,
-    language}`` as parm_set and the readers spell it, or the short ``{expr, lang}``."""
+    """node_create parms: a literal scalar/array, the short expression ``{expr, lang}``, or
+    one parm_set item without ``path`` (``{expression, language}``, ``{keyframes}``,
+    ``{channel_ref}``, ``{ramp}``, ``{multiparm_count}``...), as ``set_parm_items`` takes."""
     literal = _literal_value()
     languages = ("hscript", "python")
-    literal["anyOf"].append(
-        _obj({"expression": _s(), "language": _enum(languages, "hscript")}, ("expression",))
-    )
+    key = _obj({"frame": _n(), "value": _n()}, ("value",))
     literal["anyOf"].append(_obj({"expr": _s(), "lang": _enum(languages, "hscript")}, ("expr",)))
+    item = {
+        "value": _literal_value(),
+        "expression": _s(),
+        "language": _enum(languages, "hscript"),
+        "keyframe": key,
+        "keyframes": _arr(key),
+        "channel_ref": _s(),
+        "ramp": {"type": "object"},
+        "multiparm_count": _i(None, minimum=0),
+        "revert_to_default": {"type": "boolean"},
+        "press": {"type": "boolean"},
+        "animation": _enum(("replace", "key", "keep")),
+    }
+    literal["anyOf"].append(_obj(item))
     return literal
 
 
@@ -573,7 +586,7 @@ _NODES: tuple[ToolSpec, ...] = (
                                 "type": "object",
                                 "additionalProperties": _parm_value(),
                                 "description": (
-                                    "Parm or tuple name to value or {expression, language}."
+                                    "Parm or tuple name to a value or a parm_set item without path."
                                 ),
                             },
                             "inputs": _arr(_input_link()),
@@ -882,9 +895,10 @@ _PARMS: tuple[ToolSpec, ...] = (
         name="parm_set",
         description=(
             "Set parms in one undo step. Each item takes one of value, expression, keyframe, "
-            "keyframes, channel_ref, ramp, multiparm_count, revert_to_default, press. Tuple paths "
-            "take lists, component paths scalars; menus take token or label. animation: replace "
-            "(default) clears keys and expressions first; key keys at frame; keep is plain set. "
+            "keyframes, channel_ref, ramp, multiparm_count, revert_to_default, press (clicks a "
+            "button). Tuple paths take lists, component paths scalars; menus take token or label. "
+            "animation: replace (default) clears keys and expressions first, except that one "
+            "keyframe only adds or replaces its key; key keys at frame; keep is plain set. "
             "Returns values (tuples add per-component expressions and keyed), wrote_keyframe, "
             "node errors."
         ),

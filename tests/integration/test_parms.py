@@ -559,3 +559,116 @@ def test_messages_and_values_are_tidy(client):
     assert row["value"] == 2.4  # not 2.4000000000000004
     error = client.error("node_create", {"items": [{"parent": geo.path(), "type": "geo"}]})
     assert "is an Object node type" in error["hint"], error
+
+
+# -- review 10 fixes ---------------------------------------------------------------
+
+
+def test_any_hou_error_is_invalid_value_not_internal(client, scene, monkeypatch):
+    def refuse(parm, *args, **kwargs):
+        raise hou.KeyframeValueNotSet()
+
+    monkeypatch.setattr(hou.Parm, "set", refuse)
+    err = client.error("parm_set", {"items": [{"path": "/obj/geo1/box1/sizex", "value": 2}]})
+    assert err["code"] == "invalid_value" and "KeyframeValueNotSet" in err["hou_exception"]
+
+
+def test_channel_ref_with_trailing_slash(client, scene):
+    res = _set(client, {"path": "/obj/geo1/xform1/sx", "channel_ref": "/obj/geo1/box1/sizex/"})
+    assert res["expression"] == 'ch("../box1/sizex")'
+
+
+def test_press_and_revert_need_true(client, scene):
+    scene["box"].parm("sizex").set(5)
+    err = client.error(
+        "parm_set", {"items": [{"path": "/obj/geo1/box1/sizex", "revert_to_default": 0}]}
+    )
+    assert err["code"] == "invalid_argument"
+    assert scene["box"].parm("sizex").eval() == 5.0
+    res = _set(client, {"path": "/obj/geo1/box1/sizex", "value": 2, "revert_to_default": 0})
+    assert res["value"] == 2.0
+
+
+def test_partial_restores_a_half_applied_item(client, scene):
+    box = scene["box"]
+    box.parm("sizey").lock(True)
+    result = client.ok(
+        "parm_set",
+        {
+            "items": [
+                {"path": "/obj/geo1/box1/size", "value": [4, 4, 4]},
+                {"path": "/obj/geo1/xform1/tx", "value": 2},
+            ],
+            "partial": True,
+        },
+    )
+    assert result["failed"] == 1 and result["results"][0]["error"]["code"] == "locked"
+    assert box.parmTuple("size").eval() == (1.0, 1.0, 1.0)  # sizex was set, then restored
+    assert scene["xform"].parm("tx").eval() == 2.0
+    keyed = scene["xform"].parm("ty")
+    keyed.setExpression("$F")
+    scene["xform"].parm("tz").lock(True)
+    result = client.ok(
+        "parm_set",
+        {"items": [{"path": "/obj/geo1/xform1/t", "value": [1, 1, 1]}], "partial": True},
+    )
+    assert result["failed"] == 1
+    assert keyed.expression() == "$F" and scene["xform"].parm("tx").eval() == 2.0
+
+
+def test_single_keyframe_replace_keeps_other_keys(client, scene):
+    tx = scene["xform"].parm("tx")
+    _set(
+        client,
+        {"path": tx.path(), "keyframes": [{"frame": 1, "value": 0}, {"frame": 10, "value": 5}]},
+    )
+    _set(client, {"path": tx.path(), "keyframe": {"frame": 5, "value": 9}})
+    assert [k.frame() for k in tx.keyframes()] == [1.0, 5.0, 10.0]
+    _set(client, {"path": tx.path(), "keyframes": [{"frame": 2, "value": 1}]})
+    assert [k.frame() for k in tx.keyframes()] == [2.0]
+
+
+def test_editable_node_inside_locked_asset_is_not_locked(client, scene, work_dir):
+    sub = scene["geo"].createNode("subnet", "asset1")
+    sub.createNode("box", "inner")
+    sub.createNode("box", "sealed")
+    hda_path = (work_dir / "hp_editable_test.hda").as_posix()
+    asset = sub.createDigitalAsset(name="hp_editable_test", hda_file_name=hda_path)
+    asset.type().definition().addSection("EditableNodes", "inner")
+    asset.matchCurrentDefinition()
+    assert asset.node("inner").isEditableInsideLockedHDA()
+    assert _get(client, f"{asset.path()}/inner/sizex")["locked"] is False
+    assert _get(client, f"{asset.path()}/sealed/sizex")["locked"] is True
+    res = _set(client, {"path": f"{asset.path()}/inner/sizex", "value": 3})
+    assert res["value"] == 3.0 and "locked" not in res
+
+
+def test_node_create_parms_accept_parm_set_item_forms(client, scene):
+    from hocuspocus.tools.catalog import get
+    from hocuspocus.tools.docs import validate
+
+    args = {
+        "items": [
+            {
+                "parent": "/obj/geo1",
+                "type": "xform",
+                "parms": {
+                    "tx": {"keyframes": [{"frame": 1, "value": 0}, {"frame": 9, "value": 2}]},
+                    "sx": {"channel_ref": "/obj/geo1/box1/sizex"},
+                    "ty": {"expression": "$F", "language": "hscript"},
+                    "tz": {"expr": "$T"},
+                },
+            },
+            {
+                "parent": "/obj/geo1",
+                "type": "attribcreate",
+                "parms": {"numattr": {"multiparm_count": 2}},
+            },
+        ]
+    }
+    validate(args, get("node_create").input_schema)
+    created = client.ok("node_create", args)
+    xf = hou.node(created["created"][0])
+    assert len(xf.parm("tx").keyframes()) == 2
+    assert xf.parm("sx").expression() == 'ch("../box1/sizex")'
+    assert hou.node(created["created"][1]).parm("numattr").eval() == 2
