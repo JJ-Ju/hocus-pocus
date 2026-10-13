@@ -374,10 +374,41 @@ def _intrinsics(geo: Any, prim_types: dict[str, int]) -> dict[str, Any]:
     return out
 
 
+def _cop_info(path: Any, frame: Any) -> dict[str, Any] | None:
+    """The image summary of a Cop node (or a COP network's display node), or None for
+    other nodes (review 18 papercut 3: geo_info refused COPs)."""
+    from .visual import cop_image_node, image_summary, is_cop_network
+
+    node = require_node(path)
+    target = cop_image_node(node)
+    if target is None:
+        if is_cop_network(node):
+            raise ToolError(
+                "invalid_argument",
+                f"{node.path()} has no display node.",
+                hint="Pass a Cop node inside it, or set a display flag.",
+            )
+        return None
+    if frame is not None and (isinstance(frame, bool) or not isinstance(frame, int | float)):
+        raise ToolError("invalid_argument", "'frame' must be a number.")
+    refresh_stale(target)
+    out: dict[str, Any] = {"path": target.path(), "kind": "image"}
+    if frame is not None:
+        out["frame"] = num(frame)
+    out.update(image_summary(target, frame))
+    errors = [str(e).strip() for e in target.errors() if str(e).strip()]
+    if errors:
+        out["errors"] = errors
+    return out
+
+
 @tool("geo_info")
 def geo_info(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
-    sop = resolve_sop(args.get("path"))
     frame = args.get("frame")
+    image = _cop_info(args.get("path"), frame)
+    if image is not None:
+        return image
+    sop = resolve_sop(args.get("path"))
     geo = cooked_geometry(sop, frame)
     out: dict[str, Any] = {"path": sop.path()}
     if frame is not None:

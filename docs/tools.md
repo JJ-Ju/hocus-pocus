@@ -2,7 +2,7 @@
 
 <!-- Generated from src/hocuspocus/tools/catalog.py by `python -m hocuspocus.tools.docs`. Do not edit by hand. -->
 
-35 tools: 14 in the `minimal` profile, 31 in `core` (minimal included), 4 more in `full`. Model-visible `tools/list` text: 26,469 bytes. See `docs/BIBLE.md` §4 for the design.
+35 tools: 14 in the `minimal` profile, 31 in `core` (minimal included), 4 more in `full`. Model-visible `tools/list` text: 26,576 bytes. See `docs/BIBLE.md` §4 for the design.
 
 ## Contents
 
@@ -597,7 +597,7 @@ Read parms by parm (.../tx), tuple (.../t: all components) or component path: va
 
 Set parms in one undo step. Each item takes one of value, expression, keyframe(s), channel_ref, ramp, multiparm_count, revert_to_default, press. Tuple paths take lists, component paths scalars; menus take token or label. animation replace clears keys and expressions first; key keys at frame; keep is plain set. Returns value, raw, wrote_keyframe, node errors.
 
-**Notes.** With animation replace a single keyframe only adds or replaces its own key. press clicks a button parm and returns pressed and side_effects ({parm: [old, new]} it changed); on a writer's save button (File Cache Save to Disk, a ROP SOP's Render) the output files over its frame range are checked afterwards: outputs_summary, or cook_failed with detail.missing. press also runs the callback script of a non-button parm (pyrosource initialize), and with value it sets the value first; a plain set of a menu or toggle with a callback notes that the callback did not run. raw is left out when it equals value, and long strings are elided as in parm_get. Tuples report per-component expressions and the keyed component names. Type mismatches fail with invalid_value naming the template type and range. On a LOP a USD attribute name (inputs:intensity) sets Houdini's encoded parm (xn__inputsintensity_i0a), here and in node_create parms; path is the resolved one.
+**Notes.** With animation replace a single keyframe only adds or replaces its own key. press clicks a button parm and returns pressed and side_effects ({parm: [old, new]} it changed); on a writer's save button (File Cache Save to Disk, a ROP SOP's Render) the output files over its frame range are checked afterwards: outputs_summary, or cook_failed with detail.missing. press also runs the callback script of a non-button parm (pyrosource initialize), and with value it sets the value first; a plain set of a menu or toggle with a callback notes that the callback did not run. A string menu only the node builds (a Copernicus signature) takes a token or label like any menu. Ramp keys and values come back at 6 significant digits, without raw. raw is left out when it equals value, and long strings are elided as in parm_get. Tuples report per-component expressions and the keyed component names. Type mismatches fail with invalid_value naming the template type and range. On a LOP a USD attribute name (inputs:intensity) sets Houdini's encoded parm (xn__inputsintensity_i0a), here and in node_create parms; path is the resolved one.
 
 ### Arguments
 
@@ -728,9 +728,9 @@ Explain red nodes: lists nodes in a subtree with errors or warnings, broken chan
 
 `read-only` `headless ok` · profile `minimal`
 
-Summarise the geometry of a SOP (or an OBJ's display SOP): point, prim and vertex counts, bounding box, primitive types, attributes per class with type and size, detail attribute values, groups with counts. geo_read reads per-element values.
+Summarise the geometry of a SOP (or an OBJ's display SOP): point, prim and vertex counts, bounding box, primitive types, attributes per class with type and size, detail attribute values, groups with counts. On a Cop node: the image's layer type, resolution and channel min/max/mean.
 
-**Notes.** frame evaluates the geometry at that frame without moving the playbar. intrinsics lists every volume as a row under volume_columns [name, prim, resolution, voxel_size, min, max] and every VDB under vdb_columns [name, prim, class, value_type, active_voxels, voxel_size] (at most 100 each; volume_total or vdb_total then counts them all), and the first packed primitives. Detail attribute values are capped: arrays at 16 items, strings at 200 characters, and a dict longer than 200 characters as {elided, keys}; hou vectors and matrices are lists.
+**Notes.** frame evaluates the geometry at that frame without moving the playbar. intrinsics lists every volume as a row under volume_columns [name, prim, resolution, voxel_size, min, max] and every VDB under vdb_columns [name, prim, class, value_type, active_voxels, voxel_size] (at most 100 each; volume_total or vdb_total then counts them all), and the first packed primitives. Detail attribute values are capped: arrays at 16 items, strings at 200 characters, and a dict longer than 200 characters as {elided, keys}; hou vectors and matrices are lists. geo_read reads per-element values. A Cop node (or a COP network's display node) gives kind: image, output, layer_type (Mono, RGB, RGBA, ...), resolution, data_window, pixel_scale, storage, border, constant?, channels {r: {min, max, mean}, ...} of its first output, and other_outputs [{name, layer_type}].
 
 ### Arguments
 
@@ -742,9 +742,9 @@ Summarise the geometry of a SOP (or an OBJ's display SOP): point, prim and verte
 ### Returns
 
 - `path` (string)
-- `point_count` (integer) — always present
-- `prim_count` (integer) — always present
-- `vertex_count` (integer) — always present
+- `point_count` (integer)
+- `prim_count` (integer)
+- `vertex_count` (integer)
 - `bbox` (object | null): `min`, `max`, `size`, `center`
 - `prim_types` (object<string, integer>)
 - `attributes` (object): `point`, `vertex`, `prim`, `detail`
@@ -809,9 +809,9 @@ Read attribute values like the geometry spreadsheet: count rows of one class fro
 
 `idempotent` `headless ok` · profile `minimal`
 
-Look at /obj or a LOP stage: a PNG (long side at most 1024), path, size, camera_used, scene. camera: OBJ or LOP camera, or camera prim (lop_path). auto: the GUI viewer if present and no camera, else an OpenGL ROP (headless too) framed per fit. Leaves no nodes, undo step or dirty flag.
+Look at /obj, a LOP stage or a COP: a PNG (long side at most 1024), path, size, camera_used, scene. camera: OBJ or LOP camera, or camera prim (lop_path); cop_path: a Cop node's image. auto: the GUI viewer if present and no camera, else an OpenGL ROP (headless too) framed per fit. Leaves no nodes, undo step or dirty flag.
 
-**Notes.** fit has no default: without it the viewer source captures the view as it is and the OpenGL ROP source frames all; fit none reuses the last framing. With fit the viewer frames all or selected for the grab and puts the view back, as it does after looking through camera; context is the viewer's network, and notes say when that is not the captured scene. Without camera or lop_path the stage's display LOP is captured when /obj displays nothing; otherwise a note names it. A stage renders through the OpenGL ROP's LOP source (scene: stage, lop_path). source_used is viewer, opengl_rop or karma: when a headless OpenGL render process crashes, the frame is rendered with a temporary Karma CPU ROP (2 samples, same camera and resolution) and a note says why; later stage captures then go straight to Karma. Lights are refused as cameras; camera errors list the scene's cameras. path also writes the PNG there. Both files are opaque, on the same grey as the image (the OpenGL ROP itself writes a transparent background). image.attached is true when the PNG went out as MCP image content.
+**Notes.** fit has no default: without it the viewer source captures the view as it is and the OpenGL ROP source frames all; fit none reuses the last framing. With fit the viewer frames all or selected for the grab and puts the view back, as it does after looking through camera; context is the viewer's network, and notes say when that is not the captured scene. Without camera or lop_path the stage's display LOP is captured when /obj displays nothing; otherwise a note names it. A stage renders through the OpenGL ROP's LOP source (scene: stage, lop_path). source_used is viewer, opengl_rop or karma: when a headless OpenGL render process crashes, the frame is rendered with a temporary Karma CPU ROP (2 samples, same camera and resolution) and a note says why; later stage captures then go straight to Karma. Lights are refused as cameras; camera errors list the scene's cameras. path also writes the PNG there. Both files are opaque, on the same grey as the image (the OpenGL ROP itself writes a transparent background). image.attached is true when the PNG went out as MCP image content. cop_path (a Cop node, or a COP network's display node) renders it through a temporary rop_image in its network (about 0.2 s, deleted afterwards, outside undo): scene cop, layer {layer_type, resolution, data_window}, the image at the COP's own resolution (resolution is ignored). Without camera, lop_path or cop_path a note names the COP networks under /img.
 
 ### Arguments
 
@@ -819,6 +819,7 @@ Look at /obj or a LOP stage: a PNG (long side at most 1024), path, size, camera_
 |---|---|---|---|---|
 | `camera` | string |  |  |  |
 | `lop_path` | string |  |  |  |
+| `cop_path` | string |  |  |  |
 | `frame` | number |  |  | Default current frame. |
 | `resolution` | array<integer> |  | `[1024,768]` | min items 2; max items 2 |
 | `fit` | `all` \| `selected` \| `none` |  |  |  |
@@ -857,7 +858,7 @@ Look at /obj or a LOP stage: a PNG (long side at most 1024), path, size, camera_
 
 Render any ROP (Karma, OpenGL, ...) or writer SOP (File Cache, rop_geometry: own frame range) for frames [start, end, inc] (default current frame), optionally overriding output. Waits up to wait_s (default the job threshold): if done, returns outputs, a thumbnail and notes; else job_id to poll with job.
 
-**Notes.** Above 5 outputs only outputs_summary is inline; job result lists them all. Every expected output is checked against approved_roots. viewport_capture is the quick look. notes warn when the scene has no lights and when the thumbnail is nearly black, and say why an image output has no thumbnail (an extension it cannot read). thumbnail.image.attached is true when the image went out as MCP image content. The thumbnail is inline only, flattened onto grey; the ROP's own output files are left as written, alpha included. USD render ROPs (Lop usdrender_rop, Driver usdrender): outputs come from outputimage, else the RenderProduct productName of the render settings the ROP uses (EXR thumbnails too), never lopoutput; output overrides outputimage; a note says when nothing resolves; a husk failure carries the end of its log in detail.log_tail. A writer SOP (File Cache, rop_geometry or rop_alembic SOP) renders its own frame range unless frames is given; a File Cache renders through the ROP inside it (no output override), then turns on Load from Disk as its Save to Disk button does (side_effects: {parm: [old, new]}). A cancelled render's job result is the cancelled error with detail {last_status, partial: {outputs_summary}} (the files written before the cancel).
+**Notes.** Above 5 outputs only outputs_summary is inline; job result lists them all. Every expected output is checked against approved_roots. viewport_capture is the quick look. notes warn when the scene has no lights and when the thumbnail is nearly black, and say why an image output has no thumbnail (an extension it cannot read). thumbnail.image.attached is true when the image went out as MCP image content. The thumbnail is inline only, flattened onto grey; the ROP's own output files are left as written, alpha included. USD render ROPs (Lop usdrender_rop, Driver usdrender): outputs come from outputimage, else the RenderProduct productName of the render settings the ROP uses (EXR thumbnails too), never lopoutput; output overrides outputimage; a note says when nothing resolves; a husk failure carries the end of its log in detail.log_tail. A writer SOP (File Cache, rop_geometry or rop_alembic SOP) renders its own frame range unless frames is given; a File Cache renders through the ROP inside it (no output override), then turns on Load from Disk as its Save to Disk button does (side_effects: {parm: [old, new]}). A cancelled render's job result is the cancelled error with detail {last_status, partial: {outputs_summary}} (the files written before the cancel). A Cop node is not a ROP: the error's candidates are the rop_image nodes in its network (viewport_capture cop_path looks at it). A COP image needs no lights, so no lights note. A thumbnail PIL cannot read (a float TIFF) is converted with iconvert; if that fails too, a note says why.
 
 ### Arguments
 
@@ -879,7 +880,6 @@ Render any ROP (Karma, OpenGL, ...) or writer SOP (File Cache, rop_geometry: own
 - `outputs_summary` (object)
 - `missing` (array<string>)
 - `thumbnail` (object): `path`, `width`, `height`, `image`
-- `thumbnail_error` (string)
 - `notes` (array<string>)
 
 ### Examples
@@ -927,7 +927,7 @@ Run Python (hou bound) or HScript on Houdini's main thread in one undo step, for
 
 Find node types by name, label, description or keyword, in all 18 categories or one. Rows: name, label, category, version, description (clipped), input range, deprecated. Current versions only, older ones named in other_versions, unless current_only is false. Exact names rank first; total counts every match.
 
-**Notes.** total is the real number of matching types, not a cap: a plain-language query also matches on single description words, so broad queries can match hundreds of types. Raise limit (up to 1000) to see them all.
+**Notes.** total is the real number of matching types, not a cap: a plain-language query also matches on single description words, so broad queries can match hundreds of types. Raise limit (up to 1000) to see them all. Cop types also match the labels of their menus (remap's Threshold, blend's Over), and compositing words name their Cop type (threshold: remap, gradient: ramp, composite or over: blend, text: font, write: rop_image). A network type's row adds child_category and typical_parents (CopNet copnet: /img). Results with legacy Cop2 types carry a note that Copernicus is Cop.
 
 ### Arguments
 
@@ -961,7 +961,7 @@ Find node types by name, label, description or keyword, in all 18 categories or 
 
 Describe one node type: label, version, named inputs and outputs, parms by folder. detail compact gives name, label, type, default rows; full adds size, range, menu and folder; folders lists folders with parm counts. folder and parms (globs, a|b) narrow the parms.
 
-**Notes.** folder takes a label, an "A / B" path, or "" / "(no folder)" for the top-level parms. include_help adds the first ~2 KB of the node help. With folder or parms the inputs list becomes inputs_count, and detail full leaves out the folder list. In detail full a script menu (pdg_cachemode) or a menu built from input geometry (a SOP group) is evaluated on a temporary instance: menu {items, dynamic: true}, or items [] with a note when it evaluates empty there.
+**Notes.** folder takes a label, an "A / B" path, or "" / "(no folder)" for the top-level parms. include_help adds the first ~2 KB of the node help. With folder or parms the inputs list becomes inputs_count, and detail full leaves out the folder list. In detail full a script menu (pdg_cachemode) or a menu built from input geometry (a SOP group) is evaluated on a temporary instance: menu {items, dynamic: true}, or items [] with a note when it evaluates empty there; so is a string menu only the node builds (a Copernicus signature). Menu labels lose their ![icon] markup. A compact listing over 8 KB leaves out the parms a menu hides at its default (the per-pattern parms of the other patterns): variants {menu parm: parms left out} and a note; pass parms or detail full to list them.
 
 ### Arguments
 

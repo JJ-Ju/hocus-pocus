@@ -43,7 +43,7 @@ from hocuspocus.tools.errors import ToolError
 from hocuspocus.tools.paths import captures_dir, ensure_private_dir
 
 from ..dispatch import call_timeout
-from ._diag import require_node
+from ._diag import a_or_an, require_node
 from .geo import num
 from .hip import _norm, check_allowed, resolve_path
 from .registry import HostContext, tool
@@ -197,30 +197,45 @@ def encode_png(
 
     source = path
     tmp_dir = None
+
+    def convert() -> str:
+        nonlocal tmp_dir
+        tmp_dir = tmp_dir or tempfile.mkdtemp(prefix="hp-thumb-")
+        target = os.path.join(tmp_dir, "thumb.png")
+        exe = os.path.join(
+            hfs or os.environ.get("HFS", ""),
+            "bin",
+            "iconvert.exe" if sys.platform == "win32" else "iconvert",
+        )
+        proc = subprocess.run(
+            [exe, path, target],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        if proc.returncode != 0 or not os.path.isfile(target):
+            raise ToolError(
+                "internal",
+                f"iconvert could not convert {path} to PNG.",
+                hou_exception=f"iconvert exit {proc.returncode}",
+                detail={"stderr": (proc.stderr or proc.stdout)[-2000:]},
+            )
+        return target
+
     try:
         if os.path.splitext(path)[1].lower() not in IMAGE_EXTS:
-            tmp_dir = tempfile.mkdtemp(prefix="hp-thumb-")
-            source = os.path.join(tmp_dir, "thumb.png")
-            exe = os.path.join(
-                hfs or os.environ.get("HFS", ""),
-                "bin",
-                "iconvert.exe" if sys.platform == "win32" else "iconvert",
-            )
-            proc = subprocess.run(
-                [exe, path, source],
-                capture_output=True,
-                text=True,
-                timeout=120,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-            )
-            if proc.returncode != 0 or not os.path.isfile(source):
-                raise ToolError(
-                    "internal",
-                    f"iconvert could not convert {path} to PNG.",
-                    hou_exception=f"iconvert exit {proc.returncode}",
-                    detail={"stderr": (proc.stderr or proc.stdout)[-2000:]},
-                )
-        with Image.open(source) as im:
+            source = convert()
+        try:
+            opened = Image.open(source)
+        except Exception:
+            if source != path:
+                raise
+            # A TIFF PIL cannot read (float or 16-bit Copernicus output; review 18): let
+            # iconvert make a PNG of it.
+            source = convert()
+            opened = Image.open(source)
+        with opened as im:
             im.load()
             mean_luma = None
             if measure:
@@ -560,6 +575,240 @@ def render_isolated(
 
 def needs_isolation(rop_node: Any, ctx: HostContext) -> bool:
     return not ctx.ui and rop_node.type().name().split("::")[0] == "opengl"
+
+
+# -- Copernicus images (review 18) ----------------------------------------------------
+
+CHANNEL_NAMES = {1: ("mono",), 2: ("u", "v"), 3: ("r", "g", "b"), 4: ("r", "g", "b", "a")}
+COP_ROP_CANDIDATES = 10
+NON_IMAGE_OUTPUTS = ("Geometry", "VDB")
+
+
+def is_cop_node(node: Any) -> bool:
+    """A Copernicus node (category ``Cop``)."""
+    import hou
+
+    return isinstance(node, hou.CopNode)
+
+
+def is_cop_network(node: Any) -> bool:
+    """A network whose children are Copernicus nodes (``/img/<copnet>``, a SOP copnet)."""
+    import hou
+
+    try:
+        return node.childTypeCategory() == hou.copNodeTypeCategory()
+    except Exception:
+        return False
+
+
+def cop_display(net: Any) -> Any:
+    """The display-flagged Cop node in a COP network, or None."""
+    for child in net.children():
+        with contextlib.suppress(Exception):
+            if child.isDisplayFlagSet():
+                return child
+    return None
+
+
+def cop_image_node(node: Any) -> Any:
+    """``node`` when it is a Cop node, a COP network's display node, else None."""
+    if is_cop_node(node):
+        return node
+    if is_cop_network(node):
+        return cop_display(node)
+    return None
+
+
+def cop_rop_candidates(node: Any) -> list[str]:
+    """The ``rop_image`` nodes in the COP network holding ``node`` (or ``node`` itself
+    when it is the network), which ``render`` can render."""
+    net = node if is_cop_network(node) else node.parent()
+    out = []
+    for child in net.children() if net is not None else ():
+        with contextlib.suppress(Exception):
+            if child.type().nameComponents()[2] == "rop_image":
+                out.append(child.path())
+    return out[:COP_ROP_CANDIDATES]
+
+
+def cop_hint(node: Any) -> str:
+    """Where a COP node's pixels come from: viewport_capture cop_path for a look, a
+    rop_image for files (review 18 papercuts 1 and 2)."""
+    net = node if is_cop_network(node) else node.parent()
+    where = net.path() if net is not None else "the COP network"
+    return (
+        f"viewport_capture {{cop_path: {node.path()}}} returns the image; to write files, "
+        f"render a Cop rop_image inside {where} (coppath = the node)."
+    )
+
+
+def _rect(rect: Any) -> list[Any]:
+    """``[xmin, ymin, xmax, ymax]`` of a ``hou.BoundingRect``."""
+    return [num(v, 6) for v in (*rect.min(), *rect.max())]
+
+
+def _channel_stats(layer: Any, count: int) -> dict[str, Any]:
+    names = CHANNEL_NAMES.get(count) or tuple(f"c{i}" for i in range(count))
+    stats: dict[str, Any] = {}
+    for index, name in enumerate(names):
+        with contextlib.suppress(Exception):
+            stats[name] = {
+                "min": num(layer.computeMin(index), 6),
+                "max": num(layer.computeMax(index), 6),
+                "mean": num(layer.computeAverage(index), 6),
+            }
+    return stats
+
+
+def image_summary(node: Any, frame: float | None = None, *, stats: bool = True) -> dict[str, Any]:
+    """What a Cop node's first output holds (review 18 papercut 3): ``{output, layer_type,
+    resolution, data_window, pixel_scale, storage, border, constant?, channels: {name:
+    {min, max, mean}}}`` from ``CopNode.layer()``; other outputs are named in
+    ``other_outputs``. A non-image output (geometry, VDB) has only its type. Main thread."""
+    names = list(node.outputNames())
+    types = list(node.outputDataTypes())
+    out: dict[str, Any] = {"output": names[0] if names else None}
+    out["layer_type"] = types[0] if types else None
+    layer = node.layer(0) if frame is None else node.layerAtFrame(float(frame), 0)
+    if layer is not None:
+        out["resolution"] = list(layer.bufferResolution())
+        out["data_window"] = _rect(layer.dataWindow())
+        out["pixel_scale"] = [num(v, 6) for v in layer.pixelScale()]
+        with contextlib.suppress(Exception):
+            out["storage"] = layer.storageType().name().lower()
+            out["border"] = layer.border().name().lower()
+        with contextlib.suppress(Exception):
+            if layer.isConstant():
+                out["constant"] = True
+        if stats:
+            out["channels"] = _channel_stats(layer, int(layer.channelCount()))
+    others = [
+        {"name": name, "layer_type": types[i] if i < len(types) else None}
+        for i, name in enumerate(names)
+        if i > 0
+    ]
+    if others:
+        out["other_outputs"] = others
+    return out
+
+
+def _cop_target(path: Any) -> Any:
+    """The Cop node ``cop_path`` names (a COP network means its display node). Main
+    thread."""
+    if not isinstance(path, str) or not path.strip():
+        raise ToolError("invalid_argument", "'cop_path' must be a Cop node path.")
+    node = require_node(path, field="cop_path")
+    target = cop_image_node(node)
+    if target is not None:
+        return target
+    if is_cop_network(node):
+        raise ToolError(
+            "invalid_argument",
+            f"{node.path()} has no display node to capture.",
+            hint="Pass a Cop node inside it, or set a display flag.",
+            candidates=[c.path() for c in node.children()][:10],
+        )
+    raise ToolError(
+        "invalid_argument",
+        f"{node.path()} is {a_or_an(node.type().category().name())} node, not a Cop "
+        "(Copernicus) node.",
+        hint="Pass a node inside a COP network, such as /img/comp1/blend1; camera or "
+        "lop_path capture /obj and stages.",
+    )
+
+
+def capture_cop(ctx: HostContext, parsed: dict[str, Any]) -> dict[str, Any]:
+    """Render a Cop node through a temporary ``rop_image`` in its network to a PNG under
+    the captures dir and return it like any capture (review 18 papercut 1). The ROP is made
+    outside undo and events and deleted afterwards; about 0.2 s. Main thread."""
+    import hou
+
+    from .events import muted
+
+    node = _cop_target(parsed["cop_path"])
+    frame, extra_path, out_file = _capture_targets(parsed, ctx)
+    types = list(node.outputDataTypes())
+    if types and types[0] in NON_IMAGE_OUTPUTS:
+        raise ToolError(
+            "invalid_argument",
+            f"{node.path()} outputs {types[0]}, not an image layer.",
+            hint="geo_info reads it; capture an image node instead.",
+        )
+    was_dirty = scene_dirty(ctx)
+    errors: list[str] = []
+    with hou.undos.disabler(), muted():
+        rop = node.parent().createNode("rop_image", "__hocuspocus_capture__")
+        try:
+            _mark_internal(rop)
+            for name, value in (("coppath", node.path()), ("copoutput", out_file), ("trange", 0)):
+                rop.parm(name).set(value)
+            try:
+                rop.render(frame_range=(frame, frame), verbose=False)
+            except hou.OperationFailed as exc:
+                errors.append(str(exc).strip())
+            errors += [str(e) for e in rop.errors()]
+        finally:
+            with contextlib.suppress(Exception):
+                rop.destroy()
+    if errors or not os.path.isfile(out_file):
+        message, detail = failure(f"{node.path()} did not render an image", errors)
+        raise ToolError(
+            "cook_failed",
+            message,
+            hint="Check the node's errors with problems, then capture again.",
+            detail=detail or None,
+        )
+    layer = image_summary(node, frame, stats=False)
+    info: dict[str, Any] = {
+        "scene": "cop",
+        "cop_path": node.path(),
+        "source_used": "rop_image",
+        "layer": {k: layer[k] for k in ("layer_type", "resolution", "data_window") if k in layer},
+    }
+    if "other_outputs" in layer:
+        info["layer"]["other_outputs"] = [o["name"] for o in layer["other_outputs"]]
+    notes = []
+    if parsed.get("resolution_given"):
+        notes.append("resolution is ignored with cop_path: the image is the COP's own size.")
+    if not was_dirty and scene_dirty(ctx):
+        notes.append(
+            "Houdini marks the hip modified when the temporary rop_image is created, although "
+            "it was deleted and nothing else changed."
+        )
+    if notes:
+        info["notes"] = notes
+    size = tuple(layer.get("resolution") or (0, 0))
+    return _finish_capture(out_file, size, frame, info, extra_path)
+
+
+def _cop_networks() -> list[str]:
+    """COP networks under /img, with their display nodes, for the capture note."""
+    import hou
+
+    found = []
+    img = hou.node("/img")
+    for net in img.children() if img is not None else ():
+        if is_cop_network(net) and not net.userData(INTERNAL_KEY):
+            display = cop_display(net)
+            found.append(net.path() + (f" (display {display.path()})" if display else ""))
+    return found[:3]
+
+
+def _refuse_cop_as(field: str, value: Any) -> None:
+    """A Cop node passed as camera or lop_path: say cop_path (review 18 papercut 1)."""
+    import hou
+
+    if not isinstance(value, str) or not value.startswith("/"):
+        return
+    node = hou.node(value)
+    if node is not None and (is_cop_node(node) or is_cop_network(node)):
+        what = "network" if is_cop_network(node) else "node"
+        raise ToolError(
+            "invalid_argument",
+            f"{node.path()} is a Copernicus {what}, not a "
+            f"{'camera' if field == 'camera' else 'LOP'}.",
+            hint=f"Pass cop_path {node.path()} to capture its image.",
+        )
 
 
 # -- viewport_capture ---------------------------------------------------------------
@@ -1362,7 +1611,18 @@ def _capture_args(args: dict[str, Any]) -> dict[str, Any]:
     lop_path = args.get("lop_path")
     if lop_path is not None and (not isinstance(lop_path, str) or not lop_path.strip()):
         raise ToolError("invalid_argument", "'lop_path' must be a LOP node path.")
+    cop_path = args.get("cop_path")
+    if cop_path is not None and (
+        args.get("camera") is not None or lop_path is not None or source == "viewer"
+    ):
+        raise ToolError(
+            "invalid_argument",
+            "cop_path captures a COP image; it cannot be combined with camera, lop_path or "
+            "source viewer.",
+        )
     return {
+        "cop_path": cop_path,
+        "resolution_given": args.get("resolution") is not None,
         "source": source,
         "fit": fit,
         "fit_given": args.get("fit") is not None,
@@ -1411,6 +1671,7 @@ def _finish_capture(
     return result
 
 
+COP_NOTE = "The scene also has COP networks ({nets}); pass cop_path (a Cop node) to capture one."
 STAGE_NOTE = (
     "The scene also has a stage ({lop} is displayed in /stage); pass lop_path (or a LOP "
     "camera) to capture it."
@@ -1420,11 +1681,17 @@ STAGE_NOTE = (
 def _resolve_capture(parsed: dict[str, Any]) -> dict[str, Any]:
     """The capture target plus a note when /obj was captured but /stage has a display
     LOP. Main thread."""
+    _refuse_cop_as("camera", parsed["camera"])
+    _refuse_cop_as("lop_path", parsed["lop_path"])
     target = capture_target(parsed["camera"], parsed["lop_path"])
     if target["scene"] == "obj" and parsed["camera"] is None:
         display = _stage_display()
-        if display is not None:
-            target["note"] = STAGE_NOTE.format(lop=display.path())
+        notes = [STAGE_NOTE.format(lop=display.path())] if display is not None else []
+        nets = _cop_networks()
+        if nets:
+            notes.append(COP_NOTE.format(nets=", ".join(nets)))
+        if notes:
+            target["note"] = " ".join(notes)
     return target
 
 
@@ -1547,6 +1814,10 @@ def viewport_capture(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
             hint="Use source 'opengl_rop' (or 'auto'), which renders headless.",
         )
     timeout_s = float(call_timeout(None) or ctx.config.default_timeout_s)
+    if parsed["cop_path"] is not None:
+        if ctx.executor.on_main_thread():
+            return capture_cop(ctx, parsed)
+        return ctx.executor.run(lambda: capture_cop(ctx, parsed), timeout_s)
     if ctx.executor.on_main_thread():
         return _capture_main(parsed, ctx)
     if ctx.ui:
@@ -1917,6 +2188,13 @@ def usd_render_outputs(rop: Any, frames: list[float]) -> tuple[list[str], str | 
 
 
 def _not_a_render_node(node: Any) -> ToolError:
+    if is_cop_node(node) or is_cop_network(node):
+        return ToolError(
+            "invalid_argument",
+            f"{node.path()} ({node.type().name()}) is not a render node.",
+            hint=cop_hint(node),
+            candidates=cop_rop_candidates(node),
+        )
     return ToolError(
         "invalid_argument",
         f"{node.path()} ({node.type().name()}) is not a render node.",
@@ -2074,7 +2352,8 @@ def _prepare_render(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
         "isolate": needs_isolation(rop, ctx),
         "stage_source": rop.parm("opsource") is not None and rop.parm("opsource").eval() == 1,
         "hfs": hou.text.expandString("$HFS"),
-        "lights": scene_has_lights(),
+        # A COP image needs no lights (review 18 papercut 7).
+        "lights": (parm is not None and parm.name() == "copoutput") or scene_has_lights(),
     }
 
 
@@ -2129,7 +2408,11 @@ def _render_result(plan: dict[str, Any], thumbnail: bool) -> dict[str, Any]:
                     "image": image,
                 }
             except Exception as exc:  # a thumbnail is a nicety; never fail the render
-                result["thumbnail_error"] = f"{type(exc).__name__}: {exc}"
+                reason = exc.message if isinstance(exc, ToolError) else f"{type(exc).__name__}"
+                notes.append(
+                    f"No thumbnail: {os.path.basename(last)} could not be read ({reason})."
+                )
+                result["notes"] = notes
     return result
 
 

@@ -70,6 +70,8 @@ DEFAULT_LIMIT = 50
 HIP_KINDS = ("BeforeClear", "AfterClear", "BeforeLoad", "AfterLoad", "AfterMerge", "AfterSave")
 TOPNET_SAVE_PARMS = ("taskgraphfile", "checkpointfile", None)
 """Parms Houdini writes on a TOP network when the hip is saved (review 14 papercut 6)."""
+STAGE_SAVE_PARMS = ("rendergallerysource", None)
+"""Parms Houdini writes on /stage when the hip is saved (review 18 papercut 10)."""
 AGENT = "agent"
 OTHER = "other"
 
@@ -570,6 +572,19 @@ def _is_topnet(node: Any) -> bool:
         return False
 
 
+def _ramp_of(parm_tuple: Any) -> str | None:
+    """The ramp parm a ramp key's tuple belongs to, or None for other tuples."""
+    import hou
+
+    try:
+        parent = parm_tuple[0].parentMultiParm()
+        if parent is not None and parent.parmTemplate().type() == hou.parmTemplateType.Ramp:
+            return parent.name()
+    except Exception:
+        pass
+    return None
+
+
 def _on_node_event(**kwargs: Any) -> None:
     try:
         if _quiet():
@@ -580,8 +595,16 @@ def _on_node_event(**kwargs: Any) -> None:
         if kind == "ParmTupleChanged":
             tuple_ = kwargs.get("parm_tuple")
             name = tuple_.name() if tuple_ is not None else None
-            if name in TOPNET_SAVE_PARMS and _is_topnet(node):
+            if (name in TOPNET_SAVE_PARMS and _is_topnet(node)) or (
+                name in STAGE_SAVE_PARMS and path == "/stage"
+            ):
                 return  # Houdini's own bookkeeping when the hip is saved
+            ramp = _ramp_of(tuple_) if tuple_ is not None else None
+            if ramp is not None:
+                # A ramp edit touches every key's tuples (ramp1pos, ramp1c, ...): one event
+                # for the ramp (review 18 papercut 10).
+                LOG.record_parm(path, ramp)
+                return
             changed, keyed, order = (
                 _changed_components(node, tuple_) if tuple_ is not None else ([], [], [])
             )

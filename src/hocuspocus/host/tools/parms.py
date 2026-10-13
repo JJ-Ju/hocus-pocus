@@ -186,9 +186,12 @@ def _kind(template: Any) -> str:
     return str(ptype).rsplit(".", 1)[-1].lower()
 
 
-def _menu_mode(template: Any, kind: str) -> str | None:
+def _menu_mode(template: Any, kind: str, parm: Any = None) -> str | None:
     """``strict`` for ordinal menus (value must be an item), ``free`` for string
-    replace/toggle menus (any text allowed), None when the parm has no menu."""
+    replace/toggle menus (any text allowed), None when the parm has no menu. With
+    ``parm``, a string parm whose menu only the node builds (a Copernicus ``signature``:
+    no template items, no script, a normal menu) counts as a strict menu (review 18
+    papercut 4)."""
     import hou
 
     if kind == "menu":
@@ -197,6 +200,8 @@ def _menu_mode(template: Any, kind: str) -> str | None:
         return None
     try:
         if not template.menuItems() and not menu_is_dynamic(template):
+            if kind == "string" and parm is not None and _node_built_menu(parm):
+                return "strict"
             return None
     except Exception:
         return None
@@ -207,6 +212,23 @@ def _menu_mode(template: Any, kind: str) -> str | None:
     if menu_type in (hou.menuType.StringReplace, hou.menuType.StringToggle):
         return "free"
     return "strict"
+
+
+def _node_built_menu(parm: Any) -> bool:
+    """Whether the node gives this string parm menu items its template does not list."""
+    try:
+        return bool(parm.menuItems())
+    except Exception:
+        return False
+
+
+ICON_MARKUP = re.compile(r"^!\[[^\]]*\]\s*")
+"""A leading ``![BUTTONS_blendmode_over]`` icon reference in a menu label (Copernicus)."""
+
+
+def menu_label(label: str) -> str:
+    """A menu label without its leading icon markup (review 18 papercut 9)."""
+    return ICON_MARKUP.sub("", label) if label.startswith("![") else label
 
 
 def _range(template: Any, kind: str) -> dict[str, Any]:
@@ -292,11 +314,22 @@ def _key_info(parm: Any) -> dict[str, Any]:
     return info
 
 
+def _ramp_number(value: Any) -> Any:
+    """A ramp key or value at 6 significant digits: ramps store float32, and
+    ``0.550000011921`` reads as noise (review 18 papercut 10)."""
+    if isinstance(value, float) and math.isfinite(value):
+        return _json_number(float(f"{value:.6g}"))
+    return _json_number(value)
+
+
 def _ramp_dict(ramp: Any) -> dict[str, Any]:
-    values = [list(v) if isinstance(v, tuple | list) else _json_number(v) for v in ramp.values()]
+    values = [
+        [_ramp_number(c) for c in v] if isinstance(v, tuple | list) else _ramp_number(v)
+        for v in ramp.values()
+    ]
     return {
         "basis": [str(b).rsplit(".", 1)[-1].lower() for b in ramp.basis()],
-        "keys": [_json_number(k) for k in ramp.keys()],  # noqa: SIM118 (hou.Ramp)
+        "keys": [_ramp_number(k) for k in ramp.keys()],  # noqa: SIM118 (hou.Ramp)
         "values": values,
         "is_color": bool(ramp.isColor()),
     }
@@ -331,6 +364,8 @@ def _int_menu_token(parm: Any, value: Any) -> Any:
 
 
 def _raw(parm: Any, kind: str) -> Any:
+    if kind == "ramp":
+        return None  # rawValue() is the key count as text; value says it (review 18)
     if kind == "string":
         try:
             return parm.unexpandedString()
@@ -372,7 +407,7 @@ def _hda_locked(parm: Any) -> bool:
 
 def _menu_items(parm: Any) -> tuple[list[str], list[str]] | None:
     try:
-        return list(parm.menuItems()), list(parm.menuLabels())
+        return list(parm.menuItems()), [menu_label(label) for label in parm.menuLabels()]
     except Exception:
         return None
 
@@ -467,7 +502,7 @@ def _value_and_raw(out: dict[str, Any], value: Any, raw: Any, full_strings: bool
     ``full_strings`` (review 12 papercut 1: a 5 KB snippet was echoed twice)."""
     shape = (lambda v: v) if full_strings else elide_string
     out["value"] = shape(value)
-    if not raw_equals(raw, value):
+    if raw is not None and not raw_equals(raw, value):
         out["raw"] = shape(raw)
 
 
@@ -481,7 +516,7 @@ def _describe_parm(
     """Compact summary (``include is None``) or the full ``parm_get`` shape."""
     template = parm.parmTemplate()
     kind = _kind(template)
-    menu_mode = _menu_mode(template, kind)
+    menu_mode = _menu_mode(template, kind, parm)
     keys = _key_info(parm)
     value = _eval(parm, kind, menu_mode, frame)
     locked = _parm_locked(parm)
@@ -524,7 +559,8 @@ def _describe_parm(
         if "template" in include:
             out["template"] = _template_dict(template, kind, parm)
         if "ramp" in include and kind == "ramp" and isinstance(value, dict):
-            out["ramp"] = {**value, "count": len(value["keys"])}
+            # value already is the ramp: say it once (review 18 papercut 10).
+            out["ramp"] = {"count": len(value["keys"])}
         if "multiparm" in include:
             multiparm = _multiparm_dict(parm)
             if multiparm is not None:
@@ -791,7 +827,7 @@ def _resolve_menu(parm: Any, kind: str, value: Any, notes: list[str]) -> tuple[s
     """Return ``(token, index)`` for a token, label or index on a strict menu."""
     try:
         items = list(parm.menuItems())
-        labels = list(parm.menuLabels())
+        labels = [menu_label(label) for label in parm.menuLabels()]
     except Exception as exc:
         raise _invalid(parm, kind, f"Cannot read the menu of {parm.path()}.") from exc
     shown = ", ".join(
@@ -860,7 +896,7 @@ def _coerce(parm: Any, value: Any, notes: list[str], *, for_key: bool = False) -
             f"{path} is a single parm; got a {type(value).__name__}.",
             hint="Pass a scalar, or use the tuple path to set every component with a list.",
         )
-    menu_mode = _menu_mode(template, kind)
+    menu_mode = _menu_mode(template, kind, parm)
     if menu_mode == "strict":
         token, index = _resolve_menu(parm, kind, value, notes)
         if for_key and kind == "string":

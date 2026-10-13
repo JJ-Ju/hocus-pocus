@@ -288,7 +288,8 @@ def test_ramp(client, scene):
     assert node.parm("remap").eval().lookup(0.25) == pytest.approx(0.5)
     got = _get(client, "/obj/geo1/remap1/remap", include=["ramp", "multiparm"])
     assert got["type"] == "ramp"
-    assert got["ramp"]["count"] == 3 and got["ramp"]["is_color"] is False
+    assert got["ramp"] == {"count": 3}  # the keys are in value, once (review 18)
+    assert got["value"]["is_color"] is False
     assert got["multiparm"]["count"] == 3
     err = client.error(
         "parm_set",

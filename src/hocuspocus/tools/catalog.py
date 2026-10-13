@@ -1012,7 +1012,9 @@ _PARMS: tuple[ToolSpec, ...] = (
             "output files over its frame range are checked afterwards: outputs_summary, or "
             "cook_failed with detail.missing. press also runs the callback script of a non-button "
             "parm (pyrosource initialize), and with value it sets the value first; a plain set "
-            "of a menu or toggle with a callback notes that the callback did not run. "
+            "of a menu or toggle with a callback notes that the callback did not run. A string "
+            "menu only the node builds (a Copernicus signature) takes a token or label like any "
+            "menu. Ramp keys and values come back at 6 significant digits, without raw. "
             "raw is left out when it equals value, and long strings are "
             "elided as in parm_get. Tuples report per-component expressions and the keyed component"
             " names. Type mismatches fail with invalid_value naming the template type and range. "
@@ -1219,7 +1221,8 @@ _COOK: tuple[ToolSpec, ...] = (
         description=(
             "Summarise the geometry of a SOP (or an OBJ's display SOP): point, prim "
             "and vertex counts, bounding box, primitive types, attributes per class with type and "
-            "size, detail attribute values, groups with counts. geo_read reads per-element values."
+            "size, detail attribute values, groups with counts. On a Cop node: the image's layer "
+            "type, resolution and channel min/max/mean."
         ),
         notes=(
             "frame evaluates the geometry at that frame without moving the playbar. intrinsics "
@@ -1228,7 +1231,11 @@ _COOK: tuple[ToolSpec, ...] = (
             "value_type, active_voxels, voxel_size] (at most 100 each; volume_total or vdb_total "
             "then counts them all), and the first packed primitives. Detail attribute values are"
             " capped: arrays at 16 items, strings at 200 characters, and a dict longer than 200 "
-            "characters as {elided, keys}; hou vectors and matrices are lists."
+            "characters as {elided, keys}; hou vectors and matrices are lists. geo_read reads "
+            "per-element values. A Cop node (or a COP network's display node) gives kind: image, "
+            "output, layer_type (Mono, RGB, RGBA, ...), resolution, data_window, pixel_scale, "
+            "storage, border, constant?, channels {r: {min, max, mean}, ...} of its first "
+            "output, and other_outputs [{name, layer_type}]."
         ),
         input_schema=_obj({"path": _s("SOP or OBJ path."), "frame": _frame()}, ("path",)),
         output_schema=_out(
@@ -1245,7 +1252,6 @@ _COOK: tuple[ToolSpec, ...] = (
                 "groups": _out({k: _objs() for k in ("point", "prim", "edge", "vertex")}),
                 "intrinsics": _t("object"),
             },
-            ("point_count", "prim_count", "vertex_count"),
         ),
         read_only=True,
         examples=({"path": "/obj/geo1/OUT"}, {"path": "/obj/geo1", "frame": 1}),
@@ -1304,8 +1310,9 @@ _VISUAL: tuple[ToolSpec, ...] = (
     ToolSpec(
         name="viewport_capture",
         description=(
-            "Look at /obj or a LOP stage: a PNG (long side at most 1024), path, size, "
-            "camera_used, scene. camera: OBJ or LOP camera, or camera prim (lop_path). auto: the "
+            "Look at /obj, a LOP stage or a COP: a PNG (long side at most 1024), path, size, "
+            "camera_used, scene. camera: OBJ or LOP camera, or camera prim (lop_path); cop_path: "
+            "a Cop node's image. auto: the "
             "GUI viewer if present and no camera, else an OpenGL ROP (headless too) framed per "
             "fit. Leaves no nodes, undo step or dirty flag."
         ),
@@ -1323,12 +1330,18 @@ _VISUAL: tuple[ToolSpec, ...] = (
             "cameras; camera errors list the scene's cameras. path also writes the PNG there. Both "
             "files are "
             "opaque, on the same grey as the image (the OpenGL ROP itself writes a transparent "
-            "background). image.attached is true when the PNG went out as MCP image content."
+            "background). image.attached is true when the PNG went out as MCP image content. "
+            "cop_path (a Cop node, or a COP network's display node) renders it through a "
+            "temporary rop_image in its network (about 0.2 s, deleted afterwards, outside undo): "
+            "scene cop, layer {layer_type, resolution, data_window}, the image at the COP's own "
+            "resolution (resolution is ignored). Without camera, lop_path or cop_path a note "
+            "names the COP networks under /img."
         ),
         input_schema=_obj(
             {
                 "camera": _s(),
                 "lop_path": _s(),
+                "cop_path": _s(),
                 "frame": _frame(),
                 "resolution": _arr(
                     {"type": "integer", "minimum": 16}, minItems=2, maxItems=2, default=[1024, 768]
@@ -1384,7 +1397,11 @@ _VISUAL: tuple[ToolSpec, ...] = (
             "through the ROP inside it (no output override), then turns on Load from Disk as its "
             "Save to Disk button does (side_effects: {parm: [old, new]}). A cancelled render's "
             "job result is the cancelled error with detail {last_status, partial: "
-            "{outputs_summary}} (the files written before the cancel)."
+            "{outputs_summary}} (the files written before the cancel). A Cop node is not a ROP: "
+            "the error's candidates are the rop_image nodes in its network (viewport_capture "
+            "cop_path looks at it). A COP image needs no lights, so no lights note. A thumbnail "
+            "PIL cannot read (a float TIFF) is converted with iconvert; if that fails too, a note "
+            "says why."
         ),
         input_schema=_obj(
             {
@@ -1415,7 +1432,6 @@ _VISUAL: tuple[ToolSpec, ...] = (
                         "image": _image(),
                     }
                 ),
-                "thumbnail_error": _t("string"),
                 "notes": _list(),
             },
             ("job_id", "state"),
@@ -1465,7 +1481,11 @@ _VISUAL: tuple[ToolSpec, ...] = (
         notes=(
             "total is the real number of matching types, not a cap: a plain-language query also "
             "matches on single description words, so broad queries can match hundreds of types. "
-            "Raise limit (up to 1000) to see them all."
+            "Raise limit (up to 1000) to see them all. Cop types also match the labels of their "
+            "menus (remap's Threshold, blend's Over), and compositing words name their Cop type "
+            "(threshold: remap, gradient: ramp, composite or over: blend, text: font, write: "
+            "rop_image). A network type's row adds child_category and typical_parents (CopNet "
+            "copnet: /img). Results with legacy Cop2 types carry a note that Copernicus is Cop."
         ),
         input_schema=_obj(
             {
@@ -1514,7 +1534,11 @@ _VISUAL: tuple[ToolSpec, ...] = (
             "list becomes inputs_count, and detail full leaves out the folder list. In detail "
             "full a script menu (pdg_cachemode) or a menu built from input geometry (a SOP "
             "group) is evaluated on a temporary instance: menu {items, dynamic: true}, or items "
-            "[] with a note when it evaluates empty there."
+            "[] with a note when it evaluates empty there; so is a string menu only the node "
+            "builds (a Copernicus signature). Menu labels lose their ![icon] markup. A compact "
+            "listing over 8 KB leaves out the parms a menu hides at its default (the per-pattern "
+            "parms of the other patterns): variants {menu parm: parms left out} and a note; pass "
+            "parms or detail full to list them."
         ),
         input_schema=_obj(
             {
