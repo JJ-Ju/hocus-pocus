@@ -58,6 +58,11 @@ SPARE_BURST_S = 0.5
 """ParmTupleChanged events this close before a SpareParmsChanged on the same node are
 the template change itself (the folder and the new parms), not value edits."""
 WATCH_CAP = 5000
+DEDUPE_WINDOW = 16
+DEDUPE_S = 0.5
+"""A ``ChildCreated``/``ChildDeleted`` repeating one of the last :data:`DEDUPE_WINDOW`
+events within this many seconds, with nothing on that path and no hip event in between,
+is the same change seen twice (review 16 N2)."""
 MANAGERS = ("/obj", "/stage", "/mat", "/out", "/tasks")
 DEFAULT_LIMIT = 50
 HIP_KINDS = ("BeforeClear", "AfterClear", "BeforeLoad", "AfterLoad", "AfterMerge", "AfterSave")
@@ -86,6 +91,7 @@ class EventLog:
         self._pending: list[dict[str, Any]] | None = None
         self._pending_thread: int | None = None
         self._collapse: list[dict[str, Any]] = []
+        self._child_seen: dict[tuple[str, str, str], float] = {}
 
     @property
     def last_seq(self) -> int:
@@ -148,6 +154,8 @@ class EventLog:
             }
             if detail:
                 event["detail"] = detail
+            if kind in ("ChildCreated", "ChildDeleted") and self._repeat(event, held):
+                return None
             if held and origin is None:
                 pending = self._pending
                 assert pending is not None
@@ -161,6 +169,26 @@ class EventLog:
                 event["seq"] = self._seq
                 self._buf.append(event)
             return event
+
+    def _repeat(self, event: dict[str, Any], held: bool) -> bool:
+        """Whether ``event`` repeats one of the last :data:`DEDUPE_WINDOW` events on its
+        path (a context manager also watched as a node, after ``network_describe`` of
+        /stage, reported each top-level ``ChildCreated`` twice). Lock held."""
+        key = (event["kind"], event["path"], event["origin"])
+        mono = time.monotonic()
+        last = self._child_seen.get(key)
+        if len(self._child_seen) > 256:
+            self._child_seen = {k: t for k, t in self._child_seen.items() if mono - t <= DEDUPE_S}
+        self._child_seen[key] = mono
+        if last is None or mono - last > DEDUPE_S:
+            return False
+        recent = self._pending if held and self._pending is not None else self._buf
+        for i, other in enumerate(reversed(recent)):
+            if i >= DEDUPE_WINDOW or other["kind"] in HIP_KINDS:
+                break
+            if other["path"] == event["path"]:
+                return other["kind"] == event["kind"] and other["origin"] == event["origin"]
+        return False
 
     def _alive(self, event: dict[str, Any]) -> bool:
         """Whether ``event`` can still absorb a coalesced change (lock held)."""
@@ -471,6 +499,8 @@ def _on_node_event(**kwargs: Any) -> None:
         elif kind == "InputRewired":
             LOG.record(kind, path, {"input": kwargs.get("input_index")})
         elif kind in ("ChildCreated", "ChildDeleted"):
+            if any(node == manager for manager in _HOOKS.managers):
+                return  # _on_manager_event already records a context manager's children
             child = kwargs.get("child_node")
             LOG.record(kind, _safe_path(child), _child_detail(child))
             if kind == "ChildCreated":

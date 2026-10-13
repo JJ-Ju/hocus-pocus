@@ -185,6 +185,11 @@ D21 to D24).
   (2 samples, the same camera and resolution) and reports `source_used: "karma"` with a
   note. A crashed child's log in an error is cut to 600 characters: the fatal error and
   the crashing thread, without the idle thread stacks.
+- **Duplicate `ChildCreated` events (review 16 N2).** After `network_describe` of
+  `/stage` or `/obj`, the context manager was watched as a node too, and every
+  top-level `ChildCreated` and `ChildDeleted` was reported twice. The manager's own node
+  callback no longer records its children, and a child event that repeats one on the
+  same path within 0.5 s, with nothing on that path in between, is dropped.
 
 ### Upgrading from 1.1
 

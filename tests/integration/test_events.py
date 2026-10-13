@@ -446,3 +446,51 @@ def test_failed_hip_load_does_not_silence_events(client, work_dir, tool, monkeyp
     hou.node("/obj").createNode("geo", "after_failure")
     _settle(client)
     assert ("ChildCreated", "/obj/after_failure") in _kinds(_read(client, since))
+
+
+def test_top_level_children_are_reported_once(client):
+    """Review 16 N2: after network_describe of /stage (which watches /stage itself), every
+    top-level ChildCreated was reported twice: by the manager callback and by /stage's
+    own node callback. Nested children were reported once."""
+    client.ok("network_describe", {"root": "/stage", "format": "outline"})
+    client.ok("network_describe", {"root": "/obj", "format": "outline"})
+    since = _since()
+    client.ok(
+        "node_create",
+        {
+            "items": [
+                {"parent": "/stage", "type": "materiallibrary", "name": "matlib"},
+                {"parent": "/stage/matlib", "type": "mtlxstandard_surface", "name": "concrete"},
+                {"parent": "/stage", "type": "camera", "name": "cam_main"},
+            ]
+        },
+    )
+    hou.node("/stage").createNode("null", "user_null")
+    hou.node("/obj").createNode("geo", "user_geo")
+    _settle(client)
+    hou.node("/stage/user_null").destroy()
+    created = [e["path"] for e in _read(client, since) if e["kind"].startswith("Child")]
+    assert created == [
+        "/stage/matlib",
+        "/stage/matlib/concrete",
+        "/stage/cam_main",
+        "/stage/user_null",
+        "/obj/user_geo",
+        "/stage/user_null",
+    ]
+
+
+def test_repeated_child_events_are_dropped():
+    log = ev.EventLog()
+    log.record("ChildCreated", "/stage/a")
+    log.record("ChildCreated", "/stage/a")  # the same creation seen by a second callback
+    log.record("ChildCreated", "/stage/b")
+    log.record("ChildDeleted", "/stage/a")
+    log.record("ChildCreated", "/stage/a")  # created again after the delete: a new event
+    kinds = [(e["kind"], e["path"]) for e in log.read(0, 10)["events"]]
+    assert kinds == [
+        ("ChildCreated", "/stage/a"),
+        ("ChildCreated", "/stage/b"),
+        ("ChildDeleted", "/stage/a"),
+        ("ChildCreated", "/stage/a"),
+    ]
