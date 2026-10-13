@@ -307,3 +307,14 @@ def test_node_type_info_filters_drop_inputs_and_folders(client):
     )
     assert "folders" not in detailed and "inputs" not in detailed
     assert detailed["parms"]
+
+
+# -- hints (review 15 papercut 10) ------------------------------------------------------
+
+
+def test_node_create_camera_in_obj_suggests_cam(client):
+    error = client.error("node_create", {"items": [{"parent": "/obj", "type": "camera"}]})
+    assert error["code"] == "node_type_not_found"
+    assert "cam" in error["candidates"]
+    assert "as cam" in error["hint"]
+    assert "geo object" not in error["hint"]

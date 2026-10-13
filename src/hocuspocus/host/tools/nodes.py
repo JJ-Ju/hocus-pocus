@@ -189,6 +189,7 @@ TYPE_SYNONYMS: dict[str, dict[str, tuple[str, str]]] = {
             for name in names
         },
         "domelight": ("envlight", "an environment light (envlight) lights from a dome"),
+        "camera": ("cam", "set focal, resx and resy on it"),
     },
 }
 """``{category: {query: (type, note)}}`` for type names an agent reaches for that the
