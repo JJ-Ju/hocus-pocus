@@ -3,6 +3,29 @@
 This project uses [Semantic Versioning](https://semver.org/). The 0.9 compatibility
 policy does not apply to 1.0.
 
+## 1.2.1 (2026-10-12)
+
+### Fixes
+
+- **`install-houdini` installs into every pref dir Houdini may use.** On Windows,
+  Houdini 22 started from the Start menu (no `HOME` variable) uses
+  `%USERPROFILE%\Documents\houdini22.0`, while one started from a shell that sets `HOME`
+  (Git Bash, some terminals) uses `%HOME%\houdini22.0`. 1.2.0 wrote the package JSON only
+  to the directory hython reported from the shell `install-houdini` ran in, so a Houdini
+  started the other way never loaded HocusPocus. `install-houdini` now collects every
+  candidate (`--prefs`, `HOUDINI_USER_PREF_DIR`, hython's answer with and without
+  `HOME`, the existing `~/houdiniX.Y` and `~/Documents/houdiniX.Y`), deduplicated by
+  real path, and writes the package JSON (and, without `--dev`, the copied package) into
+  each one that exists. It creates only `--prefs` (or, when no candidate exists, the
+  first). It prints each location and records them all in `<state_dir>/install.json` as
+  `pref_dirs` (`prefs` stays, holding the first).
+- **`uninstall-houdini`** removes the package from every recorded and candidate pref dir.
+- **`doctor`** lists each candidate pref dir with whether its package JSON is present and
+  current, and warns when they disagree, naming the `install-houdini` command to run.
+- **The bridge** reads `hocuspocus.toml` from the first candidate that has one: the
+  recorded `pref_dirs` in order, then the default locations. `HOUDINI_USER_PREF_DIR`,
+  when set, is still the only place it looks.
+
 ## 1.2.0 (2026-10-12)
 
 Before 1.2 the real workloads were all SOP work. In 1.2 the `full` profile (`usd_stage`,
