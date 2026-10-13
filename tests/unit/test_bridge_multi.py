@@ -470,3 +470,45 @@ def test_connect_to_a_dead_pid_is_not_retryable_and_labels_candidates():
         {"pid": 61996, "label": "hython", "ui": False, "hip": ""},
     ]
     assert "3084 (houdinifx, GUI, city_work.hip)" in error["message"]
+
+
+# -- 5. events cursors carry their instance (review 19 papercut 8) ---------------------------
+
+
+def _events_host(host: Host, last: int) -> None:
+    def reply(args):
+        since = args.get("since", 0)
+        out = {"events": [], "next_since": max(since, last), "dropped": 0}
+        if since > last:
+            out = {"reset": True, "events": [], "next_since": last, "dropped": 0}
+        return True, out, {}
+
+    host.replies["events"] = reply
+
+
+def test_next_since_is_tagged_with_the_pid_and_round_trips():
+    bridge, hosts, _live = make(GUI)
+    _events_host(host_of(hosts, GUI), last=9)
+    first = data(bridge.call_tool("events", {}))
+    assert first["next_since"] == "3084:9"
+    again = data(bridge.call_tool("events", {"since": first["next_since"]}))
+    assert "reset" not in again
+    assert host_of(hosts, GUI).calls[-1] == ("events", {"since": 9})
+
+
+def test_cursor_from_another_instance_resets_with_a_note():
+    bridge, hosts, _live = make(GUI, WORKER)
+    _events_host(host_of(hosts, WORKER), last=4)
+    bridge.call_tool("houdini_connect", {"pid": WORKER.pid})
+    out = data(bridge.call_tool("events", {"since": "3084:9"}))
+    assert out["reset"] is True and "pid 3084" in out["note"] and "61900" in out["note"]
+    assert out["next_since"] == "61900:4"
+    assert host_of(hosts, WORKER).calls[-1] == ("events", {"since": 0})
+
+
+def test_bare_seq_still_works_and_bad_cursors_are_invalid():
+    bridge, hosts, _live = make(GUI)
+    _events_host(host_of(hosts, GUI), last=3)
+    assert data(bridge.call_tool("events", {"since": 2}))["next_since"] == "3084:3"
+    error = data(bridge.call_tool("events", {"since": "yesterday"}))
+    assert error["code"] == "invalid_argument" and "next_since" in error["message"]

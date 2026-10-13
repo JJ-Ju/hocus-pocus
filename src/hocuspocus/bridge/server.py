@@ -133,6 +133,44 @@ def job_owner(name: str, args: dict[str, Any]) -> int | None:
     return int(match.group(1)) if match else None
 
 
+EVENTS_CURSOR_RE = re.compile(r"^(?:(\d+):)?(\d+)$")
+"""An ``events`` cursor: ``<pid>:<seq>`` as the bridge returns it, or a bare ``<seq>``."""
+
+
+def events_cursor(args: dict[str, Any]) -> tuple[int | None, int]:
+    """``(pid or None, seq)`` from ``events`` ``since``; raises ``invalid_argument``."""
+    since = args.get("since", 0)
+    if isinstance(since, int) and not isinstance(since, bool) and since >= 0:
+        return None, since
+    match = EVENTS_CURSOR_RE.match(since) if isinstance(since, str) else None
+    if match is None:
+        raise ToolError(
+            "invalid_argument",
+            f"since must be the next_since of an earlier events call ('<pid>:<seq>') or a seq "
+            f"number, not {since!r}.",
+            hint="pass next_since back as since, or omit it to read from the start",
+        )
+    return (int(match.group(1)) if match.group(1) else None), int(match.group(2))
+
+
+def tag_events(
+    payload: dict[str, Any], inst: registry.Instance, foreign: tuple[int, str] | None
+) -> dict[str, Any]:
+    """``next_since`` as ``<pid>:<seq>``, and the reset note when ``since`` was a cursor
+    of another Houdini (review 19 papercut 8; the host's seq restarts per process)."""
+    out = dict(payload)
+    if isinstance(out.get("next_since"), int):
+        out["next_since"] = f"{inst.pid}:{out['next_since']}"
+    if foreign is not None:
+        pid, since = foreign
+        out["reset"] = True
+        out["note"] = (
+            f"since {since} is a cursor of Houdini pid {pid}; this is pid {inst.pid}, whose "
+            "seq numbers are its own, so its events are listed from the start."
+        )
+    return out
+
+
 def instance_meta(inst: registry.Instance) -> dict[str, Any]:
     """``_meta.instance``: which Houdini answered (review 19 papercut 4)."""
     out: dict[str, Any] = {"pid": inst.pid, "label": inst.label}
@@ -501,6 +539,7 @@ class Bridge:
                 return self._job_list_all()
             args = {key: value for key, value in args.items() if key != "all"}
         target_pid = job_owner(name, args)
+        cursor = events_cursor(args) if name == "events" else None
         stale: list[str] = []
         for _attempt in range(MAX_STALE_ENTRIES):
             inst, warnings, ambiguous = self._resolve(name, args, target_pid)
@@ -512,10 +551,16 @@ class Bridge:
                 stale.append(str(exc))
                 continue  # deleted; select again
             self._inflight[request_id] = inst
+            sent, foreign = args, None
+            if cursor is not None:
+                # The host keeps a bare seq; another Houdini's cursor reads from the start.
+                cursor_pid, seq = cursor
+                foreign = None if cursor_pid in (None, inst.pid) else (cursor_pid, args["since"])
+                sent = dict(args, since=0 if foreign else seq)
             try:
                 ok, payload, meta = client.call(
                     name,
-                    args,
+                    sent,
                     self._timeout(args),
                     request_id,
                     max_response_bytes=self.config.max_response_bytes,
@@ -539,6 +584,8 @@ class Bridge:
             meta["instance"] = instance_meta(inst)
             if ok:
                 self._remember_jobs(inst, payload)
+                if cursor is not None:
+                    payload = tag_events(payload, inst, foreign)
             if ambiguous and ok:
                 # _meta is not shown to the model by every client: say it in the result too.
                 payload = {

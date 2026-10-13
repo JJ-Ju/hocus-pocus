@@ -2,7 +2,7 @@
 
 <!-- Generated from src/hocuspocus/tools/catalog.py by `python -m hocuspocus.tools.docs`. Do not edit by hand. -->
 
-35 tools: 14 in the `minimal` profile, 31 in `core` (minimal included), 4 more in `full`. Model-visible `tools/list` text: 26,505 bytes. See `docs/BIBLE.md` §4 for the design.
+35 tools: 14 in the `minimal` profile, 31 in `core` (minimal included), 4 more in `full`. Model-visible `tools/list` text: 26,502 bytes. See `docs/BIBLE.md` §4 for the design.
 
 ## Contents
 
@@ -1235,15 +1235,15 @@ Drive a TOP node: cook its work items as a job (block waits up to timeout_s, cap
 
 `read-only` `headless ok` · profile `full`
 
-What changed since your last call: hip, node (created, renamed, deleted, parms or flags changed on nodes HocusPocus touched or read) and pdg events with seq and origin (agent|other). Pass the last seq seen as since.
+What changed since your last call: hip, node (created, renamed, deleted, parms or flags changed on nodes HocusPocus touched or read) and pdg events with seq and origin (agent|other). Pass next_since back as since.
 
-**Notes.** Watched nodes: those HocusPocus created, edited, read with node_info or listed with network_describe, and nodes created directly under /obj, /stage, /mat, /out and /tasks. ParmTupleChanged has detail.parm and, on a multi-component tuple, components (those whose value or keys changed; a burst within 0.1 s is one event with their union) and keyed (those of them with keyframes now). FlagChanged has detail.flags (flag: new value); a spare parm edit is one SpareParmsChanged; hda create, match and unlock are one hda_contents_rebuilt per asset; kind pdg has detail.event cook_start, work_item_failed (id, index, error) or cook_done (ok, states, cancelled). A call that fails and is rolled back records nothing, nor does a node created and deleted within one call, a tool's own set-and-restore, or Houdini's save-time writes on TOP networks.
+**Notes.** Watched nodes: those HocusPocus created, edited, read with node_info or listed with network_describe, and nodes created directly under /obj, /stage, /mat, /out and /tasks. ParmTupleChanged has detail.parm and, on a multi-component tuple, components (those whose value or keys changed; a burst within 0.1 s is one event with their union) and keyed (those of them with keyframes now). FlagChanged has detail.flags (flag: new value); a spare parm edit is one SpareParmsChanged; hda create, match and unlock are one hda_contents_rebuilt per asset; kind pdg has detail.event cook_start, work_item_failed (id, index, error) or cook_done (ok, states, cancelled). Each Houdini numbers its own events: next_since is '<pid>:<seq>' (pass it back as since), and a cursor from another Houdini returns reset: true with a note and that Houdini's events from the start. A call that fails and is rolled back records nothing, nor does a node created and deleted within one call, a tool's own set-and-restore, or Houdini's save-time writes on TOP networks.
 
 ### Arguments
 
 | Name | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `since` | integer |  | `0` | min 0 |
+| `since` | integer \| string |  | `0` |  |
 | `limit` | integer |  | `50` | min 1; max 1000 |
 
 ### Examples
@@ -1253,5 +1253,5 @@ What changed since your last call: hip, node (created, renamed, deleted, parms o
 ```
 
 ```json
-{"since": 42, "limit": 20}
+{"since": "3084:42", "limit": 20}
 ```
