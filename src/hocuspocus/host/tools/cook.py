@@ -177,20 +177,24 @@ def _perf_cook_stats(
     return out
 
 
-def _perf_cook(node: Any) -> tuple[float, BaseException | None, dict[str, Any] | None]:
-    """Force-cook ``node`` under Houdini's performance monitor (cook stats only). Returns
-    the wall time, the cook failure, and per-node stats, or None when the monitor could
-    not be used (another profile is recording, or the API failed). A stopped profile
-    cannot be deleted, so in a GUI session it stays in the Performance Monitor's list."""
+def _perf_cook(
+    node: Any, *, solve: bool = False
+) -> tuple[float, BaseException | None, dict[str, Any] | None]:
+    """Force-cook ``node`` under Houdini's performance monitor: cook stats, or with
+    ``solve`` DOP solve stats only. Returns the wall time, the cook failure, and the
+    profile's stats tree, or None when the monitor could not be used (another profile is
+    recording, or the API failed). A stopped profile cannot be deleted, so in a GUI
+    session it stays in the Performance Monitor's list."""
     import hou
 
     profile = None
     with contextlib.suppress(Exception):
         if hou.perfMon.activeProfile() is None:
             options = hou.PerfMonRecordOptions(
-                cook_stats=True, solve_stats=False, draw_stats=False, gpu_draw_stats=False,
-                viewport_stats=False, script_stats=False, render_stats=False,
-                thread_stats=False, frame_stats=False, memory_stats=False, errors=False,
+                cook_stats=not solve, solve_stats=solve, draw_stats=False,
+                gpu_draw_stats=False, viewport_stats=False, script_stats=False,
+                render_stats=False, thread_stats=False, frame_stats=False,
+                memory_stats=False, errors=False,
             )  # fmt: skip
             profile = hou.perfMon.startProfile(f"HocusPocus cook profile {node.path()}", options)
     try:
@@ -199,11 +203,23 @@ def _perf_cook(node: Any) -> tuple[float, BaseException | None, dict[str, Any] |
         if profile is not None:
             with contextlib.suppress(Exception):
                 profile.stop()
-    stats = None
+    tree = None
     if profile is not None:
         with contextlib.suppress(Exception):
-            stats = _perf_cook_stats(profile.stats())
-    return elapsed, failure, stats
+            tree = profile.stats()
+    return elapsed, failure, tree if isinstance(tree, dict) else None
+
+
+def solve_ms(tree: dict[str, Any]) -> float:
+    """The DOP solve time a solve-stats profile recorded, from its root's per-thread,
+    per-frame ``Solve`` (verified on 22.0.466: 0 entries when a cook read cached frames).
+    No ``hou``."""
+    total = 0.0
+    for per_thread in (tree.get("stats") or {}).values():
+        for values in (per_thread or {}).values():
+            with contextlib.suppress(TypeError, ValueError, AttributeError):
+                total += float(values.get("Solve", 0.0) or 0.0)
+    return total
 
 
 SIM_NETS_CAP = 3
@@ -230,15 +246,37 @@ def _dop_networks(node: Any) -> list[Any]:
     return [child for child in children if is_dopnet(child)][:SIM_NETS_CAP]
 
 
-def _sim_states(nets: list[Any]) -> list[tuple[str, float, int]]:
-    """``(path, simulation time, memory)`` per DOP network; a change across a cook means
-    the cook simulated frames."""
+def _sim_states(nets: list[Any]) -> list[dict[str, Any]]:
+    """``{path, time, memory}`` per DOP network: the simulation's time and memory (bytes)."""
     states = []
     for net in nets:
         with contextlib.suppress(Exception):
             sim = net.simulation()
-            states.append((net.path(), float(sim.time()), int(sim.memoryUsage())))
+            states.append(
+                {"path": net.path(), "time": float(sim.time()), "memory": int(sim.memoryUsage())}
+            )
     return states
+
+
+def resimulated(
+    before: dict[str, Any] | None, after: dict[str, Any], solve: float | None
+) -> bool | None:
+    """Whether a cook stepped the simulation, or None when Houdini gave no reliable
+    signal (review 20 N3). ``solve`` is the DOP solve time the performance monitor
+    recorded (:func:`solve_ms`), the reliable signal. Without it (the monitor could not
+    be used) only the simulation state is left, and its time moves on a cache read too
+    (a 4 ms cook of frame 24 read as ``resimulated: true``): a changed memory size means
+    frames were simulated (and cached or evicted), an unchanged time and size that
+    nothing was, and anything else is unknown. No ``hou``."""
+    if solve is not None:
+        return solve > 0.0
+    if before is None:
+        return None
+    if after["memory"] != before["memory"]:
+        return True
+    if after["time"] == before["time"]:
+        return False
+    return None
 
 
 def _profile_step(node_path: str) -> dict[str, Any]:
@@ -250,7 +288,8 @@ def _profile_step(node_path: str) -> dict[str, Any]:
     if _is_block_end(node):
         begin = _loop_begin(node)
         before = begin.cookCount() if begin is not None else None
-        elapsed, failure, stats = _perf_cook(node)
+        elapsed, failure, tree = _perf_cook(node)
+        stats = _perf_cook_stats(tree) if tree is not None else None
         loop = {"block_end": node.path(), "body": _loop_body(node, begin), "stats": stats}
         if begin is not None:
             loop["block_begin"] = begin.path()
@@ -259,7 +298,12 @@ def _profile_step(node_path: str) -> dict[str, Any]:
     else:
         nets = _dop_networks(node)
         before = _sim_states(nets)
-        elapsed, failure = timed_cook(node, True)
+        solve = None
+        if nets:
+            elapsed, failure, tree = _perf_cook(node, solve=True)
+            solve = solve_ms(tree) if tree is not None else None
+        else:
+            elapsed, failure = timed_cook(node, True)
         after = _sim_states(nets)
     row: dict[str, Any] = {
         "path": node.path(),
@@ -270,12 +314,12 @@ def _profile_step(node_path: str) -> dict[str, Any]:
         import hou
 
         # Review 17 P2-10: a force-cook of a solver reads the simulation cache when it
-        # holds the frame; say whether this cook simulated anything.
-        resimulated = before != after
+        # holds the frame; say whether this cook simulated anything (review 20 N3).
+        first = before[0] if before and before[0]["path"] == after[0]["path"] else None
         row["simulation"] = {
-            "dopnet": after[0][0],
-            "resimulated": resimulated,
-            "frame": _num(round(hou.timeToFrame(after[0][1]), 4)),
+            "dopnet": after[0]["path"],
+            "resimulated": resimulated(first, after[0], solve),
+            "frame": _num(round(hou.timeToFrame(after[0]["time"]), 4)),
         }
     if loop is not None:
         row["_loop"] = loop
@@ -512,6 +556,13 @@ def _profiled(
 
 def _sim_note(row: dict[str, Any]) -> str:
     sim = row["simulation"]
+    if sim["resimulated"] is None:
+        return (
+            f"{row['path']} cooked {sim['dopnet']} at frame {sim['frame']}, but whether it "
+            "re-simulated or read cached frames is unknown (Houdini's performance monitor was "
+            "unavailable), so resimulated is null. Reset the simulation (its resimulate button) "
+            "to time a full run."
+        )
     if sim["resimulated"]:
         return (
             f"{row['path']} simulated frames in {sim['dopnet']} up to frame {sim['frame']}; "

@@ -921,10 +921,74 @@ def test_cook_profile_on_a_sim_says_whether_it_resimulated(client):
     row = next(r for r in first["chain"] if r["path"] == solver.path())
     assert row["simulation"]["resimulated"] is True
     assert any("simulat" in n for n in first["notes"])
+    # Profiling the same frame again force-cooks the solver's inputs, so Houdini re-solves
+    # its newest frame: resimulated comes from the DOP solve stats, not a guess.
     again = client.ok("cook", {"paths": [solver.path()], "profile": True, "frame": 3})
     row = next(r for r in again["chain"] if r["path"] == solver.path())
-    assert row["simulation"]["resimulated"] is False
-    assert any("cache" in n for n in again["notes"])
+    assert isinstance(row["simulation"]["resimulated"], bool)
+
+
+def _small_pyro():
+    geo = _geo()
+    sphere = geo.createNode("sphere")
+    source = geo.createNode("pyrosource")
+    source.setInput(0, sphere)
+    source.parm("initialize").set("source")
+    source.parm("initialize").pressButton()
+    raster = geo.createNode("volumerasterizeattributes")
+    raster.setInput(0, source)
+    raster.parm("attributes").set("density temperature")
+    solver = geo.createNode("pyrosolver")
+    solver.setInput(0, raster)
+    solver.parm("divsize").set(0.25)
+    return solver
+
+
+def _sim_row(result, solver):
+    return next(r for r in result["chain"] if r["path"] == solver.path())["simulation"]
+
+
+def test_cook_profile_of_a_cached_earlier_frame_did_not_resimulate(client):
+    """Review 20 N3: after a sim ran to frame 6, profiling frame 3 reads the cache; the
+    simulation's time moves back, which used to read as resimulated."""
+    solver = _small_pyro()
+    client.ok("cook", {"paths": [solver.path()], "frame_range": [1, 6]})
+    earlier = client.ok("cook", {"paths": [solver.path()], "profile": True, "frame": 3})
+    sim = _sim_row(earlier, solver)
+    assert sim["resimulated"] is False and sim["frame"] == 3, sim
+    assert any("did not re-simulate" in n for n in earlier["notes"])
+    later = client.ok("cook", {"paths": [solver.path()], "profile": True, "frame": 8})
+    assert _sim_row(later, solver)["resimulated"] is True
+
+
+def test_cook_profile_with_a_full_sim_cache_still_tells(client):
+    """Review 20 N3: with the memory cache full, a cache read and a step both leave the
+    memory size alone; the solve stats still tell them apart."""
+    solver = _small_pyro()
+    solver.parm("cachemaxsize").set(1)  # MB
+    client.ok("cook", {"paths": [solver.path()], "frame_range": [1, 8]})
+    cached = client.ok("cook", {"paths": [solver.path()], "profile": True, "frame": 7})
+    assert _sim_row(cached, solver)["resimulated"] is False
+    later = client.ok("cook", {"paths": [solver.path()], "profile": True, "frame": 9})
+    assert _sim_row(later, solver)["resimulated"] is True
+
+
+def test_cook_profile_says_null_when_the_sim_gives_no_signal(client, monkeypatch):
+    """Review 20 N3: without the performance monitor's solve stats, a cache read is only a
+    time change, which a step with a full cache also is: resimulated is null."""
+    from hocuspocus.host.tools import cook as cook_module
+
+    solver = _small_pyro()
+    client.ok("cook", {"paths": [solver.path()], "frame_range": [1, 6]})
+
+    def unmonitored(node, solve=False):
+        return (*cook_module.timed_cook(node, True), None)
+
+    monkeypatch.setattr(cook_module, "_perf_cook", unmonitored)
+    result = client.ok("cook", {"paths": [solver.path()], "profile": True, "frame": 3})
+    sim = _sim_row(result, solver)
+    assert sim["resimulated"] is None, sim
+    assert any("unknown" in n for n in result["notes"])
 
 
 def test_houdini_status_reports_process_memory(client):

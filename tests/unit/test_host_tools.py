@@ -361,3 +361,23 @@ def test_render_outputs_listing_samples_long_sequences():
     assert many["missing"] == paths[40:]
     none = outputs_listing([], paths)
     assert none["outputs"] == [] and len(none["missing"]) == 20
+
+
+def test_resimulated_trusts_the_solve_stats_then_the_simulation_state():
+    """Review 20 N3: a force-cook that reads a cached frame records no DOP solve time;
+    without the performance monitor, the simulation's time moves on a cache read too, so
+    only a memory change or no change at all is a reliable answer."""
+    from hocuspocus.host.tools.cook import resimulated, solve_ms
+
+    def state(time, memory):
+        return {"time": time, "memory": memory}
+
+    stepped = {"stats": {"0": {"3": {"Time": 106.5, "Solve": 106.5}}}}
+    read = {"name": "Total Statistics", "stats": {}}
+    assert resimulated(state(0.5, 9), state(0.1, 9), solve_ms(stepped)) is True
+    assert resimulated(state(0.5, 9), state(0.1, 9), solve_ms(read)) is False
+    assert resimulated(state(0.0, 1), state(0.5, 9), None) is True  # memory grew
+    assert resimulated(state(0.2, 9), state(0.3, 8), None) is True  # stepped and evicted
+    assert resimulated(state(0.5, 9), state(0.5, 9), None) is False  # nothing happened
+    assert resimulated(state(0.5, 9), state(0.1, 9), None) is None  # cache read or step
+    assert resimulated(None, state(0.1, 9), None) is None
