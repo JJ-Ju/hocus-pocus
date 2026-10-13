@@ -407,13 +407,33 @@ def _multiparm_dict(parm: Any) -> dict[str, Any] | None:
     return out
 
 
+def raw_equals(raw: Any, value: Any) -> bool:
+    """Whether ``raw`` says nothing ``value`` does not: equal, or a plain number written
+    as text (``rawValue()`` of a numeric parm is ``"1.8"`` for ``1.8``; review 13 and 16).
+    Tuples compare per component."""
+    if raw == value:
+        return True
+    if isinstance(raw, list | tuple) and isinstance(value, list | tuple):
+        return len(raw) == len(value) and all(map(raw_equals, raw, value))
+    if isinstance(raw, str) and _is_number(value):
+        text = raw.strip()
+        if text in (str(value), f"{value:g}", repr(value)):
+            return True
+        try:
+            number = float(text)
+        except ValueError:
+            return False
+        return abs(number - value) <= 1e-11 * max(1.0, abs(value))
+    return False
+
+
 def _value_and_raw(out: dict[str, Any], value: Any, raw: Any, full_strings: bool) -> None:
     """``value``, then ``raw`` only when it differs (unexpanded text, an expression's
     source); strings over 200 characters become ``{elided, head}`` unless
     ``full_strings`` (review 12 papercut 1: a 5 KB snippet was echoed twice)."""
     shape = (lambda v: v) if full_strings else elide_string
     out["value"] = shape(value)
-    if raw != value:
+    if not raw_equals(raw, value):
         out["raw"] = shape(raw)
 
 

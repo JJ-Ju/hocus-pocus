@@ -202,6 +202,14 @@ D21 to D24).
   Houdini's text in `message` and in two `detail.errors` entries. The error lines are
   now deduplicated: `message` carries the first, `detail.errors` only the others, and
   "The attempted operation failed." is dropped.
+- **`raw` on numbers.** `parm_get` and `parm_set` returned `raw` as the value in text
+  form (`"value": 1.8, "raw": "1.8"`, `"raw": ["430", "300", "430"]`), although the notes
+  said it was left out when equal. `raw` is now compared after formatting the value and
+  left out when it says nothing more.
+- **`doctor` and a literal `houdini__HVER__` folder.** `doctor` now warns when a folder
+  literally named `houdini__HVER__` sits next to the resolved pref dir (or is the
+  unexpanded `HOUDINI_USER_PREF_DIR`): Houdini expands the token, so nothing in it is
+  read. The warning names the folder Houdini does read.
 
 ### Upgrading from 1.1
 

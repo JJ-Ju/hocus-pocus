@@ -164,6 +164,26 @@ def test_doctor_after_install_checks_package(tmp_path, capsys):
     assert f"[ok]   host/bridge version: {__version__}" in out
 
 
+def test_doctor_warns_about_a_literal_hver_folder(tmp_path, capsys, monkeypatch):
+    """Review 13/16: a toml in a literal houdini__HVER__ folder is never read."""
+    prefs = tmp_path / "houdini22.0"
+    cli.main(["install-houdini", "--prefs", str(prefs)])
+    literal = tmp_path / "houdini__HVER__"
+    literal.mkdir()
+    (literal / "hocuspocus.toml").write_text('profile = "full"')
+    monkeypatch.setenv("HOUDINI_USER_PREF_DIR", str(literal))
+    capsys.readouterr()
+    cli.main(["doctor", "--prefs", str(prefs)])
+    out = capsys.readouterr().out
+    line = next(x for x in out.splitlines() if "literal __HVER__ folder" in x)
+    assert line.startswith("[warn]") and str(literal) in line and str(prefs) in line
+    assert "move hocuspocus.toml there" in line
+    assert out.count("literal __HVER__ folder") == 1  # the env path is the same folder
+    literal.rename(tmp_path / "elsewhere")
+    cli.main(["doctor", "--prefs", str(prefs)])
+    assert "literal __HVER__" not in capsys.readouterr().out
+
+
 def test_client_config(capsys):
     assert cli.main(["client-config", "claude"]) == 0
     assert "claude mcp add -s user hocuspocus -- hocuspocus-mcp" in capsys.readouterr().out

@@ -49,7 +49,20 @@ def test_component_path_reads_one_component(client, scene):
     assert parm["tuple"] == "size"
     assert parm["name"] == "sizex"
     assert parm["value"] == 1.0
-    assert parm["raw"] == "1"
+    assert "raw" not in parm  # rawValue() "1" is the value as text
+
+
+def test_raw_is_left_out_for_plain_numbers(client, scene):
+    """Review 13/16: parm_set and parm_get returned "value":1.8,"raw":"1.8"."""
+    res = _set(client, {"path": "/obj/geo1/box1/sizex", "value": 1.8})
+    assert res["value"] == 1.8 and "raw" not in res, res
+    res = _set(client, {"path": "/obj/geo1/t", "value": [430, 300, 430.25]})
+    assert res["value"] == [430, 300, 430.25] and "raw" not in res, res
+    got = _get(client, "/obj/geo1/t")
+    assert "raw" not in got, got
+    hou.parm("/obj/geo1/tx").setExpression("$F*2")
+    keyed = _get(client, "/obj/geo1/t")
+    assert keyed["raw"][0] == "$F*2", keyed
 
 
 def test_tuple_set_list_and_component_set_scalar(client, scene):
@@ -517,10 +530,9 @@ def test_summarize_parm_compact(scene):
     from hocuspocus.host.tools.parms import summarize_parm
 
     box, xform = scene["box"], scene["xform"]
-    assert summarize_parm(box.parm("sizex")) == {  # raw only differs in text form
+    assert summarize_parm(box.parm("sizex")) == {  # raw "1" is the value as text: left out
         "name": "sizex",
         "value": 1.0,
-        "raw": "1",
         "is_default": True,
     }
     box.parmTuple("size").set((2, 1, 1))
@@ -529,7 +541,6 @@ def test_summarize_parm_compact(scene):
     assert compact == {
         "name": "size",
         "value": [2.0, 1.0, 1.0],
-        "raw": ["2", "1", "1"],
         "is_default": False,
     }
     animated = summarize_parm(xform.parmTuple("t"), frame=5)

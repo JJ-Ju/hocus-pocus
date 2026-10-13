@@ -388,6 +388,36 @@ def _read_version(pkg_dir: Path) -> str | None:
     return m.group(1) if m else None
 
 
+def literal_hver_dirs(pref_dir: Path, environ: Mapping[str, str] | None = None) -> list[Path]:
+    """Folders literally named ``houdini__HVER__`` next to the resolved pref dir (or the
+    unexpanded ``HOUDINI_USER_PREF_DIR`` itself). Houdini expands the token, so nothing in
+    them is read (reviews 13 and 16)."""
+    env = os.environ if environ is None else environ
+    candidates = [pref_dir.parent / "houdini__HVER__"]
+    raw = env.get("HOUDINI_USER_PREF_DIR", "")
+    if "__HVER__" in raw:
+        candidates.append(Path(raw).expanduser())
+    found: list[Path] = []
+    for path in candidates:
+        try:
+            same = path.resolve() == pref_dir.resolve()
+        except OSError:
+            same = False
+        if path.is_dir() and not same and path not in found:
+            found.append(path)
+    return found
+
+
+def _check_literal_hver(report: Report, pref_dir: Path) -> None:
+    for path in literal_hver_dirs(pref_dir):
+        moved = [n for n in ("hocuspocus.toml", "packages") if (path / n).exists()]
+        report.warn(
+            "literal __HVER__ folder",
+            f"{path} exists, but Houdini expands __HVER__ and reads {pref_dir}"
+            + (f"; move {' and '.join(moved)} there" if moved else "; nothing in it is read"),
+        )
+
+
 def doctor(args: argparse.Namespace, out: Callable[[str], None] = print) -> int:
     report = Report(out)
     out(f"hocuspocus {__version__} (bridge, hp/v{catalog.HP_RPC_VERSION})")
@@ -433,6 +463,7 @@ def doctor(args: argparse.Namespace, out: Callable[[str], None] = print) -> int:
             "hocuspocus.toml",
             f"{toml} (host and bridge; HOCUSPOCUS_* env overrides)" if toml else "none (defaults)",
         )
+    _check_literal_hver(report, prefs.path)
     pkg_json = prefs.path / "packages" / PACKAGE_JSON_NAME
     if not pkg_json.is_file():
         report.fail("package JSON", f"{pkg_json} missing; run `hocuspocus install-houdini`")
