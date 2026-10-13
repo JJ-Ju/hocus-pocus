@@ -9,11 +9,15 @@ host reports them through ``houdini_status``.
 
 The bridge starts on every MCP client launch, so it cannot ask hython for
 ``hou.homeHoudiniDirectory()`` the way ``hocuspocus install-houdini`` does. It finds the
-pref dir with cheap lookups, first hit wins:
+pref dir with cheap lookups:
 
-1. ``HOUDINI_USER_PREF_DIR`` (``__HVER__`` expanded to ``22.0``);
-2. the ``prefs`` recorded in ``<state_dir>/install.json`` by ``install-houdini``;
-3. the platform default locations, the first one that holds a ``hocuspocus.toml``.
+1. ``HOUDINI_USER_PREF_DIR`` (``__HVER__`` expanded to ``22.0``), authoritative: Houdini
+   itself uses it whenever it is set;
+2. otherwise the first candidate that holds a ``hocuspocus.toml``: the ``pref_dirs``
+   recorded in ``<state_dir>/install.json`` by ``install-houdini``, in order, then the
+   platform default locations. On Windows Houdini's pref dir depends on whether ``HOME``
+   is set (``%HOME%/houdini22.0``) or not (``%USERPROFILE%/Documents/houdini22.0``),
+   so there can be more than one.
 """
 
 from __future__ import annotations
@@ -39,7 +43,8 @@ RESULT_CONTENT = ("text", "both", "structured")
 """``result_content`` values; the first is the default (BIBLE §4.1)."""
 HOUDINI_MAJOR_MINOR = "22.0"
 INSTALL_STATE_FILE = "install.json"
-"""Written by ``hocuspocus install-houdini`` into the state dir: ``{"prefs": ...}``."""
+"""Written by ``hocuspocus install-houdini`` into the state dir: ``{"pref_dirs": [...],
+"prefs": <the first>, ...}`` (1.2.0 and earlier wrote ``prefs`` only)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,59 +110,128 @@ def _expand_hver(path: str) -> str:
     return path.replace("__HVER__", HOUDINI_MAJOR_MINOR)
 
 
-def default_pref_dirs(environ: Mapping[str, str] | None = None) -> list[Path]:
-    """Where Houdini 22.0 puts the user pref dir when nothing overrides it."""
+def _home_dirs(env: Mapping[str, str], platform: str) -> list[Path]:
+    if platform == "win32":
+        homes = [Path(env.get("USERPROFILE") or Path.home())]
+        if env.get("HOME"):
+            homes.append(Path(env["HOME"]))
+        return homes
+    return [Path(env.get("HOME") or Path.home())]
+
+
+def default_pref_dirs(
+    environ: Mapping[str, str] | None = None,
+    *,
+    major_minor: str = HOUDINI_MAJOR_MINOR,
+    platform: str | None = None,
+) -> list[Path]:
+    """Where Houdini puts the user pref dir when ``HOUDINI_USER_PREF_DIR`` is not set.
+
+    On Windows that is ``<home>/houdiniX.Y`` or ``<home>/Documents/houdiniX.Y``, for
+    ``%USERPROFILE%`` and, when set, ``%HOME%``: which one Houdini uses depends on how it
+    was started, so every one may be in use.
+    """
     env = os.environ if environ is None else environ
-    if sys.platform == "win32":
-        home = Path(env.get("USERPROFILE") or Path.home())
-        name = f"houdini{HOUDINI_MAJOR_MINOR}"
-        return [home / name, home / "Documents" / name]
-    if sys.platform == "darwin":
-        return [Path.home() / "Library" / "Preferences" / "houdini" / HOUDINI_MAJOR_MINOR]
-    return [Path.home() / f"houdini{HOUDINI_MAJOR_MINOR}"]
+    platform = platform or sys.platform
+    if platform == "darwin":
+        return [_home_dirs(env, platform)[0] / "Library" / "Preferences" / "houdini" / major_minor]
+    name = f"houdini{major_minor}"
+    found: list[Path] = []
+    for home in _home_dirs(env, platform):
+        options = [home / name, home / "Documents" / name] if platform == "win32" else [home / name]
+        found.extend(options)
+    return dedupe_dirs(found)
 
 
-def installed_pref_dir(state_dir: Path | None = None) -> Path | None:
-    """The pref dir ``install-houdini`` recorded, if any."""
+def same_dir_key(path: Path) -> str:
+    """A key equal for two spellings of one directory (links resolved, case folded on Windows)."""
+    try:
+        resolved = path.expanduser().resolve()
+    except (OSError, RuntimeError):
+        resolved = path.absolute()
+    return os.path.normcase(str(resolved))
+
+
+def dedupe_dirs(dirs: list[Path]) -> list[Path]:
+    """``dirs`` without later spellings of a directory already listed."""
+    seen: set[str] = set()
+    out: list[Path] = []
+    for path in dirs:
+        key = same_dir_key(path)
+        if key not in seen:
+            seen.add(key)
+            out.append(path)
+    return out
+
+
+def installed_pref_dirs(state_dir: Path | None = None) -> list[Path]:
+    """The pref dirs ``install-houdini`` recorded, in order (``prefs`` alone before 1.2.1)."""
     path = (state_dir or paths.state_dir()) / INSTALL_STATE_FILE
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        return None
-    prefs = data.get("prefs") if isinstance(data, dict) else None
-    return Path(prefs) if isinstance(prefs, str) and prefs else None
+        return []
+    if not isinstance(data, dict):
+        return []
+    raw = data.get("pref_dirs")
+    entries = raw if isinstance(raw, list) else []
+    if not entries and isinstance(data.get("prefs"), str):
+        entries = [data["prefs"]]
+    return dedupe_dirs([Path(e) for e in entries if isinstance(e, str) and e])
+
+
+def installed_pref_dir(state_dir: Path | None = None) -> Path | None:
+    """The first pref dir ``install-houdini`` recorded, if any."""
+    recorded = installed_pref_dirs(state_dir)
+    return recorded[0] if recorded else None
+
+
+def _state_dir_from(env: Mapping[str, str]) -> Path | None:
+    state = env.get("HOCUSPOCUS_STATE_DIR")
+    return Path(state) if state else None
 
 
 def resolve_pref_dir(
     environ: Mapping[str, str] | None = None, *, pref_dir: str | os.PathLike[str] | None = None
 ) -> tuple[Path | None, str]:
-    """``(pref_dir, source)`` from explicit → env → install.json; ``(None, "")`` if none."""
+    """``(pref_dir, source)`` from explicit → env → the first recorded one; ``(None, "")``."""
     env = os.environ if environ is None else environ
     if pref_dir:
         return Path(pref_dir), "argument"
     from_env = env.get("HOUDINI_USER_PREF_DIR", "").strip()
     if from_env:
         return Path(_expand_hver(from_env)).expanduser(), "HOUDINI_USER_PREF_DIR"
-    state = env.get("HOCUSPOCUS_STATE_DIR")
-    installed = installed_pref_dir(Path(state) if state else None)
+    installed = installed_pref_dir(_state_dir_from(env))
     if installed is not None:
         return installed, INSTALL_STATE_FILE
     return None, ""
 
 
+def pref_dir_candidates(
+    environ: Mapping[str, str] | None = None, *, pref_dir: str | os.PathLike[str] | None = None
+) -> list[Path]:
+    """Every pref dir the bridge considers, in order.
+
+    An explicit ``pref_dir`` or ``HOUDINI_USER_PREF_DIR`` is the only candidate (Houdini
+    uses it whenever it is set). Otherwise: the ``pref_dirs`` recorded in
+    ``install.json``, in order, then the platform default locations.
+    """
+    env = os.environ if environ is None else environ
+    resolved, source = resolve_pref_dir(env, pref_dir=pref_dir)
+    if resolved is not None and source != INSTALL_STATE_FILE:
+        return [resolved]
+    return dedupe_dirs(installed_pref_dirs(_state_dir_from(env)) + default_pref_dirs(env))
+
+
 def find_config_file(
     environ: Mapping[str, str] | None = None, *, pref_dir: str | os.PathLike[str] | None = None
 ) -> Path | None:
-    """The ``hocuspocus.toml`` the bridge reads, or ``None``.
+    """The ``hocuspocus.toml`` the bridge reads, or ``None``: the first candidate that has one.
 
-    A pref dir from the environment or ``install.json`` is authoritative even when it has
-    no toml (the host would see none either); only the platform defaults are probed.
+    A pref dir given explicitly or through ``HOUDINI_USER_PREF_DIR`` is authoritative even
+    when it has no toml (the host would see none either).
     """
-    resolved, _source = resolve_pref_dir(environ, pref_dir=pref_dir)
-    if resolved is not None:
-        candidate = resolved / CONFIG_FILE_NAME
-        return candidate if candidate.is_file() else None
-    for directory in default_pref_dirs(environ):
+    for directory in pref_dir_candidates(environ, pref_dir=pref_dir):
         candidate = directory / CONFIG_FILE_NAME
         if candidate.is_file():
             return candidate

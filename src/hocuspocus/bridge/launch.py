@@ -134,10 +134,9 @@ def _installed_python_dir(state: Path) -> Path | None:
 
 def _package_json_python_dir(environ: Mapping[str, str] | None) -> Path | None:
     from ..cli import PACKAGE_JSON_NAME, package_python_dir
-    from .config import default_pref_dirs, resolve_pref_dir
+    from .config import pref_dir_candidates
 
-    resolved, _source = resolve_pref_dir(environ)
-    for prefs in [resolved] if resolved is not None else default_pref_dirs(environ):
+    for prefs in pref_dir_candidates(environ):
         try:
             data = json.loads((prefs / "packages" / PACKAGE_JSON_NAME).read_text(encoding="utf-8"))
         except (OSError, ValueError):

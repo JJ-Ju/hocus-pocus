@@ -26,35 +26,37 @@ you get two commands on your `PATH`: `hocuspocus` and `hocuspocus-mcp`.
 
 ```text
 $ hocuspocus version
-hocuspocus 1.2.0 (hp/v1, mcp 2.3.x, Python 3.12.x)
+hocuspocus 1.2.1 (hp/v1, mcp 2.3.x, Python 3.12.x)
 ```
 
 ## 2. Install the Houdini package (1 minute)
 
 ```text
 $ hocuspocus install-houdini
-Houdini pref dir: C:\Users\you\houdini22.0 (from hython (C:\Program Files\Side Effects Software\Houdini 22.0.466))
-copied hocuspocus 1.2.0 to C:\Users\you\houdini22.0\hocuspocus\1.2.0\python\hocuspocus
-copied the Houdini payload to C:\Users\you\houdini22.0\hocuspocus\1.2.0\houdini
-wrote C:\Users\you\houdini22.0\packages\hocuspocus.json (template: ...\houdini\hocuspocus.json.template)
-recorded the pref dir in C:\Users\you\AppData\Local\HocusPocus\install.json (the bridge reads hocuspocus.toml from there)
+Houdini pref dir: C:\Users\you\Documents\houdini22.0 (from hython (C:\Program Files\Side Effects Software\Houdini 22.0.466), default location)
+copied hocuspocus 1.2.1 to C:\Users\you\Documents\houdini22.0\hocuspocus\1.2.1\python\hocuspocus
+copied the Houdini payload to C:\Users\you\Documents\houdini22.0\hocuspocus\1.2.1\houdini
+wrote C:\Users\you\Documents\houdini22.0\packages\hocuspocus.json (template: ...\houdini\hocuspocus.json.template)
+recorded the pref dirs in C:\Users\you\AppData\Local\HocusPocus\install.json (the bridge reads hocuspocus.toml from there)
 Restart Houdini to load HocusPocus.
 Then register the MCP server with your client, e.g.: claude mcp add -s user hocuspocus -- hocuspocus-mcp
 ```
 
-The first line tells you which pref dir it chose and why. Depending on how Houdini was
-set up, hython may report `C:\Users\you\houdini22.0` or
-`C:\Users\you\Documents\houdini22.0`; whatever it reports is the one Houdini uses. The
-search order is:
+The `Houdini pref dir:` lines tell you which pref dirs it found and why. On Windows
+Houdini's pref dir depends on how it was started: from the Start menu (no `HOME`
+variable) it is `C:\Users\you\Documents\houdini22.0`; from a shell that sets `HOME`
+(Git Bash, some terminals) it is `%HOME%\houdini22.0`. When both exist, `install-houdini`
+installs into both and lists each `wrote ...` line, so Houdini loads HocusPocus however
+you start it. The candidates, deduplicated, are:
 
-1. `--prefs`.
-2. `$HOUDINI_USER_PREF_DIR`.
-3. What `hython` reports for `hou.homeHoudiniDirectory()`. Asking hython takes a few
-   seconds.
-4. The platform default.
+1. `--prefs` (created if missing).
+2. `$HOUDINI_USER_PREF_DIR` (`__HVER__` expanded).
+3. What `hython` reports for `hou.homeHoudiniDirectory()`, and on Windows what it
+   reports with `HOME` removed. Asking hython takes a few seconds.
+4. The existing default locations: `~/houdiniX.Y` and `~/Documents/houdiniX.Y`.
 
-If the first line shows the wrong directory, run the command again with
-`--prefs <dir>`. If several Houdinis are installed, `--hfs <install dir>` chooses which
+Only `--prefs` is ever created; a candidate that does not exist is shown as skipped. If
+a directory is missing from the list, run the command again with `--prefs <dir>`. If several Houdinis are installed, `--hfs <install dir>` chooses which
 one to ask. To develop HocusPocus itself, `hocuspocus install-houdini --dev` points
 Houdini at the checkout's `src/` instead of copying it.
 
@@ -84,13 +86,13 @@ the UI is up, the host starts by itself. Then run:
 
 ```text
 $ hocuspocus doctor
-hocuspocus 1.2.0 (bridge, hp/v1)
+hocuspocus 1.2.1 (bridge, hp/v1)
 [ok]   Houdini install: C:\Program Files\Side Effects Software\Houdini 22.0.466
 [ok]   Houdini version: 22.0.466
-[ok]   Houdini pref dir: C:\Users\you\houdini22.0 (from hython (...))
+[ok]   pref dir: C:\Users\you\Documents\houdini22.0 (from hython (...), default location): package JSON -> C:\Users\you\Documents\houdini22.0\hocuspocus\1.2.1\python (1.2.1)
 [ok]   hocuspocus.toml: none (defaults)
-[ok]   package JSON: C:\Users\you\houdini22.0\packages\hocuspocus.json -> C:\Users\you\houdini22.0\hocuspocus\1.2.0\python
-[ok]   host/bridge version: 1.2.0
+[ok]   package JSON: C:\Users\you\Documents\houdini22.0\packages\hocuspocus.json -> C:\Users\you\Documents\houdini22.0\hocuspocus\1.2.1\python
+[ok]   host/bridge version: 1.2.1
 [ok]   instance /health: pid 18244 port 52311 GUI (untitled) Houdini 22.0.466
 
 Register with Claude Code:
@@ -239,10 +241,16 @@ problems:
 **`[FAIL] package JSON: ...\packages\hocuspocus.json missing; run hocuspocus install-houdini`**
 
 The package was never installed, or it went into a different pref dir than the one
-Houdini uses. Run `hocuspocus install-houdini` again and read its first line. If Houdini
-uses a custom `HOUDINI_USER_PREF_DIR`, set that variable in the shell that runs the
-command too, or pass `--prefs`. A `HOUDINI_USER_PREF_DIR` that contains `__HVER__` is
-skipped, and hython is asked instead.
+Houdini uses. Run `hocuspocus install-houdini` again and read its `Houdini pref dir:`
+lines. If Houdini uses a custom `HOUDINI_USER_PREF_DIR`, set that variable in the shell
+that runs the command too, or pass `--prefs`. `__HVER__` in it is expanded the way
+Houdini expands it.
+
+**`[warn] pref dirs disagree: HocusPocus ... is installed in A but not in B`**
+
+Houdini on Windows uses `%HOME%\houdini22.0` when started with `HOME` set (Git Bash) and
+`Documents\houdini22.0` when started from the Start menu. The warning names the command
+that installs into both; run it and restart Houdini.
 
 **Houdini not restarted: `[warn] live instances: none in ...\instances`**
 
