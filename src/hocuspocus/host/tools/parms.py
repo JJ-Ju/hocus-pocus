@@ -334,6 +334,17 @@ def _raw(parm: Any, kind: str) -> Any:
         return None
 
 
+def _holds(parm: Any, value: Any) -> bool:
+    """Whether ``parm`` already evaluates to ``value`` (numbers within float noise)."""
+    try:
+        current = parm.eval()
+    except Exception:
+        return False
+    if _is_number(current) and _is_number(value):
+        return abs(current - value) <= 1e-6 * max(1.0, abs(value))
+    return current == value
+
+
 def _parm_locked(parm: Any) -> bool:
     """The parm's own lock (``locked``; BIBLE §4.1)."""
     try:
@@ -1032,6 +1043,8 @@ def _apply(node: Any, target: Any, item: dict[str, Any], *, frame: float | None)
                 for p, v in zip(parms, values, strict=True)
             ]
             for parm, raw_value, new in zip(parms, values, converted, strict=True):
+                if animation != "key" and _parm_locked(parm) and _holds(parm, new):
+                    continue  # a computed (locked) component already at the value (review 13)
                 if animation == "replace":
                     _delete_keys(parm)
                     parm.set(new)
@@ -1241,13 +1254,28 @@ def locked_error(node: Any, target: Any, exc: BaseException | None = None) -> To
             "(or use the hda tool), then retry.",
             hou_exception=hou_exc,
         )
-    if any(_parm_locked(p) for p in _components(target)):
-        return ToolError(
-            "locked",
-            f"{path} is locked.",
-            hint=f"Unlock it in Houdini, or with houdini_python: hou.parm('{_components(target)[0].path()}').lock(False).",
-            hou_exception=hou_exc,
+    locked = [p for p in _components(target) if _parm_locked(p)]
+    if locked:
+        first = locked[0]
+        message = (
+            f"{path} is locked." if first.path() == path else f"{path}: {first.name()} is locked"
         )
+        with contextlib.suppress(Exception):
+            message = (
+                f"{message.rstrip('.')} and computed by the expression {first.expression()!r} "
+                f"(now {_json_number(first.eval())})."
+            )
+        message = message if message.endswith(".") else message + "."
+        others = [p.name() for p in _components(target) if p not in locked]
+        unlock = f"hou.parm('{first.path()}').lock(False)"
+        hint = (
+            f"Set {', '.join(others)} only (a locked component that already holds the value is "
+            f"skipped), or change what computes {first.name()}, such as a mode menu on the node. "
+            f"Last resort: houdini_python {unlock}."
+            if others
+            else f"Unlock it in Houdini, or with houdini_python: {unlock}."
+        )
+        return ToolError("locked", message, hint=hint, hou_exception=hou_exc)
     return ToolError(
         "locked",
         f"Houdini refused to modify {path} (permission error).",

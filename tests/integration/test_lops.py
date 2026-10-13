@@ -235,3 +235,43 @@ def test_usd_attribute_names_resolve_to_lop_parms(client, work_dir):
     assert [round(v, 3) for v in key.parmTuple("xn__inputscolor_zta").eval()] == [1, 0.9, 0.8]
     unknown = client.error("parm_set", {"items": [{"path": f"{dome}/inputs:nope", "value": 1}]})
     assert unknown["code"] == "parm_not_found"
+
+
+# -- computed tuple components (papercut 4) ---------------------------------------------
+
+
+def test_locked_component_holding_the_value_is_skipped(client):
+    cam = hou.node("/stage").createNode("camera", "cam1")
+    rset = hou.node("/stage").createNode("karmarendersettings", "rset")
+    rset.setInput(0, cam)
+    rset.parm("camera").set("/cameras/cam1")
+    # res_mode autoheight: resolutiony is locked and computed from resolutionx and the
+    # camera, so [640, 360] sets resolutionx and finds resolutiony already at 360.
+    result = client.ok(
+        "parm_set", {"items": [{"path": f"{rset.path()}/resolution", "value": [640, 360]}]}
+    )
+    assert result["results"][0]["value"] == [640, 360]
+    assert (rset.parm("resolutionx").eval(), rset.parm("resolutiony").eval()) == (640, 360)
+
+
+def test_locked_component_error_names_it(client):
+    cam = hou.node("/stage").createNode("camera", "cam1")
+    error = client.error(
+        "node_create",
+        {
+            "items": [
+                {
+                    "parent": "/stage",
+                    "type": "karmarendersettings",
+                    "name": "rset",
+                    "inputs": [{"index": 0, "from": cam.path()}],
+                    "parms": {"resolution": [640, 400]},
+                }
+            ],
+        },
+    )
+    assert error["code"] == "locked"
+    assert "resolutiony" in error["message"]
+    assert "expression" in error["message"]
+    assert not error["hint"].startswith("Unlock it in Houdini")
+    assert "resolutionx" in error["hint"]
