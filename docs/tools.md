@@ -313,7 +313,7 @@ Read nodes in detail: type, flags, inputs with names and sources, non-default pa
 
 Create nodes in one undo step. type resolves like createNode (box gets the current version; exact_type disables). Items may wire to earlier items; a block_end pairs with its block_begin (paired_with). Returns path, type and problems per node. network_build suits whole graphs.
 
-**Notes.** A parms value is a literal, {expression, language} (short form {expr, lang}), or any parm_set item without path. As in parm_set, a plain set of a menu or toggle with a callback script carries a note that the callback did not run; {value, press: true} runs it once the node's inputs are wired, and the row adds side_effects: {parm: [old, new]}. An input is {index or name, from, output (default 0)}. layout good_position places new nodes. return full gives node_info blocks listing only the parms the call set, with strings over 200 characters as {elided, head}; identical error lists after the first become errors_same_as.
+**Notes.** A parms value is a literal, {expression, language} (short form {expr, lang}), or any parm_set item without path. As in parm_set, a plain set of a menu or toggle with a callback script carries a note that the callback did not run; {value, press: true} runs it once the node's inputs are wired, and the row adds side_effects: {parm: [old, new]}. A type hou.NodeType.deprecated() reports (the OpenGL ROP in 22.0) gets deprecated: true and a note with its reason or replacement. An input is {index or name, from, output (default 0)}. layout good_position places new nodes. return full gives node_info blocks listing only the parms the call set, with strings over 200 characters as {elided, head}; identical error lists after the first become errors_same_as.
 
 ### Arguments
 
@@ -1100,7 +1100,7 @@ Read or set the node selection. Omit paths to get the selected node paths; pass 
 
 Jobs from render, cook or pdg: status (state, progress, message), result (the tool's result once done), cancel, list.
 
-**Notes.** Job ids are <pid>-<id>: the bridge sends a job call to the Houdini that started the job, whichever is selected; if that Houdini has exited the answer is instance_lost with the last status the bridge saw (detail.last_status). A bare id means the selected Houdini. list shows the selected Houdini's jobs; all: true lists every live instance's, each row with its pid, plus instances: [{pid, label, jobs, running}]. Jobs do not survive a Houdini restart. A pdg cook job counts the work items of the whole graph in current/total and adds nodes: {name: 'finished/total'}. A cancelled job's result is the cancelled error, whose detail holds the last status.
+**Notes.** Job ids are <pid>-<id>: the bridge sends a job call to the Houdini that started the job, whichever is selected; if that Houdini has exited the answer is instance_lost with the last status the bridge saw (detail.last_status). A bare id means the selected Houdini. list shows the selected Houdini's jobs; all: true lists every live instance's, each row with its pid, plus instances: [{pid, label, jobs, running}]. Jobs do not survive a Houdini restart. A pdg cook job counts the work items of the whole graph in current/total and adds nodes: {name: 'finished/total'}. A frame-by-frame job's message counts the frames done, as current does. cancel adds cancelled: true, or cancelled: false and a note when the job had already finished. A cancelled job's result is the cancelled error, whose detail holds the last status (state cancelled).
 
 ### Arguments
 

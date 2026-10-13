@@ -1169,6 +1169,11 @@ def _create_one(
         raise type_not_found(parent, type_name, parent.childTypeCategory()) from exc
     rollback.destroy_later(node)
     created[node.sessionId()] = parm_state(node)
+    note = deprecation_note(node.type())
+    if note:
+        extra = extras.setdefault(node.sessionId(), {})
+        extra["deprecated"] = True
+        extra.setdefault("notes", []).append(note)
     parms = item.get("parms")
     pressed: dict[str, Any] = {}
     if parms:
@@ -1232,9 +1237,40 @@ def _set_create_parms(
             extra.setdefault("side_effects", {}).update(result["side_effects"])
 
 
+def deprecation_note(node_type: Any) -> str | None:
+    """A note when ``hou.NodeType.deprecated()`` says the type is deprecated (the OpenGL
+    ROP in 22.0, replaced by the Flipbook ROP), with its ``deprecationInfo()``."""
+    try:
+        if not node_type.deprecated():
+            return None
+    except Exception:
+        return None
+    info: dict[str, Any] = {}
+    with contextlib.suppress(Exception):
+        info = dict(node_type.deprecationInfo() or {})
+    text = f"{node_type.category().name()}/{node_type.name()} is deprecated"
+    if info.get("version"):
+        text += f" since Houdini {info['version']}"
+    new_type = info.get("new_type")
+    if new_type is not None and not isinstance(new_type, str):
+        try:
+            new_type = f"{new_type.category().name()}/{new_type.name()}"
+        except Exception:
+            new_type = None
+    reason = str(info.get("reason") or "").strip()
+    if reason:
+        text += f": {reason.rstrip('.')}."
+    else:
+        text += "."
+    if new_type:
+        text += f" Its replacement is {new_type}."
+    return text + " It still works for now."
+
+
 def add_create_extras(block: dict[str, Any], extra: dict[str, Any] | None) -> None:
-    """Put a created node's parm ``side_effects`` and ``notes`` on its result row."""
-    for key in ("side_effects", "notes"):
+    """Put a created node's ``deprecated`` flag, parm ``side_effects`` and ``notes`` on its
+    result row."""
+    for key in ("deprecated", "side_effects", "notes"):
         if extra and extra.get(key):
             block[key] = extra[key]
 

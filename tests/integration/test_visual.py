@@ -523,6 +523,7 @@ def test_render_over_five_outputs_returns_a_summary(client, work_dir):
     assert summary["last"] == _fwd(work_dir / "s.0008.bgeo.sc")
     assert summary["pattern"] == _fwd(work_dir / "s.####.bgeo.sc")
     assert result["outputs_sample"] == [_fwd(work_dir / f"s.{i:04d}.bgeo.sc") for i in (1, 2, 7, 8)]
+    assert all(isinstance(f, int) for f in result["frames"]), result["frames"]
     job = client.ok("job", {"action": "result", "job_id": result["job_id"]})["result"]
     assert "outputs" not in job
     assert job["outputs_summary"] == summary
@@ -823,7 +824,11 @@ def test_render_cancelled_job_result_carries_the_partial_outputs(client, work_di
     error = client.error("job", {"action": "result", "job_id": job_id})
     assert error["code"] == "cancelled"
     detail = error["detail"]
-    assert detail["last_status"]["total"] == 60
+    last = detail["last_status"]
+    assert last["total"] == 60
+    assert last["state"] == "cancelled", last  # review 20 N7
+    assert last["message"].startswith(f"{last['current']}/60 frames done, rendering frame "), last
+    assert ".0" not in last["message"], last  # frames print as integers
     written = sorted(work_dir.glob("fc.*"))
     partial = detail["partial"]
     summary = partial["outputs_summary"]

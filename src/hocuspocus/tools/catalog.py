@@ -626,7 +626,9 @@ _NODES: tuple[ToolSpec, ...] = (
             "parm_set item without path. As in parm_set, a plain set of a menu or toggle with a "
             "callback script carries a note that the callback did not run; {value, press: true} "
             "runs it once the node's inputs are wired, and the row adds side_effects: {parm: "
-            "[old, new]}. An input is {index or name, from, output (default 0)}. "
+            "[old, new]}. A type hou.NodeType.deprecated() reports (the OpenGL ROP in 22.0) "
+            "gets deprecated: true and a note with its reason or replacement. An input is "
+            "{index or name, from, output (default 0)}. "
             "layout good_position places new nodes. return full gives node_info blocks listing only"
             " the parms the call set, with strings over 200 characters as {elided, head}; identical"
             " error lists after the first become errors_same_as."
@@ -1656,8 +1658,10 @@ _STATE: tuple[ToolSpec, ...] = (
             "live instance's, each row with its pid, plus instances: [{pid, label, jobs, "
             "running}]. Jobs do not survive a Houdini restart. "
             "A pdg cook job counts the work items of the whole graph in current/total and adds "
-            "nodes: {name: 'finished/total'}. A cancelled job's result is the cancelled error, "
-            "whose detail holds the last status."
+            "nodes: {name: 'finished/total'}. A frame-by-frame job's message counts the frames "
+            "done, as current does. cancel adds cancelled: true, or cancelled: false and a note "
+            "when the job had already finished. A cancelled job's result is the cancelled error, "
+            "whose detail holds the last status (state cancelled)."
         ),
         input_schema=_obj(
             {

@@ -148,6 +148,18 @@ def num(value: Any, digits: int = 7) -> Any:
     return float(f"{f:.{digits}g}")
 
 
+def frame_num(value: Any) -> Any:
+    """A frame as JSON and in messages: an int when it is whole (``90``, not ``90.0``;
+    review 17 and 20), else :func:`num`."""
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return value
+    if isinstance(value, bool) or not math.isfinite(f):
+        return num(value)
+    return int(f) if f.is_integer() else num(f)
+
+
 def jsonable(value: Any, *, array_cap: int | None = None, string_cap: int | None = None) -> Any:
     """Make an attribute value JSON-safe and compact (rounded floats, capped lists)."""
     if value is None or isinstance(value, bool | int):

@@ -44,7 +44,7 @@ from hocuspocus.tools.paths import captures_dir, ensure_private_dir
 
 from ..dispatch import call_timeout
 from ._diag import a_or_an, require_node
-from .geo import num
+from .geo import frame_num, num
 from .hip import _norm, check_allowed, resolve_path
 from .registry import HostContext, tool
 from .session import scene_dirty
@@ -2238,6 +2238,8 @@ def cancelled_with_partial(job: Any, partial: dict[str, Any], done: str) -> Tool
     {last_status, partial}`` so ``job result`` keeps what was done before the cancel
     (review 17 P1-6). No ``hou``."""
     status = job_snapshot(job)
+    if status:
+        status["state"] = "cancelled"  # the snapshot was taken while it ran (review 20 N7)
     job_id = status.get("job_id")
     name = f"Job {job_id}" if job_id else "The job"
     return ToolError(
@@ -2416,7 +2418,7 @@ def _render_result(plan: dict[str, Any], thumbnail: bool) -> dict[str, Any]:
     missing = [p for p in plan["expected"] if not os.path.isfile(p)]
     result: dict[str, Any] = {
         "rop_path": plan.get("owner") or plan["rop"],
-        "frames": [num(v) for v in plan["frames"]],
+        "frames": [frame_num(v) for v in plan["frames"]],
     }
     result.update(outputs_listing(outputs, missing))
     notes: list[str] = []
@@ -2506,7 +2508,7 @@ def _render_job(plan: dict[str, Any], ctx: HostContext, thumbnail: bool) -> Any:
                 done = sum(1 for p in plan["expected"] if os.path.isfile(p))
                 if plan["expected"]:
                     total = len(plan["expected"])
-                    job.set_progress(done, total, f"{done}/{total} frames")
+                    job.set_progress(done, total, f"{done}/{total} frames done")
 
             job.progress(0.0, f"rendering {len(frame_list)} frame(s) in a child hython")
             try:
@@ -2600,7 +2602,10 @@ def _render_job(plan: dict[str, Any], ctx: HostContext, thumbnail: bool) -> Any:
             job.run_main(apply_override)
             total = len(frame_list)
             for i, frame in enumerate(frame_list):
-                job.set_progress(i, total, f"frame {num(frame)} ({i + 1}/{total})")
+                # The count is current, the frames finished (review 20 N7).
+                job.set_progress(
+                    i, total, f"{i}/{total} frames done, rendering frame {frame_num(frame)}"
+                )
                 try:
                     errors = job.run_main(
                         lambda f=frame: render_frame(f), timeout_s=FRAME_TIMEOUT_S
@@ -2612,9 +2617,9 @@ def _render_job(plan: dict[str, Any], ctx: HostContext, thumbnail: bool) -> Any:
                     raise cancelled_with_partial(job, partial, done) from exc
                 if errors:
                     message, detail = failure(
-                        f"{plan['rop']} failed to render frame {num(frame)}", errors
+                        f"{plan['rop']} failed to render frame {frame_num(frame)}", errors
                     )
-                    detail["frame"] = frame
+                    detail["frame"] = frame_num(frame)
                     hint = None
                     tail = log_tail(logs)
                     if tail:

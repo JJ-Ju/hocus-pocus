@@ -344,13 +344,19 @@ def test_cook_frame_range_as_a_job_reports_frame_progress(client):
         status = client.ok("job", {"action": "status", "job_id": job_id})
         if status.get("message"):
             messages.add(status["message"])
+        if status["state"] == "running" and "frames done" in status.get("message", ""):
+            # Review 20 N7: the message counts the frames done, as current does.
+            current = status["current"]
+            assert status["message"] == (
+                f"{current}/24 frames done, cooking frame {current + 1}"
+            ), status
         if status["state"] != "running":
             break
         assert status.get("total") in (None, 24)
         client.host.executor.pump_once(0.02)
     assert status["state"] == "done", status
     assert status["progress"] == 1.0 and status["current"] == 24 and status["total"] == 24
-    assert any(m.startswith("frame ") and m.endswith("/24") for m in messages), messages
+    assert any("frames done, cooking frame" in m for m in messages), messages
     final = client.ok("job", {"action": "result", "job_id": job_id})["result"]
     assert len(final["frames"]) == 24
     assert final["frames"][0]["bbox_min"] != final["frames"][-1]["bbox_min"]
@@ -900,8 +906,24 @@ def test_cook_cancelled_frame_range_keeps_the_frames_cooked(client):
     partial = error["detail"]["partial"]
     assert 4 <= partial["frames_cooked"] < 200
     assert partial["frames"][0]["frame"] == 1
-    assert error["detail"]["last_status"]["total"] == 200
+    last = error["detail"]["last_status"]
+    assert last["total"] == 200
+    # Review 20 N7: the last status says cancelled, and counts what partial counts.
+    assert last["state"] == "cancelled", last
+    assert last["current"] == partial["frames_cooked"], last
+    assert last["message"].startswith(f"{partial['frames_cooked']}/200 frames done"), last
     assert hou.frame() == 7
+
+
+def test_job_cancel_after_the_job_finished_says_so(client):
+    """Review 20: a cancel that arrives after the job finished says nothing was cancelled."""
+    box = _geo().createNode("box")
+    started = client.ok("cook", {"paths": [box.path()], "frame_range": [1, 2], "wait_s": 0})
+    _wait_job(client, started["job_id"])
+    late = client.ok("job", {"action": "cancel", "job_id": started["job_id"]})
+    assert late["cancelled"] is False and late["state"] == "done", late
+    assert "already finished" in late["notes"][0]
+    assert client.ok("job", {"action": "result", "job_id": started["job_id"]})["state"] == "done"
 
 
 def test_cook_profile_on_a_sim_says_whether_it_resimulated(client):

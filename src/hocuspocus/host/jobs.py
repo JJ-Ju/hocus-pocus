@@ -86,6 +86,9 @@ class Job:
         self.cancel_event = threading.Event()
         self.thread: threading.Thread | None = None
         self.done_event = threading.Event()
+        self._lock = threading.Lock()
+        """Keeps ``current`` and ``message`` from one :meth:`set_progress` together in a
+        :meth:`status` read from another thread (review 20 N7)."""
 
     def set_progress(self, current: int, total: int, message: str | None = None) -> None:
         """Record ``current`` of ``total`` steps finished; ``progress`` is their ratio.
@@ -94,16 +97,21 @@ class Job:
         """
         current = max(0, int(current))
         total = int(total)
-        self.current = current
-        self.total = total
-        if total > 0:
-            self.progress = max(0.0, min(1.0, current / total))
-        if message is not None:
-            self.message = message
+        with self._lock:
+            self.current = current
+            self.total = total
+            if total > 0:
+                self.progress = max(0.0, min(1.0, current / total))
+            if message is not None:
+                self.message = message
 
     def status(self) -> dict[str, Any]:
         """The job snapshot. ``progress`` (0..1), ``current``, ``total`` and ``message``
         appear once the job has reported them."""
+        with self._lock:
+            return self._status()
+
+    def _status(self) -> dict[str, Any]:
         end = self.finished or time.time()
         data: dict[str, Any] = {
             "job_id": self.id,
@@ -223,11 +231,22 @@ class JobManager:
         return data
 
     def cancel(self, job_id: str) -> dict[str, Any]:
+        """Request a running job's cancellation. The status says ``cancelled``: whether
+        this call cancelled it; a job that had already finished is left alone, with a
+        note (review 20: a cancel that arrived too late returned a plain ``done``)."""
         job = self.get(job_id)
         if job.state == "running":
             job.cancel_event.set()
             job.message = "cancellation requested"
-        return job.status()
+            return {**job.status(), "cancelled": True}
+        data = job.status()
+        data["cancelled"] = False
+        data["notes"] = [
+            f"Job {job.id} had already finished ({job.state}) when the cancel arrived; "
+            "nothing was cancelled."
+            + (" job {action: result} returns its result." if job.state == "done" else "")
+        ]
+        return data
 
     def running_count(self) -> int:
         """How many jobs are still running (``/health`` ``jobs_running``)."""

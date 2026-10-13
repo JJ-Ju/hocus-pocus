@@ -170,6 +170,11 @@ def test_job_manager_lifecycle():
     gate2.set()
     job2.done_event.wait(5)
     assert jobs.status(job2.id)["state"] == "cancelled"
+    # Review 20: a cancel after the job finished cancels nothing and says so.
+    late = jobs.cancel(job.id)
+    assert late["cancelled"] is False and late["state"] == "done"
+    assert "already finished (done)" in late["notes"][0]
+    assert jobs.cancel(job2.id)["cancelled"] is False
 
     job3 = jobs.start("bad", lambda ctx: 1 / 0)
     job3.done_event.wait(5)
@@ -381,3 +386,12 @@ def test_resimulated_trusts_the_solve_stats_then_the_simulation_state():
     assert resimulated(state(0.5, 9), state(0.5, 9), None) is False  # nothing happened
     assert resimulated(state(0.5, 9), state(0.1, 9), None) is None  # cache read or step
     assert resimulated(None, state(0.1, 9), None) is None
+
+
+def test_frames_print_as_integers_when_whole():
+    from hocuspocus.host.tools.geo import frame_num
+
+    assert frame_num(90.0) == 90 and isinstance(frame_num(90.0), int)
+    assert frame_num(12.5) == 12.5
+    assert f"frame {frame_num(1.0)}" == "frame 1"
+    assert frame_num(float("nan")) == "nan"

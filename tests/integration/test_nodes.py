@@ -1220,3 +1220,23 @@ def test_create_pairs_with_the_only_unpaired_begin(client):
     )
     assert "paired_with" not in explicit["results"][0]
     assert hou.node(explicit["created"][0]).parm("blockpath").eval() == "../x"
+
+
+def test_node_create_flags_a_deprecated_type(client):
+    """Review 17/20 honourable mention: the OpenGL ROP is deprecated in 22.0 and
+    node_create said nothing."""
+    opengl = hou.nodeType(hou.ropNodeTypeCategory(), "opengl")
+    if not opengl.deprecated():
+        pytest.skip("this Houdini does not deprecate the OpenGL ROP")
+    result = client.ok(
+        "node_create",
+        {"items": [{"parent": "/out", "type": "opengl"}, {"parent": "/out", "type": "geometry"}]},
+    )
+    flipbook, geometry = result["results"]
+    assert flipbook["deprecated"] is True, flipbook
+    (note,) = [n for n in flipbook["notes"] if "deprecated" in n]
+    assert note.startswith("Driver/opengl is deprecated"), note
+    reason = (opengl.deprecationInfo() or {}).get("reason")
+    if reason:
+        assert reason.rstrip(".") in note
+    assert "deprecated" not in geometry and "notes" not in geometry

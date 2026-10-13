@@ -524,7 +524,7 @@ def _profiled(
         if frame is not None:
             job.run_main(lambda: hou.setFrame(frame), timeout_s)
         for index, path in enumerate(chain):
-            job.set_progress(index, steps, f"cooking {path} ({index + 1}/{len(chain)})")
+            job.set_progress(index, steps, f"{index}/{steps} steps done, cooking {path}")
             rows.append(job.run_main(lambda p=path: _profile_step(p), JOB_STEP_TIMEOUT_S))
         for index, path in enumerate(paths):
             # Already cooked by the chain: this reads its errors and warnings.
@@ -646,7 +646,10 @@ def _ranged(
     cooked = 0
     try:
         for index, value in enumerate(frames):
-            job.set_progress(index, total, f"frame {index + 1}/{total}")
+            # The count is current, the frames finished (review 20 N7).
+            job.set_progress(
+                index, total, f"{index}/{total} frames done, cooking frame {_num(value)}"
+            )
             reports, rows = job.run_main(
                 lambda f=value: _frame_step(paths, f, force, summary), JOB_STEP_TIMEOUT_S
             )
