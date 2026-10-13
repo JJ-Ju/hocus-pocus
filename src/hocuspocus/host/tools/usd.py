@@ -7,15 +7,20 @@ under ``prim`` (the prim itself first unless it is the pseudo-root), paged by
 ``**`` across segments; matching prims are listed with their subtrees to ``depth``.
 
 Attribute values are authored values only, read at ``time`` (default: current frame;
-the LOP is cooked at that frame, which is then restored), arrays summarised as
-``{len, first}``. ``depth`` is at most 16, and the walk stops once it has the page plus
-one prim, so ``total`` is reported only on the last page. Houdini's bookkeeping prim ``/HoudiniLayerInfo``
-is skipped, as in the scene graph tree.
+the LOP is cooked at that frame, which is then restored); arrays of up to 4 elements are
+listed in full (string and token arrays up to 8), longer ones summarised as
+``{len, first}``; ``attribs`` keeps the names
+matching a glob. ``depth`` is at most 16. Rows are built for the page only, and the walk
+stops once it has the page plus one prim; ``total`` comes from a separate counting walk
+(no rows), capped at :data:`COUNT_CAP`. ``summary`` returns counts by type and the world
+bounds of the subtree instead of rows. Houdini's bookkeeping prim ``/HoudiniLayerInfo`` is
+skipped, as in the scene graph tree.
 """
 
 from __future__ import annotations
 
 import contextlib
+import fnmatch
 import re
 from collections.abc import Iterator
 from typing import Any
@@ -31,6 +36,12 @@ HIDDEN_PRIMS = frozenset({"/HoudiniLayerInfo"})
 ATTR_CAP = 64
 """Authored attributes listed per prim before ``attributes_truncated`` is set."""
 ARRAY_PREVIEW = 3
+ARRAY_FULL = 4
+"""Arrays of at most this many elements are listed in full (an extent, a color)."""
+TOKEN_ARRAY_FULL = 8
+"""String and token arrays (an xformOpOrder) are listed in full up to this many."""
+COUNT_CAP = 100_000
+"""``total`` and ``summary`` stop counting here and say ``total_capped``."""
 STRING_CAP = 200
 LAYER_CAP = 50
 _IDENTITY = ((1.0, 0.0, 0.0, 0.0), (0.0, 1.0, 0.0, 0.0), (0.0, 0.0, 1.0, 0.0), (0.0, 0.0, 0.0, 1.0))
@@ -46,6 +57,17 @@ def _include(args: dict[str, Any]) -> set[str]:
     if not isinstance(value, list) or any(v not in INCLUDE for v in value):
         raise bad_arg(f"'include' must be a list of {', '.join(INCLUDE)}.")
     return set(value)
+
+
+def _attribs(args: dict[str, Any]) -> list[str] | None:
+    value = args.get("attribs")
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.replace("|", "").strip():
+        raise bad_arg(
+            "'attribs' must be a non-empty glob such as inputs:* or focalLength|xformOp*."
+        )
+    return [part.strip() for part in value.split("|") if part.strip()]
 
 
 MAX_DEPTH = 16
@@ -126,6 +148,16 @@ def resolve_lop(path: Any) -> Any:
             )
         node = display
     if not isinstance(node, hou.LopNode):
+        if node.type().category() == hou.lopNodeTypeCategory():
+            # A ROP inside a LOP network (usdrender_rop): it renders a stage, has none.
+            sources = [n.path() for n in node.inputs() if n is not None]
+            where = f"; read its input {sources[0]}" if sources else ", and no input"
+            raise ToolError(
+                "invalid_argument",
+                f"{node.path()} ({node.type().name()}) has no output stage{where}.",
+                hint=(f"Pass lop_path {sources[0]}." if sources else "Pass the LOP it renders."),
+                candidates=sources[:1],
+            )
         raise ToolError(
             "invalid_argument",
             f"{node.path()} is {a_or_an(node.type().category().name())} node, not a LOP.",
@@ -173,6 +205,11 @@ def jsonable(value: Any, *, top: bool = True) -> Any:
     if name.endswith("Array") or isinstance(value, list | tuple):
         if not top:
             return str(value)[:STRING_CAP]
+        full = ARRAY_FULL
+        if len(value) and isinstance(value[0], str):
+            full = TOKEN_ARRAY_FULL
+        if len(value) <= full:
+            return [jsonable(v, top=False) for v in value]
         items = list(value[:ARRAY_PREVIEW])
         return {"len": len(value), "first": [jsonable(v, top=False) for v in items]}
     if name.startswith("Matrix"):
@@ -223,9 +260,16 @@ def _matrix(m: Any) -> Any:
 # -- per-prim blocks --------------------------------------------------------------------
 
 
-def _attributes(prim: Any, time: Any) -> tuple[list[dict[str, Any]], bool]:
+def _attributes(
+    prim: Any, time: Any, patterns: list[str] | None = None
+) -> tuple[list[dict[str, Any]], bool]:
     rows = []
-    attrs = [a for a in prim.GetAttributes() if a.HasAuthoredValue()]
+    attrs = [
+        a
+        for a in prim.GetAttributes()
+        if a.HasAuthoredValue()
+        and (patterns is None or any(fnmatch.fnmatchcase(a.GetName(), p) for p in patterns))
+    ]
     for attr in attrs[:ATTR_CAP]:
         row: dict[str, Any] = {"name": attr.GetName(), "type": str(attr.GetTypeName())}
         try:
@@ -249,7 +293,11 @@ def _xform(prim: Any, time: Any, cache: Any) -> dict[str, Any] | None:
     local = xformable.GetLocalTransformation(time)
     if isinstance(local, tuple):  # older signature returned (matrix, resetsXformStack)
         local = local[0]
-    return {"local": _matrix(local), "world": _matrix(cache.GetLocalToWorldTransform(prim))}
+    block = {"local": _matrix(local)}
+    world = _matrix(cache.GetLocalToWorldTransform(prim))
+    if world != block["local"]:
+        block["world"] = world  # left out when the parents add nothing
+    return block
 
 
 def _binding(prim: Any) -> str | None:
@@ -261,7 +309,9 @@ def _binding(prim: Any) -> str | None:
     return str(material.GetPath()) if material else None
 
 
-def prim_row(prim: Any, include: set[str], time: Any, cache: Any) -> dict[str, Any]:
+def prim_row(
+    prim: Any, include: set[str], time: Any, cache: Any, attribs: list[str] | None = None
+) -> dict[str, Any]:
     from pxr import Usd, UsdGeom
 
     row: dict[str, Any] = {"path": str(prim.GetPath()), "type": prim.GetTypeName() or ""}
@@ -276,7 +326,7 @@ def prim_row(prim: Any, include: set[str], time: Any, cache: Any) -> dict[str, A
             row["purpose"] = str(purpose)
     row["children_count"] = len(prim.GetAllChildren())
     if "attributes" in include:
-        row["attributes"], truncated = _attributes(prim, time)
+        row["attributes"], truncated = _attributes(prim, time, attribs)
         if truncated:
             row["attributes_truncated"] = True
     if "xform" in include:
@@ -369,6 +419,81 @@ def collect_prims(stage: Any, prim: str, depth: int, stop: int | None = None) ->
     return out if stop is None else out[:stop]
 
 
+def _subtree(root: Any, depth: int | None, *, include_self: bool) -> Iterator[Any]:
+    """Prims under ``root`` (and ``root`` itself if asked) to ``depth`` levels, in the
+    order and with the hidden prims of :func:`_walk`, without building a list."""
+    from pxr import Usd
+
+    base = root.GetPath().pathElementCount
+    prims = iter(Usd.PrimRange(root, Usd.PrimAllPrimsPredicate))
+    for prim in prims:
+        level = prim.GetPath().pathElementCount - base
+        if str(prim.GetPath()) in HIDDEN_PRIMS:
+            prims.PruneChildren()
+            continue
+        if level > 0 or (include_self and not prim.IsPseudoRoot()):
+            yield prim
+        if depth is not None and level >= depth:
+            prims.PruneChildren()
+
+
+def count_prims(stage: Any, prim: str, depth: int) -> tuple[int, bool]:
+    """How many rows the listing has in all, and whether counting stopped at the cap."""
+    if _pattern(prim) is not None:
+        found = collect_prims(stage, prim, depth, stop=COUNT_CAP + 1)
+        return min(len(found), COUNT_CAP), len(found) > COUNT_CAP
+    target = stage.GetPseudoRoot() if prim == "/" else stage.GetPrimAtPath(prim)
+    total = 0
+    for _ in _subtree(target, depth, include_self=prim != "/"):
+        total += 1
+        if total > COUNT_CAP:
+            return COUNT_CAP, True
+    return total, False
+
+
+def summary_block(stage: Any, prim: str, frame: float) -> dict[str, Any]:
+    """``{total_prims, counts_by_type, bbox_world}`` for the whole subtree under ``prim``
+    (every match of a pattern), any depth."""
+    pattern = _pattern(prim)
+    if pattern is None:
+        root = stage.GetPseudoRoot() if prim == "/" else stage.GetPrimAtPath(prim)
+        if not root:
+            raise _missing_prim(stage, prim)
+        roots = [root]
+    else:
+        roots = [
+            p
+            for p in stage.Traverse()
+            if pattern.match(str(p.GetPath())) and str(p.GetPath()) not in HIDDEN_PRIMS
+        ]
+    counts: dict[str, int] = {}
+    seen: set[str] = set()
+    total = 0
+    capped = False
+    for root in roots:
+        for p in _subtree(root, None, include_self=True):
+            key = str(p.GetPath())
+            if key in seen:
+                continue
+            seen.add(key)
+            total += 1
+            kind = p.GetTypeName() or "(untyped)"
+            counts[kind] = counts.get(kind, 0) + 1
+            if total >= COUNT_CAP:
+                capped = True
+                break
+        if capped:
+            break
+    block: dict[str, Any] = {
+        "total_prims": total,
+        "counts_by_type": dict(sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))),
+        "bbox_world": stage_bbox(stage, roots, frame) if roots else None,
+    }
+    if capped:
+        block["total_capped"] = True
+    return block
+
+
 def layers_block(stage: Any, lop: Any) -> dict[str, Any]:
     stack = [layer.identifier for layer in stage.GetLayerStack(includeSessionLayers=False)]
     block: dict[str, Any] = {"stack": stack[:LAYER_CAP]}
@@ -405,7 +530,13 @@ def usd_stage(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     from pxr import Usd, UsdGeom
 
     include = _include(args)
+    attribs = _attribs(args)
+    if attribs is not None:
+        include.add("attributes")
     depth = _depth(args)
+    summary = args.get("summary", False)
+    if not isinstance(summary, bool):
+        raise bad_arg("'summary' must be a boolean.")
     prim = args.get("prim") or "/"
     if not isinstance(prim, str) or not prim.startswith("/"):
         raise bad_arg("'prim' must be an absolute prim path (or pattern) like /geo.")
@@ -420,6 +551,13 @@ def usd_stage(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     with _at_frame(requested):
         frame = float(hou.frame())
         stage = cooked_stage(lop)
+        if summary:
+            return {
+                "lop_path": lop.path(),
+                "time": _num(frame),
+                "prim": prim,
+                "summary": summary_block(stage, prim, frame),
+            }
         prims = collect_prims(stage, prim, depth, stop=start + size + 1)
         chunk, nxt = page(prims, limit, cursor)
         time = Usd.TimeCode(frame)
@@ -427,11 +565,14 @@ def usd_stage(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
         result: dict[str, Any] = {
             "lop_path": lop.path(),
             "time": _num(frame),
-            "prims": [prim_row(p, include, time, cache) for p in chunk],
+            "prims": [prim_row(p, include, time, cache, attribs) for p in chunk],
         }
         if nxt is None:
             result["total"] = len(prims)  # the walk ended: the count is exact
         else:
+            result["total"], capped = count_prims(stage, prim, depth)
+            if capped:
+                result["total_capped"] = True
             result["next_cursor"] = nxt
         if "layers" in include:
             result["layers"] = layers_block(stage, lop)

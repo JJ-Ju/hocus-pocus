@@ -275,3 +275,15 @@ def test_locked_component_error_names_it(client):
     assert "expression" in error["message"]
     assert not error["hint"].startswith("Unlock it in Houdini")
     assert "resolutionx" in error["hint"]
+
+
+# -- usd_stage on a ROP LOP (papercut 10) -----------------------------------------------
+
+
+def test_usd_stage_on_a_render_rop_points_at_its_input(client, work_dir):
+    nodes = _lop_scene(work_dir)
+    error = client.error("usd_stage", {"lop_path": nodes["rop"].path()})
+    assert error["code"] == "invalid_argument"
+    assert "not a LOP" not in error["message"]
+    assert nodes["rset"].path() in error["message"]
+    assert error["candidates"] == [nodes["rset"].path()]

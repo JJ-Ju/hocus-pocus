@@ -1634,9 +1634,19 @@ _FULL: tuple[ToolSpec, ...] = (
     ToolSpec(
         name="usd_stage",
         description=(
-            "Read the USD stage of a LOP node: prims under prim (default /) to depth (default 1) "
-            "with path and type; include adds attributes (values at time, arrays summarised), "
-            "xform, material bindings, layers. Paged by limit and cursor."
+            "Read a LOP's USD stage: prims (path, type) under prim (path or glob) to depth; "
+            "include adds attributes (attribs: name glob), xform, bindings, layers. summary: "
+            "type counts, world bbox. Paged (limit, cursor)."
+        ),
+        notes=(
+            "time is a time code (default the current frame). prim globs: * within a path "
+            "segment, ** across segments; matches are listed with their subtrees to depth. "
+            "Attribute values are authored values at time; arrays up to 4 elements (8 for "
+            "strings and tokens) are listed in full, longer ones as {len, first}. xform gives "
+            "local, and world only when it differs. total is on every page (counted up to "
+            "100000, then total_capped). summary returns {total_prims, counts_by_type, "
+            "bbox_world: {min, max, size}} for the whole subtree (default and render purposes). "
+            "A render ROP in a LOP network has no stage: the error names its input."
         ),
         input_schema=_obj(
             {
@@ -1644,7 +1654,9 @@ _FULL: tuple[ToolSpec, ...] = (
                 "prim": _s(None, default="/"),
                 "depth": _i(None, minimum=1, default=1),
                 "include": _arr(_enum(("attributes", "xform", "bindings", "layers")), default=[]),
-                "time": _n("Time code; default current frame."),
+                "attribs": _s(),
+                "summary": _b(False),
+                "time": _n(),
                 "limit": _limit(),
                 # §4.1: list tools take limit and cursor.
                 "cursor": _cursor(),
