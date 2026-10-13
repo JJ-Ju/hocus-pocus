@@ -195,6 +195,9 @@ D21 to D24).
   pattern such as `/city/bldg_00*|/city/ground` used to match nothing, silently. An
   alternative that is not a valid prim path is now `invalid_argument` with a hint, and
   so is an exact alternative that names no prim.
+- **`render` thumbnails (review 16 N4).** An image output in a format the thumbnail
+  cannot read, such as `.xyz`, came back with no thumbnail and no word why. A note now
+  says so and lists the extensions the thumbnail reads.
 
 ### Upgrading from 1.1
 

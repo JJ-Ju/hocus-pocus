@@ -85,6 +85,16 @@ def test_render_usd_rop_outputimage_wins_and_output_overrides_it(client, work_di
     assert rop.parm("lopoutput").unexpandedString() == "__render__.usd"
 
 
+def test_render_unsupported_extension_notes_the_missing_thumbnail(client, work_dir):
+    """Review 16 N4: an output the thumbnail cannot read said nothing."""
+    nodes = _lop_scene(work_dir)
+    output = _fwd(work_dir / "probe.$F4.xyz")
+    result = client.ok("render", {"rop_path": nodes["rop"].path(), "output": output, "wait_s": 300})
+    assert "thumbnail" not in result
+    note = next(n for n in result.get("notes", []) if n.startswith("No thumbnail"))
+    assert ".xyz" in note and ".png" in note and ".exr" in note
+
+
 def test_render_out_usdrender_follows_loppath(client, work_dir):
     nodes = _lop_scene(work_dir, picture="out.$F4.exr")
     rop = hou.node("/out").createNode("usdrender", "karma_out")

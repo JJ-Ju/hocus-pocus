@@ -74,6 +74,9 @@ OUTPUT_PARMS = (
 MPLAY_OUTPUTS = {"ip", "md", "imdisplay"}
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".tga"}
 CONVERT_EXTS = {".exr", ".pic", ".rat", ".hdr", ".dpx", ".cin", ".sgi", ".rgb"}
+IMAGE_PARMS = ("picture", "vm_picture", "copoutput", "outputimage")
+"""Output parms that name an image; other ROPs (geometry, USD, Alembic) get no note about
+a missing thumbnail."""
 CHILD_TIMEOUT_S = 600.0
 CRASH_LOG_CHARS = 600
 """An error carries at most this much of a crashed child's log (review 16 N1)."""
@@ -1764,6 +1767,7 @@ def _prepare_render(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
         "frames": frames,
         "frame_list": _frame_list(frames),
         "parm": parm.name() if parm is not None else None,
+        "image_rop": usd or (parm is not None and parm.name() in IMAGE_PARMS),
         "output": output,
         "expected": [_norm(p) for p in expected],
         "usd": usd,
@@ -1806,7 +1810,14 @@ def _render_result(plan: dict[str, Any], thumbnail: bool) -> dict[str, Any]:
     if thumbnail and outputs:
         last = outputs[-1]
         ext = os.path.splitext(last)[1].lower()
-        if ext in IMAGE_EXTS or ext in CONVERT_EXTS:
+        if ext not in IMAGE_EXTS | CONVERT_EXTS and plan.get("image_rop"):
+            # Review 16 N4: say why there is no thumbnail.
+            notes.append(
+                f"No thumbnail: {ext or 'a file without an extension'} is not an image "
+                "format the thumbnail reads (" + ", ".join(sorted(IMAGE_EXTS | CONVERT_EXTS)) + ")."
+            )
+            result["notes"] = notes
+        elif ext in IMAGE_EXTS or ext in CONVERT_EXTS:
             try:
                 image = encode_png(last, THUMB_MAX_SIDE, hfs=plan["hfs"], measure=True)
                 mean = image.pop("mean_luma", None)
