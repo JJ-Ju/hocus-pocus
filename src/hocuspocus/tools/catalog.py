@@ -1247,8 +1247,9 @@ _VISUAL: tuple[ToolSpec, ...] = (
         ),
         notes=(
             "fit none reuses the last framing. The viewer source captures the view as it is (fit is"
-            " not applied; home the view first). path also writes the PNG there. image.attached is "
-            "true when the PNG went out as MCP image content."
+            " not applied; home the view first). path also writes the PNG there. Both files are "
+            "opaque, on the same grey as the image (the OpenGL ROP itself writes a transparent "
+            "background). image.attached is true when the PNG went out as MCP image content."
         ),
         input_schema=_obj(
             {
@@ -1295,7 +1296,9 @@ _VISUAL: tuple[ToolSpec, ...] = (
             "Above 5 outputs only outputs_summary is inline; job result lists them all. Every "
             "expected output is checked against approved_roots. viewport_capture is the quick look."
             " notes warn when the scene has no lights and when the thumbnail is nearly black. "
-            "thumbnail.image.attached is true when the image went out as MCP image content."
+            "thumbnail.image.attached is true when the image went out as MCP image content. The "
+            "thumbnail is inline only, flattened onto grey; the ROP's own output files are left as "
+            "written, alpha included."
         ),
         input_schema=_obj(
             {

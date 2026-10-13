@@ -143,6 +143,32 @@ def _mark_internal(node: Any) -> None:
         node.setUserData(INTERNAL_KEY, "1")
 
 
+def _flatten(im: Any) -> Any:
+    """``im`` as RGB, with any alpha composited onto :data:`BACKGROUND`."""
+    from PIL import Image
+
+    if im.mode in ("RGBA", "LA") or (im.mode == "P" and "transparency" in im.info):
+        rgba = im.convert("RGBA")
+        flat = Image.new("RGB", rgba.size, BACKGROUND)
+        flat.paste(rgba, mask=rgba.getchannel("A"))
+        return flat
+    return im.convert("RGB")
+
+
+def flatten_png_in_place(path: str) -> None:
+    """Rewrite a capture PNG without alpha, on the inline image's grey (review 12): the
+    OpenGL ROP has no background-colour parm and writes a transparent background, which
+    most image viewers show as white. Captures only; render outputs are never touched."""
+    from PIL import Image
+
+    with Image.open(path) as im:
+        im.load()
+        if im.mode == "RGB":
+            return
+        flat = _flatten(im)
+    flat.save(path, format="PNG")
+
+
 def encode_png(
     path: str, max_side: int, *, hfs: str | None = None, measure: bool = False
 ) -> dict[str, Any]:
@@ -186,12 +212,7 @@ def encode_png(
                 from PIL import ImageStat
 
                 mean_luma = float(ImageStat.Stat(im.convert("RGB").convert("L")).mean[0])
-            if im.mode in ("RGBA", "LA") or (im.mode == "P" and "transparency" in im.info):
-                rgba = im.convert("RGBA")
-                flat = Image.new("RGB", rgba.size, BACKGROUND)
-                flat.paste(rgba, mask=rgba.getchannel("A"))
-            else:
-                flat = im.convert("RGB")
+            flat = _flatten(im)
             if max(flat.size) > max_side:
                 flat.thumbnail((max_side, max_side), Image.Resampling.LANCZOS)
             buf = io.BytesIO()
@@ -835,7 +856,9 @@ def _capture_targets(parsed: dict[str, Any], ctx: HostContext) -> tuple[float, A
 def _finish_capture(
     out_file: str, res: tuple[int, int], frame: float, info: dict[str, Any], extra_path: Any
 ) -> dict[str, Any]:
-    """Encode the capture and copy it to ``path``. No ``hou``."""
+    """Flatten the capture onto the inline image's grey, encode it and copy it to
+    ``path``. No ``hou``."""
+    flatten_png_in_place(out_file)
     image = encode_png(out_file, IMAGE_MAX_SIDE)
     result: dict[str, Any] = {
         "image": image,

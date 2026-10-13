@@ -19,6 +19,7 @@ hou = pytest.importorskip("hou")
 Image = pytest.importorskip("PIL.Image")
 
 from hocuspocus.host.tools.visual import (  # noqa: E402
+    BACKGROUND,
     INTERNAL_KEY,
     TEMPORARY_CAMERA,
     temporary_capture_nodes,
@@ -171,6 +172,16 @@ def test_capture_downscales_and_writes_extra_path(client, work_dir):
     assert result["also_written"] == _fwd(extra)
     with Image.open(extra) as written:
         assert written.size == (1600, 900)
+    # Review 12: files on disk have the inline image's opaque grey, not a transparent
+    # background that most viewers show as white.
+    for path in (extra, Path(result["path"])):
+        with Image.open(path) as written:
+            assert written.mode == "RGB", (path, written.mode)
+            assert written.getpixel((0, 0)) == BACKGROUND
+            assert _not_blank(written)
+    inline = _decode(result["image"]).convert("RGB")
+    with Image.open(extra) as written:
+        assert inline.getpixel((0, 0)) == written.getpixel((0, 0))
 
 
 def test_capture_explicit_camera(client):

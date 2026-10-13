@@ -804,7 +804,7 @@ Read attribute values like the geometry spreadsheet: count rows of one class fro
 
 Look at the scene: returns a PNG image (long side at most 1024) plus path, width, height, camera_used. source auto uses the GUI viewer when present, else an OpenGL ROP that works headless, with a temporary camera framed per fit unless camera is given. Leaves no nodes, undo step or dirty flag.
 
-**Notes.** fit none reuses the last framing. The viewer source captures the view as it is (fit is not applied; home the view first). path also writes the PNG there. image.attached is true when the PNG went out as MCP image content.
+**Notes.** fit none reuses the last framing. The viewer source captures the view as it is (fit is not applied; home the view first). path also writes the PNG there. Both files are opaque, on the same grey as the image (the OpenGL ROP itself writes a transparent background). image.attached is true when the PNG went out as MCP image content.
 
 ### Arguments
 
@@ -848,7 +848,7 @@ Look at the scene: returns a PNG image (long side at most 1024) plus path, width
 
 Render any ROP (Karma, Mantra, OpenGL, ...) for frames [start, end, inc] (default current frame), optionally overriding output. Waits up to wait_s (default the job threshold): if done, returns outputs, a thumbnail image and notes; else job_id and state to poll with job.
 
-**Notes.** Above 5 outputs only outputs_summary is inline; job result lists them all. Every expected output is checked against approved_roots. viewport_capture is the quick look. notes warn when the scene has no lights and when the thumbnail is nearly black. thumbnail.image.attached is true when the image went out as MCP image content.
+**Notes.** Above 5 outputs only outputs_summary is inline; job result lists them all. Every expected output is checked against approved_roots. viewport_capture is the quick look. notes warn when the scene has no lights and when the thumbnail is nearly black. thumbnail.image.attached is true when the image went out as MCP image content. The thumbnail is inline only, flattened onto grey; the ROP's own output files are left as written, alpha included.
 
 ### Arguments
 
