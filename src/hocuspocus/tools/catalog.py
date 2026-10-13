@@ -1640,7 +1640,12 @@ _FULL: tuple[ToolSpec, ...] = (
             "'finished/total'}; a cook whose items were cancelled ends cancelled, never done. "
             "cancel also cancels the job cooking that graph and returns the status after the cook"
             " stopped, with cancelled: true and jobs_cancelled. node_info on a TOP node adds "
-            "pdg_state: {cooked, failed, total}; problems lists TOP nodes with failed items."
+            "pdg_state: {cooked, failed, total}; problems lists TOP nodes with failed items. "
+            "workitems rows: id, index, state, output_files (relative to output_root, given once "
+            "per page), cook_time_s, name only when it is not <node>_<id>, node for a network; "
+            "attribs: [names] adds each item's attribute values (unknown names left out); state "
+            "filters: failed, cancelled, success, cache, cooked or a state name. When block "
+            "returns a running job before timeout_s, notes says the wait was capped."
         ),
         input_schema=_obj(
             {
@@ -1648,6 +1653,8 @@ _FULL: tuple[ToolSpec, ...] = (
                 "top_path": _s(),
                 "block": _b(False),
                 "save": _b(False),
+                "attribs": _arr({"type": "string"}),
+                "state": _s(),
                 "timeout_s": _n(None, minimum=1, default=30),
                 # bible-silent: "workitems paged" uses the §4.1 limit/cursor convention.
                 "limit": _limit(),

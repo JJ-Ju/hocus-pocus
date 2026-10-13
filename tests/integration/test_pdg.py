@@ -196,6 +196,7 @@ def test_cook_block_honours_job_threshold(client):
         client.host.config.job_threshold_s = saved
     assert result["state"] == "running" and result["job_id"], result
     assert elapsed < 4, elapsed
+    assert "job_threshold_s" in result["notes"][0] and "60" in result["notes"][0]
     client.ok("job", {"action": "cancel", "job_id": result["job_id"]})
     assert _wait_job(client, result["job_id"], timeout=30)["state"] == "cancelled"
 
@@ -287,10 +288,19 @@ def test_workitems_with_failure_and_paging(client):
     assert [r["index"] for r in rows] == [0, 1, 2]
     assert [r["state"] for r in rows] == ["cooked_success", "cooked_fail", "cooked_success"]
     assert "boom" in rows[1]["error"] and "exit_code" not in rows[1]  # in-process
-    assert rows[0]["output_files"] == ["C:/hp-test/out0.txt"]
+    # Review 14 papercut 8: one output_root, relative files, no default names.
+    assert page["output_root"] == "C:/hp-test"
+    assert rows[0]["output_files"] == ["out0.txt"]
     assert rows[1]["output_files"] == []
-    assert all(isinstance(r["id"], int) and r["name"].startswith("script_") for r in rows)
+    assert all(isinstance(r["id"], int) and "name" not in r for r in rows)
+    assert all(isinstance(r["cook_time_s"], float) for r in rows)
     assert "node" not in rows[0]
+    failed = client.ok("pdg", {"action": "workitems", "top_path": script.path(), "state": "failed"})
+    assert failed["total"] == 1 and [r["index"] for r in failed["work_items"]] == [1]
+    cooked = client.ok("pdg", {"action": "workitems", "top_path": script.path(), "state": "cooked"})
+    assert [r["index"] for r in cooked["work_items"]] == [0, 2]
+    bad = client.error("pdg", {"action": "workitems", "top_path": script.path(), "state": "red"})
+    assert bad["code"] == "invalid_argument" and "failed" in bad["candidates"]
     first = client.ok("pdg", {"action": "workitems", "top_path": script.path(), "limit": 2})
     assert len(first["work_items"]) == 2 and first["next_cursor"] == "2"
     rest = client.ok(
@@ -299,6 +309,29 @@ def test_workitems_with_failure_and_paging(client):
     )
     assert [r["index"] for r in rest["work_items"]] == [2]
     assert "next_cursor" not in rest
+
+
+def test_workitems_attribs(client):
+    """Review 14 papercut 7: the per-item wedge values without reading outputs back."""
+    net = hou.node("/obj").createNode("topnet", "topnet1")
+    wedge = net.createNode("wedge", "wedge1")
+    wedge.parm("wedgecount").set(3)
+    wedge.parm("wedgeattributes").set(1)
+    wedge.parm("name1").set("seed")
+    client.ok("pdg", {"action": "cook", "top_path": wedge.path(), "block": True})
+    args = {
+        "action": "workitems",
+        "top_path": wedge.path(),
+        "attribs": ["wedgeindex", "seed", "nope"],
+    }
+    rows = client.ok("pdg", args)["work_items"]
+    assert len(rows) == 3
+    for row in rows:
+        assert set(row["attribs"]) == {"wedgeindex", "seed"}  # unknown names are left out
+        assert row["attribs"]["wedgeindex"] == row["index"]
+        assert isinstance(row["attribs"]["seed"], float)
+    plain = client.ok("pdg", {"action": "workitems", "top_path": wedge.path()})["work_items"]
+    assert "attribs" not in plain[0]
 
 
 def test_workitems_on_network_names_nodes(client):

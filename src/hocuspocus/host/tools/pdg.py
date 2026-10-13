@@ -17,6 +17,7 @@ Cancelling the job cancels the cook. No undo group: PDG work items are not hip s
 
 from __future__ import annotations
 
+import contextlib
 import os
 import re
 import time
@@ -41,6 +42,7 @@ the graph can still look idle)."""
 CANCEL_WAIT_S = 10.0
 """How long pdg cancel waits for the cook (and its job) to stop before it reports."""
 OUTPUT_FILE_CAP = 20
+ATTRIB_VALUES_CAP = 20
 ERROR_CAP = 5
 FAILURES_CAP = 5
 """Failed work items listed in a cook result (review 14 papercut 1)."""
@@ -299,22 +301,110 @@ def item_failure(item: Any) -> dict[str, Any]:
     return out
 
 
-def _work_item_row(item: Any, owner: str | None) -> dict[str, Any]:
-    files = [f.path for f in item.outputFiles]
-    row: dict[str, Any] = {
-        "id": int(item.id),
-        "name": item.name,
-        "index": int(item.index),
-        "state": _snake(item.state.name),
-        "output_files": files[:OUTPUT_FILE_CAP],
-    }
+def _attrib_value(item: Any, name: str) -> Any:
+    try:
+        attrib = item.attrib(name)
+    except Exception:
+        return _MISSING
+    if attrib is None:
+        return _MISSING
+    try:
+        values = list(attrib.values)
+    except Exception:
+        return _MISSING
+    values = [v if isinstance(v, int | float | str | bool) else str(v) for v in values]
+    if len(values) == 1:
+        return values[0]
+    return values[:ATTRIB_VALUES_CAP]
+
+
+_MISSING = object()
+
+
+def _work_item_row(
+    item: Any, top: Any, owner: str | None, attribs: list[str] | None = None
+) -> dict[str, Any]:
+    files = [f.path.replace("\\", "/") for f in item.outputFiles]
+    row: dict[str, Any] = {"id": int(item.id)}
+    if item.name != f"{top.name()}_{item.id}":
+        row["name"] = item.name  # the default name only repeats the node and id
+    row["index"] = int(item.index)
+    row["state"] = _snake(item.state.name)
+    row["output_files"] = files[:OUTPUT_FILE_CAP]
     if len(files) > OUTPUT_FILE_CAP:
         row["output_files_total"] = len(files)
     if owner is not None:
         row["node"] = owner
+    if row["state"].startswith("cooked_"):
+        with contextlib.suppress(Exception):
+            row["cook_time_s"] = round(float(item.cookDuration), 3)
+    if attribs:
+        values = {name: _attrib_value(item, name) for name in attribs}
+        row["attribs"] = {k: v for k, v in values.items() if v is not _MISSING}
     if row["state"] == "cooked_fail":
         row.update(item_failure(item))
     return row
+
+
+def relative_outputs(rows: list[dict[str, Any]]) -> str | None:
+    """Rewrite the rows' ``output_files`` relative to their common directory and return
+    it (review 14 papercut 8: one 128-character prefix was half of every page)."""
+    files = [f for row in rows for f in row.get("output_files", [])]
+    if not files:
+        return None
+    try:
+        root = os.path.commonpath([os.path.dirname(f) for f in files]).replace("\\", "/")
+    except ValueError:  # different drives
+        return None
+    if not root or root.rstrip("/").endswith(":") or root == "/":
+        return None
+    prefix = root.rstrip("/") + "/"
+    for row in rows:
+        if row.get("output_files"):
+            row["output_files"] = [f[len(prefix) :] for f in row["output_files"]]
+    return root
+
+
+STATE_ALIASES = {
+    "failed": ("cooked_fail",),
+    "cancelled": ("cooked_cancel",),
+    "success": ("cooked_success",),
+    "cache": ("cooked_cache",),
+    "cooked": ("cooked_success", "cooked_cache"),
+}
+STATES = (
+    "uncooked",
+    "waiting",
+    "scheduled",
+    "cooking",
+    "cooked_success",
+    "cooked_cache",
+    "cooked_fail",
+    "cooked_cancel",
+)
+
+
+def state_filter(raw: Any) -> tuple[str, ...] | None:
+    if raw is None:
+        return None
+    if isinstance(raw, str):
+        if raw in STATE_ALIASES:
+            return STATE_ALIASES[raw]
+        if raw in STATES:
+            return (raw,)
+    raise bad_arg(
+        f"'state' must be a work item state; got {raw!r}.",
+        hint="Use failed, cancelled, success, cache, cooked (success or cache) or a state name.",
+        candidates=[*STATE_ALIASES, *STATES],
+    )
+
+
+def attrib_names(raw: Any) -> list[str] | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, list) or not all(isinstance(n, str) and n for n in raw):
+        raise bad_arg("'attribs' must be a list of work item attribute names.")
+    return list(dict.fromkeys(raw))
 
 
 def graph_tops(target: Any) -> list[Any]:
@@ -369,7 +459,9 @@ def cook_result(target: Any) -> dict[str, Any]:
     return out
 
 
-def work_items(node: Any) -> list[dict[str, Any]]:
+def work_items(
+    node: Any, states: tuple[str, ...] | None = None, attribs: list[str] | None = None
+) -> list[dict[str, Any]]:
     network = _is_top_network(node)
     rows: list[dict[str, Any]] = []
     for top in _tops(node):
@@ -377,7 +469,10 @@ def work_items(node: Any) -> list[dict[str, Any]]:
         if pdg_node is None:
             continue
         items = sorted(pdg_node.workItems, key=lambda w: (w.index, w.id))
-        rows.extend(_work_item_row(item, top.path() if network else None) for item in items)
+        if states is not None:
+            items = [item for item in items if _snake(item.state.name) in states]
+        owner = top.path() if network else None
+        rows.extend(_work_item_row(item, top, owner, attribs) for item in items)
     return rows
 
 
@@ -594,12 +689,19 @@ def pdg_tool(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
         return run(lambda: status_block(resolve_top(path)))
     if action == "workitems":
         limit, cursor = args.get("limit"), args.get("cursor")
+        states = state_filter(args.get("state"))
+        attribs = attrib_names(args.get("attribs"))
 
         def items() -> dict[str, Any]:
             node = resolve_top(path)
-            rows = work_items(node)
+            rows = work_items(node, states, attribs)
             chunk, nxt = page(rows, limit, cursor)
-            out: dict[str, Any] = {"path": node.path(), "work_items": chunk, "total": len(rows)}
+            out: dict[str, Any] = {"path": node.path()}
+            root = relative_outputs(chunk)
+            if root is not None:
+                out["output_root"] = root
+            out["work_items"] = chunk
+            out["total"] = len(rows)
             if nxt is not None:
                 out["next_cursor"] = nxt
             return out
@@ -618,4 +720,11 @@ def pdg_tool(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     # Like cook and render: a blocking call waits at most job_threshold_s, then hands back
     # the job (BIBLE §7); block: false returns the job at once.
     wait_s = min(timeout_s, float(ctx.config.job_threshold_s)) if block else 0.0
-    return _start_cook_job(ctx, path, timeout_s, wait_s, save)
+    result = _start_cook_job(ctx, path, timeout_s, wait_s, save)
+    if block and wait_s < timeout_s and result.get("state") == "running":
+        # Review 14 papercut 9: say that timeout_s was not what the call waited.
+        result["notes"] = [
+            f"block waited {wait_s:g} s (job_threshold_s), not timeout_s {timeout_s:g} s; "
+            "poll the job."
+        ]
+    return result
