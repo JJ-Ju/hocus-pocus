@@ -62,6 +62,40 @@ def test_undo_multiple_steps_and_empty_stack(client):
     assert {c.type().name() for c in hou.node("/obj/geo1").children()} == {"box", "sphere"}
 
 
+def test_undo_stops_at_a_user_step(client):
+    """Review 15 papercut 4: undo {steps} must not undo the user's own work silently."""
+    geo = _geo()
+    hou.undos.clear()
+    client.ok("node_create", {"items": [{"parent": "/obj/geo1", "type": "box", "name": "a"}]})
+    with hou.undos.group("user tweak"):
+        geo.parm("tx").set(3)
+    client.ok("node_create", {"items": [{"parent": "/obj/geo1", "type": "box", "name": "b"}]})
+
+    result = client.ok("undo", {"action": "undo", "steps": 3})
+    assert len(result["performed"]) == 1
+    assert result["performed"][0].startswith("HocusPocus: node_create")
+    assert result["blocked_by"] == "user tweak"
+    assert "include_user_steps" in result["note"]
+    assert hou.node("/obj/geo1/b") is None and hou.node("/obj/geo1/a") is not None
+    assert geo.parm("tx").eval() == 3
+    assert result["next_undo"] == "user tweak"
+
+    # Nothing to do when the newest step is the user's.
+    again = client.ok("undo", {"action": "undo"})
+    assert again["performed"] == [] and again["blocked_by"] == "user tweak"
+
+    crossed = client.ok("undo", {"action": "undo", "steps": 2, "include_user_steps": True})
+    assert crossed["performed"][0] == "user tweak"
+    assert crossed["performed"][1].startswith("HocusPocus: node_create")
+    assert crossed["user_steps"] == ["user tweak"]
+    assert "blocked_by" not in crossed
+    assert geo.parm("tx").eval() == 0 and hou.node("/obj/geo1/a") is None
+
+    # Redo is guarded the same way.
+    redo = client.ok("undo", {"action": "redo", "steps": 2})
+    assert len(redo["performed"]) == 1 and redo["blocked_by"] == "user tweak"
+
+
 def test_undo_parm_set_restores_value(client):
     box = _geo().createNode("box")
     client.ok("parm_set", {"items": [{"path": f"{box.path()}/sizex", "value": 4}]})
