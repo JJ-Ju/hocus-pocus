@@ -345,7 +345,7 @@ def test_press_button(client, scene):
     scene["geo"].createNode("file", "file1")
     res = _set(client, {"path": "/obj/geo1/file1/reload", "press": True})
     assert res["wrote_keyframe"] is False
-    assert res["value"] is None
+    assert res["pressed"] is True and "value" not in res  # a button has no value
     err = client.error("parm_set", {"items": [{"path": "/obj/geo1/box1/sizex", "press": True}]})
     assert err["code"] == "invalid_value"
     err = client.error("parm_set", {"items": [{"path": "/obj/geo1/file1/reload", "value": 1}]})
@@ -847,3 +847,57 @@ def test_long_string_is_elided_in_set_and_get(client, scene):
     assert expanded["value"] == "tune" and expanded["raw"] == "$OS"
     error = client.error("parm_get", {"paths": [path], "full_strings": "yes"})
     assert error["code"] == "invalid_argument"
+
+
+# -- press on save buttons (review 17 P0-2) and callback menus (review 17 P1-4) ----------
+
+
+def _file_cache(path: str, frames=(1, 3)):
+    geo = hou.node("/obj").createNode("geo", "fx")
+    box = geo.createNode("box")
+    box.parm("ty").setExpression("$F * 0.1")
+    cache = geo.createNode("filecache::2.0", "cache")
+    cache.setInput(0, box)
+    cache.parm("filemethod").set(1)  # explicit file
+    cache.parm("file").set(path)
+    for parm, value in zip(("f1", "f2"), frames, strict=True):
+        cache.parm(parm).deleteAllKeyframes()
+        cache.parm(parm).set(value)
+    return cache
+
+
+def _fwd(path) -> str:
+    return str(path).replace("\\", "/")
+
+
+def test_press_save_button_verifies_the_written_files(client, tmp_path):
+    cache = _file_cache(_fwd(tmp_path / "fc.$F4.bgeo.sc"))
+    res = _set(client, {"path": f"{cache.path()}/execute", "press": True})
+    assert res["pressed"] is True
+    assert "value" not in res and "raw" not in res
+    summary = res["outputs_summary"]
+    assert summary["count"] == 3 and summary["missing_count"] == 0
+    assert summary["pattern"] == _fwd(tmp_path / "fc.####.bgeo.sc")
+    assert res["side_effects"]["loadfromdisk"] == [0, 1]
+    assert len(list(tmp_path.glob("fc.*"))) == 3
+
+
+def test_press_save_button_that_writes_nothing_fails(client, tmp_path):
+    blocker = tmp_path / "blocker"
+    blocker.write_text("a file, so no directory can be created under it")
+    cache = _file_cache(_fwd(blocker / "sub" / "fc.$F4.bgeo.sc"))
+    error = client.error(
+        "parm_set", {"items": [{"path": f"{cache.path()}/execute", "press": True}]}
+    )
+    assert error["code"] == "cook_failed", error
+    assert "0 of 3" in error["message"]
+    missing = error["detail"]["missing"]
+    assert missing[0] == _fwd(blocker / "sub" / "fc.0001.bgeo.sc") and len(missing) == 3
+
+
+def test_press_on_a_plain_button_reports_pressed(client, scene):
+    geo = scene["geo"]
+    cache = geo.createNode("filecache::2.0", "c2")
+    res = _set(client, {"path": f"{cache.path()}/reload", "press": True})
+    assert res["pressed"] is True
+    assert "outputs_summary" not in res

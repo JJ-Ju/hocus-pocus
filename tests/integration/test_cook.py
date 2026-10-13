@@ -808,3 +808,43 @@ def test_problems_checks_paths_under_temp_variables(client):
     result = client.ok("problems", {"root": geo.path()})
     files = [r["path"] for r in result["problems"] if r["kind"] == "missing_file"]
     assert files == [reader.path()]
+
+
+# -- writer SOPs and ROPs (review 17 P0-1, review 18 papercut 8) --------------------------
+
+
+def _file_cache(work_dir, name: str = "cache", frames=(1, 3)):
+    geo = _geo("fx")
+    box = geo.createNode("box")
+    box.parm("ty").setExpression("$F * 0.1")
+    cache = geo.createNode("filecache::2.0", name)
+    cache.setInput(0, box)
+    cache.parm("filemethod").set(1)  # explicit file
+    cache.parm("file").set(str(work_dir / "fc.$F4.bgeo.sc").replace("\\", "/"))
+    for parm, value in zip(("f1", "f2"), frames, strict=True):
+        cache.parm(parm).deleteAllKeyframes()
+        cache.parm(parm).set(value)
+    return cache
+
+
+def test_cook_frame_range_on_a_file_cache_says_it_writes_nothing(client, work_dir):
+    cache = _file_cache(work_dir)
+    result = client.ok("cook", {"paths": [cache.path()], "frame_range": [1, 3]})
+    assert result["ok"] is True
+    assert not list(work_dir.glob("fc.*"))
+    (note,) = [n for n in result["notes"] if cache.path() in n]
+    assert "does not write" in note and "render" in note and "press" in note
+
+
+def test_cook_on_a_rop_says_cooking_does_not_render(client, work_dir):
+    geo = _geo()
+    box = geo.createNode("box")
+    sop_rop = geo.createNode("rop_geometry", "write")
+    sop_rop.setInput(0, box)
+    out_rop = hou.node("/out").createNode("geometry", "bgeo")
+    out_rop.parm("soppath").set(box.path())
+    result = client.ok("cook", {"paths": [sop_rop.path(), out_rop.path(), box.path()]})
+    notes = result["notes"]
+    assert len(notes) == 2, notes
+    assert any(sop_rop.path() in n and "render" in n for n in notes)
+    assert any(out_rop.path() in n and "render" in n for n in notes)

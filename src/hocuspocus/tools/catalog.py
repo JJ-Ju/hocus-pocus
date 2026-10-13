@@ -994,7 +994,10 @@ _PARMS: tuple[ToolSpec, ...] = (
         ),
         notes=(
             "With animation replace a single keyframe only adds or replaces its own key. press "
-            "clicks a button parm. raw is left out when it equals value, and long strings are "
+            "clicks a button parm and returns pressed and side_effects ({parm: [old, new]} it "
+            "changed); on a writer's save button (File Cache Save to Disk, a ROP SOP's Render) the "
+            "output files over its frame range are checked afterwards: outputs_summary, or "
+            "cook_failed with detail.missing. raw is left out when it equals value, and long strings are "
             "elided as in parm_get. Tuples report per-component expressions and the keyed component"
             " names. Type mismatches fail with invalid_value naming the template type and range. "
             "On a LOP a USD attribute name (inputs:intensity) sets Houdini's encoded parm "
@@ -1028,7 +1031,7 @@ _PARMS: tuple[ToolSpec, ...] = (
                             ),
                             "multiparm_count": _i(None, minimum=0),
                             "revert_to_default": {"type": "boolean"},
-                            "press": {"type": "boolean", "description": "Press a button parm."},
+                            "press": {"type": "boolean"},
                             "animation": _enum(("replace", "key", "keep"), "replace"),
                         },
                         ("path",),
@@ -1089,13 +1092,16 @@ _COOK: tuple[ToolSpec, ...] = (
     ToolSpec(
         name="cook",
         description=(
-            "Cook nodes and report per node ok, errors, warnings, cook_time_ms (its own cook; "
-            "cached inputs are not recooked). profile force-cooks each input chain: chain (top 10 "
+            "Cook nodes and report per node ok, errors, warnings, cook_time_ms. Cooking never "
+            "writes files (render does). profile force-cooks each input chain: chain (top 10 "
             "by cost), total_ms, attribution; for-each loop bodies show their cost over all "
             "iterations (loops). frame_range cooks frame by frame (sims advance); summary bbox adds"
             " per-frame bbox. Past the job threshold returns job_id for job."
         ),
         notes=(
+            "cook_time_ms is the node's own cook; cached inputs are not recooked. Cooking a ROP or "
+            "a File Cache writes nothing, and notes say how to write (render, or parm_set press "
+            "on its execute button). "
             "frame_range is [start, end, step] and cannot be combined with profile or frame; the "
             "current frame is restored afterwards. Errors left from before a fix are rechecked "
             "unless the last cook took over 2 s (hint: force). With profile, results[].cook_time_ms"
@@ -1321,10 +1327,10 @@ _VISUAL: tuple[ToolSpec, ...] = (
     ToolSpec(
         name="render",
         description=(
-            "Render any ROP (Karma, Mantra, OpenGL, ...) for frames [start, end, inc] (default "
-            "current frame), optionally overriding output. Waits up to wait_s (default the job "
-            "threshold): if done, returns outputs, a thumbnail image and notes; else job_id and "
-            "state to poll with job."
+            "Render any ROP (Karma, OpenGL, ...) or writer SOP (File Cache, rop_geometry: own "
+            "frame range) for frames [start, end, inc] (default current frame), optionally "
+            "overriding output. Waits up to wait_s (default the job threshold): if done, returns "
+            "outputs, a thumbnail and notes; else job_id to poll with job."
         ),
         notes=(
             "Above 5 outputs only outputs_summary is inline; job result lists them all. Every "
@@ -1337,7 +1343,12 @@ _VISUAL: tuple[ToolSpec, ...] = (
             "outputs come from outputimage, else the RenderProduct productName of the render "
             "settings the ROP uses (EXR thumbnails too), never lopoutput; output overrides "
             "outputimage; a note says when nothing resolves; a husk failure carries the end of "
-            "its log in detail.log_tail."
+            "its log in detail.log_tail. A writer SOP (File Cache, rop_geometry or rop_alembic "
+            "SOP) renders its own frame range unless frames is given; a File Cache renders "
+            "through the ROP inside it (no output override), then turns on Load from Disk as its "
+            "Save to Disk button does (side_effects: {parm: [old, new]}). A cancelled render's "
+            "job result is the cancelled error with detail {last_status, partial: "
+            "{outputs_summary}} (the files written before the cancel)."
         ),
         input_schema=_obj(
             {

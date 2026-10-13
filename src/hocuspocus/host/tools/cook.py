@@ -518,6 +518,33 @@ def _ranged(
     return [merged[p] for p in paths], extra
 
 
+def writer_notes(paths: list[str]) -> list[str]:
+    """Notes for nodes a cook does not make write anything (review 17 P0-1, review 18
+    papercut 8): a ROP renders only through ``render``, and a File Cache passes its input
+    through until saved. Main thread."""
+    import hou
+
+    from .visual import writer_rop
+
+    notes = []
+    for path in paths:
+        node = hou.node(path)
+        rop = writer_rop(node) if node is not None else None
+        if rop is None:
+            continue
+        if rop is node:
+            notes.append(
+                f"Cooking {path} does not write files; render {{rop_path: {path}}} renders it."
+            )
+        else:
+            notes.append(
+                f"Cooking {path} does not write files: a cook passes its input through. "
+                f"render {{rop_path: {path}}} saves its frame range as a job with progress and "
+                f"cancel; parm_set press on {path}/execute saves in one blocking call."
+            )
+    return notes
+
+
 @tool("cook", main_thread=False, scene=False)
 def cook(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     paths = _paths_arg(args)
@@ -536,8 +563,12 @@ def cook(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
             hint="Profile at one frame, or cook a range without profile.",
         )
 
+    notes: list[str] = []
+
     def resolve() -> list[str]:
-        return [require_node(p).path() for p in paths]
+        resolved = [require_node(p).path() for p in paths]
+        notes[:] = writer_notes(resolved)
+        return resolved
 
     def work(job: Any, resolved: list[str]) -> dict[str, Any]:
         extra: dict[str, Any] = {}
@@ -551,6 +582,8 @@ def cook(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
         if frame is not None:
             out["frame"] = frame
         out.update(extra)
+        if notes:
+            out["notes"] = notes
         return out
 
     if ctx.executor.on_main_thread():

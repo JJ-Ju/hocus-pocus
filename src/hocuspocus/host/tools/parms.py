@@ -1070,6 +1070,7 @@ def _apply(node: Any, target: Any, item: dict[str, Any], *, frame: float | None)
     before = [_key_signature(p) for p in parms]
     key_frame = frame if frame is not None else hou.frame()
     count_keys_as_written = True
+    pressed: dict[str, Any] | None = None
     try:
         if field == "value":
             value = item["value"]
@@ -1220,7 +1221,9 @@ def _apply(node: Any, target: Any, item: dict[str, Any], *, frame: float | None)
             kind = _kind(parm.parmTemplate())
             if kind != "button":
                 raise _invalid(parm, kind, f"{path} is a {kind} parm, not a button.")
-            parm.pressButton()
+            from .visual import press_button  # lazy: visual imports hou-heavy helpers
+
+            pressed = press_button(node, parm)  # verifies a save button's files (review 17)
             count_keys_as_written = False
     except ToolError:
         raise
@@ -1238,6 +1241,10 @@ def _apply(node: Any, target: Any, item: dict[str, Any], *, frame: float | None)
     if count_keys_as_written or (field == "expression" and animation == "key"):
         wrote = any(_key_signature(p) - b for p, b in zip(parms, before, strict=True))
     result = {"path": path, **summarize_parm(target, frame=frame)}
+    if pressed is not None:
+        for key in ("value", "raw", "is_default"):  # a button has no value (review 17)
+            result.pop(key, None)
+        result.update(pressed)
     result["wrote_keyframe"] = wrote
     if notes:
         result["notes"] = notes

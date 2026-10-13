@@ -1643,6 +1643,176 @@ def _output_parm(rop: Any) -> Any:
     return None
 
 
+# -- writer SOPs: File Cache, ROP SOPs (review 17 P0-1, P0-2, P1-3) --------------------
+
+SAVE_BUTTON = "execute"
+"""The save button of a File Cache and of every ROP (``Save to Disk``, ``Render``)."""
+SIDE_EFFECT_CAP = 10
+WRITTEN_SLACK_S = 2.0
+"""A file counts as written by a press when its mtime is at most this much older than
+the press (file systems round mtimes)."""
+
+
+def writer_rop(node: Any) -> Any:
+    """The ROP that writes ``node``'s files: the node itself when it is a ROP (a /out
+    driver, a SOP-level ``rop_geometry``/``rop_alembic``, a Cop ``rop_image``), or the
+    ROP inside a SOP whose ``execute`` button saves through one, such as
+    ``filecache::2.0`` (its ``render`` child, else the first ROP inside it). None for any
+    other node. Main thread."""
+    import hou
+
+    if isinstance(node, hou.RopNode):
+        return node
+    if not isinstance(node, hou.SopNode):
+        return None
+    button = node.parm(SAVE_BUTTON)
+    try:
+        if button is None or button.parmTemplate().type() != hou.parmTemplateType.Button:
+            return None
+    except Exception:
+        return None
+    inner = node.node("render")
+    if isinstance(inner, hou.RopNode):
+        return inner
+    try:
+        children = node.allSubChildren(recurse_in_locked_nodes=True)
+    except Exception:
+        children = ()
+    return next((c for c in children if isinstance(c, hou.RopNode)), None)
+
+
+def rop_frame_range(rop: Any) -> list[float] | None:
+    """``[start, end, inc]`` from the ROP's own Valid Frame Range, or None when it renders
+    the current frame only (``trange`` 0) or has no range. Main thread."""
+    trange = rop.parm("trange")
+    if trange is None:
+        return None
+    try:
+        if not int(trange.eval()):
+            return None
+        start, end = (float(rop.parm(n).eval()) for n in ("f1", "f2"))
+        inc = float(rop.parm("f3").eval()) if rop.parm("f3") is not None else 1.0
+    except Exception:
+        return None
+    if inc <= 0 or end < start:
+        return None
+    return [start, end, inc]
+
+
+def expected_outputs(rop: Any, frames: list[float]) -> list[str]:
+    """The files ``rop`` writes for ``frames`` (``[start, end, inc]``), from its output
+    parm; MPlay and empty outputs are left out. Main thread."""
+    parm = _output_parm(rop)
+    if parm is None:
+        return []
+    out = []
+    for frame in _frame_list(frames):
+        value = parm.evalAtFrame(frame).strip()
+        if value and value not in MPLAY_OUTPUTS:
+            out.append(_norm(value))
+    return out
+
+
+def outputs_summary(outputs: list[str], missing: list[str]) -> dict[str, Any]:
+    """``{count, first, last, pattern, missing_count}`` for a file sequence. No ``hou``."""
+    summary: dict[str, Any] = {"count": len(outputs)}
+    if outputs:
+        summary["first"] = outputs[0]
+        summary["last"] = outputs[-1]
+        summary["pattern"] = output_pattern(outputs[0], outputs[-1])
+    summary["missing_count"] = len(missing)
+    return summary
+
+
+def _top_parm_values(node: Any) -> dict[str, Any]:
+    """Raw values of ``node``'s value parms (not buttons, folders or labels), to report
+    what a button press changed. Main thread."""
+    import hou
+
+    skip = (
+        hou.parmTemplateType.Button,
+        hou.parmTemplateType.Folder,
+        hou.parmTemplateType.FolderSet,
+        hou.parmTemplateType.Label,
+        hou.parmTemplateType.Separator,
+    )
+    values: dict[str, Any] = {}
+    for parm in node.parms():
+        try:
+            if parm.parmTemplate().type() in skip:
+                continue
+            try:
+                values[parm.name()] = parm.unexpandedString()
+            except Exception:
+                values[parm.name()] = parm.eval()
+        except Exception:
+            continue
+    return values
+
+
+def changed_parms(before: dict[str, Any], after: dict[str, Any]) -> dict[str, list[Any]]:
+    """``{name: [old, new]}`` for parms whose raw value changed, at most
+    :data:`SIDE_EFFECT_CAP`. No ``hou``."""
+    changes = {
+        name: [before[name], value]
+        for name, value in after.items()
+        if name in before and before[name] != value
+    }
+    return dict(list(changes.items())[:SIDE_EFFECT_CAP])
+
+
+def press_button(node: Any, parm: Any) -> dict[str, Any]:
+    """Press a button (or run a menu's callback) and report it: ``{pressed: true,
+    side_effects?}``, plus ``outputs_summary`` for the save button of a writer (a File
+    Cache's Save to Disk, a ROP's Render): the files its output parm names over the
+    writer's frame range are checked afterwards, and a press that left any of them
+    unwritten fails with ``cook_failed`` listing them (review 17 P0-2: a failed save
+    reported success). Main thread."""
+    import hou
+
+    rop = writer_rop(node) if parm.name() == SAVE_BUTTON else None
+    expected: list[str] = []
+    if rop is not None:
+        frames = rop_frame_range(rop) or [hou.frame(), hou.frame(), 1.0]
+        try:
+            expected = expected_outputs(rop, frames)
+        except Exception:
+            expected = []
+    before = _top_parm_values(node)
+    started = time.time()
+    parm.pressButton()
+    out: dict[str, Any] = {"pressed": True}
+    changes = changed_parms(before, _top_parm_values(node))
+    if changes:
+        out["side_effects"] = changes
+    if not expected:
+        return out
+    written, missing = [], []
+    for path in expected:
+        try:
+            fresh = os.path.getmtime(path) >= started - WRITTEN_SLACK_S
+        except OSError:
+            fresh = False
+        (written if fresh else missing).append(path)
+    if missing:
+        errors: list[str] = []
+        with contextlib.suppress(Exception):
+            errors = error_lines([str(e) for e in rop.errors()])
+        detail: dict[str, Any] = {"missing": missing[:20], "missing_count": len(missing)}
+        if errors:
+            detail["errors"] = errors[:5]
+        raise ToolError(
+            "cook_failed",
+            f"{node.path()} {parm.name()} wrote {len(written)} of {len(expected)} files"
+            + (f": {errors[0]}" if errors else "."),
+            hint="Check that the output directory is writable and the input cooks, then press "
+            "again; render runs the same save as a job with progress and cancel.",
+            detail=detail,
+        )
+    out["outputs_summary"] = outputs_summary(written, missing)
+    return out
+
+
 def _usd_source_lop(rop: Any) -> Any:
     """The LOP whose stage a USD render ROP renders: ``loppath``, else its first input."""
     import hou
@@ -1739,6 +1909,84 @@ def usd_render_outputs(rop: Any, frames: list[float]) -> tuple[list[str], str | 
     return paths, None
 
 
+def _not_a_render_node(node: Any) -> ToolError:
+    return ToolError(
+        "invalid_argument",
+        f"{node.path()} ({node.type().name()}) is not a render node.",
+        hint="Pass a ROP such as /out/karma1 or /out/opengl1, or a writer SOP such as a File "
+        "Cache or rop_geometry.",
+    )
+
+
+def job_snapshot(job: Any) -> dict[str, Any]:
+    """The job's status as ``job status`` would show it, best effort (``{}`` when the
+    job context does not expose it). No ``hou``."""
+    inner = getattr(job, "_job", None)
+    with contextlib.suppress(Exception):
+        if inner is not None:
+            return dict(inner.status())
+    return {}
+
+
+def cancelled_with_partial(job: Any, partial: dict[str, Any], done: str) -> ToolError:
+    """The ``cancelled`` error a job raises when it stops early, with ``detail:
+    {last_status, partial}`` so ``job result`` keeps what was done before the cancel
+    (review 17 P1-6). No ``hou``."""
+    status = job_snapshot(job)
+    job_id = status.get("job_id")
+    name = f"Job {job_id}" if job_id else "The job"
+    return ToolError(
+        "cancelled",
+        f"{name} was cancelled after {done}.",
+        detail={"last_status": status, "partial": partial},
+    )
+
+
+def _render_partial(plan: dict[str, Any]) -> tuple[dict[str, Any], str]:
+    outputs = [p for p in plan["expected"] if os.path.isfile(p)]
+    missing = [p for p in plan["expected"] if not os.path.isfile(p)]
+    total = len(plan["expected"]) or len(plan["frame_list"])
+    return {"outputs_summary": outputs_summary(outputs, missing)}, (
+        f"{len(outputs)} of {total} output files"
+    )
+
+
+SAVE_SIDE_EFFECTS = ("hardenBaseName", "enableLoadFromDisk")
+"""What a File Cache's Save to Disk does after its ROP rendered (its PythonModule's
+``saveToDisk``): harden the base name, turn on Load from Disk."""
+
+
+def _writer_side_effects(owner_path: str) -> dict[str, list[Any]]:
+    """After a writer SOP rendered through its inner ROP, do what its own save button
+    does next (a File Cache turns on Load from Disk and reloads) as one undo step, and
+    return the parms that changed. Main thread."""
+    import hou
+
+    from ..undo import hou_undo_group, make_label
+
+    node = hou.node(owner_path)
+    if node is None:
+        return {}
+    before = _top_parm_values(node)
+    try:
+        module = node.hdaModule()
+    except Exception:
+        return {}
+    steps = [getattr(module, name, None) for name in SAVE_SIDE_EFFECTS]
+    if not any(callable(step) for step in steps):
+        return {}
+    with hou_undo_group(make_label("render", {"rop_path": owner_path})):
+        for step in steps:
+            if callable(step):
+                with contextlib.suppress(Exception):
+                    step(node)
+        reload = node.parm("reload")
+        if reload is not None:
+            with contextlib.suppress(Exception):
+                reload.pressButton()
+    return changed_parms(before, _top_parm_values(node))
+
+
 def _prepare_render(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     """Validate on the main thread and compute the expected output files."""
     import hou
@@ -1746,22 +1994,30 @@ def _prepare_render(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     rop_path = args.get("rop_path")
     if not isinstance(rop_path, str) or not rop_path.strip():
         raise ToolError("invalid_argument", "'rop_path' must be a ROP node path.")
-    rop = require_node(rop_path, field="rop_path")
-    if not callable(getattr(rop, "render", None)):
-        raise ToolError(
-            "invalid_argument",
-            f"{rop.path()} ({rop.type().name()}) is not a render node.",
-            hint="Pass a ROP such as /out/karma1 or /out/opengl1.",
-        )
+    owner = require_node(rop_path, field="rop_path")
+    rop = owner if callable(getattr(owner, "render", None)) else writer_rop(owner)
+    if rop is None:
+        raise _not_a_render_node(owner)
+    # A writer SOP (File Cache, rop_geometry SOP) renders its own frame range by default;
+    # a File Cache renders through the ROP inside it (review 17 P1-3).
+    writer = rop is not owner or owner.type().category().name() == "Sop"
     frames = _frames(args.get("frames"))
     if frames is None:
-        frames = [hou.frame(), hou.frame(), 1.0]
+        frames = (rop_frame_range(rop) if writer else None) or [hou.frame(), hou.frame(), 1.0]
     output = args.get("output")
     parm = _output_parm(rop)
     usd = is_usd_render_rop(rop)
     if output is not None:
         if not isinstance(output, str) or not output.strip():
             raise ToolError("invalid_argument", "'output' must be a non-empty path.")
+        if rop is not owner:
+            raise ToolError(
+                "invalid_argument",
+                f"{owner.path()} ({owner.type().name()}) writes through the ROP inside it, "
+                "whose output cannot be overridden.",
+                hint="Set the node's own output parm with parm_set (on a File Cache: "
+                "filemethod 1 and file), then render without output.",
+            )
         if parm is None:
             raise ToolError(
                 "invalid_argument",
@@ -1798,6 +2054,7 @@ def _prepare_render(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
         )
     return {
         "rop": rop.path(),
+        "owner": owner.path() if rop is not owner else None,
         "type": rop.type().name(),
         "frames": frames,
         "frame_list": _frame_list(frames),
@@ -1818,21 +2075,17 @@ def _render_result(plan: dict[str, Any], thumbnail: bool) -> dict[str, Any]:
     outputs = [p for p in plan["expected"] if os.path.isfile(p)]
     missing = [p for p in plan["expected"] if not os.path.isfile(p)]
     result: dict[str, Any] = {
-        "rop_path": plan["rop"],
+        "rop_path": plan.get("owner") or plan["rop"],
         "frames": [num(v) for v in plan["frames"]],
         "outputs": outputs,
     }
     if missing:
         result["missing"] = missing[:20]
     if len(outputs) > INLINE_OUTPUTS:
-        result["outputs_summary"] = {
-            "count": len(outputs),
-            "first": outputs[0],
-            "last": outputs[-1],
-            "pattern": output_pattern(outputs[0], outputs[-1]),
-            "missing_count": len(missing),
-        }
+        result["outputs_summary"] = outputs_summary(outputs, missing)
     notes: list[str] = []
+    if plan.get("owner"):
+        notes.append(f"{plan['owner']} rendered through its ROP {plan['rop']}.")
     images = [
         p for p in plan["expected"] if os.path.splitext(p)[1].lower() in IMAGE_EXTS | CONVERT_EXTS
     ]
@@ -1915,15 +2168,19 @@ def _render_job(plan: dict[str, Any], ctx: HostContext, thumbnail: bool) -> Any:
             def poll() -> None:
                 done = sum(1 for p in plan["expected"] if os.path.isfile(p))
                 if plan["expected"]:
-                    job.progress(
-                        done / len(plan["expected"]), f"{done}/{len(plan['expected'])} frames"
-                    )
+                    total = len(plan["expected"])
+                    job.set_progress(done, total, f"{done}/{total} frames")
 
             job.progress(0.0, f"rendering {len(frame_list)} frame(s) in a child hython")
             try:
                 outcome = child.wait(
                     timeout_s=FRAME_TIMEOUT_S, cancelled=lambda: job.cancelled, on_poll=poll
                 )
+            except ToolError as exc:
+                if exc.code != "cancelled":
+                    raise
+                partial, done = _render_partial(plan)
+                raise cancelled_with_partial(job, partial, done) from exc
             finally:
                 child.kill()
             if outcome.get("errors"):
@@ -1943,6 +2200,7 @@ def _render_job(plan: dict[str, Any], ctx: HostContext, thumbnail: bool) -> Any:
     def run_in_process(job: Any) -> dict[str, Any]:
         saved: dict[str, tuple[Any, Any]] = {}
         notes: list[str] = []
+        side_effects: dict[str, list[Any]] = {}
         logs: list[str] = []
         log_dir: list[str] = []
 
@@ -2005,8 +2263,16 @@ def _render_job(plan: dict[str, Any], ctx: HostContext, thumbnail: bool) -> Any:
             job.run_main(apply_override)
             total = len(frame_list)
             for i, frame in enumerate(frame_list):
-                job.progress(i / total, f"frame {num(frame)} ({i + 1}/{total})")
-                errors = job.run_main(lambda f=frame: render_frame(f), timeout_s=FRAME_TIMEOUT_S)
+                job.set_progress(i, total, f"frame {num(frame)} ({i + 1}/{total})")
+                try:
+                    errors = job.run_main(
+                        lambda f=frame: render_frame(f), timeout_s=FRAME_TIMEOUT_S
+                    )
+                except ToolError as exc:
+                    if exc.code != "cancelled":
+                        raise
+                    partial, done = _render_partial(plan)
+                    raise cancelled_with_partial(job, partial, done) from exc
                 if errors:
                     message, detail = failure(
                         f"{plan['rop']} failed to render frame {num(frame)}", errors
@@ -2023,7 +2289,12 @@ def _render_job(plan: dict[str, Any], ctx: HostContext, thumbnail: bool) -> Any:
                         hint=hint,
                         detail=detail,
                     )
-            job.progress(1.0, "done")
+            job.set_progress(total, total, "done")
+            if plan.get("owner"):
+                effects = job.run_main(lambda: _writer_side_effects(plan["owner"]))
+                if effects:
+                    side_effects.update(effects)
+                    ctx.scene.mark_dirty()
         finally:
             if saved:
                 # Never raises: a render error stays the error the caller sees.
@@ -2034,6 +2305,8 @@ def _render_job(plan: dict[str, Any], ctx: HostContext, thumbnail: bool) -> Any:
             for folder in log_dir:
                 shutil.rmtree(folder, ignore_errors=True)
         result = _render_result(plan, thumbnail)
+        if side_effects:
+            result["side_effects"] = side_effects
         if notes:
             result["notes"] = [*notes, *result.get("notes", [])]
         return result

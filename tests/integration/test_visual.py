@@ -722,3 +722,85 @@ def test_fit_none_does_not_reuse_framing_from_another_scene(client):
     assert result["fit_used"] == "all"  # reframed: the old framing was for another scene
     again = client.ok("viewport_capture", {"fit": "none", "resolution": [64, 48]})
     assert again["fit_used"] == "none"
+
+
+# -- writer SOPs: File Cache and ROP SOPs (review 17 P0-2, P1-3, P1-6) -------------------
+
+
+def _file_cache(work_dir: Path, frames=(1, 3), pattern: str = "fc.$F4.bgeo.sc"):
+    geo = hou.node("/obj").createNode("geo", "fx")
+    box = geo.createNode("box")
+    box.parm("ty").setExpression("$F * 0.1")
+    cache = geo.createNode("filecache::2.0", "cache")
+    cache.setInput(0, box)
+    cache.parm("filemethod").set(1)  # explicit file
+    cache.parm("file").set(_fwd(work_dir / pattern))
+    for parm, value in zip(("f1", "f2"), frames, strict=True):
+        cache.parm(parm).deleteAllKeyframes()
+        cache.parm(parm).set(value)
+    return geo, box, cache
+
+
+def test_render_a_file_cache_writes_its_frame_range(client, work_dir):
+    _geo, _box, cache = _file_cache(work_dir)
+    assert cache.parm("loadfromdisk").eval() == 0
+    result = client.ok("render", {"rop_path": cache.path()})
+    assert result["state"] == "done", result
+    assert result["rop_path"] == cache.path()
+    assert result["frames"] == [1, 3, 1]
+    assert result["outputs"] == [_fwd(work_dir / f"fc.{i:04d}.bgeo.sc") for i in (1, 2, 3)]
+    assert "missing" not in result
+    assert result["side_effects"] == {"loadfromdisk": [0, 1]}
+    assert cache.parm("loadfromdisk").eval() == 1
+    assert any("rendered through" in n for n in result["notes"]), result
+
+
+def test_render_a_file_cache_refuses_an_output_override(client, work_dir):
+    _geo, _box, cache = _file_cache(work_dir)
+    error = client.error("render", {"rop_path": cache.path(), "output": _fwd(work_dir / "x.bgeo")})
+    assert error["code"] == "invalid_argument"
+    assert "file" in error["hint"]
+
+
+def test_render_a_rop_sop_uses_its_own_frame_range(client, work_dir):
+    geo = hou.node("/obj").createNode("geo", "fx")
+    box = geo.createNode("box")
+    rop = geo.createNode("rop_geometry", "write")
+    rop.setInput(0, box)
+    rop.parm("sopoutput").set(_fwd(work_dir / "w.$F4.bgeo.sc"))
+    rop.parm("trange").set(1)
+    rop.parm("f1").deleteAllKeyframes()
+    rop.parm("f2").deleteAllKeyframes()
+    rop.parm("f1").set(2)
+    rop.parm("f2").set(3)
+    result = client.ok("render", {"rop_path": rop.path()})
+    assert result["frames"] == [2, 3, 1]
+    assert result["outputs"] == [_fwd(work_dir / f"w.{i:04d}.bgeo.sc") for i in (2, 3)]
+
+
+@pytest.mark.slow
+def test_render_cancelled_job_result_carries_the_partial_outputs(client, work_dir):
+    geo, box, cache = _file_cache(work_dir, frames=(1, 60))
+    slow = geo.createNode("python", "slow")
+    slow.parm("python").set("import time\ntime.sleep(0.08)")
+    slow.setInput(0, box)
+    cache.setInput(0, slow)
+    started = client.ok("render", {"rop_path": cache.path(), "wait_s": 0})
+    job_id = started["job_id"]
+    deadline = time.monotonic() + 30
+    while len(list(work_dir.glob("fc.*"))) < 3 and time.monotonic() < deadline:
+        client.host.executor.pump_once(0.05)
+    client.ok("job", {"action": "cancel", "job_id": job_id})
+    final = _wait_job(client, job_id)
+    assert final["state"] == "cancelled", final
+    error = client.error("job", {"action": "result", "job_id": job_id})
+    assert error["code"] == "cancelled"
+    detail = error["detail"]
+    assert detail["last_status"]["total"] == 60
+    written = sorted(work_dir.glob("fc.*"))
+    partial = detail["partial"]
+    summary = partial["outputs_summary"]
+    assert summary["count"] == len(written) < 60
+    assert summary["last"] == _fwd(written[-1])
+    assert summary["missing_count"] == 60 - len(written)
+    assert cache.parm("loadfromdisk").eval() == 0  # Save to Disk's side effects need a full save
