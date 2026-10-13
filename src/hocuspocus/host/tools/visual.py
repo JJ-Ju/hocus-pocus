@@ -11,6 +11,16 @@ snapshots the scene (``saveChildrenToFile`` per manager: no hip save, no event s
 effects) and renders it in a short-lived ``hython`` (about 3 s per call). In a GUI session
 OpenGL ROPs render in-process. Every other ROP type renders in-process, frame by frame,
 through the main-thread executor.
+
+**A child that renders a stage runs single-threaded** (``HOUDINI_MAXTHREADS=1``, review 16
+N1). Headless, the Vulkan device is created lazily by the first code that draws; for a
+stage of more than a few thousand polygons the OpenGL ROP's LOP source updates the meshes
+in parallel, so the device is created on a TBB worker while other workers wait on it, and
+hython segfaults in the driver (``RV_Instance::initializeDevice`` under
+``GR_PrimPacked::updateInstanceGeometry``; exit 139, also in a fresh hython that loads the
+hip itself). One thread creates the device on the rendering thread. If a stage capture's
+child still crashes, viewport_capture renders the frame with a temporary Karma ROP in
+the host instead (``source_used: "karma"``).
 """
 
 from __future__ import annotations
@@ -65,6 +75,8 @@ MPLAY_OUTPUTS = {"ip", "md", "imdisplay"}
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".tga"}
 CONVERT_EXTS = {".exr", ".pic", ".rat", ".hdr", ".dpx", ".cin", ".sgi", ".rgb"}
 CHILD_TIMEOUT_S = 600.0
+CRASH_LOG_CHARS = 600
+"""An error carries at most this much of a crashed child's log (review 16 N1)."""
 CAPTURES_KEEP = 50
 """``<state_dir>/captures`` keeps the newest this many files."""
 NOT_CARRIED_VARS = frozenset(
@@ -234,16 +246,12 @@ def encode_png(
 # -- isolated (child hython) rendering ---------------------------------------------
 
 _BUILD_CAPTURE = r"""
-def build_capture(hou, capture, created):
-    # viewport_capture's camera and OpenGL ROP. Every node made is appended to created.
+def capture_camera(hou, capture, created):
+    # The camera a capture looks through: (lop, camera prim) for a stage, (None, OBJ camera
+    # path) for /obj. A framed camera is built (a camera LOP after the LOP for a stage).
     lop = capture.get("lop")
-    rop = hou.node("/out").createNode("opengl")
-    created.append(rop)
-    for name, value in capture["rop_parms"].items():
-        rop.parm(name).set(value)
     if lop is not None:
-        # A stage: the ROP reads the LOP; a framed camera is a camera LOP after it.
-        source, prim = lop, capture.get("camera_prim")
+        prim = capture.get("camera_prim")
         if prim is None:
             src = hou.node(lop)
             cam = src.parent().createNode("camera")
@@ -251,11 +259,8 @@ def build_capture(hou, capture, created):
             cam.setInput(0, src)
             for name, value in capture["camera_parms"].items():
                 cam.parm(name).set(value)
-            source, prim = cam.path(), cam.parm("primpath").eval()
-        rop.parm("opsource").set(1)
-        rop.parm("loppath").set(source)
-        rop.parm("cameraprim").set(prim)
-        return rop
+            lop, prim = cam.path(), cam.parm("primpath").eval()
+        return lop, prim
     camera = capture.get("camera")
     if camera is None:
         cam = hou.node("/obj").createNode("cam")
@@ -265,7 +270,23 @@ def build_capture(hou, capture, created):
             cam.parm(name).set(value)
         cam.setWorldTransform(hou.Matrix4(capture["camera_xform"]))
         camera = cam.path()
-    rop.parm("camera").set(camera)
+    return None, camera
+
+
+def build_capture(hou, capture, created):
+    # viewport_capture's camera and OpenGL ROP. Every node made is appended to created.
+    rop = hou.node("/out").createNode("opengl")
+    created.append(rop)
+    for name, value in capture["rop_parms"].items():
+        rop.parm(name).set(value)
+    lop, camera = capture_camera(hou, capture, created)
+    if lop is not None:
+        # A stage: the ROP reads the LOP through the camera prim.
+        rop.parm("opsource").set(1)
+        rop.parm("loppath").set(lop)
+        rop.parm("cameraprim").set(camera)
+    else:
+        rop.parm("camera").set(camera)
     return rop
 """
 """The capture camera and ROP builder, run in the child hython (headless) and in-process
@@ -382,6 +403,33 @@ def snapshot_scene(tmp_dir: str) -> dict[str, Any]:
     }
 
 
+def crash_summary(log: str, limit: int = CRASH_LOG_CHARS) -> str:
+    """The useful part of a child's output, at most ``limit`` characters. For a Houdini
+    crash report: the lines before the traceback (``Fatal error: Segmentation fault``) and
+    the crashing thread's frames as bare symbols; the idle ``OTHER THREAD`` stacks are
+    dropped. Otherwise the end of the output. No ``hou``."""
+    if "-- TRACEBACK BEGIN --" not in log:
+        return log[-limit:]
+    head, _, rest = log.partition("-- TRACEBACK BEGIN --")
+    keep = [line.strip() for line in head.splitlines() if line.strip()][-3:]
+    thread = False
+    for line in rest.splitlines():
+        line = line.strip()
+        if line.startswith("CURRENT THREAD"):
+            thread = True
+            keep.append(line)
+            continue
+        if line.startswith(("OTHER THREAD", "-- TRACEBACK END")):
+            thread = False
+            continue
+        if thread and line:
+            symbol = line[line.find("[") + 1 : line.find("]")] if "[" in line else ""
+            module = os.path.basename(line.rsplit(" ", 1)[-1].replace("\\", "/"))
+            keep.append(f"{symbol} ({module})" if symbol else module)
+    out = "\n".join(keep)
+    return out if len(out) <= limit else out[: limit - 3] + "..."
+
+
 class ChildRender:
     """One child hython rendering a snapshot. Off the main thread after :meth:`start`."""
 
@@ -392,9 +440,13 @@ class ChildRender:
         rop: str,
         frames: list[float],
         parms: dict[str, Any] | None = None,
+        *,
+        single_thread: bool = False,
     ) -> None:
         self.tmp_dir = tmp_dir
         self.spec = dict(snapshot, rop=rop, frames=list(frames), parms=parms or {})
+        self.single_thread = single_thread or bool((snapshot.get("capture") or {}).get("lop"))
+        """A stage render: see the module docstring (review 16 N1)."""
         self.proc: subprocess.Popen[bytes] | None = None
         self.log_path = os.path.join(tmp_dir, "child.log")
 
@@ -405,6 +457,8 @@ class ChildRender:
         Path(spec_path).write_text(json.dumps(self.spec), encoding="utf-8")
         env = dict(os.environ)
         env["PYTHONDONTWRITEBYTECODE"] = "1"
+        if self.single_thread:
+            env["HOUDINI_MAXTHREADS"] = "1"
         with open(self.log_path, "wb") as log:
             self.proc = subprocess.Popen(
                 [self.spec["hython"], script, spec_path],
@@ -438,12 +492,12 @@ class ChildRender:
                     "internal",
                     f"The render process did not finish within {timeout_s:g}s and was killed.",
                     hou_exception="render process timeout",
-                    detail={"log": self._log_tail()},
+                    detail={"log": crash_summary(self._log_tail())},
                 )
             if on_poll is not None:
                 on_poll()
             time.sleep(JOB_POLL_S)
-        log = self._log_tail(20_000)
+        log = self._log_tail(200_000)
         marker = next(
             (line for line in reversed(log.splitlines()) if line.startswith("HPRESULT ")), None
         )
@@ -458,7 +512,7 @@ class ChildRender:
                     else "See detail.log for the render process output."
                 ),
                 hou_exception=f"render process exit {self.proc.returncode}",
-                detail={"log": log[-4000:]},
+                detail={"log": crash_summary(log), "exit_code": self.proc.returncode},
             )
         outcome = json.loads(marker[len("HPRESULT ") :])
         notes = list(self.spec.get("notes") or []) + list(outcome.get("notes") or [])
@@ -953,7 +1007,15 @@ def _capture_opengl(
     errors: list[str] = []
     if not ctx.ui:
         # Headless: the child hython builds camera and ROP in its own copy of the scene.
-        outcome = render_isolated(None, [frame, frame, 1], capture=spec)
+        try:
+            outcome = render_isolated(None, [frame, frame, 1], capture=spec)
+        except ToolError as exc:
+            if not child_crashed(exc):
+                raise
+            karma_after_crash(lambda: capture_with_karma(spec, frame, res, out_file), exc)
+            info["source_used"] = "karma"
+            info["notes"] = [karma_note(f"the OpenGL render process crashed ({exc.message})")]
+            return info
         errors = outcome.get("errors") or []
         if outcome.get("notes"):
             info["notes"] = outcome["notes"]
@@ -982,6 +1044,164 @@ def _check_capture_output(errors: list[str], out_file: str) -> None:
             hint="Check that the scene cooks (problems tool) and that a GPU is available.",
             detail={"errors": errors},
         )
+
+
+KARMA_SAMPLES = 2
+"""Pixel samples of the Karma fallback: a quick look, not a final frame."""
+_gl_stage_crashed: list[str] = []
+"""Set when a headless stage capture's OpenGL child crashed in this process: later stage
+captures with source auto go straight to Karma (each crash costs seconds)."""
+
+
+def child_crashed(exc: ToolError) -> bool:
+    """Whether a child render failed by crashing (not a licence refusal, a timeout or a
+    cancel), so another renderer may succeed where the OpenGL ROP did not."""
+    return (
+        exc.code == "internal"
+        and str(exc.hou_exception or "").startswith("render process exit")
+        and "licen" not in str(exc.hint or "").lower()
+    )
+
+
+def _karma_nodes(
+    spec: dict[str, Any], res: tuple[int, int], out_file: str, logs: list[str], created: list[Any]
+) -> Any:
+    """Build the temporary camera (when framed) and Karma ROP for one capture: for a stage
+    a karmarendersettings LOP and a usdrender_rop LOP after the captured LOP, for /obj a
+    /out karma ROP. Every node made is appended to ``created``. Returns the ROP. Main
+    thread, outside undo."""
+    import hou
+
+    namespace: dict[str, Any] = {}
+    exec(_BUILD_CAPTURE, namespace)
+    try:
+        lop, camera = namespace["capture_camera"](hou, spec, created)
+        values: dict[str, Any]
+        if lop is not None:
+            src = hou.node(lop)
+            settings = src.parent().createNode("karmarendersettings")
+            created.append(settings)
+            settings.setInput(0, src)
+            for name, value in (
+                ("camera", camera),
+                ("engine", "cpu"),
+                ("samplesperpixel", KARMA_SAMPLES),
+                ("picture", out_file),
+            ):
+                settings.parm(name).set(value)
+            rop = src.parent().createNode("usdrender_rop")
+            created.append(rop)
+            rop.setInput(0, settings)
+            values = {
+                "renderer": "BRAY_HdKarma",
+                "override_camera": camera,
+                "override_res": "specific",
+                "res_user1": res[0],
+                "res_user2": res[1],
+                "outputimage": out_file,
+                "husk_log": 1,
+                "husk_stdout": logs[1],
+                "husk_stderr": logs[0],
+            }
+            if settings.parm("primpath") is not None:
+                values["rendersettings"] = settings.parm("primpath").eval()
+        else:
+            rop = hou.node("/out").createNode("karma")
+            created.append(rop)
+            values = {
+                "camera": camera,
+                "engine": "cpu",
+                "samplesperpixel": KARMA_SAMPLES,
+                "override_camerares": 1,
+                "res_fraction": "specific",
+                "res_overridex": res[0],
+                "res_overridey": res[1],
+                "picture": out_file,
+            }
+        values["trange"] = 0
+        for name, value in values.items():
+            parm = rop.parm(name)
+            if parm is not None:
+                parm.set(value)
+        return rop
+    finally:
+        for node in created:
+            _mark_internal(node)
+
+
+def capture_with_karma(
+    spec: dict[str, Any], frame: float, res: tuple[int, int], out_file: str
+) -> None:
+    """Render one capture frame with a temporary Karma CPU ROP in the host (review 16 N1):
+    the fallback when the OpenGL child crashed. Karma has no second-render crash, so its
+    ROP renders in-process (husk is its own process). Deletes every node it made, outside
+    undo and events, and puts the selection back. Raises ``cook_failed`` with the end of
+    the husk log. Main thread."""
+    import hou
+
+    from .events import muted
+
+    selected = hou.selectedNodes()
+    log_dir = tempfile.mkdtemp(prefix="hp-husk-")
+    logs = [_norm(os.path.join(log_dir, f)) for f in ("err.log", "out.log")]
+    created: list[Any] = []
+    errors: list[str] = []
+    try:
+        with hou.undos.disabler(), muted():
+            rop = _karma_nodes(spec, res, out_file, logs, created)
+            try:
+                rop.render(frame_range=(frame, frame), verbose=False)
+            except hou.OperationFailed as exc:
+                errors.append(str(exc).strip())
+            errors += [str(e) for e in rop.errors()]
+    finally:
+        with hou.undos.disabler(), muted():
+            for node in reversed(created):
+                with contextlib.suppress(Exception):
+                    node.destroy()
+            with contextlib.suppress(Exception):
+                hou.clearAllSelected()
+                for node in selected:
+                    node.setSelected(True)
+        tail = log_tail(logs, 8)
+        shutil.rmtree(log_dir, ignore_errors=True)
+    if errors or not os.path.isfile(out_file):
+        detail: dict[str, Any] = {"errors": errors}
+        if tail:
+            detail["log_tail"] = tail
+        raise ToolError(
+            "cook_failed",
+            "The Karma fallback did not produce an image: "
+            + (errors[0] if errors else "no output file"),
+            hint="Check that the scene cooks (problems tool), or render a Karma ROP with render.",
+            detail=detail,
+        )
+
+
+def karma_after_crash(run: Any, crash: ToolError | None) -> None:
+    """Run the Karma fallback; if it fails after an OpenGL crash, say both, with the
+    crashed child's short log as ``detail.opengl_log``."""
+    try:
+        run()
+    except ToolError as exc:
+        if crash is None:
+            raise
+        detail = dict(exc.detail or {}) if isinstance(exc.detail, dict) else {}
+        detail["opengl_log"] = (crash.detail or {}).get("log", "")
+        raise ToolError(
+            exc.code,
+            f"The OpenGL render process crashed ({crash.message}) and the Karma fallback "
+            f"failed: {exc.message}",
+            hint=exc.hint,
+            detail=detail,
+        ) from exc
+
+
+def karma_note(reason: str) -> str:
+    return (
+        f"Rendered with a temporary Karma CPU ROP ({KARMA_SAMPLES} samples per pixel) "
+        f"because {reason}."
+    )
 
 
 def _scene_viewer() -> Any:
@@ -1208,7 +1428,7 @@ def _capture_main(parsed: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
         info["source_used"] = "viewer"
     else:
         info = _capture_opengl(ctx, target, frame, res, parsed["fit"], out_file)
-        info["source_used"] = "opengl_rop"
+        info.setdefault("source_used", "opengl_rop")
     _add_notes(info, target.get("note"))
     return _finish_capture(out_file, res, frame, info, extra_path)
 
@@ -1238,14 +1458,39 @@ def _capture_headless(parsed: dict[str, Any], ctx: HostContext, timeout_s: float
 
         prep = ctx.executor.run(prepare, timeout_s)
         frame = prep["frame"]
-        child = ChildRender(prep["snapshot"], tmp_dir, "", [frame, frame, 1])
-        child.start()
-        try:
-            outcome = child.wait(timeout_s=max(1.0, deadline - time.monotonic()))
-        finally:
-            child.kill()
+        spec = prep["snapshot"]["capture"]
+        stage = spec.get("lop") is not None
+        reason = None
+        crash: ToolError | None = None
+        if stage and _gl_stage_crashed and parsed["source"] == "auto":
+            reason = "an earlier OpenGL stage capture crashed its render process in this session"
+        else:
+            child = ChildRender(prep["snapshot"], tmp_dir, "", [frame, frame, 1])
+            child.start()
+            try:
+                outcome = child.wait(timeout_s=max(1.0, deadline - time.monotonic()))
+            except ToolError as exc:
+                if not child_crashed(exc):
+                    raise
+                if stage:
+                    _gl_stage_crashed[:] = [exc.message]
+                crash = exc
+                reason = f"the OpenGL render process crashed ({exc.message})"
+            finally:
+                child.kill()
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
+    if reason is not None:
+        karma_after_crash(
+            lambda: ctx.executor.run(
+                lambda: capture_with_karma(spec, frame, res, prep["out_file"]),
+                max(1.0, deadline - time.monotonic()),
+            ),
+            crash,
+        )
+        info = dict(prep["info"], source_used="karma")
+        _add_notes(info, karma_note(reason))
+        return _finish_capture(prep["out_file"], res, frame, info, prep["extra_path"])
     _check_capture_output(outcome.get("errors") or [], prep["out_file"])
     info = dict(prep["info"], source_used="opengl_rop")
     _add_notes(info, *(outcome.get("notes") or []))
@@ -1524,6 +1769,7 @@ def _prepare_render(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
         "usd": usd,
         "note": note,
         "isolate": needs_isolation(rop, ctx),
+        "stage_source": rop.parm("opsource") is not None and rop.parm("opsource").eval() == 1,
         "hfs": hou.text.expandString("$HFS"),
         "lights": scene_has_lights(),
     }
@@ -1610,7 +1856,14 @@ def _render_job(plan: dict[str, Any], ctx: HostContext, thumbnail: bool) -> Any:
         try:
             snapshot = job.run_main(lambda: snapshot_scene(tmp_dir))
             parms = {plan["parm"]: plan["output"]} if plan["output"] is not None else {}
-            child = ChildRender(snapshot, tmp_dir, plan["rop"], plan["frames"], parms)
+            child = ChildRender(
+                snapshot,
+                tmp_dir,
+                plan["rop"],
+                plan["frames"],
+                parms,
+                single_thread=plan.get("stage_source", False),
+            )
             child.start()
 
             def poll() -> None:

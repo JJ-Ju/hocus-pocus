@@ -806,7 +806,7 @@ Read attribute values like the geometry spreadsheet: count rows of one class fro
 
 Look at /obj or a LOP stage: a PNG (long side at most 1024), path, size, camera_used, scene. camera: OBJ or LOP camera, or camera prim (lop_path). auto: the GUI viewer if present and no camera, else an OpenGL ROP (headless too) framed per fit. Leaves no nodes, undo step or dirty flag.
 
-**Notes.** fit none reuses the last framing. The viewer source captures the view as it is unless fit is passed: then it frames all or selected for the grab and puts the view back, as it does after looking through camera; context is the viewer's network, and notes say when that is not the captured scene. Without camera or lop_path the stage's display LOP is captured when /obj displays nothing; otherwise a note names it. A stage renders through the OpenGL ROP's LOP source (scene: stage, lop_path). Lights are refused as cameras; camera errors list the scene's cameras. path also writes the PNG there. Both files are opaque, on the same grey as the image (the OpenGL ROP itself writes a transparent background). image.attached is true when the PNG went out as MCP image content.
+**Notes.** fit none reuses the last framing. The viewer source captures the view as it is unless fit is passed: then it frames all or selected for the grab and puts the view back, as it does after looking through camera; context is the viewer's network, and notes say when that is not the captured scene. Without camera or lop_path the stage's display LOP is captured when /obj displays nothing; otherwise a note names it. A stage renders through the OpenGL ROP's LOP source (scene: stage, lop_path). source_used is viewer, opengl_rop or karma: when a headless OpenGL render process crashes, the frame is rendered with a temporary Karma CPU ROP (2 samples, same camera and resolution) and a note says why; later stage captures then go straight to Karma. Lights are refused as cameras; camera errors list the scene's cameras. path also writes the PNG there. Both files are opaque, on the same grey as the image (the OpenGL ROP itself writes a transparent background). image.attached is true when the PNG went out as MCP image content.
 
 ### Arguments
 
@@ -828,7 +828,7 @@ Look at /obj or a LOP stage: a PNG (long side at most 1024), path, size, camera_
 - `height` (integer) — always present
 - `camera_used` (string)
 - `scene` (string)
-- `source_used` (`viewer` | `opengl_rop`)
+- `source_used` (string)
 - `frame` (number)
 - `rendered` (array<integer>)
 - `also_written` (string)

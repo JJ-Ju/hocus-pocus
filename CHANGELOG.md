@@ -177,6 +177,14 @@ D21 to D24).
   `houdini_connect quit`.
 - **`node_type_search` docs:** the docs now say that `total` is the real number of
   matching types, not a cap.
+- **Headless stage captures crashed (review 16 N1).** A stage of more than a few
+  thousand polygons crashed the capture's child hython (exit 139): the OpenGL ROP's LOP
+  source updated the meshes in parallel and created the Vulkan device on a worker
+  thread. A child that renders a stage now runs single-threaded. If the OpenGL child
+  still crashes, `viewport_capture` renders the frame with a temporary Karma CPU ROP
+  (2 samples, the same camera and resolution) and reports `source_used: "karma"` with a
+  note. A crashed child's log in an error is cut to 600 characters: the fatal error and
+  the crashing thread, without the idle thread stacks.
 
 ### Upgrading from 1.1
 

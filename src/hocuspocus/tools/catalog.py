@@ -1263,7 +1263,10 @@ _VISUAL: tuple[ToolSpec, ...] = (
             "it does after looking through camera; context is the viewer's network, and notes say "
             "when that is not the captured scene. Without camera or lop_path the stage's display "
             "LOP is captured when /obj displays nothing; otherwise a note names it. A stage renders "
-            "through the OpenGL ROP's LOP source (scene: stage, lop_path). Lights are refused as "
+            "through the OpenGL ROP's LOP source (scene: stage, lop_path). source_used is viewer, "
+            "opengl_rop or karma: when a headless OpenGL render process crashes, the frame is "
+            "rendered with a temporary Karma CPU ROP (2 samples, same camera and resolution) and "
+            "a note says why; later stage captures then go straight to Karma. Lights are refused as "
             "cameras; camera errors list the scene's cameras. path also writes the PNG there. Both "
             "files are "
             "opaque, on the same grey as the image (the OpenGL ROP itself writes a transparent "
@@ -1290,7 +1293,7 @@ _VISUAL: tuple[ToolSpec, ...] = (
                 "height": _t("integer"),
                 "camera_used": _t("string"),
                 "scene": _t("string"),
-                "source_used": {"type": "string", "enum": ["viewer", "opengl_rop"]},
+                "source_used": _t("string"),
                 "frame": _t("number"),
                 "rendered": _list("integer"),
                 "also_written": _t("string"),

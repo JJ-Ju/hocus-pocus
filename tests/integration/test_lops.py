@@ -203,6 +203,129 @@ def test_capture_bad_lop_camera_lists_cameras(client, work_dir):
     assert viewer["code"] in ("ui_required", "invalid_argument")
 
 
+def _city_scene():
+    """Review 16's scene shape: a city of ~75k polygons in an /obj network, imported with
+    sopimport, two MaterialX materials, assignmaterial, a distant and a dome light, a
+    camera LOP and Karma render settings (displayed). Before N1 was fixed, every headless
+    OpenGL capture of this stage crashed the child hython (exit 139)."""
+    city = hou.node("/obj").createNode("geo", "city_gen")
+    grid = city.createNode("grid")
+    grid.parm("rows").set(14)
+    grid.parm("cols").set(14)
+    grid.parmTuple("size").set((400, 400))
+    box = city.createNode("box")
+    box.parmTuple("size").set((12, 40, 12))
+    box.parm("dodivs").set(1)
+    box.parmTuple("divrate").set((8, 8, 8))
+    copy = city.createNode("copytopoints::2.0")
+    copy.setInput(0, box)
+    copy.setInput(1, grid)
+    name = city.createNode("attribwrangle", "name_bldgs")
+    name.setInput(0, copy)
+    name.parm("class").set(1)
+    name.parm("snippet").set('s@name = sprintf("bldg_%d", @primnum / 384);')
+    out = city.createNode("null", "OUT_CITY")
+    out.setInput(0, name)
+    out.setDisplayFlag(True)
+    out.setRenderFlag(True)
+    city.setDisplayFlag(False)  # /obj displays nothing: the stage is what the scene shows
+    stage = hou.node("/stage")
+    imp = stage.createNode("sopimport", "city")
+    imp.parm("soppath").set(out.path())
+    imp.parm("pathprefix").set("/city")
+    lib = stage.createNode("materiallibrary", "matlib")
+    lib.setInput(0, imp)
+    lib.createNode("mtlxstandard_surface", "concrete")
+    lib.createNode("mtlxstandard_surface", "asphalt")
+    assign = stage.createNode("assignmaterial", "assign")
+    assign.setInput(0, lib)
+    assign.parm("nummaterials").set(2)
+    assign.parm("primpattern1").set("/city/bldg_*")
+    assign.parm("matspecpath1").set("/materials/concrete")
+    assign.parm("primpattern2").set("/city/bldg_0")
+    assign.parm("matspecpath2").set("/materials/asphalt")
+    key = stage.createNode("distantlight::2.0", "key")
+    key.setInput(0, assign)
+    key.parmTuple("r").set((-38, -40, 0))
+    fill = stage.createNode("domelight::3.0", "fill")
+    fill.setInput(0, key)
+    fill.parm("xn__inputsintensity_i0a").set(0.6)
+    cam = stage.createNode("camera", "cam_main")
+    cam.setInput(0, fill)
+    cam.parmTuple("t").set((430, 300, 430))
+    cam.parmTuple("r").set((-28, 45, 0))
+    rset = stage.createNode("karmarenderproperties", "rset")
+    rset.setInput(0, cam)
+    rset.setDisplayFlag(True)
+    return {"cam": cam, "rset": rset}
+
+
+def test_capture_city_stage_headless(client, work_dir):
+    """N1: the review-16 scene shape captures through the OpenGL child (single-threaded)."""
+    nodes = _city_scene()
+    before = [c.name() for c in hou.node("/stage").children()]
+    result = client.ok(
+        "viewport_capture", {"lop_path": nodes["rset"].path(), "resolution": [320, 180]}
+    )
+    assert result["scene"] == "stage"
+    assert result["source_used"] == "opengl_rop"
+    assert result["camera_used"] == "temporary"
+    assert _decode(result["image"]).convert("L").getextrema()[1] > 80
+    assert [c.name() for c in hou.node("/stage").children()] == before
+
+
+def test_capture_falls_back_to_karma_when_the_child_crashes(client, work_dir, monkeypatch):
+    """N1 fallback: an OpenGL child that crashes is replaced by a temporary Karma ROP in the
+    host; the next stage capture skips the OpenGL child. No node is left behind."""
+    from hocuspocus.host.tools import visual
+
+    monkeypatch.setattr(visual, "_CHILD_SCRIPT", "import os\nos._exit(139)\n")
+    monkeypatch.setattr(visual, "_gl_stage_crashed", [])
+    nodes = _city_scene()
+    before = {n: [c.name() for c in hou.node(n).children()] for n in ("/stage", "/out", "/obj")}
+    result = client.ok("viewport_capture", {"camera": nodes["cam"].path(), "resolution": [160, 90]})
+    assert result["source_used"] == "karma"
+    assert result["camera_used"] == "/cameras/cam_main"
+    assert result["rendered"] == [160, 90]
+    assert (result["width"], result["height"]) == (160, 90)
+    assert any("Karma" in n and "crashed" in n for n in result["notes"]), result["notes"]
+    lo, hi = _decode(result["image"]).convert("L").getextrema()
+    assert hi - lo > 20
+    assert {n: [c.name() for c in hou.node(n).children()] for n in before} == before
+    framed = client.ok("viewport_capture", {"lop_path": "/stage", "resolution": [160, 90]})
+    assert framed["source_used"] == "karma"
+    assert framed["camera_used"] == "temporary"
+    assert any("earlier" in n for n in framed["notes"]), framed["notes"]
+    lo, hi = _decode(framed["image"]).convert("L").getextrema()
+    assert hi - lo > 20
+    assert {n: [c.name() for c in hou.node(n).children()] for n in before} == before
+
+
+def test_capture_crash_error_is_short(client, work_dir, monkeypatch):
+    """N1: when the fallback cannot run either (an /obj capture whose child crashes and
+    Karma fails), the error stays short: no 4 KB crash dump."""
+    from hocuspocus.host.tools import visual
+
+    dump = "-- TRACEBACK BEGIN --\nCURRENT THREAD 1\n" + "OTHER THREAD 2\n+0x1 [Idle] x.dll\n" * 400
+    monkeypatch.setattr(
+        visual,
+        "_CHILD_SCRIPT",
+        f"import os, sys\nsys.stdout.write({dump!r})\nsys.stdout.flush()\nos._exit(139)\n",
+    )
+
+    def no_karma(*args, **kwargs):
+        raise visual.ToolError("cook_failed", "karma failed too")
+
+    monkeypatch.setattr(visual, "capture_with_karma", no_karma)
+    hou.node("/obj").createNode("geo", "g").createNode("box").setDisplayFlag(True)
+    error = client.error("viewport_capture", {"resolution": [64, 64]})
+    assert error["code"] == "cook_failed"
+    assert "crashed" in error["message"] and "karma failed too" in error["message"]
+    log = error["detail"]["opengl_log"]
+    assert "CURRENT THREAD" in log and "OTHER THREAD" not in log
+    assert len(json.dumps(error)) < 1200
+
+
 # -- LOP parms by USD attribute name (papercut 7) ---------------------------------------
 
 
