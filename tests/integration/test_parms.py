@@ -901,3 +901,61 @@ def test_press_on_a_plain_button_reports_pressed(client, scene):
     res = _set(client, {"path": f"{cache.path()}/reload", "press": True})
     assert res["pressed"] is True
     assert "outputs_summary" not in res
+
+
+def _pyrosource(scene):
+    sphere = scene["geo"].createNode("sphere")
+    source = scene["geo"].createNode("pyrosource", "src")
+    source.setInput(0, sphere)
+    return source
+
+
+def test_plain_set_of_a_callback_menu_notes_the_skipped_callback(client, scene):
+    source = _pyrosource(scene)
+    res = _set(client, {"path": f"{source.path()}/initialize", "value": "source"})
+    assert source.parm("initialize").evalAsString() == "source"
+    assert source.parm("attributes").eval() == 0  # the callback did not run
+    (note,) = [n for n in res["notes"] if "callback" in n]
+    assert "press: true" in note
+
+
+def test_press_with_a_value_runs_a_menu_callback(client, scene):
+    source = _pyrosource(scene)
+    res = _set(client, {"path": f"{source.path()}/initialize", "value": "source", "press": True})
+    assert res["pressed"] is True
+    # initialize is an action menu: its callback applies the preset and resets it to none.
+    assert res["value"] == "none"
+    assert res["side_effects"]["initialize"] == ["source", "none"]
+    assert source.parm("attributes").eval() == 2  # density and temperature
+    assert "attributes" in res["side_effects"], res
+    assert not any("callback" in n for n in res.get("notes", []))
+
+
+def test_press_alone_reruns_a_menu_callback_and_node_create_accepts_it(client, scene):
+    source = _pyrosource(scene)
+    source.parm("initialize").set("source")
+    res = _set(client, {"path": f"{source.path()}/initialize", "press": True})
+    assert res["pressed"] is True and source.parm("attributes").eval() == 2
+    created = client.ok(
+        "node_create",
+        {
+            "items": [
+                {
+                    "parent": scene["geo"].path(),
+                    "type": "pyrosource",
+                    "name": "src2",
+                    "parms": {"initialize": {"value": "sourcecolor", "press": True}},
+                }
+            ]
+        },
+    )
+    assert created["results"][0]["path"] == f"{scene['geo'].path()}/src2"
+    assert hou.node(f"{scene['geo'].path()}/src2").parm("attributes").eval() >= 2
+
+
+def test_press_on_a_parm_without_callback_is_refused(client, scene):
+    err = client.error(
+        "parm_set", {"items": [{"path": "/obj/geo1/box1/type", "value": "polymesh", "press": True}]}
+    )
+    assert err["code"] == "invalid_value"
+    assert "callback" in err["message"]

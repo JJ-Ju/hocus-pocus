@@ -1725,8 +1725,8 @@ def outputs_summary(outputs: list[str], missing: list[str]) -> dict[str, Any]:
 
 
 def _top_parm_values(node: Any) -> dict[str, Any]:
-    """Raw values of ``node``'s value parms (not buttons, folders or labels), to report
-    what a button press changed. Main thread."""
+    """Raw values of ``node``'s value parms (not buttons, folders or labels; menus as
+    tokens), to report what a button press changed. Main thread."""
     import hou
 
     skip = (
@@ -1739,7 +1739,14 @@ def _top_parm_values(node: Any) -> dict[str, Any]:
     values: dict[str, Any] = {}
     for parm in node.parms():
         try:
-            if parm.parmTemplate().type() in skip:
+            kind = parm.parmTemplate().type()
+            if parm.isMultiParmParent():
+                values[parm.name()] = parm.eval()  # the instance count
+                continue
+            if kind in skip:
+                continue
+            if kind == hou.parmTemplateType.Menu:
+                values[parm.name()] = parm.evalAsString()  # the token, not the index
                 continue
             try:
                 values[parm.name()] = parm.unexpandedString()

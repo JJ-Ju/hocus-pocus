@@ -1040,15 +1040,36 @@ def _resolve_ref(node: Any, ref: Any) -> Any:
     return _normalize(target)
 
 
+def has_callback(parm: Any) -> bool:
+    """Whether the parm runs a callback script when the user changes it in the UI."""
+    try:
+        return bool(parm.parmTemplate().scriptCallback().strip())
+    except Exception:
+        return False
+
+
+CALLBACK_NOTE = (
+    "{name} has a callback script that a plain set does not run (clicking the parm in "
+    "Houdini would); pass press: true with the value to run it."
+)
+NO_CALLBACK = (
+    "{path} is a {kind} parm with no callback script; press clicks a button, or runs the "
+    "callback of a parm that has one (with or without a value)."
+)
+
+
 def _apply(node: Any, target: Any, item: dict[str, Any], *, frame: float | None) -> dict[str, Any]:
     """Apply one ``parm_set`` item. Returns the item result (without node problems)."""
     import hou
 
     path = _target_path(target)
+    # press next to a value sets the value, then runs the parm's callback (review 17 P1-4).
+    press_after = item.get("press") is True and item.get("value") is not None
     present = [
         f
         for f in VALUE_FIELDS
         if (item.get(f) is True if f in _FLAG_FIELDS else item.get(f) is not None)
+        and not (press_after and f == "press")
     ]
     if len(present) != 1:
         got = ", ".join(present) if present else "none"
@@ -1071,6 +1092,14 @@ def _apply(node: Any, target: Any, item: dict[str, Any], *, frame: float | None)
     key_frame = frame if frame is not None else hou.frame()
     count_keys_as_written = True
     pressed: dict[str, Any] | None = None
+    if press_after:
+        single = _require_single(target, "press", path)
+        if not has_callback(single):
+            raise _invalid(
+                single,
+                _kind(single.parmTemplate()),
+                NO_CALLBACK.format(path=path, kind=_kind(single.parmTemplate())),
+            )
     try:
         if field == "value":
             value = item["value"]
@@ -1111,6 +1140,14 @@ def _apply(node: Any, target: Any, item: dict[str, Any], *, frame: float | None)
                         parm.set(new)
                     if _is_number(raw_value):
                         _note_override(parm, new, frame, notes)
+            if press_after:
+                from .visual import press_button
+
+                pressed = press_button(node, parms[0])
+            elif len(parms) == 1 and has_callback(parms[0]):
+                template = parms[0].parmTemplate()
+                if _kind(template) == "toggle" or _menu_mode(template, _kind(template)):
+                    notes.append(CALLBACK_NOTE.format(name=parms[0].name()))
         elif field == "expression":
             parm = _require_single(target, "expression", path)
             expression = item["expression"]
@@ -1219,8 +1256,8 @@ def _apply(node: Any, target: Any, item: dict[str, Any], *, frame: float | None)
         elif field == "press":
             parm = _require_single(target, "press", path)
             kind = _kind(parm.parmTemplate())
-            if kind != "button":
-                raise _invalid(parm, kind, f"{path} is a {kind} parm, not a button.")
+            if kind != "button" and not has_callback(parm):
+                raise _invalid(parm, kind, NO_CALLBACK.format(path=path, kind=kind))
             from .visual import press_button  # lazy: visual imports hou-heavy helpers
 
             pressed = press_button(node, parm)  # verifies a save button's files (review 17)
@@ -1242,8 +1279,9 @@ def _apply(node: Any, target: Any, item: dict[str, Any], *, frame: float | None)
         wrote = any(_key_signature(p) - b for p, b in zip(parms, before, strict=True))
     result = {"path": path, **summarize_parm(target, frame=frame)}
     if pressed is not None:
-        for key in ("value", "raw", "is_default"):  # a button has no value (review 17)
-            result.pop(key, None)
+        if _kind(_components(target)[0].parmTemplate()) == "button":
+            for key in ("value", "raw", "is_default"):  # a button has no value (review 17)
+                result.pop(key, None)
         result.update(pressed)
     result["wrote_keyframe"] = wrote
     if notes:
