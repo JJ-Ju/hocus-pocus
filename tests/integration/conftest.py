@@ -177,7 +177,8 @@ def host(hp_dirs: dict[str, Path]) -> Any:
     from hocuspocus.host.config import HostConfig
 
     os.environ["HOCUSPOCUS_STATE_DIR"] = str(hp_dirs["state"])
-    # profile "full": the host refuses full-profile tools (pdg, hda, ...) otherwise.
+    # profile "full", never minimal or core: those hosts refuse the tools outside them
+    # (pdg, hda, geo_read, ...), and full lists every tool (test_profiles_are_nested).
     config = HostConfig(
         state_dir=str(hp_dirs["state"]), pref_dir=str(hp_dirs["prefs"]), profile="full"
     )
@@ -185,6 +186,7 @@ def host(hp_dirs: dict[str, Path]) -> Any:
     assert info["running"], info
     running = hp.current()
     assert running is not None
+    assert running.config.profile == "full"
     assert running.executor.backend == "headless"
     yield running
     hp.stop()
