@@ -334,6 +334,17 @@ def _raw(parm: Any, kind: str) -> Any:
         return None
 
 
+def _holds(parm: Any, value: Any) -> bool:
+    """Whether ``parm`` already evaluates to ``value`` (numbers within float noise)."""
+    try:
+        current = parm.eval()
+    except Exception:
+        return False
+    if _is_number(current) and _is_number(value):
+        return abs(current - value) <= 1e-6 * max(1.0, abs(value))
+    return current == value
+
+
 def _parm_locked(parm: Any) -> bool:
     """The parm's own lock (``locked``; BIBLE §4.1)."""
     try:
@@ -396,13 +407,33 @@ def _multiparm_dict(parm: Any) -> dict[str, Any] | None:
     return out
 
 
+def raw_equals(raw: Any, value: Any) -> bool:
+    """Whether ``raw`` says nothing ``value`` does not: equal, or a plain number written
+    as text (``rawValue()`` of a numeric parm is ``"1.8"`` for ``1.8``; review 13 and 16).
+    Tuples compare per component."""
+    if raw == value:
+        return True
+    if isinstance(raw, list | tuple) and isinstance(value, list | tuple):
+        return len(raw) == len(value) and all(map(raw_equals, raw, value))
+    if isinstance(raw, str) and _is_number(value):
+        text = raw.strip()
+        if text in (str(value), f"{value:g}", repr(value)):
+            return True
+        try:
+            number = float(text)
+        except ValueError:
+            return False
+        return abs(number - value) <= 1e-11 * max(1.0, abs(value))
+    return False
+
+
 def _value_and_raw(out: dict[str, Any], value: Any, raw: Any, full_strings: bool) -> None:
     """``value``, then ``raw`` only when it differs (unexpanded text, an expression's
     source); strings over 200 characters become ``{elided, head}`` unless
     ``full_strings`` (review 12 papercut 1: a 5 KB snippet was echoed twice)."""
     shape = (lambda v: v) if full_strings else elide_string
     out["value"] = shape(value)
-    if raw != value:
+    if not raw_equals(raw, value):
         out["raw"] = shape(raw)
 
 
@@ -611,7 +642,8 @@ def parm_not_found(node: Any, name: str) -> ToolError:
 
 
 def resolve_name(node: Any, name: str) -> Any:
-    """``node.parm(name)`` then ``node.parmTuple(name)``; ``parm_not_found`` otherwise."""
+    """``node.parm(name)`` then ``node.parmTuple(name)``, then on a LOP the parm a USD
+    attribute name encodes to (``inputs:intensity``); ``parm_not_found`` otherwise."""
     if not isinstance(name, str) or not name:
         raise ToolError("invalid_argument", "Parm names must be non-empty strings.")
     parm = node.parm(name)
@@ -620,6 +652,11 @@ def resolve_name(node: Any, name: str) -> Any:
     ptuple = node.parmTuple(name)
     if ptuple is not None:
         return _normalize(ptuple)
+    from .usd import usd_parm_name
+
+    alias = usd_parm_name(node, name)
+    if alias is not None and (node.parm(alias) or node.parmTuple(alias)) is not None:
+        return resolve_name(node, alias)
     raise parm_not_found(node, name)
 
 
@@ -1026,6 +1063,8 @@ def _apply(node: Any, target: Any, item: dict[str, Any], *, frame: float | None)
                 for p, v in zip(parms, values, strict=True)
             ]
             for parm, raw_value, new in zip(parms, values, converted, strict=True):
+                if animation != "key" and _parm_locked(parm) and _holds(parm, new):
+                    continue  # a computed (locked) component already at the value (review 13)
                 if animation == "replace":
                     _delete_keys(parm)
                     parm.set(new)
@@ -1235,13 +1274,28 @@ def locked_error(node: Any, target: Any, exc: BaseException | None = None) -> To
             "(or use the hda tool), then retry.",
             hou_exception=hou_exc,
         )
-    if any(_parm_locked(p) for p in _components(target)):
-        return ToolError(
-            "locked",
-            f"{path} is locked.",
-            hint=f"Unlock it in Houdini, or with houdini_python: hou.parm('{_components(target)[0].path()}').lock(False).",
-            hou_exception=hou_exc,
+    locked = [p for p in _components(target) if _parm_locked(p)]
+    if locked:
+        first = locked[0]
+        message = (
+            f"{path} is locked." if first.path() == path else f"{path}: {first.name()} is locked"
         )
+        with contextlib.suppress(Exception):
+            message = (
+                f"{message.rstrip('.')} and computed by the expression {first.expression()!r} "
+                f"(now {_json_number(first.eval())})."
+            )
+        message = message if message.endswith(".") else message + "."
+        others = [p.name() for p in _components(target) if p not in locked]
+        unlock = f"hou.parm('{first.path()}').lock(False)"
+        hint = (
+            f"Set {', '.join(others)} only (a locked component that already holds the value is "
+            f"skipped), or change what computes {first.name()}, such as a mode menu on the node. "
+            f"Last resort: houdini_python {unlock}."
+            if others
+            else f"Unlock it in Houdini, or with houdini_python: {unlock}."
+        )
+        return ToolError("locked", message, hint=hint, hou_exception=hou_exc)
     return ToolError(
         "locked",
         f"Houdini refused to modify {path} (permission error).",
@@ -1424,12 +1478,22 @@ def parm_set(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
 
 SPARE_TYPES = ("float", "int", "string", "toggle", "menu", "button", "vector", "color")
 SPARE_KEYS = frozenset(
-    ("name", "type", "label", "default", "size", "min", "max", "menu_items", "folder", "help")
-)
+    (
+        "name", "type", "label", "default", "size", "min", "max", "menu_items", "value_type",
+        "folder", "help",
+    )
+)  # fmt: skip
+MENU_VALUE_TYPES = ("string", "int")
+"""``value_type`` of a spare ``menu`` (review 12 papercut 3). ``string`` (default) is a
+``hou.MenuParmTemplate``: ``chs()`` gives the token and ``ch()`` the item index. ``int`` is a
+``hou.IntParmTemplate`` with the menu: ``ch()``/``chi()`` give the item index and
+``parm_get`` reports the index as the value (``chs()`` gives the index as text, not the
+token). Verified on 22.0.466."""
 _PARM_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 SPARE_HINT = (
     "spare_parms is {add: [{name, type: " + "|".join(SPARE_TYPES) + ", label?, default?, "
-    "size?, min?, max?, menu_items?: [{token, label}], folder?, help?}], remove: [names]}."
+    "size?, min?, max?, menu_items?: [{token, label}], value_type?: string|int (menus), "
+    "folder?, help?}], remove: [names]}."
 )
 SPARE_PARMS_HINT = "To add a control parm, use node_edit spare_parms."
 """Appended to ``parm_not_found`` on nodes that hold controls (null, subnet, geo)."""
@@ -1477,19 +1541,28 @@ def _spare_default(spec: dict[str, Any], kind: str, size: int, where: str) -> An
             raise ToolError("invalid_value", f"{where}: a toggle default is true or false.")
         return bool(default)
     if kind == "menu":
-        tokens = [i["token"] for i in spec["menu_items"]]
-        if default is None:
-            return 0
-        if isinstance(default, str) and default in tokens:
-            return tokens.index(default)
-        if _is_number(default) and float(default).is_integer() and 0 <= default < len(tokens):
-            return int(default)
-        raise ToolError(
-            "invalid_value",
-            f"{where}: default {default!r} is not one of the menu tokens.",
-            hint=f"Tokens: {', '.join(tokens)} (or an index).",
-        )
+        return _spare_menu_default(default, [i["token"] for i in spec["menu_items"]], where)
     return _spare_values(default, kind, size, where)
+
+
+def _spare_menu_default(default: Any, tokens: list[str], where: str) -> int:
+    """The item index a menu default names: a token, or a number. A whole number is the
+    index; one that is no index but equals a token's text (``-1`` for token ``"-1"``) is
+    that token."""
+    if default is None:
+        return 0
+    if isinstance(default, str) and default in tokens:
+        return tokens.index(default)
+    if _is_number(default) and float(default).is_integer():
+        if 0 <= default < len(tokens):
+            return int(default)
+        if str(int(default)) in tokens:
+            return tokens.index(str(int(default)))
+    raise ToolError(
+        "invalid_value",
+        f"{where}: default {default!r} is neither a menu token nor an item index.",
+        hint=f"Tokens: {', '.join(tokens)}; or an index from 0 to {len(tokens) - 1}.",
+    )
 
 
 def _spare_template(spec: Any, where: str) -> tuple[str, Any, str | None]:
@@ -1534,6 +1607,11 @@ def _spare_template(spec: Any, where: str) -> tuple[str, Any, str | None]:
             raise _spare_bad(f"{where}: a menu needs menu_items: [{{token, label}}, ...].")
     elif items is not None:
         raise _spare_bad(f"{where}: menu_items is for type menu.")
+    value_type = spec.get("value_type", "string")
+    if kind != "menu" and "value_type" in spec:
+        raise _spare_bad(f"{where}: value_type is for type menu.")
+    if value_type not in MENU_VALUE_TYPES:
+        raise _spare_bad(f"{where}: value_type must be string or int; got {value_type!r}.")
     default = _spare_default(spec, kind, size, where)
     if kind in ("float", "vector", "color"):
         extra: dict[str, Any] = {}
@@ -1564,6 +1642,15 @@ def _spare_template(spec: Any, where: str) -> tuple[str, Any, str | None]:
         template = hou.StringParmTemplate(name, label, size, default_value=default)
     elif kind == "toggle":
         template = hou.ToggleParmTemplate(name, label, default_value=default)
+    elif kind == "menu" and value_type == "int":
+        template = hou.IntParmTemplate(
+            name,
+            label,
+            1,
+            default_value=(default,),
+            menu_items=tuple(i["token"] for i in items),
+            menu_labels=tuple(str(i.get("label") or i["token"]) for i in items),
+        )
     elif kind == "menu":
         template = hou.MenuParmTemplate(
             name,

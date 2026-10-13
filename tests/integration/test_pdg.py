@@ -33,6 +33,20 @@ def _graph(script: str = FAIL_SECOND, count: int = 3, cook_type: int = 1):
     return net, gen, script_node
 
 
+def _rop_graph():
+    """/obj/g/box -> /out/geo_out (geometry ROP) <- /obj/topnet1/fetch (ROP Fetch, out of
+    process: each work item is a hython that loads the saved hip)."""
+    box = hou.node("/obj").createNode("geo", "g").createNode("box", "box")
+    rop = hou.node("/out").createNode("geometry", "geo_out")
+    rop.parm("soppath").set(box.path())
+    rop.parm("sopoutput").set("$HIP/geo/a.bgeo.sc")
+    net = hou.node("/obj").createNode("topnet", "topnet1")
+    fetch = net.createNode("ropfetch", "fetch")
+    fetch.parm("roppath").set(rop.path())
+    fetch.setDisplayFlag(True)
+    return rop, fetch
+
+
 def _wait_job(client, job_id: str, timeout: float = 60.0) -> dict:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -71,6 +85,51 @@ def test_cook_blocking_with_failed_item(client):
     assert status["states"] == {"cooked_success": 2, "cooked_fail": 1}
     assert status["failed"] == 1 and status["cooked"] == 2
     assert status["cook_state"] == "failed"
+    # Review 14 papercut 1: the result says which item failed and why.
+    [failure] = result["failures"]
+    assert failure["node"] == script.path() and failure["index"] == 1
+    assert "boom" in failure["error"], failure
+
+
+def test_failed_out_of_process_item_reports_its_log(client):
+    _, _, script = _graph(FAIL_SECOND, count=2, cook_type=2)
+    started = client.ok("pdg", {"action": "cook", "top_path": script.path()})
+    assert _wait_job(client, started["job_id"], timeout=90)["state"] == "done"
+    result = client.ok("job", {"action": "result", "job_id": started["job_id"]})["result"]
+    assert result["ok"] is False
+    [failure] = result["failures"]
+    assert "RuntimeError: boom" in failure["error"], failure
+    assert failure["exit_code"] == 1
+    page = client.ok("pdg", {"action": "workitems", "top_path": script.path()})
+    failed = [r for r in page["work_items"] if r["state"] == "cooked_fail"]
+    assert len(failed) == 1
+    row = failed[0]
+    assert "RuntimeError: boom" in row["error"] and len(row["error"]) <= 400
+    assert row["exit_code"] == 1
+    assert row["log_path"].endswith(".log")
+    with open(row["log_path"], encoding="utf-8", errors="replace") as handle:
+        assert "boom" in handle.read()
+    ok_rows = [r for r in page["work_items"] if r["state"] == "cooked_success"]
+    assert ok_rows and "error" not in ok_rows[0] and "log_path" not in ok_rows[0]
+
+
+def test_problems_and_node_info_report_failed_items(client):
+    """Review 14 papercut 5: a TOP node with failed work items is a problem, and
+    node_info says how its items stand."""
+    net, gen, script = _graph()
+    client.ok("pdg", {"action": "cook", "top_path": script.path(), "block": True})
+    found = client.ok("problems", {"root": net.path()})
+    rows = [r for r in found["problems"] if r["kind"] == "failed_work_items"]
+    assert len(rows) == 1, found
+    row = rows[0]
+    assert row["path"] == script.path() and row["count"] == 1
+    assert "1 of 3 work items failed" in row["message"] and "boom" in row["message"]
+    assert row["work_item"] == {"id": row["work_item"]["id"], "index": 1}
+    info = client.ok("node_info", {"paths": [script.path(), gen.path()]})["nodes"]
+    assert info[0]["pdg_state"] == {"cooked": 2, "failed": 1, "total": 3}
+    assert info[1]["pdg_state"] == {"cooked": 3, "failed": 0, "total": 3}
+    geo = hou.node("/obj").createNode("geo", "g")
+    assert "pdg_state" not in client.ok("node_info", {"paths": [geo.path()]})["nodes"][0]
 
 
 def test_cook_network_uses_display_node(client):
@@ -93,11 +152,14 @@ def test_cook_as_job(client):
     assert started["state"] == "running" and started["job_id"]
     status = _wait_job(client, started["job_id"])
     assert status["state"] == "done", status
-    assert status["progress"] == 1.0 and status["current"] == status["total"] == 3, status
+    # Review 14 papercut 3: progress counts the whole graph (3 generated + 3 scripted).
+    assert status["progress"] == 1.0 and status["current"] == status["total"] == 6, status
+    assert status["nodes"] == {"gen": "3/3", "script": "3/3"}
     result = client.ok("job", {"action": "result", "job_id": started["job_id"]})["result"]
     assert result["path"] == script.path()
     assert result["ok"] is False
     assert result["status"]["failed"] == 1 and result["status"]["cooked"] == 2
+    assert [f["index"] for f in result["failures"]] == [1]
 
 
 @pytest.mark.parametrize("where", ["args", "request"])
@@ -134,6 +196,7 @@ def test_cook_block_honours_job_threshold(client):
         client.host.config.job_threshold_s = saved
     assert result["state"] == "running" and result["job_id"], result
     assert elapsed < 4, elapsed
+    assert "job_threshold_s" in result["notes"][0] and "60" in result["notes"][0]
     client.ok("job", {"action": "cancel", "job_id": result["job_id"]})
     assert _wait_job(client, result["job_id"], timeout=30)["state"] == "cancelled"
 
@@ -168,6 +231,46 @@ def test_cook_job_waits_for_the_graph_to_start(client):
     assert result["status"]["cooked"] == 2, result
 
 
+def test_cook_refuses_an_unsaved_hip_for_out_of_process_items(client, work_dir):
+    """Review 14 papercut 2: ROP Fetch work items load the hip on disk, so cooking with
+    unsaved changes silently cooks the old scene."""
+    rop, fetch = _rop_graph()
+    untitled = client.error("pdg", {"action": "cook", "top_path": fetch.path()})
+    assert untitled["code"] == "unsaved_changes"
+    assert "untitled" in untitled["message"] and "hip_save" in untitled["hint"]
+    # save: true has nowhere to save an untitled scene.
+    error = client.error("pdg", {"action": "cook", "top_path": fetch.path(), "save": True})
+    assert error["code"] == "unsaved_changes" and "path" in error["hint"]
+
+    hip = (work_dir / "wedges.hip").as_posix()
+    client.ok("hip_save", {"path": hip})
+    client.ok(
+        "parm_set", {"items": [{"path": f"{rop.path()}/sopoutput", "value": "$HIP/geo/b.bgeo.sc"}]}
+    )
+    dirty = client.error("pdg", {"action": "cook", "top_path": fetch.path()})
+    assert dirty["code"] == "unsaved_changes"
+    assert fetch.path() in dirty["message"] and "save: true" in dirty["hint"]
+
+    client.host.config.approved_roots = [str(work_dir / "elsewhere")]
+    refused = client.error("pdg", {"action": "cook", "top_path": fetch.path(), "save": True})
+    assert refused["code"] == "path_not_allowed"
+    client.host.config.approved_roots = []
+
+    started = client.ok("pdg", {"action": "cook", "top_path": fetch.path(), "save": True})
+    assert started["saved"] == hip
+    assert _wait_job(client, started["job_id"], timeout=120)["state"] == "done"
+    result = client.ok("job", {"action": "result", "job_id": started["job_id"]})["result"]
+    assert result["ok"] is True, result
+    # The work item cooked the saved scene: the new output path, not the old one.
+    assert (work_dir / "geo" / "b.bgeo.sc").is_file()
+    assert not (work_dir / "geo" / "a.bgeo.sc").exists()
+
+
+def test_in_process_graphs_cook_unsaved(client):
+    _, gen, _ = _graph(count=1)
+    assert client.ok("pdg", {"action": "cook", "top_path": gen.path(), "block": True})["ok"]
+
+
 def test_status_before_cook(client):
     _, gen, _ = _graph()
     status = client.ok("pdg", {"action": "status", "top_path": gen.path()})
@@ -184,10 +287,20 @@ def test_workitems_with_failure_and_paging(client):
     rows = page["work_items"]
     assert [r["index"] for r in rows] == [0, 1, 2]
     assert [r["state"] for r in rows] == ["cooked_success", "cooked_fail", "cooked_success"]
-    assert rows[0]["output_files"] == ["C:/hp-test/out0.txt"]
+    assert "boom" in rows[1]["error"] and "exit_code" not in rows[1]  # in-process
+    # Review 14 papercut 8: one output_root, relative files, no default names.
+    assert page["output_root"] == "C:/hp-test"
+    assert rows[0]["output_files"] == ["out0.txt"]
     assert rows[1]["output_files"] == []
-    assert all(isinstance(r["id"], int) and r["name"].startswith("script_") for r in rows)
+    assert all(isinstance(r["id"], int) and "name" not in r for r in rows)
+    assert all(isinstance(r["cook_time_s"], float) for r in rows)
     assert "node" not in rows[0]
+    failed = client.ok("pdg", {"action": "workitems", "top_path": script.path(), "state": "failed"})
+    assert failed["total"] == 1 and [r["index"] for r in failed["work_items"]] == [1]
+    cooked = client.ok("pdg", {"action": "workitems", "top_path": script.path(), "state": "cooked"})
+    assert [r["index"] for r in cooked["work_items"]] == [0, 2]
+    bad = client.error("pdg", {"action": "workitems", "top_path": script.path(), "state": "red"})
+    assert bad["code"] == "invalid_argument" and "failed" in bad["candidates"]
     first = client.ok("pdg", {"action": "workitems", "top_path": script.path(), "limit": 2})
     assert len(first["work_items"]) == 2 and first["next_cursor"] == "2"
     rest = client.ok(
@@ -196,6 +309,29 @@ def test_workitems_with_failure_and_paging(client):
     )
     assert [r["index"] for r in rest["work_items"]] == [2]
     assert "next_cursor" not in rest
+
+
+def test_workitems_attribs(client):
+    """Review 14 papercut 7: the per-item wedge values without reading outputs back."""
+    net = hou.node("/obj").createNode("topnet", "topnet1")
+    wedge = net.createNode("wedge", "wedge1")
+    wedge.parm("wedgecount").set(3)
+    wedge.parm("wedgeattributes").set(1)
+    wedge.parm("name1").set("seed")
+    client.ok("pdg", {"action": "cook", "top_path": wedge.path(), "block": True})
+    args = {
+        "action": "workitems",
+        "top_path": wedge.path(),
+        "attribs": ["wedgeindex", "seed", "nope"],
+    }
+    rows = client.ok("pdg", args)["work_items"]
+    assert len(rows) == 3
+    for row in rows:
+        assert set(row["attribs"]) == {"wedgeindex", "seed"}  # unknown names are left out
+        assert row["attribs"]["wedgeindex"] == row["index"]
+        assert isinstance(row["attribs"]["seed"], float)
+    plain = client.ok("pdg", {"action": "workitems", "top_path": wedge.path()})["work_items"]
+    assert "attribs" not in plain[0]
 
 
 def test_workitems_on_network_names_nodes(client):
@@ -227,14 +363,35 @@ def test_cancel_running_cook(client):
             break
         client.host.executor.pump_once(0.05)
     assert status["cooking"] is True and status["states"] == {"cooking": 2}
+    # Review 14 papercut 4: pdg cancel cancels the owning job and returns the state after.
     cancelled = client.ok("pdg", {"action": "cancel", "top_path": script.path()})
     assert cancelled["path"] == script.path()
+    assert cancelled["cancelled"] is True and cancelled["jobs_cancelled"] == [started["job_id"]]
+    assert cancelled["cooking"] is False
+    assert cancelled["states"] == {"cooked_cancel": 2}
     final = _wait_job(client, started["job_id"], timeout=30)
-    assert final["state"] == "done"
-    result = client.ok("job", {"action": "result", "job_id": started["job_id"]})["result"]
-    assert result["status"]["cooking"] is False
-    assert result["status"]["cooked"] == 0
-    assert result["status"]["states"] == {"cooked_cancel": 2}
+    assert final["state"] == "cancelled" and final["message"] == "cancelled", final
+    error = client.error("job", {"action": "result", "job_id": started["job_id"]})
+    assert error["code"] == "cancelled"
+
+
+def test_cancel_inside_the_graph_never_reads_as_done(client):
+    """A cook whose items were cancelled outside HocusPocus ends cancelled, not done."""
+    _, _, script = _graph(SLEEP, count=2, cook_type=2)
+    started = client.ok("pdg", {"action": "cook", "top_path": script.path()})
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        if client.ok("pdg", {"action": "status", "top_path": script.path()})["states"].get(
+            "cooking"
+        ):
+            break
+        client.host.executor.pump_once(0.05)
+    script.cancelCook()  # e.g. the user pressed the cancel button
+    final = _wait_job(client, started["job_id"], timeout=30)
+    assert final["state"] == "cancelled", final
+    error = client.error("job", {"action": "result", "job_id": started["job_id"]})
+    assert error["code"] == "cancelled"
+    assert error["detail"]["status"]["states"] == {"cooked_cancel": 2}
 
 
 def test_cancel_via_job(client):
@@ -250,6 +407,7 @@ def test_cancel_via_job(client):
     client.ok("job", {"action": "cancel", "job_id": started["job_id"]})
     final = _wait_job(client, started["job_id"], timeout=30)
     assert final["state"] == "cancelled"
+    assert final["message"] == "cancelled"  # not "cancellation requested"
     deadline = time.monotonic() + 15
     while time.monotonic() < deadline:
         if not client.ok("pdg", {"action": "status", "top_path": script.path()})["cooking"]:

@@ -388,6 +388,36 @@ def _read_version(pkg_dir: Path) -> str | None:
     return m.group(1) if m else None
 
 
+def literal_hver_dirs(pref_dir: Path, environ: Mapping[str, str] | None = None) -> list[Path]:
+    """Folders literally named ``houdini__HVER__`` next to the resolved pref dir (or the
+    unexpanded ``HOUDINI_USER_PREF_DIR`` itself). Houdini expands the token, so nothing in
+    them is read (reviews 13 and 16)."""
+    env = os.environ if environ is None else environ
+    candidates = [pref_dir.parent / "houdini__HVER__"]
+    raw = env.get("HOUDINI_USER_PREF_DIR", "")
+    if "__HVER__" in raw:
+        candidates.append(Path(raw).expanduser())
+    found: list[Path] = []
+    for path in candidates:
+        try:
+            same = path.resolve() == pref_dir.resolve()
+        except OSError:
+            same = False
+        if path.is_dir() and not same and path not in found:
+            found.append(path)
+    return found
+
+
+def _check_literal_hver(report: Report, pref_dir: Path) -> None:
+    for path in literal_hver_dirs(pref_dir):
+        moved = [n for n in ("hocuspocus.toml", "packages") if (path / n).exists()]
+        report.warn(
+            "literal __HVER__ folder",
+            f"{path} exists, but Houdini expands __HVER__ and reads {pref_dir}"
+            + (f"; move {' and '.join(moved)} there" if moved else "; nothing in it is read"),
+        )
+
+
 def doctor(args: argparse.Namespace, out: Callable[[str], None] = print) -> int:
     report = Report(out)
     out(f"hocuspocus {__version__} (bridge, hp/v{catalog.HP_RPC_VERSION})")
@@ -433,6 +463,7 @@ def doctor(args: argparse.Namespace, out: Callable[[str], None] = print) -> int:
             "hocuspocus.toml",
             f"{toml} (host and bridge; HOCUSPOCUS_* env overrides)" if toml else "none (defaults)",
         )
+    _check_literal_hver(report, prefs.path)
     pkg_json = prefs.path / "packages" / PACKAGE_JSON_NAME
     if not pkg_json.is_file():
         report.fail("package JSON", f"{pkg_json} missing; run `hocuspocus install-houdini`")
@@ -524,10 +555,15 @@ def launch_houdini(
     wait_s: float,
     *,
     hfs: str | None = None,
+    work_dir: str | None = None,
     out: Callable[[str], None] = print,
     err: Callable[[str], None] | None = None,
 ) -> int:
     """``hocuspocus launch``: start a Houdini that belongs to no MCP server.
+
+    Houdini starts in ``work_dir`` (default: the directory the command runs in), which is
+    the untitled scene's ``$HIP`` and ``$JOB`` (review 12). ``houdini_connect {launch}``
+    keeps its own rule: ``HOCUSPOCUS_WORK_DIR``, else home.
 
     The Houdini is started detached from this process, which exits once its host has
     registered (or at once with ``--wait 0``), so it outlives every MCP client. stdout
@@ -537,8 +573,9 @@ def launch_houdini(
 
     err = err or (lambda text: print(text, file=sys.stderr))
     launcher = _launcher(hfs)
+    where = Path(work_dir) if work_dir else Path.cwd()
     try:
-        spawned = launcher.spawn(mode, hip)
+        spawned = launcher.spawn(mode, hip, work_dir=where)
         if wait_s <= 0:
             out(json.dumps({"pid": spawned.proc.pid, "mode": mode, "log": spawned.log}))
             err("Started without waiting; houdini_status lists it once its host registers.")
@@ -553,9 +590,15 @@ def launch_houdini(
     if result.log:
         entry["log"] = result.log
     out(json.dumps(entry))
+    # With --hip the scene is that file and $HIP its folder: no untitled scene (review 16 N6).
+    scene = (
+        f"It loaded {Path(hip).resolve()}."
+        if hip
+        else f"$HIP of the untitled scene is {where.resolve()}."
+    )
     err(
         f"Houdini pid {result.instance.pid} is running and outlives this command; attach "
-        f'from an MCP client with houdini_connect {{"pid": {result.instance.pid}}}.'
+        f'from an MCP client with houdini_connect {{"pid": {result.instance.pid}}}. {scene}'
     )
     return 0
 
@@ -650,7 +693,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="start a Houdini with HocusPocus that outlives any MCP client",
         description="Start GUI Houdini (or headless hython with --headless) with the "
         "HocusPocus host, wait for it to register, print its registry entry as JSON and "
-        "exit. The Houdini keeps running; attach to it with houdini_connect {pid}.",
+        "exit. The Houdini keeps running; attach to it with houdini_connect {pid}. It starts "
+        "in the current directory (or --work-dir), which is the untitled scene's $HIP and "
+        "$JOB; Houdini also searches that directory for scripts and assets, as when you run "
+        "houdini there yourself. houdini_connect {launch} instead starts in "
+        "HOCUSPOCUS_WORK_DIR, else your home directory.",
     )
     p.add_argument("--headless", action="store_true", help="run hython -m hocuspocus.host")
     p.add_argument("--hip", help="hip file to open")
@@ -662,6 +709,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="seconds to wait for the host to register (default 90; 0 returns at once)",
     )
     p.add_argument("--hfs", help="Houdini install dir (default: HOCUSPOCUS_HFS, HFS, newest 22.x)")
+    p.add_argument(
+        "--work-dir",
+        metavar="DIR",
+        help="directory Houdini starts in: $HIP and $JOB of the untitled scene "
+        "(default: the current directory; created if missing)",
+    )
 
     sub.add_parser("version", help="print versions")
     return parser
@@ -684,7 +737,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         return docs_tools(args.output)
     if args.command == "launch":
         return launch_houdini(
-            "headless" if args.headless else "gui", args.hip, args.wait, hfs=args.hfs
+            "headless" if args.headless else "gui",
+            args.hip,
+            args.wait,
+            hfs=args.hfs,
+            work_dir=args.work_dir,
         )
     if args.command == "version":
         return version()

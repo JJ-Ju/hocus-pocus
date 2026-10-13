@@ -391,6 +391,12 @@ def test_describe_depth_is_budgeted_and_paged(client, host):
 # -- outline (review 11 B11) -------------------------------------------------------
 
 
+def _true_flags(node):
+    from hocuspocus.host.tools.nodes import node_flags
+
+    return [name for name, on in node_flags(node).items() if on]
+
+
 def test_describe_outline_is_a_compact_tree(client):
     geo = hou.node("/obj").createNode("geo", "city")
     box = geo.createNode("box", "base")
@@ -416,11 +422,17 @@ def test_describe_outline_is_a_compact_tree(client):
         "children_count": 3,
         "display": "/obj/city/OUT",
         "errors": 0,
+        "flags": _true_flags(geo),
         "children": city["children"],
     }
     kids = {n["name"]: n for n in city["children"]}  # depth 2 by default for outline
     assert kids["broken"]["errors"] >= 1
-    assert set(kids["base"]) == {"path", "name", "type", "errors"}  # no children_count: 0
+    # Review 12 papercut 4: wiring and the true flags, nothing at its default.
+    assert kids["OUT"]["inputs"] == ["/obj/city/base"]
+    assert "display" in kids["OUT"]["flags"] and "display" not in kids["base"].get("flags", [])
+    for name, child in (("base", box), ("OUT", out), ("broken", broken)):
+        assert kids[name].get("flags", []) == _true_flags(child), name
+    assert set(kids["base"]) <= {"path", "name", "type", "errors", "flags"}  # no zero counts
     assert "parms" not in kids["base"] and "inputs" not in kids["base"]
     # Houdini's own locked assets (wrangles, mountain) are not flagged (review 12 papercut 4).
     assert "hda_locked" not in kids["broken"]
@@ -431,6 +443,24 @@ def test_describe_outline_is_a_compact_tree(client):
     assert all("children" not in n for n in shallow["nodes"])
     whole = client.ok("network_describe", {"root": "/", "format": "outline"})
     assert "/obj" in [n["path"] for n in whole["nodes"]]
+
+
+def test_describe_outline_inputs_keep_their_slots(client):
+    geo = hou.node("/obj").createNode("geo", "geo1")
+    a = geo.createNode("box", "a")
+    b = geo.createNode("sphere", "b")
+    merge = geo.createNode("copytopoints", "m")
+    merge.setInput(1, b)  # input 0 left empty (a merge would close the gap)
+    switch = geo.createNode("switch", "sw")
+    switch.setInput(0, a)
+    switch.setInput(1, merge)
+    switch.bypass(True)
+    result = client.ok("network_describe", {"root": geo.path(), "format": "outline"})
+    rows = {n["name"]: n for n in result["nodes"]}
+    assert rows["m"]["inputs"] == [None, "/obj/geo1/b"]
+    assert rows["sw"]["inputs"] == ["/obj/geo1/a", "/obj/geo1/m"]
+    assert "bypass" in rows["sw"]["flags"]
+    assert "inputs" not in rows["a"]
 
 
 def test_describe_outline_flags_user_locked_assets(client, work_dir):

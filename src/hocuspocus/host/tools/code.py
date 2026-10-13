@@ -207,9 +207,10 @@ def exception_error(payload: dict[str, Any], timeout_s: float | None, budget: in
     message = f"{exc['type']}: {exc['message']}" if exc["message"] else exc["type"]
     if exc["type"] == "SystemExit":
         hint = (
-            "Do not call exit() or sys.exit(): set a variable named result (or end with an "
-            "expression) to return a value. detail.rolled_back says whether the call's "
-            "scene changes were undone."
+            "Do not call exit(), sys.exit() or hou.exit(): set a variable named result (or end "
+            "with an expression) to return a value; to quit Houdini use houdini_connect "
+            "{quit: true, on_unsaved}. detail.rolled_back says whether the call's scene "
+            "changes were undone."
         )
     else:
         hint = (

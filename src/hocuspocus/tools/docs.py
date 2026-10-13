@@ -348,6 +348,8 @@ def render_tools_markdown(tools: Sequence[ToolSpec]) -> str:
             spec.description,
             "",
         ]
+        if spec.notes:
+            out += [f"**Notes.** {spec.notes}", ""]
         rows = _argument_rows(spec.input_schema)
         out += ["### Arguments", ""]
         if rows:

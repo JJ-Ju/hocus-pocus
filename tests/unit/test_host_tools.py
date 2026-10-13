@@ -248,6 +248,60 @@ def test_prune_captures_keeps_the_newest(tmp_path):
     assert sorted(p.name for p in tmp_path.iterdir()) == ["c4.png", "c5.png", "c6.png"]
 
 
+def test_crash_summary_keeps_the_crashing_thread_only():
+    """Review 16 N1: a crashed child's 4 KB tail of idle thread stacks becomes the fatal
+    error and the crashing thread's symbols, at most 600 characters."""
+    from hocuspocus.host.tools.visual import CRASH_LOG_CHARS, crash_summary
+
+    idle = "OTHER THREAD 7\n+0x7ffc [NtWaitForSingleObject] C:\\WINDOWS\\SYSTEM32\\ntdll.dll\n"
+    log = (
+        "36892: Fatal error: Segmentation fault\n-- TRACEBACK BEGIN --\n"
+        "Traceback from hython 22.0.466\nCURRENT THREAD 62892\n"
+        "+0x7ffc4fbd C:\\WINDOWS\\System32\\DriverStore\\nvoglv64.dll\n"
+        "+0x989696e4 [RV_Instance::initializeDevice] C:\\PROGRA~1\\SIDEEF~1\\bin\\libRV.dll\n"
+        + idle * 60
+        + "-- TRACEBACK END --\n"
+    )
+    summary = crash_summary(log)
+    assert summary.splitlines()[:4] == [
+        "36892: Fatal error: Segmentation fault",
+        "CURRENT THREAD 62892",
+        "nvoglv64.dll",
+        "RV_Instance::initializeDevice (libRV.dll)",
+    ]
+    assert "OTHER THREAD" not in summary and "NtWait" not in summary
+    long = log.replace("CURRENT THREAD 62892\n", "CURRENT THREAD 1\n" + "+0x1 [f] a.dll\n" * 500)
+    assert len(crash_summary(long)) == CRASH_LOG_CHARS
+    assert crash_summary("x" * 5000) == "x" * CRASH_LOG_CHARS
+
+
+def test_render_errors_say_each_line_once():
+    """Review 16 N7: hou.OperationFailed and node.errors() repeat each other."""
+    from hocuspocus.host.tools.visual import failure
+
+    errors = [
+        "The attempted operation failed.\nError:       Command Exit Code: 139\n"
+        "             Failed to complete render: exit code 139\n"
+        "Use a Log Viewer with External Render Processes enabled for more information.",
+        "Command Exit Code: 139",
+        "Failed to complete render: exit code 139\n"
+        "Use a Log Viewer with External Render Processes enabled for more information.",
+    ]
+    message, detail = failure("/stage/rop failed to render frame 1", errors)
+    assert message == "/stage/rop failed to render frame 1: Command Exit Code: 139"
+    assert detail == {
+        "errors": [
+            "Failed to complete render: exit code 139",
+            "Use a Log Viewer with External Render Processes enabled for more information.",
+        ]
+    }
+    assert failure("x", ["The attempted operation failed."]) == (
+        "x: The attempted operation failed.",
+        {},
+    )
+    assert failure("x", []) == ("x: no output file", {})
+
+
 def test_last_cook_memory_is_bounded(monkeypatch):
     from hocuspocus.host.tools import _diag
 

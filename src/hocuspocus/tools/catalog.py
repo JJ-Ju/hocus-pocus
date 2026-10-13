@@ -26,7 +26,8 @@ HP_RPC_VERSION = 1
 TOOLS_LIST_MAX_BYTES = 48_000
 """Hard cap on model-visible ``tools/list`` text (≈12k tokens). Enforced by a unit test."""
 
-DESCRIPTION_MAX_WORDS = 80
+DESCRIPTION_MAX_WORDS = 60
+"""1.2 (BIBLE §4.1): argument-level detail goes in ``ToolSpec.notes``, not the description."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,6 +37,10 @@ class ToolSpec:
     name: str
     description: str
     input_schema: dict[str, Any]
+    notes: str = ""
+    """Argument-level detail rendered into docs/tools.md and ``hocuspocus://guide`` but kept
+    out of ``tools/list`` (BIBLE §4.1 budget): what the schema cannot say and the model
+    needs only when it uses that argument."""
     output_schema: dict[str, Any] | None = None
     read_only: bool = False
     destructive: bool = False
@@ -55,6 +60,19 @@ class ToolSpec:
             "idempotentHint": self.idempotent,
             "openWorldHint": False,
         }
+
+    def wire_annotations(self) -> dict[str, Any]:
+        """:meth:`annotations` as sent in ``tools/list``: hints equal to the MCP default
+        (readOnlyHint false, idempotentHint false) are left out, and so are destructiveHint
+        and idempotentHint on a read-only tool, where the spec says they are not meaningful.
+        A client applying the spec's defaults reads the same values (BIBLE §4.1 budget)."""
+        full = self.annotations()
+        if self.read_only:
+            return {"readOnlyHint": True, "openWorldHint": False}
+        wire = {"destructiveHint": full["destructiveHint"], "openWorldHint": False}
+        if self.idempotent:
+            wire["idempotentHint"] = True
+        return wire
 
 
 # ---------------------------------------------------------------------------
@@ -231,7 +249,7 @@ def _image() -> dict[str, Any]:
             "mime_type": _t("string"),
             "width": _t("integer"),
             "height": _t("integer"),
-            "attached": {"type": "boolean", "description": "Sent as image content."},
+            "attached": _t("boolean"),  # true: sent as MCP image content
         }
     )
 
@@ -273,11 +291,14 @@ _SESSION: tuple[ToolSpec, ...] = (
     ToolSpec(
         name="houdini_status",
         description=(
-            "Start here. Reports the connected Houdini (pid, version, GUI or headless, hip path and "
-            "dirty state, $HIP/$JOB/$HIPNAME, frame, fps, range, recent files, scene_generation), "
-            "every live instance, and bridge settings (profile, read_only, allow_python). Works "
-            "with no Houdini running: connected is null. Use houdini_connect to pick or launch an "
-            "instance."
+            "Start here. Reports the connected Houdini (pid, version, GUI or headless, hip path and"
+            " dirty state, $HIP/$JOB, frame, recent files, scene_generation), every live instance "
+            "and the bridge settings. Works with no Houdini running (connected: null)."
+        ),
+        notes=(
+            "Also reports $HIPNAME, fps, the frame range, and the bridge's profile, read_only and "
+            "allow_python. An untitled scene's hip carries a note that $HIP is the launch directory"
+            " until hip_save."
         ),
         input_schema=_obj({}),
         output_schema=_out(
@@ -311,12 +332,19 @@ _SESSION: tuple[ToolSpec, ...] = (
     ToolSpec(
         name="houdini_connect",
         description=(
-            "Choose which Houdini this session drives. Pass one of: pid to attach to a live "
-            "instance listed by houdini_status; launch to start one (mode gui or headless hython, "
-            "optional hip, wait up to wait_s, default 90); or disconnect to drop the selection. "
-            "A launched Houdini usually closes when this server exits (launched.outlives_server "
-            "says); to keep Houdini alive across sessions, start it with `hocuspocus launch` and "
-            "attach by pid."
+            "Choose the Houdini this session drives: pid attaches, launch starts one (gui or "
+            "headless, optional hip), disconnect drops the selection, quit closes it (on_unsaved "
+            "as hip_new). A launched Houdini usually closes with this server "
+            "(launched.outlives_server says); `hocuspocus launch` starts one that outlives it."
+        ),
+        notes=(
+            "launch waits up to wait_s seconds for the new host to register. A launched Houdini "
+            "starts in HOCUSPOCUS_WORK_DIR (default: the home directory), which is the untitled "
+            "scene's $HIP and $JOB. quit closes the selected Houdini (or pid) through its host: "
+            "with unsaved changes on_unsaved fail (default) refuses with unsaved_changes, save "
+            "saves first, discard drops them. It returns {quit, pid, exited, saved?} and forgets "
+            "the registry entry. To keep one alive across sessions, start it with `hocuspocus "
+            "launch` and attach by pid."
         ),
         input_schema=_obj(
             {
@@ -330,13 +358,15 @@ _SESSION: tuple[ToolSpec, ...] = (
                     ("mode",),
                 ),
                 "disconnect": _b(False),
+                "quit": _b(False),
+                "on_unsaved": _enum(("fail", "save", "discard")),
             }
         ),
         bridge_local=True,
         examples=(
             {"pid": 12345},
             {"launch": {"mode": "headless", "hip": "C:/work/shot.hip"}},
-            {"disconnect": True},
+            {"quit": True, "on_unsaved": "save"},
         ),
     ),
 )
@@ -348,16 +378,16 @@ _SESSION: tuple[ToolSpec, ...] = (
 
 
 def _on_unsaved() -> dict[str, Any]:
-    return _enum(("fail", "save", "discard"), "fail", "Handling of unsaved changes.")
+    return _enum(("fail", "save", "discard"), "fail")
 
 
 _HIP: tuple[ToolSpec, ...] = (
     ToolSpec(
         name="hip_new",
         description=(
-            "Clear to a new untitled scene. on_unsaved (default fail) protects unsaved work: fail "
-            "returns unsaved_changes; save saves first (fails on an untitled scene, so use "
-            "hip_save with path); discard drops the changes. Bumps scene_generation."
+            "Clear to a new untitled scene; bumps scene_generation. on_unsaved protects unsaved "
+            "work: fail returns unsaved_changes, save saves first (an untitled scene needs hip_save"
+            " with path instead), discard drops the changes."
         ),
         input_schema=_obj({"on_unsaved": _on_unsaved()}),
         # bible-silent: result shape. Report the new scene and whether unsaved work was saved.
@@ -378,10 +408,9 @@ _HIP: tuple[ToolSpec, ...] = (
     ToolSpec(
         name="hip_open",
         description=(
-            "Load a hip file, replacing the current scene. on_unsaved as in hip_new (default fail). "
-            "Load warnings are returned in warnings rather than failing the call unless "
-            "ignore_load_warnings is false. Use hip_merge to add another file's nodes to the "
-            "current scene instead."
+            "Load a hip file, replacing the current scene; on_unsaved as in hip_new. Load warnings "
+            "are returned in warnings, not raised, unless ignore_load_warnings is false. hip_merge "
+            "adds nodes instead."
         ),
         input_schema=_obj(
             {
@@ -404,9 +433,9 @@ _HIP: tuple[ToolSpec, ...] = (
     ToolSpec(
         name="hip_save",
         description=(
-            "Save the hip file. path makes it save-as and creates directories; an untitled scene "
-            "needs path. increment saves to the next version number in the file name; backup "
-            "keeps a backup copy. Returns the real saved path, dirty after save, and file bytes."
+            "Save the hip file. path saves as (creating directories; an untitled scene needs it); "
+            "increment saves to the next version number in the file name; backup keeps a backup "
+            "copy. Returns the real saved path, dirty after save, and bytes."
         ),
         input_schema=_obj(
             {
@@ -424,10 +453,9 @@ _HIP: tuple[ToolSpec, ...] = (
     ToolSpec(
         name="hip_merge",
         description=(
-            "Merge nodes from another hip file into the current scene. node_pattern (default *) "
-            "selects nodes; dry_run only reports collisions (no undo step, allowed read-only). "
-            "Colliding nodes are renamed unless "
-            "overwrite_on_conflict. Use hip_open to replace the scene instead."
+            "Merge the nodes matching node_pattern from another hip file into the current scene. "
+            "dry_run only reports collisions (no undo step, allowed read-only). Colliding nodes are"
+            " renamed unless overwrite_on_conflict."
         ),
         input_schema=_obj(
             {
@@ -484,10 +512,9 @@ _NODES: tuple[ToolSpec, ...] = (
     ToolSpec(
         name="node_find",
         description=(
-            "Search a subtree for nodes. pattern globs names (default *), type globs type names; "
-            "category, flags and has_errors filter. Rows: path, type, category, flags, input_count, "
-            "child_count, has_errors. Locked HDAs are not entered unless recurse_locked. Paged by "
-            "limit and cursor."
+            "Search a subtree for nodes (name and type globs, category, flags, has_errors). Rows: "
+            "path, type, category, flags, input_count, child_count, has_errors. Locked HDAs are not"
+            " entered unless recurse_locked. Paged by limit and cursor."
         ),
         input_schema=_obj(
             {
@@ -509,9 +536,13 @@ _NODES: tuple[ToolSpec, ...] = (
         name="node_info",
         description=(
             "Read nodes in detail: type, flags, inputs with names and sources, non-default parms "
-            "(value, raw, expression; long strings elided), errors, warnings, cook state. include picks sections "
-            "(default parms, inputs, errors, flags); include_defaults adds parms at default. Use "
-            "parm_get for keyframes, menus and templates; network_describe for a whole network."
+            "(value, raw, expression; long strings elided), errors, warnings, cook state. parm_get "
+            "reads keyframes, menus and templates; network_describe a whole network."
+        ),
+        notes=(
+            "Default include: parms, inputs, errors, flags. Parm rows are name, value, raw (only "
+            "when it differs), expression, keyed, locked, menu_token; strings over 200 characters "
+            "come as {elided, head}. hda_locked is true at or inside a locked asset."
         ),
         input_schema=_obj(
             {
@@ -564,13 +595,17 @@ _NODES: tuple[ToolSpec, ...] = (
     ToolSpec(
         name="node_create",
         description=(
-            "Create nodes in one undo step. Item: parent, type (resolved like createNode so box "
-            "gets the current version; exact_type disables), optional name, parms (value or "
-            "{expression, language}; {expr, lang} also works), inputs (index or name, from, "
-            "output), flags, position. Items may wire to earlier items; a block_end pairs with its "
-            "block_begin (paired_with). layout default good_position. Returns path, type and "
-            "problems per node; return full gives node_info blocks with only the parms the call "
-            "set. Use network_build for whole graphs."
+            "Create nodes in one undo step. type resolves like createNode (box gets the current "
+            "version; exact_type disables). Items may wire to earlier items; a block_end pairs with"
+            " its block_begin (paired_with). Returns path, type and problems per node. "
+            "network_build suits whole graphs."
+        ),
+        notes=(
+            "A parms value is a literal, {expression, language} (short form {expr, lang}), or any "
+            "parm_set item without path. An input is {index or name, from, output (default 0)}. "
+            "layout good_position places new nodes. return full gives node_info blocks listing only"
+            " the parms the call set, with strings over 200 characters as {elided, head}; identical"
+            " error lists after the first become errors_same_as."
         ),
         input_schema=_obj(
             {
@@ -625,9 +660,9 @@ _NODES: tuple[ToolSpec, ...] = (
     ToolSpec(
         name="node_delete",
         description=(
-            "Delete nodes in one undo step. keep_connections (default true) reconnects input 0 to "
-            "the deleted node's outputs where possible, like deleting in the network editor. "
-            "Returns deleted paths."
+            "Delete nodes in one undo step and return the deleted paths. keep_connections "
+            "reconnects input 0 to the deleted node's outputs where possible, like deleting in the "
+            "network editor."
         ),
         input_schema=_obj({"paths": _paths(), "keep_connections": _b(True)}, ("paths",)),
         destructive=True,
@@ -640,10 +675,21 @@ _NODES: tuple[ToolSpec, ...] = (
         name="node_edit",
         description=(
             "Change node properties in one undo step: rename, flags, bypass, color, comment, "
-            "position, and lock (false allows editing a locked HDA's contents). spare_parms adds "
-            "{name, type: float|int|string|toggle|menu|button|vector|color, label, default, size, "
-            "min, max, menu_items [{token, label}], folder, help} or removes spare parms by name; "
-            "returns their paths. A rename returns old_path and path. Use parm_set for values."
+            "position, lock (false allows editing a locked HDA's contents). spare_parms adds {name,"
+            " type: float|int|string|toggle|menu|button|vector|color, label, default, size, min, "
+            "max, menu_items [{token, label}], value_type, folder, help} or removes spare parms by "
+            "name. Menu value_type string (default): chs() gives the token; int: ch() gives the "
+            "item index."
+        ),
+        notes=(
+            "A rename returns old_path and path; spare_parms returns the added and removed parm "
+            "paths. Only spare parms can be removed; a name already on the node fails with "
+            "name_collision; nodes inside a locked asset are refused with locked. A folder label is"
+            " created when missing. value_type is for menus only: string makes a menu parm whose "
+            "value is the token (VEX chs(); ch() gives the item index); int makes an int parm with "
+            "that menu whose value is the item index (ch() or chi(); chs() gives the index as "
+            "text). A menu default is a token or an item index; a number that is no index but "
+            'equals a token\'s text (-1 for token "-1") picks that token.'
         ),
         input_schema=_obj(
             {
@@ -692,11 +738,11 @@ _NODES: tuple[ToolSpec, ...] = (
     ToolSpec(
         name="node_copy",
         description=(
-            "Copy nodes into to_parent, which may be their own network. names renames copies in "
-            "paths order; with_inputs (default true) keeps wiring among copied nodes; "
-            "position_offset shifts them. Returns the new paths and per copy path, type and "
-            "problems (return full adds flags)."
+            "Copy nodes into to_parent, which may be their own network. names renames the copies in"
+            " paths order; with_inputs keeps wiring among copied nodes; position_offset shifts "
+            "them. Returns the new paths and per copy path, type and problems."
         ),
+        notes=("return full adds flags to each row."),
         input_schema=_obj(
             {
                 "paths": _paths(),
@@ -713,11 +759,11 @@ _NODES: tuple[ToolSpec, ...] = (
     ToolSpec(
         name="node_connect",
         description=(
-            "Wire or unwire inputs in one undo step. Each item connects output from_output "
-            "(default 0) of from into to at to_input: an index (default 0), an input name, or "
-            '"next" for the next free input of merge-style nodes. from null disconnects. Bad '
-            "inputs fail with invalid_input listing the input labels."
+            "Wire inputs in one undo step: each item connects output from_output of from into to's "
+            'to_input (an index, an input name, or "next" for the next free input of merge-style '
+            "nodes); from null disconnects."
         ),
+        notes=("A bad input fails with invalid_input, and the hint lists the node's input labels."),
         input_schema=_obj(
             {
                 "items": _arr(
@@ -753,8 +799,8 @@ _NODES: tuple[ToolSpec, ...] = (
     ToolSpec(
         name="node_layout",
         description=(
-            "Tidy a network. mode children (default) lays out the children of parent, or only "
-            "paths; good_position moves each node in paths to a free spot near its inputs."
+            "Tidy a network. mode children lays out the children of parent, or only paths; "
+            "good_position moves each node in paths to a free spot near its inputs."
         ),
         input_schema=_obj(
             {
@@ -769,12 +815,19 @@ _NODES: tuple[ToolSpec, ...] = (
     ToolSpec(
         name="network_describe",
         description=(
-            "Read a whole network in one call as Houdini's hou.data childrenAsData format: types, "
-            "non-default parms, expressions, wiring, flags, depth levels deep (default 1; 2 for "
-            "outline). Locked HDAs appear as {type, hda_locked} unless recurse_locked. Pages stop "
-            "at the response budget (truncated, next_cursor). format outline is a compact tree "
-            "(path, name, type, children_count, display, errors, hda_locked for non-Houdini "
-            "assets); python returns asCode for one node. data feeds network_build."
+            "Read a whole network as Houdini's hou.data childrenAsData (types, non-default parms, "
+            "expressions, wiring, flags) to depth; data feeds network_build. format outline is a "
+            "compact tree (type, display node, error count, input sources, flags that are on); "
+            "python is asCode for one node. Locked HDAs stay closed unless recurse_locked. Pages "
+            "end at the response budget (next_cursor)."
+        ),
+        notes=(
+            "depth defaults to 1, and to 2 for outline. A locked HDA appears as {type, hda_locked}."
+            " Outline rows: path, name, type, children_count (left out at 0), display, errors, "
+            "inputs (source path per input slot, null for an empty slot before a wired one; left "
+            'out when nothing is wired), flags (only the ones that are on, e.g. ["display", '
+            '"render"]; left out when none), and hda_locked only for locked assets not shipped with'
+            " Houdini. Truncated pages carry truncated and next_cursor."
         ),
         input_schema=_obj(
             {
@@ -798,12 +851,15 @@ _NODES: tuple[ToolSpec, ...] = (
     ToolSpec(
         name="network_build",
         description=(
-            "Build or update a whole network under parent from Houdini's hou.data childrenAsData "
-            "format (what network_describe returns) in one undo step. Types and inputs are "
-            "validated first; dry_run stops there. Input entries are {from, from_index, to_index}; "
-            "a missing to_index means the entry's position in the list. on_name_collision: error "
-            "(default), rename, replace. Returns created paths and per node path, type and "
-            "problems (return full adds flags). Use node_create for a few nodes."
+            "Build or update a network under parent from Houdini's hou.data childrenAsData format "
+            "(what network_describe returns) in one undo step. Types and inputs are validated "
+            "first; dry_run stops there. Returns created paths and per node path, type and "
+            "problems."
+        ),
+        notes=(
+            "Input entries are {from, from_index, to_index}; a missing to_index is the entry's "
+            "position in the list. return full adds flags. tag is stored as the userData "
+            "hocuspocus:tag."
         ),
         input_schema=_obj(
             {
@@ -856,11 +912,16 @@ _PARMS: tuple[ToolSpec, ...] = (
     ToolSpec(
         name="parm_get",
         description=(
-            "Read parms by parm (.../tx), tuple (.../t: all components) or component path. Each: "
-            "value at frame (default current), raw if different, expression and language, "
-            "is_default, locked (parm lock), hda_locked. Strings over 200 chars are {elided, head} "
-            "unless full_strings. include adds keys, menu, template (label, type, default, range, "
-            "help), ramp, multiparm. Tuples add per-component expressions and keyed names."
+            "Read parms by parm (.../tx), tuple (.../t: all components) or component path: value at"
+            " frame, raw if different, expression, is_default, locked (parm lock), hda_locked. "
+            "Strings over 200 chars are {elided, head} unless full_strings. Tuples add "
+            "per-component expressions and keyed names."
+        ),
+        notes=(
+            "frame defaults to the current frame. template is {label, type, default, min, max, "
+            "help}; menu items are capped at 50; keys is {count, first, last}. On a LOP a USD "
+            "attribute name (.../inputs:intensity) reads Houdini's encoded parm "
+            "(xn__inputsintensity_i0a), named in path and name."
         ),
         input_schema=_obj(
             {
@@ -914,13 +975,19 @@ _PARMS: tuple[ToolSpec, ...] = (
     ToolSpec(
         name="parm_set",
         description=(
-            "Set parms in one undo step. Each item takes one of value, expression, keyframe, "
-            "keyframes, channel_ref, ramp, multiparm_count, revert_to_default, press (clicks a "
-            "button). Tuple paths take lists, component paths scalars; menus take token or label. "
-            "animation: replace (default) clears keys and expressions first, except that one "
-            "keyframe only adds or replaces its key; key keys at frame; keep is plain set. "
-            "Returns value, raw if different (long strings elided), tuple expressions and keyed, "
+            "Set parms in one undo step. Each item takes one of value, expression, keyframe(s), "
+            "channel_ref, ramp, multiparm_count, revert_to_default, press. Tuple paths take lists, "
+            "component paths scalars; menus take token or label. animation replace clears keys and "
+            "expressions first; key keys at frame; keep is plain set. Returns value, raw, "
             "wrote_keyframe, node errors."
+        ),
+        notes=(
+            "With animation replace a single keyframe only adds or replaces its own key. press "
+            "clicks a button parm. raw is left out when it equals value, and long strings are "
+            "elided as in parm_get. Tuples report per-component expressions and the keyed component"
+            " names. Type mismatches fail with invalid_value naming the template type and range. "
+            "On a LOP a USD attribute name (inputs:intensity) sets Houdini's encoded parm "
+            "(xn__inputsintensity_i0a), here and in node_create parms; path is the resolved one."
         ),
         input_schema=_obj(
             {
@@ -1012,11 +1079,22 @@ _COOK: tuple[ToolSpec, ...] = (
         name="cook",
         description=(
             "Cook nodes and report per node ok, errors, warnings, cook_time_ms (its own cook; "
-            "cached inputs are not recooked). profile force-cooks each input chain in dependency "
-            "order: chain (top 10 by cost), total_ms. frame_range [start, end, step] cooks frame "
-            "by frame (sims advance, frame restored); summary bbox adds per-frame counts and "
-            "bbox. Errors left from before a fix are rechecked unless the last cook took over 2 "
-            "s (hint: force). Past the job threshold returns job_id for job."
+            "cached inputs are not recooked). profile force-cooks each input chain: chain (top 10 "
+            "by cost), total_ms, attribution; for-each loop bodies show their cost over all "
+            "iterations (loops). frame_range cooks frame by frame (sims advance); summary bbox adds"
+            " per-frame bbox. Past the job threshold returns job_id for job."
+        ),
+        notes=(
+            "frame_range is [start, end, step] and cannot be combined with profile or frame; the "
+            "current frame is restored afterwards. Errors left from before a fix are rechecked "
+            "unless the last cook took over 2 s (hint: force). With profile, results[].cook_time_ms"
+            " is the named node's profiled cook. attribution is per_node, or perf_monitor when a "
+            "block_end was cooked under Houdini's performance monitor: each loop body row then has "
+            "in_loop, cooks, per_iteration_ms and cook_time_ms over all iterations, and loops lists"
+            " {block_end, block_begin, iterations, total_ms}. loop-level means the monitor was "
+            "unavailable (another profile was recording) and body rows show one standalone cook. "
+            "total_ms counts each loop once, at its block_end. In a GUI session the profile stays "
+            "in the Performance Monitor's list."
         ),
         input_schema=_obj(
             {
@@ -1034,6 +1112,8 @@ _COOK: tuple[ToolSpec, ...] = (
             {
                 "ok": _t("boolean"),
                 "chain": _objs(),
+                "attribution": _t("string"),
+                "loops": _objs(),
                 "total_ms": _t("number"),
                 "frames": _objs(),
                 "results": {
@@ -1065,12 +1145,17 @@ _COOK: tuple[ToolSpec, ...] = (
     ToolSpec(
         name="problems",
         description=(
-            "Explain red nodes: walks a subtree listing nodes with errors or warnings, broken "
-            "channel references, missing files in file parms, unconnected required inputs. "
-            "Errored nodes changed since their last cook are recooked first. cook_uncooked cooks "
-            "never-cooked nodes too. Locked HDAs are skipped unless recurse_locked. Paged by limit "
-            "and cursor; scanning stops after a budget (10 s, or half of timeout_s) with "
-            "incomplete: true and a next_cursor that continues the walk."
+            "Explain red nodes: lists nodes in a subtree with errors or warnings, broken channel "
+            "references, missing files, unconnected required inputs; errored nodes changed since "
+            "their last cook are recooked first. cook_uncooked cooks never-cooked nodes too. Paged "
+            "by limit and cursor."
+        ),
+        notes=(
+            "A TOP node with failed work items is a failed_work_items row with count, work_item "
+            "{id, index} and the first item's error in message. "
+            "Locked HDAs are skipped unless recurse_locked. A scan budget (10 s, or half of "
+            "timeout_s) can end a page early with incomplete: true and a next_cursor that continues"
+            " the walk without losing rows."
         ),
         input_schema=_obj(
             {
@@ -1092,8 +1177,7 @@ _COOK: tuple[ToolSpec, ...] = (
         description=(
             "Summarise the geometry of a SOP (or an OBJ's display SOP) in about 1 KB: point, prim "
             "and vertex counts, bounding box, primitive types, attributes per class with type and "
-            "size, detail attribute values, groups with counts. Use geo_read for per-element "
-            "values."
+            "size, detail attribute values, groups with counts. geo_read reads per-element values."
         ),
         input_schema=_obj({"path": _s("SOP or OBJ path."), "frame": _frame()}, ("path",)),
         output_schema=_out(
@@ -1118,10 +1202,9 @@ _COOK: tuple[ToolSpec, ...] = (
     ToolSpec(
         name="geo_read",
         description=(
-            "Read attribute values like the geometry spreadsheet: count rows (default 50) of one "
-            "class (default point) from start, with a columns header, for attribs (default all), "
-            "optionally within group. stats adds min/max/mean and unique strings over the whole "
-            "class. Page by passing next_cursor as cursor (or its number as start)."
+            "Read attribute values like the geometry spreadsheet: count rows of one class from "
+            "start, with a columns header, optionally within group. stats adds min/max/mean and "
+            "unique strings over the whole class. Page by passing next_cursor as cursor."
         ),
         input_schema=_obj(
             {
@@ -1169,15 +1252,30 @@ _VISUAL: tuple[ToolSpec, ...] = (
     ToolSpec(
         name="viewport_capture",
         description=(
-            "Look at the scene. Returns a PNG image (long side at most 1024) plus path, width, "
-            "height, camera_used. source auto (default) uses the GUI viewer when present, else an "
-            "OpenGL ROP that works headless, framing a temporary camera per fit (default all; none "
-            "reuses the last framing) unless camera is given. Leaves no nodes, undo step or dirty "
-            "flag. Use render for final-quality images."
+            "Look at /obj or a LOP stage: a PNG (long side at most 1024), path, size, "
+            "camera_used, scene. camera: OBJ or LOP camera, or camera prim (lop_path). auto: the "
+            "GUI viewer if present and no camera, else an OpenGL ROP (headless too) framed per "
+            "fit. Leaves no nodes, undo step or dirty flag."
+        ),
+        notes=(
+            "fit none reuses the last framing. The viewer source captures the view as it is unless "
+            "fit is passed: then it frames all or selected for the grab and puts the view back, as "
+            "it does after looking through camera; context is the viewer's network, and notes say "
+            "when that is not the captured scene. Without camera or lop_path the stage's display "
+            "LOP is captured when /obj displays nothing; otherwise a note names it. A stage renders "
+            "through the OpenGL ROP's LOP source (scene: stage, lop_path). source_used is viewer, "
+            "opengl_rop or karma: when a headless OpenGL render process crashes, the frame is "
+            "rendered with a temporary Karma CPU ROP (2 samples, same camera and resolution) and "
+            "a note says why; later stage captures then go straight to Karma. Lights are refused as "
+            "cameras; camera errors list the scene's cameras. path also writes the PNG there. Both "
+            "files are "
+            "opaque, on the same grey as the image (the OpenGL ROP itself writes a transparent "
+            "background). image.attached is true when the PNG went out as MCP image content."
         ),
         input_schema=_obj(
             {
-                "camera": _s("Camera path."),
+                "camera": _s(),
+                "lop_path": _s(),
                 "frame": _frame(),
                 "resolution": _arr(
                     {"type": "integer", "minimum": 16}, minItems=2, maxItems=2, default=[1024, 768]
@@ -1194,7 +1292,8 @@ _VISUAL: tuple[ToolSpec, ...] = (
                 "width": _t("integer"),
                 "height": _t("integer"),
                 "camera_used": _t("string"),
-                "source_used": {"type": "string", "enum": ["viewer", "opengl_rop"]},
+                "scene": _t("string"),
+                "source_used": _t("string"),
                 "frame": _t("number"),
                 "rendered": _list("integer"),
                 "also_written": _t("string"),
@@ -1213,10 +1312,21 @@ _VISUAL: tuple[ToolSpec, ...] = (
         description=(
             "Render any ROP (Karma, Mantra, OpenGL, ...) for frames [start, end, inc] (default "
             "current frame), optionally overriding output. Waits up to wait_s (default the job "
-            "threshold, 10 s): if done, returns state, outputs (above 5 only outputs_summary; job "
-            "result lists all), thumbnail with the image attached, notes (no lights, nearly "
-            "black), job_id; else job_id and state to poll with job. Use viewport_capture for a "
-            "quick look."
+            "threshold): if done, returns outputs, a thumbnail image and notes; else job_id and "
+            "state to poll with job."
+        ),
+        notes=(
+            "Above 5 outputs only outputs_summary is inline; job result lists them all. Every "
+            "expected output is checked against approved_roots. viewport_capture is the quick look."
+            " notes warn when the scene has no lights and when the thumbnail is nearly black, "
+            "and say why an image output has no thumbnail (an extension it cannot read). "
+            "thumbnail.image.attached is true when the image went out as MCP image content. The "
+            "thumbnail is inline only, flattened onto grey; the ROP's own output files are left as "
+            "written, alpha included. USD render ROPs (Lop usdrender_rop, Driver usdrender): "
+            "outputs come from outputimage, else the RenderProduct productName of the render "
+            "settings the ROP uses (EXR thumbnails too), never lopoutput; output overrides "
+            "outputimage; a note says when nothing resolves; a husk failure carries the end of "
+            "its log in detail.log_tail."
         ),
         input_schema=_obj(
             {
@@ -1261,11 +1371,15 @@ _VISUAL: tuple[ToolSpec, ...] = (
         name="houdini_python",
         description=(
             "Run Python (hou bound) or HScript on Houdini's main thread in one undo step, for "
-            "anything no other tool covers. Returns stdout, stderr and result (a trailing "
-            "expression or a result variable, JSON-serialised). An uncaught exception (sys.exit "
-            "included) fails with python_exception (stdout, stderr, traceback in detail) and is "
-            "rolled back; code still running near timeout_s is stopped (houdini_busy). Output is "
-            "capped. Fails with python_disabled when turned off."
+            "anything no tool covers. Returns stdout, stderr and result. An uncaught exception "
+            "fails with python_exception and is rolled back; code still running near timeout_s is "
+            "stopped (houdini_busy)."
+        ),
+        notes=(
+            "result is the value of a trailing expression or a result variable, JSON-serialised "
+            "(repr fallback). sys.exit counts as an uncaught exception; stdout, stderr and the "
+            "traceback are in detail. Output is capped at the response budget (truncated). Fails "
+            "with python_disabled when turned off."
         ),
         input_schema=_obj(
             {
@@ -1285,11 +1399,16 @@ _VISUAL: tuple[ToolSpec, ...] = (
     ToolSpec(
         name="node_type_search",
         description=(
-            "Find node types by name, label, description or keyword across all 18 categories, or "
-            "one category. Rows: name, label, category, version, description (clipped), input "
-            "range, deprecated. Current versions only, older ones named in other_versions, unless "
-            "current_only is false. Exact names rank first; limit defaults to 20. Use "
-            "node_type_info for one type's parms and help."
+            "Find node types by name, label, description or keyword, in all 18 categories or one. "
+            "Rows: name, label, category, version, description (clipped), input range, deprecated. "
+            "Current versions only, older ones named in other_versions, unless current_only is "
+            "false. Exact names rank first; total counts every match, weak keyword matches "
+            "included."
+        ),
+        notes=(
+            "total is the real number of matching types, not a cap: a plain-language query also "
+            "matches on single description words, so broad queries can match hundreds of types. "
+            "Raise limit (up to 1000) to see them all."
         ),
         input_schema=_obj(
             {
@@ -1327,12 +1446,15 @@ _VISUAL: tuple[ToolSpec, ...] = (
     ToolSpec(
         name="node_type_info",
         description=(
-            "Describe one node type: label, version, named inputs and outputs, and parms grouped "
-            "by folder. detail compact (default): rows of name, label, type, default; full "
-            "lists every parm with size, range, menu and folder; folders lists folder names "
-            "with parm counts. type is category/name, or a bare name with category. folder limits "
-            "parms to one folder ((no folder): top level), parms to name or label globs (a|b); "
-            "include_help adds help text."
+            "Describe one node type: label, version, named inputs and outputs, parms by folder. "
+            "detail compact gives name, label, type, default rows; full adds size, range, menu and "
+            "folder; folders lists folders with parm counts. folder and parms (globs, a|b) narrow "
+            "the parms."
+        ),
+        notes=(
+            'folder takes a label, an "A / B" path, or "" / "(no folder)" for the top-level parms. '
+            "include_help adds the first ~2 KB of the node help. With folder or parms the inputs "
+            "list becomes inputs_count, and detail full leaves out the folder list."
         ),
         input_schema=_obj(
             {
@@ -1364,8 +1486,17 @@ _STATE: tuple[ToolSpec, ...] = (
             '"HocusPocus: <tool> ...".'
         ),
         input_schema=_obj(
-            {"action": _enum(("undo", "redo", "history")), "steps": _i(None, minimum=1, default=1)},
+            {
+                "action": _enum(("undo", "redo", "history")),
+                "steps": _i(None, minimum=1, default=1),
+                "include_user_steps": _b(False),
+            },
             ("action",),
+        ),
+        notes=(
+            "undo and redo stop at the first step whose label does not start with "
+            "\"HocusPocus:\" (the user's or Houdini's own) and name it in blocked_by; "
+            "include_user_steps: true crosses such steps and lists them in user_steps."
         ),
         output_schema=_out(
             {
@@ -1380,6 +1511,7 @@ _STATE: tuple[ToolSpec, ...] = (
                 "dirty": _t("boolean"),
                 "scene_generation": _t("integer"),
                 "note": _t("string"),
+                "blocked_by": _t("string"),
             }
         ),
         # Registered scene=False (performUndo raises inside an undo group); not idempotent.
@@ -1421,10 +1553,14 @@ _STATE: tuple[ToolSpec, ...] = (
     ToolSpec(
         name="job",
         description=(
-            "Manage long work started by render, cook or pdg. status returns state (running, done, "
-            "failed, cancelled), progress, message, elapsed_s; result returns the original tool's "
-            "result once done; cancel stops it; list shows all jobs. Jobs do not survive a Houdini "
-            "restart."
+            "Long work from render, cook or pdg: status (state, progress, message, elapsed_s), "
+            "result (the tool's result once done), cancel, list."
+        ),
+        notes=(
+            "Jobs do not survive a Houdini restart. "
+            "A pdg cook job counts the work items of the whole graph in current/total and adds "
+            "nodes: {name: 'finished/total'}. A cancelled job's result is the cancelled error, "
+            "whose detail holds the last status."
         ),
         input_schema=_obj(
             {
@@ -1456,11 +1592,18 @@ _FULL: tuple[ToolSpec, ...] = (
     ToolSpec(
         name="hda",
         description=(
-            "Digital asset operations. create turns subnet path into an HDA (name, label, version, "
-            "library_path, optional min_inputs/max_inputs); save updates the definition from "
-            "path; unlock allows editing path's contents; match reverts path to its definition "
-            "and locks it; install and reload take library_path; list shows loaded libraries (or "
-            "library_path's definitions), paged by limit and cursor."
+            "Digital assets: create turns subnet path into an HDA; save updates the definition from"
+            " path, spare parms included; unlock allows editing; match reverts to the definition "
+            "and locks; install and reload take library_path; list shows loaded libraries or "
+            "library_path's definitions."
+        ),
+        notes=(
+            "create takes name, label (or description), version, library_path and optional "
+            "min_inputs/max_inputs. save copies the instance's spare parms into the asset's "
+            "interface (promoted lists them; promote_spare_parms: false keeps them on the "
+            "instance). list is paged by limit and cursor; install of a loaded library says "
+            "already_loaded. node_type_info and node_type_search report the definition's version "
+            "and, without help, its label as description."
         ),
         input_schema=_obj(
             {
@@ -1474,6 +1617,7 @@ _FULL: tuple[ToolSpec, ...] = (
                 "version": _s(),
                 "min_inputs": _i(None, minimum=0, maximum=9999),
                 "max_inputs": _i(None, minimum=0, maximum=9999),
+                "promote_spare_parms": _b(True),
                 "limit": _limit(),
                 "cursor": _cursor(),
             },
@@ -1495,9 +1639,21 @@ _FULL: tuple[ToolSpec, ...] = (
     ToolSpec(
         name="usd_stage",
         description=(
-            "Read the USD stage of a LOP node: prims under prim (default /) to depth (default 1) "
-            "with path and type; include adds attributes (values at time, arrays summarised), "
-            "xform, material bindings, layers. Paged by limit and cursor."
+            "Read a LOP's USD stage: prims (path, type) under prim (path or glob) to depth; "
+            "include adds attributes (attribs: name glob), xform, bindings, layers. summary: "
+            "type counts, world bbox. Paged (limit, cursor)."
+        ),
+        notes=(
+            "time is a time code (default the current frame). prim globs: * within a path "
+            "segment, ** across segments, | between alternatives (each a path or glob, e.g. "
+            "/lights|/cameras); matches are listed with their subtrees to depth, in stage order. "
+            "An invalid alternative is invalid_argument, as is an exact one that names no prim. "
+            "Attribute values are authored values at time; arrays up to 4 elements (8 for "
+            "strings and tokens) are listed in full, longer ones as {len, first}. xform gives "
+            "local, and world only when it differs. total is on every page (counted up to "
+            "100000, then total_capped). summary returns {total_prims, counts_by_type, "
+            "bbox_world: {min, max, size}} for the whole subtree (default and render purposes). "
+            "A render ROP in a LOP network has no stage: the error names its input."
         ),
         input_schema=_obj(
             {
@@ -1505,7 +1661,9 @@ _FULL: tuple[ToolSpec, ...] = (
                 "prim": _s(None, default="/"),
                 "depth": _i(None, minimum=1, default=1),
                 "include": _arr(_enum(("attributes", "xform", "bindings", "layers")), default=[]),
-                "time": _n("Time code; default current frame."),
+                "attribs": _s(),
+                "summary": _b(False),
+                "time": _n(),
                 "limit": _limit(),
                 # §4.1: list tools take limit and cursor.
                 "cursor": _cursor(),
@@ -1522,16 +1680,37 @@ _FULL: tuple[ToolSpec, ...] = (
     ToolSpec(
         name="pdg",
         description=(
-            "Drive a TOP node. cook cooks its work items as a job (block waits up to timeout_s, "
-            "default 30, capped at the 10 s job threshold, then returns the job); status reports "
-            "node state; workitems pages work items with state and output files; cancel stops "
-            "cooking; dirty dirties the node. cook, cancel and dirty are refused in read-only mode."
+            "Drive a TOP node: cook its work items as a job (block waits up to timeout_s, capped at"
+            " the job threshold), status, workitems (paged; failed items say why), cancel, dirty."
+        ),
+        notes=(
+            "cook, cancel and dirty are refused read-only. "
+            "A failed work item carries error (the last error lines of its log, at most 400 "
+            "characters), log_path and exit_code (out-of-process items). A cook result (and job "
+            "result) has ok: false when any item of the graph failed, and failures lists the first"
+            " 5 failed items of the target and its upstream TOPs with their error. Out-of-process "
+            "ROP TOPs (ROP Fetch, ...) load the saved hip, so cook refuses an untitled scene or "
+            "unsaved changes with unsaved_changes; save: true saves first (approved_roots apply) "
+            "and the result names the saved path. A cook job's progress counts the work items of "
+            "the whole graph (the target and its upstream TOPs), with nodes: {name: "
+            "'finished/total'}; a cook whose items were cancelled ends cancelled, never done. "
+            "cancel also cancels the job cooking that graph and returns the status after the cook"
+            " stopped, with cancelled: true and jobs_cancelled. node_info on a TOP node adds "
+            "pdg_state: {cooked, failed, total}; problems lists TOP nodes with failed items. "
+            "workitems rows: id, index, state, output_files (relative to output_root, given once "
+            "per page), cook_time_s, name only when it is not <node>_<id>, node for a network; "
+            "attribs: [names] adds each item's attribute values (unknown names left out); state "
+            "filters: failed, cancelled, success, cache, cooked or a state name. When block "
+            "returns a running job before timeout_s, notes says the wait was capped."
         ),
         input_schema=_obj(
             {
                 "action": _enum(("cook", "status", "workitems", "cancel", "dirty")),
                 "top_path": _s(),
                 "block": _b(False),
+                "save": _b(False),
+                "attribs": _arr({"type": "string"}),
+                "state": _s(),
                 "timeout_s": _n(None, minimum=1, default=30),
                 # bible-silent: "workitems paged" uses the §4.1 limit/cursor convention.
                 "limit": _limit(),
@@ -1549,9 +1728,19 @@ _FULL: tuple[ToolSpec, ...] = (
     ToolSpec(
         name="events",
         description=(
-            "What changed since your last call: hip events and node events (created, renamed, "
-            "deleted, parms changed on nodes HocusPocus touched) with a monotonic seq. Pass the "
-            "last seq seen as since (default 0)."
+            "What changed since your last call: hip, node (created, renamed, deleted, parms or "
+            "flags changed on nodes HocusPocus touched or read) and pdg events with seq and "
+            "origin (agent|other). Pass the last seq seen as since."
+        ),
+        notes=(
+            "Watched nodes: those HocusPocus created, edited, read with node_info or listed with"
+            " network_describe, and nodes created directly under /obj, /stage, /mat, /out and "
+            "/tasks. FlagChanged has detail.flags (flag: new value); a spare parm edit is one "
+            "SpareParmsChanged; hda create, match and unlock are one hda_contents_rebuilt per "
+            "asset; kind pdg has detail.event cook_start, work_item_failed (id, index, error) or"
+            " cook_done (ok, states, cancelled). A call that fails and is rolled back records "
+            "nothing, nor does a node created and deleted within one call, a tool's own "
+            "set-and-restore, or Houdini's save-time writes on TOP networks."
         ),
         input_schema=_obj({"since": _i(None, minimum=0, default=0), "limit": _limit()}),
         read_only=True,

@@ -374,7 +374,7 @@ class Bridge:
                     output_schema=(
                         spec.output_schema if self.config.result_content != "text" else None
                     ),
-                    annotations=types.ToolAnnotations.model_validate(spec.annotations()),
+                    annotations=types.ToolAnnotations.model_validate(spec.wire_annotations()),
                 )
             )
         return out

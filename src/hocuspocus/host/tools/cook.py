@@ -12,6 +12,7 @@ that fails to cook is reported (``ok: false`` with its errors), never raised.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import re
 import time
@@ -119,15 +120,116 @@ def dependency_order(node: Any) -> list[Any]:
     return [n for n in [*extra, *wired, node] if hasattr(n, "cook")]
 
 
+def _is_block_end(node: Any) -> bool:
+    try:
+        return node.type().name().split("::")[0] == "block_end"
+    except Exception:
+        return False
+
+
+def _loop_begin(end: Any) -> Any:
+    """The ``block_begin`` a ``block_end`` names in ``blockpath``, or None."""
+    try:
+        path = end.parm("blockpath").eval()
+        return end.node(path) if path else None
+    except Exception:
+        return None
+
+
+def _loop_body(end: Any, begin: Any) -> list[str]:
+    """Paths of the nodes cooked once per iteration: ``begin`` and every input ancestor of
+    ``end`` that is downstream of ``begin``."""
+    if begin is None:
+        return []
+    begin_id = begin.sessionId()
+    body = [begin.path()]
+    try:
+        ancestors = list(end.inputAncestors())
+    except Exception:
+        ancestors = []
+    for node in ancestors:
+        with contextlib.suppress(Exception):
+            if any(a.sessionId() == begin_id for a in node.inputAncestors()):
+                body.append(node.path())
+    return body
+
+
+def _perf_cook_stats(
+    tree: Any, out: dict[str, tuple[float, int]] | None = None
+) -> dict[str, tuple[float, int]]:
+    """``{node path: (cook ms, cook count)}`` from ``hou.PerfMonProfile.stats()``. A node's
+    ``Cook`` includes the nodes inside it (an HDA's contents) but not its inputs, which
+    are recorded as nodes of their own (verified on 22.0.466)."""
+    out = {} if out is None else out
+    if not isinstance(tree, dict):
+        return out
+    path = tree.get("path")
+    if isinstance(path, str) and path.startswith("/"):
+        cook_ms, count = 0.0, 0
+        for per_thread in (tree.get("stats") or {}).values():
+            for values in (per_thread or {}).values():
+                cook_ms += float(values.get("Cook", 0.0) or 0.0)
+                count += int(values.get("Cook Count", 0) or 0)
+        if count:
+            out[path] = (cook_ms, count)
+    for child in tree.get("children") or ():
+        _perf_cook_stats(child, out)
+    return out
+
+
+def _perf_cook(node: Any) -> tuple[float, BaseException | None, dict[str, Any] | None]:
+    """Force-cook ``node`` under Houdini's performance monitor (cook stats only). Returns
+    the wall time, the cook failure, and per-node stats, or None when the monitor could
+    not be used (another profile is recording, or the API failed). A stopped profile
+    cannot be deleted, so in a GUI session it stays in the Performance Monitor's list."""
+    import hou
+
+    profile = None
+    with contextlib.suppress(Exception):
+        if hou.perfMon.activeProfile() is None:
+            options = hou.PerfMonRecordOptions(
+                cook_stats=True, solve_stats=False, draw_stats=False, gpu_draw_stats=False,
+                viewport_stats=False, script_stats=False, render_stats=False,
+                thread_stats=False, frame_stats=False, memory_stats=False, errors=False,
+            )  # fmt: skip
+            profile = hou.perfMon.startProfile(f"HocusPocus cook profile {node.path()}", options)
+    try:
+        elapsed, failure = timed_cook(node, True)
+    finally:
+        if profile is not None:
+            with contextlib.suppress(Exception):
+                profile.stop()
+    stats = None
+    if profile is not None:
+        with contextlib.suppress(Exception):
+            stats = _perf_cook_stats(profile.stats())
+    return elapsed, failure, stats
+
+
 def _profile_step(node_path: str) -> dict[str, Any]:
-    """Force-cook one chain node and time it. Main thread."""
+    """Force-cook one chain node and time it. A ``block_end`` is cooked under the
+    performance monitor so its loop body can be attributed (review 12 papercut 5). Main
+    thread."""
     node = require_node(node_path)
-    elapsed, failure = timed_cook(node, True)
+    loop: dict[str, Any] | None = None
+    if _is_block_end(node):
+        begin = _loop_begin(node)
+        before = begin.cookCount() if begin is not None else None
+        elapsed, failure, stats = _perf_cook(node)
+        loop = {"block_end": node.path(), "body": _loop_body(node, begin), "stats": stats}
+        if begin is not None:
+            loop["block_begin"] = begin.path()
+            with contextlib.suppress(Exception):
+                loop["iterations"] = begin.cookCount() - before
+    else:
+        elapsed, failure = timed_cook(node, True)
     row: dict[str, Any] = {
         "path": node.path(),
         "type": node.type().name(),
         "cook_time_ms": round(elapsed, 1),
     }
+    if loop is not None:
+        row["_loop"] = loop
     if failure is not None:
         try:
             errors = [str(e).strip() for e in node.errors() if str(e).strip()]
@@ -312,9 +414,68 @@ def _profiled(
         if frame is not None:
             _restore_frame(ctx, previous)
     job.set_progress(steps, steps, "done")
-    total_ms = round(sum(r["cook_time_ms"] for r in rows), 1)
+    extra = _attribute_loops(rows)
+    total_ms = round(sum(r["cook_time_ms"] for r in rows if "in_loop" not in r), 1)
+    by_path = {r["path"]: r for r in rows}
+    for result in results:
+        # The named node's profiled cook, not the cached re-check that follows it (0.0).
+        if result["path"] in by_path:
+            result["cook_time_ms"] = by_path[result["path"]]["cook_time_ms"]
     rows.sort(key=lambda r: r["cook_time_ms"], reverse=True)
-    return results, {"chain": rows[:10], "chain_total": len(rows), "total_ms": total_ms}
+    out = {"chain": rows[:10], "chain_total": len(rows), "total_ms": total_ms}
+    out.update(extra)
+    return results, out
+
+
+def _attribute_loops(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Give loop-body rows their cost across every iteration of the loop.
+
+    A body node's own step cooks it once, outside the loop; the real cost is paid when
+    the ``block_end`` cooks the body once per iteration. With the performance monitor's
+    stats a body row gets ``cook_time_ms`` (all iterations), ``cooks``,
+    ``per_iteration_ms`` and ``in_loop``; without them (``attribution: "loop-level"``) it
+    keeps its one standalone cook and is marked ``in_loop``. Either way ``total_ms``
+    counts the loop once, at its ``block_end``. An outer loop, profiled after an inner
+    one, re-attributes the inner body across all its own iterations."""
+    by_path = {r["path"]: r for r in rows}
+    loops: list[dict[str, Any]] = []
+    attribution = "per_node"
+    for row in rows:
+        loop = row.pop("_loop", None)
+        if loop is None:
+            continue
+        stats = loop["stats"]
+        entry: dict[str, Any] = {"block_end": loop["block_end"]}
+        if "block_begin" in loop:
+            entry["block_begin"] = loop["block_begin"]
+        if "iterations" in loop:
+            entry["iterations"] = loop["iterations"]
+        entry["total_ms"] = row["cook_time_ms"]
+        measured = stats is not None
+        for path in loop["body"]:
+            body_row = by_path.get(path)
+            if body_row is None:
+                continue
+            body_row["in_loop"] = loop["block_end"]
+            if stats is not None and path in stats:
+                cook_ms, count = stats[path]
+                body_row["cook_time_ms"] = round(cook_ms, 1)
+                body_row["cooks"] = count
+                body_row["per_iteration_ms"] = round(cook_ms / count, 2)
+            else:
+                measured = False
+                for key in ("cooks", "per_iteration_ms"):
+                    body_row.pop(key, None)
+        entry["attribution"] = "perf_monitor" if measured else "loop-level"
+        if not measured:
+            attribution = "loop-level"
+        elif attribution == "per_node":
+            attribution = "perf_monitor"
+        loops.append(entry)
+    out: dict[str, Any] = {"attribution": attribution}
+    if loops:
+        out["loops"] = loops
+    return out
 
 
 def _ranged(
@@ -420,6 +581,7 @@ def cook(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
 
 KIND_ORDER = {
     "error": 0,
+    "failed_work_items": 0,
     "broken_reference": 1,
     "missing_file": 2,
     "unconnected_input": 3,
@@ -695,6 +857,14 @@ def node_problems(
             except Exception:
                 continue
     rows.extend(_unconnected_inputs(node))
+    if category == "Top":
+        # Failed work items leave the node itself error-free (review 14 papercut 5).
+        from .pdg import failed_items_problem
+
+        with contextlib.suppress(Exception):
+            failed = failed_items_problem(node)
+            if failed is not None:
+                rows.append(failed)
     return rows, should_cook
 
 

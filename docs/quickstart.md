@@ -26,7 +26,7 @@ you get two commands on your `PATH`: `hocuspocus` and `hocuspocus-mcp`.
 
 ```text
 $ hocuspocus version
-hocuspocus 1.1.0 (hp/v1, mcp 2.3.x, Python 3.12.x)
+hocuspocus 1.2.0 (hp/v1, mcp 2.3.x, Python 3.12.x)
 ```
 
 ## 2. Install the Houdini package (1 minute)
@@ -34,8 +34,8 @@ hocuspocus 1.1.0 (hp/v1, mcp 2.3.x, Python 3.12.x)
 ```text
 $ hocuspocus install-houdini
 Houdini pref dir: C:\Users\you\houdini22.0 (from hython (C:\Program Files\Side Effects Software\Houdini 22.0.466))
-copied hocuspocus 1.1.0 to C:\Users\you\houdini22.0\hocuspocus\1.0.0\python\hocuspocus
-copied the Houdini payload to C:\Users\you\houdini22.0\hocuspocus\1.0.0\houdini
+copied hocuspocus 1.2.0 to C:\Users\you\houdini22.0\hocuspocus\1.2.0\python\hocuspocus
+copied the Houdini payload to C:\Users\you\houdini22.0\hocuspocus\1.2.0\houdini
 wrote C:\Users\you\houdini22.0\packages\hocuspocus.json (template: ...\houdini\hocuspocus.json.template)
 recorded the pref dir in C:\Users\you\AppData\Local\HocusPocus\install.json (the bridge reads hocuspocus.toml from there)
 Restart Houdini to load HocusPocus.
@@ -84,13 +84,13 @@ the UI is up, the host starts by itself. Then run:
 
 ```text
 $ hocuspocus doctor
-hocuspocus 1.1.0 (bridge, hp/v1)
+hocuspocus 1.2.0 (bridge, hp/v1)
 [ok]   Houdini install: C:\Program Files\Side Effects Software\Houdini 22.0.466
 [ok]   Houdini version: 22.0.466
 [ok]   Houdini pref dir: C:\Users\you\houdini22.0 (from hython (...))
 [ok]   hocuspocus.toml: none (defaults)
-[ok]   package JSON: C:\Users\you\houdini22.0\packages\hocuspocus.json -> C:\Users\you\houdini22.0\hocuspocus\1.0.0\python
-[ok]   host/bridge version: 1.1.0
+[ok]   package JSON: C:\Users\you\houdini22.0\packages\hocuspocus.json -> C:\Users\you\houdini22.0\hocuspocus\1.2.0\python
+[ok]   host/bridge version: 1.2.0
 [ok]   instance /health: pid 18244 port 52311 GUI (untitled) Houdini 22.0.466
 
 Register with Claude Code:
@@ -128,10 +128,15 @@ Expect a sequence close to this one:
 4. `geo_info` on the display node. Gives point counts and a bounding box, so the agent
    can check that the box sits above the terrain.
 5. `viewport_capture`. Returns a PNG that the agent can see, plus the file path under
-   `%LOCALAPPDATA%\HocusPocus\captures\`. In the GUI it captures the Scene Viewer as it
-   is, without framing, so if the picture shows an empty grid, home the view (press H
-   over the viewer) or ask for `"source": "opengl_rop"`, which frames the
-   scene with a temporary camera.
+   `%LOCALAPPDATA%\HocusPocus\captures\`. In the GUI, without `camera` or `fit`, it
+   captures the Scene Viewer as it is, so if the picture shows an empty grid, ask for
+   `"fit": "all"` (it frames the grab and then puts your view back) or for
+   `"source": "opengl_rop"`, which frames the scene with a temporary camera.
+
+To give a network control parms, ask for them: the agent adds spare parms to a `null`
+with `node_edit` `spare_parms` and links other parms with `ch()`. A `menu` spare parm is
+a string menu by default (VEX reads the token with `chs()`); with `value_type: "int"` it
+is an int parm whose value is the item index (`ch()` or `chi()`).
 
 The nodes appear in your network editor as they are created. To revert the whole build,
 press Ctrl+Z in Houdini once, or ask the agent to call `undo`. To keep the scene, ask it
@@ -178,9 +183,33 @@ $ hocuspocus launch --headless --hip C:/work/shot.hip
 ```
 
 Leave out `--headless` for a GUI Houdini. The command waits up to `--wait` seconds
-(default 90) for the host to register, prints its registry entry and exits. Each session
+(default 90) for the host to register, prints its registry entry and exits. Houdini starts
+in the directory you ran the command from (or `--work-dir DIR`): that is `$HIP` and `$JOB`
+until the first `hip_save`. `houdini_connect {launch}` starts in `HOCUSPOCUS_WORK_DIR`,
+else your home directory. Each session
 then attaches with `houdini_connect {"pid": 23310}` (or automatically, when it is the only
-Houdini running), and `hip_save` keeps the work between sessions.
+Houdini running), and `hip_save` keeps the work between sessions. When the work is done,
+`houdini_connect {"quit": true, "on_unsaved": "save"}` saves and closes that Houdini.
+`on_unsaved` defaults to `fail`, which refuses while there are unsaved changes, and
+`discard` drops them.
+
+## Solaris, PDG and assets
+
+These tools need the `full` profile (see [Configuration](#configuration)):
+
+- **Look at a USD stage.** `viewport_capture {"lop_path": "/stage/OUT"}` renders the
+  stage through an OpenGL ROP, framed on it. `camera` also takes a LOP camera node or a
+  camera prim path. `usd_stage {"lop_path": "/stage/OUT", "summary": true}` returns the
+  prim count, the counts by type and the world bounding box in one small result. On LOP
+  nodes, the parm tools accept USD attribute names such as `inputs:intensity`.
+- **See why PDG work failed.** A failed work item in `pdg {"action": "workitems"}`
+  carries `error` (the last error lines of its log), `log_path` and `exit_code`, and
+  `"state": "failed"` lists only the failed items. A cook result lists the first five
+  `failures`, and `problems` reports the TOP node. Graphs with ROP Fetch load the saved
+  hip, so `pdg cook` refuses unsaved changes: run `hip_save` first, or pass
+  `"save": true`.
+- **Work next to a user.** Every `events` entry says `origin: agent` or `other`. `undo`
+  stops before a step the user made unless you pass `include_user_steps: true`.
 
 ## Configuration
 
@@ -235,7 +264,9 @@ new instance up by itself, with no client restart. If several instances are runn
 
 The bridge lists the `full` tools but the host in Houdini still runs `core`. Put
 `profile = "full"` in `hocuspocus.toml`, which both read (or set `HOCUSPOCUS_PROFILE=full`
-in Houdini's environment), and restart Houdini.
+in Houdini's environment), and restart Houdini. If `HOUDINI_USER_PREF_DIR` contains
+`__HVER__`, the file goes in the expanded directory (`houdini22.0`), not in a literal
+`houdini__HVER__` one; `hocuspocus doctor` prints which file the bridge reads.
 
 **Version mismatch: `[FAIL] host/bridge version: Houdini has X, bridge is Y`, or a `version_mismatch` error**
 

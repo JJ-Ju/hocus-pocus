@@ -164,6 +164,26 @@ def test_doctor_after_install_checks_package(tmp_path, capsys):
     assert f"[ok]   host/bridge version: {__version__}" in out
 
 
+def test_doctor_warns_about_a_literal_hver_folder(tmp_path, capsys, monkeypatch):
+    """Review 13/16: a toml in a literal houdini__HVER__ folder is never read."""
+    prefs = tmp_path / "houdini22.0"
+    cli.main(["install-houdini", "--prefs", str(prefs)])
+    literal = tmp_path / "houdini__HVER__"
+    literal.mkdir()
+    (literal / "hocuspocus.toml").write_text('profile = "full"')
+    monkeypatch.setenv("HOUDINI_USER_PREF_DIR", str(literal))
+    capsys.readouterr()
+    cli.main(["doctor", "--prefs", str(prefs)])
+    out = capsys.readouterr().out
+    line = next(x for x in out.splitlines() if "literal __HVER__ folder" in x)
+    assert line.startswith("[warn]") and str(literal) in line and str(prefs) in line
+    assert "move hocuspocus.toml there" in line
+    assert out.count("literal __HVER__ folder") == 1  # the env path is the same folder
+    literal.rename(tmp_path / "elsewhere")
+    cli.main(["doctor", "--prefs", str(prefs)])
+    assert "literal __HVER__" not in capsys.readouterr().out
+
+
 def test_client_config(capsys):
     assert cli.main(["client-config", "claude"]) == 0
     assert "claude mcp add -s user hocuspocus -- hocuspocus-mcp" in capsys.readouterr().out
@@ -206,9 +226,11 @@ def _fake_launcher(tmp_path, *, register=True):
     (hfs / "bin" / f"houdinifx{launch.EXE}").write_text("")
     spawned = []
     live = []
+    cwds = []
 
     def spawner(argv, env, cwd, log_path):
         spawned.append((argv, env))
+        cwds.append(Path(cwd))
         if register:
             live.append(
                 Instance(pid=9001, port=52000, token="secret", started="2026-10-12T12:00:00Z")
@@ -226,6 +248,7 @@ def _fake_launcher(tmp_path, *, register=True):
         python_dir=lambda environ: (tmp_path / "pkg", "test"),
         owned=False,
     )
+    launcher.test_cwds = cwds
     return launcher, spawned
 
 
@@ -243,6 +266,36 @@ def test_launch_prints_the_registry_entry(tmp_path, monkeypatch, capsys):
     assert "HOCUSPOCUS_LAUNCHED_BY" not in env  # no MCP server owns it
 
 
+def test_launch_starts_houdini_in_the_current_directory(tmp_path, monkeypatch, capsys):
+    """Review 12: $HIP after `hocuspocus launch` is where the command ran, not home."""
+    shot = tmp_path / "shot"
+    shot.mkdir()
+    monkeypatch.chdir(shot)
+    monkeypatch.setenv("HOCUSPOCUS_WORK_DIR", str(tmp_path / "bridge_rule"))
+    launcher, spawned = _fake_launcher(tmp_path)
+    monkeypatch.setattr(cli, "_launcher", lambda hfs: launcher)
+    assert cli.main(["launch", "--headless", "--wait", "30"]) == 0
+    argv, _env = spawned[0]
+    assert launcher.test_cwds[0] == shot.resolve()
+    assert argv[-2:] == ["--work-dir", str(shot.resolve())]
+    assert "$HIP" in capsys.readouterr().err
+
+
+def test_launch_work_dir_option(tmp_path, monkeypatch, capsys):
+    work = tmp_path / "jobs" / "shot010"
+    launcher, _spawned = _fake_launcher(tmp_path)
+    monkeypatch.setattr(cli, "_launcher", lambda hfs: launcher)
+    assert cli.main(["launch", "--work-dir", str(work), "--wait", "30"]) == 0
+    assert launcher.test_cwds[0] == work.resolve() and work.is_dir()
+
+
+def test_launch_help_documents_the_work_dir(capsys):
+    with pytest.raises(SystemExit):
+        cli.main(["launch", "--help"])
+    text = " ".join(capsys.readouterr().out.split())
+    assert "--work-dir" in text and "$HIP" in text and "current directory" in text
+
+
 def test_launch_gui_with_hip(tmp_path, monkeypatch, capsys):
     hip = tmp_path / "shot.hip"
     hip.write_text("")
@@ -251,7 +304,10 @@ def test_launch_gui_with_hip(tmp_path, monkeypatch, capsys):
     assert cli.main(["launch", "--hip", str(hip)]) == 0
     argv, _env = spawned[0]
     assert Path(argv[0]).stem == "houdinifx" and argv[1] == str(hip.resolve())
-    assert json.loads(capsys.readouterr().out)["mode"] == "gui"
+    captured = capsys.readouterr()
+    assert json.loads(captured.out)["mode"] == "gui"
+    # Review 16 N6: a loaded hip is not "the untitled scene".
+    assert "untitled" not in captured.err and str(hip.resolve()) in captured.err
 
 
 def test_launch_wait_zero_returns_at_once(tmp_path, monkeypatch, capsys):

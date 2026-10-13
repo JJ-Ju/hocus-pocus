@@ -200,6 +200,16 @@ class HostClient:
         status, data = self._request("POST", "/shutdown", {}, read_timeout_s=timeout_s)
         self._check_status(status, data)
 
+    def quit(
+        self, on_unsaved: str = "fail", timeout_s: float = 70.0
+    ) -> tuple[bool, dict[str, Any], dict[str, Any]]:
+        """``POST /hp/v1/quit``: quit Houdini after the host's unsaved check."""
+        status, data = self._request(
+            "POST", "/quit", {"on_unsaved": on_unsaved}, read_timeout_s=timeout_s
+        )
+        self._check_status(status, data)
+        return _parse_envelope(data)
+
 
 def _parse_envelope(data: Any) -> tuple[bool, dict[str, Any], dict[str, Any]]:
     if not isinstance(data, dict) or "ok" not in data:

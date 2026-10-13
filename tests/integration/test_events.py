@@ -228,6 +228,191 @@ def test_ring_buffer_drops_oldest():
     assert log.read(3, 10)["dropped"] == 0
 
 
+# -- 1.2: origin, batches, flags, spare parms, HDAs, PDG, wider watch ---------------------
+
+
+def test_origin_tells_agent_from_user(client):
+    since = _since()
+    client.ok("node_create", {"items": [{"parent": "/obj", "type": "geo", "name": "agent_geo"}]})
+    hou.node("/obj").createNode("geo", "user_geo")
+    events = _read(client, since)
+    origins = {e["path"]: e["origin"] for e in events if e["kind"] == "ChildCreated"}
+    assert origins == {"/obj/agent_geo": "agent", "/obj/user_geo": "other"}
+
+
+def test_children_created_in_the_same_batch_as_their_parent(client):
+    """Review 14 papercut 6: CONTROLS and the topnet children had no ChildCreated."""
+    since = _since()
+    client.ok(
+        "node_create",
+        {
+            "items": [
+                {"parent": "/obj", "type": "geo", "name": "bldg"},
+                {"parent": "/obj/bldg", "type": "null", "name": "CONTROLS"},
+                {"parent": "/obj", "type": "topnet", "name": "topnet1"},
+                {"parent": "/obj/topnet1", "type": "genericgenerator", "name": "gen"},
+            ]
+        },
+    )
+    created = [e["path"] for e in _read(client, since) if e["kind"] == "ChildCreated"]
+    assert created == ["/obj/bldg", "/obj/bldg/CONTROLS", "/obj/topnet1", "/obj/topnet1/gen"]
+
+
+def test_flag_changed_names_the_flag(client):
+    geo = hou.node("/obj").createNode("geo", "g")
+    _settle(client)
+    since = _since()
+    geo.setDisplayFlag(False)
+    [event] = _read(client, since)
+    assert event["kind"] == "FlagChanged" and event["detail"] == {"flags": {"display": False}}
+
+
+def test_spare_parm_edit_is_one_spare_parms_changed(client):
+    client.ok("node_create", {"items": [{"parent": "/obj", "type": "null", "name": "CONTROLS"}]})
+    since = _since()
+    client.ok(
+        "node_edit",
+        {
+            "items": [
+                {
+                    "path": "/obj/CONTROLS",
+                    "spare_parms": {"add": [{"name": "seed", "type": "int", "default": 1}]},
+                }
+            ]
+        },
+    )
+    assert _kinds(_read(client, since)) == [("SpareParmsChanged", "/obj/CONTROLS")]
+    since = _since()
+    hou.parm("/obj/CONTROLS/seed").set(7)  # a value edit after it is still reported
+    assert _kinds(_read(client, since)) == [("ParmTupleChanged", "/obj/CONTROLS")]
+
+
+def test_rolled_back_batch_records_nothing(client):
+    """Review 13 papercut 9: a failed node_create left created/deleted pairs behind."""
+    since = _since()
+    error = client.error(
+        "node_create",
+        {
+            "items": [
+                {"parent": "/obj", "type": "geo", "name": "a"},
+                {"parent": "/obj/a", "type": "box", "name": "b"},
+                {"parent": "/obj/a", "type": "no_such_type"},
+            ]
+        },
+    )
+    assert error["detail"]["rolled_back"] is True
+    assert _read(client, since) == []
+
+
+def test_tool_internal_set_and_restore_are_not_recorded(client, work_dir):
+    """render sets and restores the ROP's output parm with undo disabled."""
+    client.ok(
+        "node_create",
+        {
+            "items": [
+                {"parent": "/obj", "type": "geo", "name": "g"},
+                {"parent": "/obj/g", "type": "box", "name": "box"},
+                {
+                    "parent": "/out",
+                    "type": "geometry",
+                    "name": "geo_out",
+                    "parms": {"soppath": "/obj/g/box"},
+                },
+            ]
+        },
+    )
+    since = _since()
+    out = (work_dir / "box.bgeo.sc").as_posix()
+    client.ok("render", {"rop_path": "/out/geo_out", "output": out, "thumbnail": False})
+    events = [e for e in _read(client, since) if e["path"] == "/out/geo_out"]
+    assert events == [], events
+
+
+def test_hda_rebuild_is_one_event(client, work_dir):
+    """Review 15 papercut 2: ~150 ChildDeleted/BeingDeleted of asset internals."""
+    client.ok(
+        "node_create",
+        {
+            "items": [
+                {"parent": "/obj", "type": "geo", "name": "g"},
+                {"parent": "/obj/g", "type": "subnet", "name": "rock"},
+                {"parent": "/obj/g/rock", "type": "box", "name": "b"},
+                {"parent": "/obj/g/rock", "type": "sphere", "name": "s"},
+            ]
+        },
+    )
+    since = _since()
+    library = (work_dir / "rock.hda").as_posix()
+    client.ok(
+        "hda",
+        {
+            "action": "create",
+            "path": "/obj/g/rock",
+            "name": "hptest::evrock::1.0",
+            "library_path": library,
+        },
+    )
+    [created] = _read(client, since)
+    assert created["kind"] == "hda_contents_rebuilt" and created["path"] == "/obj/g/rock"
+    assert created["origin"] == "agent" and created["detail"]["events"] > 0
+    client.ok("node_create", {"items": [{"parent": "/obj/g/rock", "type": "null", "name": "x"}]})
+    since = _since()
+    client.ok("hda", {"action": "match", "path": "/obj/g/rock"})  # drops the edit
+    assert _kinds(_read(client, since)) == [("hda_contents_rebuilt", "/obj/g/rock")]
+    since = _since()
+    hou.node("/obj/g/rock").setName("rock2")  # the asset node is watched again
+    assert _kinds(_read(client, since)) == [("NameChanged", "/obj/g/rock2")]
+
+
+def test_topnet_save_noise_is_dropped(client, work_dir):
+    hou.node("/obj").createNode("topnet", "topnet1").createNode("genericgenerator")
+    _settle(client)
+    since = _since()
+    hou.hipFile.save((work_dir / "tops.hip").as_posix())
+    assert [e["kind"] for e in _read(client, since)] == ["AfterSave"]
+
+
+def test_nodes_read_by_the_agent_are_watched(client, work_dir):
+    """Review 15 papercut 3: renaming /obj/sky (loaded with the hip) went unreported."""
+    hou.node("/obj").createNode("geo", "sky")
+    hou.node("/obj").createNode("cam", "cam1")
+    path = (work_dir / "loaded.hip").as_posix()
+    hou.hipFile.save(path)
+    hou.hipFile.load(path, suppress_save_prompt=True, ignore_load_warnings=True)
+    _settle(client)
+    since = _since()
+    hou.node("/obj/sky").setName("sky_unseen")  # nothing has read it yet
+    assert _read(client, since) == []
+    hou.node("/obj/sky_unseen").setName("sky")
+    client.ok("network_describe", {"root": "/obj", "format": "outline"})
+    client.ok("node_info", {"paths": ["/obj/cam1"]})
+    since = _since()
+    hou.node("/obj/sky").setName("sky_env")
+    hou.parm("/obj/cam1/focal").set(85)
+    events = _read(client, since)
+    assert _kinds(events) == [("NameChanged", "/obj/sky_env"), ("ParmTupleChanged", "/obj/cam1")]
+    assert events[0]["detail"] == {"old_name": "sky"} and events[0]["origin"] == "other"
+
+
+def test_pdg_cooks_are_recorded(client):
+    net = hou.node("/obj").createNode("topnet", "topnet1")
+    gen = net.createNode("genericgenerator", "gen")
+    gen.parm("itemcount").set(2)
+    script = net.createNode("pythonscript", "script")
+    script.setInput(0, gen)
+    script.parm("pdg_cooktype").set(1)
+    script.parm("script").set("if work_item.index == 1:\n    raise RuntimeError('boom')\n")
+    _settle(client)
+    since = _since()
+    client.ok("pdg", {"action": "cook", "top_path": script.path(), "block": True})
+    pdg = [e for e in _read(client, since) if e["kind"] == "pdg"]
+    assert [e["detail"]["event"] for e in pdg] == ["cook_start", "work_item_failed", "cook_done"]
+    assert all(e["origin"] == "agent" for e in pdg)
+    assert pdg[0]["path"] == script.path()
+    assert pdg[1]["path"] == script.path() and "boom" in pdg[1]["detail"]["error"]
+    assert pdg[2]["detail"]["ok"] is False and pdg[2]["detail"]["states"]["cooked_fail"] == 1
+
+
 def test_invalid_arguments(client):
     assert client.error("events", {"since": -1})["code"] == "invalid_argument"
     assert client.error("events", {"limit": 0})["code"] == "invalid_argument"
@@ -261,3 +446,51 @@ def test_failed_hip_load_does_not_silence_events(client, work_dir, tool, monkeyp
     hou.node("/obj").createNode("geo", "after_failure")
     _settle(client)
     assert ("ChildCreated", "/obj/after_failure") in _kinds(_read(client, since))
+
+
+def test_top_level_children_are_reported_once(client):
+    """Review 16 N2: after network_describe of /stage (which watches /stage itself), every
+    top-level ChildCreated was reported twice: by the manager callback and by /stage's
+    own node callback. Nested children were reported once."""
+    client.ok("network_describe", {"root": "/stage", "format": "outline"})
+    client.ok("network_describe", {"root": "/obj", "format": "outline"})
+    since = _since()
+    client.ok(
+        "node_create",
+        {
+            "items": [
+                {"parent": "/stage", "type": "materiallibrary", "name": "matlib"},
+                {"parent": "/stage/matlib", "type": "mtlxstandard_surface", "name": "concrete"},
+                {"parent": "/stage", "type": "camera", "name": "cam_main"},
+            ]
+        },
+    )
+    hou.node("/stage").createNode("null", "user_null")
+    hou.node("/obj").createNode("geo", "user_geo")
+    _settle(client)
+    hou.node("/stage/user_null").destroy()
+    created = [e["path"] for e in _read(client, since) if e["kind"].startswith("Child")]
+    assert created == [
+        "/stage/matlib",
+        "/stage/matlib/concrete",
+        "/stage/cam_main",
+        "/stage/user_null",
+        "/obj/user_geo",
+        "/stage/user_null",
+    ]
+
+
+def test_repeated_child_events_are_dropped():
+    log = ev.EventLog()
+    log.record("ChildCreated", "/stage/a")
+    log.record("ChildCreated", "/stage/a")  # the same creation seen by a second callback
+    log.record("ChildCreated", "/stage/b")
+    log.record("ChildDeleted", "/stage/a")
+    log.record("ChildCreated", "/stage/a")  # created again after the delete: a new event
+    kinds = [(e["kind"], e["path"]) for e in log.read(0, 10)["events"]]
+    assert kinds == [
+        ("ChildCreated", "/stage/a"),
+        ("ChildCreated", "/stage/b"),
+        ("ChildDeleted", "/stage/a"),
+        ("ChildCreated", "/stage/a"),
+    ]

@@ -1100,6 +1100,59 @@ def test_edit_spare_parms_validation_and_rollback(client):
     assert error["code"] == "locked"
 
 
+def test_edit_spare_menu_value_types(client):
+    """Review 12 papercut 3: an int menu for chi(); the default string menu keeps chs()."""
+    geo = hou.node("/obj").createNode("geo", "geo1")
+    ctrl = geo.createNode("null", "CONTROLS")
+    roofs = [{"token": t, "label": f"roof {t}"} for t in ("-1", "0", "1", "2")]
+    spare = {
+        "add": [
+            {"name": "roof_i", "type": "menu", "value_type": "int", "menu_items": roofs,
+             "default": 2},
+            {"name": "roof_t", "type": "menu", "value_type": "int", "menu_items": roofs,
+             "default": "1"},
+            {"name": "roof_n", "type": "menu", "value_type": "int", "menu_items": roofs,
+             "default": -1},
+            {"name": "roof_s", "type": "menu", "menu_items": roofs, "default": -1},
+            {"name": "roof_e", "type": "menu", "value_type": "string", "menu_items": roofs},
+        ]
+    }  # fmt: skip
+    client.ok("node_edit", {"items": [{"path": ctrl.path(), "spare_parms": spare}]})
+    roof_i = ctrl.parm("roof_i")
+    template = roof_i.parmTemplate()
+    assert template.type() == hou.parmTemplateType.Int
+    assert template.menuItems() == ("-1", "0", "1", "2")
+    assert template.menuLabels()[0] == "roof -1"
+    assert roof_i.eval() == 2  # a number is the item index
+    assert ctrl.parm("roof_t").eval() == 2  # a token string resolves to its index
+    assert ctrl.parm("roof_n").eval() == 0  # no index -1: the number matches token "-1"
+    assert ctrl.parm("roof_s").parmTemplate().type() == hou.parmTemplateType.Menu
+    assert ctrl.parm("roof_s").evalAsString() == "-1"
+    assert ctrl.parm("roof_e").parmTemplate().type() == hou.parmTemplateType.Menu
+    wrangle = geo.createNode("attribwrangle", "w")
+    wrangle.setInput(0, geo.createNode("add", "pt"))
+    wrangle.parm("class").set(0)  # detail
+    wrangle.parm("snippet").set(
+        'i@ri = chi("../CONTROLS/roof_i"); s@rs = chs("../CONTROLS/roof_s");'
+    )
+    geometry = wrangle.geometry()
+    assert geometry.attribValue("ri") == 2 and geometry.attribValue("rs") == "-1"
+    got = client.ok("parm_get", {"paths": [roof_i.path()]})["parms"][0]
+    assert got["value"] == 2 and got["menu_token"] == "1"
+    for bad, code in (
+        ({"name": "m", "type": "menu", "value_type": "float", "menu_items": roofs},
+         "invalid_argument"),
+        ({"name": "m", "type": "float", "value_type": "int"}, "invalid_argument"),
+        ({"name": "m", "type": "menu", "value_type": "int", "menu_items": roofs, "default": 7},
+         "invalid_value"),
+    ):  # fmt: skip
+        error = client.error(
+            "node_edit", {"items": [{"path": ctrl.path(), "spare_parms": {"add": [bad]}}]}
+        )
+        assert error["code"] == code, (bad, error)
+    assert "value_type" in error["hint"] or "index" in error["hint"]
+
+
 def test_parm_not_found_on_a_null_points_at_spare_parms(client):
     geo = hou.node("/obj").createNode("geo", "geo1")
     null = geo.createNode("null", "CTRL")

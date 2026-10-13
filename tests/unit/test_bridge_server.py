@@ -52,6 +52,8 @@ FAKE_TOOLS = (
                     "additionalProperties": False,
                 },
                 "disconnect": {"type": "boolean"},
+                "quit": {"type": "boolean"},
+                "on_unsaved": {"type": "string", "enum": ["fail", "save", "discard"]},
             },
         ),
         bridge_local=True,
@@ -103,7 +105,7 @@ class FakeClient:
             "pid": 4242,
             "houdini": "22.0.466",
             "generation": 2,
-            "host_version": "1.1.0",
+            "host_version": "1.2.0",
         }
         self.replies: dict[str, Any] = {}
         self.calls: list[tuple[str, dict, float]] = []
@@ -121,6 +123,16 @@ class FakeClient:
         match = next((i.pid for i in self.live if i.port == self.port), None)
         if self.follow_registry and match is not None:
             reply["pid"] = match
+        return reply
+
+    def quit(self, on_unsaved="fail", timeout_s=70.0):
+        self.calls.append(("<quit>", {"on_unsaved": on_unsaved}, timeout_s))
+        reply = self.replies.get(
+            "<quit>",
+            (True, {"quitting": True, "pid": 4242, "hip": "C:/work/a.hip", "saved": False}, {}),
+        )
+        if isinstance(reply, Exception):
+            raise reply
         return reply
 
     def call(self, tool, args, timeout_s, request_id=None, max_response_bytes=None):
@@ -544,7 +556,7 @@ def test_status_merges_registry_health_and_host():
             "time": {"frame": 1, "fps": 24, "range": [1, 240]},
             "env": {"HIP": "C:/work"},
             "scene_generation": 5,
-            "host_version": "1.1.0",
+            "host_version": "1.2.0",
             "read_only": False,
             "allow_python": True,
         },
@@ -599,6 +611,48 @@ def test_connect_rejects_two_modes():
     bridge, _c, _l = make_bridge()
     err = structured(bridge.call_tool("houdini_connect", {"pid": 4242, "disconnect": True}))
     assert err["code"] == "invalid_argument"
+
+
+@pytest.fixture
+def quick_quit(monkeypatch):
+    from hocuspocus.bridge import local_tools
+
+    monkeypatch.setattr(local_tools, "QUIT_WAIT_S", 0.0)
+    monkeypatch.setattr(local_tools.registry, "pid_alive", lambda pid: False)
+
+
+def test_quit_selected_houdini(quick_quit):
+    bridge, client, _ = make_bridge()
+    bridge.call_tool("houdini_connect", {"pid": 4242})
+    out = structured(bridge.call_tool("houdini_connect", {"quit": True, "on_unsaved": "save"}))
+    assert out == {"quit": True, "pid": 4242, "exited": True}
+    assert ("<quit>", {"on_unsaved": "save"}, 70.0) in client.calls
+    assert bridge.preferred_pid is None and bridge.last_target is None
+
+
+def test_quit_refused_with_unsaved_changes(quick_quit):
+    bridge, client, _ = make_bridge()
+    client.replies["<quit>"] = (
+        False,
+        {"code": "unsaved_changes", "message": "The scene has unsaved changes.", "hint": "x"},
+        {},
+    )
+    result = bridge.call_tool("houdini_connect", {"quit": True})
+    assert result.is_error is True
+    assert structured(result)["code"] == "unsaved_changes"
+    assert client.calls[-1][1] == {"on_unsaved": "fail"}
+
+
+def test_quit_argument_errors(quick_quit):
+    bridge, _c, _l = make_bridge()
+    err = structured(
+        bridge.call_tool("houdini_connect", {"quit": True, "launch": {"mode": "headless"}})
+    )
+    assert err["code"] == "invalid_argument"
+    err = structured(bridge.call_tool("houdini_connect", {"on_unsaved": "save"}))
+    assert err["code"] == "invalid_argument" and "quit" in err["message"]
+    err = structured(bridge.call_tool("houdini_connect", {"quit": True, "pid": 1}))
+    assert err["code"] == "houdini_offline" and err["candidates"] == ["4242"]
 
 
 def test_disconnect_then_reconnect():

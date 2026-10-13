@@ -73,10 +73,9 @@ def test_attributes_authored_values(client):
     assert attrs["xformOp:translate"]["value"] == [0, 2, 0]
     extent = attrs["extent"]
     assert extent["type"] == "float3[]"
-    assert extent["value"]["len"] == 2
-    assert extent["value"]["first"][0] == [-1, -1, -1]
+    assert extent["value"] == [[-1, -1, -1], [1, 1, 1]]  # short arrays are listed in full
     order = attrs["xformOpOrder"]["value"]
-    assert order["len"] >= 1 and isinstance(order["first"][0], str)
+    assert isinstance(order, list) and order and isinstance(order[0], str)
     # Unauthored fallbacks are not listed.
     assert "doubleSided" not in attrs and "visibility" not in attrs
 
@@ -102,9 +101,9 @@ def test_xform_and_bindings(client):
     rows = {p["path"]: p for p in result["prims"]}
     sphere = rows["/sphere1"]
     assert sphere["material"] == "/materials/chrome"
-    world = sphere["xform"]["world"]
-    assert world[3][:3] == [0, 2, 0]
-    assert sphere["xform"]["local"] == world
+    local = sphere["xform"]["local"]
+    assert local[3][:3] == [0, 2, 0]
+    assert "world" not in sphere["xform"]  # left out when it equals local
     assert "xform" not in rows["/materials"]  # a Scope is not xformable
     assert "material" not in rows["/materials"]
 
@@ -114,7 +113,7 @@ def test_identity_xform_is_compact(client):
     result = client.ok(
         "usd_stage", {"lop_path": sphere.path(), "prim": "/sphere1", "include": ["xform"]}
     )
-    assert result["prims"][0]["xform"] == {"local": "identity", "world": "identity"}
+    assert result["prims"][0]["xform"] == {"local": "identity"}
 
 
 def test_layers(client):
@@ -138,7 +137,7 @@ def test_paging(client):
         prev = node
     args = {"lop_path": prev.path(), "prim": "/geo", "depth": 1, "limit": 3}
     first = client.ok("usd_stage", args)
-    assert "total" not in first  # the walk stopped after the page (review 10)
+    assert first["total"] == 8  # counted without building rows (review 13)
     assert [p["path"] for p in first["prims"]] == ["/geo", "/geo/s0", "/geo/s1"]
     seen = [p["path"] for p in first["prims"]]
     cursor = first["next_cursor"]
@@ -166,6 +165,43 @@ def test_prim_pattern(client):
     assert [p["path"] for p in result["prims"]] == ["/geo/rock_a", "/geo/rock_b"]
     deep = client.ok("usd_stage", {"lop_path": c.path(), "prim": "/**/tree"})
     assert [p["path"] for p in deep["prims"]] == ["/props/tree"]
+
+
+def test_prim_alternation(client):
+    """Review 16 N3: prim takes a|b like attribs, and a bad pattern is an error, not []."""
+    stage = hou.node("/stage")
+    a = stage.createNode("sphere", "a")
+    a.parm("primpath").set("/city/bldg_001")
+    b = stage.createNode("cube", "b")
+    b.parm("primpath").set("/city/bldg_002")
+    b.setInput(0, a)
+    c = stage.createNode("cube", "c")
+    c.parm("primpath").set("/city/ground")
+    c.setInput(0, b)
+    d = stage.createNode("cube", "d")
+    d.parm("primpath").set("/lights/key")
+    d.setInput(0, c)
+    lop = d.path()
+    both = client.ok("usd_stage", {"lop_path": lop, "prim": "/lights|/city/ground", "depth": 1})
+    assert [p["path"] for p in both["prims"]] == ["/city/ground", "/lights"]
+    globbed = client.ok("usd_stage", {"lop_path": lop, "prim": "/city/bldg_00*|/city/ground"})
+    assert [p["path"] for p in globbed["prims"]] == [
+        "/city/bldg_001",
+        "/city/bldg_002",
+        "/city/ground",
+    ]
+    assert globbed["total"] == 3
+    summary = client.ok(
+        "usd_stage", {"lop_path": lop, "prim": "/city/bldg_*|/lights/key", "summary": True}
+    )
+    assert summary["summary"]["total_prims"] == 3
+    for bad in ("/city/bldg_00*|city/ground", "/city/[x]*", "/a||/b"):
+        error = client.error("usd_stage", {"lop_path": lop, "prim": bad})
+        assert error["code"] == "invalid_argument", bad
+        assert "|" in error["hint"]
+    missing = client.error("usd_stage", {"lop_path": lop, "prim": "/city/bldg_*|/cameras"})
+    assert missing["code"] == "invalid_argument"
+    assert "/cameras" in missing["message"]
 
 
 def test_errors(client):
@@ -246,7 +282,8 @@ def test_collection_stops_after_the_page(client, monkeypatch):
     assert [p["path"] for p in result["prims"]] == ["/geo", "/geo/s0", "/geo/s1"]
     assert result["next_cursor"] == "3"
     assert walked == [4]  # cursor + limit + 1, not all 21 prims
-    assert "total" not in result
+    assert len(rows) == 3  # rows only for the page; total comes from a counting walk
+    assert result["total"] == 21
     last = client.ok(
         "usd_stage", {"lop_path": prev.path(), "prim": "/geo", "limit": 50, "cursor": "18"}
     )
@@ -268,3 +305,71 @@ def test_time_cooks_the_lop_at_that_frame(client):
     radius = {a["name"]: a for a in later["attributes"]}["radius"]
     assert radius["value"] == 5
     assert hou.frame() == 1  # the current frame is restored
+
+
+def _city():
+    """/city with three meshes (two buildings and the ground) and a camera."""
+    stage = hou.node("/stage")
+    prev = None
+    for name, t in (("bldg_000", (0, 1, 0)), ("bldg_001", (4, 1, 0)), ("ground", (0, 0, 0))):
+        node = stage.createNode("cube", name)
+        node.parm("primpath").set(f"/city/{name}")
+        node.parmTuple("t").set(t)
+        if prev is not None:
+            node.setInput(0, prev)
+        prev = node
+    cam = stage.createNode("camera", "cam")
+    cam.setInput(0, prev)
+    cam.parmTuple("t").set((0, 2, 10))
+    return cam
+
+
+def test_summary_counts_and_bounds(client):
+    out = _city()
+    result = client.ok("usd_stage", {"lop_path": out.path(), "prim": "/city", "summary": True})
+    assert "prims" not in result
+    summary = result["summary"]
+    assert summary["total_prims"] == 4  # /city and its three cubes
+    assert summary["counts_by_type"]["Cube"] == 3
+    box = summary["bbox_world"]
+    assert box["min"] == [-1, -1, -1] and box["max"] == [5, 2, 1]
+    assert box["size"] == [6, 3, 2]
+    whole = client.ok("usd_stage", {"lop_path": out.path(), "summary": True})["summary"]
+    assert whole["counts_by_type"]["Camera"] == 1
+    assert "HoudiniLayerInfo" not in json.dumps(whole)
+    pattern = client.ok(
+        "usd_stage", {"lop_path": out.path(), "prim": "/city/bldg_*", "summary": True}
+    )["summary"]
+    assert pattern["total_prims"] == 2
+    assert len(json.dumps(result)) < 400
+
+
+def test_attribs_glob_filters_attributes(client):
+    out = _city()
+    result = client.ok(
+        "usd_stage",
+        {"lop_path": out.path(), "prim": "/cameras/cam", "attribs": "focal*|xformOpOrder"},
+    )
+    (cam,) = result["prims"]
+    names = {a["name"] for a in cam["attributes"]}
+    assert "focalLength" in names and "xformOpOrder" in names
+    assert all(n.startswith("focal") or n == "xformOpOrder" for n in names)
+    order = {a["name"]: a for a in cam["attributes"]}["xformOpOrder"]["value"]
+    assert isinstance(order, list)  # shown in full
+    bad = client.error("usd_stage", {"lop_path": out.path(), "attribs": ""})
+    assert bad["code"] == "invalid_argument"
+
+
+def test_world_is_kept_when_parents_move(client):
+    sphere = hou.node("/stage").createNode("sphere", "sphere1")
+    sphere.parm("primpath").set("/grp/ball")
+    xform = hou.node("/stage").createNode("xform", "move")
+    xform.setInput(0, sphere)
+    xform.parm("primpattern").set("/grp")
+    xform.parmTuple("t").set((0, 5, 0))
+    result = client.ok(
+        "usd_stage", {"lop_path": xform.path(), "prim": "/grp/ball", "include": ["xform"]}
+    )
+    block = result["prims"][0]["xform"]
+    assert block["local"] == "identity"
+    assert block["world"][3][:3] == [0, 5, 0]

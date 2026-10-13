@@ -56,6 +56,10 @@ class JobContext:
         """Report step ``current`` of ``total`` (see :meth:`Job.set_progress`)."""
         self._job.set_progress(current, total, message)
 
+    def set_extra(self, key: str, value: Any) -> None:
+        """Add a tool-specific field to the job status (``pdg``: ``nodes``)."""
+        self._job.extra[key] = value
+
 
 class Job:
     def __init__(self, tool: str, label: str = "") -> None:
@@ -67,6 +71,8 @@ class Job:
         self.current: int | None = None  # steps finished
         self.total: int | None = None  # steps in all
         self.message: str | None = None
+        self.extra: dict[str, Any] = {}
+        """Tool-specific status fields (never the standard keys)."""
         self.started = time.time()
         self.finished: float | None = None
         self.result: Any = None
@@ -110,6 +116,8 @@ class Job:
             data["total"] = self.total
         if self.message:
             data["message"] = self.message
+        for key, value in self.extra.items():
+            data.setdefault(key, value)
         if self.error is not None:
             data["error"] = self.error
         return data
@@ -132,6 +140,7 @@ class JobManager:
                 result = fn(ctx)
                 if job.cancel_event.is_set():
                     job.state = "cancelled"
+                    job.message = "cancelled"
                 else:
                     job.result = result
                     if job.progress is not None:
@@ -142,6 +151,8 @@ class JobManager:
             except ToolError as exc:
                 job.state = "cancelled" if exc.code == "cancelled" else "failed"
                 job.error = exc.to_dict()
+                if job.state == "cancelled":
+                    job.message = "cancelled"
             except BaseException as exc:
                 job.state = "failed"
                 job.error = ToolError(

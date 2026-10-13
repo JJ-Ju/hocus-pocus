@@ -145,6 +145,34 @@ def test_launch_work_dir_override(tmp_path, monkeypatch):
     assert Path(cwd) == work and work.is_dir()
 
 
+def test_launch_explicit_work_dir_reaches_the_headless_host(tmp_path, monkeypatch):
+    """hocuspocus launch passes its directory: the child starts there and the headless
+    host is told to stay there instead of moving to HOCUSPOCUS_WORK_DIR or home."""
+    monkeypatch.setenv("HOCUSPOCUS_WORK_DIR", str(tmp_path / "not_this"))
+    work = tmp_path / "shot"
+    work.mkdir()
+    harness = Harness()
+    launcher = make_launcher(fake_hfs(tmp_path / "hfs"), harness)
+    launcher.wait(launcher.spawn("headless", None, work_dir=work), 30)
+    argv, _env, cwd, _log = harness.spawned[0]
+    assert Path(cwd) == work
+    assert argv[-2:] == ["--work-dir", str(work)]
+    harness = Harness()
+    launcher = make_launcher(fake_hfs(tmp_path / "hfs2"), harness)
+    launcher.wait(launcher.spawn("gui", None, work_dir=work), 30)
+    argv, _env, cwd, _log = harness.spawned[0]
+    assert Path(cwd) == work and "--work-dir" not in argv  # the GUI's $HIP is its cwd
+
+
+def test_launch_without_work_dir_keeps_the_bridge_rule(tmp_path, monkeypatch):
+    work = tmp_path / "configured"
+    monkeypatch.setenv("HOCUSPOCUS_WORK_DIR", str(work))
+    harness = Harness()
+    make_launcher(fake_hfs(tmp_path / "hfs"), harness).launch("headless", None, wait_s=30)
+    argv, _env, cwd, _log = harness.spawned[0]
+    assert Path(cwd) == work and "--work-dir" not in argv  # the host applies the same rule
+
+
 def test_gui_launch_uses_houdinifx(tmp_path):
     hfs = fake_hfs(tmp_path / "hfs")
     harness = Harness()

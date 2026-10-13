@@ -53,8 +53,61 @@ def test_create_save_match_unlock(client, tmp_path):
 
 
 def test_create_version_field(client, tmp_path):
-    result, _ = _create(client, tmp_path, "hptest::pebble", version="2.0")
+    result, _ = _create(client, tmp_path, "hptest::pebble", version="2.0", label="HP Pebble")
     assert result["version"] == "2.0"
+    # Review 15 papercut 8: the same version, label and type spelling everywhere.
+    info = client.ok("node_type_info", {"type": "Sop/hptest::pebble", "include_parms": False})
+    assert info["type"] == "Sop/hptest::pebble"
+    assert info["version"] == "2.0"
+    assert info["label"] == "HP Pebble" and info["description"] == "HP Pebble"
+    found = client.ok("node_type_search", {"query": "hptest::pebble", "category": "Sop"})
+    row = next(r for r in found["results"] if r["name"] == "hptest::pebble")
+    assert row["version"] == "2.0" and row["description"] == "HP Pebble"
+    listed = client.ok("hda", {"action": "list", "library_path": result["library"]})
+    assert listed["definitions"][0]["version"] == "2.0"
+    assert listed["definitions"][0]["label"] == "HP Pebble"
+
+
+def test_save_promotes_spare_parms(client, tmp_path):
+    """Review 15 papercut 6: a spare parm added to the unlocked instance reaches the
+    asset's interface on save."""
+    result, _ = _create(client, tmp_path, "hptest::meteors::1.0")
+    path = result["path"]
+    client.ok(
+        "node_edit",
+        {
+            "items": [
+                {
+                    "path": path,
+                    "spare_parms": {
+                        "add": [{"name": "speed_scale", "type": "float", "default": 1}]
+                    },
+                }
+            ]
+        },
+    )
+    hou.parm(f"{path}/speed_scale").set(2.5)
+    saved = client.ok("hda", {"action": "save", "path": path})
+    assert saved["promoted"] == ["speed_scale"]
+    assert "hda match" in saved["note"]
+    node = hou.node(path)
+    assert node.spareParms() == ()
+    assert node.parm("speed_scale").eval() == 2.5
+    info = client.ok("node_type_info", {"type": "Sop/hptest::meteors::1.0"})
+    names = [row[0] for rows in info["parms"].values() for row in rows]
+    assert "speed_scale" in names
+    client.ok("hda", {"action": "match", "path": path})
+    assert hou.node(path).parm("speed_scale") is not None
+
+
+def test_save_can_keep_spare_parms_on_the_instance(client, tmp_path):
+    result, _ = _create(client, tmp_path, "hptest::local::1.0")
+    node = hou.node(result["path"])
+    node.addSpareParmTuple(hou.FloatParmTemplate("local", "Local", 1))
+    saved = client.ok("hda", {"action": "save", "path": node.path(), "promote_spare_parms": False})
+    assert "promoted" not in saved
+    assert [p.name() for p in node.spareParms()] == ["local"]
+    assert node.type().definition().parmTemplateGroup().find("local") is None
 
 
 def test_create_inputs_and_description(client, tmp_path):
@@ -175,9 +228,12 @@ def test_install_reload_list(client, tmp_path):
 
     installed = client.ok("hda", {"action": "install", "library_path": library})
     assert installed["action"] == "installed"
+    assert installed["already_loaded"] is True
 
     listing = client.ok("hda", {"action": "list", "limit": 1000})
     assert listing["total"] == len(listing["libraries"])
+    # No 8.3 short names (C:/PROGRA~1/...) for Houdini's own libraries.
+    assert not [row["path"] for row in listing["libraries"] if "~" in row["path"]]
     assert "next_cursor" not in listing
     ours = [row for row in listing["libraries"] if row["path"].lower() == library.lower()]
     assert ours and "hptest::stone::1.0" in ours[0]["types"]

@@ -2,9 +2,18 @@
 
 from __future__ import annotations
 
+import json
+import os
+import subprocess
+import threading
+import urllib.request
+from pathlib import Path
+
 import pytest
 
 hou = pytest.importorskip("hou")
+
+REPO_SRC = Path(__file__).resolve().parents[2] / "src"
 
 
 def _geo(name: str = "geo1"):
@@ -60,6 +69,40 @@ def test_undo_multiple_steps_and_empty_stack(client):
     again = client.ok("undo", {"action": "redo", "steps": 2})
     assert len(again["performed"]) == 2
     assert {c.type().name() for c in hou.node("/obj/geo1").children()} == {"box", "sphere"}
+
+
+def test_undo_stops_at_a_user_step(client):
+    """Review 15 papercut 4: undo {steps} must not undo the user's own work silently."""
+    geo = _geo()
+    hou.undos.clear()
+    client.ok("node_create", {"items": [{"parent": "/obj/geo1", "type": "box", "name": "a"}]})
+    with hou.undos.group("user tweak"):
+        geo.parm("tx").set(3)
+    client.ok("node_create", {"items": [{"parent": "/obj/geo1", "type": "box", "name": "b"}]})
+
+    result = client.ok("undo", {"action": "undo", "steps": 3})
+    assert len(result["performed"]) == 1
+    assert result["performed"][0].startswith("HocusPocus: node_create")
+    assert result["blocked_by"] == "user tweak"
+    assert "include_user_steps" in result["note"]
+    assert hou.node("/obj/geo1/b") is None and hou.node("/obj/geo1/a") is not None
+    assert geo.parm("tx").eval() == 3
+    assert result["next_undo"] == "user tweak"
+
+    # Nothing to do when the newest step is the user's.
+    again = client.ok("undo", {"action": "undo"})
+    assert again["performed"] == [] and again["blocked_by"] == "user tweak"
+
+    crossed = client.ok("undo", {"action": "undo", "steps": 2, "include_user_steps": True})
+    assert crossed["performed"][0] == "user tweak"
+    assert crossed["performed"][1].startswith("HocusPocus: node_create")
+    assert crossed["user_steps"] == ["user tweak"]
+    assert "blocked_by" not in crossed
+    assert geo.parm("tx").eval() == 0 and hou.node("/obj/geo1/a") is None
+
+    # Redo is guarded the same way.
+    redo = client.ok("undo", {"action": "redo", "steps": 2})
+    assert len(redo["performed"]) == 1 and redo["blocked_by"] == "user tweak"
 
 
 def test_undo_parm_set_restores_value(client):
@@ -198,3 +241,73 @@ def test_fast_cook_leaves_no_job(client):
 def test_job_errors(client):
     assert client.error("job", {"action": "status", "job_id": "nope"})["code"] == "job_not_found"
     assert client.error("job", {"action": "status"})["code"] == "invalid_argument"
+
+
+# -- quit (houdini_connect {quit}, POST /hp/v1/quit) -----------------------------------------
+
+
+def _read_line(stream, box):
+    box["line"] = stream.readline()
+
+
+def test_quit_route_checks_unsaved_changes_then_quits(hython, tmp_path):
+    """Review 15 papercut 9: a typed quit. A headless host ends its hython."""
+    cwd = tmp_path / "cwd"
+    cwd.mkdir()
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(REPO_SRC)
+    env["HOUDINI_USER_PREF_DIR"] = (tmp_path / "prefs" / "houdini__HVER__").as_posix()
+    env["HOCUSPOCUS_STATE_DIR"] = str(tmp_path / "state")
+    env["HOCUSPOCUS_WORK_DIR"] = str(tmp_path / "work")
+    proc = subprocess.Popen(
+        [str(hython), "-m", "hocuspocus.host", "--port", "0"],
+        cwd=cwd,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        box: dict = {}
+        reader = threading.Thread(target=_read_line, args=(proc.stdout, box), daemon=True)
+        reader.start()
+        reader.join(120)
+        assert "line" in box, "host did not print its JSON line within 120 s"
+        info = json.loads(box["line"])
+        token = json.loads(Path(info["token_file"]).read_text(encoding="utf-8"))["token"]
+        base = f"http://127.0.0.1:{info['port']}/hp/v1"
+
+        def post(path, body):
+            request = urllib.request.Request(
+                f"{base}{path}",
+                data=json.dumps(body).encode(),
+                headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+            )
+            with urllib.request.urlopen(request, timeout=60) as r:
+                return json.loads(r.read())
+
+        made = post(
+            "/call", {"tool": "node_create", "args": {"items": [{"parent": "/obj", "type": "geo"}]}}
+        )
+        assert made["ok"] is True
+        refused = post("/quit", {})  # on_unsaved defaults to fail
+        assert refused["ok"] is False and refused["error"]["code"] == "unsaved_changes"
+        assert proc.poll() is None
+        bad = post("/quit", {"on_unsaved": "keep"})
+        assert bad["ok"] is False and bad["error"]["code"] == "invalid_argument"
+
+        quitting = post("/quit", {"on_unsaved": "discard"})
+        assert quitting["ok"] is True, quitting
+        assert quitting["result"]["quitting"] is True
+        assert quitting["result"]["pid"] == info["pid"]
+        assert quitting["result"]["saved"] is False
+        code = proc.wait(timeout=60)
+        assert code == 0, proc.stderr.read()
+        assert not Path(info["token_file"]).exists()
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait(timeout=30)
+        for stream in (proc.stdout, proc.stderr):
+            if stream:
+                stream.close()

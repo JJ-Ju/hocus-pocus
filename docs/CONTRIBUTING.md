@@ -37,7 +37,7 @@ tests/
   unit/  integration/  e2e/
 docs/
   BIBLE.md  quickstart.md  tools.md (generated)  CONTRIBUTING.md
-  redesign/README.md             # index of the historical reviews and 1.0 evaluations
+  redesign/README.md             # index of the reviews, evaluations and plans
   redesign/review/*.md  redesign/progress.md  redesign/evidence/
 README.md  CHANGELOG.md  LICENSE
 .github/workflows/ci.yml  houdini.yml
@@ -67,7 +67,11 @@ macOS the path is `.venv/bin/...`.
    count in §4.7.
 2. **Catalogue entry.** Add a `ToolSpec` to `src/hocuspocus/tools/catalog.py` with:
    - `name`, in snake_case.
-   - A `description` of at most 80 words, with defaults stated.
+   - A `description` of at most 60 words: what the tool does and what the model needs to
+     choose it. Defaults belong in the schema (`default`), not the description.
+   - `notes` for argument-level detail (shapes the schema cannot state, edge cases). They
+     are rendered into `docs/tools.md` and `hocuspocus://guide` but not sent in
+     `tools/list` (BIBLE §4.1).
    - `input_schema`, built with `_obj` / `_s` / `_enum` / ... and
      `additionalProperties: false`.
    - An `output_schema` if the shape is stable. The bridge declares it only when
@@ -123,9 +127,10 @@ macOS the path is `.venv/bin/...`.
    - The serialised `tools/list` result stays at 44,000 bytes or less
      (`test_tools_list_budget`). It measures the largest shape a client can receive: the
      full profile with `result_content = "both"`, so output schemas count even though the
-     `text` default leaves them out. The test prints the core, full and text-default
-     sizes. When a new tool pushes it over, shorten descriptions in the output schemas
-     before cutting words the model needs from the tool description.
+     `text` default leaves them out. A second assertion keeps that size at 40,000 bytes or
+     less, the 1.2 headroom target. The test prints the core, full and text-default
+     sizes. When a new tool pushes it over, move argument detail from the description
+     into `notes` before cutting words the model needs to choose the tool.
    - `docs/tools.md` is current.
 
    `tests/unit/test_host_tools.py` checks that every `@tool` name exists in the
@@ -171,6 +176,14 @@ three things:
    - contain the `__HVER__` token, because Houdini ignores the variable otherwise;
    - not be your real `~/houdini22.0`. The integration `conftest.py` refuses to run
      against the real one.
+
+   Houdini expands `__HVER__`, so files Houdini or the host read from that pref dir live
+   in the expanded directory. To run a host with the `full` profile from such an
+   isolated pref dir (an evaluation, or `hocuspocus launch` against it), put
+   `hocuspocus.toml` with `profile = "full"` in `$SCRATCH/prefs/houdini22.0/`. A copy
+   in a literal `houdini__HVER__/` directory is never read (review 13);
+   `hocuspocus doctor` prints which file the bridge reads. The integration fixture
+   passes `profile="full"` to its host itself and needs no toml.
 
 3. **A neutral working directory.** hython puts its cwd on `HOUDINI_PATH`, so run it
    from an empty temporary directory, not from the repository.

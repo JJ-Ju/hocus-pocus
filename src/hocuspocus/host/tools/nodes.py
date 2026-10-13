@@ -189,6 +189,7 @@ TYPE_SYNONYMS: dict[str, dict[str, tuple[str, str]]] = {
             for name in names
         },
         "domelight": ("envlight", "an environment light (envlight) lights from a dome"),
+        "camera": ("cam", "set focal, resx and resy on it"),
     },
 }
 """``{category: {query: (type, note)}}`` for type names an agent reaches for that the
@@ -1100,14 +1101,17 @@ def node_info(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
                 "opaque by default.",
                 hint="Pass recurse_locked: true to read inside it.",
             )
-        nodes.append(
-            node_block(
-                node,
-                include,
-                include_defaults=include_defaults,
-                recurse_locked=recurse_locked,
-            )
+        block = node_block(
+            node, include, include_defaults=include_defaults, recurse_locked=recurse_locked
         )
+        if node.type().category().name() == "Top":
+            from .pdg import pdg_state  # lazy: TOP nodes only
+
+            with contextlib.suppress(Exception):
+                block["pdg_state"] = pdg_state(node)
+        nodes.append(block)
+        # events reports later changes to what the agent has read (review 15 papercut 3).
+        watch_nodes([node])
     return {"nodes": nodes}
 
 

@@ -78,14 +78,26 @@ def undo(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     steps = args.get("steps", 1)
     if isinstance(steps, bool) or not isinstance(steps, int) or steps < 1:
         raise bad_arg(f"steps must be an integer >= 1; got {steps!r}.")
+    include_user = args.get("include_user_steps", False)
+    if not isinstance(include_user, bool):
+        raise bad_arg("include_user_steps must be a boolean.")
     refuse_if_read_only(ctx, action.capitalize())
     labels_fn = hou.undos.undoLabels if action == "undo" else hou.undos.redoLabels
     perform = hou.undos.performUndo if action == "undo" else hou.undos.performRedo
     performed: list[str] = []
+    user_steps: list[str] = []
+    blocked_by: str | None = None
     for _ in range(steps):
         pending = _labels(labels_fn)
         if not pending:
             break
+        if not pending[0].startswith(LABEL_PREFIX):
+            # Review 15 papercut 4: a step that is not HocusPocus's is the user's (or
+            # Houdini's); crossing it needs consent.
+            if not include_user:
+                blocked_by = pending[0]
+                break
+            user_steps.append(pending[0])
         try:
             done = perform()
         except hou.Error as exc:
@@ -102,7 +114,16 @@ def undo(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     if performed:
         ctx.scene.mark_dirty()
     result: dict[str, Any] = {"performed": performed}
-    if len(performed) < steps:
+    if user_steps:
+        result["user_steps"] = user_steps
+    if blocked_by is not None:
+        result["blocked_by"] = blocked_by
+        result["note"] = (
+            f"{len(performed)} of {steps} step(s) performed: stopped before {blocked_by!r}, "
+            f"which is not a HocusPocus step (the user's or Houdini's). Pass "
+            f"include_user_steps: true to {action} it too."
+        )
+    elif len(performed) < steps:
         result["note"] = f"{len(performed)} of {steps} step(s) performed: nothing more to {action}."
     result.update(_undo_state(ctx))
     return result
