@@ -1625,13 +1625,17 @@ _FULL: tuple[ToolSpec, ...] = (
             "A failed work item carries error (the last error lines of its log, at most 400 "
             "characters), log_path and exit_code (out-of-process items). A cook result (and job "
             "result) has ok: false when any item of the graph failed, and failures lists the first"
-            " 5 failed items of the target and its upstream TOPs with their error."
+            " 5 failed items of the target and its upstream TOPs with their error. Out-of-process "
+            "ROP TOPs (ROP Fetch, ...) load the saved hip, so cook refuses an untitled scene or "
+            "unsaved changes with unsaved_changes; save: true saves first (approved_roots apply) "
+            "and the result names the saved path."
         ),
         input_schema=_obj(
             {
                 "action": _enum(("cook", "status", "workitems", "cancel", "dirty")),
                 "top_path": _s(),
                 "block": _b(False),
+                "save": _b(False),
                 "timeout_s": _n(None, minimum=1, default=30),
                 # bible-silent: "workitems paged" uses the §4.1 limit/cursor convention.
                 "limit": _limit(),

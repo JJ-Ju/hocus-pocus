@@ -27,7 +27,9 @@ from hocuspocus.tools.errors import ToolError
 from ..dispatch import call_timeout
 from ._common import bad_arg, get_node, page, refuse_if_read_only
 from ._diag import a_or_an
+from .hip import check_allowed
 from .registry import HostContext, tool
+from .session import scene_dirty
 
 ACTIONS = ("cook", "status", "workitems", "cancel", "dirty")
 POLL_S = 0.1
@@ -329,14 +331,70 @@ def work_items(node: Any) -> list[dict[str, Any]]:
     return rows
 
 
+# -- the saved hip ----------------------------------------------------------------------
+
+
+def _loads_hip(top: Any) -> bool:
+    """Whether ``top``'s work items run in processes that load the saved hip file: the
+    ROP TOPs (ROP Fetch, ROP Geometry, ...) unless their cook type is In-Process."""
+    name = top.type().name().split("::")[0]
+    if not name.startswith("rop") or name == "ropnet":
+        return False
+    parm = top.parm("pdg_cooktype")
+    if parm is None:
+        return True
+    try:
+        items, labels = parm.menuItems(), parm.menuLabels()
+        label = labels[items.index(str(parm.eval()))]
+    except Exception:
+        return True
+    return "in-process" not in label.lower()
+
+
+def ensure_saved(target: Any, save: bool, ctx: HostContext) -> str | None:
+    """Refuse to cook a graph whose out-of-process items would load a stale or missing
+    hip (review 14 papercut 2); with ``save`` save the scene first. Returns the saved
+    path, or None when nothing was saved. Main thread."""
+    import hou
+
+    loaders = [top.path() for top in graph_tops(target) if _loads_hip(top)]
+    if not loaders:
+        return None
+    named = ", ".join(loaders[:3]) + (" ..." if len(loaders) > 3 else "")
+    if hou.hipFile.isNewFile():
+        raise ToolError(
+            "unsaved_changes",
+            f"The scene is untitled, and the work items of {named} run out of process and "
+            "load the saved hip file.",
+            hint="Save the scene with hip_save {path} first, then cook.",
+        )
+    if not scene_dirty(ctx):
+        return None
+    path = hou.hipFile.path()
+    if not save:
+        raise ToolError(
+            "unsaved_changes",
+            f"The scene has unsaved changes, and the work items of {named} run out of process "
+            f"and load the saved {path}, so they would cook the old scene.",
+            hint="Pass save: true to save the scene before cooking, or call hip_save first.",
+        )
+    check_allowed(path, ctx)
+    hou.hipFile.save()
+    return hou.hipFile.path()
+
+
 # -- actions ----------------------------------------------------------------------------
 
 
-def _cook_now(path: str, block: bool) -> str:
-    """Start (or, with ``block``, run) the cook of ``path``'s target. Main thread."""
+def _cook_now(
+    path: str, block: bool, ctx: HostContext, save: bool = False
+) -> tuple[str, str | None]:
+    """Start (or, with ``block``, run) the cook of ``path``'s target, after
+    :func:`ensure_saved`. Returns the target path and the saved hip path. Main thread."""
     target = _cook_target(resolve_top(path))
+    saved = ensure_saved(target, save, ctx)
     target.cookWorkItems(block=block)
-    return target.path()
+    return target.path(), saved
 
 
 def _cancel(path: str) -> dict[str, Any]:
@@ -355,9 +413,9 @@ def _dirty(path: str) -> dict[str, Any]:
 
 
 def _start_cook_job(
-    ctx: HostContext, path: str, timeout_s: float, wait_s: float = 0.0
+    ctx: HostContext, path: str, timeout_s: float, wait_s: float = 0.0, save: bool = False
 ) -> dict[str, Any]:
-    target = ctx.executor.run(lambda: _cook_now(path, False), timeout_s)
+    target, saved = ctx.executor.run(lambda: _cook_now(path, False, ctx, save), timeout_s)
 
     def poll() -> dict[str, Any]:
         node = resolve_top(target)
@@ -394,17 +452,26 @@ def _start_cook_job(
         # Returned synchronously: the caller never saw a job_id, so keep job list clean.
         ctx.jobs.discard(started.id)
         if started.state == "done":
-            return started.result
+            return _with_saved(started.result, saved)
         raise ToolError.from_dict(started.error or {"code": "internal", "message": "cook failed"})
-    return {
-        "job_id": started.id,
-        "state": "running",
-        "path": target,
-        "message": (
-            f"Cooking {target} in the background; poll with job {{action: status, job_id: "
-            f"{started.id}}} and fetch the result with action result."
-        ),
-    }
+    return _with_saved(
+        {
+            "job_id": started.id,
+            "state": "running",
+            "path": target,
+            "message": (
+                f"Cooking {target} in the background; poll with job {{action: status, job_id: "
+                f"{started.id}}} and fetch the result with action result."
+            ),
+        },
+        saved,
+    )
+
+
+def _with_saved(result: dict[str, Any], saved: str | None) -> dict[str, Any]:
+    if saved is not None:
+        result = dict(result, saved=saved)
+    return result
 
 
 @tool("pdg", main_thread=False, scene=False)
@@ -416,8 +483,9 @@ def pdg_tool(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     if not isinstance(path, str) or not path:
         raise bad_arg("'top_path' must be a TOP node or TOP network path.")
     block = args.get("block", False)
-    if not isinstance(block, bool):
-        raise bad_arg("'block' must be a boolean.")
+    save = args.get("save", False)
+    if not isinstance(block, bool) or not isinstance(save, bool):
+        raise bad_arg("'block' and 'save' must be booleans.")
     # The dispatcher's effective timeout: args.timeout_s, else the request's, else the
     # config default (Dispatcher.effective_timeout).
     default_s = float(ctx.config.default_timeout_s)
@@ -453,9 +521,9 @@ def pdg_tool(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     # cook
     if ctx.executor.on_main_thread():
         # Called inline on the main thread (GUI shell, tests): no job can make progress.
-        target = _cook_now(path, True)
-        return cook_result(resolve_top(target))
+        target, saved = _cook_now(path, True, ctx, save)
+        return _with_saved(cook_result(resolve_top(target)), saved)
     # Like cook and render: a blocking call waits at most job_threshold_s, then hands back
     # the job (BIBLE §7); block: false returns the job at once.
     wait_s = min(timeout_s, float(ctx.config.job_threshold_s)) if block else 0.0
-    return _start_cook_job(ctx, path, timeout_s, wait_s)
+    return _start_cook_job(ctx, path, timeout_s, wait_s, save)

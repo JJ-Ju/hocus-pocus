@@ -33,6 +33,20 @@ def _graph(script: str = FAIL_SECOND, count: int = 3, cook_type: int = 1):
     return net, gen, script_node
 
 
+def _rop_graph():
+    """/obj/g/box -> /out/geo_out (geometry ROP) <- /obj/topnet1/fetch (ROP Fetch, out of
+    process: each work item is a hython that loads the saved hip)."""
+    box = hou.node("/obj").createNode("geo", "g").createNode("box", "box")
+    rop = hou.node("/out").createNode("geometry", "geo_out")
+    rop.parm("soppath").set(box.path())
+    rop.parm("sopoutput").set("$HIP/geo/a.bgeo.sc")
+    net = hou.node("/obj").createNode("topnet", "topnet1")
+    fetch = net.createNode("ropfetch", "fetch")
+    fetch.parm("roppath").set(rop.path())
+    fetch.setDisplayFlag(True)
+    return rop, fetch
+
+
 def _wait_job(client, job_id: str, timeout: float = 60.0) -> dict:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -193,6 +207,46 @@ def test_cook_job_waits_for_the_graph_to_start(client):
     result = client.ok("job", {"action": "result", "job_id": started["job_id"]})["result"]
     assert result["status"]["total"] == 2
     assert result["status"]["cooked"] == 2, result
+
+
+def test_cook_refuses_an_unsaved_hip_for_out_of_process_items(client, work_dir):
+    """Review 14 papercut 2: ROP Fetch work items load the hip on disk, so cooking with
+    unsaved changes silently cooks the old scene."""
+    rop, fetch = _rop_graph()
+    untitled = client.error("pdg", {"action": "cook", "top_path": fetch.path()})
+    assert untitled["code"] == "unsaved_changes"
+    assert "untitled" in untitled["message"] and "hip_save" in untitled["hint"]
+    # save: true has nowhere to save an untitled scene.
+    error = client.error("pdg", {"action": "cook", "top_path": fetch.path(), "save": True})
+    assert error["code"] == "unsaved_changes" and "path" in error["hint"]
+
+    hip = (work_dir / "wedges.hip").as_posix()
+    client.ok("hip_save", {"path": hip})
+    client.ok(
+        "parm_set", {"items": [{"path": f"{rop.path()}/sopoutput", "value": "$HIP/geo/b.bgeo.sc"}]}
+    )
+    dirty = client.error("pdg", {"action": "cook", "top_path": fetch.path()})
+    assert dirty["code"] == "unsaved_changes"
+    assert fetch.path() in dirty["message"] and "save: true" in dirty["hint"]
+
+    client.host.config.approved_roots = [str(work_dir / "elsewhere")]
+    refused = client.error("pdg", {"action": "cook", "top_path": fetch.path(), "save": True})
+    assert refused["code"] == "path_not_allowed"
+    client.host.config.approved_roots = []
+
+    started = client.ok("pdg", {"action": "cook", "top_path": fetch.path(), "save": True})
+    assert started["saved"] == hip
+    assert _wait_job(client, started["job_id"], timeout=120)["state"] == "done"
+    result = client.ok("job", {"action": "result", "job_id": started["job_id"]})["result"]
+    assert result["ok"] is True, result
+    # The work item cooked the saved scene: the new output path, not the old one.
+    assert (work_dir / "geo" / "b.bgeo.sc").is_file()
+    assert not (work_dir / "geo" / "a.bgeo.sc").exists()
+
+
+def test_in_process_graphs_cook_unsaved(client):
+    _, gen, _ = _graph(count=1)
+    assert client.ok("pdg", {"action": "cook", "top_path": gen.path(), "block": True})["ok"]
 
 
 def test_status_before_cook(client):
