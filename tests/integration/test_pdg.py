@@ -71,6 +71,32 @@ def test_cook_blocking_with_failed_item(client):
     assert status["states"] == {"cooked_success": 2, "cooked_fail": 1}
     assert status["failed"] == 1 and status["cooked"] == 2
     assert status["cook_state"] == "failed"
+    # Review 14 papercut 1: the result says which item failed and why.
+    [failure] = result["failures"]
+    assert failure["node"] == script.path() and failure["index"] == 1
+    assert "boom" in failure["error"], failure
+
+
+def test_failed_out_of_process_item_reports_its_log(client):
+    _, _, script = _graph(FAIL_SECOND, count=2, cook_type=2)
+    started = client.ok("pdg", {"action": "cook", "top_path": script.path()})
+    assert _wait_job(client, started["job_id"], timeout=90)["state"] == "done"
+    result = client.ok("job", {"action": "result", "job_id": started["job_id"]})["result"]
+    assert result["ok"] is False
+    [failure] = result["failures"]
+    assert "RuntimeError: boom" in failure["error"], failure
+    assert failure["exit_code"] == 1
+    page = client.ok("pdg", {"action": "workitems", "top_path": script.path()})
+    failed = [r for r in page["work_items"] if r["state"] == "cooked_fail"]
+    assert len(failed) == 1
+    row = failed[0]
+    assert "RuntimeError: boom" in row["error"] and len(row["error"]) <= 400
+    assert row["exit_code"] == 1
+    assert row["log_path"].endswith(".log")
+    with open(row["log_path"], encoding="utf-8", errors="replace") as handle:
+        assert "boom" in handle.read()
+    ok_rows = [r for r in page["work_items"] if r["state"] == "cooked_success"]
+    assert ok_rows and "error" not in ok_rows[0] and "log_path" not in ok_rows[0]
 
 
 def test_cook_network_uses_display_node(client):
@@ -98,6 +124,7 @@ def test_cook_as_job(client):
     assert result["path"] == script.path()
     assert result["ok"] is False
     assert result["status"]["failed"] == 1 and result["status"]["cooked"] == 2
+    assert [f["index"] for f in result["failures"]] == [1]
 
 
 @pytest.mark.parametrize("where", ["args", "request"])
@@ -184,6 +211,7 @@ def test_workitems_with_failure_and_paging(client):
     rows = page["work_items"]
     assert [r["index"] for r in rows] == [0, 1, 2]
     assert [r["state"] for r in rows] == ["cooked_success", "cooked_fail", "cooked_success"]
+    assert "boom" in rows[1]["error"] and "exit_code" not in rows[1]  # in-process
     assert rows[0]["output_files"] == ["C:/hp-test/out0.txt"]
     assert rows[1]["output_files"] == []
     assert all(isinstance(r["id"], int) and r["name"].startswith("script_") for r in rows)

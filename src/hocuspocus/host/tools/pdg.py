@@ -17,6 +17,8 @@ Cancelling the job cancels the cook. No undo group: PDG work items are not hip s
 
 from __future__ import annotations
 
+import os
+import re
 import time
 from typing import Any
 
@@ -36,6 +38,15 @@ it accepts that the cook produced nothing (right after ``cookWorkItems(block=Fal
 the graph can still look idle)."""
 OUTPUT_FILE_CAP = 20
 ERROR_CAP = 5
+FAILURES_CAP = 5
+"""Failed work items listed in a cook result (review 14 papercut 1)."""
+ITEM_ERROR_CHARS = 400
+LOG_TAIL_BYTES = 64 * 1024
+_STAMP = re.compile(r"^\[\d{1,2}:\d{2}:\d{2}(?:\.\d+)?\]\s*")
+_EXIT_CODE = re.compile(r"exit code\s*=?\s*(-?\d+)", re.IGNORECASE)
+_ERROR_LINE = re.compile(
+    r"\berror\b|^[\w.]*(?:Error|Exception|Interrupt|Exit)\b.*:|\bfailed\b", re.IGNORECASE
+)
 
 
 # -- node resolution --------------------------------------------------------------------
@@ -166,6 +177,76 @@ def status_block(node: Any) -> dict[str, Any]:
     }
 
 
+def _log_path(item: Any) -> str | None:
+    try:
+        uri = str(item.logURI or "")
+    except Exception:
+        return None
+    path = uri[5:] if uri.startswith("file:") else uri
+    return path.replace("\\", "/") if path and os.path.isfile(path) else None
+
+
+def _read_tail(path: str) -> str:
+    try:
+        with open(path, "rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            size = handle.tell()
+            handle.seek(max(0, size - LOG_TAIL_BYTES))
+            return handle.read().decode("utf-8", errors="replace")
+    except OSError:
+        return ""
+
+
+def error_lines(text: str) -> str:
+    """The lines of a work item log that say why it failed, newest last, at most
+    :data:`ITEM_ERROR_CHARS` (the tail is kept). Falls back to the last line."""
+    lines: list[str] = []
+    for raw in text.splitlines():
+        line = _STAMP.sub("", raw).strip()
+        if not line or line.startswith("Traceback (most recent call last)"):
+            continue
+        lines.append(line)
+    picked = [
+        line
+        for line in lines
+        if _ERROR_LINE.search(line) and not _EXIT_CODE.search(line) and line not in ("^", "~")
+    ]
+    if not picked:
+        picked = [line for line in lines if not _EXIT_CODE.search(line)][-1:]
+    unique: list[str] = []
+    for line in picked:
+        if line not in unique:
+            unique.append(line)
+    out = " | ".join(unique[-4:])
+    return out if len(out) <= ITEM_ERROR_CHARS else "..." + out[-(ITEM_ERROR_CHARS - 3) :]
+
+
+def item_failure(item: Any) -> dict[str, Any]:
+    """``error``, ``log_path`` and ``exit_code`` of a failed work item, where known.
+
+    In-process items keep their log in ``logMessages``; out-of-process items write it to
+    the scheduler's ``pdgtemp/<pid>/logs/<item>.log`` (``logURI``), which ends with the
+    process exit code."""
+    text = ""
+    try:
+        text = str(item.logMessages or "")
+    except Exception:
+        text = ""
+    path = _log_path(item)
+    if path is not None:
+        text = text + "\n" + _read_tail(path)
+    out: dict[str, Any] = {}
+    error = error_lines(text)
+    if error:
+        out["error"] = error
+    if path is not None:
+        out["log_path"] = path
+    codes = _EXIT_CODE.findall(text)
+    if codes:
+        out["exit_code"] = int(codes[-1])
+    return out
+
+
 def _work_item_row(item: Any, owner: str | None) -> dict[str, Any]:
     files = [f.path for f in item.outputFiles]
     row: dict[str, Any] = {
@@ -179,7 +260,61 @@ def _work_item_row(item: Any, owner: str | None) -> dict[str, Any]:
         row["output_files_total"] = len(files)
     if owner is not None:
         row["node"] = owner
+    if row["state"] == "cooked_fail":
+        row.update(item_failure(item))
     return row
+
+
+def graph_tops(target: Any) -> list[Any]:
+    """``target`` and every TOP node upstream of it, upstream first."""
+    import hou
+
+    order: list[Any] = []
+    seen: set[int] = set()
+
+    def visit(node: Any) -> None:
+        if node is None or node.sessionId() in seen or not isinstance(node, hou.TopNode):
+            return
+        seen.add(node.sessionId())
+        for parent in node.inputs():
+            visit(parent)
+        order.append(node)
+
+    visit(target)
+    return order
+
+
+def failures(tops: list[Any], cap: int = FAILURES_CAP) -> list[dict[str, Any]]:
+    """The first ``cap`` failed work items of ``tops``, with their errors."""
+    out: list[dict[str, Any]] = []
+    for top in tops:
+        pdg_node = top.getPDGNode()
+        if pdg_node is None:
+            continue
+        for item in sorted(pdg_node.workItems, key=lambda w: (w.index, w.id)):
+            if _snake(item.state.name) != "cooked_fail":
+                continue
+            row: dict[str, Any] = {"node": top.path(), "id": int(item.id), "index": int(item.index)}
+            row.update(item_failure(item))
+            out.append(row)
+            if len(out) >= cap:
+                return out
+    return out
+
+
+def cook_result(target: Any) -> dict[str, Any]:
+    """The result of a finished cook of ``target``: its status, and the first failed work
+    items of its graph (``target`` and its upstream TOPs) when any failed."""
+    status = status_block(target)
+    failed = failures(graph_tops(target))
+    out: dict[str, Any] = {
+        "path": target.path(),
+        "ok": status["failed"] == 0 and not failed,
+        "status": status,
+    }
+    if failed:
+        out["failures"] = failed
+    return out
 
 
 def work_items(node: Any) -> list[dict[str, Any]]:
@@ -247,7 +382,7 @@ def _start_cook_job(
                     job.set_progress(done, total, f"{done}/{total} work items finished")
                 idle = not snapshot["cooking"]
                 if idle and (seen or time.monotonic() - began > START_GRACE_S):
-                    return {"path": target, "ok": status["failed"] == 0, "status": status}
+                    return job.run_main(lambda: cook_result(resolve_top(target)))
                 time.sleep(POLL_S)
         except ToolError as exc:
             if exc.code == "cancelled":
@@ -319,8 +454,7 @@ def pdg_tool(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     if ctx.executor.on_main_thread():
         # Called inline on the main thread (GUI shell, tests): no job can make progress.
         target = _cook_now(path, True)
-        status = status_block(resolve_top(target))
-        return {"path": target, "ok": status["failed"] == 0, "status": status}
+        return cook_result(resolve_top(target))
     # Like cook and render: a blocking call waits at most job_threshold_s, then hands back
     # the job (BIBLE §7); block: false returns the job at once.
     wait_s = min(timeout_s, float(ctx.config.job_threshold_s)) if block else 0.0

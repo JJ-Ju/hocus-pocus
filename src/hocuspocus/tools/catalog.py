@@ -1621,6 +1621,12 @@ _FULL: tuple[ToolSpec, ...] = (
             " the job threshold), status, workitems (paged, with state and output files), cancel, "
             "dirty. cook, cancel and dirty are refused read-only."
         ),
+        notes=(
+            "A failed work item carries error (the last error lines of its log, at most 400 "
+            "characters), log_path and exit_code (out-of-process items). A cook result (and job "
+            "result) has ok: false when any item of the graph failed, and failures lists the first"
+            " 5 failed items of the target and its upstream TOPs with their error."
+        ),
         input_schema=_obj(
             {
                 "action": _enum(("cook", "status", "workitems", "cancel", "dirty")),
