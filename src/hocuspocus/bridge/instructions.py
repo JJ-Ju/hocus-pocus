@@ -89,11 +89,12 @@ answers `reset: true`.
 ### Copernicus (COP) images
 
 Copernicus networks live in `/img`: `node_create {parent: "/img", type: "copnet"}`, then
-the nodes inside it with category `Cop` (`Cop2` is the legacy compositor). Write and look at
-an image through a `Cop/rop_image` wired to the node to see (its `copoutput` parm is the
-file, e.g. `$HIP/img/name.$F4.png`): `render {rop_path: "/img/net/rop_image1"}` writes it
-and returns a thumbnail the model can see, in well under a second. Cooking a ROP writes
-nothing. SOPs read a COP live through an `op:` path, e.g. `attribfrommap` with
+the nodes inside it with category `Cop` (`Cop2` is the legacy compositor). To look at any
+COP node: `viewport_capture {cop_path: "/img/net/node"}` returns its image in about 0.2 s;
+`geo_info` on a COP node gives resolution and per-channel stats. To write files, wire a
+`Cop/rop_image` (its `copoutput` parm is the file, e.g. `$HIP/img/name.$F4.png`) and
+`render {rop_path: "/img/net/rop_image1"}`, which also returns a thumbnail. Cooking a ROP
+writes nothing. SOPs read a COP live through an `op:` path, e.g. `attribfrommap` with
 `filename: "op:/img/net/node"`. Compositing verbs: over and multiply are `blend` modes, a
 threshold is `remap` (op threshold), a gradient is `ramp`, text is `font`.
 
