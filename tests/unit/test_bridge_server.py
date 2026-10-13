@@ -670,14 +670,16 @@ def test_disconnect_then_reconnect():
     assert bridge.call_tool("node_info", {"paths": ["/obj"]}).is_error is False
 
 
-def test_pinned_instance_exit_falls_back_to_new_one():
+def test_pinned_instance_exit_never_falls_back_to_new_one():
+    """Review 19 papercut 1: a dead pin is instance_lost, not a silent switch."""
     bridge, client, live = make_bridge()
     bridge.call_tool("houdini_connect", {"pid": 4242})
     live.clear()
     live.append(Instance(pid=7777, port=51002, token="t3", started="2026-10-12T12:00:00Z"))
     result = bridge.call_tool("node_info", {"paths": ["/obj"]})
-    assert result.meta["pid"] == 7777
-    assert any("4242" in w for w in result.meta["warnings"])
+    assert structured(result)["code"] == "instance_lost"
+    assert structured(result)["candidates"][0]["pid"] == 7777
+    assert [c[0] for c in client.calls] == ["houdini_status"]  # only the connect's status
 
 
 # -- resources and prompts -------------------------------------------------------------------

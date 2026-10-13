@@ -117,6 +117,7 @@ def houdini_status(bridge: Bridge, args: dict[str, Any]) -> dict[str, Any]:
     warnings: list[str] = []
     connected: dict[str, Any] | None = None
     chosen_pid: int | None = None
+    lost_block: dict[str, Any] | None = None
     if bridge.detached:
         live = bridge.scan()
         warnings.append("The bridge is disconnected; call houdini_connect to attach.")
@@ -124,9 +125,14 @@ def houdini_status(bridge: Bridge, args: dict[str, Any]) -> dict[str, Any]:
         live, sel, connected = _select_verified(bridge, warnings)
         if sel.instance is not None:
             chosen_pid = sel.instance.pid
+        if sel.lost_pid is not None:
+            lost = bridge.lost_error(live)
+            lost_block = {"pid": sel.lost_pid, "label": lost.detail["label"]}
+            warnings.append(f"{lost.message} {lost.hint[0].upper()}{lost.hint[1:]}.")
     settings = _split_settings(connected)
     status: dict[str, Any] = {
         "connected": connected,
+        **({"lost": lost_block} if lost_block else {}),
         "instances": [dict(inst.public(), selected=inst.pid == chosen_pid) for inst in live],
         "bridge_version": __version__,
         "profile": bridge.config.profile,
@@ -172,7 +178,7 @@ def houdini_connect(bridge: Bridge, args: dict[str, Any]) -> dict[str, Any]:
 
     if args.get("disconnect"):
         previous = bridge.preferred_pid
-        bridge.preferred_pid = None
+        bridge.pin(None)
         bridge.detached = True
         return {"connected": None, "disconnected": previous}
 
@@ -184,7 +190,7 @@ def houdini_connect(bridge: Bridge, args: dict[str, Any]) -> dict[str, Any]:
             float(launch.get("wait_s", 90)),
         )
         block = _connect_block(bridge, result.instance)
-        bridge.preferred_pid = result.instance.pid
+        bridge.pin(result.instance)
         bridge.last_target = result.instance
         bridge.detached = False
         _split_settings(block)
@@ -210,13 +216,14 @@ def houdini_connect(bridge: Bridge, args: dict[str, Any]) -> dict[str, Any]:
                 candidates=[str(inst.pid) for inst in live],
             )
         block = _connect_block(bridge, match)
-        bridge.preferred_pid = pid
+        bridge.pin(match)
         bridge.last_target = match
         bridge.detached = False
         _split_settings(block)
         return {"connected": block}
 
-    # No arguments: (re)enable automatic selection and report what it picks.
+    # No arguments: clear any pin, (re)enable automatic selection and report what it picks.
+    bridge.pin(None)
     warnings: list[str] = []
     _live, sel, block = _select_verified(bridge, warnings)
     if sel.instance is None or block is None:
@@ -254,6 +261,8 @@ def _quit(bridge: Bridge, args: dict[str, Any]) -> dict[str, Any]:
     else:
         warnings: list[str] = []
         _live, sel, block = _select_verified(bridge, warnings)
+        if sel.lost_pid is not None:
+            raise bridge.lost_error(_live)
         inst = sel.instance if block is not None else None
         if inst is None:
             raise ToolError(
@@ -269,7 +278,7 @@ def _quit(bridge: Bridge, args: dict[str, Any]) -> dict[str, Any]:
     # Forget it now: the bridge must not report this Houdini as having "exited" later.
     registry.forget(inst)
     if bridge.preferred_pid == inst.pid:
-        bridge.preferred_pid = None
+        bridge.pin(None)
     if bridge.last_target is not None and bridge.last_target.pid == inst.pid:
         bridge.last_target = None
     deadline = time.monotonic() + QUIT_WAIT_S

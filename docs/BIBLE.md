@@ -284,7 +284,12 @@ under the word cap, and a passing example.
 - **Several Houdinis.** Each has its own port, token and registry entry.
   `houdini_status` lists them with pid, label, hip, ui, version, started. The agent
   selects with `houdini_connect {pid}`. The bridge remembers the selection for its
-  lifetime only.
+  lifetime only. A pin is sticky (1.3, review 19 papercut 1): when the pinned Houdini
+  exits, every call returns `instance_lost` (naming the dead pid and label and the live
+  candidates as `{pid, label, ui, hip}`) and `houdini_status` reports `connected: null`
+  with `lost: {pid, label}`; the bridge never moves the pin to another instance. Only an
+  explicit `houdini_connect` (`{pid}`, `{launch}`, `{}` for automatic selection, or
+  `{disconnect: true}`) clears it.
 - **Restart.** Houdini closes → registry entry disappears → calls return
   `houdini_offline` → Houdini starts → new entry → bridge auto-selects it when it is the
   only one. No `/mcp reconnect` required.
@@ -670,6 +675,7 @@ Stable codes (the complete set; adding one is a design change):
 | code | when | retryable |
 |---|---|---|
 | `houdini_offline` | no live instance; names the pid (and hip) the bridge was driving if it exited, and says its unsaved changes are lost | after connect (`retryable: false` when nothing is running) |
+| `instance_lost` | the pinned Houdini exited (1.3); names its pid and label, `candidates` are the live instances as `{pid, label, ui, hip}`; the bridge does not switch on its own (§3.6) | no; after an explicit `houdini_connect` |
 | `houdini_busy` | main-thread timeout | yes |
 | `delivery_unknown` | request sent, response lost (becomes `houdini_offline` "exited while running <tool>" when the process is gone within 1.5 s) | inspect first |
 | `version_mismatch` | host `hp/vN` ≠ bridge | after reinstall |

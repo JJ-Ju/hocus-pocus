@@ -156,6 +156,9 @@ class Bridge:
             self.config.hfs or None, scan=self.scan, launches=self.launches
         )
         self.preferred_pid: int | None = None
+        """The pinned pid (``houdini_connect {pid}`` or ``{launch}``); BIBLE §3.6."""
+        self.pinned: registry.Instance | None = None
+        """The pinned instance as last seen, to name it once it has exited."""
         self.last_target: registry.Instance | None = None
         """The instance the last forwarded call went to, to name it if it exits."""
         self._previous_target: registry.Instance | None = None
@@ -168,6 +171,31 @@ class Bridge:
         """request_id -> the instance a call in flight was sent to (progress polling)."""
 
     # -- instances -----------------------------------------------------------------------
+
+    def pin(self, inst: registry.Instance | None) -> None:
+        """Pin ``inst`` (or clear the pin): only an explicit ``houdini_connect`` calls this."""
+        self.pinned = inst
+        self.preferred_pid = inst.pid if inst is not None else None
+
+    def lost_error(self, live: list[registry.Instance]) -> ToolError:
+        """``instance_lost``: the pinned Houdini exited and the bridge will not pick another
+        (review 19 papercut 1)."""
+        pid = self.preferred_pid
+        pinned = self.pinned if self.pinned is not None and self.pinned.pid == pid else None
+        label = pinned.label if pinned is not None and pinned.label else "houdini"
+        hip = pinned.hip if pinned is not None else ""
+        ordered = registry.sort_preferred(live)
+        choices = "; ".join(inst.describe() for inst in ordered) or "none is running"
+        return ToolError(
+            "instance_lost",
+            f"The pinned Houdini pid {pid} ({label}) has exited; changes made in it since its "
+            f"last save are lost. Not switching to another Houdini on its own. Live: {choices}.",
+            hint="houdini_connect {pid} pins one of the candidates, houdini_connect {launch} "
+            "starts one, houdini_connect {} returns to automatic selection",
+            candidates=[inst.candidate() for inst in ordered],
+            retryable=False,
+            detail={"pid": pid, "label": label, "hip": hip or None},
+        )
 
     def client_for(self, inst: registry.Instance) -> HostClient:
         return self.client_factory(inst.port, inst.token)
@@ -210,6 +238,8 @@ class Bridge:
             )
         live = self.scan()
         sel = registry.select(live, self.preferred_pid)
+        if sel.lost_pid is not None:
+            raise self.lost_error(live)
         warnings = list(sel.warnings)
         exited = self._exited_target(live)
         if sel.instance is None:
@@ -226,9 +256,7 @@ class Bridge:
             )
         inst = sel.instance
         self._previous_target = self.last_target
-        if self.preferred_pid is not None and inst.pid != self.preferred_pid:
-            self.preferred_pid = None  # the pinned instance exited; fall back to auto-selection
-        elif exited is not None and exited.pid != inst.pid:
+        if exited is not None and exited.pid != inst.pid:
             warnings.append(
                 f"The Houdini you were driving (pid {exited.pid}) has exited; changes made in it "
                 f"since its last save are lost. Now using pid {inst.pid}."

@@ -58,8 +58,8 @@ MINIMAL = {
 
 # BIBLE §9 code table, transcribed (`python_disabled / read_only` is one row, two codes).
 BIBLE_ERROR_CODES = {
-    "houdini_offline", "houdini_busy", "delivery_unknown", "version_mismatch",
-    "invalid_argument", "node_not_found", "parm_not_found", "node_type_not_found",
+    "houdini_offline", "instance_lost", "houdini_busy", "delivery_unknown",
+    "version_mismatch", "invalid_argument", "node_not_found", "parm_not_found", "node_type_not_found",
     "invalid_input", "invalid_value", "name_collision", "locked", "cook_failed",
     "unsaved_changes", "file_not_found", "path_not_allowed", "ui_required",
     "python_disabled", "read_only", "job_not_found", "cancelled", "python_exception",
@@ -105,6 +105,24 @@ def test_profiles() -> None:
     assert MINIMAL_TOOLS == MINIMAL and len(minimal) == 14
     assert [spec.name for spec in minimal] == [n for n in EXPECTED_ORDER if n in MINIMAL]
     assert {catalog.profile_of(spec) for spec in minimal} == {"minimal"}
+
+
+def test_profiles_are_nested() -> None:
+    """minimal ⊂ core ⊂ full (BIBLE §4.1): a bigger profile never drops a tool, so a
+    client moving up a profile keeps every tool it knew, and the integration tier, which
+    runs its host on full, exercises every tool of every profile."""
+    assert catalog.PROFILES == ("minimal", "core", "full")
+    names = {p: [spec.name for spec in for_profile(p)] for p in catalog.PROFILES}
+    assert set(names["minimal"]) < set(names["core"]) < set(names["full"])
+    assert names["full"] == [spec.name for spec in TOOLS]
+    for profile in catalog.PROFILES:  # each in catalogue order
+        assert names[profile] == [n for n in names["full"] if n in set(names[profile])]
+    for spec in TOOLS:
+        smallest = catalog.profile_of(spec)
+        listed = [p for p in catalog.PROFILES if catalog.in_profile(spec, p)]
+        assert listed == list(catalog.PROFILES[catalog.PROFILES.index(smallest) :]), spec.name
+    assert catalog.in_profile(get("pdg"), "bogus") is False  # unknown reads as core
+    assert catalog.in_profile(get("geo_read"), "bogus") is True
 
 
 def test_bridge_local_tools() -> None:
