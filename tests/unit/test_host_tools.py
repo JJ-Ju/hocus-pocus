@@ -275,6 +275,33 @@ def test_crash_summary_keeps_the_crashing_thread_only():
     assert crash_summary("x" * 5000) == "x" * CRASH_LOG_CHARS
 
 
+def test_render_errors_say_each_line_once():
+    """Review 16 N7: hou.OperationFailed and node.errors() repeat each other."""
+    from hocuspocus.host.tools.visual import failure
+
+    errors = [
+        "The attempted operation failed.\nError:       Command Exit Code: 139\n"
+        "             Failed to complete render: exit code 139\n"
+        "Use a Log Viewer with External Render Processes enabled for more information.",
+        "Command Exit Code: 139",
+        "Failed to complete render: exit code 139\n"
+        "Use a Log Viewer with External Render Processes enabled for more information.",
+    ]
+    message, detail = failure("/stage/rop failed to render frame 1", errors)
+    assert message == "/stage/rop failed to render frame 1: Command Exit Code: 139"
+    assert detail == {
+        "errors": [
+            "Failed to complete render: exit code 139",
+            "Use a Log Viewer with External Render Processes enabled for more information.",
+        ]
+    }
+    assert failure("x", ["The attempted operation failed."]) == (
+        "x: The attempted operation failed.",
+        {},
+    )
+    assert failure("x", []) == ("x: no output file", {})
+
+
 def test_last_cook_memory_is_bounded(monkeypatch):
     from hocuspocus.host.tools import _diag
 

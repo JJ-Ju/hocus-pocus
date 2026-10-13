@@ -1039,13 +1039,49 @@ def _capture_opengl(
     return info
 
 
+GENERIC_FAILURE = "The attempted operation failed."
+ERROR_PREFIXES = ("Error:", "Warning:")
+
+
+def error_lines(errors: list[str]) -> list[str]:
+    """The distinct lines of a ROP's errors, in order: ``hou.OperationFailed`` text and
+    ``node.errors()`` repeat each other (review 16 N7: a husk failure said the same thing
+    three times). Drops the generic "The attempted operation failed." and the
+    ``Error:`` prefixes. No ``hou``."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for error in errors:
+        for line in str(error).splitlines():
+            line = line.strip()
+            for prefix in ERROR_PREFIXES:
+                if line.startswith(prefix):
+                    line = line[len(prefix) :].strip()
+            if not line or line == GENERIC_FAILURE or line in seen:
+                continue
+            seen.add(line)
+            out.append(line)
+    if not out and errors:
+        out.append(GENERIC_FAILURE)
+    return out
+
+
+def failure(message: str, errors: list[str]) -> tuple[str, dict[str, Any]]:
+    """``message: <first error line>`` and a detail with the other lines only."""
+    lines = error_lines(errors)
+    detail: dict[str, Any] = {}
+    if len(lines) > 1:
+        detail["errors"] = lines[1:]
+    return f"{message}: {lines[0] if lines else 'no output file'}", detail
+
+
 def _check_capture_output(errors: list[str], out_file: str) -> None:
     if errors or not os.path.isfile(out_file):
+        message, detail = failure("The OpenGL ROP did not produce an image", errors)
         raise ToolError(
             "cook_failed",
-            f"The OpenGL ROP did not produce an image: {errors[0] if errors else 'no output file'}",
+            message,
             hint="Check that the scene cooks (problems tool) and that a GPU is available.",
-            detail={"errors": errors},
+            detail=detail or None,
         )
 
 
@@ -1169,13 +1205,12 @@ def capture_with_karma(
         tail = log_tail(logs, 8)
         shutil.rmtree(log_dir, ignore_errors=True)
     if errors or not os.path.isfile(out_file):
-        detail: dict[str, Any] = {"errors": errors}
+        message, detail = failure("The Karma fallback did not produce an image", errors)
         if tail:
             detail["log_tail"] = tail
         raise ToolError(
             "cook_failed",
-            "The Karma fallback did not produce an image: "
-            + (errors[0] if errors else "no output file"),
+            message,
             hint="Check that the scene cooks (problems tool), or render a Karma ROP with render.",
             detail=detail,
         )
@@ -1892,11 +1927,11 @@ def _render_job(plan: dict[str, Any], ctx: HostContext, thumbnail: bool) -> Any:
             finally:
                 child.kill()
             if outcome.get("errors"):
-                raise ToolError(
-                    "cook_failed",
-                    f"{plan['rop']} failed to render: {outcome['errors'][0]}",
-                    detail={"errors": outcome["errors"], "warnings": outcome.get("warnings", [])},
-                )
+                message, detail = failure(f"{plan['rop']} failed to render", outcome["errors"])
+                warnings = error_lines(outcome.get("warnings") or [])
+                if warnings:
+                    detail["warnings"] = warnings
+                raise ToolError("cook_failed", message, detail=detail or None)
             job.progress(1.0, "done")
             result = _render_result(plan, thumbnail)
             if outcome.get("notes"):
@@ -1973,7 +2008,10 @@ def _render_job(plan: dict[str, Any], ctx: HostContext, thumbnail: bool) -> Any:
                 job.progress(i / total, f"frame {num(frame)} ({i + 1}/{total})")
                 errors = job.run_main(lambda f=frame: render_frame(f), timeout_s=FRAME_TIMEOUT_S)
                 if errors:
-                    detail: dict[str, Any] = {"errors": errors, "frame": frame}
+                    message, detail = failure(
+                        f"{plan['rop']} failed to render frame {num(frame)}", errors
+                    )
+                    detail["frame"] = frame
                     hint = None
                     tail = log_tail(logs)
                     if tail:
@@ -1981,7 +2019,7 @@ def _render_job(plan: dict[str, Any], ctx: HostContext, thumbnail: bool) -> Any:
                         hint = "husk failed; detail.log_tail has the end of its log."
                     raise ToolError(
                         "cook_failed",
-                        f"{plan['rop']} failed to render frame {num(frame)}: {errors[0]}",
+                        message,
                         hint=hint,
                         detail=detail,
                     )

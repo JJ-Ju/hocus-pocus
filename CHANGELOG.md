@@ -198,6 +198,10 @@ D21 to D24).
 - **`render` thumbnails (review 16 N4).** An image output in a format the thumbnail
   cannot read, such as `.xyz`, came back with no thumbnail and no word why. A note now
   says so and lists the extensions the thumbnail reads.
+- **Render failures said it three times (review 16 N7).** A failed render repeated
+  Houdini's text in `message` and in two `detail.errors` entries. The error lines are
+  now deduplicated: `message` carries the first, `detail.errors` only the others, and
+  "The attempted operation failed." is dropped.
 
 ### Upgrading from 1.1
 

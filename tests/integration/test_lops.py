@@ -109,6 +109,10 @@ def test_render_usd_rop_failure_carries_the_husk_log(client, work_dir):
     rop = nodes["rop"]
     error = client.error("render", {"rop_path": rop.path(), "wait_s": 300})
     assert error["code"] == "cook_failed"
+    # Review 16 N7: message, detail.errors and the hint say each thing once.
+    lines = [error["message"], *error["detail"].get("errors", [])]
+    assert "The attempted operation failed" not in error["message"]
+    assert all(b not in a for i, a in enumerate(lines) for b in lines[i + 1 :]), lines
     tail = error["detail"]["log_tail"]
     assert isinstance(tail, list) and 0 < len(tail) <= 20
     assert any("Unable to create file" in line for line in tail), tail
