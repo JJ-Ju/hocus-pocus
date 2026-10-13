@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import base64
 import io
-import json
 from pathlib import Path
 
 import pytest
@@ -118,5 +117,3 @@ def test_usd_render_outputs_note_when_nothing_resolves(client):
     paths, note = usd_render_outputs(rop, [1.0])
     assert paths == []
     assert "outputimage" in note and "RenderProduct" in note
-
-
