@@ -1581,11 +1581,16 @@ _STATE: tuple[ToolSpec, ...] = (
     ToolSpec(
         name="job",
         description=(
-            "Long work from render, cook or pdg: status (state, progress, message, elapsed_s), "
-            "result (the tool's result once done), cancel, list."
+            "Jobs from render, cook or pdg: status (state, progress, message), result (the "
+            "tool's result once done), cancel, list."
         ),
         notes=(
-            "Jobs do not survive a Houdini restart. "
+            "Job ids are <pid>-<id>: the bridge sends a job call to the Houdini that started the "
+            "job, whichever is selected; if that Houdini has exited the answer is instance_lost "
+            "with the last status the bridge saw (detail.last_status). A bare id means the "
+            "selected Houdini. list shows the selected Houdini's jobs; all: true lists every "
+            "live instance's, each row with its pid, plus instances: [{pid, label, jobs, "
+            "running}]. Jobs do not survive a Houdini restart. "
             "A pdg cook job counts the work items of the whole graph in current/total and adds "
             "nodes: {name: 'finished/total'}. A cancelled job's result is the cancelled error, "
             "whose detail holds the last status."
@@ -1594,6 +1599,7 @@ _STATE: tuple[ToolSpec, ...] = (
             {
                 "action": _enum(("status", "result", "cancel", "list")),
                 "job_id": _s("Required except for list."),
+                "all": _b(False),
             },
             ("action",),
         ),
@@ -1612,7 +1618,10 @@ _STATE: tuple[ToolSpec, ...] = (
         ),
         # Reads and cancel only touch host-side jobs; repeating any action is harmless.
         idempotent=True,
-        examples=({"action": "status", "job_id": "j-3f2a"}, {"action": "list"}),
+        examples=(
+            {"action": "status", "job_id": "61900-9c3e6f7ca53e"},
+            {"action": "list", "all": True},
+        ),
     ),
 )
 

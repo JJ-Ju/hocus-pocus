@@ -16,6 +16,7 @@ import threading
 import time
 import traceback
 import uuid
+from collections import OrderedDict
 from collections.abc import Callable, Sequence
 from typing import Any
 from urllib.parse import unquote
@@ -113,6 +114,23 @@ def mutates(spec: ToolSpec, args: dict[str, Any]) -> bool:
     if spec.name in READ_WITHOUT:
         return any(args.get(key) is not None for key in READ_WITHOUT[spec.name])
     return True
+
+
+JOB_ID_RE = re.compile(r"^(\d+)-[0-9A-Za-z]+$")
+"""A host job id, ``<pid>-<hex>`` (1.3): the pid is the Houdini that runs the job."""
+JOB_CACHE_SIZE = 200
+"""How many job snapshots the bridge keeps, to report a job whose Houdini has exited."""
+JOB_SNAPSHOT_KEYS = (
+    "job_id", "tool", "label", "state", "progress", "current", "total", "message", "elapsed_s",
+)  # fmt: skip
+
+
+def job_owner(name: str, args: dict[str, Any]) -> int | None:
+    """The pid a ``job`` call must go to, from its ``<pid>-<id>`` job id; else None."""
+    if name != "job":
+        return None
+    match = JOB_ID_RE.match(str(args.get("job_id") or ""))
+    return int(match.group(1)) if match else None
 
 
 def instance_meta(inst: registry.Instance) -> dict[str, Any]:
@@ -220,6 +238,8 @@ class Bridge:
         self._verified: set[tuple[int, int, str]] = set()
         self._lock = threading.Lock()
         self.progress_interval_s = PROGRESS_INTERVAL_S
+        self._jobs: OrderedDict[str, dict[str, Any]] = OrderedDict()
+        """job_id -> {pid, label, status}: the last snapshot of every job this bridge saw."""
         self._inflight: dict[str, registry.Instance] = {}
         """request_id -> the instance a call in flight was sent to (progress polling)."""
 
@@ -291,10 +311,18 @@ class Bridge:
         return inst, warnings
 
     def _resolve(
-        self, tool: str = "", args: dict[str, Any] | None = None
+        self, tool: str = "", args: dict[str, Any] | None = None, target_pid: int | None = None
     ) -> tuple[registry.Instance, list[str], str | None]:
         """:meth:`resolve`, plus the ambiguity warning when the choice was a guess (a read
-        on the preferred one of several unpinned instances)."""
+        on the preferred one of several unpinned instances). ``target_pid`` (a job's
+        Houdini) bypasses the selection: that instance or ``instance_lost``."""
+        if target_pid is not None:
+            live = self.scan()
+            owner = next((inst for inst in live if inst.pid == target_pid), None)
+            if owner is None:
+                raise self.job_lost_error(target_pid, str((args or {}).get("job_id")), live)
+            self._check_hp(owner)
+            return owner, [], None
         if self.detached:
             raise ToolError(
                 "houdini_offline",
@@ -330,6 +358,11 @@ class Bridge:
                 f"since its last save are lost. Now using pid {inst.pid}."
             )
         self.last_target = inst
+        self._check_hp(inst)
+        return inst, warnings, (sel.warnings[0] if sel.ambiguous and sel.warnings else None)
+
+    @staticmethod
+    def _check_hp(inst: registry.Instance) -> None:
         if inst.hp != catalog.HP_RPC_VERSION:
             raise ToolError(
                 "version_mismatch",
@@ -337,7 +370,92 @@ class Bridge:
                 f"hp/v{catalog.HP_RPC_VERSION}.",
                 hint=REINSTALL_HINT,
             )
-        return inst, warnings, (sel.warnings[0] if sel.ambiguous and sel.warnings else None)
+
+    # -- jobs (review 19 papercut 3) -------------------------------------------------------
+
+    def job_lost_error(self, pid: int, job_id: str, live: list[registry.Instance]) -> ToolError:
+        """``instance_lost`` for a job whose Houdini has exited, with its last known status."""
+        cached = self._jobs.get(job_id)
+        label = cached["label"] if cached else ""
+        if not label and self.pinned is not None and self.pinned.pid == pid:
+            label = self.pinned.label
+        label = label or "houdini"
+        last = cached["status"] if cached else None
+        message = (
+            f"Job {job_id} ran in Houdini pid {pid} ({label}), which has exited; its jobs are gone."
+        )
+        if last:
+            steps = (
+                f", {last['current']}/{last['total']}"
+                if last.get("current") is not None and last.get("total")
+                else ""
+            )
+            note = f", {last['message']}" if last.get("message") else ""
+            message += f" Last status seen: {last.get('state')}{steps}{note}."
+        ordered = registry.sort_preferred(live)
+        return ToolError(
+            "instance_lost",
+            message,
+            hint="start the work again on a live Houdini (houdini_connect {pid} or {launch}, "
+            "then repeat the render, cook or pdg call); outputs already written stay on disk",
+            candidates=[inst.candidate() for inst in ordered],
+            retryable=False,
+            detail={"pid": pid, "label": label, "job_id": job_id, "last_status": last},
+        )
+
+    def _remember_jobs(self, inst: registry.Instance, payload: dict[str, Any]) -> None:
+        rows = [payload] if isinstance(payload.get("job_id"), str) else []
+        if isinstance(payload.get("jobs"), list):
+            rows += [row for row in payload["jobs"] if isinstance(row, dict)]
+        for row in rows:
+            job_id = row.get("job_id")
+            if not isinstance(job_id, str) or "state" not in row:
+                continue
+            snapshot = {key: row[key] for key in JOB_SNAPSHOT_KEYS if key in row}
+            self._jobs[job_id] = {"pid": inst.pid, "label": inst.label, "status": snapshot}
+            self._jobs.move_to_end(job_id)
+        while len(self._jobs) > JOB_CACHE_SIZE:
+            self._jobs.popitem(last=False)
+
+    def _job_list_all(self) -> tuple[bool, dict[str, Any], dict[str, Any]]:
+        """``job {action: list, all: true}``: every live instance's jobs, GUI first."""
+        jobs: list[dict[str, Any]] = []
+        instances: list[dict[str, Any]] = []
+        errors: list[dict[str, Any]] = []
+        for inst in registry.sort_preferred(self.scan()):
+            try:
+                if (inst.pid, inst.port, inst.token) not in self._verified:
+                    self.verify(inst)
+                ok, payload, _meta = self.client_for(inst).call(
+                    "job", {"action": "list"}, self.config.default_timeout_s
+                )
+            except registry.StaleEntry:
+                continue
+            except ToolError as exc:
+                errors.append({"pid": inst.pid, "code": exc.code, "message": exc.message})
+                continue
+            if not ok:
+                errors.append(
+                    {
+                        "pid": inst.pid,
+                        "code": payload.get("code"),
+                        "message": payload.get("message"),
+                    }
+                )
+                continue
+            rows = [
+                dict(row, pid=inst.pid)
+                for row in payload.get("jobs") or []
+                if isinstance(row, dict)
+            ]
+            self._remember_jobs(inst, {"jobs": rows})
+            jobs += rows
+            running = sum(1 for row in rows if row.get("state") == "running")
+            instances.append(dict(instance_meta(inst), jobs=len(rows), running=running))
+        out: dict[str, Any] = {"jobs": jobs, "instances": instances}
+        if errors:
+            out["errors"] = errors
+        return True, out, {}
 
     def _exited_target(self, live: list[registry.Instance]) -> registry.Instance | None:
         last = self.last_target
@@ -378,9 +496,14 @@ class Bridge:
         self, name: str, args: dict[str, Any], request_id: str | None = None
     ) -> tuple[bool, dict[str, Any], dict[str, Any]]:
         request_id = request_id or uuid.uuid4().hex
+        if name == "job":
+            if args.get("all") and args.get("action") == "list":
+                return self._job_list_all()
+            args = {key: value for key, value in args.items() if key != "all"}
+        target_pid = job_owner(name, args)
         stale: list[str] = []
         for _attempt in range(MAX_STALE_ENTRIES):
-            inst, warnings, ambiguous = self._resolve(name, args)
+            inst, warnings, ambiguous = self._resolve(name, args, target_pid)
             client = self.client_for(inst)
             try:
                 if (inst.pid, inst.port, inst.token) not in self._verified:
@@ -414,6 +537,8 @@ class Bridge:
             meta = dict(meta)
             meta.setdefault("pid", inst.pid)
             meta["instance"] = instance_meta(inst)
+            if ok:
+                self._remember_jobs(inst, payload)
             if ambiguous and ok:
                 # _meta is not shown to the model by every client: say it in the result too.
                 payload = {

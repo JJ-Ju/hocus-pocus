@@ -2,7 +2,7 @@
 
 <!-- Generated from src/hocuspocus/tools/catalog.py by `python -m hocuspocus.tools.docs`. Do not edit by hand. -->
 
-35 tools: 14 in the `minimal` profile, 31 in `core` (minimal included), 4 more in `full`. Model-visible `tools/list` text: 26,479 bytes. See `docs/BIBLE.md` §4 for the design.
+35 tools: 14 in the `minimal` profile, 31 in `core` (minimal included), 4 more in `full`. Model-visible `tools/list` text: 26,504 bytes. See `docs/BIBLE.md` §4 for the design.
 
 ## Contents
 
@@ -1093,9 +1093,9 @@ Read or set the node selection. Omit paths to get the selected node paths; pass 
 
 `idempotent` `headless ok` · profile `core`
 
-Long work from render, cook or pdg: status (state, progress, message, elapsed_s), result (the tool's result once done), cancel, list.
+Jobs from render, cook or pdg: status (state, progress, message), result (the tool's result once done), cancel, list.
 
-**Notes.** Jobs do not survive a Houdini restart. A pdg cook job counts the work items of the whole graph in current/total and adds nodes: {name: 'finished/total'}. A cancelled job's result is the cancelled error, whose detail holds the last status.
+**Notes.** Job ids are <pid>-<id>: the bridge sends a job call to the Houdini that started the job, whichever is selected; if that Houdini has exited the answer is instance_lost with the last status the bridge saw (detail.last_status). A bare id means the selected Houdini. list shows the selected Houdini's jobs; all: true lists every live instance's, each row with its pid, plus instances: [{pid, label, jobs, running}]. Jobs do not survive a Houdini restart. A pdg cook job counts the work items of the whole graph in current/total and adds nodes: {name: 'finished/total'}. A cancelled job's result is the cancelled error, whose detail holds the last status.
 
 ### Arguments
 
@@ -1103,6 +1103,7 @@ Long work from render, cook or pdg: status (state, progress, message, elapsed_s)
 |---|---|---|---|---|
 | `action` | `status` \| `result` \| `cancel` \| `list` | yes |  |  |
 | `job_id` | string |  |  | Required except for list. |
+| `all` | boolean |  | `false` |  |
 
 ### Returns
 
@@ -1119,11 +1120,11 @@ Long work from render, cook or pdg: status (state, progress, message, elapsed_s)
 ### Examples
 
 ```json
-{"action": "status", "job_id": "j-3f2a"}
+{"action": "status", "job_id": "61900-9c3e6f7ca53e"}
 ```
 
 ```json
-{"action": "list"}
+{"action": "list", "all": true}
 ```
 
 

@@ -288,3 +288,101 @@ def test_status_and_connect_carry_the_instance_and_select_the_gui():
     assert result.meta["instance"]["pid"] == GUI.pid
     connected = bridge.call_tool("houdini_connect", {"pid": WORKER.pid})
     assert connected.meta["instance"] == {"pid": WORKER.pid, "label": "hython"}
+
+
+# -- 3. jobs go to the Houdini that started them (review 19 papercut 3) -----------------------
+
+
+def _worker_with_job(hosts):
+    worker = host_of(hosts, WORKER)
+    worker.replies["render"] = (
+        True,
+        {"job_id": "61900-9c3e6f7ca53e", "state": "running", "tool": "render"},
+        {},
+    )
+    worker.replies["job"] = lambda args: (
+        (True, {"jobs": [{"job_id": "61900-9c3e6f7ca53e", "state": "running"}]}, {})
+        if args.get("action") == "list"
+        else (
+            True,
+            {
+                "job_id": args["job_id"],
+                "state": "running",
+                "current": 29,
+                "total": 240,
+                "message": "frame 29",
+            },
+            {},
+        )
+    )
+    return worker
+
+
+def test_job_calls_follow_the_pid_in_the_job_id():
+    bridge, hosts, _live = make(GUI, WORKER)
+    worker = _worker_with_job(hosts)
+    bridge.call_tool("houdini_connect", {"pid": WORKER.pid})
+    started = data(bridge.call_tool("render", {"rop_path": "/out/gl_two", "wait_s": 0}))
+    bridge.call_tool("houdini_connect", {"pid": GUI.pid})  # back to the GUI
+    result = bridge.call_tool("job", {"action": "status", "job_id": started["job_id"]})
+    assert not result.is_error
+    assert data(result)["current"] == 29
+    assert result.meta["instance"]["pid"] == WORKER.pid
+    assert worker.calls[-1] == ("job", {"action": "status", "job_id": "61900-9c3e6f7ca53e"})
+    assert all(call[0] != "job" for call in host_of(hosts, GUI).calls)
+
+
+def test_job_routing_ignores_ambiguity_and_a_lost_pin():
+    bridge, hosts, live = make(GUI, WORKER, WORKER2)
+    _worker_with_job(hosts)
+    bridge.call_tool("houdini_connect", {"pid": WORKER2.pid})
+    live.remove(WORKER2)  # the pin is lost, but the job's own Houdini is alive
+    result = bridge.call_tool("job", {"action": "cancel", "job_id": "61900-9c3e6f7ca53e"})
+    assert not result.is_error and result.meta["instance"]["pid"] == WORKER.pid
+
+
+def test_job_of_an_exited_houdini_is_instance_lost_with_its_last_status():
+    bridge, hosts, live = make(GUI, WORKER)
+    _worker_with_job(hosts)
+    bridge.call_tool("houdini_connect", {"pid": WORKER.pid})
+    bridge.call_tool("render", {"rop_path": "/out/gl_two", "wait_s": 0})
+    bridge.call_tool("job", {"action": "status", "job_id": "61900-9c3e6f7ca53e"})
+    bridge.call_tool("houdini_connect", {"pid": GUI.pid})
+    live.remove(WORKER)  # killed at frame 29
+    error = data(bridge.call_tool("job", {"action": "status", "job_id": "61900-9c3e6f7ca53e"}))
+    assert error["code"] == "instance_lost" and error["retryable"] is False
+    assert "pid 61900 (hython)" in error["message"] and "29/240" in error["message"]
+    assert error["detail"]["last_status"]["state"] == "running"
+    assert error["candidates"][0]["pid"] == GUI.pid
+    assert all(call[0] != "job" for call in host_of(hosts, GUI).calls)
+
+
+def test_bare_job_id_goes_to_the_selected_instance():
+    bridge, hosts, _live = make(GUI, WORKER)
+    _worker_with_job(hosts)
+    bridge.call_tool("houdini_connect", {"pid": WORKER.pid})
+    result = bridge.call_tool("job", {"action": "status", "job_id": "9c3e6f7ca53e"})
+    assert result.meta["instance"]["pid"] == WORKER.pid
+
+
+def test_job_resource_routes_by_pid_too():
+    bridge, hosts, _live = make(GUI, WORKER)
+    _worker_with_job(hosts)
+    contents = bridge.read_resource("houdini://job/61900-9c3e6f7ca53e").contents[0].text
+    assert json.loads(contents)["current"] == 29
+
+
+def test_job_list_is_the_selected_instance_and_all_aggregates():
+    bridge, hosts, _live = make(GUI, WORKER)
+    _worker_with_job(hosts)
+    host_of(hosts, GUI).replies["job"] = (True, {"jobs": []}, {})
+    selected = data(bridge.call_tool("job", {"action": "list"}))  # unpinned read: the GUI
+    assert selected["jobs"] == [] and selected["_instance"]["pid"] == GUI.pid
+    every = data(bridge.call_tool("job", {"action": "list", "all": True}))
+    assert every["jobs"] == [{"job_id": "61900-9c3e6f7ca53e", "state": "running", "pid": 61900}]
+    assert every["instances"] == [
+        {"pid": 3084, "label": "houdinifx", "jobs": 0, "running": 0},
+        {"pid": 61900, "label": "hython", "jobs": 1, "running": 1},
+    ]
+    # the host never sees the bridge-only argument
+    assert all("all" not in args for tool, args in host_of(hosts, GUI).calls if tool == "job")

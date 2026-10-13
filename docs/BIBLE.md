@@ -646,6 +646,15 @@ from the job's `current`/`total` steps (else its 0..1 `progress` over `total: 1`
 call. Jobs are not durable across a Houdini restart; `job status` after a
 restart returns `job_not_found` with that explanation.
 
+**Jobs and several instances** (1.3, review 19 papercut 3). A job id is `<pid>-<id>`,
+the pid of the Houdini that runs it (a bare `<id>` still finds a job of that process).
+The bridge sends `job` (and `houdini://job/{id}`) to the instance the pid names, whatever
+is selected or pinned; when that Houdini has exited the answer is `instance_lost` with the
+last status the bridge saw for the job in `detail.last_status`. `job {action: list}` lists
+the selected Houdini's jobs; `{action: list, all: true}` asks every live instance and adds
+`pid` to each row and `instances: [{pid, label, jobs, running}]`. A host asked for another
+pid's job answers `job_not_found` naming both pids.
+
 ---
 
 ## 8. Visual feedback

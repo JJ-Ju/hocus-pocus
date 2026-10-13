@@ -118,7 +118,9 @@ class Host:
         self.executor = executor or MainThreadExecutor()
         self.scene = SceneState()
         self.undo = UndoHistory()
-        self.jobs = CallJobManager(self.executor, default_timeout_s=config.default_timeout_s)
+        self.jobs = CallJobManager(
+            self.executor, default_timeout_s=config.default_timeout_s, id_prefix=str(self.pid)
+        )
         self.registry = InstanceRegistry(self.state_dir / "instances", self.pid)
         self.shutdown_event = threading.Event()
         self.server: HostHTTPServer | None = None
