@@ -581,6 +581,7 @@ def cook(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
 
 KIND_ORDER = {
     "error": 0,
+    "failed_work_items": 0,
     "broken_reference": 1,
     "missing_file": 2,
     "unconnected_input": 3,
@@ -856,6 +857,14 @@ def node_problems(
             except Exception:
                 continue
     rows.extend(_unconnected_inputs(node))
+    if category == "Top":
+        # Failed work items leave the node itself error-free (review 14 papercut 5).
+        from .pdg import failed_items_problem
+
+        with contextlib.suppress(Exception):
+            failed = failed_items_problem(node)
+            if failed is not None:
+                rows.append(failed)
     return rows, should_cook
 
 

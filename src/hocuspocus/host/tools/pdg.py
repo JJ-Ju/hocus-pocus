@@ -174,6 +174,40 @@ def _finished(top: Any) -> tuple[int, int, int]:
     return finished, len(items), cancelled
 
 
+def pdg_state(top: Any) -> dict[str, int]:
+    """``node_info``'s ``pdg_state`` for a TOP node: cooked, failed and total items."""
+    pdg_node = top.getPDGNode()
+    items = list(pdg_node.workItems) if pdg_node is not None else []
+    states = [_snake(item.state.name) for item in items]
+    return {
+        "cooked": sum(state in ("cooked_success", "cooked_cache") for state in states),
+        "failed": states.count("cooked_fail"),
+        "total": len(items),
+    }
+
+
+def failed_items_problem(top: Any) -> dict[str, Any] | None:
+    """A ``problems`` row for a TOP node with failed work items, or None."""
+    state = pdg_state(top)
+    if not state["failed"]:
+        return None
+    [first] = failures([top], cap=1)
+    message = f"{top.path()}: {state['failed']} of {state['total']} work items failed"
+    if first.get("error"):
+        message += f"; work item {first['id']}: {first['error']}"
+    row: dict[str, Any] = {
+        "path": top.path(),
+        "type": top.type().name(),
+        "kind": "failed_work_items",
+        "count": state["failed"],
+        "work_item": {"id": first["id"], "index": first["index"]},
+    }
+    if first.get("log_path"):
+        row["log_path"] = first["log_path"]
+    row["message"] = message
+    return row
+
+
 def status_block(node: Any) -> dict[str, Any]:
     if not _is_top_network(node):
         out = _node_status(node)

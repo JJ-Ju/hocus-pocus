@@ -1100,14 +1100,15 @@ def node_info(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
                 "opaque by default.",
                 hint="Pass recurse_locked: true to read inside it.",
             )
-        nodes.append(
-            node_block(
-                node,
-                include,
-                include_defaults=include_defaults,
-                recurse_locked=recurse_locked,
-            )
+        block = node_block(
+            node, include, include_defaults=include_defaults, recurse_locked=recurse_locked
         )
+        if node.type().category().name() == "Top":
+            from .pdg import pdg_state  # lazy: TOP nodes only
+
+            with contextlib.suppress(Exception):
+                block["pdg_state"] = pdg_state(node)
+        nodes.append(block)
     return {"nodes": nodes}
 
 

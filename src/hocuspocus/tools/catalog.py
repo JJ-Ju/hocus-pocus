@@ -1141,6 +1141,8 @@ _COOK: tuple[ToolSpec, ...] = (
             "by limit and cursor."
         ),
         notes=(
+            "A TOP node with failed work items is a failed_work_items row with count, work_item "
+            "{id, index} and the first item's error in message. "
             "Locked HDAs are skipped unless recurse_locked. A scan budget (10 s, or half of "
             "timeout_s) can end a page early with incomplete: true and a next_cursor that continues"
             " the walk without losing rows."
@@ -1637,7 +1639,8 @@ _FULL: tuple[ToolSpec, ...] = (
             "the whole graph (the target and its upstream TOPs), with nodes: {name: "
             "'finished/total'}; a cook whose items were cancelled ends cancelled, never done. "
             "cancel also cancels the job cooking that graph and returns the status after the cook"
-            " stopped, with cancelled: true and jobs_cancelled."
+            " stopped, with cancelled: true and jobs_cancelled. node_info on a TOP node adds "
+            "pdg_state: {cooked, failed, total}; problems lists TOP nodes with failed items."
         ),
         input_schema=_obj(
             {

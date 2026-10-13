@@ -113,6 +113,25 @@ def test_failed_out_of_process_item_reports_its_log(client):
     assert ok_rows and "error" not in ok_rows[0] and "log_path" not in ok_rows[0]
 
 
+def test_problems_and_node_info_report_failed_items(client):
+    """Review 14 papercut 5: a TOP node with failed work items is a problem, and
+    node_info says how its items stand."""
+    net, gen, script = _graph()
+    client.ok("pdg", {"action": "cook", "top_path": script.path(), "block": True})
+    found = client.ok("problems", {"root": net.path()})
+    rows = [r for r in found["problems"] if r["kind"] == "failed_work_items"]
+    assert len(rows) == 1, found
+    row = rows[0]
+    assert row["path"] == script.path() and row["count"] == 1
+    assert "1 of 3 work items failed" in row["message"] and "boom" in row["message"]
+    assert row["work_item"] == {"id": row["work_item"]["id"], "index": 1}
+    info = client.ok("node_info", {"paths": [script.path(), gen.path()]})["nodes"]
+    assert info[0]["pdg_state"] == {"cooked": 2, "failed": 1, "total": 3}
+    assert info[1]["pdg_state"] == {"cooked": 3, "failed": 0, "total": 3}
+    geo = hou.node("/obj").createNode("geo", "g")
+    assert "pdg_state" not in client.ok("node_info", {"paths": [geo.path()]})["nodes"][0]
+
+
 def test_cook_network_uses_display_node(client):
     net, _, script = _graph()
     result = client.ok("pdg", {"action": "cook", "top_path": net.path(), "block": True})
