@@ -1518,6 +1518,11 @@ _STATE: tuple[ToolSpec, ...] = (
             "result (the tool's result once done), cancel, list. Jobs do not survive a Houdini "
             "restart."
         ),
+        notes=(
+            "A pdg cook job counts the work items of the whole graph in current/total and adds "
+            "nodes: {name: 'finished/total'}. A cancelled job's result is the cancelled error, "
+            "whose detail holds the last status."
+        ),
         input_schema=_obj(
             {
                 "action": _enum(("status", "result", "cancel", "list")),
@@ -1628,7 +1633,11 @@ _FULL: tuple[ToolSpec, ...] = (
             " 5 failed items of the target and its upstream TOPs with their error. Out-of-process "
             "ROP TOPs (ROP Fetch, ...) load the saved hip, so cook refuses an untitled scene or "
             "unsaved changes with unsaved_changes; save: true saves first (approved_roots apply) "
-            "and the result names the saved path."
+            "and the result names the saved path. A cook job's progress counts the work items of "
+            "the whole graph (the target and its upstream TOPs), with nodes: {name: "
+            "'finished/total'}; a cook whose items were cancelled ends cancelled, never done. "
+            "cancel also cancels the job cooking that graph and returns the status after the cook"
+            " stopped, with cancelled: true and jobs_cancelled."
         ),
         input_schema=_obj(
             {

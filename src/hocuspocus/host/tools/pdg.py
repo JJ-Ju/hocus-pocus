@@ -38,6 +38,8 @@ START_GRACE_S = 2.0
 """How long the job waits for a graph that shows neither cooking nor work items before
 it accepts that the cook produced nothing (right after ``cookWorkItems(block=False)``
 the graph can still look idle)."""
+CANCEL_WAIT_S = 10.0
+"""How long pdg cancel waits for the cook (and its job) to stop before it reports."""
 OUTPUT_FILE_CAP = 20
 ERROR_CAP = 5
 FAILURES_CAP = 5
@@ -156,6 +158,20 @@ def _node_status(top: Any) -> dict[str, Any]:
     if warnings:
         row["warnings"] = warnings[:ERROR_CAP]
     return row
+
+
+def _finished(top: Any) -> tuple[int, int, int]:
+    """(finished, total, cancelled) work items of one TOP node."""
+    pdg_node = top.getPDGNode()
+    items = list(pdg_node.workItems) if pdg_node is not None else []
+    finished = cancelled = 0
+    for item in items:
+        state = _snake(item.state.name)
+        if state in ("cooked_success", "cooked_cache", "cooked_fail", "cooked_cancel"):
+            finished += 1
+        if state == "cooked_cancel":
+            cancelled += 1
+    return finished, len(items), cancelled
 
 
 def status_block(node: Any) -> dict[str, Any]:
@@ -397,10 +413,41 @@ def _cook_now(
     return target.path(), saved
 
 
-def _cancel(path: str) -> dict[str, Any]:
+def _cancel_now(path: str, jobs: list[dict[str, Any]]) -> list[str]:
+    """Cancel the cook of ``path`` and return the ids of the running ``pdg`` jobs that
+    cook a graph containing it (cancelling the cook alone left them to report done)."""
+    import hou
+
     node = resolve_top(path)
+    paths = {node.path(), *(top.path() for top in _tops(node))}
+    owning: list[str] = []
+    for job in jobs:
+        if job.get("tool") != "pdg" or job.get("state") != "running":
+            continue
+        label = job.get("label") or ""
+        target = hou.node(label) if label else None
+        graph = {top.path() for top in graph_tops(target)} if target is not None else {label}
+        if graph & paths:
+            owning.append(job["job_id"])
     node.cancelCook()
-    return status_block(node)
+    return owning
+
+
+def _cancel(ctx: HostContext, path: str, run: Any) -> dict[str, Any]:
+    owning = run(lambda: _cancel_now(path, ctx.jobs.list()))
+    for job_id in owning:
+        ctx.jobs.cancel(job_id)
+    deadline = time.monotonic() + CANCEL_WAIT_S
+    for job_id in owning:
+        ctx.jobs.get(job_id).done_event.wait(max(0.0, deadline - time.monotonic()))
+    while True:
+        status = run(lambda: status_block(resolve_top(path)))
+        if not status["cooking"] or time.monotonic() > deadline:
+            break
+        time.sleep(POLL_S)
+    status["cancelled"] = True
+    status["jobs_cancelled"] = owning
+    return status
 
 
 def _dirty(path: str) -> dict[str, Any]:
@@ -418,8 +465,11 @@ def _start_cook_job(
     target, saved = ctx.executor.run(lambda: _cook_now(path, False, ctx, save), timeout_s)
 
     def poll() -> dict[str, Any]:
-        node = resolve_top(target)
-        return {"cooking": _is_cooking(node), "status": status_block(node)}
+        # The whole graph: the target's own items are only the last stage (review 14
+        # papercut 3 saw 0/8 while the upstream ROP fetch had finished 7 of 8).
+        tops = graph_tops(resolve_top(target))
+        rows = [(top.name(), *_finished(top)) for top in tops]
+        return {"cooking": any(_is_cooking(top) for top in tops), "rows": rows}
 
     def work(job: Any) -> dict[str, Any]:
         began = time.monotonic()
@@ -428,19 +478,27 @@ def _start_cook_job(
             while True:
                 job.check_cancelled()
                 snapshot = job.run_main(poll, JOB_POLL_TIMEOUT_S)
-                status = snapshot["status"]
-                total = status.get("total") or 0
+                rows = snapshot["rows"]
+                total = sum(row[2] for row in rows)
                 seen = seen or snapshot["cooking"] or total > 0
                 if total:
-                    done = (
-                        status["cooked"]
-                        + status["failed"]
-                        + status["states"].get("cooked_cancel", 0)
-                    )
+                    done = sum(row[1] for row in rows)
                     job.set_progress(done, total, f"{done}/{total} work items finished")
+                    job.set_extra("nodes", {name: f"{d}/{t}" for name, d, t, _ in rows})
                 idle = not snapshot["cooking"]
                 if idle and (seen or time.monotonic() - began > START_GRACE_S):
-                    return job.run_main(lambda: cook_result(resolve_top(target)))
+                    result = job.run_main(lambda: cook_result(resolve_top(target)))
+                    cancelled = sum(row[3] for row in rows)
+                    if cancelled:
+                        # Never "done" for a cook whose items were cancelled (papercut 4).
+                        raise ToolError(
+                            "cancelled",
+                            f"The cook of {target} was cancelled: {cancelled} work item(s) "
+                            "did not finish.",
+                            hint="Cook again with pdg cook; finished items come from the cache.",
+                            detail=result,
+                        )
+                    return result
                 time.sleep(POLL_S)
         except ToolError as exc:
             if exc.code == "cancelled":
@@ -514,7 +572,7 @@ def pdg_tool(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
 
         return run(items)
     if action == "cancel":
-        return run(lambda: _cancel(path))
+        return _cancel(ctx, path, run)
     if action == "dirty":
         return run(lambda: _dirty(path))
 

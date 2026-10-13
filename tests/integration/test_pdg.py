@@ -133,7 +133,9 @@ def test_cook_as_job(client):
     assert started["state"] == "running" and started["job_id"]
     status = _wait_job(client, started["job_id"])
     assert status["state"] == "done", status
-    assert status["progress"] == 1.0 and status["current"] == status["total"] == 3, status
+    # Review 14 papercut 3: progress counts the whole graph (3 generated + 3 scripted).
+    assert status["progress"] == 1.0 and status["current"] == status["total"] == 6, status
+    assert status["nodes"] == {"gen": "3/3", "script": "3/3"}
     result = client.ok("job", {"action": "result", "job_id": started["job_id"]})["result"]
     assert result["path"] == script.path()
     assert result["ok"] is False
@@ -309,14 +311,35 @@ def test_cancel_running_cook(client):
             break
         client.host.executor.pump_once(0.05)
     assert status["cooking"] is True and status["states"] == {"cooking": 2}
+    # Review 14 papercut 4: pdg cancel cancels the owning job and returns the state after.
     cancelled = client.ok("pdg", {"action": "cancel", "top_path": script.path()})
     assert cancelled["path"] == script.path()
+    assert cancelled["cancelled"] is True and cancelled["jobs_cancelled"] == [started["job_id"]]
+    assert cancelled["cooking"] is False
+    assert cancelled["states"] == {"cooked_cancel": 2}
     final = _wait_job(client, started["job_id"], timeout=30)
-    assert final["state"] == "done"
-    result = client.ok("job", {"action": "result", "job_id": started["job_id"]})["result"]
-    assert result["status"]["cooking"] is False
-    assert result["status"]["cooked"] == 0
-    assert result["status"]["states"] == {"cooked_cancel": 2}
+    assert final["state"] == "cancelled" and final["message"] == "cancelled", final
+    error = client.error("job", {"action": "result", "job_id": started["job_id"]})
+    assert error["code"] == "cancelled"
+
+
+def test_cancel_inside_the_graph_never_reads_as_done(client):
+    """A cook whose items were cancelled outside HocusPocus ends cancelled, not done."""
+    _, _, script = _graph(SLEEP, count=2, cook_type=2)
+    started = client.ok("pdg", {"action": "cook", "top_path": script.path()})
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        if client.ok("pdg", {"action": "status", "top_path": script.path()})["states"].get(
+            "cooking"
+        ):
+            break
+        client.host.executor.pump_once(0.05)
+    script.cancelCook()  # e.g. the user pressed the cancel button
+    final = _wait_job(client, started["job_id"], timeout=30)
+    assert final["state"] == "cancelled", final
+    error = client.error("job", {"action": "result", "job_id": started["job_id"]})
+    assert error["code"] == "cancelled"
+    assert error["detail"]["status"]["states"] == {"cooked_cancel": 2}
 
 
 def test_cancel_via_job(client):
@@ -332,6 +355,7 @@ def test_cancel_via_job(client):
     client.ok("job", {"action": "cancel", "job_id": started["job_id"]})
     final = _wait_job(client, started["job_id"], timeout=30)
     assert final["state"] == "cancelled"
+    assert final["message"] == "cancelled"  # not "cancellation requested"
     deadline = time.monotonic() + 15
     while time.monotonic() < deadline:
         if not client.ok("pdg", {"action": "status", "top_path": script.path()})["cooking"]:
