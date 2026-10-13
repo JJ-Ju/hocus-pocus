@@ -23,8 +23,9 @@ repeating it. `_meta.scene_generation` changes when the scene is cleared or load
 paths may be stale. A Houdini started with `houdini_connect {launch}` usually closes when this \
 server exits (`launched.outlives_server` says): `hip_save` before the session ends, keep one \
 session open for long jobs, or attach by pid to one started with `hocuspocus launch`. \
-`viewport_capture` with `source: opengl_rop` frames the scene per `fit`; the GUI viewer path \
-captures the view as it is (home it first). `node_type_info` is large \
+`viewport_capture` frames per `fit` on both paths and restores the user's view afterwards; \
+without `fit` or `camera` the GUI viewer is captured as it is. `lop_path` captures a stage. \
+`node_type_info` is large \
 for FX types: pass `parms` globs, or `detail: "folders"` first. Add spare parms with \
 `node_edit` `spare_parms` (recipe in `hocuspocus://guide`). The resource `houdini://outline` \
 is the whole scene as a compact tree."""
