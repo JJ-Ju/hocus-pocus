@@ -2,9 +2,18 @@
 
 from __future__ import annotations
 
+import json
+import os
+import subprocess
+import threading
+import urllib.request
+from pathlib import Path
+
 import pytest
 
 hou = pytest.importorskip("hou")
+
+REPO_SRC = Path(__file__).resolve().parents[2] / "src"
 
 
 def _geo(name: str = "geo1"):
@@ -232,3 +241,73 @@ def test_fast_cook_leaves_no_job(client):
 def test_job_errors(client):
     assert client.error("job", {"action": "status", "job_id": "nope"})["code"] == "job_not_found"
     assert client.error("job", {"action": "status"})["code"] == "invalid_argument"
+
+
+# -- quit (houdini_connect {quit}, POST /hp/v1/quit) -----------------------------------------
+
+
+def _read_line(stream, box):
+    box["line"] = stream.readline()
+
+
+def test_quit_route_checks_unsaved_changes_then_quits(hython, tmp_path):
+    """Review 15 papercut 9: a typed quit. A headless host ends its hython."""
+    cwd = tmp_path / "cwd"
+    cwd.mkdir()
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(REPO_SRC)
+    env["HOUDINI_USER_PREF_DIR"] = (tmp_path / "prefs" / "houdini__HVER__").as_posix()
+    env["HOCUSPOCUS_STATE_DIR"] = str(tmp_path / "state")
+    env["HOCUSPOCUS_WORK_DIR"] = str(tmp_path / "work")
+    proc = subprocess.Popen(
+        [str(hython), "-m", "hocuspocus.host", "--port", "0"],
+        cwd=cwd,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        box: dict = {}
+        reader = threading.Thread(target=_read_line, args=(proc.stdout, box), daemon=True)
+        reader.start()
+        reader.join(120)
+        assert "line" in box, "host did not print its JSON line within 120 s"
+        info = json.loads(box["line"])
+        token = json.loads(Path(info["token_file"]).read_text(encoding="utf-8"))["token"]
+        base = f"http://127.0.0.1:{info['port']}/hp/v1"
+
+        def post(path, body):
+            request = urllib.request.Request(
+                f"{base}{path}",
+                data=json.dumps(body).encode(),
+                headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+            )
+            with urllib.request.urlopen(request, timeout=60) as r:
+                return json.loads(r.read())
+
+        made = post(
+            "/call", {"tool": "node_create", "args": {"items": [{"parent": "/obj", "type": "geo"}]}}
+        )
+        assert made["ok"] is True
+        refused = post("/quit", {})  # on_unsaved defaults to fail
+        assert refused["ok"] is False and refused["error"]["code"] == "unsaved_changes"
+        assert proc.poll() is None
+        bad = post("/quit", {"on_unsaved": "keep"})
+        assert bad["ok"] is False and bad["error"]["code"] == "invalid_argument"
+
+        quitting = post("/quit", {"on_unsaved": "discard"})
+        assert quitting["ok"] is True, quitting
+        assert quitting["result"]["quitting"] is True
+        assert quitting["result"]["pid"] == info["pid"]
+        assert quitting["result"]["saved"] is False
+        code = proc.wait(timeout=60)
+        assert code == 0, proc.stderr.read()
+        assert not Path(info["token_file"]).exists()
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait(timeout=30)
+        for stream in (proc.stdout, proc.stderr):
+            if stream:
+                stream.close()

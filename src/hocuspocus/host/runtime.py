@@ -179,6 +179,7 @@ class Host:
             shutdown=self.request_shutdown,
             meta=self.meta,
             call_jobs=self.jobs.for_call,
+            quit=self.request_quit,
         )
         self.server = HostHTTPServer(app, "127.0.0.1", int(self.config.port))
         self.ctx.port = self.server.port
@@ -263,6 +264,50 @@ class Host:
         from . import stop as module_stop
 
         self.executor.post(module_stop)
+
+    def request_quit(self, body: dict[str, Any]) -> tuple[dict[str, Any], Any]:
+        """``POST /hp/v1/quit`` (``houdini_connect {quit}``): apply ``on_unsaved`` like
+        ``hip_new`` on the main thread, then quit Houdini once the answer is sent: the
+        GUI with ``hou.exit(suppress_save_prompt=True)``, hython by ending its main loop
+        (``__main__`` returns; ``os._exit`` would segfault PDG teardown)."""
+        from .dispatch import error_envelope, ok_envelope
+        from .tools.hip import handle_unsaved
+        from .tools.session import scene_dirty
+
+        on_unsaved = body.get("on_unsaved", "fail")
+
+        def check() -> dict[str, Any]:
+            import hou
+
+            assert self.ctx is not None
+            if on_unsaved == "save" and self.config.read_only and scene_dirty(self.ctx):
+                raise ToolError(
+                    "read_only",
+                    "Saving before quitting changes the hip file, and the host is read-only.",
+                    hint="Quit with on_unsaved: 'discard', or turn read_only off.",
+                )
+            saved = handle_unsaved(on_unsaved, self.ctx, "quit Houdini")
+            return {"quitting": True, "pid": self.pid, "hip": hou.hipFile.path(), "saved": saved}
+
+        try:
+            result = self.executor.run(check, 60.0)
+        except ToolError as exc:
+            return error_envelope(exc, self.meta()), None
+        self.logger.info("quit requested over HTTP (on_unsaved=%s)", on_unsaved)
+        return ok_envelope(result, self.meta()), self._quit_now
+
+    def _quit_now(self) -> None:
+        time.sleep(0.2)  # let the response reach the bridge
+        if not self.ui:
+            self.request_shutdown()
+            return
+
+        def leave() -> None:
+            import hou
+
+            hou.exit(suppress_save_prompt=True)
+
+        self.executor.post(leave)
 
     # -- state -------------------------------------------------------------------
 

@@ -5,6 +5,7 @@ These run in the bridge (not in Houdini) so they work with no Houdini running.
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
@@ -17,6 +18,8 @@ if TYPE_CHECKING:
     from .server import Bridge
 
 HOST_STATUS_TIMEOUT_S = 10.0
+QUIT_WAIT_S = 15.0
+"""How long houdini_connect {quit} waits for the Houdini process to end."""
 
 DIES_WITH_SERVER_NOTE = (
     "This Houdini shares this MCP server's job object and closes when the server exits "
@@ -143,6 +146,23 @@ def houdini_status(bridge: Bridge, args: dict[str, Any]) -> dict[str, Any]:
 
 def houdini_connect(bridge: Bridge, args: dict[str, Any]) -> dict[str, Any]:
     modes = [k for k in ("pid", "launch", "disconnect") if args.get(k) not in (None, False)]
+    if args.get("quit"):
+        # quit takes an optional pid (the Houdini to quit); nothing else.
+        others = [m for m in modes if m != "pid"]
+        if others:
+            raise ToolError(
+                "invalid_argument",
+                f"quit cannot be combined with {', '.join(others)}.",
+                hint="quit the selected Houdini with {quit: true}, or one by pid with "
+                "{quit: true, pid}",
+            )
+        return _quit(bridge, args)
+    if args.get("on_unsaved") is not None:
+        raise ToolError(
+            "invalid_argument",
+            "on_unsaved applies only with quit: true.",
+            hint="houdini_connect {quit: true, on_unsaved: 'fail'|'save'|'discard'}",
+        )
     if len(modes) > 1:
         raise ToolError(
             "invalid_argument",
@@ -213,6 +233,55 @@ def houdini_connect(bridge: Bridge, args: dict[str, Any]) -> dict[str, Any]:
     out: dict[str, Any] = {"connected": block}
     if warnings:
         out["warnings"] = warnings
+    return out
+
+
+def _quit(bridge: Bridge, args: dict[str, Any]) -> dict[str, Any]:
+    """``houdini_connect {quit: true, on_unsaved, pid?}``: quit a Houdini through its host
+    (review 15 papercut 9: hou.exit in houdini_python looked like a failure)."""
+    on_unsaved = args.get("on_unsaved") or "fail"
+    live = bridge.scan()
+    if args.get("pid") is not None:
+        pid = int(args["pid"])
+        inst = next((i for i in live if i.pid == pid), None)
+        if inst is None:
+            raise ToolError(
+                "houdini_offline",
+                f"No live HocusPocus instance with pid {pid}.",
+                hint="pick a pid from houdini_status.instances",
+                candidates=[str(i.pid) for i in live],
+            )
+    else:
+        warnings: list[str] = []
+        _live, sel, block = _select_verified(bridge, warnings)
+        inst = sel.instance if block is not None else None
+        if inst is None:
+            raise ToolError(
+                "houdini_offline",
+                "No live Houdini instance with HocusPocus is running; nothing to quit.",
+                hint=OFFLINE_HINT,
+                retryable=False,
+            )
+    client = bridge.client_for(inst)
+    ok, result, _meta = client.quit(on_unsaved)
+    if not ok:
+        raise ToolError.from_dict(result)
+    # Forget it now: the bridge must not report this Houdini as having "exited" later.
+    registry.forget(inst)
+    if bridge.preferred_pid == inst.pid:
+        bridge.preferred_pid = None
+    if bridge.last_target is not None and bridge.last_target.pid == inst.pid:
+        bridge.last_target = None
+    deadline = time.monotonic() + QUIT_WAIT_S
+    exited = not registry.pid_alive(inst.pid)
+    while not exited and time.monotonic() < deadline:
+        time.sleep(0.2)
+        exited = not registry.pid_alive(inst.pid)
+    out: dict[str, Any] = {"quit": True, "pid": inst.pid, "exited": exited}
+    if result.get("saved"):
+        out["saved"] = result.get("hip")
+    if not exited:
+        out["note"] = f"Houdini (pid {inst.pid}) is still closing."
     return out
 
 

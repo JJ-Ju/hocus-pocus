@@ -1034,12 +1034,116 @@ def output_pattern(first: str, last: str) -> str:
     return first[:start] + "#" * len(run) + first[end:]
 
 
+def is_usd_render_rop(rop: Any) -> bool:
+    """A USD render ROP (``Lop/usdrender_rop``, ``Driver/usdrender``, Karma's wrappers):
+    husk renders the stage; ``lopoutput`` is only its intermediate USD file."""
+    return rop.parm("outputimage") is not None and rop.parm("lopoutput") is not None
+
+
 def _output_parm(rop: Any) -> Any:
+    if is_usd_render_rop(rop):
+        return rop.parm("outputimage")  # never lopoutput (review 13 papercut 2)
     for name in OUTPUT_PARMS:
         parm = rop.parm(name)
         if parm is not None:
             return parm
     return None
+
+
+def _usd_source_lop(rop: Any) -> Any:
+    """The LOP whose stage a USD render ROP renders: ``loppath``, else its first input."""
+    import hou
+
+    path = rop.parm("loppath").eval().strip() if rop.parm("loppath") is not None else ""
+    node = rop.node(path) if path else None
+    if node is None and not path:
+        inputs = [n for n in rop.inputs() if n is not None]
+        node = inputs[0] if inputs else None
+    if node is not None and not isinstance(node, hou.LopNode):
+        display = getattr(node, "displayNode", lambda: None)()
+        node = display if isinstance(display, hou.LopNode) else None
+    return node
+
+
+def _render_settings_prim(stage: Any, rop: Any) -> Any:
+    """The RenderSettings prim husk uses: the ROP's ``rendersettings``, else the stage's
+    ``renderSettingsPrimPath``, else the first one under /Render (then anywhere)."""
+    from pxr import Usd, UsdRender
+
+    path = ""
+    if rop.parm("rendersettings") is not None:
+        path = rop.parm("rendersettings").eval().strip()
+    if path:
+        prim = stage.GetPrimAtPath(path)
+        return prim if prim and prim.IsA(UsdRender.Settings) else None
+    with contextlib.suppress(Exception):
+        settings = UsdRender.Settings.GetStageRenderSettings(stage)
+        if settings:
+            return settings.GetPrim()
+    render = stage.GetPrimAtPath("/Render")
+    ranges = [Usd.PrimRange(render)] if render else []
+    ranges.append(stage.Traverse())
+    for prims in ranges:
+        for prim in prims:
+            if prim.IsA(UsdRender.Settings):
+                return prim
+    return None
+
+
+def usd_render_outputs(rop: Any, frames: list[float]) -> tuple[list[str], str | None]:
+    """Image files a USD render ROP writes when ``outputimage`` is empty: the
+    ``productName`` of every RenderProduct of its render settings, per frame (review 13
+    papercut 1). Returns ``(paths, note)``; the note says why nothing resolved. Main thread."""
+    from pxr import Usd, UsdRender
+
+    lop = _usd_source_lop(rop)
+    if lop is None:
+        return [], (
+            f"{rop.path()} has no LOP to render (loppath or an input), so its output image "
+            "is unknown; set outputimage, or wire the render settings LOP into it."
+        )
+    stages: dict[float, Any] = {}
+
+    def stage_at(frame: float | None) -> Any:
+        key = -1e30 if frame is None else frame
+        if key not in stages:
+            stages[key] = lop.stage() if frame is None else lop.stage(frame=frame)
+        return stages[key]
+
+    try:
+        stage = stage_at(None)
+        settings = _render_settings_prim(stage, rop) if stage is not None else None
+    except Exception:
+        stage = settings = None
+    if settings is None:
+        return [], (
+            f"No output image resolved for {rop.path()}: outputimage is empty and "
+            f"{lop.path()}'s stage has no render settings prim with a RenderProduct; set "
+            "outputimage, or picture on the render settings LOP."
+        )
+    targets = UsdRender.Settings(settings).GetProductsRel().GetForwardedTargets()
+    paths: list[str] = []
+    for frame in frames:
+        for target in targets:
+            attr = UsdRender.Product(stage.GetPrimAtPath(target)).GetProductNameAttr()
+            if not attr:
+                continue
+            samples = attr.GetTimeSamples()
+            current = attr
+            if samples and not samples[0] <= frame <= samples[-1]:
+                # Sampled over the playbar only: cook the stage at that frame.
+                with contextlib.suppress(Exception):
+                    current = stage_at(frame).GetPrimAtPath(target).GetAttribute("productName")
+            value = current.Get(Usd.TimeCode(frame)) if current else None
+            if value:
+                paths.append(str(value))
+    if not paths:
+        return [], (
+            f"No output image resolved for {rop.path()}: outputimage is empty and the "
+            f"RenderProduct productName under {settings.GetPath()} is empty; set outputimage, "
+            "or picture on the render settings LOP."
+        )
+    return paths, None
 
 
 def _prepare_render(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
@@ -1061,6 +1165,7 @@ def _prepare_render(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
         frames = [hou.frame(), hou.frame(), 1.0]
     output = args.get("output")
     parm = _output_parm(rop)
+    usd = is_usd_render_rop(rop)
     if output is not None:
         if not isinstance(output, str) or not output.strip():
             raise ToolError("invalid_argument", "'output' must be a non-empty path.")
@@ -1073,11 +1178,15 @@ def _prepare_render(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
         output = output.strip()
         check_allowed(resolve_path(output), ctx)
     expected: list[str] = []
-    for f in _frame_list(frames):
-        if output is not None:
-            expected.append(hou.text.expandStringAtFrame(output, f))
-        elif parm is not None:
-            expected.append(parm.evalAtFrame(f))
+    note = None
+    if output is None and usd and not parm.evalAtFrame(frames[0]).strip():
+        expected, note = usd_render_outputs(rop, _frame_list(frames))
+    else:
+        for f in _frame_list(frames):
+            if output is not None:
+                expected.append(hou.text.expandStringAtFrame(output, f))
+            elif parm is not None:
+                expected.append(parm.evalAtFrame(f))
     # Every file the render will write, not only an override (one check per directory).
     checked: set[str] = set()
     for path in expected:
@@ -1102,6 +1211,8 @@ def _prepare_render(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
         "parm": parm.name() if parm is not None else None,
         "output": output,
         "expected": [_norm(p) for p in expected],
+        "usd": usd,
+        "note": note,
         "isolate": needs_isolation(rop, ctx),
         "hfs": hou.text.expandString("$HFS"),
         "lights": scene_has_lights(),
@@ -1132,6 +1243,8 @@ def _render_result(plan: dict[str, Any], thumbnail: bool) -> dict[str, Any]:
     ]
     if images and not plan.get("lights", True):
         notes.append(NO_LIGHTS_NOTE)
+    if plan.get("note") and not outputs:
+        notes.append(plan["note"])
     if notes:
         result["notes"] = notes
     if thumbnail and outputs:
@@ -1156,6 +1269,25 @@ def _render_result(plan: dict[str, Any], thumbnail: bool) -> dict[str, Any]:
             except Exception as exc:  # a thumbnail is a nicety; never fail the render
                 result["thumbnail_error"] = f"{type(exc).__name__}: {exc}"
     return result
+
+
+LOG_TAIL_LINES = 20
+
+
+def log_tail(paths: list[str], lines: int = LOG_TAIL_LINES) -> list[str]:
+    """At most ``lines`` non-empty lines from the ends of the given log files, earlier
+    files first (husk's stderr before its stdout). No ``hou``."""
+    out: list[str] = []
+    for path in paths:
+        if len(out) >= lines:
+            break
+        if not path or not os.path.isfile(path):
+            continue
+        with contextlib.suppress(OSError):
+            data = Path(path).read_bytes()[-20_000:].decode("utf-8", "replace")
+            found = [line.rstrip() for line in data.splitlines() if line.strip()]
+            out.extend(found[-(lines - len(out)) :])
+    return out
 
 
 def _render_job(plan: dict[str, Any], ctx: HostContext, thumbnail: bool) -> Any:
@@ -1200,27 +1332,53 @@ def _render_job(plan: dict[str, Any], ctx: HostContext, thumbnail: bool) -> Any:
             shutil.rmtree(tmp_dir, ignore_errors=True)
 
     def run_in_process(job: Any) -> dict[str, Any]:
-        saved: dict[str, Any] = {}
+        saved: dict[str, tuple[Any, Any]] = {}
         notes: list[str] = []
+        logs: list[str] = []
+        log_dir: list[str] = []
+
+        def temporary_parms(node: Any) -> dict[str, Any]:
+            """The output override and, on USD render ROPs, husk logs to read on failure."""
+            parms: dict[str, Any] = {}
+            if plan["output"] is not None:
+                parms[plan["parm"]] = plan["output"]
+            names = ("husk_log", "husk_stdout", "husk_stderr")
+            if plan.get("usd") and all(node.parm(n) is not None for n in names):
+                if node.parm("husk_log").eval():
+                    logs.extend(node.parm(n).eval() for n in names[1:])
+                else:
+                    log_dir.append(tempfile.mkdtemp(prefix="hp-husk-"))
+                    out, err = (_norm(os.path.join(log_dir[0], f)) for f in ("out.log", "err.log"))
+                    parms.update(husk_log=1, husk_stdout=out, husk_stderr=err)
+                    logs.extend((err, out))
+            return parms
 
         def apply_override() -> None:
-            parm = hou.node(plan["rop"]).parm(plan["parm"])
-            saved["raw"] = parm.unexpandedString()
-            saved["keys"] = parm.keyframes()
-            with hou.undos.disabler():
-                if saved["keys"]:
-                    parm.deleteAllKeyframes()
-                parm.set(plan["output"])
+            from .events import muted
+
+            node = hou.node(plan["rop"])
+            with hou.undos.disabler(), muted():
+                for name, value in temporary_parms(node).items():
+                    parm = node.parm(name)
+                    string = parm.parmTemplate().type() == hou.parmTemplateType.String
+                    keys = parm.keyframes()
+                    saved[name] = (parm.unexpandedString() if string else parm.eval(), keys)
+                    if keys:
+                        parm.deleteAllKeyframes()
+                    parm.set(value)
 
         def restore() -> None:
+            from .events import muted
+
             node = hou.node(plan["rop"])
             if node is None:
                 return
-            parm = node.parm(plan["parm"])
-            with hou.undos.disabler():
-                parm.set(saved["raw"])
-                if saved["keys"]:
-                    parm.setKeyframes(saved["keys"])
+            with hou.undos.disabler(), muted():
+                for name, (raw, keys) in saved.items():
+                    parm = node.parm(name)
+                    parm.set(raw)
+                    if keys:
+                        parm.setKeyframes(keys)
 
         def render_frame(frame: float) -> list[str]:
             node = hou.node(plan["rop"])
@@ -1234,26 +1392,35 @@ def _render_job(plan: dict[str, Any], ctx: HostContext, thumbnail: bool) -> Any:
             errors += [str(e) for e in node.errors()]
             return errors
 
-        if plan["output"] is not None:
-            job.run_main(apply_override)
         try:
+            job.run_main(apply_override)
             total = len(frame_list)
             for i, frame in enumerate(frame_list):
                 job.progress(i / total, f"frame {num(frame)} ({i + 1}/{total})")
                 errors = job.run_main(lambda f=frame: render_frame(f), timeout_s=FRAME_TIMEOUT_S)
                 if errors:
+                    detail: dict[str, Any] = {"errors": errors, "frame": frame}
+                    hint = None
+                    tail = log_tail(logs)
+                    if tail:
+                        detail["log_tail"] = tail
+                        hint = "husk failed; detail.log_tail has the end of its log."
                     raise ToolError(
                         "cook_failed",
                         f"{plan['rop']} failed to render frame {num(frame)}: {errors[0]}",
-                        detail={"errors": errors, "frame": frame},
+                        hint=hint,
+                        detail=detail,
                     )
             job.progress(1.0, "done")
         finally:
-            if "raw" in saved:
+            if saved:
                 # Never raises: a render error stays the error the caller sees.
                 note = run_with_fallback(ctx.executor, restore, 60.0)
                 if note:
-                    notes.append(f"Restoring {plan['rop']} {plan['parm']} failed: {note}.")
+                    names = ", ".join(saved)
+                    notes.append(f"Restoring {plan['rop']} {names} failed: {note}.")
+            for folder in log_dir:
+                shutil.rmtree(folder, ignore_errors=True)
         result = _render_result(plan, thumbnail)
         if notes:
             result["notes"] = [*notes, *result.get("notes", [])]

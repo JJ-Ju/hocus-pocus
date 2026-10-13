@@ -7,6 +7,7 @@ Routes::
     GET  /hp/v1/jobs/{id}   job status (and result once done)
     GET  /hp/v1/calls/{request_id}/jobs   snapshots of the jobs a call started (progress)
     POST /hp/v1/shutdown    stop the host (not Houdini)
+    POST /hp/v1/quit        {on_unsaved} -> quit Houdini after the unsaved check
 
 Every route rejects a non-loopback ``Origin`` or ``Host`` with 403 (the ``Host`` check
 closes DNS rebinding, which sends same-origin GETs with no ``Origin``). Idle connections
@@ -86,9 +87,14 @@ class HostApp:
         shutdown: Callable[[], None] | None = None,
         meta: Callable[[], dict[str, Any]] | None = None,
         call_jobs: Callable[[str], list[dict[str, Any]]] | None = None,
+        quit: Callable[[dict[str, Any]], tuple[dict[str, Any], Callable[[], None] | None]]
+        | None = None,
     ) -> None:
         self.token = token
         self.call = call
+        self.quit = quit
+        """``POST /hp/v1/quit``: returns the envelope and, when it agreed to quit, the
+        function that quits (run after the response is sent)."""
         self.health = health
         self.job = job
         self.call_jobs = call_jobs
@@ -207,7 +213,7 @@ class _Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802 - http.server API
         path = urlsplit(self.path).path.rstrip("/")
-        if path not in (f"{API_PREFIX}/call", f"{API_PREFIX}/shutdown"):
+        if path not in (f"{API_PREFIX}/call", f"{API_PREFIX}/shutdown", f"{API_PREFIX}/quit"):
             if self._guard(auth=False):
                 self._transport_error(HTTPStatus.NOT_FOUND, f"No route {path}.")
             return
@@ -221,6 +227,17 @@ class _Handler(BaseHTTPRequestHandler):
             shutdown = self.server.app.shutdown
             if shutdown is not None:
                 threading.Thread(target=shutdown, name="hocuspocus-shutdown", daemon=True).start()
+            return
+        if path.endswith("/quit"):
+            quit_ = self.server.app.quit
+            if quit_ is None:
+                self._transport_error(HTTPStatus.NOT_FOUND, f"No route {path}.")
+                return
+            envelope, after = quit_(body if isinstance(body, dict) else {})
+            self.close_connection = True
+            self._send_json(HTTPStatus.OK, envelope)
+            if after is not None:
+                threading.Thread(target=after, name="hocuspocus-quit", daemon=True).start()
             return
         if not isinstance(body, dict):
             self._send_json(

@@ -332,15 +332,19 @@ _SESSION: tuple[ToolSpec, ...] = (
     ToolSpec(
         name="houdini_connect",
         description=(
-            "Choose the Houdini this session drives: pid attaches to a live instance, launch starts"
-            " one (gui or headless hython, optional hip), disconnect drops the selection. A "
-            "launched Houdini usually closes when this server exits (launched.outlives_server "
-            "says); for one that outlives sessions, run `hocuspocus launch` and attach by pid."
+            "Choose the Houdini this session drives: pid attaches, launch starts one (gui or "
+            "headless, optional hip), disconnect drops the selection, quit closes it (on_unsaved "
+            "as hip_new). A launched Houdini usually closes with this server "
+            "(launched.outlives_server says); `hocuspocus launch` starts one that outlives it."
         ),
         notes=(
             "launch waits up to wait_s seconds for the new host to register. A launched Houdini "
             "starts in HOCUSPOCUS_WORK_DIR (default: the home directory), which is the untitled "
-            "scene's $HIP and $JOB."
+            "scene's $HIP and $JOB. quit closes the selected Houdini (or pid) through its host: "
+            "with unsaved changes on_unsaved fail (default) refuses with unsaved_changes, save "
+            "saves first, discard drops them. It returns {quit, pid, exited, saved?} and forgets "
+            "the registry entry. To keep one alive across sessions, start it with `hocuspocus "
+            "launch` and attach by pid."
         ),
         input_schema=_obj(
             {
@@ -354,13 +358,15 @@ _SESSION: tuple[ToolSpec, ...] = (
                     ("mode",),
                 ),
                 "disconnect": _b(False),
+                "quit": _b(False),
+                "on_unsaved": _enum(("fail", "save", "discard")),
             }
         ),
         bridge_local=True,
         examples=(
             {"pid": 12345},
             {"launch": {"mode": "headless", "hip": "C:/work/shot.hip"}},
-            {"disconnect": True},
+            {"quit": True, "on_unsaved": "save"},
         ),
     ),
 )
@@ -1300,7 +1306,11 @@ _VISUAL: tuple[ToolSpec, ...] = (
             " notes warn when the scene has no lights and when the thumbnail is nearly black. "
             "thumbnail.image.attached is true when the image went out as MCP image content. The "
             "thumbnail is inline only, flattened onto grey; the ROP's own output files are left as "
-            "written, alpha included."
+            "written, alpha included. USD render ROPs (Lop usdrender_rop, Driver usdrender): "
+            "outputs come from outputimage, else the RenderProduct productName of the render "
+            "settings the ROP uses (EXR thumbnails too), never lopoutput; output overrides "
+            "outputimage; a note says when nothing resolves; a husk failure carries the end of "
+            "its log in detail.log_tail."
         ),
         input_schema=_obj(
             {
@@ -1527,10 +1537,10 @@ _STATE: tuple[ToolSpec, ...] = (
         name="job",
         description=(
             "Long work from render, cook or pdg: status (state, progress, message, elapsed_s), "
-            "result (the tool's result once done), cancel, list. Jobs do not survive a Houdini "
-            "restart."
+            "result (the tool's result once done), cancel, list."
         ),
         notes=(
+            "Jobs do not survive a Houdini restart. "
             "A pdg cook job counts the work items of the whole graph in current/total and adds "
             "nodes: {name: 'finished/total'}. A cancelled job's result is the cancelled error, "
             "whose detail holds the last status."
@@ -1640,10 +1650,10 @@ _FULL: tuple[ToolSpec, ...] = (
         name="pdg",
         description=(
             "Drive a TOP node: cook its work items as a job (block waits up to timeout_s, capped at"
-            " the job threshold), status, workitems (paged, with state and output files), cancel, "
-            "dirty. cook, cancel and dirty are refused read-only."
+            " the job threshold), status, workitems (paged; failed items say why), cancel, dirty."
         ),
         notes=(
+            "cook, cancel and dirty are refused read-only. "
             "A failed work item carries error (the last error lines of its log, at most 400 "
             "characters), log_path and exit_code (out-of-process items). A cook result (and job "
             "result) has ok: false when any item of the graph failed, and failures lists the first"
