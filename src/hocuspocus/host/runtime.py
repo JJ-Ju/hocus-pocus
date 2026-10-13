@@ -191,7 +191,7 @@ class Host:
         # The events ring buffer (tool ``events``) records hip and node events from here on.
         from .tools import events as tool_events
 
-        tool_events.install(self.executor.post)
+        tool_events.install(self.executor.post, executor=self.executor)
 
         removed = prune_stale(self.registry.directory)
         if removed:

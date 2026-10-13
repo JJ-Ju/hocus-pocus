@@ -1109,6 +1109,8 @@ def node_info(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
             with contextlib.suppress(Exception):
                 block["pdg_state"] = pdg_state(node)
         nodes.append(block)
+        # events reports later changes to what the agent has read (review 15 papercut 3).
+        watch_nodes([node])
     return {"nodes": nodes}
 
 

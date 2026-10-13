@@ -1709,9 +1709,19 @@ _FULL: tuple[ToolSpec, ...] = (
     ToolSpec(
         name="events",
         description=(
-            "What changed since your last call: hip events and node events (created, renamed, "
-            "deleted, parms changed on nodes HocusPocus touched) with a monotonic seq. Pass the "
-            "last seq seen as since (default 0)."
+            "What changed since your last call: hip, node (created, renamed, deleted, parms or "
+            "flags changed on nodes HocusPocus touched or read) and pdg events with seq and "
+            "origin (agent|other). Pass the last seq seen as since."
+        ),
+        notes=(
+            "Watched nodes: those HocusPocus created, edited, read with node_info or listed with"
+            " network_describe, and nodes created directly under /obj, /stage, /mat, /out and "
+            "/tasks. FlagChanged has detail.flags (flag: new value); a spare parm edit is one "
+            "SpareParmsChanged; hda create, match and unlock are one hda_contents_rebuilt per "
+            "asset; kind pdg has detail.event cook_start, work_item_failed (id, index, error) or"
+            " cook_done (ok, states, cancelled). A call that fails and is rolled back records "
+            "nothing, nor does a node created and deleted within one call, a tool's own "
+            "set-and-restore, or Houdini's save-time writes on TOP networks."
         ),
         input_schema=_obj({"since": _i(None, minimum=0, default=0), "limit": _limit()}),
         read_only=True,

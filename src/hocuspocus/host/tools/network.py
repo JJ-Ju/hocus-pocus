@@ -364,6 +364,10 @@ def network_describe(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
         N.inside_locked(root) or (fmt != "python" and N._is_locked_hda(root))
     ):
         raise N._locked_root_error(root)
+    # events reports renames and edits of what the agent has described (review 15
+    # papercut 3: a user rename of /obj/sky surfaced only as a failed call).
+    if not N._is_locked_hda(root):
+        N.watch_nodes([root, *root.children()])
     if fmt == "outline":
         return _outline(root, depth=depth, recurse_locked=recurse_locked, cursor=cursor, ctx=ctx)
     if fmt == "python":

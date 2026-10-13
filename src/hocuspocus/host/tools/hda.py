@@ -22,6 +22,7 @@ from typing import Any
 from hocuspocus.tools.errors import ToolError
 
 from ..undo import hou_undo_group, make_label
+from . import events
 from ._common import (
     bad_arg,
     get_node,
@@ -32,7 +33,7 @@ from ._common import (
     response_budget,
 )
 from .hip import check_allowed, resolve_path
-from .nodes import ensure_editable, hda_block
+from .nodes import ensure_editable, hda_block, watch_nodes
 from .registry import HostContext, tool
 
 ACTIONS = ("create", "save", "unlock", "match", "install", "reload", "list")
@@ -414,8 +415,21 @@ def hda(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     label = make_label(
         "hda", {"undo_label": f"{action} {args.get('path') or args.get('library_path')}"}
     )
+    # create, match and unlock rebuild the asset's contents: one events entry for the
+    # asset, not one per internal node (review 15 papercut 2).
+    rebuilt = get_node(args["path"]) if action in ("create", "match", "unlock") else None
     with hou_undo_group(label):
-        result = handler(args, ctx)
+        if rebuilt is None:
+            result = handler(args, ctx)
+        else:
+            path = rebuilt.path()
+            # createDigitalAsset builds the asset as a sibling, deletes the subnet and
+            # renames the sibling, so for create the whole parent network is in scope.
+            parent = rebuilt.parent()
+            scope = parent.path() if action == "create" and parent is not None else path
+            with events.collapsed(path, scope=scope):
+                result = handler(args, ctx)
+            watch_nodes([get_node(result.get("path") or path)])
     ctx.undo.record(label, "hda")
     ctx.scene.mark_dirty()
     result["undo_label"] = label

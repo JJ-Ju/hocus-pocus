@@ -84,6 +84,9 @@ class MainThreadExecutor:
         self.main_thread_ident: int | None = main_thread_ident
         self._running = False
         self._draining = False
+        self.work_wrapper: Callable[[Callable[[], Any]], Any] | None = None
+        """Runs each queued callable (``wrapper(fn)``) when set: the ``events`` hooks use it
+        to tell HocusPocus's own scene changes from the user's."""
 
     # -- lifecycle ---------------------------------------------------------------
 
@@ -231,8 +234,9 @@ class MainThreadExecutor:
                 return
             work.state = "running"
         reraise: BaseException | None = None
+        wrapper = self.work_wrapper
         try:
-            work.result = work.fn()
+            work.result = work.fn() if wrapper is None else wrapper(work.fn)
         except BaseException as exc:  # transported to the caller
             work.exc = exc
             with contextlib.suppress(Exception):  # exceptions that reject attributes

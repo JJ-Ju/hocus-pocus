@@ -26,6 +26,7 @@ from typing import Any
 from hocuspocus.tools.errors import ToolError
 
 from ..dispatch import call_timeout
+from . import events
 from ._common import bad_arg, get_node, page, refuse_if_read_only
 from ._diag import a_or_an
 from .hip import check_allowed
@@ -618,6 +619,7 @@ def _start_cook_job(
                 if idle and (seen or time.monotonic() - began > START_GRACE_S):
                     result = job.run_main(lambda: cook_result(resolve_top(target)))
                     cancelled = sum(row[3] for row in rows)
+                    _record_done(result, cancelled=bool(cancelled))
                     if cancelled:
                         # Never "done" for a cook whose items were cancelled (papercut 4).
                         raise ToolError(
@@ -630,10 +632,14 @@ def _start_cook_job(
                     return result
                 time.sleep(POLL_S)
         except ToolError as exc:
-            if exc.code == "cancelled":
+            if exc.code == "cancelled" and not isinstance(exc.detail, dict):
+                # Cancelled through job (the cook still runs); a cook that ended with
+                # cancelled items carries its result in detail and is already recorded.
                 ctx.executor.run(lambda: resolve_top(target).cancelCook(), JOB_POLL_TIMEOUT_S)
+                events.record_pdg(target, "cook_done", ok=False, cancelled=True)
             raise
 
+    events.record_pdg(target, "cook_start")
     started = ctx.jobs.start("pdg", work, label=target)
     if wait_s > 0 and started.done_event.wait(wait_s):
         # Returned synchronously: the caller never saw a job_id, so keep job list clean.
@@ -653,6 +659,18 @@ def _start_cook_job(
         },
         saved,
     )
+
+
+def _record_done(result: dict[str, Any], cancelled: bool = False) -> None:
+    """``events``: the failed items and the end of a cook (review 14 papercut 6)."""
+    for failure in result.get("failures", []):
+        detail = {k: failure[k] for k in ("id", "index", "error") if k in failure}
+        events.record_pdg(failure["node"], "work_item_failed", **detail)
+    status = result.get("status") or {}
+    extra: dict[str, Any] = {"ok": bool(result.get("ok")), "states": status.get("states", {})}
+    if cancelled:
+        extra["cancelled"] = True
+    events.record_pdg(result.get("path", ""), "cook_done", **extra)
 
 
 def _with_saved(result: dict[str, Any], saved: str | None) -> dict[str, Any]:
@@ -716,7 +734,10 @@ def pdg_tool(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     if ctx.executor.on_main_thread():
         # Called inline on the main thread (GUI shell, tests): no job can make progress.
         target, saved = _cook_now(path, True, ctx, save)
-        return _with_saved(cook_result(resolve_top(target)), saved)
+        events.record_pdg(target, "cook_start")
+        result = cook_result(resolve_top(target))
+        _record_done(result)
+        return _with_saved(result, saved)
     # Like cook and render: a blocking call waits at most job_threshold_s, then hands back
     # the job (BIBLE §7); block: false returns the job at once.
     wait_s = min(timeout_s, float(ctx.config.job_threshold_s)) if block else 0.0
