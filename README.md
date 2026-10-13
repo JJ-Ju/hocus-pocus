@@ -24,7 +24,9 @@ the typed tools. The logs are reviews [08](docs/redesign/review/08-city-build-lo
 and [09](docs/redesign/review/09-city-destruction-log.md). Since 1.1, `node_edit` adds
 spare parms itself, `network_describe {format: "outline"}` (or the `houdini://outline`
 resource) shows a whole scene as a compact tree, and `cook` can profile an input chain
-or step a simulation over a frame range with progress.
+or step a simulation over a frame range with progress. A spare `menu` parm is a string
+menu (VEX reads its token with `chs()`) unless it is added with `value_type: "int"`,
+which makes an int parm whose value is the item index (`ch()`/`chi()`).
 
 ![City overview captured with viewport_capture](docs/redesign/evidence/city-destruction/02_city_overview.png)
 

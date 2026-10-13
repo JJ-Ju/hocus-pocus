@@ -1374,7 +1374,13 @@ _VISUAL: tuple[ToolSpec, ...] = (
             "Find node types by name, label, description or keyword, in all 18 categories or one. "
             "Rows: name, label, category, version, description (clipped), input range, deprecated. "
             "Current versions only, older ones named in other_versions, unless current_only is "
-            "false. Exact names rank first."
+            "false. Exact names rank first; total counts every match, weak keyword matches "
+            "included."
+        ),
+        notes=(
+            "total is the real number of matching types, not a cap: a plain-language query also "
+            "matches on single description words, so broad queries can match hundreds of types. "
+            "Raise limit (up to 1000) to see them all."
         ),
         input_schema=_obj(
             {

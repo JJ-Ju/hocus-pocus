@@ -55,6 +55,17 @@ def test_search_ranks_exact_current_version_first(client, query, category, expec
     assert result["total"] >= len(result["results"])
 
 
+def test_search_total_is_the_real_match_count(client):
+    """Review 12: total read 200 for a broad query, which looked like a cap. It is the
+    number of types that match at all, weak keyword matches included."""
+    few = client.ok("node_type_search", {"query": "copy to points", "category": "Sop", "limit": 5})
+    every = client.ok(
+        "node_type_search", {"query": "copy to points", "category": "Sop", "limit": 1000}
+    )
+    assert few["total"] == every["total"] == len(every["results"]) > len(few["results"])
+    assert few["results"] == every["results"][:5]
+
+
 @pytest.mark.parametrize(
     ("query", "top"),
     [

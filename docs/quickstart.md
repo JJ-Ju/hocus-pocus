@@ -133,6 +133,11 @@ Expect a sequence close to this one:
    over the viewer) or ask for `"source": "opengl_rop"`, which frames the
    scene with a temporary camera.
 
+To give a network control parms, ask for them: the agent adds spare parms to a `null`
+with `node_edit` `spare_parms` and links other parms with `ch()`. A `menu` spare parm is
+a string menu by default (VEX reads the token with `chs()`); with `value_type: "int"` it
+is an int parm whose value is the item index (`ch()` or `chi()`).
+
 The nodes appear in your network editor as they are created. To revert the whole build,
 press Ctrl+Z in Houdini once, or ask the agent to call `undo`. To keep the scene, ask it
 to save. `hip_save` with a `path` saves as, and it creates missing directories.
