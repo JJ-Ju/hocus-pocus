@@ -1248,20 +1248,27 @@ _VISUAL: tuple[ToolSpec, ...] = (
     ToolSpec(
         name="viewport_capture",
         description=(
-            "Look at the scene: returns a PNG image (long side at most 1024) plus path, width, "
-            "height, camera_used. source auto uses the GUI viewer when present, else an OpenGL ROP "
-            "that works headless, with a temporary camera framed per fit unless camera is given. "
-            "Leaves no nodes, undo step or dirty flag."
+            "Look at /obj or a LOP stage: a PNG (long side at most 1024), path, size, "
+            "camera_used, scene. camera: OBJ or LOP camera, or camera prim (lop_path). auto: the "
+            "GUI viewer if present and no camera, else an OpenGL ROP (headless too) framed per "
+            "fit. Leaves no nodes, undo step or dirty flag."
         ),
         notes=(
-            "fit none reuses the last framing. The viewer source captures the view as it is (fit is"
-            " not applied; home the view first). path also writes the PNG there. Both files are "
+            "fit none reuses the last framing. The viewer source captures the view as it is unless "
+            "fit is passed: then it frames all or selected for the grab and puts the view back, as "
+            "it does after looking through camera; context is the viewer's network, and notes say "
+            "when that is not the captured scene. Without camera or lop_path the stage's display "
+            "LOP is captured when /obj displays nothing; otherwise a note names it. A stage renders "
+            "through the OpenGL ROP's LOP source (scene: stage, lop_path). Lights are refused as "
+            "cameras; camera errors list the scene's cameras. path also writes the PNG there. Both "
+            "files are "
             "opaque, on the same grey as the image (the OpenGL ROP itself writes a transparent "
             "background). image.attached is true when the PNG went out as MCP image content."
         ),
         input_schema=_obj(
             {
-                "camera": _s("Camera path."),
+                "camera": _s(),
+                "lop_path": _s(),
                 "frame": _frame(),
                 "resolution": _arr(
                     {"type": "integer", "minimum": 16}, minItems=2, maxItems=2, default=[1024, 768]
@@ -1278,6 +1285,7 @@ _VISUAL: tuple[ToolSpec, ...] = (
                 "width": _t("integer"),
                 "height": _t("integer"),
                 "camera_used": _t("string"),
+                "scene": _t("string"),
                 "source_used": {"type": "string", "enum": ["viewer", "opengl_rop"]},
                 "frame": _t("number"),
                 "rendered": _list("integer"),

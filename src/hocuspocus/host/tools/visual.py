@@ -233,25 +233,50 @@ def encode_png(
 
 # -- isolated (child hython) rendering ---------------------------------------------
 
-_CHILD_SCRIPT = r"""
-import json, sys
-
-def build_capture(hou, capture):
-    # viewport_capture's camera and ROP, created in the child scene only.
+_BUILD_CAPTURE = r"""
+def build_capture(hou, capture, created):
+    # viewport_capture's camera and OpenGL ROP. Every node made is appended to created.
+    lop = capture.get("lop")
+    rop = hou.node("/out").createNode("opengl")
+    created.append(rop)
+    for name, value in capture["rop_parms"].items():
+        rop.parm(name).set(value)
+    if lop is not None:
+        # A stage: the ROP reads the LOP; a framed camera is a camera LOP after it.
+        source, prim = lop, capture.get("camera_prim")
+        if prim is None:
+            src = hou.node(lop)
+            cam = src.parent().createNode("camera")
+            created.append(cam)
+            cam.setInput(0, src)
+            for name, value in capture["camera_parms"].items():
+                cam.parm(name).set(value)
+            source, prim = cam.path(), cam.parm("primpath").eval()
+        rop.parm("opsource").set(1)
+        rop.parm("loppath").set(source)
+        rop.parm("cameraprim").set(prim)
+        return rop
     camera = capture.get("camera")
     if camera is None:
         cam = hou.node("/obj").createNode("cam")
+        created.append(cam)
         cam.setDisplayFlag(False)
         for name, value in capture["camera_parms"].items():
             cam.parm(name).set(value)
         cam.setWorldTransform(hou.Matrix4(capture["camera_xform"]))
         camera = cam.path()
-    rop = hou.node("/out").createNode("opengl")
-    for name, value in capture["rop_parms"].items():
-        rop.parm(name).set(value)
     rop.parm("camera").set(camera)
-    return rop.path()
+    return rop
+"""
+"""The capture camera and ROP builder, run in the child hython (headless) and in-process
+(GUI) alike."""
 
+_CHILD_SCRIPT = (
+    r"""
+import json, sys
+"""
+    + _BUILD_CAPTURE
+    + r"""
 def main():
     with open(sys.argv[1], encoding="utf-8") as fh:
         spec = json.load(fh)
@@ -285,7 +310,7 @@ def main():
     hou.setFrame(spec["frame"])
     capture = spec.get("capture")
     if capture:
-        spec["rop"] = build_capture(hou, capture)
+        spec["rop"] = build_capture(hou, capture, []).path()
     rop = hou.node(spec["rop"])
     result = {"errors": [], "warnings": [], "notes": notes}
     if rop is None:
@@ -306,6 +331,7 @@ def main():
 
 main()
 """
+)
 
 
 def snapshot_scene(tmp_dir: str) -> dict[str, Any]:
@@ -496,19 +522,168 @@ def _resolution(value: Any) -> tuple[int, int]:
     return int(value[0]), int(value[1])
 
 
-def _camera_node(path: Any) -> Any:
+LIGHT_PARMS = ("light_type", "light_intensity", "light_enable")
+CAMERA_CANDIDATES = 10
+CAPTURE_CAMERA_PRIM = "/hocuspocus_capture_cam"
+"""Prim path of the camera LOP a framed stage capture adds (only in the capture's copy)."""
+
+
+def _is_light(node: Any) -> bool:
+    try:
+        base = node.type().nameComponents()[2].lower()
+    except Exception:
+        base = ""
+    return "light" in base or any(node.parm(name) is not None for name in LIGHT_PARMS)
+
+
+def _is_obj_camera(node: Any) -> bool:
+    import hou
+
+    return isinstance(node, hou.ObjNode) and node.parm("focal") is not None and not _is_light(node)
+
+
+def _is_lop_camera(node: Any) -> bool:
+    import hou
+
+    return (
+        isinstance(node, hou.LopNode)
+        and node.parm("primpath") is not None
+        and node.type().nameComponents()[2] == "camera"
+    )
+
+
+def scene_cameras(stage: Any = None) -> list[str]:
+    """Candidates for ``camera``: OBJ cameras, LOP camera nodes and, given a stage, its
+    camera prims (at most :data:`CAMERA_CANDIDATES`). Main thread."""
+    import hou
+
+    found: list[str] = []
+    with contextlib.suppress(Exception):
+        for node in hou.node("/obj").allSubChildren(recurse_in_locked_nodes=False):
+            if not node.userData(INTERNAL_KEY) and _is_obj_camera(node):
+                found.append(node.path())
+    with contextlib.suppress(Exception):
+        for node_type in hou.lopNodeTypeCategory().nodeTypes().values():
+            if node_type.nameComponents()[2] == "camera":
+                found.extend(n.path() for n in node_type.instances())
+    if stage is not None:
+        with contextlib.suppress(Exception):
+            from pxr import UsdGeom
+
+            for prim in stage.Traverse():
+                if prim.IsA(UsdGeom.Camera):
+                    found.append(str(prim.GetPath()))
+                    if len(found) >= 2 * CAMERA_CANDIDATES:
+                        break
+    return found[:CAMERA_CANDIDATES]
+
+
+def _no_camera(message: str, stage: Any = None) -> ToolError:
+    cameras = scene_cameras(stage)
+    hint = (
+        f"Cameras here: {', '.join(cameras)}."
+        if cameras
+        else "This scene has no camera; omit camera to frame the scene automatically."
+    )
+    return ToolError(
+        "invalid_argument",
+        message,
+        hint=hint + " A LOP camera node, or a camera prim with lop_path, captures the stage.",
+        candidates=cameras,
+    )
+
+
+def _obj_camera(path: Any) -> Any:
+    """The OBJ camera at ``path``; lights and other nodes are refused with the scene's
+    cameras as candidates (review 15 papercuts 1 and 10)."""
     import hou
 
     if not isinstance(path, str) or not path.strip():
         raise ToolError("invalid_argument", "'camera' must be a camera node path.")
     node = require_node(path, field="camera")
-    if not isinstance(node, hou.ObjNode) or node.parm("focal") is None:
-        raise ToolError(
-            "invalid_argument",
-            f"{node.path()} ({node.type().name()}) is not a camera.",
-            hint="Pass an OBJ camera such as /obj/cam1, or omit camera to frame the scene automatically.",
-        )
+    if _is_obj_camera(node):
+        return node
+    if isinstance(node, hou.ObjNode) and _is_light(node):
+        raise _no_camera(f"{node.path()} ({node.type().name()}) is a light, not a camera.")
+    raise _no_camera(f"{node.path()} ({node.type().name()}) is not a camera.")
+
+
+def _stage_display() -> Any:
+    """The display LOP of /stage, or None."""
+    import hou
+
+    with contextlib.suppress(Exception):
+        display = hou.node("/stage").displayNode()
+        if isinstance(display, hou.LopNode):
+            return display
+    return None
+
+
+def _lop_with_prim(node: Any, prim: str) -> Any:
+    """The LOP to render for a camera LOP: its network's display node when that stage has
+    the camera prim (the lit, shaded scene the user sees), else the camera LOP itself."""
+    with contextlib.suppress(Exception):
+        display = node.parent().displayNode()
+        if display is not None and display != node and display.stage().GetPrimAtPath(prim):
+            return display
     return node
+
+
+def capture_target(camera: Any, lop_path: Any) -> dict[str, Any]:
+    """What a capture looks at: ``{scene: "obj", camera}`` (an OBJ camera node or None) or
+    ``{scene: "stage", lop, camera_prim}`` (a camera prim path or None). Main thread.
+
+    A LOP camera node or a camera prim path means the stage; without camera or lop_path,
+    /obj unless it displays nothing and /stage has a display LOP (review 13 papercut 3)."""
+    import hou
+
+    from .usd import cooked_stage, resolve_lop
+
+    lop = resolve_lop(lop_path) if lop_path is not None else None
+    if camera is None:
+        if lop is None and not _displayed_objects():
+            lop = _stage_display()
+        if lop is not None:
+            return {"scene": "stage", "lop": lop, "camera_prim": None}
+        return {"scene": "obj", "camera": None}
+    if not isinstance(camera, str) or not camera.strip():
+        raise ToolError("invalid_argument", "'camera' must be a camera node or prim path.")
+    node = hou.node(camera) if camera.startswith("/") else None
+    if node is None:
+        source = lop if lop is not None else _stage_display()
+        if source is not None and camera.startswith("/"):
+            from pxr import UsdGeom
+
+            stage = cooked_stage(source)
+            prim = stage.GetPrimAtPath(camera)
+            if prim and prim.IsA(UsdGeom.Camera):
+                return {"scene": "stage", "lop": source, "camera_prim": camera}
+            if lop is not None:
+                raise _no_camera(f"No camera prim {camera!r} on the stage of {lop.path()}.", stage)
+        require_node(camera, field="camera")  # node_not_found with candidates
+    if _is_lop_camera(node):
+        prim = node.parm("primpath").eval()
+        return {
+            "scene": "stage",
+            "lop": lop if lop is not None else _lop_with_prim(node, prim),
+            "camera_prim": prim,
+        }
+    if lop is not None and _is_obj_camera(node):
+        raise _no_camera(
+            f"{node.path()} is an OBJ camera, and lop_path captures a stage.", cooked_stage(lop)
+        )
+    return {"scene": "obj", "camera": _obj_camera(camera)}
+
+
+def _stage_bbox(lop: Any) -> tuple[list[float], list[float]] | None:
+    """World bounds of the LOP's stage (default and render purposes), or None."""
+    import hou
+
+    from .usd import cooked_stage, stage_bbox
+
+    stage = cooked_stage(lop)
+    box = stage_bbox(stage, [stage.GetPseudoRoot()], hou.frame())
+    return None if box is None else (box["min"], box["max"])
 
 
 def _world_bbox(obj: Any, sop: Any) -> tuple[list[float], list[float]] | None:
@@ -648,24 +823,73 @@ merged."""
 
 
 def _capture_spec(
-    camera: Any, res: tuple[int, int], fit: str, out_file: str, generation: int | None = None
+    target: dict[str, Any],
+    res: tuple[int, int],
+    fit: str,
+    out_file: str,
+    generation: int | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    """What to build for one capture, and the ``camera_used``/``fit_used`` to report."""
+    """What to build for one capture, and the ``camera_used``/``fit_used``/``scene`` to
+    report. Main thread."""
+    import hou
+
     rop_parms = {"trange": 0, "tres": 1, "res1": res[0], "res2": res[1], "picture": out_file}
-    if camera is not None:
-        cam = _camera_node(camera)
+    stage = target["scene"] == "stage"
+    info: dict[str, Any] = {"scene": target["scene"]}
+    if stage:
+        info["lop_path"] = target["lop"].path()
+        if target["camera_prim"] is not None:
+            spec = {
+                "lop": target["lop"].path(),
+                "camera_prim": target["camera_prim"],
+                "rop_parms": rop_parms,
+            }
+            return spec, {**info, "camera_used": target["camera_prim"], "fit_used": "none"}
+    elif target["camera"] is not None:
+        path = target["camera"].path()
         return (
-            {"camera": cam.path(), "rop_parms": rop_parms},
-            {"camera_used": cam.path(), "fit_used": "none"},
+            {"camera": path, "rop_parms": rop_parms},
+            {**info, "camera_used": path, "fit_used": "none"},
         )
     fit_used = "none"
-    if _last_framing.get("generation") != generation:
-        _last_framing.clear()  # framed in another scene
+    key = (generation, info.get("lop_path"))
+    if _last_framing.get("key") != key:
+        _last_framing.clear()  # framed in another scene, or another stage
     framing = _last_framing.get("framing")
     if fit != "none" or framing is None:
-        bbox, fit_used = _fit_bbox(fit if fit != "none" else "all")
+        if stage:  # a stage has no node selection to fit: everything
+            bbox, fit_used = _stage_bbox(target["lop"]), "all"
+        else:
+            bbox, fit_used = _fit_bbox(fit if fit != "none" else "all")
         framing = _framing(bbox, res)
-        _last_framing.update(framing=framing, generation=generation)
+        _last_framing.update(framing=framing, key=key)
+    if stage:
+        xform = hou.Matrix4(framing["camera_xform"])
+        t = xform.extractTranslates("srt")
+        r = xform.extractRotates("srt", "xyz")
+        focal, aperture = CAMERA_LENS
+        camera_parms = {
+            "primpath": CAPTURE_CAMERA_PRIM,
+            "tx": t[0],
+            "ty": t[1],
+            "tz": t[2],
+            "rx": r[0],
+            "ry": r[1],
+            "rz": r[2],
+            "focalLength": focal,
+            "aperture": "set",
+            "horizontalAperture": aperture,
+            "verticalAperture": aperture * res[1] / res[0],
+            "clippingRange1": framing["near"],
+            "clippingRange2": framing["far"],
+        }
+        spec = {
+            "lop": target["lop"].path(),
+            "camera_prim": None,
+            "camera_parms": camera_parms,
+            "rop_parms": rop_parms,
+        }
+        return spec, {**info, "camera_used": TEMPORARY_CAMERA, "fit_used": fit_used}
     camera_parms = {
         "resx": res[0],
         "resy": res[1],
@@ -679,7 +903,7 @@ def _capture_spec(
             "camera_parms": camera_parms,
             "rop_parms": rop_parms,
         },
-        {"camera_used": TEMPORARY_CAMERA, "fit_used": fit_used},
+        {**info, "camera_used": TEMPORARY_CAMERA, "fit_used": fit_used},
     )
 
 
@@ -694,24 +918,15 @@ def temporary_capture_nodes(spec: dict[str, Any]) -> Iterator[Any]:
 
     selected = hou.selectedNodes()
     created: list[Any] = []
+    namespace: dict[str, Any] = {}
+    exec(_BUILD_CAPTURE, namespace)  # the same builder the child hython runs
     try:
         with hou.undos.disabler(), muted():
-            camera = spec.get("camera")
-            if camera is None:
-                cam = hou.node("/obj").createNode("cam")
-                created.append(cam)
-                _mark_internal(cam)
-                cam.setDisplayFlag(False)
-                for name, value in spec["camera_parms"].items():
-                    cam.parm(name).set(value)
-                cam.setWorldTransform(hou.Matrix4(spec["camera_xform"]))
-                camera = cam.path()
-            rop = hou.node("/out").createNode("opengl")
-            created.append(rop)
-            _mark_internal(rop)
-            for name, value in spec["rop_parms"].items():
-                rop.parm(name).set(value)
-            rop.parm("camera").set(camera)
+            try:
+                rop = namespace["build_capture"](hou, spec, created)
+            finally:
+                for node in created:
+                    _mark_internal(node)
         yield rop
     finally:
         with hou.undos.disabler(), muted():
@@ -725,11 +940,16 @@ def temporary_capture_nodes(spec: dict[str, Any]) -> Iterator[Any]:
 
 
 def _capture_opengl(
-    ctx: HostContext, camera: Any, frame: float, res: tuple[int, int], fit: str, out_file: str
+    ctx: HostContext,
+    target: dict[str, Any],
+    frame: float,
+    res: tuple[int, int],
+    fit: str,
+    out_file: str,
 ) -> dict[str, Any]:
     import hou
 
-    spec, info = _capture_spec(camera, res, fit, out_file, ctx.scene.generation)
+    spec, info = _capture_spec(target, res, fit, out_file, ctx.scene.generation)
     errors: list[str] = []
     if not ctx.ui:
         # Headless: the child hython builds camera and ROP in its own copy of the scene.
@@ -773,15 +993,56 @@ def _scene_viewer() -> Any:
         return None
 
 
+def _viewer_context_note(viewer: Any, target: dict[str, Any]) -> tuple[str | None, str | None]:
+    """The viewer's network context, and a note when it is not the captured scene's
+    (inside an object other objects draw ghosted or hidden; review 15 papercut 7)."""
+    try:
+        pwd = viewer.pwd()
+        context = pwd.path() if pwd is not None else None
+    except Exception:
+        return None, None
+    if context is None:
+        return None, None
+    wanted = "/obj" if target["scene"] == "obj" else target["lop"].parent().path()
+    if context == wanted:
+        return context, None
+    return context, (
+        f"The viewer shows {context}, not {wanted}: it draws that network's context (other "
+        "objects ghosted or hidden). source opengl_rop renders the whole scene."
+    )
+
+
 def _capture_viewer(
-    viewer: Any, camera: Any, frame: float, res: tuple[int, int], out_file: str
+    viewer: Any,
+    target: dict[str, Any],
+    frame: float,
+    res: tuple[int, int],
+    out_file: str,
+    fit: str | None = None,
 ) -> dict[str, Any]:
+    """Flipbook one frame of the Scene Viewer. A ``camera`` or an explicit ``fit`` changes
+    the view only for the grab: the view (and the camera the viewport looked through) is
+    saved first and put back afterwards (review 15 papercuts 1 and 5)."""
+    import hou
+
     viewport = viewer.curViewport()
     previous = viewport.camera()
-    cam = _camera_node(camera) if camera is not None else None
-    if cam is not None:
-        viewport.setCamera(cam)
+    saved_view = viewport.defaultCamera().stash()
+    cam = target.get("camera")
+    fit_used = "none"
+    changed = cam is not None or fit in ("all", "selected")
     try:
+        if cam is not None:
+            viewport.setCamera(cam)
+        elif fit in ("all", "selected"):
+            if previous is not None:
+                viewport.useDefaultCamera()  # frame the free view, never move a camera node
+            if fit == "selected" and hou.selectedNodes():
+                viewport.frameSelected()
+                fit_used = "selected"
+            else:
+                viewport.frameAll()
+                fit_used = "all"
         settings = viewer.flipbookSettings().stash()
         settings.frameRange((frame, frame))
         settings.outputToMPlay(False)
@@ -790,11 +1051,11 @@ def _capture_viewer(
         settings.resolution(res)
         viewer.flipbook(viewport, settings, open_dialog=False)
     finally:
-        if cam is not None:
+        if changed:
+            viewport.useDefaultCamera()
+            viewport.setDefaultCamera(saved_view)
             if previous is not None:
                 viewport.setCamera(previous)
-            else:
-                viewport.useDefaultCamera()
     if not os.path.isfile(out_file):
         raise ToolError(
             "internal",
@@ -802,11 +1063,19 @@ def _capture_viewer(
             hou_exception="flipbook produced no file",
             hint="Retry with source 'opengl_rop'.",
         )
-    used = viewport.camera()
-    return {
-        "camera_used": cam.path() if cam is not None else (used.path() if used else "viewport"),
-        "fit_used": "none",
+    info: dict[str, Any] = {
+        "scene": target["scene"],
+        "camera_used": (
+            cam.path() if cam is not None else (previous.path() if previous else "viewport")
+        ),
+        "fit_used": fit_used,
     }
+    context, note = _viewer_context_note(viewer, target)
+    if context is not None:
+        info["context"] = context
+    if note:
+        info["notes"] = [note]
+    return info
 
 
 def _capture_args(args: dict[str, Any]) -> dict[str, Any]:
@@ -830,12 +1099,17 @@ def _capture_args(args: dict[str, Any]) -> dict[str, Any]:
             "'path' must be a .png file: the capture is always a PNG.",
             hint="Use a path ending in .png, or render with a ROP for other formats.",
         )
+    lop_path = args.get("lop_path")
+    if lop_path is not None and (not isinstance(lop_path, str) or not lop_path.strip()):
+        raise ToolError("invalid_argument", "'lop_path' must be a LOP node path.")
     return {
         "source": source,
         "fit": fit,
+        "fit_given": args.get("fit") is not None,
         "res": res,
         "frame": frame,
         "camera": args.get("camera"),
+        "lop_path": lop_path,
         "path": extra_path,
     }
 
@@ -877,13 +1151,44 @@ def _finish_capture(
     return result
 
 
+STAGE_NOTE = (
+    "The scene also has a stage ({lop} is displayed in /stage); pass lop_path (or a LOP "
+    "camera) to capture it."
+)
+
+
+def _resolve_capture(parsed: dict[str, Any]) -> dict[str, Any]:
+    """The capture target plus a note when /obj was captured but /stage has a display
+    LOP. Main thread."""
+    target = capture_target(parsed["camera"], parsed["lop_path"])
+    if target["scene"] == "obj" and parsed["camera"] is None:
+        display = _stage_display()
+        if display is not None:
+            target["note"] = STAGE_NOTE.format(lop=display.path())
+    return target
+
+
+def _add_notes(info: dict[str, Any], *notes: Any) -> None:
+    merged = [*info.get("notes", []), *(n for n in notes if n)]
+    if merged:
+        info["notes"] = merged
+
+
 def _capture_main(parsed: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     """The whole capture on the main thread: the GUI path (viewer or in-process OpenGL
     ROP), and headless when called inline on the main thread."""
-    source, camera, res = parsed["source"], parsed["camera"], parsed["res"]
+    source, res = parsed["source"], parsed["res"]
+    target = _resolve_capture(parsed)
     frame, extra_path, out_file = _capture_targets(parsed, ctx)
     viewer = None
     if source == "viewer":
+        if target["scene"] == "stage":
+            raise ToolError(
+                "invalid_argument",
+                "source 'viewer' captures the Scene Viewer as it is; a stage capture (a LOP "
+                "camera or lop_path) renders through an OpenGL ROP.",
+                hint="Use source 'opengl_rop' or 'auto'.",
+            )
         viewer = _scene_viewer()
         if viewer is None:
             raise ToolError(
@@ -891,14 +1196,18 @@ def _capture_main(parsed: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
                 "No Scene Viewer pane is open.",
                 hint="Open a Scene Viewer, or use source 'opengl_rop'.",
             )
-    elif source == "auto" and ctx.ui:
+    elif source == "auto" and ctx.ui and target["scene"] == "obj" and target["camera"] is None:
+        # With a camera, auto renders through the ROP: fast in the GUI, and it leaves the
+        # user's view alone (review 15 papercut 1).
         viewer = _scene_viewer()
     if viewer is not None:
-        info = _capture_viewer(viewer, camera, frame, res, out_file)
+        fit = parsed["fit"] if parsed["fit_given"] else None
+        info = _capture_viewer(viewer, target, frame, res, out_file, fit)
         info["source_used"] = "viewer"
     else:
-        info = _capture_opengl(ctx, camera, frame, res, parsed["fit"], out_file)
+        info = _capture_opengl(ctx, target, frame, res, parsed["fit"], out_file)
         info["source_used"] = "opengl_rop"
+    _add_notes(info, target.get("note"))
     return _finish_capture(out_file, res, frame, info, extra_path)
 
 
@@ -911,10 +1220,10 @@ def _capture_headless(parsed: dict[str, Any], ctx: HostContext, timeout_s: float
     try:
 
         def prepare() -> dict[str, Any]:
+            target = _resolve_capture(parsed)
             frame, extra_path, out_file = _capture_targets(parsed, ctx)
-            spec, info = _capture_spec(
-                parsed["camera"], res, parsed["fit"], out_file, ctx.scene.generation
-            )
+            spec, info = _capture_spec(target, res, parsed["fit"], out_file, ctx.scene.generation)
+            _add_notes(info, target.get("note"))
             snapshot = snapshot_scene(tmp_dir)
             snapshot["capture"] = spec
             return {
@@ -937,8 +1246,7 @@ def _capture_headless(parsed: dict[str, Any], ctx: HostContext, timeout_s: float
         shutil.rmtree(tmp_dir, ignore_errors=True)
     _check_capture_output(outcome.get("errors") or [], prep["out_file"])
     info = dict(prep["info"], source_used="opengl_rop")
-    if outcome.get("notes"):
-        info["notes"] = outcome["notes"]
+    _add_notes(info, *(outcome.get("notes") or []))
     return _finish_capture(prep["out_file"], res, frame, info, prep["extra_path"])
 
 

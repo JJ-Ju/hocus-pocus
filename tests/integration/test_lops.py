@@ -117,3 +117,86 @@ def test_usd_render_outputs_note_when_nothing_resolves(client):
     paths, note = usd_render_outputs(rop, [1.0])
     assert paths == []
     assert "outputimage" in note and "RenderProduct" in note
+
+
+# -- viewport_capture of a stage (papercut 3) -------------------------------------------
+
+
+def _center_lit(image: dict) -> bool:
+    img = _decode(image).convert("L")
+    w, h = img.size
+    center = img.getpixel((w // 2, h // 2))
+    corner = img.getpixel((2, 2))
+    return abs(center - corner) > 20
+
+
+def test_capture_lop_camera_renders_the_stage(client, work_dir):
+    nodes = _lop_scene(work_dir)
+    hou.node("/obj").createNode("geo", "unrelated").createNode("box").setDisplayFlag(True)
+    result = client.ok("viewport_capture", {"camera": nodes["cam"].path(), "resolution": [160, 90]})
+    assert result["scene"] == "stage"
+    assert result["lop_path"] == nodes["rset"].path()  # the displayed LOP
+    assert result["camera_used"] == "/cameras/cam1"
+    assert result["source_used"] == "opengl_rop"
+    assert _center_lit(result["image"])
+    assert [c.name() for c in hou.node("/stage").children()] == [
+        "sphere1",
+        "matlib",
+        "assign",
+        "dome",
+        "cam1",
+        "rset",
+        "rop",
+    ]
+
+
+def test_capture_camera_prim_with_lop_path(client, work_dir):
+    nodes = _lop_scene(work_dir)
+    result = client.ok(
+        "viewport_capture",
+        {"camera": "/cameras/cam1", "lop_path": nodes["cam"].path(), "resolution": [160, 90]},
+    )
+    assert result["scene"] == "stage"
+    assert result["lop_path"] == nodes["cam"].path()
+    assert result["camera_used"] == "/cameras/cam1"
+
+
+def test_capture_lop_path_frames_the_stage(client, work_dir):
+    nodes = _lop_scene(work_dir)
+    result = client.ok("viewport_capture", {"lop_path": "/stage", "resolution": [160, 120]})
+    assert result["scene"] == "stage"
+    assert result["lop_path"] == nodes["rset"].path()
+    assert result["camera_used"] == "temporary"
+    assert result["fit_used"] == "all"
+    assert _center_lit(result["image"])
+
+
+def test_capture_without_obj_geometry_uses_the_stage(client, work_dir):
+    _lop_scene(work_dir)
+    result = client.ok("viewport_capture", {"resolution": [160, 120]})
+    assert result["scene"] == "stage"
+    assert _center_lit(result["image"])
+
+
+def test_capture_obj_scene_notes_the_stage(client, work_dir):
+    _lop_scene(work_dir)
+    hou.node("/obj").createNode("geo", "g").createNode("box").setDisplayFlag(True)
+    result = client.ok("viewport_capture", {"resolution": [160, 120]})
+    assert result["scene"] == "obj"
+    assert any("lop_path" in note and "/stage/rset" in note for note in result["notes"])
+
+
+def test_capture_bad_lop_camera_lists_cameras(client, work_dir):
+    nodes = _lop_scene(work_dir)
+    error = client.error("viewport_capture", {"camera": nodes["rset"].path()})
+    assert error["code"] == "invalid_argument"
+    assert "not a camera" in error["message"]
+    assert nodes["cam"].path() in error["candidates"]
+    assert "OBJ camera such as" not in error["hint"]
+    missing = client.error(
+        "viewport_capture", {"camera": "/cameras/nope", "lop_path": nodes["rset"].path()}
+    )
+    assert missing["code"] == "invalid_argument"
+    assert "/cameras/cam1" in missing["candidates"]
+    viewer = client.error("viewport_capture", {"lop_path": "/stage", "source": "viewer"})
+    assert viewer["code"] in ("ui_required", "invalid_argument")

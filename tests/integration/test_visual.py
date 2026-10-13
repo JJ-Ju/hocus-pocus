@@ -225,6 +225,122 @@ def test_capture_bad_camera(client):
     error = client.error("viewport_capture", {"camera": "/obj/toy"})
     assert error["code"] == "invalid_argument"
     assert "not a camera" in error["message"]
+    assert not error.get("candidates")  # the scene has no camera yet
+    assert "OBJ camera such as" not in error["hint"]
+
+
+def test_capture_light_is_not_a_camera_and_errors_list_cameras(client):
+    _toy_scene()
+    hou.node("/obj").createNode("cam", "shotcam")
+    sun = hou.node("/obj").createNode("hlight", "sun")
+    error = client.error("viewport_capture", {"camera": sun.path()})
+    assert error["code"] == "invalid_argument"
+    assert "is a light" in error["message"]
+    assert error["candidates"] == ["/obj/shotcam"]
+    error = client.error("viewport_capture", {"camera": "/obj/toy"})
+    assert error["candidates"] == ["/obj/shotcam"]
+    assert "/obj/shotcam" in error["hint"]
+
+
+class _FakeView:
+    """A GeometryViewport stand-in: ``view`` is what the viewport shows."""
+
+    def __init__(self, camera=None):
+        self._camera = camera
+        self.view = f"through {camera.path()}" if camera is not None else "user view"
+
+    def camera(self):
+        return self._camera
+
+    def defaultCamera(self):
+        view = self
+
+        class _Default:
+            def stash(self):
+                return view.view if view._camera is None else "user view"
+
+        return _Default()
+
+    def setCamera(self, cam):
+        self._camera = cam
+        self.view = f"through {cam.path()}"
+
+    def useDefaultCamera(self):
+        self._camera = None  # the free view keeps whatever it showed (Houdini does too)
+
+    def setDefaultCamera(self, stashed):
+        self.view = stashed
+
+    def frameAll(self):
+        assert self._camera is None, "framing must never move a camera node"
+        self.view = "framed all"
+
+    def frameSelected(self):
+        assert self._camera is None
+        self.view = "framed selected"
+
+
+class _FakeViewer:
+    def __init__(self, viewport, pwd):
+        self.viewport, self._pwd, self.seen = viewport, pwd, None
+
+    def curViewport(self):
+        return self.viewport
+
+    def pwd(self):
+        return self._pwd
+
+    def flipbookSettings(self):
+        viewer = self
+
+        class _Settings:
+            def stash(self):
+                return self
+
+            def output(self, path):
+                self.path = path
+
+            def __getattr__(self, name):
+                return lambda *a, **k: None
+
+        viewer.settings = _Settings()
+        return viewer.settings
+
+    def flipbook(self, viewport, settings, open_dialog=False):
+        self.seen = (viewport.view, viewport.camera())
+        Image.new("RGB", (32, 24), (90, 90, 90)).save(settings.path)
+
+
+def test_viewer_capture_restores_the_view(client, work_dir):
+    from hocuspocus.host.tools.visual import _capture_viewer, capture_target
+
+    geo = _toy_scene()
+    shot = hou.node("/obj").createNode("cam", "shotcam")
+    user_cam = hou.node("/obj").createNode("cam", "usercam")
+    # camera: the grab looks through it; the user's free view comes back.
+    viewport = _FakeView()
+    viewer = _FakeViewer(viewport, hou.node("/obj"))
+    target = capture_target(shot.path(), None)
+    info = _capture_viewer(viewer, target, 1.0, (32, 24), str(work_dir / "a.png"))
+    assert viewer.seen == ("through /obj/shotcam", shot)
+    assert (viewport.view, viewport.camera()) == ("user view", None)
+    assert info["camera_used"] == "/obj/shotcam" and info["context"] == "/obj"
+    assert "notes" not in info
+    # An explicit fit frames the free view, then the camera the user looked through returns.
+    viewport = _FakeView(user_cam)
+    viewer = _FakeViewer(viewport, geo)
+    target = capture_target(None, None)
+    info = _capture_viewer(viewer, target, 1.0, (32, 24), str(work_dir / "b.png"), "all")
+    assert viewer.seen == ("framed all", None)
+    assert viewport.camera() is user_cam and viewport.view == "through /obj/usercam"
+    assert info["fit_used"] == "all"
+    assert info["context"] == geo.path()
+    assert any(geo.path() in note and "opengl_rop" in note for note in info["notes"])
+    # Without fit the view is captured as it is and left alone.
+    viewport = _FakeView()
+    viewer = _FakeViewer(viewport, hou.node("/obj"))
+    info = _capture_viewer(viewer, target, 1.0, (32, 24), str(work_dir / "c.png"))
+    assert viewer.seen == ("user view", None) and info["fit_used"] == "none"
 
 
 def test_capture_bad_arguments(client):

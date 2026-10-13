@@ -175,6 +175,29 @@ def jsonable(value: Any, *, top: bool = True) -> Any:
     return text if len(text) <= STRING_CAP else text[:STRING_CAP] + "…"
 
 
+def stage_bbox(stage: Any, prims: list[Any], frame: float) -> dict[str, Any] | None:
+    """World-space bounds of ``prims`` (default and render purposes, extents hints used)
+    as ``{min, max, size}``, or None when nothing has extent."""
+    from pxr import Gf, Usd, UsdGeom
+
+    cache = UsdGeom.BBoxCache(
+        Usd.TimeCode(frame), [UsdGeom.Tokens.default_, UsdGeom.Tokens.render], True
+    )
+    total = Gf.Range3d()
+    for prim in prims:
+        box = cache.ComputeWorldBound(prim).ComputeAlignedRange()
+        if not box.IsEmpty():
+            total = Gf.Range3d.GetUnion(total, box)
+    if total.IsEmpty():
+        return None
+    lo, hi = total.GetMin(), total.GetMax()
+    return {
+        "min": [_num(x) for x in lo],
+        "max": [_num(x) for x in hi],
+        "size": [_num(hi[i] - lo[i]) for i in range(3)],
+    }
+
+
 def _matrix(m: Any) -> Any:
     rows = tuple(tuple(float(x) for x in m.GetRow(i)) for i in range(4))
     if rows == _IDENTITY:
