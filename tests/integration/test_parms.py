@@ -954,6 +954,41 @@ def test_press_alone_reruns_a_menu_callback_and_node_create_accepts_it(client, s
     assert hou.node(f"{scene['geo'].path()}/src2").parm("attributes").eval() >= 2
 
 
+def test_node_create_parms_are_callback_aware(client, scene):
+    """Review 20 N2: node_create parms note a skipped callback as parm_set does, and
+    {value, press: true} runs it (after the inputs are wired)."""
+    geo = scene["geo"].path()
+    sphere = scene["geo"].createNode("sphere")
+    plain = client.ok(
+        "node_create",
+        {"items": [{"parent": geo, "type": "pyrosource", "parms": {"initialize": "source"}}]},
+    )["results"][0]
+    node = hou.node(plain["path"])
+    assert node.parm("attributes").eval() == 0  # the callback did not run
+    (note,) = [n for n in plain["notes"] if "callback" in n]
+    assert '"initialize": {"value": ..., "press": true}' in note
+    pressed = client.ok(
+        "node_create",
+        {
+            "items": [
+                {
+                    "parent": geo,
+                    "type": "pyrosource",
+                    "inputs": [{"index": 0, "from": sphere.path()}],
+                    "parms": {"initialize": {"value": "source", "press": True}},
+                }
+            ],
+            "return": "full",
+        },
+    )["results"][0]
+    node = hou.node(pressed["path"])
+    assert node.parm("attributes").eval() == 2  # density and temperature
+    assert node.inputs()[0] == sphere
+    assert pressed["side_effects"]["initialize"] == ["source", "none"]
+    assert "attributes" in pressed["side_effects"]
+    assert not any("callback" in n for n in pressed.get("notes", []))
+
+
 def test_press_on_a_parm_without_callback_is_refused(client, scene):
     err = client.error(
         "parm_set", {"items": [{"path": "/obj/geo1/box1/type", "value": "polymesh", "press": True}]}

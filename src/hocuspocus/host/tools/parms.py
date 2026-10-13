@@ -1088,14 +1088,28 @@ CALLBACK_NOTE = (
     "{name} has a callback script that a plain set does not run (clicking the parm in "
     "Houdini would); pass press: true with the value to run it."
 )
+CREATE_CALLBACK_NOTE = (
+    "{name} has a callback script that a plain set does not run (clicking the parm in "
+    'Houdini would); pass parms {{"{name}": {{"value": ..., "press": true}}}} to run it.'
+)
+"""The same note on ``node_create``, whose parms spell the item without ``path`` (review 20
+N2)."""
 NO_CALLBACK = (
     "{path} is a {kind} parm with no callback script; press clicks a button, or runs the "
     "callback of a parm that has one (with or without a value)."
 )
 
 
-def _apply(node: Any, target: Any, item: dict[str, Any], *, frame: float | None) -> dict[str, Any]:
-    """Apply one ``parm_set`` item. Returns the item result (without node problems)."""
+def _apply(
+    node: Any,
+    target: Any,
+    item: dict[str, Any],
+    *,
+    frame: float | None,
+    callback_note: str = CALLBACK_NOTE,
+) -> dict[str, Any]:
+    """Apply one ``parm_set`` item. Returns the item result (without node problems).
+    ``callback_note`` is the note for a plain set of a callback menu or toggle."""
     import hou
 
     path = _target_path(target)
@@ -1183,7 +1197,7 @@ def _apply(node: Any, target: Any, item: dict[str, Any], *, frame: float | None)
             elif len(parms) == 1 and has_callback(parms[0]):
                 template = parms[0].parmTemplate()
                 if _kind(template) == "toggle" or _menu_mode(template, _kind(template)):
-                    notes.append(CALLBACK_NOTE.format(name=parms[0].name()))
+                    notes.append(callback_note.format(name=parms[0].name()))
         elif field == "expression":
             parm = _require_single(target, "expression", path)
             expression = item["expression"]
@@ -1468,7 +1482,12 @@ def _item_from_spec(name: str, spec: Any, animation: str) -> dict[str, Any]:
 
 
 def set_parm_items(
-    node: Any, parms: dict[str, Any], ctx: Any, *, animation: str = "replace"
+    node: Any,
+    parms: dict[str, Any],
+    ctx: Any,
+    *,
+    animation: str = "replace",
+    callback_note: str = CALLBACK_NOTE,
 ) -> list[dict[str, Any]]:
     """Apply ``{parm_name: value | {expression, language} | {expr, lang}}`` to ``node`` and return per-parm results.
 
@@ -1476,7 +1495,9 @@ def set_parm_items(
     one ``parm_set`` item per entry; raises ToolError on the first failure. A dict value
     other than ``{expr, lang}`` (including ``{expression, language}``) is treated as a ``parm_set`` item without ``path`` (e.g.
     ``{"ramp": {...}}``, ``{"channel_ref": "/obj/..."}``). Results are the compact
-    summary plus ``path`` and ``wrote_keyframe`` (no node errors: callers report those).
+    summary plus ``path`` and ``wrote_keyframe`` (no node errors: callers report those),
+    with ``notes`` and, for a pressed entry, ``pressed`` and ``side_effects``, as
+    ``parm_set`` returns them.
     """
     del ctx  # part of the shared signature; nothing here needs host state
     if not isinstance(parms, dict):
@@ -1486,7 +1507,7 @@ def set_parm_items(
         try:
             target = resolve_name(node, name)
             item = _item_from_spec(name, spec, animation)
-            results.append(_apply(node, target, item, frame=None))
+            results.append(_apply(node, target, item, frame=None, callback_note=callback_note))
         except ToolError as exc:
             if exc.message.startswith(f"parms.{name}:"):
                 raise
