@@ -213,6 +213,36 @@ These tools need the `full` profile (see [Configuration](#configuration)):
 - **Work next to a user.** Every `events` entry says `origin: agent` or `other`. `undo`
   stops before a step the user made unless you pass `include_user_steps: true`.
 
+## Caches, Copernicus and two Houdinis
+
+These work in the default `core` profile:
+
+- **Write a sim cache.** `cook` never writes files: cooking a File Cache passes the
+  geometry through, and the result says so. To write the cache, `render` the File Cache
+  SOP: `render {"rop_path": "/obj/pyro/cache", "wait_s": 0}` returns a `job_id` at once,
+  writes the node's own frame range with per-frame progress, and turns on Load from Disk
+  when it is done, as the Save to Disk button would. `job {"action": "cancel"}` stops it
+  and keeps the frames already written. `geo_info` and `geo_read` take `frame` to inspect
+  the cache without moving the playbar, and `houdini_status` reports Houdini's memory.
+- **Look at a Copernicus image.** COP networks live in `/img` (`node_create {"parent":
+  "/img", "type": "copnet"}`), and their nodes are category `Cop`.
+  `viewport_capture {"cop_path": "/img/copnet1/blend1"}` returns that node's image in
+  about 0.2 s, and `geo_info` on a Cop node returns its resolution and per-channel
+  min/max/mean. To write the image to disk, `render` a `rop_image` wired to the node. A
+  SOP reads a COP live through an `op:` path, for example `attribfrommap` with
+  `filename: "op:/img/copnet1/blend1"`.
+- **Drive two Houdinis.** Keep the GUI for editing and start a worker for renders with
+  `hocuspocus launch --headless`. With two running, ask the agent to pin one:
+  `houdini_connect {"pid": 3084, "name": "editor"}`, and later `{"name": "editor"}`.
+  Until one is pinned, calls that change a scene refuse with `ambiguous_instance`, and
+  reads go to the GUI. The usual hand-off is `hip_save` in the GUI, then pin the worker,
+  `hip_open` the saved hip and `render {"wait_s": 0}`, then pin the GUI again. The job id
+  (`61900-9c3e6f7ca53e`) carries the worker's pid, so `job` reaches the worker whichever
+  Houdini is pinned, and `job {"action": "list", "all": true}` lists every Houdini's jobs.
+  If the pinned Houdini exits, every call returns `instance_lost` until you pin another;
+  the bridge never switches on its own. The `hocuspocus://guide` resource has this
+  recipe, and `hocuspocus://tools` has every tool's notes.
+
 ## Configuration
 
 Nothing needs configuring for this guide. Two settings in
@@ -225,7 +255,10 @@ result_content = "both"     # also send structuredContent (default "text")
 ```
 
 - `profile` is read by the bridge, which lists the tools, and by the host inside Houdini,
-  which refuses the four `full` tools on `core`. Restart Houdini after changing it.
+  which refuses the tools outside its profile. Restart Houdini after changing it.
+  `minimal` lists 14 tools (status, connect, hip open and save, the main node and parm
+  tools, `cook`, `geo_info`, `viewport_capture` and `houdini_python`) for clients with a
+  small context; the argument detail they leave out is in `hocuspocus://tools`.
 - `result_content` decides where a result's JSON goes. The default `text` sends it once,
   in the text block, which is what Claude Code shows the model. Use `both` for a client
   that reads `structuredContent` or `outputSchema`, or `structured` for structured data
@@ -266,7 +299,13 @@ The bridge works without Houdini, so `tools/list` still answers, but no live ins
 registered. Start Houdini, or let the agent call
 `houdini_connect {"launch": {"mode": "gui"}}` (or `"headless"`). The bridge picks the
 new instance up by itself, with no client restart. If several instances are running,
-`houdini_status` lists them and `houdini_connect {"pid": N}` selects one.
+`houdini_status` lists them and `houdini_connect {"pid": N}` pins one.
+
+**`ambiguous_instance` or `instance_lost`**
+
+Several Houdinis are running and none is pinned (`ambiguous_instance`), or the pinned one
+has exited (`instance_lost`). The error lists the live instances as `candidates`. Pin one
+with `houdini_connect {"pid": N}`; `houdini_connect {}` goes back to automatic selection.
 
 **`invalid_argument`: "hda is a full-profile tool, and this Houdini's host runs the core profile"**
 

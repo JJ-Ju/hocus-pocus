@@ -119,6 +119,17 @@ macOS the path is `.venv/bin/...`.
    - Tools that create or change nodes call `watch_nodes(...)` from `nodes.py` after
      their own changes, so `events` reports later edits to those nodes.
    - A new module must also be added to `TOOL_MODULES` in `host/tools/registry.py`.
+   - Leave instance tagging to the bridge (BIBLE §3.3 rule 3). It adds
+     `_meta.instance: {pid, label, name?}` to every result a host answers. When several
+     Houdinis run and none is pinned, it refuses a call that changes a scene with
+     `ambiguous_instance` and adds `_instance: {pid, label, ui, warning}` to the result
+     of a read it sent to a guessed instance. A host tool never writes these keys, so
+     do not name a result field `_instance`. A `read_only` tool always counts as a read.
+     A `scene=False` tool with reading forms (an `action: list`, or no arguments) must
+     add them to `READ_ACTIONS` or `READ_WITHOUT` in `bridge/server.py` and to
+     `test_which_calls_count_as_changing_a_scene` in `tests/unit/test_bridge_multi.py`.
+     Otherwise its reads are refused too. A tool that starts a job gets a
+     `<pid>-<id>` job id from the job manager, which the bridge routes by pid (BIBLE §7).
 4. **Integration test.** Add a test in `tests/integration/test_<family>.py` that calls
    the tool through the real host (see `tests/integration/conftest.py`) against real
    nodes. Cover the error path and any Houdini idiom from BIBLE §5 that the tool
