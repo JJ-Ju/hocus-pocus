@@ -297,12 +297,19 @@ class Bridge:
         hip = pinned.hip if pinned is not None else ""
         ordered = registry.sort_preferred(live)
         choices = "; ".join(inst.describe() for inst in ordered) or "none is running"
+        saved = hip and not hip.replace("\\", "/").endswith("/untitled.hip")
+        launch = (
+            f"houdini_connect {{launch: {{mode: 'headless', hip: '{hip}'}}}} reopens its last "
+            "saved scene"
+            if saved
+            else "houdini_connect {launch} starts one"
+        )
         return ToolError(
             "instance_lost",
             f"The pinned Houdini pid {pid} ({label}) has exited; changes made in it since its "
             f"last save are lost. Not switching to another Houdini on its own. Live: {choices}.",
-            hint="houdini_connect {pid} pins one of the candidates, houdini_connect {launch} "
-            "starts one, houdini_connect {} returns to automatic selection",
+            hint=f"houdini_connect {{pid}} pins one of the candidates, {launch}, "
+            "houdini_connect {} returns to automatic selection",
             candidates=[inst.candidate() for inst in ordered],
             retryable=False,
             detail={"pid": pid, "label": label, "hip": hip or None},

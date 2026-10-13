@@ -138,6 +138,7 @@ def test_dead_pin_is_instance_lost_on_every_call_and_never_switches():
             {"pid": 3084, "label": "houdinifx", "ui": True, "hip": "C:/work/city_work.hip"}
         ]
         assert "houdini_connect {pid}" in error["hint"]
+        assert "hip: 'C:/work/city_work.hip'" in error["hint"]  # reopen its last save
     assert host_of(hosts, GUI).calls == []  # nothing reached the GUI
 
 
