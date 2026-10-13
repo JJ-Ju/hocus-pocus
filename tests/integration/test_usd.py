@@ -167,6 +167,43 @@ def test_prim_pattern(client):
     assert [p["path"] for p in deep["prims"]] == ["/props/tree"]
 
 
+def test_prim_alternation(client):
+    """Review 16 N3: prim takes a|b like attribs, and a bad pattern is an error, not []."""
+    stage = hou.node("/stage")
+    a = stage.createNode("sphere", "a")
+    a.parm("primpath").set("/city/bldg_001")
+    b = stage.createNode("cube", "b")
+    b.parm("primpath").set("/city/bldg_002")
+    b.setInput(0, a)
+    c = stage.createNode("cube", "c")
+    c.parm("primpath").set("/city/ground")
+    c.setInput(0, b)
+    d = stage.createNode("cube", "d")
+    d.parm("primpath").set("/lights/key")
+    d.setInput(0, c)
+    lop = d.path()
+    both = client.ok("usd_stage", {"lop_path": lop, "prim": "/lights|/city/ground", "depth": 1})
+    assert [p["path"] for p in both["prims"]] == ["/city/ground", "/lights"]
+    globbed = client.ok("usd_stage", {"lop_path": lop, "prim": "/city/bldg_00*|/city/ground"})
+    assert [p["path"] for p in globbed["prims"]] == [
+        "/city/bldg_001",
+        "/city/bldg_002",
+        "/city/ground",
+    ]
+    assert globbed["total"] == 3
+    summary = client.ok(
+        "usd_stage", {"lop_path": lop, "prim": "/city/bldg_*|/lights/key", "summary": True}
+    )
+    assert summary["summary"]["total_prims"] == 3
+    for bad in ("/city/bldg_00*|city/ground", "/city/[x]*", "/a||/b"):
+        error = client.error("usd_stage", {"lop_path": lop, "prim": bad})
+        assert error["code"] == "invalid_argument", bad
+        assert "|" in error["hint"]
+    missing = client.error("usd_stage", {"lop_path": lop, "prim": "/city/bldg_*|/cameras"})
+    assert missing["code"] == "invalid_argument"
+    assert "/cameras" in missing["message"]
+
+
 def test_errors(client):
     out = _scene()
     missing = client.error("usd_stage", {"lop_path": out.path(), "prim": "/sphere2"})

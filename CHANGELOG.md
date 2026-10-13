@@ -190,6 +190,11 @@ D21 to D24).
   top-level `ChildCreated` and `ChildDeleted` was reported twice. The manager's own node
   callback no longer records its children, and a child event that repeats one on the
   same path within 0.5 s, with nothing on that path in between, is dropped.
+- **`usd_stage prim` alternation (review 16 N3).** `prim` now takes `a|b` like `attribs`:
+  each alternative is a prim path or glob, and matches come back in stage order. A
+  pattern such as `/city/bldg_00*|/city/ground` used to match nothing, silently. An
+  alternative that is not a valid prim path is now `invalid_argument` with a hint, and
+  so is an exact alternative that names no prim.
 
 ### Upgrading from 1.1
 

@@ -1644,7 +1644,9 @@ _FULL: tuple[ToolSpec, ...] = (
         ),
         notes=(
             "time is a time code (default the current frame). prim globs: * within a path "
-            "segment, ** across segments; matches are listed with their subtrees to depth. "
+            "segment, ** across segments, | between alternatives (each a path or glob, e.g. "
+            "/lights|/cameras); matches are listed with their subtrees to depth, in stage order. "
+            "An invalid alternative is invalid_argument, as is an exact one that names no prim. "
             "Attribute values are authored values at time; arrays up to 4 elements (8 for "
             "strings and tokens) are listed in full, longer ones as {len, first}. xform gives "
             "local, and world only when it differs. total is on every page (counted up to "

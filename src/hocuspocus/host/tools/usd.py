@@ -4,7 +4,10 @@ See docs/BIBLE.md §4.7. The LOP is cooked (non-forced) first; a failed cook or 
 stage is ``cook_failed`` with the node's errors. Rows are prims in depth-first order
 under ``prim`` (the prim itself first unless it is the pseudo-root), paged by
 ``limit``/``cursor``. ``prim`` may be a pattern: ``*`` matches within one path segment,
-``**`` across segments; matching prims are listed with their subtrees to ``depth``.
+``**`` across segments, and ``|`` separates alternatives (each a prim path or glob, as in
+``attribs``); matching prims are listed with their subtrees to ``depth``, in stage order.
+An alternative that is not a valid ``Sdf.Path`` (with ``*`` read as a name character) is
+``invalid_argument``; an exact alternative that names no prim is too.
 
 Attribute values are authored values only, read at ``time`` (default: current frame;
 the LOP is cooked at that frame, which is then restored); arrays of up to 4 elements are
@@ -95,22 +98,67 @@ def _time(args: dict[str, Any]) -> float | None:
     return float(value)
 
 
-def _pattern(prim: str) -> re.Pattern[str] | None:
-    if "*" not in prim:
-        return None
+PRIM_HINT = (
+    "Use absolute prim paths, * within a path segment, ** across segments and | between "
+    "alternatives, e.g. /city/bldg_00*|/city/ground."
+)
+
+
+def prim_alternatives(prim: str) -> list[str]:
+    """The ``|``-separated alternatives of ``prim``, each checked as an ``Sdf.Path`` (with
+    ``*`` read as a name character). Raises ``invalid_argument`` for one that is not an
+    absolute prim path (review 16 N3: ``/a*|/b`` used to match nothing, silently)."""
+    from pxr import Sdf
+
+    alternatives = []
+    for raw in prim.split("|"):
+        alt = raw.strip()
+        if alt != "/":
+            alt = alt.rstrip("/")
+        probe = alt.replace("*", "x")
+        valid = alt.startswith("/") and Sdf.Path.IsValidPathString(probe)
+        if valid and alt != "/":
+            path = Sdf.Path(probe)
+            valid = path.IsAbsolutePath() and path.IsPrimPath()
+        if not valid:
+            raise ToolError(
+                "invalid_argument",
+                f"'prim' {raw.strip()!r} is not a prim path or pattern"
+                + (f" (in {prim!r})." if "|" in prim else "."),
+                hint=PRIM_HINT,
+            )
+        alternatives.append(alt)
+    return alternatives
+
+
+def _glob(alt: str) -> str:
     out = []
     i = 0
-    while i < len(prim):
-        if prim.startswith("**", i):
+    while i < len(alt):
+        if alt.startswith("**", i):
             out.append(".*")
             i += 2
-        elif prim[i] == "*":
+        elif alt[i] == "*":
             out.append("[^/]*")
             i += 1
         else:
-            out.append(re.escape(prim[i]))
+            out.append(re.escape(alt[i]))
             i += 1
-    return re.compile("".join(out) + r"\Z")
+    return "".join(out) + r"\Z"
+
+
+def _pattern(prim: str) -> re.Pattern[str] | None:
+    """None for one exact prim path; else a regex matching any alternative."""
+    if "*" not in prim and "|" not in prim:
+        return None
+    return re.compile("|".join(f"(?:{_glob(alt)})" for alt in prim_alternatives(prim)))
+
+
+def _check_exact(stage: Any, prim: str) -> None:
+    """An exact alternative of a ``|`` pattern must name a prim, as a lone path must."""
+    for alt in prim_alternatives(prim):
+        if "*" not in alt and alt != "/" and not stage.GetPrimAtPath(alt):
+            raise _missing_prim(stage, alt)
 
 
 # -- the LOP and its stage -------------------------------------------------------------
@@ -402,6 +450,7 @@ def collect_prims(stage: Any, prim: str, depth: int, stop: int | None = None) ->
         return out
     from pxr import Usd
 
+    _check_exact(stage, prim)
     seen: set[str] = set()
     for candidate in stage.Traverse(Usd.PrimAllPrimsPredicate):
         if stop is not None and len(out) >= stop:
@@ -461,6 +510,7 @@ def summary_block(stage: Any, prim: str, frame: float) -> dict[str, Any]:
             raise _missing_prim(stage, prim)
         roots = [root]
     else:
+        _check_exact(stage, prim)
         roots = [
             p
             for p in stage.Traverse()
@@ -540,8 +590,7 @@ def usd_stage(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     prim = args.get("prim") or "/"
     if not isinstance(prim, str) or not prim.startswith("/"):
         raise bad_arg("'prim' must be an absolute prim path (or pattern) like /geo.")
-    if prim != "/":
-        prim = prim.rstrip("/")
+    prim = "|".join(prim_alternatives(prim))
     requested = _time(args)
     limit, cursor = args.get("limit"), args.get("cursor")
     page([], limit, cursor)  # validate before cooking
