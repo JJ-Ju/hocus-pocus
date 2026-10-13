@@ -544,17 +544,40 @@ def test_render_waits_job_threshold_by_default(client, work_dir):
 
 
 @pytest.mark.slow
-def test_render_notes_no_lights_and_a_black_thumbnail(client, work_dir):
-    """Review 11 B10: an unlit, empty OpenGL render says why it is black."""
+def test_render_notes_no_lights_and_an_empty_thumbnail(client, work_dir):
+    """Review 11 B10: an unlit, empty OpenGL render says why it shows nothing (review 20
+    N1: on its transparent background that is "empty", not "nearly black")."""
     rop = _opengl_rop(work_dir)
     result = client.ok("render", {"rop_path": rop.path(), "frames": [1, 1]})
     notes = " ".join(result.get("notes", []))
     assert "no lights" in notes, result
-    assert "nearly black" in notes, result
+    assert "empty" in notes and "nearly black" not in notes, result
     hou.node("/obj").createNode("hlight", "key")
     _toy_scene()
     lit = client.ok("render", {"rop_path": rop.path(), "frames": [1, 1]})
-    assert "no lights" not in " ".join(lit.get("notes", [])), lit
+    notes = " ".join(lit.get("notes", []))
+    assert "no lights" not in notes and "empty" not in notes, lit
+    assert "nearly black" not in notes, lit
+
+
+@pytest.mark.slow
+def test_render_sparse_opengl_frame_is_not_nearly_black(client, work_dir):
+    """Review 20 N1: a small subject on the OpenGL ROP's transparent background is mostly
+    transparent pixels, which the raw RGBA mean counted as black."""
+    hou.node("/obj").createNode("hlight", "key")
+    geo = _toy_scene()
+    geo.parmTuple("s").set((0.15, 0.15, 0.15))
+    rop = _opengl_rop(work_dir)
+    result = client.ok("render", {"rop_path": rop.path(), "frames": [1, 1]})
+    from PIL import ImageStat
+
+    with Image.open(result["outputs"][0]) as raw:
+        alpha = raw.getchannel("A")
+        covered = 1 - alpha.histogram()[0] / (alpha.size[0] * alpha.size[1])
+        raw_mean = ImageStat.Stat(raw.convert("RGB").convert("L")).mean[0]
+    assert 0 < covered < 0.1 and raw_mean < 8  # the frame that used to trigger the note
+    notes = " ".join(result.get("notes", []))
+    assert "nearly black" not in notes and "empty" not in notes, result
 
 
 def test_render_rop_own_output_outside_approved_roots_in_process(client, work_dir):

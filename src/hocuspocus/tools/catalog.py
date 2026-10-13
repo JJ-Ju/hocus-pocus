@@ -1384,7 +1384,8 @@ _VISUAL: tuple[ToolSpec, ...] = (
         notes=(
             "Above 5 outputs only outputs_summary is inline; job result lists them all. Every "
             "expected output is checked against approved_roots. viewport_capture is the quick look."
-            " notes warn when the scene has no lights and when the thumbnail is nearly black, "
+            " notes warn when the scene has no lights, when the thumbnail (as sent, flattened onto "
+            "grey) is nearly black, and when every pixel is transparent (empty), "
             "and say why an image output has no thumbnail (an extension it cannot read). "
             "thumbnail.image.attached is true when the image went out as MCP image content. The "
             "thumbnail is inline only, flattened onto grey; the ROP's own output files are left as "

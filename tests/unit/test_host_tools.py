@@ -312,3 +312,35 @@ def test_last_cook_memory_is_bounded(monkeypatch):
     assert 0 not in _diag._last_cook_ms and _diag.COOK_MEMORY + 49 in _diag._last_cook_ms
     _diag.remember_cook(60, 1.0)  # recooked: becomes the most recent
     assert next(reversed(_diag._last_cook_ms)) == 60
+
+
+def test_thumbnail_luminance_is_measured_on_the_flattened_image(tmp_path):
+    """Review 20 N1: a sparse subject on a transparent background is not nearly black; an
+    empty frame says empty, and an opaque black frame is still nearly black."""
+    Image = pytest.importorskip("PIL.Image")
+    from hocuspocus.host.tools.visual import encode_png, thumbnail_note
+
+    def measure(im) -> tuple[float | None, float | None]:
+        path = tmp_path / "t.png"
+        im.save(path)
+        out = encode_png(str(path), 512, measure=True)
+        return out.get("mean_luma"), out.get("coverage")
+
+    sparse = Image.new("RGBA", (200, 100), (0, 0, 0, 0))
+    sparse.paste((200, 200, 200, 255), (90, 40, 110, 60))  # a 2 % puff
+    mean, coverage = measure(sparse)
+    assert mean > 60 and coverage == pytest.approx(0.02)
+    assert thumbnail_note(mean, coverage) is None
+
+    empty = Image.new("RGBA", (200, 100), (0, 0, 0, 0))
+    mean, coverage = measure(empty)
+    assert coverage == 0.0
+    assert "empty" in thumbnail_note(mean, coverage)
+
+    black = Image.new("RGB", (200, 100), (2, 2, 2))
+    mean, coverage = measure(black)
+    assert coverage is None and mean < 8
+    assert "nearly black" in thumbnail_note(mean, coverage)
+
+    dark_opaque = Image.new("RGBA", (200, 100), (1, 1, 1, 255))
+    assert "nearly black" in thumbnail_note(*measure(dark_opaque))

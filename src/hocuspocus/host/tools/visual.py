@@ -92,7 +92,8 @@ JOB_POLL_S = 0.1
 INLINE_OUTPUTS = 5
 """A render result lists at most this many outputs; above it, ``outputs_summary`` only."""
 DARK_MEAN = 8.0
-"""A thumbnail whose mean luminance (0..255) is below this is reported as nearly black."""
+"""A thumbnail whose mean luminance (0..255), measured on the flattened image the agent
+receives, is below this is reported as nearly black."""
 NO_LIGHTS_NOTE = (
     "Scene has no lights; an OpenGL render relies on the ROP's headlight setting and other "
     "renderers may render black."
@@ -190,8 +191,10 @@ def encode_png(
     """Load an image file, flatten alpha onto grey, downscale, return the image dict.
 
     Formats PIL cannot read (EXR, .pic, ...) are converted with ``$HFS/bin/iconvert``.
-    ``measure`` adds ``mean_luma``: the mean luminance (0..255) of the colour channels
-    before alpha is flattened, so an empty render over transparency reads as black.
+    ``measure`` adds ``mean_luma``: the mean luminance (0..255) of the returned image,
+    after alpha is flattened onto grey (review 20 N1: measured on the raw RGBA, the
+    transparent pixels of a sparse OpenGL frame counted as black), and, for an image with
+    alpha, ``coverage``: the fraction of its pixels with alpha above 0.
     """
     from PIL import Image
 
@@ -237,14 +240,21 @@ def encode_png(
             opened = Image.open(source)
         with opened as im:
             im.load()
+            coverage = None
+            if measure and (
+                im.mode in ("RGBA", "LA") or (im.mode == "P" and "transparency" in im.info)
+            ):
+                alpha = im.convert("RGBA").getchannel("A")
+                total = alpha.size[0] * alpha.size[1]
+                coverage = (total - alpha.histogram()[0]) / float(total or 1)
+            flat = _flatten(im)
+            if max(flat.size) > max_side:
+                flat.thumbnail((max_side, max_side), Image.Resampling.LANCZOS)
             mean_luma = None
             if measure:
                 from PIL import ImageStat
 
-                mean_luma = float(ImageStat.Stat(im.convert("RGB").convert("L")).mean[0])
-            flat = _flatten(im)
-            if max(flat.size) > max_side:
-                flat.thumbnail((max_side, max_side), Image.Resampling.LANCZOS)
+                mean_luma = float(ImageStat.Stat(flat.convert("L")).mean[0])
             buf = io.BytesIO()
             flat.save(buf, format="PNG", optimize=True)
             out = {
@@ -255,6 +265,8 @@ def encode_png(
             }
             if mean_luma is not None:
                 out["mean_luma"] = mean_luma
+            if coverage is not None:
+                out["coverage"] = coverage
             return out
     finally:
         if tmp_dir:
@@ -2357,6 +2369,24 @@ def _prepare_render(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     }
 
 
+def thumbnail_note(mean_luma: float | None, coverage: float | None) -> str | None:
+    """The note on how a render thumbnail looks, from :func:`encode_png`'s ``measure``:
+    a fully transparent image is empty; an opaque or mostly opaque one whose flattened
+    mean is under :data:`DARK_MEAN` is nearly black. A sparse subject on a transparent
+    background is neither (review 20 N1). No ``hou``."""
+    if coverage is not None and coverage <= 0.0:
+        return (
+            "The thumbnail is empty (every pixel is transparent): check camera framing and "
+            "which objects are displayed."
+        )
+    if mean_luma is not None and mean_luma < DARK_MEAN:
+        return (
+            f"The thumbnail is nearly black (mean luminance {mean_luma:.1f}/255): check "
+            "lights, camera framing and exposure."
+        )
+    return None
+
+
 def _render_result(plan: dict[str, Any], thumbnail: bool) -> dict[str, Any]:
     outputs = [p for p in plan["expected"] if os.path.isfile(p)]
     missing = [p for p in plan["expected"] if not os.path.isfile(p)]
@@ -2394,12 +2424,9 @@ def _render_result(plan: dict[str, Any], thumbnail: bool) -> dict[str, Any]:
         elif ext in IMAGE_EXTS or ext in CONVERT_EXTS:
             try:
                 image = encode_png(last, THUMB_MAX_SIDE, hfs=plan["hfs"], measure=True)
-                mean = image.pop("mean_luma", None)
-                if mean is not None and mean < DARK_MEAN:
-                    notes.append(
-                        f"The thumbnail is nearly black (mean luminance {mean:.1f}/255): check "
-                        "lights, camera framing and exposure."
-                    )
+                look = thumbnail_note(image.pop("mean_luma", None), image.pop("coverage", None))
+                if look:
+                    notes.append(look)
                     result["notes"] = notes
                 result["thumbnail"] = {
                     "path": last,
