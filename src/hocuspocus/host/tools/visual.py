@@ -2294,6 +2294,23 @@ def _writer_side_effects(owner_path: str) -> dict[str, list[Any]]:
     return changed_parms(before, _top_parm_values(node))
 
 
+def _writer_output_hint(owner: Any) -> str:
+    """How to change the output of a writer SOP that renders through its inner ROP, in
+    ``parm_set`` terms: a File Cache's ``filemethod`` by its menu token (review 20 N4: the
+    hint said ``filemethod 1``, an index ``parm_set`` does not take)."""
+    method, file_parm = owner.parm("filemethod"), owner.parm("file")
+    explicit = None
+    with contextlib.suppress(Exception):
+        if method is not None and "explicit" in method.menuItems():
+            explicit = "explicit"
+    if explicit and file_parm is not None:
+        return (
+            f'Set the output with parm_set on {owner.path()} (filemethod: "{explicit}", then '
+            "file: the path), then render without output."
+        )
+    return "Set the node's own output parm with parm_set, then render without output."
+
+
 def _prepare_render(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     """Validate on the main thread and compute the expected output files."""
     import hou
@@ -2322,8 +2339,7 @@ def _prepare_render(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
                 "invalid_argument",
                 f"{owner.path()} ({owner.type().name()}) writes through the ROP inside it, "
                 "whose output cannot be overridden.",
-                hint="Set the node's own output parm with parm_set (on a File Cache: "
-                "filemethod 1 and file), then render without output.",
+                hint=_writer_output_hint(owner),
             )
         if parm is None:
             raise ToolError(

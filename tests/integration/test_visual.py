@@ -787,7 +787,10 @@ def test_render_a_file_cache_refuses_an_output_override(client, work_dir):
     _geo, _box, cache = _file_cache(work_dir)
     error = client.error("render", {"rop_path": cache.path(), "output": _fwd(work_dir / "x.bgeo")})
     assert error["code"] == "invalid_argument"
-    assert "file" in error["hint"]
+    # Review 20 N4: the hint names the menu token parm_set takes, not an index.
+    assert 'filemethod: "explicit"' in error["hint"], error
+    assert cache.path() in error["hint"] and "file: " in error["hint"]
+    assert "explicit" in cache.parm("filemethod").menuItems()
 
 
 def test_render_a_rop_sop_uses_its_own_frame_range(client, work_dir):
