@@ -2,7 +2,7 @@
 
 <!-- Generated from src/hocuspocus/tools/catalog.py by `python -m hocuspocus.tools.docs`. Do not edit by hand. -->
 
-35 tools: 14 in the `minimal` profile, 31 in `core` (minimal included), 4 more in `full`. Model-visible `tools/list` text: 26,502 bytes. See `docs/BIBLE.md` §4 for the design.
+35 tools: 14 in the `minimal` profile, 31 in `core` (minimal included), 4 more in `full`. Model-visible `tools/list` text: 26,485 bytes. See `docs/BIBLE.md` §4 for the design.
 
 ## Contents
 
@@ -48,7 +48,7 @@
 
 Start here. Reports the connected Houdini (pid, version, GUI or headless, hip path and dirty state, $HIP/$JOB, frame, recent files, scene_generation), every live instance and the bridge settings. Works with no Houdini running (connected: null).
 
-**Notes.** Also reports $HIPNAME, fps, the frame range, and the bridge's profile, read_only and allow_python. An untitled scene's hip carries a note that $HIP is the launch directory until hip_save. Each instances[] row has pid, port, label, houdini, ui, hip, started, launched_by, name (when given), selected (the pinned instance, or the one reads go to), busy (the main thread has been held for over a second) and jobs_running. With several instances and none pinned, tools that change a scene refuse with ambiguous_instance: pin one with houdini_connect {pid}. When the pinned Houdini has exited, connected is null and lost: {pid, label} names it.
+**Notes.** Also reports $HIPNAME, fps, the frame range, and the bridge's profile, read_only and allow_python. An untitled scene's hip carries a note that $HIP is the launch directory until hip_save. Each instances[] row has pid, port, label, houdini, ui, hip, started, launched_by, name (when given), selected (the pinned instance, or the one reads go to), busy (the main thread has been held for over a second) and jobs_running. With several instances and none pinned, tools that change a scene refuse with ambiguous_instance: pin one with houdini_connect {pid}. When the pinned Houdini has exited, connected is null and lost: {pid, label} names it. connected.memory is {rss_mb, peak_mb}: the Houdini process's resident and peak memory (watch it while a sim cache fills).
 
 ### Arguments
 
@@ -649,9 +649,9 @@ Set parms in one undo step. Each item takes one of value, expression, keyframe(s
 
 `idempotent` `headless ok` · profile `minimal`
 
-Cook nodes and report per node ok, errors, warnings, cook_time_ms. Cooking never writes files (render does). profile force-cooks each input chain: chain (top 10 by cost), total_ms, attribution; for-each loop bodies show their cost over all iterations (loops). frame_range cooks frame by frame (sims advance); summary bbox adds per-frame bbox. Past the job threshold returns job_id for job.
+Cook nodes and report per node ok, errors, warnings, cook_time_ms. Cooking never writes files (render does). profile force-cooks each input chain: chain (top 10), total_ms, attribution; for-each loop bodies show their cost over all iterations (loops). frame_range cooks frame by frame (sims advance); summary bbox adds bbox rows. Past wait_s returns job_id for job.
 
-**Notes.** cook_time_ms is the node's own cook; cached inputs are not recooked. Cooking a ROP or a File Cache writes nothing, and notes say how to write (render, or parm_set press on its execute button). frame_range is [start, end, step] and cannot be combined with profile or frame; the current frame is restored afterwards. Errors left from before a fix are rechecked unless the last cook took over 2 s (hint: force). With profile, results[].cook_time_ms is the named node's profiled cook. attribution is per_node, or perf_monitor when a block_end was cooked under Houdini's performance monitor: each loop body row then has in_loop, cooks, per_iteration_ms and cook_time_ms over all iterations, and loops lists {block_end, block_begin, iterations, total_ms}. loop-level means the monitor was unavailable (another profile was recording) and body rows show one standalone cook. total_ms counts each loop once, at its block_end. In a GUI session the profile stays in the Performance Monitor's list.
+**Notes.** cook_time_ms is the node's own cook; cached inputs are not recooked. Cooking a ROP or a File Cache writes nothing, and notes say how to write (render, or parm_set press on its execute button). frame_range is [start, end, step] and cannot be combined with profile or frame; the current frame is restored afterwards. Errors left from before a fix are rechecked unless the last cook took over 2 s (hint: force). With profile, results[].cook_time_ms is the named node's profiled cook. attribution is per_node, or perf_monitor when a block_end was cooked under Houdini's performance monitor: each loop body row then has in_loop, cooks, per_iteration_ms and cook_time_ms over all iterations, and loops lists {block_end, block_begin, iterations, total_ms}. loop-level means the monitor was unavailable (another profile was recording) and body rows show one standalone cook. total_ms counts each loop once, at its block_end. In a GUI session the profile stays in the Performance Monitor's list. A profiled node that simulates (a DOP network, or a solver SOP such as pyrosolver with one inside) gets simulation {dopnet, resimulated, frame} and a note: a force-cook reads frames already in the simulation cache instead of re-simulating them. summary bbox rows appear only when the counts, bbox or errors change: a row stands for its frame through the frame in through. wait_s is how long the call waits before returning the job (default min(timeout_s, job threshold); 0 returns the job at once). A cancelled cook's job result is the cancelled error with detail {last_status, partial: {frames_cooked, results, frames?}}.
 
 ### Arguments
 
@@ -664,6 +664,7 @@ Cook nodes and report per node ok, errors, warnings, cook_time_ms. Cooking never
 | `profile` | boolean |  | `false` |  |
 | `frame_range` | array<number> |  |  | min items 2; max items 3 |
 | `summary` | `none` \| `bbox` |  | `"none"` |  |
+| `wait_s` | number |  |  | min 0 |
 
 ### Returns
 
@@ -727,7 +728,9 @@ Explain red nodes: lists nodes in a subtree with errors or warnings, broken chan
 
 `read-only` `headless ok` · profile `minimal`
 
-Summarise the geometry of a SOP (or an OBJ's display SOP) in about 1 KB: point, prim and vertex counts, bounding box, primitive types, attributes per class with type and size, detail attribute values, groups with counts. geo_read reads per-element values.
+Summarise the geometry of a SOP (or an OBJ's display SOP): point, prim and vertex counts, bounding box, primitive types, attributes per class with type and size, detail attribute values, groups with counts. geo_read reads per-element values.
+
+**Notes.** frame evaluates the geometry at that frame without moving the playbar. intrinsics lists every volume as a row under volume_columns [name, prim, resolution, voxel_size, min, max] and every VDB under vdb_columns [name, prim, class, value_type, active_voxels, voxel_size] (at most 100 each; volume_total or vdb_total then counts them all), and the first packed primitives. Detail attribute values are capped: arrays at 16 items, strings at 200 characters, and a dict longer than 200 characters as {elided, keys}; hou vectors and matrices are lists.
 
 ### Arguments
 
@@ -763,7 +766,7 @@ Summarise the geometry of a SOP (or an OBJ's display SOP) in about 1 KB: point, 
 
 `read-only` `headless ok` · profile `core`
 
-Read attribute values like the geometry spreadsheet: count rows of one class from start, with a columns header, optionally within group. stats adds min/max/mean and unique strings over the whole class. Page by passing next_cursor as cursor.
+Read attribute values like the geometry spreadsheet: count rows of one class from start, optionally within group, at frame. stats adds min/max/mean and unique strings over the whole class. Page by passing next_cursor as cursor.
 
 ### Arguments
 
@@ -777,6 +780,7 @@ Read attribute values like the geometry spreadsheet: count rows of one class fro
 | `group` | string |  |  |  |
 | `stats` | boolean |  | `false` |  |
 | `cursor` | string |  |  | next_cursor from the previous page. |
+| `frame` | number |  |  |  |
 
 ### Returns
 
@@ -921,7 +925,7 @@ Run Python (hou bound) or HScript on Houdini's main thread in one undo step, for
 
 `read-only` `headless ok` · profile `core`
 
-Find node types by name, label, description or keyword, in all 18 categories or one. Rows: name, label, category, version, description (clipped), input range, deprecated. Current versions only, older ones named in other_versions, unless current_only is false. Exact names rank first; total counts every match, weak keyword matches included.
+Find node types by name, label, description or keyword, in all 18 categories or one. Rows: name, label, category, version, description (clipped), input range, deprecated. Current versions only, older ones named in other_versions, unless current_only is false. Exact names rank first; total counts every match.
 
 **Notes.** total is the real number of matching types, not a cap: a plain-language query also matches on single description words, so broad queries can match hundreds of types. Raise limit (up to 1000) to see them all.
 

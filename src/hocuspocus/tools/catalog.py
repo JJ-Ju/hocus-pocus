@@ -311,7 +311,9 @@ _SESSION: tuple[ToolSpec, ...] = (
             "reads go to), busy (the main thread has been held for over a second) and "
             "jobs_running. With several instances and none pinned, tools that change a scene "
             "refuse with ambiguous_instance: pin one with houdini_connect {pid}. When the pinned "
-            "Houdini has exited, connected is null and lost: {pid, label} names it."
+            "Houdini has exited, connected is null and lost: {pid, label} names it. "
+            "connected.memory is {rss_mb, peak_mb}: the Houdini process's resident and peak "
+            "memory (watch it while a sim cache fills)."
         ),
         input_schema=_obj({}),
         output_schema=_out(
@@ -1107,10 +1109,10 @@ _COOK: tuple[ToolSpec, ...] = (
         name="cook",
         description=(
             "Cook nodes and report per node ok, errors, warnings, cook_time_ms. Cooking never "
-            "writes files (render does). profile force-cooks each input chain: chain (top 10 "
-            "by cost), total_ms, attribution; for-each loop bodies show their cost over all "
-            "iterations (loops). frame_range cooks frame by frame (sims advance); summary bbox adds"
-            " per-frame bbox. Past the job threshold returns job_id for job."
+            "writes files (render does). profile force-cooks each input chain: chain (top 10), "
+            "total_ms, attribution; for-each loop bodies show their cost over all iterations "
+            "(loops). frame_range cooks frame by frame (sims advance); summary bbox adds bbox "
+            "rows. Past wait_s returns job_id for job."
         ),
         notes=(
             "cook_time_ms is the node's own cook; cached inputs are not recooked. Cooking a ROP or "
@@ -1125,7 +1127,15 @@ _COOK: tuple[ToolSpec, ...] = (
             " {block_end, block_begin, iterations, total_ms}. loop-level means the monitor was "
             "unavailable (another profile was recording) and body rows show one standalone cook. "
             "total_ms counts each loop once, at its block_end. In a GUI session the profile stays "
-            "in the Performance Monitor's list."
+            "in the Performance Monitor's list. A profiled node that simulates (a DOP network, or "
+            "a solver SOP such as pyrosolver with one inside) gets simulation {dopnet, "
+            "resimulated, frame} and a note: a force-cook reads frames already in the simulation "
+            "cache instead of re-simulating them. summary bbox rows appear only when the counts, "
+            "bbox or errors change: a row stands for its frame through the frame in through. "
+            "wait_s is how long the call waits before returning the job (default "
+            "min(timeout_s, job threshold); 0 returns the job at once). A cancelled cook's job "
+            "result is the cancelled error with detail {last_status, partial: {frames_cooked, "
+            "results, frames?}}."
         ),
         input_schema=_obj(
             {
@@ -1136,6 +1146,7 @@ _COOK: tuple[ToolSpec, ...] = (
                 "profile": _b(False),
                 "frame_range": _arr({"type": "number"}, None, minItems=2, maxItems=3),
                 "summary": _enum(("none", "bbox"), "none"),
+                "wait_s": _n(None, minimum=0),
             },
             ("paths",),
         ),
@@ -1206,9 +1217,18 @@ _COOK: tuple[ToolSpec, ...] = (
     ToolSpec(
         name="geo_info",
         description=(
-            "Summarise the geometry of a SOP (or an OBJ's display SOP) in about 1 KB: point, prim "
+            "Summarise the geometry of a SOP (or an OBJ's display SOP): point, prim "
             "and vertex counts, bounding box, primitive types, attributes per class with type and "
             "size, detail attribute values, groups with counts. geo_read reads per-element values."
+        ),
+        notes=(
+            "frame evaluates the geometry at that frame without moving the playbar. intrinsics "
+            "lists every volume as a row under volume_columns [name, prim, resolution, "
+            "voxel_size, min, max] and every VDB under vdb_columns [name, prim, class, "
+            "value_type, active_voxels, voxel_size] (at most 100 each; volume_total or vdb_total "
+            "then counts them all), and the first packed primitives. Detail attribute values are"
+            " capped: arrays at 16 items, strings at 200 characters, and a dict longer than 200 "
+            "characters as {elided, keys}; hou vectors and matrices are lists."
         ),
         input_schema=_obj({"path": _s("SOP or OBJ path."), "frame": _frame()}, ("path",)),
         output_schema=_out(
@@ -1234,7 +1254,7 @@ _COOK: tuple[ToolSpec, ...] = (
         name="geo_read",
         description=(
             "Read attribute values like the geometry spreadsheet: count rows of one class from "
-            "start, with a columns header, optionally within group. stats adds min/max/mean and "
+            "start, optionally within group, at frame. stats adds min/max/mean and "
             "unique strings over the whole class. Page by passing next_cursor as cursor."
         ),
         input_schema=_obj(
@@ -1249,6 +1269,7 @@ _COOK: tuple[ToolSpec, ...] = (
                 "stats": _b(False),
                 # §4.1: cursors are opaque strings everywhere; overrides start.
                 "cursor": _cursor(),
+                "frame": _n(),
             },
             ("path",),
         ),
@@ -1438,8 +1459,7 @@ _VISUAL: tuple[ToolSpec, ...] = (
             "Find node types by name, label, description or keyword, in all 18 categories or one. "
             "Rows: name, label, category, version, description (clipped), input range, deprecated. "
             "Current versions only, older ones named in other_versions, unless current_only is "
-            "false. Exact names rank first; total counts every match, weak keyword matches "
-            "included."
+            "false. Exact names rank first; total counts every match."
         ),
         notes=(
             "total is the real number of matching types, not a cap: a plain-language query also "

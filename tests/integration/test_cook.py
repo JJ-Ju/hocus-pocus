@@ -848,3 +848,87 @@ def test_cook_on_a_rop_says_cooking_does_not_render(client, work_dir):
     assert len(notes) == 2, notes
     assert any(sop_rop.path() in n and "render" in n for n in notes)
     assert any(out_rop.path() in n and "render" in n for n in notes)
+
+
+# -- review 17: wait_s, summary rows on change, partial results, sims ----------------------
+
+
+def test_cook_frame_range_summary_emits_rows_only_on_change(client):
+    geo = _geo()
+    box = geo.createNode("box")
+    box.parm("ty").setExpression("floor($F / 4)")
+    result = client.ok("cook", {"paths": [box.path()], "frame_range": [1, 10], "summary": "bbox"})
+    frames = result["frames"]
+    assert [(row["frame"], row.get("through")) for row in frames] == [(1, 3), (4, 7), (8, 10)]
+    assert frames[1]["bbox_min"][1] == pytest.approx(0.5)
+    still = client.ok("cook", {"paths": [geo.path()], "frame_range": [1, 5], "summary": "bbox"})
+    assert [(row["frame"], row.get("through")) for row in still["frames"]] == [(1, 3), (4, 5)]
+
+
+def test_cook_wait_s_zero_returns_a_job_at_once(client):
+    node = _slow_python_sop(_geo(), 0.3)
+    result = client.ok("cook", {"paths": [node.path()], "force": True, "wait_s": 0})
+    assert result["state"] == "running"
+    status = _wait_job(client, result["job_id"])
+    assert status["state"] == "done"
+    error = client.error("cook", {"paths": [node.path()], "wait_s": -1})
+    assert error["code"] == "invalid_argument"
+
+
+@pytest.mark.slow
+def test_cook_cancelled_frame_range_keeps_the_frames_cooked(client):
+    geo = _geo()
+    box = geo.createNode("box")
+    slow = _slow_python_sop(geo, 0.05)
+    slow.setInput(0, box)
+    hou.setFrame(7)
+    result = client.ok(
+        "cook",
+        {"paths": [slow.path()], "frame_range": [1, 200], "summary": "bbox", "wait_s": 0},
+    )
+    job_id = result["job_id"]
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        status = client.ok("job", {"action": "status", "job_id": job_id})
+        if (status.get("current") or 0) >= 4:
+            break
+        client.host.executor.pump_once(0.02)
+    client.ok("job", {"action": "cancel", "job_id": job_id})
+    assert _wait_job(client, job_id)["state"] == "cancelled"
+    error = client.error("job", {"action": "result", "job_id": job_id})
+    assert error["code"] == "cancelled"
+    partial = error["detail"]["partial"]
+    assert 4 <= partial["frames_cooked"] < 200
+    assert partial["frames"][0]["frame"] == 1
+    assert error["detail"]["last_status"]["total"] == 200
+    assert hou.frame() == 7
+
+
+def test_cook_profile_on_a_sim_says_whether_it_resimulated(client):
+    geo = _geo()
+    sphere = geo.createNode("sphere")
+    source = geo.createNode("pyrosource")
+    source.setInput(0, sphere)
+    source.parm("initialize").set("source")
+    source.parm("initialize").pressButton()
+    raster = geo.createNode("volumerasterizeattributes")
+    raster.setInput(0, source)
+    raster.parm("attributes").set("density temperature")
+    solver = geo.createNode("pyrosolver")
+    solver.setInput(0, raster)
+    solver.parm("divsize").set(0.25)
+    first = client.ok("cook", {"paths": [solver.path()], "profile": True, "frame": 3})
+    row = next(r for r in first["chain"] if r["path"] == solver.path())
+    assert row["simulation"]["resimulated"] is True
+    assert any("simulat" in n for n in first["notes"])
+    again = client.ok("cook", {"paths": [solver.path()], "profile": True, "frame": 3})
+    row = next(r for r in again["chain"] if r["path"] == solver.path())
+    assert row["simulation"]["resimulated"] is False
+    assert any("cache" in n for n in again["notes"])
+
+
+def test_houdini_status_reports_process_memory(client):
+    status = client.ok("houdini_status")
+    memory = status["memory"]
+    assert memory["rss_mb"] > 50
+    assert memory["peak_mb"] >= memory["rss_mb"]

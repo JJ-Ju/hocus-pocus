@@ -206,6 +206,41 @@ def _perf_cook(node: Any) -> tuple[float, BaseException | None, dict[str, Any] |
     return elapsed, failure, stats
 
 
+SIM_NETS_CAP = 3
+
+
+def _dop_networks(node: Any) -> list[Any]:
+    """The DOP networks a node simulates with: itself (a DOP network SOP or object), else
+    the ones inside it (``pyrosolver``'s ``dopnet1``), at most :data:`SIM_NETS_CAP`."""
+    import hou
+
+    def is_dopnet(candidate: Any) -> bool:
+        try:
+            category = candidate.childTypeCategory()
+        except Exception:
+            return False
+        return category is not None and category == hou.dopNodeTypeCategory()
+
+    if is_dopnet(node):
+        return [node]
+    try:
+        children = node.allSubChildren(recurse_in_locked_nodes=True)
+    except Exception:
+        return []
+    return [child for child in children if is_dopnet(child)][:SIM_NETS_CAP]
+
+
+def _sim_states(nets: list[Any]) -> list[tuple[str, float, int]]:
+    """``(path, simulation time, memory)`` per DOP network; a change across a cook means
+    the cook simulated frames."""
+    states = []
+    for net in nets:
+        with contextlib.suppress(Exception):
+            sim = net.simulation()
+            states.append((net.path(), float(sim.time()), int(sim.memoryUsage())))
+    return states
+
+
 def _profile_step(node_path: str) -> dict[str, Any]:
     """Force-cook one chain node and time it. A ``block_end`` is cooked under the
     performance monitor so its loop body can be attributed (review 12 papercut 5). Main
@@ -222,12 +257,26 @@ def _profile_step(node_path: str) -> dict[str, Any]:
             with contextlib.suppress(Exception):
                 loop["iterations"] = begin.cookCount() - before
     else:
+        nets = _dop_networks(node)
+        before = _sim_states(nets)
         elapsed, failure = timed_cook(node, True)
+        after = _sim_states(nets)
     row: dict[str, Any] = {
         "path": node.path(),
         "type": node.type().name(),
         "cook_time_ms": round(elapsed, 1),
     }
+    if loop is None and after:
+        import hou
+
+        # Review 17 P2-10: a force-cook of a solver reads the simulation cache when it
+        # holds the frame; say whether this cook simulated anything.
+        resimulated = before != after
+        row["simulation"] = {
+            "dopnet": after[0][0],
+            "resimulated": resimulated,
+            "frame": _num(round(hou.timeToFrame(after[0][1]), 4)),
+        }
     if loop is not None:
         row["_loop"] = loop
     if failure is not None:
@@ -326,6 +375,27 @@ def _frame_step(
     return reports, rows
 
 
+_SAME_KEYS = ("path", "point_count", "prim_count", "bbox_min", "bbox_max", "errors")
+
+
+def collapse_frames(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Summary rows only where something changed (review 17 P2-8: 48 rows, 4 changes): a
+    run of frames with the same counts, bbox and errors is its first row plus
+    ``through``, the run's last frame. Per node when several are cooked. No ``hou``."""
+    out: list[dict[str, Any]] = []
+    last: dict[Any, dict[str, Any]] = {}
+    for row in rows:
+        key = row.get("path")
+        previous = last.get(key)
+        if previous is not None and all(previous.get(k) == row.get(k) for k in _SAME_KEYS):
+            previous["through"] = row["frame"]
+            continue
+        row = dict(row)
+        out.append(row)
+        last[key] = row
+    return out
+
+
 def _merge_frame_report(
     merged: dict[str, dict[str, Any]], report: dict[str, Any], frame: float
 ) -> None:
@@ -367,12 +437,22 @@ class _Inline:
 
 
 def _plain(job: Any, paths: list[str], force: bool, frame: float | None) -> list[dict[str, Any]]:
-    results = []
+    results: list[dict[str, Any]] = []
     for index, path in enumerate(paths):
         job.set_progress(index, len(paths), f"cooking {path}")
-        results.append(
-            job.run_main(lambda p=path: cook_node(p, force=force, frame=frame), JOB_STEP_TIMEOUT_S)
-        )
+        try:
+            results.append(
+                job.run_main(
+                    lambda p=path: cook_node(p, force=force, frame=frame), JOB_STEP_TIMEOUT_S
+                )
+            )
+        except ToolError as exc:
+            if exc.code != "cancelled":
+                raise
+            from .visual import cancelled_with_partial
+
+            done = f"{len(results)} of {len(paths)} nodes"
+            raise cancelled_with_partial(job, {"results": results}, done) from exc
     job.set_progress(len(paths), len(paths), "done")
     return results
 
@@ -424,7 +504,24 @@ def _profiled(
     rows.sort(key=lambda r: r["cook_time_ms"], reverse=True)
     out = {"chain": rows[:10], "chain_total": len(rows), "total_ms": total_ms}
     out.update(extra)
+    notes = [_sim_note(row) for row in rows if "simulation" in row]
+    if notes:
+        out["notes"] = notes
     return results, out
+
+
+def _sim_note(row: dict[str, Any]) -> str:
+    sim = row["simulation"]
+    if sim["resimulated"]:
+        return (
+            f"{row['path']} simulated frames in {sim['dopnet']} up to frame {sim['frame']}; "
+            "its cook_time_ms includes that simulation."
+        )
+    return (
+        f"{row['path']} did not re-simulate: {sim['dopnet']}'s cache already held frame "
+        f"{sim['frame']}, so its cook_time_ms is a cache read. Reset the simulation (its "
+        "resimulate button) to time a full run."
+    )
 
 
 def _attribute_loops(rows: list[dict[str, Any]]) -> dict[str, Any]:
@@ -495,15 +592,27 @@ def _ranged(
     frame_rows: list[dict[str, Any]] = []
     merged: dict[str, dict[str, Any]] = {}
     started = time.perf_counter()
+    cooked = 0
     try:
         for index, value in enumerate(frames):
             job.set_progress(index, total, f"frame {index + 1}/{total}")
             reports, rows = job.run_main(
                 lambda f=value: _frame_step(paths, f, force, summary), JOB_STEP_TIMEOUT_S
             )
+            cooked += 1
             frame_rows.extend(rows)
             for report in reports:
                 _merge_frame_report(merged, report, value)
+    except ToolError as exc:
+        if exc.code != "cancelled":
+            raise
+        # Review 17 P1-6: job result keeps what was cooked before the cancel.
+        from .visual import cancelled_with_partial
+
+        partial: dict[str, Any] = {"frames_cooked": cooked, "results": list(merged.values())}
+        if summary == "bbox":
+            partial["frames"] = collapse_frames(frame_rows)
+        raise cancelled_with_partial(job, partial, f"{cooked} of {total} frames") from exc
     finally:
         _restore_frame(ctx, previous)
     job.set_progress(total, total, "done")
@@ -514,7 +623,7 @@ def _ranged(
         "total_ms": round((time.perf_counter() - started) * 1000, 1),
     }
     if summary == "bbox":
-        extra["frames"] = frame_rows
+        extra["frames"] = collapse_frames(frame_rows)
     return [merged[p] for p in paths], extra
 
 
@@ -551,6 +660,9 @@ def cook(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     force = bool(args.get("force", False))
     frame = _number(args, "frame", None)
     timeout_s = _number(args, "timeout_s", 30.0, positive=True)
+    wait_arg = _number(args, "wait_s", None)
+    if wait_arg is not None and wait_arg < 0:
+        raise ToolError("invalid_argument", "'wait_s' must be a number >= 0.")
     profile = bool(args.get("profile", False))
     summary = args.get("summary", "none")
     if summary not in SUMMARIES:
@@ -583,7 +695,7 @@ def cook(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
             out["frame"] = frame
         out.update(extra)
         if notes:
-            out["notes"] = notes
+            out["notes"] = [*notes, *extra.get("notes", [])]
         return out
 
     if ctx.executor.on_main_thread():
@@ -593,7 +705,12 @@ def cook(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     resolved = ctx.executor.run(resolve, timeout_s)
     label = resolved[0] if len(resolved) == 1 else f"{len(resolved)} nodes"
     started = ctx.jobs.start("cook", lambda job: work(job, resolved), label=label)
-    wait_s = min(timeout_s, float(ctx.config.job_threshold_s))
+    # An explicit wait_s is the caller's own threshold, as on render (review 17 P2-8).
+    wait_s = (
+        float(wait_arg)
+        if wait_arg is not None
+        else min(timeout_s, float(ctx.config.job_threshold_s))
+    )
     if started.done_event.wait(wait_s):
         # Returned synchronously: the caller never saw a job_id, so keep job list clean.
         ctx.jobs.discard(started.id)
@@ -604,7 +721,7 @@ def cook(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
         "job_id": started.id,
         "state": "running",
         "message": (
-            f"Cooking {label} is taking longer than {wait_s:g}s; poll with "
+            f"Cooking {label} runs as a job (waited {wait_s:g}s); poll with "
             f"job {{action: status, job_id: {started.id}}} and fetch the result with action result."
         ),
     }

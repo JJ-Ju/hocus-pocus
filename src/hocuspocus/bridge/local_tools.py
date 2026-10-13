@@ -37,7 +37,9 @@ OUTLIVES_NOTE = (
 )
 
 # Fields the host's own ``houdini_status`` answer may contribute to the connected block.
-_HOST_FIELDS = ("hip", "time", "env", "scene_generation", "host_version", "houdini", "ui", "recent")
+_HOST_FIELDS = (
+    "hip", "time", "env", "scene_generation", "host_version", "houdini", "ui", "recent", "memory",
+)  # fmt: skip
 
 
 def connected_block(bridge: Bridge, inst: registry.Instance) -> dict[str, Any]:

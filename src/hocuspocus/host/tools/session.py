@@ -6,7 +6,9 @@ and this call's result into its ``connected`` block.
 
 from __future__ import annotations
 
+import contextlib
 import os
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -127,6 +129,68 @@ def env_block() -> dict[str, Any]:
     return {name: hou.getenv(name) for name in ("HIP", "JOB", "HIPNAME")}
 
 
+def _windows_memory() -> tuple[int, int] | None:
+    """``(working set, peak working set)`` bytes of this process (Windows)."""
+    import ctypes
+    from ctypes import wintypes
+
+    class Counters(ctypes.Structure):
+        _fields_ = [
+            ("cb", wintypes.DWORD),
+            ("PageFaultCount", wintypes.DWORD),
+            ("PeakWorkingSetSize", ctypes.c_size_t),
+            ("WorkingSetSize", ctypes.c_size_t),
+            ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
+            ("QuotaPagedPoolUsage", ctypes.c_size_t),
+            ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
+            ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+            ("PagefileUsage", ctypes.c_size_t),
+            ("PeakPagefileUsage", ctypes.c_size_t),
+        ]
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+    query = kernel32.K32GetProcessMemoryInfo
+    query.argtypes = (wintypes.HANDLE, ctypes.POINTER(Counters), wintypes.DWORD)
+    query.restype = wintypes.BOOL
+    counters = Counters()
+    counters.cb = ctypes.sizeof(Counters)
+    if not query(kernel32.GetCurrentProcess(), ctypes.byref(counters), counters.cb):
+        return None
+    return int(counters.WorkingSetSize), int(counters.PeakWorkingSetSize)
+
+
+def _posix_memory() -> tuple[int | None, int] | None:
+    """``(resident set, peak resident set)`` bytes of this process (Linux, macOS)."""
+    import resource
+
+    peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    peak *= 1 if sys.platform == "darwin" else 1024  # bytes on macOS, KiB on Linux
+    rss = None
+    with contextlib.suppress(OSError, ValueError, IndexError):
+        pages = int(Path("/proc/self/statm").read_text().split()[1])
+        rss = pages * os.sysconf("SC_PAGE_SIZE")
+    return rss, peak
+
+
+def memory_block() -> dict[str, Any] | None:
+    """``{rss_mb, peak_mb}`` of the Houdini process (review 17 P2-9: an agent filling a
+    sim cache could not see memory grow), or None when the platform will not say. Reads
+    the OS counters directly (no psutil in hython)."""
+    try:
+        sizes = _windows_memory() if sys.platform == "win32" else _posix_memory()
+    except Exception:
+        sizes = None
+    if sizes is None:
+        return None
+    rss, peak = sizes
+    mib = 1024 * 1024
+    return {
+        "rss_mb": round(rss / mib, 1) if rss is not None else None,
+        "peak_mb": round(peak / mib, 1),
+    }
+
+
 UNTITLED_NOTE = "$HIP is the launch directory until you hip_save."
 
 
@@ -137,7 +201,7 @@ def session_info(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     hip = hip_block(ctx)
     if hip.get("is_new"):
         hip["note"] = UNTITLED_NOTE
-    return {
+    out = {
         "pid": ctx.pid or os.getpid(),
         "port": ctx.port,
         "houdini": hou.applicationVersionString(),
@@ -154,6 +218,10 @@ def session_info(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
         "allow_python": bool(config.allow_python),
         "profile": config.profile,
     }
+    memory = memory_block()
+    if memory is not None:
+        out["memory"] = memory
+    return out
 
 
 tool("session_info", read_only=True)(session_info)

@@ -114,10 +114,12 @@ def test_geo_info_intrinsics_for_packed_volume_vdb(client):
     intrinsics = result["intrinsics"]
     assert intrinsics["packed"][0]["type"] == "PackedGeometry"
     assert intrinsics["packed"][0]["bounds"] == [-0.5, 0.5, -0.5, 0.5, -0.5, 0.5]
-    assert intrinsics["volume"][0]["resolution"] == [10, 10, 10]
-    assert intrinsics["volume"][0]["name"] == "density"
-    assert intrinsics["vdb"][0]["class"] == "level set"
-    assert intrinsics["vdb"][0]["active_voxels"] > 0
+    volumes = dict(zip(intrinsics["volume_columns"], intrinsics["volume"][0], strict=True))
+    assert volumes["resolution"] == [10, 10, 10]
+    assert volumes["name"] == "density"
+    vdbs = dict(zip(intrinsics["vdb_columns"], intrinsics["vdb"][0], strict=True))
+    assert vdbs["class"] == "level set"
+    assert vdbs["active_voxels"] > 0
     assert _size(result) < 2000
 
 
@@ -469,3 +471,61 @@ def test_capture_framing_bbox_refreshes_stale_errors(client):
 
     geo, copy1 = _broken_then_fixed_outside()
     assert _world_bbox(geo, copy1) is not None
+
+
+# -- review 17: every volume, vectors, dict attributes, geo_read frame -----------------------
+
+
+def test_geo_info_lists_every_volume_as_a_row(client):
+    geo = hou.node("/obj").createNode("geo", "vols")
+    merge = geo.createNode("merge")
+    for index in range(6):
+        volume = geo.createNode("volume", f"v{index}")
+        volume.parm("name").set(f"field{index}")
+        merge.setNextInput(volume)
+    merge.setDisplayFlag(True)
+    result = client.ok("geo_info", {"path": merge.path()})
+    intrinsics = result["intrinsics"]
+    assert intrinsics["volume_columns"] == [
+        "name",
+        "prim",
+        "resolution",
+        "voxel_size",
+        "min",
+        "max",
+    ]
+    assert [row[0] for row in intrinsics["volume"]] == [f"field{i}" for i in range(6)]
+    assert "volume_total" not in intrinsics
+
+
+def test_geo_info_vectors_as_lists_and_long_dicts_elided(client):
+    geo, box = _box()
+    py = geo.createNode("python", "detail")
+    py.setFirstInput(box)
+    py.parm("python").set(
+        "geo = hou.pwd().geometry()\n"
+        "geo.addAttrib(hou.attribType.Global, 'vis', {})\n"
+        "geo.setGlobalAttribValue('vis', {'range': hou.Vector2(0, 1), "
+        "'ramp': 'x' * 400, 'mode': 'smoke'})\n"
+        "geo.addAttrib(hou.attribType.Global, 'small', {})\n"
+        "geo.setGlobalAttribValue('small', {'c': hou.Vector3(1, 2, 3)})\n"
+    )
+    py.setDisplayFlag(True)
+    result = client.ok("geo_info", {"path": py.path()})
+    detail = {row["name"]: row["value"] for row in result["attributes"]["detail"]}
+    assert detail["small"] == {"c": [1.0, 2.0, 3.0]}
+    vis = detail["vis"]
+    assert vis["elided"] > 200 and sorted(vis["keys"]) == ["mode", "ramp", "range"]
+    assert "<hou." not in json.dumps(result)
+
+
+def test_geo_read_at_a_frame_leaves_the_playbar(client):
+    geo, box = _box()
+    box.parm("ty").setExpression("$F")
+    hou.setFrame(1)
+    result = client.ok("geo_read", {"path": box.path(), "attribs": ["P"], "count": 1, "frame": 12})
+    assert result["frame"] == 12
+    assert result["rows"][0][1][1] == pytest.approx(11.5)
+    assert hou.frame() == 1
+    stats = client.ok("geo_read", {"path": box.path(), "class": "detail", "frame": 3})
+    assert stats["frame"] == 3
