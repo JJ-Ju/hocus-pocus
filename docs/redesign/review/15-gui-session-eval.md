@@ -12,13 +12,10 @@
 
 1. **Orientation.** `houdini_status` found the GUI instance, the hip and `HIP` = the hip's directory. Frame was 72 and the range 1–96. `network_describe {root:/obj, format:outline}` returned 72 nodes in 6.6 KB.
 2. **Viewport captures, three ways.** I compared `source: viewer`, `source: opengl_rop, fit: all`, `camera: /obj/cam_district` with `auto` and with `opengl_rop`, and `source: viewer, fit: all`.
-3. **A user working alongside.** I made two agent edits (`parm_set` sun intensity, `node_create` a null `AGENT_REVIEW` after `OUT_SIM`). Then I made four "manual" edits through `houdini_python`, each with its own `undo_label`: rename `/obj/sky` → `sky_env`, move two nodes, change the sun intensity and the `cam_district` focal length, and delete `/obj/cam_street`.
-   Those edits are labelled `HocusPocus: houdini_python ...` in the undo history, so they do not look like a user's steps. I added a fifth `houdini_python` call that only *schedules* two edits through `hdefereval.executeDeferred`: a rename of `/obj/sun` → `sun_key` and a change to `/obj/cam_overview/focal`. Those edits ran on the event loop after the call returned, outside HocusPocus's undo group. They are indistinguishable from real user steps (`Rename Node sun -> sun_key`, `Change Parameter focal`).
-   Then I ran `events`, `node_info`/`node_find`, `undo history`, `undo` and `redo` of an agent `node_edit`, and an undo across a user step.
-4. **`selection`** set and get, then `viewport_capture fit: selected` in `auto` and in `opengl_rop`.
-5. **Playback.** `time {frame: 60}`, then `cam_district` captures at frames 1, 48 and 96, through both the ROP and the viewer.
-6. **HDA round trip.** I created a SOP `subnet` `/obj/destruction/meteors` and used `node_copy` to bring in the six meteor nodes with their wiring. I set the display flag inside and checked that `geo_info` showed 3 packed meteors.
-   Then: `hda create` (`hp::meteors`, label "HP Meteors", version 1.0, library `<scratch>/g15/hda/meteors.hda`), `hda save`, `hda match`, `node_type_info`, `hda unlock`, `parm_set meteor_shape/freq 3`, `node_edit spare_parms` add `speed_scale`, `hda save`, `node_type_info`, `hda match` and `parm_get`. I listed with `hda list` (two pages of 5, then `library_path`) and ran `node_type_search` twice. `hda reload` and `hda install` were extra.
+3. **A user working alongside.** Two agent edits (`parm_set` sun intensity; `node_create` a null `AGENT_REVIEW`), then four "manual" `houdini_python` edits with their own `undo_label`: rename `/obj/sky` → `sky_env`, move two nodes, change sun intensity and `cam_district` focal, delete `/obj/cam_street`. Because those are labelled `HocusPocus: houdini_python ...`, a fifth call only *scheduled* two edits via `hdefereval.executeDeferred` (rename `/obj/sun` → `sun_key`, change `/obj/cam_overview/focal`); they ran after the call returned, outside HocusPocus's undo group, and are indistinguishable from real user steps. Then `events`, `node_info`/`node_find`, `undo history`, undo/redo of an agent `node_edit`, and an undo across a user step.
+4. **`selection`** set/get, then `viewport_capture fit: selected` (`auto` and `opengl_rop`).
+5. **Playback.** `time {frame: 60}`, then `cam_district` captures at frames 1, 48, 96 through the ROP and the viewer.
+6. **HDA round trip.** A SOP `subnet` `/obj/destruction/meteors` filled by `node_copy` of the six meteor nodes (display flag set inside, `geo_info` = 3 packed meteors); `hda create` (`hp::meteors`, "HP Meteors", 1.0, `<scratch>/g15/hda/meteors.hda`), `save`, `match`, `node_type_info`, `unlock`, `parm_set meteor_shape/freq 3`, `node_edit spare_parms` add `speed_scale`, `save`, `node_type_info`, `match`, `parm_get`, `hda list` (two pages of 5, then `library_path`), `node_type_search` ×2, plus `reload` and `install`.
 7. **Deliberate errors**, then `problems`, `events`, `hip_save` and the close.
 
 ---
@@ -98,9 +95,7 @@ In the middle of the HDA step, the `hda match` call died before any request was 
 - **`source: viewer` shows the user's working context, not the scene.** When the hip opened, the viewer was not homed: the first grab showed the camera gizmos and one ground tile. Once it was pointed at the district, it showed the city with *ghosted* translucent towers and meteor. The ROP render of the same frame showed rubble. The saved network editor sat inside `/obj/city_gen`, so that object drew solid and `/obj/destruction` was ghosted as an "other object". Nothing in the result says so: `camera_used: "viewport"` and `fit_used: "none"` are all you get. After `selection {paths:[/obj/destruction/OUT_SIM]}`, the viewer showed the sim solid. Setting the selection evidently moved the user's network context as well, and the result did not mention that either.
 - **The viewer cannot be homed.** `{"source":"viewer","fit":"all"}` returned `fit_used: "none"` with no note, and `fit: selected` under `auto` did the same. No tool homes or frames the viewer. The quickstart tells a *person* to press H. The workaround I found was a capture with `camera`, which leads to the next problem.
 - **`camera` with `source: auto` or `viewer` permanently moves the user's viewer.** After `camera: /obj/cam_district`, the user's viewport stayed at the camera's view (badge "No cam", so it is a copy, not a lock). After `camera: /obj/sun_key` (a light, which the tool accepts), the user's viewer was left looking at empty sky. Nothing restores the previous view, and the result does not say the view changed. For a tool whose description says it "Leaves no nodes, undo step or dirty flag", this is the biggest GUI surprise of the session.
-- **The `opengl_rop` source is the right default for an agent in a GUI.** It is fast, it is lit (sun plus sky here), and it is framed. It leaves the user's viewer alone, and its result matches what a render would see. The `fit: all` framing is loose: the city fills about the lower-middle third of the frame. The note `Houdini marks the hip modified when the temporary capture camera and ROP are created...` is honest.
-- `path` (also_written) is still written as **RGBA with a transparent background**, while the attached image is RGB. This is the review 12 leftover, and it is still present.
-- The viewer images carry the HUD (the Persp/No cam badges, the axis gizmo and an "Indie Edition" watermark from this machine's licence). They are fine for "what does the user see" and wrong for evidence. That is why `50_gui_viewer.png` is the ROP shot through `cam_district`.
+- **`opengl_rop` is the right agent default in a GUI:** fast, lit, framed, leaves the user's viewer alone, matches a render. `fit: all` framing is loose (the city fills the lower-middle third). Viewer grabs carry the HUD and this machine's "Indie Edition" watermark, which is why `50_gui_viewer.png` is the ROP shot through `cam_district`.
 
 ### 3.2 Events alongside a user
 - `events {}` returned **nothing after the agent's own `parm_set` and `node_create`**. That is reasonable, since those nodes were not yet watched.
@@ -115,12 +110,11 @@ In the middle of the HDA step, the `hda match` call died before any request was 
 - `undo_label` on `houdini_python` is honoured as `HocusPocus: houdini_python <label>`. That is good for auditing, but it means `houdini_python` cannot imitate a user step. I needed the deferred trick to test real interleaving.
 
 ### 3.4 HDA round trip
-- `node_copy` of six nodes into a new subnet kept the wiring (1.2 KB). I had to set the display flag on `cfg_meteor` inside the subnet myself. No tool collapses nodes into a subnet, so "collapse `/obj/destruction`" means rebuilding by copy. A `hda create` on the `geo` object itself would have converted the whole destruction setup.
-- `hda create` returned a clear result in 0.25 s: `type`, `library`, `hda_locked: false`, and a `note` saying the node is now an unlocked instance, to edit then save. `hda save`, `match`, `unlock`, `reload` and `install` all worked. `parm_get` after `match` showed `freq: 3`, so the contents edit persisted into the definition.
+- No tool collapses nodes into a subnet; `node_copy` into a new subnet kept the wiring (1.2 KB) and I set the inner display flag myself.
+- `hda create` (0.25 s) explains the unlocked state in a `note`. `save`, `match`, `unlock`, `reload` and `install` all worked, and `freq: 3` persisted into the definition.
 - **The spare parm did not reach the definition.** `node_edit spare_parms add speed_scale` on the unlocked HDA instance succeeded, and `hda save` reported `saved: true`. `node_type_info` still showed `"parms": {}`, and after `match` the parm survived only as an instance spare. There is no way to build an HDA's parameter interface through the typed tools.
 - **Version metadata is inconsistent.** `create {version:"1.0"}` returns `version: "1.0"`, and `hda list library_path` shows `"version":"1.0"`. `node_type_info` and `node_type_search` show `version: ""` and `description: ""`, although the docs say `description` is the same as `label`. `node_type_info` reports `"type":"hp::Sop/meteors"`, which is Houdini's spelling but unlike every other type string the tools return.
-- `matches_definition: false` right after `hda save` on an unlocked instance is technically right, but it reads as "save failed".
-- `hda list` puts the user library first, which is good. The other 32 entries are built-ins with **8.3 short paths** (`C:/PROGRA~1/SIDEEF~1/HOUDIN~1.466/houdini/otls/OPlibObject.hda`). Paging works (`next_cursor: "5"`, `"10"`). `node_type_search "meteors"` found the type immediately (186 B).
+- `matches_definition: false` right after `hda save` (unlocked instance) reads as "save failed". `hda list` puts the user library first and pages correctly, but shows built-ins as 8.3 short paths (`C:/PROGRA~1/SIDEEF~1/...`). `node_type_search "meteors"` found the type at once (186 B).
 
 ### 3.5 Deliberate errors
 | Call | Exact message (abridged) | Hint helped? |
@@ -143,12 +137,12 @@ I had no view of the desktop from this seat, so these notes come from latency an
 ---
 
 ## 4. What worked well
-- **`hocuspocus launch` for a GUI.** One command printed the registry line, and a private `HOCUSPOCUS_STATE_DIR` kept other agents' instances out of view. `houdini_status` auto-selected the instance. `HIP` was the hip's directory, as it should be.
-- **The OpenGL ROP capture in a GUI** is about 0.8 s, lit, side-effect free and reproducible. It is fast enough to scrub frames 1/48/96 in under 4 s of tool time.
-- **Stale-path recovery.** `node_not_found` candidates found a node the user renamed. `hip_open` candidates found the real file.
-- **Undo labels and history** are clear and mix agent and user steps faithfully. `undo`/`redo` return `performed` and `next_*`.
-- **The HDA lifecycle** worked end to end in 11 small calls (avg 429 B). `create` explains the unlocked state, and `node_type_search` sees the new type at once.
-- **Byte discipline outside `events`:** median result about 360 B, and no `node_type_info` blow-ups this session.
+- **`hocuspocus launch` for a GUI**: one command, a private `HOCUSPOCUS_STATE_DIR` hid other agents' instances, `houdini_status` auto-selected it, and `HIP` was the hip's directory.
+- **GUI OpenGL ROP capture**: about 0.8 s, lit and side-effect free; frames 1/48/96 in under 4 s of tool time.
+- **Stale-path recovery**: `node_not_found` and `hip_open` candidates found the user-renamed node and the real file.
+- **Undo labels and history** mix agent and user steps faithfully; `undo`/`redo` report `performed` and `next_*`.
+- **The HDA lifecycle** ran end to end in 11 small calls (avg 429 B).
+- **Byte discipline outside `events`**: median result about 360 B.
 
 ---
 
