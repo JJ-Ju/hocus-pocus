@@ -218,9 +218,18 @@ Responsibilities:
 2. **Validate arguments** against the catalogue's JSON Schema (SDK v2 does not), and
    return schema failures as `isError` results with `code: invalid_argument`.
 3. **Resolve the target instance.** Order: explicitly connected instance (via
-   `houdini_connect`) → the only live instance → the most recently started live
-   instance, with a warning in the result `_meta` when more than one exists. If none:
-   `code: houdini_offline` with the hint "call houdini_connect with launch to start one".
+   `houdini_connect`; never another one in its place, §3.6) → the only live instance →
+   with several live and none pinned (1.3, review 19 papercut 2), calls that change a
+   scene refuse with `ambiguous_instance` (the candidates, and the `houdini_connect
+   {"pid": …}` call for each), and reads go to the preferred instance (a GUI session
+   first, then the most recently started) with the warning in `_meta.warnings` and in the
+   result as `_instance: {pid, label, ui, warning}`. "Changes a scene" is every tool not
+   `read_only` except the reading forms of the `scene=False` tools (`time` and
+   `selection` without arguments, `job` status/result/list, `undo history`, `hda list`,
+   `pdg` status/workitems) and `viewport_capture`. Every result a host answered (ok or
+   error, `houdini_status` and `houdini_connect` included) carries `_meta.instance:
+   {pid, label, name?}`. If none: `code: houdini_offline` with the hint "call
+   houdini_connect with launch to start one".
 4. **Forward** `tools/call` to `POST /hp/v1/call`. One attempt; never retry a mutation.
    On connection failure after the request was sent, return `code: delivery_unknown`
    with the instructions to inspect state before repeating.
@@ -675,6 +684,7 @@ Stable codes (the complete set; adding one is a design change):
 | code | when | retryable |
 |---|---|---|
 | `houdini_offline` | no live instance; names the pid (and hip) the bridge was driving if it exited, and says its unsaved changes are lost | after connect (`retryable: false` when nothing is running) |
+| `ambiguous_instance` | several live instances, none pinned, and the call changes a scene (1.3, §3.3 rule 3); `candidates` as for `instance_lost`, `hint` names the `houdini_connect {"pid": …}` call for each | no; after `houdini_connect {pid}` |
 | `instance_lost` | the pinned Houdini exited (1.3); names its pid and label, `candidates` are the live instances as `{pid, label, ui, hip}`; the bridge does not switch on its own (§3.6) | no; after an explicit `houdini_connect` |
 | `houdini_busy` | main-thread timeout | yes |
 | `delivery_unknown` | request sent, response lost (becomes `houdini_offline` "exited while running <tool>" when the process is gone within 1.5 s) | inspect first |

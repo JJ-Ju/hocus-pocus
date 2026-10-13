@@ -86,6 +86,59 @@ def launcher_exited_error(record: dict[str, Any]) -> ToolError:
     )
 
 
+READ_ACTIONS: dict[str, frozenset[str]] = {
+    "job": frozenset({"status", "result", "list"}),
+    "undo": frozenset({"history"}),
+    "hda": frozenset({"list"}),
+    "pdg": frozenset({"status", "workitems"}),
+}
+"""Actions of ``scene=False`` tools that only read (BIBLE §4.1)."""
+READ_WITHOUT: dict[str, tuple[str, ...]] = {
+    "time": ("frame", "range", "fps"),
+    "selection": ("paths",),
+}
+"""``scene=False`` tools that only read when none of these arguments is given."""
+
+
+def mutates(spec: ToolSpec, args: dict[str, Any]) -> bool:
+    """Whether a call may change a Houdini (its scene, files on disk, or work it runs).
+
+    With several live instances and none pinned these calls refuse with
+    ``ambiguous_instance`` (review 19 papercut 2); reads go to the preferred instance.
+    ``viewport_capture`` counts as a read: it leaves no nodes, undo step or dirty flag."""
+    if spec.read_only or spec.bridge_local or spec.name == "viewport_capture":
+        return False
+    if spec.name in READ_ACTIONS:
+        return args.get("action") not in READ_ACTIONS[spec.name]
+    if spec.name in READ_WITHOUT:
+        return any(args.get(key) is not None for key in READ_WITHOUT[spec.name])
+    return True
+
+
+def instance_meta(inst: registry.Instance) -> dict[str, Any]:
+    """``_meta.instance``: which Houdini answered (review 19 papercut 4)."""
+    out: dict[str, Any] = {"pid": inst.pid, "label": inst.label}
+    if inst.name:
+        out["name"] = inst.name
+    return out
+
+
+def ambiguous_error(tool: str, sel: registry.Selection) -> ToolError:
+    """``ambiguous_instance``: a call that changes a scene, several instances, no pin."""
+    ordered = list(sel.candidates)
+    calls = "; ".join(
+        f'houdini_connect {{"pid": {inst.pid}}} pins {inst.describe()}' for inst in ordered
+    )
+    return ToolError(
+        "ambiguous_instance",
+        f"{len(ordered)} Houdini instances are running and none is pinned, so {tool} (which "
+        "changes a scene) was not sent to a guess. Pin the one you mean, then repeat the call.",
+        hint=calls,
+        candidates=[inst.candidate() for inst in ordered],
+        retryable=False,
+    )
+
+
 RESULT_CONTENT_MODES = ("both", "text", "structured")
 """``result_content`` (BIBLE §4.1): where a tool result's JSON goes.
 
@@ -228,8 +281,20 @@ class Bridge:
             # A ghost entry this bridge never talked to: nothing "exited" from its view.
             self.last_target = self._previous_target
 
-    def resolve(self) -> tuple[registry.Instance, list[str]]:
-        """Pick the target instance (BIBLE §3.3 rule 3) or raise ``houdini_offline``."""
+    def resolve(
+        self, tool: str = "", args: dict[str, Any] | None = None
+    ) -> tuple[registry.Instance, list[str]]:
+        """Pick the target instance (BIBLE §3.3 rule 3) or raise ``houdini_offline``,
+        ``instance_lost`` (a dead pin) or ``ambiguous_instance`` (``tool`` changes a scene,
+        several instances run and none is pinned)."""
+        inst, warnings, _ambiguous = self._resolve(tool, args)
+        return inst, warnings
+
+    def _resolve(
+        self, tool: str = "", args: dict[str, Any] | None = None
+    ) -> tuple[registry.Instance, list[str], str | None]:
+        """:meth:`resolve`, plus the ambiguity warning when the choice was a guess (a read
+        on the preferred one of several unpinned instances)."""
         if self.detached:
             raise ToolError(
                 "houdini_offline",
@@ -255,6 +320,9 @@ class Bridge:
                 retryable=False,  # repeating cannot work until something is launched
             )
         inst = sel.instance
+        spec = self._by_name.get(tool)
+        if sel.ambiguous and spec is not None and mutates(spec, args or {}):
+            raise ambiguous_error(tool, sel)
         self._previous_target = self.last_target
         if exited is not None and exited.pid != inst.pid:
             warnings.append(
@@ -269,7 +337,7 @@ class Bridge:
                 f"hp/v{catalog.HP_RPC_VERSION}.",
                 hint=REINSTALL_HINT,
             )
-        return inst, warnings
+        return inst, warnings, (sel.warnings[0] if sel.ambiguous and sel.warnings else None)
 
     def _exited_target(self, live: list[registry.Instance]) -> registry.Instance | None:
         last = self.last_target
@@ -312,7 +380,7 @@ class Bridge:
         request_id = request_id or uuid.uuid4().hex
         stale: list[str] = []
         for _attempt in range(MAX_STALE_ENTRIES):
-            inst, warnings = self.resolve()
+            inst, warnings, ambiguous = self._resolve(name, args)
             client = self.client_for(inst)
             try:
                 if (inst.pid, inst.port, inst.token) not in self._verified:
@@ -345,6 +413,13 @@ class Bridge:
                 self._inflight.pop(request_id, None)
             meta = dict(meta)
             meta.setdefault("pid", inst.pid)
+            meta["instance"] = instance_meta(inst)
+            if ambiguous and ok:
+                # _meta is not shown to the model by every client: say it in the result too.
+                payload = {
+                    **payload,
+                    "_instance": dict(instance_meta(inst), ui=inst.ui, warning=ambiguous),
+                }
             if stale:
                 warnings = [f"Removed stale registry entries: {'; '.join(stale)}.", *warnings]
             if warnings:
@@ -420,7 +495,15 @@ class Bridge:
                         "internal", f"Bridge-local tool {name!r} has no implementation."
                     )
                 with self._lock:
-                    return True, impl(self, args), {}
+                    result = impl(self, args)
+                connected = result.get("connected")
+                meta = {}
+                if isinstance(connected, dict) and isinstance(connected.get("pid"), int):
+                    meta["instance"] = {
+                        "pid": connected["pid"],
+                        "label": connected.get("label", ""),
+                    }
+                return True, result, meta
             return self.forward(name, args, request_id)
         except ToolError as exc:
             return False, exc.to_dict(), {}

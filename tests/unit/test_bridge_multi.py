@@ -188,3 +188,103 @@ def test_quit_of_a_lost_pin_is_instance_lost():
     live.remove(WORKER)
     error = data(bridge.call_tool("houdini_connect", {"quit": True}))
     assert error["code"] == "instance_lost"
+
+
+# -- 2. several instances and no pin (review 19 papercut 2) ----------------------------------
+
+
+def test_mutating_call_refuses_when_ambiguous_and_names_the_calls():
+    bridge, hosts, _live = make(GUI, WORKER)
+    result = bridge.call_tool("node_delete", {"paths": ["/obj/geo1"]})
+    assert result.is_error
+    error = data(result)
+    assert error["code"] == "ambiguous_instance" and error["retryable"] is False
+    assert [c["pid"] for c in error["candidates"]] == [3084, 61900]  # GUI first
+    assert 'houdini_connect {"pid": 3084}' in error["hint"]
+    assert 'houdini_connect {"pid": 61900}' in error["hint"]
+    assert host_of(hosts, GUI).calls == [] and host_of(hosts, WORKER).calls == []
+
+
+def test_reads_go_to_the_gui_and_say_so():
+    """The GUI is preferred over a newer headless worker, and the guess is visible."""
+    bridge, hosts, _live = make(GUI, WORKER)
+    result = bridge.call_tool("time", {})
+    assert not result.is_error
+    body = data(result)
+    assert body["pid"] == GUI.pid
+    assert body["_instance"]["pid"] == GUI.pid and body["_instance"]["ui"] is True
+    assert "none is pinned" in body["_instance"]["warning"]
+    assert result.meta["instance"] == {"pid": GUI.pid, "label": "houdinifx"}
+    assert host_of(hosts, WORKER).calls == []
+
+
+@pytest.mark.parametrize(
+    ("tool", "args", "refused"),
+    [
+        ("time", {}, False),
+        ("time", {"frame": 12}, True),
+        ("selection", {}, False),
+        ("selection", {"paths": ["/obj/geo1"]}, True),
+        ("job", {"action": "list"}, False),
+        ("job", {"action": "status", "job_id": "abc"}, False),
+        ("job", {"action": "cancel", "job_id": "abc"}, True),
+        ("undo", {"action": "history"}, False),
+        ("undo", {"action": "undo"}, True),
+        ("viewport_capture", {}, False),
+        ("cook", {"paths": ["/obj/geo1"]}, True),
+        ("render", {"rop_path": "/out/gl"}, True),
+        ("houdini_python", {"code": "1"}, True),
+        ("parm_get", {"paths": ["/obj/geo1/tx"]}, False),
+        ("hda", {"action": "list"}, False),
+        ("pdg", {"action": "status", "top_path": "/tasks/topnet1"}, False),
+        ("pdg", {"action": "cook", "top_path": "/tasks/topnet1"}, True),
+    ],
+)
+def test_which_calls_count_as_changing_a_scene(tool, args, refused):
+    bridge, _hosts, _live = make(GUI, WORKER)
+    result = bridge.call_tool(tool, args)
+    code = data(result).get("code") if result.is_error else None
+    assert (code == "ambiguous_instance") is refused, data(result)
+
+
+def test_pinned_instance_takes_mutations_without_the_warning():
+    bridge, hosts, _live = make(GUI, WORKER)
+    bridge.call_tool("houdini_connect", {"pid": WORKER.pid})
+    result = bridge.call_tool("node_delete", {"paths": ["/obj/geo1"]})
+    assert not result.is_error
+    assert "_instance" not in data(result)
+    assert result.meta["instance"] == {"pid": WORKER.pid, "label": "hython"}
+    assert host_of(hosts, WORKER).calls[-1][0] == "node_delete"
+
+
+def test_single_instance_is_never_ambiguous():
+    bridge, _hosts, _live = make(WORKER)
+    result = bridge.call_tool("node_delete", {"paths": ["/obj/geo1"]})
+    assert not result.is_error and "_instance" not in data(result)
+    assert result.meta["instance"]["pid"] == WORKER.pid
+
+
+def test_host_errors_carry_the_instance_too():
+    bridge, hosts, _live = make(WORKER)
+    host_of(hosts, WORKER).replies["node_info"] = (
+        False,
+        {"code": "node_not_found", "message": "No node at /obj/x."},
+        {},
+    )
+    result = bridge.call_tool("node_info", {"paths": ["/obj/x"]})
+    assert result.is_error and result.meta["instance"]["pid"] == WORKER.pid
+
+
+def test_status_and_connect_carry_the_instance_and_select_the_gui():
+    bridge, _hosts, _live = make(GUI, WORKER)
+    result = bridge.call_tool("houdini_status", {})
+    status = data(result)
+    assert status["connected"]["pid"] == GUI.pid
+    assert {row["pid"]: row["selected"] for row in status["instances"]} == {
+        3084: True,
+        61900: False,
+    }
+    assert any("ambiguous_instance" in w for w in status["warnings"])
+    assert result.meta["instance"]["pid"] == GUI.pid
+    connected = bridge.call_tool("houdini_connect", {"pid": WORKER.pid})
+    assert connected.meta["instance"] == {"pid": WORKER.pid, "label": "hython"}

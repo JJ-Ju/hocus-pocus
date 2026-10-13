@@ -58,8 +58,8 @@ MINIMAL = {
 
 # BIBLE §9 code table, transcribed (`python_disabled / read_only` is one row, two codes).
 BIBLE_ERROR_CODES = {
-    "houdini_offline", "instance_lost", "houdini_busy", "delivery_unknown",
-    "version_mismatch", "invalid_argument", "node_not_found", "parm_not_found", "node_type_not_found",
+    "houdini_offline", "instance_lost", "ambiguous_instance", "houdini_busy",
+    "delivery_unknown", "version_mismatch", "invalid_argument", "node_not_found", "parm_not_found", "node_type_not_found",
     "invalid_input", "invalid_value", "name_collision", "locked", "cook_failed",
     "unsaved_changes", "file_not_found", "path_not_allowed", "ui_required",
     "python_disabled", "read_only", "job_not_found", "cancelled", "python_exception",
