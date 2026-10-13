@@ -304,7 +304,10 @@ def test_launch_gui_with_hip(tmp_path, monkeypatch, capsys):
     assert cli.main(["launch", "--hip", str(hip)]) == 0
     argv, _env = spawned[0]
     assert Path(argv[0]).stem == "houdinifx" and argv[1] == str(hip.resolve())
-    assert json.loads(capsys.readouterr().out)["mode"] == "gui"
+    captured = capsys.readouterr()
+    assert json.loads(captured.out)["mode"] == "gui"
+    # Review 16 N6: a loaded hip is not "the untitled scene".
+    assert "untitled" not in captured.err and str(hip.resolve()) in captured.err
 
 
 def test_launch_wait_zero_returns_at_once(tmp_path, monkeypatch, capsys):

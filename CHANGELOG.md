@@ -210,6 +210,8 @@ D21 to D24).
   literally named `houdini__HVER__` sits next to the resolved pref dir (or is the
   unexpanded `HOUDINI_USER_PREF_DIR`): Houdini expands the token, so nothing in it is
   read. The warning names the folder Houdini does read.
+- **`hocuspocus launch --hip` (review 16 N6)** said "$HIP of the untitled scene is
+  <cwd>" although it had loaded the hip. It now names the hip it loaded.
 
 ### Upgrading from 1.1
 

@@ -590,10 +590,15 @@ def launch_houdini(
     if result.log:
         entry["log"] = result.log
     out(json.dumps(entry))
+    # With --hip the scene is that file and $HIP its folder: no untitled scene (review 16 N6).
+    scene = (
+        f"It loaded {Path(hip).resolve()}."
+        if hip
+        else f"$HIP of the untitled scene is {where.resolve()}."
+    )
     err(
         f"Houdini pid {result.instance.pid} is running and outlives this command; attach "
-        f'from an MCP client with houdini_connect {{"pid": {result.instance.pid}}}. '
-        f"$HIP of the untitled scene is {where.resolve()}."
+        f'from an MCP client with houdini_connect {{"pid": {result.instance.pid}}}. {scene}'
     )
     return 0
 
