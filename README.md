@@ -149,8 +149,10 @@ houdini_connect {"launch": {"mode": "headless", "hip": "C:/work/shot.hip"}}
 Headless runs `hython -m hocuspocus.host` from the detected Houdini install; GUI runs
 `houdinifx` (or `houdini`). Detection uses the `hfs` setting, then `HOCUSPOCUS_HFS`,
 then `HFS`, then the newest `Side Effects Software/Houdini 22.*`. The bridge waits
-until the new instance registers. A launched Houdini starts in `HOCUSPOCUS_WORK_DIR`
-(default: your home directory), which is the `$HIP` of its untitled scene.
+until the new instance registers. A Houdini launched this way starts in
+`HOCUSPOCUS_WORK_DIR` (default: your home directory), which is the `$HIP` and `$JOB` of
+its untitled scene. `hocuspocus launch` (below) starts in the directory you run it from
+instead.
 
 > **Launch lifetime.** A Houdini started with `houdini_connect {launch}` exits with the
 > bridge that launched it (the end of a session, or a one-shot script exiting), losing
@@ -164,12 +166,16 @@ sessions. The Houdini it starts belongs to no MCP server and keeps running:
 ```bash
 hocuspocus launch                      # GUI houdinifx with the package loaded
 hocuspocus launch --headless --hip C:/work/shot.hip --wait 120
+hocuspocus launch --headless --work-dir C:/work/shot010   # $HIP/$JOB of the untitled scene
 {"pid": 23310, "port": 53120, "label": "hython", "hip": "C:/work/shot.hip", ..., "mode": "headless"}
 ```
 
 It uses the same Houdini detection and package path rules as `houdini_connect {launch}`,
 waits up to `--wait` seconds (default 90; `0` returns at once) for the host to register,
-prints the registry entry (never the token) as one JSON line, and exits. Later sessions
+prints the registry entry (never the token) as one JSON line, and exits. Houdini starts
+in the directory the command runs in (or `--work-dir DIR`), so the untitled scene's `$HIP`
+and `$JOB` are where you expect; as when you run `houdini` there yourself, Houdini also
+looks in that directory for scripts and assets. Later sessions
 attach with `houdini_connect {"pid": 23310}`, or pick it automatically when it is the
 only one running. Close a GUI one as usual; end a headless one's process once its work
 is saved. To run the host by hand instead, use `hython -m hocuspocus.host [--hip FILE]
@@ -225,7 +231,7 @@ Houdini's environment (a launched Houdini inherits the launcher's), and restart 
 | `HOCUSPOCUS_DEFAULT_TIMEOUT_S` | `30` | per-call timeout sent to the host |
 | `HOCUSPOCUS_HFS` | auto | Houdini install used by `houdini_connect` launch |
 | `HOCUSPOCUS_RESULT_CONTENT` | `text` | `text`, `both` or `structured`: where result JSON goes |
-| `HOCUSPOCUS_WORK_DIR` | home | where a launched Houdini starts (environment only) |
+| `HOCUSPOCUS_WORK_DIR` | home | where `houdini_connect {launch}` starts Houdini (environment only; `hocuspocus launch` uses its cwd or `--work-dir`) |
 
 `HOCUSPOCUS_STATE_DIR` moves the shared state directory. That directory holds the
 instance registry, logs and captures. The default is `%LOCALAPPDATA%\HocusPocus` on

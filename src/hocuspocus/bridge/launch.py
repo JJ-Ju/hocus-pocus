@@ -408,8 +408,12 @@ class Launcher:
         return self._launches or registry.LaunchLog()
 
     def build(
-        self, mode: str, hip: str | None
+        self, mode: str, hip: str | None, work_dir: Path | None = None
     ) -> tuple[list[str], dict[str, str], Path, Path | None]:
+        """argv, environment, cwd and log path for one launch. ``work_dir`` is the
+        untitled scene's ``$HIP``/``$JOB``: ``hocuspocus launch`` passes the directory it
+        ran in (or ``--work-dir``); ``None`` (``houdini_connect {launch}``) keeps
+        ``HOCUSPOCUS_WORK_DIR``, else home."""
         hfs = detect_hfs(self.config_hfs, self.environ)
         if hfs is None:
             raise ToolError(
@@ -425,7 +429,7 @@ class Launcher:
             env.pop(LAUNCHED_BY_ENV, None)
         # The untitled scene's $HIP/$JOB: renders to $HIP/... must not land in the state
         # dir next to instances/ and logs/ (review 07 papercut 3).
-        cwd = paths.work_dir()
+        cwd = paths.work_dir() if work_dir is None else Path(work_dir)
         stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S")
         if mode == "gui":
             exe = gui_executable(hfs)
@@ -443,6 +447,10 @@ class Launcher:
             argv = [str(hython_path(hfs)), "-m", "hocuspocus.host"]
             if hip:
                 argv += ["--hip", hip]
+            if work_dir is not None:
+                # The host moves to its work dir at start (HOCUSPOCUS_WORK_DIR, else home)
+                # unless told which one; a GUI's $HIP simply follows its cwd.
+                argv += ["--work-dir", str(cwd)]
             python_dir, _source = self.python_dir(self.environ)
             existing = env.get("PYTHONPATH", "")
             env["PYTHONPATH"] = str(python_dir) + (os.pathsep + existing if existing else "")
@@ -452,8 +460,10 @@ class Launcher:
             "invalid_argument", f"Unknown launch mode {mode!r}.", hint="use 'gui' or 'headless'"
         )
 
-    def spawn(self, mode: str, hip: str | None = None) -> Spawned:
-        """Start Houdini without waiting for it to register."""
+    def spawn(
+        self, mode: str, hip: str | None = None, *, work_dir: str | Path | None = None
+    ) -> Spawned:
+        """Start Houdini without waiting for it to register (``work_dir``: see ``build``)."""
         if hip:
             # Resolved here: the child starts in the work dir, not this process's cwd.
             hip = str(Path(hip).expanduser().resolve())
@@ -463,7 +473,17 @@ class Launcher:
                     f"Hip file not found: {hip}",
                     hint="pass an existing .hip path or omit hip",
                 )
-        argv, env, cwd, log_path = self.build(mode, hip)
+        if work_dir is not None:
+            work_dir = Path(work_dir).expanduser().resolve()
+            try:
+                work_dir.mkdir(parents=True, exist_ok=True)
+            except OSError as exc:
+                raise ToolError(
+                    "invalid_argument",
+                    f"Cannot use {work_dir} as the work directory: {exc}",
+                    hint="pass an existing or creatable directory",
+                ) from exc
+        argv, env, cwd, log_path = self.build(mode, hip, work_dir)
         before = frozenset(inst.pid for inst in self.scan())
         try:
             proc = self.spawner(argv, env, cwd, log_path)

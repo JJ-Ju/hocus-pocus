@@ -315,8 +315,8 @@ hfs = ""                    # bridge: explicit Houdini install dir for launch
 result_content = "text"     # bridge: text | both | structured (§4.1)
 ```
 
-`HOCUSPOCUS_WORK_DIR` (environment only) is where a Houdini that HocusPocus launches
-starts, and so the `$HIP` and `$JOB` of its untitled scene; default the user's home
+`HOCUSPOCUS_WORK_DIR` (environment only) is where a Houdini that `houdini_connect {launch}`
+starts (`hocuspocus launch` uses its own cwd or `--work-dir`, §10.2), and so the `$HIP` and `$JOB` of its untitled scene; default the user's home
 directory, as for a GUI Houdini started from the desktop. Never the state dir (it holds
 `instances/` and `logs/`) and never the repo. `hython -m hocuspocus.host` moves there too
 after start-up (`--work-dir` overrides; hython's own cwd stays off `HOUDINI_PATH` as long
@@ -403,7 +403,7 @@ as it was started from a neutral directory).
 | Tool | Args | Returns | Notes |
 |---|---|---|---|
 | `houdini_status` | — | `connected: {pid, port, houdini, ui, hip: {path, name, dirty, is_new}, time: {frame, fps, range}, env: {HIP, JOB, HIPNAME}, scene_generation, host_version}`, `instances: [...]`, `bridge_version`, `profile`, `read_only`, `allow_python` | Works offline (`connected: null`). Read-only. An untitled scene's `hip` carries `note: "$HIP is the launch directory until you hip_save."` |
-| `houdini_connect` | `pid?`, `launch?: {mode: gui\|headless, hip?, wait_s=90}`, `disconnect?: bool` | the new `connected` block | Launch uses `hfs` config or auto-detect. Headless launches `hython -m hocuspocus.host`. Both modes start in `HOCUSPOCUS_WORK_DIR` (default home, §3.7). A launched Houdini usually ends with the bridge that launched it (`launched.outlives_server` says; §15, launch lifetime); to keep one across sessions, start it with `hocuspocus launch` (§10.2, 1.1) and attach by `pid`. |
+| `houdini_connect` | `pid?`, `launch?: {mode: gui\|headless, hip?, wait_s=90}`, `disconnect?: bool` | the new `connected` block | Launch uses `hfs` config or auto-detect. Headless launches `hython -m hocuspocus.host`. Both modes start in `HOCUSPOCUS_WORK_DIR` (default home, §3.7); `hocuspocus launch` starts in its own cwd or `--work-dir` instead (§10.2). A launched Houdini usually ends with the bridge that launched it (`launched.outlives_server` says; §15, launch lifetime); to keep one across sessions, start it with `hocuspocus launch` (§10.2, 1.1) and attach by `pid`. |
 
 ### 4.3 Hip file
 
@@ -759,11 +759,17 @@ the `claude mcp add` / Codex config lines. `hocuspocus version` prints the bridg
 `mcp` and Python versions. `uninstall-houdini` removes the package JSON, the copied
 versions and the `install.json` record.
 `hocuspocus client-config codex|claude` prints the snippets. `hocuspocus docs tools`
-regenerates `docs/tools.md`. `hocuspocus launch [--headless] [--hip FILE] [--wait N]`
-starts GUI Houdini (or `hython -m hocuspocus.host`) with the same detection and package
-path rules as `houdini_connect {launch}`, waits for its registry entry, prints it as JSON
-(no token) and exits: that Houdini belongs to no MCP server (no `launched_by`, no launch
-record), so it outlives every client (1.1, review 11 B1).
+regenerates `docs/tools.md`. `hocuspocus launch [--headless] [--hip FILE] [--wait N]
+[--work-dir DIR]` starts GUI Houdini (or `hython -m hocuspocus.host`) with the same
+detection and package path rules as `houdini_connect {launch}`, waits for its registry
+entry, prints it as JSON (no token) and exits: that Houdini belongs to no MCP server (no
+`launched_by`, no launch record), so it outlives every client (1.1, review 11 B1). It
+starts in the directory the command runs in, or `--work-dir` (1.2, review 12): the
+untitled scene's `$HIP` and `$JOB` are where the user ran it, as when running `houdini`
+there; a headless host gets `--work-dir` too, because the host otherwise moves to
+`HOCUSPOCUS_WORK_DIR`/home at start. `houdini_connect {launch}` keeps that
+`HOCUSPOCUS_WORK_DIR`/home rule (§4.2): an MCP server's cwd is wherever the client
+started it.
 
 Houdini version policy: `>= 22.0` supported; builds other than the tested list print a
 warning in `doctor` and the host log, never a refusal.

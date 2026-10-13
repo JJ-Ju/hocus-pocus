@@ -178,7 +178,10 @@ $ hocuspocus launch --headless --hip C:/work/shot.hip
 ```
 
 Leave out `--headless` for a GUI Houdini. The command waits up to `--wait` seconds
-(default 90) for the host to register, prints its registry entry and exits. Each session
+(default 90) for the host to register, prints its registry entry and exits. Houdini starts
+in the directory you ran the command from (or `--work-dir DIR`): that is `$HIP` and `$JOB`
+until the first `hip_save`. `houdini_connect {launch}` starts in `HOCUSPOCUS_WORK_DIR`,
+else your home directory. Each session
 then attaches with `houdini_connect {"pid": 23310}` (or automatically, when it is the only
 Houdini running), and `hip_save` keeps the work between sessions.
 
