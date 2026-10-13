@@ -9,8 +9,10 @@ restart). ``origin`` is ``"agent"`` for changes made inside a HocusPocus call an
   ``AfterSave`` (``path`` is the hip file). The clear inside a load is not reported.
 * nodes: ``ChildCreated``/``ChildDeleted`` directly under the context managers
   (``/obj``, ``/stage``, ``/mat``, ``/out``, ``/tasks``) and under watched networks;
-  ``NameChanged``, ``ParmTupleChanged`` (bursts on one parm tuple within
-  :data:`COALESCE_S` collapse into one event with ``count``), ``FlagChanged`` (``detail.
+  ``NameChanged``, ``ParmTupleChanged`` (``detail.components`` names the components of a
+  multi-component tuple whose value or keys changed, ``detail.keyed`` those that now have
+  keyframes; bursts on one tuple within :data:`COALESCE_S` collapse into one event with
+  the union of components), ``FlagChanged`` (``detail.
   flags`` names the flags and their new values), ``SpareParmsChanged``, ``InputRewired``
   and ``BeingDeleted`` on watched nodes.
 * ``hda_contents_rebuilt``: one event for an asset whose contents ``hda create``,
@@ -196,8 +198,20 @@ class EventLog:
             return self._pending is not None and any(e is event for e in self._pending)
         return bool(self._buf) and event["seq"] >= self._buf[0]["seq"]
 
-    def record_parm(self, path: str, parm: str | None) -> None:
-        """``ParmTupleChanged``, coalesced per (node, parm tuple) within :data:`COALESCE_S`."""
+    def record_parm(
+        self,
+        path: str,
+        parm: str | None,
+        components: list[str] | None = None,
+        keyed: list[str] | None = None,
+        order: list[str] | None = None,
+    ) -> None:
+        """``ParmTupleChanged``, coalesced per (node, parm tuple) within :data:`COALESCE_S`.
+
+        ``components`` are the changed components of a multi-component tuple and ``keyed``
+        those of them that have keyframes now (review 16 papercut 9: a key on ``ry`` read
+        as ``{parm: r, count: 3}``). A coalesced event keeps the union, in ``order`` (the
+        tuple's component order)."""
         key = (path, parm)
         mono = time.monotonic()
         with self._lock:
@@ -206,7 +220,7 @@ class EventLog:
                 event, last = recent
                 if mono - last <= COALESCE_S and self._alive(event):
                     detail = event.setdefault("detail", {})
-                    detail["count"] = detail.get("count", 1) + 1
+                    _merge_components(detail, components or [], keyed or [], order or [])
                     event["time"] = _now_iso()
                     self._recent_parm[key] = (event, mono)
                     return
@@ -214,7 +228,10 @@ class EventLog:
                 self._recent_parm = {
                     k: v for k, v in self._recent_parm.items() if mono - v[1] <= SPARE_BURST_S
                 }
-        event = self.record("ParmTupleChanged", path, {"parm": parm} if parm else None)
+        detail: dict[str, Any] = {"parm": parm} if parm else {}
+        if parm and components:
+            _merge_components(detail, components, keyed or [], order or [])
+        event = self.record("ParmTupleChanged", path, detail or None)
         if event is not None:
             with self._lock:
                 self._recent_parm[key] = (event, mono)
@@ -276,6 +293,25 @@ class EventLog:
         return out
 
 
+def _merge_components(
+    detail: dict[str, Any], components: list[str], keyed: list[str], order: list[str]
+) -> None:
+    """Fold one change's ``components``/``keyed`` into a ParmTupleChanged ``detail``."""
+    if not components:
+        return
+    seen = detail.get("components", [])
+    merged = seen + [c for c in components if c not in seen]
+    rank = {name: i for i, name in enumerate(order)}
+    merged.sort(key=lambda c: rank.get(c, len(rank)))
+    was_keyed = detail.get("keyed", [])
+    now_keyed = [c for c in merged if c in keyed or (c in was_keyed and c not in components)]
+    detail["components"] = merged
+    if now_keyed:
+        detail["keyed"] = now_keyed
+    else:
+        detail.pop("keyed", None)
+
+
 def _ordered(event: dict[str, Any]) -> dict[str, Any]:
     """``seq`` first, as in events recorded directly."""
     return {"seq": event["seq"], **{k: v for k, v in event.items() if k != "seq"}}
@@ -320,6 +356,9 @@ class _Hooks:
         self.muted = 0
         self.watched: dict[int, Any] = {}
         self.flags: dict[int, dict[str, bool]] = {}
+        self.tuples: dict[int, dict[str, tuple[Any, ...]]] = {}
+        """Per watched node, the last seen state of each multi-component parm tuple, to
+        name the components a ParmTupleChanged changed."""
         self.managers: list[Any] = []
         self.post: Any = None
         self.executor: Any = None
@@ -465,6 +504,63 @@ def _flag_change(node: Any) -> dict[str, bool]:
     return {name: value for name, value in now.items() if before.get(name) != value}
 
 
+def _component_state(parm: Any) -> tuple[Any, Any]:
+    """What a component's change can touch: its raw value (an expression's text) and its
+    keyframes."""
+    try:
+        value = parm.rawValue()
+    except Exception:
+        value = None
+    try:
+        keys = tuple(
+            (
+                k.frame(),
+                k.expression() if k.isExpressionSet() else None,
+                k.value() if k.isValueSet() else None,
+            )
+            for k in parm.keyframes()
+        )
+    except Exception:
+        keys = ()
+    return value, keys
+
+
+def _tuple_state(parm_tuple: Any) -> tuple[Any, ...]:
+    return tuple(_component_state(p) for p in parm_tuple)
+
+
+def _snapshot_tuples(node: Any) -> None:
+    """Remember every multi-component parm tuple of a newly watched node."""
+    states: dict[str, tuple[Any, ...]] = {}
+    for parm_tuple in node.parmTuples():
+        with contextlib.suppress(Exception):
+            if len(parm_tuple) > 1:
+                states[parm_tuple.name()] = _tuple_state(parm_tuple)
+    _HOOKS.tuples[node.sessionId()] = states
+
+
+def _changed_components(node: Any, parm_tuple: Any) -> tuple[list[str], list[str], list[str]]:
+    """``(changed, keyed, order)`` for a multi-component tuple; empty for one component.
+    Without a snapshot (a tuple added later) the non-default components count as changed."""
+    try:
+        parms = list(parm_tuple)
+        if len(parms) < 2:
+            return [], [], []
+        order = [p.name() for p in parms]
+        now = _tuple_state(parm_tuple)
+        states = _HOOKS.tuples.setdefault(node.sessionId(), {})
+        before = states.get(parm_tuple.name())
+        states[parm_tuple.name()] = now
+        if before is None or len(before) != len(now):
+            changed = [p.name() for p in parms if not p.isAtDefault()]
+        else:
+            changed = [order[i] for i in range(len(now)) if now[i] != before[i]]
+        keyed = [order[i] for i in range(len(now)) if order[i] in changed and now[i][1]]
+        return changed, keyed, order
+    except Exception:
+        return [], [], []
+
+
 def _is_topnet(node: Any) -> bool:
     import hou
 
@@ -486,7 +582,10 @@ def _on_node_event(**kwargs: Any) -> None:
             name = tuple_.name() if tuple_ is not None else None
             if name in TOPNET_SAVE_PARMS and _is_topnet(node):
                 return  # Houdini's own bookkeeping when the hip is saved
-            LOG.record_parm(path, name)
+            changed, keyed, order = (
+                _changed_components(node, tuple_) if tuple_ is not None else ([], [], [])
+            )
+            LOG.record_parm(path, name, changed, keyed, order)
         elif kind == "SpareParmTemplatesChanged":
             LOG.drop_recent_parms(path)
             LOG.record("SpareParmsChanged", path)
@@ -510,6 +609,7 @@ def _on_node_event(**kwargs: Any) -> None:
             with contextlib.suppress(Exception):
                 _HOOKS.watched.pop(node.sessionId(), None)
                 _HOOKS.flags.pop(node.sessionId(), None)
+                _HOOKS.tuples.pop(node.sessionId(), None)
         else:
             LOG.record(kind, path)
     except Exception:
@@ -544,6 +644,7 @@ def watch_node(node: Any) -> bool:
         from .nodes import node_flags
 
         _HOOKS.flags[sid] = node_flags(node)
+        _snapshot_tuples(node)
         return True
     except Exception:
         log.debug("watch_node failed", exc_info=True)
@@ -604,6 +705,7 @@ def _forget_watched() -> None:
             node.removeEventCallback(_node_types(), _on_node_event)
     _HOOKS.watched.clear()
     _HOOKS.flags.clear()
+    _HOOKS.tuples.clear()
 
 
 def _on_hip_event(event_type: Any) -> None:
@@ -620,6 +722,7 @@ def _on_hip_event(event_type: Any) -> None:
             # Watched nodes are gone; manager nodes survive, but re-attach to be safe.
             _HOOKS.watched.clear()
             _HOOKS.flags.clear()
+            _HOOKS.tuples.clear()
             _attach_managers()
         if kind in ("AfterLoad", "AfterMerge") or (kind == "AfterClear" and not loading):
             _HOOKS.hip_busy = False

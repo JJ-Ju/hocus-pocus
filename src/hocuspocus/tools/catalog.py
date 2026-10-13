@@ -1741,7 +1741,10 @@ _FULL: tuple[ToolSpec, ...] = (
         notes=(
             "Watched nodes: those HocusPocus created, edited, read with node_info or listed with"
             " network_describe, and nodes created directly under /obj, /stage, /mat, /out and "
-            "/tasks. FlagChanged has detail.flags (flag: new value); a spare parm edit is one "
+            "/tasks. ParmTupleChanged has detail.parm and, on a multi-component tuple, "
+            "components (those whose value or keys changed; a burst within 0.1 s is one event "
+            "with their union) and keyed (those of them with keyframes now). FlagChanged has "
+            "detail.flags (flag: new value); a spare parm edit is one "
             "SpareParmsChanged; hda create, match and unlock are one hda_contents_rebuilt per "
             "asset; kind pdg has detail.event cook_start, work_item_failed (id, index, error) or"
             " cook_done (ok, states, cancelled). A call that fails and is rolled back records "
