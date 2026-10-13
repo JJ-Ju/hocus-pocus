@@ -34,7 +34,7 @@ from . import budget
 from . import instances as registry
 from .client import OFFLINE_HINT, REINSTALL_HINT, HostClient
 from .config import BridgeConfig
-from .instructions import INSTRUCTIONS, guide_text
+from .instructions import INSTRUCTIONS, guide_text, tools_text
 from .launch import Launcher
 from .local_tools import LOCAL_TOOLS
 from .validate import coerce_integers, validate
@@ -765,7 +765,14 @@ class Bridge:
             "hocuspocus://guide",
             "guide",
             "text/markdown",
-            "The HocusPocus operating manual with tool reference.",
+            "The HocusPocus operating manual: instructions and recipes (several Houdinis, "
+            "Copernicus, spare parms).",
+        ),
+        (
+            "hocuspocus://tools",
+            "tools",
+            "text/markdown",
+            "The tool reference: every tool's arguments, notes and examples (large).",
         ),
     )
     TEMPLATES: tuple[tuple[str, str, str], ...] = (
@@ -810,13 +817,10 @@ class Bridge:
         return None
 
     def read_resource(self, uri: str) -> types.ReadResourceResult:
-        if uri == "hocuspocus://guide":
+        if uri in ("hocuspocus://guide", "hocuspocus://tools"):
+            text = guide_text() if uri == "hocuspocus://guide" else tools_text(self.tools)
             return types.ReadResourceResult(
-                contents=[
-                    types.TextResourceContents(
-                        uri=uri, text=guide_text(), mime_type="text/markdown"
-                    )
-                ]
+                contents=[types.TextResourceContents(uri=uri, text=text, mime_type="text/markdown")]
             )
         route = self.route_resource(uri)
         if route is None:
@@ -872,9 +876,13 @@ _PROMPTS: dict[str, tuple[str, list[tuple[str, str, bool]], str]] = {
         "Summarise the open Houdini scene: hip file, networks, problems.",
         [("root", "Network to start from (default /obj)", False)],
         "Inspect the Houdini scene under {root}. Call houdini_status first (hip file, frame, "
-        "instance). Then network_describe on {root} with depth 2, and problems on {root}. "
-        "Summarise: what each top-level network builds, the display/render nodes, and any "
-        "errors or warnings with the node path and the likely cause. Do not modify anything.",
+        "instance). If it warns that several Houdinis are running and none is pinned, ask the "
+        "user which one to inspect, or pin the GUI session with houdini_connect {{pid}}, before "
+        "going on. Read the resource houdini://outline (or call network_describe {{root: "
+        '"{root}", format: "outline"}}) for the tree, then problems on {root}. Describe one '
+        "network in more detail only when the summary needs it. Summarise: what each top-level "
+        "network builds, the display/render nodes, and any errors or warnings with the node "
+        "path and the likely cause. Do not modify anything.",
     ),
     "build_sop_chain": (
         "Build a SOP network from a plain-language description, then verify it.",
@@ -889,18 +897,22 @@ _PROMPTS: dict[str, tuple[str, list[tuple[str, str, bool]], str]] = {
         "Build this in Houdini: {description}. Parent network: {parent}. Plan the SOP chain "
         "first, then create it with one node_create call (items with parms and inputs; set the "
         "display flag on the last node), or network_build for larger graphs. Use "
-        "node_type_search when unsure of a type name. Then cook the display node, check "
-        "geo_info (counts, bbox), fix any errors from the results, and finish with "
-        "viewport_capture. Report the final node paths.",
+        "node_type_search when unsure of a type name. node_create already reports each "
+        "node's errors and cook state: fix any errors it shows (cook only nodes it reports "
+        "not_cooked), check geo_info on the display node (counts, bbox), and finish with "
+        'viewport_capture {{"fit": "all"}} so the new geometry is framed. Report the final node '
+        "paths.",
     ),
     "debug_red_node": (
         "Find out why a node has errors and fix it.",
         [("path", "Node path, e.g. /obj/geo1/attribwrangle1", True)],
-        "The node {path} shows errors. Call node_info on it (include errors, parms, inputs) "
-        "and problems on its parent. Read the error text, inspect upstream inputs and any "
-        "expressions or file paths involved, and explain the root cause. Propose the smallest "
-        "fix; apply it with parm_set/node_connect only if it is unambiguous, then cook {path} "
-        "to confirm it is clean.",
+        "The node {path} shows errors. Call node_info on it (include errors, parms, inputs). "
+        "Read the error text, inspect upstream inputs and any expressions or file paths "
+        "involved (problems on its parent when the cause may lie upstream), and explain the "
+        "root cause. Propose the smallest fix; apply it with parm_set/node_connect only if it "
+        "is unambiguous: the result re-cooks the node, so its errors confirm the fix. In a "
+        "wrangle, ch() of a parm that does not exist is 0 without an error: add the parms it "
+        "reads with node_edit spare_parms and set them.",
     ),
     "turntable_preview": (
         "Set up a turntable camera around an object and capture preview frames.",
@@ -908,11 +920,16 @@ _PROMPTS: dict[str, tuple[str, list[tuple[str, str, bool]], str]] = {
             ("path", "Object or SOP to orbit, e.g. /obj/geo1", True),
             ("frames", "Frame count for a full turn (default 48)", False),
         ],
-        "Create a turntable preview of {path} over {frames} frames. Read geo_info for its "
-        "bounding box, then create a null at the bbox centre with ry keyed 0→360 over frames "
-        "1–{frames} and a camera parented to it, framed to the bbox. Set the playbar range with "
-        "time. Capture viewport_capture at the first frame and at a quarter turn using that "
-        "camera, and show both images.",
+        "Create a turntable preview of {path} over {frames} frames. Check houdini_status (ui: "
+        "GUI or headless) and the resource houdini://outline: if {path}'s display flag is off, "
+        "turn it on with node_edit (flags: {{display: true}}) and say so. Other displayed "
+        "objects can hide it: turn their display flags off for the captures and back on "
+        "afterwards, or tell the user which objects block the view. Read geo_info on {path} "
+        "for its bounding box, then create a null at the bbox centre with ry keyed 0→360 over "
+        "frames 1–{frames} and a camera parented to it, framed to the bbox, with resx/resy set "
+        "(e.g. 1280×720). Do not change the playbar range in a GUI session: each capture takes "
+        "frame. Capture viewport_capture {{camera, frame, resolution: [resx, resy]}} at the "
+        "first frame and at a quarter turn, and show both images.",
     ),
 }
 _PROMPT_DEFAULTS = {"root": "/obj", "parent": "a new geo node under /obj", "frames": "48"}

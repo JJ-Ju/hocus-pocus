@@ -2,7 +2,7 @@
 
 <!-- Generated from src/hocuspocus/tools/catalog.py by `python -m hocuspocus.tools.docs`. Do not edit by hand. -->
 
-35 tools: 14 in the `minimal` profile, 31 in `core` (minimal included), 4 more in `full`. Model-visible `tools/list` text: 26,485 bytes. See `docs/BIBLE.md` §4 for the design.
+35 tools: 14 in the `minimal` profile, 31 in `core` (minimal included), 4 more in `full`. Model-visible `tools/list` text: 26,469 bytes. See `docs/BIBLE.md` §4 for the design.
 
 ## Contents
 
@@ -811,7 +811,7 @@ Read attribute values like the geometry spreadsheet: count rows of one class fro
 
 Look at /obj or a LOP stage: a PNG (long side at most 1024), path, size, camera_used, scene. camera: OBJ or LOP camera, or camera prim (lop_path). auto: the GUI viewer if present and no camera, else an OpenGL ROP (headless too) framed per fit. Leaves no nodes, undo step or dirty flag.
 
-**Notes.** fit none reuses the last framing. The viewer source captures the view as it is unless fit is passed: then it frames all or selected for the grab and puts the view back, as it does after looking through camera; context is the viewer's network, and notes say when that is not the captured scene. Without camera or lop_path the stage's display LOP is captured when /obj displays nothing; otherwise a note names it. A stage renders through the OpenGL ROP's LOP source (scene: stage, lop_path). source_used is viewer, opengl_rop or karma: when a headless OpenGL render process crashes, the frame is rendered with a temporary Karma CPU ROP (2 samples, same camera and resolution) and a note says why; later stage captures then go straight to Karma. Lights are refused as cameras; camera errors list the scene's cameras. path also writes the PNG there. Both files are opaque, on the same grey as the image (the OpenGL ROP itself writes a transparent background). image.attached is true when the PNG went out as MCP image content.
+**Notes.** fit has no default: without it the viewer source captures the view as it is and the OpenGL ROP source frames all; fit none reuses the last framing. With fit the viewer frames all or selected for the grab and puts the view back, as it does after looking through camera; context is the viewer's network, and notes say when that is not the captured scene. Without camera or lop_path the stage's display LOP is captured when /obj displays nothing; otherwise a note names it. A stage renders through the OpenGL ROP's LOP source (scene: stage, lop_path). source_used is viewer, opengl_rop or karma: when a headless OpenGL render process crashes, the frame is rendered with a temporary Karma CPU ROP (2 samples, same camera and resolution) and a note says why; later stage captures then go straight to Karma. Lights are refused as cameras; camera errors list the scene's cameras. path also writes the PNG there. Both files are opaque, on the same grey as the image (the OpenGL ROP itself writes a transparent background). image.attached is true when the PNG went out as MCP image content.
 
 ### Arguments
 
@@ -821,7 +821,7 @@ Look at /obj or a LOP stage: a PNG (long side at most 1024), path, size, camera_
 | `lop_path` | string |  |  |  |
 | `frame` | number |  |  | Default current frame. |
 | `resolution` | array<integer> |  | `[1024,768]` | min items 2; max items 2 |
-| `fit` | `all` \| `selected` \| `none` |  | `"all"` |  |
+| `fit` | `all` \| `selected` \| `none` |  |  |  |
 | `source` | `auto` \| `viewer` \| `opengl_rop` |  | `"auto"` |  |
 | `path` | string |  |  | Also write the PNG here (must end in .png). |
 

@@ -512,3 +512,90 @@ def test_bare_seq_still_works_and_bad_cursors_are_invalid():
     assert data(bridge.call_tool("events", {"since": 2}))["next_since"] == "3084:3"
     error = data(bridge.call_tool("events", {"since": "yesterday"}))
     assert error["code"] == "invalid_argument" and "next_since" in error["message"]
+
+
+# -- 6. the guide, the tool reference and the prompts (review 19 papercuts 5, 6, 7, 10) -------
+
+
+def test_guide_is_instructions_and_recipes_under_8_kb():
+    from hocuspocus.bridge.instructions import GUIDE_MAX_BYTES, guide_text
+
+    guide = guide_text()
+    assert len(guide.encode("utf-8")) <= GUIDE_MAX_BYTES == 8192
+    assert "## Tools" not in guide and "## houdini_status" not in guide
+    for needle in (
+        "### Two Houdinis",
+        "ambiguous_instance",
+        "instance_lost",
+        "<pid>-<id>",
+        "<pid>:<seq>",
+        "### Copernicus",
+        "/img",
+        "copnet",
+        "rop_image",
+        "render {rop_path",
+        "op:/img/",
+        "spare_parms",
+        "hocuspocus://tools",
+    ):
+        assert needle in guide, needle
+
+
+def test_tools_resource_is_the_reference_for_the_profile():
+    bridge, _hosts, _live = make(GUI, config=BridgeConfig(profile="core"))
+    resources = {str(r.uri): r for r in bridge.list_resources()}
+    assert "hocuspocus://tools" in resources
+    text = bridge.read_resource("hocuspocus://tools").contents[0].text
+    assert "## houdini_status" in text and "## viewport_capture" in text
+    assert "## events" not in text  # a full-profile tool
+    full, _h, _l = make(GUI)
+    assert "## events" in full.read_resource("hocuspocus://tools").contents[0].text
+
+
+def test_instructions_mention_pinning_and_the_tool_reference():
+    from hocuspocus.bridge.instructions import INSTRUCTIONS
+
+    assert "houdini_connect {pid}" in INSTRUCTIONS and "ambiguous_instance" in INSTRUCTIONS
+    assert "instance_lost" in INSTRUCTIONS and "hocuspocus://tools" in INSTRUCTIONS
+    assert len(INSTRUCTIONS.split()) <= 400
+
+
+def _prompt(name, args=None):
+    from hocuspocus.bridge.server import get_prompt
+
+    return get_prompt(name, args).messages[0].content.text
+
+
+def test_inspect_scene_reads_the_outline_and_asks_to_pin():
+    text = _prompt("inspect_scene", {"root": "/obj"})
+    assert "houdini://outline" in text and 'format: "outline"' in text
+    assert "problems on /obj" in text
+    assert "houdini_connect {pid}" in text and "depth 2" not in text
+
+
+def test_build_sop_chain_frames_the_result():
+    text = _prompt("build_sop_chain", {"description": "a torus"})
+    assert 'viewport_capture {"fit": "all"}' in text
+    assert "Then cook the display node" not in text
+
+
+def test_turntable_checks_display_isolates_and_leaves_the_playbar():
+    text = _prompt("turntable_preview", {"path": "/obj/building_gen"})
+    assert "display flag" in text and "{display: true}" in text
+    assert "block the view" in text
+    assert "resolution: [resx, resy]" in text
+    assert "Do not change the playbar range in a GUI session" in text
+    assert "Set the playbar range" not in text
+
+
+def test_debug_red_node_drops_the_mandatory_cook_and_names_spare_parms():
+    text = _prompt("debug_red_node", {"path": "/obj/geo1/wrangle1"})
+    assert "then cook" not in text and "spare_parms" in text
+
+
+def test_viewport_capture_fit_has_no_schema_default():
+    from hocuspocus.tools.catalog import get
+
+    spec = get("viewport_capture")
+    assert "default" not in spec.input_schema["properties"]["fit"]
+    assert "fit has no default" in spec.notes

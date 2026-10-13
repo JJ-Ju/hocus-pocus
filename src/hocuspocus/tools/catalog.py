@@ -1310,8 +1310,9 @@ _VISUAL: tuple[ToolSpec, ...] = (
             "fit. Leaves no nodes, undo step or dirty flag."
         ),
         notes=(
-            "fit none reuses the last framing. The viewer source captures the view as it is unless "
-            "fit is passed: then it frames all or selected for the grab and puts the view back, as "
+            "fit has no default: without it the viewer source captures the view as it is and the "
+            "OpenGL ROP source frames all; fit none reuses the last framing. With fit the viewer "
+            "frames all or selected for the grab and puts the view back, as "
             "it does after looking through camera; context is the viewer's network, and notes say "
             "when that is not the captured scene. Without camera or lop_path the stage's display "
             "LOP is captured when /obj displays nothing; otherwise a note names it. A stage renders "
@@ -1332,7 +1333,7 @@ _VISUAL: tuple[ToolSpec, ...] = (
                 "resolution": _arr(
                     {"type": "integer", "minimum": 16}, minItems=2, maxItems=2, default=[1024, 768]
                 ),
-                "fit": _enum(("all", "selected", "none"), "all"),
+                "fit": _enum(("all", "selected", "none")),
                 "source": _enum(("auto", "viewer", "opengl_rop"), "auto"),
                 "path": _s("Also write the PNG here (must end in .png)."),
             }

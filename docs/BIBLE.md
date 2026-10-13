@@ -380,7 +380,7 @@ as it was started from a neutral directory).
   description ≤ 60 words: what the tool does and what the model must know to pick it.
   Argument-level detail (shapes the schema cannot state, edge cases, defaults the schema
   already declares) lives in the spec's `notes`, which `docs/tools.md` and the resource
-  `hocuspocus://guide` render and `tools/list` leaves out; examples live there too.
+  `hocuspocus://tools` render and `tools/list` leaves out; examples live there too.
   1.3: an argument's schema `description` is at most 12 words (a unit test,
   `test_argument_detail_lives_in_notes`); anything longer goes in `notes`, so a new
   argument costs its name and type, not its explanation.
@@ -513,18 +513,34 @@ core tools (§4.1).
 - `houdini://node/{path}/parms`
 - `houdini://node/{path}/geo`
 - `houdini://nodetype/{category}/{name}`
-- `houdini://job/{id}`
-- `hocuspocus://guide` — the operating manual below in full, with examples
+- `houdini://job/{id}` (routed to the Houdini in the job id, §7)
+- `hocuspocus://guide` — the operating manual: the instructions below, the resources and
+  recipes (two Houdinis, Copernicus, spare parms); at most 8 KB, a unit test enforces it
+  (1.3, review 19 papercut 10: with the tool reference appended it was 52 KB)
+- `hocuspocus://tools` — the tool reference rendered from the catalogue for the bridge's
+  profile (the text of `docs/tools.md`, every tool's `notes` and examples; 1.3)
 
 **Prompts** (slash commands in Claude Code): `inspect_scene`, `build_sop_chain`,
-`debug_red_node`, `turntable_preview`.
+`debug_red_node`, `turntable_preview`. 1.3 (review 19 §5): `inspect_scene` reads
+`houdini://outline` (or `network_describe format: outline`), then `problems`, and asks
+which Houdini to inspect (or pins the GUI) when status warns of several; `build_sop_chain`
+reads the errors `node_create` returns instead of a separate cook and ends with
+`viewport_capture {"fit": "all"}`; `debug_red_node` drops the mandatory `problems`/`cook`
+and names wrangle spare parms; `turntable_preview` turns the target's display flag on,
+hides other displayed objects for the captures (or says what blocks the view), captures at
+the camera's resolution and never changes the playbar range in a GUI session (each
+capture takes `frame`).
 
 **Server `instructions`** (≤ 400 words, shipped in `initialize`; the text lives in
 `bridge/instructions.py` and a unit test enforces the cap):
 
 > HocusPocus drives a live Houdini. Identity is Houdini paths. Start with
 > `houdini_status`; if nothing is connected, `houdini_connect` can launch Houdini (GUI
-> or headless hython) or attach to a running one by pid. Build with `node_create`
+> or headless hython) or attach to a running one by pid. With several Houdinis running,
+> pin one with `houdini_connect {pid}`: until then calls that change a scene refuse with
+> `ambiguous_instance`, and if the pinned one exits calls return `instance_lost` instead
+> of switching. `_meta.instance` names the Houdini that answered; job ids and `events`
+> cursors carry their pid. Build with `node_create`
 > (batch, with parms and inputs) or `network_build` (whole graph from the
 > `network_describe` format). Read with `node_info` and `network_describe`. Change
 > values with `parm_set`; tuple paths like `.../t` take lists, component paths like
@@ -546,7 +562,7 @@ core tools (§4.1).
 > `lop_path` captures a stage. `node_type_info` is large for FX types: pass `parms` globs, or `detail:
 > "folders"` first. Add spare parms with `node_edit` `spare_parms` (recipe in
 > `hocuspocus://guide`). The resource `houdini://outline` is the whole scene as a
-> compact tree.
+> compact tree; `hocuspocus://tools` is the full tool reference.
 
 ---
 
@@ -919,7 +935,7 @@ overlap (one agent per host tool family).
 - **D18** (1.1) An uncaught `houdini_python` exception is an `isError` result with `code: python_exception`, rolled back. *A failure returned as a success was easy to miss (review 07), and its half-applied scene changes stayed behind.*
 - **D19** (1.1) `node_type_search` defaults to `current_only`, with `other_versions` on the row. *Older versions about doubled search results (review 09) without helping the agent choose a type.*
 - **D20** (1.1) A Houdini that outlives its clients comes from the `hocuspocus launch` CLI, not from new process-ownership tricks in the bridge. *Detaching from a client's process tree is not reliable on Windows (review 08); a Houdini the client never started is not in its process tree.*
-- **D21** (1.2) Argument-level detail lives in a tool spec's `notes`, which `docs/tools.md` and `hocuspocus://guide` render and `tools/list` leaves out; `tools/list` stays ≤ 40,000 bytes (§4.1). *At 43,999 B against the 44,000 B cap no fix could add a word; the model needs the description to pick a tool and the detail only when it uses an argument.*
+- **D21** (1.2) Argument-level detail lives in a tool spec's `notes`, which `docs/tools.md` and `hocuspocus://guide` (1.3: `hocuspocus://tools`) render and `tools/list` leaves out; `tools/list` stays ≤ 40,000 bytes (§4.1). *At 43,999 B against the 44,000 B cap no fix could add a word; the model needs the description to pick a tool and the detail only when it uses an argument.*
 - **D22** (1.2) Every `events` entry carries `origin: agent|other`, and the host holds a call's events until its work ends, publishing none for a rolled-back call (§4.7). *Next to a user, the agent could not tell its own edits from the user's (review 15), and a rolled-back call's events would describe changes that no longer exist.*
 - **D23** (1.2) `undo`/`redo` stop at the first step not labelled `HocusPocus:` unless `include_user_steps: true` (§4.7). *In review 15 `undo {steps: 2}` silently undid the user's own edit; crossing a user step needs explicit consent, as discarding unsaved work does (D11).*
 - **D24** (1.2) `pdg cook` refuses an untitled or unsaved scene when the graph has out-of-process ROP TOPs; `save: true` saves first (§4.7). *Those work items load the hip on disk, so in review 14 a dirty scene cooked the old parms and reported success.*

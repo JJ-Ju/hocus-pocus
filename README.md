@@ -141,8 +141,8 @@ The bridge also serves resources and prompts:
 
 - **Resources:** `houdini://status`, `houdini://outline` (the whole scene as a compact
   tree), `houdini://node/{path}`, `.../parms`, `.../geo`,
-  `houdini://nodetype/{category}/{name}`, `houdini://job/{id}`, and the full operating
-  manual at `hocuspocus://guide`.
+  `houdini://nodetype/{category}/{name}`, `houdini://job/{id}`, the operating manual
+  and recipes at `hocuspocus://guide`, and the tool reference at `hocuspocus://tools`.
 - **Prompts:** `inspect_scene`, `build_sop_chain`, `debug_red_node`,
   `turntable_preview`. `tools/list` works with no Houdini running.
 
@@ -198,7 +198,9 @@ host by hand instead, use `hython -m hocuspocus.host [--hip FILE] [--port N]
 
 Tools that need the UI return `ui_required` headless; `viewport_capture` works through
 an OpenGL ROP in a short-lived child hython (about 3 s). Several Houdinis can run at
-once: `houdini_status` lists them and `houdini_connect {"pid": N}` picks one.
+once: `houdini_status` lists them and `houdini_connect {"pid": N}` pins one. Until one is
+pinned, calls that change a scene refuse with `ambiguous_instance` (reads go to the GUI
+session); a pinned Houdini that exits gives `instance_lost`, never a silent switch.
 
 ## Configuration
 

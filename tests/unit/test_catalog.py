@@ -294,13 +294,13 @@ def test_argument_detail_lives_in_notes(spec: catalog.ToolSpec) -> None:
 
 def test_notes_reach_the_docs_and_guide_but_not_tools_list() -> None:
     from hocuspocus.bridge.config import BridgeConfig
-    from hocuspocus.bridge.instructions import guide_text
+    from hocuspocus.bridge.instructions import tools_text
     from hocuspocus.bridge.server import Bridge
 
     noted = [spec for spec in TOOLS if spec.notes]
     assert len(noted) >= 10
     markdown = render_tools_markdown(TOOLS)
-    guide = guide_text()
+    guide = tools_text()  # hocuspocus://tools (1.3; the guide itself is instructions only)
     listed = {
         tool.name: tool
         for tool in Bridge(BridgeConfig(profile="full"), scan=lambda: []).list_tools()

@@ -70,7 +70,7 @@ macOS the path is `.venv/bin/...`.
    - A `description` of at most 60 words: what the tool does and what the model needs to
      choose it. Defaults belong in the schema (`default`), not the description.
    - `notes` for argument-level detail (shapes the schema cannot state, edge cases). They
-     are rendered into `docs/tools.md` and `hocuspocus://guide` but not sent in
+     are rendered into `docs/tools.md` and `hocuspocus://tools` but not sent in
      `tools/list` (BIBLE §4.1).
    - `input_schema`, built with `_obj` / `_s` / `_enum` / ... and
      `additionalProperties: false`.

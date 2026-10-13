@@ -750,6 +750,7 @@ def test_resources_over_mcp_client():
         "houdini://status",
         "houdini://outline",
         "hocuspocus://guide",
+        "hocuspocus://tools",
     }
     assert "houdini://nodetype/{category}/{name}" in {t.uri_template for t in templates}
     assert "HocusPocus drives a live Houdini" in guide.contents[0].text
