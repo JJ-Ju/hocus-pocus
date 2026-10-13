@@ -35,7 +35,7 @@ Attach these to a conversation for context (each is also a tool call):
 
 - `houdini://status`: the connected Houdini, hip file, frame and instances (`houdini_status`).
 - `houdini://outline`: the whole scene as a compact tree two levels deep, with display
-  nodes and error counts (`network_describe {root: "/", format: "outline", depth: 2}`).
+  nodes, error counts, input sources and the flags that are on (`network_describe {root: "/", format: "outline", depth: 2}`).
   Start here to learn what a hip contains, then `network_describe` one network.
 - `houdini://node/{path}`, `.../parms`, `.../geo`: `node_info`, its parms, `geo_info`.
 - `houdini://nodetype/{category}/{name}`: `node_type_info` in full.

@@ -2,7 +2,7 @@
 
 <!-- Generated from src/hocuspocus/tools/catalog.py by `python -m hocuspocus.tools.docs`. Do not edit by hand. -->
 
-35 tools: 31 in the `core` profile, 4 more in `full`. Model-visible `tools/list` text: 26,084 bytes. See `docs/BIBLE.md` §4 for the design.
+35 tools: 31 in the `core` profile, 4 more in `full`. Model-visible `tools/list` text: 26,118 bytes. See `docs/BIBLE.md` §4 for the design.
 
 ## Contents
 
@@ -498,9 +498,9 @@ Tidy a network. mode children lays out the children of parent, or only paths; go
 
 `read-only` `headless ok` · profile `core`
 
-Read a whole network as Houdini's hou.data childrenAsData (types, non-default parms, expressions, wiring, flags) to depth; data feeds network_build. format outline is a compact tree (type, display node, error count); python is asCode for one node. Locked HDAs stay closed unless recurse_locked. Pages end at the response budget (next_cursor).
+Read a whole network as Houdini's hou.data childrenAsData (types, non-default parms, expressions, wiring, flags) to depth; data feeds network_build. format outline is a compact tree (type, display node, error count, input sources, flags that are on); python is asCode for one node. Locked HDAs stay closed unless recurse_locked. Pages end at the response budget (next_cursor).
 
-**Notes.** depth defaults to 1, and to 2 for outline. A locked HDA appears as {type, hda_locked}. Outline rows: path, name, type, children_count (left out at 0), display, errors, and hda_locked only for locked assets not shipped with Houdini. Truncated pages carry truncated and next_cursor.
+**Notes.** depth defaults to 1, and to 2 for outline. A locked HDA appears as {type, hda_locked}. Outline rows: path, name, type, children_count (left out at 0), display, errors, inputs (source path per input slot, null for an empty slot before a wired one; left out when nothing is wired), flags (only the ones that are on, e.g. ["display", "render"]; left out when none), and hda_locked only for locked assets not shipped with Houdini. Truncated pages carry truncated and next_cursor.
 
 ### Arguments
 

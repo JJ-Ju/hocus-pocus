@@ -206,11 +206,26 @@ def _shipped_asset(node: Any) -> bool:
     return _SHIPPED_LIBRARIES[library]
 
 
+def _outline_inputs(node: Any) -> list[str | None]:
+    try:
+        sources = list(node.inputs())
+    except Exception:
+        return []
+    while sources and sources[-1] is None:
+        sources.pop()
+    return [None if source is None else source.path() for source in sources]
+
+
 def _outline_entry(
     node: Any, level: int, *, depth: int, recurse_locked: bool, budget: _Budget
 ) -> dict[str, Any]:
-    """``{path, name, type, children_count?, display?, errors, hda_locked?, children?}``:
-    no parms and no wiring, so a whole scene fits in one page (``houdini://outline``).
+    """``{path, name, type, children_count?, display?, errors, inputs?, flags?, hda_locked?,
+    children?}``: no parms, so a whole scene fits in one page (``houdini://outline``).
+
+    ``inputs`` (1.2, review 12 papercut 4) lists the source node path per input slot, with
+    ``null`` for an empty slot before a wired one, and is left out when nothing is wired;
+    ``flags`` lists only the flags that are on (``["display", "render"]``), left out when
+    none is.
 
     ``children_count`` is left out at 0. ``hda_locked`` marks only locked assets that are
     not shipped with Houdini: ``attribwrangle``, ``mountain`` and other SOPs from
@@ -237,6 +252,12 @@ def _outline_entry(
             if shown is not None:
                 entry["display"] = shown.path()
     entry["errors"] = _error_count(node)
+    inputs = _outline_inputs(node)
+    if inputs:
+        entry["inputs"] = inputs
+    flags = [name for name, on in N.node_flags(node).items() if on]
+    if flags:
+        entry["flags"] = flags
     if locked and not _shipped_asset(node):
         entry["hda_locked"] = True
     if level < depth and children:
