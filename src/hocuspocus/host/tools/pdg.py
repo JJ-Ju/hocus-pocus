@@ -122,9 +122,20 @@ def _snake(name: str) -> str:
 
 def _cook_state(top: Any) -> str:
     try:
-        return _snake(top.getCookState(False).name())
+        state = _snake(top.getCookState(False).name())
     except Exception:
         return "unknown"
+    if state == "uncooked":
+        # After an earlier cook in the session the node's UI state can lag behind its
+        # work items (as workItemStates() does); trust the items when they all finished.
+        try:
+            pdg_node = top.getPDGNode()
+            items = [_snake(i.state.name) for i in pdg_node.workItems] if pdg_node else []
+        except Exception:
+            items = []
+        if items and all(i in ("cooked_success", "cooked_cache") for i in items):
+            return "cooked"
+    return state
 
 
 def _is_cooking(top: Any) -> bool:
