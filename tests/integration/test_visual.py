@@ -62,6 +62,7 @@ def _wait_job(client, job_id: str, timeout_s: float = 120.0) -> dict:
 # -- viewport_capture -----------------------------------------------------------------
 
 
+@pytest.mark.slow
 def test_capture_headless_opengl_twice(client):
     _toy_scene()
     timings = []
@@ -92,6 +93,7 @@ def _all_nodes() -> list[str]:
     return sorted(n.path() for n in hou.node("/").allSubChildren(recurse_in_locked_nodes=False))
 
 
+@pytest.mark.slow
 def test_capture_leaves_the_scene_untouched(client, work_dir):
     """Review 07 papercut 2: a look is read-only. Headless, the camera and ROP exist only
     in the child hython; the live scene gains no nodes, no undo entry and no dirty flag."""
@@ -149,6 +151,7 @@ def test_temporary_capture_nodes_are_removed_outside_undo(client):
     assert [n.path() for n in hou.selectedNodes()] == [geo.path()]
 
 
+@pytest.mark.slow
 def test_capture_frames_the_geometry(client):
     geo = _toy_scene()
     geo.parmTuple("t").set((40, 5, -30))
@@ -160,6 +163,7 @@ def test_capture_frames_the_geometry(client):
     assert _not_blank(img)
 
 
+@pytest.mark.slow
 def test_capture_downscales_and_writes_extra_path(client, work_dir):
     _toy_scene()
     extra = work_dir / "shots" / "wide.png"
@@ -184,6 +188,7 @@ def test_capture_downscales_and_writes_extra_path(client, work_dir):
         assert inline.getpixel((0, 0)) == written.getpixel((0, 0))
 
 
+@pytest.mark.slow
 def test_capture_explicit_camera(client):
     _toy_scene()
     cam = hou.node("/obj").createNode("cam", "shotcam")
@@ -194,6 +199,7 @@ def test_capture_explicit_camera(client):
     assert (result["width"], result["height"]) == (200, 100)
 
 
+@pytest.mark.slow
 def test_capture_fit_selected_and_none(client):
     geo = _toy_scene()
     other = hou.node("/obj").createNode("geo", "far")
@@ -369,6 +375,7 @@ def _opengl_rop(work_dir: Path, name: str = "gl1"):
     return rop
 
 
+@pytest.mark.slow
 def test_render_opengl_frames_with_thumbnail(client, work_dir):
     _toy_scene()
     rop = _opengl_rop(work_dir)
@@ -384,6 +391,7 @@ def test_render_opengl_frames_with_thumbnail(client, work_dir):
     assert result["job_id"]
 
 
+@pytest.mark.slow
 def test_render_as_job_then_result(client, work_dir):
     _toy_scene()
     rop = _opengl_rop(work_dir)
@@ -412,6 +420,7 @@ def test_render_output_override_in_process(client, work_dir):
     assert rop.parm("sopoutput").unexpandedString() == "$HIP/geo/original.$F4.bgeo.sc"
 
 
+@pytest.mark.slow
 def test_render_opengl_output_override(client, work_dir):
     _toy_scene()
     rop = _opengl_rop(work_dir)
@@ -436,6 +445,7 @@ def test_render_errors(client, work_dir):
     assert error["code"] == "invalid_argument"
 
 
+@pytest.mark.slow
 def test_render_karma_starts_as_job_and_cancels(client, work_dir):
     _toy_scene()
     cam = hou.node("/obj").createNode("cam", "kcam")
@@ -479,6 +489,7 @@ def test_render_result_always_has_state(client, work_dir):
     assert result["job_id"]
 
 
+@pytest.mark.slow
 def test_render_isolated_override_replaces_keyed_output(client, work_dir):
     _toy_scene()
     rop = _opengl_rop(work_dir)
@@ -500,21 +511,26 @@ def _bgeo_rop(work_dir: Path, pattern: str = "s.$F4.bgeo.sc"):
 
 
 def test_render_over_five_outputs_returns_a_summary(client, work_dir):
-    """Review 11 B6: a sequence returns outputs_summary inline, the list via job result."""
+    """Review 11 B6, review 20 N5: a sequence returns outputs_summary and outputs_sample,
+    inline and from job result alike, never every path."""
     rop = _bgeo_rop(work_dir)
     result = client.ok("render", {"rop_path": rop.path(), "frames": [1, 8]})
     assert result["state"] == "done"
-    assert "outputs" not in result
+    assert "outputs" not in result and "hint" not in result
     summary = result["outputs_summary"]
     assert summary["count"] == 8 and summary["missing_count"] == 0
     assert summary["first"] == _fwd(work_dir / "s.0001.bgeo.sc")
     assert summary["last"] == _fwd(work_dir / "s.0008.bgeo.sc")
     assert summary["pattern"] == _fwd(work_dir / "s.####.bgeo.sc")
-    assert "action: result" in result["hint"]
-    full = client.ok("job", {"action": "result", "job_id": result["job_id"]})["result"]
-    assert full["outputs"] == [_fwd(work_dir / f"s.{i:04d}.bgeo.sc") for i in range(1, 9)]
+    assert result["outputs_sample"] == [_fwd(work_dir / f"s.{i:04d}.bgeo.sc") for i in (1, 2, 7, 8)]
+    assert all(isinstance(f, int) for f in result["frames"]), result["frames"]
+    job = client.ok("job", {"action": "result", "job_id": result["job_id"]})["result"]
+    assert "outputs" not in job
+    assert job["outputs_summary"] == summary
+    assert job["outputs_sample"] == result["outputs_sample"]
     few = client.ok("render", {"rop_path": rop.path(), "frames": [1, 5]})
     assert len(few["outputs"]) == 5 and "outputs_summary" not in few
+    assert "outputs_sample" not in few
 
 
 def test_render_waits_job_threshold_by_default(client, work_dir):
@@ -532,17 +548,41 @@ def test_render_waits_job_threshold_by_default(client, work_dir):
     assert explicit["state"] == "done"
 
 
-def test_render_notes_no_lights_and_a_black_thumbnail(client, work_dir):
-    """Review 11 B10: an unlit, empty OpenGL render says why it is black."""
+@pytest.mark.slow
+def test_render_notes_no_lights_and_an_empty_thumbnail(client, work_dir):
+    """Review 11 B10: an unlit, empty OpenGL render says why it shows nothing (review 20
+    N1: on its transparent background that is "empty", not "nearly black")."""
     rop = _opengl_rop(work_dir)
     result = client.ok("render", {"rop_path": rop.path(), "frames": [1, 1]})
     notes = " ".join(result.get("notes", []))
     assert "no lights" in notes, result
-    assert "nearly black" in notes, result
+    assert "empty" in notes and "nearly black" not in notes, result
     hou.node("/obj").createNode("hlight", "key")
     _toy_scene()
     lit = client.ok("render", {"rop_path": rop.path(), "frames": [1, 1]})
-    assert "no lights" not in " ".join(lit.get("notes", [])), lit
+    notes = " ".join(lit.get("notes", []))
+    assert "no lights" not in notes and "empty" not in notes, lit
+    assert "nearly black" not in notes, lit
+
+
+@pytest.mark.slow
+def test_render_sparse_opengl_frame_is_not_nearly_black(client, work_dir):
+    """Review 20 N1: a small subject on the OpenGL ROP's transparent background is mostly
+    transparent pixels, which the raw RGBA mean counted as black."""
+    hou.node("/obj").createNode("hlight", "key")
+    geo = _toy_scene()
+    geo.parmTuple("s").set((0.15, 0.15, 0.15))
+    rop = _opengl_rop(work_dir)
+    result = client.ok("render", {"rop_path": rop.path(), "frames": [1, 1]})
+    from PIL import ImageStat
+
+    with Image.open(result["outputs"][0]) as raw:
+        alpha = raw.getchannel("A")
+        covered = 1 - alpha.histogram()[0] / (alpha.size[0] * alpha.size[1])
+        raw_mean = ImageStat.Stat(raw.convert("RGB").convert("L")).mean[0]
+    assert 0 < covered < 0.1 and raw_mean < 8  # the frame that used to trigger the note
+    notes = " ".join(result.get("notes", []))
+    assert "nearly black" not in notes and "empty" not in notes, result
 
 
 def test_render_rop_own_output_outside_approved_roots_in_process(client, work_dir):
@@ -558,6 +598,7 @@ def test_render_rop_own_output_outside_approved_roots_in_process(client, work_di
     assert result["outputs"] == [_fwd(work_dir / "allowed" / "s.0001.bgeo.sc")]
 
 
+@pytest.mark.slow
 def test_capture_after_an_outside_fix(client):
     """Review 10 §5: a node fixed outside HocusPocus keeps its old error (BIBLE §5.18);
     the capture's framing refreshes it instead of failing or framing nothing."""
@@ -586,6 +627,7 @@ def test_capture_path_must_be_png(client, work_dir):
     assert ".png" in error["message"]
 
 
+@pytest.mark.slow
 def test_captures_dir_is_pruned_to_newest_50(client):
     from hocuspocus.host.tools.visual import _captures
 
@@ -622,6 +664,7 @@ def _sliding_box(name: str = "slide"):
 
 
 @pytest.mark.parametrize("driver", ["keys_at_30fps", "hscript_global", "hou_session"])
+@pytest.mark.slow
 def test_headless_capture_matches_the_live_scene(client, driver):
     """The child hython must evaluate the scene as the live session does: keys at the
     scene's fps (not retimed by setFps), global hscript variables and hou.session."""
@@ -661,6 +704,7 @@ def test_headless_capture_matches_the_live_scene(client, driver):
     assert _centroid_x(live["image"]) == pytest.approx(_centroid_x(static["image"]), abs=1.0)
 
 
+@pytest.mark.slow
 def test_headless_capture_does_not_hold_the_main_thread(client):
     import http.client
     import json
@@ -694,6 +738,7 @@ def test_headless_capture_does_not_hold_the_main_thread(client):
     assert box["body"]["ok"] is True, box["body"]
 
 
+@pytest.mark.slow
 def test_fit_none_does_not_reuse_framing_from_another_scene(client):
     far = hou.node("/obj").createNode("geo", "far")
     far.createNode("box").setDisplayFlag(True)
@@ -705,3 +750,92 @@ def test_fit_none_does_not_reuse_framing_from_another_scene(client):
     assert result["fit_used"] == "all"  # reframed: the old framing was for another scene
     again = client.ok("viewport_capture", {"fit": "none", "resolution": [64, 48]})
     assert again["fit_used"] == "none"
+
+
+# -- writer SOPs: File Cache and ROP SOPs (review 17 P0-2, P1-3, P1-6) -------------------
+
+
+def _file_cache(work_dir: Path, frames=(1, 3), pattern: str = "fc.$F4.bgeo.sc"):
+    geo = hou.node("/obj").createNode("geo", "fx")
+    box = geo.createNode("box")
+    box.parm("ty").setExpression("$F * 0.1")
+    cache = geo.createNode("filecache::2.0", "cache")
+    cache.setInput(0, box)
+    cache.parm("filemethod").set(1)  # explicit file
+    cache.parm("file").set(_fwd(work_dir / pattern))
+    for parm, value in zip(("f1", "f2"), frames, strict=True):
+        cache.parm(parm).deleteAllKeyframes()
+        cache.parm(parm).set(value)
+    return geo, box, cache
+
+
+def test_render_a_file_cache_writes_its_frame_range(client, work_dir):
+    _geo, _box, cache = _file_cache(work_dir)
+    assert cache.parm("loadfromdisk").eval() == 0
+    result = client.ok("render", {"rop_path": cache.path()})
+    assert result["state"] == "done", result
+    assert result["rop_path"] == cache.path()
+    assert result["frames"] == [1, 3, 1]
+    assert result["outputs"] == [_fwd(work_dir / f"fc.{i:04d}.bgeo.sc") for i in (1, 2, 3)]
+    assert "missing" not in result
+    assert result["side_effects"] == {"loadfromdisk": [0, 1]}
+    assert cache.parm("loadfromdisk").eval() == 1
+    assert any("rendered through" in n for n in result["notes"]), result
+
+
+def test_render_a_file_cache_refuses_an_output_override(client, work_dir):
+    _geo, _box, cache = _file_cache(work_dir)
+    error = client.error("render", {"rop_path": cache.path(), "output": _fwd(work_dir / "x.bgeo")})
+    assert error["code"] == "invalid_argument"
+    # Review 20 N4: the hint names the menu token parm_set takes, not an index.
+    assert 'filemethod: "explicit"' in error["hint"], error
+    assert cache.path() in error["hint"] and "file: " in error["hint"]
+    assert "explicit" in cache.parm("filemethod").menuItems()
+
+
+def test_render_a_rop_sop_uses_its_own_frame_range(client, work_dir):
+    geo = hou.node("/obj").createNode("geo", "fx")
+    box = geo.createNode("box")
+    rop = geo.createNode("rop_geometry", "write")
+    rop.setInput(0, box)
+    rop.parm("sopoutput").set(_fwd(work_dir / "w.$F4.bgeo.sc"))
+    rop.parm("trange").set(1)
+    rop.parm("f1").deleteAllKeyframes()
+    rop.parm("f2").deleteAllKeyframes()
+    rop.parm("f1").set(2)
+    rop.parm("f2").set(3)
+    result = client.ok("render", {"rop_path": rop.path()})
+    assert result["frames"] == [2, 3, 1]
+    assert result["outputs"] == [_fwd(work_dir / f"w.{i:04d}.bgeo.sc") for i in (2, 3)]
+
+
+@pytest.mark.slow
+def test_render_cancelled_job_result_carries_the_partial_outputs(client, work_dir):
+    geo, box, cache = _file_cache(work_dir, frames=(1, 60))
+    slow = geo.createNode("python", "slow")
+    slow.parm("python").set("import time\ntime.sleep(0.08)")
+    slow.setInput(0, box)
+    cache.setInput(0, slow)
+    started = client.ok("render", {"rop_path": cache.path(), "wait_s": 0})
+    job_id = started["job_id"]
+    deadline = time.monotonic() + 30
+    while len(list(work_dir.glob("fc.*"))) < 3 and time.monotonic() < deadline:
+        client.host.executor.pump_once(0.05)
+    client.ok("job", {"action": "cancel", "job_id": job_id})
+    final = _wait_job(client, job_id)
+    assert final["state"] == "cancelled", final
+    error = client.error("job", {"action": "result", "job_id": job_id})
+    assert error["code"] == "cancelled"
+    detail = error["detail"]
+    last = detail["last_status"]
+    assert last["total"] == 60
+    assert last["state"] == "cancelled", last  # review 20 N7
+    assert last["message"].startswith(f"{last['current']}/60 frames done, rendering frame "), last
+    assert ".0" not in last["message"], last  # frames print as integers
+    written = sorted(work_dir.glob("fc.*"))
+    partial = detail["partial"]
+    summary = partial["outputs_summary"]
+    assert summary["count"] == len(written) < 60
+    assert summary["last"] == _fwd(written[-1])
+    assert summary["missing_count"] == 60 - len(written)
+    assert cache.parm("loadfromdisk").eval() == 0  # Save to Disk's side effects need a full save

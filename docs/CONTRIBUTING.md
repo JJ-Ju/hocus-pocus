@@ -70,7 +70,7 @@ macOS the path is `.venv/bin/...`.
    - A `description` of at most 60 words: what the tool does and what the model needs to
      choose it. Defaults belong in the schema (`default`), not the description.
    - `notes` for argument-level detail (shapes the schema cannot state, edge cases). They
-     are rendered into `docs/tools.md` and `hocuspocus://guide` but not sent in
+     are rendered into `docs/tools.md` and `hocuspocus://tools` but not sent in
      `tools/list` (BIBLE §4.1).
    - `input_schema`, built with `_obj` / `_s` / `_enum` / ... and
      `additionalProperties: false`.
@@ -78,7 +78,15 @@ macOS the path is `.venv/bin/...`.
      `result_content` is `both` or `structured`; with the default `text` the model sees
      just the description and the result JSON in the text block (BIBLE §4.1), so put
      anything the model must know about the result in the description.
-   - `read_only` / `destructive` / `idempotent`, `profile`, and `headless_ok`.
+   - Argument `description`s of at most 12 words, checked by
+     `test_argument_detail_lives_in_notes`. Say what the argument is in the schema, and
+     put how it behaves (shapes, edge cases, interactions with other arguments) in
+     `notes`. A new feature then adds only its name and type to `tools/list`, not its
+     explanation.
+   - `read_only` / `destructive` / `idempotent`, `profile`, and `headless_ok`. `profile`
+     is `core` or `full`. The `minimal` profile (BIBLE §4.1) is the `MINIMAL_TOOLS` set in
+     `catalog.py`. Add a tool to it only when a small-context client cannot work without
+     it, and update BIBLE §4.1 and `test_profiles` in the same change.
    - At least one entry in `examples`.
 
    The bridge registers the tool from this entry, so it shows up in `tools/list`
@@ -111,6 +119,17 @@ macOS the path is `.venv/bin/...`.
    - Tools that create or change nodes call `watch_nodes(...)` from `nodes.py` after
      their own changes, so `events` reports later edits to those nodes.
    - A new module must also be added to `TOOL_MODULES` in `host/tools/registry.py`.
+   - Leave instance tagging to the bridge (BIBLE §3.3 rule 3). It adds
+     `_meta.instance: {pid, label, name?}` to every result a host answers. When several
+     Houdinis run and none is pinned, it refuses a call that changes a scene with
+     `ambiguous_instance` and adds `_instance: {pid, label, ui, warning}` to the result
+     of a read it sent to a guessed instance. A host tool never writes these keys, so
+     do not name a result field `_instance`. A `read_only` tool always counts as a read.
+     A `scene=False` tool with reading forms (an `action: list`, or no arguments) must
+     add them to `READ_ACTIONS` or `READ_WITHOUT` in `bridge/server.py` and to
+     `test_which_calls_count_as_changing_a_scene` in `tests/unit/test_bridge_multi.py`.
+     Otherwise its reads are refused too. A tool that starts a job gets a
+     `<pid>-<id>` job id from the job manager, which the bridge routes by pid (BIBLE §7).
 4. **Integration test.** Add a test in `tests/integration/test_<family>.py` that calls
    the tool through the real host (see `tests/integration/conftest.py`) against real
    nodes. Cover the error path and any Houdini idiom from BIBLE §5 that the tool
@@ -121,15 +140,16 @@ macOS the path is `.venv/bin/...`.
 6. **Unit guard.** Run `pytest tests/unit`. `tests/unit/test_catalog.py` checks the new
    entry:
    - The name is unique and snake_case.
-   - The description stays under the word cap.
+   - The description stays under the word cap, and every argument description is 12
+     words or fewer.
    - The schema shape and annotations are valid.
    - The examples validate.
    - The serialised `tools/list` result stays at 44,000 bytes or less
      (`test_tools_list_budget`). It measures the largest shape a client can receive: the
      full profile with `result_content = "both"`, so output schemas count even though the
      `text` default leaves them out. A second assertion keeps that size at 40,000 bytes or
-     less, the 1.2 headroom target. The test prints the core, full and text-default
-     sizes. When a new tool pushes it over, move argument detail from the description
+     less, the 1.2 headroom target. The test prints the minimal, core, full and
+     text-default sizes. When a new tool pushes it over, move argument detail from the description
      into `notes` before cutting words the model needs to choose the tool.
    - `docs/tools.md` is current.
 
@@ -145,7 +165,8 @@ or into your real Houdini preferences, and they never use port 37219.
 | Tier | Runs in | Command | Budget |
 |---|---|---|---|
 | `tests/unit` | system Python | `.venv/Scripts/python -m pytest tests/unit -q` | about 10 s |
-| `tests/integration` | hython | see below | < 90 s |
+| `tests/integration` (fast, the default) | hython | see below | < 90 s |
+| `tests/integration` (`slow`) | hython | the same command with `-m slow` (or `--runslow` for both) | about 3 min |
 | `tests/e2e` | system Python spawning hython | `.venv/Scripts/python -m pytest tests/e2e -q` | < 60 s |
 
 When no hython can be found, the `houdini` and `e2e` tests skip. hython is found through
@@ -213,6 +234,30 @@ $env:PYTHONDONTWRITEBYTECODE = "1"
   --rootdir C:\path\to\hocus-pocus
 ```
 
+#### Fast and slow
+
+A plain run is the **fast** set. On the 1.3 release machine it is 386 tests in about 50 s,
+under the 90 s budget. `tests/conftest.py` deselects tests marked `@pytest.mark.slow`
+unless you ask for them. The slow set is 60 tests and about 3 minutes:
+
+- visual child renders and `render` tests;
+- LOP and stage captures, and Karma;
+- PDG cooks (all of `test_pdg.py`);
+- the 1M-point geometry tests;
+- tests that wait out a timeout on purpose.
+
+To choose a set, add one of these to the command above:
+
+- `-m slow` runs only the slow set.
+- `--runslow` runs both sets.
+- Any `-m` expression that names `slow`, such as `-m "not slow"`, decides on its own.
+
+Mark a new test `@pytest.mark.slow` when it takes over about 1.5 s. Measure with
+`--durations=30`. Keep the fast set under 90 s, because it is the run before every commit
+that touches `host/`. Run `--runslow` before you merge, and always after changing
+rendering, capture, PDG or job code. CI runs the two sets as separate steps of
+`houdini.yml`.
+
 How the session fixture works:
 
 - It starts one in-process host with isolated `HOCUSPOCUS_STATE_DIR` and pref dirs.
@@ -245,7 +290,8 @@ HOUDINI_HYTHON="C:/Program Files/Side Effects Software/Houdini 22.0.466/bin/hyth
 - `.github/workflows/ci.yml` runs on every push and PR, on `windows-latest` and
   `ubuntu-latest`. It runs `ruff check`, `ruff format --check`, the unit tier, and a
   check that `docs/tools.md` is fresh. It does not need Houdini.
-- `.github/workflows/houdini.yml` runs the integration and e2e tiers. It needs a
+- `.github/workflows/houdini.yml` runs the integration tier twice (the fast set, then
+  `-m slow`) and the e2e tier. It needs a
   **self-hosted runner labelled `houdini`** with a licensed Houdini 22. It runs nightly,
   on manual dispatch and on PRs labelled `houdini`.
 

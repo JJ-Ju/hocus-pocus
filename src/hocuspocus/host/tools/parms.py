@@ -28,7 +28,15 @@ from typing import Any
 
 from hocuspocus.tools.errors import ToolError
 
-from ._common import arg_bool, elide_string, hou_exception_text, hou_message, require_node
+from ._common import (
+    DYNAMIC_MENU_NOTE,
+    arg_bool,
+    elide_string,
+    hou_exception_text,
+    hou_message,
+    menu_is_dynamic,
+    require_node,
+)
 from ._diag import cheap_cook_problems
 from .registry import HostContext, tool
 
@@ -178,9 +186,12 @@ def _kind(template: Any) -> str:
     return str(ptype).rsplit(".", 1)[-1].lower()
 
 
-def _menu_mode(template: Any, kind: str) -> str | None:
+def _menu_mode(template: Any, kind: str, parm: Any = None) -> str | None:
     """``strict`` for ordinal menus (value must be an item), ``free`` for string
-    replace/toggle menus (any text allowed), None when the parm has no menu."""
+    replace/toggle menus (any text allowed), None when the parm has no menu. With
+    ``parm``, a string parm whose menu only the node builds (a Copernicus ``signature``:
+    no template items, no script, a normal menu) counts as a strict menu (review 18
+    papercut 4)."""
     import hou
 
     if kind == "menu":
@@ -188,7 +199,9 @@ def _menu_mode(template: Any, kind: str) -> str | None:
     if kind not in ("string", "int"):
         return None
     try:
-        if not template.menuItems() and not template.itemGeneratorScript():
+        if not template.menuItems() and not menu_is_dynamic(template):
+            if kind == "string" and parm is not None and _node_built_menu(parm):
+                return "strict"
             return None
     except Exception:
         return None
@@ -199,6 +212,23 @@ def _menu_mode(template: Any, kind: str) -> str | None:
     if menu_type in (hou.menuType.StringReplace, hou.menuType.StringToggle):
         return "free"
     return "strict"
+
+
+def _node_built_menu(parm: Any) -> bool:
+    """Whether the node gives this string parm menu items its template does not list."""
+    try:
+        return bool(parm.menuItems())
+    except Exception:
+        return False
+
+
+ICON_MARKUP = re.compile(r"^!\[[^\]]*\]\s*")
+"""A leading ``![BUTTONS_blendmode_over]`` icon reference in a menu label (Copernicus)."""
+
+
+def menu_label(label: str) -> str:
+    """A menu label without its leading icon markup (review 18 papercut 9)."""
+    return ICON_MARKUP.sub("", label) if label.startswith("![") else label
 
 
 def _range(template: Any, kind: str) -> dict[str, Any]:
@@ -284,11 +314,22 @@ def _key_info(parm: Any) -> dict[str, Any]:
     return info
 
 
+def _ramp_number(value: Any) -> Any:
+    """A ramp key or value at 6 significant digits: ramps store float32, and
+    ``0.550000011921`` reads as noise (review 18 papercut 10)."""
+    if isinstance(value, float) and math.isfinite(value):
+        return _json_number(float(f"{value:.6g}"))
+    return _json_number(value)
+
+
 def _ramp_dict(ramp: Any) -> dict[str, Any]:
-    values = [list(v) if isinstance(v, tuple | list) else _json_number(v) for v in ramp.values()]
+    values = [
+        [_ramp_number(c) for c in v] if isinstance(v, tuple | list) else _ramp_number(v)
+        for v in ramp.values()
+    ]
     return {
         "basis": [str(b).rsplit(".", 1)[-1].lower() for b in ramp.basis()],
-        "keys": [_json_number(k) for k in ramp.keys()],  # noqa: SIM118 (hou.Ramp)
+        "keys": [_ramp_number(k) for k in ramp.keys()],  # noqa: SIM118 (hou.Ramp)
         "values": values,
         "is_color": bool(ramp.isColor()),
     }
@@ -323,6 +364,8 @@ def _int_menu_token(parm: Any, value: Any) -> Any:
 
 
 def _raw(parm: Any, kind: str) -> Any:
+    if kind == "ramp":
+        return None  # rawValue() is the key count as text; value says it (review 18)
     if kind == "string":
         try:
             return parm.unexpandedString()
@@ -362,12 +405,34 @@ def _hda_locked(parm: Any) -> bool:
         return False
 
 
-def _menu_dict(parm: Any, token: Any) -> dict[str, Any] | None:
+def _menu_items(parm: Any) -> tuple[list[str], list[str]] | None:
     try:
-        items = list(parm.menuItems())
-        labels = list(parm.menuLabels())
+        return list(parm.menuItems()), [menu_label(label) for label in parm.menuLabels()]
     except Exception:
         return None
+
+
+def _menu_dict(parm: Any, token: Any) -> dict[str, Any] | None:
+    """``{token, label, index?, items, item_count, truncated?}``. A dynamic menu (a menu
+    script, or one Houdini builds from the input geometry; review 14 papercut 10) is
+    evaluated on this parm and adds ``dynamic: true``; when it is still empty after a
+    cook of the node, or cannot be evaluated, ``items`` is ``[]`` with a ``note``."""
+    try:
+        dynamic = menu_is_dynamic(parm.parmTemplate())
+    except Exception:
+        dynamic = False
+    read = _menu_items(parm)
+    if dynamic and not (read and read[0]):
+        import hou
+
+        node = parm.node()
+        if isinstance(node, hou.SopNode):  # a group or attribute menu reads the cooked input
+            with contextlib.suppress(Exception):
+                node.cook()
+            read = _menu_items(parm) or read
+    if read is None and not dynamic:
+        return None
+    items, labels = read or ([], [])
     out: dict[str, Any] = {"token": token, "label": None}
     if token in items:
         index = items.index(token)
@@ -380,6 +445,10 @@ def _menu_dict(parm: Any, token: Any) -> dict[str, Any] | None:
     out["item_count"] = len(items)
     if len(items) > MENU_ITEMS_LIMIT:
         out["truncated"] = True
+    if dynamic:
+        out["dynamic"] = True
+        if not items:
+            out["note"] = DYNAMIC_MENU_NOTE
     return out
 
 
@@ -433,7 +502,7 @@ def _value_and_raw(out: dict[str, Any], value: Any, raw: Any, full_strings: bool
     ``full_strings`` (review 12 papercut 1: a 5 KB snippet was echoed twice)."""
     shape = (lambda v: v) if full_strings else elide_string
     out["value"] = shape(value)
-    if not raw_equals(raw, value):
+    if raw is not None and not raw_equals(raw, value):
         out["raw"] = shape(raw)
 
 
@@ -447,7 +516,7 @@ def _describe_parm(
     """Compact summary (``include is None``) or the full ``parm_get`` shape."""
     template = parm.parmTemplate()
     kind = _kind(template)
-    menu_mode = _menu_mode(template, kind)
+    menu_mode = _menu_mode(template, kind, parm)
     keys = _key_info(parm)
     value = _eval(parm, kind, menu_mode, frame)
     locked = _parm_locked(parm)
@@ -490,7 +559,8 @@ def _describe_parm(
         if "template" in include:
             out["template"] = _template_dict(template, kind, parm)
         if "ramp" in include and kind == "ramp" and isinstance(value, dict):
-            out["ramp"] = {**value, "count": len(value["keys"])}
+            # value already is the ramp: say it once (review 18 papercut 10).
+            out["ramp"] = {"count": len(value["keys"])}
         if "multiparm" in include:
             multiparm = _multiparm_dict(parm)
             if multiparm is not None:
@@ -757,7 +827,7 @@ def _resolve_menu(parm: Any, kind: str, value: Any, notes: list[str]) -> tuple[s
     """Return ``(token, index)`` for a token, label or index on a strict menu."""
     try:
         items = list(parm.menuItems())
-        labels = list(parm.menuLabels())
+        labels = [menu_label(label) for label in parm.menuLabels()]
     except Exception as exc:
         raise _invalid(parm, kind, f"Cannot read the menu of {parm.path()}.") from exc
     shown = ", ".join(
@@ -826,7 +896,7 @@ def _coerce(parm: Any, value: Any, notes: list[str], *, for_key: bool = False) -
             f"{path} is a single parm; got a {type(value).__name__}.",
             hint="Pass a scalar, or use the tuple path to set every component with a list.",
         )
-    menu_mode = _menu_mode(template, kind)
+    menu_mode = _menu_mode(template, kind, parm)
     if menu_mode == "strict":
         token, index = _resolve_menu(parm, kind, value, notes)
         if for_key and kind == "string":
@@ -1006,15 +1076,50 @@ def _resolve_ref(node: Any, ref: Any) -> Any:
     return _normalize(target)
 
 
-def _apply(node: Any, target: Any, item: dict[str, Any], *, frame: float | None) -> dict[str, Any]:
-    """Apply one ``parm_set`` item. Returns the item result (without node problems)."""
+def has_callback(parm: Any) -> bool:
+    """Whether the parm runs a callback script when the user changes it in the UI."""
+    try:
+        return bool(parm.parmTemplate().scriptCallback().strip())
+    except Exception:
+        return False
+
+
+CALLBACK_NOTE = (
+    "{name} has a callback script that a plain set does not run (clicking the parm in "
+    "Houdini would); pass press: true with the value to run it."
+)
+CREATE_CALLBACK_NOTE = (
+    "{name} has a callback script that a plain set does not run (clicking the parm in "
+    'Houdini would); pass parms {{"{name}": {{"value": ..., "press": true}}}} to run it.'
+)
+"""The same note on ``node_create``, whose parms spell the item without ``path`` (review 20
+N2)."""
+NO_CALLBACK = (
+    "{path} is a {kind} parm with no callback script; press clicks a button, or runs the "
+    "callback of a parm that has one (with or without a value)."
+)
+
+
+def _apply(
+    node: Any,
+    target: Any,
+    item: dict[str, Any],
+    *,
+    frame: float | None,
+    callback_note: str = CALLBACK_NOTE,
+) -> dict[str, Any]:
+    """Apply one ``parm_set`` item. Returns the item result (without node problems).
+    ``callback_note`` is the note for a plain set of a callback menu or toggle."""
     import hou
 
     path = _target_path(target)
+    # press next to a value sets the value, then runs the parm's callback (review 17 P1-4).
+    press_after = item.get("press") is True and item.get("value") is not None
     present = [
         f
         for f in VALUE_FIELDS
         if (item.get(f) is True if f in _FLAG_FIELDS else item.get(f) is not None)
+        and not (press_after and f == "press")
     ]
     if len(present) != 1:
         got = ", ".join(present) if present else "none"
@@ -1036,6 +1141,15 @@ def _apply(node: Any, target: Any, item: dict[str, Any], *, frame: float | None)
     before = [_key_signature(p) for p in parms]
     key_frame = frame if frame is not None else hou.frame()
     count_keys_as_written = True
+    pressed: dict[str, Any] | None = None
+    if press_after:
+        single = _require_single(target, "press", path)
+        if not has_callback(single):
+            raise _invalid(
+                single,
+                _kind(single.parmTemplate()),
+                NO_CALLBACK.format(path=path, kind=_kind(single.parmTemplate())),
+            )
     try:
         if field == "value":
             value = item["value"]
@@ -1076,6 +1190,14 @@ def _apply(node: Any, target: Any, item: dict[str, Any], *, frame: float | None)
                         parm.set(new)
                     if _is_number(raw_value):
                         _note_override(parm, new, frame, notes)
+            if press_after:
+                from .visual import press_button
+
+                pressed = press_button(node, parms[0])
+            elif len(parms) == 1 and has_callback(parms[0]):
+                template = parms[0].parmTemplate()
+                if _kind(template) == "toggle" or _menu_mode(template, _kind(template)):
+                    notes.append(callback_note.format(name=parms[0].name()))
         elif field == "expression":
             parm = _require_single(target, "expression", path)
             expression = item["expression"]
@@ -1184,9 +1306,11 @@ def _apply(node: Any, target: Any, item: dict[str, Any], *, frame: float | None)
         elif field == "press":
             parm = _require_single(target, "press", path)
             kind = _kind(parm.parmTemplate())
-            if kind != "button":
-                raise _invalid(parm, kind, f"{path} is a {kind} parm, not a button.")
-            parm.pressButton()
+            if kind != "button" and not has_callback(parm):
+                raise _invalid(parm, kind, NO_CALLBACK.format(path=path, kind=kind))
+            from .visual import press_button  # lazy: visual imports hou-heavy helpers
+
+            pressed = press_button(node, parm)  # verifies a save button's files (review 17)
             count_keys_as_written = False
     except ToolError:
         raise
@@ -1204,6 +1328,11 @@ def _apply(node: Any, target: Any, item: dict[str, Any], *, frame: float | None)
     if count_keys_as_written or (field == "expression" and animation == "key"):
         wrote = any(_key_signature(p) - b for p, b in zip(parms, before, strict=True))
     result = {"path": path, **summarize_parm(target, frame=frame)}
+    if pressed is not None:
+        if _kind(_components(target)[0].parmTemplate()) == "button":
+            for key in ("value", "raw", "is_default"):  # a button has no value (review 17)
+                result.pop(key, None)
+        result.update(pressed)
     result["wrote_keyframe"] = wrote
     if notes:
         result["notes"] = notes
@@ -1353,7 +1482,12 @@ def _item_from_spec(name: str, spec: Any, animation: str) -> dict[str, Any]:
 
 
 def set_parm_items(
-    node: Any, parms: dict[str, Any], ctx: Any, *, animation: str = "replace"
+    node: Any,
+    parms: dict[str, Any],
+    ctx: Any,
+    *,
+    animation: str = "replace",
+    callback_note: str = CALLBACK_NOTE,
 ) -> list[dict[str, Any]]:
     """Apply ``{parm_name: value | {expression, language} | {expr, lang}}`` to ``node`` and return per-parm results.
 
@@ -1361,7 +1495,9 @@ def set_parm_items(
     one ``parm_set`` item per entry; raises ToolError on the first failure. A dict value
     other than ``{expr, lang}`` (including ``{expression, language}``) is treated as a ``parm_set`` item without ``path`` (e.g.
     ``{"ramp": {...}}``, ``{"channel_ref": "/obj/..."}``). Results are the compact
-    summary plus ``path`` and ``wrote_keyframe`` (no node errors: callers report those).
+    summary plus ``path`` and ``wrote_keyframe`` (no node errors: callers report those),
+    with ``notes`` and, for a pressed entry, ``pressed`` and ``side_effects``, as
+    ``parm_set`` returns them.
     """
     del ctx  # part of the shared signature; nothing here needs host state
     if not isinstance(parms, dict):
@@ -1371,7 +1507,7 @@ def set_parm_items(
         try:
             target = resolve_name(node, name)
             item = _item_from_spec(name, spec, animation)
-            results.append(_apply(node, target, item, frame=None))
+            results.append(_apply(node, target, item, frame=None, callback_note=callback_note))
         except ToolError as exc:
             if exc.message.startswith(f"parms.{name}:"):
                 raise

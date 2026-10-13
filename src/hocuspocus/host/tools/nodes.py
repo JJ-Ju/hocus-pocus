@@ -1123,10 +1123,12 @@ def _create_one(
     rollback: Rollback,
     created: dict[int, dict[str, tuple[Any, ...]]],
     pairs: dict[int, str],
+    extras: dict[int, dict[str, Any]],
 ) -> Any:
     """Create one ``node_create`` item; ``created`` maps the new node's session id to its
     parm state right after ``createNode`` (see :func:`parm_state`), ``pairs`` to the
-    ``block_begin`` a new ``block_end`` was paired with (see :func:`pair_block_end`)."""
+    ``block_begin`` a new ``block_end`` was paired with (see :func:`pair_block_end`),
+    ``extras`` to the ``notes`` and ``side_effects`` its parms reported."""
     import hou
 
     if not isinstance(item, dict):
@@ -1167,13 +1169,21 @@ def _create_one(
         raise type_not_found(parent, type_name, parent.childTypeCategory()) from exc
     rollback.destroy_later(node)
     created[node.sessionId()] = parm_state(node)
+    note = deprecation_note(node.type())
+    if note:
+        extra = extras.setdefault(node.sessionId(), {})
+        extra["deprecated"] = True
+        extra.setdefault("notes", []).append(note)
     parms = item.get("parms")
+    pressed: dict[str, Any] = {}
     if parms:
         if not isinstance(parms, dict):
             raise bad_arg(f"items[{index}].parms must be an object.")
-        from .parms import set_parm_items  # lazy: parms imports this module
-
-        set_parm_items(node, parms, ctx, animation="replace")
+        # A {value, press: true} entry runs its callback after the plain values are set
+        # and the inputs are wired, as clicking it in the parameter pane would (review 20 N2).
+        plain = {k: v for k, v in parms.items() if not _is_press(v)}
+        pressed = {k: v for k, v in parms.items() if _is_press(v)}
+        _set_create_parms(node, plain, ctx, extras)
     for link_index, link in enumerate(item.get("inputs") or []):
         if not isinstance(link, dict) or "from" not in link:
             raise bad_arg(
@@ -1189,6 +1199,8 @@ def _create_one(
         output = check_output_index(src, link.get("output", 0))
         connect(node, dest_index, src, output, None)
     set_flags(node, item.get("flags"))
+    if pressed:
+        _set_create_parms(node, pressed, ctx, extras)
     begin = pair_block_end(node, rollback)
     if begin is not None:
         pairs[node.sessionId()] = begin.path()
@@ -1199,6 +1211,68 @@ def _create_one(
         with contextlib.suppress(Exception):
             node.moveToGoodPosition(move_inputs=False, move_outputs=False, move_unconnected=False)
     return node
+
+
+def _is_press(spec: Any) -> bool:
+    return isinstance(spec, dict) and spec.get("press") is True
+
+
+def _set_create_parms(
+    node: Any, parms: dict[str, Any], ctx: HostContext, extras: dict[int, dict[str, Any]]
+) -> None:
+    """Set ``node_create`` parms through the ``parm_set`` engine and keep what its results
+    report: the skipped-callback note and a press's ``side_effects`` (review 20 N2)."""
+    if not parms:
+        return
+    from .parms import CREATE_CALLBACK_NOTE, set_parm_items  # lazy: parms imports this module
+
+    results = set_parm_items(
+        node, parms, ctx, animation="replace", callback_note=CREATE_CALLBACK_NOTE
+    )
+    extra = extras.setdefault(node.sessionId(), {})
+    for result in results:
+        for note in result.get("notes") or ():
+            extra.setdefault("notes", []).append(note)
+        if result.get("side_effects"):
+            extra.setdefault("side_effects", {}).update(result["side_effects"])
+
+
+def deprecation_note(node_type: Any) -> str | None:
+    """A note when ``hou.NodeType.deprecated()`` says the type is deprecated (the OpenGL
+    ROP in 22.0, replaced by the Flipbook ROP), with its ``deprecationInfo()``."""
+    try:
+        if not node_type.deprecated():
+            return None
+    except Exception:
+        return None
+    info: dict[str, Any] = {}
+    with contextlib.suppress(Exception):
+        info = dict(node_type.deprecationInfo() or {})
+    text = f"{node_type.category().name()}/{node_type.name()} is deprecated"
+    if info.get("version"):
+        text += f" since Houdini {info['version']}"
+    new_type = info.get("new_type")
+    if new_type is not None and not isinstance(new_type, str):
+        try:
+            new_type = f"{new_type.category().name()}/{new_type.name()}"
+        except Exception:
+            new_type = None
+    reason = str(info.get("reason") or "").strip()
+    if reason:
+        text += f": {reason.rstrip('.')}."
+    else:
+        text += "."
+    if new_type:
+        text += f" Its replacement is {new_type}."
+    return text + " It still works for now."
+
+
+def add_create_extras(block: dict[str, Any], extra: dict[str, Any] | None) -> None:
+    """Put a created node's ``deprecated`` flag, parm ``side_effects`` and ``notes`` on its
+    result row."""
+    for key in ("deprecated", "side_effects", "notes"):
+        if extra and extra.get(key):
+            block[key] = extra[key]
 
 
 BLOCK_BEGIN, BLOCK_END = "block_begin", "block_end"
@@ -1288,11 +1362,12 @@ def node_create(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     rollback = Rollback()
     baselines: dict[int, dict[str, tuple[Any, ...]]] = {}
     pairs: dict[int, str] = {}
+    extras: dict[int, dict[str, Any]] = {}
     done, failures = run_batch(
         items,
         partial,
         rollback,
-        lambda item, index: _create_one(item, index, args, ctx, rollback, baselines, pairs),
+        lambda item, index: _create_one(item, index, args, ctx, rollback, baselines, pairs, extras),
         _create_item_path,
     )
     created = list(done.items())  # item order
@@ -1310,6 +1385,7 @@ def node_create(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     for index, node in created:
         if node.sessionId() in pairs:
             blocks[index]["paired_with"] = pairs[node.sessionId()]
+        add_create_extras(blocks[index], extras.get(node.sessionId()))
     results = [blocks.get(i) or {"error": failures[i]} for i in range(len(items))]
     if mode == "summary":
         collapse_problems(results)

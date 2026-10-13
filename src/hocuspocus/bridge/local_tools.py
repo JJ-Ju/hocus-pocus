@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 from ..tools.errors import ToolError
@@ -18,6 +19,8 @@ if TYPE_CHECKING:
     from .server import Bridge
 
 HOST_STATUS_TIMEOUT_S = 10.0
+ROW_HEALTH_TIMEOUT_S = 2.0
+"""``/health`` per ``instances[]`` row (busy, jobs_running); it never needs the main thread."""
 QUIT_WAIT_S = 15.0
 """How long houdini_connect {quit} waits for the Houdini process to end."""
 
@@ -34,7 +37,9 @@ OUTLIVES_NOTE = (
 )
 
 # Fields the host's own ``houdini_status`` answer may contribute to the connected block.
-_HOST_FIELDS = ("hip", "time", "env", "scene_generation", "host_version", "houdini", "ui", "recent")
+_HOST_FIELDS = (
+    "hip", "time", "env", "scene_generation", "host_version", "houdini", "ui", "recent", "memory",
+)  # fmt: skip
 
 
 def connected_block(bridge: Bridge, inst: registry.Instance) -> dict[str, Any]:
@@ -52,6 +57,8 @@ def connected_block(bridge: Bridge, inst: registry.Instance) -> dict[str, Any]:
         "started": inst.started,
         "scene_generation": health.get("generation", inst.generation),
     }
+    if inst.name:
+        block["name"] = inst.name
     if inst.hip:
         block["hip"] = {"path": inst.hip}
     host_version = health.get("host_version") or health.get("version")
@@ -117,6 +124,7 @@ def houdini_status(bridge: Bridge, args: dict[str, Any]) -> dict[str, Any]:
     warnings: list[str] = []
     connected: dict[str, Any] | None = None
     chosen_pid: int | None = None
+    lost_block: dict[str, Any] | None = None
     if bridge.detached:
         live = bridge.scan()
         warnings.append("The bridge is disconnected; call houdini_connect to attach.")
@@ -124,10 +132,15 @@ def houdini_status(bridge: Bridge, args: dict[str, Any]) -> dict[str, Any]:
         live, sel, connected = _select_verified(bridge, warnings)
         if sel.instance is not None:
             chosen_pid = sel.instance.pid
+        if sel.lost_pid is not None:
+            lost = bridge.lost_error(live)
+            lost_block = {"pid": sel.lost_pid, "label": lost.detail["label"]}
+            warnings.append(f"{lost.message} {lost.hint[0].upper()}{lost.hint[1:]}.")
     settings = _split_settings(connected)
     status: dict[str, Any] = {
         "connected": connected,
-        "instances": [dict(inst.public(), selected=inst.pid == chosen_pid) for inst in live],
+        **({"lost": lost_block} if lost_block else {}),
+        "instances": [_row(bridge, inst, inst.pid == chosen_pid) for inst in live],
         "bridge_version": __version__,
         "profile": bridge.config.profile,
     }
@@ -144,7 +157,58 @@ def houdini_status(bridge: Bridge, args: dict[str, Any]) -> dict[str, Any]:
     return status
 
 
+def _row(bridge: Bridge, inst: registry.Instance, selected: bool) -> dict[str, Any]:
+    """One ``instances[]`` row: the registry entry, ``selected``, and from ``/health`` the
+    host's ``busy`` flag and ``jobs_running`` (review 19 papercut 4)."""
+    row = dict(inst.public(), selected=selected)
+    try:
+        health = bridge.client_for(inst).health(timeout_s=ROW_HEALTH_TIMEOUT_S)
+    except ToolError as exc:
+        row["unreachable"] = exc.code
+        return row
+    for key in ("busy", "jobs_running"):
+        if key in health:
+            row[key] = health[key]
+    return row
+
+
+def _no_such_pid(pid: int, live: list[registry.Instance], hint: str) -> ToolError:
+    """A pid that is not a live instance: repeating cannot help (review 19 papercut 9)."""
+    ordered = registry.sort_preferred(live)
+    return ToolError(
+        "houdini_offline",
+        f"No live HocusPocus instance with pid {pid}."
+        + (f" Live: {'; '.join(i.describe() for i in ordered)}." if ordered else ""),
+        hint=hint,
+        candidates=[inst.candidate() for inst in ordered],
+        retryable=False,
+    )
+
+
+def _apply_name(
+    bridge: Bridge, inst: registry.Instance, name: str | None, live: list[registry.Instance]
+) -> registry.Instance:
+    """Store ``name`` on ``inst`` (moving it from any other instance) and return the
+    updated instance."""
+    if name is None:
+        return inst
+    name = name.strip()
+    for other in live:
+        if other.pid != inst.pid and other.name and other.name == name:
+            registry.set_name(other, "")
+    registry.set_name(inst, name)
+    return replace(inst, name=name)
+
+
 def houdini_connect(bridge: Bridge, args: dict[str, Any]) -> dict[str, Any]:
+    if args.get("name") is not None and args.get("pid") is None and args.get("launch") is None:
+        if args.get("quit") or args.get("disconnect"):
+            raise ToolError(
+                "invalid_argument",
+                "name goes with pid (to name that Houdini) or alone (to select it by name).",
+                hint="houdini_connect {pid, name: 'worker'}, then houdini_connect {name: 'worker'}",
+            )
+        return _connect_by_name(bridge, str(args["name"]))
     modes = [k for k in ("pid", "launch", "disconnect") if args.get(k) not in (None, False)]
     if args.get("quit"):
         # quit takes an optional pid (the Houdini to quit); nothing else.
@@ -172,7 +236,7 @@ def houdini_connect(bridge: Bridge, args: dict[str, Any]) -> dict[str, Any]:
 
     if args.get("disconnect"):
         previous = bridge.preferred_pid
-        bridge.preferred_pid = None
+        bridge.pin(None)
         bridge.detached = True
         return {"connected": None, "disconnected": previous}
 
@@ -183,9 +247,10 @@ def houdini_connect(bridge: Bridge, args: dict[str, Any]) -> dict[str, Any]:
             launch.get("hip"),
             float(launch.get("wait_s", 90)),
         )
-        block = _connect_block(bridge, result.instance)
-        bridge.preferred_pid = result.instance.pid
-        bridge.last_target = result.instance
+        instance = _apply_name(bridge, result.instance, args.get("name"), bridge.scan())
+        block = _connect_block(bridge, instance)
+        bridge.pin(instance)
+        bridge.last_target = instance
         bridge.detached = False
         _split_settings(block)
         launched: dict[str, Any] = {
@@ -203,20 +268,21 @@ def houdini_connect(bridge: Bridge, args: dict[str, Any]) -> dict[str, Any]:
         pid = int(args["pid"])
         match = next((inst for inst in live if inst.pid == pid), None)
         if match is None:
-            raise ToolError(
-                "houdini_offline",
-                f"No live HocusPocus instance with pid {pid}.",
-                hint="pick a pid from houdini_status.instances, or launch one with houdini_connect {launch}",
-                candidates=[str(inst.pid) for inst in live],
+            raise _no_such_pid(
+                pid,
+                live,
+                "pick a pid from the candidates, or launch one with houdini_connect {launch}",
             )
+        match = _apply_name(bridge, match, args.get("name"), live)
         block = _connect_block(bridge, match)
-        bridge.preferred_pid = pid
+        bridge.pin(match)
         bridge.last_target = match
         bridge.detached = False
         _split_settings(block)
         return {"connected": block}
 
-    # No arguments: (re)enable automatic selection and report what it picks.
+    # No arguments: clear any pin, (re)enable automatic selection and report what it picks.
+    bridge.pin(None)
     warnings: list[str] = []
     _live, sel, block = _select_verified(bridge, warnings)
     if sel.instance is None or block is None:
@@ -236,6 +302,27 @@ def houdini_connect(bridge: Bridge, args: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _connect_by_name(bridge: Bridge, name: str) -> dict[str, Any]:
+    """``houdini_connect {name}``: pin the live instance named ``name``."""
+    live = bridge.scan()
+    match = next((inst for inst in live if inst.name and inst.name == name.strip()), None)
+    if match is None:
+        ordered = registry.sort_preferred(live)
+        raise ToolError(
+            "houdini_offline",
+            f"No live HocusPocus instance is named {name!r}.",
+            hint="name one with houdini_connect {pid, name}, or pick a pid from the candidates",
+            candidates=[inst.candidate() for inst in ordered],
+            retryable=False,
+        )
+    block = _connect_block(bridge, match)
+    bridge.pin(match)
+    bridge.last_target = match
+    bridge.detached = False
+    _split_settings(block)
+    return {"connected": block}
+
+
 def _quit(bridge: Bridge, args: dict[str, Any]) -> dict[str, Any]:
     """``houdini_connect {quit: true, on_unsaved, pid?}``: quit a Houdini through its host
     (review 15 papercut 9: hou.exit in houdini_python looked like a failure)."""
@@ -245,15 +332,12 @@ def _quit(bridge: Bridge, args: dict[str, Any]) -> dict[str, Any]:
         pid = int(args["pid"])
         inst = next((i for i in live if i.pid == pid), None)
         if inst is None:
-            raise ToolError(
-                "houdini_offline",
-                f"No live HocusPocus instance with pid {pid}.",
-                hint="pick a pid from houdini_status.instances",
-                candidates=[str(i.pid) for i in live],
-            )
+            raise _no_such_pid(pid, live, "pick a pid from the candidates")
     else:
         warnings: list[str] = []
         _live, sel, block = _select_verified(bridge, warnings)
+        if sel.lost_pid is not None:
+            raise bridge.lost_error(_live)
         inst = sel.instance if block is not None else None
         if inst is None:
             raise ToolError(
@@ -269,7 +353,7 @@ def _quit(bridge: Bridge, args: dict[str, Any]) -> dict[str, Any]:
     # Forget it now: the bridge must not report this Houdini as having "exited" later.
     registry.forget(inst)
     if bridge.preferred_pid == inst.pid:
-        bridge.preferred_pid = None
+        bridge.pin(None)
     if bridge.last_target is not None and bridge.last_target.pid == inst.pid:
         bridge.last_target = None
     deadline = time.monotonic() + QUIT_WAIT_S

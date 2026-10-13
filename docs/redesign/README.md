@@ -2,7 +2,7 @@
 
 This directory holds the record of the HocusPocus 1.0 redesign and the 1.x releases
 after it: the reviews of 0.9 that motivated it, the evaluations of 1.0 that closed it,
-the 1.1 and 1.2 plans and the evaluations behind them, a progress log, and image
+the 1.1, 1.2 and 1.3 plans and the evaluations behind them, a progress log, and image
 evidence.
 None of it is a living document. The design authority for 1.x is
 [`docs/BIBLE.md`](../BIBLE.md); user documentation is [`README.md`](../../README.md),
@@ -24,23 +24,31 @@ None of it is a living document. The design authority for 1.x is
 | [`review/13-solaris-lookdev-eval.md`](review/13-solaris-lookdev-eval.md) | Workload evaluation: the city in LOPs with MaterialX, lights and a Karma render (`usd_stage`, `render`, `full` profile) | 1.1 at `c812972` (`release/1.2`), headless hython | 2026-10-12 | 1.1 evaluation record; its papercuts were fixed in 1.2 |
 | [`review/14-pdg-wedge-eval.md`](review/14-pdg-wedge-eval.md) | Workload evaluation: an eight-wedge TOP network driven through `pdg`, `job` and `events` | 1.1 at `c812972` (`release/1.2`), headless hython | 2026-10-12 | 1.1 evaluation record; its papercuts were fixed in 1.2 |
 | [`review/15-gui-session-eval.md`](review/15-gui-session-eval.md) | Workload evaluation: a GUI session next to a user (captures, selection, events, undo) and an HDA round trip | 1.1 at `c812972` (`release/1.2`), GUI Houdini FX | 2026-10-12 | 1.1 evaluation record; its papercuts were fixed in 1.2 |
+| [`review/17-fx-sim-cache-eval.md`](review/17-fx-sim-cache-eval.md) | Workload evaluation: a pyro sim cached with a File Cache, flipbooked with an OpenGL ROP, inspected across frames and stressed with cancels and bad cache paths | 1.2.1 at `88e654c` (`release/1.3`), headless hython | 2026-10-12 | 1.2.1 evaluation record; its papercuts were fixed in 1.3 |
+| [`review/18-copernicus-eval.md`](review/18-copernicus-eval.md) | Workload evaluation: a Copernicus network generating and compositing a city map, written to disk and read back by SOPs | 1.2.1 at `88e654c` (`release/1.3`), headless hython | 2026-10-12 | 1.2.1 evaluation record; its papercuts were fixed in 1.3 |
+| [`review/19-two-instances-and-prompts-eval.md`](review/19-two-instances-and-prompts-eval.md) | Workload evaluation: a GUI Houdini and a headless worker driven from one session, and the four shipped prompts followed as written | 1.2.1 at `88e654c` (`release/1.3`), GUI Houdini FX and headless hython | 2026-10-12 | 1.2.1 evaluation record; its papercuts were fixed in 1.3 |
 
 Reports 10 to 12 are the post-merge code review, the ergonomics review and the 1.1 city
 rebuild; `plan-1.1.md` and `CHANGELOG.md` 1.1.0 cite them. Reports 13 to 15 are the 1.2
 evaluation workloads (`plan-1.2.md` phase 1); each describes 1.1 as it stood at the
-commit its banner names, and `CHANGELOG.md` 1.2.0 lists what was fixed.
+commit its banner names, and `CHANGELOG.md` 1.2.0 lists what was fixed. Report 16 is the
+Solaris re-run on 1.2 (`CHANGELOG.md` 1.2.0 cites its N-numbered findings). Reports 17 to 19
+are the 1.3 evaluation workloads (`plan-1.3.md` phase 1); each describes 1.2.1 at
+`88e654c`, the commit its banner names, and `CHANGELOG.md` 1.3.0 lists what was fixed.
 
 ## Other files
 
 - [`progress.md`](progress.md): one line per milestone event of the redesign, M0 to the
-  merge and after, through the 1.1 and 1.2 releases.
-- [`plan-1.1.md`](plan-1.1.md), [`plan-1.2.md`](plan-1.2.md): the release plans.
+  merge and after, through the 1.1, 1.2 and 1.3 releases.
+- [`plan-1.1.md`](plan-1.1.md), [`plan-1.2.md`](plan-1.2.md), [`plan-1.3.md`](plan-1.3.md):
+  the release plans.
 - [`evidence/city-destruction/`](evidence/city-destruction/): captures and renders from
   reviews 08 and 09. Each report's evidence table says how each image was made.
   `01`–`03` are from review 08 (building, city overview, street); `10`–`21` are from
   review 09 (simulation frames, contact sheet, animated GIF); `02_city_overview_1.1.png`
   is from review 12; `30_lookdev_karma.png`, `40_pdg_wedges.png` and `50_gui_viewer.png`
-  are from reviews 13, 14 and 15.
+  are from reviews 13, 14 and 15; `60_pyro_frames.png`, `70_copernicus_citymap.png` and
+  `80_two_instance_render.png` are from reviews 17, 18 and 19.
 
 The 0.9 source, docs and scripts that reviews 01–06 describe are at the git tag
 `v0.9-archive`. Line numbers and file paths quoted in those reports refer to that tree.

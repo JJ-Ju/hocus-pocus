@@ -170,6 +170,11 @@ def test_job_manager_lifecycle():
     gate2.set()
     job2.done_event.wait(5)
     assert jobs.status(job2.id)["state"] == "cancelled"
+    # Review 20: a cancel after the job finished cancels nothing and says so.
+    late = jobs.cancel(job.id)
+    assert late["cancelled"] is False and late["state"] == "done"
+    assert "already finished (done)" in late["notes"][0]
+    assert jobs.cancel(job2.id)["cancelled"] is False
 
     job3 = jobs.start("bad", lambda ctx: 1 / 0)
     job3.done_event.wait(5)
@@ -312,3 +317,81 @@ def test_last_cook_memory_is_bounded(monkeypatch):
     assert 0 not in _diag._last_cook_ms and _diag.COOK_MEMORY + 49 in _diag._last_cook_ms
     _diag.remember_cook(60, 1.0)  # recooked: becomes the most recent
     assert next(reversed(_diag._last_cook_ms)) == 60
+
+
+def test_thumbnail_luminance_is_measured_on_the_flattened_image(tmp_path):
+    """Review 20 N1: a sparse subject on a transparent background is not nearly black; an
+    empty frame says empty, and an opaque black frame is still nearly black."""
+    Image = pytest.importorskip("PIL.Image")
+    from hocuspocus.host.tools.visual import encode_png, thumbnail_note
+
+    def measure(im) -> tuple[float | None, float | None]:
+        path = tmp_path / "t.png"
+        im.save(path)
+        out = encode_png(str(path), 512, measure=True)
+        return out.get("mean_luma"), out.get("coverage")
+
+    sparse = Image.new("RGBA", (200, 100), (0, 0, 0, 0))
+    sparse.paste((200, 200, 200, 255), (90, 40, 110, 60))  # a 2 % puff
+    mean, coverage = measure(sparse)
+    assert mean > 60 and coverage == pytest.approx(0.02)
+    assert thumbnail_note(mean, coverage) is None
+
+    empty = Image.new("RGBA", (200, 100), (0, 0, 0, 0))
+    mean, coverage = measure(empty)
+    assert coverage == 0.0
+    assert "empty" in thumbnail_note(mean, coverage)
+
+    black = Image.new("RGB", (200, 100), (2, 2, 2))
+    mean, coverage = measure(black)
+    assert coverage is None and mean < 8
+    assert "nearly black" in thumbnail_note(mean, coverage)
+
+    dark_opaque = Image.new("RGBA", (200, 100), (1, 1, 1, 255))
+    assert "nearly black" in thumbnail_note(*measure(dark_opaque))
+
+
+def test_render_outputs_listing_samples_long_sequences():
+    """Review 20 N5: at most 5 outputs are listed; above that a summary, the first and
+    last two, and at most 20 missing paths."""
+    from hocuspocus.host.tools.visual import outputs_listing
+
+    paths = [f"C:/r/s.{i:04d}.exr" for i in range(1, 49)]
+    assert outputs_listing(paths[:5], []) == {"outputs": paths[:5]}
+    many = outputs_listing(paths[:40], paths[40:])
+    assert "outputs" not in many
+    assert many["outputs_sample"] == [paths[0], paths[1], paths[38], paths[39]]
+    assert many["outputs_summary"]["count"] == 40
+    assert many["outputs_summary"]["missing_count"] == 8
+    assert many["missing"] == paths[40:]
+    none = outputs_listing([], paths)
+    assert none["outputs"] == [] and len(none["missing"]) == 20
+
+
+def test_resimulated_trusts_the_solve_stats_then_the_simulation_state():
+    """Review 20 N3: a force-cook that reads a cached frame records no DOP solve time;
+    without the performance monitor, the simulation's time moves on a cache read too, so
+    only a memory change or no change at all is a reliable answer."""
+    from hocuspocus.host.tools.cook import resimulated, solve_ms
+
+    def state(time, memory):
+        return {"time": time, "memory": memory}
+
+    stepped = {"stats": {"0": {"3": {"Time": 106.5, "Solve": 106.5}}}}
+    read = {"name": "Total Statistics", "stats": {}}
+    assert resimulated(state(0.5, 9), state(0.1, 9), solve_ms(stepped)) is True
+    assert resimulated(state(0.5, 9), state(0.1, 9), solve_ms(read)) is False
+    assert resimulated(state(0.0, 1), state(0.5, 9), None) is True  # memory grew
+    assert resimulated(state(0.2, 9), state(0.3, 8), None) is True  # stepped and evicted
+    assert resimulated(state(0.5, 9), state(0.5, 9), None) is False  # nothing happened
+    assert resimulated(state(0.5, 9), state(0.1, 9), None) is None  # cache read or step
+    assert resimulated(None, state(0.1, 9), None) is None
+
+
+def test_frames_print_as_integers_when_whole():
+    from hocuspocus.host.tools.geo import frame_num
+
+    assert frame_num(90.0) == 90 and isinstance(frame_num(90.0), int)
+    assert frame_num(12.5) == 12.5
+    assert f"frame {frame_num(1.0)}" == "frame 1"
+    assert frame_num(float("nan")) == "nan"

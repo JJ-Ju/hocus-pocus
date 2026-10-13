@@ -2,35 +2,35 @@
 
 <!-- Generated from src/hocuspocus/tools/catalog.py by `python -m hocuspocus.tools.docs`. Do not edit by hand. -->
 
-35 tools: 31 in the `core` profile, 4 more in `full`. Model-visible `tools/list` text: 26,487 bytes. See `docs/BIBLE.md` §4 for the design.
+35 tools: 14 in the `minimal` profile, 31 in `core` (minimal included), 4 more in `full`. Model-visible `tools/list` text: 26,576 bytes. See `docs/BIBLE.md` §4 for the design.
 
 ## Contents
 
-- [`houdini_status`](#houdini_status)
-- [`houdini_connect`](#houdini_connect)
+- [`houdini_status`](#houdini_status) *(minimal)*
+- [`houdini_connect`](#houdini_connect) *(minimal)*
 - [`hip_new`](#hip_new)
-- [`hip_open`](#hip_open)
-- [`hip_save`](#hip_save)
+- [`hip_open`](#hip_open) *(minimal)*
+- [`hip_save`](#hip_save) *(minimal)*
 - [`hip_merge`](#hip_merge)
-- [`node_find`](#node_find)
-- [`node_info`](#node_info)
-- [`node_create`](#node_create)
+- [`node_find`](#node_find) *(minimal)*
+- [`node_info`](#node_info) *(minimal)*
+- [`node_create`](#node_create) *(minimal)*
 - [`node_delete`](#node_delete)
 - [`node_edit`](#node_edit)
 - [`node_copy`](#node_copy)
-- [`node_connect`](#node_connect)
+- [`node_connect`](#node_connect) *(minimal)*
 - [`node_layout`](#node_layout)
 - [`network_describe`](#network_describe)
 - [`network_build`](#network_build)
-- [`parm_get`](#parm_get)
-- [`parm_set`](#parm_set)
-- [`cook`](#cook)
+- [`parm_get`](#parm_get) *(minimal)*
+- [`parm_set`](#parm_set) *(minimal)*
+- [`cook`](#cook) *(minimal)*
 - [`problems`](#problems)
-- [`geo_info`](#geo_info)
+- [`geo_info`](#geo_info) *(minimal)*
 - [`geo_read`](#geo_read)
-- [`viewport_capture`](#viewport_capture)
+- [`viewport_capture`](#viewport_capture) *(minimal)*
 - [`render`](#render)
-- [`houdini_python`](#houdini_python)
+- [`houdini_python`](#houdini_python) *(minimal)*
 - [`node_type_search`](#node_type_search)
 - [`node_type_info`](#node_type_info)
 - [`undo`](#undo)
@@ -44,11 +44,11 @@
 
 ## houdini_status
 
-`read-only` `bridge-local` `headless ok` · profile `core`
+`read-only` `bridge-local` `headless ok` · profile `minimal`
 
 Start here. Reports the connected Houdini (pid, version, GUI or headless, hip path and dirty state, $HIP/$JOB, frame, recent files, scene_generation), every live instance and the bridge settings. Works with no Houdini running (connected: null).
 
-**Notes.** Also reports $HIPNAME, fps, the frame range, and the bridge's profile, read_only and allow_python. An untitled scene's hip carries a note that $HIP is the launch directory until hip_save.
+**Notes.** Also reports $HIPNAME, fps, the frame range, and the bridge's profile, read_only and allow_python. An untitled scene's hip carries a note that $HIP is the launch directory until hip_save. Each instances[] row has pid, port, label, houdini, ui, hip, started, launched_by, name (when given), selected (the pinned instance, or the one reads go to), busy (the main thread has been held for over a second) and jobs_running. With several instances and none pinned, tools that change a scene refuse with ambiguous_instance: pin one with houdini_connect {pid}. When the pinned Houdini has exited, connected is null and lost: {pid, label} names it. connected.memory is {rss_mb, peak_mb}: the Houdini process's resident and peak memory (watch it while a sim cache fills).
 
 ### Arguments
 
@@ -59,7 +59,7 @@ None.
 - `connected` (object | null): `pid`, `port`, `label`, `houdini`, `ui`, `hip`, `time`, `env`, `scene_generation`, `host_version` — always present
 - `instances` (array<object>): `pid`, `label`, `houdini`, `ui`, `hip`, `started`, `launched_by` — always present
 - `bridge_version` (string) — always present
-- `profile` (`core` | `full`)
+- `profile` (`minimal` | `core` | `full`)
 - `read_only` (boolean)
 - `allow_python` (boolean)
 
@@ -72,11 +72,11 @@ None.
 
 ## houdini_connect
 
-`bridge-local` `headless ok` · profile `core`
+`bridge-local` `headless ok` · profile `minimal`
 
-Choose the Houdini this session drives: pid attaches, launch starts one (gui or headless, optional hip), disconnect drops the selection, quit closes it (on_unsaved as hip_new). A launched Houdini usually closes with this server (launched.outlives_server says); `hocuspocus launch` starts one that outlives it.
+Choose the Houdini this session drives: pid attaches, launch starts one (gui or headless, optional hip), disconnect drops the selection, quit closes it. A launched Houdini usually closes with this server (launched.outlives_server says); `hocuspocus launch` starts one that outlives it.
 
-**Notes.** launch waits up to wait_s seconds for the new host to register. A launched Houdini starts in HOCUSPOCUS_WORK_DIR (default: the home directory), which is the untitled scene's $HIP and $JOB. quit closes the selected Houdini (or pid) through its host: with unsaved changes on_unsaved fail (default) refuses with unsaved_changes, save saves first, discard drops them. It returns {quit, pid, exited, saved?} and forgets the registry entry. To keep one alive across sessions, start it with `hocuspocus launch` and attach by pid.
+**Notes.** pid (or launch) pins that Houdini: the pin holds until the next houdini_connect, and if it exits every call returns instance_lost rather than switching. {} unpins (automatic selection). name labels the Houdini given by pid or launch, shown in houdini_status and in _meta.instance; {name} alone pins the Houdini with that name. A pid that is not running is houdini_offline with the live candidates. launch waits up to wait_s seconds for the new host to register. A launched Houdini starts in HOCUSPOCUS_WORK_DIR (default: the home directory), which is the untitled scene's $HIP and $JOB. quit closes the selected Houdini (or pid) through its host: with unsaved changes on_unsaved fail (default) refuses with unsaved_changes, save saves first, discard drops them. It returns {quit, pid, exited, saved?} and forgets the registry entry. To keep one alive across sessions, start it with `hocuspocus launch` and attach by pid.
 
 ### Arguments
 
@@ -87,6 +87,7 @@ Choose the Houdini this session drives: pid attaches, launch starts one (gui or 
 | `launch.mode` | `gui` \| `headless` | yes |  |  |
 | `launch.hip` | string |  |  | Hip file to open. |
 | `launch.wait_s` | number |  | `90` | min 1 |
+| `name` | string |  |  |  |
 | `disconnect` | boolean |  | `false` |  |
 | `quit` | boolean |  | `false` |  |
 | `on_unsaved` | `fail` \| `save` \| `discard` |  |  |  |
@@ -94,7 +95,7 @@ Choose the Houdini this session drives: pid attaches, launch starts one (gui or 
 ### Examples
 
 ```json
-{"pid": 12345}
+{"pid": 12345, "name": "worker"}
 ```
 
 ```json
@@ -140,7 +141,7 @@ Clear to a new untitled scene; bumps scene_generation. on_unsaved protects unsav
 
 ## hip_open
 
-`destructive` `headless ok` · profile `core`
+`destructive` `headless ok` · profile `minimal`
 
 Load a hip file, replacing the current scene; on_unsaved as in hip_new. Load warnings are returned in warnings, not raised, unless ignore_load_warnings is false. hip_merge adds nodes instead.
 
@@ -171,7 +172,7 @@ Load a hip file, replacing the current scene; on_unsaved as in hip_new. Load war
 
 ## hip_save
 
-`headless ok` · profile `core`
+`headless ok` · profile `minimal`
 
 Save the hip file. path saves as (creating directories; an untitled scene needs it); increment saves to the next version number in the file name; backup keeps a backup copy. Returns the real saved path, dirty after save, and bytes.
 
@@ -240,7 +241,7 @@ Merge the nodes matching node_pattern from another hip file into the current sce
 
 ## node_find
 
-`read-only` `headless ok` · profile `core`
+`read-only` `headless ok` · profile `minimal`
 
 Search a subtree for nodes (name and type globs, category, flags, has_errors). Rows: path, type, category, flags, input_count, child_count, has_errors. Locked HDAs are not entered unless recurse_locked. Paged by limit and cursor.
 
@@ -276,7 +277,7 @@ Search a subtree for nodes (name and type globs, category, flags, has_errors). R
 
 ## node_info
 
-`read-only` `headless ok` · profile `core`
+`read-only` `headless ok` · profile `minimal`
 
 Read nodes in detail: type, flags, inputs with names and sources, non-default parms (value, raw, expression; long strings elided), errors, warnings, cook state. parm_get reads keyframes, menus and templates; network_describe a whole network.
 
@@ -308,11 +309,11 @@ Read nodes in detail: type, flags, inputs with names and sources, non-default pa
 
 ## node_create
 
-`headless ok` · profile `core`
+`headless ok` · profile `minimal`
 
 Create nodes in one undo step. type resolves like createNode (box gets the current version; exact_type disables). Items may wire to earlier items; a block_end pairs with its block_begin (paired_with). Returns path, type and problems per node. network_build suits whole graphs.
 
-**Notes.** A parms value is a literal, {expression, language} (short form {expr, lang}), or any parm_set item without path. An input is {index or name, from, output (default 0)}. layout good_position places new nodes. return full gives node_info blocks listing only the parms the call set, with strings over 200 characters as {elided, head}; identical error lists after the first become errors_same_as.
+**Notes.** A parms value is a literal, {expression, language} (short form {expr, lang}), or any parm_set item without path. As in parm_set, a plain set of a menu or toggle with a callback script carries a note that the callback did not run; {value, press: true} runs it once the node's inputs are wired, and the row adds side_effects: {parm: [old, new]}. A type hou.NodeType.deprecated() reports (the OpenGL ROP in 22.0) gets deprecated: true and a note with its reason or replacement. An input is {index or name, from, output (default 0)}. layout good_position places new nodes. return full gives node_info blocks listing only the parms the call set, with strings over 200 characters as {elided, head}; identical error lists after the first become errors_same_as.
 
 ### Arguments
 
@@ -447,7 +448,7 @@ Copy nodes into to_parent, which may be their own network. names renames the cop
 
 ## node_connect
 
-`idempotent` `headless ok` · profile `core`
+`idempotent` `headless ok` · profile `minimal`
 
 Wire inputs in one undo step: each item connects output from_output of from into to's to_input (an index, an input name, or "next" for the next free input of merge-style nodes); from null disconnects.
 
@@ -560,11 +561,11 @@ Build or update a network under parent from Houdini's hou.data childrenAsData fo
 
 ## parm_get
 
-`read-only` `headless ok` · profile `core`
+`read-only` `headless ok` · profile `minimal`
 
 Read parms by parm (.../tx), tuple (.../t: all components) or component path: value at frame, raw if different, expression, is_default, locked (parm lock), hda_locked. Strings over 200 chars are {elided, head} unless full_strings. Tuples add per-component expressions and keyed names.
 
-**Notes.** frame defaults to the current frame. template is {label, type, default, min, max, help}; menu items are capped at 50; keys is {count, first, last}. On a LOP a USD attribute name (.../inputs:intensity) reads Houdini's encoded parm (xn__inputsintensity_i0a), named in path and name.
+**Notes.** frame defaults to the current frame. template is {label, type, default, min, max, help}; menu items are capped at 50; a menu Houdini builds on the node (a menu script, or a SOP group or attribute menu) is evaluated on it and marked dynamic: true, with items [] and a note when it is empty even after a cook of the SOP. keys is {count, first, last}. On a LOP a USD attribute name (.../inputs:intensity) reads Houdini's encoded parm (xn__inputsintensity_i0a), named in path and name.
 
 ### Arguments
 
@@ -592,11 +593,11 @@ Read parms by parm (.../tx), tuple (.../t: all components) or component path: va
 
 ## parm_set
 
-`idempotent` `headless ok` · profile `core`
+`idempotent` `headless ok` · profile `minimal`
 
 Set parms in one undo step. Each item takes one of value, expression, keyframe(s), channel_ref, ramp, multiparm_count, revert_to_default, press. Tuple paths take lists, component paths scalars; menus take token or label. animation replace clears keys and expressions first; key keys at frame; keep is plain set. Returns value, raw, wrote_keyframe, node errors.
 
-**Notes.** With animation replace a single keyframe only adds or replaces its own key. press clicks a button parm. raw is left out when it equals value, and long strings are elided as in parm_get. Tuples report per-component expressions and the keyed component names. Type mismatches fail with invalid_value naming the template type and range. On a LOP a USD attribute name (inputs:intensity) sets Houdini's encoded parm (xn__inputsintensity_i0a), here and in node_create parms; path is the resolved one.
+**Notes.** With animation replace a single keyframe only adds or replaces its own key. press clicks a button parm and returns pressed and side_effects ({parm: [old, new]} it changed); on a writer's save button (File Cache Save to Disk, a ROP SOP's Render) the output files over its frame range are checked afterwards: outputs_summary, or cook_failed with detail.missing. press also runs the callback script of a non-button parm (pyrosource initialize), and with value it sets the value first; a plain set of a menu or toggle with a callback notes that the callback did not run. A string menu only the node builds (a Copernicus signature) takes a token or label like any menu. Ramp keys and values come back at 6 significant digits, without raw. raw is left out when it equals value, and long strings are elided as in parm_get. Tuples report per-component expressions and the keyed component names. Type mismatches fail with invalid_value naming the template type and range. On a LOP a USD attribute name (inputs:intensity) sets Houdini's encoded parm (xn__inputsintensity_i0a), here and in node_create parms; path is the resolved one.
 
 ### Arguments
 
@@ -620,7 +621,7 @@ Set parms in one undo step. Each item takes one of value, expression, keyframe(s
 | `items[].ramp.values` | array<number \| array<number>> | yes |  |  |
 | `items[].multiparm_count` | integer |  |  | min 0 |
 | `items[].revert_to_default` | boolean |  |  |  |
-| `items[].press` | boolean |  |  | Press a button parm. |
+| `items[].press` | boolean |  |  |  |
 | `items[].animation` | `replace` \| `key` \| `keep` |  | `"replace"` |  |
 | `frame` | number |  |  | Default current frame. |
 | `partial` | boolean |  | `false` | Keep successful items. |
@@ -646,11 +647,11 @@ Set parms in one undo step. Each item takes one of value, expression, keyframe(s
 
 ## cook
 
-`idempotent` `headless ok` · profile `core`
+`idempotent` `headless ok` · profile `minimal`
 
-Cook nodes and report per node ok, errors, warnings, cook_time_ms (its own cook; cached inputs are not recooked). profile force-cooks each input chain: chain (top 10 by cost), total_ms, attribution; for-each loop bodies show their cost over all iterations (loops). frame_range cooks frame by frame (sims advance); summary bbox adds per-frame bbox. Past the job threshold returns job_id for job.
+Cook nodes and report per node ok, errors, warnings, cook_time_ms. Cooking never writes files (render does). profile force-cooks each input chain: chain (top 10), total_ms, attribution; for-each loop bodies show their cost over all iterations (loops). frame_range cooks frame by frame (sims advance); summary bbox adds bbox rows. Past wait_s returns job_id for job.
 
-**Notes.** frame_range is [start, end, step] and cannot be combined with profile or frame; the current frame is restored afterwards. Errors left from before a fix are rechecked unless the last cook took over 2 s (hint: force). With profile, results[].cook_time_ms is the named node's profiled cook. attribution is per_node, or perf_monitor when a block_end was cooked under Houdini's performance monitor: each loop body row then has in_loop, cooks, per_iteration_ms and cook_time_ms over all iterations, and loops lists {block_end, block_begin, iterations, total_ms}. loop-level means the monitor was unavailable (another profile was recording) and body rows show one standalone cook. total_ms counts each loop once, at its block_end. In a GUI session the profile stays in the Performance Monitor's list.
+**Notes.** cook_time_ms is the node's own cook; cached inputs are not recooked. Cooking a ROP or a File Cache writes nothing, and notes say how to write (render, or parm_set press on its execute button). frame_range is [start, end, step] and cannot be combined with profile or frame; the current frame is restored afterwards. Errors left from before a fix are rechecked unless the last cook took over 2 s (hint: force). With profile, results[].cook_time_ms is the named node's profiled cook. attribution is per_node, or perf_monitor when a block_end was cooked under Houdini's performance monitor: each loop body row then has in_loop, cooks, per_iteration_ms and cook_time_ms over all iterations, and loops lists {block_end, block_begin, iterations, total_ms}. loop-level means the monitor was unavailable (another profile was recording) and body rows show one standalone cook. total_ms counts each loop once, at its block_end. In a GUI session the profile stays in the Performance Monitor's list. A profiled node that simulates (a DOP network, or a solver SOP such as pyrosolver with one inside) gets simulation {dopnet, resimulated, frame} and a note: a force-cook reads frames already in the simulation cache instead of re-simulating them. It is cooked under the performance monitor, and resimulated is whether DOP solve time was recorded (null, with a note, when the monitor is unavailable and the simulation state cannot tell). summary bbox rows appear only when the counts, bbox or errors change: a row stands for its frame through the frame in through. wait_s is how long the call waits before returning the job (default min(timeout_s, job threshold); 0 returns the job at once). A cancelled cook's job result is the cancelled error with detail {last_status, partial: {frames_cooked, results, frames?}}.
 
 ### Arguments
 
@@ -663,6 +664,7 @@ Cook nodes and report per node ok, errors, warnings, cook_time_ms (its own cook;
 | `profile` | boolean |  | `false` |  |
 | `frame_range` | array<number> |  |  | min items 2; max items 3 |
 | `summary` | `none` \| `bbox` |  | `"none"` |  |
+| `wait_s` | number |  |  | min 0 |
 
 ### Returns
 
@@ -724,9 +726,11 @@ Explain red nodes: lists nodes in a subtree with errors or warnings, broken chan
 
 ## geo_info
 
-`read-only` `headless ok` · profile `core`
+`read-only` `headless ok` · profile `minimal`
 
-Summarise the geometry of a SOP (or an OBJ's display SOP) in about 1 KB: point, prim and vertex counts, bounding box, primitive types, attributes per class with type and size, detail attribute values, groups with counts. geo_read reads per-element values.
+Summarise the geometry of a SOP (or an OBJ's display SOP): point, prim and vertex counts, bounding box, primitive types, attributes per class with type and size, detail attribute values, groups with counts. On a Cop node: the image's layer type, resolution and channel min/max/mean.
+
+**Notes.** frame evaluates the geometry at that frame without moving the playbar. intrinsics lists every volume as a row under volume_columns [name, prim, resolution, voxel_size, min, max] and every VDB under vdb_columns [name, prim, class, value_type, active_voxels, voxel_size] (at most 100 each; volume_total or vdb_total then counts them all), and the first packed primitives. Detail attribute values are capped: arrays at 16 items, strings at 200 characters, and a dict longer than 200 characters as {elided, keys}; hou vectors and matrices are lists. geo_read reads per-element values. A Cop node (or a COP network's display node) gives kind: image, output, layer_type (Mono, RGB, RGBA, ...), resolution, data_window, pixel_scale, storage, border, constant?, channels {r: {min, max, mean}, ...} of its first output, and other_outputs [{name, layer_type}].
 
 ### Arguments
 
@@ -738,9 +742,9 @@ Summarise the geometry of a SOP (or an OBJ's display SOP) in about 1 KB: point, 
 ### Returns
 
 - `path` (string)
-- `point_count` (integer) — always present
-- `prim_count` (integer) — always present
-- `vertex_count` (integer) — always present
+- `point_count` (integer)
+- `prim_count` (integer)
+- `vertex_count` (integer)
 - `bbox` (object | null): `min`, `max`, `size`, `center`
 - `prim_types` (object<string, integer>)
 - `attributes` (object): `point`, `vertex`, `prim`, `detail`
@@ -762,7 +766,7 @@ Summarise the geometry of a SOP (or an OBJ's display SOP) in about 1 KB: point, 
 
 `read-only` `headless ok` · profile `core`
 
-Read attribute values like the geometry spreadsheet: count rows of one class from start, with a columns header, optionally within group. stats adds min/max/mean and unique strings over the whole class. Page by passing next_cursor as cursor.
+Read attribute values like the geometry spreadsheet: count rows of one class from start, optionally within group, at frame. stats adds min/max/mean and unique strings over the whole class. Page by passing next_cursor as cursor.
 
 ### Arguments
 
@@ -776,6 +780,7 @@ Read attribute values like the geometry spreadsheet: count rows of one class fro
 | `group` | string |  |  |  |
 | `stats` | boolean |  | `false` |  |
 | `cursor` | string |  |  | next_cursor from the previous page. |
+| `frame` | number |  |  |  |
 
 ### Returns
 
@@ -802,11 +807,11 @@ Read attribute values like the geometry spreadsheet: count rows of one class fro
 
 ## viewport_capture
 
-`idempotent` `headless ok` · profile `core`
+`idempotent` `headless ok` · profile `minimal`
 
-Look at /obj or a LOP stage: a PNG (long side at most 1024), path, size, camera_used, scene. camera: OBJ or LOP camera, or camera prim (lop_path). auto: the GUI viewer if present and no camera, else an OpenGL ROP (headless too) framed per fit. Leaves no nodes, undo step or dirty flag.
+Look at /obj, a LOP stage or a COP: a PNG (long side at most 1024), path, size, camera_used, scene. camera: OBJ or LOP camera, or camera prim (lop_path); cop_path: a Cop node's image. auto: the GUI viewer if present and no camera, else an OpenGL ROP (headless too) framed per fit. Leaves no nodes, undo step or dirty flag.
 
-**Notes.** fit none reuses the last framing. The viewer source captures the view as it is unless fit is passed: then it frames all or selected for the grab and puts the view back, as it does after looking through camera; context is the viewer's network, and notes say when that is not the captured scene. Without camera or lop_path the stage's display LOP is captured when /obj displays nothing; otherwise a note names it. A stage renders through the OpenGL ROP's LOP source (scene: stage, lop_path). source_used is viewer, opengl_rop or karma: when a headless OpenGL render process crashes, the frame is rendered with a temporary Karma CPU ROP (2 samples, same camera and resolution) and a note says why; later stage captures then go straight to Karma. Lights are refused as cameras; camera errors list the scene's cameras. path also writes the PNG there. Both files are opaque, on the same grey as the image (the OpenGL ROP itself writes a transparent background). image.attached is true when the PNG went out as MCP image content.
+**Notes.** fit has no default: without it the viewer source captures the view as it is and the OpenGL ROP source frames all; fit none reuses the last framing. With fit the viewer frames all or selected for the grab and puts the view back, as it does after looking through camera; context is the viewer's network, and notes say when that is not the captured scene. Without camera or lop_path the stage's display LOP is captured when /obj displays nothing; otherwise a note names it. A stage renders through the OpenGL ROP's LOP source (scene: stage, lop_path). source_used is viewer, opengl_rop or karma: when a headless OpenGL render process crashes, the frame is rendered with a temporary Karma CPU ROP (2 samples, same camera and resolution) and a note says why; later stage captures then go straight to Karma. Lights are refused as cameras; camera errors list the scene's cameras. path also writes the PNG there. Both files are opaque, on the same grey as the image (the OpenGL ROP itself writes a transparent background). image.attached is true when the PNG went out as MCP image content. cop_path (a Cop node, or a COP network's display node) renders it through a temporary rop_image in its network (about 0.2 s, deleted afterwards, outside undo): scene cop, layer {layer_type, resolution, data_window}, the image at the COP's own resolution (resolution is ignored). Without camera, lop_path or cop_path a note names the COP networks under /img.
 
 ### Arguments
 
@@ -814,9 +819,10 @@ Look at /obj or a LOP stage: a PNG (long side at most 1024), path, size, camera_
 |---|---|---|---|---|
 | `camera` | string |  |  |  |
 | `lop_path` | string |  |  |  |
+| `cop_path` | string |  |  |  |
 | `frame` | number |  |  | Default current frame. |
 | `resolution` | array<integer> |  | `[1024,768]` | min items 2; max items 2 |
-| `fit` | `all` \| `selected` \| `none` |  | `"all"` |  |
+| `fit` | `all` \| `selected` \| `none` |  |  |  |
 | `source` | `auto` \| `viewer` \| `opengl_rop` |  | `"auto"` |  |
 | `path` | string |  |  | Also write the PNG here (must end in .png). |
 
@@ -850,9 +856,9 @@ Look at /obj or a LOP stage: a PNG (long side at most 1024), path, size, camera_
 
 `headless ok` · profile `core`
 
-Render any ROP (Karma, Mantra, OpenGL, ...) for frames [start, end, inc] (default current frame), optionally overriding output. Waits up to wait_s (default the job threshold): if done, returns outputs, a thumbnail image and notes; else job_id and state to poll with job.
+Render any ROP (Karma, OpenGL, ...) or writer SOP (File Cache, rop_geometry: own frame range) for frames [start, end, inc] (default current frame), optionally overriding output. Waits up to wait_s (default the job threshold): if done, returns outputs, a thumbnail and notes; else job_id to poll with job.
 
-**Notes.** Above 5 outputs only outputs_summary is inline; job result lists them all. Every expected output is checked against approved_roots. viewport_capture is the quick look. notes warn when the scene has no lights and when the thumbnail is nearly black, and say why an image output has no thumbnail (an extension it cannot read). thumbnail.image.attached is true when the image went out as MCP image content. The thumbnail is inline only, flattened onto grey; the ROP's own output files are left as written, alpha included. USD render ROPs (Lop usdrender_rop, Driver usdrender): outputs come from outputimage, else the RenderProduct productName of the render settings the ROP uses (EXR thumbnails too), never lopoutput; output overrides outputimage; a note says when nothing resolves; a husk failure carries the end of its log in detail.log_tail.
+**Notes.** Above 5 outputs the result, inline or from job result, has outputs_summary and outputs_sample (the first 2 and last 2) instead of outputs; missing lists up to 20 paths. Every expected output is checked against approved_roots. viewport_capture is the quick look. notes warn when the scene has no lights, when the thumbnail (as sent, flattened onto grey) is nearly black, and when every pixel is transparent (empty), and say why an image output has no thumbnail (an extension it cannot read). thumbnail.image.attached is true when the image went out as MCP image content. The thumbnail is inline only, flattened onto grey; the ROP's own output files are left as written, alpha included. USD render ROPs (Lop usdrender_rop, Driver usdrender): outputs come from outputimage, else the RenderProduct productName of the render settings the ROP uses (EXR thumbnails too), never lopoutput; output overrides outputimage; a note says when nothing resolves; a husk failure carries the end of its log in detail.log_tail. A writer SOP (File Cache, rop_geometry or rop_alembic SOP) renders its own frame range unless frames is given; a File Cache renders through the ROP inside it (no output override), then turns on Load from Disk as its Save to Disk button does (side_effects: {parm: [old, new]}). A cancelled render's job result is the cancelled error with detail {last_status, partial: {outputs_summary}} (the files written before the cancel). A Cop node is not a ROP: the error's candidates are the rop_image nodes in its network (viewport_capture cop_path looks at it). A COP image needs no lights, so no lights note. A thumbnail PIL cannot read (a float TIFF) is converted with iconvert; if that fails too, a note says why.
 
 ### Arguments
 
@@ -874,7 +880,6 @@ Render any ROP (Karma, Mantra, OpenGL, ...) for frames [start, end, inc] (defaul
 - `outputs_summary` (object)
 - `missing` (array<string>)
 - `thumbnail` (object): `path`, `width`, `height`, `image`
-- `thumbnail_error` (string)
 - `notes` (array<string>)
 
 ### Examples
@@ -890,7 +895,7 @@ Render any ROP (Karma, Mantra, OpenGL, ...) for frames [start, end, inc] (defaul
 
 ## houdini_python
 
-`destructive` `headless ok` · profile `core`
+`destructive` `headless ok` · profile `minimal`
 
 Run Python (hou bound) or HScript on Houdini's main thread in one undo step, for anything no tool covers. Returns stdout, stderr and result. An uncaught exception fails with python_exception and is rolled back; code still running near timeout_s is stopped (houdini_busy).
 
@@ -920,9 +925,9 @@ Run Python (hou bound) or HScript on Houdini's main thread in one undo step, for
 
 `read-only` `headless ok` · profile `core`
 
-Find node types by name, label, description or keyword, in all 18 categories or one. Rows: name, label, category, version, description (clipped), input range, deprecated. Current versions only, older ones named in other_versions, unless current_only is false. Exact names rank first; total counts every match, weak keyword matches included.
+Find node types by name, label, description or keyword, in all 18 categories or one. Rows: name, label, category, version, description (clipped), input range, deprecated. Current versions only, older ones named in other_versions, unless current_only is false. Exact names rank first; total counts every match.
 
-**Notes.** total is the real number of matching types, not a cap: a plain-language query also matches on single description words, so broad queries can match hundreds of types. Raise limit (up to 1000) to see them all.
+**Notes.** total is the real number of matching types, not a cap: a plain-language query also matches on single description words, so broad queries can match hundreds of types. Raise limit (up to 1000) to see them all. Cop types also match the labels of their menus (remap's Threshold, blend's Over), and compositing words name their Cop type (threshold: remap, gradient: ramp, composite or over: blend, text: font, write: rop_image). A network type's row adds child_category and typical_parents (CopNet copnet: /img). Results with legacy Cop2 types carry a note that Copernicus is Cop.
 
 ### Arguments
 
@@ -956,7 +961,7 @@ Find node types by name, label, description or keyword, in all 18 categories or 
 
 Describe one node type: label, version, named inputs and outputs, parms by folder. detail compact gives name, label, type, default rows; full adds size, range, menu and folder; folders lists folders with parm counts. folder and parms (globs, a|b) narrow the parms.
 
-**Notes.** folder takes a label, an "A / B" path, or "" / "(no folder)" for the top-level parms. include_help adds the first ~2 KB of the node help. With folder or parms the inputs list becomes inputs_count, and detail full leaves out the folder list.
+**Notes.** folder takes a label, an "A / B" path, or "" / "(no folder)" for the top-level parms. include_help adds the first ~2 KB of the node help. With folder or parms the inputs list becomes inputs_count, and detail full leaves out the folder list. In detail full a script menu (pdg_cachemode) or a menu built from input geometry (a SOP group) is evaluated on a temporary instance: menu {items, dynamic: true}, or items [] with a note when it evaluates empty there; so is a string menu only the node builds (a Copernicus signature). Menu labels lose their ![icon] markup. A compact listing over 8 KB leaves out the parms a menu hides at its default (the per-pattern parms of the other patterns): variants {menu parm: parms left out} and a note; pass parms or detail full to list them.
 
 ### Arguments
 
@@ -1093,9 +1098,9 @@ Read or set the node selection. Omit paths to get the selected node paths; pass 
 
 `idempotent` `headless ok` · profile `core`
 
-Long work from render, cook or pdg: status (state, progress, message, elapsed_s), result (the tool's result once done), cancel, list.
+Jobs from render, cook or pdg: status (state, progress, message), result (the tool's result once done), cancel, list.
 
-**Notes.** Jobs do not survive a Houdini restart. A pdg cook job counts the work items of the whole graph in current/total and adds nodes: {name: 'finished/total'}. A cancelled job's result is the cancelled error, whose detail holds the last status.
+**Notes.** Job ids are <pid>-<id>: the bridge sends a job call to the Houdini that started the job, whichever is selected; if that Houdini has exited the answer is instance_lost with the last status the bridge saw (detail.last_status). A bare id means the selected Houdini. list shows the selected Houdini's jobs; all: true lists every live instance's, each row with its pid, plus instances: [{pid, label, jobs, running}]. Jobs do not survive a Houdini restart. A pdg cook job counts the work items of the whole graph in current/total and adds nodes: {name: 'finished/total'}. A frame-by-frame job's message counts the frames done, as current does. cancel adds cancelled: true, or cancelled: false and a note when the job had already finished. A cancelled job's result is the cancelled error, whose detail holds the last status (state cancelled).
 
 ### Arguments
 
@@ -1103,6 +1108,7 @@ Long work from render, cook or pdg: status (state, progress, message, elapsed_s)
 |---|---|---|---|---|
 | `action` | `status` \| `result` \| `cancel` \| `list` | yes |  |  |
 | `job_id` | string |  |  | Required except for list. |
+| `all` | boolean |  | `false` |  |
 
 ### Returns
 
@@ -1119,11 +1125,11 @@ Long work from render, cook or pdg: status (state, progress, message, elapsed_s)
 ### Examples
 
 ```json
-{"action": "status", "job_id": "j-3f2a"}
+{"action": "status", "job_id": "61900-9c3e6f7ca53e"}
 ```
 
 ```json
-{"action": "list"}
+{"action": "list", "all": true}
 ```
 
 
@@ -1233,15 +1239,15 @@ Drive a TOP node: cook its work items as a job (block waits up to timeout_s, cap
 
 `read-only` `headless ok` · profile `full`
 
-What changed since your last call: hip, node (created, renamed, deleted, parms or flags changed on nodes HocusPocus touched or read) and pdg events with seq and origin (agent|other). Pass the last seq seen as since.
+What changed since your last call: hip, node (created, renamed, deleted, parms or flags changed on nodes HocusPocus touched or read) and pdg events with seq and origin (agent|other). Pass next_since back as since.
 
-**Notes.** Watched nodes: those HocusPocus created, edited, read with node_info or listed with network_describe, and nodes created directly under /obj, /stage, /mat, /out and /tasks. FlagChanged has detail.flags (flag: new value); a spare parm edit is one SpareParmsChanged; hda create, match and unlock are one hda_contents_rebuilt per asset; kind pdg has detail.event cook_start, work_item_failed (id, index, error) or cook_done (ok, states, cancelled). A call that fails and is rolled back records nothing, nor does a node created and deleted within one call, a tool's own set-and-restore, or Houdini's save-time writes on TOP networks.
+**Notes.** Watched nodes: those HocusPocus created, edited, read with node_info or listed with network_describe, and nodes created directly under /obj, /stage, /mat, /out and /tasks. ParmTupleChanged has detail.parm and, on a multi-component tuple, components (those whose value or keys changed; a burst within 0.1 s is one event with their union) and keyed (those of them with keyframes now). FlagChanged has detail.flags (flag: new value); a spare parm edit is one SpareParmsChanged; hda create, match and unlock are one hda_contents_rebuilt per asset; kind pdg has detail.event cook_start, work_item_failed (id, index, error) or cook_done (ok, states, cancelled). Each Houdini numbers its own events: next_since is '<pid>:<seq>' (pass it back as since), and a cursor from another Houdini returns reset: true with a note and that Houdini's events from the start. A call that fails and is rolled back records nothing, nor does a node created and deleted within one call, a tool's own set-and-restore, or Houdini's save-time writes on TOP networks.
 
 ### Arguments
 
 | Name | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `since` | integer |  | `0` | min 0 |
+| `since` | integer \| string |  | `0` |  |
 | `limit` | integer |  | `50` | min 1; max 1000 |
 
 ### Examples
@@ -1251,5 +1257,5 @@ What changed since your last call: hip, node (created, renamed, deleted, parms o
 ```
 
 ```json
-{"since": 42, "limit": 20}
+{"since": "3084:42", "limit": 20}
 ```

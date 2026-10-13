@@ -177,20 +177,24 @@ def _perf_cook_stats(
     return out
 
 
-def _perf_cook(node: Any) -> tuple[float, BaseException | None, dict[str, Any] | None]:
-    """Force-cook ``node`` under Houdini's performance monitor (cook stats only). Returns
-    the wall time, the cook failure, and per-node stats, or None when the monitor could
-    not be used (another profile is recording, or the API failed). A stopped profile
-    cannot be deleted, so in a GUI session it stays in the Performance Monitor's list."""
+def _perf_cook(
+    node: Any, *, solve: bool = False
+) -> tuple[float, BaseException | None, dict[str, Any] | None]:
+    """Force-cook ``node`` under Houdini's performance monitor: cook stats, or with
+    ``solve`` DOP solve stats only. Returns the wall time, the cook failure, and the
+    profile's stats tree, or None when the monitor could not be used (another profile is
+    recording, or the API failed). A stopped profile cannot be deleted, so in a GUI
+    session it stays in the Performance Monitor's list."""
     import hou
 
     profile = None
     with contextlib.suppress(Exception):
         if hou.perfMon.activeProfile() is None:
             options = hou.PerfMonRecordOptions(
-                cook_stats=True, solve_stats=False, draw_stats=False, gpu_draw_stats=False,
-                viewport_stats=False, script_stats=False, render_stats=False,
-                thread_stats=False, frame_stats=False, memory_stats=False, errors=False,
+                cook_stats=not solve, solve_stats=solve, draw_stats=False,
+                gpu_draw_stats=False, viewport_stats=False, script_stats=False,
+                render_stats=False, thread_stats=False, frame_stats=False,
+                memory_stats=False, errors=False,
             )  # fmt: skip
             profile = hou.perfMon.startProfile(f"HocusPocus cook profile {node.path()}", options)
     try:
@@ -199,11 +203,80 @@ def _perf_cook(node: Any) -> tuple[float, BaseException | None, dict[str, Any] |
         if profile is not None:
             with contextlib.suppress(Exception):
                 profile.stop()
-    stats = None
+    tree = None
     if profile is not None:
         with contextlib.suppress(Exception):
-            stats = _perf_cook_stats(profile.stats())
-    return elapsed, failure, stats
+            tree = profile.stats()
+    return elapsed, failure, tree if isinstance(tree, dict) else None
+
+
+def solve_ms(tree: dict[str, Any]) -> float:
+    """The DOP solve time a solve-stats profile recorded, from its root's per-thread,
+    per-frame ``Solve`` (verified on 22.0.466: 0 entries when a cook read cached frames).
+    No ``hou``."""
+    total = 0.0
+    for per_thread in (tree.get("stats") or {}).values():
+        for values in (per_thread or {}).values():
+            with contextlib.suppress(TypeError, ValueError, AttributeError):
+                total += float(values.get("Solve", 0.0) or 0.0)
+    return total
+
+
+SIM_NETS_CAP = 3
+
+
+def _dop_networks(node: Any) -> list[Any]:
+    """The DOP networks a node simulates with: itself (a DOP network SOP or object), else
+    the ones inside it (``pyrosolver``'s ``dopnet1``), at most :data:`SIM_NETS_CAP`."""
+    import hou
+
+    def is_dopnet(candidate: Any) -> bool:
+        try:
+            category = candidate.childTypeCategory()
+        except Exception:
+            return False
+        return category is not None and category == hou.dopNodeTypeCategory()
+
+    if is_dopnet(node):
+        return [node]
+    try:
+        children = node.allSubChildren(recurse_in_locked_nodes=True)
+    except Exception:
+        return []
+    return [child for child in children if is_dopnet(child)][:SIM_NETS_CAP]
+
+
+def _sim_states(nets: list[Any]) -> list[dict[str, Any]]:
+    """``{path, time, memory}`` per DOP network: the simulation's time and memory (bytes)."""
+    states = []
+    for net in nets:
+        with contextlib.suppress(Exception):
+            sim = net.simulation()
+            states.append(
+                {"path": net.path(), "time": float(sim.time()), "memory": int(sim.memoryUsage())}
+            )
+    return states
+
+
+def resimulated(
+    before: dict[str, Any] | None, after: dict[str, Any], solve: float | None
+) -> bool | None:
+    """Whether a cook stepped the simulation, or None when Houdini gave no reliable
+    signal (review 20 N3). ``solve`` is the DOP solve time the performance monitor
+    recorded (:func:`solve_ms`), the reliable signal. Without it (the monitor could not
+    be used) only the simulation state is left, and its time moves on a cache read too
+    (a 4 ms cook of frame 24 read as ``resimulated: true``): a changed memory size means
+    frames were simulated (and cached or evicted), an unchanged time and size that
+    nothing was, and anything else is unknown. No ``hou``."""
+    if solve is not None:
+        return solve > 0.0
+    if before is None:
+        return None
+    if after["memory"] != before["memory"]:
+        return True
+    if after["time"] == before["time"]:
+        return False
+    return None
 
 
 def _profile_step(node_path: str) -> dict[str, Any]:
@@ -215,19 +288,39 @@ def _profile_step(node_path: str) -> dict[str, Any]:
     if _is_block_end(node):
         begin = _loop_begin(node)
         before = begin.cookCount() if begin is not None else None
-        elapsed, failure, stats = _perf_cook(node)
+        elapsed, failure, tree = _perf_cook(node)
+        stats = _perf_cook_stats(tree) if tree is not None else None
         loop = {"block_end": node.path(), "body": _loop_body(node, begin), "stats": stats}
         if begin is not None:
             loop["block_begin"] = begin.path()
             with contextlib.suppress(Exception):
                 loop["iterations"] = begin.cookCount() - before
     else:
-        elapsed, failure = timed_cook(node, True)
+        nets = _dop_networks(node)
+        before = _sim_states(nets)
+        solve = None
+        if nets:
+            elapsed, failure, tree = _perf_cook(node, solve=True)
+            solve = solve_ms(tree) if tree is not None else None
+        else:
+            elapsed, failure = timed_cook(node, True)
+        after = _sim_states(nets)
     row: dict[str, Any] = {
         "path": node.path(),
         "type": node.type().name(),
         "cook_time_ms": round(elapsed, 1),
     }
+    if loop is None and after:
+        import hou
+
+        # Review 17 P2-10: a force-cook of a solver reads the simulation cache when it
+        # holds the frame; say whether this cook simulated anything (review 20 N3).
+        first = before[0] if before and before[0]["path"] == after[0]["path"] else None
+        row["simulation"] = {
+            "dopnet": after[0]["path"],
+            "resimulated": resimulated(first, after[0], solve),
+            "frame": _num(round(hou.timeToFrame(after[0]["time"]), 4)),
+        }
     if loop is not None:
         row["_loop"] = loop
     if failure is not None:
@@ -326,6 +419,27 @@ def _frame_step(
     return reports, rows
 
 
+_SAME_KEYS = ("path", "point_count", "prim_count", "bbox_min", "bbox_max", "errors")
+
+
+def collapse_frames(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Summary rows only where something changed (review 17 P2-8: 48 rows, 4 changes): a
+    run of frames with the same counts, bbox and errors is its first row plus
+    ``through``, the run's last frame. Per node when several are cooked. No ``hou``."""
+    out: list[dict[str, Any]] = []
+    last: dict[Any, dict[str, Any]] = {}
+    for row in rows:
+        key = row.get("path")
+        previous = last.get(key)
+        if previous is not None and all(previous.get(k) == row.get(k) for k in _SAME_KEYS):
+            previous["through"] = row["frame"]
+            continue
+        row = dict(row)
+        out.append(row)
+        last[key] = row
+    return out
+
+
 def _merge_frame_report(
     merged: dict[str, dict[str, Any]], report: dict[str, Any], frame: float
 ) -> None:
@@ -367,12 +481,22 @@ class _Inline:
 
 
 def _plain(job: Any, paths: list[str], force: bool, frame: float | None) -> list[dict[str, Any]]:
-    results = []
+    results: list[dict[str, Any]] = []
     for index, path in enumerate(paths):
         job.set_progress(index, len(paths), f"cooking {path}")
-        results.append(
-            job.run_main(lambda p=path: cook_node(p, force=force, frame=frame), JOB_STEP_TIMEOUT_S)
-        )
+        try:
+            results.append(
+                job.run_main(
+                    lambda p=path: cook_node(p, force=force, frame=frame), JOB_STEP_TIMEOUT_S
+                )
+            )
+        except ToolError as exc:
+            if exc.code != "cancelled":
+                raise
+            from .visual import cancelled_with_partial
+
+            done = f"{len(results)} of {len(paths)} nodes"
+            raise cancelled_with_partial(job, {"results": results}, done) from exc
     job.set_progress(len(paths), len(paths), "done")
     return results
 
@@ -400,7 +524,7 @@ def _profiled(
         if frame is not None:
             job.run_main(lambda: hou.setFrame(frame), timeout_s)
         for index, path in enumerate(chain):
-            job.set_progress(index, steps, f"cooking {path} ({index + 1}/{len(chain)})")
+            job.set_progress(index, steps, f"{index}/{steps} steps done, cooking {path}")
             rows.append(job.run_main(lambda p=path: _profile_step(p), JOB_STEP_TIMEOUT_S))
         for index, path in enumerate(paths):
             # Already cooked by the chain: this reads its errors and warnings.
@@ -424,7 +548,31 @@ def _profiled(
     rows.sort(key=lambda r: r["cook_time_ms"], reverse=True)
     out = {"chain": rows[:10], "chain_total": len(rows), "total_ms": total_ms}
     out.update(extra)
+    notes = [_sim_note(row) for row in rows if "simulation" in row]
+    if notes:
+        out["notes"] = notes
     return results, out
+
+
+def _sim_note(row: dict[str, Any]) -> str:
+    sim = row["simulation"]
+    if sim["resimulated"] is None:
+        return (
+            f"{row['path']} cooked {sim['dopnet']} at frame {sim['frame']}, but whether it "
+            "re-simulated or read cached frames is unknown (Houdini's performance monitor was "
+            "unavailable), so resimulated is null. Reset the simulation (its resimulate button) "
+            "to time a full run."
+        )
+    if sim["resimulated"]:
+        return (
+            f"{row['path']} simulated frames in {sim['dopnet']} up to frame {sim['frame']}; "
+            "its cook_time_ms includes that simulation."
+        )
+    return (
+        f"{row['path']} did not re-simulate: {sim['dopnet']}'s cache already held frame "
+        f"{sim['frame']}, so its cook_time_ms is a cache read. Reset the simulation (its "
+        "resimulate button) to time a full run."
+    )
 
 
 def _attribute_loops(rows: list[dict[str, Any]]) -> dict[str, Any]:
@@ -495,15 +643,30 @@ def _ranged(
     frame_rows: list[dict[str, Any]] = []
     merged: dict[str, dict[str, Any]] = {}
     started = time.perf_counter()
+    cooked = 0
     try:
         for index, value in enumerate(frames):
-            job.set_progress(index, total, f"frame {index + 1}/{total}")
+            # The count is current, the frames finished (review 20 N7).
+            job.set_progress(
+                index, total, f"{index}/{total} frames done, cooking frame {_num(value)}"
+            )
             reports, rows = job.run_main(
                 lambda f=value: _frame_step(paths, f, force, summary), JOB_STEP_TIMEOUT_S
             )
+            cooked += 1
             frame_rows.extend(rows)
             for report in reports:
                 _merge_frame_report(merged, report, value)
+    except ToolError as exc:
+        if exc.code != "cancelled":
+            raise
+        # Review 17 P1-6: job result keeps what was cooked before the cancel.
+        from .visual import cancelled_with_partial
+
+        partial: dict[str, Any] = {"frames_cooked": cooked, "results": list(merged.values())}
+        if summary == "bbox":
+            partial["frames"] = collapse_frames(frame_rows)
+        raise cancelled_with_partial(job, partial, f"{cooked} of {total} frames") from exc
     finally:
         _restore_frame(ctx, previous)
     job.set_progress(total, total, "done")
@@ -514,8 +677,35 @@ def _ranged(
         "total_ms": round((time.perf_counter() - started) * 1000, 1),
     }
     if summary == "bbox":
-        extra["frames"] = frame_rows
+        extra["frames"] = collapse_frames(frame_rows)
     return [merged[p] for p in paths], extra
+
+
+def writer_notes(paths: list[str]) -> list[str]:
+    """Notes for nodes a cook does not make write anything (review 17 P0-1, review 18
+    papercut 8): a ROP renders only through ``render``, and a File Cache passes its input
+    through until saved. Main thread."""
+    import hou
+
+    from .visual import writer_rop
+
+    notes = []
+    for path in paths:
+        node = hou.node(path)
+        rop = writer_rop(node) if node is not None else None
+        if rop is None:
+            continue
+        if rop is node:
+            notes.append(
+                f"Cooking {path} does not write files; render {{rop_path: {path}}} renders it."
+            )
+        else:
+            notes.append(
+                f"Cooking {path} does not write files: a cook passes its input through. "
+                f"render {{rop_path: {path}}} saves its frame range as a job with progress and "
+                f"cancel; parm_set press on {path}/execute saves in one blocking call."
+            )
+    return notes
 
 
 @tool("cook", main_thread=False, scene=False)
@@ -524,6 +714,9 @@ def cook(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     force = bool(args.get("force", False))
     frame = _number(args, "frame", None)
     timeout_s = _number(args, "timeout_s", 30.0, positive=True)
+    wait_arg = _number(args, "wait_s", None)
+    if wait_arg is not None and wait_arg < 0:
+        raise ToolError("invalid_argument", "'wait_s' must be a number >= 0.")
     profile = bool(args.get("profile", False))
     summary = args.get("summary", "none")
     if summary not in SUMMARIES:
@@ -536,8 +729,12 @@ def cook(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
             hint="Profile at one frame, or cook a range without profile.",
         )
 
+    notes: list[str] = []
+
     def resolve() -> list[str]:
-        return [require_node(p).path() for p in paths]
+        resolved = [require_node(p).path() for p in paths]
+        notes[:] = writer_notes(resolved)
+        return resolved
 
     def work(job: Any, resolved: list[str]) -> dict[str, Any]:
         extra: dict[str, Any] = {}
@@ -551,6 +748,8 @@ def cook(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
         if frame is not None:
             out["frame"] = frame
         out.update(extra)
+        if notes:
+            out["notes"] = [*notes, *extra.get("notes", [])]
         return out
 
     if ctx.executor.on_main_thread():
@@ -560,7 +759,12 @@ def cook(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     resolved = ctx.executor.run(resolve, timeout_s)
     label = resolved[0] if len(resolved) == 1 else f"{len(resolved)} nodes"
     started = ctx.jobs.start("cook", lambda job: work(job, resolved), label=label)
-    wait_s = min(timeout_s, float(ctx.config.job_threshold_s))
+    # An explicit wait_s is the caller's own threshold, as on render (review 17 P2-8).
+    wait_s = (
+        float(wait_arg)
+        if wait_arg is not None
+        else min(timeout_s, float(ctx.config.job_threshold_s))
+    )
     if started.done_event.wait(wait_s):
         # Returned synchronously: the caller never saw a job_id, so keep job list clean.
         ctx.jobs.discard(started.id)
@@ -571,7 +775,7 @@ def cook(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
         "job_id": started.id,
         "state": "running",
         "message": (
-            f"Cooking {label} is taking longer than {wait_s:g}s; poll with "
+            f"Cooking {label} runs as a job (waited {wait_s:g}s); poll with "
             f"job {{action: status, job_id: {started.id}}} and fetch the result with action result."
         ),
     }

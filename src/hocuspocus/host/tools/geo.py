@@ -29,6 +29,11 @@ LIST_CAP = 60
 DETAIL_ARRAY_CAP = 16
 DETAIL_STRING_CAP = 200
 INTRINSIC_SAMPLES = 3
+FIELD_ROWS_CAP = 100
+"""Volume and VDB primitives listed per ``geo_info`` before ``volume_total`` is set (a pyro
+sim has six; review 17 P1-7 found three of six listed)."""
+VOLUME_COLUMNS = ["name", "prim", "resolution", "voxel_size", "min", "max"]
+VDB_COLUMNS = ["name", "prim", "class", "value_type", "active_voxels", "voxel_size"]
 STATS_UNIQUE_CAP = 20
 ROWS_BYTE_BUDGET = 12_000
 """geo_read stops adding rows past this many bytes so the result stays under 16 KB and
@@ -143,6 +148,18 @@ def num(value: Any, digits: int = 7) -> Any:
     return float(f"{f:.{digits}g}")
 
 
+def frame_num(value: Any) -> Any:
+    """A frame as JSON and in messages: an int when it is whole (``90``, not ``90.0``;
+    review 17 and 20), else :func:`num`."""
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return value
+    if isinstance(value, bool) or not math.isfinite(f):
+        return num(value)
+    return int(f) if f.is_integer() else num(f)
+
+
 def jsonable(value: Any, *, array_cap: int | None = None, string_cap: int | None = None) -> Any:
     """Make an attribute value JSON-safe and compact (rounded floats, capped lists)."""
     if value is None or isinstance(value, bool | int):
@@ -165,6 +182,13 @@ def jsonable(value: Any, *, array_cap: int | None = None, string_cap: int | None
                 f"… {len(items) - array_cap} more"
             ]
         return [jsonable(v, array_cap=array_cap, string_cap=string_cap) for v in items]
+    rows = getattr(value, "asTupleOfTuples", None)  # hou.Matrix2/3/4
+    if callable(rows):
+        with contextlib.suppress(Exception):
+            return [[num(v) for v in row] for row in rows()]
+    if hasattr(value, "__len__") and hasattr(value, "__getitem__"):
+        with contextlib.suppress(Exception):  # hou.Vector2/3/4, hou.Quaternion, hou.Color
+            return [jsonable(value[i]) for i in range(len(value))]
     try:
         json.dumps(value)
         return value
@@ -267,10 +291,22 @@ def _attributes(geo: Any, out: dict[str, Any]) -> dict[str, list[dict[str, Any]]
             value = geo.attribValue(attrib.name())
         except Exception as exc:  # pragma: no cover - defensive
             value = f"<unreadable: {exc}>"
-        entry["value"] = jsonable(value, array_cap=DETAIL_ARRAY_CAP, string_cap=DETAIL_STRING_CAP)
+        entry["value"] = _detail_value(value)
         detail.append(entry)
     attributes["detail"] = _capped(detail, out, "attributes.detail")
     return attributes
+
+
+def _detail_value(value: Any) -> Any:
+    """A detail attribute value for ``geo_info``: arrays and strings capped, and a dict
+    whose JSON is longer than :data:`DETAIL_STRING_CAP` as ``{elided: <chars>, keys}``
+    (review 17 P1-7: a pyro ``volvis`` dict was half of every ``geo_info``)."""
+    out = jsonable(value, array_cap=DETAIL_ARRAY_CAP, string_cap=DETAIL_STRING_CAP)
+    if isinstance(out, dict):
+        size = len(json.dumps(out, separators=(",", ":"), default=str))
+        if size > DETAIL_STRING_CAP:
+            return {"elided": size, "keys": sorted(out)[:DETAIL_ARRAY_CAP]}
+    return out
 
 
 def _groups(geo: Any, out: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
@@ -329,43 +365,62 @@ def _intrinsics(geo: Any, prim_types: dict[str, int]) -> dict[str, Any]:
             if len(rows) >= INTRINSIC_SAMPLES:
                 break
         out["packed"] = rows
-    if "volume" in prim_types:
-        rows = []
-        for prim in sample(hou.primType.Volume):
-            row = {
-                "prim": prim.number(),
-                "resolution": iv(prim, "voxelresolution"),
-                "voxel_size": iv(prim, "voxelsize"),
-                "min": iv(prim, "volumeminvalue"),
-                "max": iv(prim, "volumemaxvalue"),
-            }
-            name = _prim_name(geo, prim)
-            if name:
-                row["name"] = name
-            rows.append(row)
-        out["volume"] = rows
-    if "vdb" in prim_types:
-        rows = []
-        for prim in sample(hou.primType.VDB):
-            row = {
-                "prim": prim.number(),
-                "class": iv(prim, "vdb_class"),
-                "value_type": iv(prim, "vdb_value_type"),
-                "active_voxels": iv(prim, "activevoxelcount"),
-                "voxel_size": iv(prim, "voxelsize"),
-            }
-            name = _prim_name(geo, prim)
-            if name:
-                row["name"] = name
-            rows.append(row)
-        out["vdb"] = rows
+    # Every volume and VDB as one compact row (review 17 P1-7), up to FIELD_ROWS_CAP.
+    fields = (
+        ("volume", hou.primType.Volume, VOLUME_COLUMNS,
+         ("voxelresolution", "voxelsize", "volumeminvalue", "volumemaxvalue")),
+        ("vdb", hou.primType.VDB, VDB_COLUMNS,
+         ("vdb_class", "vdb_value_type", "activevoxelcount", "voxelsize")),
+    )  # fmt: skip
+    for key, ptype, columns, names in fields:
+        if key not in prim_types:
+            continue
+        rows = [
+            [_prim_name(geo, prim), prim.number(), *(iv(prim, name) for name in names)]
+            for prim in itertools.islice(geo.iterPrimsOfType(ptype), FIELD_ROWS_CAP)
+        ]
+        out[f"{key}_columns"] = columns
+        out[key] = rows
+        if prim_types[key] > len(rows):
+            out[f"{key}_total"] = prim_types[key]
+    return out
+
+
+def _cop_info(path: Any, frame: Any) -> dict[str, Any] | None:
+    """The image summary of a Cop node (or a COP network's display node), or None for
+    other nodes (review 18 papercut 3: geo_info refused COPs)."""
+    from .visual import cop_image_node, image_summary, is_cop_network
+
+    node = require_node(path)
+    target = cop_image_node(node)
+    if target is None:
+        if is_cop_network(node):
+            raise ToolError(
+                "invalid_argument",
+                f"{node.path()} has no display node.",
+                hint="Pass a Cop node inside it, or set a display flag.",
+            )
+        return None
+    if frame is not None and (isinstance(frame, bool) or not isinstance(frame, int | float)):
+        raise ToolError("invalid_argument", "'frame' must be a number.")
+    refresh_stale(target)
+    out: dict[str, Any] = {"path": target.path(), "kind": "image"}
+    if frame is not None:
+        out["frame"] = num(frame)
+    out.update(image_summary(target, frame))
+    errors = [str(e).strip() for e in target.errors() if str(e).strip()]
+    if errors:
+        out["errors"] = errors
     return out
 
 
 @tool("geo_info")
 def geo_info(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
-    sop = resolve_sop(args.get("path"))
     frame = args.get("frame")
+    image = _cop_info(args.get("path"), frame)
+    if image is not None:
+        return image
+    sop = resolve_sop(args.get("path"))
     geo = cooked_geometry(sop, frame)
     out: dict[str, Any] = {"path": sop.path()}
     if frame is not None:
@@ -624,11 +679,15 @@ def geo_read(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     group = args.get("group")
     if group is not None and (not isinstance(group, str) or not group.strip()):
         raise ToolError("invalid_argument", "'group' must be a non-empty string.")
+    frame = args.get("frame")
 
     sop = resolve_sop(args.get("path"))
-    geo = cooked_geometry(sop)
+    # geometryAtFrame: the playbar stays where the user left it (review 17 P1-5).
+    geo = cooked_geometry(sop, frame)
     attribs = _resolve_attribs(geo, cls, args.get("attribs"))
     out: dict[str, Any] = {"path": sop.path(), "class": cls}
+    if frame is not None:
+        out["frame"] = num(frame)
 
     if cls == "detail":
         if group:

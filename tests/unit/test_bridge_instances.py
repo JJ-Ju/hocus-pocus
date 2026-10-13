@@ -71,11 +71,13 @@ def test_select_explicit_wins_without_warning():
     assert sel.warnings == ()
 
 
-def test_select_explicit_gone_falls_back_with_warning():
+def test_select_explicit_gone_is_lost_not_replaced():
+    """Review 19 papercut 1: a dead pin selects nothing; the bridge says instance_lost."""
     only = _inst(2, "2026-10-12T10:00:00Z")
     sel = select([only], preferred_pid=99)
-    assert sel.instance == only
-    assert any("99" in w for w in sel.warnings)
+    assert sel.instance is None
+    assert sel.lost_pid == 99
+    assert sel.candidates == (only,)
 
 
 def test_scan_prunes_dead_and_keeps_live(tmp_path):

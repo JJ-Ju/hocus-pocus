@@ -15,17 +15,20 @@ from __future__ import annotations
 import contextlib
 import difflib
 import functools
+import json
 import os
 import re
 import threading
 import time
 import zipfile
+from collections.abc import Iterator
 from typing import Any
 
 from hocuspocus.tools.catalog import CATEGORIES
 from hocuspocus.tools.errors import ToolError
 
-from ._common import arg_bool, int_arg
+from ._common import DYNAMIC_MENU_NOTE, arg_bool, int_arg, menu_is_dynamic
+from .parms import menu_label
 from .registry import HostContext, tool
 
 # -- help archive -----------------------------------------------------------------
@@ -310,8 +313,43 @@ def _build_rows() -> list[dict[str, Any]]:
             row["_tags"] = set(header["tags"]) if header else set()
             row["_tagw"] = {w for t in row["_tags"] for w in _words(t)}
             row["_bestbet"] = set(header["bestbet"]) if header else set()
+            with contextlib.suppress(Exception):
+                child = node_type.childTypeCategory()
+                if child is not None:
+                    row["child_category"] = child.name()
+            if cat_name in MENU_LABEL_CATEGORIES:
+                labels = _menu_labels(node_type)
+                row["_menul"] = {label.lower() for label in labels}
+                row["_menuw"] = {w for label in labels for w in _words(label)}
             rows.append(row)
     return rows
+
+
+MENU_LABEL_CATEGORIES = frozenset({"Cop"})
+"""Categories whose types are also found by the labels of their menus: Copernicus names
+its verbs as modes (remap's Threshold, blend's Over; review 18 papercut 5)."""
+
+
+def _menu_labels(node_type: Any) -> list[str]:
+    """Labels of the menus at the top level and one folder down (icon markup stripped)."""
+    import hou
+
+    labels: list[str] = []
+    folders = (hou.parmTemplateType.Folder, hou.parmTemplateType.FolderSet)
+
+    def visit(templates: Any, depth: int) -> None:
+        for template in templates:
+            kind = template.type()
+            if kind in folders:
+                if depth < 1:
+                    visit(template.parmTemplates(), depth + 1)
+            elif kind == hou.parmTemplateType.Menu:
+                with contextlib.suppress(Exception):
+                    labels.extend(menu_label(label) for label in template.menuLabels())
+
+    with contextlib.suppress(Exception):
+        visit(node_type.parmTemplateGroup().entries(), 0)
+    return labels
 
 
 def type_path(node_type: Any) -> str:
@@ -415,7 +453,9 @@ STOP_WORDS = frozenset(
 )
 """Words a plain-language query carries that say nothing about the node type."""
 
-TOKEN_WEIGHTS = {"name": 4.0, "label": 3.0, "in_name": 2.0, "tag": 1.5, "description": 1.0}
+TOKEN_WEIGHTS = {
+    "name": 4.0, "label": 3.0, "in_name": 2.0, "menu": 2.0, "tag": 1.5, "description": 1.0,
+}  # fmt: skip
 
 SYNONYMS = {
     "surface": ("geometry", "mesh", "polygon", "point"),
@@ -439,6 +479,8 @@ def _token_weight(row: dict[str, Any], word: str) -> float:
         return TOKEN_WEIGHTS["label"]
     if len(word) >= 4 and word in row["_basec"]:
         return TOKEN_WEIGHTS["in_name"]
+    if word in row.get("_menuw", ()):
+        return TOKEN_WEIGHTS["menu"]
     if word in row["_tagw"] or word in row["_tags"] or word in row["_bestbet"]:
         return TOKEN_WEIGHTS["tag"]
     if word in row["_descw"]:
@@ -495,6 +537,8 @@ def score_row(row: dict[str, Any], query: str) -> float:
             score = 55
         elif len(q) >= 3 and q in label:
             score = 50
+        elif q in row.get("_menul", ()):
+            score = 60  # a mode menu item: remap's "Threshold", blend's "Over"
         elif qwords:
             score = _token_score(row, qwords)
     if not score:
@@ -506,6 +550,52 @@ def score_row(row: dict[str, Any], query: str) -> float:
     if not row["is_current_version"]:
         score -= 15
     return max(score, 1.0)
+
+
+COP_SYNONYMS = {
+    "threshold": ("remap",),
+    "step": ("remap",),
+    "gradient": ("ramp",),
+    "composite": ("blend",),
+    "comp": ("blend",),
+    "over": ("blend",),
+    "merge": ("blend",),
+    "text": ("font",),
+    "title": ("font",),
+    "write": ("rop_image",),
+    "save": ("rop_image",),
+    "output": ("rop_image",),
+}
+"""Compositing words → the Copernicus type that does it (review 18 papercut 5: threshold
+and gradient found nothing, composite found zcomp)."""
+SYNONYM_SCORE = 88
+COP2_NOTE = (
+    "Cop2 is the legacy compositor (COP Network - Old); Houdini 22's Copernicus nodes are "
+    "category Cop."
+)
+TYPICAL_PARENTS = {
+    "Object": ["/obj"],
+    "Driver": ["/out"],
+    "CopNet": ["/img"],
+    "Lop": ["/stage", "a LOP network"],
+    "Sop": ["a geo object such as /obj/geo1"],
+    "Top": ["/tasks", "a TOP network"],
+    "TopNet": ["/tasks"],
+    "Chop": ["/ch", "a CHOP network"],
+    "ChopNet": ["/ch"],
+    "Dop": ["a DOP network"],
+    "Cop": ["a COP network"],
+    "Vop": ["a VOP network or material builder"],
+    "VopNet": ["/mat"],
+    "Shop": ["/shop"],
+}
+"""Where a container type is created, by its own category (review 18 papercut 6)."""
+
+
+def _synonym_targets(query: str, category: str | None) -> set[str]:
+    if category not in (None, "Cop"):
+        return set()
+    return set(COP_SYNONYMS.get(" ".join(query.lower().split()), ()))
 
 
 def public_row(row: dict[str, Any], *, fold_versions: bool = False) -> dict[str, Any]:
@@ -529,6 +619,9 @@ def public_row(row: dict[str, Any], *, fold_versions: bool = False) -> dict[str,
             out["other_versions"] = others
     if row["hidden"]:
         out["hidden"] = True
+    if row.get("child_category"):
+        out["child_category"] = row["child_category"]
+        out["typical_parents"] = TYPICAL_PARENTS.get(row["category"], [])
     return out
 
 
@@ -554,12 +647,15 @@ def search(
     if current_only:
         current = {(r["category"], r["name"]): r for r in rows if r["is_current_version"]}
     best: dict[tuple[str, str], tuple[float, dict[str, Any]]] = {}
+    synonyms = _synonym_targets(query, category)
     for row in rows:
         if category and row["category"] != category:
             continue
         if row["hidden"] and not include_hidden:
             continue
         score = score_row(row, query)
+        if synonyms and row["category"] == "Cop" and row["_base"] in synonyms:
+            score = max(score, SYNONYM_SCORE if row["is_current_version"] else 1.0)
         if score <= 0:
             continue
         key = (row["category"], row["name"])
@@ -757,45 +853,55 @@ def _mark_internal(node: Any) -> None:
         node.setUserData(INTERNAL_KEY, "1")
 
 
+@contextlib.contextmanager
+def probe_instance(node_type: Any) -> Iterator[Any]:
+    """A throwaway instance of ``node_type``, or None when the category has no creatable
+    parent. Created with undo disabled and events muted, so it never shows in ``events``
+    or the undo stack, and destroyed (with its temporary container) when the block ends."""
+    import hou
+
+    from .events import muted
+
+    with hou.undos.disabler(), muted():
+        parent, cleanup = _probe_parent(node_type.category().name())
+        if parent is None:
+            yield None
+            return
+        node = None
+        try:
+            # load_contents: an HDA's outputs come from its contents (a
+            # multi-output asset reports one output without them).
+            node = parent.createNode(
+                node_type.name(), TMP_NAME if cleanup is None else None,
+                run_init_scripts=False, load_contents=True,
+            )  # fmt: skip
+            _mark_internal(node)
+            yield node
+        finally:
+            target = cleanup if cleanup is not None else node
+            if target is not None:
+                with contextlib.suppress(Exception):
+                    target.destroy()
+
+
 def type_io(node_type: Any) -> dict[str, Any]:
     """Named inputs/outputs of a type, read from a throwaway instance (cached per type).
 
-    The instance is created with undo disabled and destroyed immediately. Falls back to
-    generic ``inputN`` names when the category has no creatable parent.
+    Falls back to generic ``inputN`` names when the category has no creatable parent.
     """
     key = node_type.nameWithCategory()
     cached = _IO_CACHE.get(key)
     if cached is not None:
         return cached
-    import hou
-
-    from .events import muted
-
     data: dict[str, Any] | None = None
     try:
-        # Outside undo and muted: the probe never shows in ``events`` or the undo stack.
-        with hou.undos.disabler(), muted():
-            parent, cleanup = _probe_parent(node_type.category().name())
-            if parent is not None:
-                node = None
-                try:
-                    # load_contents: an HDA's outputs come from its contents (a
-                    # multi-output asset reports one output without them).
-                    node = parent.createNode(
-                        node_type.name(), TMP_NAME if cleanup is None else None,
-                        run_init_scripts=False, load_contents=True,
-                    )  # fmt: skip
-                    _mark_internal(node)
-                    data = {
-                        "inputs": _io_rows(node.inputNames(), node.inputLabels()),
-                        "outputs": _io_rows(node.outputNames(), node.outputLabels()),
-                        "source": "instance",
-                    }
-                finally:
-                    target = cleanup if cleanup is not None else node
-                    if target is not None:
-                        with contextlib.suppress(Exception):
-                            target.destroy()
+        with probe_instance(node_type) as node:
+            if node is not None:
+                data = {
+                    "inputs": _io_rows(node.inputNames(), node.inputLabels()),
+                    "outputs": _io_rows(node.outputNames(), node.outputLabels()),
+                    "source": "instance",
+                }
     except Exception:
         data = None
     if data is None:
@@ -970,7 +1076,7 @@ def _template_row(
     if items:
         menu: dict[str, Any] = {
             "items": [
-                [tok, labels[i] if i < len(labels) else tok]
+                [tok, menu_label(labels[i]) if i < len(labels) else tok]
                 for i, tok in enumerate(items[:MENU_CAP])
             ]
         }
@@ -981,6 +1087,12 @@ def _template_row(
             if 0 <= index < len(items):
                 row["default_token"] = items[index]
         row["menu"] = menu
+    elif menu_is_dynamic(template):
+        row["menu"] = {"dynamic": True, "items": []}  # evaluate_dynamic_menus fills it
+    elif _maybe_node_menu(template):
+        # A string menu only the node builds (a Copernicus signature; review 18 papercut 4):
+        # evaluate_dynamic_menus keeps it when the instance has items.
+        row["menu"] = {"dynamic": True, "items": [], "_maybe": True}
     help_text = (template.help() or "").strip()
     if not help_text and parm_help:
         help_text = parm_help.get((template.label() or "").strip().lower(), "")
@@ -991,6 +1103,61 @@ def _template_row(
     if path:
         row["folder"] = " / ".join(path)
     return row
+
+
+def _maybe_node_menu(template: Any) -> bool:
+    """A plain string parm (no items, no script, a normal menu type) whose node may still
+    give it menu items."""
+    import hou
+
+    try:
+        return (
+            template.type() == hou.parmTemplateType.String
+            and template.stringType() == hou.stringParmType.Regular
+            and template.menuType() == hou.menuType.Normal
+            and template.numComponents() == 1
+        )
+    except Exception:
+        return False
+
+
+def evaluate_dynamic_menus(node_type: Any, rows: list[dict[str, Any]]) -> None:
+    """Fill the ``menu`` of rows whose menu Houdini computes on an instance (a menu
+    script such as ``pdg_cachemode``, or a SOP ``group`` menu; review 14 papercut 10) from
+    one throwaway instance: ``{items, dynamic: true, total?}``, and ``default_token`` for a
+    menu default. A menu that evaluates empty or fails keeps ``items: []`` with a ``note``."""
+    pending = [row for row in rows if (row.get("menu") or {}).get("dynamic")]
+    if not pending:
+        return
+    evaluated: dict[str, tuple[list[str], list[str]]] = {}
+    with contextlib.suppress(Exception), probe_instance(node_type) as node:
+        for row in pending if node is not None else ():
+            parm = node.parm(row["name"])
+            if parm is None:
+                continue
+            with contextlib.suppress(Exception):
+                evaluated[row["name"]] = (list(parm.menuItems()), list(parm.menuLabels()))
+    for row in pending:
+        items, labels = evaluated.get(row["name"], ([], []))
+        if not items and row["menu"].get("_maybe"):
+            del row["menu"]  # a plain string parm after all
+            continue
+        if not items:
+            row["menu"] = {"dynamic": True, "items": [], "note": DYNAMIC_MENU_NOTE}
+            continue
+        menu: dict[str, Any] = {
+            "items": [
+                [tok, menu_label(labels[i]) if i < len(labels) else tok]
+                for i, tok in enumerate(items[:MENU_CAP])
+            ],
+            "dynamic": True,
+        }
+        if len(items) > MENU_CAP:
+            menu["total"] = len(items)
+        index = row.get("default")
+        if row["type"] == "menu" and isinstance(index, int) and 0 <= index < len(items):
+            row["default_token"] = items[index]
+        row["menu"] = menu
 
 
 # -- tools ------------------------------------------------------------------------------
@@ -1029,6 +1196,8 @@ def node_type_search(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
             "No match. Try a shorter word, the node's label (e.g. 'copy to points'), "
             "include_hidden, or no category."
         )
+    if any(r["category"] == "Cop2" for r in rows):
+        result["notes"] = [COP2_NOTE]
     return result
 
 
@@ -1039,6 +1208,15 @@ COMPACT_HINT = "detail: full adds menus, ranges, hidden parms and per-parm help.
 
 PARM_COLUMNS = ["name", "label", "type", "default", "components"]
 """Columns of a compact parm row; ``components`` only on tuples."""
+
+
+def _variants_note(variants: dict[str, int], rows: list[dict[str, Any]]) -> str:
+    defaults = {r["name"]: r.get("default_token", r.get("default")) for r in rows}
+    parts = ", ".join(f"{n} by {menu} ({defaults.get(menu)!s})" for menu, n in variants.items())
+    return (
+        f"Left out the parms the menus hide at their defaults: {parts}. Pass parms with a glob "
+        "for another choice (such as <token>_*), or detail full, to list them."
+    )
 
 
 def filter_parms(rows: list[dict[str, Any]], pattern: str) -> list[dict[str, Any]]:
@@ -1088,6 +1266,78 @@ def compact_parms(rows: list[dict[str, Any]]) -> dict[str, list[list[Any]]]:
             out.append(row["components"])
         grouped.setdefault(row.get("folder") or NO_FOLDER, []).append(out)
     return grouped
+
+
+COMPACT_COLLAPSE_BYTES = 8000
+"""A compact listing over this many bytes leaves out the parms its menus hide at their
+defaults (review 18 papercut 9: Cop/tilepattern listed 16 patterns' parms, 14.7 KB)."""
+_COND_GROUP = re.compile(r"\{([^}]*)\}")
+_COND_TERM = re.compile(r"(\w+)\s*(==|!=|<=|>=|<|>)\s*(\"[^\"]*\"|'[^']*'|[^\s}]+)")
+
+
+def _term_true(value: Any, op: str, raw: str) -> bool:
+    want = raw.strip("\"'")
+    if isinstance(value, bool):
+        value = int(value)
+    if isinstance(value, int | float) and not isinstance(value, bool):
+        try:
+            other: Any = float(want)
+            left: Any = float(value)
+        except ValueError:
+            left, other = str(value), want
+    else:
+        left, other = str(value), want
+    try:
+        return {
+            "==": left == other,
+            "!=": left != other,
+            "<": left < other,
+            ">": left > other,
+            "<=": left <= other,
+            ">=": left >= other,
+        }[op]
+    except TypeError:
+        return False
+
+
+def hidden_by(condition: str, defaults: dict[str, Any], menus: set[str]) -> str | None:
+    """The menu parm whose default value hides a parm under ``condition`` (a ``HideWhen``:
+    ``{ a != x } { b == y }``, terms in braces all true, any braces), or None when the parm
+    shows at the defaults or the hiding group names no menu parm."""
+    for group in _COND_GROUP.findall(condition):
+        terms = _COND_TERM.findall(group)
+        if not terms or any(name not in defaults for name, _op, _raw in terms):
+            continue
+        if all(_term_true(defaults[name], op, raw) for name, op, raw in terms):
+            menu = next((name for name, _op, _raw in terms if name in menus), None)
+            if menu is not None:
+                return menu
+    return None
+
+
+def collapse_variants(
+    group: Any, rows: list[dict[str, Any]]
+) -> tuple[list[dict[str, Any]], dict[str, int]]:
+    """Rows without the parms a menu hides at its default (per-pattern parms of the other
+    patterns), and ``{menu parm: parms left out}``."""
+    import hou
+
+    defaults = {r["name"]: r.get("default_token", r.get("default")) for r in rows}
+    menus = {r["name"] for r in rows if r["type"] == "menu"}
+    kept: list[dict[str, Any]] = []
+    variants: dict[str, int] = {}
+    for row in rows:
+        menu = None
+        with contextlib.suppress(Exception):
+            template = group.find(row["name"])
+            condition = template.conditionals().get(hou.parmCondType.HideWhen) if template else None
+            if condition:
+                menu = hidden_by(condition, defaults, menus)
+        if menu is None:
+            kept.append(row)
+        else:
+            variants[menu] = variants.get(menu, 0) + 1
+    return kept, variants
 
 
 @tool("node_type_info")
@@ -1183,12 +1433,20 @@ def node_type_info(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
         elif detail == "full":
             if not narrowed:
                 result["folders"] = folders
+            evaluate_dynamic_menus(node_type, rows)
             result["parms"] = rows
         else:
             for key in ("help_url", "tags"):  # rarely needed to build with the type
                 result.pop(key, None)
             result["parm_columns"] = PARM_COLUMNS
             result["parms"] = compact_parms(rows)
+            size = len(json.dumps(result["parms"], separators=(",", ":"), default=str))
+            if not narrowed and size > COMPACT_COLLAPSE_BYTES:
+                kept, variants = collapse_variants(group, rows)
+                if variants:
+                    result["parms"] = compact_parms(kept)
+                    result["variants"] = variants
+                    result["notes"] = [_variants_note(variants, rows)]
             result["detail"] = "compact"
             result.setdefault("hint", COMPACT_HINT)
     if include_help:

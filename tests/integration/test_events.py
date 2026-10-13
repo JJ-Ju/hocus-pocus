@@ -58,7 +58,7 @@ def test_node_lifecycle_events(client):
     ]
     assert events[0]["detail"] == {"type": "geo"}
     assert events[1]["detail"] == {"old_name": "user_geo"}
-    assert events[2]["detail"] == {"parm": "t"}
+    assert events[2]["detail"] == {"parm": "t", "components": ["tx"]}
     assert events[5]["detail"] == {"input": 0}
     assert all(e["time"].endswith("Z") for e in events)
 
@@ -71,12 +71,42 @@ def test_parm_bursts_coalesce(client):
     geo.parm("tx").set(1)
     events = _read(client, since)
     assert _kinds(events) == [("ParmTupleChanged", "/obj/g"), ("ParmTupleChanged", "/obj/g")]
-    assert events[0]["detail"] == {"parm": "r", "count": 3}
-    assert events[1]["detail"] == {"parm": "t"}
+    assert events[0]["detail"] == {"parm": "r", "components": ["rx", "ry", "rz"]}
+    assert events[1]["detail"] == {"parm": "t", "components": ["tx"]}
     time.sleep(ev.COALESCE_S + 0.05)
     geo.parm("ry").set(5)
     later = _read(client, events[-1]["seq"])
-    assert len(later) == 1 and later[0]["detail"] == {"parm": "r"}
+    assert len(later) == 1 and later[0]["detail"] == {"parm": "r", "components": ["ry"]}
+    geo.parm("scale").set(2)  # a one-component tuple names no components
+    assert _read(client, later[-1]["seq"])[0]["detail"] == {"parm": "scale"}
+
+
+def test_keyed_components_are_named(client):
+    """Review 16 papercut 9: a key on ry plus a set of rx read as {parm: r, count: 3}."""
+    client.ok("node_create", {"items": [{"parent": "/obj", "type": "geo", "name": "keyed"}]})
+    since = _since()
+    client.ok(
+        "parm_set", {"items": [{"path": "/obj/keyed/ry", "keyframe": {"frame": 10, "value": 45}}]}
+    )
+    events = _read(client, since)
+    assert _kinds(events) == [("ParmTupleChanged", "/obj/keyed")]
+    assert events[0]["detail"] == {"parm": "r", "components": ["ry"], "keyed": ["ry"]}
+    assert events[0]["origin"] == "agent"
+    since = events[-1]["seq"]
+    time.sleep(ev.COALESCE_S + 0.05)  # a burst within COALESCE_S joins the last event
+    # One call keying ry again and setting rx coalesces into the union of components.
+    client.ok(
+        "parm_set",
+        {
+            "items": [
+                {"path": "/obj/keyed/ry", "keyframe": {"frame": 20, "value": 90}},
+                {"path": "/obj/keyed/rx", "value": 15},
+            ]
+        },
+    )
+    events = _read(client, since)
+    assert _kinds(events) == [("ParmTupleChanged", "/obj/keyed")]
+    assert events[0]["detail"] == {"parm": "r", "components": ["rx", "ry"], "keyed": ["ry"]}
 
 
 def test_watch_node_inside_network(client):
@@ -92,7 +122,7 @@ def test_watch_node_inside_network(client):
         ("ChildCreated", "/obj/g/box1"),
         ("ParmTupleChanged", "/obj/g/box1"),
     ]
-    assert events[1]["detail"] == {"parm": "size"}
+    assert events[1]["detail"] == {"parm": "size", "components": ["sizex"]}
 
 
 def test_unwatched_nodes_are_quiet(client):

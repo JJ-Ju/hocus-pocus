@@ -98,6 +98,7 @@ def test_cook_slow_but_within_threshold_is_synchronous(client):
     assert result["results"][0]["cook_time_ms"] >= 350
 
 
+@pytest.mark.slow
 def test_cook_becomes_job_after_timeout(client):
     node = _slow_python_sop(_geo(), 2.0)
     started = time.monotonic()
@@ -343,13 +344,19 @@ def test_cook_frame_range_as_a_job_reports_frame_progress(client):
         status = client.ok("job", {"action": "status", "job_id": job_id})
         if status.get("message"):
             messages.add(status["message"])
+        if status["state"] == "running" and "frames done" in status.get("message", ""):
+            # Review 20 N7: the message counts the frames done, as current does.
+            current = status["current"]
+            assert status["message"] == (
+                f"{current}/24 frames done, cooking frame {current + 1}"
+            ), status
         if status["state"] != "running":
             break
         assert status.get("total") in (None, 24)
         client.host.executor.pump_once(0.02)
     assert status["state"] == "done", status
     assert status["progress"] == 1.0 and status["current"] == 24 and status["total"] == 24
-    assert any(m.startswith("frame ") and m.endswith("/24") for m in messages), messages
+    assert any("frames done, cooking frame" in m for m in messages), messages
     final = client.ok("job", {"action": "result", "job_id": job_id})["result"]
     assert len(final["frames"]) == 24
     assert final["frames"][0]["bbox_min"] != final["frames"][-1]["bbox_min"]
@@ -677,6 +684,7 @@ def test_slow_node_with_old_errors_gets_a_force_hint(client):
 # -- problems: budget, locked assets, defaults, dedupe, $TEMP (review 10) -------------
 
 
+@pytest.mark.slow
 def test_problems_time_budget_returns_incomplete_with_node_cursor(client, monkeypatch):
     from hocuspocus.host.tools import cook as cook_module
 
@@ -713,6 +721,7 @@ def test_problems_time_budget_returns_incomplete_with_node_cursor(client, monkey
     assert sorted(seen) == sorted((r["path"], r["kind"]) for r in full["problems"])
 
 
+@pytest.mark.slow
 def test_problems_budget_pages_rows_inside_a_partial_scan(client, monkeypatch):
     from hocuspocus.host.tools import cook as cook_module
 
@@ -805,3 +814,207 @@ def test_problems_checks_paths_under_temp_variables(client):
     result = client.ok("problems", {"root": geo.path()})
     files = [r["path"] for r in result["problems"] if r["kind"] == "missing_file"]
     assert files == [reader.path()]
+
+
+# -- writer SOPs and ROPs (review 17 P0-1, review 18 papercut 8) --------------------------
+
+
+def _file_cache(work_dir, name: str = "cache", frames=(1, 3)):
+    geo = _geo("fx")
+    box = geo.createNode("box")
+    box.parm("ty").setExpression("$F * 0.1")
+    cache = geo.createNode("filecache::2.0", name)
+    cache.setInput(0, box)
+    cache.parm("filemethod").set(1)  # explicit file
+    cache.parm("file").set(str(work_dir / "fc.$F4.bgeo.sc").replace("\\", "/"))
+    for parm, value in zip(("f1", "f2"), frames, strict=True):
+        cache.parm(parm).deleteAllKeyframes()
+        cache.parm(parm).set(value)
+    return cache
+
+
+def test_cook_frame_range_on_a_file_cache_says_it_writes_nothing(client, work_dir):
+    cache = _file_cache(work_dir)
+    result = client.ok("cook", {"paths": [cache.path()], "frame_range": [1, 3]})
+    assert result["ok"] is True
+    assert not list(work_dir.glob("fc.*"))
+    (note,) = [n for n in result["notes"] if cache.path() in n]
+    assert "does not write" in note and "render" in note and "press" in note
+
+
+def test_cook_on_a_rop_says_cooking_does_not_render(client, work_dir):
+    geo = _geo()
+    box = geo.createNode("box")
+    sop_rop = geo.createNode("rop_geometry", "write")
+    sop_rop.setInput(0, box)
+    out_rop = hou.node("/out").createNode("geometry", "bgeo")
+    out_rop.parm("soppath").set(box.path())
+    result = client.ok("cook", {"paths": [sop_rop.path(), out_rop.path(), box.path()]})
+    notes = result["notes"]
+    assert len(notes) == 2, notes
+    assert any(sop_rop.path() in n and "render" in n for n in notes)
+    assert any(out_rop.path() in n and "render" in n for n in notes)
+
+
+# -- review 17: wait_s, summary rows on change, partial results, sims ----------------------
+
+
+def test_cook_frame_range_summary_emits_rows_only_on_change(client):
+    geo = _geo()
+    box = geo.createNode("box")
+    box.parm("ty").setExpression("floor($F / 4)")
+    result = client.ok("cook", {"paths": [box.path()], "frame_range": [1, 10], "summary": "bbox"})
+    frames = result["frames"]
+    assert [(row["frame"], row.get("through")) for row in frames] == [(1, 3), (4, 7), (8, 10)]
+    assert frames[1]["bbox_min"][1] == pytest.approx(0.5)
+    still = client.ok("cook", {"paths": [geo.path()], "frame_range": [1, 5], "summary": "bbox"})
+    assert [(row["frame"], row.get("through")) for row in still["frames"]] == [(1, 3), (4, 5)]
+
+
+def test_cook_wait_s_zero_returns_a_job_at_once(client):
+    node = _slow_python_sop(_geo(), 0.3)
+    result = client.ok("cook", {"paths": [node.path()], "force": True, "wait_s": 0})
+    assert result["state"] == "running"
+    status = _wait_job(client, result["job_id"])
+    assert status["state"] == "done"
+    error = client.error("cook", {"paths": [node.path()], "wait_s": -1})
+    assert error["code"] == "invalid_argument"
+
+
+@pytest.mark.slow
+def test_cook_cancelled_frame_range_keeps_the_frames_cooked(client):
+    geo = _geo()
+    box = geo.createNode("box")
+    slow = _slow_python_sop(geo, 0.05)
+    slow.setInput(0, box)
+    hou.setFrame(7)
+    result = client.ok(
+        "cook",
+        {"paths": [slow.path()], "frame_range": [1, 200], "summary": "bbox", "wait_s": 0},
+    )
+    job_id = result["job_id"]
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        status = client.ok("job", {"action": "status", "job_id": job_id})
+        if (status.get("current") or 0) >= 4:
+            break
+        client.host.executor.pump_once(0.02)
+    client.ok("job", {"action": "cancel", "job_id": job_id})
+    assert _wait_job(client, job_id)["state"] == "cancelled"
+    error = client.error("job", {"action": "result", "job_id": job_id})
+    assert error["code"] == "cancelled"
+    partial = error["detail"]["partial"]
+    assert 4 <= partial["frames_cooked"] < 200
+    assert partial["frames"][0]["frame"] == 1
+    last = error["detail"]["last_status"]
+    assert last["total"] == 200
+    # Review 20 N7: the last status says cancelled, and counts what partial counts.
+    assert last["state"] == "cancelled", last
+    assert last["current"] == partial["frames_cooked"], last
+    assert last["message"].startswith(f"{partial['frames_cooked']}/200 frames done"), last
+    assert hou.frame() == 7
+
+
+def test_job_cancel_after_the_job_finished_says_so(client):
+    """Review 20: a cancel that arrives after the job finished says nothing was cancelled."""
+    box = _geo().createNode("box")
+    started = client.ok("cook", {"paths": [box.path()], "frame_range": [1, 2], "wait_s": 0})
+    _wait_job(client, started["job_id"])
+    late = client.ok("job", {"action": "cancel", "job_id": started["job_id"]})
+    assert late["cancelled"] is False and late["state"] == "done", late
+    assert "already finished" in late["notes"][0]
+    assert client.ok("job", {"action": "result", "job_id": started["job_id"]})["state"] == "done"
+
+
+def test_cook_profile_on_a_sim_says_whether_it_resimulated(client):
+    geo = _geo()
+    sphere = geo.createNode("sphere")
+    source = geo.createNode("pyrosource")
+    source.setInput(0, sphere)
+    source.parm("initialize").set("source")
+    source.parm("initialize").pressButton()
+    raster = geo.createNode("volumerasterizeattributes")
+    raster.setInput(0, source)
+    raster.parm("attributes").set("density temperature")
+    solver = geo.createNode("pyrosolver")
+    solver.setInput(0, raster)
+    solver.parm("divsize").set(0.25)
+    first = client.ok("cook", {"paths": [solver.path()], "profile": True, "frame": 3})
+    row = next(r for r in first["chain"] if r["path"] == solver.path())
+    assert row["simulation"]["resimulated"] is True
+    assert any("simulat" in n for n in first["notes"])
+    # Profiling the same frame again force-cooks the solver's inputs, so Houdini re-solves
+    # its newest frame: resimulated comes from the DOP solve stats, not a guess.
+    again = client.ok("cook", {"paths": [solver.path()], "profile": True, "frame": 3})
+    row = next(r for r in again["chain"] if r["path"] == solver.path())
+    assert isinstance(row["simulation"]["resimulated"], bool)
+
+
+def _small_pyro():
+    geo = _geo()
+    sphere = geo.createNode("sphere")
+    source = geo.createNode("pyrosource")
+    source.setInput(0, sphere)
+    source.parm("initialize").set("source")
+    source.parm("initialize").pressButton()
+    raster = geo.createNode("volumerasterizeattributes")
+    raster.setInput(0, source)
+    raster.parm("attributes").set("density temperature")
+    solver = geo.createNode("pyrosolver")
+    solver.setInput(0, raster)
+    solver.parm("divsize").set(0.25)
+    return solver
+
+
+def _sim_row(result, solver):
+    return next(r for r in result["chain"] if r["path"] == solver.path())["simulation"]
+
+
+def test_cook_profile_of_a_cached_earlier_frame_did_not_resimulate(client):
+    """Review 20 N3: after a sim ran to frame 6, profiling frame 3 reads the cache; the
+    simulation's time moves back, which used to read as resimulated."""
+    solver = _small_pyro()
+    client.ok("cook", {"paths": [solver.path()], "frame_range": [1, 6]})
+    earlier = client.ok("cook", {"paths": [solver.path()], "profile": True, "frame": 3})
+    sim = _sim_row(earlier, solver)
+    assert sim["resimulated"] is False and sim["frame"] == 3, sim
+    assert any("did not re-simulate" in n for n in earlier["notes"])
+    later = client.ok("cook", {"paths": [solver.path()], "profile": True, "frame": 8})
+    assert _sim_row(later, solver)["resimulated"] is True
+
+
+def test_cook_profile_with_a_full_sim_cache_still_tells(client):
+    """Review 20 N3: with the memory cache full, a cache read and a step both leave the
+    memory size alone; the solve stats still tell them apart."""
+    solver = _small_pyro()
+    solver.parm("cachemaxsize").set(1)  # MB
+    client.ok("cook", {"paths": [solver.path()], "frame_range": [1, 8]})
+    cached = client.ok("cook", {"paths": [solver.path()], "profile": True, "frame": 7})
+    assert _sim_row(cached, solver)["resimulated"] is False
+    later = client.ok("cook", {"paths": [solver.path()], "profile": True, "frame": 9})
+    assert _sim_row(later, solver)["resimulated"] is True
+
+
+def test_cook_profile_says_null_when_the_sim_gives_no_signal(client, monkeypatch):
+    """Review 20 N3: without the performance monitor's solve stats, a cache read is only a
+    time change, which a step with a full cache also is: resimulated is null."""
+    from hocuspocus.host.tools import cook as cook_module
+
+    solver = _small_pyro()
+    client.ok("cook", {"paths": [solver.path()], "frame_range": [1, 6]})
+
+    def unmonitored(node, solve=False):
+        return (*cook_module.timed_cook(node, True), None)
+
+    monkeypatch.setattr(cook_module, "_perf_cook", unmonitored)
+    result = client.ok("cook", {"paths": [solver.path()], "profile": True, "frame": 3})
+    sim = _sim_row(result, solver)
+    assert sim["resimulated"] is None, sim
+    assert any("unknown" in n for n in result["notes"])
+
+
+def test_houdini_status_reports_process_memory(client):
+    status = client.ok("houdini_status")
+    memory = status["memory"]
+    assert memory["rss_mb"] > 50
+    assert memory["peak_mb"] >= memory["rss_mb"]

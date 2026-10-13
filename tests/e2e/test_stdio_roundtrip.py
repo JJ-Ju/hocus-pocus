@@ -226,7 +226,8 @@ def test_bridge_launch_starts_in_the_work_dir(hython, tmp_path):
         assert connected["hip"]["path"] == f"{work.as_posix()}/untitled.hip"
         assert "note" in connected["hip"]
         error = _json(offline)
-        assert offline.is_error is True and error["code"] == "houdini_offline", error
+        # 1.3 (review 19 papercut 1): a launch pins, so its exit is instance_lost.
+        assert offline.is_error is True and error["code"] == "instance_lost", error
         assert f"pid {connected['pid']}" in error["message"], error
         assert "lost" in error["message"] and error["retryable"] is False
     finally:

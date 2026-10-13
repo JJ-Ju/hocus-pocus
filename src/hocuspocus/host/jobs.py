@@ -3,6 +3,10 @@
 A job is a thread running a sequence of short main-thread steps: it calls ``hou`` only
 through :meth:`JobContext.run_main` (the executor), checks :attr:`JobContext.cancelled`
 between steps and reports progress. Jobs live in memory and do not survive a restart.
+
+Job ids are ``<pid>-<hex>`` (1.3, review 19 papercut 3): the bridge routes ``job`` calls to
+the Houdini whose pid prefixes the id, whichever instance is selected. A bare ``<hex>``
+still finds a job of this process.
 """
 
 from __future__ import annotations
@@ -21,8 +25,9 @@ from hocuspocus.tools.errors import ToolError
 log = logging.getLogger("hocuspocus.host.jobs")
 
 JOB_NOT_FOUND_HINT = (
-    "Jobs live in the Houdini process that started them and do not survive a Houdini "
-    "restart; use job with action 'list' to see current jobs."
+    "Jobs live in the Houdini process that started them (the pid before the '-' in the id) "
+    "and do not survive a Houdini restart; use job with action 'list' to see this "
+    "Houdini's jobs, or {action: 'list', all: true} for every running Houdini's."
 )
 
 
@@ -62,8 +67,9 @@ class JobContext:
 
 
 class Job:
-    def __init__(self, tool: str, label: str = "") -> None:
-        self.id = uuid.uuid4().hex[:12]
+    def __init__(self, tool: str, label: str = "", prefix: str = "") -> None:
+        token = uuid.uuid4().hex[:12]
+        self.id = f"{prefix}-{token}" if prefix else token
         self.tool = tool
         self.label = label
         self.state = "running"  # running | done | failed | cancelled
@@ -80,6 +86,9 @@ class Job:
         self.cancel_event = threading.Event()
         self.thread: threading.Thread | None = None
         self.done_event = threading.Event()
+        self._lock = threading.Lock()
+        """Keeps ``current`` and ``message`` from one :meth:`set_progress` together in a
+        :meth:`status` read from another thread (review 20 N7)."""
 
     def set_progress(self, current: int, total: int, message: str | None = None) -> None:
         """Record ``current`` of ``total`` steps finished; ``progress`` is their ratio.
@@ -88,16 +97,21 @@ class Job:
         """
         current = max(0, int(current))
         total = int(total)
-        self.current = current
-        self.total = total
-        if total > 0:
-            self.progress = max(0.0, min(1.0, current / total))
-        if message is not None:
-            self.message = message
+        with self._lock:
+            self.current = current
+            self.total = total
+            if total > 0:
+                self.progress = max(0.0, min(1.0, current / total))
+            if message is not None:
+                self.message = message
 
     def status(self) -> dict[str, Any]:
         """The job snapshot. ``progress`` (0..1), ``current``, ``total`` and ``message``
         appear once the job has reported them."""
+        with self._lock:
+            return self._status()
+
+    def _status(self) -> dict[str, Any]:
         end = self.finished or time.time()
         data: dict[str, Any] = {
             "job_id": self.id,
@@ -124,15 +138,24 @@ class Job:
 
 
 class JobManager:
-    def __init__(self, executor: Any, *, default_timeout_s: float = 30.0, keep: int = 100) -> None:
+    def __init__(
+        self,
+        executor: Any,
+        *,
+        default_timeout_s: float = 30.0,
+        keep: int = 100,
+        id_prefix: str = "",
+    ) -> None:
         self._executor = executor
+        self._prefix = id_prefix
+        """Prepended to job ids as ``<prefix>-``: the host's pid (1.3)."""
         self._default_timeout_s = default_timeout_s
         self._keep = keep
         self._jobs: OrderedDict[str, Job] = OrderedDict()
         self._lock = threading.Lock()
 
     def start(self, tool: str, fn: Callable[[JobContext], Any], *, label: str = "") -> Job:
-        job = Job(tool, label)
+        job = Job(tool, label, self._prefix)
         ctx = JobContext(job, self._executor, self._default_timeout_s)
 
         def runner() -> None:
@@ -182,7 +205,18 @@ class JobManager:
     def get(self, job_id: str) -> Job:
         with self._lock:
             job = self._jobs.get(job_id)
+            if job is None and self._prefix and "-" not in job_id:
+                job = self._jobs.get(f"{self._prefix}-{job_id}")  # a bare id of this process
         if job is None:
+            owner, dash, _rest = job_id.partition("-")
+            if dash and owner.isdigit() and self._prefix and owner != self._prefix:
+                raise ToolError(
+                    "job_not_found",
+                    f"Job {job_id!r} was started by Houdini pid {owner}; this is pid "
+                    f"{self._prefix}.",
+                    hint="The bridge sends job calls to the Houdini that started the job; "
+                    f"if pid {owner} has exited, its jobs are gone.",
+                )
             raise ToolError("job_not_found", f"No job with id {job_id!r}.", hint=JOB_NOT_FOUND_HINT)
         return job
 
@@ -197,11 +231,27 @@ class JobManager:
         return data
 
     def cancel(self, job_id: str) -> dict[str, Any]:
+        """Request a running job's cancellation. The status says ``cancelled``: whether
+        this call cancelled it; a job that had already finished is left alone, with a
+        note (review 20: a cancel that arrived too late returned a plain ``done``)."""
         job = self.get(job_id)
         if job.state == "running":
             job.cancel_event.set()
             job.message = "cancellation requested"
-        return job.status()
+            return {**job.status(), "cancelled": True}
+        data = job.status()
+        data["cancelled"] = False
+        data["notes"] = [
+            f"Job {job.id} had already finished ({job.state}) when the cancel arrived; "
+            "nothing was cancelled."
+            + (" job {action: result} returns its result." if job.state == "done" else "")
+        ]
+        return data
+
+    def running_count(self) -> int:
+        """How many jobs are still running (``/health`` ``jobs_running``)."""
+        with self._lock:
+            return sum(1 for job in self._jobs.values() if job.state == "running")
 
     def discard(self, job_id: str) -> bool:
         """Forget a finished job (e.g. one whose result was returned synchronously).

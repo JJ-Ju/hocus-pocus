@@ -8,6 +8,9 @@ import pytest
 
 hou = pytest.importorskip("hou")
 
+# Every test here builds and most cook a TOP graph: the slow tier (BIBLE §11).
+pytestmark = pytest.mark.slow
+
 FAIL_SECOND = (
     "if work_item.index == 1:\n"
     "    raise RuntimeError('boom')\n"

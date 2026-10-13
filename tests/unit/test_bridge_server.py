@@ -16,7 +16,7 @@ from hocuspocus.bridge.config import BridgeConfig
 from hocuspocus.bridge.instances import Instance
 from hocuspocus.bridge.instructions import INSTRUCTIONS
 from hocuspocus.bridge.server import Bridge, build_server, get_prompt, list_prompts
-from hocuspocus.tools.catalog import ToolSpec
+from hocuspocus.tools.catalog import MINIMAL_TOOLS, ToolSpec
 from hocuspocus.tools.errors import ToolError
 
 pytestmark = pytest.mark.unit
@@ -105,7 +105,7 @@ class FakeClient:
             "pid": 4242,
             "houdini": "22.0.466",
             "generation": 2,
-            "host_version": "1.2.1",
+            "host_version": "1.3.0",
         }
         self.replies: dict[str, Any] = {}
         self.calls: list[tuple[str, dict, float]] = []
@@ -213,6 +213,9 @@ def test_profile_filters_real_catalogue():
     full = Bridge(BridgeConfig(profile="full"), scan=lambda: [])
     assert {t.profile for t in core.tools} <= {"core"}
     assert len(full.tools) >= len(core.tools)
+    minimal = Bridge(BridgeConfig(profile="minimal"), scan=lambda: [])
+    assert {t.name for t in minimal.tools} == MINIMAL_TOOLS
+    assert {t.name for t in minimal.list_tools()} == MINIMAL_TOOLS
 
 
 def test_tools_list_is_deterministic():
@@ -556,7 +559,7 @@ def test_status_merges_registry_health_and_host():
             "time": {"frame": 1, "fps": 24, "range": [1, 240]},
             "env": {"HIP": "C:/work"},
             "scene_generation": 5,
-            "host_version": "1.2.1",
+            "host_version": "1.3.0",
             "read_only": False,
             "allow_python": True,
         },
@@ -604,7 +607,11 @@ def test_connect_pid_pins_selection():
 def test_connect_unknown_pid_lists_candidates():
     bridge, _c, _l = make_bridge()
     err = structured(bridge.call_tool("houdini_connect", {"pid": 1}))
-    assert err["code"] == "houdini_offline" and err["candidates"] == ["4242"]
+    assert err["code"] == "houdini_offline" and err["retryable"] is False
+    assert err["candidates"] == [
+        {"pid": 4242, "label": "hython", "ui": False, "hip": "C:/work/a.hip"}
+    ]
+    assert "4242 (hython, headless, a.hip)" in err["message"]
 
 
 def test_connect_rejects_two_modes():
@@ -652,7 +659,7 @@ def test_quit_argument_errors(quick_quit):
     err = structured(bridge.call_tool("houdini_connect", {"on_unsaved": "save"}))
     assert err["code"] == "invalid_argument" and "quit" in err["message"]
     err = structured(bridge.call_tool("houdini_connect", {"quit": True, "pid": 1}))
-    assert err["code"] == "houdini_offline" and err["candidates"] == ["4242"]
+    assert err["code"] == "houdini_offline" and err["candidates"][0]["pid"] == 4242
 
 
 def test_disconnect_then_reconnect():
@@ -667,14 +674,16 @@ def test_disconnect_then_reconnect():
     assert bridge.call_tool("node_info", {"paths": ["/obj"]}).is_error is False
 
 
-def test_pinned_instance_exit_falls_back_to_new_one():
+def test_pinned_instance_exit_never_falls_back_to_new_one():
+    """Review 19 papercut 1: a dead pin is instance_lost, not a silent switch."""
     bridge, client, live = make_bridge()
     bridge.call_tool("houdini_connect", {"pid": 4242})
     live.clear()
     live.append(Instance(pid=7777, port=51002, token="t3", started="2026-10-12T12:00:00Z"))
     result = bridge.call_tool("node_info", {"paths": ["/obj"]})
-    assert result.meta["pid"] == 7777
-    assert any("4242" in w for w in result.meta["warnings"])
+    assert structured(result)["code"] == "instance_lost"
+    assert structured(result)["candidates"][0]["pid"] == 7777
+    assert [c[0] for c in client.calls] == ["houdini_status"]  # only the connect's status
 
 
 # -- resources and prompts -------------------------------------------------------------------
@@ -741,6 +750,7 @@ def test_resources_over_mcp_client():
         "houdini://status",
         "houdini://outline",
         "hocuspocus://guide",
+        "hocuspocus://tools",
     }
     assert "houdini://nodetype/{category}/{name}" in {t.uri_template for t in templates}
     assert "HocusPocus drives a live Houdini" in guide.contents[0].text

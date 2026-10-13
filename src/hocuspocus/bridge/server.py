@@ -16,6 +16,7 @@ import threading
 import time
 import traceback
 import uuid
+from collections import OrderedDict
 from collections.abc import Callable, Sequence
 from typing import Any
 from urllib.parse import unquote
@@ -33,7 +34,7 @@ from . import budget
 from . import instances as registry
 from .client import OFFLINE_HINT, REINSTALL_HINT, HostClient
 from .config import BridgeConfig
-from .instructions import INSTRUCTIONS, guide_text
+from .instructions import INSTRUCTIONS, guide_text, tools_text
 from .launch import Launcher
 from .local_tools import LOCAL_TOOLS
 from .validate import coerce_integers, validate
@@ -83,6 +84,114 @@ def launcher_exited_error(record: dict[str, Any]) -> ToolError:
             "hip": record.get("hip") or None,
             "mode": record.get("mode"),
         },
+    )
+
+
+READ_ACTIONS: dict[str, frozenset[str]] = {
+    "job": frozenset({"status", "result", "list"}),
+    "undo": frozenset({"history"}),
+    "hda": frozenset({"list"}),
+    "pdg": frozenset({"status", "workitems"}),
+}
+"""Actions of ``scene=False`` tools that only read (BIBLE §4.1)."""
+READ_WITHOUT: dict[str, tuple[str, ...]] = {
+    "time": ("frame", "range", "fps"),
+    "selection": ("paths",),
+}
+"""``scene=False`` tools that only read when none of these arguments is given."""
+
+
+def mutates(spec: ToolSpec, args: dict[str, Any]) -> bool:
+    """Whether a call may change a Houdini (its scene, files on disk, or work it runs).
+
+    With several live instances and none pinned these calls refuse with
+    ``ambiguous_instance`` (review 19 papercut 2); reads go to the preferred instance.
+    ``viewport_capture`` counts as a read: it leaves no nodes, undo step or dirty flag."""
+    if spec.read_only or spec.bridge_local or spec.name == "viewport_capture":
+        return False
+    if spec.name in READ_ACTIONS:
+        return args.get("action") not in READ_ACTIONS[spec.name]
+    if spec.name in READ_WITHOUT:
+        return any(args.get(key) is not None for key in READ_WITHOUT[spec.name])
+    return True
+
+
+JOB_ID_RE = re.compile(r"^(\d+)-[0-9A-Za-z]+$")
+"""A host job id, ``<pid>-<hex>`` (1.3): the pid is the Houdini that runs the job."""
+JOB_CACHE_SIZE = 200
+"""How many job snapshots the bridge keeps, to report a job whose Houdini has exited."""
+JOB_SNAPSHOT_KEYS = (
+    "job_id", "tool", "label", "state", "progress", "current", "total", "message", "elapsed_s",
+)  # fmt: skip
+
+
+def job_owner(name: str, args: dict[str, Any]) -> int | None:
+    """The pid a ``job`` call must go to, from its ``<pid>-<id>`` job id; else None."""
+    if name != "job":
+        return None
+    match = JOB_ID_RE.match(str(args.get("job_id") or ""))
+    return int(match.group(1)) if match else None
+
+
+EVENTS_CURSOR_RE = re.compile(r"^(?:(\d+):)?(\d+)$")
+"""An ``events`` cursor: ``<pid>:<seq>`` as the bridge returns it, or a bare ``<seq>``."""
+
+
+def events_cursor(args: dict[str, Any]) -> tuple[int | None, int]:
+    """``(pid or None, seq)`` from ``events`` ``since``; raises ``invalid_argument``."""
+    since = args.get("since", 0)
+    if isinstance(since, int) and not isinstance(since, bool) and since >= 0:
+        return None, since
+    match = EVENTS_CURSOR_RE.match(since) if isinstance(since, str) else None
+    if match is None:
+        raise ToolError(
+            "invalid_argument",
+            f"since must be the next_since of an earlier events call ('<pid>:<seq>') or a seq "
+            f"number, not {since!r}.",
+            hint="pass next_since back as since, or omit it to read from the start",
+        )
+    return (int(match.group(1)) if match.group(1) else None), int(match.group(2))
+
+
+def tag_events(
+    payload: dict[str, Any], inst: registry.Instance, foreign: tuple[int, str] | None
+) -> dict[str, Any]:
+    """``next_since`` as ``<pid>:<seq>``, and the reset note when ``since`` was a cursor
+    of another Houdini (review 19 papercut 8; the host's seq restarts per process)."""
+    out = dict(payload)
+    if isinstance(out.get("next_since"), int):
+        out["next_since"] = f"{inst.pid}:{out['next_since']}"
+    if foreign is not None:
+        pid, since = foreign
+        out["reset"] = True
+        out["note"] = (
+            f"since {since} is a cursor of Houdini pid {pid}; this is pid {inst.pid}, whose "
+            "seq numbers are its own, so its events are listed from the start."
+        )
+    return out
+
+
+def instance_meta(inst: registry.Instance) -> dict[str, Any]:
+    """``_meta.instance``: which Houdini answered (review 19 papercut 4)."""
+    out: dict[str, Any] = {"pid": inst.pid, "label": inst.label}
+    if inst.name:
+        out["name"] = inst.name
+    return out
+
+
+def ambiguous_error(tool: str, sel: registry.Selection) -> ToolError:
+    """``ambiguous_instance``: a call that changes a scene, several instances, no pin."""
+    ordered = list(sel.candidates)
+    calls = "; ".join(
+        f'houdini_connect {{"pid": {inst.pid}}} pins {inst.describe()}' for inst in ordered
+    )
+    return ToolError(
+        "ambiguous_instance",
+        f"{len(ordered)} Houdini instances are running and none is pinned, so {tool} (which "
+        "changes a scene) was not sent to a guess. Pin the one you mean, then repeat the call.",
+        hint=calls,
+        candidates=[inst.candidate() for inst in ordered],
+        retryable=False,
     )
 
 
@@ -144,7 +253,7 @@ class Bridge:
         launches: registry.LaunchLog | None = None,
     ) -> None:
         self.config = config or BridgeConfig.load()
-        profile = self.config.profile if self.config.profile in ("core", "full") else "core"
+        profile = self.config.profile if self.config.profile in catalog.PROFILES else "core"
         self.tools: tuple[ToolSpec, ...] = (
             tuple(tools) if tools is not None else catalog.for_profile(profile)
         )
@@ -156,6 +265,9 @@ class Bridge:
             self.config.hfs or None, scan=self.scan, launches=self.launches
         )
         self.preferred_pid: int | None = None
+        """The pinned pid (``houdini_connect {pid}`` or ``{launch}``); BIBLE §3.6."""
+        self.pinned: registry.Instance | None = None
+        """The pinned instance as last seen, to name it once it has exited."""
         self.last_target: registry.Instance | None = None
         """The instance the last forwarded call went to, to name it if it exits."""
         self._previous_target: registry.Instance | None = None
@@ -164,10 +276,44 @@ class Bridge:
         self._verified: set[tuple[int, int, str]] = set()
         self._lock = threading.Lock()
         self.progress_interval_s = PROGRESS_INTERVAL_S
+        self._jobs: OrderedDict[str, dict[str, Any]] = OrderedDict()
+        """job_id -> {pid, label, status}: the last snapshot of every job this bridge saw."""
         self._inflight: dict[str, registry.Instance] = {}
         """request_id -> the instance a call in flight was sent to (progress polling)."""
 
     # -- instances -----------------------------------------------------------------------
+
+    def pin(self, inst: registry.Instance | None) -> None:
+        """Pin ``inst`` (or clear the pin): only an explicit ``houdini_connect`` calls this."""
+        self.pinned = inst
+        self.preferred_pid = inst.pid if inst is not None else None
+
+    def lost_error(self, live: list[registry.Instance]) -> ToolError:
+        """``instance_lost``: the pinned Houdini exited and the bridge will not pick another
+        (review 19 papercut 1)."""
+        pid = self.preferred_pid
+        pinned = self.pinned if self.pinned is not None and self.pinned.pid == pid else None
+        label = pinned.label if pinned is not None and pinned.label else "houdini"
+        hip = pinned.hip if pinned is not None else ""
+        ordered = registry.sort_preferred(live)
+        choices = "; ".join(inst.describe() for inst in ordered) or "none is running"
+        saved = hip and not hip.replace("\\", "/").endswith("/untitled.hip")
+        launch = (
+            f"houdini_connect {{launch: {{mode: 'headless', hip: '{hip}'}}}} reopens its last "
+            "saved scene"
+            if saved
+            else "houdini_connect {launch} starts one"
+        )
+        return ToolError(
+            "instance_lost",
+            f"The pinned Houdini pid {pid} ({label}) has exited; changes made in it since its "
+            f"last save are lost. Not switching to another Houdini on its own. Live: {choices}.",
+            hint=f"houdini_connect {{pid}} pins one of the candidates, {launch}, "
+            "houdini_connect {} returns to automatic selection",
+            candidates=[inst.candidate() for inst in ordered],
+            retryable=False,
+            detail={"pid": pid, "label": label, "hip": hip or None},
+        )
 
     def client_for(self, inst: registry.Instance) -> HostClient:
         return self.client_factory(inst.port, inst.token)
@@ -200,8 +346,28 @@ class Bridge:
             # A ghost entry this bridge never talked to: nothing "exited" from its view.
             self.last_target = self._previous_target
 
-    def resolve(self) -> tuple[registry.Instance, list[str]]:
-        """Pick the target instance (BIBLE §3.3 rule 3) or raise ``houdini_offline``."""
+    def resolve(
+        self, tool: str = "", args: dict[str, Any] | None = None
+    ) -> tuple[registry.Instance, list[str]]:
+        """Pick the target instance (BIBLE §3.3 rule 3) or raise ``houdini_offline``,
+        ``instance_lost`` (a dead pin) or ``ambiguous_instance`` (``tool`` changes a scene,
+        several instances run and none is pinned)."""
+        inst, warnings, _ambiguous = self._resolve(tool, args)
+        return inst, warnings
+
+    def _resolve(
+        self, tool: str = "", args: dict[str, Any] | None = None, target_pid: int | None = None
+    ) -> tuple[registry.Instance, list[str], str | None]:
+        """:meth:`resolve`, plus the ambiguity warning when the choice was a guess (a read
+        on the preferred one of several unpinned instances). ``target_pid`` (a job's
+        Houdini) bypasses the selection: that instance or ``instance_lost``."""
+        if target_pid is not None:
+            live = self.scan()
+            owner = next((inst for inst in live if inst.pid == target_pid), None)
+            if owner is None:
+                raise self.job_lost_error(target_pid, str((args or {}).get("job_id")), live)
+            self._check_hp(owner)
+            return owner, [], None
         if self.detached:
             raise ToolError(
                 "houdini_offline",
@@ -210,6 +376,8 @@ class Bridge:
             )
         live = self.scan()
         sel = registry.select(live, self.preferred_pid)
+        if sel.lost_pid is not None:
+            raise self.lost_error(live)
         warnings = list(sel.warnings)
         exited = self._exited_target(live)
         if sel.instance is None:
@@ -225,15 +393,21 @@ class Bridge:
                 retryable=False,  # repeating cannot work until something is launched
             )
         inst = sel.instance
+        spec = self._by_name.get(tool)
+        if sel.ambiguous and spec is not None and mutates(spec, args or {}):
+            raise ambiguous_error(tool, sel)
         self._previous_target = self.last_target
-        if self.preferred_pid is not None and inst.pid != self.preferred_pid:
-            self.preferred_pid = None  # the pinned instance exited; fall back to auto-selection
-        elif exited is not None and exited.pid != inst.pid:
+        if exited is not None and exited.pid != inst.pid:
             warnings.append(
                 f"The Houdini you were driving (pid {exited.pid}) has exited; changes made in it "
                 f"since its last save are lost. Now using pid {inst.pid}."
             )
         self.last_target = inst
+        self._check_hp(inst)
+        return inst, warnings, (sel.warnings[0] if sel.ambiguous and sel.warnings else None)
+
+    @staticmethod
+    def _check_hp(inst: registry.Instance) -> None:
         if inst.hp != catalog.HP_RPC_VERSION:
             raise ToolError(
                 "version_mismatch",
@@ -241,7 +415,92 @@ class Bridge:
                 f"hp/v{catalog.HP_RPC_VERSION}.",
                 hint=REINSTALL_HINT,
             )
-        return inst, warnings
+
+    # -- jobs (review 19 papercut 3) -------------------------------------------------------
+
+    def job_lost_error(self, pid: int, job_id: str, live: list[registry.Instance]) -> ToolError:
+        """``instance_lost`` for a job whose Houdini has exited, with its last known status."""
+        cached = self._jobs.get(job_id)
+        label = cached["label"] if cached else ""
+        if not label and self.pinned is not None and self.pinned.pid == pid:
+            label = self.pinned.label
+        label = label or "houdini"
+        last = cached["status"] if cached else None
+        message = (
+            f"Job {job_id} ran in Houdini pid {pid} ({label}), which has exited; its jobs are gone."
+        )
+        if last:
+            steps = (
+                f", {last['current']}/{last['total']}"
+                if last.get("current") is not None and last.get("total")
+                else ""
+            )
+            note = f", {last['message']}" if last.get("message") else ""
+            message += f" Last status seen: {last.get('state')}{steps}{note}."
+        ordered = registry.sort_preferred(live)
+        return ToolError(
+            "instance_lost",
+            message,
+            hint="start the work again on a live Houdini (houdini_connect {pid} or {launch}, "
+            "then repeat the render, cook or pdg call); outputs already written stay on disk",
+            candidates=[inst.candidate() for inst in ordered],
+            retryable=False,
+            detail={"pid": pid, "label": label, "job_id": job_id, "last_status": last},
+        )
+
+    def _remember_jobs(self, inst: registry.Instance, payload: dict[str, Any]) -> None:
+        rows = [payload] if isinstance(payload.get("job_id"), str) else []
+        if isinstance(payload.get("jobs"), list):
+            rows += [row for row in payload["jobs"] if isinstance(row, dict)]
+        for row in rows:
+            job_id = row.get("job_id")
+            if not isinstance(job_id, str) or "state" not in row:
+                continue
+            snapshot = {key: row[key] for key in JOB_SNAPSHOT_KEYS if key in row}
+            self._jobs[job_id] = {"pid": inst.pid, "label": inst.label, "status": snapshot}
+            self._jobs.move_to_end(job_id)
+        while len(self._jobs) > JOB_CACHE_SIZE:
+            self._jobs.popitem(last=False)
+
+    def _job_list_all(self) -> tuple[bool, dict[str, Any], dict[str, Any]]:
+        """``job {action: list, all: true}``: every live instance's jobs, GUI first."""
+        jobs: list[dict[str, Any]] = []
+        instances: list[dict[str, Any]] = []
+        errors: list[dict[str, Any]] = []
+        for inst in registry.sort_preferred(self.scan()):
+            try:
+                if (inst.pid, inst.port, inst.token) not in self._verified:
+                    self.verify(inst)
+                ok, payload, _meta = self.client_for(inst).call(
+                    "job", {"action": "list"}, self.config.default_timeout_s
+                )
+            except registry.StaleEntry:
+                continue
+            except ToolError as exc:
+                errors.append({"pid": inst.pid, "code": exc.code, "message": exc.message})
+                continue
+            if not ok:
+                errors.append(
+                    {
+                        "pid": inst.pid,
+                        "code": payload.get("code"),
+                        "message": payload.get("message"),
+                    }
+                )
+                continue
+            rows = [
+                dict(row, pid=inst.pid)
+                for row in payload.get("jobs") or []
+                if isinstance(row, dict)
+            ]
+            self._remember_jobs(inst, {"jobs": rows})
+            jobs += rows
+            running = sum(1 for row in rows if row.get("state") == "running")
+            instances.append(dict(instance_meta(inst), jobs=len(rows), running=running))
+        out: dict[str, Any] = {"jobs": jobs, "instances": instances}
+        if errors:
+            out["errors"] = errors
+        return True, out, {}
 
     def _exited_target(self, live: list[registry.Instance]) -> registry.Instance | None:
         last = self.last_target
@@ -282,9 +541,15 @@ class Bridge:
         self, name: str, args: dict[str, Any], request_id: str | None = None
     ) -> tuple[bool, dict[str, Any], dict[str, Any]]:
         request_id = request_id or uuid.uuid4().hex
+        if name == "job":
+            if args.get("all") and args.get("action") == "list":
+                return self._job_list_all()
+            args = {key: value for key, value in args.items() if key != "all"}
+        target_pid = job_owner(name, args)
+        cursor = events_cursor(args) if name == "events" else None
         stale: list[str] = []
         for _attempt in range(MAX_STALE_ENTRIES):
-            inst, warnings = self.resolve()
+            inst, warnings, ambiguous = self._resolve(name, args, target_pid)
             client = self.client_for(inst)
             try:
                 if (inst.pid, inst.port, inst.token) not in self._verified:
@@ -293,10 +558,16 @@ class Bridge:
                 stale.append(str(exc))
                 continue  # deleted; select again
             self._inflight[request_id] = inst
+            sent, foreign = args, None
+            if cursor is not None:
+                # The host keeps a bare seq; another Houdini's cursor reads from the start.
+                cursor_pid, seq = cursor
+                foreign = None if cursor_pid in (None, inst.pid) else (cursor_pid, args["since"])
+                sent = dict(args, since=0 if foreign else seq)
             try:
                 ok, payload, meta = client.call(
                     name,
-                    args,
+                    sent,
                     self._timeout(args),
                     request_id,
                     max_response_bytes=self.config.max_response_bytes,
@@ -317,6 +588,17 @@ class Bridge:
                 self._inflight.pop(request_id, None)
             meta = dict(meta)
             meta.setdefault("pid", inst.pid)
+            meta["instance"] = instance_meta(inst)
+            if ok:
+                self._remember_jobs(inst, payload)
+                if cursor is not None:
+                    payload = tag_events(payload, inst, foreign)
+            if ambiguous and ok:
+                # _meta is not shown to the model by every client: say it in the result too.
+                payload = {
+                    **payload,
+                    "_instance": dict(instance_meta(inst), ui=inst.ui, warning=ambiguous),
+                }
             if stale:
                 warnings = [f"Removed stale registry entries: {'; '.join(stale)}.", *warnings]
             if warnings:
@@ -392,7 +674,15 @@ class Bridge:
                         "internal", f"Bridge-local tool {name!r} has no implementation."
                     )
                 with self._lock:
-                    return True, impl(self, args), {}
+                    result = impl(self, args)
+                connected = result.get("connected")
+                meta = {}
+                if isinstance(connected, dict) and isinstance(connected.get("pid"), int):
+                    meta["instance"] = {
+                        "pid": connected["pid"],
+                        "label": connected.get("label", ""),
+                    }
+                return True, result, meta
             return self.forward(name, args, request_id)
         except ToolError as exc:
             return False, exc.to_dict(), {}
@@ -482,7 +772,14 @@ class Bridge:
             "hocuspocus://guide",
             "guide",
             "text/markdown",
-            "The HocusPocus operating manual with tool reference.",
+            "The HocusPocus operating manual: instructions and recipes (several Houdinis, "
+            "Copernicus, spare parms).",
+        ),
+        (
+            "hocuspocus://tools",
+            "tools",
+            "text/markdown",
+            "The tool reference: every tool's arguments, notes and examples (large).",
         ),
     )
     TEMPLATES: tuple[tuple[str, str, str], ...] = (
@@ -527,13 +824,10 @@ class Bridge:
         return None
 
     def read_resource(self, uri: str) -> types.ReadResourceResult:
-        if uri == "hocuspocus://guide":
+        if uri in ("hocuspocus://guide", "hocuspocus://tools"):
+            text = guide_text() if uri == "hocuspocus://guide" else tools_text(self.tools)
             return types.ReadResourceResult(
-                contents=[
-                    types.TextResourceContents(
-                        uri=uri, text=guide_text(), mime_type="text/markdown"
-                    )
-                ]
+                contents=[types.TextResourceContents(uri=uri, text=text, mime_type="text/markdown")]
             )
         route = self.route_resource(uri)
         if route is None:
@@ -589,9 +883,13 @@ _PROMPTS: dict[str, tuple[str, list[tuple[str, str, bool]], str]] = {
         "Summarise the open Houdini scene: hip file, networks, problems.",
         [("root", "Network to start from (default /obj)", False)],
         "Inspect the Houdini scene under {root}. Call houdini_status first (hip file, frame, "
-        "instance). Then network_describe on {root} with depth 2, and problems on {root}. "
-        "Summarise: what each top-level network builds, the display/render nodes, and any "
-        "errors or warnings with the node path and the likely cause. Do not modify anything.",
+        "instance). If it warns that several Houdinis are running and none is pinned, ask the "
+        "user which one to inspect, or pin the GUI session with houdini_connect {{pid}}, before "
+        "going on. Read the resource houdini://outline (or call network_describe {{root: "
+        '"{root}", format: "outline"}}) for the tree, then problems on {root}. Describe one '
+        "network in more detail only when the summary needs it. Summarise: what each top-level "
+        "network builds, the display/render nodes, and any errors or warnings with the node "
+        "path and the likely cause. Do not modify anything.",
     ),
     "build_sop_chain": (
         "Build a SOP network from a plain-language description, then verify it.",
@@ -606,18 +904,22 @@ _PROMPTS: dict[str, tuple[str, list[tuple[str, str, bool]], str]] = {
         "Build this in Houdini: {description}. Parent network: {parent}. Plan the SOP chain "
         "first, then create it with one node_create call (items with parms and inputs; set the "
         "display flag on the last node), or network_build for larger graphs. Use "
-        "node_type_search when unsure of a type name. Then cook the display node, check "
-        "geo_info (counts, bbox), fix any errors from the results, and finish with "
-        "viewport_capture. Report the final node paths.",
+        "node_type_search when unsure of a type name. node_create already reports each "
+        "node's errors and cook state: fix any errors it shows (cook only nodes it reports "
+        "not_cooked), check geo_info on the display node (counts, bbox), and finish with "
+        'viewport_capture {{"fit": "all"}} so the new geometry is framed. Report the final node '
+        "paths.",
     ),
     "debug_red_node": (
         "Find out why a node has errors and fix it.",
         [("path", "Node path, e.g. /obj/geo1/attribwrangle1", True)],
-        "The node {path} shows errors. Call node_info on it (include errors, parms, inputs) "
-        "and problems on its parent. Read the error text, inspect upstream inputs and any "
-        "expressions or file paths involved, and explain the root cause. Propose the smallest "
-        "fix; apply it with parm_set/node_connect only if it is unambiguous, then cook {path} "
-        "to confirm it is clean.",
+        "The node {path} shows errors. Call node_info on it (include errors, parms, inputs). "
+        "Read the error text, inspect upstream inputs and any expressions or file paths "
+        "involved (problems on its parent when the cause may lie upstream), and explain the "
+        "root cause. Propose the smallest fix; apply it with parm_set/node_connect only if it "
+        "is unambiguous: the result re-cooks the node, so its errors confirm the fix. In a "
+        "wrangle, ch() of a parm that does not exist is 0 without an error: add the parms it "
+        "reads with node_edit spare_parms and set them.",
     ),
     "turntable_preview": (
         "Set up a turntable camera around an object and capture preview frames.",
@@ -625,11 +927,16 @@ _PROMPTS: dict[str, tuple[str, list[tuple[str, str, bool]], str]] = {
             ("path", "Object or SOP to orbit, e.g. /obj/geo1", True),
             ("frames", "Frame count for a full turn (default 48)", False),
         ],
-        "Create a turntable preview of {path} over {frames} frames. Read geo_info for its "
-        "bounding box, then create a null at the bbox centre with ry keyed 0→360 over frames "
-        "1–{frames} and a camera parented to it, framed to the bbox. Set the playbar range with "
-        "time. Capture viewport_capture at the first frame and at a quarter turn using that "
-        "camera, and show both images.",
+        "Create a turntable preview of {path} over {frames} frames. Check houdini_status (ui: "
+        "GUI or headless) and the resource houdini://outline: if {path}'s display flag is off, "
+        "turn it on with node_edit (flags: {{display: true}}) and say so. Other displayed "
+        "objects can hide it: turn their display flags off for the captures and back on "
+        "afterwards, or tell the user which objects block the view. Read geo_info on {path} "
+        "for its bounding box, then create a null at the bbox centre with ry keyed 0→360 over "
+        "frames 1–{frames} and a camera parented to it, framed to the bbox, with resx/resy set "
+        "(e.g. 1280×720). Do not change the playbar range in a GUI session: each capture takes "
+        "frame. Capture viewport_capture {{camera, frame, resolution: [resx, resy]}} at the "
+        "first frame and at a quarter turn, and show both images.",
     ),
 }
 _PROMPT_DEFAULTS = {"root": "/obj", "parent": "a new geo node under /obj", "frames": "48"}

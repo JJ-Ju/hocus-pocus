@@ -4,6 +4,9 @@
   Houdini 22.x, and exposes it as the ``hython`` fixture.
 * Marks tests by directory (``unit``, ``houdini``, ``e2e``) and skips ``houdini``/``e2e``
   tests when no hython is available, so contributors without a licence get green.
+* Keeps ``slow`` tests (visual child renders, stage captures, Karma, PDG cooks, 1M-point
+  geometry, deliberate timeouts) out of a default run: ``--runslow`` adds them and
+  ``-m slow`` runs only them (BIBLE §11).
 """
 
 from __future__ import annotations
@@ -62,16 +65,37 @@ def find_hython() -> Path | None:
 HYTHON = find_hython()
 
 
+def pytest_addoption(parser: pytest.Parser) -> None:
+    parser.addoption(
+        "--runslow",
+        action="store_true",
+        default=False,
+        help="also run tests marked slow (deselected by default; -m slow runs only them)",
+    )
+
+
 def pytest_configure(config: pytest.Config) -> None:
     for line in (
         "unit: pure-Python tests, no Houdini",
         "houdini: needs hython (run with `hython -m pytest tests/integration`)",
         "e2e: spawns hython and the stdio bridge",
+        "slow: over ~1.5 s (renders, captures, PDG cooks); run with --runslow or -m slow",
     ):
         config.addinivalue_line("markers", line)
 
 
+def _wants_slow(config: pytest.Config) -> bool:
+    """``--runslow``, or a ``-m`` expression that names ``slow`` (``-m slow``,
+    ``-m "not slow"``), which then decides on its own."""
+    return bool(config.getoption("--runslow")) or "slow" in (config.option.markexpr or "")
+
+
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    if not _wants_slow(config):
+        slow = [item for item in items if "slow" in item.keywords]
+        if slow:
+            config.hook.pytest_deselected(items=slow)
+            items[:] = [item for item in items if "slow" not in item.keywords]
     skip = pytest.mark.skip(reason="hython not found (set HOUDINI_HYTHON or HFS)")
     for item in items:
         parts = Path(str(item.fspath)).parts

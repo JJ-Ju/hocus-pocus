@@ -3,6 +3,236 @@
 This project uses [Semantic Versioning](https://semver.org/). The 0.9 compatibility
 policy does not apply to 1.0.
 
+## 1.3.0 (2026-10-12)
+
+1.3 put three more workloads through the MCP tools, each on 1.2.1:
+
+- an FX sim cached with a File Cache and flipbooked
+  (`docs/redesign/review/17-fx-sim-cache-eval.md`);
+- a Copernicus image network written to disk and brought back as pixels
+  (`18-copernicus-eval.md`);
+- a GUI Houdini and a headless worker driven from one session, with the four shipped
+  prompts followed as written (`19-two-instances-and-prompts-eval.md`).
+
+This release fixes what they found and the known items of the plan
+(`docs/redesign/plan-1.3.md`): dynamic menus, keyed components in `events`, a `minimal`
+profile with a 12-word cap on argument descriptions, and a fast/slow split of the
+integration tier. Driving several Houdinis is now explicit: the bridge never switches
+instance on its own, and job ids and `events` cursors say which Houdini they belong to.
+Read **Upgrading from 1.2** if an agent prompt or script runs more than one Houdini,
+polls jobs, keeps `events` cursors or presses buttons. The contract decisions are D25 to
+D29 in `docs/BIBLE.md` §15.
+
+### Contract changes
+
+- **New error codes `instance_lost` and `ambiguous_instance`; the bridge never switches
+  instance on its own.**
+  - `houdini_connect {pid}` (or `{launch}`) pins that Houdini. In 1.2, when a pinned
+    Houdini exited, the bridge moved to another one silently, so in review 19 a
+    `parm_set` meant for a killed worker changed the user's GUI scene. Every call now
+    returns `instance_lost`, naming the dead pid and label, with the live instances as
+    `candidates: [{pid, label, ui, hip}]` and `retryable: false`. `houdini_status`
+    reports `connected: null` and `lost: {pid, label}`. Only an explicit
+    `houdini_connect` (`{pid}`, `{name}`, `{launch}`, `{}` or `{disconnect: true}`)
+    clears the pin.
+  - With several live Houdinis and none pinned, a call that changes a scene refuses with
+    `ambiguous_instance`. The error lists the candidates and the `houdini_connect
+    {"pid": …}` call for each. In 1.2 the newest instance was picked, so an agent that
+    skipped `houdini_status` edited a throwaway worker.
+- **Every result names its Houdini.** A result a host answered carries `_meta.instance:
+  {pid, label, name?}`, `houdini_status` and `houdini_connect` included. A read sent to a
+  guessed instance (several running, none pinned) goes to the GUI session first, then the
+  newest, and also carries `_instance: {pid, label, ui, warning}` in the result itself,
+  because not every client shows `_meta` to the model. The reading forms of the
+  `scene=False` tools count as reads: `time` and `selection` without arguments, `job`
+  status/result/list, `undo history`, `hda list` and `pdg` status/workitems. So does
+  `viewport_capture`.
+- **Job ids are `<pid>-<id>`.** The bridge sends `job` calls (and `houdini://job/{id}`)
+  to the Houdini whose pid starts the id, whatever is selected or pinned. When that
+  Houdini has exited, the answer is `instance_lost` with the last status the bridge saw in
+  `detail.last_status`. A bare `<id>` still finds a job of the selected Houdini.
+- **`events` cursors are `<pid>:<seq>`.** Each Houdini numbers its own events from 1, so
+  in 1.2 a `since` carried over from the GUI silently skipped a worker's first events.
+  `next_since` is now `"<pid>:<seq>"` and `since` takes it back. A cursor from another
+  Houdini returns that Houdini's events from the start, with `reset: true` and a note. A
+  bare integer still works, and the host keeps plain integers.
+- **`ParmTupleChanged` names the changed components.** On a multi-component tuple the
+  event carries `components` (those whose value or keys changed; a burst within 0.1 s is
+  one event with their union) and `keyed` (those of them with keyframes now) instead of
+  `count`.
+- **`parm_set press` returns what the press did.** A pressed button returns `pressed`
+  and `side_effects: {parm: [old, new]}` instead of `value`, `raw` and `is_default`. On a
+  writer's save button (File Cache Save to Disk, a ROP SOP's Render), the output files
+  over its frame range are checked afterwards: the result has `outputs_summary`, or the
+  call fails with `cook_failed` and `detail.missing` when the press wrote nothing.
+- **`render` accepts writer SOPs.** A File Cache, `rop_geometry` or `rop_alembic` SOP
+  renders over its own frame range unless `frames` is given, as a job with per-frame
+  progress and cancel. A File Cache renders through the ROP inside it (no `output`
+  override), then turns on Load from Disk as its Save to Disk button does, and reports
+  `side_effects`.
+- **`cook` on writers says it wrote nothing.** Cooking a ROP or a File Cache writes no
+  files. The result now carries a note naming `render` and `parm_set press` on the
+  node's execute button. In review 17, `cook {frame_range}` on a File Cache returned
+  `ok: true` and left no cache on disk.
+- **`geo_info` on a Cop node returns an image summary**: `kind: image`, `layer_type`,
+  `resolution`, `data_window`, `pixel_scale`, `storage`, `border`, per-channel `{min,
+  max, mean}` of the first output, and `other_outputs`. The output schema no longer
+  requires `point_count`, `prim_count` and `vertex_count`.
+- **`viewport_capture` `fit` has no schema default.** The schema said `fit: "all"`, but
+  the viewer never applied it: without `fit` the viewer captures the view as it is and
+  the OpenGL ROP frames all. The schema now matches that behaviour.
+- **`hocuspocus://guide` is split from the tool reference.** The guide is the
+  instructions, the resources and recipes (two Houdinis, Copernicus, spare parms), at most
+  8 KB. In 1.2 it was 52 KB because the whole tool reference followed it. The reference
+  is the new resource `hocuspocus://tools`, with every tool's `notes` and examples for the
+  bridge's profile.
+- **`minimal` profile.** `profile = "minimal"` lists and allows 14 tools for clients with
+  a small context: `houdini_status`, `houdini_connect`, `hip_open`, `hip_save`,
+  `node_find`, `node_info`, `node_create`, `node_connect`, `parm_get`, `parm_set`, `cook`,
+  `geo_info`, `viewport_capture` and `houdini_python`. The profiles nest (minimal ⊂ core ⊂
+  full). `tools/list` is 20.4 KB on `minimal`, 36.6 KB on `core` and 40.0 KB on `full`,
+  output schemas declared. Argument descriptions are now at most 12 words, and a unit test
+  enforces it. Their detail moved to `notes`, which `docs/tools.md` and
+  `hocuspocus://tools` render and `tools/list` leaves out.
+- **Ramp values are rounded.** Ramp keys and values come back at 6 significant digits,
+  without `raw` (which was the key count), and `parm_get include: [ramp]` no longer
+  repeats the whole ramp under both `value` and `ramp`. One ramp edit is one `events`
+  entry instead of one per key parm.
+
+### Added
+
+- `viewport_capture {cop_path}` looks at a Cop node, or a COP network's display node. It
+  renders through a temporary `rop_image` in its network (about 0.2 s, outside undo and
+  `events`, deleted afterwards) and returns the PNG at the COP's own resolution with
+  `scene: cop` and `layer: {layer_type, resolution, data_window}`. A capture with no
+  `camera`, `lop_path` or `cop_path` names the COP networks under `/img` in a note, and a
+  Cop node passed as `camera` or `lop_path` points at `cop_path`.
+- `geo_read {frame}` reads at that frame without moving the playbar.
+- `cook {wait_s}`, as on `render`: how long the call waits before returning the job;
+  `0` returns it at once. With `summary: bbox`, a row appears only when the counts, the
+  bbox or the errors change, and its `through` names the last frame it stands for.
+- `houdini_status` reports `connected.memory: {rss_mb, peak_mb}`, the Houdini process's
+  resident and peak memory from the OS counters, so an agent can watch a sim cache fill.
+- `houdini_connect {pid, name}` names a Houdini. The name is stored in its registry
+  entry and shown in `houdini_status` and `_meta.instance`; `{name}` alone pins it.
+  `houdini_status.instances[]` rows gain `busy` (the main thread has been held for at
+  least 1 s) and `jobs_running`, both from each host's `/health`, plus `name` and
+  `selected`.
+- `job {action: "list", all: true}` lists the jobs of every live Houdini, each row with
+  its `pid`, plus `instances: [{pid, label, jobs, running}]`.
+- Dynamic menus are evaluated. In `node_type_info detail: full`, a script menu (such as
+  `pdg_cachemode`) or a menu built from input geometry (a SOP group menu) is evaluated on
+  a muted, undo-free temporary instance and returned as `menu: {items, dynamic: true}`.
+  `parm_get include: [menu]` reads the live parm (cooking a SOP first) and marks it
+  `dynamic`. A menu that is still empty returns `items: []` with a note.
+- String parms whose menu only the node builds, such as the Copernicus `signature`, list
+  their menu and are validated like other menus: a token or a label is accepted, and
+  anything else is `invalid_value`.
+- `node_type_search` knows Copernicus. Cop types match the labels of their menus
+  (`remap`'s Threshold, `blend`'s Over), and compositing words name their Cop type
+  (threshold: `remap`, gradient: `ramp`, composite or over: `blend`, text: `font`, write:
+  `rop_image`). A network type's row adds `child_category` and `typical_parents`
+  (`copnet`: `/img`). Results with legacy `Cop2` types carry a note that Copernicus is
+  `Cop`.
+- A compact `node_type_info` over 8 KB leaves out the parms that a menu hides at its
+  default, such as the per-pattern parms of the other `tilepattern` patterns. It lists
+  them in `variants: {menu parm: parms left out}` with a note. Pass `parms` or `detail:
+  full` to see them.
+- `cook {profile: true}` on a node that simulates (a DOP network, or a solver SOP such as
+  `pyrosolver`) adds `simulation: {dopnet, resimulated, frame}` and a note on whether the
+  force-cook re-simulated or read frames already in the simulation cache.
+- `parm_set press` runs the callback script of any parm that has one, menus and toggles
+  included (`pyrosource` `initialize`). With `value`, it sets the value first. A plain set
+  of a menu or toggle with a callback carries a note that the callback did not run.
+- Partial results on cancel. A cancelled `cook` job's result is the `cancelled` error
+  with `detail: {last_status, partial: {frames_cooked, results, frames?}}`, and a
+  cancelled `render` job's has `detail: {last_status, partial: {outputs_summary}}`, the
+  files written before the cancel.
+- The integration tier is split into a fast set and a slow set. A default `hython -m
+  pytest` run deselects tests marked `slow`: 386 tests in about 50 s, against 4 minutes
+  before. `--runslow` adds the 60 slow tests and `-m slow` runs only them. `houdini.yml`
+  runs the two sets as separate steps. A new e2e test drives two headless Houdinis
+  through one bridge session.
+
+### Fixed
+
+- **Save to Disk failed silently (review 17 P0-2).** A File Cache Save to Disk press
+  into a directory that could not be created returned success. The press now checks the
+  output files and fails with `cook_failed` listing the missing ones.
+- **Callback menus (review 17 P1-4).** Setting `pyrosource` `initialize` stored the token
+  and skipped the callback that fills the attribute multiparm, so the sim sourced nothing,
+  and `press` refused menus. See `press` above.
+- **`geo_info` on sims (review 17 P1-7).** `geo_info` listed only 3 of a pyro sim's 6
+  volumes. It now lists every volume and VDB as a compact row under `volume_columns` and
+  `vdb_columns` (at most 100 each, with `volume_total` or `vdb_total` beyond that).
+  Detail attribute values that are `hou` vectors and matrices come back as lists, and a
+  dict over 200 characters as `{elided, keys}`; a pyro sim's `volvis` dict had been about
+  1,350 B.
+- **`render` on Cop nodes (review 18 papercuts 2, 7).** `render` on a Cop node that is
+  not a ROP pointed at Karma. Its error now lists the `rop_image` nodes in the network as
+  `candidates`. COP image ROPs no longer get the "Scene has no lights" note.
+- **`render` thumbnails of TIFFs (review 18).** A thumbnail PIL cannot read (a float
+  TIFF) is converted with `iconvert`. If that fails too, a note says why; the raw
+  `thumbnail_error` field is gone.
+- **Menu labels with icon markup (review 18 papercut 9).** Copernicus labels such as
+  `![BUTTONS_blendmode_over]Over` lose the `![…]` prefix.
+- **`/stage` save-time writes (review 18 papercut 10).** `hip_save` no longer records
+  Houdini's save-time writes on `/stage` as `origin: agent` events. TOP networks were
+  already excluded.
+- **`houdini_connect` to a dead pid (review 19 papercut 9).** It answered
+  `houdini_offline` with `retryable: true` and bare pid strings. A pid or name that is not
+  running is now `retryable: false` with labelled candidates `{pid, label, ui, hip}`.
+- **The shipped prompts (review 19 §5).**
+  - `inspect_scene` reads `houdini://outline` (or `network_describe format: outline`),
+    then `problems`, and asks which Houdini to inspect when several run. In review 19 it
+    cost about five times as much.
+  - `build_sop_chain` ends with `viewport_capture {"fit": "all"}`.
+  - `debug_red_node` drops the mandatory `problems`/`cook` and names wrangle spare parms.
+  - `turntable_preview` turns the target's display flag on, hides other displayed
+    objects for the captures, captures at the camera's resolution and leaves the playbar
+    range alone.
+- **"Nearly black" on sparse flipbooks (review 20 N1).** The note is measured on the
+  flattened thumbnail the agent receives, not the transparent RGBA file; a fully
+  transparent frame says "empty" instead.
+- **`node_create` parms skipped callbacks silently (review 20 N2).** A plain set of a
+  callback menu or toggle carries `parm_set`'s note, and `{value, press: true}` runs the
+  callback once the inputs are wired, with `side_effects`.
+- **Render `job result` listed every path (review 20 N5).** Above 5 outputs, the direct
+  result and `job result` both return `outputs_summary` and `outputs_sample` (first 2,
+  last 2); `missing` keeps up to 20 paths.
+- **`cook profile` called a cache read a re-simulation (review 20 N3).** `resimulated`
+  comes from the DOP solve stats of `hou.perfMon`, and is `null` with a note when nothing
+  reliable says.
+- **Job status details (review 20 N7, review 17 mentions).** `message` counts the frames
+  done as `current` does, frames print as integers, a cancelled job's `last_status` says
+  `cancelled`, a late `job cancel` returns `cancelled: false` with a note, and
+  `node_create` flags deprecated types such as the 22.0 OpenGL ROP.
+- **File Cache `output` hint (review 20 N4).** It names `filemethod: "explicit"`, the
+  token `parm_set` takes, instead of the index 1.
+- **Version string (review 20 N6).** The package, `hocuspocus version`, `bridge_version`
+  and `host_version` say 1.3.0.
+
+### Upgrading from 1.2
+
+An agent prompt or script written for 1.2 may need these changes:
+
+- **Pin an instance when running several.** Call `houdini_connect {"pid": N}` (or
+  `{"pid": N, "name": "worker"}`, then `{"name": "worker"}`) before changing a scene.
+  Expect `ambiguous_instance` until you do. After a pinned Houdini exits, expect
+  `instance_lost` on every call until you call `houdini_connect` again.
+- **Job ids** look like `61900-9c3e6f7ca53e`. Treat them as opaque strings and pass them
+  back unchanged. `job {action: "list"}` shows the selected Houdini's jobs; add
+  `all: true` for every instance's.
+- **`events` cursors** are strings (`"3084:42"`). Pass `next_since` back as `since`
+  instead of the last `seq`, and handle `reset: true`. Read `components` and `keyed` on
+  `ParmTupleChanged` instead of `count`.
+- **Press results.** A pressed button returns `pressed` and `side_effects`, not `value`.
+  A save-button press that writes nothing is now an error. To write a cache as a job with
+  progress and cancel, `render` the File Cache instead of pressing its button.
+- **Small clients** can set `profile = "minimal"` in `hocuspocus.toml` (which the bridge
+  and the host both read) to list 14 tools. Argument detail that left `tools/list` is in
+  `hocuspocus://tools`.
+
 ## 1.2.1 (2026-10-12)
 
 ### Fixes

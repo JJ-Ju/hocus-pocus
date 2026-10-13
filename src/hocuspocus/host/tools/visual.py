@@ -43,8 +43,8 @@ from hocuspocus.tools.errors import ToolError
 from hocuspocus.tools.paths import captures_dir, ensure_private_dir
 
 from ..dispatch import call_timeout
-from ._diag import require_node
-from .geo import num
+from ._diag import a_or_an, require_node
+from .geo import frame_num, num
 from .hip import _norm, check_allowed, resolve_path
 from .registry import HostContext, tool
 from .session import scene_dirty
@@ -90,9 +90,15 @@ through the environment, the rest are Houdini's own."""
 FRAME_TIMEOUT_S = 24 * 3600.0
 JOB_POLL_S = 0.1
 INLINE_OUTPUTS = 5
-"""A render result lists at most this many outputs; above it, ``outputs_summary`` only."""
+"""A render result lists at most this many outputs; above it, ``outputs_summary`` and
+``outputs_sample``, in the direct result and in ``job result`` alike (review 20 N5)."""
+OUTPUTS_SAMPLE_ENDS = 2
+"""``outputs_sample`` is this many outputs from each end of the sequence."""
+MISSING_LISTED = 20
+"""``missing`` lists at most this many paths; ``outputs_summary.missing_count`` counts all."""
 DARK_MEAN = 8.0
-"""A thumbnail whose mean luminance (0..255) is below this is reported as nearly black."""
+"""A thumbnail whose mean luminance (0..255), measured on the flattened image the agent
+receives, is below this is reported as nearly black."""
 NO_LIGHTS_NOTE = (
     "Scene has no lights; an OpenGL render relies on the ROP's headlight setting and other "
     "renderers may render black."
@@ -190,46 +196,70 @@ def encode_png(
     """Load an image file, flatten alpha onto grey, downscale, return the image dict.
 
     Formats PIL cannot read (EXR, .pic, ...) are converted with ``$HFS/bin/iconvert``.
-    ``measure`` adds ``mean_luma``: the mean luminance (0..255) of the colour channels
-    before alpha is flattened, so an empty render over transparency reads as black.
+    ``measure`` adds ``mean_luma``: the mean luminance (0..255) of the returned image,
+    after alpha is flattened onto grey (review 20 N1: measured on the raw RGBA, the
+    transparent pixels of a sparse OpenGL frame counted as black), and, for an image with
+    alpha, ``coverage``: the fraction of its pixels with alpha above 0.
     """
     from PIL import Image
 
     source = path
     tmp_dir = None
+
+    def convert() -> str:
+        nonlocal tmp_dir
+        tmp_dir = tmp_dir or tempfile.mkdtemp(prefix="hp-thumb-")
+        target = os.path.join(tmp_dir, "thumb.png")
+        exe = os.path.join(
+            hfs or os.environ.get("HFS", ""),
+            "bin",
+            "iconvert.exe" if sys.platform == "win32" else "iconvert",
+        )
+        proc = subprocess.run(
+            [exe, path, target],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        if proc.returncode != 0 or not os.path.isfile(target):
+            raise ToolError(
+                "internal",
+                f"iconvert could not convert {path} to PNG.",
+                hou_exception=f"iconvert exit {proc.returncode}",
+                detail={"stderr": (proc.stderr or proc.stdout)[-2000:]},
+            )
+        return target
+
     try:
         if os.path.splitext(path)[1].lower() not in IMAGE_EXTS:
-            tmp_dir = tempfile.mkdtemp(prefix="hp-thumb-")
-            source = os.path.join(tmp_dir, "thumb.png")
-            exe = os.path.join(
-                hfs or os.environ.get("HFS", ""),
-                "bin",
-                "iconvert.exe" if sys.platform == "win32" else "iconvert",
-            )
-            proc = subprocess.run(
-                [exe, path, source],
-                capture_output=True,
-                text=True,
-                timeout=120,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-            )
-            if proc.returncode != 0 or not os.path.isfile(source):
-                raise ToolError(
-                    "internal",
-                    f"iconvert could not convert {path} to PNG.",
-                    hou_exception=f"iconvert exit {proc.returncode}",
-                    detail={"stderr": (proc.stderr or proc.stdout)[-2000:]},
-                )
-        with Image.open(source) as im:
+            source = convert()
+        try:
+            opened = Image.open(source)
+        except Exception:
+            if source != path:
+                raise
+            # A TIFF PIL cannot read (float or 16-bit Copernicus output; review 18): let
+            # iconvert make a PNG of it.
+            source = convert()
+            opened = Image.open(source)
+        with opened as im:
             im.load()
+            coverage = None
+            if measure and (
+                im.mode in ("RGBA", "LA") or (im.mode == "P" and "transparency" in im.info)
+            ):
+                alpha = im.convert("RGBA").getchannel("A")
+                total = alpha.size[0] * alpha.size[1]
+                coverage = (total - alpha.histogram()[0]) / float(total or 1)
+            flat = _flatten(im)
+            if max(flat.size) > max_side:
+                flat.thumbnail((max_side, max_side), Image.Resampling.LANCZOS)
             mean_luma = None
             if measure:
                 from PIL import ImageStat
 
-                mean_luma = float(ImageStat.Stat(im.convert("RGB").convert("L")).mean[0])
-            flat = _flatten(im)
-            if max(flat.size) > max_side:
-                flat.thumbnail((max_side, max_side), Image.Resampling.LANCZOS)
+                mean_luma = float(ImageStat.Stat(flat.convert("L")).mean[0])
             buf = io.BytesIO()
             flat.save(buf, format="PNG", optimize=True)
             out = {
@@ -240,6 +270,8 @@ def encode_png(
             }
             if mean_luma is not None:
                 out["mean_luma"] = mean_luma
+            if coverage is not None:
+                out["coverage"] = coverage
             return out
     finally:
         if tmp_dir:
@@ -560,6 +592,240 @@ def render_isolated(
 
 def needs_isolation(rop_node: Any, ctx: HostContext) -> bool:
     return not ctx.ui and rop_node.type().name().split("::")[0] == "opengl"
+
+
+# -- Copernicus images (review 18) ----------------------------------------------------
+
+CHANNEL_NAMES = {1: ("mono",), 2: ("u", "v"), 3: ("r", "g", "b"), 4: ("r", "g", "b", "a")}
+COP_ROP_CANDIDATES = 10
+NON_IMAGE_OUTPUTS = ("Geometry", "VDB")
+
+
+def is_cop_node(node: Any) -> bool:
+    """A Copernicus node (category ``Cop``)."""
+    import hou
+
+    return isinstance(node, hou.CopNode)
+
+
+def is_cop_network(node: Any) -> bool:
+    """A network whose children are Copernicus nodes (``/img/<copnet>``, a SOP copnet)."""
+    import hou
+
+    try:
+        return node.childTypeCategory() == hou.copNodeTypeCategory()
+    except Exception:
+        return False
+
+
+def cop_display(net: Any) -> Any:
+    """The display-flagged Cop node in a COP network, or None."""
+    for child in net.children():
+        with contextlib.suppress(Exception):
+            if child.isDisplayFlagSet():
+                return child
+    return None
+
+
+def cop_image_node(node: Any) -> Any:
+    """``node`` when it is a Cop node, a COP network's display node, else None."""
+    if is_cop_node(node):
+        return node
+    if is_cop_network(node):
+        return cop_display(node)
+    return None
+
+
+def cop_rop_candidates(node: Any) -> list[str]:
+    """The ``rop_image`` nodes in the COP network holding ``node`` (or ``node`` itself
+    when it is the network), which ``render`` can render."""
+    net = node if is_cop_network(node) else node.parent()
+    out = []
+    for child in net.children() if net is not None else ():
+        with contextlib.suppress(Exception):
+            if child.type().nameComponents()[2] == "rop_image":
+                out.append(child.path())
+    return out[:COP_ROP_CANDIDATES]
+
+
+def cop_hint(node: Any) -> str:
+    """Where a COP node's pixels come from: viewport_capture cop_path for a look, a
+    rop_image for files (review 18 papercuts 1 and 2)."""
+    net = node if is_cop_network(node) else node.parent()
+    where = net.path() if net is not None else "the COP network"
+    return (
+        f"viewport_capture {{cop_path: {node.path()}}} returns the image; to write files, "
+        f"render a Cop rop_image inside {where} (coppath = the node)."
+    )
+
+
+def _rect(rect: Any) -> list[Any]:
+    """``[xmin, ymin, xmax, ymax]`` of a ``hou.BoundingRect``."""
+    return [num(v, 6) for v in (*rect.min(), *rect.max())]
+
+
+def _channel_stats(layer: Any, count: int) -> dict[str, Any]:
+    names = CHANNEL_NAMES.get(count) or tuple(f"c{i}" for i in range(count))
+    stats: dict[str, Any] = {}
+    for index, name in enumerate(names):
+        with contextlib.suppress(Exception):
+            stats[name] = {
+                "min": num(layer.computeMin(index), 6),
+                "max": num(layer.computeMax(index), 6),
+                "mean": num(layer.computeAverage(index), 6),
+            }
+    return stats
+
+
+def image_summary(node: Any, frame: float | None = None, *, stats: bool = True) -> dict[str, Any]:
+    """What a Cop node's first output holds (review 18 papercut 3): ``{output, layer_type,
+    resolution, data_window, pixel_scale, storage, border, constant?, channels: {name:
+    {min, max, mean}}}`` from ``CopNode.layer()``; other outputs are named in
+    ``other_outputs``. A non-image output (geometry, VDB) has only its type. Main thread."""
+    names = list(node.outputNames())
+    types = list(node.outputDataTypes())
+    out: dict[str, Any] = {"output": names[0] if names else None}
+    out["layer_type"] = types[0] if types else None
+    layer = node.layer(0) if frame is None else node.layerAtFrame(float(frame), 0)
+    if layer is not None:
+        out["resolution"] = list(layer.bufferResolution())
+        out["data_window"] = _rect(layer.dataWindow())
+        out["pixel_scale"] = [num(v, 6) for v in layer.pixelScale()]
+        with contextlib.suppress(Exception):
+            out["storage"] = layer.storageType().name().lower()
+            out["border"] = layer.border().name().lower()
+        with contextlib.suppress(Exception):
+            if layer.isConstant():
+                out["constant"] = True
+        if stats:
+            out["channels"] = _channel_stats(layer, int(layer.channelCount()))
+    others = [
+        {"name": name, "layer_type": types[i] if i < len(types) else None}
+        for i, name in enumerate(names)
+        if i > 0
+    ]
+    if others:
+        out["other_outputs"] = others
+    return out
+
+
+def _cop_target(path: Any) -> Any:
+    """The Cop node ``cop_path`` names (a COP network means its display node). Main
+    thread."""
+    if not isinstance(path, str) or not path.strip():
+        raise ToolError("invalid_argument", "'cop_path' must be a Cop node path.")
+    node = require_node(path, field="cop_path")
+    target = cop_image_node(node)
+    if target is not None:
+        return target
+    if is_cop_network(node):
+        raise ToolError(
+            "invalid_argument",
+            f"{node.path()} has no display node to capture.",
+            hint="Pass a Cop node inside it, or set a display flag.",
+            candidates=[c.path() for c in node.children()][:10],
+        )
+    raise ToolError(
+        "invalid_argument",
+        f"{node.path()} is {a_or_an(node.type().category().name())} node, not a Cop "
+        "(Copernicus) node.",
+        hint="Pass a node inside a COP network, such as /img/comp1/blend1; camera or "
+        "lop_path capture /obj and stages.",
+    )
+
+
+def capture_cop(ctx: HostContext, parsed: dict[str, Any]) -> dict[str, Any]:
+    """Render a Cop node through a temporary ``rop_image`` in its network to a PNG under
+    the captures dir and return it like any capture (review 18 papercut 1). The ROP is made
+    outside undo and events and deleted afterwards; about 0.2 s. Main thread."""
+    import hou
+
+    from .events import muted
+
+    node = _cop_target(parsed["cop_path"])
+    frame, extra_path, out_file = _capture_targets(parsed, ctx)
+    types = list(node.outputDataTypes())
+    if types and types[0] in NON_IMAGE_OUTPUTS:
+        raise ToolError(
+            "invalid_argument",
+            f"{node.path()} outputs {types[0]}, not an image layer.",
+            hint="geo_info reads it; capture an image node instead.",
+        )
+    was_dirty = scene_dirty(ctx)
+    errors: list[str] = []
+    with hou.undos.disabler(), muted():
+        rop = node.parent().createNode("rop_image", "__hocuspocus_capture__")
+        try:
+            _mark_internal(rop)
+            for name, value in (("coppath", node.path()), ("copoutput", out_file), ("trange", 0)):
+                rop.parm(name).set(value)
+            try:
+                rop.render(frame_range=(frame, frame), verbose=False)
+            except hou.OperationFailed as exc:
+                errors.append(str(exc).strip())
+            errors += [str(e) for e in rop.errors()]
+        finally:
+            with contextlib.suppress(Exception):
+                rop.destroy()
+    if errors or not os.path.isfile(out_file):
+        message, detail = failure(f"{node.path()} did not render an image", errors)
+        raise ToolError(
+            "cook_failed",
+            message,
+            hint="Check the node's errors with problems, then capture again.",
+            detail=detail or None,
+        )
+    layer = image_summary(node, frame, stats=False)
+    info: dict[str, Any] = {
+        "scene": "cop",
+        "cop_path": node.path(),
+        "source_used": "rop_image",
+        "layer": {k: layer[k] for k in ("layer_type", "resolution", "data_window") if k in layer},
+    }
+    if "other_outputs" in layer:
+        info["layer"]["other_outputs"] = [o["name"] for o in layer["other_outputs"]]
+    notes = []
+    if parsed.get("resolution_given"):
+        notes.append("resolution is ignored with cop_path: the image is the COP's own size.")
+    if not was_dirty and scene_dirty(ctx):
+        notes.append(
+            "Houdini marks the hip modified when the temporary rop_image is created, although "
+            "it was deleted and nothing else changed."
+        )
+    if notes:
+        info["notes"] = notes
+    size = tuple(layer.get("resolution") or (0, 0))
+    return _finish_capture(out_file, size, frame, info, extra_path)
+
+
+def _cop_networks() -> list[str]:
+    """COP networks under /img, with their display nodes, for the capture note."""
+    import hou
+
+    found = []
+    img = hou.node("/img")
+    for net in img.children() if img is not None else ():
+        if is_cop_network(net) and not net.userData(INTERNAL_KEY):
+            display = cop_display(net)
+            found.append(net.path() + (f" (display {display.path()})" if display else ""))
+    return found[:3]
+
+
+def _refuse_cop_as(field: str, value: Any) -> None:
+    """A Cop node passed as camera or lop_path: say cop_path (review 18 papercut 1)."""
+    import hou
+
+    if not isinstance(value, str) or not value.startswith("/"):
+        return
+    node = hou.node(value)
+    if node is not None and (is_cop_node(node) or is_cop_network(node)):
+        what = "network" if is_cop_network(node) else "node"
+        raise ToolError(
+            "invalid_argument",
+            f"{node.path()} is a Copernicus {what}, not a "
+            f"{'camera' if field == 'camera' else 'LOP'}.",
+            hint=f"Pass cop_path {node.path()} to capture its image.",
+        )
 
 
 # -- viewport_capture ---------------------------------------------------------------
@@ -1362,7 +1628,18 @@ def _capture_args(args: dict[str, Any]) -> dict[str, Any]:
     lop_path = args.get("lop_path")
     if lop_path is not None and (not isinstance(lop_path, str) or not lop_path.strip()):
         raise ToolError("invalid_argument", "'lop_path' must be a LOP node path.")
+    cop_path = args.get("cop_path")
+    if cop_path is not None and (
+        args.get("camera") is not None or lop_path is not None or source == "viewer"
+    ):
+        raise ToolError(
+            "invalid_argument",
+            "cop_path captures a COP image; it cannot be combined with camera, lop_path or "
+            "source viewer.",
+        )
     return {
+        "cop_path": cop_path,
+        "resolution_given": args.get("resolution") is not None,
         "source": source,
         "fit": fit,
         "fit_given": args.get("fit") is not None,
@@ -1411,6 +1688,7 @@ def _finish_capture(
     return result
 
 
+COP_NOTE = "The scene also has COP networks ({nets}); pass cop_path (a Cop node) to capture one."
 STAGE_NOTE = (
     "The scene also has a stage ({lop} is displayed in /stage); pass lop_path (or a LOP "
     "camera) to capture it."
@@ -1420,11 +1698,17 @@ STAGE_NOTE = (
 def _resolve_capture(parsed: dict[str, Any]) -> dict[str, Any]:
     """The capture target plus a note when /obj was captured but /stage has a display
     LOP. Main thread."""
+    _refuse_cop_as("camera", parsed["camera"])
+    _refuse_cop_as("lop_path", parsed["lop_path"])
     target = capture_target(parsed["camera"], parsed["lop_path"])
     if target["scene"] == "obj" and parsed["camera"] is None:
         display = _stage_display()
-        if display is not None:
-            target["note"] = STAGE_NOTE.format(lop=display.path())
+        notes = [STAGE_NOTE.format(lop=display.path())] if display is not None else []
+        nets = _cop_networks()
+        if nets:
+            notes.append(COP_NOTE.format(nets=", ".join(nets)))
+        if notes:
+            target["note"] = " ".join(notes)
     return target
 
 
@@ -1547,6 +1831,10 @@ def viewport_capture(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
             hint="Use source 'opengl_rop' (or 'auto'), which renders headless.",
         )
     timeout_s = float(call_timeout(None) or ctx.config.default_timeout_s)
+    if parsed["cop_path"] is not None:
+        if ctx.executor.on_main_thread():
+            return capture_cop(ctx, parsed)
+        return ctx.executor.run(lambda: capture_cop(ctx, parsed), timeout_s)
     if ctx.executor.on_main_thread():
         return _capture_main(parsed, ctx)
     if ctx.ui:
@@ -1641,6 +1929,186 @@ def _output_parm(rop: Any) -> Any:
         if parm is not None:
             return parm
     return None
+
+
+# -- writer SOPs: File Cache, ROP SOPs (review 17 P0-1, P0-2, P1-3) --------------------
+
+SAVE_BUTTON = "execute"
+"""The save button of a File Cache and of every ROP (``Save to Disk``, ``Render``)."""
+SIDE_EFFECT_CAP = 10
+WRITTEN_SLACK_S = 2.0
+"""A file counts as written by a press when its mtime is at most this much older than
+the press (file systems round mtimes)."""
+
+
+def writer_rop(node: Any) -> Any:
+    """The ROP that writes ``node``'s files: the node itself when it is a ROP (a /out
+    driver, a SOP-level ``rop_geometry``/``rop_alembic``, a Cop ``rop_image``), or the
+    ROP inside a SOP whose ``execute`` button saves through one, such as
+    ``filecache::2.0`` (its ``render`` child, else the first ROP inside it). None for any
+    other node. Main thread."""
+    import hou
+
+    if isinstance(node, hou.RopNode):
+        return node
+    if not isinstance(node, hou.SopNode):
+        return None
+    button = node.parm(SAVE_BUTTON)
+    try:
+        if button is None or button.parmTemplate().type() != hou.parmTemplateType.Button:
+            return None
+    except Exception:
+        return None
+    inner = node.node("render")
+    if isinstance(inner, hou.RopNode):
+        return inner
+    try:
+        children = node.allSubChildren(recurse_in_locked_nodes=True)
+    except Exception:
+        children = ()
+    return next((c for c in children if isinstance(c, hou.RopNode)), None)
+
+
+def rop_frame_range(rop: Any) -> list[float] | None:
+    """``[start, end, inc]`` from the ROP's own Valid Frame Range, or None when it renders
+    the current frame only (``trange`` 0) or has no range. Main thread."""
+    trange = rop.parm("trange")
+    if trange is None:
+        return None
+    try:
+        if not int(trange.eval()):
+            return None
+        start, end = (float(rop.parm(n).eval()) for n in ("f1", "f2"))
+        inc = float(rop.parm("f3").eval()) if rop.parm("f3") is not None else 1.0
+    except Exception:
+        return None
+    if inc <= 0 or end < start:
+        return None
+    return [start, end, inc]
+
+
+def expected_outputs(rop: Any, frames: list[float]) -> list[str]:
+    """The files ``rop`` writes for ``frames`` (``[start, end, inc]``), from its output
+    parm; MPlay and empty outputs are left out. Main thread."""
+    parm = _output_parm(rop)
+    if parm is None:
+        return []
+    out = []
+    for frame in _frame_list(frames):
+        value = parm.evalAtFrame(frame).strip()
+        if value and value not in MPLAY_OUTPUTS:
+            out.append(_norm(value))
+    return out
+
+
+def outputs_summary(outputs: list[str], missing: list[str]) -> dict[str, Any]:
+    """``{count, first, last, pattern, missing_count}`` for a file sequence. No ``hou``."""
+    summary: dict[str, Any] = {"count": len(outputs)}
+    if outputs:
+        summary["first"] = outputs[0]
+        summary["last"] = outputs[-1]
+        summary["pattern"] = output_pattern(outputs[0], outputs[-1])
+    summary["missing_count"] = len(missing)
+    return summary
+
+
+def _top_parm_values(node: Any) -> dict[str, Any]:
+    """Raw values of ``node``'s value parms (not buttons, folders or labels; menus as
+    tokens), to report what a button press changed. Main thread."""
+    import hou
+
+    skip = (
+        hou.parmTemplateType.Button,
+        hou.parmTemplateType.Folder,
+        hou.parmTemplateType.FolderSet,
+        hou.parmTemplateType.Label,
+        hou.parmTemplateType.Separator,
+    )
+    values: dict[str, Any] = {}
+    for parm in node.parms():
+        try:
+            kind = parm.parmTemplate().type()
+            if parm.isMultiParmParent():
+                values[parm.name()] = parm.eval()  # the instance count
+                continue
+            if kind in skip:
+                continue
+            if kind == hou.parmTemplateType.Menu:
+                values[parm.name()] = parm.evalAsString()  # the token, not the index
+                continue
+            try:
+                values[parm.name()] = parm.unexpandedString()
+            except Exception:
+                values[parm.name()] = parm.eval()
+        except Exception:
+            continue
+    return values
+
+
+def changed_parms(before: dict[str, Any], after: dict[str, Any]) -> dict[str, list[Any]]:
+    """``{name: [old, new]}`` for parms whose raw value changed, at most
+    :data:`SIDE_EFFECT_CAP`. No ``hou``."""
+    changes = {
+        name: [before[name], value]
+        for name, value in after.items()
+        if name in before and before[name] != value
+    }
+    return dict(list(changes.items())[:SIDE_EFFECT_CAP])
+
+
+def press_button(node: Any, parm: Any) -> dict[str, Any]:
+    """Press a button (or run a menu's callback) and report it: ``{pressed: true,
+    side_effects?}``, plus ``outputs_summary`` for the save button of a writer (a File
+    Cache's Save to Disk, a ROP's Render): the files its output parm names over the
+    writer's frame range are checked afterwards, and a press that left any of them
+    unwritten fails with ``cook_failed`` listing them (review 17 P0-2: a failed save
+    reported success). Main thread."""
+    import hou
+
+    rop = writer_rop(node) if parm.name() == SAVE_BUTTON else None
+    expected: list[str] = []
+    if rop is not None:
+        frames = rop_frame_range(rop) or [hou.frame(), hou.frame(), 1.0]
+        try:
+            expected = expected_outputs(rop, frames)
+        except Exception:
+            expected = []
+    before = _top_parm_values(node)
+    started = time.time()
+    parm.pressButton()
+    out: dict[str, Any] = {"pressed": True}
+    changes = changed_parms(before, _top_parm_values(node))
+    if changes:
+        out["side_effects"] = changes
+    if not expected:
+        return out
+    written, missing = [], []
+    for path in expected:
+        try:
+            fresh = os.path.getmtime(path) >= started - WRITTEN_SLACK_S
+        except OSError:
+            fresh = False
+        (written if fresh else missing).append(path)
+    if missing:
+        errors: list[str] = []
+        with contextlib.suppress(Exception):
+            errors = error_lines([str(e) for e in rop.errors()])
+        detail: dict[str, Any] = {
+            "missing": missing[:MISSING_LISTED],
+            "missing_count": len(missing),
+        }
+        if errors:
+            detail["errors"] = errors[:5]
+        raise ToolError(
+            "cook_failed",
+            f"{node.path()} {parm.name()} wrote {len(written)} of {len(expected)} files"
+            + (f": {errors[0]}" if errors else "."),
+            hint="Check that the output directory is writable and the input cooks, then press "
+            "again; render runs the same save as a job with progress and cancel.",
+            detail=detail,
+        )
+    out["outputs_summary"] = outputs_summary(written, missing)
+    return out
 
 
 def _usd_source_lop(rop: Any) -> Any:
@@ -1739,6 +2207,110 @@ def usd_render_outputs(rop: Any, frames: list[float]) -> tuple[list[str], str | 
     return paths, None
 
 
+def _not_a_render_node(node: Any) -> ToolError:
+    if is_cop_node(node) or is_cop_network(node):
+        return ToolError(
+            "invalid_argument",
+            f"{node.path()} ({node.type().name()}) is not a render node.",
+            hint=cop_hint(node),
+            candidates=cop_rop_candidates(node),
+        )
+    return ToolError(
+        "invalid_argument",
+        f"{node.path()} ({node.type().name()}) is not a render node.",
+        hint="Pass a ROP such as /out/karma1 or /out/opengl1, or a writer SOP such as a File "
+        "Cache or rop_geometry.",
+    )
+
+
+def job_snapshot(job: Any) -> dict[str, Any]:
+    """The job's status as ``job status`` would show it, best effort (``{}`` when the
+    job context does not expose it). No ``hou``."""
+    inner = getattr(job, "_job", None)
+    with contextlib.suppress(Exception):
+        if inner is not None:
+            return dict(inner.status())
+    return {}
+
+
+def cancelled_with_partial(job: Any, partial: dict[str, Any], done: str) -> ToolError:
+    """The ``cancelled`` error a job raises when it stops early, with ``detail:
+    {last_status, partial}`` so ``job result`` keeps what was done before the cancel
+    (review 17 P1-6). No ``hou``."""
+    status = job_snapshot(job)
+    if status:
+        status["state"] = "cancelled"  # the snapshot was taken while it ran (review 20 N7)
+    job_id = status.get("job_id")
+    name = f"Job {job_id}" if job_id else "The job"
+    return ToolError(
+        "cancelled",
+        f"{name} was cancelled after {done}.",
+        detail={"last_status": status, "partial": partial},
+    )
+
+
+def _render_partial(plan: dict[str, Any]) -> tuple[dict[str, Any], str]:
+    outputs = [p for p in plan["expected"] if os.path.isfile(p)]
+    missing = [p for p in plan["expected"] if not os.path.isfile(p)]
+    total = len(plan["expected"]) or len(plan["frame_list"])
+    return {"outputs_summary": outputs_summary(outputs, missing)}, (
+        f"{len(outputs)} of {total} output files"
+    )
+
+
+SAVE_SIDE_EFFECTS = ("hardenBaseName", "enableLoadFromDisk")
+"""What a File Cache's Save to Disk does after its ROP rendered (its PythonModule's
+``saveToDisk``): harden the base name, turn on Load from Disk."""
+
+
+def _writer_side_effects(owner_path: str) -> dict[str, list[Any]]:
+    """After a writer SOP rendered through its inner ROP, do what its own save button
+    does next (a File Cache turns on Load from Disk and reloads) as one undo step, and
+    return the parms that changed. Main thread."""
+    import hou
+
+    from ..undo import hou_undo_group, make_label
+
+    node = hou.node(owner_path)
+    if node is None:
+        return {}
+    before = _top_parm_values(node)
+    try:
+        module = node.hdaModule()
+    except Exception:
+        return {}
+    steps = [getattr(module, name, None) for name in SAVE_SIDE_EFFECTS]
+    if not any(callable(step) for step in steps):
+        return {}
+    with hou_undo_group(make_label("render", {"rop_path": owner_path})):
+        for step in steps:
+            if callable(step):
+                with contextlib.suppress(Exception):
+                    step(node)
+        reload = node.parm("reload")
+        if reload is not None:
+            with contextlib.suppress(Exception):
+                reload.pressButton()
+    return changed_parms(before, _top_parm_values(node))
+
+
+def _writer_output_hint(owner: Any) -> str:
+    """How to change the output of a writer SOP that renders through its inner ROP, in
+    ``parm_set`` terms: a File Cache's ``filemethod`` by its menu token (review 20 N4: the
+    hint said ``filemethod 1``, an index ``parm_set`` does not take)."""
+    method, file_parm = owner.parm("filemethod"), owner.parm("file")
+    explicit = None
+    with contextlib.suppress(Exception):
+        if method is not None and "explicit" in method.menuItems():
+            explicit = "explicit"
+    if explicit and file_parm is not None:
+        return (
+            f'Set the output with parm_set on {owner.path()} (filemethod: "{explicit}", then '
+            "file: the path), then render without output."
+        )
+    return "Set the node's own output parm with parm_set, then render without output."
+
+
 def _prepare_render(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     """Validate on the main thread and compute the expected output files."""
     import hou
@@ -1746,22 +2318,29 @@ def _prepare_render(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     rop_path = args.get("rop_path")
     if not isinstance(rop_path, str) or not rop_path.strip():
         raise ToolError("invalid_argument", "'rop_path' must be a ROP node path.")
-    rop = require_node(rop_path, field="rop_path")
-    if not callable(getattr(rop, "render", None)):
-        raise ToolError(
-            "invalid_argument",
-            f"{rop.path()} ({rop.type().name()}) is not a render node.",
-            hint="Pass a ROP such as /out/karma1 or /out/opengl1.",
-        )
+    owner = require_node(rop_path, field="rop_path")
+    rop = owner if callable(getattr(owner, "render", None)) else writer_rop(owner)
+    if rop is None:
+        raise _not_a_render_node(owner)
+    # A writer SOP (File Cache, rop_geometry SOP) renders its own frame range by default;
+    # a File Cache renders through the ROP inside it (review 17 P1-3).
+    writer = rop is not owner or owner.type().category().name() == "Sop"
     frames = _frames(args.get("frames"))
     if frames is None:
-        frames = [hou.frame(), hou.frame(), 1.0]
+        frames = (rop_frame_range(rop) if writer else None) or [hou.frame(), hou.frame(), 1.0]
     output = args.get("output")
     parm = _output_parm(rop)
     usd = is_usd_render_rop(rop)
     if output is not None:
         if not isinstance(output, str) or not output.strip():
             raise ToolError("invalid_argument", "'output' must be a non-empty path.")
+        if rop is not owner:
+            raise ToolError(
+                "invalid_argument",
+                f"{owner.path()} ({owner.type().name()}) writes through the ROP inside it, "
+                "whose output cannot be overridden.",
+                hint=_writer_output_hint(owner),
+            )
         if parm is None:
             raise ToolError(
                 "invalid_argument",
@@ -1798,6 +2377,7 @@ def _prepare_render(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
         )
     return {
         "rop": rop.path(),
+        "owner": owner.path() if rop is not owner else None,
         "type": rop.type().name(),
         "frames": frames,
         "frame_list": _frame_list(frames),
@@ -1810,29 +2390,56 @@ def _prepare_render(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
         "isolate": needs_isolation(rop, ctx),
         "stage_source": rop.parm("opsource") is not None and rop.parm("opsource").eval() == 1,
         "hfs": hou.text.expandString("$HFS"),
-        "lights": scene_has_lights(),
+        # A COP image needs no lights (review 18 papercut 7).
+        "lights": (parm is not None and parm.name() == "copoutput") or scene_has_lights(),
     }
+
+
+def outputs_listing(outputs: list[str], missing: list[str]) -> dict[str, Any]:
+    """``outputs`` when there are at most :data:`INLINE_OUTPUTS`, else ``outputs_summary``
+    plus ``outputs_sample`` (the first and last :data:`OUTPUTS_SAMPLE_ENDS`); ``missing``
+    up to :data:`MISSING_LISTED`. A 48-frame render's ``job result`` was 8 KB of paths
+    (review 20 N5). No ``hou``."""
+    out: dict[str, Any] = {}
+    if len(outputs) > INLINE_OUTPUTS:
+        out["outputs_summary"] = outputs_summary(outputs, missing)
+        out["outputs_sample"] = outputs[:OUTPUTS_SAMPLE_ENDS] + outputs[-OUTPUTS_SAMPLE_ENDS:]
+    else:
+        out["outputs"] = outputs
+    if missing:
+        out["missing"] = missing[:MISSING_LISTED]
+    return out
+
+
+def thumbnail_note(mean_luma: float | None, coverage: float | None) -> str | None:
+    """The note on how a render thumbnail looks, from :func:`encode_png`'s ``measure``:
+    a fully transparent image is empty; an opaque or mostly opaque one whose flattened
+    mean is under :data:`DARK_MEAN` is nearly black. A sparse subject on a transparent
+    background is neither (review 20 N1). No ``hou``."""
+    if coverage is not None and coverage <= 0.0:
+        return (
+            "The thumbnail is empty (every pixel is transparent): check camera framing and "
+            "which objects are displayed."
+        )
+    if mean_luma is not None and mean_luma < DARK_MEAN:
+        return (
+            f"The thumbnail is nearly black (mean luminance {mean_luma:.1f}/255): check "
+            "lights, camera framing and exposure."
+        )
+    return None
 
 
 def _render_result(plan: dict[str, Any], thumbnail: bool) -> dict[str, Any]:
     outputs = [p for p in plan["expected"] if os.path.isfile(p)]
     missing = [p for p in plan["expected"] if not os.path.isfile(p)]
     result: dict[str, Any] = {
-        "rop_path": plan["rop"],
-        "frames": [num(v) for v in plan["frames"]],
-        "outputs": outputs,
+        "rop_path": plan.get("owner") or plan["rop"],
+        "frames": [frame_num(v) for v in plan["frames"]],
     }
-    if missing:
-        result["missing"] = missing[:20]
-    if len(outputs) > INLINE_OUTPUTS:
-        result["outputs_summary"] = {
-            "count": len(outputs),
-            "first": outputs[0],
-            "last": outputs[-1],
-            "pattern": output_pattern(outputs[0], outputs[-1]),
-            "missing_count": len(missing),
-        }
+    result.update(outputs_listing(outputs, missing))
     notes: list[str] = []
+    if plan.get("owner"):
+        notes.append(f"{plan['owner']} rendered through its ROP {plan['rop']}.")
     images = [
         p for p in plan["expected"] if os.path.splitext(p)[1].lower() in IMAGE_EXTS | CONVERT_EXTS
     ]
@@ -1855,12 +2462,9 @@ def _render_result(plan: dict[str, Any], thumbnail: bool) -> dict[str, Any]:
         elif ext in IMAGE_EXTS or ext in CONVERT_EXTS:
             try:
                 image = encode_png(last, THUMB_MAX_SIDE, hfs=plan["hfs"], measure=True)
-                mean = image.pop("mean_luma", None)
-                if mean is not None and mean < DARK_MEAN:
-                    notes.append(
-                        f"The thumbnail is nearly black (mean luminance {mean:.1f}/255): check "
-                        "lights, camera framing and exposure."
-                    )
+                look = thumbnail_note(image.pop("mean_luma", None), image.pop("coverage", None))
+                if look:
+                    notes.append(look)
                     result["notes"] = notes
                 result["thumbnail"] = {
                     "path": last,
@@ -1869,7 +2473,11 @@ def _render_result(plan: dict[str, Any], thumbnail: bool) -> dict[str, Any]:
                     "image": image,
                 }
             except Exception as exc:  # a thumbnail is a nicety; never fail the render
-                result["thumbnail_error"] = f"{type(exc).__name__}: {exc}"
+                reason = exc.message if isinstance(exc, ToolError) else f"{type(exc).__name__}"
+                notes.append(
+                    f"No thumbnail: {os.path.basename(last)} could not be read ({reason})."
+                )
+                result["notes"] = notes
     return result
 
 
@@ -1915,15 +2523,19 @@ def _render_job(plan: dict[str, Any], ctx: HostContext, thumbnail: bool) -> Any:
             def poll() -> None:
                 done = sum(1 for p in plan["expected"] if os.path.isfile(p))
                 if plan["expected"]:
-                    job.progress(
-                        done / len(plan["expected"]), f"{done}/{len(plan['expected'])} frames"
-                    )
+                    total = len(plan["expected"])
+                    job.set_progress(done, total, f"{done}/{total} frames done")
 
             job.progress(0.0, f"rendering {len(frame_list)} frame(s) in a child hython")
             try:
                 outcome = child.wait(
                     timeout_s=FRAME_TIMEOUT_S, cancelled=lambda: job.cancelled, on_poll=poll
                 )
+            except ToolError as exc:
+                if exc.code != "cancelled":
+                    raise
+                partial, done = _render_partial(plan)
+                raise cancelled_with_partial(job, partial, done) from exc
             finally:
                 child.kill()
             if outcome.get("errors"):
@@ -1943,6 +2555,7 @@ def _render_job(plan: dict[str, Any], ctx: HostContext, thumbnail: bool) -> Any:
     def run_in_process(job: Any) -> dict[str, Any]:
         saved: dict[str, tuple[Any, Any]] = {}
         notes: list[str] = []
+        side_effects: dict[str, list[Any]] = {}
         logs: list[str] = []
         log_dir: list[str] = []
 
@@ -2005,13 +2618,24 @@ def _render_job(plan: dict[str, Any], ctx: HostContext, thumbnail: bool) -> Any:
             job.run_main(apply_override)
             total = len(frame_list)
             for i, frame in enumerate(frame_list):
-                job.progress(i / total, f"frame {num(frame)} ({i + 1}/{total})")
-                errors = job.run_main(lambda f=frame: render_frame(f), timeout_s=FRAME_TIMEOUT_S)
+                # The count is current, the frames finished (review 20 N7).
+                job.set_progress(
+                    i, total, f"{i}/{total} frames done, rendering frame {frame_num(frame)}"
+                )
+                try:
+                    errors = job.run_main(
+                        lambda f=frame: render_frame(f), timeout_s=FRAME_TIMEOUT_S
+                    )
+                except ToolError as exc:
+                    if exc.code != "cancelled":
+                        raise
+                    partial, done = _render_partial(plan)
+                    raise cancelled_with_partial(job, partial, done) from exc
                 if errors:
                     message, detail = failure(
-                        f"{plan['rop']} failed to render frame {num(frame)}", errors
+                        f"{plan['rop']} failed to render frame {frame_num(frame)}", errors
                     )
-                    detail["frame"] = frame
+                    detail["frame"] = frame_num(frame)
                     hint = None
                     tail = log_tail(logs)
                     if tail:
@@ -2023,7 +2647,12 @@ def _render_job(plan: dict[str, Any], ctx: HostContext, thumbnail: bool) -> Any:
                         hint=hint,
                         detail=detail,
                     )
-            job.progress(1.0, "done")
+            job.set_progress(total, total, "done")
+            if plan.get("owner"):
+                effects = job.run_main(lambda: _writer_side_effects(plan["owner"]))
+                if effects:
+                    side_effects.update(effects)
+                    ctx.scene.mark_dirty()
         finally:
             if saved:
                 # Never raises: a render error stays the error the caller sees.
@@ -2034,6 +2663,8 @@ def _render_job(plan: dict[str, Any], ctx: HostContext, thumbnail: bool) -> Any:
             for folder in log_dir:
                 shutil.rmtree(folder, ignore_errors=True)
         result = _render_result(plan, thumbnail)
+        if side_effects:
+            result["side_effects"] = side_effects
         if notes:
             result["notes"] = [*notes, *result.get("notes", [])]
         return result
@@ -2067,10 +2698,6 @@ def render(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
         result = dict(job.result)
         result["job_id"] = job.id
         result["state"] = "done"
-        if "outputs_summary" in result:
-            # The full list stays on the job (review 11 B6).
-            result.pop("outputs", None)
-            result["hint"] = "job {action: result, job_id} lists every output."
         return result
     if job.state in ("failed", "cancelled") and job.error:
         raise ToolError.from_dict(job.error)

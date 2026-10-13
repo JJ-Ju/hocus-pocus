@@ -184,6 +184,38 @@ def _assert_no_side_effects(before_children: int, before_undo: tuple) -> None:
     assert hou.undos.undoLabels() == before_undo
 
 
+def test_info_evaluates_script_menus_on_a_probe(client):
+    """Review 14 papercut 10: pdg_cachemode is a script menu, so the template has no
+    items; detail full evaluates it on a temporary instance instead of a bare default."""
+    from hocuspocus.host.tools import events as ev
+
+    before = (len(hou.node("/obj").children()), hou.undos.undoLabels())
+    since = ev.LOG.last_seq
+    info = client.ok(
+        "node_type_info",
+        {"type": "Top/genericgenerator", "parms": "pdg_cachemode", "detail": "full"},
+    )
+    _assert_no_side_effects(*before)
+    assert client.ok("events", {"since": since})["events"] == []  # the probe is silent
+    (row,) = info["parms"]
+    assert row["menu"]["dynamic"] is True
+    assert ["2", "Write Files"] in row["menu"]["items"]
+    assert row["default"] == 0 and row["default_token"] == "0"
+
+
+def test_info_marks_input_driven_menus_dynamic(client):
+    """A SOP group menu lists the input's groups: empty on a probe with no input, so it
+    is marked dynamic with a note pointing at parm_get on a live node."""
+    info = client.ok("node_type_info", {"type": "Sop/blast", "parms": "group", "detail": "full"})
+    (row,) = info["parms"]
+    assert row["menu"]["dynamic"] is True and row["menu"]["items"] == []
+    assert "parm_get" in row["menu"]["note"]
+    static = client.ok(
+        "node_type_info", {"type": "Sop/blast", "parms": "grouptype", "detail": "full"}
+    )
+    assert "dynamic" not in static["parms"][0]["menu"]  # a static menu stays as it was
+
+
 def test_info_box(client):
     before = (len(hou.node("/obj").children()), hou.undos.undoLabels())
     info = client.ok("node_type_info", {"type": "Sop/box", "detail": "full"})

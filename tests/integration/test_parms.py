@@ -288,7 +288,8 @@ def test_ramp(client, scene):
     assert node.parm("remap").eval().lookup(0.25) == pytest.approx(0.5)
     got = _get(client, "/obj/geo1/remap1/remap", include=["ramp", "multiparm"])
     assert got["type"] == "ramp"
-    assert got["ramp"]["count"] == 3 and got["ramp"]["is_color"] is False
+    assert got["ramp"] == {"count": 3}  # the keys are in value, once (review 18)
+    assert got["value"]["is_color"] is False
     assert got["multiparm"]["count"] == 3
     err = client.error(
         "parm_set",
@@ -345,7 +346,7 @@ def test_press_button(client, scene):
     scene["geo"].createNode("file", "file1")
     res = _set(client, {"path": "/obj/geo1/file1/reload", "press": True})
     assert res["wrote_keyframe"] is False
-    assert res["value"] is None
+    assert res["pressed"] is True and "value" not in res  # a button has no value
     err = client.error("parm_set", {"items": [{"path": "/obj/geo1/box1/sizex", "press": True}]})
     assert err["code"] == "invalid_value"
     err = client.error("parm_set", {"items": [{"path": "/obj/geo1/file1/reload", "value": 1}]})
@@ -750,6 +751,30 @@ def _spare(node, template):
     return node.parm(template.name())
 
 
+def test_dynamic_menus_are_evaluated_on_the_live_parm(client, scene):
+    """Review 14 papercut 10: a script menu (pdg_cachemode) and a SOP group menu (built
+    from the input's groups) are read from the parm and marked dynamic."""
+    geo = scene["geo"]
+    group = geo.createNode("groupcreate", "grp")
+    group.setInput(0, scene["box"])
+    group.parm("groupname").set("mygroup")
+    blast = geo.createNode("blast", "blast1")
+    blast.setInput(0, group)  # never cooked: parm_get cooks it to read the groups
+    got = _get(client, f"{blast.path()}/group", include=["menu"])
+    assert got["menu"]["dynamic"] is True
+    assert {"token": "mygroup", "label": "mygroup"} in got["menu"]["items"]
+    lonely = geo.createNode("blast", "no_input")
+    got = _get(client, f"{lonely.path()}/group", include=["menu"])
+    assert got["menu"]["dynamic"] is True and got["menu"]["items"] == []
+    assert got["menu"]["note"]
+    assert "dynamic" not in _get(client, f"{blast.path()}/grouptype", include=["menu"])["menu"]
+
+    gen = hou.node("/obj").createNode("topnet", "topnet1").createNode("genericgenerator", "gen")
+    got = _get(client, f"{gen.path()}/pdg_cachemode", include=["menu"])
+    assert got["menu"]["dynamic"] is True and got["menu"]["token"] == "0"
+    assert {"token": "2", "label": "Write Files"} in got["menu"]["items"]
+
+
 def test_int_menus_free_menus_and_strict_ranges(client, scene):
     null = scene["geo"].createNode("null", "CTRL")
     _spare(
@@ -823,3 +848,150 @@ def test_long_string_is_elided_in_set_and_get(client, scene):
     assert expanded["value"] == "tune" and expanded["raw"] == "$OS"
     error = client.error("parm_get", {"paths": [path], "full_strings": "yes"})
     assert error["code"] == "invalid_argument"
+
+
+# -- press on save buttons (review 17 P0-2) and callback menus (review 17 P1-4) ----------
+
+
+def _file_cache(path: str, frames=(1, 3)):
+    geo = hou.node("/obj").createNode("geo", "fx")
+    box = geo.createNode("box")
+    box.parm("ty").setExpression("$F * 0.1")
+    cache = geo.createNode("filecache::2.0", "cache")
+    cache.setInput(0, box)
+    cache.parm("filemethod").set(1)  # explicit file
+    cache.parm("file").set(path)
+    for parm, value in zip(("f1", "f2"), frames, strict=True):
+        cache.parm(parm).deleteAllKeyframes()
+        cache.parm(parm).set(value)
+    return cache
+
+
+def _fwd(path) -> str:
+    return str(path).replace("\\", "/")
+
+
+def test_press_save_button_verifies_the_written_files(client, tmp_path):
+    cache = _file_cache(_fwd(tmp_path / "fc.$F4.bgeo.sc"))
+    res = _set(client, {"path": f"{cache.path()}/execute", "press": True})
+    assert res["pressed"] is True
+    assert "value" not in res and "raw" not in res
+    summary = res["outputs_summary"]
+    assert summary["count"] == 3 and summary["missing_count"] == 0
+    assert summary["pattern"] == _fwd(tmp_path / "fc.####.bgeo.sc")
+    assert res["side_effects"]["loadfromdisk"] == [0, 1]
+    assert len(list(tmp_path.glob("fc.*"))) == 3
+
+
+def test_press_save_button_that_writes_nothing_fails(client, tmp_path):
+    blocker = tmp_path / "blocker"
+    blocker.write_text("a file, so no directory can be created under it")
+    cache = _file_cache(_fwd(blocker / "sub" / "fc.$F4.bgeo.sc"))
+    error = client.error(
+        "parm_set", {"items": [{"path": f"{cache.path()}/execute", "press": True}]}
+    )
+    assert error["code"] == "cook_failed", error
+    assert "0 of 3" in error["message"]
+    missing = error["detail"]["missing"]
+    assert missing[0] == _fwd(blocker / "sub" / "fc.0001.bgeo.sc") and len(missing) == 3
+
+
+def test_press_on_a_plain_button_reports_pressed(client, scene):
+    geo = scene["geo"]
+    cache = geo.createNode("filecache::2.0", "c2")
+    res = _set(client, {"path": f"{cache.path()}/reload", "press": True})
+    assert res["pressed"] is True
+    assert "outputs_summary" not in res
+
+
+def _pyrosource(scene):
+    sphere = scene["geo"].createNode("sphere")
+    source = scene["geo"].createNode("pyrosource", "src")
+    source.setInput(0, sphere)
+    return source
+
+
+def test_plain_set_of_a_callback_menu_notes_the_skipped_callback(client, scene):
+    source = _pyrosource(scene)
+    res = _set(client, {"path": f"{source.path()}/initialize", "value": "source"})
+    assert source.parm("initialize").evalAsString() == "source"
+    assert source.parm("attributes").eval() == 0  # the callback did not run
+    (note,) = [n for n in res["notes"] if "callback" in n]
+    assert "press: true" in note
+
+
+def test_press_with_a_value_runs_a_menu_callback(client, scene):
+    source = _pyrosource(scene)
+    res = _set(client, {"path": f"{source.path()}/initialize", "value": "source", "press": True})
+    assert res["pressed"] is True
+    # initialize is an action menu: its callback applies the preset and resets it to none.
+    assert res["value"] == "none"
+    assert res["side_effects"]["initialize"] == ["source", "none"]
+    assert source.parm("attributes").eval() == 2  # density and temperature
+    assert "attributes" in res["side_effects"], res
+    assert not any("callback" in n for n in res.get("notes", []))
+
+
+def test_press_alone_reruns_a_menu_callback_and_node_create_accepts_it(client, scene):
+    source = _pyrosource(scene)
+    source.parm("initialize").set("source")
+    res = _set(client, {"path": f"{source.path()}/initialize", "press": True})
+    assert res["pressed"] is True and source.parm("attributes").eval() == 2
+    created = client.ok(
+        "node_create",
+        {
+            "items": [
+                {
+                    "parent": scene["geo"].path(),
+                    "type": "pyrosource",
+                    "name": "src2",
+                    "parms": {"initialize": {"value": "sourcecolor", "press": True}},
+                }
+            ]
+        },
+    )
+    assert created["results"][0]["path"] == f"{scene['geo'].path()}/src2"
+    assert hou.node(f"{scene['geo'].path()}/src2").parm("attributes").eval() >= 2
+
+
+def test_node_create_parms_are_callback_aware(client, scene):
+    """Review 20 N2: node_create parms note a skipped callback as parm_set does, and
+    {value, press: true} runs it (after the inputs are wired)."""
+    geo = scene["geo"].path()
+    sphere = scene["geo"].createNode("sphere")
+    plain = client.ok(
+        "node_create",
+        {"items": [{"parent": geo, "type": "pyrosource", "parms": {"initialize": "source"}}]},
+    )["results"][0]
+    node = hou.node(plain["path"])
+    assert node.parm("attributes").eval() == 0  # the callback did not run
+    (note,) = [n for n in plain["notes"] if "callback" in n]
+    assert '"initialize": {"value": ..., "press": true}' in note
+    pressed = client.ok(
+        "node_create",
+        {
+            "items": [
+                {
+                    "parent": geo,
+                    "type": "pyrosource",
+                    "inputs": [{"index": 0, "from": sphere.path()}],
+                    "parms": {"initialize": {"value": "source", "press": True}},
+                }
+            ],
+            "return": "full",
+        },
+    )["results"][0]
+    node = hou.node(pressed["path"])
+    assert node.parm("attributes").eval() == 2  # density and temperature
+    assert node.inputs()[0] == sphere
+    assert pressed["side_effects"]["initialize"] == ["source", "none"]
+    assert "attributes" in pressed["side_effects"]
+    assert not any("callback" in n for n in pressed.get("notes", []))
+
+
+def test_press_on_a_parm_without_callback_is_refused(client, scene):
+    err = client.error(
+        "parm_set", {"items": [{"path": "/obj/geo1/box1/type", "value": "polymesh", "press": True}]}
+    )
+    assert err["code"] == "invalid_value"
+    assert "callback" in err["message"]

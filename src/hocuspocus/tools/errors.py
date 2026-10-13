@@ -10,6 +10,8 @@ from typing import Any
 
 ERROR_CODES: dict[str, str] = {
     "houdini_offline": "No live Houdini instance is connected.",
+    "instance_lost": "The pinned Houdini exited; the bridge does not switch to another on its own.",
+    "ambiguous_instance": "Several Houdinis run and none is pinned; pin one before changing a scene.",
     "houdini_busy": "Houdini's main thread did not finish the call within the timeout.",
     "delivery_unknown": "The request was sent but the response was lost; inspect state before repeating.",
     "version_mismatch": "Host and bridge speak different hp RPC versions.",
@@ -50,7 +52,7 @@ class ToolError(Exception):
         message: str,
         *,
         hint: str | None = None,
-        candidates: list[str] | None = None,
+        candidates: list[Any] | None = None,
         hou_exception: str | None = None,
         detail: Any = None,
         retryable: bool | None = None,

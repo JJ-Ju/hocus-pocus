@@ -37,6 +37,8 @@ class Instance:
     label: str = ""
     launched_by: int | None = None
     """The pid of the HocusPocus bridge that launched this Houdini, if one did."""
+    name: str = ""
+    """A name the agent gave this Houdini with ``houdini_connect {pid, name}`` (1.3)."""
     file: Path | None = field(default=None, compare=False)
 
     @classmethod
@@ -53,6 +55,7 @@ class Instance:
             generation=int(data.get("generation") or 0),
             label=str(data.get("label") or ""),
             launched_by=_optional_pid(data.get("launched_by")),
+            name=str(data.get("name") or ""),
             file=file,
         )
 
@@ -68,7 +71,21 @@ class Instance:
             "started": self.started,
             "generation": self.generation,
             "launched_by": self.launched_by,
+            **({"name": self.name} if self.name else {}),
         }
+
+    def candidate(self) -> dict[str, Any]:
+        """How an error names this instance as a choice: ``{pid, label, ui, hip, name?}``."""
+        out: dict[str, Any] = {"pid": self.pid, "label": self.label, "ui": self.ui, "hip": self.hip}
+        if self.name:
+            out["name"] = self.name
+        return out
+
+    def describe(self) -> str:
+        """``3084 'editor' (houdinifx, GUI, city.hip)``: one instance in a sentence."""
+        hip = self.hip.replace("\\", "/").rsplit("/", 1)[-1] if self.hip else "untitled"
+        name = f" '{self.name}'" if self.name else ""
+        return f"{self.pid}{name} ({self.label or 'houdini'}, {'GUI' if self.ui else 'headless'}, {hip})"
 
 
 def _optional_pid(value: Any) -> int | None:
@@ -183,39 +200,82 @@ def sort_recent(instances: Iterable[Instance]) -> list[Instance]:
 # -- selection -----------------------------------------------------------------------------
 
 
+def sort_preferred(instances: Iterable[Instance]) -> list[Instance]:
+    """The order the bridge prefers when nothing is pinned: GUI sessions first (the user's
+    scene; review 19 papercut 2), then the most recently started."""
+    recent = sort_recent(instances)
+    return [i for i in recent if i.ui] + [i for i in recent if not i.ui]
+
+
 @dataclass(frozen=True, slots=True)
 class Selection:
     instance: Instance | None
     warnings: tuple[str, ...] = ()
     live_count: int = 0
+    pinned: bool = False
+    """True when ``instance`` is the one ``houdini_connect`` pinned."""
+    lost_pid: int | None = None
+    """The pinned pid when it is no longer live (``instance`` is then None)."""
+    candidates: tuple[Instance, ...] = ()
+    """Every live instance, in preference order."""
 
     @property
     def multiple(self) -> bool:
         return self.live_count > 1
 
+    @property
+    def ambiguous(self) -> bool:
+        """Several live instances and none pinned: mutating tools must refuse."""
+        return not self.pinned and self.instance is not None and self.live_count > 1
+
 
 def select(instances: list[Instance], preferred_pid: int | None = None) -> Selection:
-    """BIBLE §3.3 rule 3: explicit → the only live one → the most recent (with a warning)."""
-    ordered = sort_recent(instances)
-    warnings: list[str] = []
+    """BIBLE §3.3 rule 3 (1.3): the pinned instance, never another one in its place (a dead
+    pin is ``lost_pid``) → the only live one → with several, the preferred one
+    (:func:`sort_preferred`) for reads only, with a warning."""
+    ordered = sort_preferred(instances)
     if preferred_pid is not None:
         for inst in ordered:
             if inst.pid == preferred_pid:
-                return Selection(inst, (), len(ordered))
-        warnings.append(
-            f"The Houdini you were driving (pid {preferred_pid}) has exited; changes made in it "
-            "since its last save are lost. Selecting another live instance."
-        )
+                return Selection(inst, (), len(ordered), pinned=True, candidates=tuple(ordered))
+        return Selection(None, (), len(ordered), lost_pid=preferred_pid, candidates=tuple(ordered))
     if not ordered:
-        return Selection(None, tuple(warnings), 0)
+        return Selection(None, (), 0)
     chosen = ordered[0]
+    warnings: list[str] = []
     if len(ordered) > 1:
-        others = ", ".join(str(i.pid) for i in ordered[1:])
-        warnings.append(
-            f"{len(ordered)} Houdini instances are running; using the most recent (pid {chosen.pid}). "
-            f"Others: {others}. Pin one with houdini_connect {{pid}}."
-        )
-    return Selection(chosen, tuple(warnings), len(ordered))
+        warnings.append(ambiguity_warning(chosen, ordered))
+    return Selection(chosen, tuple(warnings), len(ordered), candidates=tuple(ordered))
+
+
+def ambiguity_warning(chosen: Instance, ordered: list[Instance]) -> str:
+    choices = "; ".join(inst.describe() for inst in ordered)
+    return (
+        f"{len(ordered)} Houdini instances are running and none is pinned: reads go to pid "
+        f"{chosen.pid}, and tools that change a scene refuse with ambiguous_instance. Pin one "
+        f"with houdini_connect {{pid}}: {choices}."
+    )
+
+
+def set_name(inst: Instance, name: str) -> None:
+    """Store ``name`` in ``inst``'s registry entry (the host keeps it on later rewrites)."""
+    from ..host.registry import _write_private_atomic
+
+    if inst.file is None:
+        return
+    try:
+        data = json.loads(inst.file.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise ToolError(
+            "houdini_offline",
+            f"Cannot read the registry entry of pid {inst.pid}: {exc}",
+            retryable=False,
+        ) from exc
+    if name:
+        data["name"] = name
+    else:
+        data.pop("name", None)
+    _write_private_atomic(inst.file, json.dumps(data, indent=1))
 
 
 # -- launch records ----------------------------------------------------------------------

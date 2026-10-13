@@ -55,6 +55,7 @@ def _lop_scene(work_dir: Path, picture: str | None = "k.$F4.exr"):
 # -- render on USD render ROPs (papercuts 1 and 2) --------------------------------------
 
 
+@pytest.mark.slow
 def test_render_usd_rop_reports_the_render_product(client, work_dir):
     nodes = _lop_scene(work_dir)
     result = client.ok("render", {"rop_path": nodes["rop"].path(), "wait_s": 300})
@@ -70,6 +71,7 @@ def test_render_usd_rop_reports_the_render_product(client, work_dir):
     assert hi - lo > 20
 
 
+@pytest.mark.slow
 def test_render_usd_rop_outputimage_wins_and_output_overrides_it(client, work_dir):
     nodes = _lop_scene(work_dir)
     rop = nodes["rop"]
@@ -85,6 +87,7 @@ def test_render_usd_rop_outputimage_wins_and_output_overrides_it(client, work_di
     assert rop.parm("lopoutput").unexpandedString() == "__render__.usd"
 
 
+@pytest.mark.slow
 def test_render_unsupported_extension_notes_the_missing_thumbnail(client, work_dir):
     """Review 16 N4: an output the thumbnail cannot read said nothing."""
     nodes = _lop_scene(work_dir)
@@ -95,6 +98,7 @@ def test_render_unsupported_extension_notes_the_missing_thumbnail(client, work_d
     assert ".xyz" in note and ".png" in note and ".exr" in note
 
 
+@pytest.mark.slow
 def test_render_out_usdrender_follows_loppath(client, work_dir):
     nodes = _lop_scene(work_dir, picture="out.$F4.exr")
     rop = hou.node("/out").createNode("usdrender", "karma_out")
@@ -145,6 +149,7 @@ def _center_lit(image: dict) -> bool:
     return abs(center - corner) > 20
 
 
+@pytest.mark.slow
 def test_capture_lop_camera_renders_the_stage(client, work_dir):
     nodes = _lop_scene(work_dir)
     hou.node("/obj").createNode("geo", "unrelated").createNode("box").setDisplayFlag(True)
@@ -165,6 +170,7 @@ def test_capture_lop_camera_renders_the_stage(client, work_dir):
     ]
 
 
+@pytest.mark.slow
 def test_capture_camera_prim_with_lop_path(client, work_dir):
     nodes = _lop_scene(work_dir)
     result = client.ok(
@@ -176,6 +182,7 @@ def test_capture_camera_prim_with_lop_path(client, work_dir):
     assert result["camera_used"] == "/cameras/cam1"
 
 
+@pytest.mark.slow
 def test_capture_lop_path_frames_the_stage(client, work_dir):
     nodes = _lop_scene(work_dir)
     result = client.ok("viewport_capture", {"lop_path": "/stage", "resolution": [160, 120]})
@@ -186,6 +193,7 @@ def test_capture_lop_path_frames_the_stage(client, work_dir):
     assert _center_lit(result["image"])
 
 
+@pytest.mark.slow
 def test_capture_without_obj_geometry_uses_the_stage(client, work_dir):
     _lop_scene(work_dir)
     result = client.ok("viewport_capture", {"resolution": [160, 120]})
@@ -193,6 +201,7 @@ def test_capture_without_obj_geometry_uses_the_stage(client, work_dir):
     assert _center_lit(result["image"])
 
 
+@pytest.mark.slow
 def test_capture_obj_scene_notes_the_stage(client, work_dir):
     _lop_scene(work_dir)
     hou.node("/obj").createNode("geo", "g").createNode("box").setDisplayFlag(True)
@@ -274,6 +283,7 @@ def _city_scene():
     return {"cam": cam, "rset": rset}
 
 
+@pytest.mark.slow
 def test_capture_city_stage_headless(client, work_dir):
     """N1: the review-16 scene shape captures through the OpenGL child (single-threaded)."""
     nodes = _city_scene()
@@ -288,6 +298,7 @@ def test_capture_city_stage_headless(client, work_dir):
     assert [c.name() for c in hou.node("/stage").children()] == before
 
 
+@pytest.mark.slow
 def test_capture_falls_back_to_karma_when_the_child_crashes(client, work_dir, monkeypatch):
     """N1 fallback: an OpenGL child that crashes is replaced by a temporary Karma ROP in the
     host; the next stage capture skips the OpenGL child. No node is left behind."""
@@ -315,6 +326,7 @@ def test_capture_falls_back_to_karma_when_the_child_crashes(client, work_dir, mo
     assert {n: [c.name() for c in hou.node(n).children()] for n in before} == before
 
 
+@pytest.mark.slow
 def test_capture_crash_error_is_short(client, work_dir, monkeypatch):
     """N1: when the fallback cannot run either (an /obj capture whose child crashes and
     Karma fails), the error stays short: no 4 KB crash dump."""
