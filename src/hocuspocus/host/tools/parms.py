@@ -28,7 +28,15 @@ from typing import Any
 
 from hocuspocus.tools.errors import ToolError
 
-from ._common import arg_bool, elide_string, hou_exception_text, hou_message, require_node
+from ._common import (
+    DYNAMIC_MENU_NOTE,
+    arg_bool,
+    elide_string,
+    hou_exception_text,
+    hou_message,
+    menu_is_dynamic,
+    require_node,
+)
 from ._diag import cheap_cook_problems
 from .registry import HostContext, tool
 
@@ -188,7 +196,7 @@ def _menu_mode(template: Any, kind: str) -> str | None:
     if kind not in ("string", "int"):
         return None
     try:
-        if not template.menuItems() and not template.itemGeneratorScript():
+        if not template.menuItems() and not menu_is_dynamic(template):
             return None
     except Exception:
         return None
@@ -362,12 +370,34 @@ def _hda_locked(parm: Any) -> bool:
         return False
 
 
-def _menu_dict(parm: Any, token: Any) -> dict[str, Any] | None:
+def _menu_items(parm: Any) -> tuple[list[str], list[str]] | None:
     try:
-        items = list(parm.menuItems())
-        labels = list(parm.menuLabels())
+        return list(parm.menuItems()), list(parm.menuLabels())
     except Exception:
         return None
+
+
+def _menu_dict(parm: Any, token: Any) -> dict[str, Any] | None:
+    """``{token, label, index?, items, item_count, truncated?}``. A dynamic menu (a menu
+    script, or one Houdini builds from the input geometry; review 14 papercut 10) is
+    evaluated on this parm and adds ``dynamic: true``; when it is still empty after a
+    cook of the node, or cannot be evaluated, ``items`` is ``[]`` with a ``note``."""
+    try:
+        dynamic = menu_is_dynamic(parm.parmTemplate())
+    except Exception:
+        dynamic = False
+    read = _menu_items(parm)
+    if dynamic and not (read and read[0]):
+        import hou
+
+        node = parm.node()
+        if isinstance(node, hou.SopNode):  # a group or attribute menu reads the cooked input
+            with contextlib.suppress(Exception):
+                node.cook()
+            read = _menu_items(parm) or read
+    if read is None and not dynamic:
+        return None
+    items, labels = read or ([], [])
     out: dict[str, Any] = {"token": token, "label": None}
     if token in items:
         index = items.index(token)
@@ -380,6 +410,10 @@ def _menu_dict(parm: Any, token: Any) -> dict[str, Any] | None:
     out["item_count"] = len(items)
     if len(items) > MENU_ITEMS_LIMIT:
         out["truncated"] = True
+    if dynamic:
+        out["dynamic"] = True
+        if not items:
+            out["note"] = DYNAMIC_MENU_NOTE
     return out
 
 

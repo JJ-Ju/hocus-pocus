@@ -919,7 +919,10 @@ _PARMS: tuple[ToolSpec, ...] = (
         ),
         notes=(
             "frame defaults to the current frame. template is {label, type, default, min, max, "
-            "help}; menu items are capped at 50; keys is {count, first, last}. On a LOP a USD "
+            "help}; menu items are capped at 50; a menu Houdini builds on the node (a menu "
+            "script, or a SOP group or attribute menu) is evaluated on it and marked dynamic: "
+            "true, with items [] and a note when it is empty even after a cook of the SOP. keys "
+            "is {count, first, last}. On a LOP a USD "
             "attribute name (.../inputs:intensity) reads Houdini's encoded parm "
             "(xn__inputsintensity_i0a), named in path and name."
         ),
@@ -1454,7 +1457,10 @@ _VISUAL: tuple[ToolSpec, ...] = (
         notes=(
             'folder takes a label, an "A / B" path, or "" / "(no folder)" for the top-level parms. '
             "include_help adds the first ~2 KB of the node help. With folder or parms the inputs "
-            "list becomes inputs_count, and detail full leaves out the folder list."
+            "list becomes inputs_count, and detail full leaves out the folder list. In detail "
+            "full a script menu (pdg_cachemode) or a menu built from input geometry (a SOP "
+            "group) is evaluated on a temporary instance: menu {items, dynamic: true}, or items "
+            "[] with a note when it evaluates empty there."
         ),
         input_schema=_obj(
             {

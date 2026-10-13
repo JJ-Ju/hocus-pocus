@@ -750,6 +750,30 @@ def _spare(node, template):
     return node.parm(template.name())
 
 
+def test_dynamic_menus_are_evaluated_on_the_live_parm(client, scene):
+    """Review 14 papercut 10: a script menu (pdg_cachemode) and a SOP group menu (built
+    from the input's groups) are read from the parm and marked dynamic."""
+    geo = scene["geo"]
+    group = geo.createNode("groupcreate", "grp")
+    group.setInput(0, scene["box"])
+    group.parm("groupname").set("mygroup")
+    blast = geo.createNode("blast", "blast1")
+    blast.setInput(0, group)  # never cooked: parm_get cooks it to read the groups
+    got = _get(client, f"{blast.path()}/group", include=["menu"])
+    assert got["menu"]["dynamic"] is True
+    assert {"token": "mygroup", "label": "mygroup"} in got["menu"]["items"]
+    lonely = geo.createNode("blast", "no_input")
+    got = _get(client, f"{lonely.path()}/group", include=["menu"])
+    assert got["menu"]["dynamic"] is True and got["menu"]["items"] == []
+    assert got["menu"]["note"]
+    assert "dynamic" not in _get(client, f"{blast.path()}/grouptype", include=["menu"])["menu"]
+
+    gen = hou.node("/obj").createNode("topnet", "topnet1").createNode("genericgenerator", "gen")
+    got = _get(client, f"{gen.path()}/pdg_cachemode", include=["menu"])
+    assert got["menu"]["dynamic"] is True and got["menu"]["token"] == "0"
+    assert {"token": "2", "label": "Write Files"} in got["menu"]["items"]
+
+
 def test_int_menus_free_menus_and_strict_ranges(client, scene):
     null = scene["geo"].createNode("null", "CTRL")
     _spare(

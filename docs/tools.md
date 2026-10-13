@@ -564,7 +564,7 @@ Build or update a network under parent from Houdini's hou.data childrenAsData fo
 
 Read parms by parm (.../tx), tuple (.../t: all components) or component path: value at frame, raw if different, expression, is_default, locked (parm lock), hda_locked. Strings over 200 chars are {elided, head} unless full_strings. Tuples add per-component expressions and keyed names.
 
-**Notes.** frame defaults to the current frame. template is {label, type, default, min, max, help}; menu items are capped at 50; keys is {count, first, last}. On a LOP a USD attribute name (.../inputs:intensity) reads Houdini's encoded parm (xn__inputsintensity_i0a), named in path and name.
+**Notes.** frame defaults to the current frame. template is {label, type, default, min, max, help}; menu items are capped at 50; a menu Houdini builds on the node (a menu script, or a SOP group or attribute menu) is evaluated on it and marked dynamic: true, with items [] and a note when it is empty even after a cook of the SOP. keys is {count, first, last}. On a LOP a USD attribute name (.../inputs:intensity) reads Houdini's encoded parm (xn__inputsintensity_i0a), named in path and name.
 
 ### Arguments
 
@@ -956,7 +956,7 @@ Find node types by name, label, description or keyword, in all 18 categories or 
 
 Describe one node type: label, version, named inputs and outputs, parms by folder. detail compact gives name, label, type, default rows; full adds size, range, menu and folder; folders lists folders with parm counts. folder and parms (globs, a|b) narrow the parms.
 
-**Notes.** folder takes a label, an "A / B" path, or "" / "(no folder)" for the top-level parms. include_help adds the first ~2 KB of the node help. With folder or parms the inputs list becomes inputs_count, and detail full leaves out the folder list.
+**Notes.** folder takes a label, an "A / B" path, or "" / "(no folder)" for the top-level parms. include_help adds the first ~2 KB of the node help. With folder or parms the inputs list becomes inputs_count, and detail full leaves out the folder list. In detail full a script menu (pdg_cachemode) or a menu built from input geometry (a SOP group) is evaluated on a temporary instance: menu {items, dynamic: true}, or items [] with a note when it evaluates empty there.
 
 ### Arguments
 

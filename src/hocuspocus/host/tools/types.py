@@ -20,12 +20,13 @@ import re
 import threading
 import time
 import zipfile
+from collections.abc import Iterator
 from typing import Any
 
 from hocuspocus.tools.catalog import CATEGORIES
 from hocuspocus.tools.errors import ToolError
 
-from ._common import arg_bool, int_arg
+from ._common import DYNAMIC_MENU_NOTE, arg_bool, int_arg, menu_is_dynamic
 from .registry import HostContext, tool
 
 # -- help archive -----------------------------------------------------------------
@@ -757,45 +758,55 @@ def _mark_internal(node: Any) -> None:
         node.setUserData(INTERNAL_KEY, "1")
 
 
+@contextlib.contextmanager
+def probe_instance(node_type: Any) -> Iterator[Any]:
+    """A throwaway instance of ``node_type``, or None when the category has no creatable
+    parent. Created with undo disabled and events muted, so it never shows in ``events``
+    or the undo stack, and destroyed (with its temporary container) when the block ends."""
+    import hou
+
+    from .events import muted
+
+    with hou.undos.disabler(), muted():
+        parent, cleanup = _probe_parent(node_type.category().name())
+        if parent is None:
+            yield None
+            return
+        node = None
+        try:
+            # load_contents: an HDA's outputs come from its contents (a
+            # multi-output asset reports one output without them).
+            node = parent.createNode(
+                node_type.name(), TMP_NAME if cleanup is None else None,
+                run_init_scripts=False, load_contents=True,
+            )  # fmt: skip
+            _mark_internal(node)
+            yield node
+        finally:
+            target = cleanup if cleanup is not None else node
+            if target is not None:
+                with contextlib.suppress(Exception):
+                    target.destroy()
+
+
 def type_io(node_type: Any) -> dict[str, Any]:
     """Named inputs/outputs of a type, read from a throwaway instance (cached per type).
 
-    The instance is created with undo disabled and destroyed immediately. Falls back to
-    generic ``inputN`` names when the category has no creatable parent.
+    Falls back to generic ``inputN`` names when the category has no creatable parent.
     """
     key = node_type.nameWithCategory()
     cached = _IO_CACHE.get(key)
     if cached is not None:
         return cached
-    import hou
-
-    from .events import muted
-
     data: dict[str, Any] | None = None
     try:
-        # Outside undo and muted: the probe never shows in ``events`` or the undo stack.
-        with hou.undos.disabler(), muted():
-            parent, cleanup = _probe_parent(node_type.category().name())
-            if parent is not None:
-                node = None
-                try:
-                    # load_contents: an HDA's outputs come from its contents (a
-                    # multi-output asset reports one output without them).
-                    node = parent.createNode(
-                        node_type.name(), TMP_NAME if cleanup is None else None,
-                        run_init_scripts=False, load_contents=True,
-                    )  # fmt: skip
-                    _mark_internal(node)
-                    data = {
-                        "inputs": _io_rows(node.inputNames(), node.inputLabels()),
-                        "outputs": _io_rows(node.outputNames(), node.outputLabels()),
-                        "source": "instance",
-                    }
-                finally:
-                    target = cleanup if cleanup is not None else node
-                    if target is not None:
-                        with contextlib.suppress(Exception):
-                            target.destroy()
+        with probe_instance(node_type) as node:
+            if node is not None:
+                data = {
+                    "inputs": _io_rows(node.inputNames(), node.inputLabels()),
+                    "outputs": _io_rows(node.outputNames(), node.outputLabels()),
+                    "source": "instance",
+                }
     except Exception:
         data = None
     if data is None:
@@ -981,6 +992,8 @@ def _template_row(
             if 0 <= index < len(items):
                 row["default_token"] = items[index]
         row["menu"] = menu
+    elif menu_is_dynamic(template):
+        row["menu"] = {"dynamic": True, "items": []}  # evaluate_dynamic_menus fills it
     help_text = (template.help() or "").strip()
     if not help_text and parm_help:
         help_text = parm_help.get((template.label() or "").strip().lower(), "")
@@ -991,6 +1004,42 @@ def _template_row(
     if path:
         row["folder"] = " / ".join(path)
     return row
+
+
+def evaluate_dynamic_menus(node_type: Any, rows: list[dict[str, Any]]) -> None:
+    """Fill the ``menu`` of rows whose menu Houdini computes on an instance (a menu
+    script such as ``pdg_cachemode``, or a SOP ``group`` menu; review 14 papercut 10) from
+    one throwaway instance: ``{items, dynamic: true, total?}``, and ``default_token`` for a
+    menu default. A menu that evaluates empty or fails keeps ``items: []`` with a ``note``."""
+    pending = [row for row in rows if (row.get("menu") or {}).get("dynamic")]
+    if not pending:
+        return
+    evaluated: dict[str, tuple[list[str], list[str]]] = {}
+    with contextlib.suppress(Exception), probe_instance(node_type) as node:
+        for row in pending if node is not None else ():
+            parm = node.parm(row["name"])
+            if parm is None:
+                continue
+            with contextlib.suppress(Exception):
+                evaluated[row["name"]] = (list(parm.menuItems()), list(parm.menuLabels()))
+    for row in pending:
+        items, labels = evaluated.get(row["name"], ([], []))
+        if not items:
+            row["menu"] = {"dynamic": True, "items": [], "note": DYNAMIC_MENU_NOTE}
+            continue
+        menu: dict[str, Any] = {
+            "items": [
+                [tok, labels[i] if i < len(labels) else tok]
+                for i, tok in enumerate(items[:MENU_CAP])
+            ],
+            "dynamic": True,
+        }
+        if len(items) > MENU_CAP:
+            menu["total"] = len(items)
+        index = row.get("default")
+        if row["type"] == "menu" and isinstance(index, int) and 0 <= index < len(items):
+            row["default_token"] = items[index]
+        row["menu"] = menu
 
 
 # -- tools ------------------------------------------------------------------------------
@@ -1183,6 +1232,7 @@ def node_type_info(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
         elif detail == "full":
             if not narrowed:
                 result["folders"] = folders
+            evaluate_dynamic_menus(node_type, rows)
             result["parms"] = rows
         else:
             for key in ("help_url", "tags"):  # rarely needed to build with the type

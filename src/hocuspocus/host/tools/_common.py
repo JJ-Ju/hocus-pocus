@@ -221,3 +221,43 @@ def page(
                 break
     end = start + len(chunk)
     return chunk, (str(end) if end < len(rows) else None)
+
+
+# -- menus ----------------------------------------------------------------------------
+
+DYNAMIC_MENU_NOTE = (
+    "Houdini builds this menu on a node (a menu script, or the input's groups and "
+    "attributes) and it evaluated empty here. Read it with parm_get include: [menu] on a "
+    "node whose inputs are wired and cooked, or set the value directly."
+)
+"""Note on a dynamic menu that evaluated to no items (review 14 papercut 10)."""
+
+
+def menu_is_dynamic(template: Any) -> bool:
+    """Whether Houdini computes this parm's menu on an instance, so the template's
+    ``menuItems()`` is empty: a menu script (``itemGeneratorScript``), or a menu built in
+    C++ with no static items (a ``Menu`` template without items, or a string menu of type
+    toggle/replace such as a SOP ``group``). ``parm.menuItems()`` evaluates either."""
+    import hou
+
+    types = hou.parmTemplateType
+    try:
+        kind = template.type()
+        if kind not in (types.Menu, types.String, types.Int):
+            return False
+    except Exception:
+        return False
+    with contextlib.suppress(Exception):
+        if template.itemGeneratorScript():
+            return True
+    try:
+        if template.menuItems():
+            return False
+    except Exception:
+        return False
+    if kind == types.Menu:
+        return True
+    try:
+        return template.menuType() != hou.menuType.Normal
+    except Exception:
+        return False
