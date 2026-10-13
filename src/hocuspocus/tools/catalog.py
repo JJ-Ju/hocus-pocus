@@ -1385,7 +1385,9 @@ _VISUAL: tuple[ToolSpec, ...] = (
             "outputs, a thumbnail and notes; else job_id to poll with job."
         ),
         notes=(
-            "Above 5 outputs only outputs_summary is inline; job result lists them all. Every "
+            "Above 5 outputs the result, inline or from job result, has outputs_summary and "
+            "outputs_sample (the first 2 and last 2) instead of outputs; missing lists up to 20 "
+            "paths. Every "
             "expected output is checked against approved_roots. viewport_capture is the quick look."
             " notes warn when the scene has no lights, when the thumbnail (as sent, flattened onto "
             "grey) is nearly black, and when every pixel is transparent (empty), "

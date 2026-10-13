@@ -344,3 +344,20 @@ def test_thumbnail_luminance_is_measured_on_the_flattened_image(tmp_path):
 
     dark_opaque = Image.new("RGBA", (200, 100), (1, 1, 1, 255))
     assert "nearly black" in thumbnail_note(*measure(dark_opaque))
+
+
+def test_render_outputs_listing_samples_long_sequences():
+    """Review 20 N5: at most 5 outputs are listed; above that a summary, the first and
+    last two, and at most 20 missing paths."""
+    from hocuspocus.host.tools.visual import outputs_listing
+
+    paths = [f"C:/r/s.{i:04d}.exr" for i in range(1, 49)]
+    assert outputs_listing(paths[:5], []) == {"outputs": paths[:5]}
+    many = outputs_listing(paths[:40], paths[40:])
+    assert "outputs" not in many
+    assert many["outputs_sample"] == [paths[0], paths[1], paths[38], paths[39]]
+    assert many["outputs_summary"]["count"] == 40
+    assert many["outputs_summary"]["missing_count"] == 8
+    assert many["missing"] == paths[40:]
+    none = outputs_listing([], paths)
+    assert none["outputs"] == [] and len(none["missing"]) == 20

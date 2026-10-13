@@ -90,7 +90,12 @@ through the environment, the rest are Houdini's own."""
 FRAME_TIMEOUT_S = 24 * 3600.0
 JOB_POLL_S = 0.1
 INLINE_OUTPUTS = 5
-"""A render result lists at most this many outputs; above it, ``outputs_summary`` only."""
+"""A render result lists at most this many outputs; above it, ``outputs_summary`` and
+``outputs_sample``, in the direct result and in ``job result`` alike (review 20 N5)."""
+OUTPUTS_SAMPLE_ENDS = 2
+"""``outputs_sample`` is this many outputs from each end of the sequence."""
+MISSING_LISTED = 20
+"""``missing`` lists at most this many paths; ``outputs_summary.missing_count`` counts all."""
 DARK_MEAN = 8.0
 """A thumbnail whose mean luminance (0..255), measured on the flattened image the agent
 receives, is below this is reported as nearly black."""
@@ -2088,7 +2093,10 @@ def press_button(node: Any, parm: Any) -> dict[str, Any]:
         errors: list[str] = []
         with contextlib.suppress(Exception):
             errors = error_lines([str(e) for e in rop.errors()])
-        detail: dict[str, Any] = {"missing": missing[:20], "missing_count": len(missing)}
+        detail: dict[str, Any] = {
+            "missing": missing[:MISSING_LISTED],
+            "missing_count": len(missing),
+        }
         if errors:
             detail["errors"] = errors[:5]
         raise ToolError(
@@ -2369,6 +2377,22 @@ def _prepare_render(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     }
 
 
+def outputs_listing(outputs: list[str], missing: list[str]) -> dict[str, Any]:
+    """``outputs`` when there are at most :data:`INLINE_OUTPUTS`, else ``outputs_summary``
+    plus ``outputs_sample`` (the first and last :data:`OUTPUTS_SAMPLE_ENDS`); ``missing``
+    up to :data:`MISSING_LISTED`. A 48-frame render's ``job result`` was 8 KB of paths
+    (review 20 N5). No ``hou``."""
+    out: dict[str, Any] = {}
+    if len(outputs) > INLINE_OUTPUTS:
+        out["outputs_summary"] = outputs_summary(outputs, missing)
+        out["outputs_sample"] = outputs[:OUTPUTS_SAMPLE_ENDS] + outputs[-OUTPUTS_SAMPLE_ENDS:]
+    else:
+        out["outputs"] = outputs
+    if missing:
+        out["missing"] = missing[:MISSING_LISTED]
+    return out
+
+
 def thumbnail_note(mean_luma: float | None, coverage: float | None) -> str | None:
     """The note on how a render thumbnail looks, from :func:`encode_png`'s ``measure``:
     a fully transparent image is empty; an opaque or mostly opaque one whose flattened
@@ -2393,12 +2417,8 @@ def _render_result(plan: dict[str, Any], thumbnail: bool) -> dict[str, Any]:
     result: dict[str, Any] = {
         "rop_path": plan.get("owner") or plan["rop"],
         "frames": [num(v) for v in plan["frames"]],
-        "outputs": outputs,
     }
-    if missing:
-        result["missing"] = missing[:20]
-    if len(outputs) > INLINE_OUTPUTS:
-        result["outputs_summary"] = outputs_summary(outputs, missing)
+    result.update(outputs_listing(outputs, missing))
     notes: list[str] = []
     if plan.get("owner"):
         notes.append(f"{plan['owner']} rendered through its ROP {plan['rop']}.")
@@ -2657,10 +2677,6 @@ def render(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
         result = dict(job.result)
         result["job_id"] = job.id
         result["state"] = "done"
-        if "outputs_summary" in result:
-            # The full list stays on the job (review 11 B6).
-            result.pop("outputs", None)
-            result["hint"] = "job {action: result, job_id} lists every output."
         return result
     if job.state in ("failed", "cancelled") and job.error:
         raise ToolError.from_dict(job.error)

@@ -511,21 +511,25 @@ def _bgeo_rop(work_dir: Path, pattern: str = "s.$F4.bgeo.sc"):
 
 
 def test_render_over_five_outputs_returns_a_summary(client, work_dir):
-    """Review 11 B6: a sequence returns outputs_summary inline, the list via job result."""
+    """Review 11 B6, review 20 N5: a sequence returns outputs_summary and outputs_sample,
+    inline and from job result alike, never every path."""
     rop = _bgeo_rop(work_dir)
     result = client.ok("render", {"rop_path": rop.path(), "frames": [1, 8]})
     assert result["state"] == "done"
-    assert "outputs" not in result
+    assert "outputs" not in result and "hint" not in result
     summary = result["outputs_summary"]
     assert summary["count"] == 8 and summary["missing_count"] == 0
     assert summary["first"] == _fwd(work_dir / "s.0001.bgeo.sc")
     assert summary["last"] == _fwd(work_dir / "s.0008.bgeo.sc")
     assert summary["pattern"] == _fwd(work_dir / "s.####.bgeo.sc")
-    assert "action: result" in result["hint"]
-    full = client.ok("job", {"action": "result", "job_id": result["job_id"]})["result"]
-    assert full["outputs"] == [_fwd(work_dir / f"s.{i:04d}.bgeo.sc") for i in range(1, 9)]
+    assert result["outputs_sample"] == [_fwd(work_dir / f"s.{i:04d}.bgeo.sc") for i in (1, 2, 7, 8)]
+    job = client.ok("job", {"action": "result", "job_id": result["job_id"]})["result"]
+    assert "outputs" not in job
+    assert job["outputs_summary"] == summary
+    assert job["outputs_sample"] == result["outputs_sample"]
     few = client.ok("render", {"rop_path": rop.path(), "frames": [1, 5]})
     assert len(few["outputs"]) == 5 and "outputs_summary" not in few
+    assert "outputs_sample" not in few
 
 
 def test_render_waits_job_threshold_by_default(client, work_dir):
