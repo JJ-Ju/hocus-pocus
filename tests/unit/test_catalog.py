@@ -133,6 +133,28 @@ def test_annotations(spec: catalog.ToolSpec) -> None:
         assert spec.output_schema["type"] == "object"
 
 
+# MCP ToolAnnotations defaults (2025-06-18 schema).
+MCP_HINT_DEFAULTS = {
+    "readOnlyHint": False,
+    "destructiveHint": True,
+    "idempotentHint": False,
+    "openWorldHint": True,
+}
+
+
+@pytest.mark.parametrize("spec", TOOLS, ids=_ids)
+def test_wire_annotations_mean_the_same_under_mcp_defaults(spec: catalog.ToolSpec) -> None:
+    full = spec.annotations()
+    wire = spec.wire_annotations()
+    assert set(wire) <= set(full) and len(wire) < len(full)
+    resolved = {**MCP_HINT_DEFAULTS, **wire}
+    assert resolved["readOnlyHint"] == full["readOnlyHint"]
+    assert resolved["openWorldHint"] is False
+    if not full["readOnlyHint"]:  # destructive/idempotent are meaningful only then
+        assert resolved["destructiveHint"] == full["destructiveHint"]
+        assert resolved["idempotentHint"] == full["idempotentHint"]
+
+
 def test_examples_validate() -> None:
     assert validate_examples(TOOLS) == []
     for spec in TOOLS:
@@ -162,6 +184,11 @@ TOOLS_LIST_WIRE_MAX_BYTES = 44_000
 """Cap on the serialised ``tools/list`` result a client receives (review 11 §1.1): names,
 descriptions, input and output schemas and annotations, for the full profile."""
 
+TOOLS_LIST_WIRE_TARGET_BYTES = 40_000
+"""1.2 headroom target (BIBLE §4.1): the full profile sits at or under 40,000 bytes, leaving
+4 KB under the cap for new tools. Argument detail lives in each spec's ``notes``
+(``docs/tools.md`` and ``hocuspocus://guide``), not in ``tools/list``."""
+
 
 def tools_list_wire_size(profile: str, result_content: str = "both") -> int:
     """Bytes of the ``ListToolsResult`` the bridge sends, serialised as the SDK does.
@@ -189,7 +216,35 @@ def test_tools_list_budget(capsys: pytest.CaptureFixture[str]) -> None:
             f"names+descriptions+input schemas {tools_list_text_size(TOOLS):,} B"
         )
     assert sizes["core"] < sizes["full"] <= TOOLS_LIST_WIRE_MAX_BYTES, sizes
+    assert sizes["full"] <= TOOLS_LIST_WIRE_TARGET_BYTES, (
+        f"tools/list (full profile, output schemas declared) is {sizes['full']:,} B, over the "
+        f"{TOOLS_LIST_WIRE_TARGET_BYTES:,} B headroom target (BIBLE §4.1; hard cap "
+        f"{TOOLS_LIST_WIRE_MAX_BYTES:,} B). Move argument detail from the description into the "
+        "spec's notes (docs/tools.md, hocuspocus://guide) before raising the target."
+    )
     assert tools_list_text_size(TOOLS) <= TOOLS_LIST_MAX_BYTES
+
+
+def test_description_cap_is_60_words() -> None:
+    assert DESCRIPTION_MAX_WORDS == 60  # BIBLE §4.1 (1.2)
+
+
+def test_notes_reach_the_docs_and_guide_but_not_tools_list() -> None:
+    from hocuspocus.bridge.config import BridgeConfig
+    from hocuspocus.bridge.instructions import guide_text
+    from hocuspocus.bridge.server import Bridge
+
+    noted = [spec for spec in TOOLS if spec.notes]
+    assert len(noted) >= 10
+    markdown = render_tools_markdown(TOOLS)
+    guide = guide_text()
+    listed = {
+        tool.name: tool
+        for tool in Bridge(BridgeConfig(profile="full"), scan=lambda: []).list_tools()
+    }
+    for spec in noted:
+        assert spec.notes in markdown and spec.notes in guide, spec.name
+        assert spec.notes not in (listed[spec.name].description or ""), spec.name
 
 
 def test_error_codes_match_bible() -> None:

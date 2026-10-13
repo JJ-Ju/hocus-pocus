@@ -335,7 +335,7 @@ as it was started from a neutral directory).
   (`/obj/geo1/box1/sizex` or tuple `/obj/geo1/box1/size`). Nothing else. Tools that
   return nodes return their final resolved path.
 - **Arguments:** flat, typed, `additionalProperties: false`, enums for closed sets,
-  defaults stated in the description. Batch tools take `items: [...]` and return
+  defaults stated in the schema's `default` (1.2: not repeated in the description). Batch tools take `items: [...]` and return
   `results: [...]` in the same order; one failing item fails the whole call and rolls
   back the undo group unless `partial: true`. Every batch error (and each failed row's
   `error` with `partial`) has one shape: the message starts `items[i] (<path>): ` and
@@ -354,8 +354,15 @@ as it was started from a neutral directory).
 - **Budget:** `tools/list` ≤ 11,000 tokens total, CI-tested on what clients receive: the
   serialised `tools/list` result of the full profile (names, descriptions, input and output
   schemas, annotations) is ≤ 44,000 bytes (names, descriptions and input schemas alone stay
-  ≤ 48 KB). Each description ≤ 80 words. Examples live in `docs/tools.md` and the resource `hocuspocus://guide`, not in
-  descriptions. Default result ≤ 16 KB. List tools take `limit` (default 50) and
+  ≤ 48 KB), and 1.2 keeps it ≤ 40,000 bytes so new tools have 4 KB of headroom (a second
+  assertion in `test_tools_list_budget`; 39.4 KB when the target was set, down from 44.0 KB). Each
+  description ≤ 60 words: what the tool does and what the model must know to pick it.
+  Argument-level detail (shapes the schema cannot state, edge cases, defaults the schema
+  already declares) lives in the spec's `notes`, which `docs/tools.md` and the resource
+  `hocuspocus://guide` render and `tools/list` leaves out; examples live there too.
+  Annotations go out without hints equal to the MCP defaults (`readOnlyHint: false`,
+  `idempotentHint: false`, and `destructiveHint`/`idempotentHint` on read-only tools), which
+  a client reads as the same values. Default result ≤ 16 KB. List tools take `limit` (default 50) and
   `cursor`; results carry `next_cursor` when more exist and `total` when cheap. A budget
   cut never loses rows: the bridge sends `max_response_bytes` in the `/hp/v1/call`
   envelope, list tools end a page at that budget with `next_cursor` at the first row not
@@ -771,7 +778,7 @@ pytest everywhere. Markers `unit`, `houdini`, `e2e`; `conftest.py` finds hython 
 
 | Tier | Runner | Scope | Budget |
 |---|---|---|---|
-| `tests/unit` | system Python | catalogue integrity (every tool has impl, schema, annotations, ≤ 80-word description, serialised `tools/list` ≤ 44,000 B), bridge instance selection and offline behaviour with a fake host, error mapping, budget truncation, config parsing, `cli` path resolution | < 10 s |
+| `tests/unit` | system Python | catalogue integrity (every tool has impl, schema, annotations, ≤ 60-word description, serialised `tools/list` ≤ 44,000 B and ≤ 40,000 B target), bridge instance selection and offline behaviour with a fake host, error mapping, budget truncation, config parsing, `cli` path resolution | < 10 s |
 | `tests/integration` | `hython -m pytest` | in-process host: one `hou` session per run, `hipFile.clear()` per test, every tool exercised against real nodes; the idioms in §5 each have a test | < 90 s |
 | `tests/e2e` | system Python spawning hython | official `mcp` client → `hocuspocus-mcp` stdio → `hython -m hocuspocus.host` on an ephemeral port with an isolated `HOUDINI_USER_PREF_DIR` and a neutral cwd: a stdio round trip, review 06 tasks 2, 3, 4, 6 and 9 as one scripted scenario, and a bridge launch that checks the work dir | < 60 s |
 | GUI (manual; no `tests/gui` directory) | checklist | package loads in `houdinifx`, autostart, viewer capture; run before a release and logged in `docs/redesign/progress.md` | — |

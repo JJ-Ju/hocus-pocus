@@ -5,9 +5,6 @@ See docs/BIBLE.md §4.8. Keep ``INSTRUCTIONS`` under 400 words; a unit test enfo
 
 from __future__ import annotations
 
-import contextlib
-from pathlib import Path
-
 INSTRUCTIONS = """\
 HocusPocus drives a live Houdini. Identity is Houdini paths. Start with `houdini_status`; \
 if nothing is connected, `houdini_connect` can launch Houdini (GUI or headless hython) or \
@@ -71,22 +68,13 @@ GUIDE_HEADER = """\
 """
 
 
-def _tools_md() -> Path | None:
-    # Running from a checkout: <repo>/src/hocuspocus/bridge/instructions.py -> <repo>/docs/tools.md
-    candidate = Path(__file__).resolve().parents[3] / "docs" / "tools.md"
-    return candidate if candidate.is_file() else None
-
-
 def guide_text() -> str:
-    """The full operating manual: instructions plus ``docs/tools.md`` when available."""
+    """The full operating manual: instructions, resources, recipes and the per-tool reference
+    rendered from the catalogue (the same text as ``docs/tools.md``, including each tool's
+    ``notes``, which ``tools/list`` leaves out; BIBLE §4.1)."""
+    from hocuspocus.tools.catalog import TOOLS
+    from hocuspocus.tools.docs import render_tools_markdown
+
     parts = [GUIDE_HEADER, INSTRUCTIONS, "\n\n", RESOURCES, RECIPES]
-    tools_md = _tools_md()
-    if tools_md is not None:
-        with contextlib.suppress(OSError):
-            parts += ["\n## Tools\n\n", tools_md.read_text(encoding="utf-8")]
-    else:
-        parts.append(
-            "\nThe per-tool reference (`docs/tools.md`) is not installed; read each tool's "
-            "description and inputSchema from `tools/list`.\n"
-        )
+    parts += ["\n## Tools\n\n", render_tools_markdown(TOOLS)]
     return "".join(parts)
