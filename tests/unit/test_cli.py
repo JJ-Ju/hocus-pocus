@@ -15,9 +15,13 @@ pytestmark = pytest.mark.unit
 
 @pytest.fixture(autouse=True)
 def no_houdini(tmp_path, monkeypatch):
-    """No HFS, isolated state dir, no inherited pref dir."""
+    """No HFS, isolated state dir, no inherited pref dir, and a fake home: install-houdini
+    also writes into every existing default pref dir, which must never be the real one."""
     monkeypatch.setenv("HOCUSPOCUS_STATE_DIR", str(tmp_path / "state"))
     monkeypatch.delenv("HOUDINI_USER_PREF_DIR", raising=False)
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "fakehome"))
+    monkeypatch.setenv("HOME", str(tmp_path / "fakehome"))
+    monkeypatch.setattr(cli.Path, "home", classmethod(lambda cls: tmp_path / "fakehome"))
     monkeypatch.setattr(cli, "_detect_hfs", lambda explicit: None)
 
 
@@ -106,20 +110,17 @@ def test_pref_dir_resolution_order(tmp_path, monkeypatch):
     env = {"HOUDINI_USER_PREF_DIR": str(tmp_path / "from_env")}
     assert cli.resolve_pref_dir(str(tmp_path / "flag"), environ=env).source == "--prefs"
     assert cli.resolve_pref_dir(None, environ=env).path == tmp_path / "from_env"
-    # __HVER__ placeholders are not a usable path
-    assert (
-        cli.resolve_pref_dir(None, environ={"HOUDINI_USER_PREF_DIR": "x/houdini__HVER__"}).source
-        != "HOUDINI_USER_PREF_DIR"
-    )
+    # Houdini expands __HVER__; so does install-houdini
+    hver = cli.resolve_pref_dir(None, environ={"HOUDINI_USER_PREF_DIR": "x/houdini__HVER__"})
+    assert hver.source == "HOUDINI_USER_PREF_DIR" and hver.path == Path("x/houdini22.0")
     # hython is asked before the platform default
     monkeypatch.setattr(cli, "_detect_hfs", lambda explicit: tmp_path / "hfs")
+    home = {"USERPROFILE": str(tmp_path / "nohome"), "HOME": str(tmp_path / "nohome")}
     asked = cli.resolve_pref_dir(
-        None, environ={}, hython_query=lambda hfs: str(tmp_path / "houdini22.0")
+        None, environ=home, hython_query=lambda hfs, env: str(tmp_path / "houdini22.0")
     )
     assert asked.path == tmp_path / "houdini22.0" and asked.source.startswith("hython")
-    fallback = cli.resolve_pref_dir(
-        None, environ={"USERPROFILE": str(tmp_path)}, hython_query=lambda hfs: None
-    )
+    fallback = cli.resolve_pref_dir(None, environ=home, hython_query=lambda hfs, env: None)
     assert fallback.source == "platform default"
 
 
@@ -375,3 +376,200 @@ def test_doctor_removes_an_entry_whose_port_refuses(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "removed the stale registry entry" in out
     assert not entry.exists()
+
+
+# -- 1.2.1: every pref dir Houdini may use ------------------------------------------------
+
+
+def _windows_machine(tmp_path, *, docs=True, home=True):
+    """A fake Windows profile: ``%USERPROFILE%/Documents/houdini22.0`` (Houdini from the
+    Start menu, no HOME) and ``%HOME%/houdini22.0`` (Houdini from Git Bash)."""
+    profile = tmp_path / "fakehome"
+    docs_dir, home_dir = profile / "Documents" / "houdini22.0", profile / "houdini22.0"
+    if docs:
+        docs_dir.mkdir(parents=True)
+    if home:
+        home_dir.mkdir(parents=True)
+    return {"USERPROFILE": str(profile), "HOME": str(profile)}, home_dir, docs_dir
+
+
+def _hython_like_houdini(home_dir, docs_dir, asked=None):
+    """hython's ``homeHoudiniDirectory()``: ``%HOME%/houdini22.0`` when HOME is set."""
+
+    def query(hfs, env):
+        if asked is not None:
+            asked.append("HOME" in env)
+        return str(home_dir if "HOME" in env else docs_dir)
+
+    return query
+
+
+@pytest.fixture
+def fake_hfs(tmp_path, monkeypatch):
+    hfs = tmp_path / "Houdini 22.0.466"
+    monkeypatch.setattr(cli, "_detect_hfs", lambda explicit: hfs)
+    return hfs
+
+
+def test_home_changes_hythons_answer_and_both_are_candidates(tmp_path, fake_hfs):
+    env, home_dir, docs_dir = _windows_machine(tmp_path)
+    asked = []
+    cands = cli.pref_dir_candidates(
+        None,
+        environ=env,
+        hython_query=_hython_like_houdini(home_dir, docs_dir, asked),
+        platform="win32",
+    )
+    assert asked == [True, False]  # once as is, once without HOME
+    assert [c.path for c in cands] == [home_dir, docs_dir]
+    assert cands[0].source.startswith("hython (") and "default location" in cands[0].source
+    assert cands[1].source.startswith("hython without HOME")
+    # Without HOME in the environment there is nothing to remove: one query.
+    asked.clear()
+    no_home = {"USERPROFILE": env["USERPROFILE"]}
+    cli.pref_dir_candidates(
+        None,
+        environ=no_home,
+        hython_query=_hython_like_houdini(home_dir, docs_dir, asked),
+        platform="win32",
+    )
+    assert asked == [False]
+
+
+def test_install_writes_into_both_existing_pref_dirs(tmp_path, fake_hfs):
+    env, home_dir, docs_dir = _windows_machine(tmp_path)
+    lines = []
+    rc = cli.install_houdini(
+        None,
+        dev=False,
+        environ=env,
+        hython_query=_hython_like_houdini(home_dir, docs_dir),
+        platform="win32",
+        out=lines.append,
+    )
+    assert rc == 0
+    for prefs in (home_dir, docs_dir):
+        target = prefs / "packages" / "hocuspocus.json"
+        data = json.loads(target.read_text(encoding="utf-8"))
+        python_dir = cli.package_python_dir(data)
+        assert python_dir == Path(
+            str(prefs / "hocuspocus" / __version__ / "python").replace("\\", "/")
+        )
+        assert (python_dir / "hocuspocus" / "version.py").is_file()
+        assert any(line.startswith("wrote ") and str(target) in line for line in lines)
+    record = json.loads((tmp_path / "state" / "install.json").read_text(encoding="utf-8"))
+    posix = [str(p.resolve()).replace("\\", "/") for p in (home_dir, docs_dir)]
+    assert record["pref_dirs"] == posix and record["prefs"] == posix[0]
+
+
+def test_install_with_only_one_existing_creates_no_other(tmp_path, fake_hfs):
+    env, home_dir, docs_dir = _windows_machine(tmp_path, home=False)
+    lines = []
+    rc = cli.install_houdini(
+        None,
+        dev=True,
+        environ=env,
+        hython_query=_hython_like_houdini(home_dir, docs_dir),
+        platform="win32",
+        out=lines.append,
+    )
+    assert rc == 0
+    assert (docs_dir / "packages" / "hocuspocus.json").is_file()
+    assert not home_dir.exists()  # hython named it, but Houdini never created it
+    assert any(str(home_dir) in line and "skipped" in line for line in lines)
+    record = json.loads((tmp_path / "state" / "install.json").read_text(encoding="utf-8"))
+    assert record["pref_dirs"] == [str(docs_dir.resolve()).replace("\\", "/")]
+
+
+def test_install_prefs_flag_is_created_and_existing_defaults_also_get_it(tmp_path):
+    env, home_dir, docs_dir = _windows_machine(tmp_path, home=False)
+    flag = tmp_path / "custom" / "houdini22.0"
+    rc = cli.install_houdini(
+        str(flag), dev=True, environ=env, platform="win32", out=lambda line: None
+    )
+    assert rc == 0
+    assert (flag / "packages" / "hocuspocus.json").is_file()
+    assert (docs_dir / "packages" / "hocuspocus.json").is_file()
+    assert not home_dir.exists()
+    record = json.loads((tmp_path / "state" / "install.json").read_text(encoding="utf-8"))
+    assert record["prefs"] == str(flag.resolve()).replace("\\", "/")
+    assert len(record["pref_dirs"]) == 2
+
+
+def test_candidates_dedupe_by_real_path(tmp_path, fake_hfs):
+    env, home_dir, docs_dir = _windows_machine(tmp_path, docs=False)
+    spelled = str(home_dir / ".." / "houdini22.0")
+    cands = cli.pref_dir_candidates(
+        spelled,
+        environ={**env, "HOUDINI_USER_PREF_DIR": str(home_dir)},
+        hython_query=lambda hfs, e: str(home_dir),
+        platform="win32",
+    )
+    assert len(cands) == 1
+    assert cands[0].source.startswith("--prefs, HOUDINI_USER_PREF_DIR, hython")
+
+
+def test_uninstall_removes_every_recorded_pref_dir(tmp_path, fake_hfs):
+    env, home_dir, docs_dir = _windows_machine(tmp_path)
+    query = _hython_like_houdini(home_dir, docs_dir)
+    cli.install_houdini(
+        None, dev=False, environ=env, hython_query=query, platform="win32", out=lambda x: None
+    )
+    lines = []
+    # Even when this shell only finds one of them, the record names both.
+    rc = cli.uninstall_houdini(
+        None,
+        environ={"USERPROFILE": env["USERPROFILE"]},
+        hython_query=lambda hfs, e: str(docs_dir),
+        platform="win32",
+        out=lines.append,
+    )
+    assert rc == 0
+    for prefs in (home_dir, docs_dir):
+        assert not (prefs / "packages" / "hocuspocus.json").exists()
+        assert not (prefs / "hocuspocus").exists()
+        assert prefs.is_dir()  # the pref dirs themselves stay
+    assert not (tmp_path / "state" / "install.json").exists()
+    assert "Restart Houdini" in lines[-1]
+
+
+def test_doctor_warns_when_pref_dirs_disagree(tmp_path, fake_hfs, monkeypatch):
+    env, home_dir, docs_dir = _windows_machine(tmp_path)
+    query = _hython_like_houdini(home_dir, docs_dir)
+    monkeypatch.setattr(cli, "run_hython", lambda *a, **k: "22.0.466")
+    # A 1.2.0-style install: only the pref dir hython reported from this shell.
+    cli.install(home_dir, dev=True, out=lambda x: None)
+    lines = []
+    args = cli.build_parser().parse_args(["doctor"])
+    cli.doctor(args, lines.append, environ=env, hython_query=query, platform="win32")
+    out = "\n".join(lines)
+    assert f"[ok]   pref dir: {home_dir}" in out
+    assert f"[--]   pref dir: {docs_dir}" in out and "no package JSON" in out
+    warning = next(x for x in lines if "pref dirs disagree" in x)
+    assert warning.startswith("[warn]") and str(docs_dir) in warning
+    assert "`hocuspocus install-houdini --dev`" in warning
+    # After installing into both, they agree.
+    cli.install_houdini(
+        None, dev=True, environ=env, hython_query=query, platform="win32", out=lambda x: None
+    )
+    lines.clear()
+    cli.doctor(args, lines.append, environ=env, hython_query=query, platform="win32")
+    assert not any("disagree" in x for x in lines)
+    assert sum(x.startswith("[ok]   pref dir:") for x in lines) == 2
+
+
+def test_doctor_flags_a_stale_copy_in_another_pref_dir(tmp_path, fake_hfs, monkeypatch):
+    env, home_dir, docs_dir = _windows_machine(tmp_path)
+    query = _hython_like_houdini(home_dir, docs_dir)
+    monkeypatch.setattr(cli, "run_hython", lambda *a, **k: "22.0.466")
+    cli.install_houdini(
+        None, dev=False, environ=env, hython_query=query, platform="win32", out=lambda x: None
+    )
+    version_py = docs_dir / "hocuspocus" / __version__ / "python" / "hocuspocus" / "version.py"
+    version_py.write_text('__version__ = "0.9.0"\n', encoding="utf-8")
+    lines = []
+    args = cli.build_parser().parse_args(["doctor"])
+    cli.doctor(args, lines.append, environ=env, hython_query=query, platform="win32")
+    assert any("pref dirs disagree" in x and str(docs_dir) in x for x in lines)
+    assert any("has 0.9.0" in x for x in lines)
+    assert not any("install-houdini --dev" in x for x in lines)

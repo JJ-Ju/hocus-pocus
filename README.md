@@ -67,12 +67,16 @@ will replace the first two lines. Interactive users can simply open Houdini; one
 scripts and short sessions should start it with `hocuspocus launch`
 ([below](#scripted-clients-hocuspocus-launch)), so it outlives them.
 
-`hocuspocus install-houdini` finds your Houdini user pref dir (`--prefs`,
-`$HOUDINI_USER_PREF_DIR`, what `hython` reports, then the platform default) and names it
-on its first line. It copies the package to `<prefs>/hocuspocus/<version>/` (`--dev`
-points at the checkout instead), writes `<prefs>/packages/hocuspocus.json` and records
-the pref dir in `<state dir>/install.json` for the bridge. It is idempotent;
-`hocuspocus uninstall-houdini` undoes it.
+`hocuspocus install-houdini` finds every Houdini user pref dir Houdini may use
+(`--prefs`, `$HOUDINI_USER_PREF_DIR`, what `hython` reports with and without `HOME`, and
+the existing `~/houdiniX.Y` and `~/Documents/houdiniX.Y`) and names each one. On Windows
+the pref dir depends on how Houdini was started: from the Start menu (no `HOME`) it is
+`Documents\houdini22.0`, from a shell that sets `HOME` (Git Bash) it is
+`%HOME%\houdini22.0`. Into each that exists (and `--prefs`, created if needed) it copies
+the package to `<prefs>/hocuspocus/<version>/` (`--dev` points at the checkout instead)
+and writes `<prefs>/packages/hocuspocus.json`, then records the pref dirs in
+`<state dir>/install.json` for the bridge. It is idempotent;
+`hocuspocus uninstall-houdini` undoes it in every recorded pref dir.
 
 For Codex, `hocuspocus client-config codex` prints the `~/.codex/config.toml` entry
 (`[mcp_servers.hocuspocus]` with `command = "hocuspocus-mcp"`).
@@ -220,8 +224,11 @@ result_content = "text"     # bridge: text | both | structured (where result JSO
 log_level = "INFO"          # host
 ```
 
-The bridge finds the file through `HOUDINI_USER_PREF_DIR` (`__HVER__` read as `22.0`),
-then the pref dir recorded in `<state dir>/install.json`, then the default locations;
+The bridge finds the file through `HOUDINI_USER_PREF_DIR` (`__HVER__` read as `22.0`)
+when it is set. Otherwise it reads the toml from the first candidate pref dir that has
+one: the pref dirs recorded in `<state dir>/install.json`, in order, then the default
+locations (`~/houdini22.0`, then `~/Documents/houdini22.0` on Windows). Since Houdini may
+use either of those, keep a single `hocuspocus.toml`, or the same one in each;
 `hocuspocus doctor` prints which file it reads. Bridge settings can also be set
 per client, for example
 `claude mcp add -s user hocuspocus -e HOCUSPOCUS_PROFILE=full -- hocuspocus-mcp`. Since

@@ -18,7 +18,7 @@ TOML = 'profile = "full"\nmax_response_bytes = 32768\ndefault_timeout_s = 45\nhf
 @pytest.fixture
 def env(tmp_path, monkeypatch):
     """An environment with an isolated state dir and no inherited pref dir."""
-    monkeypatch.setattr(bc, "default_pref_dirs", lambda environ=None: [tmp_path / "default"])
+    monkeypatch.setattr(bc, "default_pref_dirs", lambda *a, **k: [tmp_path / "default"])
     return {"HOCUSPOCUS_STATE_DIR": str(tmp_path / "state")}
 
 
@@ -95,6 +95,50 @@ def test_resolved_pref_dir_without_toml_is_authoritative(tmp_path, env, monkeypa
     assert BridgeConfig.load(env).profile == "full"  # probed default location
     env["HOUDINI_USER_PREF_DIR"] = str(tmp_path / "empty")
     assert BridgeConfig.load(env).profile == "core"
+
+
+def test_recorded_pref_dirs_first_with_a_toml_wins(tmp_path, env):
+    """1.2.1: the toml is read from the first recorded pref dir that has one, then the
+    default locations; a recorded dir without a toml no longer hides the others."""
+    first, second = tmp_path / "home" / "houdini22.0", tmp_path / "docs" / "houdini22.0"
+    for d in (first, second):
+        d.mkdir(parents=True)
+    state = tmp_path / "state"
+    state.mkdir()
+    (state / "install.json").write_text(
+        json.dumps({"prefs": str(first), "pref_dirs": [str(first), str(second)]}),
+        encoding="utf-8",
+    )
+    assert bc.installed_pref_dirs(state) == [first, second]
+    assert bc.installed_pref_dir(state) == first
+    default = tmp_path / "default"
+    default.mkdir()
+    (default / "hocuspocus.toml").write_text('profile = "full"\n', encoding="utf-8")
+    assert bc.pref_dir_candidates(env) == [first, second, default]
+    assert BridgeConfig.load(env).config_file == str(default / "hocuspocus.toml")
+    (second / "hocuspocus.toml").write_text(TOML, encoding="utf-8")
+    assert BridgeConfig.load(env).config_file == str(second / "hocuspocus.toml")
+    (first / "hocuspocus.toml").write_text('profile = "core"\n', encoding="utf-8")
+    assert BridgeConfig.load(env).config_file == str(first / "hocuspocus.toml")
+
+
+def test_pre_121_install_json_still_read(tmp_path):
+    state = tmp_path / "state"
+    state.mkdir()
+    (state / "install.json").write_text(json.dumps({"prefs": "C:/p/houdini22.0"}))
+    assert bc.installed_pref_dirs(state) == [bc.Path("C:/p/houdini22.0")]
+
+
+def test_windows_default_pref_dirs_cover_home_and_documents(tmp_path):
+    env = {"USERPROFILE": str(tmp_path / "user"), "HOME": str(tmp_path / "home")}
+    assert bc.default_pref_dirs(env, major_minor="22.5", platform="win32") == [
+        tmp_path / "user" / "houdini22.5",
+        tmp_path / "user" / "Documents" / "houdini22.5",
+        tmp_path / "home" / "houdini22.5",
+        tmp_path / "home" / "Documents" / "houdini22.5",
+    ]
+    same = {"USERPROFILE": str(tmp_path), "HOME": str(tmp_path)}
+    assert len(bc.default_pref_dirs(same, platform="win32")) == 2  # deduplicated
 
 
 def test_from_env_ignores_files(tmp_path, env):

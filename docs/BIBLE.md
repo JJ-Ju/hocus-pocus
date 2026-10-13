@@ -298,9 +298,12 @@ the bridge reads `profile`, `max_response_bytes`, `default_timeout_s`, `hfs` and
 `result_content` from the same file and ignores the rest (the host skips the
 bridge-only `hfs` and `result_content` without a warning). Inside Houdini the pref dir is
 `hou.homeHoudiniDirectory()`. The bridge starts on every client launch and cannot afford
-a hython query, so it looks in `HOUDINI_USER_PREF_DIR` (`__HVER__` read as `22.0`), then
-the `prefs` that `install-houdini` records in `<state_dir>/install.json`, then the
-platform default locations. A `HOCUSPOCUS_<KEY>` variable overrides the file in either
+a hython query, so it looks in `HOUDINI_USER_PREF_DIR` (`__HVER__` read as `22.0`) when
+it is set; otherwise it reads the toml from the first candidate that has one: the
+`pref_dirs` that `install-houdini` records in `<state_dir>/install.json`, in order, then
+the platform default locations (1.2.1: on Windows Houdini uses `%HOME%\houdini22.0` when
+started with `HOME` set and `Documents\houdini22.0` without, so several may be in use).
+A `HOCUSPOCUS_<KEY>` variable overrides the file in either
 process.
 
 ```toml
@@ -743,23 +746,30 @@ for the current project only.
 
 `install-houdini`:
 
-1. Resolves the pref dir: `--prefs`, else `HOUDINI_USER_PREF_DIR`, else asks hython
-   (`hou.homeHoudiniDirectory()`) from the detected HFS, else the platform default.
+1. Resolves every candidate pref dir, deduplicated by real path (1.2.1): `--prefs`,
+   `HOUDINI_USER_PREF_DIR`, what hython (`hou.homeHoudiniDirectory()`) from the detected
+   HFS reports, what it reports with `HOME` removed (Windows; a Houdini started from the
+   Start menu has no `HOME`), and the existing `<home>/houdiniX.Y` and
+   `<home>/Documents/houdiniX.Y`. It installs into `--prefs` (created if missing) and
+   every candidate that exists; if none exists, it creates the first.
 2. Copies `src/hocuspocus` (all of it; Houdini only imports `host` and `tools`) to
    `<prefs>/hocuspocus/<version>/python/` and the `houdini/` payload to
    `<prefs>/hocuspocus/<version>/houdini/`, and writes `<prefs>/packages/hocuspocus.json`
    pointing at both. `--dev` points at the checkout's `src/` and `houdini/` instead of
    copying.
-3. Records the pref dir in `<state_dir>/install.json` so the bridge can find
+3. Records the pref dirs in `<state_dir>/install.json` (`pref_dirs`, and `prefs` = the
+   first, for older readers) so the bridge can find
    `hocuspocus.toml` without asking hython (§3.7).
 4. Prints what it did and the restart note. Idempotent; replaces older versions.
 
-`hocuspocus doctor` checks: HFS found, Houdini version, the resolved pref dir, which
+`hocuspocus doctor` checks: HFS found, Houdini version, every candidate pref dir with
+whether its package JSON is present and current (warning, with the command to run, when
+one has it and another does not), which
 `hocuspocus.toml` the bridge reads, package JSON present and pointing at an existing
 dir, host/bridge version match, live instances with a `/health` round trip, and prints
 the `claude mcp add` / Codex config lines. `hocuspocus version` prints the bridge, RPC,
-`mcp` and Python versions. `uninstall-houdini` removes the package JSON, the copied
-versions and the `install.json` record.
+`mcp` and Python versions. `uninstall-houdini` removes the package JSON and the copied
+versions from every candidate and recorded pref dir, then the `install.json` record.
 `hocuspocus client-config codex|claude` prints the snippets. `hocuspocus docs tools`
 regenerates `docs/tools.md`. `hocuspocus launch [--headless] [--hip FILE] [--wait N]
 [--work-dir DIR]` starts GUI Houdini (or `hython -m hocuspocus.host`) with the same
