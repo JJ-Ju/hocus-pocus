@@ -22,22 +22,31 @@ city, then fractured 30 buildings and ran a 96-frame rigid-body simulation of me
 hitting them, using two `houdini_python` calls (to add spare parms) and otherwise only
 the typed tools. The logs are reviews [08](docs/redesign/review/08-city-build-log.md)
 and [09](docs/redesign/review/09-city-destruction-log.md). Since 1.1, `node_edit` adds
-spare parms itself, `network_describe {format: "outline"}` (or the `houdini://outline`
-resource) shows a whole scene as a compact tree, and `cook` can profile an input chain
-or step a simulation over a frame range with progress. A spare `menu` parm is a string
-menu (VEX reads its token with `chs()`) unless it is added with `value_type: "int"`,
-which makes an int parm whose value is the item index (`ch()`/`chi()`).
+spare parms itself (a `menu` reads as its token with `chs()`, or with `value_type: "int"`
+as the item index with `ch()`), `network_describe {format: "outline"}` shows a whole
+scene as a compact tree, and `cook` profiles an input chain or steps a frame range.
+
+1.2 put the `full` profile and the GUI paths to work: a Solaris lookdev rendered with
+Karma ([13](docs/redesign/review/13-solaris-lookdev-eval.md)), a PDG wedge
+([14](docs/redesign/review/14-pdg-wedge-eval.md)) and a GUI session next to a user
+([15](docs/redesign/review/15-gui-session-eval.md)), with none of the agent's own work in
+`houdini_python`. `viewport_capture {lop_path}` captures a USD stage, `usd_stage
+{summary: true}` gives prim counts by type and world bounds in one call, a failed PDG
+work item carries its log's `error`, `log_path` and `exit_code`, and `undo` stops at the
+user's own steps.
 
 ![City overview captured with viewport_capture](docs/redesign/evidence/city-destruction/02_city_overview.png)
 
 ![Simulation frames 1 to 96 and a district close-up](docs/redesign/evidence/city-destruction/20_contact_sheet.png)
 
+- [Karma lookdev](docs/redesign/evidence/city-destruction/30_lookdev_karma.png): the city in `/stage` with MaterialX materials, a dome and a key light, Karma CPU at 640×360 (review 13).
+- [PDG wedges](docs/redesign/evidence/city-destruction/40_pdg_wedges.png): eight building-generator wedges cooked through ROP Fetch TOPs, one OpenGL capture each (review 14).
+- [GUI viewer](docs/redesign/evidence/city-destruction/50_gui_viewer.png): `viewport_capture` through `cam_district` at frame 72, `opengl_rop` source, in a live GUI Houdini (review 15).
+
 ## Requirements
 
-- SideFX Houdini **22.0 or newer**. Tested on 22.0.466. Other 22.x builds work, and
-  `hocuspocus doctor` prints a warning for them.
-- [uv](https://docs.astral.sh/uv/). The bridge needs Python 3.11 or newer, and uv
-  provides one.
+- SideFX Houdini **22.0 or newer**, tested on 22.0.466 (`doctor` warns on other 22.x).
+- [uv](https://docs.astral.sh/uv/), which provides the Python 3.11+ the bridge needs.
 - An MCP client such as Claude Code or Codex.
 
 ## Install
@@ -59,14 +68,11 @@ scripts and short sessions should start it with `hocuspocus launch`
 ([below](#scripted-clients-hocuspocus-launch)), so it outlives them.
 
 `hocuspocus install-houdini` finds your Houdini user pref dir (`--prefs`,
-`$HOUDINI_USER_PREF_DIR`, what `hython` reports, then the platform default) and says
-which it used and why on its first line. It copies the package and the Houdini payload
-to `<prefs>/hocuspocus/<version>/`, writes `<prefs>/packages/hocuspocus.json`, and
-records the pref dir in `<state dir>/install.json` so the bridge can find
-`hocuspocus.toml`. It is idempotent and removes older versions; `--dev` points Houdini
-at the checkout's `src/` and `houdini/` instead of copying, and `--hfs` says which
-Houdini install to ask. `hocuspocus uninstall-houdini` removes the package, the JSON and
-the record.
+`$HOUDINI_USER_PREF_DIR`, what `hython` reports, then the platform default) and names it
+on its first line. It copies the package to `<prefs>/hocuspocus/<version>/` (`--dev`
+points at the checkout instead), writes `<prefs>/packages/hocuspocus.json` and records
+the pref dir in `<state dir>/install.json` for the bridge. It is idempotent;
+`hocuspocus uninstall-houdini` undoes it.
 
 For Codex, `hocuspocus client-config codex` prints the `~/.codex/config.toml` entry
 (`[mcp_servers.hocuspocus]` with `command = "hocuspocus-mcp"`).
@@ -136,9 +142,10 @@ The bridge also serves resources and prompts:
 - **Prompts:** `inspect_scene`, `build_sop_chain`, `debug_red_node`,
   `turntable_preview`. `tools/list` works with no Houdini running.
 
-In a GUI session, `viewport_capture` defaults to the Scene Viewer and captures the view
-as it is: it does not frame the scene. Home the view first, or pass
-`"source": "opengl_rop"`, which frames the scene with a temporary camera.
+In a GUI session, `viewport_capture` without `camera` or `fit` grabs the Scene Viewer as
+it is; an explicit `fit` frames the grab, and the user's view is put back afterwards.
+With a `camera` or `lop_path` (a LOP stage), or `"source": "opengl_rop"`, it renders
+through an OpenGL ROP, framed by a temporary camera when no `camera` is given.
 
 ## Headless use and launching
 
@@ -177,12 +184,13 @@ waits up to `--wait` seconds (default 90; `0` returns at once) for the host to r
 prints the registry entry (never the token) as one JSON line, and exits. Houdini starts
 in the directory the command runs in (or `--work-dir DIR`), so the untitled scene's `$HIP`
 and `$JOB` are where you expect; as when you run `houdini` there yourself, Houdini also
-looks in that directory for scripts and assets. Later sessions
-attach with `houdini_connect {"pid": 23310}`, or pick it automatically when it is the
-only one running. Close a GUI one as usual; end a headless one's process once its work
-is saved. To run the host by hand instead, use `hython -m hocuspocus.host [--hip FILE]
-[--port N] [--read-only] [--no-python] ...` from a neutral directory (hython puts its cwd
-on `HOUDINI_PATH`); it prints `{"pid", "port", "token_file"}` and serves until stopped.
+looks in that directory for scripts and assets. Later sessions attach with
+`houdini_connect {"pid": 23310}`, or pick it automatically when it is the only one
+running. Close it with `houdini_connect {"quit": true, "on_unsaved": "save"}` (1.2;
+`fail`, the default, refuses with unsaved changes), or a GUI one as usual. To run the
+host by hand instead, use `hython -m hocuspocus.host [--hip FILE] [--port N]
+[--read-only] [--no-python] ...` from a neutral directory (hython puts its cwd on
+`HOUDINI_PATH`); it prints `{"pid", "port", "token_file"}` and serves until stopped.
 
 Tools that need the UI return `ui_required` headless; `viewport_capture` works through
 an OpenGL ROP in a short-lived child hython (about 3 s). Several Houdinis can run at
@@ -208,14 +216,9 @@ default_timeout_s = 30      # both: per-call timeout
 job_threshold_s = 10        # host: cooks longer than this become jobs
 profile = "core"            # both: "full" also lists (bridge) and allows (host) hda, usd_stage, pdg, events
 hfs = ""                    # bridge: Houdini install used by houdini_connect launch
-result_content = "text"     # bridge: text | both | structured (see below)
+result_content = "text"     # bridge: text | both | structured (where result JSON goes)
 log_level = "INFO"          # host
 ```
-
-`result_content` (1.1) decides where a result's JSON goes. `text` (default) sends it
-once, in the text block, with no `structuredContent` or `outputSchema`: Claude Code shows
-the model only the text block. `both` is the 1.0 shape for clients that read
-`structuredContent`; `structured` puts the data there and a one-line summary in the text.
 
 The bridge finds the file through `HOUDINI_USER_PREF_DIR` (`__HVER__` read as `22.0`),
 then the pref dir recorded in `<state dir>/install.json`, then the default locations;
@@ -232,7 +235,7 @@ Houdini's environment (a launched Houdini inherits the launcher's), and restart 
 | `HOCUSPOCUS_MAX_RESPONSE_BYTES` | `16384` | response budget; lists are truncated with `truncated: true` |
 | `HOCUSPOCUS_DEFAULT_TIMEOUT_S` | `30` | per-call timeout sent to the host |
 | `HOCUSPOCUS_HFS` | auto | Houdini install used by `houdini_connect` launch |
-| `HOCUSPOCUS_RESULT_CONTENT` | `text` | `text`, `both` or `structured`: where result JSON goes |
+| `HOCUSPOCUS_RESULT_CONTENT` | `text` | where result JSON goes: `text` block only, `both` (adds `structuredContent`), or `structured` |
 | `HOCUSPOCUS_WORK_DIR` | home | where `houdini_connect {launch}` starts Houdini (environment only; `hocuspocus launch` uses its cwd or `--work-dir`) |
 
 `HOCUSPOCUS_STATE_DIR` moves the shared state directory. That directory holds the
@@ -259,9 +262,9 @@ already has a shell on your machine.
 
 ## Status and versioning
 
-1.0 was merged to `master` on 2026-10-12 (tag `v1.0.0`). 1.1 changes some result
-shapes; [`CHANGELOG.md`](CHANGELOG.md) lists them with upgrade notes and known
-limitations. HocusPocus is not on PyPI yet. It is qualified on Windows with Houdini
+1.0 was merged to `master` on 2026-10-12 (tag `v1.0.0`). 1.1 and 1.2 change some result
+shapes and defaults; [`CHANGELOG.md`](CHANGELOG.md) lists them with upgrade notes and
+known limitations. HocusPocus is not on PyPI yet. It is qualified on Windows with Houdini
 22.0.466; the code is not Windows-only, but Linux and macOS are untested.
 
 The host/bridge protocol is versioned (`hp/v1`). A version mismatch returns

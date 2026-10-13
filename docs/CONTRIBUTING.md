@@ -37,7 +37,7 @@ tests/
   unit/  integration/  e2e/
 docs/
   BIBLE.md  quickstart.md  tools.md (generated)  CONTRIBUTING.md
-  redesign/README.md             # index of the historical reviews and 1.0 evaluations
+  redesign/README.md             # index of the reviews, evaluations and plans
   redesign/review/*.md  redesign/progress.md  redesign/evidence/
 README.md  CHANGELOG.md  LICENSE
 .github/workflows/ci.yml  houdini.yml
@@ -176,6 +176,14 @@ three things:
    - contain the `__HVER__` token, because Houdini ignores the variable otherwise;
    - not be your real `~/houdini22.0`. The integration `conftest.py` refuses to run
      against the real one.
+
+   Houdini expands `__HVER__`, so files Houdini or the host read from that pref dir live
+   in the expanded directory. To run a host with the `full` profile from such an
+   isolated pref dir (an evaluation, or `hocuspocus launch` against it), put
+   `hocuspocus.toml` with `profile = "full"` in `$SCRATCH/prefs/houdini22.0/`. A copy
+   in a literal `houdini__HVER__/` directory is never read (review 13);
+   `hocuspocus doctor` prints which file the bridge reads. The integration fixture
+   passes `profile="full"` to its host itself and needs no toml.
 
 3. **A neutral working directory.** hython puts its cwd on `HOUDINI_PATH`, so run it
    from an empty temporary directory, not from the repository.
