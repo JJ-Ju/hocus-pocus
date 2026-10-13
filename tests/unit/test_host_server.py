@@ -79,6 +79,8 @@ def _tools():
         "liar": HostTool("liar", liar, read_only=False),
         "hostonly": HostTool("hostonly", echo, read_only=False, main_thread=False, scene=False),
         "pdg": HostTool("pdg", echo, read_only=True, main_thread=False, scene=False),
+        "geo_info": HostTool("geo_info", echo, read_only=True),
+        "geo_read": HostTool("geo_read", echo, read_only=True),
         "starts_job": HostTool(
             "starts_job", starts_job, read_only=True, main_thread=False, scene=False
         ),
@@ -484,3 +486,15 @@ def test_a_core_host_refuses_full_profile_tools(stack):
     assert 'profile = "full"' in error["hint"]
     ctx.config.profile = "full"
     assert dispatcher.call("pdg", {})["ok"] is True
+
+
+def test_a_minimal_host_refuses_tools_outside_minimal(stack):
+    """1.3 (BIBLE §3.7): the host honours minimal as it honours core."""
+    dispatcher, ctx = stack["dispatcher"], stack["ctx"]
+    ctx.config.profile = "minimal"
+    assert dispatcher.call("geo_info", {})["ok"] is True
+    error = dispatcher.call("geo_read", {})["error"]
+    assert error["code"] == "invalid_argument"
+    assert "core-profile" in error["message"] and "minimal profile" in error["message"]
+    assert 'profile = "core"' in error["hint"]
+    assert "full-profile" in dispatcher.call("pdg", {})["error"]["message"]

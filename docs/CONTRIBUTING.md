@@ -78,7 +78,15 @@ macOS the path is `.venv/bin/...`.
      `result_content` is `both` or `structured`; with the default `text` the model sees
      just the description and the result JSON in the text block (BIBLE §4.1), so put
      anything the model must know about the result in the description.
-   - `read_only` / `destructive` / `idempotent`, `profile`, and `headless_ok`.
+   - Argument `description`s of at most 12 words, checked by
+     `test_argument_detail_lives_in_notes`. Say what the argument is in the schema, and
+     put how it behaves (shapes, edge cases, interactions with other arguments) in
+     `notes`. A new feature then adds only its name and type to `tools/list`, not its
+     explanation.
+   - `read_only` / `destructive` / `idempotent`, `profile`, and `headless_ok`. `profile`
+     is `core` or `full`. The `minimal` profile (BIBLE §4.1) is the `MINIMAL_TOOLS` set in
+     `catalog.py`. Add a tool to it only when a small-context client cannot work without
+     it, and update BIBLE §4.1 and `test_profiles` in the same change.
    - At least one entry in `examples`.
 
    The bridge registers the tool from this entry, so it shows up in `tools/list`
@@ -121,15 +129,16 @@ macOS the path is `.venv/bin/...`.
 6. **Unit guard.** Run `pytest tests/unit`. `tests/unit/test_catalog.py` checks the new
    entry:
    - The name is unique and snake_case.
-   - The description stays under the word cap.
+   - The description stays under the word cap, and every argument description is 12
+     words or fewer.
    - The schema shape and annotations are valid.
    - The examples validate.
    - The serialised `tools/list` result stays at 44,000 bytes or less
      (`test_tools_list_budget`). It measures the largest shape a client can receive: the
      full profile with `result_content = "both"`, so output schemas count even though the
      `text` default leaves them out. A second assertion keeps that size at 40,000 bytes or
-     less, the 1.2 headroom target. The test prints the core, full and text-default
-     sizes. When a new tool pushes it over, move argument detail from the description
+     less, the 1.2 headroom target. The test prints the minimal, core, full and
+     text-default sizes. When a new tool pushes it over, move argument detail from the description
      into `notes` before cutting words the model needs to choose the tool.
    - `docs/tools.md` is current.
 

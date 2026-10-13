@@ -144,7 +144,7 @@ class Bridge:
         launches: registry.LaunchLog | None = None,
     ) -> None:
         self.config = config or BridgeConfig.load()
-        profile = self.config.profile if self.config.profile in ("core", "full") else "core"
+        profile = self.config.profile if self.config.profile in catalog.PROFILES else "core"
         self.tools: tuple[ToolSpec, ...] = (
             tuple(tools) if tools is not None else catalog.for_profile(profile)
         )

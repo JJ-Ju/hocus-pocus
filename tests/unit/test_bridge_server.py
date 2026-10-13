@@ -16,7 +16,7 @@ from hocuspocus.bridge.config import BridgeConfig
 from hocuspocus.bridge.instances import Instance
 from hocuspocus.bridge.instructions import INSTRUCTIONS
 from hocuspocus.bridge.server import Bridge, build_server, get_prompt, list_prompts
-from hocuspocus.tools.catalog import ToolSpec
+from hocuspocus.tools.catalog import MINIMAL_TOOLS, ToolSpec
 from hocuspocus.tools.errors import ToolError
 
 pytestmark = pytest.mark.unit
@@ -213,6 +213,9 @@ def test_profile_filters_real_catalogue():
     full = Bridge(BridgeConfig(profile="full"), scan=lambda: [])
     assert {t.profile for t in core.tools} <= {"core"}
     assert len(full.tools) >= len(core.tools)
+    minimal = Bridge(BridgeConfig(profile="minimal"), scan=lambda: [])
+    assert {t.name for t in minimal.tools} == MINIMAL_TOOLS
+    assert {t.name for t in minimal.list_tools()} == MINIMAL_TOOLS
 
 
 def test_tools_list_is_deterministic():

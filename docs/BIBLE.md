@@ -263,7 +263,9 @@ and the hint "run `hocuspocus install-houdini` and restart Houdini".
 `hocuspocus/tools/catalog.py` is a stdlib-only module that defines every tool once:
 name, description, input JSON Schema, output JSON Schema (where stable), MCP
 annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint=false`),
-`profile` (`core` or `full`), `headless_ok` (bool), and `bridge_local` (bool). The host
+`profile` (`core` or `full`; 1.3: `MINIMAL_TOOLS` names the 14 core tools of the
+`minimal` profile, and the three profiles nest, minimal ⊂ core ⊂ full), `headless_ok`
+(bool), and `bridge_local` (bool). The host
 imports it to map names to implementations and to reject unknown tools; the bridge
 imports it to register MCP tools; `hocuspocus docs tools` renders `docs/tools.md` from
 it; a unit test asserts every catalogue entry has an implementation, a description
@@ -314,7 +316,7 @@ approved_roots = []         # if non-empty, file paths for hip/hda/render must b
 max_response_bytes = 16384
 default_timeout_s = 30
 job_threshold_s = 10        # cook/render longer than this become jobs
-profile = "core"            # core | full (adds usd_stage, pdg, hda, events); the host refuses full tools on core
+profile = "core"            # minimal | core | full: minimal is 14 tools (§4.1), full adds usd_stage, pdg, hda, events; the host refuses tools outside its profile
 log_level = "INFO"
 hfs = ""                    # bridge: explicit Houdini install dir for launch
 result_content = "text"     # bridge: text | both | structured (§4.1)
@@ -365,6 +367,9 @@ as it was started from a neutral directory).
   Argument-level detail (shapes the schema cannot state, edge cases, defaults the schema
   already declares) lives in the spec's `notes`, which `docs/tools.md` and the resource
   `hocuspocus://guide` render and `tools/list` leaves out; examples live there too.
+  1.3: an argument's schema `description` is at most 12 words (a unit test,
+  `test_argument_detail_lives_in_notes`); anything longer goes in `notes`, so a new
+  argument costs its name and type, not its explanation.
   Annotations go out without hints equal to the MCP defaults (`readOnlyHint: false`,
   `idempotentHint: false`, and `destructiveHint`/`idempotentHint` on read-only tools), which
   a client reads as the same values. Default result ≤ 16 KB. List tools take `limit` (default 50) and
@@ -374,6 +379,13 @@ as it was started from a neutral directory).
   returned, and the bridge trims a still-oversized page only when its cursor is an integer
   offset (rewriting `next_cursor` to offset + rows kept), else returns it whole with
   `over_budget: true`.
+- **Profiles** (1.3): `minimal ⊂ core ⊂ full`, set by `profile` (§3.7); the bridge lists
+  and the host allows only the profile's tools. `minimal`, for clients with a small
+  context, is `houdini_status`, `houdini_connect`, `hip_open`, `hip_save`, `node_find`,
+  `node_info`, `node_create`, `node_connect`, `parm_get`, `parm_set`, `cook`, `geo_info`,
+  `viewport_capture` and `houdini_python` (14; 20.4 KB of `tools/list` against 36.6 KB
+  for `core` and 40.0 KB for `full`, output schemas declared). `houdini_python` covers
+  what the others leave out.
 - **Non-default only:** parm listings show parms where `isAtDefault()` is false unless
   `include_defaults: true`.
 - **Locked HDAs** are opaque by default: `node_find`, `node_info` and
@@ -474,7 +486,8 @@ Recent files (`hip_info` / status): the hip files saved or loaded in this host s
 | `events` *(full)* | `since = 0`, `limit` | Host-side ring buffer of hip events and node events (`ChildCreated`, `NameChanged`, `ParmTupleChanged` on nodes the agent touched, `BeingDeleted`) with a monotonic sequence. For "what did the user change since my last call". 1.2: every event has `origin: agent\|other` (agent = inside a HocusPocus call: the host holds a call's events and publishes them when its main-thread work ends, none if it was rolled back, without nodes created and deleted within it, and without changes made while undo is disabled, such as `render`'s output-parm set and restore); nodes read with `node_info` or listed by `network_describe` are watched too; nested nodes created in one batch get their `ChildCreated`; `FlagChanged` names the flags; 1.3 (review 16 papercut 9): `ParmTupleChanged` on a multi-component tuple names the `components` whose value or keys changed instead of a `count` (a burst within 0.1 s is one event with their union) and lists in `keyed` those of them with keyframes now, from a per-tuple snapshot taken when the node is watched; spare parm edits are one `SpareParmsChanged`; `hda create/match/unlock` are one `hda_contents_rebuilt`; the `pdg` tool records `kind: "pdg"` events (`cook_start`, `work_item_failed`, `cook_done`); Houdini's save-time writes on TOP networks are dropped. |
 
 Count: 2 session + 4 hip + 10 node/network + 2 parm + 4 cook/geo + 2 visual + 1 code +
-2 types + 4 state/job = **31 in `core`**, plus 4 in `full` = 35.
+2 types + 4 state/job = **31 in `core`**, plus 4 in `full` = 35. `minimal` is 14 of the
+core tools (§4.1).
 
 ### 4.8 Resources, prompts, instructions
 

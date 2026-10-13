@@ -16,7 +16,7 @@ from collections.abc import Iterable, Sequence
 from pathlib import Path
 from typing import Any
 
-from hocuspocus.tools.catalog import TOOLS, ToolSpec
+from hocuspocus.tools.catalog import TOOLS, ToolSpec, profile_of
 
 __all__ = [
     "SchemaError",
@@ -321,6 +321,7 @@ def _badges(spec: ToolSpec) -> str:
 
 def render_tools_markdown(tools: Sequence[ToolSpec]) -> str:
     """Render the full ``docs/tools.md`` text (LF line endings, trailing newline)."""
+    minimal = sum(1 for spec in tools if profile_of(spec) == "minimal")
     core = sum(1 for spec in tools if spec.profile == "core")
     out: list[str] = [
         "# HocusPocus tools",
@@ -328,7 +329,8 @@ def render_tools_markdown(tools: Sequence[ToolSpec]) -> str:
         "<!-- Generated from src/hocuspocus/tools/catalog.py by `python -m hocuspocus.tools.docs`."
         " Do not edit by hand. -->",
         "",
-        f"{len(tools)} tools: {core} in the `core` profile, {len(tools) - core} more in `full`. "
+        f"{len(tools)} tools: {minimal} in the `minimal` profile, {core} in `core` (minimal "
+        f"included), {len(tools) - core} more in `full`. "
         f"Model-visible `tools/list` text: {tools_list_text_size(tools):,} bytes. "
         "See `docs/BIBLE.md` §4 for the design.",
         "",
@@ -336,14 +338,14 @@ def render_tools_markdown(tools: Sequence[ToolSpec]) -> str:
         "",
     ]
     for spec in tools:
-        suffix = " *(full)*" if spec.profile == "full" else ""
+        suffix = {"full": " *(full)*", "minimal": " *(minimal)*"}.get(profile_of(spec), "")
         out.append(f"- [`{spec.name}`](#{spec.name}){suffix}")
     for spec in tools:
         out += [
             "",
             f"## {spec.name}",
             "",
-            f"{_badges(spec)} · profile `{spec.profile}`",
+            f"{_badges(spec)} · profile `{profile_of(spec)}`",
             "",
             spec.description,
             "",

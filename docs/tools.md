@@ -2,35 +2,35 @@
 
 <!-- Generated from src/hocuspocus/tools/catalog.py by `python -m hocuspocus.tools.docs`. Do not edit by hand. -->
 
-35 tools: 31 in the `core` profile, 4 more in `full`. Model-visible `tools/list` text: 26,487 bytes. See `docs/BIBLE.md` §4 for the design.
+35 tools: 14 in the `minimal` profile, 31 in `core` (minimal included), 4 more in `full`. Model-visible `tools/list` text: 26,487 bytes. See `docs/BIBLE.md` §4 for the design.
 
 ## Contents
 
-- [`houdini_status`](#houdini_status)
-- [`houdini_connect`](#houdini_connect)
+- [`houdini_status`](#houdini_status) *(minimal)*
+- [`houdini_connect`](#houdini_connect) *(minimal)*
 - [`hip_new`](#hip_new)
-- [`hip_open`](#hip_open)
-- [`hip_save`](#hip_save)
+- [`hip_open`](#hip_open) *(minimal)*
+- [`hip_save`](#hip_save) *(minimal)*
 - [`hip_merge`](#hip_merge)
-- [`node_find`](#node_find)
-- [`node_info`](#node_info)
-- [`node_create`](#node_create)
+- [`node_find`](#node_find) *(minimal)*
+- [`node_info`](#node_info) *(minimal)*
+- [`node_create`](#node_create) *(minimal)*
 - [`node_delete`](#node_delete)
 - [`node_edit`](#node_edit)
 - [`node_copy`](#node_copy)
-- [`node_connect`](#node_connect)
+- [`node_connect`](#node_connect) *(minimal)*
 - [`node_layout`](#node_layout)
 - [`network_describe`](#network_describe)
 - [`network_build`](#network_build)
-- [`parm_get`](#parm_get)
-- [`parm_set`](#parm_set)
-- [`cook`](#cook)
+- [`parm_get`](#parm_get) *(minimal)*
+- [`parm_set`](#parm_set) *(minimal)*
+- [`cook`](#cook) *(minimal)*
 - [`problems`](#problems)
-- [`geo_info`](#geo_info)
+- [`geo_info`](#geo_info) *(minimal)*
 - [`geo_read`](#geo_read)
-- [`viewport_capture`](#viewport_capture)
+- [`viewport_capture`](#viewport_capture) *(minimal)*
 - [`render`](#render)
-- [`houdini_python`](#houdini_python)
+- [`houdini_python`](#houdini_python) *(minimal)*
 - [`node_type_search`](#node_type_search)
 - [`node_type_info`](#node_type_info)
 - [`undo`](#undo)
@@ -44,7 +44,7 @@
 
 ## houdini_status
 
-`read-only` `bridge-local` `headless ok` · profile `core`
+`read-only` `bridge-local` `headless ok` · profile `minimal`
 
 Start here. Reports the connected Houdini (pid, version, GUI or headless, hip path and dirty state, $HIP/$JOB, frame, recent files, scene_generation), every live instance and the bridge settings. Works with no Houdini running (connected: null).
 
@@ -59,7 +59,7 @@ None.
 - `connected` (object | null): `pid`, `port`, `label`, `houdini`, `ui`, `hip`, `time`, `env`, `scene_generation`, `host_version` — always present
 - `instances` (array<object>): `pid`, `label`, `houdini`, `ui`, `hip`, `started`, `launched_by` — always present
 - `bridge_version` (string) — always present
-- `profile` (`core` | `full`)
+- `profile` (`minimal` | `core` | `full`)
 - `read_only` (boolean)
 - `allow_python` (boolean)
 
@@ -72,7 +72,7 @@ None.
 
 ## houdini_connect
 
-`bridge-local` `headless ok` · profile `core`
+`bridge-local` `headless ok` · profile `minimal`
 
 Choose the Houdini this session drives: pid attaches, launch starts one (gui or headless, optional hip), disconnect drops the selection, quit closes it (on_unsaved as hip_new). A launched Houdini usually closes with this server (launched.outlives_server says); `hocuspocus launch` starts one that outlives it.
 
@@ -140,7 +140,7 @@ Clear to a new untitled scene; bumps scene_generation. on_unsaved protects unsav
 
 ## hip_open
 
-`destructive` `headless ok` · profile `core`
+`destructive` `headless ok` · profile `minimal`
 
 Load a hip file, replacing the current scene; on_unsaved as in hip_new. Load warnings are returned in warnings, not raised, unless ignore_load_warnings is false. hip_merge adds nodes instead.
 
@@ -171,7 +171,7 @@ Load a hip file, replacing the current scene; on_unsaved as in hip_new. Load war
 
 ## hip_save
 
-`headless ok` · profile `core`
+`headless ok` · profile `minimal`
 
 Save the hip file. path saves as (creating directories; an untitled scene needs it); increment saves to the next version number in the file name; backup keeps a backup copy. Returns the real saved path, dirty after save, and bytes.
 
@@ -240,7 +240,7 @@ Merge the nodes matching node_pattern from another hip file into the current sce
 
 ## node_find
 
-`read-only` `headless ok` · profile `core`
+`read-only` `headless ok` · profile `minimal`
 
 Search a subtree for nodes (name and type globs, category, flags, has_errors). Rows: path, type, category, flags, input_count, child_count, has_errors. Locked HDAs are not entered unless recurse_locked. Paged by limit and cursor.
 
@@ -276,7 +276,7 @@ Search a subtree for nodes (name and type globs, category, flags, has_errors). R
 
 ## node_info
 
-`read-only` `headless ok` · profile `core`
+`read-only` `headless ok` · profile `minimal`
 
 Read nodes in detail: type, flags, inputs with names and sources, non-default parms (value, raw, expression; long strings elided), errors, warnings, cook state. parm_get reads keyframes, menus and templates; network_describe a whole network.
 
@@ -308,7 +308,7 @@ Read nodes in detail: type, flags, inputs with names and sources, non-default pa
 
 ## node_create
 
-`headless ok` · profile `core`
+`headless ok` · profile `minimal`
 
 Create nodes in one undo step. type resolves like createNode (box gets the current version; exact_type disables). Items may wire to earlier items; a block_end pairs with its block_begin (paired_with). Returns path, type and problems per node. network_build suits whole graphs.
 
@@ -447,7 +447,7 @@ Copy nodes into to_parent, which may be their own network. names renames the cop
 
 ## node_connect
 
-`idempotent` `headless ok` · profile `core`
+`idempotent` `headless ok` · profile `minimal`
 
 Wire inputs in one undo step: each item connects output from_output of from into to's to_input (an index, an input name, or "next" for the next free input of merge-style nodes); from null disconnects.
 
@@ -560,7 +560,7 @@ Build or update a network under parent from Houdini's hou.data childrenAsData fo
 
 ## parm_get
 
-`read-only` `headless ok` · profile `core`
+`read-only` `headless ok` · profile `minimal`
 
 Read parms by parm (.../tx), tuple (.../t: all components) or component path: value at frame, raw if different, expression, is_default, locked (parm lock), hda_locked. Strings over 200 chars are {elided, head} unless full_strings. Tuples add per-component expressions and keyed names.
 
@@ -592,7 +592,7 @@ Read parms by parm (.../tx), tuple (.../t: all components) or component path: va
 
 ## parm_set
 
-`idempotent` `headless ok` · profile `core`
+`idempotent` `headless ok` · profile `minimal`
 
 Set parms in one undo step. Each item takes one of value, expression, keyframe(s), channel_ref, ramp, multiparm_count, revert_to_default, press. Tuple paths take lists, component paths scalars; menus take token or label. animation replace clears keys and expressions first; key keys at frame; keep is plain set. Returns value, raw, wrote_keyframe, node errors.
 
@@ -646,7 +646,7 @@ Set parms in one undo step. Each item takes one of value, expression, keyframe(s
 
 ## cook
 
-`idempotent` `headless ok` · profile `core`
+`idempotent` `headless ok` · profile `minimal`
 
 Cook nodes and report per node ok, errors, warnings, cook_time_ms (its own cook; cached inputs are not recooked). profile force-cooks each input chain: chain (top 10 by cost), total_ms, attribution; for-each loop bodies show their cost over all iterations (loops). frame_range cooks frame by frame (sims advance); summary bbox adds per-frame bbox. Past the job threshold returns job_id for job.
 
@@ -724,7 +724,7 @@ Explain red nodes: lists nodes in a subtree with errors or warnings, broken chan
 
 ## geo_info
 
-`read-only` `headless ok` · profile `core`
+`read-only` `headless ok` · profile `minimal`
 
 Summarise the geometry of a SOP (or an OBJ's display SOP) in about 1 KB: point, prim and vertex counts, bounding box, primitive types, attributes per class with type and size, detail attribute values, groups with counts. geo_read reads per-element values.
 
@@ -802,7 +802,7 @@ Read attribute values like the geometry spreadsheet: count rows of one class fro
 
 ## viewport_capture
 
-`idempotent` `headless ok` · profile `core`
+`idempotent` `headless ok` · profile `minimal`
 
 Look at /obj or a LOP stage: a PNG (long side at most 1024), path, size, camera_used, scene. camera: OBJ or LOP camera, or camera prim (lop_path). auto: the GUI viewer if present and no camera, else an OpenGL ROP (headless too) framed per fit. Leaves no nodes, undo step or dirty flag.
 
@@ -890,7 +890,7 @@ Render any ROP (Karma, Mantra, OpenGL, ...) for frames [start, end, inc] (defaul
 
 ## houdini_python
 
-`destructive` `headless ok` · profile `core`
+`destructive` `headless ok` · profile `minimal`
 
 Run Python (hou bound) or HScript on Houdini's main thread in one undo step, for anything no tool covers. Returns stdout, stderr and result. An uncaught exception fails with python_exception and is rolled back; code still running near timeout_s is stopped (houdini_busy).
 

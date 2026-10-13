@@ -16,7 +16,9 @@ except ImportError:  # running from a checkout without an editable install
 
 from hocuspocus.tools import catalog  # noqa: E402
 from hocuspocus.tools.catalog import (  # noqa: E402
+    ARGUMENT_DESCRIPTION_MAX_WORDS,
     DESCRIPTION_MAX_WORDS,
+    MINIMAL_TOOLS,
     TOOLS,
     TOOLS_LIST_MAX_BYTES,
     for_profile,
@@ -47,6 +49,12 @@ EXPECTED_ORDER = [
     "hda", "usd_stage", "pdg", "events",
 ]  # fmt: skip
 FULL_ONLY = {"hda", "usd_stage", "pdg", "events"}
+# BIBLE §4.1 (1.3): the minimal profile, for clients with a small context.
+MINIMAL = {
+    "houdini_status", "houdini_connect", "hip_open", "hip_save", "node_find", "node_info",
+    "node_create", "node_connect", "parm_get", "parm_set", "cook", "geo_info",
+    "viewport_capture", "houdini_python",
+}  # fmt: skip
 
 # BIBLE §9 code table, transcribed (`python_disabled / read_only` is one row, two codes).
 BIBLE_ERROR_CODES = {
@@ -93,6 +101,10 @@ def test_profiles() -> None:
     assert {spec.name for spec in TOOLS if spec.profile == "full"} == FULL_ONLY
     assert for_profile("full") == TOOLS
     assert [spec.name for spec in core] == [n for n in EXPECTED_ORDER if n not in FULL_ONLY]
+    minimal = for_profile("minimal")
+    assert MINIMAL_TOOLS == MINIMAL and len(minimal) == 14
+    assert [spec.name for spec in minimal] == [n for n in EXPECTED_ORDER if n in MINIMAL]
+    assert {catalog.profile_of(spec) for spec in minimal} == {"minimal"}
 
 
 def test_bridge_local_tools() -> None:
@@ -207,15 +219,16 @@ def tools_list_wire_size(profile: str, result_content: str = "both") -> int:
 
 
 def test_tools_list_budget(capsys: pytest.CaptureFixture[str]) -> None:
-    sizes = {profile: tools_list_wire_size(profile) for profile in ("core", "full")}
+    sizes = {profile: tools_list_wire_size(profile) for profile in ("minimal", "core", "full")}
     with capsys.disabled():
         print(
-            f"\n[tools/list] serialised: core {sizes['core']:,} B, full {sizes['full']:,} B "
+            f"\n[tools/list] serialised: minimal {sizes['minimal']:,} B, core "
+            f"{sizes['core']:,} B, full {sizes['full']:,} B "
             f"(cap {TOOLS_LIST_WIRE_MAX_BYTES:,} B; full without output schemas, the "
             f"text default: {tools_list_wire_size('full', 'text'):,} B); "
             f"names+descriptions+input schemas {tools_list_text_size(TOOLS):,} B"
         )
-    assert sizes["core"] < sizes["full"] <= TOOLS_LIST_WIRE_MAX_BYTES, sizes
+    assert sizes["minimal"] < sizes["core"] < sizes["full"] <= TOOLS_LIST_WIRE_MAX_BYTES, sizes
     assert sizes["full"] <= TOOLS_LIST_WIRE_TARGET_BYTES, (
         f"tools/list (full profile, output schemas declared) is {sizes['full']:,} B, over the "
         f"{TOOLS_LIST_WIRE_TARGET_BYTES:,} B headroom target (BIBLE §4.1; hard cap "
@@ -227,6 +240,38 @@ def test_tools_list_budget(capsys: pytest.CaptureFixture[str]) -> None:
 
 def test_description_cap_is_60_words() -> None:
     assert DESCRIPTION_MAX_WORDS == 60  # BIBLE §4.1 (1.2)
+
+
+def _argument_descriptions(schema: dict, path: str = ""):
+    """``(argument path, description)`` for every described property, nested ones too."""
+    for name, prop in schema.get("properties", {}).items():
+        where = f"{path}.{name}" if path else name
+        if prop.get("description"):
+            yield where, prop["description"]
+        yield from _argument_descriptions(prop, where)
+        if isinstance(prop.get("items"), dict):
+            yield from _argument_descriptions(prop["items"], f"{where}[]")
+    for key in ("anyOf", "oneOf", "allOf"):
+        for sub in schema.get(key, ()):
+            yield from _argument_descriptions(sub, path)
+
+
+@pytest.mark.parametrize("spec", TOOLS, ids=_ids)
+def test_argument_detail_lives_in_notes(spec: catalog.ToolSpec) -> None:
+    """BIBLE §4.1 (1.3): an argument description is a phrase of at most 12 words. Shapes,
+    edge cases and interactions go in the spec's notes (docs/tools.md and
+    hocuspocus://guide), which tools/list leaves out, so new arguments do not eat the
+    tools/list budget."""
+    assert ARGUMENT_DESCRIPTION_MAX_WORDS == 12
+    long = {
+        where: len(text.split())
+        for where, text in _argument_descriptions(spec.input_schema)
+        if len(text.split()) > ARGUMENT_DESCRIPTION_MAX_WORDS
+    }
+    assert not long, (
+        f"argument descriptions over {ARGUMENT_DESCRIPTION_MAX_WORDS} words: {long}. Keep a "
+        "short phrase in the schema and move the detail into the spec's notes."
+    )
 
 
 def test_notes_reach_the_docs_and_guide_but_not_tools_list() -> None:

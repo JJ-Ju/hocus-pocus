@@ -220,7 +220,7 @@ Nothing needs configuring for this guide. Two settings in
 win) matter most for scripts and other clients:
 
 ```toml
-profile = "full"            # list and allow hda, usd_stage, pdg and events (default "core")
+profile = "full"            # list and allow hda, usd_stage, pdg and events (default "core"; "minimal" lists 14 tools)
 result_content = "both"     # also send structuredContent (default "text")
 ```
 

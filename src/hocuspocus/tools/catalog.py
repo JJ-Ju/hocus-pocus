@@ -18,7 +18,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-Profile = Literal["core", "full"]
+Profile = Literal["minimal", "core", "full"]
+
+PROFILES: tuple[str, ...] = ("minimal", "core", "full")
+"""Nested, smallest first (BIBLE §3.5, §3.7): each profile lists every tool of the one before."""
 
 HP_RPC_VERSION = 1
 """Host RPC contract version (the ``v1`` in ``/hp/v1/...``)."""
@@ -28,6 +31,10 @@ TOOLS_LIST_MAX_BYTES = 48_000
 
 DESCRIPTION_MAX_WORDS = 60
 """1.2 (BIBLE §4.1): argument-level detail goes in ``ToolSpec.notes``, not the description."""
+
+ARGUMENT_DESCRIPTION_MAX_WORDS = 12
+"""1.3 (BIBLE §4.1): an argument's schema ``description`` is a short phrase; anything longer
+(shapes, edge cases, interactions) goes in the spec's ``notes``, outside ``tools/list``."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,6 +53,7 @@ class ToolSpec:
     destructive: bool = False
     idempotent: bool = False
     profile: Profile = "core"
+    """``core`` or ``full``; membership of ``minimal`` is :data:`MINIMAL_TOOLS`."""
     headless_ok: bool = True
     bridge_local: bool = False
     """True when the bridge answers this tool itself (``houdini_status``, ``houdini_connect``)."""
@@ -319,7 +327,7 @@ _SESSION: tuple[ToolSpec, ...] = (
                     ),
                 },
                 "bridge_version": _t("string"),
-                "profile": {"type": "string", "enum": ["core", "full"]},
+                "profile": {"type": "string", "enum": list(PROFILES)},
                 "read_only": _t("boolean"),
                 "allow_python": _t("boolean"),
             },
@@ -1779,7 +1787,28 @@ def get(name: str) -> ToolSpec | None:
     return None
 
 
+MINIMAL_TOOLS: frozenset[str] = frozenset(
+    {
+        "houdini_status", "houdini_connect", "hip_open", "hip_save",
+        "node_find", "node_info", "node_create", "node_connect",
+        "parm_get", "parm_set", "cook", "geo_info", "viewport_capture", "houdini_python",
+    }
+)  # fmt: skip
+"""The ``minimal`` profile (1.3, BIBLE §4.1): 14 core tools for clients with a small context.
+``houdini_python`` covers what the others leave out."""
+
+
+def profile_of(spec: ToolSpec) -> str:
+    """The smallest profile that lists ``spec``."""
+    return "minimal" if spec.name in MINIMAL_TOOLS else spec.profile
+
+
+def in_profile(spec: ToolSpec, profile: str) -> bool:
+    """Whether ``profile`` lists ``spec``; an unknown profile reads as ``core``."""
+    rank = PROFILES.index(profile) if profile in PROFILES else PROFILES.index("core")
+    return PROFILES.index(profile_of(spec)) <= rank
+
+
 def for_profile(profile: Profile) -> tuple[ToolSpec, ...]:
-    if profile == "full":
-        return TOOLS
-    return tuple(spec for spec in TOOLS if spec.profile == "core")
+    """The tools ``profile`` lists, in catalogue order."""
+    return tuple(spec for spec in TOOLS if in_profile(spec, profile))

@@ -13,6 +13,7 @@ import traceback
 from collections.abc import Callable, Mapping
 from typing import Any
 
+from hocuspocus.tools.catalog import in_profile, profile_of
 from hocuspocus.tools.errors import ToolError
 
 from .tools.registry import HostContext, HostTool
@@ -197,13 +198,15 @@ class Dispatcher:
                 )
             spec = impl.spec
             host_profile = getattr(self.ctx.config, "profile", "full")
-            if spec is not None and spec.profile == "full" and host_profile == "core":
+            if spec is not None and not in_profile(spec, host_profile):
+                needed = profile_of(spec)
                 raise ToolError(
                     "invalid_argument",
-                    f"{tool} is a full-profile tool, and this Houdini's host runs the core "
-                    "profile.",
-                    hint='Set profile = "full" in hocuspocus.toml (host and bridge read it) or '
-                    "HOCUSPOCUS_PROFILE=full in Houdini's environment, and restart Houdini.",
+                    f"{tool} is a {needed}-profile tool, and this Houdini's host runs the "
+                    f"{host_profile} profile.",
+                    hint=f'Set profile = "{needed}" (or "full") in hocuspocus.toml (host and '
+                    f"bridge read it) or HOCUSPOCUS_PROFILE={needed} in Houdini's environment, "
+                    "and restart Houdini.",
                 )
             if not impl.headless_ok and not self.ctx.ui:
                 raise ToolError(
