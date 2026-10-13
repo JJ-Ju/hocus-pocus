@@ -35,6 +35,8 @@ from .undo import UndoHistory, hou_undo_group
 LOGGER_NAME = "hocuspocus"
 LOG_MAX_BYTES = 5 * 1024 * 1024
 SUPPORTED_MAJOR_MINOR = (22, 0)
+BUSY_AFTER_S = 1.0
+"""``/health`` reports ``busy`` once the main thread has been held this long (1.3)."""
 
 
 def _utc_now() -> str:
@@ -333,6 +335,9 @@ class Host:
             "generation": self.scene.generation,
             "ui": self.ui,
             "host_version": __version__,
+            # 1.3 (review 19 papercut 4): houdini_status.instances[] shows these per row.
+            "busy": self.executor.busy_s() >= BUSY_AFTER_S,
+            "jobs_running": self.jobs.running_count(),
         }
 
     def status(self) -> dict[str, Any]:

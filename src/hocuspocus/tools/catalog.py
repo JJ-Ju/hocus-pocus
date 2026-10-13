@@ -306,7 +306,12 @@ _SESSION: tuple[ToolSpec, ...] = (
         notes=(
             "Also reports $HIPNAME, fps, the frame range, and the bridge's profile, read_only and "
             "allow_python. An untitled scene's hip carries a note that $HIP is the launch directory"
-            " until hip_save."
+            " until hip_save. Each instances[] row has pid, port, label, houdini, ui, hip, "
+            "started, launched_by, name (when given), selected (the pinned instance, or the one "
+            "reads go to), busy (the main thread has been held for over a second) and "
+            "jobs_running. With several instances and none pinned, tools that change a scene "
+            "refuse with ambiguous_instance: pin one with houdini_connect {pid}. When the pinned "
+            "Houdini has exited, connected is null and lost: {pid, label} names it."
         ),
         input_schema=_obj({}),
         output_schema=_out(
@@ -341,11 +346,16 @@ _SESSION: tuple[ToolSpec, ...] = (
         name="houdini_connect",
         description=(
             "Choose the Houdini this session drives: pid attaches, launch starts one (gui or "
-            "headless, optional hip), disconnect drops the selection, quit closes it (on_unsaved "
-            "as hip_new). A launched Houdini usually closes with this server "
+            "headless, optional hip), disconnect drops the selection, quit closes it. A launched "
+            "Houdini usually closes with this server "
             "(launched.outlives_server says); `hocuspocus launch` starts one that outlives it."
         ),
         notes=(
+            "pid (or launch) pins that Houdini: the pin holds until the next houdini_connect, and "
+            "if it exits every call returns instance_lost rather than switching. {} unpins "
+            "(automatic selection). name labels the Houdini given by pid or launch, shown in "
+            "houdini_status and in _meta.instance; {name} alone pins the Houdini with that name. "
+            "A pid that is not running is houdini_offline with the live candidates. "
             "launch waits up to wait_s seconds for the new host to register. A launched Houdini "
             "starts in HOCUSPOCUS_WORK_DIR (default: the home directory), which is the untitled "
             "scene's $HIP and $JOB. quit closes the selected Houdini (or pid) through its host: "
@@ -365,6 +375,7 @@ _SESSION: tuple[ToolSpec, ...] = (
                     },
                     ("mode",),
                 ),
+                "name": _s(),
                 "disconnect": _b(False),
                 "quit": _b(False),
                 "on_unsaved": _enum(("fail", "save", "discard")),
@@ -372,7 +383,7 @@ _SESSION: tuple[ToolSpec, ...] = (
         ),
         bridge_local=True,
         examples=(
-            {"pid": 12345},
+            {"pid": 12345, "name": "worker"},
             {"launch": {"mode": "headless", "hip": "C:/work/shot.hip"}},
             {"quit": True, "on_unsaved": "save"},
         ),

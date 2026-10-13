@@ -33,10 +33,11 @@ _GUI_DRAIN_BUDGET_S = 0.05
 
 
 class _Work:
-    __slots__ = ("fn", "done", "lock", "state", "result", "exc")
+    __slots__ = ("fn", "done", "lock", "state", "result", "exc", "queued")
 
     def __init__(self, fn: Callable[[], Any]) -> None:
         self.fn = fn
+        self.queued = time.monotonic()
         self.done = threading.Event()
         self.lock = threading.Lock()
         self.state = "pending"  # pending | running | done | cancelled
@@ -84,6 +85,8 @@ class MainThreadExecutor:
         self.main_thread_ident: int | None = main_thread_ident
         self._running = False
         self._draining = False
+        self._current_started: float | None = None
+        """When the callable running on the main thread now started (``busy_s``)."""
         self.work_wrapper: Callable[[Callable[[], Any]], Any] | None = None
         """Runs each queued callable (``wrapper(fn)``) when set: the ``events`` hooks use it
         to tell HocusPocus's own scene changes from the user's."""
@@ -146,6 +149,19 @@ class MainThreadExecutor:
             return "gui" if hou.isUIAvailable() else "headless"
         except ImportError:
             return "headless"
+
+    def busy_s(self) -> float:
+        """Seconds the main thread has been held: by the callable running now, or (a modal
+        dialog, a long user cook) the oldest one still waiting. 0.0 when idle."""
+        now = time.monotonic()
+        ages = []
+        started = self._current_started
+        if started is not None:
+            ages.append(now - started)
+        with self._queue.mutex:
+            if self._queue.queue:
+                ages.append(now - self._queue.queue[0].queued)
+        return max(ages, default=0.0)
 
     # -- submission --------------------------------------------------------------
 
@@ -235,6 +251,7 @@ class MainThreadExecutor:
             work.state = "running"
         reraise: BaseException | None = None
         wrapper = self.work_wrapper
+        self._current_started = time.monotonic()
         try:
             work.result = work.fn() if wrapper is None else wrapper(work.fn)
         except BaseException as exc:  # transported to the caller
@@ -244,6 +261,7 @@ class MainThreadExecutor:
             if isinstance(exc, KeyboardInterrupt | SystemExit):
                 reraise = exc
         finally:
+            self._current_started = None
             with work.lock:
                 work.state = "done"
             work.done.set()

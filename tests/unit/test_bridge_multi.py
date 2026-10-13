@@ -386,3 +386,87 @@ def test_job_list_is_the_selected_instance_and_all_aggregates():
     ]
     # the host never sees the bridge-only argument
     assert all("all" not in args for tool, args in host_of(hosts, GUI).calls if tool == "job")
+
+
+# -- 4. instance rows: busy, jobs_running, name, selected (review 19 papercuts 4, 9) ----------
+
+
+def test_rows_show_busy_jobs_running_and_selected():
+    bridge, hosts, _live = make(GUI, WORKER)
+    host_of(hosts, WORKER).health_extra = {"busy": True, "jobs_running": 1}
+    host_of(hosts, GUI).health_extra = {"busy": False, "jobs_running": 0}
+    bridge.call_tool("houdini_connect", {"pid": WORKER.pid})
+    rows = {row["pid"]: row for row in data(bridge.call_tool("houdini_status", {}))["instances"]}
+    assert rows[61900]["busy"] is True and rows[61900]["jobs_running"] == 1
+    assert rows[61900]["selected"] is True and rows[3084]["selected"] is False
+    assert rows[3084]["busy"] is False and rows[3084]["jobs_running"] == 0
+
+
+def test_unreachable_row_says_so():
+    from hocuspocus.tools.errors import ToolError
+
+    bridge, hosts, _live = make(GUI, WORKER)
+
+    def refuse(timeout_s=5.0):
+        raise ToolError("houdini_offline", "refused", detail={"reason": "unreachable"})
+
+    host_of(hosts, WORKER).health = refuse
+    rows = {row["pid"]: row for row in data(bridge.call_tool("houdini_status", {}))["instances"]}
+    assert rows[61900]["unreachable"] == "houdini_offline" and "busy" not in rows[61900]
+
+
+def _registered(tmp_path, inst: Instance) -> Instance:
+    from dataclasses import replace
+
+    entry = tmp_path / f"{inst.pid}.json"
+    entry.write_text(json.dumps({"pid": inst.pid, "port": inst.port, "token": inst.token}))
+    return replace(inst, file=entry)
+
+
+def test_connect_names_an_instance_and_selects_it_by_name(tmp_path):
+    from dataclasses import replace
+
+    gui, worker = _registered(tmp_path, GUI), _registered(tmp_path, WORKER)
+    bridge, _hosts, live = make(gui, worker)
+    out = data(bridge.call_tool("houdini_connect", {"pid": worker.pid, "name": "worker"}))
+    assert out["connected"]["name"] == "worker"
+    assert json.loads(worker.file.read_text())["name"] == "worker"  # in the registry entry
+    live[:] = [gui, replace(worker, name="worker")]  # what the next scan reads
+    bridge.call_tool("houdini_connect", {"pid": gui.pid})
+    result = bridge.call_tool("houdini_connect", {"name": "worker"})
+    assert data(result)["connected"]["pid"] == worker.pid
+    assert result.meta["instance"]["pid"] == worker.pid
+    rows = data(bridge.call_tool("houdini_status", {}))["instances"]
+    assert {row["pid"]: row.get("name") for row in rows} == {3084: None, 61900: "worker"}
+    forwarded = bridge.call_tool("node_info", {"paths": ["/obj"]})
+    assert forwarded.meta["instance"] == {"pid": 61900, "label": "hython", "name": "worker"}
+
+
+def test_a_name_moves_from_the_instance_that_had_it(tmp_path):
+    from dataclasses import replace
+
+    gui, worker = _registered(tmp_path, GUI), _registered(tmp_path, WORKER)
+    bridge, _hosts, live = make(gui, worker)
+    bridge.call_tool("houdini_connect", {"pid": worker.pid, "name": "main"})
+    live[:] = [gui, replace(worker, name="main")]
+    bridge.call_tool("houdini_connect", {"pid": gui.pid, "name": "main"})
+    assert "name" not in json.loads(worker.file.read_text())
+    assert json.loads(gui.file.read_text())["name"] == "main"
+
+
+def test_unknown_name_lists_candidates():
+    bridge, _hosts, _live = make(GUI, WORKER)
+    error = data(bridge.call_tool("houdini_connect", {"name": "editor"}))
+    assert error["code"] == "houdini_offline" and error["retryable"] is False
+    assert [c["pid"] for c in error["candidates"]] == [3084, 61900]
+
+
+def test_connect_to_a_dead_pid_is_not_retryable_and_labels_candidates():
+    bridge, _hosts, _live = make(GUI, WORKER2)
+    error = data(bridge.call_tool("houdini_connect", {"pid": 61900}))
+    assert error["code"] == "houdini_offline" and error["retryable"] is False
+    assert error["candidates"] == [
+        {"pid": 3084, "label": "houdinifx", "ui": True, "hip": "C:/work/city_work.hip"},
+        {"pid": 61996, "label": "hython", "ui": False, "hip": ""},
+    ]
+    assert "3084 (houdinifx, GUI, city_work.hip)" in error["message"]

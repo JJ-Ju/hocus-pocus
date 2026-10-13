@@ -212,6 +212,12 @@ class InstanceRegistry:
             if not changed and not self._pending:
                 return
             self._entry.update(changed)
+            # The bridge writes ``name`` (houdini_connect {pid, name}; 1.3): keep it.
+            on_disk = read_entry(self.path) or {}
+            if on_disk.get("name"):
+                self._entry["name"] = on_disk["name"]
+            else:
+                self._entry.pop("name", None)
             data = dict(self._entry)
             try:
                 _write_private_atomic(self.path, json.dumps(data, indent=1))

@@ -607,7 +607,11 @@ def test_connect_pid_pins_selection():
 def test_connect_unknown_pid_lists_candidates():
     bridge, _c, _l = make_bridge()
     err = structured(bridge.call_tool("houdini_connect", {"pid": 1}))
-    assert err["code"] == "houdini_offline" and err["candidates"] == ["4242"]
+    assert err["code"] == "houdini_offline" and err["retryable"] is False
+    assert err["candidates"] == [
+        {"pid": 4242, "label": "hython", "ui": False, "hip": "C:/work/a.hip"}
+    ]
+    assert "4242 (hython, headless, a.hip)" in err["message"]
 
 
 def test_connect_rejects_two_modes():
@@ -655,7 +659,7 @@ def test_quit_argument_errors(quick_quit):
     err = structured(bridge.call_tool("houdini_connect", {"on_unsaved": "save"}))
     assert err["code"] == "invalid_argument" and "quit" in err["message"]
     err = structured(bridge.call_tool("houdini_connect", {"quit": True, "pid": 1}))
-    assert err["code"] == "houdini_offline" and err["candidates"] == ["4242"]
+    assert err["code"] == "houdini_offline" and err["candidates"][0]["pid"] == 4242
 
 
 def test_disconnect_then_reconnect():
