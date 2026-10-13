@@ -2,7 +2,7 @@
 
 <!-- Generated from src/hocuspocus/tools/catalog.py by `python -m hocuspocus.tools.docs`. Do not edit by hand. -->
 
-35 tools: 31 in the `core` profile, 4 more in `full`. Model-visible `tools/list` text: 26,008 bytes. See `docs/BIBLE.md` §4 for the design.
+35 tools: 31 in the `core` profile, 4 more in `full`. Model-visible `tools/list` text: 26,084 bytes. See `docs/BIBLE.md` §4 for the design.
 
 ## Contents
 
@@ -376,9 +376,9 @@ Delete nodes in one undo step and return the deleted paths. keep_connections rec
 
 `idempotent` `headless ok` · profile `core`
 
-Change node properties in one undo step: rename, flags, bypass, color, comment, position, lock (false allows editing a locked HDA's contents). spare_parms adds {name, type: float|int|string|toggle|menu|button|vector|color, label, default, size, min, max, menu_items [{token, label}], folder, help} or removes spare parms by name. parm_set changes values.
+Change node properties in one undo step: rename, flags, bypass, color, comment, position, lock (false allows editing a locked HDA's contents). spare_parms adds {name, type: float|int|string|toggle|menu|button|vector|color, label, default, size, min, max, menu_items [{token, label}], value_type, folder, help} or removes spare parms by name. Menu value_type string (default): chs() gives the token; int: ch() gives the item index.
 
-**Notes.** A rename returns old_path and path; spare_parms returns the added and removed parm paths. Only spare parms can be removed; a name already on the node fails with name_collision; nodes inside a locked asset are refused with locked. A folder label is created when missing.
+**Notes.** A rename returns old_path and path; spare_parms returns the added and removed parm paths. Only spare parms can be removed; a name already on the node fails with name_collision; nodes inside a locked asset are refused with locked. A folder label is created when missing. value_type is for menus only: string makes a menu parm whose value is the token (VEX chs(); ch() gives the item index); int makes an int parm with that menu whose value is the item index (ch() or chi(); chs() gives the index as text). A menu default is a token or an item index; a number that is no index but equals a token's text (-1 for token "-1") picks that token.
 
 ### Arguments
 

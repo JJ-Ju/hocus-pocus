@@ -58,6 +58,15 @@ Add a control parm to a null, subnet, geo object or an unlocked HDA instance wit
 
 `parm_set {path: "/obj/geo1/rbd1/strength", expression: 'ch("../CONTROLS/glue_strength")'}`
 then links to it. A `ch()` to a parm that does not exist evaluates to 0 silently.
+
+A `menu` is a string menu by default: VEX reads its token with `chs()` (`ch()` gives the
+item index). For a menu that VEX reads as a number, pass `value_type: "int"`: the parm is
+an int whose value is the item index, read with `ch()` or `chi()`:
+
+```json
+{"name": "roof_type", "type": "menu", "value_type": "int", "default": 0,
+ "menu_items": [{"token": "flat", "label": "Flat"}, {"token": "pyramid", "label": "Pyramid"}]}
+```
 """
 
 GUIDE_HEADER = """\

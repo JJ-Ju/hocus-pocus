@@ -1424,12 +1424,22 @@ def parm_set(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
 
 SPARE_TYPES = ("float", "int", "string", "toggle", "menu", "button", "vector", "color")
 SPARE_KEYS = frozenset(
-    ("name", "type", "label", "default", "size", "min", "max", "menu_items", "folder", "help")
-)
+    (
+        "name", "type", "label", "default", "size", "min", "max", "menu_items", "value_type",
+        "folder", "help",
+    )
+)  # fmt: skip
+MENU_VALUE_TYPES = ("string", "int")
+"""``value_type`` of a spare ``menu`` (review 12 papercut 3). ``string`` (default) is a
+``hou.MenuParmTemplate``: ``chs()`` gives the token and ``ch()`` the item index. ``int`` is a
+``hou.IntParmTemplate`` with the menu: ``ch()``/``chi()`` give the item index and
+``parm_get`` reports the index as the value (``chs()`` gives the index as text, not the
+token). Verified on 22.0.466."""
 _PARM_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 SPARE_HINT = (
     "spare_parms is {add: [{name, type: " + "|".join(SPARE_TYPES) + ", label?, default?, "
-    "size?, min?, max?, menu_items?: [{token, label}], folder?, help?}], remove: [names]}."
+    "size?, min?, max?, menu_items?: [{token, label}], value_type?: string|int (menus), "
+    "folder?, help?}], remove: [names]}."
 )
 SPARE_PARMS_HINT = "To add a control parm, use node_edit spare_parms."
 """Appended to ``parm_not_found`` on nodes that hold controls (null, subnet, geo)."""
@@ -1477,19 +1487,28 @@ def _spare_default(spec: dict[str, Any], kind: str, size: int, where: str) -> An
             raise ToolError("invalid_value", f"{where}: a toggle default is true or false.")
         return bool(default)
     if kind == "menu":
-        tokens = [i["token"] for i in spec["menu_items"]]
-        if default is None:
-            return 0
-        if isinstance(default, str) and default in tokens:
-            return tokens.index(default)
-        if _is_number(default) and float(default).is_integer() and 0 <= default < len(tokens):
-            return int(default)
-        raise ToolError(
-            "invalid_value",
-            f"{where}: default {default!r} is not one of the menu tokens.",
-            hint=f"Tokens: {', '.join(tokens)} (or an index).",
-        )
+        return _spare_menu_default(default, [i["token"] for i in spec["menu_items"]], where)
     return _spare_values(default, kind, size, where)
+
+
+def _spare_menu_default(default: Any, tokens: list[str], where: str) -> int:
+    """The item index a menu default names: a token, or a number. A whole number is the
+    index; one that is no index but equals a token's text (``-1`` for token ``"-1"``) is
+    that token."""
+    if default is None:
+        return 0
+    if isinstance(default, str) and default in tokens:
+        return tokens.index(default)
+    if _is_number(default) and float(default).is_integer():
+        if 0 <= default < len(tokens):
+            return int(default)
+        if str(int(default)) in tokens:
+            return tokens.index(str(int(default)))
+    raise ToolError(
+        "invalid_value",
+        f"{where}: default {default!r} is neither a menu token nor an item index.",
+        hint=f"Tokens: {', '.join(tokens)}; or an index from 0 to {len(tokens) - 1}.",
+    )
 
 
 def _spare_template(spec: Any, where: str) -> tuple[str, Any, str | None]:
@@ -1534,6 +1553,11 @@ def _spare_template(spec: Any, where: str) -> tuple[str, Any, str | None]:
             raise _spare_bad(f"{where}: a menu needs menu_items: [{{token, label}}, ...].")
     elif items is not None:
         raise _spare_bad(f"{where}: menu_items is for type menu.")
+    value_type = spec.get("value_type", "string")
+    if kind != "menu" and "value_type" in spec:
+        raise _spare_bad(f"{where}: value_type is for type menu.")
+    if value_type not in MENU_VALUE_TYPES:
+        raise _spare_bad(f"{where}: value_type must be string or int; got {value_type!r}.")
     default = _spare_default(spec, kind, size, where)
     if kind in ("float", "vector", "color"):
         extra: dict[str, Any] = {}
@@ -1564,6 +1588,15 @@ def _spare_template(spec: Any, where: str) -> tuple[str, Any, str | None]:
         template = hou.StringParmTemplate(name, label, size, default_value=default)
     elif kind == "toggle":
         template = hou.ToggleParmTemplate(name, label, default_value=default)
+    elif kind == "menu" and value_type == "int":
+        template = hou.IntParmTemplate(
+            name,
+            label,
+            1,
+            default_value=(default,),
+            menu_items=tuple(i["token"] for i in items),
+            menu_labels=tuple(str(i.get("label") or i["token"]) for i in items),
+        )
     elif kind == "menu":
         template = hou.MenuParmTemplate(
             name,

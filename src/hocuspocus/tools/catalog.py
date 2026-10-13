@@ -671,14 +671,19 @@ _NODES: tuple[ToolSpec, ...] = (
             "Change node properties in one undo step: rename, flags, bypass, color, comment, "
             "position, lock (false allows editing a locked HDA's contents). spare_parms adds {name,"
             " type: float|int|string|toggle|menu|button|vector|color, label, default, size, min, "
-            "max, menu_items [{token, label}], folder, help} or removes spare parms by name. "
-            "parm_set changes values."
+            "max, menu_items [{token, label}], value_type, folder, help} or removes spare parms by "
+            "name. Menu value_type string (default): chs() gives the token; int: ch() gives the "
+            "item index."
         ),
         notes=(
             "A rename returns old_path and path; spare_parms returns the added and removed parm "
             "paths. Only spare parms can be removed; a name already on the node fails with "
             "name_collision; nodes inside a locked asset are refused with locked. A folder label is"
-            " created when missing."
+            " created when missing. value_type is for menus only: string makes a menu parm whose "
+            "value is the token (VEX chs(); ch() gives the item index); int makes an int parm with "
+            "that menu whose value is the item index (ch() or chi(); chs() gives the index as "
+            "text). A menu default is a token or an item index; a number that is no index but "
+            'equals a token\'s text (-1 for token "-1") picks that token.'
         ),
         input_schema=_obj(
             {
