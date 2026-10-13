@@ -26,7 +26,7 @@ you get two commands on your `PATH`: `hocuspocus` and `hocuspocus-mcp`.
 
 ```text
 $ hocuspocus version
-hocuspocus 1.2.1 (hp/v1, mcp 2.3.x, Python 3.12.x)
+hocuspocus 1.3.0 (hp/v1, mcp 2.3.x, Python 3.12.x)
 ```
 
 ## 2. Install the Houdini package (1 minute)
@@ -34,8 +34,8 @@ hocuspocus 1.2.1 (hp/v1, mcp 2.3.x, Python 3.12.x)
 ```text
 $ hocuspocus install-houdini
 Houdini pref dir: C:\Users\you\Documents\houdini22.0 (from hython (C:\Program Files\Side Effects Software\Houdini 22.0.466), default location)
-copied hocuspocus 1.2.1 to C:\Users\you\Documents\houdini22.0\hocuspocus\1.2.1\python\hocuspocus
-copied the Houdini payload to C:\Users\you\Documents\houdini22.0\hocuspocus\1.2.1\houdini
+copied hocuspocus 1.3.0 to C:\Users\you\Documents\houdini22.0\hocuspocus\1.3.0\python\hocuspocus
+copied the Houdini payload to C:\Users\you\Documents\houdini22.0\hocuspocus\1.3.0\houdini
 wrote C:\Users\you\Documents\houdini22.0\packages\hocuspocus.json (template: ...\houdini\hocuspocus.json.template)
 recorded the pref dirs in C:\Users\you\AppData\Local\HocusPocus\install.json (the bridge reads hocuspocus.toml from there)
 Restart Houdini to load HocusPocus.
@@ -86,13 +86,13 @@ the UI is up, the host starts by itself. Then run:
 
 ```text
 $ hocuspocus doctor
-hocuspocus 1.2.1 (bridge, hp/v1)
+hocuspocus 1.3.0 (bridge, hp/v1)
 [ok]   Houdini install: C:\Program Files\Side Effects Software\Houdini 22.0.466
 [ok]   Houdini version: 22.0.466
-[ok]   pref dir: C:\Users\you\Documents\houdini22.0 (from hython (...), default location): package JSON -> C:\Users\you\Documents\houdini22.0\hocuspocus\1.2.1\python (1.2.1)
+[ok]   pref dir: C:\Users\you\Documents\houdini22.0 (from hython (...), default location): package JSON -> C:\Users\you\Documents\houdini22.0\hocuspocus\1.3.0\python (1.3.0)
 [ok]   hocuspocus.toml: none (defaults)
-[ok]   package JSON: C:\Users\you\Documents\houdini22.0\packages\hocuspocus.json -> C:\Users\you\Documents\houdini22.0\hocuspocus\1.2.1\python
-[ok]   host/bridge version: 1.2.1
+[ok]   package JSON: C:\Users\you\Documents\houdini22.0\packages\hocuspocus.json -> C:\Users\you\Documents\houdini22.0\hocuspocus\1.3.0\python
+[ok]   host/bridge version: 1.3.0
 [ok]   instance /health: pid 18244 port 52311 GUI (untitled) Houdini 22.0.466
 
 Register with Claude Code:

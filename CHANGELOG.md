@@ -191,6 +191,26 @@ D29 in `docs/BIBLE.md` §15.
   - `turntable_preview` turns the target's display flag on, hides other displayed
     objects for the captures, captures at the camera's resolution and leaves the playbar
     range alone.
+- **"Nearly black" on sparse flipbooks (review 20 N1).** The note is measured on the
+  flattened thumbnail the agent receives, not the transparent RGBA file; a fully
+  transparent frame says "empty" instead.
+- **`node_create` parms skipped callbacks silently (review 20 N2).** A plain set of a
+  callback menu or toggle carries `parm_set`'s note, and `{value, press: true}` runs the
+  callback once the inputs are wired, with `side_effects`.
+- **Render `job result` listed every path (review 20 N5).** Above 5 outputs, the direct
+  result and `job result` both return `outputs_summary` and `outputs_sample` (first 2,
+  last 2); `missing` keeps up to 20 paths.
+- **`cook profile` called a cache read a re-simulation (review 20 N3).** `resimulated`
+  comes from the DOP solve stats of `hou.perfMon`, and is `null` with a note when nothing
+  reliable says.
+- **Job status details (review 20 N7, review 17 mentions).** `message` counts the frames
+  done as `current` does, frames print as integers, a cancelled job's `last_status` says
+  `cancelled`, a late `job cancel` returns `cancelled: false` with a note, and
+  `node_create` flags deprecated types such as the 22.0 OpenGL ROP.
+- **File Cache `output` hint (review 20 N4).** It names `filemethod: "explicit"`, the
+  token `parm_set` takes, instead of the index 1.
+- **Version string (review 20 N6).** The package, `hocuspocus version`, `bridge_version`
+  and `host_version` say 1.3.0.
 
 ### Upgrading from 1.2
 
