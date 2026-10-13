@@ -94,6 +94,21 @@ def _pattern(prim: str) -> re.Pattern[str] | None:
 # -- the LOP and its stage -------------------------------------------------------------
 
 
+def usd_parm_name(node: Any, name: str) -> str | None:
+    """Houdini's parm name for a USD attribute name on a LOP node (``inputs:intensity`` ->
+    ``xn__inputsintensity_i0a``, via ``hou.text.encodeParm``), or None when the node is not
+    a LOP or the name needs no encoding (review 13 papercut 7)."""
+    import hou
+
+    try:
+        if node.type().category() != hou.lopNodeTypeCategory():
+            return None
+        encoded = hou.text.encodeParm(name)
+    except Exception:
+        return None
+    return encoded if encoded and encoded != name else None
+
+
 def resolve_lop(path: Any) -> Any:
     """The LOP node at ``path``; a LOP network resolves to its display node."""
     import hou

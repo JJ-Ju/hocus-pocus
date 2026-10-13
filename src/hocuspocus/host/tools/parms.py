@@ -611,7 +611,8 @@ def parm_not_found(node: Any, name: str) -> ToolError:
 
 
 def resolve_name(node: Any, name: str) -> Any:
-    """``node.parm(name)`` then ``node.parmTuple(name)``; ``parm_not_found`` otherwise."""
+    """``node.parm(name)`` then ``node.parmTuple(name)``, then on a LOP the parm a USD
+    attribute name encodes to (``inputs:intensity``); ``parm_not_found`` otherwise."""
     if not isinstance(name, str) or not name:
         raise ToolError("invalid_argument", "Parm names must be non-empty strings.")
     parm = node.parm(name)
@@ -620,6 +621,11 @@ def resolve_name(node: Any, name: str) -> Any:
     ptuple = node.parmTuple(name)
     if ptuple is not None:
         return _normalize(ptuple)
+    from .usd import usd_parm_name
+
+    alias = usd_parm_name(node, name)
+    if alias is not None and (node.parm(alias) or node.parmTuple(alias)) is not None:
+        return resolve_name(node, alias)
     raise parm_not_found(node, name)
 
 

@@ -200,3 +200,38 @@ def test_capture_bad_lop_camera_lists_cameras(client, work_dir):
     assert "/cameras/cam1" in missing["candidates"]
     viewer = client.error("viewport_capture", {"lop_path": "/stage", "source": "viewer"})
     assert viewer["code"] in ("ui_required", "invalid_argument")
+
+
+# -- LOP parms by USD attribute name (papercut 7) ---------------------------------------
+
+
+def test_usd_attribute_names_resolve_to_lop_parms(client, work_dir):
+    nodes = _lop_scene(work_dir)
+    dome = nodes["dome"].path()
+    result = client.ok("parm_set", {"items": [{"path": f"{dome}/inputs:intensity", "value": 0.5}]})
+    item = result["results"][0]
+    assert item["path"] == f"{dome}/xn__inputsintensity_i0a"
+    assert nodes["dome"].parm("xn__inputsintensity_i0a").eval() == 0.5
+    got = client.ok("parm_get", {"paths": [f"{dome}/inputs:color"]})["parms"][0]
+    assert got["name"] == "xn__inputscolor_zta"
+    assert got["value"] == [1, 1, 1]
+    created = client.ok(
+        "node_create",
+        {
+            "items": [
+                {
+                    "parent": "/stage",
+                    "type": "distantlight::2.0",
+                    "name": "key",
+                    "inputs": [{"index": 0, "from": dome}],
+                    "parms": {"inputs:intensity": 2.5, "inputs:color": [1, 0.9, 0.8]},
+                }
+            ],
+        },
+    )
+    assert created["created"]
+    key = hou.node("/stage/key")
+    assert key.parm("xn__inputsintensity_i0a").eval() == 2.5
+    assert [round(v, 3) for v in key.parmTuple("xn__inputscolor_zta").eval()] == [1, 0.9, 0.8]
+    unknown = client.error("parm_set", {"items": [{"path": f"{dome}/inputs:nope", "value": 1}]})
+    assert unknown["code"] == "parm_not_found"

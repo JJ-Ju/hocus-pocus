@@ -919,7 +919,9 @@ _PARMS: tuple[ToolSpec, ...] = (
         ),
         notes=(
             "frame defaults to the current frame. template is {label, type, default, min, max, "
-            "help}; menu items are capped at 50; keys is {count, first, last}."
+            "help}; menu items are capped at 50; keys is {count, first, last}. On a LOP a USD "
+            "attribute name (.../inputs:intensity) reads Houdini's encoded parm "
+            "(xn__inputsintensity_i0a), named in path and name."
         ),
         input_schema=_obj(
             {
@@ -983,7 +985,9 @@ _PARMS: tuple[ToolSpec, ...] = (
             "With animation replace a single keyframe only adds or replaces its own key. press "
             "clicks a button parm. raw is left out when it equals value, and long strings are "
             "elided as in parm_get. Tuples report per-component expressions and the keyed component"
-            " names. Type mismatches fail with invalid_value naming the template type and range."
+            " names. Type mismatches fail with invalid_value naming the template type and range. "
+            "On a LOP a USD attribute name (inputs:intensity) sets Houdini's encoded parm "
+            "(xn__inputsintensity_i0a), here and in node_create parms; path is the resolved one."
         ),
         input_schema=_obj(
             {
