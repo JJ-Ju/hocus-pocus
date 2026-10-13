@@ -3,6 +3,206 @@
 This project uses [Semantic Versioning](https://semver.org/). The 0.9 compatibility
 policy does not apply to 1.0.
 
+## 1.2.0 (2026-10-12)
+
+Before 1.2 the real workloads were all SOP work. In 1.2 the `full` profile (`usd_stage`,
+`pdg`, `hda`, `events`) and the GUI-only paths (viewer capture, selection, undo next to
+a user) got their first real workloads. These were a Solaris lookdev of the city rendered
+with Karma (`docs/redesign/review/13-solaris-lookdev-eval.md`), a PDG wedge driven
+through `pdg`, `job` and `events` (`14-pdg-wedge-eval.md`), and a GUI session next to a
+user with an HDA round trip (`15-gui-session-eval.md`). This release fixes what they
+found, plus the review-12 leftovers (plan in `docs/redesign/plan-1.2.md`). A few results
+and defaults change, so read **Upgrading from 1.1** if you have agent prompts or scripts
+written against 1.1. Each contract decision is recorded in `docs/BIBLE.md` (decisions
+D21 to D24).
+
+### Contract changes
+
+- **Shorter catalogue descriptions.** Each description is at most 60 words and no longer
+  repeats defaults and enums that the schema states. Argument-level detail moved to a
+  new `notes` field on each tool spec. `docs/tools.md` and the `hocuspocus://guide`
+  resource render the notes, and `tools/list` leaves them out. The `full`-profile
+  `tools/list` with output schemas declared went from 44.0 KB to under 40,000 B, and a
+  unit test keeps it there. No tool or argument was removed.
+- **Annotations omit MCP defaults.** Hints equal to the MCP default are no longer sent:
+  `readOnlyHint: false`, `idempotentHint: false`, and `destructiveHint` and
+  `idempotentHint` on read-only tools. A client reads the missing hints as the same
+  values.
+- **`events`.** Every event carries `origin: agent|other`. The host holds an agent call's
+  events until the call's work ends. A call that fails and is rolled back records
+  nothing, and neither does a node created and deleted within one call or a tool's own
+  set and restore.
+  - New event kinds:
+    - `SpareParmsChanged`: one per spare parm edit, instead of a burst of
+      `ParmTupleChanged`.
+    - `kind: "pdg"`: `cook_start`, `work_item_failed` and `cook_done`.
+    - `hda_contents_rebuilt`: one per asset for `hda create`, `match` and `unlock`,
+      instead of one event per internal node.
+  - `FlagChanged` names the changed flags in `detail.flags`. The empty `FlagChanged`
+    that a spare parm edit used to send is dropped.
+  - Nodes read with `node_info` or listed by `network_describe` are watched too.
+  - Nested nodes created in one batch get their `ChildCreated`.
+  - Houdini's save-time writes on TOP networks are dropped.
+- **`undo` stops at user steps.** `undo` and `redo` stop at the first step whose label
+  does not start with `HocusPocus:`, which is a step by the user or by Houdini. The
+  result names that step in `blocked_by` and explains in `note`.
+  `include_user_steps: true` crosses such steps and lists them in `user_steps`.
+- **`pdg cook` refuses unsaved hips for out-of-process graphs.** ROP Fetch and the other
+  out-of-process ROP TOPs load the hip on disk. In 1.1, a cook with unsaved changes
+  cooked the old scene without a warning. When the graph has such a node, `cook` now
+  refuses an untitled scene or unsaved changes with `unsaved_changes`. `save: true`
+  saves first, and `approved_roots` apply. In-process graphs cook as before.
+- **`hda save` promotes spare parms.** With `promote_spare_parms` (default true), the
+  instance's spare parms become part of the definition's interface, values included,
+  and `promoted` lists them. In 1.1 they stayed on the instance, and `node_type_info`
+  showed no parms. `promote_spare_parms: false` keeps the 1.1 behaviour.
+- **`render` on USD render ROPs.** For `Lop/usdrender_rop` and `Driver/usdrender`, the
+  outputs come from `outputimage`. When that is empty, they come from the `productName`
+  of each RenderProduct of the render settings the ROP uses, per frame. They are never
+  `lopoutput`, which is husk's intermediate file.
+  - `output` overrides `outputimage`.
+  - A `note` says when no output resolves.
+  - A husk failure carries the last lines of its log in `detail.log_tail`.
+
+  In 1.1 these ROPs returned `outputs: []` and no thumbnail.
+- **`viewport_capture` leaves the GUI view as it was.** The viewer path saves the view
+  and the camera the viewport looked through. It puts both back after looking through
+  `camera` or after an explicit `fit`.
+  - An explicit `fit` now frames all or selected for the grab. 1.1 ignored `fit` on the
+    viewer. `fit_used` says what was done.
+  - With a `camera` or a stage, `auto` uses the OpenGL ROP.
+  - Every result says `scene: obj|stage`.
+  - In the GUI, `context` names the viewer's network, and a note says when that is not
+    the captured scene.
+  - Lights are refused as cameras, and camera errors list the scene's cameras as
+    `candidates`.
+
+### Added
+
+- `viewport_capture` captures LOP stages. `camera` takes a LOP camera node or a camera
+  prim path, and the new `lop_path` names the stage. A framed stage gets a temporary
+  camera LOP. With neither `camera` nor `lop_path`, the `/stage` display LOP is captured
+  when `/obj` displays nothing; otherwise a note names it. Stage captures work both
+  headless and in the GUI.
+- `usd_stage {summary: true}` returns `{total_prims, counts_by_type, bbox_world}` for the
+  whole subtree in a few hundred bytes.
+  - `total` is on every page. It comes from a counting walk capped at 100,000 prims,
+    which sets `total_capped` when the cap is reached.
+  - `attribs` (a name glob, `a|b`) filters attributes.
+  - Arrays of up to 4 elements (8 for strings and tokens) are listed whole.
+  - `world` is left out when it equals `local`.
+- On LOP nodes, `parm_get`, `parm_set` and `node_create` `parms` accept USD attribute
+  names such as `inputs:intensity`. The host resolves them to Houdini's encoded parm
+  name (`xn__inputsintensity_i0a`), and the result carries the resolved path.
+- `pdg workitems` gains three fields:
+  - `attribs: [names]` returns each item's attribute values.
+  - A `state` filter takes `failed`, `cancelled`, `success`, `cache`, `cooked` or a
+    state name.
+  - Each item reports `cook_time_s`.
+
+  Output files are relative to one `output_root` per page.
+- A failed PDG work item carries `error`, `log_path` and `exit_code`. `error` holds the
+  last error lines of the item's log, at most 400 characters. A cook result has
+  `ok: false` when any item of the graph failed, and lists the first 5 `failures`.
+- `pdg {action: "cook", save: true}` saves the hip before cooking.
+- `houdini_connect {quit: true, on_unsaved: fail|save|discard, pid?}` closes a Houdini
+  through its host, using the new route `POST /hp/v1/quit`. It returns `{quit, pid,
+  exited, saved?}`. In 1.1 the only way to close Houdini was `hou.exit` in
+  `houdini_python`, which answered `python_exception`.
+- `cook {profile: true}` attributes time inside for-each loops.
+  - Each `block_end` is force-cooked under the performance monitor.
+  - Body rows get `in_loop`, `cooks`, `per_iteration_ms`, and `cook_time_ms` over all
+    iterations.
+  - `loops` lists each loop with its `iterations` and `total_ms`.
+  - `attribution` is `per_node`, `perf_monitor`, or `loop-level` when the monitor was
+    unavailable.
+- `network_describe {format: "outline"}` rows carry `inputs` and `flags`. `inputs` is the
+  source path per input slot, and `flags` lists the flags that are on. Both are left out
+  when empty.
+- `node_edit` spare `menu` parms take `value_type: "int"`, which makes an int parm whose
+  value is the item index (`ch()`/`chi()`). The default `string` menu's value is the
+  token (`chs()`).
+- `hocuspocus launch --work-dir DIR` starts Houdini in `DIR`. Without the flag, the
+  launched Houdini now starts in the directory the command runs in, so the untitled
+  scene's `$HIP` and `$JOB` are that directory, not home. `houdini_connect {launch}`
+  keeps the `HOCUSPOCUS_WORK_DIR`/home rule.
+- `viewport_capture` writes an opaque PNG, both in the captures dir and at `path`. The
+  image is composited onto the same grey as the inline image. In 1.1 the file kept the
+  OpenGL ROP's transparent background, which most viewers show as white.
+- `node_type_info` with `folder` or `parms` (a parm lookup) returns `inputs_count`
+  instead of the input list, and `detail: full` leaves out `folders`. On
+  `mtlxstandard_surface`, the inputs had been 2.2 KB of a 3.3 KB answer.
+- `node_info` on a TOP node adds `pdg_state: {cooked, failed, total}`.
+
+### Fixed
+
+- **Locked tuple components:** `parm_set` on a tuple failed the whole batch when one
+  component was locked and computed by an expression, such as Karma's `resolutiony`
+  under `res_mode: autoheight`. The hint suggested unlocking it through
+  `houdini_python`. A component that already holds the requested value is now skipped.
+  Otherwise the error names the component, its expression and its value, and the hint
+  names the components to set instead.
+- **`camera` in `/obj`:** `node_create {type: "camera"}` in `/obj` gave a hint that
+  pointed at SOPs. The hint now says that Object networks spell it `cam`, and the
+  candidates lead with `cam`.
+- **HDA reporting:**
+  - `node_type_info` and `node_type_search` showed an empty version and description for
+    assets made with `hda create`. They now fall back to the definition's version and,
+    when the asset has no help, its label. They spell the type `Sop/ns::name`.
+  - `hda list` expands Windows 8.3 short paths such as `C:/PROGRA~1/...`.
+  - `hda install` of an already loaded library says `already_loaded`.
+- **Stale TOP cook state:** after an earlier PDG cook in the same session, a TOP node
+  whose items had all cooked could still report `cook_state: "uncooked"`. `cook_state`
+  now trusts the work items.
+- **`problems` on TOP networks:** `problems` said "No problems" for a TOP network with
+  failed work items. It now reports a `failed_work_items` row with the count and the
+  first item's error.
+- **PDG job progress:** a `pdg` cook job counted only the target's work items, so it read
+  0/8 while upstream items were finishing. It now counts the whole graph and adds
+  `nodes: {name: "finished/total"}`.
+- **`pdg cancel`:** it returned the status from before the cancel, and the job then
+  reported `done`.
+  - It now also cancels the job cooking that graph.
+  - It waits for the cook to stop and returns that status with `cancelled: true`.
+  - A cook with cancelled items ends `cancelled`, never `done`.
+- **Blocking `pdg cook`:** when it hands back a running job before `timeout_s`, `notes`
+  now says that `job_threshold_s` capped the wait.
+- **`usd_stage` on a render ROP:** for a render ROP in a LOP network, `usd_stage` said
+  "is a Lop node, not a LOP". The error now says that the ROP has no output stage and
+  names its input as the candidate.
+- **`camera_used` after a viewer `fit`:** after a viewer `fit` from a camera view,
+  `camera_used` named that camera, although the grab was of the framed free view. It
+  now reads `viewport`.
+- **`hou.exit` hint:** the `houdini_python` hint for `hou.exit` names
+  `houdini_connect quit`.
+- **`node_type_search` docs:** the docs now say that `total` is the real number of
+  matching types, not a cap.
+
+### Upgrading from 1.1
+
+An agent prompt or script written for 1.1 may need these changes:
+
+- **`events` consumers:**
+  - Expect `origin` on every event, and the new kinds `SpareParmsChanged`,
+    `hda_contents_rebuilt` and `kind: "pdg"`.
+  - Filter on `origin: "other"` to see only the user's changes.
+  - After a spare parm edit you get one `SpareParmsChanged` instead of a burst of
+    `ParmTupleChanged`. After `hda create`, `match` or `unlock` you get one
+    `hda_contents_rebuilt` instead of one event per internal node.
+- **`undo {steps: N}`** now stops before a step that is not HocusPocus's. Check
+  `blocked_by`, and pass `include_user_steps: true` when you mean to undo the user's
+  steps too.
+- **`pdg cook` on an unsaved or untitled scene** fails with `unsaved_changes` when the
+  graph has a ROP Fetch or another out-of-process ROP TOP. Call `hip_save` first, or
+  pass `save: true`.
+- **`tools/list` is smaller.** Argument rules that used to be in descriptions are now in
+  `docs/tools.md` and `hocuspocus://guide`. A client that relied on description text
+  for them should read the guide resource.
+- **`hda save`** now promotes instance spare parms. Pass `promote_spare_parms: false` to
+  keep them on the instance.
+- **`hocuspocus launch`** starts Houdini in the directory the command runs in. Pass
+  `--work-dir` to start it somewhere else.
+
 ## 1.1.0 (2026-10-12)
 
 Measured on the review-08 city workload rebuilt headless (`docs/redesign/review/12-city-rebuild-1.1.md`): 58 tool calls instead of 74, 0 `houdini_python` calls instead of 2, `node_create` results about 10x smaller (172 B per node instead of ~1,690 B), `tools/list` 30.6 KB as the model sees it, and a Houdini started with `hocuspocus launch` that outlived every client session.
