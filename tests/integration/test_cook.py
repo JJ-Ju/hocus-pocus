@@ -203,6 +203,66 @@ def test_cook_profile_as_a_job_reports_progress(client):
     assert final["chain"][0]["path"] == slow.path()
 
 
+def _for_each_points(geo, points: int, slow_s: float):
+    """A for-each-point loop over ``points`` grid points whose body sleeps ``slow_s``."""
+    grid = geo.createNode("grid", "pts")
+    grid.parm("rows").set(2)
+    grid.parm("cols").set(points // 2)
+    begin = geo.createNode("block_begin", "each_begin")
+    begin.setInput(0, grid)
+    begin.parm("method").set(1)  # fetch piece or point
+    slow = _slow_python_sop(geo, slow_s, "body_slow")
+    slow.setInput(0, begin)
+    fast = geo.createNode("null", "body_fast")
+    fast.setInput(0, slow)
+    end = geo.createNode("block_end", "each_end")
+    end.setInput(0, fast)
+    end.parm("itermethod").set(1)  # by pieces or points
+    end.parm("method").set(1)  # merge each iteration
+    end.parm("blockpath").set("../each_begin")
+    end.parm("templatepath").set("../each_begin")
+    begin.parm("blockpath").set("../each_end")
+    out = geo.createNode("null", "OUT")
+    out.setInput(0, end)
+    return grid, begin, slow, fast, end, out
+
+
+def test_cook_profile_attributes_loop_bodies(client):
+    """Review 12 papercut 5: inside a for-each loop the body nodes carry the loop's real
+    per-node cost (Houdini's performance monitor), not one standalone cook."""
+    geo = _geo()
+    grid, begin, slow, fast, end, out = _for_each_points(geo, 4, 0.03)
+    out.cook(force=True)
+    result = client.ok("cook", {"paths": [out.path()], "profile": True})
+    assert result["ok"] is True, result
+    assert result["attribution"] == "perf_monitor", result
+    (loop,) = result["loops"]
+    assert loop["block_end"] == end.path() and loop["block_begin"] == begin.path()
+    assert loop["iterations"] == 4
+    assert loop["total_ms"] >= 4 * 30 * 0.9
+    rows = {row["path"]: row for row in result["chain"]}
+    body = rows[slow.path()]
+    assert body["in_loop"] == end.path() and body["cooks"] == 4
+    assert body["cook_time_ms"] >= 4 * 30 * 0.9  # all iterations, not one cook
+    assert 25 <= body["per_iteration_ms"] <= body["cook_time_ms"] / 2
+    assert rows[fast.path()]["in_loop"] == end.path()
+    assert "in_loop" not in rows[grid.path()] and "in_loop" not in rows[out.path()]
+    assert rows[end.path()]["cook_time_ms"] >= body["cook_time_ms"] * 0.9
+    # The loop is counted once, at its block_end: body rows are not added on top.
+    outside = sum(r["cook_time_ms"] for r in result["chain"] if "in_loop" not in r)
+    assert result["total_ms"] <= outside + 1 and result["total_ms"] < 2 * loop["total_ms"] + 50
+    # results[] reports the profiled cook of the named node, never a cached 0.0.
+    assert result["results"][0]["cook_time_ms"] == rows[out.path()]["cook_time_ms"]
+
+
+def test_cook_profile_without_loops_says_per_node(client):
+    _box, _slow, _sub, out = _chain(_geo(), 0.02)
+    result = client.ok("cook", {"paths": [out.path()], "profile": True})
+    assert result["attribution"] == "per_node" and "loops" not in result
+    row = next(r for r in result["chain"] if r["path"] == out.path())
+    assert result["results"][0]["cook_time_ms"] == row["cook_time_ms"]
+
+
 def test_cook_profile_and_frame_range_errors(client):
     box = _geo().createNode("box")
     path = box.path()

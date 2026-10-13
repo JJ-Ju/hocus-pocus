@@ -1070,13 +1070,21 @@ _COOK: tuple[ToolSpec, ...] = (
         description=(
             "Cook nodes and report per node ok, errors, warnings, cook_time_ms (its own cook; "
             "cached inputs are not recooked). profile force-cooks each input chain: chain (top 10 "
-            "by cost), total_ms. frame_range cooks frame by frame (sims advance); summary bbox adds"
-            " per-frame counts and bbox. Past the job threshold returns job_id for job."
+            "by cost), total_ms, attribution; for-each loop bodies show their cost over all "
+            "iterations (loops). frame_range cooks frame by frame (sims advance); summary bbox adds"
+            " per-frame bbox. Past the job threshold returns job_id for job."
         ),
         notes=(
             "frame_range is [start, end, step] and cannot be combined with profile or frame; the "
             "current frame is restored afterwards. Errors left from before a fix are rechecked "
-            "unless the last cook took over 2 s (hint: force)."
+            "unless the last cook took over 2 s (hint: force). With profile, results[].cook_time_ms"
+            " is the named node's profiled cook. attribution is per_node, or perf_monitor when a "
+            "block_end was cooked under Houdini's performance monitor: each loop body row then has "
+            "in_loop, cooks, per_iteration_ms and cook_time_ms over all iterations, and loops lists"
+            " {block_end, block_begin, iterations, total_ms}. loop-level means the monitor was "
+            "unavailable (another profile was recording) and body rows show one standalone cook. "
+            "total_ms counts each loop once, at its block_end. In a GUI session the profile stays "
+            "in the Performance Monitor's list."
         ),
         input_schema=_obj(
             {
@@ -1094,6 +1102,8 @@ _COOK: tuple[ToolSpec, ...] = (
             {
                 "ok": _t("boolean"),
                 "chain": _objs(),
+                "attribution": _t("string"),
+                "loops": _objs(),
                 "total_ms": _t("number"),
                 "frames": _objs(),
                 "results": {
