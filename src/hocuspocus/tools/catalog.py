@@ -1566,13 +1566,17 @@ _FULL: tuple[ToolSpec, ...] = (
         name="hda",
         description=(
             "Digital assets: create turns subnet path into an HDA; save updates the definition from"
-            " path; unlock allows editing its contents; match reverts it to its definition and "
-            "locks it; install and reload take library_path; list shows loaded libraries or "
+            " path, spare parms included; unlock allows editing; match reverts to the definition "
+            "and locks; install and reload take library_path; list shows loaded libraries or "
             "library_path's definitions."
         ),
         notes=(
             "create takes name, label (or description), version, library_path and optional "
-            "min_inputs/max_inputs. list is paged by limit and cursor."
+            "min_inputs/max_inputs. save copies the instance's spare parms into the asset's "
+            "interface (promoted lists them; promote_spare_parms: false keeps them on the "
+            "instance). list is paged by limit and cursor; install of a loaded library says "
+            "already_loaded. node_type_info and node_type_search report the definition's version "
+            "and, without help, its label as description."
         ),
         input_schema=_obj(
             {
@@ -1586,6 +1590,7 @@ _FULL: tuple[ToolSpec, ...] = (
                 "version": _s(),
                 "min_inputs": _i(None, minimum=0, maximum=9999),
                 "max_inputs": _i(None, minimum=0, maximum=9999),
+                "promote_spare_parms": _b(True),
                 "limit": _limit(),
                 "cursor": _cursor(),
             },

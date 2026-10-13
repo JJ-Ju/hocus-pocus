@@ -95,6 +95,17 @@ def _norm_key(path: str) -> str:
     return os.path.normcase(os.path.normpath(path))
 
 
+def long_path(path: str) -> str:
+    """``path`` with Windows 8.3 short names expanded (``C:/PROGRA~1/...`` is how
+    ``hou.hda.loadedFiles()`` reports $HFS libraries), forward slashes."""
+    if "~" not in path or not os.path.exists(path):
+        return path
+    try:
+        return os.path.realpath(path).replace("\\", "/")
+    except OSError:
+        return path
+
+
 def _library(args: dict[str, Any], ctx: HostContext) -> str:
     path = resolve_path(args["library_path"], field="library_path")
     if not path.lower().endswith(HDA_EXTENSIONS):
@@ -256,14 +267,28 @@ def _save(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     if library and library != "Embedded" and os.path.isabs(library):
         check_allowed(resolve_path(library, field="library_path"), ctx)
     label = _label(args) or ""
+    promote = args.get("promote_spare_parms", True)
+    if not isinstance(promote, bool):
+        raise bad_arg("'promote_spare_parms' must be a boolean.")
+    spares = [p.name() for p in node.spareParms()] if promote else []
     try:
         if label:
             definition.setDescription(label)
         definition.updateFromNode(node)
+        if spares:
+            # updateFromNode saves the contents, not the instance's spare parms (review
+            # 15 papercut 6). The instance's template group is the definition's plus its
+            # spares; making it the definition's turns the spares into asset parms and
+            # keeps their values.
+            definition.setParmTemplateGroup(node.parmTemplateGroup())
     except hou.Error as exc:
         raise _hou_failure(exc, f"Saving {node.type().name()} from {node.path()}") from exc
     out = _instance_result(node)
     out["saved"] = True
+    if spares:
+        out["promoted"] = sorted(set(spares))
+    if not node.isLockedHDA():
+        out["note"] = "Saved; the instance stays unlocked for editing. hda match locks it."
     return out
 
 
@@ -298,8 +323,9 @@ def _install(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     _require_library_file(library)
     action = args["action"]
     loaded = {_norm_key(p) for p in hou.hda.loadedFiles()}
+    was_loaded = _norm_key(library) in loaded
     try:
-        if action == "reload" and _norm_key(library) in loaded:
+        if action == "reload" and was_loaded:
             hou.hda.reloadFile(library)
             done = "reloaded"
         else:
@@ -312,6 +338,8 @@ def _install(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
         "action": done,
         "definitions": [_definition_row(d) for d in _definitions(library)],
     }
+    if action == "install" and was_loaded:
+        out["already_loaded"] = True
     if action == "reload" and done == "installed":
         out["note"] = "The library was not loaded, so it was installed instead."
     return out
@@ -333,7 +361,7 @@ def _list(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     for path in hou.hda.loadedFiles():
         builtin = _is_builtin(path)
         definitions = _definitions(path)
-        row: dict[str, Any] = {"path": path, "definition_count": len(definitions)}
+        row: dict[str, Any] = {"path": long_path(path), "definition_count": len(definitions)}
         if builtin:
             row["builtin"] = True
         else:

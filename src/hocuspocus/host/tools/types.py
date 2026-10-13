@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import contextlib
 import difflib
+import functools
 import os
 import re
 import threading
@@ -294,6 +295,10 @@ def _build_rows() -> list[dict[str, Any]]:
             entry = help_entry(cat_name, (scope, namespace, base, version))
             header = parse_help_header(_HELP.read(entry, HELP_HEAD_BYTES) or "") if entry else None
             row["description"] = header["summary"] if header else ""
+            if not version or not row["description"]:
+                asset = asset_fields(node_type)
+                row["version"] = version or asset.get("version", "")
+                row["description"] = row["description"] or asset.get("description", "")
             row["_help"] = entry
             row["_base"] = base.lower()
             row["_basec"] = _compact(base)
@@ -307,6 +312,46 @@ def _build_rows() -> list[dict[str, Any]]:
             row["_bestbet"] = set(header["bestbet"]) if header else set()
             rows.append(row)
     return rows
+
+
+def type_path(node_type: Any) -> str:
+    """``Category/name``. ``nameWithCategory()`` puts a namespace in front of the
+    category (``hp::Sop/meteors``), unlike every other type string the tools use."""
+    return f"{node_type.category().name()}/{node_type.name()}"
+
+
+@functools.cache
+def _hfs_prefixes() -> tuple[str, ...]:
+    hfs = os.environ.get("HFS")
+    if not hfs:
+        return ()
+    forms = {hfs, os.path.realpath(hfs)}
+    return tuple(os.path.normcase(os.path.normpath(f)) + os.sep for f in forms)
+
+
+def asset_fields(node_type: Any) -> dict[str, str]:
+    """A digital asset's version and description where its name and help have none:
+    ``hda create {version}`` stores the version on the definition, not in the type name,
+    and the label is what Houdini calls the asset's description."""
+    try:
+        definition = node_type.definition()
+    except Exception:
+        definition = None
+    if definition is None:
+        return {}
+    out: dict[str, str] = {}
+    try:
+        if definition.version():
+            out["version"] = str(definition.version())
+        library = os.path.normcase(os.path.normpath(definition.libraryFilePath() or ""))
+        builtin = any(library.startswith(prefix) for prefix in _hfs_prefixes())
+        # Houdini's own assets keep "" rather than repeat their label.
+        description = definition.comment() or ("" if builtin else definition.description())
+        if description:
+            out["description"] = str(description)
+    except Exception:
+        pass
+    return out
 
 
 def get_index() -> list[dict[str, Any]]:
@@ -643,7 +688,7 @@ def resolve_type(type_name: str, category: str | None = None) -> Any:
             candidates=suggest_types(name),
         )
     found.sort(key=lambda t: CATEGORY_RANK.get(t.category().name(), 99))
-    names = [t.nameWithCategory() for t in found]
+    names = [type_path(t) for t in found]
     raise ToolError(
         "invalid_argument",
         f"{name!r} exists in several categories: {', '.join(names)}.",
@@ -1073,14 +1118,15 @@ def node_type_info(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     entry = help_entry(cat_name, components)
     raw_help = _HELP.read(entry) if entry else None
     header = parse_help_header(raw_help or "")
+    asset = asset_fields(node_type) if not components[3] or not header["summary"] else {}
     result: dict[str, Any] = {
         "name": node_type.name(),
-        "type": node_type.nameWithCategory(),
+        "type": type_path(node_type),
         "label": node_type.description(),
         "category": cat_name,
-        "version": components[3],
+        "version": components[3] or asset.get("version", ""),
         "is_current_version": not order or order[0] == node_type.name(),
-        "description": header["summary"],
+        "description": header["summary"] or asset.get("description", ""),
         "help_url": node_type.helpUrl() or node_type.defaultHelpUrl(),
     }
     if order and order[0] != node_type.name():
@@ -1116,7 +1162,7 @@ def node_type_info(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
             label = args.get("folder")
             raise ToolError(
                 "invalid_argument",
-                f"No folder {label!r} on {node_type.nameWithCategory()}.",
+                f"No folder {label!r} on {type_path(node_type)}.",
                 hint="Pass one folder from candidates, or a single segment of one.",
                 candidates=[row["folder"] for row in folder_counts(every, folders)],
             )
