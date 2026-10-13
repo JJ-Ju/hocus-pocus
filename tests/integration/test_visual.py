@@ -334,6 +334,7 @@ def test_viewer_capture_restores_the_view(client, work_dir):
     assert viewer.seen == ("framed all", None)
     assert viewport.camera() is user_cam and viewport.view == "through /obj/usercam"
     assert info["fit_used"] == "all"
+    assert info["camera_used"] == "viewport"  # the framed free view, not usercam
     assert info["context"] == geo.path()
     assert any(geo.path() in note and "opengl_rop" in note for note in info["notes"])
     # Without fit the view is captured as it is and left alone.

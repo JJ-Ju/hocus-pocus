@@ -1066,7 +1066,9 @@ def _capture_viewer(
     info: dict[str, Any] = {
         "scene": target["scene"],
         "camera_used": (
-            cam.path() if cam is not None else (previous.path() if previous else "viewport")
+            cam.path()
+            if cam is not None
+            else (previous.path() if previous is not None and fit_used == "none" else "viewport")
         ),
         "fit_used": fit_used,
     }
