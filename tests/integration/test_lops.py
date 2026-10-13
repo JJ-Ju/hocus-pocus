@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import base64
 import io
+import json
 from pathlib import Path
 
 import pytest
@@ -287,3 +288,22 @@ def test_usd_stage_on_a_render_rop_points_at_its_input(client, work_dir):
     assert "not a LOP" not in error["message"]
     assert nodes["rset"].path() in error["message"]
     assert error["candidates"] == [nodes["rset"].path()]
+
+
+# -- node_type_info filters (papercut 8) ------------------------------------------------
+
+
+def test_node_type_info_filters_drop_inputs_and_folders(client):
+    full = client.ok("node_type_info", {"type": "Vop/mtlxstandard_surface"})
+    assert len(full["inputs"]) > 20
+    narrowed = client.ok(
+        "node_type_info", {"type": "Vop/mtlxstandard_surface", "parms": "base*|specular"}
+    )
+    assert "inputs" not in narrowed
+    assert narrowed["inputs_count"] == len(full["inputs"])
+    assert len(json.dumps(narrowed)) < len(json.dumps(full)) / 2
+    detailed = client.ok(
+        "node_type_info", {"type": "Lop/karmarendersettings", "parms": "res*", "detail": "full"}
+    )
+    assert "folders" not in detailed and "inputs" not in detailed
+    assert detailed["parms"]

@@ -1148,7 +1148,11 @@ def node_type_info(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     io = type_io(node_type)
     result["min_inputs"] = node_type.minNumInputs()
     result["max_inputs"] = node_type.maxNumInputs()
-    result["inputs"] = io["inputs"]
+    narrowed = include_parms and (folder is not None or parm_glob is not None)
+    if narrowed:  # a parm lookup: the input list is noise (42 rows on mtlx; review 13)
+        result["inputs_count"] = len(io["inputs"])
+    else:
+        result["inputs"] = io["inputs"]
     if node_type.hasUnorderedInputs():
         result["unordered_inputs"] = True
     result["outputs"] = io["outputs"]
@@ -1177,7 +1181,8 @@ def node_type_info(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
             result["folders"] = folder_counts(rows, folders)
             result["hint"] = "Pass folder with one of these to list its parms."
         elif detail == "full":
-            result["folders"] = folders
+            if not narrowed:
+                result["folders"] = folders
             result["parms"] = rows
         else:
             for key in ("help_url", "tags"):  # rarely needed to build with the type

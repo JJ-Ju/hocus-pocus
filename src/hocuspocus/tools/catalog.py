@@ -1449,7 +1449,8 @@ _VISUAL: tuple[ToolSpec, ...] = (
         ),
         notes=(
             'folder takes a label, an "A / B" path, or "" / "(no folder)" for the top-level parms. '
-            "include_help adds the first ~2 KB of the node help."
+            "include_help adds the first ~2 KB of the node help. With folder or parms the inputs "
+            "list becomes inputs_count, and detail full leaves out the folder list."
         ),
         input_schema=_obj(
             {
