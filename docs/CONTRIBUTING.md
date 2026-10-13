@@ -145,7 +145,8 @@ or into your real Houdini preferences, and they never use port 37219.
 | Tier | Runs in | Command | Budget |
 |---|---|---|---|
 | `tests/unit` | system Python | `.venv/Scripts/python -m pytest tests/unit -q` | about 10 s |
-| `tests/integration` | hython | see below | < 90 s |
+| `tests/integration` (fast, the default) | hython | see below | < 90 s |
+| `tests/integration` (`slow`) | hython | the same command with `-m slow` (or `--runslow` for both) | about 3 min |
 | `tests/e2e` | system Python spawning hython | `.venv/Scripts/python -m pytest tests/e2e -q` | < 60 s |
 
 When no hython can be found, the `houdini` and `e2e` tests skip. hython is found through
@@ -213,6 +214,30 @@ $env:PYTHONDONTWRITEBYTECODE = "1"
   --rootdir C:\path\to\hocus-pocus
 ```
 
+#### Fast and slow
+
+A plain run is the **fast** set. On the 1.3 release machine it is 386 tests in about 50 s,
+under the 90 s budget. `tests/conftest.py` deselects tests marked `@pytest.mark.slow`
+unless you ask for them. The slow set is 60 tests and about 3 minutes:
+
+- visual child renders and `render` tests;
+- LOP and stage captures, and Karma;
+- PDG cooks (all of `test_pdg.py`);
+- the 1M-point geometry tests;
+- tests that wait out a timeout on purpose.
+
+To choose a set, add one of these to the command above:
+
+- `-m slow` runs only the slow set.
+- `--runslow` runs both sets.
+- Any `-m` expression that names `slow`, such as `-m "not slow"`, decides on its own.
+
+Mark a new test `@pytest.mark.slow` when it takes over about 1.5 s. Measure with
+`--durations=30`. Keep the fast set under 90 s, because it is the run before every commit
+that touches `host/`. Run `--runslow` before you merge, and always after changing
+rendering, capture, PDG or job code. CI runs the two sets as separate steps of
+`houdini.yml`.
+
 How the session fixture works:
 
 - It starts one in-process host with isolated `HOCUSPOCUS_STATE_DIR` and pref dirs.
@@ -245,7 +270,8 @@ HOUDINI_HYTHON="C:/Program Files/Side Effects Software/Houdini 22.0.466/bin/hyth
 - `.github/workflows/ci.yml` runs on every push and PR, on `windows-latest` and
   `ubuntu-latest`. It runs `ruff check`, `ruff format --check`, the unit tier, and a
   check that `docs/tools.md` is fresh. It does not need Houdini.
-- `.github/workflows/houdini.yml` runs the integration and e2e tiers. It needs a
+- `.github/workflows/houdini.yml` runs the integration tier twice (the fast set, then
+  `-m slow`) and the e2e tier. It needs a
   **self-hosted runner labelled `houdini`** with a licensed Houdini 22. It runs nightly,
   on manual dispatch and on PRs labelled `houdini`.
 

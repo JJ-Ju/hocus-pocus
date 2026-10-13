@@ -39,6 +39,7 @@ markers = [
     "unit: pure-Python tests, no Houdini",
     "houdini: needs hython (run with `hython -m pytest tests/integration`)",
     "e2e: spawns hython and the stdio bridge",
+    "slow: over ~1.5 s (renders, captures, PDG cooks); run with --runslow or -m slow",
 ]
 addopts = "-ra"
 timeout = 300

@@ -319,6 +319,7 @@ def test_geo_read_large_count_stays_under_budget(client):
     assert _size(result) < 16_384
 
 
+@pytest.mark.slow
 def test_one_million_points(client):
     geo, box = _box()
     scatter = geo.createNode("scatter", "scatter1m")
@@ -405,6 +406,7 @@ def test_geo_read_page_does_not_load_whole_columns(client, monkeypatch):
     assert set(loaded) >= {"P", "name"}
 
 
+@pytest.mark.slow
 def test_one_million_points_string_stats_with_a_pattern_group(client):
     geo, box = _box()
     scatter = geo.createNode("scatter", "scatter1m")

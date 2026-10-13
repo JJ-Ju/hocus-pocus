@@ -62,6 +62,7 @@ def _wait_job(client, job_id: str, timeout_s: float = 120.0) -> dict:
 # -- viewport_capture -----------------------------------------------------------------
 
 
+@pytest.mark.slow
 def test_capture_headless_opengl_twice(client):
     _toy_scene()
     timings = []
@@ -92,6 +93,7 @@ def _all_nodes() -> list[str]:
     return sorted(n.path() for n in hou.node("/").allSubChildren(recurse_in_locked_nodes=False))
 
 
+@pytest.mark.slow
 def test_capture_leaves_the_scene_untouched(client, work_dir):
     """Review 07 papercut 2: a look is read-only. Headless, the camera and ROP exist only
     in the child hython; the live scene gains no nodes, no undo entry and no dirty flag."""
@@ -149,6 +151,7 @@ def test_temporary_capture_nodes_are_removed_outside_undo(client):
     assert [n.path() for n in hou.selectedNodes()] == [geo.path()]
 
 
+@pytest.mark.slow
 def test_capture_frames_the_geometry(client):
     geo = _toy_scene()
     geo.parmTuple("t").set((40, 5, -30))
@@ -160,6 +163,7 @@ def test_capture_frames_the_geometry(client):
     assert _not_blank(img)
 
 
+@pytest.mark.slow
 def test_capture_downscales_and_writes_extra_path(client, work_dir):
     _toy_scene()
     extra = work_dir / "shots" / "wide.png"
@@ -184,6 +188,7 @@ def test_capture_downscales_and_writes_extra_path(client, work_dir):
         assert inline.getpixel((0, 0)) == written.getpixel((0, 0))
 
 
+@pytest.mark.slow
 def test_capture_explicit_camera(client):
     _toy_scene()
     cam = hou.node("/obj").createNode("cam", "shotcam")
@@ -194,6 +199,7 @@ def test_capture_explicit_camera(client):
     assert (result["width"], result["height"]) == (200, 100)
 
 
+@pytest.mark.slow
 def test_capture_fit_selected_and_none(client):
     geo = _toy_scene()
     other = hou.node("/obj").createNode("geo", "far")
@@ -369,6 +375,7 @@ def _opengl_rop(work_dir: Path, name: str = "gl1"):
     return rop
 
 
+@pytest.mark.slow
 def test_render_opengl_frames_with_thumbnail(client, work_dir):
     _toy_scene()
     rop = _opengl_rop(work_dir)
@@ -384,6 +391,7 @@ def test_render_opengl_frames_with_thumbnail(client, work_dir):
     assert result["job_id"]
 
 
+@pytest.mark.slow
 def test_render_as_job_then_result(client, work_dir):
     _toy_scene()
     rop = _opengl_rop(work_dir)
@@ -412,6 +420,7 @@ def test_render_output_override_in_process(client, work_dir):
     assert rop.parm("sopoutput").unexpandedString() == "$HIP/geo/original.$F4.bgeo.sc"
 
 
+@pytest.mark.slow
 def test_render_opengl_output_override(client, work_dir):
     _toy_scene()
     rop = _opengl_rop(work_dir)
@@ -436,6 +445,7 @@ def test_render_errors(client, work_dir):
     assert error["code"] == "invalid_argument"
 
 
+@pytest.mark.slow
 def test_render_karma_starts_as_job_and_cancels(client, work_dir):
     _toy_scene()
     cam = hou.node("/obj").createNode("cam", "kcam")
@@ -479,6 +489,7 @@ def test_render_result_always_has_state(client, work_dir):
     assert result["job_id"]
 
 
+@pytest.mark.slow
 def test_render_isolated_override_replaces_keyed_output(client, work_dir):
     _toy_scene()
     rop = _opengl_rop(work_dir)
@@ -532,6 +543,7 @@ def test_render_waits_job_threshold_by_default(client, work_dir):
     assert explicit["state"] == "done"
 
 
+@pytest.mark.slow
 def test_render_notes_no_lights_and_a_black_thumbnail(client, work_dir):
     """Review 11 B10: an unlit, empty OpenGL render says why it is black."""
     rop = _opengl_rop(work_dir)
@@ -558,6 +570,7 @@ def test_render_rop_own_output_outside_approved_roots_in_process(client, work_di
     assert result["outputs"] == [_fwd(work_dir / "allowed" / "s.0001.bgeo.sc")]
 
 
+@pytest.mark.slow
 def test_capture_after_an_outside_fix(client):
     """Review 10 §5: a node fixed outside HocusPocus keeps its old error (BIBLE §5.18);
     the capture's framing refreshes it instead of failing or framing nothing."""
@@ -586,6 +599,7 @@ def test_capture_path_must_be_png(client, work_dir):
     assert ".png" in error["message"]
 
 
+@pytest.mark.slow
 def test_captures_dir_is_pruned_to_newest_50(client):
     from hocuspocus.host.tools.visual import _captures
 
@@ -622,6 +636,7 @@ def _sliding_box(name: str = "slide"):
 
 
 @pytest.mark.parametrize("driver", ["keys_at_30fps", "hscript_global", "hou_session"])
+@pytest.mark.slow
 def test_headless_capture_matches_the_live_scene(client, driver):
     """The child hython must evaluate the scene as the live session does: keys at the
     scene's fps (not retimed by setFps), global hscript variables and hou.session."""
@@ -661,6 +676,7 @@ def test_headless_capture_matches_the_live_scene(client, driver):
     assert _centroid_x(live["image"]) == pytest.approx(_centroid_x(static["image"]), abs=1.0)
 
 
+@pytest.mark.slow
 def test_headless_capture_does_not_hold_the_main_thread(client):
     import http.client
     import json
@@ -694,6 +710,7 @@ def test_headless_capture_does_not_hold_the_main_thread(client):
     assert box["body"]["ok"] is True, box["body"]
 
 
+@pytest.mark.slow
 def test_fit_none_does_not_reuse_framing_from_another_scene(client):
     far = hou.node("/obj").createNode("geo", "far")
     far.createNode("box").setDisplayFlag(True)

@@ -69,7 +69,9 @@ jobs:
           & $env:HOUDINI_HYTHON -m pip install --disable-pip-version-check --target $deps pytest pytest-timeout
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Integration tier (hython -m pytest tests/integration)
+      # Two integration runs (BIBLE §11): the fast default set (< 90 s), then the tests
+      # marked slow (renders, stage captures, Karma, PDG cooks, 1M-point geometry).
+      - name: Integration tier, fast (hython -m pytest tests/integration)
         run: |
           $root = Join-Path $env:RUNNER_TEMP "hp-it"
           $cwd = Join-Path $root "cwd"
@@ -79,7 +81,21 @@ jobs:
           $env:PYTHONPATH = "$(Join-Path $env:RUNNER_TEMP 'hy-deps');$env:GITHUB_WORKSPACE\src"
           Set-Location $cwd
           & $env:HOUDINI_HYTHON -m pytest "$env:GITHUB_WORKSPACE\tests\integration" -q `
-            -p no:cacheprovider --rootdir "$env:GITHUB_WORKSPACE"
+            -p no:cacheprovider --rootdir "$env:GITHUB_WORKSPACE" --durations=10
+          exit $LASTEXITCODE
+
+      - name: Integration tier, slow (hython -m pytest tests/integration -m slow)
+        if: ${{ !cancelled() }}
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP "hp-it-slow"
+          $cwd = Join-Path $root "cwd"
+          New-Item -ItemType Directory -Force $cwd | Out-Null
+          $env:HOUDINI_USER_PREF_DIR = Join-Path $root "prefs\houdini__HVER__"
+          $env:HOCUSPOCUS_STATE_DIR = Join-Path $root "state"
+          $env:PYTHONPATH = "$(Join-Path $env:RUNNER_TEMP 'hy-deps');$env:GITHUB_WORKSPACE\src"
+          Set-Location $cwd
+          & $env:HOUDINI_HYTHON -m pytest "$env:GITHUB_WORKSPACE\tests\integration" -q `
+            -p no:cacheprovider --rootdir "$env:GITHUB_WORKSPACE" -m slow --durations=10
           exit $LASTEXITCODE
 
       - name: E2E tier (official MCP client -> hocuspocus-mcp -> hython host)

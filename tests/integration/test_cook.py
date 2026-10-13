@@ -98,6 +98,7 @@ def test_cook_slow_but_within_threshold_is_synchronous(client):
     assert result["results"][0]["cook_time_ms"] >= 350
 
 
+@pytest.mark.slow
 def test_cook_becomes_job_after_timeout(client):
     node = _slow_python_sop(_geo(), 2.0)
     started = time.monotonic()
@@ -677,6 +678,7 @@ def test_slow_node_with_old_errors_gets_a_force_hint(client):
 # -- problems: budget, locked assets, defaults, dedupe, $TEMP (review 10) -------------
 
 
+@pytest.mark.slow
 def test_problems_time_budget_returns_incomplete_with_node_cursor(client, monkeypatch):
     from hocuspocus.host.tools import cook as cook_module
 
@@ -713,6 +715,7 @@ def test_problems_time_budget_returns_incomplete_with_node_cursor(client, monkey
     assert sorted(seen) == sorted((r["path"], r["kind"]) for r in full["problems"])
 
 
+@pytest.mark.slow
 def test_problems_budget_pages_rows_inside_a_partial_scan(client, monkeypatch):
     from hocuspocus.host.tools import cook as cook_module
 
