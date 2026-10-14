@@ -3,9 +3,14 @@
 A ``houdini://`` URI is parsed here into the ``inspect`` (or ``search``, or the host's
 ``houdini_status``) call it stands for, and that call runs through the host dispatcher
 exactly as ``POST /hp/v1/call`` runs it, so the resource body is byte for byte the tool's
-result for the same options (the ``inspect`` result carries its ``etag``). The route answers ``{uri, etag, body}``, or ``{uri, etag, not_modified: true}``
-when the request's ``If-None-Match`` names the current etag (the read still runs: the
-saving is the bytes on the wire and in the model's context).
+result for the same options (the ``inspect`` result carries its ``etag``). Bodies are
+therefore the compact 2.0 projections (spec-2.0 M4 "read shapes":
+``host/tools/inspect.py`` :func:`project`, ``host/tools/search.py`` ``compact_*``):
+``houdini://node``, ``geo``, ``outline``, ``problems``, ``type`` and ``types`` leave out
+what is default or empty; the 1.4 shape is ``inspect``/``search`` with ``detail: full``.
+The route answers ``{uri, etag, body}``, or ``{uri, etag, not_modified: true}`` when the
+request's ``If-None-Match`` names the current etag (the read still runs: the saving is the
+bytes on the wire and in the model's context).
 
 Templates (RFC 6570; a ``{path}`` may be percent-encoded, ``%2Fobj%2Fgeo1``, or plain,
 ``obj/geo1``; list values are comma-separated)::

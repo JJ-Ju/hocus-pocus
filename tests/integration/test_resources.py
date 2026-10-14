@@ -96,6 +96,27 @@ def test_resource_is_its_tool_call(v2_client, uri):
     assert same == {"uri": uri, "etag": resource["etag"], "not_modified": True}
 
 
+def test_resources_share_the_compact_projections(v2_client):
+    """spec-2.0 M4 "read shapes": a resource is its inspect (or search) call, so its body
+    is the compact projection too; inspect with detail: full gives the 1.4 shape."""
+    _scene()
+    node = _read(v2_client, "houdini://node/obj/geo1/xform1")["body"]
+    (row,) = node["nodes"]
+    assert row["type"] == "Sop/xform" and row["inputs"] == ["/obj/geo1/box1"], row
+    assert row["flags"] == ["display", "render"] or row["flags"] == ["display"], row
+    assert "session_id" not in row and "errors" not in row, row
+    parms = _read(v2_client, "houdini://node/obj/geo1/box1?parms=size*")["body"]
+    assert parms["parms"] == {"size": [2.0, 1.0, 1.0]}, parms
+    geo = _read(v2_client, "houdini://geo/obj/geo1/xform1")["body"]
+    assert geo["attributes"] == {"point": {"P": "float3:position"}}, geo["attributes"]
+    assert "groups" not in geo and "center" not in geo["bbox"], geo
+    outline = _read(v2_client, "houdini://outline?root=/obj&depth=3")["body"]
+    assert "children_count" not in outline["nodes"][0], outline
+    types = _read(v2_client, "houdini://types?q=scatter&category=Sop&limit=3")["body"]
+    assert "kind" not in types and types["common"]["category"] == "Sop", types
+    assert all("category" not in r and "version" not in r for r in types["results"]), types
+
+
 def test_node_etag_moves_with_a_parm(v2_client):
     _scene()
     uri = "houdini://node/obj/geo1/box1"
