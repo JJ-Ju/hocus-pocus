@@ -1,8 +1,8 @@
 """``inspect`` (spec-2.0 §2.3) against real Houdini: each ``what`` returns its 1.4 read's
 result plus only ``etag`` (``node`` and ``outline`` with their 2.0 trims, M4) with
-``detail: full``, and by default for node, parms and geo the compact projection (spec-2.0
-M4 "read shapes": defaults and empties left out); the etag is stable while nothing changes
-and moves when the addressed node does."""
+``detail: full``, and by default the compact projection (spec-2.0 M4 "read shapes":
+defaults and empties left out); the etag is stable while nothing changes and moves when
+the addressed node does."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ from hocuspocus.host import resources as host_resources  # noqa: E402
 
 ETAG = re.compile(r"^\d+:\d+:[0-9a-f]{16}$")
 ADDED = ("etag",)
-PROJECTED = frozenset({"node", "parms", "geo"})
+PROJECTED = frozenset({"node", "parms", "outline", "geo", "problems", "type"})
 """The reads with a compact shape; ``detail: full`` gives their 1.4 shape."""
 
 
@@ -155,12 +155,17 @@ def test_outline_is_network_describe_outline(v2_client):
                  {"root": "/obj", "format": "outline", "depth": 3})  # fmt: skip
     (geo,) = deep["nodes"]
     assert geo == {
-        "path": "/obj/geo1", "type": "geo", "children_count": 2, "display": "/obj/geo1/xform1",
+        "path": "/obj/geo1",
+        "type": "geo",
+        "display": "/obj/geo1/xform1",
         "flags": ["display"],
-        "children": [{"path": "/obj/geo1/box1", "type": "box"},
-                     {"path": "/obj/geo1/xform1", "type": "xform",
-                      "flags": ["display", "render"]}],
-    }, geo  # fmt: skip
+        "children": [
+            {"path": "/obj/geo1/box1", "type": "box"},
+            {"path": "/obj/geo1/xform1", "type": "xform", "flags": ["display", "render"]},
+        ],
+    }, geo  # fmt: skip  (children_count: children lists both)
+    shallow = v2_client.ok("inspect", {"what": "outline", "target": "/obj", "depth": 1})
+    assert shallow["nodes"][0]["children_count"] == 2, shallow  # not listed: counted
     wired = _same(v2_client, "outline", "/obj", {"depth": 3, "wiring": True},
                   "network_describe", {"root": "/obj", "format": "outline", "depth": 3})  # fmt: skip
     assert wired["nodes"][0]["children"][1]["inputs"] == ["/obj/geo1/box1"]
@@ -221,13 +226,27 @@ def test_problems_is_problems(v2_client):
 
 
 def test_type_is_node_type_info(v2_client):
-    options = {"parms": "*seed*"}
-    new = _same(v2_client, "type", "Sop/scatter", options, "node_type_info",
-                {"type": "Sop/scatter", **options})  # fmt: skip
+    options = {"parms": "*seed*", "detail": "full"}  # node_type_info's full shape: unchanged
+    _same(v2_client, "type", "Sop/scatter", options, "node_type_info",
+          {"type": "Sop/scatter", **options})  # fmt: skip
+    old = v2_client.ok("node_type_info", {"type": "Sop/scatter", "parms": "*seed*"})
+    new = v2_client.ok("inspect", {"what": "type", "target": "Sop/scatter", "parms": "*seed*"})
     assert new["name"] == "scatter" or new["name"].startswith("scatter::"), new["name"]
-    _same(v2_client, "type", "box", {"category": "Sop", "detail": "folders"}, "node_type_info",
-          {"type": "box", "category": "Sop", "detail": "folders"})  # fmt: skip
-    again = v2_client.ok("inspect", {"what": "type", "target": "Sop/scatter", **options})
+    assert new["parms"] == old["parms"] and new["parm_columns"] == old["parm_columns"]
+    assert old["is_current_version"] is True and "is_current_version" not in new
+    assert old["detail"] == "compact" and not {"detail", "hint", "inputs_count"} & set(new)
+    assert old["outputs"] == [{"index": 0, "name": "output1", "label": "Output 1"}]
+    assert "outputs" not in new  # only the default output
+    rest = {k: v for k, v in old.items()
+            if k not in ("detail", "hint", "inputs_count", "is_current_version", "outputs")}  # fmt: skip
+    assert {k: v for k, v in new.items() if k != "etag"} == rest
+    copy = v2_client.ok("inspect", {"what": "type", "target": "Sop/copytopoints",
+                                    "include_parms": False})  # fmt: skip
+    assert copy["inputs"] == ["Geometry to Copy", "Target Points to Copy to"], copy
+    folders = v2_client.ok("inspect", {"what": "type", "target": "box", "category": "Sop",
+                                       "detail": "folders"})  # fmt: skip
+    assert folders["folders"] and "hint" in folders  # folders keeps its own hint
+    again = v2_client.ok("inspect", {"what": "type", "target": "Sop/scatter", "parms": "*seed*"})
     assert again["etag"] == new["etag"]
 
 
@@ -341,6 +360,18 @@ def test_geo_compact_summary(v2_client):
     assert full["groups"] == old["groups"] and full["bbox"] == old["bbox"]
     plain = v2_client.ok("inspect", {"what": "geo", "target": box.path()})
     assert "groups" not in plain
+
+
+def test_problems_compact(v2_client):
+    _geo()
+    old = v2_client.ok("problems", {"root": "/obj"})
+    new = v2_client.ok("inspect", {"what": "problems", "target": "/obj"})
+    assert new["problems"] == [] and old["counts"] == {} and "counts" not in new
+    assert "nodes_with_problems" not in new and new["total"] == 0
+    error = v2_client.error("inspect", {"what": "problems", "detail": "folders"})
+    assert error["code"] == "invalid_argument" and "detail" in error["message"]
+    error = v2_client.error("inspect", {"what": "network", "target": "/obj", "detail": "full"})
+    assert error["code"] == "invalid_argument" and "does not take detail" in error["message"]
 
 
 # -- etag ---------------------------------------------------------------------------------

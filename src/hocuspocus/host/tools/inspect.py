@@ -8,9 +8,9 @@ of a 1.4 tool (spec-2.0 §4, ``host/tx.py``) is picked up here too. The result i
 ``{etag, ...the 1.4 result}`` projected for 2.0 (:func:`project`): the caller knows its
 ``what`` and ``target``, so they are not echoed; ``node`` rows leave out ``session_id``;
 ``outline`` leaves out ``format`` and, per row, ``name`` when it is the path's last
-segment, ``errors: 0``, and ``inputs`` unless ``wiring: true``; and ``node``, ``parms`` and
-``geo`` leave out what is default or empty (spec-2.0 M4 "read shapes"), unless ``detail:
-full`` asks for the 1.4 shape.
+segment, ``errors: 0``, and ``inputs`` unless ``wiring: true``; and ``node``, ``parms``,
+``outline``, ``geo``, ``problems`` and ``type`` leave out what is default or empty (spec-2.0
+M4 "read shapes"), unless ``detail: full`` asks for the 1.4 shape.
 
 Registered with ``main_thread=False`` because two of its reads must not hold the main
 thread (``events`` and ``job`` run off it in 1.4); the others run on it through the
@@ -37,6 +37,7 @@ from ..resources import content_etag
 from ._common import bad_arg, get_node
 from .registry import HostContext, tool
 from .registry import get as get_tool
+from .types import COMPACT_HINT
 
 WHATS: tuple[str, ...] = (
     "node", "parms", "network", "outline", "geo", "image", "stage", "problems", "type",
@@ -54,15 +55,23 @@ OPTIONS: dict[str, frozenset[str]] = {
     "network": frozenset(
         {"depth", "include_defaults", "include_positions", "recurse_locked", "cursor"}
     ),
-    "outline": frozenset({"depth", "recurse_locked", "cursor", "wiring"}),
+    "outline": frozenset({"depth", "recurse_locked", "cursor", "wiring", "detail"}),
     "geo": frozenset({"frame", "attributes", "rows", "detail"}) | GEO_READ_OPTIONS,
     "image": frozenset({"frame"}),
     "stage": frozenset(
         {"prim", "depth", "include", "attribs", "summary", "time", "limit", "cursor"}
     ),
     "problems": frozenset(
-        {"include_warnings", "cook_uncooked", "recurse_locked", "timeout_s", "limit", "cursor"}
-    ),
+        {
+            "include_warnings",
+            "cook_uncooked",
+            "recurse_locked",
+            "timeout_s",
+            "limit",
+            "cursor",
+            "detail",
+        }
+    ),  # fmt: skip
     "type": frozenset({"category", "include_parms", "include_help", "folder", "parms", "detail"}),
     "events": frozenset({"since", "limit"}),
     "jobs": frozenset({"job_id"}),
@@ -243,7 +252,7 @@ INSPECT_ONLY = frozenset({"wiring", "detail"})
 DETAILS = ("compact", "full")
 """``detail`` of the projected reads; ``type`` also takes ``folders``."""
 
-PROJECTED = frozenset({"node", "parms", "geo"})
+PROJECTED = frozenset({"node", "parms", "outline", "geo", "problems", "type"})
 
 PLAIN_PARM_TYPES = frozenset({"float", "int", "string", "toggle"})
 """Parm types a compact parm row leaves out: the JSON value already says them."""
@@ -552,6 +561,59 @@ def _compact_outline(rows: Any, wiring: bool) -> None:
         _compact_outline(row.get("children"), wiring)
 
 
+def _drop_listed_counts(rows: Any) -> None:
+    """``children_count`` where ``children`` lists exactly that many."""
+    for row in rows if isinstance(rows, list) else ():
+        if not isinstance(row, dict):
+            continue
+        children = row.get("children")
+        if isinstance(children, list) and row.get("children_count") == len(children):
+            del row["children_count"]
+        _drop_listed_counts(children)
+
+
+def compact_problems(result: dict[str, Any]) -> dict[str, Any]:
+    """``problems`` without empty ``counts`` or a zero ``nodes_with_problems`` (``total``
+    and the ``problems`` list, empty or not, say it)."""
+    return {
+        k: v
+        for k, v in result.items()
+        if not (k == "counts" and not v) and not (k == "nodes_with_problems" and v == 0)
+    }
+
+
+DEFAULT_OUTPUTS = [{"index": 0, "name": "output1", "label": "Output 1"}]
+
+
+def compact_type(result: dict[str, Any], options: dict[str, Any]) -> dict[str, Any]:
+    """``node_type_info`` (compact or folders): no ``is_current_version: true``, empty
+    ``version``, ``detail: compact`` echo and its constant hint, or ``inputs_count``
+    (kept with detail: folders); inputs and outputs as their labels, outputs left out when there is only
+    the default one."""
+    folders = options.get("detail") == "folders"
+    out: dict[str, Any] = {}
+    for key, value in result.items():
+        if key == "is_current_version" and value is True:
+            continue
+        if key == "version" and value in ("", None):
+            continue
+        if key == "detail" and value == "compact":
+            continue
+        if key == "hint" and value == COMPACT_HINT:  # constant; the spec notes say it
+            continue
+        if key == "inputs_count" and not folders:
+            continue
+        if key == "outputs" and value == DEFAULT_OUTPUTS:
+            continue
+        labelled = isinstance(value, list) and all(
+            isinstance(r, dict) and "label" in r for r in value
+        )
+        if key in ("inputs", "outputs") and labelled:
+            value = [r["label"] or r.get("name") for r in value]
+        out[key] = value
+    return out
+
+
 def project(what: str, result: dict[str, Any], options: dict[str, Any]) -> dict[str, Any]:
     """The 2.0 shape of a 1.4 read (``result`` may be changed in place): what the caller
     already knows or did not ask for, and what is default or empty, is left out;
@@ -575,7 +637,14 @@ def project(what: str, result: dict[str, Any], options: dict[str, Any]) -> dict[
             key = "name" if options.get("by_name") else "path"
             result["parms"] = compact_parms(result["parms"], key)
         return result
-    return compact_geo(result)
+    if what == "outline":
+        _drop_listed_counts(result.get("nodes"))
+        return result
+    if what == "geo":
+        return compact_geo(result)
+    if what == "problems":
+        return compact_problems(result)
+    return compact_type(result, options)
 
 
 # -- the tool ------------------------------------------------------------------------------
