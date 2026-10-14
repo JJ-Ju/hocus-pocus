@@ -7,6 +7,7 @@ so the dispatcher is unit-testable on plain CPython.
 from __future__ import annotations
 
 import contextlib
+import os
 import threading
 import time
 import traceback
@@ -157,6 +158,24 @@ def tool_error_from_exception(exc: BaseException) -> ToolError:
     )
 
 
+def log_call(logger: Any, tool: Any, envelope: dict[str, Any]) -> None:
+    """One INFO line per call in the host log (review 22 finding 4: a 616-call soak left
+    137 B of log): ``call <tool> <elapsed> ms main <main_thread_ms> ms ok|<code> pid
+    <pid>``; the formatter adds the timestamp. Never raises."""
+    with contextlib.suppress(Exception):
+        meta = envelope.get("_meta") or {}
+        timing = meta.get("timing") or {}
+        status = "ok" if envelope.get("ok") else (envelope.get("error") or {}).get("code")
+        logger.info(
+            "call %s %s ms main %s ms %s pid %d",
+            tool if isinstance(tool, str) and tool else "?",
+            meta.get("elapsed_ms"),
+            timing.get("main_thread_ms", 0),
+            status or "internal",
+            os.getpid(),
+        )
+
+
 class Dispatcher:
     """Run one tool call and produce the ``hp/v1`` envelope."""
 
@@ -203,7 +222,20 @@ class Dispatcher:
         """Run ``tool``. ``max_response_bytes`` (from the request envelope; the config
         value when absent) is exposed to the tool as ``ctx.extras["max_response_bytes"]``
         so paged tools can cap rows to the client's budget. ``request_id`` (also from the
-        envelope) is what :func:`current_request_id` returns while the tool runs."""
+        envelope) is what :func:`current_request_id` returns while the tool runs. Every
+        call writes one line to the host log (:func:`log_call`)."""
+        envelope = self._call(tool, args, timeout_s, max_response_bytes, request_id)
+        log_call(self.ctx.logger, tool, envelope)
+        return envelope
+
+    def _call(
+        self,
+        tool: Any,
+        args: Any,
+        timeout_s: Any,
+        max_response_bytes: Any,
+        request_id: Any,
+    ) -> dict[str, Any]:
         started = time.perf_counter()
         undo_label: str | None = None
         timing: dict[str, Any] = {}

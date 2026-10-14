@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import subprocess
 import threading
@@ -339,3 +340,15 @@ def test_quit_route_checks_unsaved_changes_then_quits(hython, tmp_path):
         for stream in (proc.stdout, proc.stderr):
             if stream:
                 stream.close()
+
+
+def test_every_call_leaves_one_line_in_the_host_log(client, host):
+    """Review 22 finding 4: the host log recorded nothing per call."""
+    client.ok("time")
+    client.error("undo", {"action": "sideways"})
+    for handler in logging.getLogger(host.logger.name).parent.handlers:
+        handler.flush()
+    log = (Path(host.state_dir) / "logs" / f"host-{host.pid}.log").read_text(encoding="utf-8")
+    lines = [line for line in log.splitlines() if " call " in line]
+    assert any(" call time " in line and line.endswith(f" ok pid {os.getpid()}") for line in lines)
+    assert any(" call undo " in line and " invalid_argument pid " in line for line in lines)

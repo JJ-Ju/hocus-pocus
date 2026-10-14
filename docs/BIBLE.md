@@ -201,7 +201,10 @@ load and clear mark it clean. In the GUI the host asks Houdini.
 `AfterClear`, `AfterLoad`, `AfterMerge`. Returned in every tool result's `_meta` as
 `scene_generation`. Agents that cache node paths can detect that the world changed.
 
-**Per-instance state.** Logs at `<state_dir>/logs/host-<pid>.log` (rotating, 5 MB).
+**Per-instance state.** Logs at `<state_dir>/logs/host-<pid>.log` (rotating, 5 MB, two
+backups). 1.4 (review 22 finding 4): every call writes one INFO line, `<timestamp> INFO
+<logger>: call <tool> <elapsed> ms main <main_thread_ms> ms ok|<error code> pid
+<pid>` (~110 B), so a session or an incident can be reconstructed host-side.
 No SQLite, no journal, no shared files between instances.
 
 ### 3.3 The bridge (outside Houdini)

@@ -174,3 +174,39 @@ def test_nothing_is_remembered_when_the_group_recorded_nothing():
     history.rolled_back(None)
     history.rolled_back(())
     assert history.rolled_back_in(("x",)) == set()
+
+
+# -- one host log line per call (review 22 finding 4) ---------------------------------------
+
+
+def test_every_call_writes_one_log_line(caplog):
+    def ok(args, ctx):
+        return {"done": True}
+
+    def bad(args, ctx):
+        raise ToolError("invalid_value", "nope")
+
+    ctx = HostContext(
+        config=HostConfig(),
+        executor=None,
+        logger=logging.getLogger("hocuspocus.host.test_calls"),
+        scene=SceneState(),
+        jobs=JobManager(None),
+        undo=UndoHistory(),
+    )
+    tools = {
+        "ok_tool": HostTool("ok_tool", ok, read_only=True, main_thread=False),
+        "bad_tool": HostTool("bad_tool", bad, read_only=True, main_thread=False),
+    }
+    dispatcher = Dispatcher(ctx, tools.get)
+    with caplog.at_level(logging.INFO, logger="hocuspocus.host.test_calls"):
+        envelope = dispatcher.call("ok_tool", {})
+        dispatcher.call("bad_tool", {})
+        dispatcher.call("no_such_tool", {})
+    lines = [r.getMessage() for r in caplog.records]
+    assert len(lines) == 3
+    pid = f"pid {__import__('os').getpid()}"
+    assert lines[0].startswith("call ok_tool ") and lines[0].endswith(f" ok {pid}")
+    assert f"{envelope['_meta']['elapsed_ms']} ms main 0 ms" in lines[0]
+    assert lines[1].endswith(f" invalid_value {pid}") and lines[2].startswith("call no_such_tool ")
+    assert envelope["_meta"]["timing"] == {"main_thread_ms": 0}
