@@ -10,8 +10,8 @@ SPEC = ToolSpec(
     description=(
         "Search node types or nodes. kind types: node_type_search (query is a name, label "
         "or keyword; 1.4 ranking, synonyms, current_only). kind nodes: node_find under root "
-        "(query is a type glob; pattern, category, flags, has_errors). Returns kind and "
-        "exactly the 1.4 tool's result, paged by limit and cursor."
+        "(query is a type glob; pattern, category, flags, has_errors). Returns the 1.4 "
+        "tool's result with compact rows, paged by limit and cursor."
     ),
     notes=(
         "Each kind takes its 1.4 tool's arguments; any other is invalid_argument naming "
@@ -20,8 +20,16 @@ SPEC = ToolSpec(
         "node_type_search's {results, total, common?, hint?, notes?}, plus next_cursor when "
         "total counts more matches than this page (node_type_search itself has no paging; a "
         "types page reaches the first 1000 matches). nodes: query (optional) is node_find's "
-        "type glob, pattern its name glob; the result is node_find's {root, nodes, total, "
-        "next_cursor?}."
+        "type glob, pattern its name glob; the result is node_find's {root?, nodes, "
+        "common?, total, next_cursor?}. Compact (detail: compact, the default; detail: full "
+        "returns {kind, ...the 1.4 result} unchanged): what is default or empty is omitted "
+        "and kind is not echoed. nodes: root is omitted when the call named it; a row is "
+        "{path, type}, plus flags (the list of flags that are on) when any is on, "
+        "has_errors only when true, child_count and input_count only when above 0; common: "
+        "{category} holds the category most rows share, and a row in another category names "
+        "its type as Category/type (Object/geo); next_cursor is the last row's path (cursor "
+        "takes it, or node_find's after:<path>). types is node_type_search's result "
+        "plus kind."
     ),
     input_schema=_obj(
         {
@@ -37,6 +45,7 @@ SPEC = ToolSpec(
             "current_only": {"type": "boolean"},
             "limit": _i(None, minimum=1, maximum=1000),
             "cursor": _cursor(),
+            "detail": _enum(("compact", "full")),
         },
         ("kind",),
     ),

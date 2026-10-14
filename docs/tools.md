@@ -2,7 +2,7 @@
 
 <!-- Generated from src/hocuspocus/tools/spec/ by `python -m hocuspocus.tools.docs`. Do not edit by hand. -->
 
-39 tools. The 2.0 profiles nest: 10 in `minimal`, 18 in `core` (the default), 21 in `full`. `compat_1x` lists the 35 1.4 tools with their 1.4 schemas, 18 of them only there (each names its 2.0 replacement). Model-visible `tools/list` text: 34,025 bytes. See `docs/BIBLE.md` §4 for the design.
+39 tools. The 2.0 profiles nest: 10 in `minimal`, 18 in `core` (the default), 21 in `full`. `compat_1x` lists the 35 1.4 tools with their 1.4 schemas, 18 of them only there (each names its 2.0 replacement). Model-visible `tools/list` text: 34,079 bytes. See `docs/BIBLE.md` §4 for the design.
 
 ## Contents
 
@@ -314,9 +314,9 @@ Read the scene in one tool. what: node, parms, network, outline, geo (rows: true
 
 `read-only` `headless ok` · profiles `minimal`, `core`, `full`
 
-Search node types or nodes. kind types: node_type_search (query is a name, label or keyword; 1.4 ranking, synonyms, current_only). kind nodes: node_find under root (query is a type glob; pattern, category, flags, has_errors). Returns kind and exactly the 1.4 tool's result, paged by limit and cursor.
+Search node types or nodes. kind types: node_type_search (query is a name, label or keyword; 1.4 ranking, synonyms, current_only). kind nodes: node_find under root (query is a type glob; pattern, category, flags, has_errors). Returns the 1.4 tool's result with compact rows, paged by limit and cursor.
 
-**Notes.** Each kind takes its 1.4 tool's arguments; any other is invalid_argument naming the ones it takes. Defaults are the 1.4 tool's (types: limit 20, current_only true; nodes: root /, limit 50). types: query is required; the result is node_type_search's {results, total, common?, hint?, notes?}, plus next_cursor when total counts more matches than this page (node_type_search itself has no paging; a types page reaches the first 1000 matches). nodes: query (optional) is node_find's type glob, pattern its name glob; the result is node_find's {root, nodes, total, next_cursor?}.
+**Notes.** Each kind takes its 1.4 tool's arguments; any other is invalid_argument naming the ones it takes. Defaults are the 1.4 tool's (types: limit 20, current_only true; nodes: root /, limit 50). types: query is required; the result is node_type_search's {results, total, common?, hint?, notes?}, plus next_cursor when total counts more matches than this page (node_type_search itself has no paging; a types page reaches the first 1000 matches). nodes: query (optional) is node_find's type glob, pattern its name glob; the result is node_find's {root?, nodes, common?, total, next_cursor?}. Compact (detail: compact, the default; detail: full returns {kind, ...the 1.4 result} unchanged): what is default or empty is omitted and kind is not echoed. nodes: root is omitted when the call named it; a row is {path, type}, plus flags (the list of flags that are on) when any is on, has_errors only when true, child_count and input_count only when above 0; common: {category} holds the category most rows share, and a row in another category names its type as Category/type (Object/geo); next_cursor is the last row's path (cursor takes it, or node_find's after:<path>). types is node_type_search's result plus kind.
 
 ### Arguments
 
@@ -339,6 +339,7 @@ Search node types or nodes. kind types: node_type_search (query is a name, label
 | `current_only` | boolean |  |  |  |
 | `limit` | integer |  |  | min 1; max 1000 |
 | `cursor` | string |  |  | next_cursor from the previous page. |
+| `detail` | `compact` \| `full` |  |  |  |
 
 ### Examples
 
