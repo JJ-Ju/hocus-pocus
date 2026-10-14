@@ -179,3 +179,27 @@ def test_look_arguments_are_checked_without_houdini():
         with pytest.raises(ToolError) as caught:
             parse_look_args(bad)
         assert caught.value.code == "invalid_argument", bad
+
+
+def test_viewport_capture_settings_set_on_visual_reach_the_backends(monkeypatch):
+    """Tests and the docs set WARM_CAPTURES, _CHILD_SCRIPT, _stage_crashed and
+    capture_with_karma on hocuspocus.host.tools.visual; the look modules own them now."""
+    from hocuspocus.host.look import child, flipbook, karma
+    from hocuspocus.host.tools import visual
+
+    monkeypatch.setattr(visual, "WARM_CAPTURES", False)
+    assert flipbook.WARM_CAPTURES is False
+    monkeypatch.setattr(visual, "_CHILD_SCRIPT", "pass\n")
+    assert child._CHILD_SCRIPT == "pass\n"
+    crashed: dict[str, str] = {}
+    monkeypatch.setattr(visual, "_stage_crashed", crashed)
+    assert select._stage_crashed is crashed
+
+    def stand_in(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(visual, "capture_with_karma", stand_in)
+    assert karma.capture_with_karma is stand_in
+    monkeypatch.undo()
+    assert flipbook.WARM_CAPTURES is True and child._CHILD_SCRIPT != "pass\n"
+    assert karma.capture_with_karma is not stand_in
