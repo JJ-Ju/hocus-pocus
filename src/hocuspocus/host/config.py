@@ -21,7 +21,7 @@ log = logging.getLogger("hocuspocus.host.config")
 CONFIG_FILE_NAME = "hocuspocus.toml"
 ENV_PREFIX = "HOCUSPOCUS_"
 
-_PROFILES = ("minimal", "core", "full")
+_PROFILES = ("minimal", "core", "full", "v2")
 BRIDGE_ONLY_KEYS = frozenset({"hfs", "result_content"})
 """Keys of the shared ``hocuspocus.toml`` that only the bridge reads; the host skips
 them without the "unknown key" warning."""

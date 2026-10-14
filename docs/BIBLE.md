@@ -172,7 +172,8 @@ Auth: `Authorization: Bearer <token>`; 401 otherwise. `Origin` and `Host` header
 present, must name a loopback host; 403 otherwise (the `Host` check stops DNS rebinding
 from reading `/health`). Request body cap 4 MB; idle connections time out after 60 s.
 The host runs only the tools of its own `profile` (§3.7): a `core` host answers a
-full-profile tool with `invalid_argument` and the hint to set `profile = "full"`.
+full-profile tool with `invalid_argument` and the hint to set `profile = "full"`; a
+`full` host answers a 2.0 tool (`inspect`, `search`) with the hint `profile = "v2"`.
 
 **Instance registry entry.** On start the host writes
 `<state_dir>/instances/<pid>.json`:
@@ -284,8 +285,9 @@ and the hint "run `hocuspocus install-houdini` and restart Houdini".
 `hocuspocus/tools/catalog.py` is a stdlib-only module that defines every tool once:
 name, description, input JSON Schema, output JSON Schema (where stable), MCP
 annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint=false`),
-`profile` (`core` or `full`; 1.3: `MINIMAL_TOOLS` names the 14 core tools of the
-`minimal` profile, listed in §4.1, and the three profiles nest, minimal ⊂ core ⊂ full),
+`profile` (`core`, `full` or `v2`; 1.3: `MINIMAL_TOOLS` names the 14 core tools of the
+`minimal` profile, listed in §4.1; 2.0 M1: `v2` is `full` plus the 2.0 tools of §4.9, and
+the four profiles nest, minimal ⊂ core ⊂ full ⊂ v2; `for_profile("v2")` is every tool),
 `headless_ok`
 (bool), and `bridge_local` (bool). The host
 imports it to map names to implementations and to reject unknown tools; the bridge
@@ -346,7 +348,7 @@ approved_roots = []         # if non-empty, file paths for hip/hda/render must b
 max_response_bytes = 16384
 default_timeout_s = 30
 job_threshold_s = 10        # cook/render longer than this become jobs
-profile = "core"            # minimal | core | full: minimal is 14 tools (§4.1), full adds usd_stage, pdg, hda, events; the host refuses tools outside its profile
+profile = "core"            # minimal | core | full | v2: minimal is 14 tools (§4.1), full adds usd_stage, pdg, hda, events, v2 adds the 2.0 tools (§4.9); the host refuses tools outside its profile
 log_level = "INFO"
 hfs = ""                    # bridge: explicit Houdini install dir for launch
 result_content = "text"     # bridge: text | both | structured (§4.1)
@@ -416,7 +418,10 @@ as it was started from a neutral directory).
   `next_since` (`<pid>:<seq>` of the last kept event, with `more: true`; 1.4, review 22
   finding 1: the host's cursor skipped every event the cut dropped). Any other page is
   returned whole with `over_budget: true`. `events` also ends its pages at the budget.
-- **Profiles** (1.3): `minimal ⊂ core ⊂ full`, set by `profile` (§3.7); the bridge lists
+- **Profiles** (1.3; `v2` 2.0 M1): `minimal ⊂ core ⊂ full ⊂ v2`, set by `profile` (§3.7).
+  `v2` is `full` plus the 2.0 tools (§4.9), alongside the 1.4 names; its `tools/list` has
+  no cap of its own until M3, and the 1.x profiles' bytes are those of 1.4 (goldens). The
+  bridge lists
   and the host allows only the profile's tools. `minimal`, for clients with a small
   context, is `houdini_status`, `houdini_connect`, `hip_open`, `hip_save`, `node_find`,
   `node_info`, `node_create`, `node_connect`, `parm_get`, `parm_set`, `cook`, `geo_info`,

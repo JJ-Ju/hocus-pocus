@@ -4,6 +4,9 @@ Stdlib only. Imported by the host (inside Houdini) to map names to implementatio
 by the bridge (outside Houdini) to register MCP tools, and by the docs generator.
 See docs/BIBLE.md §3.5 and §4.
 
+Profiles nest, smallest first: ``minimal ⊂ core ⊂ full ⊂ v2``. ``v2`` (spec-2.0 §7 M1)
+is ``full`` plus the 2.0 tools (spec ``profile="v2"``), served alongside the 1.4 names.
+
 2.0 (spec-2.0 §5.1): each tool is defined in its own module under
 ``hocuspocus/tools/spec/`` (``spec/<tool>.py`` exports ``SPEC``), built with the schema
 helpers in ``spec/_helpers.py``. This module is the loader: it re-exports the specs in
@@ -11,6 +14,9 @@ catalogue order and owns the profile membership.
 """
 
 from __future__ import annotations
+
+import copy
+import dataclasses
 
 from .spec import TOOLS
 from .spec._helpers import (
@@ -71,6 +77,25 @@ def in_profile(spec: ToolSpec, profile: str) -> bool:
     return PROFILES.index(profile_of(spec)) <= rank
 
 
+def _v2_status(spec: ToolSpec) -> ToolSpec:
+    """``houdini_status`` as the ``v2`` profile lists it: its ``profile`` output field may
+    also be ``v2``. The 1.x profiles keep the 1.4 schema (and so their ``tools/list``
+    bytes); only the v2 listing names the fourth profile."""
+    schema = copy.deepcopy(spec.output_schema)
+    field = (schema or {}).get("properties", {}).get("profile")
+    if not isinstance(field, dict) or "enum" not in field:
+        return spec
+    field["enum"] = list(PROFILES)
+    return dataclasses.replace(spec, output_schema=schema)
+
+
+_V2_TOOLS: tuple[ToolSpec, ...] = tuple(
+    _v2_status(spec) if spec.name == "houdini_status" else spec for spec in TOOLS
+)
+
+
 def for_profile(profile: Profile) -> tuple[ToolSpec, ...]:
-    """The tools ``profile`` lists, in catalogue order."""
+    """The tools ``profile`` lists, in catalogue order. ``v2`` lists every tool."""
+    if profile == "v2":
+        return _V2_TOOLS
     return tuple(spec for spec in TOOLS if in_profile(spec, profile))

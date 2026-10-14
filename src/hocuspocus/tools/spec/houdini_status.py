@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from ._helpers import PROFILES, ToolSpec, _connected_block, _obj, _out, _t
+from ._helpers import PROFILES_1X, ToolSpec, _connected_block, _obj, _out, _t
 
 SPEC = ToolSpec(
     name="houdini_status",
@@ -42,7 +42,7 @@ SPEC = ToolSpec(
                 ),
             },
             "bridge_version": _t("string"),
-            "profile": {"type": "string", "enum": list(PROFILES)},
+            "profile": {"type": "string", "enum": list(PROFILES_1X)},
             "read_only": _t("boolean"),
             "allow_python": _t("boolean"),
         },

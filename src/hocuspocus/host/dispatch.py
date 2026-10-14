@@ -276,11 +276,13 @@ class Dispatcher:
             host_profile = getattr(self.ctx.config, "profile", "full")
             if spec is not None and not in_profile(spec, host_profile):
                 needed = profile_of(spec)
+                # v2 is the largest profile; for the others "full" also lists the tool.
+                wider = "" if needed == "v2" else ' (or "full")'
                 raise ToolError(
                     "invalid_argument",
                     f"{tool} is a {needed}-profile tool, and this Houdini's host runs the "
                     f"{host_profile} profile.",
-                    hint=f'Set profile = "{needed}" (or "full") in hocuspocus.toml (host and '
+                    hint=f'Set profile = "{needed}"{wider} in hocuspocus.toml (host and '
                     f"bridge read it) or HOCUSPOCUS_PROFILE={needed} in Houdini's environment, "
                     "and restart Houdini.",
                 )

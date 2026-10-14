@@ -341,6 +341,9 @@ def render_tools_markdown(tools: Sequence[ToolSpec]) -> str:
     """Render the full ``docs/tools.md`` text (LF line endings, trailing newline)."""
     minimal = sum(1 for spec in tools if profile_of(spec) == "minimal")
     core = sum(1 for spec in tools if spec.profile == "core")
+    v2 = sum(1 for spec in tools if spec.profile == "v2")
+    full = len(tools) - core - v2
+    v2_part = f", {v2} more in `v2` (the 2.0 tools)" if v2 else ""
     out: list[str] = [
         "# HocusPocus tools",
         "",
@@ -348,7 +351,7 @@ def render_tools_markdown(tools: Sequence[ToolSpec]) -> str:
         " Do not edit by hand. -->",
         "",
         f"{len(tools)} tools: {minimal} in the `minimal` profile, {core} in `core` (minimal "
-        f"included), {len(tools) - core} more in `full`. "
+        f"included), {full} more in `full`{v2_part}. "
         f"Model-visible `tools/list` text: {tools_list_text_size(tools):,} bytes. "
         "See `docs/BIBLE.md` §4 for the design.",
         "",
@@ -356,7 +359,9 @@ def render_tools_markdown(tools: Sequence[ToolSpec]) -> str:
         "",
     ]
     for spec in tools:
-        suffix = {"full": " *(full)*", "minimal": " *(minimal)*"}.get(profile_of(spec), "")
+        suffix = {"full": " *(full)*", "minimal": " *(minimal)*", "v2": " *(v2)*"}.get(
+            profile_of(spec), ""
+        )
         out.append(f"- [`{spec.name}`](#{spec.name}){suffix}")
     for spec in tools:
         out += [
@@ -415,14 +420,19 @@ def default_output_path() -> Path:
 # Budget report (docs/redesign/budget.md)
 # ---------------------------------------------------------------------------
 
-BUDGET_PROFILES: tuple[str, ...] = ("minimal", "core", "full")
+BUDGET_PROFILES: tuple[str, ...] = ("minimal", "core", "full", "v2")
 BUDGET_MODES: tuple[str, ...] = ("text", "both")
 TOOLS_LIST_CAPS: dict[str, int] = {"text": 32_000, "both": 44_000}
 """BIBLE §4.1 (1.4) caps on the full profile's serialised ``tools/list`` per
 ``result_content`` mode; ``test_tools_list_budget`` enforces them."""
 BUDGET_TOP = 10
 BUDGET_COLUMNS: tuple[str, ...] = tuple(f"{p} {m}" for m in BUDGET_MODES for p in BUDGET_PROFILES)
-"""History columns, ``"<profile> <mode>"``: the three profiles in ``text``, then in ``both``."""
+"""History columns, ``"<profile> <mode>"``: the four profiles in ``text``, then in ``both``."""
+LEGACY_BUDGET_COLUMNS: tuple[str, ...] = tuple(
+    f"{p} {m}" for m in BUDGET_MODES for p in ("minimal", "core", "full")
+)
+"""Columns of rows recorded before the ``v2`` profile (1.4): read back with no ``v2`` sizes,
+which the table shows as ``—``."""
 _HISTORY_HEADING = "## History"
 _CONTRIBUTION_HEADING = "## Per-tool contribution"
 _DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
@@ -462,7 +472,12 @@ def measure_budget() -> dict[str, Any]:
 
 
 def _budget_row(row: dict[str, Any]) -> str:
-    cells = [row["date"], row["version"], *(f"{row['sizes'][c]:,}" for c in BUDGET_COLUMNS)]
+    sizes = row["sizes"]
+    cells = [
+        row["date"],
+        row["version"],
+        *(f"{sizes[c]:,}" if c in sizes else "—" for c in BUDGET_COLUMNS),
+    ]
     return "| " + " | ".join(cells) + " |"
 
 
@@ -474,16 +489,20 @@ def parse_budget_history(text: str) -> list[dict[str, Any]]:
     section = text.split(_HISTORY_HEADING, 1)[1].split("\n## ", 1)[0]
     for line in section.splitlines():
         cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
-        if len(cells) != 2 + len(BUDGET_COLUMNS) or not _DATE.fullmatch(cells[0]):
+        if not _DATE.fullmatch(cells[0]):
             continue
-        numbers = [int(cell.replace(",", "")) for cell in cells[2:]]
-        rows.append(
-            {
-                "date": cells[0],
-                "version": cells[1],
-                "sizes": dict(zip(BUDGET_COLUMNS, numbers, strict=True)),
-            }
-        )
+        if len(cells) == 2 + len(BUDGET_COLUMNS):
+            columns = BUDGET_COLUMNS
+        elif len(cells) == 2 + len(LEGACY_BUDGET_COLUMNS):
+            columns = LEGACY_BUDGET_COLUMNS
+        else:
+            continue
+        sizes = {
+            column: int(cell.replace(",", ""))
+            for column, cell in zip(columns, cells[2:], strict=True)
+            if cell != "—"
+        }
+        rows.append({"date": cells[0], "version": cells[1], "sizes": sizes})
     return rows
 
 
@@ -508,7 +527,9 @@ def render_budget_markdown(history: Sequence[dict[str, Any]], measured: dict[str
         "MCP SDK writes it), per profile and `result_content` mode (BIBLE §4.1, spec-2.0 "
         "§5.1). `text` is what clients see by default (no output schemas); `both` declares "
         f"them. Caps on the full profile: `text` ≤ {TOOLS_LIST_CAPS['text']:,} B, `both` ≤ "
-        f"{TOOLS_LIST_CAPS['both']:,} B. A change that raises a number says why in its commit.",
+        f"{TOOLS_LIST_CAPS['both']:,} B. `v2` (full plus the 2.0 tools, spec-2.0 §7 M1) is "
+        "measured but has no cap of its own; rows from before it show `—` there. A change "
+        "that raises a number says why in its commit.",
         "",
         _HISTORY_HEADING,
         "",

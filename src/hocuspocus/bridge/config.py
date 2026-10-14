@@ -38,7 +38,8 @@ log = logging.getLogger(__name__)
 
 DEFAULT_MAX_RESPONSE_BYTES = 16_384
 DEFAULT_TIMEOUT_S = 30.0
-PROFILES = ("minimal", "core", "full")
+PROFILES = ("minimal", "core", "full", "v2")
+"""``profile`` values (BIBLE §3.7); ``v2`` is ``full`` plus the 2.0 tools."""
 RESULT_CONTENT = ("text", "both", "structured")
 """``result_content`` values; the first is the default (BIBLE §4.1)."""
 HOUDINI_MAJOR_MINOR = "22.0"

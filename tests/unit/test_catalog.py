@@ -49,6 +49,8 @@ EXPECTED_ORDER = [
     "hda", "usd_stage", "pdg", "events",
 ]  # fmt: skip
 FULL_ONLY = {"hda", "usd_stage", "pdg", "events"}
+# spec-2.0 §7 M1: the 2.0 tools, listed only by the v2 profile (full plus these).
+V2_ONLY: set[str] = set()
 # BIBLE §4.1 (1.3): the minimal profile, for clients with a small context.
 MINIMAL = {
     "houdini_status", "houdini_connect", "hip_open", "hip_save", "node_find", "node_info",
@@ -99,7 +101,9 @@ def test_profiles() -> None:
     core = for_profile("core")
     assert len(core) == 31
     assert {spec.name for spec in TOOLS if spec.profile == "full"} == FULL_ONLY
-    assert for_profile("full") == TOOLS
+    assert {spec.name for spec in TOOLS if spec.profile == "v2"} == V2_ONLY
+    assert for_profile("full") == tuple(spec for spec in TOOLS if spec.name not in V2_ONLY)
+    assert [spec.name for spec in for_profile("v2")] == [spec.name for spec in TOOLS]
     assert [spec.name for spec in core] == [n for n in EXPECTED_ORDER if n not in FULL_ONLY]
     minimal = for_profile("minimal")
     assert MINIMAL_TOOLS == MINIMAL and len(minimal) == 14
@@ -108,15 +112,17 @@ def test_profiles() -> None:
 
 
 def test_profiles_are_nested() -> None:
-    """minimal ⊂ core ⊂ full (BIBLE §4.1): a bigger profile never drops a tool, so a
-    client moving up a profile keeps every tool it knew, and the integration tier, which
-    runs its host on full, exercises every tool of every profile."""
-    assert catalog.PROFILES == ("minimal", "core", "full")
+    """minimal ⊂ core ⊂ full ⊂ v2 (BIBLE §4.1, spec-2.0 §7 M1): a bigger profile never
+    drops a tool, so a client moving up a profile keeps every tool it knew. The integration
+    tier runs its host on full and the 2.0 tools' tests switch it to v2."""
+    assert catalog.PROFILES == ("minimal", "core", "full", "v2")
     names = {p: [spec.name for spec in for_profile(p)] for p in catalog.PROFILES}
     assert set(names["minimal"]) < set(names["core"]) < set(names["full"])
-    assert names["full"] == [spec.name for spec in TOOLS]
+    assert set(names["full"]) <= set(names["v2"])
+    assert set(names["v2"]) - set(names["full"]) == V2_ONLY
+    assert names["v2"] == [spec.name for spec in TOOLS]
     for profile in catalog.PROFILES:  # each in catalogue order
-        assert names[profile] == [n for n in names["full"] if n in set(names[profile])]
+        assert names[profile] == [n for n in names["v2"] if n in set(names[profile])]
     for spec in TOOLS:
         smallest = catalog.profile_of(spec)
         listed = [p for p in catalog.PROFILES if catalog.in_profile(spec, p)]
@@ -220,7 +226,7 @@ TOOLS_LIST_BOTH_MAX_BYTES = 44_000
 """Cap on the largest shape a client can ask for (review 11 §1.1): the full profile with
 ``result_content = "both"``, output schemas declared."""
 
-PROFILES = ("minimal", "core", "full")
+PROFILES = ("minimal", "core", "full", "v2")
 MODES = ("text", "both")
 
 
@@ -242,7 +248,8 @@ def tools_list_wire_size(profile: str, result_content: str = "text") -> int:
 
 def test_tools_list_budget(capsys: pytest.CaptureFixture[str]) -> None:
     """BIBLE §4.1 (1.4): cap what clients see by default (``text``) and the ``both`` shape,
-    each measured on the full profile; all six sizes are printed."""
+    each measured on the full profile; all eight sizes (four profiles) are printed. v2 has
+    no cap of its own (spec-2.0 §7 M1) but never lists less than full."""
     sizes = {(p, m): tools_list_wire_size(p, m) for m in MODES for p in PROFILES}
     caps = {"text": TOOLS_LIST_DEFAULT_MAX_BYTES, "both": TOOLS_LIST_BOTH_MAX_BYTES}
     with capsys.disabled():
@@ -254,6 +261,7 @@ def test_tools_list_budget(capsys: pytest.CaptureFixture[str]) -> None:
         print(f"\n[tools/list] names+descriptions+input schemas {tools_list_text_size(TOOLS):,} B")
     for mode in MODES:
         assert sizes["minimal", mode] < sizes["core", mode] < sizes["full", mode], sizes
+        assert sizes["full", mode] <= sizes["v2", mode], sizes
         assert sizes["full", mode] <= caps[mode], (
             f"tools/list (full profile, result_content {mode}) is {sizes['full', mode]:,} B, "
             f"over the {caps[mode]:,} B cap (BIBLE §4.1). Move argument detail from the "
@@ -310,8 +318,7 @@ def test_notes_reach_the_docs_and_guide_but_not_tools_list() -> None:
     markdown = render_tools_markdown(TOOLS)
     guide = tools_text()  # hocuspocus://tools (1.3; the guide itself is instructions only)
     listed = {
-        tool.name: tool
-        for tool in Bridge(BridgeConfig(profile="full"), scan=lambda: []).list_tools()
+        tool.name: tool for tool in Bridge(BridgeConfig(profile="v2"), scan=lambda: []).list_tools()
     }
     for spec in noted:
         assert spec.notes in markdown and spec.notes in guide, spec.name

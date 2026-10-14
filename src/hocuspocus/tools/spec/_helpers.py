@@ -15,10 +15,16 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-Profile = Literal["minimal", "core", "full"]
+Profile = Literal["minimal", "core", "full", "v2"]
 
-PROFILES: tuple[str, ...] = ("minimal", "core", "full")
-"""Nested, smallest first (BIBLE §3.5, §3.7): each profile lists every tool of the one before."""
+PROFILES: tuple[str, ...] = ("minimal", "core", "full", "v2")
+"""Nested, smallest first (BIBLE §3.5, §3.7): each profile lists every tool of the one before.
+``v2`` (spec-2.0 §7 M1) is ``full`` plus the 2.0 tools (``inspect``, ``search``, ...)."""
+
+PROFILES_1X: tuple[str, ...] = PROFILES[:3]
+"""The 1.x profiles. ``houdini_status``'s output schema names these in every 1.x profile, so
+their ``tools/list`` bytes stay those of 1.4; the ``v2`` listing names all four
+(``catalog.for_profile``)."""
 
 HP_RPC_VERSION = 1
 """Host RPC contract version (the ``v1`` in ``/hp/v1/...``)."""
@@ -50,7 +56,8 @@ class ToolSpec:
     destructive: bool = False
     idempotent: bool = False
     profile: Profile = "core"
-    """``core`` or ``full``; membership of ``minimal`` is :data:`MINIMAL_TOOLS`."""
+    """``core``, ``full`` or ``v2`` (2.0 tools); membership of ``minimal`` is
+    :data:`MINIMAL_TOOLS`."""
     headless_ok: bool = True
     bridge_local: bool = False
     """True when the bridge answers this tool itself (``houdini_status``, ``houdini_connect``)."""
