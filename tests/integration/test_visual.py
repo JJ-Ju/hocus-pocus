@@ -771,6 +771,9 @@ def test_headless_capture_does_not_hold_the_main_thread(client):
     import json
     import threading
 
+    from hocuspocus.host.tools import visual
+
+    visual.close_warm_capture()  # a kept child renders in 0.3 s: start a fresh one (3 s)
     _toy_scene()
     box: dict = {}
 
@@ -991,3 +994,71 @@ def test_render_camera_override_renders_through_it(client, work_dir):
     result = client.ok("render", {"rop_path": rop.path(), "frames": [1, 1], "camera": far.path()})
     assert result["outputs"] == [_fwd(work_dir / "gl.0001.png")]
     assert rop.parm("camera").eval() == "/obj/cam1"
+
+
+# -- kept capture child (review 22 finding 6) -----------------------------------------
+
+
+@pytest.mark.slow
+def test_headless_captures_reuse_a_kept_child(client):
+    """A fresh child hython per capture cost about 3 s, 69 % of a soak's tool time. The
+    child is now kept: later captures push a fresh scene snapshot to it and re-render its
+    Flipbook ROP, /obj and stage alike, and edits between captures show."""
+    from hocuspocus.host.tools import visual
+
+    visual.close_warm_capture()
+    geo = _toy_scene()
+    started = time.perf_counter()
+    first = client.ok("viewport_capture", {"resolution": [160, 120]})
+    cold_s = time.perf_counter() - started
+    child = visual._warm["child"]
+    assert child is not None and child.proc.poll() is None
+    pid = child.proc.pid
+    imp = hou.node("/stage").createNode("sopimport", "imp")
+    imp.parm("soppath").set(geo.path())
+    started = time.perf_counter()
+    geo.parmTuple("t").set((3, 0, 0))
+    moved = client.ok("viewport_capture", {"resolution": [160, 120], "fit": "none"})
+    stage = client.ok("viewport_capture", {"lop_path": imp.path(), "resolution": [160, 120]})
+    warm_s = (time.perf_counter() - started) / 2
+    print(f"\ncapture: first (child start) {cold_s:.2f}s, kept child {warm_s:.2f}s per capture")
+    assert visual._warm["child"].proc.pid == pid
+    assert stage["scene"] == "stage" and first["scene"] == moved["scene"] == "obj"
+    for result in (first, stage, moved):
+        assert result["source_used"] == "flipbook_rop", result
+        assert _not_blank(_decode(result["image"]))
+    assert _centroid_x(moved["image"]) > _centroid_x(first["image"]) + 10
+    assert warm_s < cold_s
+    child.proc.kill()  # a kept child that went away is replaced
+    child.proc.wait(10)
+    again = client.ok("viewport_capture", {"resolution": [160, 120]})
+    assert visual._warm["child"].proc.pid != pid
+    assert "notes" not in again or not any("kept" in n for n in again["notes"])
+
+
+@pytest.mark.slow
+def test_a_kept_child_that_crashes_falls_back_to_a_fresh_one(client, monkeypatch):
+    from hocuspocus.host.tools import visual
+
+    visual.close_warm_capture()
+    monkeypatch.setitem(visual._warm, "disabled", None)
+    _toy_scene()
+    client.ok("viewport_capture", {"resolution": [96, 72]})
+    real_wait = visual.WarmCapture._wait
+
+    def crash_after_first(self, request, offset, timeout_s):
+        if self.uses > 1:
+            self.proc.kill()
+            self.proc.wait(10)
+            raise visual.exit_error(139, "Fatal error: Segmentation fault")
+        return real_wait(self, request, offset, timeout_s)
+
+    monkeypatch.setattr(visual.WarmCapture, "_wait", crash_after_first)
+    result = client.ok("viewport_capture", {"resolution": [96, 72]})
+    assert result["source_used"] == "flipbook_rop"
+    assert visual.WARM_CRASH_NOTE in result["notes"], result
+    assert _not_blank(_decode(result["image"]))
+    assert visual._warm["disabled"] and visual._warm["child"] is None
+    later = client.ok("viewport_capture", {"resolution": [96, 72]})
+    assert visual._warm["child"] is None  # fresh children from now on
+    assert visual.WARM_CRASH_NOTE not in later.get("notes", [])

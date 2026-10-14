@@ -736,6 +736,23 @@ rendered and deleted four times, OBJ and stage, then again after `hipFile.clear(
 in houdinifx 22.0.466; a GUI capture takes about 0.3 s); every other ROP type renders
 in-process frame by frame through the executor.
 
+**Headless captures keep their Flipbook child** (1.4, review 22 finding 6: a fresh child
+per capture took 2.9-3.7 s, 69 % of a soak's tool time). The first headless Flipbook
+capture starts a child hython that stays up; each later capture pushes a fresh snapshot to
+it over stdin, and the child deletes every node of its previous scene except its own
+Flipbook ROP (never `hipFile.clear()`), loads the snapshot, builds the capture camera and
+renders that same ROP again, which the Flipbook ROP survives (verified on 22.0.466: /obj
+and stage scenes alternated eight times in one hython, 0.15-0.19 s per render after the
+first). Measured through the tools on a rubber toy at 640x480: 2.8-3.6 s per capture before,
+3.3 s for the first and 0.35-0.4 s (0.9 s for a stage) for each later one after. The kept
+child is replaced when the child script, the hython or an installed HDA library (its mtime)
+changes, when it exited, after 200 captures, or after 110 s idle; it exits by itself after
+120 s idle (it holds a licence) or when the host goes away (stdin EOF). A capture while it
+is busy, an OpenGL or Karma step of the chain, and `render` of a user's ROP still use a
+fresh child. A crash of a kept child that had already rendered retries that capture in a
+fresh child with a note, and later captures in that Houdini use fresh children; a crash of
+a new kept child is a crash as before (§8 chain).
+
 **An OpenGL ROP child that renders a stage runs single-threaded** (`HOUDINI_MAXTHREADS=1`,
 review 16 N1): its LOP source creates the Vulkan device on a TBB worker and crashes for a
 stage of more than a few thousand polygons. The Flipbook ROP does not (review 16's city

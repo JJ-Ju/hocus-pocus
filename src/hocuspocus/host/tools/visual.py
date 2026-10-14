@@ -18,7 +18,10 @@ Flipbook ROP that has rendered is deleted (``destroy()`` or ``hip_new``), the ne
 render in that hython segfaults at the same place (``RV_ShaderVariableSet::create``), and
 a capture's temporary ROP is always deleted. So headless, the host snapshots the scene
 (``saveChildrenToFile`` per manager: no hip save, no event side effects) and renders
-Flipbook and OpenGL ROPs in a short-lived ``hython`` (about 3 s per call). In a GUI session
+Flipbook and OpenGL ROPs in a short-lived ``hython`` (about 3 s per call). viewport_capture
+keeps its Flipbook child between captures instead (:class:`WarmCapture`, review 22 finding
+6): each capture pushes a fresh snapshot, the child deletes its previous scene but never its
+own Flipbook ROP, and re-renders that ROP (about 0.3 s). In a GUI session
 both render in-process (a temporary Flipbook ROP created, rendered and deleted four times,
 then again after ``hipFile.clear()``, did not crash in houdinifx 22.0.466). Every other ROP
 type renders in-process, frame by frame, through the main-thread executor.
@@ -38,6 +41,7 @@ the next ROP of the chain renders it, and Karma, in the host, last
 
 from __future__ import annotations
 
+import atexit
 import base64
 import contextlib
 import io
@@ -47,6 +51,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from collections.abc import Iterator
 from pathlib import Path
@@ -354,11 +359,7 @@ import json, sys
 """
     + _BUILD_CAPTURE
     + r"""
-def main():
-    with open(sys.argv[1], encoding="utf-8") as fh:
-        spec = json.load(fh)
-    import hou
-    notes = []
+def load_scene(hou, spec, notes):
     for key, value in spec["env"].items():
         if value:
             hou.putenv(key, value)
@@ -385,11 +386,54 @@ def main():
             node.loadChildrenFromFile(path, ignore_load_warnings=True)
     hou.playbar.setFrameRange(spec["range"][0], spec["range"][1])
     hou.setFrame(spec["frame"])
+
+
+def clear_scene(hou, keep):
+    # A kept child's next scene: every node goes but its own capture ROPs. Never
+    # hipFile.clear(): it deletes them, and a Flipbook ROP that rendered and was deleted
+    # crashes the next Flipbook render in the process.
+    for manager in hou.node("/").children():
+        for node in manager.children():
+            if node.path() not in keep:
+                try:
+                    node.destroy()
+                except Exception:
+                    pass
+
+
+def reuse_capture(hou, capture, rop):
+    # The kept ROP looks through the new capture's camera (built in the new scene).
+    for name, value in capture["rop_parms"].items():
+        rop.parm(name).set(value)
+    lop, camera = capture_camera(hou, capture, [])
+    if lop is not None:
+        rop.parm("opsource").set(1)
+        rop.parm("loppath").set(lop)
+        rop.parm("cameraprim").set(camera)
+    else:
+        rop.parm("opsource").set(0)
+        rop.parm("camera").set(camera)
+    return rop
+
+
+def render(hou, spec, kept):
+    notes = []
+    if kept:
+        clear_scene(hou, set(rop.path() for rop in kept.values()))
+    load_scene(hou, spec, notes)
     capture = spec.get("capture")
     if capture:
-        spec["rop"] = build_capture(hou, capture, []).path()
+        rop_type = capture.get("rop_type") or "flipbook"
+        if rop_type in kept:
+            rop = reuse_capture(hou, capture, kept[rop_type])
+        else:
+            rop = build_capture(hou, capture, [])
+            if spec.get("serve"):
+                rop.setName("hocuspocus_capture_" + rop_type, unique_name=True)
+                kept[rop_type] = rop
+        spec["rop"] = rop.path()
     rop = hou.node(spec["rop"])
-    result = {"errors": [], "warnings": [], "notes": notes}
+    result = {"errors": [], "warnings": [], "notes": notes, "request": spec.get("request")}
     if rop is None:
         result["errors"].append("ROP %s missing in the snapshot" % spec["rop"])
     else:
@@ -403,8 +447,48 @@ def main():
             result["errors"].append(str(exc).strip())
         result["errors"] += [str(e) for e in rop.errors()]
         result["warnings"] += [str(w) for w in rop.warnings()]
+    return result
+
+
+def requests(idle_s):
+    # Spec paths, one per stdin line, until EOF (the host went away) or idle_s without one.
+    import queue, threading
+
+    lines = queue.Queue()
+
+    def read():
+        for line in sys.stdin:
+            lines.put(line.strip())
+        lines.put(None)
+
+    threading.Thread(target=read, daemon=True).start()
+    while True:
+        try:
+            path = lines.get(timeout=idle_s)
+        except queue.Empty:
+            return
+        if not path:
+            return
+        yield path
+
+
+def emit(result):
     sys.stdout.write("HPRESULT " + json.dumps(result) + "\n")
     sys.stdout.flush()
+
+
+def main():
+    with open(sys.argv[1], encoding="utf-8") as fh:
+        spec = json.load(fh)
+    import hou
+    kept = {}
+    emit(render(hou, spec, kept))
+    if not spec.get("serve"):
+        return
+    # A kept capture child (warm captures): render each further request in this process.
+    for path in requests(spec.get("idle_s") or 120):
+        with open(path, encoding="utf-8") as fh:
+            emit(render(hou, json.load(fh), kept))
 
 main()
 """
@@ -486,6 +570,31 @@ def crash_summary(log: str, limit: int = CRASH_LOG_CHARS) -> str:
     return out if len(out) <= limit else out[: limit - 3] + "..."
 
 
+def exit_error(code: int | None, log: str) -> ToolError:
+    """The error for a render process that exited without a result: a crash, or a licence
+    refusal (retry). No ``hou``."""
+    licence = "licen" in log.lower()
+    return ToolError(
+        "internal",
+        f"The render process exited with code {code}.",
+        hint=(
+            "No Houdini licence was available for the render process; retry shortly."
+            if licence
+            else "See detail.log for the render process output."
+        ),
+        hou_exception=f"render process exit {code}",
+        detail={"log": crash_summary(log), "exit_code": code},
+    )
+
+
+def _child_env(single_thread: bool = False) -> dict[str, str]:
+    env = dict(os.environ)
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    if single_thread:
+        env["HOUDINI_MAXTHREADS"] = "1"
+    return env
+
+
 class ChildRender:
     """One child hython rendering a snapshot. Off the main thread after :meth:`start`."""
 
@@ -514,15 +623,11 @@ class ChildRender:
         spec_path = os.path.join(self.tmp_dir, "spec.json")
         Path(script).write_text(_CHILD_SCRIPT, encoding="utf-8")
         Path(spec_path).write_text(json.dumps(self.spec), encoding="utf-8")
-        env = dict(os.environ)
-        env["PYTHONDONTWRITEBYTECODE"] = "1"
-        if self.single_thread:
-            env["HOUDINI_MAXTHREADS"] = "1"
         with open(self.log_path, "wb") as log:
             self.proc = subprocess.Popen(
                 [self.spec["hython"], script, spec_path],
                 cwd=self.tmp_dir,
-                env=env,
+                env=_child_env(self.single_thread),
                 stdin=subprocess.DEVNULL,
                 stdout=log,
                 stderr=subprocess.STDOUT,
@@ -561,18 +666,7 @@ class ChildRender:
             (line for line in reversed(log.splitlines()) if line.startswith("HPRESULT ")), None
         )
         if self.proc.returncode != 0 or marker is None:
-            licence = "licen" in log.lower()
-            raise ToolError(
-                "internal",
-                f"The render process exited with code {self.proc.returncode}.",
-                hint=(
-                    "No Houdini licence was available for the render process; retry shortly."
-                    if licence
-                    else "See detail.log for the render process output."
-                ),
-                hou_exception=f"render process exit {self.proc.returncode}",
-                detail={"log": crash_summary(log), "exit_code": self.proc.returncode},
-            )
+            raise exit_error(self.proc.returncode, log)
         outcome = json.loads(marker[len("HPRESULT ") :])
         notes = list(self.spec.get("notes") or []) + list(outcome.get("notes") or [])
         outcome["notes"] = notes
@@ -586,32 +680,214 @@ class ChildRender:
         return data[-limit:].decode("utf-8", "replace")
 
 
-def render_isolated(
-    rop: str | None,
-    frames: list[float],
-    parms: dict[str, Any] | None = None,
-    *,
-    capture: dict[str, Any] | None = None,
-    timeout_s: float = CHILD_TIMEOUT_S,
-) -> dict[str, Any]:
-    """Snapshot and render synchronously in a child hython. Main thread (snapshot).
+# -- warm capture child (review 22 finding 6) ------------------------------------------
 
-    With ``capture`` the child builds viewport_capture's camera and ROP in its own scene
-    (``rop`` is then None), so the live scene gains no nodes.
-    """
-    tmp_dir = tempfile.mkdtemp(prefix="hp-render-")
-    try:
-        snapshot = snapshot_scene(tmp_dir)
-        if capture is not None:
-            snapshot["capture"] = capture
-        child = ChildRender(snapshot, tmp_dir, rop or "", frames, parms)
+WARM_CAPTURES = True
+"""Headless Flipbook captures render in a kept child hython (:class:`WarmCapture`)."""
+WARM_IDLE_S = 120.0
+"""A kept capture child exits after this long without a capture (it holds a licence)."""
+WARM_MAX_USES = 200
+"""A kept capture child is replaced after this many captures."""
+_warm: dict[str, Any] = {"child": None, "disabled": None}
+"""``child``: the kept :class:`WarmCapture`; ``disabled``: why kept children are off in
+this process (one crashed where a fresh child did not)."""
+_warm_lock = threading.Lock()
+
+
+def warm_key(snapshot: dict[str, Any]) -> tuple[Any, ...]:
+    """What a kept child cannot change between captures: the hython, the child script and
+    the HDA libraries it installed (with their mtimes, so ``hda save`` restarts it). The
+    scene itself is pushed with every capture. No ``hou``."""
+    libs = []
+    for lib in snapshot.get("hdas") or []:
+        try:
+            libs.append((lib, os.path.getmtime(lib)))
+        except OSError:
+            libs.append((lib, None))
+    return (snapshot.get("hython"), _CHILD_SCRIPT, tuple(libs))
+
+
+class WarmCapture:
+    """A capture child hython kept between headless Flipbook captures (review 22 finding 6:
+    a fresh child cost 2.9-3.7 s per capture, 69 % of a soak's tool time). Each capture
+    sends a fresh scene snapshot; the child deletes its previous scene, keeping only its
+    own Flipbook ROP, loads the snapshot and renders that ROP again: re-rendering one
+    Flipbook ROP is safe in-process, deleting one that rendered is not (module docstring).
+    It exits on stdin EOF (the host went away) or after :data:`WARM_IDLE_S` idle. Results
+    are ``HPRESULT`` lines in its log, matched by request id. Off the main thread."""
+
+    def __init__(self, key: tuple[Any, ...], hython: str) -> None:
+        self.key = key
+        self.hython = hython
+        self.dir = tempfile.mkdtemp(prefix="hp-warm-")
+        self.log_path = os.path.join(self.dir, "child.log")
+        self.proc: subprocess.Popen[bytes] | None = None
+        self.uses = 0
+        self.last_used = time.monotonic()
+
+    def usable(self, key: tuple[Any, ...]) -> bool:
+        return (
+            self.proc is not None
+            and self.proc.poll() is None
+            and self.key == key
+            and self.uses < WARM_MAX_USES
+            and time.monotonic() - self.last_used < WARM_IDLE_S - 10.0
+        )
+
+    def request(self, spec: dict[str, Any], tmp_dir: str, timeout_s: float) -> dict[str, Any]:
+        """Render one capture spec and return its outcome, as :meth:`ChildRender.wait`."""
+        request = f"{os.getpid()}-{self.uses}-{time.monotonic_ns()}"
+        spec = dict(spec, serve=True, idle_s=WARM_IDLE_S, request=request)
+        spec_path = os.path.join(tmp_dir, f"warm-{self.uses}.json")
+        Path(spec_path).write_text(json.dumps(spec), encoding="utf-8")
+        offset = 0
+        if self.proc is None:
+            script = os.path.join(self.dir, "render_child.py")
+            Path(script).write_text(_CHILD_SCRIPT, encoding="utf-8")
+            with open(self.log_path, "wb") as log:
+                self.proc = subprocess.Popen(
+                    [self.hython, script, spec_path],
+                    cwd=self.dir,
+                    env=_child_env(),
+                    stdin=subprocess.PIPE,
+                    stdout=log,
+                    stderr=subprocess.STDOUT,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                )
+        else:
+            with contextlib.suppress(OSError):
+                offset = os.path.getsize(self.log_path)
+            assert self.proc.stdin is not None
+            # It may have exited: then its exit code is reported below.
+            with contextlib.suppress(OSError):
+                self.proc.stdin.write((spec_path + "\n").encode("utf-8"))
+                self.proc.stdin.flush()
+        self.uses += 1
+        try:
+            outcome = self._wait(request, offset, timeout_s)
+        finally:
+            self.last_used = time.monotonic()
+        outcome["notes"] = list(spec.get("notes") or []) + list(outcome.get("notes") or [])
+        return outcome
+
+    def _read(self, offset: int) -> str:
+        try:
+            with open(self.log_path, "rb") as fh:
+                fh.seek(offset)
+                return fh.read().decode("utf-8", "replace")
+        except OSError:
+            return ""
+
+    def _wait(self, request: str, offset: int, timeout_s: float) -> dict[str, Any]:
+        assert self.proc is not None
+        deadline = time.monotonic() + timeout_s
+        marker = f'"request": "{request}"'
+
+        def result(log: str) -> dict[str, Any] | None:
+            for line in log.splitlines():
+                if line.startswith("HPRESULT ") and marker in line:
+                    return json.loads(line[len("HPRESULT ") :])
+            return None
+
+        while True:
+            exited = self.proc.poll() is not None
+            log = self._read(offset)
+            found = result(log)
+            if found is not None:
+                return found
+            if exited:
+                raise exit_error(self.proc.returncode, log[-200_000:])
+            if time.monotonic() > deadline:
+                self.close()
+                raise ToolError(
+                    "internal",
+                    f"The render process did not finish within {timeout_s:g}s and was killed.",
+                    hou_exception="render process timeout",
+                    detail={"log": crash_summary(log[-4000:])},
+                )
+            time.sleep(0.02)
+
+    def close(self) -> None:
+        if self.proc is not None:
+            with contextlib.suppress(Exception):
+                if self.proc.stdin is not None:
+                    self.proc.stdin.close()
+            if self.proc.poll() is None:
+                with contextlib.suppress(Exception):
+                    self.proc.kill()
+            with contextlib.suppress(Exception):
+                self.proc.wait(10)
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+
+def close_warm_capture() -> None:
+    """Stop the kept capture child, if any (host exit, tests)."""
+    with _warm_lock:
+        child = _warm["child"]
+        _warm["child"] = None
+    if child is not None:
+        child.close()
+
+
+atexit.register(close_warm_capture)
+
+WARM_CRASH_NOTE = (
+    "The kept capture process crashed, so this capture used a fresh one; later captures "
+    "in this Houdini start a fresh process each time."
+)
+
+
+def render_capture_child(
+    snapshot: dict[str, Any], tmp_dir: str, frame: float, timeout_s: float
+) -> dict[str, Any]:
+    """Render one viewport_capture snapshot (``snapshot["capture"]``) in a child hython.
+    A headless Flipbook capture goes to the kept :class:`WarmCapture`, started on first use
+    and replaced when :func:`warm_key` changes or it died, idled or aged out. Anything else
+    goes to a fresh :class:`ChildRender`: another ROP type, a capture while the kept child
+    is busy, and every capture after a kept child that had already rendered crashed (that
+    capture is retried once in a fresh child, with a note). A fresh kept child's crash is a
+    crash, as before. Off the main thread."""
+    frames = [frame, frame, 1]
+    capture = snapshot.get("capture") or {}
+
+    def cold() -> dict[str, Any]:
+        child = ChildRender(snapshot, tmp_dir, "", frames)
         child.start()
         try:
             return child.wait(timeout_s=timeout_s)
         finally:
             child.kill()
+
+    if (
+        not WARM_CAPTURES
+        or _warm["disabled"]
+        or capture.get("rop_type", "flipbook") != "flipbook"
+        or not _warm_lock.acquire(blocking=False)
+    ):
+        return cold()
+    try:
+        key = warm_key(snapshot)
+        child = _warm["child"]
+        if child is not None and not child.usable(key):
+            child.close()
+            child = _warm["child"] = None
+        fresh = child is None
+        if child is None:
+            child = _warm["child"] = WarmCapture(key, snapshot["hython"])
+        spec = dict(snapshot, rop="", frames=frames, parms={})
+        try:
+            return child.request(spec, tmp_dir, timeout_s)
+        except ToolError as exc:
+            child.close()
+            _warm["child"] = None
+            if fresh or not child_crashed(exc):
+                raise
+            _warm["disabled"] = exc.message
+        outcome = cold()
+        outcome["notes"] = [*outcome.get("notes", []), WARM_CRASH_NOTE]
+        return outcome
     finally:
-        shutil.rmtree(tmp_dir, ignore_errors=True)
+        _warm_lock.release()
 
 
 def rop_core_type(rop_node: Any) -> str:
@@ -1377,9 +1653,12 @@ def _capture_rop(
     if not ctx.ui:
         # Headless: the child hython builds camera and ROP in its own copy of the scene.
         def render_rop(rop_type: str) -> dict[str, Any]:
-            outcome = render_isolated(
-                None, [frame, frame, 1], capture=dict(spec, rop_type=rop_type)
-            )
+            tmp_dir = tempfile.mkdtemp(prefix="hp-render-")
+            try:
+                snapshot = dict(snapshot_scene(tmp_dir), capture=dict(spec, rop_type=rop_type))
+                outcome = render_capture_child(snapshot, tmp_dir, frame, CHILD_TIMEOUT_S)
+            finally:
+                shutil.rmtree(tmp_dir, ignore_errors=True)
             _check_capture_output(outcome.get("errors") or [], out_file, rop_type)
             return outcome
 
@@ -1934,12 +2213,9 @@ def _capture_headless(parsed: dict[str, Any], ctx: HostContext, timeout_s: float
 
         def render_rop(rop_type: str) -> dict[str, Any]:
             snapshot = dict(prep["snapshot"], capture=dict(spec, rop_type=rop_type))
-            child = ChildRender(snapshot, tmp_dir, "", [frame, frame, 1])
-            child.start()
-            try:
-                outcome = child.wait(timeout_s=max(1.0, deadline - time.monotonic()))
-            finally:
-                child.kill()
+            outcome = render_capture_child(
+                snapshot, tmp_dir, frame, max(1.0, deadline - time.monotonic())
+            )
             _check_capture_output(outcome.get("errors") or [], prep["out_file"], rop_type)
             return outcome
 
