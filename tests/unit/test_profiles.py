@@ -163,7 +163,7 @@ def test_a_2x_bridge_answers_a_removed_tool_with_its_replacement(profile) -> Non
         assert error["message"] == (
             f"{name} is a 1.4 tool that the 2.0 {profile} profile does not serve."
         )
-        assert error["hint"] == migration.hint(name)
+        assert error["hint"] == migration.hint(name, profile)
     with pytest.raises(MCPError):  # any other unknown name is still a protocol error
         bridge.call_tool("node_infos", {})
 

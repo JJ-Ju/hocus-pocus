@@ -33,6 +33,7 @@ import types
 from typing import Any
 
 from hocuspocus.tools.errors import ToolError
+from hocuspocus.tools.migration import BARE, hint_join, hint_tool, is_compat
 
 from ..dispatch import call_timeout
 from ..look import child as _child
@@ -242,13 +243,14 @@ def cop_rop_candidates(node: Any) -> list[str]:
 
 
 def cop_hint(node: Any) -> str:
-    """Where a COP node's pixels come from: viewport_capture cop_path for a look, a
-    rop_image for files (review 18 papercuts 1 and 2)."""
+    """Where a COP node's pixels come from: a look at the node (``look {target}``,
+    ``viewport_capture {cop_path}`` on ``compat_1x``), a rop_image for files (review 18
+    papercuts 1 and 2)."""
     net = node if is_cop_network(node) else node.parent()
     where = net.path() if net is not None else "the COP network"
     return (
-        f"viewport_capture {{cop_path: {node.path()}}} returns the image; to write files, "
-        f"render a Cop rop_image inside {where} (coppath = the node)."
+        f"{hint_tool('viewport_capture', cop_path=node.path())} returns the image; to write "
+        f"files, render a Cop rop_image inside {where} (coppath = the node)."
     )
 
 
@@ -630,7 +632,12 @@ def press_button(node: Any, parm: Any) -> dict[str, Any]:
             f"{node.path()} {parm.name()} wrote {len(written)} of {len(expected)} files"
             + (f": {errors[0]}" if errors else "."),
             hint="Check that the output directory is writable and the input cooks, then press "
-            "again; render runs the same save as a job with progress and cancel.",
+            "again"
+            + (
+                f"; {render} runs the same save as a job with progress and cancel."
+                if (render := hint_tool("render", rop_path=node.path()))
+                else "."
+            ),
             detail=detail,
         )
     out["outputs_summary"] = outputs_summary(written, missing)
@@ -1090,16 +1097,24 @@ def _check_camera_source(rop: Any, name: str, override: str) -> None:
             "invalid_argument",
             f"{rop.path()} reads /obj (opsource: obj), and {what}; set opsource to lop to "
             f"render the camera prim {prim}{where}.",
-            hint=f'parm_set {rop.path()} opsource: "lop", {then}; or pass an OBJ camera.',
+            hint=f"{_set_call(rop.path(), 'opsource', 'lop')}, {then}; or pass an OBJ camera.",
         )
     if name == "cameraprim" and node is not None and _is_obj_camera(node):
         raise ToolError(
             "invalid_argument",
             f"{rop.path()} reads a stage (opsource: lop), and {override} is an OBJ camera; set "
             "opsource to obj to render through it.",
-            hint=f'parm_set {rop.path()} opsource: "obj", then render with camera {override}; '
-            "or pass a camera prim path.",
+            hint=f"{_set_call(rop.path(), 'opsource', 'obj')}, then "
+            f"render with camera {override}; or pass a camera prim path.",
         )
+
+
+def _set_call(node: str, parm: str, value: str) -> str:
+    """The parm change a hint asks for: an ``edit`` ``set`` op on 2.0, the 1.4 shorthand
+    ``parm_set <node> <parm>: "<value>"`` on ``compat_1x``."""
+    if is_compat():
+        return f'parm_set {node} {parm}: "{value}"'
+    return hint_tool("parm_set", path=f"{node}/{parm}", value=value) or ""
 
 
 def rop_camera(rop: Any, override: Any) -> dict[str, str]:
@@ -1139,8 +1154,12 @@ def rop_camera(rop: Any, override: Any) -> dict[str, str]:
     hint = (
         f"Cameras here: {', '.join(cameras)}. Set the ROP's camera parm to one, or pass camera."
         if cameras
-        else "Create a camera (node_create cam in /obj) and set the ROP's camera parm, or pass "
-        "camera; viewport_capture frames the scene without one."
+        else hint_join(
+            f"Create a camera ({hint_tool('node_create', parent='/obj', type='cam')}) and set "
+            "the ROP's camera parm, or pass camera;",
+            hint_tool("viewport_capture"),
+            "frames the scene without one.",
+        )
     )
     raise ToolError(
         "node_not_found",
@@ -1247,11 +1266,19 @@ def _writer_output_hint(owner: Any) -> str:
         if method is not None and "explicit" in method.menuItems():
             explicit = "explicit"
     if explicit and file_parm is not None:
+        if is_compat():
+            return (
+                f'Set the output with parm_set on {owner.path()} (filemethod: "{explicit}", '
+                "then file: the path), then render without output."
+            )
+        method_set = hint_tool("parm_set", path=f"{owner.path()}/filemethod", value=explicit)
         return (
-            f'Set the output with parm_set on {owner.path()} (filemethod: "{explicit}", then '
-            "file: the path), then render without output."
+            f"Set the output with {method_set}, then file to the path; then render without output."
         )
-    return "Set the node's own output parm with parm_set, then render without output."
+    return (
+        f"Set the node's own output parm ({hint_tool('parm_set', path=BARE, value=BARE)}), "
+        "then render without output."
+    )
 
 
 def _prepare_render(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
@@ -1289,7 +1316,8 @@ def _prepare_render(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
             raise ToolError(
                 "invalid_argument",
                 f"{rop.path()} ({rop.type().name()}) has no output parm to override.",
-                hint="Set the ROP's output parm with parm_set, then render without output.",
+                hint=f"Set the ROP's output parm ({hint_tool('parm_set', path=BARE, value=BARE)}), "
+                "then render without output.",
             )
         output = output.strip()
         check_allowed(resolve_path(output), ctx)

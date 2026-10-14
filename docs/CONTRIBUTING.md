@@ -127,7 +127,12 @@ macOS the path is `.venv/bin/...`.
    - The function runs on Houdini's main thread, inside one undo group if the tool
      mutates.
    - Raise `ToolError(code, message, hint=..., candidates=...)` for user mistakes. Use
-     only codes from `tools/errors.py` (BIBLE §9).
+     only codes from `tools/errors.py` (BIBLE §9). A hint or message that names a tool
+     builds the name with `migration.hint_tool("<1.4 or 2.0 name>", **args)`, never a
+     literal: it renders the call the active profile serves (`node_find {root}` on
+     `compat_1x`, `search {kind: "nodes", root}` on the 2.0 profiles) and returns `None`
+     where the profile has no such tool. `tests/unit/test_hint_profiles.py` fails on a
+     hint literal that names a removed 1.4 tool.
    - Register with `scene=False` when the dispatcher's undo group, read-only refusal or
      dirty marking would be wrong for the tool: `performUndo` raises inside an undo
      group (`undo`); reads must not dirty the scene (`time`, `selection`, `hda list`);

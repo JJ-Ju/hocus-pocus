@@ -119,7 +119,7 @@ def _check_args(what: str, target: Any, options: dict[str, Any]) -> None:
         raise bad_arg(
             f"what: {what} does not take {', '.join(extra)}.",
             hint=f"{what} takes {', '.join(sorted(allowed)) or 'no options'} "
-            "(docs/tools.md, inspect notes).",
+            "(hocuspocus://tools, inspect notes).",
         )
     if what in NO_TARGET and target is not None:
         raise bad_arg(f"what: {what} takes no target.", hint="Leave target out.")
@@ -146,7 +146,7 @@ def _check_args(what: str, target: Any, options: dict[str, Any]) -> None:
             raise bad_arg("'rows' must be a boolean.")
         wrong = sorted(set(options) & (frozenset({"attributes"}) if rows else GEO_READ_OPTIONS))
         if wrong:
-            mode = "rows: true (geo_read)" if rows else "the geo summary (geo_info)"
+            mode = "rows: true" if rows else "the geo summary (without rows)"
             raise bad_arg(
                 f"{', '.join(wrong)} {'is' if len(wrong) == 1 else 'are'} not an option of {mode}.",
                 hint="rows: true reads values (class, attribs, start, count, group, stats, "

@@ -29,6 +29,7 @@ import os
 from typing import Any
 
 from hocuspocus.tools.errors import ToolError
+from hocuspocus.tools.migration import BARE, hint_tool
 
 from .. import tx
 from . import nodes as N
@@ -43,6 +44,24 @@ MAX_PROBLEMS = 20
 
 
 # -- network_describe ---------------------------------------------------------------
+
+
+def data_hint() -> str:
+    """What ``data`` of a build is, as the call's profile names the read that produces it."""
+    return (
+        f"Pass the 'data' field of {hint_tool('network_describe', root=BARE)}, e.g. "
+        "{box1: {type: box}}."
+    )
+
+
+def type_parms_call(node_type: Any) -> str | None:
+    """The read that lists ``node_type``'s parms (``inspect {what: "type", target}`` on
+    2.0, ``node_type_info {type}`` on ``compat_1x``)."""
+    try:
+        name = f"{node_type.category().name()}/{node_type.name()}"
+    except Exception:
+        name = BARE
+    return hint_tool("node_type_info", type=name)
 
 
 def _trim_templates(templates: Any, keep: set[str]) -> Any:
@@ -313,7 +332,9 @@ def _outline(
         if after not in names:
             raise N.bad_arg(
                 f"The cursor's node {after!r} is no longer in {root.path()}.",
-                hint="The network changed between pages; call network_describe again without cursor.",
+                hint="The network changed between pages; call "
+                f"{hint_tool('network_describe', root=root.path(), format='outline')} again "
+                "without cursor.",
             )
         start = names.index(after) + 1
     budget = _Budget(N.response_budget(ctx))
@@ -406,7 +427,8 @@ def network_describe(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
         except Exception as exc:  # e.g. a node that is not a network
             raise N.bad_arg(
                 f"Cannot describe {root.path()} as a network.",
-                hint="root must be a network (e.g. /obj, a geo object, a subnet); use node_info for a leaf node.",
+                hint="root must be a network (e.g. /obj, a geo object, a subnet); use "
+                f"{hint_tool('node_info', paths=[root.path()])} for a leaf node.",
                 hou_exception=N.hou_exception_text(exc),
             ) from exc
     top = top or {}
@@ -417,7 +439,8 @@ def network_describe(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
         if after not in top:
             raise N.bad_arg(
                 f"The cursor's node {after!r} is no longer in {root.path()}.",
-                hint="The network changed between pages; call network_describe again without cursor.",
+                hint="The network changed between pages; call "
+                f"{hint_tool('network_describe', root=root.path())} again without cursor.",
             )
         start = names.index(after) + 1
     budget = _Budget(N.response_budget(ctx))
@@ -563,7 +586,7 @@ def _validate_level(
             early[name] = N.bad_arg(
                 f"{where}: each entry needs a string 'type'.",
                 hint="data maps node names to {type, parms?, inputs?, flags?, children?}; "
-                "pass the 'data' field of network_describe.",
+                f"pass the 'data' field of {hint_tool('network_describe', root=BARE)}.",
             )
             continue
         type_name = entry["type"]
@@ -582,7 +605,7 @@ def _validate_level(
                 hint=(
                     f"Closest {category.name()} types: {', '.join(candidates[:5])}."
                     if candidates
-                    else "Use node_type_search to find the type name."
+                    else f"{hint_tool('node_type_search', query=type_name)} finds the type name."
                 ),
                 candidates=candidates,
             )
@@ -787,7 +810,7 @@ def _verify_level(
                     ToolError(
                         "parm_not_found",
                         f"{where}: no parm {parm_name!r} on {node.type().name()}.",
-                        hint="Use node_type_info to list the type's parms.",
+                        hint=f"{type_parms_call(node.type())} lists the type's parms.",
                         candidates=difflib.get_close_matches(parm_name, names, n=5, cutoff=0.5),
                     ),
                     where,
@@ -942,11 +965,11 @@ def prepare_build(parent: Any, args: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(data, dict) or not data:
         raise N.bad_arg(
             "'data' must be a non-empty object of node name -> node data.",
-            hint="Pass the 'data' field of network_describe, e.g. {box1: {type: box}}.",
+            hint=data_hint(),
         )
     if set(data) >= {"root", "data"} and isinstance(data.get("data"), dict):
         raise N.bad_arg(
-            "'data' looks like a whole network_describe result.",
+            "'data' looks like a whole network read (root and data).",
             hint="Pass its 'data' field instead.",
         )
     on_collision = args.get("on_name_collision", "error") or "error"

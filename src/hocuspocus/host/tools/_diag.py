@@ -19,8 +19,19 @@ REFRESH_CATEGORIES = frozenset({"Sop", "Lop", "Cop", "Cop2", "Chop"})
 
 STALE_HINT = (
     "These errors may predate your last change: the node was not recooked because its last "
-    "cook took over {seconds:g} s. Run cook with force: true to recheck."
+    "cook took over {seconds:g} s."
 )
+
+
+def stale_hint(path: str, seconds: float) -> str:
+    """:data:`STALE_HINT` plus the forced cook that rechecks, where the profile serves
+    ``cook``."""
+    from hocuspocus.tools.migration import hint_tool
+
+    recheck = hint_tool("cook", paths=[path], force=True)
+    text = STALE_HINT.format(seconds=seconds)
+    return f"{text} {recheck} rechecks." if recheck else text
+
 
 COOK_MEMORY = 2000
 """Nodes whose last cook duration is remembered (least recently cooked dropped first)."""
@@ -185,7 +196,7 @@ def collect_problems(node: Any, *, cook: bool = False, force: bool = False) -> d
             )
         out["cook_time_ms"] = round(elapsed, 1)
         if stale and not do_force:
-            out["hint"] = STALE_HINT.format(seconds=SLOW_COOK_MS / 1000)
+            out["hint"] = stale_hint(node.path(), SLOW_COOK_MS / 1000)
     else:
         with contextlib.suppress(Exception):
             out["cook_state"] = "cooked" if not node.needsToCook() else "not_cooked"
@@ -230,13 +241,15 @@ def a_or_an(word: str) -> str:
 def missing_node_error(path: str, *, message: str | None = None, exclude: Any = None) -> Any:
     """The one ``node_not_found`` for ``path`` (review 21 papercut 4): ``candidates`` are
     near-miss children of the missing node's parent (never ``exclude``, such as the node
-    being wired), and the hint names ``node_find`` on that parent, or on the nearest
-    ancestor that exists when the parent is missing too."""
+    being wired), and the hint names the node search on that parent (``search {kind:
+    "nodes", root}``, ``node_find`` on ``compat_1x``), or on the nearest ancestor that
+    exists when the parent is missing too."""
     import difflib
 
     import hou
 
     from hocuspocus.tools.errors import ToolError
+    from hocuspocus.tools.migration import hint_tool
 
     parent_path, _, name = path.rstrip("/").rpartition("/")
     parent = hou.node(parent_path or "/")
@@ -250,7 +263,7 @@ def missing_node_error(path: str, *, message: str | None = None, exclude: Any = 
         candidates = [
             f"{base}/{n}" for n in difflib.get_close_matches(name, names, n=5, cutoff=0.4)
         ]
-        listing = f'node_find {{root: "{parent.path()}"}} lists its children'
+        listing = f"{hint_tool('node_find', root=parent.path())} lists its children"
         hint = (
             f"Did you mean a candidate? {listing}."
             if candidates
@@ -264,7 +277,7 @@ def missing_node_error(path: str, *, message: str | None = None, exclude: Any = 
         root = existing.path() if existing is not None else "/"
         hint = (
             f"The parent {parent_path or '/'} does not exist either; "
-            f'node_find {{root: "{root}"}} lists what does.'
+            f"{hint_tool('node_find', root=root)} lists what does."
         )
     return ToolError(
         "node_not_found", message or f"No node at {path}.", hint=hint, candidates=candidates

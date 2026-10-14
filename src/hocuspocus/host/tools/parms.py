@@ -27,10 +27,11 @@ from collections.abc import Iterator
 from typing import Any
 
 from hocuspocus.tools.errors import ToolError
+from hocuspocus.tools.migration import BARE, hint_tool, is_compat
 
 from ._common import (
-    DYNAMIC_MENU_NOTE,
     arg_bool,
+    dynamic_menu_note,
     elide_string,
     hou_exception_text,
     hou_message,
@@ -448,7 +449,7 @@ def _menu_dict(parm: Any, token: Any) -> dict[str, Any] | None:
     if dynamic:
         out["dynamic"] = True
         if not items:
-            out["note"] = DYNAMIC_MENU_NOTE
+            out["note"] = dynamic_menu_note()
     return out
 
 
@@ -699,10 +700,13 @@ def parm_not_found(node: Any, name: str) -> ToolError:
         else:
             hint = f"Did you mean {first}?"
     else:
-        hint = "List the node's parm names with node_info (include_defaults: true)."
+        hint = (
+            f"{hint_tool('node_info', paths=[node.path()], include=['parms'])} lists the "
+            "node's parm names."
+        )
     with contextlib.suppress(Exception):
         if node.type().nameComponents()[2] in CONTROL_NODE_TYPES:
-            hint = f"{hint} {SPARE_PARMS_HINT}"
+            hint = f"{hint} {spare_parms_hint()}"
     return ToolError(
         "parm_not_found",
         f"No parm or parm tuple '{name}' on {node.path()}.",
@@ -749,7 +753,8 @@ def resolve_path(path: Any) -> tuple[Any, Any]:
         if exc.code == "node_not_found":
             exc.hint = (
                 f"{exc.hint} Parm paths are <node path>/<parm name>, e.g. "
-                "/obj/geo1/box1/sizex; node_find locates the node."
+                f"/obj/geo1/box1/sizex; {hint_tool('node_find', root=BARE, type=BARE)} "
+                "locates the node."
             )
         raise
     return node, resolve_name(node, name)
@@ -925,12 +930,7 @@ def _coerce(parm: Any, value: Any, notes: list[str], *, for_key: bool = False) -
         raise _invalid(parm, kind, f"{path} is a toggle; pass true or false.")
     if kind in ("int", "float", "multiparm"):
         if not _is_number(value):
-            hint = (
-                "For an expression use the expression field in parm_set, or "
-                f"{EXPRESSION_SPELLINGS} as the value in node_create parms."
-                if isinstance(value, str)
-                else None
-            )
+            hint = expression_hint() if isinstance(value, str) else None
             raise _invalid(parm, kind, f"{path} is a {kind} parm; got {value!r}.", hint=hint)
         if not math.isfinite(value):
             raise _invalid(parm, kind, f"{path} cannot be set to {value}.")
@@ -1105,7 +1105,7 @@ CREATE_CALLBACK_NOTE = (
 """The same note on ``node_create``, whose parms spell the item without ``path`` (review 20
 N2)."""
 NETWORK_CALLBACK_NOTE = (
-    "{path} has a callback script that network_build does not run (clicking the parm in "
+    "{path} has a callback script that a build does not run (clicking the parm in "
     'Houdini would); pass press {{"{key}": ["{name}"]}} to run it after the build.'
 )
 """The same note on ``network_build``, whose ``press`` maps a node in data to parm names
@@ -1416,8 +1416,8 @@ def locked_error(node: Any, target: Any, exc: BaseException | None = None) -> To
         return ToolError(
             "locked",
             f"{path} is inside the locked HDA {asset}.",
-            hint=f"Call node_edit with lock: false on {asset} to allow editing its contents "
-            "(or use the hda tool), then retry.",
+            hint=f"Call {hint_tool('node_edit', path=asset, lock=False)} to allow editing its "
+            f"contents{' (or use the hda tool)' if hint_tool('hda') else ''}, then retry.",
             hou_exception=hou_exc,
         )
     locked = [p for p in _components(target) if _parm_locked(p)]
@@ -1434,12 +1434,13 @@ def locked_error(node: Any, target: Any, exc: BaseException | None = None) -> To
         message = message if message.endswith(".") else message + "."
         others = [p.name() for p in _components(target) if p not in locked]
         unlock = f"hou.parm('{first.path()}').lock(False)"
+        python = hint_tool("houdini_python", code=unlock)
         hint = (
             f"Set {', '.join(others)} only (a locked component that already holds the value is "
-            f"skipped), or change what computes {first.name()}, such as a mode menu on the node. "
-            f"Last resort: houdini_python {unlock}."
+            f"skipped), or change what computes {first.name()}, such as a mode menu on the node."
+            + (f" Last resort: {python}." if python else "")
             if others
-            else f"Unlock it in Houdini, or with houdini_python: {unlock}."
+            else "Unlock it in Houdini" + (f", or with {python}." if python else ".")
         )
         return ToolError("locked", message, hint=hint, hou_exception=hou_exc)
     return ToolError(
@@ -1646,7 +1647,29 @@ SPARE_HINT = (
     "size?, min?, max?, menu_items?: [{token, label}], value_type?: string|int (menus), "
     "folder?, help?}], remove: [names]}."
 )
-SPARE_PARMS_HINT = "To add a control parm, use node_edit spare_parms."
+
+
+def spare_parms_hint() -> str:
+    """How to add a control parm, as the call's profile names it."""
+    return f"To add a control parm, use {hint_tool('node_edit', path=BARE, spare_parms=BARE)}."
+
+
+def expression_hint() -> str:
+    """How to pass an expression where a number was expected (``invalid_value``), as the
+    call's profile names it: the ``expression`` field of a ``set`` op on 2.0 (review 25
+    papercut 1), of a ``parm_set`` item on ``compat_1x``."""
+    if is_compat():
+        return (
+            "For an expression use the expression field in parm_set, or "
+            f"{EXPRESSION_SPELLINGS} as the value in node_create parms."
+        )
+    return (
+        "For an expression pass the expression field of a set op ("
+        f"{hint_tool('parm_set', path=BARE, expression=BARE)}), or {EXPRESSION_SPELLINGS} "
+        "as the value in a create op's parms."
+    )
+
+
 """Appended to ``parm_not_found`` on nodes that hold controls (null, subnet, geo)."""
 CONTROL_NODE_TYPES = frozenset(("null", "subnet", "geo"))
 
@@ -1904,7 +1927,8 @@ def apply_spare_parms(node: Any, plan: dict[str, Any], rollback: Any) -> dict[st
         raise ToolError(
             "locked",
             f"Cannot change the parms of {node.path()}: {hou_message(exc)}",
-            hint="Unlock the asset with node_edit lock: false first.",
+            hint=f"Unlock the asset with "
+            f"{hint_tool('node_edit', path=node.path(), lock=False)} first.",
             hou_exception=hou_exception_text(exc),
         ) from exc
     except hou.Error as exc:

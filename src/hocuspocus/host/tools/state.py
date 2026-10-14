@@ -269,12 +269,17 @@ def select_nodes(nodes: list[Any]) -> list[str]:
     return moved
 
 
-CONTEXT_CHANGED_NOTE = (
-    "Houdini takes the Scene Viewer and Network Editor listed in context_changed into the "
-    "selection's network on its next idle tick (putting them back would change the "
-    "selection). A look or viewport_capture with source viewer then shows that network; "
-    "the default sources are not affected."
-)
+def context_changed_note() -> str:
+    """Why the panes followed the selection, naming the viewer capture the call's profile
+    serves."""
+    from hocuspocus.tools.migration import hint_tool
+
+    return (
+        "Houdini takes the Scene Viewer and Network Editor listed in context_changed into "
+        "the selection's network on its next idle tick (putting them back would change the "
+        f"selection). {hint_tool('viewport_capture', source='viewer')} then shows that "
+        "network; the default sources are not affected."
+    )
 
 
 @tool("selection", scene=False)
@@ -299,7 +304,7 @@ def selection(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     out: dict[str, Any] = {"selected": [n.path() for n in hou.selectedNodes()]}
     if moved:
         out["context_changed"] = moved
-        out["notes"] = [CONTEXT_CHANGED_NOTE]
+        out["notes"] = [context_changed_note()]
     return out
 
 

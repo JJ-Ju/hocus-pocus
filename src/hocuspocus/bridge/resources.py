@@ -47,7 +47,7 @@ from ..tools.errors import ToolError
 from ..tools.profiles import is_2x
 from . import budget
 from . import instances as registry
-from .client import DELIVERY_HINT, OFFLINE_HINT, REINSTALL_HINT
+from .client import OFFLINE_HINT, REINSTALL_HINT, delivery_hint
 from .instructions import guide_text, tools_text
 
 if TYPE_CHECKING:
@@ -195,7 +195,7 @@ def host_resource(
                 "delivery_unknown",
                 f"No complete answer to the resource read from port {client.port} "
                 f"({exc.__class__.__name__}: {exc}).",
-                hint=DELIVERY_HINT,
+                hint=delivery_hint(getattr(client, "profile", None) or "core"),
             ) from exc
     finally:
         conn.close()

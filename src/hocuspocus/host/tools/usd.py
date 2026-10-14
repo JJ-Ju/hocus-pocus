@@ -30,6 +30,7 @@ from collections.abc import Iterator
 from typing import Any
 
 from hocuspocus.tools.errors import ToolError
+from hocuspocus.tools.migration import hint_tool
 
 from ._common import DEFAULT_LIMIT, bad_arg, get_node, page
 from ._diag import a_or_an, collect_problems
@@ -210,7 +211,7 @@ def resolve_lop(path: Any) -> Any:
         raise ToolError(
             "invalid_argument",
             f"{node.path()} is {a_or_an(node.type().category().name())} node, not a LOP.",
-            hint="usd_stage reads LOP (Solaris) nodes, e.g. /stage/OUT.",
+            hint=f"{hint_tool('usd_stage', lop_path='/stage/OUT')} reads LOP (Solaris) nodes.",
         )
     return node
 
@@ -259,7 +260,7 @@ def cooked_stage(lop: Any) -> Any:
         raise ToolError(
             "cook_failed",
             f"{lop.path()} failed to cook: {errors[0].splitlines()[0] if errors[0] else ''}",
-            hint="Fix the errors (problems tool) and retry.",
+            hint=f"Fix the errors ({hint_tool('problems', root=lop.path())} lists them) and retry.",
             detail={"path": lop.path(), "errors": errors, "warnings": report["warnings"]},
         )
     return stage

@@ -26,8 +26,9 @@ from typing import Any
 
 from hocuspocus.tools.catalog import CATEGORIES
 from hocuspocus.tools.errors import ToolError
+from hocuspocus.tools.migration import hint_tool
 
-from ._common import DYNAMIC_MENU_NOTE, arg_bool, int_arg, menu_is_dynamic
+from ._common import arg_bool, dynamic_menu_note, int_arg, menu_is_dynamic
 from .parms import menu_label
 from .registry import HostContext, tool
 
@@ -780,7 +781,8 @@ def resolve_type(type_name: str, category: str | None = None) -> Any:
             raise ToolError(
                 "node_type_not_found",
                 f"No {cat.name()} node type named {name!r}.",
-                hint="Use node_type_search to find the type by name or label.",
+                hint=f"{hint_tool('node_type_search', query=name, category=cat.name())} finds "
+                "the type by name or label.",
                 candidates=suggest_types(name, cat.name()),
             )
         return node_type
@@ -795,7 +797,7 @@ def resolve_type(type_name: str, category: str | None = None) -> Any:
         raise ToolError(
             "node_type_not_found",
             f"No node type named {name!r} in any category.",
-            hint="Use node_type_search to find the type by name or label.",
+            hint=f"{hint_tool('node_type_search', query=name)} finds the type by name or label.",
             candidates=suggest_types(name),
         )
     found.sort(key=lambda t: CATEGORY_RANK.get(t.category().name(), 99))
@@ -1158,7 +1160,7 @@ def evaluate_dynamic_menus(node_type: Any, rows: list[dict[str, Any]]) -> None:
             del row["menu"]  # a plain string parm after all
             continue
         if not items:
-            row["menu"] = {"dynamic": True, "items": [], "note": DYNAMIC_MENU_NOTE}
+            row["menu"] = {"dynamic": True, "items": [], "note": dynamic_menu_note()}
             continue
         menu: dict[str, Any] = {
             "items": [

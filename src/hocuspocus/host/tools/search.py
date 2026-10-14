@@ -266,7 +266,7 @@ def search(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     if extra:
         raise bad_arg(
             f"kind: {kind} does not take {', '.join(extra)}.",
-            hint=f"{kind} takes {', '.join(sorted(OPTIONS[kind]))} (docs/tools.md, search).",
+            hint=f"{kind} takes {', '.join(sorted(OPTIONS[kind]))} (hocuspocus://tools, search).",
         )
     full = _detail(options) == "full"
     options.pop("detail", None)

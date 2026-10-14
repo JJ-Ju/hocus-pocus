@@ -11,6 +11,7 @@ still finds a job of this process.
 
 from __future__ import annotations
 
+import contextvars
 import logging
 import threading
 import time
@@ -199,7 +200,11 @@ class JobManager:
         with self._lock:
             self._jobs[job.id] = job
             self._evict()
-        job.thread = threading.Thread(target=runner, name=f"hocuspocus-job-{job.id}", daemon=True)
+        # The starting call's context (its hint profile) goes with the job's thread.
+        context = contextvars.copy_context()
+        job.thread = threading.Thread(
+            target=context.run, args=(runner,), name=f"hocuspocus-job-{job.id}", daemon=True
+        )
         job.thread.start()
         return job
 

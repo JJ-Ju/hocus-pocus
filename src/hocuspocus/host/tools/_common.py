@@ -38,7 +38,7 @@ __all__ = [
     "response_budget",
 ]
 
-ARG_HINT = "Check the argument against the tool's schema (docs/tools.md)."
+ARG_HINT = "Check the argument against the tool's schema (hocuspocus://tools)."
 DEFAULT_LIMIT = 50
 DEFAULT_RESPONSE_BYTES = 16384
 ROW_ENVELOPE_BYTES = 256
@@ -225,12 +225,18 @@ def page(
 
 # -- menus ----------------------------------------------------------------------------
 
-DYNAMIC_MENU_NOTE = (
-    "Houdini builds this menu on a node (a menu script, or the input's groups and "
-    "attributes) and it evaluated empty here. Read it with parm_get include: [menu] on a "
-    "node whose inputs are wired and cooked, or set the value directly."
-)
-"""Note on a dynamic menu that evaluated to no items (review 14 papercut 10)."""
+
+def dynamic_menu_note() -> str:
+    """Note on a dynamic menu that evaluated to no items (review 14 papercut 10), naming
+    the parm read the call's profile serves."""
+    from hocuspocus.tools.migration import BARE, hint_tool
+
+    read = hint_tool("parm_get", paths=[BARE], include=["menu"])
+    return (
+        "Houdini builds this menu on a node (a menu script, or the input's groups and "
+        f"attributes) and it evaluated empty here. Read it with {read} on a node whose "
+        "inputs are wired and cooked, or set the value directly."
+    )
 
 
 def menu_is_dynamic(template: Any) -> bool:

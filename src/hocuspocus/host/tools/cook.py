@@ -19,6 +19,7 @@ import time
 from typing import Any
 
 from hocuspocus.tools.errors import ToolError
+from hocuspocus.tools.migration import hint_tool
 
 from ..dispatch import call_timeout
 from ._common import bad_arg, number, parse_limit
@@ -871,7 +872,8 @@ def writer_notes(paths: list[str]) -> list[str]:
             notes.append(
                 f"Cooking {path} does not write files: a cook passes its input through. "
                 f"render {{rop_path: {path}}} saves its frame range as a job with progress and "
-                f"cancel; parm_set press on {path}/execute saves in one blocking call."
+                f"cancel; {hint_tool('parm_set', path=f'{path}/execute', press=True)} saves in "
+                "one blocking call."
             )
     return notes
 
@@ -1271,7 +1273,7 @@ def _parse_problems_cursor(cursor: Any) -> tuple[int, int, int | None]:
         raise ToolError(
             "invalid_argument",
             f"Invalid cursor {cursor!r}.",
-            hint="Pass next_cursor from the previous problems result unchanged.",
+            hint="Pass next_cursor from the previous result unchanged.",
         )
     return offset, node_start, end
 

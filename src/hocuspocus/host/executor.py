@@ -15,6 +15,8 @@ The scheduling primitive is injectable so both backends are unit-testable withou
 from __future__ import annotations
 
 import contextlib
+import contextvars
+import functools
 import logging
 import queue
 import threading
@@ -237,7 +239,9 @@ class MainThreadExecutor:
                 "The HocusPocus host is not running.",
                 hint="Restart the host (hocuspocus.host.start()) or call houdini_connect.",
             )
-        work = _Work(fn)
+        # The caller's context (the call's hint profile, hocuspocus.tools.migration) goes
+        # with the callable to the main thread.
+        work = _Work(functools.partial(contextvars.copy_context().run, fn))
         meter = current_meter()
         self._queue.put(work)
         if not work.done.wait(timeout_s):

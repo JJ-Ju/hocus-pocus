@@ -1056,7 +1056,7 @@ def _op_select(args: Any, opts: dict[str, Any], index: int, st: State) -> OpResu
     import hou
 
     from .tools import nodes as N
-    from .tools.state import CONTEXT_CHANGED_NOTE, select_nodes
+    from .tools.state import context_changed_note, select_nodes
 
     if not isinstance(args, dict):
         raise N.bad_arg(f"items[{index}] must be an object.")
@@ -1083,7 +1083,7 @@ def _op_select(args: Any, opts: dict[str, Any], index: int, st: State) -> OpResu
     data: dict[str, Any] = {"selected": [n.path() for n in hou.selectedNodes()]}
     if moved:
         data["context_changed"] = moved
-        data["notes"] = [CONTEXT_CHANGED_NOTE]
+        data["notes"] = [context_changed_note()]
     return OpResult(index, Op("select", args), data=data)
 
 
@@ -1470,6 +1470,13 @@ def _template_names(node_type: Any) -> tuple[set[str], list[re.Pattern[str]]]:
     return names, patterns
 
 
+def type_parms_call(node_type: Any) -> str | None:
+    """The read that lists a type's parms and inputs, as the call's profile names it."""
+    from .tools.network import type_parms_call as call
+
+    return call(node_type)
+
+
 def _check_type_parm(node_type: Any, path: str, name: str, spare: set[str]) -> None:
     """Refuse a parm a new node of ``node_type`` will not have (only for
     :data:`SIM_PARM_CATEGORIES`; anything uncertain passes)."""
@@ -1489,7 +1496,7 @@ def _check_type_parm(node_type: Any, path: str, name: str, spare: set[str]) -> N
     raise ToolError(
         "parm_not_found",
         f"No parm or parm tuple '{name}' on {path} ({node_type.name()}).",
-        hint="Use node_type_info to list the type's parms.",
+        hint=f"{type_parms_call(node_type)} lists the type's parms.",
         candidates=difflib.get_close_matches(name, sorted(names), n=5, cutoff=0.6),
     )
 
@@ -1666,7 +1673,7 @@ def _check_input(dest: Any, dest_path: str, to_input: Any) -> Any:
             raise ToolError(
                 "invalid_input",
                 f"{dest_path} has no input {to_input} (it takes {max_inputs}).",
-                hint="Check the type's inputs with node_type_info.",
+                hint=f"{type_parms_call(dest.type)} lists the type's inputs.",
             )
         return to_input
     if isinstance(to_input, str):
@@ -1939,7 +1946,7 @@ def _v_build(args: Any, opts: dict[str, Any], index: int, sim: Sim) -> dict[str,
         if not isinstance(data, dict) or not data:
             raise N.bad_arg(
                 "'data' must be a non-empty object of node name -> node data.",
-                hint="Pass the 'data' field of network_describe, e.g. {box1: {type: box}}.",
+                hint=W.data_hint(),
             )
         data = json.loads(json.dumps(data))
         problems = W._Problems()

@@ -21,6 +21,7 @@ from collections.abc import Iterable
 from typing import Any
 
 from hocuspocus.tools.errors import ToolError
+from hocuspocus.tools.migration import BARE, hint_tool
 
 from .. import tx
 from ..tx import Rollback  # noqa: F401 (re-exported: the compensation the batch tools share)
@@ -144,7 +145,7 @@ def _locked_error(node: Any, asset: Any, action: str) -> ToolError:
         f"({asset.type().name()})."
         if asset is not node
         else f"Cannot {action} {node.path()}: it is a locked asset ({node.type().name()}).",
-        hint=f"Unlock it with node_edit {{path: {asset.path()!r}, lock: false}} "
+        hint=f"Unlock it with {hint_tool('node_edit', path=asset.path(), lock=False)} "
         "(allowEditingOfContents) first, or work outside the asset.",
     )
 
@@ -301,9 +302,12 @@ def type_not_found(parent: Any, type_name: str, category: Any) -> ToolError:
         if "Sop" in others and category.name() == "Object":
             hint += " Create a geo object first and put SOPs inside it."
     elif candidates:
-        hint = f"Closest {category.name()} types: {', '.join(candidates[:5])}. node_type_search finds types by label."
+        hint = (
+            f"Closest {category.name()} types: {', '.join(candidates[:5])}. "
+            f"{hint_tool('node_type_search', query=type_name)} finds types by label."
+        )
     else:
-        hint = "Use node_type_search to find the type name."
+        hint = f"{hint_tool('node_type_search', query=type_name)} finds the type name."
     return ToolError(
         "node_type_not_found",
         f"No {category.name()} node type {type_name!r} (parent {parent.path()}).",
@@ -690,7 +694,8 @@ def to_tool_error(exc: BaseException, *, node: Any = None, op: str | None = None
             "locked",
             hou_message(exc),
             hint=(
-                f"Unlock {asset.path()} with node_edit lock: false first."
+                f"Unlock {asset.path()} with "
+                f"{hint_tool('node_edit', path=asset.path(), lock=False)} first."
                 if asset is not None
                 else "The node is not editable (locked asset or permission)."
             ),
@@ -700,7 +705,7 @@ def to_tool_error(exc: BaseException, *, node: Any = None, op: str | None = None
         return ToolError(
             "invalid_input",
             hou_message(exc),
-            hint="Check input indices with node_info include inputs.",
+            hint=f"Check input indices with {_inputs_call(node)}.",
             hou_exception=text,
         )
     refusals = tuple(
@@ -720,8 +725,9 @@ def to_tool_error(exc: BaseException, *, node: Any = None, op: str | None = None
         return ToolError(
             "invalid_argument",
             f"Houdini refused the operation{where}: {hou_message(exc)}",
-            hint="Check the node's state (locked asset, type, name) with node_info and retry "
-            "with different arguments.",
+            hint=f"Check the node's state (locked asset, type, name) with "
+            f"{hint_tool('node_info', paths=[node.path() if node is not None else BARE])} and "
+            "retry with different arguments.",
             hou_exception=text,
         )
     from ..dispatch import tool_error_from_exception
@@ -767,13 +773,22 @@ def batch_error(index: int, path: Any, exc: BaseException, *, rolled_back: bool)
 # -- wiring helpers ---------------------------------------------------------------
 
 
+def _inputs_call(node: Any) -> str | None:
+    """The read that lists ``node``'s inputs, as the call's profile names it."""
+    try:
+        path = node.path()
+    except Exception:
+        path = BARE
+    return hint_tool("node_info", paths=[path], include=["inputs"])
+
+
 def _labels_hint(node: Any) -> str:
     try:
         names = list(node.inputNames())
         labels = list(node.inputLabels())
         max_inputs = node.type().maxNumInputs()
     except Exception:
-        return "Check the node's inputs with node_info include inputs."
+        return f"Check the node's inputs with {_inputs_call(node)}."
     if not names and max_inputs == 0:
         return f"{node.path()} takes no inputs."
     shown = [

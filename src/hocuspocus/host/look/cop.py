@@ -10,6 +10,7 @@ import os
 from typing import Any
 
 from hocuspocus.tools.errors import ToolError
+from hocuspocus.tools.migration import hint_tool
 
 from ..tools._diag import a_or_an, require_node
 from ..tools.geo import num
@@ -146,7 +147,8 @@ def render_cop(
         raise ToolError(
             "invalid_argument",
             f"{node.path()} outputs {types[0]}, not an image layer.",
-            hint="geo_info reads it; capture an image node instead.",
+            hint=f"{hint_tool('geo_info', path=node.path())} reads it; capture an image node "
+            "instead.",
         )
     errors: list[str] = []
     with hou.undos.disabler(), muted():
@@ -168,7 +170,8 @@ def render_cop(
         raise ToolError(
             "cook_failed",
             message,
-            hint="Check the node's errors with problems, then capture again.",
+            hint=f"Check the node's errors with {hint_tool('problems', root=node.path())}, "
+            "then capture again.",
             detail=detail or None,
         )
     layer = image_summary(node, frame, stats=False)

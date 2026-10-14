@@ -43,6 +43,7 @@ from pathlib import Path
 from typing import Any
 
 from hocuspocus.tools.errors import ToolError
+from hocuspocus.tools.migration import hint_tool
 
 TEMPORARY_CAMERA = "temporary"
 """``camera_used`` when the camera was built for one capture and deleted afterwards."""
@@ -164,7 +165,8 @@ def check_capture_output(errors: list[str], out_file: str, rop_type: str = "flip
         raise ToolError(
             "cook_failed",
             message,
-            hint="Check that the scene cooks (problems tool) and that a GPU is available.",
+            hint=f"Check that the scene cooks ({hint_tool('problems')} lists errors) and "
+            "that a GPU is available.",
             detail=detail or None,
         )
 

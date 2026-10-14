@@ -1,0 +1,309 @@
+"""Hints and messages name only tools the active profile serves (review 25 papercut 1).
+
+Two checks:
+
+* **Dynamic.** A fixture of representative errors (an ``edit`` plan validated against the
+  fake ``hou`` scene of ``test_host_tx``, the hint helpers the host and bridge build their
+  texts with, the bridge's own refusals and argument errors) is produced once per profile
+  inside :func:`hocuspocus.tools.migration.using_profile`, as the host's dispatcher runs a
+  call. Every ``message``, ``hint`` and note is scanned for ``\\b[a-z_]+\\b`` candidates
+  that are tool names; none may be outside the profile's listing (from the catalogue).
+* **Static.** No string literal in a hint or message of ``host/`` or ``bridge/`` names a
+  1.4 tool 2.0 removed: such a name only reaches a hint through
+  :func:`~hocuspocus.tools.migration.hint_tool`, which renders it for the profile.
+
+A snake_case candidate (``node_find``) always counts as naming a tool. A one-word tool name
+is also an English word (cook, look, render, search, time, undo, job, events, problems), so
+it counts only where the text uses it as a call: followed by ``{`` (``cook {paths}``) or by
+``tool`` ("the problems tool"). :func:`~hocuspocus.tools.migration.hint_tool` always renders
+the call form. A removed tool's own refusal names the tool that was called; that one name
+is allowed there.
+"""
+
+from __future__ import annotations
+
+import ast
+import re
+import sys
+import types
+from pathlib import Path
+from typing import Any
+
+import pytest
+from test_host_tx import FakeScene  # the fake hou scene the transaction tests use
+
+from hocuspocus.tools import catalog, migration
+from hocuspocus.tools.errors import ToolError
+
+pytestmark = pytest.mark.unit
+
+PROFILES = ("minimal", "core", "full", "compat_1x")
+TOOL_NAMES = frozenset(spec.name for spec in catalog.TOOLS)
+SRC = Path(__file__).resolve().parents[2] / "src" / "hocuspocus"
+
+
+def named_tools(text: str) -> set[str]:
+    """The tool names ``text`` uses (see the module docstring for what counts)."""
+    found: set[str] = set()
+    for match in re.finditer(r"\b[a-z_]+\b", text):
+        word = match.group(0)
+        if word not in TOOL_NAMES:
+            continue
+        rest = text[match.end() :]
+        if "_" in word or re.match(r"\s*\{", rest) or re.match(r"\s+tool\b", rest):
+            found.add(word)
+    return found
+
+
+def test_named_tools_reads_calls_not_english() -> None:
+    assert named_tools('node_find {root: "/obj"} lists it') == {"node_find"}
+    assert named_tools("see also the problems tool") == {"problems"}
+    assert named_tools('cook {paths: ["/obj/a"], force: true} rechecks') == {"cook"}
+    assert named_tools("the node failed to cook; render again; look closer") == set()
+
+
+def texts(item: Any) -> list[str]:
+    """Every message, hint and note string inside an error dict or a ToolError."""
+    if isinstance(item, ToolError):
+        item = item.to_dict()
+    out: list[str] = []
+    if isinstance(item, str):
+        return [item]
+    if isinstance(item, dict):
+        for key, value in item.items():
+            if key in ("message", "hint", "note", "notes", "problems") or isinstance(
+                value, dict | list
+            ):
+                out += texts(value)
+    elif isinstance(item, list):
+        for value in item:
+            out += texts(value)
+    return out
+
+
+# -- the fixture ----------------------------------------------------------------------------
+
+
+class _Parented:
+    """Enough of a node for the hint helpers that take one."""
+
+    def __init__(self, path: str, category: str = "Sop", name: str = "box") -> None:
+        self._path, self._category, self._name = path, category, name
+
+    def path(self) -> str:
+        return self._path
+
+    def parent(self) -> _Parented:
+        return _Parented(self._path.rpartition("/")[0] or "/")
+
+    def type(self) -> Any:
+        category = types.SimpleNamespace(name=lambda: self._category)
+        return types.SimpleNamespace(
+            name=lambda: self._name, category=lambda: category, maxNumInputs=lambda: 1
+        )
+
+    def inputNames(self) -> tuple:  # noqa: N802 - hou API
+        raise RuntimeError("no inputs here: the fallback hint")
+
+
+EDIT_MISTAKES = [
+    [{"op": "create", "parent": "/obj/geo1", "type": "mountian"}],  # bad type
+    [{"op": "create", "parent": "/obj/geo1", "type": "box", "parms": {"sise": 1}}],  # bad parm
+    [{"op": "create", "parent": "/obj/geo1", "type": "geo"}],  # wrong category
+    [{"op": "set", "path": "/obj/geo1/box1/sise", "value": 1}],  # bad parm on a node
+    [  # missing from
+        {"op": "create", "id": "x", "parent": "/obj/geo1", "type": "xform"},
+        {"op": "connect", "from": "/obj/geo1/nope", "to": "$x"},
+    ],
+    [{"op": "connect", "from": "/obj/geo1/box1", "to": "/obj/geo1/nopee"}],  # missing to
+    [  # bad input on a new node
+        {"op": "create", "id": "x", "parent": "/obj/geo1", "type": "xform"},
+        {"op": "connect", "from": "/obj/geo1/box1", "to": "$x", "to_input": 5},
+    ],
+    [{"op": "create", "parent": "/obj/nogeo", "type": "box"}],  # missing parent
+    [{"op": "build", "parent": "/obj/geo1", "data": {}}],  # empty build data
+]
+
+
+def _host_errors(scene: FakeScene) -> list[Any]:
+    from hocuspocus.host import tx
+    from hocuspocus.host.tools import _common, _diag, geo, network, nodes, parms, state
+
+    out: list[Any] = []
+    for ops in EDIT_MISTAKES:
+        diag = tx.validate(tx.parse_ops(ops), ctx=None)
+        assert diag.problems, ops
+        out += diag.problems
+    out.append(_diag.missing_node_error("/obj/geo1/boxx"))
+    out.append(_diag.missing_node_error("/obj/gone/boxx"))
+    out.append(parms.expression_hint())
+    out.append(parms.spare_parms_hint())
+    out.append(_common.dynamic_menu_note())
+    out.append(state.context_changed_note())
+    out.append(_diag.stale_hint("/obj/geo1/box1", 2.0))
+    out.append(network.data_hint())
+    node = _Parented("/obj/geo1/box1")
+    out.append(geo.cook_failed_hint(node))
+    out.append(nodes._labels_hint(node))
+    out.append(nodes._locked_error(node, node, "edit"))
+    return out
+
+
+def _bridge_errors(profile: str) -> list[Any]:
+    from hocuspocus.bridge.client import delivery_hint
+    from hocuspocus.bridge.config import BridgeConfig
+    from hocuspocus.bridge.server import Bridge
+
+    bridge = Bridge(BridgeConfig(profile=profile), scan=lambda: [])
+    out: list[Any] = [delivery_hint(profile)]
+    calls: list[tuple[str, dict[str, Any]]] = [
+        ("parm_set", {"path": "/obj/geo1/box1/sizex", "value": 1}),  # flat batch item
+        ("houdini_connect", {"bogus": 1}),
+    ]
+    if profile != "compat_1x":
+        calls += [
+            ("inspect", {"what": "node", "path": "/obj/geo1"}),
+            ("inspect", {"what": "node", "bogus_frame": 1}),
+            ("edit", {"op": "set", "path": "/obj/a/t", "value": 1}),
+            ("search", {"query": "box"}),
+        ]
+    for name, args in calls:
+        result = bridge.call_tool(name, args)
+        assert result.is_error, (name, args)
+        out.append(_payload(result))
+    return out
+
+
+def _payload(result: Any) -> dict[str, Any]:
+    import json
+
+    if result.structured_content is not None:
+        return result.structured_content
+    return json.loads(result.content[0].text)
+
+
+def _refusals(profile: str) -> list[tuple[str, Any]]:
+    if profile == "compat_1x":
+        return []
+    return [(tool, migration.removed_error(tool, profile)) for tool in migration.REPLACEMENTS]
+
+
+@pytest.fixture
+def scene(monkeypatch) -> FakeScene:
+    fake = FakeScene()
+    monkeypatch.setitem(sys.modules, "hou", fake.module())
+    return fake
+
+
+@pytest.mark.parametrize("profile", PROFILES)
+def test_every_hint_names_only_tools_the_profile_serves(profile, scene) -> None:
+    listed = {spec.name for spec in catalog.for_profile(profile)}
+    with migration.using_profile(profile):
+        produced = _host_errors(scene) + _bridge_errors(profile)
+        refusals = _refusals(profile)
+    bad = []
+    for item in produced:
+        for text in texts(item):
+            outside = named_tools(text) - listed
+            if outside:
+                bad.append((sorted(outside), text))
+    for called, error in refusals:
+        for text in texts(error):
+            outside = named_tools(text) - listed - {called}
+            if outside:
+                bad.append((sorted(outside), text))
+    assert not bad, "\n".join(f"{names}: {text}" for names, text in bad)
+    assert len(produced) > 20
+
+
+def test_hints_name_the_2x_call_on_2x_profiles(scene) -> None:
+    """The papercut's own examples, both ways."""
+    from hocuspocus.host import tx
+
+    def first(ops: list[dict[str, Any]]) -> ToolError:
+        return tx.validate(tx.parse_ops(ops), ctx=None).problems[0]
+
+    with migration.using_profile("core"):
+        bad_type = first(EDIT_MISTAKES[0])
+        bad_parm = first(EDIT_MISTAKES[1])
+        missing = first(EDIT_MISTAKES[4])
+        assert 'search {kind: "types", query: "mountian"}' in bad_type.hint
+        assert 'inspect {what: "type", target: "Sop/box"}' in bad_parm.hint
+        assert 'search {kind: "nodes", root: "/obj/geo1"}' in missing.hint
+        assert (
+            'edit {ops: [{op: "set", path, expression}]}'
+            in __import__("hocuspocus.host.tools.parms", fromlist=["x"]).expression_hint()
+        )
+    with migration.using_profile("compat_1x"):
+        assert 'node_type_search {query: "mountian"}' in first(EDIT_MISTAKES[0]).hint
+        assert 'node_find {root: "/obj/geo1"}' in first(EDIT_MISTAKES[4]).hint
+
+
+def test_hint_tool_renders_each_profile() -> None:
+    h = migration.hint_tool
+    assert h("node_find", "core", root="/obj") == 'search {kind: "nodes", root: "/obj"}'
+    assert h("node_find", "compat_1x", root="/obj") == 'node_find {root: "/obj"}'
+    assert h("node_info", "full", paths=["/obj/a"]) == 'inspect {what: "node", target: "/obj/a"}'
+    assert h("viewport_capture", "minimal") == "look {}"
+    assert h("problems", "core") == 'inspect {what: "problems"}'
+    assert h("problems", "compat_1x") == "problems"
+    assert h("parm_set", "core", path=migration.BARE) == 'edit {ops: [{op: "set", path}]}'
+    assert h("parm_set", "compat_1x", path=migration.BARE) == "parm_set {items: [{path}]}"
+    assert h("cook", "minimal") is None and h("cook", "core", paths=["/a"]) == (
+        'cook {paths: ["/a"]}'
+    )
+    assert h("hda", "core") is None and h("hda", "full") == "hda"
+    assert migration.current_profile() == "full"
+    with migration.using_profile("v2") as resolved:
+        assert resolved == "full" and migration.current_profile() == "full"
+    with migration.using_profile("compat_1x"):
+        assert migration.is_compat() and h("node_type_info") == "node_type_info"
+
+
+# -- the static guard -------------------------------------------------------------------------
+
+HINT_NAMES = re.compile(r"(^|_)(HINT|NOTE)S?$")
+
+
+def _literals(node: ast.AST) -> list[str]:
+    """String pieces of ``node``, skipping calls (``hint_tool("node_find", ...)`` names a
+    tool on purpose)."""
+    if isinstance(node, ast.Call):
+        return []
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return [node.value]
+    out: list[str] = []
+    for child in ast.iter_child_nodes(node):
+        out += _literals(child)
+    return out
+
+
+def _hint_literals(tree: ast.AST) -> list[tuple[int, str]]:
+    found: list[tuple[int, str]] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            func = node.func
+            name = func.id if isinstance(func, ast.Name) else getattr(func, "attr", "")
+            if name in ("ToolError", "bad_arg"):
+                for arg in node.args[1:2]:
+                    found += [(node.lineno, s) for s in _literals(arg)]
+            for keyword in node.keywords:
+                if keyword.arg in ("hint", "message"):
+                    found += [(node.lineno, s) for s in _literals(keyword.value)]
+        elif isinstance(node, ast.Assign):
+            targets = [t.id for t in node.targets if isinstance(t, ast.Name)]
+            if any(HINT_NAMES.search(t) for t in targets):
+                found += [(node.lineno, s) for s in _literals(node.value)]
+    return found
+
+
+def test_no_hint_literal_names_a_removed_tool() -> None:
+    removed = set(migration.REPLACEMENTS)
+    bad = []
+    for path in sorted([*SRC.glob("host/**/*.py"), *SRC.glob("bridge/*.py")]):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for line, text in _hint_literals(tree):
+            words = named_tools(text) & removed
+            if words:
+                bad.append(f"{path.relative_to(SRC)}:{line}: {sorted(words)} in {text!r}")
+    assert not bad, "route these through migration.hint_tool:\n" + "\n".join(bad)

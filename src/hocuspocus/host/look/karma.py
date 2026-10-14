@@ -19,6 +19,7 @@ import tempfile
 from typing import Any
 
 from hocuspocus.tools.errors import ToolError
+from hocuspocus.tools.migration import BARE, hint_tool
 
 from ..tools.hip import _norm
 from . import child
@@ -151,10 +152,12 @@ def capture_with_karma(
         message, detail = failure(f"{label} did not produce an image", errors)
         if tail:
             detail["log_tail"] = tail
+        render = hint_tool("render", rop_path=BARE)
         raise ToolError(
             "cook_failed",
             message,
-            hint="Check that the scene cooks (problems tool), or render a Karma ROP with render.",
+            hint=f"Check that the scene cooks ({hint_tool('problems')} lists errors)"
+            + (f", or render a Karma ROP with {render}." if render else "."),
             detail=detail,
         )
 

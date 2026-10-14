@@ -161,7 +161,7 @@ def events_cursor(args: dict[str, Any]) -> tuple[int | None, int]:
     if match is None:
         raise ToolError(
             "invalid_argument",
-            f"since must be the next_since of an earlier events call ('<pid>:<seq>') or a seq "
+            f"since must be the next_since of an earlier events read ('<pid>:<seq>') or a seq "
             f"number, not {since!r}.",
             hint="pass next_since back as since, or omit it to read from the start",
         )

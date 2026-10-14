@@ -189,6 +189,14 @@ def log_call(logger: Any, tool: Any, envelope: dict[str, Any]) -> None:
         )
 
 
+def hint_profile(host_profile: Any, client_profile: Any = None) -> str:
+    """The profile a call's hints and messages name tools for (review 25 papercut 1): the
+    bridge's, from the envelope, when it names one, else the host's own."""
+    if isinstance(client_profile, str) and normalize(client_profile):
+        return normalize(client_profile) or "core"
+    return normalize(host_profile) or "core"
+
+
 def profile_error(
     spec: ToolSpec, host_profile: str, client_profile: Any = None
 ) -> ToolError | None:
@@ -330,6 +338,7 @@ class Dispatcher:
                 effective,
                 request_id if isinstance(request_id, str) and request_id else None,
                 timing,
+                hint_profile(getattr(self.ctx.config, "profile", "full"), profile),
             )
             timing["main"] = impl.main_thread
             sent = time.perf_counter()
@@ -373,6 +382,7 @@ class Dispatcher:
         timeout_s: float,
         request_id: str | None = None,
         timing: dict[str, Any] | None = None,
+        profile: str = "full",
     ) -> Callable[[], Any]:
         ctx = self.ctx
 
@@ -384,7 +394,8 @@ class Dispatcher:
             _CALL.request_id = request_id
             began = time.perf_counter()
             try:
-                return run_tool()
+                with migration.using_profile(profile):
+                    return run_tool()
             finally:
                 _CALL.timeout_s = None
                 _CALL.request_id = None

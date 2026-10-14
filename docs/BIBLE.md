@@ -1128,6 +1128,15 @@ Every tool failure is an `isError: true` result:
  "candidates": ["sizex", "sizey", "sizez", "scale"], "hou_exception": null}
 ```
 
+A `hint` or `message` that names a tool names one the call's profile serves (2.0, review
+25 papercut 1): every such text is built with `tools/migration.py` `hint_tool(name)`, which
+renders the 2.0 call on the 2.0 profiles (`search {kind: "nodes", root}`,
+`inspect {what: "type", target}`, `search {kind: "types", query}`,
+`inspect {what: "problems"}`, `look`, an `edit` `set` or `create` op) and keeps the 1.4
+name on `compat_1x`, and leaves out a clause whose tool the profile lacks (`cook` on
+`minimal`). The host reads the profile from the request envelope (the bridge's), else its
+own. `tests/unit/test_hint_profiles.py` checks a fixture of errors in every profile.
+
 Stable codes (the complete set; adding one is a design change):
 
 | code | when | retryable |
