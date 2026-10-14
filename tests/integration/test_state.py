@@ -30,6 +30,7 @@ def test_undo_history_lists_hocuspocus_labels(client):
     result = client.ok("undo", {"action": "history"})
     assert result["history"][0].startswith("HocusPocus: node_create")
     assert len(result["history"]) <= 20
+    assert result["total"] >= len(result["history"]) and result["redo_total"] == 0
     assert result["enabled"] is True
     assert isinstance(result["redo"], list)
 

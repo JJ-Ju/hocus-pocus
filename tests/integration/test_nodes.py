@@ -1256,11 +1256,19 @@ def test_node_create_flags_a_deprecated_type(client):
     opengl = hou.nodeType(hou.ropNodeTypeCategory(), "opengl")
     if not opengl.deprecated():
         pytest.skip("this Houdini does not deprecate the OpenGL ROP")
+    from hocuspocus.host.tools import nodes
+
+    nodes._DEPRECATION_NOTED.clear()  # the note is given once per type per host session
     result = client.ok(
         "node_create",
         {"items": [{"parent": "/out", "type": "opengl"}, {"parent": "/out", "type": "geometry"}]},
     )
     flipbook, geometry = result["results"]
+    # Review 22 finding 10: later rows of the type say only deprecated: true.
+    again = client.ok("node_create", {"items": [{"parent": "/out", "type": "opengl"}] * 2})[
+        "results"
+    ]
+    assert all(row["deprecated"] is True and "notes" not in row for row in again)
     assert flipbook["deprecated"] is True, flipbook
     (note,) = [n for n in flipbook["notes"] if "deprecated" in n]
     assert note.startswith("Driver/opengl is deprecated"), note

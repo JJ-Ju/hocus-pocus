@@ -313,7 +313,7 @@ Read nodes in detail: type, flags, inputs with names and sources, non-default pa
 
 Create nodes in one undo step. type resolves like createNode (box gets the current version; exact_type disables). Items may wire to earlier items; a block_end pairs with its block_begin (paired_with). Returns path, type and problems per node. network_build suits whole graphs.
 
-**Notes.** A parms value is a literal, {expression, language} (short form {expr, lang}), or any parm_set item without path. As in parm_set, a plain set of a menu or toggle with a callback script carries a note that the callback did not run; {value, press: true} runs it once the node's inputs are wired, and the row adds side_effects: {parm: [old, new]}. A type hou.NodeType.deprecated() reports (the OpenGL ROP in 22.0) gets deprecated: true and a note with its reason or replacement. An input is {index or name, from, output (default 0)}. layout good_position places new nodes. return full gives node_info blocks listing only the parms the call set, with strings over 200 characters as {elided, head}; identical error lists after the first become errors_same_as. Each new node is cooked once to report its problems, and its row carries cook_ms (a first cook of an HDA such as mountain can take 200 ms); cook: false skips that cook (cook_state: not_cooked), for batch builders that cook once at the end.
+**Notes.** A parms value is a literal, {expression, language} (short form {expr, lang}), or any parm_set item without path. As in parm_set, a plain set of a menu or toggle with a callback script carries a note that the callback did not run; {value, press: true} runs it once the node's inputs are wired, and the row adds side_effects: {parm: [old, new]}. A type hou.NodeType.deprecated() reports (the OpenGL ROP in 22.0) gets deprecated: true and a note with its reason or replacement (the note once per type per Houdini session). An input is {index or name, from, output (default 0)}. layout good_position places new nodes. return full gives node_info blocks listing only the parms the call set, with strings over 200 characters as {elided, head}; identical error lists after the first become errors_same_as. Each new node is cooked once to report its problems, and its row carries cook_ms (a first cook of an HDA such as mountain can take 200 ms); cook: false skips that cook (cook_state: not_cooked), for batch builders that cook once at the end.
 
 ### Arguments
 
@@ -1001,7 +1001,7 @@ Describe one node type: label, version, named inputs and outputs, parms by folde
 
 Undo or redo steps (default 1) and return the labels performed, or list the last 20 undo labels with history. Every HocusPocus mutation is one step labelled "HocusPocus: <tool> ...".
 
-**Notes.** undo and redo stop at the first step whose label does not start with "HocusPocus:" (the user's or Houdini's own) and name it in blocked_by; include_user_steps: true crosses such steps and lists them in user_steps.
+**Notes.** undo and redo stop at the first step whose label does not start with "HocusPocus:" (the user's or Houdini's own) and name it in blocked_by; include_user_steps: true crosses such steps and lists them in user_steps. redo never re-applies a call that failed and was rolled back: it stops and names it in skipped, and history lists it under rolled_back, not redo. history's total and redo_total count every label; hip_open and hip_new clear the history.
 
 ### Arguments
 

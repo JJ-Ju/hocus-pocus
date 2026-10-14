@@ -627,7 +627,8 @@ _NODES: tuple[ToolSpec, ...] = (
             "callback script carries a note that the callback did not run; {value, press: true} "
             "runs it once the node's inputs are wired, and the row adds side_effects: {parm: "
             "[old, new]}. A type hou.NodeType.deprecated() reports (the OpenGL ROP in 22.0) "
-            "gets deprecated: true and a note with its reason or replacement. An input is "
+            "gets deprecated: true and a note with its reason or replacement (the note once per "
+            "type per Houdini session). An input is "
             "{index or name, from, output (default 0)}. "
             "layout good_position places new nodes. return full gives node_info blocks listing only"
             " the parms the call set, with strings over 200 characters as {elided, head}; identical"
@@ -1647,7 +1648,10 @@ _STATE: tuple[ToolSpec, ...] = (
         notes=(
             "undo and redo stop at the first step whose label does not start with "
             "\"HocusPocus:\" (the user's or Houdini's own) and name it in blocked_by; "
-            "include_user_steps: true crosses such steps and lists them in user_steps."
+            "include_user_steps: true crosses such steps and lists them in user_steps. redo "
+            "never re-applies a call that failed and was rolled back: it stops and names it in "
+            "skipped, and history lists it under rolled_back, not redo. history's total and "
+            "redo_total count every label; hip_open and hip_new clear the history."
         ),
         output_schema=_out(
             {

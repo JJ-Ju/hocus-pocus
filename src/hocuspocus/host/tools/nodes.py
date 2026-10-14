@@ -1187,7 +1187,11 @@ def _create_one(
     if note:
         extra = extras.setdefault(node.sessionId(), {})
         extra["deprecated"] = True
-        extra.setdefault("notes", []).append(note)
+        key = node.type().nameWithCategory()
+        if key not in _DEPRECATION_NOTED:
+            # Review 22 finding 10: 37 mountain creates repeated the same ~150 B note.
+            _DEPRECATION_NOTED.add(key)
+            extra.setdefault("notes", []).append(note)
     parms = item.get("parms")
     pressed: dict[str, Any] = {}
     if parms:
@@ -1249,6 +1253,11 @@ def _set_create_parms(
             extra.setdefault("notes", []).append(note)
         if result.get("side_effects"):
             extra.setdefault("side_effects", {}).update(result["side_effects"])
+
+
+_DEPRECATION_NOTED: set[str] = set()
+"""Types whose deprecation note ``node_create`` has given in this host session: later rows
+of the type carry only ``deprecated: true``."""
 
 
 def deprecation_note(node_type: Any) -> str | None:

@@ -78,10 +78,14 @@ def undo(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
         redoable = [label for i, label in enumerate(redo_labels) if i not in skip]
         out: dict[str, Any] = {
             "history": undo_labels[:HISTORY_LIMIT],
+            "total": len(undo_labels),
             "redo": redoable[:HISTORY_LIMIT],
+            "redo_total": len(redoable),
             "enabled": bool(hou.undos.areEnabled()),
-            "note": f"Newest first. Labels starting with {LABEL_PREFIX.strip()!r} are "
-            "HocusPocus calls; the rest are the user's or Houdini's own steps.",
+            "note": f"Newest first, at most {HISTORY_LIMIT}; total and redo_total count them "
+            f"all (review 22 finding 9). Labels starting with {LABEL_PREFIX.strip()!r} are "
+            "HocusPocus calls; the rest are the user's or Houdini's own steps. hip_open and "
+            "hip_new clear the history.",
         }
         if skip:
             out["rolled_back"] = [redo_labels[i] for i in sorted(skip)]
