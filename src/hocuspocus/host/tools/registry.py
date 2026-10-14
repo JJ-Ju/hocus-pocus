@@ -18,7 +18,7 @@ those duties apply themselves:
   host-side jobs are not hip state; these also run off the main thread
   (``main_thread=False``) so they can wait on jobs and reach ``hou`` only through the
   executor.
-* ``viewport_capture`` — a look leaves the scene as it was (its camera and ROP are
+* ``viewport_capture``, ``look`` — a look leaves the scene as it was (its camera and ROP are
   temporary), so it must not add an undo step or dirty the scene. It also runs off the
   main thread: headless, it snapshots the scene in one executor call and waits for the
   child hython without holding the main thread; the GUI path is one executor call.
@@ -71,6 +71,7 @@ TOOL_MODULES = (
     "inspect",
     "search",
     "edit",
+    "look",
 )
 """Modules under ``hocuspocus.host.tools`` imported by :func:`load_all`."""
 

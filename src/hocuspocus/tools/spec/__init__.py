@@ -29,8 +29,8 @@ ORDER: tuple[str, ...] = (
     "undo", "time", "selection", "job",
     # full profile only
     "hda", "usd_stage", "pdg", "events",
-    # 2.0 tools, v2 profile only (spec-2.0 §2.3, §2.4; BIBLE §4.9)
-    "inspect", "search", "edit",
+    # 2.0 tools, v2 profile only (spec-2.0 §2.3-§2.5; BIBLE §4.9)
+    "inspect", "search", "edit", "look",
 )  # fmt: skip
 """Spec module names (each equal to its tool's name), in catalogue order."""
 

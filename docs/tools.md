@@ -2,7 +2,7 @@
 
 <!-- Generated from src/hocuspocus/tools/spec/ by `python -m hocuspocus.tools.docs`. Do not edit by hand. -->
 
-38 tools: 14 in the `minimal` profile, 31 in `core` (minimal included), 4 more in `full`, 3 more in `v2` (the 2.0 tools). Model-visible `tools/list` text: 33,005 bytes. See `docs/BIBLE.md` §4 for the design.
+39 tools: 14 in the `minimal` profile, 31 in `core` (minimal included), 4 more in `full`, 4 more in `v2` (the 2.0 tools). Model-visible `tools/list` text: 34,006 bytes. See `docs/BIBLE.md` §4 for the design.
 
 ## Contents
 
@@ -44,6 +44,7 @@
 - [`inspect`](#inspect) *(v2)*
 - [`search`](#search) *(v2)*
 - [`edit`](#edit) *(v2)*
+- [`look`](#look) *(v2)*
 
 ## houdini_status
 
@@ -1451,4 +1452,59 @@ Change the scene in one undo step. ops run in order, each {op, id?, ...}: create
 
 ```json
 {"ops": [{"op": "set", "path": "/obj/terrain/box1/size", "value": [2, 1, 2]}, {"op": "connect", "from": "/obj/terrain/box1", "to": "/obj/terrain/merge1", "to_input": "next"}, {"op": "node", "path": "/obj/terrain/OUT", "comment": "final"}], "dry_run": true}
+```
+
+
+## look
+
+`idempotent` `headless ok` · profile `v2`
+
+Look at the scene: a PNG (long side at most 1024). target: an object, SOP, LOP, Cop node or ROP (default the display). quality draft is a Flipbook ROP (headless too), lit adds the scene's lights (Karma when there are none), final renders Karma. Returns backend_used, chain, scene, context, camera_used, notes. Leaves no nodes, undo step or dirty flag.
+
+**Notes.** Replaces viewport_capture (2.0): the same renderers, chosen by quality. target kinds: omitted, /obj unless it displays nothing and /stage has a display LOP (a note names a stage or COP network it did not show); an object frames it (fit_used target); a SOP frames it, showing it in the render when it lacks the display flag (the flag is moved for the render only); a LOP, a LOP network (its display LOP) or a ROP in a LOP network (the LOP it renders) is a stage (scene stage, lop_path); a Cop node or COP network (its display node) is its own image at its own resolution (scene cop, layer; quality, resolution and fit do not apply); a ROP in /out looks through its camera and lends final its samples. A camera or light as target is invalid_argument: pass it as camera (an OBJ camera, a LOP camera, or a camera prim on the stage). quality draft: the Flipbook ROP, then the OpenGL ROP, then (headless, after a render process crash) a Karma CPU ROP at 2 samples. lit: the same with full lighting and shadows when the scene has lights, else Karma at 2 samples with its default light (a note says so). final: Karma at the target ROP's samples per pixel, else 32 (samples in the result); seconds, not a draft. source viewer (GUI only, draft only, never a stage or COP) grabs the Scene Viewer as the user sees it (context is the viewer's network; the view is put back); headless it is ui_required. chain is the planned order of backends; backend_used the one that drew; notes say why an earlier one did not. fit: all, selected or none (reuse the last automatic framing); without camera an automatic camera frames the target, else everything (camera_used temporary). on (v2 profile) picks the Houdini (pid, instance name or role); the bridge routes it, as for cook and render. Headless, the Flipbook and OpenGL ROPs render a snapshot of the scene in a child hython, kept warm between looks (about 0.3 s after a 3 s first start): every node, the asset libraries outside $HFS, $HIP/$JOB, global variables and hou.session; not the current take (a note says so), in-memory simulation caches (the child re-simulates to the frame) or variables set with hou.putenv. Karma and Cop images render the live scene in the host. image.attached is true when the PNG went out as MCP image content.
+
+### Arguments
+
+| Name | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `target` | string |  |  | Object, SOP, LOP, Cop node or ROP path. |
+| `quality` | `draft` \| `lit` \| `final` |  | `"draft"` |  |
+| `camera` | string |  |  |  |
+| `frame` | number |  |  | Default current frame. |
+| `resolution` | array<integer> |  | `[1024,768]` | min items 2; max items 2 |
+| `fit` | `all` \| `selected` \| `none` |  |  |  |
+| `source` | `auto` \| `viewer` |  | `"auto"` |  |
+| `on` | integer \| string |  |  | Instance to run on: pid, name or role. |
+
+### Returns
+
+- `image` (object): `mime_type`, `width`, `height`, `attached`
+- `backend_used` (string) — always present
+- `chain` (array<string>) — always present
+- `quality` (string)
+- `target` (string | null)
+- `scene` (string) — always present
+- `context` (string)
+- `camera_used` (string)
+- `fit_used` (string)
+- `samples` (integer)
+- `frame` (number)
+- `path` (string) — always present
+- `width` (integer) — always present
+- `height` (integer) — always present
+- `rendered` (array<integer>)
+- `notes` (array<string>)
+
+### Examples
+
+```json
+{}
+```
+
+```json
+{"target": "/obj/geo1/scatter1", "quality": "lit", "resolution": [640, 480]}
+```
+
+```json
+{"target": "/out/karma1", "quality": "final", "frame": 24}
 ```

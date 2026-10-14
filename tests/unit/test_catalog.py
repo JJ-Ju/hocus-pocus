@@ -47,11 +47,11 @@ EXPECTED_ORDER = [
     "viewport_capture", "render", "houdini_python", "node_type_search", "node_type_info",
     "undo", "time", "selection", "job",
     "hda", "usd_stage", "pdg", "events",
-    "inspect", "search", "edit",
+    "inspect", "search", "edit", "look",
 ]  # fmt: skip
 FULL_ONLY = {"hda", "usd_stage", "pdg", "events"}
 # spec-2.0 §7 M1: the 2.0 tools, listed only by the v2 profile (full plus these).
-V2_ONLY = {"inspect", "search", "edit"}
+V2_ONLY = {"inspect", "search", "edit", "look"}
 # BIBLE §4.1 (1.3): the minimal profile, for clients with a small context.
 MINIMAL = {
     "houdini_status", "houdini_connect", "hip_open", "hip_save", "node_find", "node_info",
@@ -73,12 +73,12 @@ BIBLE_ERROR_CODES = {
 DESTRUCTIVE = {"node_delete", "hip_new", "hip_open", "houdini_python", "edit"}
 IDEMPOTENT = {
     "parm_set", "node_connect", "node_edit", "time", "selection", "cook", "job",
-    "viewport_capture",
+    "viewport_capture", "look",
 }  # fmt: skip
 WITH_OUTPUT_SCHEMA = {
     "houdini_status", "hip_new", "hip_open", "hip_save", "hip_merge", "node_info",
     "parm_get", "parm_set", "cook", "geo_info", "geo_read", "viewport_capture", "render",
-    "node_type_search", "time", "selection", "undo", "job",
+    "node_type_search", "time", "selection", "undo", "job", "look",
 }  # fmt: skip
 
 NAME_RE = re.compile(r"^[a-z][a-z0-9_]*$")
