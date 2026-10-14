@@ -23,10 +23,11 @@ src/hocuspocus/
     __main__.py                #   hython -m hocuspocus.host
     config.py executor.py server.py dispatch.py runtime.py registry.py jobs.py undo.py
     tx.py                      #   the transaction engine every mutation runs on (2.0)
+    look/                      #   look's and viewport_capture's backends (2.0)
     tools/                     #   one module per tool family, each registering with @tool
       registry.py _diag.py session.py hip.py code.py nodes.py network.py parms.py cook.py
       types.py geo.py visual.py state.py hda.py usd.py pdg.py events.py inspect.py
-      search.py edit.py
+      search.py edit.py look.py
   bridge/                      # OUTSIDE Houdini; official mcp SDK
     __main__.py server.py client.py instances.py launch.py local_tools.py
     validate.py budget.py config.py instructions.py
@@ -409,7 +410,9 @@ capture, remember that a later capture runs in that kept process, not in a fresh
 - There is no config key or environment variable for it. To send every capture to a fresh
   child, set the module constant in the host process, for example through
   `houdini_python`: `import hocuspocus.host.tools.visual as v; v.WARM_CAPTURES = False`.
-  Set it back to `True` to re-enable it.
+  Set it back to `True` to re-enable it. Since 2.0 the kept child lives in
+  `host/look/flipbook.py`; `visual` forwards the constant there, and `look` uses the
+  same child.
 - `v.close_warm_capture()` stops the kept child; the next capture starts a new one. The
   integration tests call it before they time a cold capture.
 - If a kept child that had already rendered crashes, the capture is retried in a fresh
