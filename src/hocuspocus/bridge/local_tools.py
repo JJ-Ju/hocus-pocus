@@ -191,6 +191,41 @@ def houdini_status(bridge: Bridge, args: dict[str, Any]) -> dict[str, Any]:
         )
     if warnings:
         status["warnings"] = warnings
+    if bridge.v2:
+        shape_status(status, detail=args.get("detail") is True)
+    return status
+
+
+def _default_role(row: dict[str, Any]) -> str:
+    return "editor" if row.get("ui") else "worker"
+
+
+def shape_status(status: dict[str, Any], *, detail: bool = False) -> dict[str, Any]:
+    """The 2.0 ``houdini_status`` (and ``houdini://status``) shape, in place: what is the
+    default or empty is left out (spec-2.0 §7 M4). ``connected.memory`` only with
+    ``detail``; per ``connected``, ``instances[]`` and ``recent[]`` row ``role`` when it is
+    the mode's default (editor for a GUI Houdini, worker headless) and ``name`` when null;
+    per instance ``selected: false``, ``busy: false`` and ``jobs_running: 0``. Without
+    ``memory`` two reads of an unchanged session are byte-identical, so the resource's
+    etag holds."""
+    connected = status.get("connected")
+    rows = [connected] if isinstance(connected, dict) else []
+    rows += [r for r in status.get("instances") or () if isinstance(r, dict)]
+    rows += [r for r in status.get("recent") or () if isinstance(r, dict)]
+    if isinstance(connected, dict) and not detail:
+        connected.pop("memory", None)
+    for row in rows:
+        if row.get("role") == _default_role(row):
+            del row["role"]
+        if "name" in row and row["name"] is None:
+            del row["name"]
+    for row in status.get("instances") or ():
+        if isinstance(row, dict):
+            for key, default in (("selected", False), ("busy", False), ("jobs_running", 0)):
+                if key in row and row[key] == default:
+                    del row[key]
+    if not status.get("recent"):
+        status.pop("recent", None)
     return status
 
 

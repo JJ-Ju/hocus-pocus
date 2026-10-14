@@ -93,7 +93,7 @@ def test_fx_cache(workload):
         timeout=180,
     )
     assert look.images == 1, look.data
-    memory = rec.ok("houdini_status")["connected"]["memory"]
+    memory = rec.ok("houdini_status", {"detail": True})["connected"]["memory"]  # 2.0: asked for
     rec.ok("inspect", {"what": "problems", "target": GEO})
 
     rec.finish(

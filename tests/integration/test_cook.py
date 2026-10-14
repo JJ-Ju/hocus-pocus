@@ -1066,3 +1066,5 @@ def test_houdini_status_reports_process_memory(client):
     memory = status["memory"]
     assert memory["rss_mb"] > 50
     assert memory["peak_mb"] >= memory["rss_mb"]
+    # detail: false (what the houdini://status resource asks for) leaves them out.
+    assert "memory" not in client.ok("houdini_status", {"detail": False})

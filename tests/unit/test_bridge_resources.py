@@ -121,7 +121,7 @@ def isolated_state(tmp_path, monkeypatch):
         ),
         ("houdini://events?since=4242:12", "inspect", {"what": "events", "since": "4242:12"}),
         ("houdini://jobs", "inspect", {"what": "jobs"}),
-        ("houdini://status", "houdini_status", {}),
+        ("houdini://status", "houdini_status", {"detail": False}),
         ("houdini://instances", "", {}),
     ],
 )
@@ -295,7 +295,7 @@ def test_serve_gives_search_and_status_a_content_etag():
     pid, generation, digest = one["result"]["etag"].split(":")
     assert pid.isdigit() and generation == "2" and len(digest) == 16
     status = host_resources.serve(app, "houdini://status")
-    assert status["ok"] and app.calls[-1] == ("houdini_status", {})
+    assert status["ok"] and app.calls[-1] == ("houdini_status", {"detail": False})
 
 
 def test_serve_passes_errors_and_refuses_bridge_kinds():

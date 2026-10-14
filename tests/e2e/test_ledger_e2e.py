@@ -132,10 +132,13 @@ def test_ledger_roles_on_and_a_bridge_restart(hython, tmp_path):
 
         one = anyio.run(first_bridge)
         status0 = _json(one["status0"])
-        assert {row["pid"]: row["role"] for row in status0["instances"]} == {
+        # 2.0 M4: a row names its role only when it is not the mode's default (headless:
+        # worker).
+        assert {row["pid"]: row.get("role", "worker") for row in status0["instances"]} == {
             editor: "worker",
             worker: "worker",
         }
+        assert all("role" not in row for row in status0["instances"]), status0
         assert not one["build"].is_error, _json(one["build"])
         pinned = _json(one["pin_editor"])["connected"]
         assert pinned["pid"] == editor and pinned["role"] == "editor"
@@ -149,7 +152,7 @@ def test_ledger_roles_on_and_a_bridge_restart(hython, tmp_path):
         status1 = _json(one["status1"])
         assert status1["connected"]["pid"] == editor  # the pin did not move
         rows = {row["pid"]: row for row in status1["instances"]}
-        assert rows[editor]["role"] == "editor" and rows[worker]["role"] == "worker"
+        assert rows[editor]["role"] == "editor" and "role" not in rows[worker]  # worker
         assert rows[worker]["jobs_running"] == 1
         job1 = _json(one["job1"])
         assert job1["job_id"] == job_id and job1["state"] == "running", job1
@@ -178,7 +181,7 @@ def test_ledger_roles_on_and_a_bridge_restart(hython, tmp_path):
         assert [row["pid"] for row in status2["instances"]] == [editor]
         recent = {row["pid"]: row for row in status2.get("recent", [])}
         assert worker in recent, status2
-        assert recent[worker]["role"] == "worker" and recent[worker]["name"] == "w"
+        assert "role" not in recent[worker] and recent[worker]["name"] == "w"  # worker
         assert recent[worker]["alive"] is False
 
         lost = _json(two["lost_job"])

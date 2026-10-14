@@ -29,7 +29,12 @@ SPEC = ToolSpec(
         "(the default for a GUI Houdini) or worker (headless), as houdini_connect {role} set "
         "it; recent lists up to 5 Houdinis the bridge ledger remembers that are no longer "
         "running, most recently seen first, each {pid, label, ui, role, hip (its last hip "
-        "file), started, last_seen, alive: false, name?}. The ledger survives a bridge restart."
+        "file), started, last_seen, alive: false, name?}. The ledger survives a bridge restart. "
+        "Defaults and empties are left out (2.0): role when it is the mode's default (editor "
+        "for a GUI Houdini, worker headless), name when unset, and on instances[] rows "
+        "selected: false, busy: false and jobs_running: 0; recent when no dead Houdini is "
+        "remembered; connected.memory unless detail: true (so two reads of an unchanged "
+        "session match, and houdini://status, shaped the same, keeps its etag)."
     ),
     input_schema=_obj({}),
     output_schema=_out(
@@ -60,6 +65,7 @@ SPEC = ToolSpec(
     bridge_local=True,
     examples=({},),
     v2_extra={
+        "input": {"properties": {"detail": {"type": "boolean", "default": False}}},
         "output": {
             "properties": {
                 "instances": {
@@ -67,6 +73,6 @@ SPEC = ToolSpec(
                 },
                 "recent": {"type": "array", "items": {"type": "object"}},
             }
-        }
+        },
     },
 )

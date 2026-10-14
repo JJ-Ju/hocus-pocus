@@ -111,6 +111,7 @@ SOAK_READS = (
     "houdini://node/obj/geo1/xform1",
     "houdini://outline?root=/obj",
     "houdini://problems?root=/obj",
+    "houdini://status",
 )
 
 

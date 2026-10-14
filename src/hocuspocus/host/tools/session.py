@@ -273,7 +273,9 @@ def session_info(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
         "allow_python": bool(config.allow_python),
         "profile": config.profile,
     }
-    memory = memory_block()
+    # detail: false (the houdini://status resource, spec-2.0 §7 M4) leaves the memory
+    # figures out: they move between two reads of an unchanged session.
+    memory = memory_block() if args.get("detail") is not False else None
     if memory is not None:
         out["memory"] = memory
     return out

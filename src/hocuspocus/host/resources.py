@@ -23,6 +23,7 @@ Templates (RFC 6570; a ``{path}`` may be percent-encoded, ``%2Fobj%2Fgeo1``, or 
     houdini://events{?since,limit}                           inspect events
     houdini://jobs                                           inspect jobs
     houdini://status                                         the host's houdini_status
+                                                             (detail: false, no memory)
     houdini://instances                                      served by the bridge only
 
 Every etag is :func:`content_etag`: ``<pid>:<scene_generation>:<16 hex>``, the first 16
@@ -190,7 +191,7 @@ def parse(uri: Any) -> Route:
 
 def _call(kind: str, tail: str, q: dict[str, Any]) -> tuple[str, dict[str, Any]]:
     if kind == "status":
-        return "houdini_status", {}
+        return "houdini_status", {"detail": False}  # no memory figures: a stable etag
     if kind in BRIDGE_ONLY:
         return "", {}
     if kind == "jobs":

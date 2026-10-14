@@ -208,7 +208,7 @@ class Host:
                 return True, {**job, "result": {"outputs": ["x.bgeo"]}}, {}
             return True, dict(job), {}
         if tool == "houdini_status":
-            return True, {"hip": {"path": self.inst.hip}}, {}
+            return True, {"hip": {"path": self.inst.hip}, "memory": {"rss_mb": 1.0}}, {}
         return True, {"echo": tool}, {}
 
     def job(self, job_id, timeout_s=10.0):
@@ -348,8 +348,9 @@ def test_connect_sets_roles_that_status_reports():
     out = data(bridge.call_tool("houdini_connect", {"pid": W1.pid, "role": "editor"}))
     assert out["connected"]["role"] == "editor"
     status = data(bridge.call_tool("houdini_status", {}))
-    roles = {row["pid"]: row["role"] for row in status["instances"]}
-    assert roles == {GUI.pid: "editor", W1.pid: "editor"}
+    # 2.0 M4: a row names its role only when it is not the mode's default.
+    roles = {row["pid"]: row.get("role") for row in status["instances"]}
+    assert roles == {GUI.pid: None, W1.pid: "editor"}
     error = data(bridge.call_tool("houdini_connect", {"role": "worker"}))
     assert error["code"] == "houdini_offline" and {c["role"] for c in error["candidates"]} == {
         "editor"
@@ -372,10 +373,32 @@ def test_recent_lists_quit_and_dead_instances_outside_compat_1x_only(tmp_path):
     status = data(bridge.call_tool("houdini_status", {}))
     recent = {row["pid"]: row for row in status["recent"]}
     assert set(recent) == {W1.pid, W2.pid}
-    assert recent[W1.pid]["hip"] == "C:/work/w1.hip" and recent[W1.pid]["role"] == "worker"
+    assert recent[W1.pid]["hip"] == "C:/work/w1.hip" and "role" not in recent[W1.pid]  # worker
     assert recent[W2.pid]["name"] == "farm" and recent[W2.pid]["alive"] is False
     assert [row["pid"] for row in status["instances"]] == [GUI.pid]
     full, _h, _l = make(GUI, profile="compat_1x", ledger=ledger)
     status = data(full.call_tool("houdini_status", {}))
     assert "recent" not in status and "role" not in status["instances"][0]
     assert "role" not in (status["connected"] or {})
+
+
+def test_status_leaves_out_defaults_and_memory_outside_compat_1x():
+    """2.0 M4: houdini_status leaves out default roles, selected: false, busy: false,
+    jobs_running: 0, an unset name and connected.memory (unless detail: true); compat_1x
+    keeps the 1.4 shape."""
+    bridge, hosts, _live = make(GUI, W1)
+    hosts[W1.port].load = {"jobs_running": 2, "busy": True}
+    bridge.call_tool("houdini_connect", {"pid": GUI.pid})
+    status = data(bridge.call_tool("houdini_status", {}))
+    rows = {row["pid"]: row for row in status["instances"]}
+    assert rows[GUI.pid]["selected"] is True and "role" not in rows[GUI.pid]
+    assert not {"busy", "jobs_running"} & set(rows[GUI.pid]), rows[GUI.pid]
+    assert "selected" not in rows[W1.pid] and "role" not in rows[W1.pid]
+    assert rows[W1.pid]["jobs_running"] == 2 and rows[W1.pid]["busy"] is True
+    assert "name" not in rows[W1.pid] and "recent" not in status
+    assert "memory" not in status["connected"] and "role" not in status["connected"]
+    detailed = data(bridge.call_tool("houdini_status", {"detail": True}))
+    assert detailed["connected"]["memory"] == {"rss_mb": 1.0}
+    full, _h, _l = make(GUI, W1, profile="compat_1x")
+    old = data(full.call_tool("houdini_status", {}))
+    assert {row["selected"] for row in old["instances"]} == {True, False}
