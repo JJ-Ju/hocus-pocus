@@ -62,8 +62,8 @@ def creates(items: list[dict[str, Any]], known: set[str] | None = None) -> list[
 
 
 def rows_by_path(result: Any) -> dict[str, dict[str, Any]]:
-    """An ``edit`` result's per-op rows by path."""
-    return {row["path"]: row for row in result["results"] if row.get("path")}
+    """An ``edit`` summary's per-node rows by path."""
+    return {row["path"]: row for row in result["nodes"]}
 
 
 def node_problems(result: Any) -> list[dict[str, Any]]:

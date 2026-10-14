@@ -58,11 +58,12 @@ def test_scorecard_twelve(workload, wl_host):
             ]
         },
     )  # fmt: skip
-    creates = [r["path"] for r in built["results"] if r["op"] == "create"]
-    assert creates[-1] == f"{GEO}/OUT" and creates[1] == f"{GEO}/box1", built.data
-    # The echo cooked every touched node once: OUT cooked clean (1.4: a separate cook).
+    ids = built["ids"]
+    assert ids["out"] == f"{GEO}/OUT" and ids["box"] == f"{GEO}/box1", built.data
+    # The echo cooked every touched node once: OUT cooked clean (1.4: a separate cook);
+    # a clean cooked row carries no errors and no cook_state.
     out_row = next(n for n in built["nodes"] if n["path"] == f"{GEO}/OUT")
-    assert out_row["errors"] == [] and out_row.get("cook_state"), out_row
+    assert "errors" not in out_row and "cook_state" not in out_row, out_row
 
     # -- 3. read back ---------------------------------------------------------------------
     info = rec.ok("inspect", {"what": "node", "paths": [f"{GEO}/mountain1", f"{GEO}/OUT"]})
@@ -101,7 +102,8 @@ def test_scorecard_twelve(workload, wl_host):
     changed = rec.ok(
         "edit", {"ops": [{"op": "set", "path": f"{GEO}/mountain1/height", "value": 0.7}]}
     )
-    assert changed["results"][0]["value"] == pytest.approx(0.7), changed.data
+    assert [n["path"] for n in changed["nodes"]] == [f"{GEO}/mountain1"], changed.data
+    assert not changed["nodes"][0].get("errors"), changed.data
     assert rec.ok("hip_save", {})["dirty"] is False
     after = rec.ok("houdini_status")["connected"]["hip"]
     assert after["dirty"] is False and after["path"] == hip, after

@@ -61,21 +61,19 @@ def test_review_07_build_in_one_call_under_1_kb(v2_client):
     print(f"\n[edit] review-07 build (geo, box, mountain, subdivide, OUT): {size} bytes")
     assert size < 1024, (size, result)
     assert envelope["_meta"]["undo_label"] == "HocusPocus: edit 5 ops"
-    assert [r["op"] for r in result["results"]] == ["create"] * 5
-    assert [r.get("id") for r in result["results"]] == ["geo", "box", "mtn", "sub", None]
-    paths = [r["path"] for r in result["results"]]
-    assert paths == [
-        "/obj/terrain",
-        "/obj/terrain/box1",
-        "/obj/terrain/mountain1",
-        "/obj/terrain/subdivide1",
-        "/obj/terrain/OUT",
-    ]
-    assert [n["path"] for n in result["nodes"]] == paths
+    # The summary echo: one compact row per touched node and the ids, no per-op rows.
+    assert "results" not in result
+    assert result["ids"] == {
+        "geo": "/obj/terrain",
+        "box": "/obj/terrain/box1",
+        "mtn": "/obj/terrain/mountain1",
+        "sub": "/obj/terrain/subdivide1",
+    }
+    paths = [n["path"] for n in result["nodes"]]
+    assert paths == [*result["ids"].values(), "/obj/terrain/OUT"]
     for row in result["nodes"]:
-        assert set(row) >= {"path", "type", "errors", "warnings", "cook_state"}, row
-        assert row["errors"] == [], row
-    assert any("cook_ms" in row for row in result["nodes"][1:])
+        assert set(row) <= {"path", "type", "cook_state", "cook_ms", "deprecated", "notes"}, row
+        assert row.get("cook_state") != "cooked" and row.get("cook_ms", 1) >= 1, row
     out = hou.node("/obj/terrain/OUT")
     assert out.isDisplayFlagSet() and out.inputs()[0].path() == "/obj/terrain/subdivide1"
     assert hou.node("/obj/terrain/mountain1").inputs()[0].name() == "box1"
@@ -134,7 +132,8 @@ def test_every_op_type_in_one_call(v2_client):
                 },
                 {"op": "delete", "path": old.path()},
                 {"op": "select", "paths": ["$c"]},
-            ]
+            ],
+            "return": "ops",
         },
     )
     rows = result["results"]
@@ -180,10 +179,10 @@ def test_id_chain_create_connect_set(v2_client):
             ]
         },
     )
-    xform = hou.node(result["results"][1]["path"])
-    assert xform.inputs()[0].path() == result["results"][0]["path"]
+    xform = hou.node(result["ids"]["b"])
+    assert xform.inputs()[0].path() == result["ids"]["a"]
     assert xform.parm("ty").expression() == "$F * 0.1"  # $F is Houdini's, not an id
-    assert result["results"][3]["expression"] == "$F * 0.1"
+    assert [n["path"] for n in result["nodes"]] == [result["ids"]["a"], xform.path()]
 
 
 def test_unknown_or_forward_ids_are_refused(v2_client):
@@ -252,7 +251,7 @@ def test_dry_run_changes_nothing_and_returns_resolved_paths(v2_client, host):
     real = v2_client.ok(
         "edit", {"ops": [{"op": "create", "parent": "/obj/terrain", "type": "box"}]}
     )
-    assert real["results"][0]["path"] == "/obj/terrain/box2"
+    assert real["nodes"][0]["path"] == "/obj/terrain/box2"
 
 
 def test_dry_run_reports_every_problem_without_changing_anything(v2_client):
@@ -373,11 +372,15 @@ def test_partial_keeps_the_ops_that_worked(v2_client):
             "partial": True,
         },
     )
-    assert result["failed"] == 2
-    rows = result["results"]
-    assert rows[1]["error"]["code"] == "node_type_not_found"
-    assert rows[1]["error"]["detail"]["rolled_back"] is True
-    assert rows[3]["error"]["code"] == "invalid_argument"
+    failed = result["failed"]
+    assert [(f["item"], f["op"], f.get("id")) for f in failed] == [
+        (1, "create", "bad"),
+        (3, "connect", None),
+    ]
+    assert failed[0]["error"]["code"] == "node_type_not_found"
+    assert failed[0]["error"]["detail"]["rolled_back"] is True
+    assert failed[1]["error"]["code"] == "invalid_argument"
+    assert result["ids"] == {"a": "/obj/g/box1"}
     assert hou.node("/obj/g/box1").parm("sizex").eval() == 3.0
     assert [c.name() for c in hou.node("/obj/g").children()] == ["box1"]
 
@@ -404,7 +407,8 @@ def test_build_op_with_press_runs_the_callbacks(v2_client):
                     },
                     "press": {"src": ["initialize"]},
                 },
-            ]
+            ],
+            "return": "ops",
         },
     )
     src = hou.node("/obj/pyro/src")
@@ -423,7 +427,7 @@ def test_select_op_sets_the_selection_and_rolls_back(v2_client):
     box = geo.createNode("box", "box1")
     box.setSelected(True, clear_all_selected=True)
     result = v2_client.ok("edit", {"ops": [{"op": "select", "paths": [geo.path()]}]})
-    assert result["results"][0]["selected"] == [geo.path()]
+    assert result["selected"] == [geo.path()] and result["nodes"] == []
     assert hou.selectedNodes() == (geo,)
     v2_client.error(
         "edit",
@@ -450,12 +454,17 @@ def test_summary_and_full_echo(v2_client):
     summary = v2_client.ok("edit", {"ops": ops})
     hou.hipFile.clear(suppress_save_prompt=True)
     hou.node("/obj").createNode("geo", "g")
+    per_op = v2_client.ok("edit", {"ops": ops, "return": "ops"})
+    hou.hipFile.clear(suppress_save_prompt=True)
+    hou.node("/obj").createNode("geo", "g")
     full = v2_client.ok("edit", {"ops": ops, "return": "full"})
-    assert "flags" not in summary["nodes"][0] and "parms" not in summary["results"][0]
+    assert "flags" not in summary["nodes"][0] and "results" not in summary
+    assert [r["path"] for r in per_op["results"]] == ["/obj/g/box1", "/obj/g/transform1"]
+    assert "parms" not in per_op["results"][0] and per_op["nodes"] == summary["nodes"]
     assert full["nodes"][1]["flags"]["display"] is True
     assert [r["name"] for r in full["results"][0]["parms"]] == ["size"]
     assert set(full["nodes"][0]) >= {"path", "name", "type", "errors", "warnings", "messages"}
-    assert _size(full) > _size(summary)
+    assert _size(full) > _size(per_op) > _size(summary)
 
 
 def test_errors_reported_once_in_summary(v2_client):
@@ -473,3 +482,35 @@ def test_errors_reported_once_in_summary(v2_client):
     first, second = result["nodes"]
     assert first["errors"], first
     assert second.get("errors_same_as") == first["path"] or second.get("errors"), second
+
+
+def test_summary_folds_op_results_into_node_rows(v2_client):
+    """The summary echo carries each op's notable result on its node's row (a rename's
+    old_path, a block_end's pairing) or at the top (deleted, selected), and nothing the
+    caller sent: no set values, no spare parm lists, no empty problem lists."""
+    geo = hou.node("/obj").createNode("geo", "g")
+    victim = geo.createNode("box", "victim")
+    result = v2_client.ok(
+        "edit",
+        {
+            "ops": [
+                {"op": "create", "id": "b", "parent": geo.path(), "type": "box"},
+                {"op": "set", "path": "$b/sizex", "value": 3},
+                {"op": "node", "path": "$b", "name": "base",
+                 "spare_parms": {"add": [{"name": "seed", "type": "int"}]}},
+                {"op": "create", "id": "fb", "parent": geo.path(), "type": "block_begin",
+                 "name": "foreach_begin"},
+                {"op": "create", "parent": geo.path(), "type": "block_end",
+                 "name": "foreach_end"},
+                {"op": "delete", "path": victim.path()},
+                {"op": "select", "paths": ["/obj/g/base"]},
+            ]
+        },
+    )  # fmt: skip
+    rows = {row["path"]: row for row in result["nodes"]}
+    assert rows["/obj/g/base"]["old_path"] == "/obj/g/box1"
+    assert set(rows["/obj/g/base"]) <= {"path", "type", "old_path", "cook_ms"}
+    assert rows["/obj/g/foreach_end"]["paired_with"] == "/obj/g/foreach_begin"
+    assert result["ids"] == {"b": "/obj/g/base", "fb": "/obj/g/foreach_begin"}
+    assert result["deleted"] == ["/obj/g/victim"] and result["selected"] == ["/obj/g/base"]
+    assert hou.node("/obj/g/base").parm("sizex").eval() == 3.0

@@ -104,8 +104,8 @@ class Soak:
         result = self.rec.ok("edit", {"ops": ops})
         self.batches.append(len(ops))
         assert [n for n in result.get("nodes", []) if n.get("errors")] == [], result.data
-        for index, check in checks:
-            check(result["results"][index], result)
+        for _index, check in checks:  # the summary echo: node rows, ids, deleted
+            check(result.data, result)
 
     # -- setup and scheduled actions ----------------------------------------------------
 
@@ -285,8 +285,8 @@ class Soak:
         self.ops += ops
         expected = obj.path
 
-        def check(row: dict[str, Any], _result: Any) -> None:
-            assert row["path"] == expected, row
+        def check(summary: dict[str, Any], _result: Any) -> None:
+            assert summary["ids"][i] == expected or _gone(expected, summary), summary
 
         self.checks.append((len(self.ops) - len(ops), check))
         assert p == expected
@@ -317,7 +317,8 @@ class Soak:
                 {"path": f"{obj.path}/mtn/height", "value": round(self.rng.uniform(0.1, 1), 2)},
             ]
         )  # fmt: skip
-        self.queue({"op": "set", **item}, lambda row, _r, p=item["path"]: _assert_in(p, row))
+        node = item["path"].rpartition("/")[0]
+        self.queue({"op": "set", **item}, lambda row, _r, p=node: _assert_in(p, row))
 
     def node_edit(self) -> None:
         obj = self.pick()
@@ -478,8 +479,16 @@ class Soak:
         self.rec.ok("houdini_status")
 
 
-def _assert_in(path: str, row: dict[str, Any]) -> None:
-    assert path in json.dumps(row), (path, row)
+def _gone(path: str, summary: dict[str, Any]) -> bool:
+    """``path`` or an ancestor was deleted, or renamed, by a later op of the same edit."""
+    deleted = [*summary.get("deleted", []), *(r.get("old_path", "") for r in summary["nodes"])]
+    return any(d and (path == d or path.startswith(f"{d}/")) for d in deleted)
+
+
+def _assert_in(path: str, summary: dict[str, Any]) -> None:
+    """The summary echo names ``path`` (a node row, an id, a deleted path), or a later op
+    of the same edit took it away."""
+    assert path in json.dumps(summary) or _gone(path, summary), (path, summary)
 
 
 def _settle(rec: Any, job_id: str, timeout_s: float = 60.0) -> None:

@@ -23,10 +23,10 @@ result. So there is one undo policy, one rollback and one echo engine.
   changes are reverted and the rest stand. ``rolled_back`` is what really happened:
   a delete cannot be compensated, so ``edit`` then leaves the answer to the dispatcher,
   which undoes the whole group after it closes (``host/undo.py``).
-* :func:`echo` is the ``edit`` result: one row per op and the 1.4 summary row (``path,
-  type, errors, warnings, cook_state, cook_ms``) per touched node, each cooked once at the
-  end; ``return: full`` gives the 1.4 full shapes (flags, parm rows with long strings
-  elided).
+* :func:`echo` is the ``edit`` result: by default one compact row per touched node
+  (``path``, ``type``, and only the notable problems; each cooked once at the end) with the
+  ops' results folded in and an ``ids`` map; ``return: ops`` adds one row per op;
+  ``return: full`` gives the 1.4 full shapes (flags, parm rows with long strings elided).
 
 Pure Python apart from the op handlers, which import ``hou`` and the tool families lazily
 (the families import this module).
@@ -2013,13 +2013,58 @@ def node_problems(node: Any, cook: bool) -> dict[str, Any]:
     return cheap_cook_problems(node) if cook else collect_problems(node, cook=False)
 
 
+RETURN_MODES = ("summary", "ops", "full")
+"""``edit``'s ``return``: ``summary`` (the default) is one compact row per touched node with
+the ops' notable results folded in; ``ops`` adds the per-op rows; ``full`` is the 1.4 full
+shapes."""
+
+
+def return_mode(args: dict[str, Any]) -> str:
+    from .tools.nodes import bad_arg
+
+    mode = args.get("return") or "summary"
+    if mode not in RETURN_MODES:
+        raise bad_arg("'return' must be 'summary', 'ops' or 'full'.")
+    return mode
+
+
+def compact_row(node: Any, problems: dict[str, Any]) -> dict[str, Any]:
+    """The summary row of a touched node: ``path`` and ``type``, then only what is
+    notable: non-empty ``errors``/``warnings``, ``cook_state`` unless ``cooked``,
+    ``cook_ms`` from 1 ms, a ``hint``."""
+    row: dict[str, Any] = {"path": node.path(), "type": node.type().name()}
+    for key in ("errors", "warnings"):
+        if problems.get(key):
+            row[key] = problems[key]
+    state = problems.get("cook_state")
+    if state and state != "cooked":
+        row["cook_state"] = state
+    ms = problems.get("cook_time_ms")
+    if isinstance(ms, (int, float)) and ms >= 1:
+        row["cook_ms"] = ms
+    if problems.get("hint"):
+        row["hint"] = problems["hint"]
+    return row
+
+
+FOLDED_NODE_KEYS = ("old_path", "paired_with", "deprecated", "hda", "notes", "side_effects")
+"""Op results that belong to one node and are folded into its ``summary`` row."""
+
+
 def echo(result: Result, mode: str) -> dict[str, Any]:
-    """The ``edit`` result: ``results`` (one row per op: ``op``, ``id``, what it did) and
-    ``nodes`` (the 1.4 summary row per touched node, cooked once; ``full`` adds flags
-    and messages). Identical error lists after the first become ``errors_same_as`` in
-    summary mode."""
+    """The ``edit`` result.
+
+    ``summary``: ``nodes`` (one :func:`compact_row` per touched node, cooked once, with
+    the ops' per-node results folded in: :data:`FOLDED_NODE_KEYS`), ``ids`` (``{id:
+    path}`` for every op id), and what is not one node's: ``deleted``, ``reconnected``,
+    ``selected`` (and ``context_changed``), ``renamed``, ``replaced``, ``failed`` (with
+    ``partial``: ``[{item, op, id?, error}]``). ``ops`` is ``results`` (one row per op) plus the compact ``nodes``;
+    ``full`` is the 1.4 full shapes (flags, messages, parm rows). Identical error lists
+    after the first become ``errors_same_as`` outside ``full``."""
     from .tools import nodes as N
 
+    if mode == "summary":
+        return _summary_echo(result)
     rows: list[dict[str, Any]] = []
     for res in result.results:
         row: dict[str, Any] = {"op": res.op.op}
@@ -2033,8 +2078,8 @@ def echo(result: Result, mode: str) -> dict[str, Any]:
     blocks: list[dict[str, Any]] = []
     for node, cook in result.touched():
         problems = node_problems(node, cook)
-        if mode == "summary":
-            blocks.append(N.summary_block(node, problems))
+        if mode == "ops":
+            blocks.append(compact_row(node, problems))
         else:
             block = {"path": node.path(), "name": node.name(), "type": node.type().name()}
             block["flags"] = N.node_flags(node)
@@ -2042,12 +2087,120 @@ def echo(result: Result, mode: str) -> dict[str, Any]:
             if "cook_time_ms" in block:
                 block["cook_ms"] = block.pop("cook_time_ms")
             blocks.append(block)
-    if mode == "summary":
+    if mode == "ops":
         N.collapse_problems(blocks)
     out: dict[str, Any] = {"results": rows, "nodes": blocks}
     if result.failures:
         out["failed"] = len(result.failures)
     return out
+
+
+def _summary_echo(result: Result) -> dict[str, Any]:
+    from .tools import nodes as N
+
+    blocks: dict[str, dict[str, Any]] = {}
+    for node, cook in result.touched():
+        row = compact_row(node, node_problems(node, cook))
+        blocks[row["path"]] = row
+    out: dict[str, Any] = {}
+    ids: dict[str, str] = {}
+    failed: list[dict[str, Any]] = []
+    for res in result.results:
+        if res.error is not None:
+            entry: dict[str, Any] = {"item": res.index, "op": res.op.op}
+            if res.op.id:
+                entry["id"] = res.op.id
+            entry["error"] = res.error
+            failed.append(entry)
+            continue
+        if res.op.id and res.path:
+            ids[res.op.id] = _current_path(res.node) or res.path  # after later renames
+        _fold(res, result.state, blocks, out)
+    rows = list(blocks.values())
+    N.collapse_problems(rows)
+    final: dict[str, Any] = {"nodes": rows}
+    if ids:
+        final["ids"] = ids
+    final.update(out)
+    if failed:
+        final["failed"] = failed
+    return final
+
+
+def _current_path(node: Any) -> str | None:
+    if node is None or _session_id(node) is None:
+        return None
+    return node.path()
+
+
+def _fold(res: OpResult, st: State, blocks: dict[str, dict[str, Any]], out: dict[str, Any]) -> None:
+    """Fold one op's notable results into the summary: per-node keys onto that node's
+    row (when it is still there), the rest onto the top level."""
+    from .tools import nodes as N
+
+    kind, data = res.op.op, res.data
+
+    def onto(path: str | None, key: str, value: Any) -> None:
+        row = blocks.get(path or "")
+        if row is None:
+            return
+        if isinstance(value, list) and isinstance(row.get(key), list):
+            row[key] = row[key] + [v for v in value if v not in row[key]]
+        elif isinstance(value, dict) and isinstance(row.get(key), dict):
+            row[key] = {**row[key], **value}
+        else:
+            row[key] = value
+
+    def top(key: str, values: Any) -> None:
+        if isinstance(values, dict):
+            out.setdefault(key, {}).update(values)
+        else:
+            out.setdefault(key, []).extend(v for v in values if v not in out.get(key, []))
+
+    if kind == "create" and res.node is not None:
+        extra: dict[str, Any] = {}
+        sid = res.node.sessionId()
+        if sid in st.pairs:
+            extra["paired_with"] = st.pairs[sid]
+        N.add_create_extras(extra, st.extras.get(sid))
+        for key, value in extra.items():
+            onto(res.path, key, value)
+    elif kind == "node":
+        for key in ("old_path", "hda"):
+            if key in res.extra:
+                onto(res.path, key, res.extra[key])
+    elif kind == "set":
+        items = data if isinstance(data, list) else [data]
+        path = res.node.path() if res.node is not None else None
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            target = path or str(item.get("path", "")).rpartition("/")[0]
+            if item.get("notes"):
+                onto(target, "notes", list(item["notes"]))
+            if item.get("side_effects"):
+                onto(target, "side_effects", dict(item["side_effects"]))
+    elif kind == "delete":
+        top("deleted", data["deleted"])
+        if data["reconnected"]:
+            top("reconnected", data["reconnected"])
+    elif kind == "build":
+        base = data["parent"].path().rstrip("/")
+        if data["renamed"]:
+            top("renamed", {f"{base}/{k}": f"{base}/{v}" for k, v in data["renamed"].items()})
+        if data["replaced"]:
+            top("replaced", [f"{base}/{n}" for n in data["replaced"]])
+        for node_path, effects in (data.get("side_effects") or {}).items():
+            onto(node_path, "side_effects", effects)
+        for key in ("warnings", "notes"):
+            if data[key]:
+                top(key, data[key])
+    elif kind == "select":
+        out["selected"] = data["selected"]
+        if data.get("context_changed"):
+            out["context_changed"] = data["context_changed"]
+        if data.get("notes"):
+            top("notes", data["notes"])
 
 
 def _short_parm_row(row: dict[str, Any]) -> dict[str, Any]:

@@ -11,7 +11,6 @@ from ._helpers import (
     _n,
     _obj,
     _partial,
-    _return,
     _s,
 )
 
@@ -25,7 +24,7 @@ SPEC = ToolSpec(
         "id?, ...}: create, delete, connect, set, node (rename, flags, color, comment, "
         "position, lock, spare_parms), copy, layout, build (hou.data), select; later ops name "
         "an earlier op's node as $id. dry_run validates, returning resolved paths. A failure "
-        "rolls all back unless partial. Returns per-op rows and per-node problems."
+        "rolls all back unless partial. Returns per-node rows (problems only) and ids."
     ),
     notes=(
         "Each op takes the fields of the 1.4 tool it replaces. create: parent, type, name, "
@@ -52,14 +51,18 @@ SPEC = ToolSpec(
         "call back; the error is items[i] (path) with detail.rolled_back as performed (a "
         "delete cannot be compensated, so the dispatcher's undo of the step decides). With "
         "partial, ops run without the up-front validation and a failing op reverts only "
-        "itself; its row carries error. Result: results (one row per op: op, id, path, "
-        "and what it did: paired_with, notes, deprecated, side_effects, set values, input "
-        "and from, old_path, deleted, created, selected), nodes (the summary row per "
-        "touched node: path, type, errors, warnings, cook_state, cook_ms, each cooked once "
-        "after every op ran; node ops do not cook), failed with partial. return full adds "
-        "flags to nodes and the 1.4 full rows to results (create parms the call set, with "
-        "strings over 200 characters as {elided, head}). The undo label is HocusPocus: edit "
-        "<n> ops."
+        "itself. Result (return summary): nodes, one row per touched node, each cooked once "
+        "after every op ran (node ops do not cook): path and type, plus errors and warnings "
+        "when not empty (a list repeated downstream becomes errors_same_as), cook_state "
+        "when not cooked, cook_ms from 1 ms, and the ops' results for that node (old_path, "
+        "paired_with, deprecated, hda, notes, side_effects); ids {id: path} for every op "
+        "id; deleted, reconnected, selected (context_changed), renamed, replaced when an "
+        "op did that; failed [{item, op, id, error}] with partial. return ops adds "
+        "results, one row per op (op, "
+        "id, path, and what it did: set values, input and from, spare_parms, created, "
+        "copies); return full gives the 1.4 full shapes (flags and messages on nodes, "
+        "create parms the call set, strings over 200 characters as {elided, head}) and "
+        "failed as a count. The undo label is HocusPocus: edit <n> ops."
     ),
     # Field shapes are the 1.4 tools' (notes); the host checks them, so the schema names the
     # fields and their JSON types only (spec-2.0 principle 13: bytes per tools/list).
@@ -119,7 +122,7 @@ SPEC = ToolSpec(
                 minItems=1,
             ),
             "dry_run": _b(False),
-            "return": _return(),
+            "return": _enum(("summary", "ops", "full"), "summary"),
             "partial": _partial(),
         },
         ("ops",),

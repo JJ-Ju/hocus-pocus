@@ -102,11 +102,11 @@ async def _scenario(rec: Recorder) -> None:
             ]
         },
     )
-    paths = [row["path"] for row in built["results"]]
+    paths = list(built["ids"].values())
     assert paths[:5] == [GEO, f"{GEO}/box1", f"{GEO}/mountain1", f"{GEO}/subdivide1", f"{GEO}/OUT"]
-    copy_path = paths[-1]
+    copy_path = built["ids"]["copy"]
     assert copy_path == f"{GEO}/copytopoints1", paths
-    assert all(not node["errors"] for node in built["nodes"]), built["nodes"]
+    assert all(not node.get("errors") for node in built["nodes"]), built["nodes"]
 
     # -- 2. read the chain back -------------------------------------------------------------
     read = await rec.ok(

@@ -519,9 +519,10 @@ policy, one rollback and one echo engine.
   changes are reverted and the rest stand. `rolled_back` is what really happened: a delete
   cannot be compensated, so after one the dispatcher undoes the whole group once it closes
   and reports that outcome.
-- **Echo.** One row per op, and the §4.1 summary row per touched node (`path, type, errors,
-  warnings, cook_state, cook_ms`), each node cooked once after every op ran; `return:
-  full` gives the 1.4 full shapes.
+- **Echo.** By default one compact row per touched node (`path, type`, then only what is
+  notable), each node cooked once after every op ran, with the ops' results folded in and
+  an `ids` map; `return: ops` adds one row per op; `return: full` gives the 1.4 full
+  shapes (spec-2.0 §7 M4: the per-op rows repeated every created node's path).
 
 ### 3.10 Resources
 
@@ -764,17 +765,23 @@ takes the fields of the 1.4 tool it replaces, with that tool's semantics (§4.5 
 - **Failure.** A failing op rolls the call back by compensation and raises the §4.1 batch
   error (`items[i] (<path>): ...`, `detail: {item, path, rolled_back}`); after a delete,
   `rolled_back` is what undoing the whole group did. `partial` skips the up-front
-  validation, reverts only a failing op and keeps the rest; its row carries `error` and
-  the result `failed`.
-- **Result.** `results` (one row per op: `op`, `id?`, `path` (final, after later renames)
-  and what it did, the table's last column) and `nodes` (the §4.1 summary row per touched
-  node, `path, type, errors, warnings, cook_state, cook_ms`, each cooked once after every op
-  ran; nodes only a `node` op touched, and `cook: false` creates, are not cooked; identical
-  error lists after the first become `errors_same_as`). `return: full` adds `name`, `flags`
-  and `messages` to `nodes` and the 1.4 full rows to `results` (a create's `parms` lists
-  only the parms the call set, strings over 200 characters as `{elided, head}`; a set's
-  whole `parm_set` row). The review-07 build (geo, box, mountain, subdivide, OUT) is one
-  call of under 1 KB.
+  validation, reverts only a failing op and keeps the rest; the result's `failed` lists
+  `{item, op, id?, error}` per failed op.
+- **Result** (`return: summary | ops | full = summary`; 2.0 M4, review of the workload
+  bytes). `summary`: `nodes`, one row per touched node, each cooked once after every op
+  ran (nodes only a `node` op touched, and `cook: false` creates, are not cooked): `path`,
+  `type`, and only what is notable: `errors`/`warnings` when not empty (identical lists
+  after the first become `errors_same_as`), `cook_state` when not `cooked`, `cook_ms` from
+  1 ms, `hint`, and the ops' results for that node (`old_path`, `paired_with`,
+  `deprecated`, `hda`, `notes`, `side_effects`); `ids` (`{id: path}`, the path after later
+  renames) for every op id; `deleted`, `reconnected`, `selected` (`context_changed`),
+  `renamed`, `replaced` when an op did that. What the caller sent (set values, wiring,
+  spare parm names) is not echoed. `ops` adds `results`, one row per op (`op`, `id?`,
+  `path` (final, after later renames) and what it did, the table's last column). `full`
+  gives `results` with the 1.4 full rows (a create's `parms` lists only the parms the call
+  set, strings over 200 characters as `{elided, head}`; a set's whole `parm_set` row) and
+  `nodes` with `name`, `flags` and `messages`, and `failed` as a count. The review-07
+  build (geo, box, mountain, subdivide, OUT) is one call of under 1 KB.
 - Destructive (`delete`), not idempotent.
 
 **`node_create`** and **`parm_set`** stay in every profile as conveniences: an `edit` plan

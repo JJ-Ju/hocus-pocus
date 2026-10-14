@@ -114,9 +114,8 @@ def test_city_build(workload):
     ]
     ops += creates(core, known={B})
     built = rec.ok("edit", {"ops": ops})
-    assert "roof_type" in str(built.data) and "district_count" in str(built.data), built.data
     rows = rows_by_path(built)
-    assert sum(1 for r in built["results"] if r["op"] == "create" and r["path"].startswith(B))
+    assert built["ids"]["building_gen_OUT_BUILDING"] == f"{B}/OUT_BUILDING", built.data
     assert len([p for p in rows if p.startswith(f"{B}/") and p != f"{B}/CONTROLS"]) == 12
     assert node_problems(built) == [], built.data
     geo = rec.ok("inspect", {"what": "geo", "target": f"{B}/OUT_BUILDING"})
@@ -133,7 +132,9 @@ def test_city_build(workload):
             ]
         },
     )
-    assert parapet["results"][0]["value"] in ("parapet", 1), parapet.data
+    # The spare menu exists (the set resolved it) and nothing complains.
+    assert [r["path"] for r in parapet["nodes"]] == [f"{B}/CONTROLS", B], parapet.data
+    assert node_problems(parapet) == [], parapet.data
 
     # -- 3. the city, its comments and the camera: one transaction ------------------------
     city_items = _city_items()

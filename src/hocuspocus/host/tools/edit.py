@@ -13,7 +13,6 @@ from typing import Any
 
 from .. import tx
 from ._common import arg_bool
-from .nodes import return_mode
 from .registry import HostContext, tool
 
 CHANGED_KEY = "_changed"
@@ -23,7 +22,7 @@ CHANGED_KEY = "_changed"
 def edit(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     dry_run = arg_bool(args, "dry_run", False)
     partial = arg_bool(args, "partial", False)
-    mode = return_mode(args)
+    mode = tx.return_mode(args)
     plan = tx.parse_ops(args.get("ops"), partial=partial)
     # Validation first: a plan with a bad op changes nothing at all. With partial each op
     # stands alone, so a bad op only fails itself when it runs.
