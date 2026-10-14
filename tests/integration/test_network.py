@@ -533,3 +533,102 @@ def test_build_accepts_to_index_by_input_name(client):
         },
     )
     assert error["code"] == "invalid_input"
+
+
+# -- parm callbacks (1.4, review 20 N2 for network_build) ------------------------------
+
+
+def _pyro_data(initialize: str = "source") -> dict:
+    return {
+        "sphere1": {"type": "sphere"},
+        "src": {
+            "type": "pyrosource",
+            "parms": {"initialize": initialize},
+            "inputs": [{"from": "sphere1", "from_index": 0, "to_index": 0}],
+        },
+    }
+
+
+def test_build_notes_callbacks_it_did_not_run(client):
+    """A menu with a callback script set from data is set, but setChildrenFromData does not
+    run the callback; the result says so, as node_create does, and names press."""
+    geo = hou.node("/obj").createNode("geo", "pyro")
+    result = client.ok("network_build", {"parent": geo.path(), "data": _pyro_data()})
+    src = hou.node(f"{geo.path()}/src")
+    assert src.parm("initialize").evalAsString() == "source"
+    assert src.parm("attributes").eval() == 0  # the callback did not run
+    (note,) = [n for n in result["notes"] if "callback" in n]
+    assert note.startswith(f"{src.path()}/initialize") and '"src": ["initialize"]' in note
+    assert "pressed" not in result
+
+
+def test_build_press_runs_callbacks_after_the_build(client):
+    geo = hou.node("/obj").createNode("geo", "pyro")
+    result = client.ok(
+        "network_build",
+        {"parent": geo.path(), "data": _pyro_data(), "press": {"src": ["initialize"]}},
+    )
+    src = hou.node(f"{geo.path()}/src")
+    # initialize is an action menu: its callback applies the preset and resets it to none.
+    assert src.parm("initialize").evalAsString() == "none"
+    assert src.parm("attributes").eval() == 2  # density and temperature
+    assert result["pressed"] == [f"{src.path()}/initialize"]
+    effects = result["side_effects"][src.path()]
+    assert effects["initialize"] == ["source", "none"] and "attributes" in effects
+    assert not any("callback" in n for n in result.get("notes", []))
+    # One undo step takes the build and the press back together.
+    client.ok("undo", {"action": "undo"})
+    assert hou.node(f"{geo.path()}/src") is None
+
+
+def test_build_press_takes_nested_and_absolute_paths(client):
+    result = client.ok(
+        "network_build",
+        {
+            "parent": "/obj",
+            "data": {"pyro": {"type": "geo", "children": _pyro_data()}},
+            "press": {"/obj/pyro/src": ["initialize"]},
+        },
+    )
+    assert hou.node("/obj/pyro/src").parm("attributes").eval() == 2
+    assert result["pressed"] == ["/obj/pyro/src/initialize"]
+    hou.node("/obj/pyro").destroy()
+    client.ok(
+        "network_build",
+        {
+            "parent": "/obj",
+            "data": {"pyro": {"type": "geo", "children": _pyro_data()}},
+            "press": {"pyro/src": ["initialize"]},
+        },
+    )
+    assert hou.node("/obj/pyro/src").parm("attributes").eval() == 2
+
+
+def test_build_press_errors_roll_back(client):
+    geo = hou.node("/obj").createNode("geo", "pyro")
+    error = client.error(
+        "network_build",
+        {"parent": geo.path(), "data": _pyro_data(), "press": {"nope": ["initialize"]}},
+    )
+    assert error["code"] == "invalid_argument" and "src" in error["candidates"]
+    error = client.error(
+        "network_build",
+        {"parent": geo.path(), "data": _pyro_data(), "press": {"src": ["initialise"]}},
+    )
+    assert error["code"] == "parm_not_found" and "initialize" in error["candidates"]
+    error = client.error(
+        "network_build",
+        {"parent": geo.path(), "data": _pyro_data(), "press": {"sphere1": ["radx"]}},
+    )
+    assert error["code"] == "invalid_value", error  # no callback to run
+    assert geo.children() == ()
+    dry = client.ok(
+        "network_build",
+        {
+            "parent": geo.path(),
+            "data": _pyro_data(),
+            "press": {"src": ["initialize"]},
+            "dry_run": True,
+        },
+    )
+    assert dry["dry_run"] is True and geo.children() == ()

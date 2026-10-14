@@ -145,7 +145,8 @@ class HostClient:
             "error",
             "_meta",
         }, envelope
-        assert set(envelope["_meta"]) == {"scene_generation", "undo_label", "elapsed_ms"}
+        assert set(envelope["_meta"]) == {"scene_generation", "undo_label", "elapsed_ms", "timing"}
+        assert envelope["_meta"]["timing"]["main_thread_ms"] >= 0
         return envelope
 
     def ok(self, tool: str, args: dict[str, Any] | None = None, **kw: Any) -> dict[str, Any]:
@@ -212,3 +213,22 @@ def clean_scene(request: pytest.FixtureRequest) -> Any:
 @pytest.fixture
 def work_dir(tmp_path: Path) -> Path:
     return tmp_path
+
+
+@pytest.fixture
+def crash_capture_child(monkeypatch: pytest.MonkeyPatch) -> Any:
+    """``crash(rop_type)`` makes every viewport_capture child that renders ``rop_type``
+    (``flipbook`` or ``opengl``) exit as a segfault would, and forgets earlier crashes."""
+    from hocuspocus.host.tools import visual
+
+    def crash(rop_type: str) -> None:
+        prefix = (
+            "import json, os, sys\n"
+            "with open(sys.argv[1], encoding='utf-8') as fh:\n"
+            f"    if (json.load(fh).get('capture') or {{}}).get('rop_type') == {rop_type!r}:\n"
+            "        os._exit(139)\n"
+        )
+        monkeypatch.setattr(visual, "_CHILD_SCRIPT", prefix + visual._CHILD_SCRIPT)
+        monkeypatch.setattr(visual, "_stage_crashed", {})
+
+    return crash

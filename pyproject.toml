@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "hocuspocus"
-version = "1.3.0"
+version = "1.4.0"
 description = "MCP server that lets AI agents drive a live SideFX Houdini session."
 readme = "README.md"
 license = { file = "LICENSE" }

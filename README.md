@@ -39,6 +39,13 @@ a File Cache writes the cache as a job with progress and cancel, `viewport_captu
 {cop_path}` and `geo_info` show a COP image, and with several Houdinis running the agent
 pins one by pid or name, so no call lands in the wrong scene.
 
+1.4 re-ran the first scorecard ([21](docs/redesign/review/21-scorecard-1.3.md): 4/5/5/5/5/5),
+soaked one host with 1,230 calls without an unexpected error ([22](docs/redesign/review/22-soak-1.3.md))
+and took a Vellum cloth through USD to Karma ([23](docs/redesign/review/23-vellum-usd-eval.md)).
+Captures render through the Flipbook ROP (`source_used: flipbook_rop`), and headless repeat
+captures take about 0.4 s. `render` writes a USD export in one call and checks its time
+samples, takes `camera`, and `network_build {press}` runs parm callbacks after a build.
+
 ![City overview captured with viewport_capture](docs/redesign/evidence/city-destruction/02_city_overview.png)
 
 ![Simulation frames 1 to 96 and a district close-up](docs/redesign/evidence/city-destruction/20_contact_sheet.png)
@@ -49,6 +56,8 @@ pins one by pid or name, so no call lands in the wrong scene.
 - [Pyro cache](docs/redesign/evidence/city-destruction/60_pyro_frames.png): a smoke plume cached with a File Cache and flipbooked with an OpenGL ROP, frames 1 to 48 (review 17).
 - [Copernicus city map](docs/redesign/evidence/city-destruction/70_copernicus_citymap.png): a COP network's image written by `rop_image`, and the SOP city that reads it through `op:` (review 18).
 - [Two instances](docs/redesign/evidence/city-destruction/80_two_instance_render.png): frames of a render on a headless worker while the GUI Houdini kept editing (review 19).
+- [Soak latency](docs/redesign/evidence/city-destruction/90_soak_latency.png): latency per call and host memory over a 616-call session on one headless Houdini (review 22).
+- [Vellum to USD to Karma](docs/redesign/evidence/city-destruction/100_vellum_usd_karma.png): a Vellum cloth cached, exported with a `usd_rop`, re-imported with `sublayer` and rendered with Karma at frame 24 (review 23).
 
 ## Requirements
 
@@ -148,8 +157,9 @@ The bridge also serves resources and prompts:
 
 In a GUI session, `viewport_capture` without `camera` or `fit` grabs the Scene Viewer as
 it is; an explicit `fit` frames the grab, and the user's view is put back afterwards.
-With a `camera` or `lop_path` (a LOP stage), or `"source": "opengl_rop"`, it renders
-through an OpenGL ROP, framed by a temporary camera when no `camera` is given.
+With a `camera` or `lop_path` (a LOP stage), or `"source": "flipbook_rop"`, it renders
+through a Flipbook ROP (falling back to the OpenGL ROP, then Karma), framed by a temporary
+camera when no `camera` is given. `render {camera}` overrides a ROP's camera for one render.
 `cop_path` shows a Copernicus node's image in about 0.2 s. To write a cache, `render` the
 File Cache (`cook` never writes files): it runs as a job you can poll and cancel.
 
@@ -195,7 +205,7 @@ host by hand instead, use `hython -m hocuspocus.host [--hip FILE] [--port N]
 [--read-only] [--no-python] ...` from a neutral directory (hython puts its cwd on
 `HOUDINI_PATH`); it prints `{"pid", "port", "token_file"}` and serves until stopped.
 Tools that need the UI return `ui_required` headless; `viewport_capture` works through
-an OpenGL ROP in a short-lived child hython (about 3 s).
+a Flipbook ROP in a child hython, about 3 s for the first capture and 0.4 s for later ones.
 
 **Two Houdinis.** Several can run at once, for example the GUI for editing and a
 `hocuspocus launch --headless` worker for renders. `houdini_status` lists them (`busy`,
@@ -271,7 +281,7 @@ already has a shell on your machine.
 
 ## Status and versioning
 
-1.0 was merged to `master` on 2026-10-12 (tag `v1.0.0`). 1.1, 1.2 and 1.3 change some
+1.0 was merged to `master` on 2026-10-12 (tag `v1.0.0`). 1.1 to 1.4 change some
 result shapes and defaults; [`CHANGELOG.md`](CHANGELOG.md) lists them with upgrade notes and
 known limitations. HocusPocus is not on PyPI yet. It is qualified on Windows with Houdini
 22.0.466; the code is not Windows-only, but Linux and macOS are untested.

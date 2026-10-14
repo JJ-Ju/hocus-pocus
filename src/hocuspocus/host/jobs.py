@@ -22,6 +22,8 @@ from typing import Any
 
 from hocuspocus.tools.errors import ToolError
 
+from .executor import current_meter, metering
+
 log = logging.getLogger("hocuspocus.host.jobs")
 
 JOB_NOT_FOUND_HINT = (
@@ -157,10 +159,14 @@ class JobManager:
     def start(self, tool: str, fn: Callable[[JobContext], Any], *, label: str = "") -> Job:
         job = Job(tool, label, self._prefix)
         ctx = JobContext(job, self._executor, self._default_timeout_s)
+        # The starting call's main-thread meter: steps finished while it waits count
+        # toward its _meta.timing (review 24 N5).
+        meter = current_meter()
 
         def runner() -> None:
             try:
-                result = fn(ctx)
+                with metering(meter):
+                    result = fn(ctx)
                 if job.cancel_event.is_set():
                     job.state = "cancelled"
                     job.message = "cancelled"

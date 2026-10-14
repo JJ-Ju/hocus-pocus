@@ -7,6 +7,7 @@ so the dispatcher is unit-testable on plain CPython.
 from __future__ import annotations
 
 import contextlib
+import os
 import threading
 import time
 import traceback
@@ -16,6 +17,7 @@ from typing import Any
 from hocuspocus.tools.catalog import in_profile, profile_of
 from hocuspocus.tools.errors import ToolError
 
+from .executor import MainThreadMeter, metering
 from .tools.registry import HostContext, HostTool
 from .undo import UndoGroupFactory, make_label
 
@@ -74,12 +76,54 @@ def _report_rollback(error: ToolError, outcome: Any, ctx: HostContext) -> None:
         detail[ROLLED_BACK_KEY] = rolled_back
 
 
-def make_meta(ctx: HostContext, *, undo_label: str | None, started: float) -> dict[str, Any]:
-    return {
+def _note_rolled_back(outcome: Any, ctx: HostContext) -> None:
+    """Tell the undo history that a rollback left this call on the redo stack, so
+    ``undo {action: redo}`` will not re-apply it (review 21 papercut 2)."""
+    redo_after = getattr(outcome, "redo_after", None)
+    undo = getattr(ctx, "undo", None)
+    if redo_after and undo is not None and hasattr(undo, "rolled_back"):
+        undo.rolled_back(tuple(redo_after))
+
+
+def make_meta(
+    ctx: HostContext,
+    *,
+    undo_label: str | None,
+    started: float,
+    timing: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    meta: dict[str, Any] = {
         "scene_generation": ctx.scene.generation,
         "undo_label": undo_label,
         "elapsed_ms": int(round((time.perf_counter() - started) * 1000)),
     }
+    if timing is not None:
+        meta["timing"] = timing_block(timing)
+    return meta
+
+
+def timing_block(timing: dict[str, Any]) -> dict[str, Any]:
+    """``_meta.timing`` (review 22 finding 2): ``main_thread_ms``, the time the tool ran
+    on Houdini's main thread, and ``queue_ms``, the wait for the main thread before that.
+    A tool that runs off the main thread reports the sum of the main-thread steps run on
+    its behalf, its jobs' steps finished within its wait included (review 24 N5), or
+    ``0`` with ``off_main_thread: true`` when it ran none."""
+    metered = timing.get("metered")
+    if metered is not None:
+        if not metered["steps"]:
+            return {"main_thread_ms": 0, "off_main_thread": True}
+        return {
+            "main_thread_ms": round(metered["main_s"] * 1000, 1),
+            "queue_ms": round(metered["queue_s"] * 1000, 1),
+        }
+    work = timing.get("work_s")
+    out: dict[str, Any] = {
+        "main_thread_ms": round(work * 1000, 1) if work is not None and timing.get("main") else 0
+    }
+    waited = timing.get("waited_s")
+    if timing.get("main") and work is not None and waited is not None:
+        out["queue_ms"] = round(max(0.0, waited - work) * 1000, 1)
+    return out
 
 
 def ok_envelope(result: Any, meta: dict[str, Any]) -> dict[str, Any]:
@@ -123,6 +167,24 @@ def tool_error_from_exception(exc: BaseException) -> ToolError:
         hou_exception=f"{qualified}: {message}",
         detail={"traceback": tb},
     )
+
+
+def log_call(logger: Any, tool: Any, envelope: dict[str, Any]) -> None:
+    """One INFO line per call in the host log (review 22 finding 4: a 616-call soak left
+    137 B of log): ``call <tool> <elapsed> ms main <main_thread_ms> ms ok|<code> pid
+    <pid>``; the formatter adds the timestamp. Never raises."""
+    with contextlib.suppress(Exception):
+        meta = envelope.get("_meta") or {}
+        timing = meta.get("timing") or {}
+        status = "ok" if envelope.get("ok") else (envelope.get("error") or {}).get("code")
+        logger.info(
+            "call %s %s ms main %s ms %s pid %d",
+            tool if isinstance(tool, str) and tool else "?",
+            meta.get("elapsed_ms"),
+            timing.get("main_thread_ms", 0),
+            status or "internal",
+            os.getpid(),
+        )
 
 
 class Dispatcher:
@@ -171,9 +233,23 @@ class Dispatcher:
         """Run ``tool``. ``max_response_bytes`` (from the request envelope; the config
         value when absent) is exposed to the tool as ``ctx.extras["max_response_bytes"]``
         so paged tools can cap rows to the client's budget. ``request_id`` (also from the
-        envelope) is what :func:`current_request_id` returns while the tool runs."""
+        envelope) is what :func:`current_request_id` returns while the tool runs. Every
+        call writes one line to the host log (:func:`log_call`)."""
+        envelope = self._call(tool, args, timeout_s, max_response_bytes, request_id)
+        log_call(self.ctx.logger, tool, envelope)
+        return envelope
+
+    def _call(
+        self,
+        tool: Any,
+        args: Any,
+        timeout_s: Any,
+        max_response_bytes: Any,
+        request_id: Any,
+    ) -> dict[str, Any]:
         started = time.perf_counter()
         undo_label: str | None = None
+        timing: dict[str, Any] = {}
         try:
             if not isinstance(tool, str) or not tool:
                 raise ToolError(
@@ -232,14 +308,31 @@ class Dispatcher:
                 self.response_budget(max_response_bytes),
                 effective,
                 request_id if isinstance(request_id, str) and request_id else None,
+                timing,
             )
-            result = self.ctx.executor.run(work, effective) if impl.main_thread else work()
+            timing["main"] = impl.main_thread
+            sent = time.perf_counter()
+            if impl.main_thread:
+                try:
+                    result = self.ctx.executor.run(work, effective)
+                finally:
+                    timing["waited_s"] = time.perf_counter() - sent
+            else:
+                meter = MainThreadMeter()
+                try:
+                    with metering(meter):
+                        result = work()
+                finally:
+                    timing["metered"] = meter.close()
             changed = _pop_changed(result)
             if read_only_dry_run and changed is not False:
                 raise _read_only_error(tool)
             if changed is False:
                 undo_label = None
-            return ok_envelope(result, make_meta(self.ctx, undo_label=undo_label, started=started))
+            return ok_envelope(
+                result,
+                make_meta(self.ctx, undo_label=undo_label, started=started, timing=timing),
+            )
         except BaseException as exc:
             if isinstance(exc, KeyboardInterrupt | SystemExit):
                 raise
@@ -247,7 +340,7 @@ class Dispatcher:
             if error.code == "internal":
                 self.ctx.logger.error("tool %s failed: %s", tool, error.message, exc_info=exc)
             return error_envelope(
-                error, make_meta(self.ctx, undo_label=undo_label, started=started)
+                error, make_meta(self.ctx, undo_label=undo_label, started=started, timing=timing)
             )
 
     def _work(
@@ -258,6 +351,7 @@ class Dispatcher:
         budget: int,
         timeout_s: float,
         request_id: str | None = None,
+        timing: dict[str, Any] | None = None,
     ) -> Callable[[], Any]:
         ctx = self.ctx
 
@@ -267,11 +361,14 @@ class Dispatcher:
             ctx.extras["max_response_bytes"] = budget
             _CALL.timeout_s = timeout_s
             _CALL.request_id = request_id
+            began = time.perf_counter()
             try:
                 return run_tool()
             finally:
                 _CALL.timeout_s = None
                 _CALL.request_id = None
+                if timing is not None:
+                    timing["work_s"] = time.perf_counter() - began
 
         def run_tool() -> Any:
             if undo_label is None:
@@ -284,6 +381,10 @@ class Dispatcher:
                     result = impl.fn(args, ctx)
             except ToolError as exc:
                 _report_rollback(exc, outcome, ctx)
+                _note_rolled_back(outcome, ctx)
+                raise
+            except Exception:
+                _note_rolled_back(outcome, ctx)
                 raise
             # A tool that says it changed nothing (a dry run) records no label and does
             # not dirty the scene.

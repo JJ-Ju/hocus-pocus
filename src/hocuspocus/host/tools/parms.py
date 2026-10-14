@@ -1084,6 +1084,16 @@ def has_callback(parm: Any) -> bool:
         return False
 
 
+def skips_callback(parm: Any) -> bool:
+    """Whether a plain set of ``parm`` leaves a callback unrun that clicking it in Houdini
+    would run: a toggle or a menu with a callback script (review 20 N2)."""
+    if not has_callback(parm):
+        return False
+    template = parm.parmTemplate()
+    kind = _kind(template)
+    return kind == "toggle" or bool(_menu_mode(template, kind))
+
+
 CALLBACK_NOTE = (
     "{name} has a callback script that a plain set does not run (clicking the parm in "
     "Houdini would); pass press: true with the value to run it."
@@ -1094,6 +1104,12 @@ CREATE_CALLBACK_NOTE = (
 )
 """The same note on ``node_create``, whose parms spell the item without ``path`` (review 20
 N2)."""
+NETWORK_CALLBACK_NOTE = (
+    "{path} has a callback script that network_build does not run (clicking the parm in "
+    'Houdini would); pass press {{"{key}": ["{name}"]}} to run it after the build.'
+)
+"""The same note on ``network_build``, whose ``press`` maps a node in data to parm names
+(1.4)."""
 NO_CALLBACK = (
     "{path} is a {kind} parm with no callback script; press clicks a button, or runs the "
     "callback of a parm that has one (with or without a value)."
@@ -1112,7 +1128,10 @@ def _apply(
     ``callback_note`` is the note for a plain set of a callback menu or toggle."""
     import hou
 
+    from .events import note_explicit  # lazy: events imports nodes, which imports this
+
     path = _target_path(target)
+    note_explicit(target)  # its events are the agent's; Houdini's own writes are not
     # press next to a value sets the value, then runs the parm's callback (review 17 P1-4).
     press_after = item.get("press") is True and item.get("value") is not None
     present = [
@@ -1194,10 +1213,8 @@ def _apply(
                 from .visual import press_button
 
                 pressed = press_button(node, parms[0])
-            elif len(parms) == 1 and has_callback(parms[0]):
-                template = parms[0].parmTemplate()
-                if _kind(template) == "toggle" or _menu_mode(template, _kind(template)):
-                    notes.append(callback_note.format(name=parms[0].name()))
+            elif len(parms) == 1 and skips_callback(parms[0]):
+                notes.append(callback_note.format(name=parms[0].name()))
         elif field == "expression":
             parm = _require_single(target, "expression", path)
             expression = item["expression"]

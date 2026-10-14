@@ -247,35 +247,88 @@ def _dop_networks(node: Any) -> list[Any]:
 
 
 def _sim_states(nets: list[Any]) -> list[dict[str, Any]]:
-    """``{path, time, memory}`` per DOP network: the simulation's time and memory (bytes)."""
+    """``{path, time, memory, frame, start}`` per DOP network: the simulation's time,
+    memory (bytes) and current frame, and the network's start frame."""
+    import hou
+
     states = []
     for net in nets:
         with contextlib.suppress(Exception):
             sim = net.simulation()
+            start = net.parm("startframe")
+            time_now = float(sim.time())
             states.append(
-                {"path": net.path(), "time": float(sim.time()), "memory": int(sim.memoryUsage())}
+                {
+                    "path": net.path(),
+                    "time": time_now,
+                    "memory": int(sim.memoryUsage()),
+                    "frame": round(hou.timeToFrame(time_now), 4),
+                    "start": float(start.eval()) if start is not None else hou.timeToFrame(0.0),
+                }
             )
     return states
 
 
+SAME_TIME_S = 1e-6
+CURRENT_FRAME = "current_frame"
+"""``resimulated`` when a cook re-solved only the frame the simulation already stood on."""
+
+
 def resimulated(
     before: dict[str, Any] | None, after: dict[str, Any], solve: float | None
-) -> bool | None:
-    """Whether a cook stepped the simulation, or None when Houdini gave no reliable
-    signal (review 20 N3). ``solve`` is the DOP solve time the performance monitor
-    recorded (:func:`solve_ms`), the reliable signal. Without it (the monitor could not
-    be used) only the simulation state is left, and its time moves on a cache read too
-    (a 4 ms cook of frame 24 read as ``resimulated: true``): a changed memory size means
-    frames were simulated (and cached or evicted), an unchanged time and size that
-    nothing was, and anything else is unknown. No ``hou``."""
+) -> bool | str | None:
+    """Whether a cook stepped the simulation: ``False`` (it read cached frames),
+    ``"current_frame"`` (it re-solved only the frame the simulation already stood on),
+    ``True`` (it simulated frames the cache did not hold), or None when Houdini gave no
+    reliable signal (review 20 N3).
+
+    ``solve`` is the DOP solve time the performance monitor recorded (:func:`solve_ms`),
+    the reliable signal for whether anything was solved. It is booked on the frame being
+    evaluated however many frames were stepped, so how many comes from the simulation
+    state: a warm solver whose inputs a profile force-cooked re-solves its current frame
+    (review 24 N3: 77 ms "solves" on a warm Vellum solver read as a full re-run), and its
+    time does not move. Without ``solve`` (the monitor could not be used) the time moves
+    on a cache read too (a 4 ms cook of frame 24 read as ``resimulated: true``): a changed
+    memory size means frames were simulated (the current one only when the time stayed),
+    an unchanged time and size that nothing was, and anything else is unknown. No ``hou``."""
+    stayed = before is not None and abs(after["time"] - before["time"]) < SAME_TIME_S
+    held = before is not None and before["memory"] > 0
     if solve is not None:
-        return solve > 0.0
+        if solve <= 0.0:
+            return False
+        return CURRENT_FRAME if stayed and held else True
     if before is None:
         return None
     if after["memory"] != before["memory"]:
-        return True
-    if after["time"] == before["time"]:
+        return CURRENT_FRAME if stayed and held else True
+    if stayed:
         return False
+    return None
+
+
+def simulated_frames(
+    before: dict[str, Any] | None, after: dict[str, Any], verdict: bool | str | None
+) -> list[float | int] | None:
+    """``[first, last]`` frames a cook simulated, when the state tells: the current frame
+    for ``"current_frame"``; from the start frame for a simulation that was empty or reset;
+    from the frame after the one it stood on when it moved forward. None otherwise (a
+    cache read, or a jump whose cached frames are unknown). No ``hou``."""
+    if "frame" not in after:
+        return None
+    last = _num(after["frame"])
+    if verdict == CURRENT_FRAME:
+        return [last, last]
+    if verdict is not True:
+        return None
+    start = after.get("start")
+    if (
+        before is None
+        or before["memory"] <= 0
+        or (start is not None and before.get("frame", start) <= start)
+    ):
+        return [_num(start), last] if start is not None else None
+    if before["time"] < after["time"] and "frame" in before:
+        return [_num(round(before["frame"] + 1, 4)), last]
     return None
 
 
@@ -316,11 +369,15 @@ def _profile_step(node_path: str) -> dict[str, Any]:
         # Review 17 P2-10: a force-cook of a solver reads the simulation cache when it
         # holds the frame; say whether this cook simulated anything (review 20 N3).
         first = before[0] if before and before[0]["path"] == after[0]["path"] else None
+        verdict = resimulated(first, after[0], solve)
         row["simulation"] = {
             "dopnet": after[0]["path"],
-            "resimulated": resimulated(first, after[0], solve),
+            "resimulated": verdict,
             "frame": _num(round(hou.timeToFrame(after[0]["time"]), 4)),
         }
+        frames = simulated_frames(first, after[0], verdict)
+        if frames is not None:
+            row["simulation"]["simulated_frames"] = frames
     if loop is not None:
         row["_loop"] = loop
     if failure is not None:
@@ -563,10 +620,20 @@ def _sim_note(row: dict[str, Any]) -> str:
             "unavailable), so resimulated is null. Reset the simulation (its resimulate button) "
             "to time a full run."
         )
-    if sim["resimulated"]:
+    if sim["resimulated"] == CURRENT_FRAME:
         return (
-            f"{row['path']} simulated frames in {sim['dopnet']} up to frame {sim['frame']}; "
-            "its cook_time_ms includes that simulation."
+            f"{row['path']} re-solved only frame {sim['frame']} in {sim['dopnet']}: profile "
+            "force-cooks the solver's inputs, so Houdini re-steps the frame the simulation "
+            "stands on, and the frames before it came from the simulation cache; its "
+            "cook_time_ms is that one step. Reset the simulation (its resimulate button) to "
+            "time a full run."
+        )
+    if sim["resimulated"]:
+        frames = sim.get("simulated_frames")
+        what = f"frames {frames[0]}-{frames[1]}" if frames else f"frames up to frame {sim['frame']}"
+        return (
+            f"{row['path']} simulated {what} in {sim['dopnet']}; its cook_time_ms includes "
+            "that simulation."
         )
     return (
         f"{row['path']} did not re-simulate: {sim['dopnet']}'s cache already held frame "

@@ -20,7 +20,7 @@ import queue
 import threading
 import time
 import traceback
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from typing import Any, Literal
 
 from hocuspocus.tools.errors import ToolError
@@ -32,11 +32,62 @@ log = logging.getLogger("hocuspocus.host.executor")
 _GUI_DRAIN_BUDGET_S = 0.05
 
 
+class MainThreadMeter:
+    """Main-thread time spent on behalf of one call that runs off the main thread (review
+    24 N5: ``render``, ``cook`` and ``job`` reported ``main_thread_ms: 0`` even for a 1.9 s
+    profile cook). Every :meth:`MainThreadExecutor.run` made from a thread the meter is
+    bound to (:func:`metering`), including the threads of jobs the call starts
+    (:class:`~hocuspocus.host.jobs.JobManager`), adds the step's run and queue time while
+    the meter is open; the dispatcher closes it when the call returns, so job steps that
+    finish later do not count."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._open = True
+        self.main_s = 0.0
+        self.queue_s = 0.0
+        self.steps = 0
+
+    def add(self, main_s: float, queue_s: float) -> None:
+        with self._lock:
+            if self._open:
+                self.main_s += max(0.0, main_s)
+                self.queue_s += max(0.0, queue_s)
+                self.steps += 1
+
+    def close(self) -> dict[str, float | int]:
+        """Stop counting and return ``{main_s, queue_s, steps}``."""
+        with self._lock:
+            self._open = False
+            return {"main_s": self.main_s, "queue_s": self.queue_s, "steps": self.steps}
+
+
+_METER = threading.local()
+
+
+def current_meter() -> MainThreadMeter | None:
+    """The meter bound to this thread, if any."""
+    return getattr(_METER, "meter", None)
+
+
+@contextlib.contextmanager
+def metering(meter: MainThreadMeter | None) -> Iterator[None]:
+    """Bind ``meter`` to this thread for the block (None unbinds)."""
+    previous = current_meter()
+    _METER.meter = meter
+    try:
+        yield
+    finally:
+        _METER.meter = previous
+
+
 class _Work:
-    __slots__ = ("fn", "done", "lock", "state", "result", "exc", "queued")
+    __slots__ = ("fn", "done", "lock", "state", "result", "exc", "queued", "started", "finished")
 
     def __init__(self, fn: Callable[[], Any]) -> None:
         self.fn = fn
+        self.started: float | None = None
+        self.finished: float | None = None
         self.queued = time.monotonic()
         self.done = threading.Event()
         self.lock = threading.Lock()
@@ -187,6 +238,7 @@ class MainThreadExecutor:
                 hint="Restart the host (hocuspocus.host.start()) or call houdini_connect.",
             )
         work = _Work(fn)
+        meter = current_meter()
         self._queue.put(work)
         if not work.done.wait(timeout_s):
             with work.lock:
@@ -198,6 +250,8 @@ class MainThreadExecutor:
             # It finished between the wait timing out and the lock (review 10 section 1.5):
             # report its result, not "still running".
             work.done.wait()
+        if meter is not None and work.started is not None and work.finished is not None:
+            meter.add(work.finished - work.started, work.started - work.queued)
         if work.exc is not None:
             raise work.exc
         return work.result
@@ -251,7 +305,7 @@ class MainThreadExecutor:
             work.state = "running"
         reraise: BaseException | None = None
         wrapper = self.work_wrapper
-        self._current_started = time.monotonic()
+        self._current_started = work.started = time.monotonic()
         try:
             work.result = work.fn() if wrapper is None else wrapper(work.fn)
         except BaseException as exc:  # transported to the caller
@@ -261,6 +315,7 @@ class MainThreadExecutor:
             if isinstance(exc, KeyboardInterrupt | SystemExit):
                 reraise = exc
         finally:
+            work.finished = time.monotonic()
             self._current_started = None
             with work.lock:
                 work.state = "done"

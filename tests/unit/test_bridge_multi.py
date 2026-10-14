@@ -67,7 +67,7 @@ class Host:
             "pid": self.inst.pid,
             "houdini": "22.0.466",
             "generation": 1,
-            "host_version": "1.3.0",
+            "host_version": "1.4.0",
             **self.health_extra,
         }
 
@@ -538,8 +538,12 @@ def test_guide_is_instructions_and_recipes_under_8_kb():
         "op:/img/",
         "spare_parms",
         "hocuspocus://tools",
+        "### Flipbook frames",
     ):
         assert needle in guide, needle
+    # 1.4: the guide recommends the Flipbook ROP, never the OpenGL ROP it replaces.
+    assert "Driver/flipbook" in guide and "deprecate" in guide
+    assert "opengl_rop" not in guide and 'type: "opengl"' not in guide
 
 
 def test_tools_resource_is_the_reference_for_the_profile():
@@ -600,3 +604,37 @@ def test_viewport_capture_fit_has_no_schema_default():
     spec = get("viewport_capture")
     assert "default" not in spec.input_schema["properties"]["fit"]
     assert "fit has no default" in spec.notes
+
+
+# -- a job id whose pid was never ours is job_not_found (review 21 papercut 3, 22 #7) -------
+
+
+@pytest.mark.parametrize("job_id", ["999-deadbeef", "123-abc"])
+def test_made_up_job_id_is_job_not_found_not_a_dead_houdini(job_id):
+    bridge, hosts, _live = make(GUI, WORKER)
+    error = data(bridge.call_tool("job", {"action": "status", "job_id": job_id}))
+    assert error["code"] == "job_not_found" and error["retryable"] is False
+    assert (
+        "exited" not in error["message"] and "not a Houdini this server knows" in error["message"]
+    )
+    assert "job {action: list, all: true}" in error["hint"]
+    assert all(call[0] != "job" for host in hosts.values() for call in host.calls)
+
+
+def test_job_of_a_pid_seen_in_the_registry_is_still_instance_lost():
+    bridge, hosts, live = make(GUI, WORKER)
+    bridge.call_tool("node_info", {"paths": ["/obj"]})  # the bridge sees both instances
+    live.remove(WORKER)
+    error = data(bridge.call_tool("job", {"action": "status", "job_id": "61900-0000abcd"}))
+    assert error["code"] == "instance_lost" and "pid 61900" in error["message"]
+
+
+def test_job_of_a_launched_houdini_is_instance_lost_from_a_fresh_bridge(tmp_path):
+    from hocuspocus.bridge.instances import LaunchLog
+
+    log = LaunchLog(tmp_path / "launches")
+    log.record(WORKER, mode="headless", outlives_server=False)
+    bridge, _hosts, live = make(GUI)
+    bridge.launches = log
+    error = data(bridge.call_tool("job", {"action": "status", "job_id": "61900-9c3e6f7ca53e"}))
+    assert error["code"] == "instance_lost"

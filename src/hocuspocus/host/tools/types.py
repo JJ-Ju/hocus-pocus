@@ -625,6 +625,21 @@ def public_row(row: dict[str, Any], *, fold_versions: bool = False) -> dict[str,
     return out
 
 
+def shared_fields(rows: list[dict[str, Any]], keys: tuple[str, ...]) -> dict[str, Any]:
+    """Hoist ``keys`` out of ``rows`` when at least two rows carry them and every row has
+    the same values (review 23 papercut 6: 37 Vellum rows repeated ``child_category`` and
+    ``typical_parents``, 4.4 KB). Returns the hoisted fields; ``rows`` lose them."""
+    if len(rows) < 2 or any(key not in row for row in rows for key in keys):
+        return {}
+    first = {key: rows[0][key] for key in keys}
+    if any(row[key] != first[key] for row in rows for key in keys):
+        return {}
+    for row in rows:
+        for key in keys:
+            del row[key]
+    return first
+
+
 def _clip(text: str, limit: int) -> str:
     return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
 
@@ -1187,10 +1202,14 @@ def node_type_search(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     include_hidden = arg_bool(args, "include_hidden", False)
     current_only = arg_bool(args, "current_only", True)
     rows, total = search(query, category, limit, include_hidden, current_only)
-    result: dict[str, Any] = {
-        "results": [public_row(r, fold_versions=current_only) for r in rows],
-        "total": total,
-    }
+    public = [public_row(r, fold_versions=current_only) for r in rows]
+    result: dict[str, Any] = {"results": public, "total": total}
+    if current_only:
+        for row in public:  # every row is a current version (review 23 papercut 6)
+            row.pop("is_current_version", None)
+    common = shared_fields(public, ("child_category", "typical_parents"))
+    if common:
+        result["common"] = common
     if not rows:
         result["hint"] = (
             "No match. Try a shorter word, the node's label (e.g. 'copy to points'), "
@@ -1222,19 +1241,57 @@ def _variants_note(variants: dict[str, int], rows: list[dict[str, Any]]) -> str:
 def filter_parms(rows: list[dict[str, Any]], pattern: str) -> list[dict[str, Any]]:
     """Rows whose name or label matches the glob ``pattern`` (case-insensitive); a
     pattern without wildcards matches the whole name or label, and ``a|b`` matches
-    either glob (review 12 papercut 2)."""
+    either glob (review 12 papercut 2).
+
+    Review 23 papercut 7: ``*pin*`` also matched eight ``*damping*`` parms. Rows where a
+    wildcard pattern's text starts a word of the label or name (``Pin Type``, ``pin_group``)
+    come first; the others matched only inside a word and get ``matched_by:
+    "substring"``. Review 24 N2: an alternative without wildcards is an exact match, so
+    the rows it matches rank with the word-start matches and are never marked, whatever
+    the other alternatives are (``*pin*|group`` listed ``group`` as a substring match)."""
     import fnmatch
 
     pats = [p.strip().lower() for p in pattern.split("|") if p.strip()]
-    return [
-        row
-        for row in rows
-        if any(
-            fnmatch.fnmatchcase(row["name"].lower(), pat)
-            or fnmatch.fnmatchcase((row.get("label") or "").lower(), pat)
-            for pat in pats
+
+    def matches(row: dict[str, Any], pat: str) -> bool:
+        return fnmatch.fnmatchcase(row["name"].lower(), pat) or fnmatch.fnmatchcase(
+            (row.get("label") or "").lower(), pat
         )
-    ]
+
+    words, inside = [], []
+    for row in rows:
+        hit = [pat for pat in pats if matches(row, pat)]
+        if not hit:
+            continue
+        # An exact alternative, or a glob with wildcards inside its text (p*n*), has no
+        # word to start: never marked.
+        cores = [_glob_core(pat) for pat in hit]
+        if any(core is None for core in cores) or _starts_a_word(row, cores):
+            words.append(row)
+        else:
+            inside.append(dict(row, matched_by="substring"))
+    return words + inside
+
+
+def _has_wildcard(pattern: str) -> bool:
+    return any(ch in pattern for ch in "*?[")
+
+
+def _glob_core(pattern: str) -> str | None:
+    """The literal text of a wildcard glob such as ``*pin*`` or ``pin*``; None for an
+    exact name (no wildcard) or a glob with wildcards inside its text."""
+    if not _has_wildcard(pattern):
+        return None
+    core = pattern.strip("*")
+    return core if core and not any(ch in core for ch in "*?[]") else None
+
+
+def _starts_a_word(row: dict[str, Any], cores: list[str]) -> bool:
+    import re
+
+    text = f"{row['name']} {row.get('label') or ''}".lower()
+    words = [w for w in re.split(r"[^a-z0-9]+", text) if w]
+    return any(word.startswith(core) for word in words for core in cores)
 
 
 def folder_counts(rows: list[dict[str, Any]], folders: list[str]) -> list[dict[str, Any]]:
@@ -1422,6 +1479,13 @@ def node_type_info(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
             )
         if parm_glob is not None:
             rows = filter_parms(rows, parm_glob)
+            inside = [row["name"] for row in rows if row.get("matched_by") == "substring"]
+            if inside:
+                result["substring_matches"] = inside
+                result.setdefault("notes", []).append(
+                    f"{len(inside)} parm(s) matched {parm_glob!r} only inside a word "
+                    "(substring_matches, listed after the word-start matches)."
+                )
             if not rows:
                 result["hint"] = (
                     f"No parm name or label matches {parm_glob!r}; globs are case-insensitive, "

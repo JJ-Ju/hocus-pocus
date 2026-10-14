@@ -124,3 +124,146 @@ def test_dispatcher_keeps_a_tool_supplied_rolled_back(fake_hou):
 
     _ctx, dispatcher = _dispatcher(hou_undo_group, fn)
     assert dispatcher.call("mutate", {})["error"]["detail"]["rolled_back"] is False
+
+
+# -- a rolled-back call is not redoable (review 21 papercut 2) ------------------------------
+
+
+class RedoUndos(FakeUndos):
+    """FakeUndos with Houdini's redo stack: an undo moves the entry onto it."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.redo: list[str] = []
+
+    def redoLabels(self) -> tuple[str, ...]:  # noqa: N802 - hou API
+        return tuple(reversed(self.redo))
+
+    def performUndo(self) -> None:  # noqa: N802 - hou API
+        self.redo.append(self.stack.pop())
+
+
+def test_dispatcher_remembers_a_rolled_back_call_on_the_redo_stack(monkeypatch):
+    undos = RedoUndos()
+    monkeypatch.setitem(sys.modules, "hou", types.SimpleNamespace(undos=undos))
+
+    def fn(args, ctx):
+        raise ToolError("python_exception", "ZeroDivisionError", detail={"rolled_back": None})
+
+    ctx, dispatcher = _dispatcher(hou_undo_group, fn)
+    assert dispatcher.call("mutate", {})["error"]["detail"]["rolled_back"] is True
+    redo = undos.redoLabels()
+    assert redo == ("HocusPocus: mutate",)
+    assert ctx.undo.rolled_back_in(redo) == {0}
+
+
+def test_rolled_back_entry_is_found_under_later_undos_and_forgotten_once_gone():
+    history = UndoHistory()
+    history.rolled_back(("HocusPocus: houdini_python 1/0",))
+    # Undoing an older step puts it on top; the failed call stays at the bottom.
+    assert history.rolled_back_in(
+        ("HocusPocus: parm_set 1 parm", "HocusPocus: houdini_python 1/0")
+    ) == {1}
+    # A new change cleared the redo stack; a later stack with the same label is not it.
+    assert history.rolled_back_in(()) == set()
+    assert history.rolled_back_in(("HocusPocus: houdini_python 1/0",)) == set()
+
+
+def test_nothing_is_remembered_when_the_group_recorded_nothing():
+    history = UndoHistory()
+    history.rolled_back(None)
+    history.rolled_back(())
+    assert history.rolled_back_in(("x",)) == set()
+
+
+# -- one host log line per call (review 22 finding 4) ---------------------------------------
+
+
+def test_every_call_writes_one_log_line(caplog):
+    def ok(args, ctx):
+        return {"done": True}
+
+    def bad(args, ctx):
+        raise ToolError("invalid_value", "nope")
+
+    ctx = HostContext(
+        config=HostConfig(),
+        executor=None,
+        logger=logging.getLogger("hocuspocus.host.test_calls"),
+        scene=SceneState(),
+        jobs=JobManager(None),
+        undo=UndoHistory(),
+    )
+    tools = {
+        "ok_tool": HostTool("ok_tool", ok, read_only=True, main_thread=False),
+        "bad_tool": HostTool("bad_tool", bad, read_only=True, main_thread=False),
+    }
+    dispatcher = Dispatcher(ctx, tools.get)
+    with caplog.at_level(logging.INFO, logger="hocuspocus.host.test_calls"):
+        envelope = dispatcher.call("ok_tool", {})
+        dispatcher.call("bad_tool", {})
+        dispatcher.call("no_such_tool", {})
+    lines = [r.getMessage() for r in caplog.records]
+    assert len(lines) == 3
+    pid = f"pid {__import__('os').getpid()}"
+    assert lines[0].startswith("call ok_tool ") and lines[0].endswith(f" ok {pid}")
+    assert f"{envelope['_meta']['elapsed_ms']} ms main 0 ms" in lines[0]
+    assert lines[1].endswith(f" invalid_value {pid}") and lines[2].startswith("call no_such_tool ")
+    # Review 24 N5: ran entirely off the main thread, and says so.
+    assert envelope["_meta"]["timing"] == {"main_thread_ms": 0, "off_main_thread": True}
+
+
+def test_off_main_thread_calls_report_the_main_thread_steps_run_for_them():
+    """Review 24 N5: render, cook and job reported main_thread_ms 0, even a 1.9 s profile
+    cook. Steps an off-main-thread tool runs, and steps of the jobs it starts that finish
+    within its wait, are summed; a job step finishing after the call returns is not."""
+    import threading
+    import time
+
+    from hocuspocus.host.executor import MainThreadExecutor
+
+    executor = MainThreadExecutor("headless", main_thread_ident=threading.get_ident())
+    executor.start()
+    jobs = JobManager(executor)
+    ctx = HostContext(
+        config=HostConfig(),
+        executor=executor,
+        logger=logging.getLogger("hocuspocus.host.test_calls"),
+        scene=SceneState(),
+        jobs=jobs,
+        undo=UndoHistory(),
+    )
+    release = threading.Event()
+
+    def waits_on_jobs(args, c):
+        c.executor.run(lambda: time.sleep(0.05), 5.0)
+        done = c.jobs.start("t", lambda job: job.run_main(lambda: time.sleep(0.05)))
+        done.done_event.wait(5.0)
+
+        def later(job):
+            release.wait(5.0)
+            job.run_main(lambda: time.sleep(0.2))
+
+        c.jobs.start("t", later)  # its step runs after the call returned
+        return {"ok": True}
+
+    tools = {
+        "waits": HostTool("waits", waits_on_jobs, read_only=True, main_thread=False),
+        "idle": HostTool("idle", lambda a, c: {}, read_only=True, main_thread=False),
+    }
+    dispatcher = Dispatcher(ctx, tools.get)
+    box = {}
+    caller = threading.Thread(target=lambda: box.update(env=dispatcher.call("waits", {})))
+    caller.start()
+    while caller.is_alive():
+        executor.pump_once(0.01)
+    release.set()
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline and jobs.running_count():
+        executor.pump_once(0.01)
+    timing = box["env"]["_meta"]["timing"]
+    assert 80 <= timing["main_thread_ms"] < 250, timing  # two 50 ms steps, not the 200
+    assert timing["queue_ms"] >= 0 and "off_main_thread" not in timing, timing
+    idle = dispatcher.call("idle", {})["_meta"]["timing"]
+    assert idle == {"main_thread_ms": 0, "off_main_thread": True}
+    executor.stop()

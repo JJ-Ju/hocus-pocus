@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import subprocess
 import threading
@@ -29,6 +30,7 @@ def test_undo_history_lists_hocuspocus_labels(client):
     result = client.ok("undo", {"action": "history"})
     assert result["history"][0].startswith("HocusPocus: node_create")
     assert len(result["history"]) <= 20
+    assert result["total"] >= len(result["history"]) and result["redo_total"] == 0
     assert result["enabled"] is True
     assert isinstance(result["redo"], list)
 
@@ -54,6 +56,34 @@ def test_undo_and_redo_node_create(client):
     assert redone["performed"] == result["performed"]
     assert hou.node(path) is not None
     assert redone["next_undo"] == result["performed"][0]
+
+
+def test_redo_never_reapplies_a_rolled_back_houdini_python(client):
+    """Review 21 papercut 2: the failed call's rollback left it on the redo stack, and
+    redo re-created /obj/pyjunk2 from code that had raised."""
+    client.ok("node_create", {"items": [{"parent": "/obj", "type": "geo", "name": "keep"}]})
+    code = 'hou.node("/obj").createNode("geo", "pyjunk2")\n1/0'
+    error = client.error("houdini_python", {"code": code})
+    assert error["code"] == "python_exception" and error["detail"]["rolled_back"] is True
+    assert hou.node("/obj/pyjunk2") is None
+    history = client.ok("undo", {"action": "history"})
+    assert history["redo"] == [] and history["rolled_back"][0].startswith(
+        "HocusPocus: houdini_python"
+    )
+    redo = client.ok("undo", {"action": "redo"})
+    assert redo["performed"] == [] and redo["skipped"] == history["rolled_back"]
+    assert "rolled back" in redo["note"] and redo["next_redo"] is None
+    assert redo["redo_count"] == 0
+    assert hou.node("/obj/pyjunk2") is None
+    # Undo of the create puts it above the failed call: redo applies it, then stops.
+    client.ok("undo", {"action": "undo"})
+    assert hou.node("/obj/keep") is None
+    again = client.ok("undo", {"action": "redo", "steps": 2})
+    assert len(again["performed"]) == 1 and again["performed"][0].startswith(
+        "HocusPocus: node_create"
+    )
+    assert again["skipped"] and hou.node("/obj/keep") is not None
+    assert hou.node("/obj/pyjunk2") is None
 
 
 def test_undo_multiple_steps_and_empty_stack(client):
@@ -311,3 +341,15 @@ def test_quit_route_checks_unsaved_changes_then_quits(hython, tmp_path):
         for stream in (proc.stdout, proc.stderr):
             if stream:
                 stream.close()
+
+
+def test_every_call_leaves_one_line_in_the_host_log(client, host):
+    """Review 22 finding 4: the host log recorded nothing per call."""
+    client.ok("time")
+    client.error("undo", {"action": "sideways"})
+    for handler in logging.getLogger(host.logger.name).parent.handlers:
+        handler.flush()
+    log = (Path(host.state_dir) / "logs" / f"host-{host.pid}.log").read_text(encoding="utf-8")
+    lines = [line for line in log.splitlines() if " call " in line]
+    assert any(" call time " in line and line.endswith(f" ok pid {os.getpid()}") for line in lines)
+    assert any(" call undo " in line and " invalid_argument pid " in line for line in lines)

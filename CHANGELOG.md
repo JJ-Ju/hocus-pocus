@@ -3,6 +3,200 @@
 This project uses [Semantic Versioning](https://semver.org/). The 0.9 compatibility
 policy does not apply to 1.0.
 
+## 1.4.0 (2026-10-13)
+
+1.4 put 1.3.0 through three evaluations, each through the MCP tools only:
+
+- the review 07 scorecard re-run by a fresh agent, which scored 1.3.0 4 / 5 / 5 / 5 / 5 / 5
+  against 1.0's 4 / 5 / 4 / 4 / 5 / 5 (`docs/redesign/review/21-scorecard-1.3.md`);
+- a soak of 1,230 calls (a 614-call pilot and a 616-call run on one session) against a
+  headless host, with no unexpected error, no call over 10 s and nothing leaked
+  (`22-soak-1.3.md`, latency chart `90_soak_latency.png`);
+- a Vellum cloth cached with a File Cache, exported to USD, re-imported with `sublayer`
+  and rendered with Karma (`23-vellum-usd-eval.md`, `100_vellum_usd_karma.png`).
+
+This release fixes what they found and the known items of the plan
+(`docs/redesign/plan-1.4.md`). Captures move from the OpenGL ROP, which Houdini 22
+deprecates, to the Flipbook ROP, and a headless capture after the first takes about
+0.4 s instead of 3 s. `render` writes an animated USD layer or Alembic archive in one call
+and reads it back, so a frozen export fails instead of reporting success (review 23's
+P0). A budget-trimmed `events` page no longer skips events (review 22's P0). Mutation
+results and `_meta` say how long Houdini cooked, and the host log has one line per call.
+Read **Upgrading from 1.3** if a prompt or script names the `opengl_rop` source, calls
+`render` without `frames`, filters `events` by `origin` or relies on `redo`. The contract
+decisions are D30 to D34 in `docs/BIBLE.md` §15.
+
+### Contract changes
+
+- **Captures go through the Flipbook ROP.** `viewport_capture`'s ROP source is now
+  `source: "flipbook_rop"`; `opengl_rop` stays as an alias of it. It tries the Flipbook
+  ROP, then the OpenGL ROP, then a temporary Karma CPU ROP (2 samples, same camera and
+  resolution). `source_used` is `viewer`, `flipbook_rop`, `opengl_rop` or `karma`, and
+  `notes` say why an earlier ROP did not render. Headless, a ROP whose render process
+  crashes hands the frame to the next; in the GUI a ROP that writes no image does, and
+  there is no Karma step. The temporary OpenGL ROP gets no deprecation note. A Flipbook
+  ROP's stage capture keeps every thread; only the OpenGL ROP's stage child stays
+  single-threaded.
+- **`render` renders a single-file ROP in one call and reads it back** (review 23 P0-1).
+  In 1.3 every ROP rendered one `rop.render()` call per frame, so a `usd_rop`, a
+  `usdexport` SOP or an Alembic ROP overwrote its one file on each call: a 48-frame
+  export reported 48 outputs and `done` and kept one time sample. A ROP whose output path
+  is the same for every frame now renders the range in one call, with per-frame progress
+  from its render events (a cancel waits for the call to end). The file is then read
+  back: a USD layer set (the root layer and every layer it composes) or an Alembic
+  archive with fewer frames than asked fails with `cook_failed`, and a USD export without
+  time samples gets a static-stage note.
+- **`render` without `frames` renders the ROP's own frame range** (review 23 P1-2). Every
+  ROP renders its Valid Frame Range (`f1`-`f3`) unless it is set to Render Current
+  Frame, which renders the current frame. A note says which range was used and that
+  `frames` renders others. In 1.3 a ROP rendered the current frame, while writer SOPs
+  already used their own range.
+- **Render outputs are listed once, and USD exports list their layers** (review 23
+  P1-3). One file is one output, so a 48-frame USD export counts 1, not 48. A USD export
+  adds `layers: [{path, bytes, time_samples, time_codes?}]`: its root layer, every layer
+  file it composes (a `sopimport` save path is one) and USD files the render wrote beside
+  it, at most 20.
+- **A ROP whose camera is missing fails with `node_not_found`** (review 21 papercut 5),
+  not a bare `cook_failed` "No camera specified for render.". The error names the
+  `camera` parm and its value, lists the scene's OBJ cameras as `candidates`, and hints to
+  set the parm, pass `camera` or create one.
+- **`node_edit` never cooks** (review 22 finding 3). It reports `cook_state` from
+  `needsToCook()` and the errors already on the node; in 1.3 a rename recooked the node
+  (about 200 ms for a `mountain`).
+- **`node_create {cook: false}` and `cook_ms`** (review 22 finding 2). `node_create`,
+  `node_copy` and `network_build` summary rows carry `cook_ms`, the time the diagnostic
+  cook took (a first cook of an HDA such as `mountain` takes about 200 ms).
+  `node_create {cook: false}` skips that cook (`cook_state: not_cooked`) for batch
+  builders that cook once at the end.
+- **`_meta.timing` on every host call** (review 22 finding 2): `{main_thread_ms,
+  queue_ms}`, the time the tool ran on Houdini's main thread (0 for tools that run off it,
+  such as `job` and `events`) and the wait for it before that, success or error.
+- **`events` `origin: houdini`** (review 23 papercut 9). In a call that sets parms
+  (`parm_set`, `node_create` parms), a `ParmTupleChanged` on a parm the call did not set
+  but Houdini wrote (callbacks, a camera's `*Converted` parms, a light's guide scale,
+  `labelparm*`) has `origin: "houdini"` instead of `agent`. A call that sets no parms
+  explicitly, such as `houdini_python`, keeps every write `agent`. Events of different
+  origins no longer coalesce.
+- **`redo` stops at a rolled-back call** (review 21 papercut 2). Rolling back a failed
+  `houdini_python` or batch left it on Houdini's redo stack, and `undo {action: redo}`
+  re-ran it. `redo` now stops before it and names it in `skipped` with a note; `history`
+  lists it under `rolled_back`, not `redo`, and `next_redo`/`redo_count` skip it.
+- **`tools/list` budget policy** (D30). The full profile's `tools/list` is capped at
+  32,000 B with the default `result_content = "text"` (what clients see by default, no
+  output schemas) and at 44,000 B with `both`. The 40,000 B target on the `both` shape is
+  gone. At 1.4.0 the full profile is 30,825 B (`text`) and 40,415 B (`both`). No tool or
+  argument was removed.
+- **`usd_stage` layer rows** (review 23 papercuts 4, 10). `layers.stack` rows are
+  objects, `{identifier, save_path?, owner_node?, time_codes?}`, instead of identifier
+  strings: `save_path` is where Houdini will save an anonymous layer (a `sopimport`'s save
+  path) or a file layer's own path, and `owner_node` the LOP that made it. `usd_stage` on a
+  `usd_rop` or `usdrender_rop` reads the LOP it renders (its `loppath`, else its input)
+  with a note instead of refusing.
+- **`node_type_search` rows** (review 23 papercut 6). With `current_only` (the default)
+  rows leave out `is_current_version`; `child_category` and `typical_parents` shared by
+  every row are said once, in `common`.
+- **`geo_info` attributes** (review 23 papercut 8). `attributes: "names"` lists only the
+  attribute names per class. Solver internals (Vellum and DOP bookkeeping such as
+  `pprevious`, `hitnml`, `dPw`, `varmap`, and names starting with `__`) are left out of
+  both modes and counted in `internal_attribute_count` with a note; `geo_read` still reads
+  them.
+
+### Added
+
+- **A kept capture child** (review 22 finding 6). Headless, the first Flipbook capture
+  starts a child hython that stays up; each later capture sends it a fresh scene snapshot.
+  A capture after the first takes about 0.35-0.4 s (0.9 s for a stage) against 2.8-3.6 s
+  in 1.3. The child is replaced when the child script, the hython or an installed HDA
+  library changes, after 200 captures or 110 s idle, and exits by itself after 120 s idle.
+  A crash of a kept child that had already rendered retries the capture in a fresh child
+  with a note. In the GUI a capture renders in-process (about 0.3 s).
+- **`render {camera}`** overrides the ROP's camera for one render, set and restored like
+  `output`: an OBJ camera for the `camera` parm, or a camera prim for a ROP reading a stage
+  (`cameraprim`) or a USD render ROP (`override_camera`).
+- **`network_build {press}`.** `setChildrenFromData` runs no parm callbacks, so a
+  `pyrosource` built from data with `initialize` set applied nothing. `network_build` now
+  notes every callback menu or toggle that `data` sets, as `node_create` does, and
+  `press: {node: [parm names]}` runs those callbacks after the build is wired, in the same
+  undo step; the result adds `pressed` and `side_effects`, and a failed press rolls the
+  build back.
+- **ROP LOPs as stages** (review 23 papercut 10). `viewport_capture {lop_path}` and
+  `usd_stage` on a `usd_rop` or `usdrender_rop` use the LOP the ROP renders (its
+  `loppath`, else its input), with a note.
+- **One host log line per call** (review 22 finding 4): `call <tool> <elapsed> ms main
+  <main_thread_ms> ms ok|<code> pid <pid>` at INFO in `<state_dir>/logs/host-<pid>.log`,
+  through the existing rotating handler (5 MB, two backups).
+- **`undo {action: history}` counts** (review 22 finding 9). `total` and `redo_total`
+  count every label next to the newest 20, and the notes say that `hip_open` and `hip_new`
+  clear the history.
+- **Output indices in outlines** (review 23 papercut 5). `network_describe {format:
+  outline}` and `houdini://outline` write an input whose source output is not 0 as
+  `"<path>:<n>"`, so a Vellum constraint output fed in as geometry is visible.
+- **The items form for flat batch calls** (review 21 papercut 1). `parm_set {path,
+  value}`, `node_connect {from, to}` or any batch tool given one flat item answers
+  `invalid_argument` whose hint is the corrected call, the caller's fields wrapped in
+  `items`. The instructions and the guide use the items form.
+- **`node_type_info` glob ranking** (review 23 papercut 7). A wildcard `parms` glob lists
+  the parms it matches at the start of a name or label word first; those matched only
+  inside a word follow, named in `substring_matches` and marked `matched_by: "substring"`
+  in `full` rows.
+- **A Flipbook frames recipe** in `hocuspocus://guide`, and the instructions point a
+  many-frame flipbook at the Flipbook ROP.
+
+### Fixed
+
+- **`events` paging under the budget** (review 22 finding 1, P0). A budget-trimmed
+  `events` page kept the host's `next_since`, the last seq scanned, so a client following
+  the cursor silently lost every event the cut dropped. The bridge now rewrites
+  `next_since` to `<pid>:<seq>` of the last kept event with `more: true`, and rewrites
+  `node_find`'s `after:<path>`, `network_describe`'s `after:<name>` and integer offsets
+  (`geo_read`'s `start` included) the same way; any other page stays whole with
+  `over_budget: true`. The host also ends `events` pages at the budget.
+- **Malformed job ids** (review 21 papercut 3, review 22 finding 7). `job {status,
+  job_id: "999-deadbeef"}` answered `instance_lost` for a Houdini that never existed. A
+  pid the bridge never saw live (no registry entry, job, pin or launch record) is now
+  `job_not_found` with a hint naming `job {action: list, all: true}`.
+- **`node_not_found` hints** (review 21 papercut 4, review 22 finding 8). A missing
+  wiring source (`node_connect` `from`, `node_create` `inputs.from`) prefixes the batch
+  error with its own path and says what it was to be wired into, takes candidates from
+  its parent without the target, and every `node_not_found` hint names `node_find` on the
+  parent, or on the nearest existing ancestor when the parent is missing too. `geo_info`,
+  `cook` and `node_info` share it.
+- **Deprecation notes once per type** (review 22 finding 10). `node_create` gives a
+  deprecated type's note once per type per host session; every row keeps
+  `deprecated: true`. In the soak the same `mountain` note was sent 37 times.
+- **Camera-missing renders** (review 21 papercut 5): see the contract change above.
+- **The guide's flat examples.** The spare-parm and Copernicus recipes used flat
+  `parm_set` and `node_create` calls that the schema rejects; they now use `items`.
+- **Shared USD layers** (review 24 N1, P1): a USD render whose layer replaced another ROP's samples with fewer (48 to 3) says so first in `notes` and sets `layers[].overwrote_samples`; layers another ROP also writes get `shared_with`.
+- **`cook profile` on a warm solver** (review 24 N3): a re-solve of the frame the simulation stood on is `resimulated: "current_frame"`, not `true`; cache reads stay `false`, and `simulated_frames` gives the range when known.
+- **Exact `parms` alternatives** (review 24 N2): `node_type_info parms: "*pin*|group"` no longer lists `group` in `substring_matches`.
+- **`render camera` against `opsource`** (review 24 N4): a camera prim on a viewport ROP reading /obj, or an OBJ camera on one reading a stage, fails naming `opsource`; an override adds a `Rendered through` note.
+- **`_meta.timing` off the main thread** (review 24 N5): job-backed tools sum the main-thread steps run for the call, or report `off_main_thread: true`.
+- **Layer row paths** (review 24 N7): `usd_stage` layer rows use forward slashes and drop a `save_path` equal to the identifier.
+
+### Upgrading from 1.3
+
+An agent prompt or script written for 1.3 may need these changes:
+
+- **Capture source names.** Use `"source": "flipbook_rop"`; `"opengl_rop"` still works as
+  its alias. Expect `source_used: "flipbook_rop"` where 1.3 said `opengl_rop`, and read
+  `notes` when it is `opengl_rop` or `karma`.
+- **`render` frame defaults.** Without `frames`, a ROP now renders its own frame range,
+  not the current frame. Pass `frames: [f, f, 1]` for one frame, or set the ROP to Render
+  Current Frame. A USD or Alembic export with fewer frames than asked is now an error, and
+  `outputs_summary.count` counts files, not frames.
+- **`events` origins.** `origin` is `agent`, `houdini` or `other`. A filter that keeps
+  only `agent` now drops the parms Houdini wrote itself during an agent call; keep
+  `houdini` too if you need them. Follow `next_since` and `more` rather than counting
+  rows, since a trimmed page now ends early.
+- **`redo` behaviour.** `redo` no longer re-applies a call that failed and was rolled
+  back: it stops before it and lists it in `skipped`. Read `history.rolled_back` for such
+  calls.
+- **Shapes that changed.** `usd_stage` `layers.stack` rows are objects; `geo_info` leaves
+  out Vellum and DOP internals (`geo_read` reads them); `node_type_search` rows may omit
+  `is_current_version`, `child_category` and `typical_parents` (read `common`); a missing
+  ROP camera is `node_not_found`; `node_edit` reports `cook_state` without cooking.
+
 ## 1.3.0 (2026-10-12)
 
 1.3 put three more workloads through the MCP tools, each on 1.2.1:

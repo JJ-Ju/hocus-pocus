@@ -34,7 +34,7 @@ from ._common import (  # noqa: F401 (re-exported for the other tool modules)
     parse_limit,
     response_budget,
 )
-from ._diag import a_or_an, cheap_cook_problems, collect_problems
+from ._diag import a_or_an, cheap_cook_problems, collect_problems, missing_node_error
 from .registry import HostContext, tool
 
 NODE_INFO_SECTIONS = (
@@ -555,12 +555,13 @@ def node_block(
     return out
 
 
-def mutation_block(node: Any, **extra: Any) -> dict[str, Any]:
-    """Compact per-node block for mutation results: path, type, flags, problems."""
+def mutation_block(node: Any, *, cook: bool = True, **extra: Any) -> dict[str, Any]:
+    """Compact per-node block for mutation results: path, type, flags, problems. Without
+    ``cook`` the problems are read as they are (``cook_state`` from ``needsToCook()``)."""
     out: dict[str, Any] = {"path": node.path(), "name": node.name(), "type": node.type().name()}
     out.update(extra)
     out["flags"] = node_flags(node)
-    out.update(cheap_cook_problems(node))
+    out.update(cheap_cook_problems(node) if cook else collect_problems(node, cook=False))
     return out
 
 
@@ -627,6 +628,9 @@ def summary_block(
     for key in ("errors", "warnings", "cook_state", "hint"):
         if key in problems:
             out[key] = problems[key]
+    if "cook_time_ms" in problems:
+        # Review 22 finding 2: a slow create is usually Houdini's first cook of an HDA.
+        out["cook_ms"] = problems["cook_time_ms"]
     return out
 
 
@@ -760,6 +764,11 @@ def to_tool_error(exc: BaseException, *, node: Any = None, op: str | None = None
     return tool_error_from_exception(exc)
 
 
+ABOUT_KEY = "_about"
+"""A ToolError ``detail`` key naming the node the error is about when that is not the
+item's own path; :func:`batch_error` puts it in the message prefix and ``detail.path``."""
+
+
 def batch_error(index: int, path: Any, exc: BaseException, *, rolled_back: bool) -> ToolError:
     """The one batch error shape (review 10 §4): ``items[i] (<path>): <message>`` and
     ``detail: {item, path, rolled_back}``, ``rolled_back`` as actually performed.
@@ -777,6 +786,11 @@ def batch_error(index: int, path: Any, exc: BaseException, *, rolled_back: bool)
             message = rest[2:]
         elif rest.startswith(" "):
             message = "it" + rest
+    about = error.detail.pop(ABOUT_KEY, None) if isinstance(error.detail, dict) else None
+    if isinstance(about, str) and about:
+        path = about  # the error is about another node than the item's (a wiring source)
+        if message.startswith(path):
+            message = message[len(path) :].lstrip(": ")
     shown = path if isinstance(path, str) and path else None
     error.message = f"{tag} ({shown}): {message}" if shown else f"{tag}: {message}"
     error.args = (error.message,)
@@ -1173,7 +1187,11 @@ def _create_one(
     if note:
         extra = extras.setdefault(node.sessionId(), {})
         extra["deprecated"] = True
-        extra.setdefault("notes", []).append(note)
+        key = node.type().nameWithCategory()
+        if key not in _DEPRECATION_NOTED:
+            # Review 22 finding 10: 37 mountain creates repeated the same ~150 B note.
+            _DEPRECATION_NOTED.add(key)
+            extra.setdefault("notes", []).append(note)
     parms = item.get("parms")
     pressed: dict[str, Any] = {}
     if parms:
@@ -1193,7 +1211,7 @@ def _create_one(
             raise bad_arg(
                 f"items[{index}].inputs[{link_index}]: pass index or name, not both.",
             )
-        src = get_node(link["from"], field="inputs.from", relative_to=parent)
+        src = _connect_source(link["from"], node, field="inputs.from")
         target = link.get("name") if "name" in link else link.get("index", link_index)
         dest_index = resolve_input_index(node, target)
         output = check_output_index(src, link.get("output", 0))
@@ -1235,6 +1253,11 @@ def _set_create_parms(
             extra.setdefault("notes", []).append(note)
         if result.get("side_effects"):
             extra.setdefault("side_effects", {}).update(result["side_effects"])
+
+
+_DEPRECATION_NOTED: set[str] = set()
+"""Types whose deprecation note ``node_create`` has given in this host session: later rows
+of the type carry only ``deprecated: true``."""
 
 
 def deprecation_note(node_type: Any) -> str | None:
@@ -1358,6 +1381,7 @@ def node_create(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     if layout not in ("good_position", "none"):
         raise bad_arg("'layout' must be 'good_position' or 'none'.")
     partial = arg_bool(args, "partial", False)
+    cook = arg_bool(args, "cook", True)
     mode = return_mode(args)
     rollback = Rollback()
     baselines: dict[int, dict[str, tuple[Any, ...]]] = {}
@@ -1371,12 +1395,19 @@ def node_create(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
         _create_item_path,
     )
     created = list(done.items())  # item order
+
+    def problems_of(node: Any) -> dict[str, Any]:
+        return cheap_cook_problems(node) if cook else collect_problems(node, cook=False)
+
     if mode == "summary":
-        blocks = {index: summary_block(node) for index, node in created}
+        blocks = {index: summary_block(node, problems_of(node)) for index, node in created}
     else:
         blocks = {}
         for index, node in created:
-            block = node_block(node, DEFAULT_INCLUDE, problems=cheap_cook_problems(node))
+            problems = problems_of(node)
+            block = node_block(node, DEFAULT_INCLUDE, problems=problems)
+            if "cook_time_ms" in problems:
+                block["cook_ms"] = block.pop("cook_time_ms")
             keep = call_edited_parms(
                 node, baselines.get(node.sessionId(), {}), items[index].get("parms") or {}
             )
@@ -1603,7 +1634,9 @@ def node_edit(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
             continue
         entry = done[index]
         node = entry["node"]
-        block = mutation_block(node, **entry["extra"])
+        # Review 22 finding 3: a rename recooked a mountain HDA (~200 ms). An edit reports
+        # problems as they are; only cook and creates cook.
+        block = mutation_block(node, cook=False, **entry["extra"])
         block["comment"] = node.comment()
         block["position"] = _round(node.position())
         block["color"] = _round(node.color().rgb())
@@ -1688,13 +1721,37 @@ def node_copy(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     return {"paths": [c.path() for c in copies], "results": results}
 
 
+def _connect_source(src_path: Any, dest: Any, field: str = "from") -> Any:
+    """The ``from`` node of a wiring item. A missing one is reported by its own path, with
+    near misses from its parent (never ``dest``) and a ``node_find`` hint on that parent
+    (review 21 papercut 4: the error named the target and offered it as the candidate)."""
+    import hou
+
+    try:
+        return get_node(src_path, field=field, relative_to=dest.parent())
+    except ToolError as exc:
+        if exc.code != "node_not_found":
+            raise
+    full = (
+        src_path if src_path.startswith("/") else f"{dest.parent().path().rstrip('/')}/{src_path}"
+    )
+    full = hou.hscriptExpandString(full) if "$" in full else full
+    error = missing_node_error(
+        full,
+        message=f"{full}: no node there to wire into {dest.path()} ({field}).",
+        exclude=dest,
+    )
+    error.detail = {ABOUT_KEY: full}
+    raise error
+
+
 def _connect_one(item: Any, index: int, rollback: Rollback) -> dict[str, Any]:
     if not isinstance(item, dict) or "to" not in item or "from" not in item:
         raise bad_arg(f"items[{index}] needs 'from' (path or null) and 'to'.")
     dest = get_node(item.get("to"), field="to")
     ensure_editable(dest, "rewire")
     src_path = item.get("from")
-    src = None if src_path is None else get_node(src_path, field="from", relative_to=dest.parent())
+    src = None if src_path is None else _connect_source(src_path, dest)
     to_input = item.get("to_input", 0)
     index_or_next = resolve_input_index(dest, to_input)
     if src is None:

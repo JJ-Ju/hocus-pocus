@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from hocuspocus.bridge.validate import validate
@@ -194,3 +196,81 @@ def test_every_catalogue_example_and_default_passes_the_runtime_validator():
             sub = {k: v for k, v in prop.items() if k != "default"}
             sub["$defs"] = spec.input_schema.get("$defs", {})
             assert validate(prop["default"], sub) == [], (spec.name, where)
+
+
+# -- the corrected call for a flat batch item (review 21 papercut 1) -----------------------
+
+
+def _catalog_schema(name: str) -> dict:
+    from hocuspocus.tools import catalog
+
+    return catalog.get(name).input_schema
+
+
+@pytest.mark.parametrize(
+    ("tool", "args", "item"),
+    [
+        (
+            "parm_set",
+            {"path": "/obj/g/height", "value": 0.7},
+            {"path": "/obj/g/height", "value": 0.7},
+        ),
+        (
+            "node_connect",
+            {"from": "/obj/g/box1", "to": "/obj/g/merge1", "to_input": 0},
+            {"from": "/obj/g/box1", "to": "/obj/g/merge1", "to_input": 0},
+        ),
+        ("node_create", {"parent": "/obj", "type": "geo"}, {"parent": "/obj", "type": "geo"}),
+        ("node_edit", {"path": "/obj/a", "name": "b"}, {"path": "/obj/a", "name": "b"}),
+    ],
+)
+def test_flat_batch_item_gets_the_items_form_with_its_own_fields(tool, args, item):
+    from hocuspocus.bridge.validate import shape_hint
+
+    schema = _catalog_schema(tool)
+    assert validate(args, schema)  # the flat form is rejected
+    hint = shape_hint(args, schema)
+    fixed = json.loads(hint.split("items: ", 1)[1])
+    assert fixed == {"items": [item]}
+    assert not validate(fixed, schema)  # and the hint's form is valid
+
+
+def test_top_level_fields_stay_outside_items():
+    from hocuspocus.bridge.validate import shape_hint
+
+    hint = shape_hint({"path": "/x", "value": 1, "partial": True}, _catalog_schema("parm_set"))
+    assert json.loads(hint.split("items: ", 1)[1]) == {
+        "items": [{"path": "/x", "value": 1}],
+        "partial": True,
+    }
+
+
+def test_no_shape_hint_for_unrelated_mistakes():
+    from hocuspocus.bridge.validate import shape_hint
+
+    assert shape_hint({"bogus": 1}, _catalog_schema("parm_set")) is None
+    assert shape_hint({"items": "x"}, _catalog_schema("parm_set")) is None
+    assert shape_hint({"paths": ["/obj"]}, _catalog_schema("node_info")) is None
+
+
+def test_bridge_error_for_a_flat_parm_set_shows_the_items_form():
+    from hocuspocus.bridge.config import BridgeConfig
+    from hocuspocus.bridge.server import Bridge
+
+    bridge = Bridge(BridgeConfig(profile="full"), scan=lambda: [])
+    result = bridge.call_tool("parm_set", {"path": "/obj/geo1/box1/sizex", "value": 2})
+    error = json.loads(result.content[0].text)
+    assert error["code"] == "invalid_argument"
+    assert '{"items": [{"path": "/obj/geo1/box1/sizex", "value": 2}]}' in error["hint"]
+
+
+def test_guide_examples_use_the_items_form():
+    import re
+
+    from hocuspocus.bridge.instructions import GUIDE_MAX_BYTES, INSTRUCTIONS, guide_text
+
+    guide = guide_text()
+    assert len(guide.encode("utf-8")) <= GUIDE_MAX_BYTES
+    for text in (guide, INSTRUCTIONS):
+        for tool in ("parm_set", "node_connect", "node_create", "node_edit"):
+            assert not re.search(rf"`{tool} \{{(?!items)", text), tool

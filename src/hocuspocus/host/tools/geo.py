@@ -279,13 +279,61 @@ def _capped(items: list[dict[str, Any]], out: dict[str, Any], key: str) -> list[
     return items
 
 
-def _attributes(geo: Any, out: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
-    attributes: dict[str, list[dict[str, Any]]] = {}
+INTERNAL_ATTRIBUTES = frozenset(
+    {
+        # Vellum and DOP solver bookkeeping (review 23 papercut 8; listed on 22.0.466)
+        "dP", "dPw", "plast", "pprevious", "has_pprevious", "vlast", "vprevious",
+        "hitnml", "hitnum", "hitpos", "hitprim", "hittime", "hituv", "hitv",
+        "overlap_self", "overlap_external", "disableself", "disableexternal", "fallback",
+        "target_path", "target_pt", "targetv", "targetw", "dopobject", "doppath",
+        "rest_ratio", "rest2_ratio", "timescale", "varmap",
+    }
+)  # fmt: skip
+INTERNAL_PREFIXES = ("__",)
+"""Attributes ``geo_info`` counts as ``internal_attribute_count`` instead of listing:
+solver state an agent rarely reads (``geo_read`` with ``attribs`` still reads them)."""
+ATTRIBUTE_MODES = ("full", "names")
+
+
+def is_internal_attribute(name: str) -> bool:
+    return name in INTERNAL_ATTRIBUTES or name.startswith(INTERNAL_PREFIXES)
+
+
+def _attributes(geo: Any, out: dict[str, Any], mode: str = "full") -> dict[str, list[Any]]:
+    """``geo_info``'s attributes per class, ``full`` rows or ``names`` only, without the
+    solver internals (counted in ``out``)."""
+    attributes: dict[str, list[Any]] = {}
+    internal: list[str] = []
+
+    def visible(cls: str) -> list[Any]:
+        kept = []
+        for attrib in _class_attribs(geo, cls):
+            if is_internal_attribute(attrib.name()):
+                internal.append(attrib.name())
+            else:
+                kept.append(attrib)
+        return kept
+
     for cls in ("point", "vertex", "prim"):
-        entries = [attrib_entry(a) for a in _class_attribs(geo, cls)]
-        attributes[cls] = _capped(entries, out, f"attributes.{cls}")
+        attribs = visible(cls)
+        if mode == "names":
+            attributes[cls] = [a.name() for a in attribs]
+        else:
+            entries = [attrib_entry(a) for a in attribs]
+            attributes[cls] = _capped(entries, out, f"attributes.{cls}")
+    detail_attribs = visible("detail")
+    if internal:
+        out["internal_attribute_count"] = len(internal)
+        shown = ", ".join(internal[:6]) + (", ..." if len(internal) > 6 else "")
+        out.setdefault("notes", []).append(
+            f"{len(internal)} solver-internal attribute(s) left out ({shown}); geo_read "
+            "with attribs reads them."
+        )
+    if mode == "names":
+        attributes["detail"] = [a.name() for a in detail_attribs]
+        return attributes
     detail = []
-    for attrib in _class_attribs(geo, "detail"):
+    for attrib in detail_attribs:
         entry = attrib_entry(attrib)
         try:
             value = geo.attribValue(attrib.name())
@@ -420,6 +468,9 @@ def geo_info(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     image = _cop_info(args.get("path"), frame)
     if image is not None:
         return image
+    mode = args.get("attributes", "full") or "full"
+    if mode not in ATTRIBUTE_MODES:
+        raise ToolError("invalid_argument", "'attributes' must be 'full' or 'names'.")
     sop = resolve_sop(args.get("path"))
     geo = cooked_geometry(sop, frame)
     out: dict[str, Any] = {"path": sop.path()}
@@ -431,7 +482,7 @@ def geo_info(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     out["bbox"] = _bbox(geo)
     prim_types = prim_type_counts(geo)
     out["prim_types"] = prim_types
-    out["attributes"] = _attributes(geo, out)
+    out["attributes"] = _attributes(geo, out, mode)
     out["groups"] = _groups(geo, out)
     intrinsics = _intrinsics(geo, prim_types)
     if intrinsics:

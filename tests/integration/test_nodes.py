@@ -321,7 +321,7 @@ def test_create_copy_and_build_summary_results(client):
     summary = client.ok("node_create", {"items": items, "return": "summary"})
     rows = summary["results"]
     assert summary["created"] == ["/obj/geo1/w0", "/obj/geo1/x0", "/obj/geo1/x1"]
-    assert set(rows[0]) <= {"path", "type", "errors", "warnings", "cook_state", "hint"}
+    assert set(rows[0]) <= {"path", "type", "errors", "warnings", "cook_state", "hint", "cook_ms"}
     assert rows[0]["type"] == "attribwrangle" and rows[0]["errors"]
     # Downstream nodes repeat the upstream error verbatim: it is reported once.
     assert rows[1]["errors_same_as"] == "/obj/geo1/w0" and "errors" not in rows[1]
@@ -334,7 +334,7 @@ def test_create_copy_and_build_summary_results(client):
         "node_copy",
         {"paths": ["/obj/geo1/x0", "/obj/geo1/x1"], "to_parent": "/obj/geo1", "return": "summary"},
     )
-    keys = {"path", "type", "errors", "warnings", "cook_state", "hint", "source"}
+    keys = {"path", "type", "errors", "warnings", "cook_state", "hint", "source", "cook_ms"}
     keys |= {"errors_same_as", "warnings_same_as"}
     assert all(set(row) <= keys for row in copied["results"])
     texts = [tuple(row["errors"]) for row in copied["results"] if row.get("errors")]
@@ -470,6 +470,34 @@ def test_node_not_found_is_one_shape_across_tools(client):
     assert {e["message"] for e in errors[:4]} == {f"No node at {missing}."}
     assert all(e["candidates"][0] == "/obj/geo1/xform1" for e in errors)
     assert "Parm paths are" in errors[2]["hint"]
+
+
+def test_missing_wiring_source_names_itself_and_its_parent(client):
+    """Review 21 papercut 4: the prefix named the target, the candidate was the target
+    itself and the hint said only 'Check the node name.'"""
+    make_chain()
+    error = client.error(
+        "node_connect",
+        {"items": [{"from": "/obj/geo1/nope", "to": "/obj/geo1/OUT", "to_input": 0}]},
+    )
+    assert error["code"] == "node_not_found"
+    assert error["message"].startswith("items[0] (/obj/geo1/nope): ")
+    assert "/obj/geo1/OUT" in error["message"]  # what it was to be wired into
+    assert error["detail"]["path"] == "/obj/geo1/nope"
+    assert "/obj/geo1/OUT" not in error.get("candidates", [])
+    assert 'node_find {root: "/obj/geo1"}' in error["hint"]
+    created = client.error(
+        "node_create",
+        {"items": [{"parent": "/obj/geo1", "type": "null", "inputs": [{"from": "xfrom2"}]}]},
+    )
+    assert created["message"].startswith("items[0] (/obj/geo1/xfrom2): ")
+    assert created["candidates"][0] == "/obj/geo1/xform1"
+
+
+def test_missing_parent_hint_names_node_find_on_the_nearest_ancestor(client):
+    error = client.error("node_info", {"paths": ["/obj/soak_missing/out"]})
+    assert "/obj/soak_missing does not exist either" in error["hint"]
+    assert 'node_find {root: "/obj"}' in error["hint"]
 
 
 # -- node_find ---------------------------------------------------------------------
@@ -910,7 +938,7 @@ def test_mutation_echo_defaults_to_summary(client):
     """1.1 (review 11 B5): summary is the default echo of node_create, node_copy and
     network_build."""
     geo = hou.node("/obj").createNode("geo", "geo1")
-    summary_keys = {"path", "type", "errors", "warnings", "cook_state", "hint", "source"}
+    summary_keys = {"path", "type", "errors", "warnings", "cook_state", "hint", "source", "cook_ms"}
     summary_keys |= {"errors_same_as", "warnings_same_as", "paired_with"}
     created = client.ok(
         "node_create", {"items": [{"parent": geo.path(), "type": "box", "name": "b"}]}
@@ -1228,11 +1256,19 @@ def test_node_create_flags_a_deprecated_type(client):
     opengl = hou.nodeType(hou.ropNodeTypeCategory(), "opengl")
     if not opengl.deprecated():
         pytest.skip("this Houdini does not deprecate the OpenGL ROP")
+    from hocuspocus.host.tools import nodes
+
+    nodes._DEPRECATION_NOTED.clear()  # the note is given once per type per host session
     result = client.ok(
         "node_create",
         {"items": [{"parent": "/out", "type": "opengl"}, {"parent": "/out", "type": "geometry"}]},
     )
     flipbook, geometry = result["results"]
+    # Review 22 finding 10: later rows of the type say only deprecated: true.
+    again = client.ok("node_create", {"items": [{"parent": "/out", "type": "opengl"}] * 2})[
+        "results"
+    ]
+    assert all(row["deprecated"] is True and "notes" not in row for row in again)
     assert flipbook["deprecated"] is True, flipbook
     (note,) = [n for n in flipbook["notes"] if "deprecated" in n]
     assert note.startswith("Driver/opengl is deprecated"), note
@@ -1240,3 +1276,74 @@ def test_node_create_flags_a_deprecated_type(client):
     if reason:
         assert reason.rstrip(".") in note
     assert "deprecated" not in geometry and "notes" not in geometry
+
+
+# -- cook visibility (review 22 findings 2 and 3) -------------------------------------
+
+
+def test_create_rows_carry_cook_ms_and_cook_false_skips_the_cook(client):
+    hou.node("/obj").createNode("geo", "geo1")
+    envelope = client.call("node_create", {"items": [{"parent": "/obj/geo1", "type": "box"}]})
+    row = envelope["result"]["results"][0]
+    assert row["cook_state"] == "cooked" and row["cook_ms"] >= 0
+    assert envelope["_meta"]["timing"]["main_thread_ms"] > 0
+    assert envelope["_meta"]["timing"]["queue_ms"] >= 0
+    full = client.ok(
+        "node_create", {"items": [{"parent": "/obj/geo1", "type": "sphere"}], "return": "full"}
+    )
+    assert "cook_ms" in full["results"][0] and "cook_time_ms" not in full["results"][0]
+    skipped = client.ok(
+        "node_create", {"items": [{"parent": "/obj/geo1", "type": "grid"}], "cook": False}
+    )
+    row = skipped["results"][0]
+    assert row["cook_state"] == "not_cooked" and "cook_ms" not in row
+    assert hou.node(row["path"]).needsToCook()
+
+
+def test_job_backed_calls_report_their_main_thread_time(client):
+    """Review 24 N5: cook, render and job reported main_thread_ms 0, even a 1.9 s
+    profile cook. The steps a job ran within the call's wait are counted now; a call that
+    ran nothing on the main thread says off_main_thread."""
+    geo = hou.node("/obj").createNode("geo", "geo1")
+    python = geo.createNode("python", "slow")
+    python.parm("python").set("import time\ntime.sleep(0.15)")
+    envelope = client.call("cook", {"paths": [python.path()], "profile": True})
+    assert envelope["ok"], envelope
+    timing = envelope["_meta"]["timing"]
+    assert timing["main_thread_ms"] >= 140 and "off_main_thread" not in timing, timing
+    assert timing["queue_ms"] >= 0
+    listed = client.call("job", {"action": "list"})["_meta"]["timing"]
+    assert listed == {"main_thread_ms": 0, "off_main_thread": True}, listed
+
+
+def test_node_edit_never_cooks(client):
+    geo = hou.node("/obj").createNode("geo", "geo1")
+    box = geo.createNode("box", "box1")  # never cooked
+    result = client.ok(
+        "node_edit",
+        {
+            "items": [
+                {"path": box.path(), "name": "base", "comment": "c", "color": [1, 0, 0]},
+            ]
+        },
+    )
+    row = result["results"][0]
+    assert row["path"] == "/obj/geo1/base" and row["cook_state"] == "not_cooked"
+    assert "cook_time_ms" not in row
+    assert box.needsToCook()
+
+
+def test_outline_inputs_name_a_non_zero_source_output(client):
+    """Review 23 papercut 5: the outline dropped the output index, so Vellum's constraint
+    output wired as geometry looked right."""
+    geo = hou.node("/obj").createNode("geo", "geo1")
+    box = geo.createNode("box", "box1")
+    split = geo.createNode("split", "split1")
+    split.setInput(0, box)
+    merge = geo.createNode("merge", "merge1")
+    merge.setInput(0, split, 0)
+    merge.setInput(1, split, 1)
+    result = client.ok("network_describe", {"root": geo.path(), "format": "outline"})
+    rows = {row["name"]: row for row in result["nodes"]}
+    assert rows["merge1"]["inputs"] == ["/obj/geo1/split1", "/obj/geo1/split1:1"]
+    assert rows["split1"]["inputs"] == ["/obj/geo1/box1"]

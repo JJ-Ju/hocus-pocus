@@ -3,28 +3,45 @@
 Images go back as ``{"image": {"png_base64", "mime_type"}}`` (the bridge turns that into
 MCP image content) and are also written under ``<state_dir>/captures``.
 
-**Headless OpenGL renders run in a child hython.** In hython 22.0.466 the second
+**Captures render through the Flipbook ROP** (1.4). Houdini 22 deprecates the OpenGL ROP
+(``Driver/opengl``) for the Flipbook ROP (``Driver/flipbook``), which has the same output,
+resolution, camera and LOP-source parms. viewport_capture's ROP source tries, in order, the
+Flipbook ROP, the OpenGL ROP and a temporary Karma CPU ROP (:func:`capture_chain`); each
+step that fails says why in ``notes`` and ``source_used`` names the one that ran.
+
+**Headless viewport renders run in a child hython.** In hython 22.0.466 the second
 ``RopNode.render()`` of any OpenGL ROP in a process segfaults inside the Vulkan viewport
 renderer (``GR_FillAttributesVK`` / ``RV_ShaderVariableSet``), whatever the node, frame,
-output or geometry; one multi-frame ``render()`` call is fine. So headless, the host
-snapshots the scene (``saveChildrenToFile`` per manager: no hip save, no event side
-effects) and renders it in a short-lived ``hython`` (about 3 s per call). In a GUI session
-OpenGL ROPs render in-process. Every other ROP type renders in-process, frame by frame,
-through the main-thread executor.
+output or geometry; one multi-frame ``render()`` call is fine. The Flipbook ROP renders
+the same ROP again in-process (other frames, cameras, resolutions, geometry), but once a
+Flipbook ROP that has rendered is deleted (``destroy()`` or ``hip_new``), the next Flipbook
+render in that hython segfaults at the same place (``RV_ShaderVariableSet::create``), and
+a capture's temporary ROP is always deleted. So headless, the host snapshots the scene
+(``saveChildrenToFile`` per manager: no hip save, no event side effects) and renders
+Flipbook and OpenGL ROPs in a short-lived ``hython`` (about 3 s per call). viewport_capture
+keeps its Flipbook child between captures instead (:class:`WarmCapture`, review 22 finding
+6): each capture pushes a fresh snapshot, the child deletes its previous scene but never its
+own Flipbook ROP, and re-renders that ROP (about 0.3 s). In a GUI session
+both render in-process (a temporary Flipbook ROP created, rendered and deleted four times,
+then again after ``hipFile.clear()``, did not crash in houdinifx 22.0.466). Every other ROP
+type renders in-process, frame by frame, through the main-thread executor.
 
-**A child that renders a stage runs single-threaded** (``HOUDINI_MAXTHREADS=1``, review 16
-N1). Headless, the Vulkan device is created lazily by the first code that draws; for a
-stage of more than a few thousand polygons the OpenGL ROP's LOP source updates the meshes
-in parallel, so the device is created on a TBB worker while other workers wait on it, and
-hython segfaults in the driver (``RV_Instance::initializeDevice`` under
+**An OpenGL child that renders a stage runs single-threaded** (``HOUDINI_MAXTHREADS=1``,
+review 16 N1). Headless, the Vulkan device is created lazily by the first code that draws;
+for a stage of more than a few thousand polygons the OpenGL ROP's LOP source updates the
+meshes in parallel, so the device is created on a TBB worker while other workers wait on
+it, and hython segfaults in the driver (``RV_Instance::initializeDevice`` under
 ``GR_PrimPacked::updateInstanceGeometry``; exit 139, also in a fresh hython that loads the
-hip itself). One thread creates the device on the rendering thread. If a stage capture's
-child still crashes, viewport_capture renders the frame with a temporary Karma ROP in
-the host instead (``source_used: "karma"``).
+hip itself). One thread creates the device on the rendering thread. The Flipbook ROP does
+not have this crash (review 16's city stage rendered multi-threaded in 5 of 5 fresh
+hythons), so its children keep every thread. If a stage capture's child still crashes,
+the next ROP of the chain renders it, and Karma, in the host, last
+(``source_used: "karma"``).
 """
 
 from __future__ import annotations
 
+import atexit
 import base64
 import contextlib
 import io
@@ -34,6 +51,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from collections.abc import Iterator
 from pathlib import Path
@@ -58,10 +76,17 @@ BACKGROUND = (64, 64, 64)
 """Alpha is composited onto mid grey so silhouettes read on light and dark clients."""
 VIEW_DIRECTION = (0.62, 0.45, 0.85)
 """Camera offset direction for fit framing: a three-quarter view from front-right-above."""
-SOURCES = ("auto", "viewer", "opengl_rop")
+SOURCES = ("auto", "viewer", "flipbook_rop", "opengl_rop")
+"""``opengl_rop`` is the 1.3 name of ``flipbook_rop``: both run :func:`capture_chain`."""
+CAPTURE_ROPS = ("flipbook", "opengl")
+"""The viewport ROP types viewport_capture tries, in order, before Karma (1.4)."""
+ROP_SOURCE_USED = {"flipbook": "flipbook_rop", "opengl": "opengl_rop", "karma": "karma"}
+ROP_LABELS = {"flipbook": "Flipbook ROP", "opengl": "OpenGL ROP", "karma": "Karma"}
+VIEWPORT_ROP_TYPES = frozenset(CAPTURE_ROPS)
+"""ROP types whose headless renders go through a child hython (module docstring)."""
 FITS = ("all", "selected", "none")
 OUTPUT_PARMS = (
-    "picture",  # opengl, karma
+    "picture",  # flipbook, opengl, karma
     "vm_picture",  # mantra (ifd)
     "sopoutput",  # geometry
     "copoutput",  # comp
@@ -100,8 +125,8 @@ DARK_MEAN = 8.0
 """A thumbnail whose mean luminance (0..255), measured on the flattened image the agent
 receives, is below this is reported as nearly black."""
 NO_LIGHTS_NOTE = (
-    "Scene has no lights; an OpenGL render relies on the ROP's headlight setting and other "
-    "renderers may render black."
+    "Scene has no lights; a Flipbook or OpenGL ROP render relies on the ROP's headlight "
+    "setting and other renderers may render black."
 )
 
 
@@ -309,8 +334,9 @@ def capture_camera(hou, capture, created):
 
 
 def build_capture(hou, capture, created):
-    # viewport_capture's camera and OpenGL ROP. Every node made is appended to created.
-    rop = hou.node("/out").createNode("opengl")
+    # viewport_capture's camera and viewport ROP (rop_type: flipbook or opengl, the same
+    # parms). Every node made is appended to created.
+    rop = hou.node("/out").createNode(capture.get("rop_type") or "flipbook")
     created.append(rop)
     for name, value in capture["rop_parms"].items():
         rop.parm(name).set(value)
@@ -333,11 +359,7 @@ import json, sys
 """
     + _BUILD_CAPTURE
     + r"""
-def main():
-    with open(sys.argv[1], encoding="utf-8") as fh:
-        spec = json.load(fh)
-    import hou
-    notes = []
+def load_scene(hou, spec, notes):
     for key, value in spec["env"].items():
         if value:
             hou.putenv(key, value)
@@ -364,11 +386,54 @@ def main():
             node.loadChildrenFromFile(path, ignore_load_warnings=True)
     hou.playbar.setFrameRange(spec["range"][0], spec["range"][1])
     hou.setFrame(spec["frame"])
+
+
+def clear_scene(hou, keep):
+    # A kept child's next scene: every node goes but its own capture ROPs. Never
+    # hipFile.clear(): it deletes them, and a Flipbook ROP that rendered and was deleted
+    # crashes the next Flipbook render in the process.
+    for manager in hou.node("/").children():
+        for node in manager.children():
+            if node.path() not in keep:
+                try:
+                    node.destroy()
+                except Exception:
+                    pass
+
+
+def reuse_capture(hou, capture, rop):
+    # The kept ROP looks through the new capture's camera (built in the new scene).
+    for name, value in capture["rop_parms"].items():
+        rop.parm(name).set(value)
+    lop, camera = capture_camera(hou, capture, [])
+    if lop is not None:
+        rop.parm("opsource").set(1)
+        rop.parm("loppath").set(lop)
+        rop.parm("cameraprim").set(camera)
+    else:
+        rop.parm("opsource").set(0)
+        rop.parm("camera").set(camera)
+    return rop
+
+
+def render(hou, spec, kept):
+    notes = []
+    if kept:
+        clear_scene(hou, set(rop.path() for rop in kept.values()))
+    load_scene(hou, spec, notes)
     capture = spec.get("capture")
     if capture:
-        spec["rop"] = build_capture(hou, capture, []).path()
+        rop_type = capture.get("rop_type") or "flipbook"
+        if rop_type in kept:
+            rop = reuse_capture(hou, capture, kept[rop_type])
+        else:
+            rop = build_capture(hou, capture, [])
+            if spec.get("serve"):
+                rop.setName("hocuspocus_capture_" + rop_type, unique_name=True)
+                kept[rop_type] = rop
+        spec["rop"] = rop.path()
     rop = hou.node(spec["rop"])
-    result = {"errors": [], "warnings": [], "notes": notes}
+    result = {"errors": [], "warnings": [], "notes": notes, "request": spec.get("request")}
     if rop is None:
         result["errors"].append("ROP %s missing in the snapshot" % spec["rop"])
     else:
@@ -382,8 +447,48 @@ def main():
             result["errors"].append(str(exc).strip())
         result["errors"] += [str(e) for e in rop.errors()]
         result["warnings"] += [str(w) for w in rop.warnings()]
+    return result
+
+
+def requests(idle_s):
+    # Spec paths, one per stdin line, until EOF (the host went away) or idle_s without one.
+    import queue, threading
+
+    lines = queue.Queue()
+
+    def read():
+        for line in sys.stdin:
+            lines.put(line.strip())
+        lines.put(None)
+
+    threading.Thread(target=read, daemon=True).start()
+    while True:
+        try:
+            path = lines.get(timeout=idle_s)
+        except queue.Empty:
+            return
+        if not path:
+            return
+        yield path
+
+
+def emit(result):
     sys.stdout.write("HPRESULT " + json.dumps(result) + "\n")
     sys.stdout.flush()
+
+
+def main():
+    with open(sys.argv[1], encoding="utf-8") as fh:
+        spec = json.load(fh)
+    import hou
+    kept = {}
+    emit(render(hou, spec, kept))
+    if not spec.get("serve"):
+        return
+    # A kept capture child (warm captures): render each further request in this process.
+    for path in requests(spec.get("idle_s") or 120):
+        with open(path, encoding="utf-8") as fh:
+            emit(render(hou, json.load(fh), kept))
 
 main()
 """
@@ -465,6 +570,31 @@ def crash_summary(log: str, limit: int = CRASH_LOG_CHARS) -> str:
     return out if len(out) <= limit else out[: limit - 3] + "..."
 
 
+def exit_error(code: int | None, log: str) -> ToolError:
+    """The error for a render process that exited without a result: a crash, or a licence
+    refusal (retry). No ``hou``."""
+    licence = "licen" in log.lower()
+    return ToolError(
+        "internal",
+        f"The render process exited with code {code}.",
+        hint=(
+            "No Houdini licence was available for the render process; retry shortly."
+            if licence
+            else "See detail.log for the render process output."
+        ),
+        hou_exception=f"render process exit {code}",
+        detail={"log": crash_summary(log), "exit_code": code},
+    )
+
+
+def _child_env(single_thread: bool = False) -> dict[str, str]:
+    env = dict(os.environ)
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    if single_thread:
+        env["HOUDINI_MAXTHREADS"] = "1"
+    return env
+
+
 class ChildRender:
     """One child hython rendering a snapshot. Off the main thread after :meth:`start`."""
 
@@ -480,8 +610,11 @@ class ChildRender:
     ) -> None:
         self.tmp_dir = tmp_dir
         self.spec = dict(snapshot, rop=rop, frames=list(frames), parms=parms or {})
-        self.single_thread = single_thread or bool((snapshot.get("capture") or {}).get("lop"))
-        """A stage render: see the module docstring (review 16 N1)."""
+        capture = snapshot.get("capture") or {}
+        self.single_thread = single_thread or bool(
+            capture.get("lop") and capture.get("rop_type") == "opengl"
+        )
+        """An OpenGL ROP rendering a stage: see the module docstring (review 16 N1)."""
         self.proc: subprocess.Popen[bytes] | None = None
         self.log_path = os.path.join(tmp_dir, "child.log")
 
@@ -490,15 +623,11 @@ class ChildRender:
         spec_path = os.path.join(self.tmp_dir, "spec.json")
         Path(script).write_text(_CHILD_SCRIPT, encoding="utf-8")
         Path(spec_path).write_text(json.dumps(self.spec), encoding="utf-8")
-        env = dict(os.environ)
-        env["PYTHONDONTWRITEBYTECODE"] = "1"
-        if self.single_thread:
-            env["HOUDINI_MAXTHREADS"] = "1"
         with open(self.log_path, "wb") as log:
             self.proc = subprocess.Popen(
                 [self.spec["hython"], script, spec_path],
                 cwd=self.tmp_dir,
-                env=env,
+                env=_child_env(self.single_thread),
                 stdin=subprocess.DEVNULL,
                 stdout=log,
                 stderr=subprocess.STDOUT,
@@ -537,18 +666,7 @@ class ChildRender:
             (line for line in reversed(log.splitlines()) if line.startswith("HPRESULT ")), None
         )
         if self.proc.returncode != 0 or marker is None:
-            licence = "licen" in log.lower()
-            raise ToolError(
-                "internal",
-                f"The render process exited with code {self.proc.returncode}.",
-                hint=(
-                    "No Houdini licence was available for the render process; retry shortly."
-                    if licence
-                    else "See detail.log for the render process output."
-                ),
-                hou_exception=f"render process exit {self.proc.returncode}",
-                detail={"log": crash_summary(log), "exit_code": self.proc.returncode},
-            )
+            raise exit_error(self.proc.returncode, log)
         outcome = json.loads(marker[len("HPRESULT ") :])
         notes = list(self.spec.get("notes") or []) + list(outcome.get("notes") or [])
         outcome["notes"] = notes
@@ -562,36 +680,223 @@ class ChildRender:
         return data[-limit:].decode("utf-8", "replace")
 
 
-def render_isolated(
-    rop: str | None,
-    frames: list[float],
-    parms: dict[str, Any] | None = None,
-    *,
-    capture: dict[str, Any] | None = None,
-    timeout_s: float = CHILD_TIMEOUT_S,
-) -> dict[str, Any]:
-    """Snapshot and render synchronously in a child hython. Main thread (snapshot).
+# -- warm capture child (review 22 finding 6) ------------------------------------------
 
-    With ``capture`` the child builds viewport_capture's camera and ROP in its own scene
-    (``rop`` is then None), so the live scene gains no nodes.
-    """
-    tmp_dir = tempfile.mkdtemp(prefix="hp-render-")
-    try:
-        snapshot = snapshot_scene(tmp_dir)
-        if capture is not None:
-            snapshot["capture"] = capture
-        child = ChildRender(snapshot, tmp_dir, rop or "", frames, parms)
+WARM_CAPTURES = True
+"""Headless Flipbook captures render in a kept child hython (:class:`WarmCapture`)."""
+WARM_IDLE_S = 120.0
+"""A kept capture child exits after this long without a capture (it holds a licence)."""
+WARM_MAX_USES = 200
+"""A kept capture child is replaced after this many captures."""
+_warm: dict[str, Any] = {"child": None, "disabled": None}
+"""``child``: the kept :class:`WarmCapture`; ``disabled``: why kept children are off in
+this process (one crashed where a fresh child did not)."""
+_warm_lock = threading.Lock()
+
+
+def warm_key(snapshot: dict[str, Any]) -> tuple[Any, ...]:
+    """What a kept child cannot change between captures: the hython, the child script and
+    the HDA libraries it installed (with their mtimes, so ``hda save`` restarts it). The
+    scene itself is pushed with every capture. No ``hou``."""
+    libs = []
+    for lib in snapshot.get("hdas") or []:
+        try:
+            libs.append((lib, os.path.getmtime(lib)))
+        except OSError:
+            libs.append((lib, None))
+    return (snapshot.get("hython"), _CHILD_SCRIPT, tuple(libs))
+
+
+class WarmCapture:
+    """A capture child hython kept between headless Flipbook captures (review 22 finding 6:
+    a fresh child cost 2.9-3.7 s per capture, 69 % of a soak's tool time). Each capture
+    sends a fresh scene snapshot; the child deletes its previous scene, keeping only its
+    own Flipbook ROP, loads the snapshot and renders that ROP again: re-rendering one
+    Flipbook ROP is safe in-process, deleting one that rendered is not (module docstring).
+    It exits on stdin EOF (the host went away) or after :data:`WARM_IDLE_S` idle. Results
+    are ``HPRESULT`` lines in its log, matched by request id. Off the main thread."""
+
+    def __init__(self, key: tuple[Any, ...], hython: str) -> None:
+        self.key = key
+        self.hython = hython
+        self.dir = tempfile.mkdtemp(prefix="hp-warm-")
+        self.log_path = os.path.join(self.dir, "child.log")
+        self.proc: subprocess.Popen[bytes] | None = None
+        self.uses = 0
+        self.last_used = time.monotonic()
+
+    def usable(self, key: tuple[Any, ...]) -> bool:
+        return (
+            self.proc is not None
+            and self.proc.poll() is None
+            and self.key == key
+            and self.uses < WARM_MAX_USES
+            and time.monotonic() - self.last_used < WARM_IDLE_S - 10.0
+        )
+
+    def request(self, spec: dict[str, Any], tmp_dir: str, timeout_s: float) -> dict[str, Any]:
+        """Render one capture spec and return its outcome, as :meth:`ChildRender.wait`."""
+        request = f"{os.getpid()}-{self.uses}-{time.monotonic_ns()}"
+        spec = dict(spec, serve=True, idle_s=WARM_IDLE_S, request=request)
+        spec_path = os.path.join(tmp_dir, f"warm-{self.uses}.json")
+        Path(spec_path).write_text(json.dumps(spec), encoding="utf-8")
+        offset = 0
+        if self.proc is None:
+            script = os.path.join(self.dir, "render_child.py")
+            Path(script).write_text(_CHILD_SCRIPT, encoding="utf-8")
+            with open(self.log_path, "wb") as log:
+                self.proc = subprocess.Popen(
+                    [self.hython, script, spec_path],
+                    cwd=self.dir,
+                    env=_child_env(),
+                    stdin=subprocess.PIPE,
+                    stdout=log,
+                    stderr=subprocess.STDOUT,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                )
+        else:
+            with contextlib.suppress(OSError):
+                offset = os.path.getsize(self.log_path)
+            assert self.proc.stdin is not None
+            # It may have exited: then its exit code is reported below.
+            with contextlib.suppress(OSError):
+                self.proc.stdin.write((spec_path + "\n").encode("utf-8"))
+                self.proc.stdin.flush()
+        self.uses += 1
+        try:
+            outcome = self._wait(request, offset, timeout_s)
+        finally:
+            self.last_used = time.monotonic()
+        outcome["notes"] = list(spec.get("notes") or []) + list(outcome.get("notes") or [])
+        return outcome
+
+    def _read(self, offset: int) -> str:
+        try:
+            with open(self.log_path, "rb") as fh:
+                fh.seek(offset)
+                return fh.read().decode("utf-8", "replace")
+        except OSError:
+            return ""
+
+    def _wait(self, request: str, offset: int, timeout_s: float) -> dict[str, Any]:
+        assert self.proc is not None
+        deadline = time.monotonic() + timeout_s
+        marker = f'"request": "{request}"'
+
+        def result(log: str) -> dict[str, Any] | None:
+            for line in log.splitlines():
+                if line.startswith("HPRESULT ") and marker in line:
+                    return json.loads(line[len("HPRESULT ") :])
+            return None
+
+        while True:
+            exited = self.proc.poll() is not None
+            log = self._read(offset)
+            found = result(log)
+            if found is not None:
+                return found
+            if exited:
+                raise exit_error(self.proc.returncode, log[-200_000:])
+            if time.monotonic() > deadline:
+                self.close()
+                raise ToolError(
+                    "internal",
+                    f"The render process did not finish within {timeout_s:g}s and was killed.",
+                    hou_exception="render process timeout",
+                    detail={"log": crash_summary(log[-4000:])},
+                )
+            time.sleep(0.02)
+
+    def close(self) -> None:
+        if self.proc is not None:
+            with contextlib.suppress(Exception):
+                if self.proc.stdin is not None:
+                    self.proc.stdin.close()
+            if self.proc.poll() is None:
+                with contextlib.suppress(Exception):
+                    self.proc.kill()
+            with contextlib.suppress(Exception):
+                self.proc.wait(10)
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+
+def close_warm_capture() -> None:
+    """Stop the kept capture child, if any (host exit, tests)."""
+    with _warm_lock:
+        child = _warm["child"]
+        _warm["child"] = None
+    if child is not None:
+        child.close()
+
+
+atexit.register(close_warm_capture)
+
+WARM_CRASH_NOTE = (
+    "The kept capture process crashed, so this capture used a fresh one; later captures "
+    "in this Houdini start a fresh process each time."
+)
+
+
+def render_capture_child(
+    snapshot: dict[str, Any], tmp_dir: str, frame: float, timeout_s: float
+) -> dict[str, Any]:
+    """Render one viewport_capture snapshot (``snapshot["capture"]``) in a child hython.
+    A headless Flipbook capture goes to the kept :class:`WarmCapture`, started on first use
+    and replaced when :func:`warm_key` changes or it died, idled or aged out. Anything else
+    goes to a fresh :class:`ChildRender`: another ROP type, a capture while the kept child
+    is busy, and every capture after a kept child that had already rendered crashed (that
+    capture is retried once in a fresh child, with a note). A fresh kept child's crash is a
+    crash, as before. Off the main thread."""
+    frames = [frame, frame, 1]
+    capture = snapshot.get("capture") or {}
+
+    def cold() -> dict[str, Any]:
+        child = ChildRender(snapshot, tmp_dir, "", frames)
         child.start()
         try:
             return child.wait(timeout_s=timeout_s)
         finally:
             child.kill()
+
+    if (
+        not WARM_CAPTURES
+        or _warm["disabled"]
+        or capture.get("rop_type", "flipbook") != "flipbook"
+        or not _warm_lock.acquire(blocking=False)
+    ):
+        return cold()
+    try:
+        key = warm_key(snapshot)
+        child = _warm["child"]
+        if child is not None and not child.usable(key):
+            child.close()
+            child = _warm["child"] = None
+        fresh = child is None
+        if child is None:
+            child = _warm["child"] = WarmCapture(key, snapshot["hython"])
+        spec = dict(snapshot, rop="", frames=frames, parms={})
+        try:
+            return child.request(spec, tmp_dir, timeout_s)
+        except ToolError as exc:
+            child.close()
+            _warm["child"] = None
+            if fresh or not child_crashed(exc):
+                raise
+            _warm["disabled"] = exc.message
+        outcome = cold()
+        outcome["notes"] = [*outcome.get("notes", []), WARM_CRASH_NOTE]
+        return outcome
     finally:
-        shutil.rmtree(tmp_dir, ignore_errors=True)
+        _warm_lock.release()
+
+
+def rop_core_type(rop_node: Any) -> str:
+    return rop_node.type().name().split("::")[0]
 
 
 def needs_isolation(rop_node: Any, ctx: HostContext) -> bool:
-    return not ctx.ui and rop_node.type().name().split("::")[0] == "opengl"
+    """Headless Flipbook and OpenGL ROPs render in a child hython (module docstring)."""
+    return not ctx.ui and rop_core_type(rop_node) in VIEWPORT_ROP_TYPES
 
 
 # -- Copernicus images (review 18) ----------------------------------------------------
@@ -1232,8 +1537,8 @@ def _capture_spec(
 
 @contextlib.contextmanager
 def temporary_capture_nodes(spec: dict[str, Any]) -> Iterator[Any]:
-    """Create the capture camera (unless the spec names one) and OpenGL ROP in the live
-    scene for an in-process render, outside undo, and delete them afterwards, restoring
+    """Create the capture camera (unless the spec names one) and the spec's viewport ROP
+    (``rop_type``) in the live scene for an in-process render, outside undo, and delete them afterwards, restoring
     the selection. Yields the ROP. Main thread."""
     import hou
 
@@ -1262,47 +1567,141 @@ def temporary_capture_nodes(spec: dict[str, Any]) -> Iterator[Any]:
                     node.setSelected(True)
 
 
-def _capture_opengl(
+def capture_chain(available: Any) -> list[str]:
+    """The renderers a ROP-source capture tries, in order: the Flipbook ROP, the OpenGL ROP
+    (each when this Houdini has the type) and Karma last. No ``hou``."""
+    have = set(available)
+    return [t for t in CAPTURE_ROPS if t in have] + ["karma"]
+
+
+def available_capture_rops() -> list[str]:
+    """The :data:`CAPTURE_ROPS` this Houdini has (22.0 has both; older builds lack the
+    Flipbook ROP). Main thread."""
+    import hou
+
+    category = hou.ropNodeTypeCategory()
+    return [t for t in CAPTURE_ROPS if hou.nodeType(category, t) is not None]
+
+
+def fallback_note(failures: list[tuple[str, str]], used: str) -> str | None:
+    """Why a capture used a later renderer of :func:`capture_chain`: one note naming each
+    ROP that did not render and why (``failures``: ``(rop type, reason)``)."""
+    if not failures:
+        return None
+    why = "; ".join(f"the {ROP_LABELS[t]} {reason}" for t, reason in failures)
+    if used == "karma":
+        return karma_note(why)
+    return f"Rendered with the {ROP_LABELS[used]} because {why}."
+
+
+def run_capture_chain(
+    chain: list[str],
+    *,
+    stage: bool,
+    source: str,
+    render_rop: Any,
+    render_karma: Any,
+) -> tuple[str, dict[str, Any], list[str]]:
+    """Render one capture with the first renderer of ``chain`` that works. ``render_rop``
+    (a ROP type) returns the render outcome or raises; a crashed child moves on to the next
+    renderer, any other error is raised. Karma runs only after a crash or skip. Returns
+    ``(renderer, outcome, notes)``. Headless, a stage whose child crashed once is not sent
+    to that ROP again in this process when ``source`` is ``auto`` (each crash costs
+    seconds)."""
+    failures: list[tuple[str, str]] = []
+    crash: ToolError | None = None
+    for renderer in chain:
+        if renderer == "karma":
+            if not failures:
+                break  # nothing crashed: the last ROP's error was raised already
+            karma_after_crash(render_karma, crash)
+            return "karma", {}, [n for n in (fallback_note(failures, "karma"),) if n]
+        if stage and source == "auto" and renderer in _stage_crashed:
+            failures.append(
+                (renderer, "was skipped (it crashed a stage capture earlier in this session)")
+            )
+            continue
+        try:
+            outcome = render_rop(renderer)
+        except ToolError as exc:
+            if not child_crashed(exc):
+                raise
+            crash = exc
+            if stage:
+                _stage_crashed[renderer] = exc.message
+            failures.append((renderer, f"crashed its render process ({exc.message})"))
+            continue
+        return renderer, outcome, [n for n in (fallback_note(failures, renderer),) if n]
+    raise ToolError("internal", "No renderer could capture the scene.")
+
+
+def _capture_rop(
     ctx: HostContext,
     target: dict[str, Any],
     frame: float,
     res: tuple[int, int],
     fit: str,
     out_file: str,
+    source: str = "auto",
 ) -> dict[str, Any]:
+    """The ROP source on the main thread: in a child hython headless, in-process in the GUI.
+    Sets ``source_used``. Main thread."""
     import hou
 
     spec, info = _capture_spec(target, res, fit, out_file, ctx.scene.generation)
-    errors: list[str] = []
+    chain = capture_chain(available_capture_rops())
     if not ctx.ui:
         # Headless: the child hython builds camera and ROP in its own copy of the scene.
-        try:
-            outcome = render_isolated(None, [frame, frame, 1], capture=spec)
-        except ToolError as exc:
-            if not child_crashed(exc):
-                raise
-            karma_after_crash(lambda: capture_with_karma(spec, frame, res, out_file), exc)
-            info["source_used"] = "karma"
-            info["notes"] = [karma_note(f"the OpenGL render process crashed ({exc.message})")]
-            return info
-        errors = outcome.get("errors") or []
-        if outcome.get("notes"):
-            info["notes"] = outcome["notes"]
-    else:
+        def render_rop(rop_type: str) -> dict[str, Any]:
+            tmp_dir = tempfile.mkdtemp(prefix="hp-render-")
+            try:
+                snapshot = dict(snapshot_scene(tmp_dir), capture=dict(spec, rop_type=rop_type))
+                outcome = render_capture_child(snapshot, tmp_dir, frame, CHILD_TIMEOUT_S)
+            finally:
+                shutil.rmtree(tmp_dir, ignore_errors=True)
+            _check_capture_output(outcome.get("errors") or [], out_file, rop_type)
+            return outcome
+
+        used, outcome, notes = run_capture_chain(
+            chain,
+            stage=spec.get("lop") is not None,
+            source=source,
+            render_rop=render_rop,
+            render_karma=lambda: capture_with_karma(spec, frame, res, out_file),
+        )
+        info["source_used"] = ROP_SOURCE_USED[used]
+        _add_notes(info, *(outcome.get("notes") or []), *notes)
+        return info
+    # GUI: in-process. A ROP that renders no image hands over to the next viewport ROP; a
+    # crash here would take Houdini down, so there is no crash fallback (and no Karma).
+    failures: list[tuple[str, str]] = []
+    rops = [t for t in chain if t != "karma"]
+    for i, rop_type in enumerate(rops):
         was_dirty = scene_dirty(ctx)
-        with temporary_capture_nodes(spec) as rop:
+        errors: list[str] = []
+        with temporary_capture_nodes(dict(spec, rop_type=rop_type)) as rop:
             try:
                 rop.render(frame_range=(frame, frame), verbose=False)
             except hou.OperationFailed as exc:
                 errors.append(str(exc).strip())
             errors += [str(e) for e in rop.errors()]
         if not was_dirty and scene_dirty(ctx):
-            info["notes"] = [
+            _add_notes(
+                info,
                 "Houdini marks the hip modified when the temporary capture camera and ROP are "
-                "created, although both were deleted and nothing else changed."
-            ]
-    _check_capture_output(errors, out_file)
-    return info
+                "created, although both were deleted and nothing else changed.",
+            )
+        try:
+            _check_capture_output(errors, out_file, rop_type)
+        except ToolError as exc:
+            if i == len(rops) - 1:
+                raise
+            failures.append((rop_type, f"produced no image ({exc.message})"))
+            continue
+        info["source_used"] = ROP_SOURCE_USED[rop_type]
+        _add_notes(info, fallback_note(failures, rop_type))
+        return info
+    raise ToolError("internal", "This Houdini has neither a Flipbook ROP nor an OpenGL ROP.")
 
 
 GENERIC_FAILURE = "The attempted operation failed."
@@ -1340,9 +1739,9 @@ def failure(message: str, errors: list[str]) -> tuple[str, dict[str, Any]]:
     return f"{message}: {lines[0] if lines else 'no output file'}", detail
 
 
-def _check_capture_output(errors: list[str], out_file: str) -> None:
+def _check_capture_output(errors: list[str], out_file: str, rop_type: str = "flipbook") -> None:
     if errors or not os.path.isfile(out_file):
-        message, detail = failure("The OpenGL ROP did not produce an image", errors)
+        message, detail = failure(f"The {ROP_LABELS[rop_type]} did not produce an image", errors)
         raise ToolError(
             "cook_failed",
             message,
@@ -1353,14 +1752,15 @@ def _check_capture_output(errors: list[str], out_file: str) -> None:
 
 KARMA_SAMPLES = 2
 """Pixel samples of the Karma fallback: a quick look, not a final frame."""
-_gl_stage_crashed: list[str] = []
-"""Set when a headless stage capture's OpenGL child crashed in this process: later stage
-captures with source auto go straight to Karma (each crash costs seconds)."""
+_stage_crashed: dict[str, str] = {}
+"""ROP type -> crash message, set when a headless stage capture's child of that ROP crashed
+in this process: later stage captures with source auto skip that ROP (each crash costs
+seconds)."""
 
 
 def child_crashed(exc: ToolError) -> bool:
     """Whether a child render failed by crashing (not a licence refusal, a timeout or a
-    cancel), so another renderer may succeed where the OpenGL ROP did not."""
+    cancel), so another renderer may succeed where a viewport ROP did not."""
     return (
         exc.code == "internal"
         and str(exc.hou_exception or "").startswith("render process exit")
@@ -1438,7 +1838,7 @@ def capture_with_karma(
     spec: dict[str, Any], frame: float, res: tuple[int, int], out_file: str
 ) -> None:
     """Render one capture frame with a temporary Karma CPU ROP in the host (review 16 N1):
-    the fallback when the OpenGL child crashed. Karma has no second-render crash, so its
+    the fallback when the viewport ROP children crashed. Karma has no second-render crash, so its
     ROP renders in-process (husk is its own process). Deletes every node it made, outside
     undo and events, and puts the selection back. Raises ``cook_failed`` with the end of
     the husk log. Main thread."""
@@ -1483,8 +1883,8 @@ def capture_with_karma(
 
 
 def karma_after_crash(run: Any, crash: ToolError | None) -> None:
-    """Run the Karma fallback; if it fails after an OpenGL crash, say both, with the
-    crashed child's short log as ``detail.opengl_log``."""
+    """Run the Karma fallback; if it fails after a viewport ROP child crashed, say both,
+    with the crashed child's short log as ``detail.opengl_log`` (the 1.3 name, kept)."""
     try:
         run()
     except ToolError as exc:
@@ -1494,8 +1894,8 @@ def karma_after_crash(run: Any, crash: ToolError | None) -> None:
         detail["opengl_log"] = (crash.detail or {}).get("log", "")
         raise ToolError(
             exc.code,
-            f"The OpenGL render process crashed ({crash.message}) and the Karma fallback "
-            f"failed: {exc.message}",
+            f"The viewport ROP render process crashed ({crash.message}) and the Karma "
+            f"fallback failed: {exc.message}",
             hint=exc.hint,
             detail=detail,
         ) from exc
@@ -1532,7 +1932,7 @@ def _viewer_context_note(viewer: Any, target: dict[str, Any]) -> tuple[str | Non
         return context, None
     return context, (
         f"The viewer shows {context}, not {wanted}: it draws that network's context (other "
-        "objects ghosted or hidden). source opengl_rop renders the whole scene."
+        "objects ghosted or hidden). source flipbook_rop renders the whole scene."
     )
 
 
@@ -1585,7 +1985,7 @@ def _capture_viewer(
             "internal",
             "The Scene Viewer flipbook did not write an image.",
             hou_exception="flipbook produced no file",
-            hint="Retry with source 'opengl_rop'.",
+            hint="Retry with source 'flipbook_rop'.",
         )
     info: dict[str, Any] = {
         "scene": target["scene"],
@@ -1695,12 +2095,41 @@ STAGE_NOTE = (
 )
 
 
+def rop_lop_source(lop_path: Any) -> tuple[Any, str | None]:
+    """For a ROP inside a LOP network (``usdrender_rop``, ``usd_rop``), which has no output
+    stage, the LOP it renders (``loppath``, else its input) and a note; any other value
+    unchanged. A ROP LOP with neither is left for :func:`resolve_lop` to refuse (review 23
+    P2-10). Main thread."""
+    import hou
+
+    if not isinstance(lop_path, str) or not lop_path.strip().startswith("/"):
+        return lop_path, None
+    node = hou.node(lop_path.strip())
+    if (
+        not isinstance(node, hou.RopNode)
+        or isinstance(node, hou.LopNode)
+        or node.type().category() != hou.lopNodeTypeCategory()
+    ):
+        return lop_path, None
+    source = None
+    with contextlib.suppress(Exception):
+        source = _usd_source_lop(node)
+    if source is None:
+        return lop_path, None
+    return source.path(), (
+        f"Captured {source.path()}, the LOP {node.path()} renders: a ROP has no output stage."
+    )
+
+
 def _resolve_capture(parsed: dict[str, Any]) -> dict[str, Any]:
     """The capture target plus a note when /obj was captured but /stage has a display
-    LOP. Main thread."""
+    LOP, or when ``lop_path`` was a ROP LOP. Main thread."""
     _refuse_cop_as("camera", parsed["camera"])
     _refuse_cop_as("lop_path", parsed["lop_path"])
-    target = capture_target(parsed["camera"], parsed["lop_path"])
+    lop_path, rop_note = rop_lop_source(parsed["lop_path"])
+    target = capture_target(parsed["camera"], lop_path)
+    if rop_note:
+        target["note"] = rop_note
     if target["scene"] == "obj" and parsed["camera"] is None:
         display = _stage_display()
         notes = [STAGE_NOTE.format(lop=display.path())] if display is not None else []
@@ -1719,7 +2148,7 @@ def _add_notes(info: dict[str, Any], *notes: Any) -> None:
 
 
 def _capture_main(parsed: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
-    """The whole capture on the main thread: the GUI path (viewer or in-process OpenGL
+    """The whole capture on the main thread: the GUI path (viewer or in-process viewport
     ROP), and headless when called inline on the main thread."""
     source, res = parsed["source"], parsed["res"]
     target = _resolve_capture(parsed)
@@ -1730,15 +2159,15 @@ def _capture_main(parsed: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
             raise ToolError(
                 "invalid_argument",
                 "source 'viewer' captures the Scene Viewer as it is; a stage capture (a LOP "
-                "camera or lop_path) renders through an OpenGL ROP.",
-                hint="Use source 'opengl_rop' or 'auto'.",
+                "camera or lop_path) renders through a Flipbook ROP.",
+                hint="Use source 'flipbook_rop' or 'auto'.",
             )
         viewer = _scene_viewer()
         if viewer is None:
             raise ToolError(
                 "invalid_value",
                 "No Scene Viewer pane is open.",
-                hint="Open a Scene Viewer, or use source 'opengl_rop'.",
+                hint="Open a Scene Viewer, or use source 'flipbook_rop'.",
             )
     elif source == "auto" and ctx.ui and target["scene"] == "obj" and target["camera"] is None:
         # With a camera, auto renders through the ROP: fast in the GUI, and it leaves the
@@ -1749,8 +2178,7 @@ def _capture_main(parsed: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
         info = _capture_viewer(viewer, target, frame, res, out_file, fit)
         info["source_used"] = "viewer"
     else:
-        info = _capture_opengl(ctx, target, frame, res, parsed["fit"], out_file)
-        info.setdefault("source_used", "opengl_rop")
+        info = _capture_rop(ctx, target, frame, res, parsed["fit"], out_file, source)
     _add_notes(info, target.get("note"))
     return _finish_capture(out_file, res, frame, info, extra_path)
 
@@ -1771,6 +2199,7 @@ def _capture_headless(parsed: dict[str, Any], ctx: HostContext, timeout_s: float
             snapshot = snapshot_scene(tmp_dir)
             snapshot["capture"] = spec
             return {
+                "chain": capture_chain(available_capture_rops()),
                 "frame": frame,
                 "extra_path": extra_path,
                 "out_file": out_file,
@@ -1781,41 +2210,32 @@ def _capture_headless(parsed: dict[str, Any], ctx: HostContext, timeout_s: float
         prep = ctx.executor.run(prepare, timeout_s)
         frame = prep["frame"]
         spec = prep["snapshot"]["capture"]
-        stage = spec.get("lop") is not None
-        reason = None
-        crash: ToolError | None = None
-        if stage and _gl_stage_crashed and parsed["source"] == "auto":
-            reason = "an earlier OpenGL stage capture crashed its render process in this session"
-        else:
-            child = ChildRender(prep["snapshot"], tmp_dir, "", [frame, frame, 1])
-            child.start()
-            try:
-                outcome = child.wait(timeout_s=max(1.0, deadline - time.monotonic()))
-            except ToolError as exc:
-                if not child_crashed(exc):
-                    raise
-                if stage:
-                    _gl_stage_crashed[:] = [exc.message]
-                crash = exc
-                reason = f"the OpenGL render process crashed ({exc.message})"
-            finally:
-                child.kill()
-    finally:
-        shutil.rmtree(tmp_dir, ignore_errors=True)
-    if reason is not None:
-        karma_after_crash(
-            lambda: ctx.executor.run(
+
+        def render_rop(rop_type: str) -> dict[str, Any]:
+            snapshot = dict(prep["snapshot"], capture=dict(spec, rop_type=rop_type))
+            outcome = render_capture_child(
+                snapshot, tmp_dir, frame, max(1.0, deadline - time.monotonic())
+            )
+            _check_capture_output(outcome.get("errors") or [], prep["out_file"], rop_type)
+            return outcome
+
+        def render_karma() -> None:
+            ctx.executor.run(
                 lambda: capture_with_karma(spec, frame, res, prep["out_file"]),
                 max(1.0, deadline - time.monotonic()),
-            ),
-            crash,
+            )
+
+        used, outcome, notes = run_capture_chain(
+            prep["chain"],
+            stage=spec.get("lop") is not None,
+            source=parsed["source"],
+            render_rop=render_rop,
+            render_karma=render_karma,
         )
-        info = dict(prep["info"], source_used="karma")
-        _add_notes(info, karma_note(reason))
-        return _finish_capture(prep["out_file"], res, frame, info, prep["extra_path"])
-    _check_capture_output(outcome.get("errors") or [], prep["out_file"])
-    info = dict(prep["info"], source_used="opengl_rop")
-    _add_notes(info, *(outcome.get("notes") or []))
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+    info = dict(prep["info"], source_used=ROP_SOURCE_USED[used])
+    _add_notes(info, *(outcome.get("notes") or []), *notes)
     return _finish_capture(prep["out_file"], res, frame, info, prep["extra_path"])
 
 
@@ -1828,7 +2248,7 @@ def viewport_capture(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
         raise ToolError(
             "ui_required",
             "source 'viewer' captures the GUI Scene Viewer, and this Houdini is headless.",
-            hint="Use source 'opengl_rop' (or 'auto'), which renders headless.",
+            hint="Use source 'flipbook_rop' (or 'auto'), which renders headless.",
         )
     timeout_s = float(call_timeout(None) or ctx.config.default_timeout_s)
     if parsed["cop_path"] is not None:
@@ -1985,6 +2405,30 @@ def rop_frame_range(rop: Any) -> list[float] | None:
     if inc <= 0 or end < start:
         return None
     return [start, end, inc]
+
+
+def default_frames(rop: Any, name: str) -> tuple[list[float], str | None]:
+    """The frames ``render`` renders without ``frames``: the ROP's own Valid Frame Range,
+    else the current frame, with a note saying which (review 23 P1-2: a usd_rop set to
+    frames 1-48 rendered frame 1 only, silently). Main thread."""
+    import hou
+
+    own = rop_frame_range(rop)
+    if own is not None:
+        start, end, inc = own
+        step = f" step {frame_num(inc)}" if inc != 1 else ""
+        return own, (
+            f"Rendered {name}'s own frame range {frame_num(start)}-{frame_num(end)}{step}; "
+            "pass frames to render others."
+        )
+    frame = hou.frame()
+    note = None
+    if rop.parm("trange") is not None:
+        note = (
+            f"Rendered the current frame ({frame_num(frame)}) only: {name}'s Valid Frame Range "
+            "is 'Render Current Frame'. Pass frames to render a range."
+        )
+    return [frame, frame, 1.0], note
 
 
 def expected_outputs(rop: Any, frames: list[float]) -> list[str]:
@@ -2207,6 +2651,438 @@ def usd_render_outputs(rop: Any, frames: list[float]) -> tuple[list[str], str | 
     return paths, None
 
 
+# -- single-file ROPs: USD, Alembic (review 23 P0-1) -----------------------------------
+
+USD_EXTS = (".usd", ".usda", ".usdc", ".usdz")
+LAYERS_LISTED = 20
+"""A USD render lists at most this many layer files."""
+SAMPLE_SLACK = 1e-3
+
+
+def single_file_kind(path: str) -> str | None:
+    """``usd`` or ``abc`` for an output file that holds every frame of a range, from its
+    extension; None for any other file. No ``hou``."""
+    ext = os.path.splitext(path)[1].lower()
+    if ext in USD_EXTS:
+        return "usd"
+    return "abc" if ext == ".abc" else None
+
+
+def _layer_dependencies(layer: Any, path: str) -> list[str]:
+    """The files ``layer`` (opened from ``path``) composes: sublayers, references and
+    payloads, relative paths resolved against its directory. No ``hou``."""
+    out = []
+    for dep in layer.GetCompositionAssetDependencies():
+        dep = str(dep).split(":SDF_FORMAT_ARGS:")[0]
+        if not dep or dep.startswith("anon:"):
+            continue
+        full = dep if os.path.isabs(dep) else os.path.join(os.path.dirname(path), dep)
+        out.append(_norm(os.path.normpath(full)))
+    return out
+
+
+def usd_layers(root: str, since: float | None = None) -> list[dict[str, Any]]:
+    """Every USD layer file a render wrote: ``root`` and the files it composes, followed
+    through each layer (a sopimport's save path is a sublayer of a usd_rop's root layer),
+    then USD files in ``root``'s directory modified since ``since`` that none of them
+    reached. Rows ``{path, bytes, time_samples, time_codes?}``, at most
+    :data:`LAYERS_LISTED`. Opened as anonymous copies, so the session's cached layers are
+    neither used nor reloaded. ``pxr``, no ``hou``."""
+    from pxr import Sdf
+
+    queue, seen, rows = [_norm(root)], set(), []
+    scanned = False
+    while len(rows) < LAYERS_LISTED:
+        if not queue:
+            if scanned or since is None:
+                break
+            scanned = True
+            folder = os.path.dirname(_norm(root))
+            with contextlib.suppress(OSError):
+                for name in sorted(os.listdir(folder)):
+                    full = _norm(os.path.join(folder, name))
+                    if os.path.splitext(name)[1].lower() not in USD_EXTS:
+                        continue
+                    with contextlib.suppress(OSError):
+                        if os.path.getmtime(full) >= since - WRITTEN_SLACK_S:
+                            queue.append(full)
+            continue
+        path = queue.pop(0)
+        key = os.path.normcase(path)
+        if key in seen or not os.path.isfile(path):
+            continue
+        seen.add(key)
+        row: dict[str, Any] = {"path": path, "bytes": os.path.getsize(path)}
+        layer = None
+        with contextlib.suppress(Exception):
+            layer = Sdf.Layer.OpenAsAnonymous(path)
+        if layer is not None:
+            samples = sorted(layer.ListAllTimeSamples())
+            row["time_samples"] = len(samples)
+            if samples:
+                row["time_codes"] = [frame_num(samples[0]), frame_num(samples[-1])]
+            queue.extend(_layer_dependencies(layer, path))
+        rows.append(row)
+    return rows
+
+
+def _lost_frames(rop: str, path: str, found: str, frames: list[float]) -> ToolError:
+    return ToolError(
+        "cook_failed",
+        f"{rop} wrote {found} for {len(frames)} frames to {os.path.basename(path)}: a "
+        "single-file output lost frames.",
+        hint="Check the ROP's frame range parms and that the input is animated, then render "
+        "again with frames.",
+        detail={"path": path, "frames": [frame_num(frames[0]), frame_num(frames[-1])]},
+    )
+
+
+def check_single_file(
+    rop: str, path: str, frames: list[float], since: float | None = None
+) -> dict[str, Any]:
+    """Read back a single-file output after a render (review 23 P0-1: frame by frame,
+    each call overwrote the file and only the last frame's sample survived). USD: lists
+    :func:`usd_layers`, and over a range the layer with the most time samples must have
+    one per frame; none at all is a static stage (a note). Alembic: the archive's time
+    range must cover the frames. Raises ``cook_failed``; returns ``{notes?, layers?}``.
+    Main thread (``hou.fps``)."""
+    import hou
+
+    kind = single_file_kind(path)
+    out: dict[str, Any] = {}
+    if kind is None or not os.path.isfile(path):
+        return out
+    if kind == "usd":
+        # Every layer file written, not only the root (review 23 P1-3: the data was in the
+        # sopimport's save path, a sublayer of a 697 B root layer).
+        layers = usd_layers(path, since)
+        out["layers"] = layers
+    if len(frames) < 2:
+        return out
+    start, end = frames[0], frames[-1]
+    if kind == "usd":
+        counts = []
+        for row in layers:
+            codes = row.get("time_codes")
+            if codes and codes[-1] >= start - SAMPLE_SLACK and codes[0] <= end + SAMPLE_SLACK:
+                counts.append((row["time_samples"], row["path"]))
+        if not counts:
+            out["notes"] = [
+                f"No layer {rop} wrote has time samples: the exported stage is static over "
+                f"frames {frame_num(start)}-{frame_num(end)}."
+            ]
+            return out
+        best, where = max(counts)
+        if best < len(frames):
+            plural = "s" if best != 1 else ""
+            raise _lost_frames(rop, where, f"{best} time sample{plural}", frames)
+        return out
+    import _alembic_hom_extensions as alembic
+
+    span = None
+    with contextlib.suppress(Exception):
+        span = alembic.alembicTimeRange(path)
+    fps = hou.fps()
+    if span is None:
+        raise _lost_frames(rop, path, "a single time sample", frames)
+    first, last = span[0] * fps, span[1] * fps
+    if first > start + SAMPLE_SLACK or last < end - SAMPLE_SLACK:
+        raise _lost_frames(
+            rop, path, f"frames {frame_num(round(first, 3))}-{frame_num(round(last, 3))}", frames
+        )
+    return out
+
+
+# -- shared USD layers (review 24 N1) ------------------------------------------------
+
+USD_WRITER_TYPES = (("Lop", "usd_rop"), ("Driver", "usd"), ("Sop", "usdexport"))
+"""ROPs that write USD layer files (not husk renders): their ``lopoutput`` and the save
+paths of the LOPs they export can collide."""
+
+
+def _layer_key(path: str) -> str:
+    return os.path.normcase(_norm(path))
+
+
+def usd_save_paths(rop: Any) -> dict[str, str]:
+    """``{save path: LOP path}`` for the LOPs a USD writer ROP exports that save their layer
+    to a file of their own (a ``sopimport``'s ``savepath``, on by default as
+    ``$HIP/usd/$OS.usd`` whatever the ROP's output). Main thread."""
+    import hou
+
+    out: dict[str, str] = {}
+    lop = None
+    with contextlib.suppress(Exception):
+        lop = rop.inputs()[0] if isinstance(rop, hou.LopNode) and rop.inputs() else None
+        if lop is None and rop.parm("loppath") is not None:
+            lop = _usd_source_lop(rop)
+    if not isinstance(lop, hou.LopNode):
+        return out
+    try:
+        nodes = [lop, *lop.inputAncestors()]
+    except Exception:
+        nodes = [lop]
+    for node in nodes:
+        parm = node.parm("savepath") if isinstance(node, hou.LopNode) else None
+        if parm is None:
+            continue
+        with contextlib.suppress(Exception):
+            enable = node.parm("enable_savepath")
+            if enable is not None and not int(enable.eval()):
+                continue
+            value = parm.eval().strip()
+            if value and single_file_kind(value) == "usd":
+                out.setdefault(_norm(value), node.path())
+    return out
+
+
+def usd_writer_rops() -> list[Any]:
+    """Every USD writer ROP in the scene (:data:`USD_WRITER_TYPES`). Main thread."""
+    import hou
+
+    categories = {
+        "Lop": hou.lopNodeTypeCategory,
+        "Driver": hou.ropNodeTypeCategory,
+        "Sop": hou.sopNodeTypeCategory,
+    }
+    found = []
+    for category, name in USD_WRITER_TYPES:
+        with contextlib.suppress(Exception):
+            node_type = hou.nodeType(categories[category](), name)
+            if node_type is not None:
+                found.extend(node_type.instances())
+    return found
+
+
+def shared_layer_writers(rop: Any, root: str, saves: dict[str, str]) -> dict[str, list[str]]:
+    """``{layer path: [other ROP paths]}`` for the layer files ``rop`` writes (its root
+    layer ``root`` and the save paths ``saves``) that another USD writer ROP in the scene
+    writes too: the same ``lopoutput``, or a LOP save path they both export. Main thread."""
+    mine = {_layer_key(root): _norm(root)}
+    mine.update({_layer_key(path): path for path in saves})
+    shared: dict[str, list[str]] = {}
+    for other in usd_writer_rops():
+        if other.path() == rop.path():
+            continue
+        theirs: set[str] = set()
+        with contextlib.suppress(Exception):
+            value = other.parm("lopoutput").eval().strip()
+            if value:
+                theirs.add(_layer_key(value))
+        theirs.update(_layer_key(path) for path in usd_save_paths(other))
+        for key in sorted(theirs & set(mine)):
+            shared.setdefault(mine[key], []).append(other.path())
+    return shared
+
+
+def layer_snapshot(paths: list[str]) -> dict[str, dict[str, Any]]:
+    """``{normcase path: layer row}`` for the USD layer files that exist now among
+    ``paths`` and the layers they compose (:func:`usd_layers`), taken before a render so
+    its read-back can tell what it replaced. ``pxr``, no ``hou``."""
+    out: dict[str, dict[str, Any]] = {}
+    for path in paths:
+        if not os.path.isfile(path) or _layer_key(path) in out:
+            continue
+        with contextlib.suppress(Exception):
+            for row in usd_layers(path):
+                out.setdefault(_layer_key(row["path"]), row)
+    return out
+
+
+def _samples_text(row: dict[str, Any]) -> str:
+    count = row.get("time_samples") or 0
+    text = f"{count} sample{'s' if count != 1 else ''}"
+    codes = row.get("time_codes")
+    if codes:
+        text += f" ({frame_num(codes[0])}-{frame_num(codes[-1])})"
+    return text
+
+
+def overwrote_samples(before: dict[str, Any], after: dict[str, Any]) -> bool:
+    """Whether a render replaced a layer's time samples with fewer, or with time codes
+    that no longer cover the old range (review 24 N1). No ``hou``."""
+    old = before.get("time_samples") or 0
+    if not old:
+        return False
+    new = after.get("time_samples") or 0
+    if new < old:
+        return True
+    was, now = before.get("time_codes"), after.get("time_codes")
+    if not was or not now:
+        return False
+    return now[0] > was[0] + SAMPLE_SLACK or now[-1] < was[-1] - SAMPLE_SLACK
+
+
+def layer_overwrites(
+    layers: list[dict[str, Any]],
+    before: dict[str, dict[str, Any]],
+    shared: dict[str, list[str]],
+    saves: dict[str, str],
+) -> list[str]:
+    """Mark the layer rows a USD render replaced (review 24 N1: a second ``usd_rop``
+    rewrote the ``sopimport`` save path another ROP had written with 48 samples, silently):
+    ``overwrote_samples`` (the sample count it had) on a row whose samples shrank or moved,
+    and ``shared_with`` (the other ROPs writing that file). Returns the notes, the
+    overwrites first. No ``hou``."""
+    shared_keys = {_layer_key(path): rops for path, rops in shared.items()}
+    owners = {_layer_key(path): node for path, node in saves.items()}
+    overwrites, warnings = [], []
+    for row in layers:
+        key = _layer_key(row["path"])
+        name = os.path.basename(row["path"])
+        others = shared_keys.get(key)
+        if others:
+            row["shared_with"] = others
+        where = f" (the save path of {owners[key]})" if key in owners else ""
+        old = before.get(key)
+        if old is not None and overwrote_samples(old, row):
+            row["overwrote_samples"] = old.get("time_samples") or 0
+            why = (
+                f"two ROPs share this layer path: {', '.join(others)} also writes it{where}; "
+                "re-render that ROP to restore its samples"
+                if others
+                else "an earlier render wrote it; re-render that one to restore its samples"
+            )
+            overwrites.append(
+                f"Overwrote {name}, which had {_samples_text(old)}, with {_samples_text(row)}; "
+                f"{why}."
+            )
+        elif others:
+            warnings.append(
+                f"{', '.join(others)} also writes {name}{where}: rendering either ROP replaces "
+                "the other's time samples in it."
+            )
+    return overwrites + warnings
+
+
+def rop_camera_parm(rop: Any) -> str | None:
+    """The parm naming the camera ``rop`` renders through: ``override_camera`` (a prim) on
+    a USD render ROP, ``cameraprim`` on a viewport ROP reading a stage, else ``camera`` (an
+    OBJ camera); None when it has none. Main thread."""
+    if is_usd_render_rop(rop):
+        return "override_camera" if rop.parm("override_camera") is not None else None
+    source = rop.parm("opsource")
+    if source is not None and rop.parm("cameraprim") is not None:
+        with contextlib.suppress(Exception):
+            if source.eval() == 1:
+                return "cameraprim"
+    return "camera" if rop.parm("camera") is not None else None
+
+
+def _looks_like_prim(lop: Any, path: str) -> bool:
+    """Whether ``path``, which names no node, is a prim: one on ``lop``'s stage, or (no
+    LOP to look in) a path whose parent is not a node either (``/cameras/cam``, not
+    ``/obj/nope``). Main thread."""
+    import hou
+
+    if lop is not None:
+        with contextlib.suppress(Exception):
+            from .usd import cooked_stage
+
+            return bool(cooked_stage(lop).GetPrimAtPath(path))
+        return False
+    parent = path.rstrip("/").rsplit("/", 1)[0] or "/"
+    return parent != "/" and hou.node(parent) is None
+
+
+def _check_camera_source(rop: Any, name: str, override: str) -> None:
+    """Refuse a ``camera`` override that does not fit a viewport ROP's ``opsource`` (review
+    24 N4: a camera prim on a Flipbook ROP reading /obj failed with "No node at
+    /cameras/cam" and a hint about /cameras, and finding ``opsource`` took two calls): a
+    prim path or LOP camera while it reads /obj, an OBJ camera while it reads a stage. The
+    error names ``opsource`` and the value to set. Main thread."""
+    import hou
+
+    source = rop.parm("opsource")
+    if source is None or rop.parm("cameraprim") is None or not override.startswith("/"):
+        return
+    node = hou.node(override)
+    loppath = rop.parm("loppath")
+    lop_value = loppath.eval().strip() if loppath is not None else ""
+    lop = rop.node(lop_value) if lop_value else None
+    if name == "camera":
+        prim = override
+        if node is not None:
+            if not _is_lop_camera(node):
+                return
+            prim = node.parm("primpath").eval()
+        elif not _looks_like_prim(lop, override):
+            return  # a missing node: node_not_found, with the scene's cameras
+        where = f" from {lop.path()}" if lop is not None else ""
+        then = (
+            f"then render with camera {prim}"
+            if lop is not None
+            else "set loppath to the LOP whose stage has it, then render with camera " + prim
+        )
+        what = (
+            f"{override} is a LOP camera (prim {prim})"
+            if node is not None
+            else f"{override} is not a node"
+        )
+        raise ToolError(
+            "invalid_argument",
+            f"{rop.path()} reads /obj (opsource: obj), and {what}; set opsource to lop to "
+            f"render the camera prim {prim}{where}.",
+            hint=f'parm_set {rop.path()} opsource: "lop", {then}; or pass an OBJ camera.',
+        )
+    if name == "cameraprim" and node is not None and _is_obj_camera(node):
+        raise ToolError(
+            "invalid_argument",
+            f"{rop.path()} reads a stage (opsource: lop), and {override} is an OBJ camera; set "
+            "opsource to obj to render through it.",
+            hint=f'parm_set {rop.path()} opsource: "obj", then render with camera {override}; '
+            "or pass a camera prim path.",
+        )
+
+
+def rop_camera(rop: Any, override: Any) -> dict[str, str]:
+    """The temporary camera parm value for ``render``'s ``camera`` override, checked
+    (``{}`` without one). Without an override, a ROP whose ``camera`` parm names a node
+    that does not exist fails here with ``node_not_found``, naming the parm and listing the
+    scene's OBJ cameras (review 21 papercut 5: the render said only "No camera specified
+    for render."). Main thread."""
+    name = rop_camera_parm(rop)
+    if override is not None:
+        if not isinstance(override, str) or not override.strip():
+            raise ToolError("invalid_argument", "'camera' must be a camera node or prim path.")
+        override = override.strip()
+        if name is None:
+            raise ToolError(
+                "invalid_argument",
+                f"{rop.path()} ({rop.type().name()}) has no camera parm to override.",
+                hint="Render without camera; this ROP does not render through a camera.",
+            )
+        _check_camera_source(rop, name, override)
+        if name == "camera":
+            return {name: _obj_camera(override).path()}
+        if not override.startswith("/"):
+            raise ToolError(
+                "invalid_argument",
+                f"{rop.path()} renders a stage: camera must be a camera prim path such as "
+                "/cameras/cam1.",
+            )
+        return {name: override}
+    if name != "camera":
+        return {}
+    value = rop.parm("camera").eval().strip()
+    if value and rop.node(value) is not None:
+        return {}
+    cameras = [c for c in scene_cameras() if c.startswith("/obj/")]
+    what = f"points at {value}, which does not exist" if value else "is empty"
+    hint = (
+        f"Cameras here: {', '.join(cameras)}. Set the ROP's camera parm to one, or pass camera."
+        if cameras
+        else "Create a camera (node_create cam in /obj) and set the ROP's camera parm, or pass "
+        "camera; viewport_capture frames the scene without one."
+    )
+    raise ToolError(
+        "node_not_found",
+        f"{rop.path()}'s camera parm {what}.",
+        hint=hint,
+        candidates=cameras,
+    )
+
+
 def _not_a_render_node(node: Any) -> ToolError:
     if is_cop_node(node) or is_cop_network(node):
         return ToolError(
@@ -2218,8 +3094,8 @@ def _not_a_render_node(node: Any) -> ToolError:
     return ToolError(
         "invalid_argument",
         f"{node.path()} ({node.type().name()}) is not a render node.",
-        hint="Pass a ROP such as /out/karma1 or /out/opengl1, or a writer SOP such as a File "
-        "Cache or rop_geometry.",
+        hint="Pass a ROP such as /out/karma1 or /out/flipbook1, or a writer SOP such as a "
+        "File Cache or rop_geometry.",
     )
 
 
@@ -2322,12 +3198,13 @@ def _prepare_render(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     rop = owner if callable(getattr(owner, "render", None)) else writer_rop(owner)
     if rop is None:
         raise _not_a_render_node(owner)
-    # A writer SOP (File Cache, rop_geometry SOP) renders its own frame range by default;
-    # a File Cache renders through the ROP inside it (review 17 P1-3).
-    writer = rop is not owner or owner.type().category().name() == "Sop"
+    # Without frames every ROP renders its own Valid Frame Range, as writer SOPs did since
+    # review 17 P1-3 (review 23 P1-2), or the current frame when it is set to that; a File
+    # Cache renders through the ROP inside it.
     frames = _frames(args.get("frames"))
+    range_note = None
     if frames is None:
-        frames = (rop_frame_range(rop) if writer else None) or [hou.frame(), hou.frame(), 1.0]
+        frames, range_note = default_frames(rop, owner.path())
     output = args.get("output")
     parm = _output_parm(rop)
     usd = is_usd_render_rop(rop)
@@ -2375,18 +3252,47 @@ def _prepare_render(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
             f"{rop.path()} renders to MPlay ({parm.name()} = {expected[0]!r}), which needs a GUI.",
             hint="Pass output with a file path such as $HIP/render/$OS.$F4.png.",
         )
+    camera_parms = rop_camera(rop, args.get("camera"))
+    camera_note = None
+    if camera_parms and args.get("camera") is not None:
+        parm_name, value = next(iter(camera_parms.items()))
+        camera_note = f"Rendered through {value} ({parm_name} restored)."
+    # One file for the whole range (a USD layer, an Alembic archive, any path without $F):
+    # one render() call writes every frame; frame by frame each call overwrote the file
+    # (review 23 P0-1).
+    distinct = {_norm(p) for p in expected if p.strip()}
+    single_file = len(_frame_list(frames)) > 1 and len(distinct) == 1
+    readback = len(distinct) == 1 and single_file_kind(next(iter(distinct))) is not None
+    layer_watch = None
+    if readback and single_file_kind(next(iter(distinct))) == "usd":
+        # What the layer files hold now, and which other ROPs write them (review 24 N1).
+        root = next(iter(distinct))
+        saves = usd_save_paths(rop)
+        layer_watch = {
+            "before": layer_snapshot([root, *saves]),
+            "shared": shared_layer_writers(rop, root, saves),
+            "saves": saves,
+        }
     return {
         "rop": rop.path(),
         "owner": owner.path() if rop is not owner else None,
         "type": rop.type().name(),
+        "core_type": rop_core_type(rop),
         "frames": frames,
         "frame_list": _frame_list(frames),
         "parm": parm.name() if parm is not None else None,
         "image_rop": usd or (parm is not None and parm.name() in IMAGE_PARMS),
         "output": output,
-        "expected": [_norm(p) for p in expected],
+        "camera_note": camera_note,
+        "camera_parms": camera_parms,
+        # One file per path: a single-file ROP's 48 frames are one output (review 23 P1-3).
+        "expected": list(dict.fromkeys(_norm(p) for p in expected)),
         "usd": usd,
+        "single_file": single_file,
+        "readback": readback,
+        "layer_watch": layer_watch,
         "note": note,
+        "range_note": range_note,
         "isolate": needs_isolation(rop, ctx),
         "stage_source": rop.parm("opsource") is not None and rop.parm("opsource").eval() == 1,
         "hfs": hou.text.expandString("$HFS"),
@@ -2440,6 +3346,10 @@ def _render_result(plan: dict[str, Any], thumbnail: bool) -> dict[str, Any]:
     notes: list[str] = []
     if plan.get("owner"):
         notes.append(f"{plan['owner']} rendered through its ROP {plan['rop']}.")
+    if plan.get("range_note"):
+        notes.append(plan["range_note"])
+    if plan.get("camera_note") and outputs:
+        notes.append(plan["camera_note"])
     images = [
         p for p in plan["expected"] if os.path.splitext(p)[1].lower() in IMAGE_EXTS | CONVERT_EXTS
     ]
@@ -2510,13 +3420,15 @@ def _render_job(plan: dict[str, Any], ctx: HostContext, thumbnail: bool) -> Any:
         try:
             snapshot = job.run_main(lambda: snapshot_scene(tmp_dir))
             parms = {plan["parm"]: plan["output"]} if plan["output"] is not None else {}
+            parms.update(plan.get("camera_parms") or {})
             child = ChildRender(
                 snapshot,
                 tmp_dir,
                 plan["rop"],
                 plan["frames"],
                 parms,
-                single_thread=plan.get("stage_source", False),
+                # An OpenGL ROP on a stage (review 16 N1); the Flipbook ROP keeps its threads.
+                single_thread=plan.get("stage_source", False) and plan["core_type"] == "opengl",
             )
             child.start()
 
@@ -2560,8 +3472,9 @@ def _render_job(plan: dict[str, Any], ctx: HostContext, thumbnail: bool) -> Any:
         log_dir: list[str] = []
 
         def temporary_parms(node: Any) -> dict[str, Any]:
-            """The output override and, on USD render ROPs, husk logs to read on failure."""
-            parms: dict[str, Any] = {}
+            """The camera and output overrides and, on USD render ROPs, husk logs to read on
+            failure."""
+            parms: dict[str, Any] = dict(plan.get("camera_parms") or {})
             if plan["output"] is not None:
                 parms[plan["parm"]] = plan["output"]
             names = ("husk_log", "husk_stdout", "husk_stderr")
@@ -2614,10 +3527,62 @@ def _render_job(plan: dict[str, Any], ctx: HostContext, thumbnail: bool) -> Any:
             errors += [str(e) for e in node.errors()]
             return errors
 
+        def render_range(on_frame: Any) -> list[str]:
+            """One render() call over the whole range, ``on_frame`` after each frame."""
+            node = hou.node(plan["rop"])
+            if node is None:
+                return [f"{plan['rop']} was deleted during the render."]
+
+            def event(_node: Any, kind: Any, _time: float) -> None:
+                if kind == hou.ropRenderEventType.PostFrame:
+                    with contextlib.suppress(Exception):
+                        on_frame()
+
+            errors: list[str] = []
+            hooked = False
+            with contextlib.suppress(Exception):
+                node.addRenderEventCallback(event)
+                hooked = True
+            try:
+                start, end, inc = plan["frames"]
+                node.render(frame_range=(start, end, inc), verbose=False)
+            except hou.OperationFailed as exc:
+                errors.append(str(exc).strip())
+            finally:
+                if hooked:
+                    with contextlib.suppress(Exception):
+                        node.removeRenderEventCallback(event)
+            errors += [str(e) for e in node.errors()]
+            return errors
+
+        def run_single_file(total: int) -> None:
+            done = [0]
+            name = os.path.basename(plan["expected"][0])
+
+            def on_frame() -> None:
+                done[0] = min(total, done[0] + 1)
+                job.set_progress(done[0], total, f"{done[0]}/{total} frames written to {name}")
+
+            job.set_progress(0, total, f"0/{total} frames written to {name} (one render call)")
+            try:
+                errors = job.run_main(lambda: render_range(on_frame), timeout_s=FRAME_TIMEOUT_S)
+            except ToolError as exc:
+                if exc.code != "cancelled":
+                    raise
+                partial, written = _render_partial(plan)
+                raise cancelled_with_partial(job, partial, written) from exc
+            if errors:
+                message, detail = failure(f"{plan['rop']} failed to render", errors)
+                raise ToolError("cook_failed", message, detail=detail or None)
+
+        readback: dict[str, Any] = {}
+        started = time.time()
         try:
             job.run_main(apply_override)
             total = len(frame_list)
-            for i, frame in enumerate(frame_list):
+            if plan.get("single_file"):
+                run_single_file(total)
+            for i, frame in enumerate([] if plan.get("single_file") else frame_list):
                 # The count is current, the frames finished (review 20 N7).
                 job.set_progress(
                     i, total, f"{i}/{total} frames done, rendering frame {frame_num(frame)}"
@@ -2647,6 +3612,20 @@ def _render_job(plan: dict[str, Any], ctx: HostContext, thumbnail: bool) -> Any:
                         hint=hint,
                         detail=detail,
                     )
+            if plan.get("readback"):
+                # A single-file range render cannot stop mid-range, so a cancel sent during
+                # it is too late: the file is complete and is read back (no cancel check).
+                readback.update(
+                    ctx.executor.run(
+                        lambda: check_single_file(
+                            plan.get("owner") or plan["rop"],
+                            plan["expected"][0],
+                            frame_list,
+                            started,
+                        ),
+                        ctx.config.default_timeout_s,
+                    )
+                )
             job.set_progress(total, total, "done")
             if plan.get("owner"):
                 effects = job.run_main(lambda: _writer_side_effects(plan["owner"]))
@@ -2663,6 +3642,15 @@ def _render_job(plan: dict[str, Any], ctx: HostContext, thumbnail: bool) -> Any:
             for folder in log_dir:
                 shutil.rmtree(folder, ignore_errors=True)
         result = _render_result(plan, thumbnail)
+        watch = plan.get("layer_watch")
+        if readback.get("layers") and watch:
+            # First, so an overwritten layer is the first thing read (review 24 N1).
+            notes[:0] = layer_overwrites(
+                readback["layers"], watch["before"], watch["shared"], watch["saves"]
+            )
+        notes.extend(readback.get("notes") or [])
+        if readback.get("layers"):
+            result["layers"] = readback["layers"]
         if side_effects:
             result["side_effects"] = side_effects
         if notes:

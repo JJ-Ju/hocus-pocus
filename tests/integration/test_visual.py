@@ -1,8 +1,9 @@
 """viewport_capture and render against real Houdini (headless hython).
 
-Headless OpenGL renders go through a child hython (see hocuspocus.host.tools.visual), so
-these tests also prove the host survives repeated OpenGL renders, which segfault
-in-process in 22.0.466.
+Headless Flipbook and OpenGL ROP renders go through a child hython (see
+hocuspocus.host.tools.visual), so these tests also prove the host survives repeated
+viewport renders, which segfault in-process in 22.0.466 (the OpenGL ROP on any second
+render, the Flipbook ROP once a ROP that rendered is deleted).
 """
 
 from __future__ import annotations
@@ -63,7 +64,7 @@ def _wait_job(client, job_id: str, timeout_s: float = 120.0) -> dict:
 
 
 @pytest.mark.slow
-def test_capture_headless_opengl_twice(client):
+def test_capture_headless_twice(client):
     _toy_scene()
     timings = []
     results = []
@@ -75,7 +76,7 @@ def test_capture_headless_opengl_twice(client):
         results.append(envelope["result"])
     print(f"\nviewport_capture headless: first {timings[0]:.2f}s, second {timings[1]:.2f}s")
     for result in results:
-        assert result["source_used"] == "opengl_rop"
+        assert result["source_used"] == "flipbook_rop"
         assert result["camera_used"] == TEMPORARY_CAMERA
         assert result["fit_used"] == "all"
         assert (result["width"], result["height"]) == (1024, 768)
@@ -86,6 +87,36 @@ def test_capture_headless_opengl_twice(client):
         assert img.size == (1024, 768)
         assert _not_blank(img)
     assert results[0]["path"] != results[1]["path"]
+
+
+@pytest.mark.slow
+def test_capture_sources_render_through_the_flipbook_rop(client):
+    """1.4: flipbook_rop is the ROP source; opengl_rop, its 1.3 name, runs the same chain.
+    The temporary ROP is HocusPocus's own, so no deprecation note."""
+    _toy_scene()
+    for source in ("flipbook_rop", "opengl_rop", "auto"):
+        result = client.ok("viewport_capture", {"source": source, "resolution": [160, 120]})
+        assert result["source_used"] == "flipbook_rop", (source, result)
+        assert result["rendered"] == [160, 120]
+        assert _not_blank(_decode(result["image"]))
+        assert not any("deprecat" in n.lower() for n in result.get("notes", [])), result
+
+
+@pytest.mark.slow
+def test_capture_falls_back_from_the_flipbook_rop_to_the_opengl_rop(client, crash_capture_child):
+    """A Flipbook ROP child that crashes hands the frame to the OpenGL ROP, and notes say
+    so; still no deprecation note for the temporary OpenGL ROP, and no node left behind."""
+    crash_capture_child("flipbook")
+    _toy_scene()
+    nodes = _all_nodes()
+    result = client.ok("viewport_capture", {"resolution": [160, 120]})
+    assert result["source_used"] == "opengl_rop"
+    notes = " ".join(result["notes"])
+    assert "Flipbook ROP crashed its render process" in notes, notes
+    assert "Rendered with the OpenGL ROP" in notes, notes
+    assert "deprecat" not in notes.lower()
+    assert _not_blank(_decode(result["image"]))
+    assert _all_nodes() == nodes
 
 
 def _all_nodes() -> list[str]:
@@ -121,8 +152,9 @@ def test_capture_leaves_the_scene_untouched(client, work_dir):
 
 def test_temporary_capture_nodes_are_removed_outside_undo(client):
     """The in-process (GUI) path: nodes exist only during the render, and the selection
-    is restored. Rendering in-process is not exercised here (a second OpenGL render in
-    one hython segfaults); the context manager is."""
+    is restored. Rendering in-process is not exercised here (headless, a Flipbook render
+    after a rendered Flipbook ROP was deleted segfaults the hython); the context manager
+    is."""
     from hocuspocus.host.tools import events
 
     geo = _toy_scene()
@@ -138,7 +170,7 @@ def test_temporary_capture_nodes_are_removed_outside_undo(client):
         "rop_parms": {"res1": 64, "res2": 48},
     }
     with temporary_capture_nodes(spec) as rop:
-        assert rop.type().name() == "opengl"
+        assert rop.type().name() == "flipbook"
         cam = hou.node(rop.parm("camera").eval())
         assert cam.type().name() == "cam"
         assert cam.userData(INTERNAL_KEY) == "1"
@@ -221,7 +253,7 @@ def test_capture_fit_selected_and_none(client):
 def test_capture_viewer_headless_is_ui_required(client):
     error = client.error("viewport_capture", {"source": "viewer"})
     assert error["code"] == "ui_required"
-    assert "opengl_rop" in error["hint"]
+    assert "flipbook_rop" in error["hint"]
 
 
 def test_capture_bad_camera(client):
@@ -342,7 +374,7 @@ def test_viewer_capture_restores_the_view(client, work_dir):
     assert info["fit_used"] == "all"
     assert info["camera_used"] == "viewport"  # the framed free view, not usercam
     assert info["context"] == geo.path()
-    assert any(geo.path() in note and "opengl_rop" in note for note in info["notes"])
+    assert any(geo.path() in note and "flipbook_rop" in note for note in info["notes"])
     # Without fit the view is captured as it is and left alone.
     viewport = _FakeView()
     viewer = _FakeViewer(viewport, hou.node("/obj"))
@@ -389,6 +421,35 @@ def test_render_opengl_frames_with_thumbnail(client, work_dir):
     img = _decode(thumb["image"])
     assert max(img.size) <= 512 and img.size == (320, 240)
     assert result["job_id"]
+
+
+def _flipbook_rop(work_dir: Path, name: str = "fb1"):
+    cam = hou.node("/obj").createNode("cam", "fbcam")
+    cam.parmTuple("t").set((0, 0.5, 5))
+    rop = hou.node("/out").createNode("flipbook", name)
+    rop.parm("camera").set(cam.path())
+    rop.parm("tres").set(1)
+    rop.parm("res1").set(320)
+    rop.parm("res2").set(240)
+    rop.parm("picture").set(_fwd(work_dir / "fb.$F4.png"))
+    return rop
+
+
+@pytest.mark.slow
+def test_render_flipbook_rop_twice_headless(client, work_dir):
+    """A user's Flipbook ROP renders in a child hython headless, like the OpenGL ROP: a
+    render after a rendered Flipbook ROP was deleted would crash the host otherwise."""
+    _toy_scene()
+    rop = _flipbook_rop(work_dir)
+    first = client.ok("render", {"rop_path": rop.path(), "frames": [1, 2]})
+    assert first["outputs"] == [_fwd(work_dir / f"fb.000{i}.png") for i in (1, 2)]
+    assert _decode(first["thumbnail"]["image"]).size == (320, 240)
+    rop.destroy()
+    again = _flipbook_rop(work_dir, "fb2")
+    out = _fwd(work_dir / "fb_again.$F4.png")
+    second = client.ok("render", {"rop_path": again.path(), "frames": [3, 3], "output": out})
+    assert second["outputs"] == [_fwd(work_dir / "fb_again.0003.png")]
+    assert again.parm("picture").unexpandedString() == _fwd(work_dir / "fb.$F4.png")
 
 
 @pytest.mark.slow
@@ -710,6 +771,9 @@ def test_headless_capture_does_not_hold_the_main_thread(client):
     import json
     import threading
 
+    from hocuspocus.host.tools import visual
+
+    visual.close_warm_capture()  # a kept child renders in 0.3 s: start a fresh one (3 s)
     _toy_scene()
     box: dict = {}
 
@@ -839,3 +903,163 @@ def test_render_cancelled_job_result_carries_the_partial_outputs(client, work_di
     assert summary["last"] == _fwd(written[-1])
     assert summary["missing_count"] == 60 - len(written)
     assert cache.parm("loadfromdisk").eval() == 0  # Save to Disk's side effects need a full save
+
+
+# -- single-file ROPs (review 23 P0-1) ------------------------------------------------
+
+
+def _alembic_rop(work_dir: Path, name: str = "anim.abc"):
+    geo = hou.node("/obj").createNode("geo", "anim")
+    box = geo.createNode("box")
+    box.parm("ty").setExpression("$F * 0.1")
+    rop = hou.node("/out").createNode("alembic", "abc")
+    rop.parm("sop_path").set(box.path())
+    rop.parm("filename").set(_fwd(work_dir / name))
+    return rop
+
+
+def _abc_frames(path: Path) -> tuple[float, float] | None:
+    import _alembic_hom_extensions as abc
+
+    span = abc.alembicTimeRange(_fwd(path))
+    return None if span is None else tuple(round(t * hou.fps(), 3) for t in span)
+
+
+def test_render_alembic_rop_writes_the_range_in_one_call(client, work_dir):
+    rop = _alembic_rop(work_dir)
+    result = client.ok("render", {"rop_path": rop.path(), "frames": [1, 12]})
+    assert result["state"] == "done", result
+    assert result["outputs"] == [_fwd(work_dir / "anim.abc")]
+    assert "outputs_sample" not in result and "layers" not in result
+    assert _abc_frames(work_dir / "anim.abc") == (1.0, 12.0)
+
+
+def test_render_fails_when_an_alembic_file_lost_frames(client, work_dir):
+    from hocuspocus.host.tools import visual
+
+    rop = _alembic_rop(work_dir)
+    for frame in range(1, 13):
+        rop.render(frame_range=(frame, frame), verbose=False)
+    with pytest.raises(visual.ToolError) as caught:
+        visual.check_single_file(
+            rop.path(), _fwd(work_dir / "anim.abc"), [float(f) for f in range(1, 13)]
+        )
+    assert caught.value.code == "cook_failed"
+    assert "12 frames" in caught.value.message
+
+
+# -- the ROP's camera (review 21 papercut 5) ------------------------------------------
+
+
+def test_render_a_rop_whose_camera_is_missing_names_the_parm(client, work_dir):
+    """A fresh OpenGL ROP points at /obj/cam1; when that is missing, render said only
+    "No camera specified for render." It now fails before rendering, naming the parm and
+    the scene's cameras."""
+    _toy_scene()
+    rop = hou.node("/out").createNode("opengl", "gl_nocam")
+    rop.parm("picture").set(_fwd(work_dir / "nocam.$F4.png"))
+    error = client.error("render", {"rop_path": rop.path()})
+    assert error["code"] == "node_not_found", error
+    assert "camera" in error["message"] and "/obj/cam1" in error["message"], error
+    assert not error.get("candidates")
+    assert "pass camera" in error["hint"] and "cam" in error["hint"], error
+    other = hou.node("/obj").createNode("cam", "shot_cam")
+    error = client.error("render", {"rop_path": rop.path()})
+    assert error["candidates"] == [other.path()], error
+    assert not list(work_dir.glob("nocam.*"))
+
+
+def test_render_camera_override_is_checked(client, work_dir):
+    geo = _toy_scene()
+    rop = _opengl_rop(work_dir)
+    error = client.error("render", {"rop_path": rop.path(), "camera": geo.path()})
+    assert error["code"] == "invalid_argument", error
+    assert error["candidates"] == ["/obj/rendercam"], error
+    error = client.error("render", {"rop_path": rop.path(), "camera": "/obj/nope"})
+    assert error["code"] == "node_not_found", error
+    bgeo = _bgeo_rop(work_dir, "c.$F4.bgeo.sc")
+    error = client.error("render", {"rop_path": bgeo.path(), "camera": "/obj/rendercam"})
+    assert error["code"] == "invalid_argument" and "camera" in error["message"], error
+
+
+@pytest.mark.slow
+def test_render_camera_override_renders_through_it(client, work_dir):
+    _toy_scene()
+    rop = _opengl_rop(work_dir)
+    rop.parm("camera").set("/obj/cam1")  # missing: the override replaces it
+    far = hou.node("/obj").createNode("cam", "far")
+    far.parmTuple("t").set((0, 0.5, 40))
+    far.parm("resx").set(320)
+    far.parm("resy").set(240)
+    result = client.ok("render", {"rop_path": rop.path(), "frames": [1, 1], "camera": far.path()})
+    assert result["outputs"] == [_fwd(work_dir / "gl.0001.png")]
+    assert "Rendered through /obj/far (camera restored)." in result["notes"], result
+    assert rop.parm("camera").eval() == "/obj/cam1"
+
+
+# -- kept capture child (review 22 finding 6) -----------------------------------------
+
+
+@pytest.mark.slow
+def test_headless_captures_reuse_a_kept_child(client):
+    """A fresh child hython per capture cost about 3 s, 69 % of a soak's tool time. The
+    child is now kept: later captures push a fresh scene snapshot to it and re-render its
+    Flipbook ROP, /obj and stage alike, and edits between captures show."""
+    from hocuspocus.host.tools import visual
+
+    visual.close_warm_capture()
+    geo = _toy_scene()
+    started = time.perf_counter()
+    first = client.ok("viewport_capture", {"resolution": [160, 120]})
+    cold_s = time.perf_counter() - started
+    child = visual._warm["child"]
+    assert child is not None and child.proc.poll() is None
+    pid = child.proc.pid
+    imp = hou.node("/stage").createNode("sopimport", "imp")
+    imp.parm("soppath").set(geo.path())
+    started = time.perf_counter()
+    geo.parmTuple("t").set((3, 0, 0))
+    moved = client.ok("viewport_capture", {"resolution": [160, 120], "fit": "none"})
+    stage = client.ok("viewport_capture", {"lop_path": imp.path(), "resolution": [160, 120]})
+    warm_s = (time.perf_counter() - started) / 2
+    print(f"\ncapture: first (child start) {cold_s:.2f}s, kept child {warm_s:.2f}s per capture")
+    assert visual._warm["child"].proc.pid == pid
+    assert stage["scene"] == "stage" and first["scene"] == moved["scene"] == "obj"
+    for result in (first, stage, moved):
+        assert result["source_used"] == "flipbook_rop", result
+        assert _not_blank(_decode(result["image"]))
+    assert _centroid_x(moved["image"]) > _centroid_x(first["image"]) + 10
+    assert warm_s < cold_s
+    child.proc.kill()  # a kept child that went away is replaced
+    child.proc.wait(10)
+    again = client.ok("viewport_capture", {"resolution": [160, 120]})
+    assert visual._warm["child"].proc.pid != pid
+    assert "notes" not in again or not any("kept" in n for n in again["notes"])
+
+
+@pytest.mark.slow
+def test_a_kept_child_that_crashes_falls_back_to_a_fresh_one(client, monkeypatch):
+    from hocuspocus.host.tools import visual
+
+    visual.close_warm_capture()
+    monkeypatch.setitem(visual._warm, "disabled", None)
+    _toy_scene()
+    client.ok("viewport_capture", {"resolution": [96, 72]})
+    real_wait = visual.WarmCapture._wait
+
+    def crash_after_first(self, request, offset, timeout_s):
+        if self.uses > 1:
+            self.proc.kill()
+            self.proc.wait(10)
+            raise visual.exit_error(139, "Fatal error: Segmentation fault")
+        return real_wait(self, request, offset, timeout_s)
+
+    monkeypatch.setattr(visual.WarmCapture, "_wait", crash_after_first)
+    result = client.ok("viewport_capture", {"resolution": [96, 72]})
+    assert result["source_used"] == "flipbook_rop"
+    assert visual.WARM_CRASH_NOTE in result["notes"], result
+    assert _not_blank(_decode(result["image"]))
+    assert visual._warm["disabled"] and visual._warm["child"] is None
+    later = client.ok("viewport_capture", {"resolution": [96, 72]})
+    assert visual._warm["child"] is None  # fresh children from now on
+    assert visual.WARM_CRASH_NOTE not in later.get("notes", [])

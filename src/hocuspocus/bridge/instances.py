@@ -325,6 +325,10 @@ class LaunchLog:
             out.append((file, data))
         return out
 
+    def has(self, pid: int) -> bool:
+        """Whether a launch of ``pid`` is on record (it may have exited since)."""
+        return any(int(data["pid"]) == pid for _file, data in self._entries())
+
     def take_orphans(
         self, *, own_pid: int | None = None, alive: Callable[[int], bool] = pid_alive
     ) -> list[dict[str, Any]]:

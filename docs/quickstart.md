@@ -26,7 +26,7 @@ you get two commands on your `PATH`: `hocuspocus` and `hocuspocus-mcp`.
 
 ```text
 $ hocuspocus version
-hocuspocus 1.3.0 (hp/v1, mcp 2.3.x, Python 3.12.x)
+hocuspocus 1.4.0 (hp/v1, mcp 2.3.x, Python 3.12.x)
 ```
 
 ## 2. Install the Houdini package (1 minute)
@@ -34,8 +34,8 @@ hocuspocus 1.3.0 (hp/v1, mcp 2.3.x, Python 3.12.x)
 ```text
 $ hocuspocus install-houdini
 Houdini pref dir: C:\Users\you\Documents\houdini22.0 (from hython (C:\Program Files\Side Effects Software\Houdini 22.0.466), default location)
-copied hocuspocus 1.3.0 to C:\Users\you\Documents\houdini22.0\hocuspocus\1.3.0\python\hocuspocus
-copied the Houdini payload to C:\Users\you\Documents\houdini22.0\hocuspocus\1.3.0\houdini
+copied hocuspocus 1.4.0 to C:\Users\you\Documents\houdini22.0\hocuspocus\1.4.0\python\hocuspocus
+copied the Houdini payload to C:\Users\you\Documents\houdini22.0\hocuspocus\1.4.0\houdini
 wrote C:\Users\you\Documents\houdini22.0\packages\hocuspocus.json (template: ...\houdini\hocuspocus.json.template)
 recorded the pref dirs in C:\Users\you\AppData\Local\HocusPocus\install.json (the bridge reads hocuspocus.toml from there)
 Restart Houdini to load HocusPocus.
@@ -86,13 +86,13 @@ the UI is up, the host starts by itself. Then run:
 
 ```text
 $ hocuspocus doctor
-hocuspocus 1.3.0 (bridge, hp/v1)
+hocuspocus 1.4.0 (bridge, hp/v1)
 [ok]   Houdini install: C:\Program Files\Side Effects Software\Houdini 22.0.466
 [ok]   Houdini version: 22.0.466
-[ok]   pref dir: C:\Users\you\Documents\houdini22.0 (from hython (...), default location): package JSON -> C:\Users\you\Documents\houdini22.0\hocuspocus\1.3.0\python (1.3.0)
+[ok]   pref dir: C:\Users\you\Documents\houdini22.0 (from hython (...), default location): package JSON -> C:\Users\you\Documents\houdini22.0\hocuspocus\1.4.0\python (1.4.0)
 [ok]   hocuspocus.toml: none (defaults)
-[ok]   package JSON: C:\Users\you\Documents\houdini22.0\packages\hocuspocus.json -> C:\Users\you\Documents\houdini22.0\hocuspocus\1.3.0\python
-[ok]   host/bridge version: 1.3.0
+[ok]   package JSON: C:\Users\you\Documents\houdini22.0\packages\hocuspocus.json -> C:\Users\you\Documents\houdini22.0\hocuspocus\1.4.0\python
+[ok]   host/bridge version: 1.4.0
 [ok]   instance /health: pid 18244 port 52311 GUI (untitled) Houdini 22.0.466
 
 Register with Claude Code:
@@ -133,12 +133,14 @@ Expect a sequence close to this one:
    `%LOCALAPPDATA%\HocusPocus\captures\`. In the GUI, without `camera` or `fit`, it
    captures the Scene Viewer as it is, so if the picture shows an empty grid, ask for
    `"fit": "all"` (it frames the grab and then puts your view back) or for
-   `"source": "opengl_rop"`, which frames the scene with a temporary camera.
+   `"source": "flipbook_rop"`, which frames the scene with a temporary camera.
 
 To give a network control parms, ask for them: the agent adds spare parms to a `null`
 with `node_edit` `spare_parms` and links other parms with `ch()`. A `menu` spare parm is
 a string menu by default (VEX reads the token with `chs()`); with `value_type: "int"` it
-is an int parm whose value is the item index (`ch()` or `chi()`).
+is an int parm whose value is the item index (`ch()` or `chi()`). A graph rebuilt with
+`network_build` sets parms without running their callbacks; the result notes each one, and
+`press: {"geo1/src": ["initialize"]}` runs them after the build.
 
 The nodes appear in your network editor as they are created. To revert the whole build,
 press Ctrl+Z in Houdini once, or ask the agent to call `undo`. To keep the scene, ask it
@@ -200,17 +202,24 @@ Houdini running), and `hip_save` keeps the work between sessions. When the work 
 These tools need the `full` profile (see [Configuration](#configuration)):
 
 - **Look at a USD stage.** `viewport_capture {"lop_path": "/stage/OUT"}` renders the
-  stage through an OpenGL ROP, framed on it. `camera` also takes a LOP camera node or a
+  stage through a Flipbook ROP, framed on it. `camera` also takes a LOP camera node or a
   camera prim path. `usd_stage {"lop_path": "/stage/OUT", "summary": true}` returns the
   prim count, the counts by type and the world bounding box in one small result. On LOP
   nodes, the parm tools accept USD attribute names such as `inputs:intensity`.
+- **Export USD and check it.** `render {"rop_path": "/stage/usd_rop1", "wait_s": 0}`
+  renders the ROP's own frame range into its one layer in a single call, then reads the
+  layer back: fewer time samples than frames fails with `cook_failed`. The result lists
+  each file once, plus `layers` with every layer file the export wrote and its time
+  samples. `usd_stage` and `viewport_capture` on a `usd_rop` or `usdrender_rop` read the
+  stage it renders, and `render {"camera": "/cameras/cam"}` renders through another camera.
 - **See why PDG work failed.** A failed work item in `pdg {"action": "workitems"}`
   carries `error` (the last error lines of its log), `log_path` and `exit_code`, and
   `"state": "failed"` lists only the failed items. A cook result lists the first five
   `failures`, and `problems` reports the TOP node. Graphs with ROP Fetch load the saved
   hip, so `pdg cook` refuses unsaved changes: run `hip_save` first, or pass
   `"save": true`.
-- **Work next to a user.** Every `events` entry says `origin: agent` or `other`. `undo`
+- **Work next to a user.** Every `events` entry says `origin: agent` or `other`
+  (`houdini` for parms Houdini wrote itself during an agent call). `undo`
   stops before a step the user made unless you pass `include_user_steps: true`.
 
 ## Caches, Copernicus and two Houdinis
@@ -224,8 +233,8 @@ These work in the default `core` profile:
   when it is done, as the Save to Disk button would. `job {"action": "cancel"}` stops it
   and keeps the frames already written. `geo_info` and `geo_read` take `frame` to inspect
   the cache without moving the playbar, and `houdini_status` reports Houdini's memory.
-- **Look at a Copernicus image.** COP networks live in `/img` (`node_create {"parent":
-  "/img", "type": "copnet"}`), and their nodes are category `Cop`.
+- **Look at a Copernicus image.** COP networks live in `/img` (`node_create {"items":
+  [{"parent": "/img", "type": "copnet"}]}`), and their nodes are category `Cop`.
   `viewport_capture {"cop_path": "/img/copnet1/blend1"}` returns that node's image in
   about 0.2 s, and `geo_info` on a Cop node returns its resolution and per-channel
   min/max/mean. To write the image to disk, `render` a `rop_image` wired to the node. A
@@ -323,11 +332,15 @@ You upgraded the tool but Houdini still loads the old host. Run
 **Headless capture: `viewport_capture` returns `ui_required`, or each capture takes seconds**
 
 hython has no scene viewer, so `source: "viewer"` needs the GUI. Use the default
-`source: "auto"` or `"opengl_rop"`. These render through a temporary OpenGL ROP and,
-without `camera`, a temporary camera framed on the scene, and they work headless.
-Headless, each capture renders in a short-lived child hython (a second OpenGL render in
-one hython process crashes Houdini 22.0.466), so every capture takes about 3 s. Nothing
-is left in your scene.
+`source: "auto"` or `"flipbook_rop"` (`"opengl_rop"`, its 1.3 name, still works). These
+render through a temporary Flipbook ROP (falling back to the OpenGL ROP, then Karma, with a
+note) and, without `camera`, a temporary camera framed on the scene, and they work
+headless. Headless, captures render in a child hython (a viewport render after a deleted
+ROP, or a second OpenGL render, crashes hython 22.0.466). The first capture starts it, about
+3 s; later Flipbook captures reuse it, about 0.4 s each (0.9 s for a stage), until it has been
+idle for 2 minutes. Nothing is left in your scene. `source_used: flipbook_rop` means the
+Flipbook ROP rendered it. For a flipbook of many frames, ask for a
+Flipbook ROP (`/out`, type `flipbook`) and `render`: Houdini 22 deprecates the OpenGL ROP.
 
 **Other errors.** Every tool error has a `code` and a `hint`. Agents normally act on the
 hint themselves. The full list of codes is in [`BIBLE.md`](BIBLE.md) §9.

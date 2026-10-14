@@ -529,3 +529,29 @@ def test_geo_read_at_a_frame_leaves_the_playbar(client):
     assert hou.frame() == 1
     stats = client.ok("geo_read", {"path": box.path(), "class": "detail", "frame": 3})
     assert stats["frame"] == 3
+
+
+def test_geo_info_missing_node_hint_matches_cook(client):
+    """Review 22 finding 8: geo_info said only 'Check the node name.'."""
+    for path in ("/obj/soak_missing", "/obj/soak_missing/out"):
+        geo = client.error("geo_info", {"path": path})
+        cook = client.error("cook", {"paths": [path]})
+        assert geo["code"] == cook["code"] == "node_not_found"
+        assert geo["hint"] == cook["hint"] and "node_find" in geo["hint"]
+
+
+def test_geo_info_names_mode_and_internal_attributes(client):
+    """Review 23 papercut 8: a Vellum result was mostly solver internals."""
+    geo = hou.node("/obj").createNode("geo", "vel")
+    box = geo.createNode("box")
+    wrangle = geo.createNode("attribwrangle")
+    wrangle.setInput(0, box)
+    wrangle.parm("snippet").set("v@pprevious = @P; i@__scratch = 1; f@keepme = 2;")
+    full = client.ok("geo_info", {"path": wrangle.path()})
+    names = [a["name"] for a in full["attributes"]["point"]]
+    assert "keepme" in names and "pprevious" not in names and "__scratch" not in names
+    assert full["internal_attribute_count"] == 2 and "geo_read" in full["notes"][0]
+    short = client.ok("geo_info", {"path": wrangle.path(), "attributes": "names"})
+    assert short["attributes"]["point"] == names
+    assert len(json.dumps(short)) < len(json.dumps(full))
+    assert client.error("geo_info", {"path": wrangle.path(), "attributes": "rows"})

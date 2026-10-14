@@ -3,7 +3,8 @@
 The buffer holds the last :data:`RING_SIZE` events, each ``{seq, time, kind, path,
 origin, detail?}`` with a monotonic ``seq`` (it survives scene clears, not a host
 restart). ``origin`` is ``"agent"`` for changes made inside a HocusPocus call and
-``"other"`` for the user's (or Houdini's) own. Kinds are Houdini's event names:
+``"other"`` for the user's (or Houdini's) own; inside a call that sets parms explicitly,
+parm writes it did not make are ``"houdini"`` (:func:`note_explicit`). Kinds are Houdini's event names:
 
 * hip: ``BeforeClear``, ``AfterClear``, ``BeforeLoad``, ``AfterLoad``, ``AfterMerge``,
   ``AfterSave`` (``path`` is the hip file). The clear inside a load is not reported.
@@ -49,7 +50,7 @@ from collections import deque
 from collections.abc import Callable, Iterator
 from typing import Any
 
-from ._common import int_arg
+from ._common import ROW_ENVELOPE_BYTES, compact_size, int_arg, response_budget
 from .registry import HostContext, tool
 
 log = logging.getLogger("hocuspocus.host.events")
@@ -74,6 +75,9 @@ STAGE_SAVE_PARMS = ("rendergallerysource", None)
 """Parms Houdini writes on /stage when the hip is saved (review 18 papercut 10)."""
 AGENT = "agent"
 OTHER = "other"
+HOUDINI = "houdini"
+"""A parm Houdini wrote itself inside a call that set other parms explicitly (a camera's
+``*Converted`` parms, a light's guide scale, ``labelparm*``; review 23 papercut 9)."""
 
 
 def _now_iso() -> str:
@@ -160,7 +164,7 @@ class EventLog:
                 event["detail"] = detail
             if kind in ("ChildCreated", "ChildDeleted") and self._repeat(event, held):
                 return None
-            if held and origin is None:
+            if held and origin in (None, HOUDINI):
                 pending = self._pending
                 assert pending is not None
                 at = len(pending)
@@ -207,6 +211,7 @@ class EventLog:
         components: list[str] | None = None,
         keyed: list[str] | None = None,
         order: list[str] | None = None,
+        origin: str | None = None,
     ) -> None:
         """``ParmTupleChanged``, coalesced per (node, parm tuple) within :data:`COALESCE_S`.
 
@@ -216,11 +221,16 @@ class EventLog:
         tuple's component order)."""
         key = (path, parm)
         mono = time.monotonic()
+        effective = origin or (AGENT if self.holding() else OTHER)
         with self._lock:
             recent = self._recent_parm.get(key)
             if recent is not None:
                 event, last = recent
-                if mono - last <= COALESCE_S and self._alive(event):
+                if (
+                    mono - last <= COALESCE_S
+                    and self._alive(event)
+                    and event["origin"] == effective
+                ):
                     detail = event.setdefault("detail", {})
                     _merge_components(detail, components or [], keyed or [], order or [])
                     event["time"] = _now_iso()
@@ -233,7 +243,7 @@ class EventLog:
         detail: dict[str, Any] = {"parm": parm} if parm else {}
         if parm and components:
             _merge_components(detail, components, keyed or [], order or [])
-        event = self.record("ParmTupleChanged", path, detail or None)
+        event = self.record("ParmTupleChanged", path, detail or None, origin=origin)
         if event is not None:
             with self._lock:
                 self._recent_parm[key] = (event, mono)
@@ -272,7 +282,10 @@ class EventLog:
 
     # -- reading ------------------------------------------------------------------
 
-    def read(self, since: int, limit: int) -> dict[str, Any]:
+    def read(self, since: int, limit: int, budget: int | None = None) -> dict[str, Any]:
+        """Events after ``since``: at most ``limit`` and, with ``budget``, at most that many
+        bytes (at least one event). ``next_since`` is the seq of the last event returned,
+        so a page cut by either never skips an event (review 22 finding 1)."""
         with self._lock:
             events = list(self._buf)
             last = self._seq
@@ -287,10 +300,17 @@ class EventLog:
         oldest = snapshot[0]["seq"] if snapshot else last + 1
         newer = [e for e in snapshot if e["seq"] > since]
         chunk = newer[:limit]
+        if budget is not None:
+            used = ROW_ENVELOPE_BYTES
+            for kept, event in enumerate(chunk):
+                used += compact_size(event) + 1
+                if kept and used > budget:
+                    chunk = chunk[:kept]
+                    break
         out["events"] = chunk
         out["next_since"] = chunk[-1]["seq"] if chunk else max(since, last)
         out["dropped"] = max(0, oldest - since - 1)
-        if len(newer) > limit:
+        if len(newer) > len(chunk):
             out["more"] = True
         return out
 
@@ -367,6 +387,8 @@ class _Hooks:
         self.pending: set[int] = set()
         self.created: set[int] = set()
         """Session ids whose ChildCreated the open work item recorded."""
+        self.explicit: set[tuple[str, str]] = set()
+        """(node path, parm tuple name) the open work item set explicitly (:func:`note_explicit`)."""
 
 
 _HOOKS = _Hooks()
@@ -401,6 +423,7 @@ def agent_work(fn: Callable[[], Any]) -> Any:
     if not LOG.begin():
         return fn()
     _HOOKS.created = set()
+    _HOOKS.explicit = set()
     discard = False
     try:
         return fn()
@@ -409,7 +432,28 @@ def agent_work(fn: Callable[[], Any]) -> Any:
         raise
     finally:
         _HOOKS.created = set()
+        _HOOKS.explicit = set()
         LOG.end(discard=discard)
+
+
+def note_explicit(target: Any) -> None:
+    """The running call sets ``target`` (a parm or parm tuple) itself: its
+    ``ParmTupleChanged`` is the agent's. Once a call has noted one, the parm writes it did
+    not note are Houdini's own (callbacks, converted and computed parms) and are recorded
+    with ``origin: "houdini"`` (review 23 papercut 9). Main thread; never raises."""
+    if not LOG.holding():
+        return
+    with contextlib.suppress(Exception):
+        parm_tuple = target.tuple() if hasattr(target, "tuple") else target
+        _HOOKS.explicit.add((parm_tuple.node().path(), parm_tuple.name()))
+
+
+def _parm_origin(path: str, name: str | None) -> str | None:
+    """``houdini`` for a parm write the running call did not make itself; else None (the
+    default: the agent's inside a call, the user's outside one)."""
+    if not _HOOKS.explicit or not LOG.holding():
+        return None
+    return None if (path, name) in _HOOKS.explicit else HOUDINI
 
 
 def hip_done() -> None:
@@ -603,12 +647,12 @@ def _on_node_event(**kwargs: Any) -> None:
             if ramp is not None:
                 # A ramp edit touches every key's tuples (ramp1pos, ramp1c, ...): one event
                 # for the ramp (review 18 papercut 10).
-                LOG.record_parm(path, ramp)
+                LOG.record_parm(path, ramp, origin=_parm_origin(path, ramp))
                 return
             changed, keyed, order = (
                 _changed_components(node, tuple_) if tuple_ is not None else ([], [], [])
             )
-            LOG.record_parm(path, name, changed, keyed, order)
+            LOG.record_parm(path, name, changed, keyed, order, origin=_parm_origin(path, name))
         elif kind == "SpareParmTemplatesChanged":
             LOG.drop_recent_parms(path)
             LOG.record("SpareParmsChanged", path)
@@ -806,4 +850,4 @@ def record_pdg(path: str, event: str, **detail: Any) -> None:
 def events(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     since = int_arg(args, "since", 0, 0)
     limit = int_arg(args, "limit", DEFAULT_LIMIT, 1, 1000)
-    return LOG.read(since, limit)
+    return LOG.read(since, limit, response_budget(ctx))

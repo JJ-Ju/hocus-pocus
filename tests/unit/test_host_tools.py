@@ -240,6 +240,71 @@ def test_run_with_fallback_queues_a_retry_and_never_raises():
     assert "also failed" in note
 
 
+def test_capture_fallback_chain_is_ordered():
+    """1.4: the ROP source tries the Flipbook ROP, then the OpenGL ROP (each when Houdini
+    has it), then Karma; a crashed child moves on, any other error stops the chain, and
+    the note names every ROP that did not render."""
+    from hocuspocus.host.tools.visual import capture_chain, run_capture_chain
+
+    assert capture_chain({"opengl", "flipbook"}) == ["flipbook", "opengl", "karma"]
+    assert capture_chain(["opengl"]) == ["opengl", "karma"]
+    assert capture_chain([]) == ["karma"]
+
+    def crashed(code=139):
+        return ToolError(
+            "internal",
+            f"The render process exited with code {code}.",
+            hint="See detail.log for the render process output.",
+            hou_exception=f"render process exit {code}",
+            detail={"log": "Segmentation fault"},
+        )
+
+    def attempt(fail: set[str], tried: list[str]):
+        def render_rop(rop_type):
+            tried.append(rop_type)
+            if rop_type in fail:
+                raise crashed()
+            return {"errors": [], "notes": []}
+
+        return render_rop
+
+    chain = ["flipbook", "opengl", "karma"]
+    tried: list[str] = []
+    used, _, notes = run_capture_chain(
+        chain, stage=False, source="auto", render_rop=attempt(set(), tried), render_karma=None
+    )
+    assert (used, tried, notes) == ("flipbook", ["flipbook"], [])
+
+    tried = []
+    used, _, notes = run_capture_chain(
+        chain,
+        stage=False,
+        source="auto",
+        render_rop=attempt({"flipbook"}, tried),
+        render_karma=None,
+    )
+    assert (used, tried) == ("opengl", ["flipbook", "opengl"])
+    assert notes[0].startswith("Rendered with the OpenGL ROP because the Flipbook ROP crashed")
+
+    tried, karma = [], []
+    used, _, notes = run_capture_chain(
+        chain,
+        stage=False,
+        source="auto",
+        render_rop=attempt({"flipbook", "opengl"}, tried),
+        render_karma=lambda: karma.append(1),
+    )
+    assert (used, tried, karma) == ("karma", ["flipbook", "opengl"], [1])
+    assert "Karma" in notes[0] and "Flipbook ROP" in notes[0] and "OpenGL ROP" in notes[0]
+
+    def refused(rop_type):
+        raise ToolError("cook_failed", "The Flipbook ROP did not produce an image: x")
+
+    with pytest.raises(ToolError) as err:
+        run_capture_chain(chain, stage=False, source="auto", render_rop=refused, render_karma=None)
+    assert err.value.code == "cook_failed"
+
+
 def test_prune_captures_keeps_the_newest(tmp_path):
     import os
 
@@ -388,6 +453,35 @@ def test_resimulated_trusts_the_solve_stats_then_the_simulation_state():
     assert resimulated(None, state(0.1, 9), None) is None
 
 
+def test_a_warm_solver_that_re_solved_its_frame_is_current_frame_only():
+    """Review 24 N3: profile force-cooks a warm solver's inputs, so Houdini re-solves the
+    frame the simulation stands on (77 ms on Vellum); the solve stats are booked on that
+    frame however many were stepped, so the simulation's time tells one from many."""
+    from hocuspocus.host.tools.cook import CURRENT_FRAME, resimulated, simulated_frames
+
+    def state(time, memory, frame, start=1.0):
+        return {"time": time, "memory": memory, "frame": frame, "start": start}
+
+    warm = state(23 / 24, 9_972_592, 24.0)
+    resolved = state(23 / 24, 9_973_088, 24.0)
+    assert resimulated(warm, resolved, 25.9) == CURRENT_FRAME
+    assert simulated_frames(warm, resolved, CURRENT_FRAME) == [24, 24]
+    assert resimulated(warm, warm, 0.0) is False
+    assert simulated_frames(warm, warm, False) is None
+    assert resimulated(warm, resolved, None) == CURRENT_FRAME  # no monitor: memory, same time
+    fresh, done = state(0.0, 0, 1.0), state(23 / 24, 9_972_592, 24.0)
+    assert resimulated(fresh, done, 1365.8) is True  # an empty simulation at its start
+    assert simulated_frames(fresh, done, True) == [1, 24]
+    reset = state(0.0, 437_744, 1.0)
+    later = state(25 / 24, 10_802_004, 26.0)
+    assert resimulated(reset, later, 855.6) is True
+    assert simulated_frames(reset, later, True) == [1, 26]
+    assert simulated_frames(warm, later, True) == [25, 26]  # stepped on from frame 24
+    earlier = state(9 / 24, 9_973_088, 10.0)
+    assert simulated_frames(later, earlier, True) is None  # moved back: unknown which
+    assert resimulated(state(0.0, 0, 1.0), state(0.0, 500, 1.0), 12.0) is True  # frame 1
+
+
 def test_frames_print_as_integers_when_whole():
     from hocuspocus.host.tools.geo import frame_num
 
@@ -395,3 +489,57 @@ def test_frames_print_as_integers_when_whole():
     assert frame_num(12.5) == 12.5
     assert f"frame {frame_num(1.0)}" == "frame 1"
     assert frame_num(float("nan")) == "nan"
+
+
+def test_a_layer_whose_samples_shrank_or_moved_is_an_overwrite():
+    """Review 24 N1: a second usd_rop rewrote a shared sopimport layer, 48 samples to 3."""
+    from hocuspocus.host.tools.visual import overwrote_samples
+
+    def row(n, codes=None):
+        return {"time_samples": n, **({"time_codes": codes} if codes else {})}
+
+    assert overwrote_samples(row(48, [1, 48]), row(3, [1, 3]))
+    assert overwrote_samples(row(48, [1, 48]), row(48, [49, 96]))  # moved
+    assert not overwrote_samples(row(48, [1, 48]), row(48, [1, 48]))  # the same render again
+    assert not overwrote_samples(row(48, [1, 48]), row(96, [1, 96]))  # covers the old range
+    assert not overwrote_samples(row(0), row(3, [1, 3]))  # nothing to lose
+
+
+def test_layer_overwrites_mark_rows_and_name_the_other_rop():
+    from hocuspocus.host.tools.visual import layer_overwrites
+
+    shared = "C:/w/usd/collider_import.usd"
+    layers = [
+        {"path": "C:/w/usd/probe.usd", "bytes": 700, "time_samples": 0},
+        {"path": shared, "bytes": 1838, "time_samples": 3, "time_codes": [1, 3]},
+    ]
+    before = {
+        __import__("os").path.normcase(shared): {
+            "path": shared,
+            "time_samples": 48,
+            "time_codes": [1, 48],
+        }
+    }
+    notes = layer_overwrites(
+        layers,
+        before,
+        {shared: ["/stage/export_usd"]},
+        {shared: "/stage/collider_import"},
+    )
+    assert layers[1]["overwrote_samples"] == 48
+    assert layers[1]["shared_with"] == ["/stage/export_usd"]
+    assert "overwrote_samples" not in layers[0] and "shared_with" not in layers[0]
+    assert notes == [
+        "Overwrote collider_import.usd, which had 48 samples (1-48), with 3 samples (1-3); "
+        "two ROPs share this layer path: /stage/export_usd also writes it (the save path of "
+        "/stage/collider_import); re-render that ROP to restore its samples."
+    ]
+    # Shared but nothing lost yet (the first render): a warning, no overwrite mark.
+    fresh = [dict(layers[1])]
+    fresh[0].pop("overwrote_samples")
+    warned = layer_overwrites(fresh, {}, {shared: ["/stage/export_usd"]}, {})
+    assert "overwrote_samples" not in fresh[0]
+    assert warned == [
+        "/stage/export_usd also writes collider_import.usd: rendering either ROP replaces the "
+        "other's time samples in it."
+    ]

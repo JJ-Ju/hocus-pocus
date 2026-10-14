@@ -227,9 +227,52 @@ def a_or_an(word: str) -> str:
     return f"{'an' if word[:1].lower() in 'aeiou' else 'a'} {word}"
 
 
+def missing_node_error(path: str, *, message: str | None = None, exclude: Any = None) -> Any:
+    """The one ``node_not_found`` for ``path`` (review 21 papercut 4): ``candidates`` are
+    near-miss children of the missing node's parent (never ``exclude``, such as the node
+    being wired), and the hint names ``node_find`` on that parent, or on the nearest
+    ancestor that exists when the parent is missing too."""
+    import difflib
+
+    import hou
+
+    from hocuspocus.tools.errors import ToolError
+
+    parent_path, _, name = path.rstrip("/").rpartition("/")
+    parent = hou.node(parent_path or "/")
+    candidates: list[str] = []
+    if parent is not None:
+        skip = {exclude.path()} if exclude is not None and hasattr(exclude, "path") else set()
+        base = parent.path().rstrip("/")
+        names = [
+            child.name() for child in parent.children() if f"{base}/{child.name()}" not in skip
+        ]
+        candidates = [
+            f"{base}/{n}" for n in difflib.get_close_matches(name, names, n=5, cutoff=0.4)
+        ]
+        listing = f'node_find {{root: "{parent.path()}"}} lists its children'
+        hint = (
+            f"Did you mean a candidate? {listing}."
+            if candidates
+            else f"{parent.path()} has no similar child; {listing}."
+        )
+    else:
+        ancestor, existing = parent_path, None
+        while ancestor and existing is None:
+            ancestor = ancestor.rpartition("/")[0]
+            existing = hou.node(ancestor or "/")
+        root = existing.path() if existing is not None else "/"
+        hint = (
+            f"The parent {parent_path or '/'} does not exist either; "
+            f'node_find {{root: "{root}"}} lists what does.'
+        )
+    return ToolError(
+        "node_not_found", message or f"No node at {path}.", hint=hint, candidates=candidates
+    )
+
+
 def require_node(path: Any, *, field: str = "path") -> Any:
     """Return ``hou.node(path)`` or raise ``node_not_found`` with sibling candidates."""
-    import difflib
 
     import hou
 
@@ -247,16 +290,4 @@ def require_node(path: Any, *, field: str = "path") -> Any:
     node = hou.node(path)
     if node is not None:
         return node
-    parent_path, _, name = path.rstrip("/").rpartition("/")
-    parent = hou.node(parent_path or "/")
-    candidates: list[str] = []
-    if parent is not None:
-        names = [child.name() for child in parent.children()]
-        base = parent.path().rstrip("/")
-        candidates = [
-            f"{base}/{n}" for n in difflib.get_close_matches(name, names, n=5, cutoff=0.4)
-        ]
-        hint = "Check the node name." if candidates else f"{parent.path()} has no similar child."
-    else:
-        hint = f"The parent {parent_path or '/'} does not exist either."
-    raise ToolError("node_not_found", f"No node at {path}.", hint=hint, candidates=candidates)
+    raise missing_node_error(path)

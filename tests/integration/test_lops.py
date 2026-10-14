@@ -157,7 +157,7 @@ def test_capture_lop_camera_renders_the_stage(client, work_dir):
     assert result["scene"] == "stage"
     assert result["lop_path"] == nodes["rset"].path()  # the displayed LOP
     assert result["camera_used"] == "/cameras/cam1"
-    assert result["source_used"] == "opengl_rop"
+    assert result["source_used"] == "flipbook_rop"
     assert _center_lit(result["image"])
     assert [c.name() for c in hou.node("/stage").children()] == [
         "sphere1",
@@ -292,7 +292,7 @@ def test_capture_city_stage_headless(client, work_dir):
         "viewport_capture", {"lop_path": nodes["rset"].path(), "resolution": [320, 180]}
     )
     assert result["scene"] == "stage"
-    assert result["source_used"] == "opengl_rop"
+    assert result["source_used"] == "flipbook_rop"
     assert result["camera_used"] == "temporary"
     assert _decode(result["image"]).convert("L").getextrema()[1] > 80
     assert [c.name() for c in hou.node("/stage").children()] == before
@@ -305,7 +305,7 @@ def test_capture_falls_back_to_karma_when_the_child_crashes(client, work_dir, mo
     from hocuspocus.host.tools import visual
 
     monkeypatch.setattr(visual, "_CHILD_SCRIPT", "import os\nos._exit(139)\n")
-    monkeypatch.setattr(visual, "_gl_stage_crashed", [])
+    monkeypatch.setattr(visual, "_stage_crashed", {})
     nodes = _city_scene()
     before = {n: [c.name() for c in hou.node(n).children()] for n in ("/stage", "/out", "/obj")}
     result = client.ok("viewport_capture", {"camera": nodes["cam"].path(), "resolution": [160, 90]})
@@ -324,6 +324,26 @@ def test_capture_falls_back_to_karma_when_the_child_crashes(client, work_dir, mo
     lo, hi = _decode(framed["image"]).convert("L").getextrema()
     assert hi - lo > 20
     assert {n: [c.name() for c in hou.node(n).children()] for n in before} == before
+
+
+@pytest.mark.slow
+def test_stage_capture_falls_back_to_the_opengl_rop(client, work_dir, crash_capture_child):
+    """1.4: a stage whose Flipbook ROP child crashes is captured by the OpenGL ROP (its
+    child single-threaded); with source auto the next stage capture skips the Flipbook ROP
+    and says so. No deprecation note for the temporary OpenGL ROP."""
+    crash_capture_child("flipbook")
+    nodes = _lop_scene(work_dir)
+    before = [c.name() for c in hou.node("/stage").children()]
+    result = client.ok("viewport_capture", {"camera": nodes["cam"].path(), "resolution": [160, 90]})
+    assert result["scene"] == "stage" and result["source_used"] == "opengl_rop"
+    notes = " ".join(result["notes"])
+    assert "Flipbook ROP crashed its render process" in notes, notes
+    assert "deprecat" not in notes.lower()
+    assert _center_lit(result["image"])
+    again = client.ok("viewport_capture", {"lop_path": "/stage", "resolution": [160, 90]})
+    assert again["source_used"] == "opengl_rop"
+    assert any("skipped" in n and "earlier" in n for n in again["notes"]), again["notes"]
+    assert [c.name() for c in hou.node("/stage").children()] == before
 
 
 @pytest.mark.slow
@@ -427,16 +447,254 @@ def test_locked_component_error_names_it(client):
     assert "resolutionx" in error["hint"]
 
 
+# -- viewport_capture of a ROP LOP (review 23 P2-10) ------------------------------------
+
+
+@pytest.mark.slow
+def test_capture_a_rop_lop_captures_the_stage_it_renders(client, work_dir):
+    """A ROP inside a LOP network has no output stage; viewport_capture now captures the
+    LOP it renders (its input, or loppath) and says so, instead of refusing."""
+    nodes = _lop_scene(work_dir)
+    result = client.ok(
+        "viewport_capture",
+        {"lop_path": nodes["rop"].path(), "camera": "/cameras/cam1", "resolution": [160, 90]},
+    )
+    assert result["scene"] == "stage"
+    assert result["lop_path"] == nodes["rset"].path()
+    note = f"Captured {nodes['rset'].path()}, the LOP {nodes['rop'].path()} renders"
+    assert any(n.startswith(note) for n in result["notes"]), result["notes"]
+    assert _center_lit(result["image"])
+
+
+def test_capture_a_rop_lop_without_input_is_refused(client):
+    rop = hou.node("/stage").createNode("usd_rop", "lonely")
+    error = client.error("viewport_capture", {"lop_path": rop.path()})
+    assert error["code"] == "invalid_argument"
+    assert "no output stage" in error["message"]
+
+
 # -- usd_stage on a ROP LOP (papercut 10) -----------------------------------------------
 
 
-def test_usd_stage_on_a_render_rop_points_at_its_input(client, work_dir):
+def test_usd_stage_on_a_render_rop_reads_its_input(client, work_dir):
+    """Review 23 papercut 10: the tool knew the right node and still refused (1.4)."""
     nodes = _lop_scene(work_dir)
-    error = client.error("usd_stage", {"lop_path": nodes["rop"].path()})
-    assert error["code"] == "invalid_argument"
-    assert "not a LOP" not in error["message"]
-    assert nodes["rset"].path() in error["message"]
-    assert error["candidates"] == [nodes["rset"].path()]
+    result = client.ok("usd_stage", {"lop_path": nodes["rop"].path()})
+    assert result["lop_path"] == nodes["rset"].path()
+    assert nodes["rop"].path() in result["note"] and result["prims"]
+    lonely = hou.node("/stage").createNode("usd_rop", "lonely_stage")
+    error = client.error("usd_stage", {"lop_path": lonely.path()})
+    assert error["code"] == "invalid_argument" and "no output stage" in error["message"]
+
+
+# -- single-file USD exports (review 23 P0-1) -------------------------------------------
+
+
+def _usd_export(work_dir: Path, frames=(1, 12)):
+    """An animated box -> sopimport (its save path under work_dir/usd) -> usd_rop writing
+    work_dir/usd/anim.usd over ``frames`` (trange normal). Returns the ROP."""
+    geo = hou.node("/obj").createNode("geo", "anim")
+    box = geo.createNode("box")
+    box.parm("ty").setExpression("$F * 0.1")
+    box.setDisplayFlag(True)
+    imp = hou.node("/stage").createNode("sopimport", "anim_import")
+    imp.parm("soppath").set(box.path())
+    imp.parm("savepath").set(_fwd(work_dir / "usd" / "$OS.usd"))
+    rop = hou.node("/stage").createNode("usd_rop", "export_usd")
+    rop.setInput(0, imp)
+    rop.parm("lopoutput").set(_fwd(work_dir / "usd" / "anim.usd"))
+    rop.parm("trange").set(1)
+    for name, value in zip(("f1", "f2"), frames, strict=True):
+        rop.parm(name).deleteAllKeyframes()
+        rop.parm(name).set(value)
+    return rop
+
+
+def _samples(path: Path) -> list[float]:
+    from pxr import Sdf
+
+    return list(Sdf.Layer.OpenAsAnonymous(_fwd(path)).ListAllTimeSamples())
+
+
+def test_render_usd_rop_writes_every_frame_in_one_call(client, work_dir):
+    """Review 23 P0-1: frame by frame, every render() call overwrote the one layer and
+    left frame 12's sample only. One render() call over the range writes all 12."""
+    rop = _usd_export(work_dir)
+    result = client.ok("render", {"rop_path": rop.path(), "frames": [1, 12]})
+    assert result["state"] == "done", result
+    assert result["frames"] == [1, 12, 1]
+    # Review 23 P1-3: one file is one output, and the layers that hold the data are listed.
+    assert result["outputs"] == [_fwd(work_dir / "usd" / "anim.usd")]
+    assert "outputs_sample" not in result and "outputs_summary" not in result
+    layers = {Path(row["path"]).name: row for row in result["layers"]}
+    assert set(layers) == {"anim.usd", "anim_import.usd"}, result["layers"]
+    assert layers["anim_import.usd"]["time_samples"] == 12
+    assert layers["anim_import.usd"]["time_codes"] == [1, 12]
+    assert layers["anim.usd"]["time_samples"] == 0 and "time_codes" not in layers["anim.usd"]
+    assert all(row["bytes"] == Path(row["path"]).stat().st_size for row in result["layers"])
+    samples = _samples(work_dir / "usd" / "anim_import.usd")
+    assert samples == [float(f) for f in range(1, 13)], samples
+    status = client.ok("job", {"action": "status", "job_id": result["job_id"]})
+    assert status["current"] == status["total"] == 12, status
+
+
+def test_render_fails_when_a_usd_layer_lost_frames(client, work_dir):
+    """The read-back that guards P0-1: a layer written frame by frame holds one sample for
+    12 frames, which is cook_failed naming the layer."""
+    from hocuspocus.host.tools import visual
+
+    rop = _usd_export(work_dir)
+    for frame in range(1, 13):
+        rop.render(frame_range=(frame, frame), verbose=False)
+    assert len(_samples(work_dir / "usd" / "anim_import.usd")) == 1
+    with pytest.raises(visual.ToolError) as caught:
+        visual.check_single_file(
+            rop.path(), _fwd(work_dir / "usd" / "anim.usd"), [float(f) for f in range(1, 13)]
+        )
+    assert caught.value.code == "cook_failed"
+    assert "1 time sample" in caught.value.message and "12 frames" in caught.value.message
+
+
+def test_render_usdexport_sop_writes_every_frame(client, work_dir):
+    geo = hou.node("/obj").createNode("geo", "anim")
+    box = geo.createNode("box")
+    box.parm("ty").setExpression("$F * 0.1")
+    export = geo.createNode("usdexport", "usd_out")
+    export.setInput(0, box)
+    export.parm("lopoutput").set(_fwd(work_dir / "sop.usd"))
+    result = client.ok("render", {"rop_path": export.path(), "frames": [1, 6]})
+    assert result["state"] == "done", result
+    assert result["outputs"] == [_fwd(work_dir / "sop.usd")]
+    assert [row["time_samples"] for row in result["layers"]] == [6], result["layers"]
+    assert len(_samples(work_dir / "sop.usd")) == 6
+
+
+def test_render_without_frames_uses_the_rops_frame_range(client, work_dir):
+    """Review 23 P1-2: render without frames used the current frame even on a ROP set to
+    a frame range. It now renders the ROP's own range, and a ROP set to Render Current
+    Frame renders that frame; a note says which."""
+    rop = _usd_export(work_dir, frames=(1, 6))
+    result = client.ok("render", {"rop_path": rop.path()})
+    assert result["frames"] == [1, 6, 1], result
+    assert any("own frame range 1-6" in n for n in result["notes"]), result
+    assert len(_samples(work_dir / "usd" / "anim_import.usd")) == 6
+    rop.parm("trange").set(0)
+    rop.parm("lopoutput").set(_fwd(work_dir / "usd" / "still.usd"))
+    hou.setFrame(3)
+    current = client.ok("render", {"rop_path": rop.path()})
+    assert current["frames"] == [3, 3, 1], current
+    assert any("current frame (3) only" in n for n in current["notes"]), current
+    # One frame of a USD export lists its layers too (no time samples to check).
+    assert current["outputs"] == [_fwd(work_dir / "usd" / "still.usd")]
+    assert Path(current["layers"][0]["path"]).name == "still.usd", current["layers"]
+    given = client.ok("render", {"rop_path": rop.path(), "frames": [2, 4]})
+    assert not any("frame range" in n or "current frame" in n for n in given.get("notes", []))
+
+
+@pytest.mark.slow
+def test_render_says_when_a_second_usd_rop_overwrote_a_shared_layer(client, work_dir):
+    """Review 24 N1: a second usd_rop with its own lopoutput, wired to the same sopimport,
+    rewrote that sopimport's save path layer (48 samples to 3) and said nothing."""
+    export = _usd_export(work_dir, frames=(1, 48))
+    imp = export.inputs()[0]
+    probe = hou.node("/stage").createNode("usd_rop", "single_probe")
+    probe.setInput(0, imp)
+    probe.parm("lopoutput").set(_fwd(work_dir / "usd" / "probe.usd"))
+    shared = _fwd(work_dir / "usd" / "anim_import.usd")
+    first = client.ok("render", {"rop_path": export.path()})
+    assert first["state"] == "done", first
+    rows = {Path(row["path"]).name: row for row in first["layers"]}
+    assert rows["anim_import.usd"]["time_samples"] == 48
+    assert "overwrote_samples" not in rows["anim_import.usd"]
+    # The first render already warns that another ROP writes the same layer.
+    assert rows["anim_import.usd"]["shared_with"] == [probe.path()], rows
+    assert any(n.startswith(f"{probe.path()} also writes anim_import.usd") for n in first["notes"])
+
+    second = client.ok("render", {"rop_path": probe.path(), "frames": [1, 3]})
+    assert second["state"] == "done", second
+    rows = {Path(row["path"]).name: row for row in second["layers"]}
+    clobbered = rows["anim_import.usd"]
+    assert clobbered["path"] == shared
+    assert clobbered["time_samples"] == 3 and clobbered["time_codes"] == [1, 3]
+    assert clobbered["overwrote_samples"] == 48 and clobbered["shared_with"] == [export.path()]
+    assert "overwrote_samples" not in rows["probe.usd"]
+    assert second["notes"][0] == (
+        "Overwrote anim_import.usd, which had 48 samples (1-48), with 3 samples (1-3); two "
+        f"ROPs share this layer path: {export.path()} also writes it (the save path of "
+        f"{imp.path()}); re-render that ROP to restore its samples."
+    ), second["notes"]
+    # Rendering the same ROP again replaces nothing it had.
+    again = client.ok("render", {"rop_path": probe.path(), "frames": [1, 3]})
+    assert not any(n.startswith("Overwrote") for n in again.get("notes", [])), again
+    assert all("overwrote_samples" not in row for row in again["layers"])
+
+
+@pytest.mark.slow
+def test_render_warns_when_two_usd_rops_share_a_lopoutput(client, work_dir):
+    export = _usd_export(work_dir, frames=(1, 4))
+    twin = hou.node("/stage").createNode("usd_rop", "twin")
+    twin.setInput(0, export.inputs()[0])
+    twin.parm("lopoutput").set(export.parm("lopoutput").unexpandedString())
+    result = client.ok("render", {"rop_path": export.path()})
+    root = next(r for r in result["layers"] if Path(r["path"]).name == "anim.usd")
+    assert root["shared_with"] == [twin.path()], result["layers"]
+    assert any(n.startswith(f"{twin.path()} also writes anim.usd") for n in result["notes"])
+
+
+def _stage_flipbook(work_dir: Path, nodes: dict):
+    rop = hou.node("/out").createNode("flipbook", "fb")
+    rop.parm("loppath").set(nodes["rset"].path())
+    rop.parm("picture").set(_fwd(work_dir / "fb.$F4.png"))
+    for name in ("resx", "resy"):
+        if rop.parm(name) is not None:
+            rop.parm(name).set(64)
+    return rop
+
+
+def test_render_camera_that_does_not_fit_opsource_names_it(client, work_dir):
+    """Review 24 N4: a camera prim on a Flipbook ROP at opsource obj failed with "No node
+    at /cameras/cam1" and a hint about /cameras; finding opsource took two calls."""
+    nodes = _lop_scene(work_dir)
+    rop = _stage_flipbook(work_dir, nodes)
+    assert rop.parm("opsource").evalAsString() == "obj"
+    error = client.error("render", {"rop_path": rop.path(), "camera": "/cameras/cam1"})
+    assert error["code"] == "invalid_argument", error
+    assert error["message"] == (
+        f"{rop.path()} reads /obj (opsource: obj), and /cameras/cam1 is not a node; set "
+        f"opsource to lop to render the camera prim /cameras/cam1 from {nodes['rset'].path()}."
+    ), error
+    assert f'parm_set {rop.path()} opsource: "lop"' in error["hint"], error
+    # The camera LOP node itself: the same hint, naming its prim.
+    error = client.error("render", {"rop_path": rop.path(), "camera": nodes["cam"].path()})
+    assert "opsource" in error["message"] and "prim /cameras/cam1" in error["message"], error
+    # The other way round: an OBJ camera on a ROP reading the stage.
+    rop.parm("opsource").set("lop")
+    cam = hou.node("/obj").createNode("cam", "objcam")
+    error = client.error("render", {"rop_path": rop.path(), "camera": cam.path()})
+    assert error["code"] == "invalid_argument", error
+    assert "opsource: lop" in error["message"] and "OBJ camera" in error["message"], error
+    assert f'parm_set {rop.path()} opsource: "obj"' in error["hint"], error
+    # Without loppath the hint says to set it too; a missing /obj node is still not found.
+    bare = hou.node("/out").createNode("flipbook", "bare")
+    error = client.error("render", {"rop_path": bare.path(), "camera": "/cameras/cam1"})
+    assert "opsource" in error["message"] and "set loppath" in error["hint"], error
+    error = client.error("render", {"rop_path": bare.path(), "camera": "/obj/nope"})
+    assert error["code"] == "node_not_found", error
+    assert not list(work_dir.glob("fb.*"))
+
+
+@pytest.mark.slow
+def test_render_camera_prim_override_says_it_was_used(client, work_dir):
+    nodes = _lop_scene(work_dir)
+    rop = _stage_flipbook(work_dir, nodes)
+    rop.parm("opsource").set("lop")
+    rop.parm("cameraprim").set("/cameras/elsewhere")
+    result = client.ok(
+        "render", {"rop_path": rop.path(), "frames": [1, 1], "camera": "/cameras/cam1"}
+    )
+    assert result["outputs"] == [_fwd(work_dir / "fb.0001.png")], result
+    assert "Rendered through /cameras/cam1 (cameraprim restored)." in result["notes"], result
+    assert rop.parm("cameraprim").eval() == "/cameras/elsewhere"
 
 
 # -- node_type_info filters (papercut 8) ------------------------------------------------

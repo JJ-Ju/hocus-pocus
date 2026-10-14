@@ -26,7 +26,7 @@ attach to a running one by pid. With several Houdinis running, pin one with \
 switching. `_meta.instance` names the Houdini that answered; job ids and `events` cursors \
 carry their pid. Build with `node_create` (batch, with parms and inputs) or \
 `network_build` (whole graph from the `network_describe` format). Read with `node_info` and \
-`network_describe`. Change values with `parm_set`; tuple paths like `.../t` take lists, \
+`network_describe`. Change values with `parm_set {items: [{path, value}]}`; tuple paths like `.../t` take lists, \
 component paths like `.../tx` take scalars; expressions go in `expression`. After building, \
 call `cook` or read `errors` in results, then `geo_info` to check counts and bounds, and \
 `viewport_capture` to look at it. Every mutating call is one undo step. Hip tools refuse to \
@@ -41,6 +41,8 @@ server exits (`launched.outlives_server` says): `hip_save` before the session en
 session open for long jobs, or attach by pid to one started with `hocuspocus launch`. \
 `viewport_capture` frames per `fit` on both paths and restores the user's view afterwards; \
 without `fit` or `camera` the GUI viewer is captured as it is. `lop_path` captures a stage. \
+For a flipbook of many frames, `render` a Flipbook ROP (`Driver/flipbook`, recipe in the \
+guide); Houdini 22 deprecates the OpenGL ROP. \
 `node_type_info` is large \
 for FX types: pass `parms` globs, or `detail: "folders"` first. Add spare parms with \
 `node_edit` `spare_parms` (recipe in `hocuspocus://guide`). The resource `houdini://outline` \
@@ -88,7 +90,7 @@ answers `reset: true`.
 
 ### Copernicus (COP) images
 
-Copernicus networks live in `/img`: `node_create {parent: "/img", type: "copnet"}`, then
+Copernicus networks live in `/img`: `node_create {items: [{parent: "/img", type: "copnet"}]}`, then
 the nodes inside it with category `Cop` (`Cop2` is the legacy compositor). To look at any
 COP node: `viewport_capture {cop_path: "/img/net/node"}` returns its image in about 0.2 s;
 `geo_info` on a COP node gives resolution and per-channel stats. To write files, wire a
@@ -97,6 +99,16 @@ COP node: `viewport_capture {cop_path: "/img/net/node"}` returns its image in ab
 writes nothing. SOPs read a COP live through an `op:` path, e.g. `attribfrommap` with
 `filename: "op:/img/net/node"`. Compositing verbs: over and multiply are `blend` modes, a
 threshold is `remap` (op threshold), a gradient is `ramp`, text is `font`.
+
+### Flipbook frames (Flipbook ROP)
+
+`viewport_capture` is one frame. For a sequence, create a `flipbook` ROP in `/out` (the
+OpenGL ROP it replaces is deprecated in Houdini 22) with `camera` (an OBJ camera), `picture`
+(e.g. `$HIP/flip/$OS.$F4.png`), `trange: 1` and `f1`/`f2`, plus `tres: 1` with `res1`/`res2`
+to override the camera's resolution; for a stage set `opsource: 1`, `loppath` and
+`cameraprim`. Then `render {rop_path: "/out/flipbook1", wait_s: 0}` and poll the `job_id`:
+the result lists the frames and returns the last one as a thumbnail. Headless it renders in
+a short-lived child hython, a few seconds to start.
 
 ### Add a spare parm (node_edit spare_parms)
 
@@ -109,8 +121,8 @@ Add a control parm to a null, subnet, geo object or an unlocked HDA instance wit
                                      "label": "Glue Strength", "default": 0.5}]}}]}
 ```
 
-`parm_set {path: "/obj/geo1/rbd1/strength", expression: 'ch("../CONTROLS/glue_strength")'}`
-then links to it. A `ch()` to a parm that does not exist evaluates to 0 silently.
+`parm_set {items: [{path: "/obj/geo1/rbd1/strength", expression: 'ch("../CONTROLS/glue_strength")'}]}`
+then links to it (batch tools always take `items`). A `ch()` to a parm that does not exist evaluates to 0 silently.
 
 A `menu` is a string menu by default: VEX reads its token with `chs()` (`ch()` gives the
 item index). For a menu that VEX reads as a number, pass `value_type: "int"`: the parm is
