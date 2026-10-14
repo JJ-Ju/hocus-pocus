@@ -551,7 +551,7 @@ capture takes `frame`).
 > cursors carry their pid. Build with `node_create`
 > (batch, with parms and inputs) or `network_build` (whole graph from the
 > `network_describe` format). Read with `node_info` and `network_describe`. Change
-> values with `parm_set`; tuple paths like `.../t` take lists, component paths like
+> values with `parm_set {items: [{path, value}]}`; tuple paths like `.../t` take lists, component paths like
 > `.../tx` take scalars; expressions go in `expression`. After building, call `cook` or
 > read `errors` in results, then `geo_info` to check counts and bounds, and
 > `viewport_capture` to look at it. Every mutating call is one undo step. Hip tools

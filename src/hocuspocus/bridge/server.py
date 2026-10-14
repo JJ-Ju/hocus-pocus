@@ -37,7 +37,7 @@ from .config import BridgeConfig
 from .instructions import INSTRUCTIONS, guide_text, tools_text
 from .launch import Launcher
 from .local_tools import LOCAL_TOOLS
-from .validate import coerce_integers, validate
+from .validate import coerce_integers, shape_hint, validate
 
 EXIT_GRACE_S = 1.5
 """After a lost response, how long to watch for the Houdini process to exit."""
@@ -717,10 +717,13 @@ class Bridge:
         args = dict(arguments or {})
         violations = validate(args, spec.input_schema)
         if violations:
+            # Review 21 papercut 1: a flat item of a batch tool gets the corrected call.
+            wrapped = shape_hint(args, spec.input_schema)
             error = ToolError(
                 "invalid_argument",
                 f"{len(violations)} argument problem(s) for {name}: " + "; ".join(violations[:5]),
-                hint=f"fix the listed arguments; {name}'s inputSchema in tools/list is authoritative",
+                hint=wrapped
+                or f"fix the listed arguments; {name}'s inputSchema in tools/list is authoritative",
                 detail={"violations": violations},
             )
             return make_result(self.config.result_content, name, error.to_dict(), is_error=True)

@@ -328,3 +328,44 @@ def validate(value: Any, schema: dict[str, Any] | None) -> list[str]:
     validator = _Validator(schema)
     validator.check(value, schema, "")
     return validator.errors[:MAX_VIOLATIONS]
+
+
+SHAPE_HINT_MAX_CHARS = 400
+
+
+def _elided(value: Any) -> Any:
+    """``value`` with long strings and lists shortened, for a hint that echoes it."""
+    if isinstance(value, str) and len(value) > 80:
+        return value[:77] + "..."
+    if isinstance(value, list):
+        return [_elided(v) for v in value[:4]] + (["..."] if len(value) > 4 else [])
+    if isinstance(value, dict):
+        return {k: _elided(v) for k, v in value.items()}
+    return value
+
+
+def shape_hint(value: Any, schema: dict[str, Any] | None) -> str | None:
+    """The corrected call when ``value`` is one flat item of a batch tool (review 21
+    papercut 1): ``parm_set {path, value}`` instead of ``{items: [{path, value}]}``.
+
+    Returns ``wrap it: {"items": [{...the caller's own item fields...}], ...}`` when the
+    schema requires an ``items`` array of objects, ``value`` has no ``items``, and every
+    key that is not a top-level property is a property of an item; else None."""
+    if not isinstance(value, dict) or not schema or "items" in value:
+        return None
+    validator = _Validator(schema)
+    root = validator._resolve(schema)
+    props = root.get("properties") or {}
+    if "items" not in props or "items" not in (root.get("required") or ()):
+        return None
+    array = validator._resolve(props["items"]) if isinstance(props["items"], dict) else {}
+    item = validator._resolve(array.get("items")) if isinstance(array.get("items"), dict) else {}
+    item_props = item.get("properties") or {}
+    flat = {k: v for k, v in value.items() if k not in props}
+    if not flat or not item_props or any(k not in item_props for k in flat):
+        return None
+    outer = {k: v for k, v in value.items() if k in props}
+    fixed = json.dumps(_elided({"items": [flat], **outer}), ensure_ascii=False)
+    if len(fixed) > SHAPE_HINT_MAX_CHARS:
+        fixed = fixed[: SHAPE_HINT_MAX_CHARS - 1] + "…"
+    return f"this tool takes a batch; pass the item inside items: {fixed}"
