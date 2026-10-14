@@ -740,13 +740,83 @@ ABOUT_KEY = "_about"
 item's own path; :func:`batch_error` puts it in the message prefix and ``detail.path``."""
 
 
-def batch_error(index: int, path: Any, exc: BaseException, *, rolled_back: bool) -> ToolError:
+OP_FIELD_DEFAULTS: dict[tuple[str, str], str] = {
+    ("create", "node_type_not_found"): "type",
+    ("create", "parm_not_found"): "parms",
+    ("create", "invalid_value"): "parms",
+    ("create", "name_collision"): "name",
+    ("create", "invalid_input"): "inputs",
+    ("connect", "invalid_input"): "to_input",
+    ("set", "parm_not_found"): "path",
+    ("set", "invalid_value"): "value",
+    ("set", "locked"): "path",
+    ("node", "name_collision"): "name",
+    ("copy", "name_collision"): "names",
+    ("build", "node_type_not_found"): "data",
+    ("build", "parm_not_found"): "data",
+}
+"""The ``edit`` op field an error is about when the code that raised it did not say
+(``tx.FIELD_KEY``): mostly errors of the run, which ``partial`` reaches without the
+validation pass."""
+
+PATH_FIELDS: dict[str, tuple[str, ...]] = {
+    "create": ("parent",),
+    "connect": ("from", "to"),
+    "set": ("path", "node"),
+    "node": ("path",),
+    "delete": ("paths",),
+    "copy": ("paths", "to_parent"),
+    "layout": ("parent", "paths"),
+    "build": ("parent",),
+    "select": ("paths",),
+}
+
+
+def _op_field(op: dict[str, Any], error: ToolError) -> str | None:
+    """The op field ``error`` is about: the one the raiser named, a path field whose value
+    the message names (``node_not_found``), else :data:`OP_FIELD_DEFAULTS`."""
+    from ..tx import FIELD_KEY
+
+    detail = error.detail if isinstance(error.detail, dict) else {}
+    named = detail.pop(FIELD_KEY, None)
+    if isinstance(named, str) and named:
+        return named
+    kind = str(op.get("op") or "")
+    if error.code == "node_not_found":
+        for key in PATH_FIELDS.get(kind, ()):
+            value = op.get(key)
+            values = value if isinstance(value, list) else [value]
+            for i, item in enumerate(values):
+                if isinstance(item, str) and item and item.rstrip("/") in error.message:
+                    return f"{key}[{i}]" if isinstance(value, list) else key
+    return OP_FIELD_DEFAULTS.get((kind, error.code))
+
+
+def batch_error(
+    index: int,
+    path: Any,
+    exc: BaseException,
+    *,
+    rolled_back: bool | None,
+    label: str = "items",
+    op: Any = None,
+) -> ToolError:
     """The one batch error shape (review 10 §4): ``items[i] (<path>): <message>`` and
     ``detail: {item, path, rolled_back}``, ``rolled_back`` as actually performed.
 
     A message that already names the item (``items[i].type ...``) or starts with its path
-    is not repeated: the path appears once."""
+    is not repeated: the path appears once.
+
+    ``edit`` (``label="ops"``, ``op`` the op's fields) names the field instead (review 25
+    papercut 3): ``ops[i].<field>: <message>`` (``ops[0].from: No node at /obj/g/nope.``)
+    and ``detail.field``; ``ops[i] (<path>)`` only when no field is known."""
     error = to_tool_error(exc)
+    if label == "ops":
+        return _op_error(index, path, error, rolled_back, op if isinstance(op, dict) else {})
+    if isinstance(error.detail, dict):
+        from ..tx import FIELD_KEY
+
+        error.detail.pop(FIELD_KEY, None)
     message = error.message
     tag = f"items[{index}]"
     if message.startswith(tag):
@@ -767,6 +837,39 @@ def batch_error(index: int, path: Any, exc: BaseException, *, rolled_back: bool)
     error.args = (error.message,)
     detail = error.detail if isinstance(error.detail, dict) else {}
     error.detail = {**detail, "item": index, "path": shown, "rolled_back": rolled_back}
+    return error
+
+
+def _op_error(
+    index: int, path: Any, error: ToolError, rolled_back: bool | None, op: dict[str, Any]
+) -> ToolError:
+    """:func:`batch_error` for an ``edit`` op."""
+    field = _op_field(op, error)
+    message = error.message
+    legacy = f"items[{index}]"
+    if message.startswith(legacy):  # a validator's own "items[i].type must be ..."
+        rest = message[len(legacy) :]
+        if rest.startswith(".") and not field:
+            field = rest[1:].split(" ", 1)[0].rstrip(":")
+            message = rest[1 + len(field) :].lstrip(" :")
+        else:
+            message = rest.lstrip(".: ")
+    detail = error.detail if isinstance(error.detail, dict) else {}
+    detail.pop(ABOUT_KEY, None)
+    shown = path if isinstance(path, str) and path else None
+    if shown and message.startswith(f"{shown}: "):  # "<path>: ..." names it twice
+        message = message[len(shown) + 2 :]
+    if field and message.startswith(f"{field} "):  # "from '$x' names no op id"
+        message = message[len(field) + 1 :]
+    if field:
+        error.message = f"ops[{index}].{field}: {message}"
+    else:
+        error.message = (
+            f"ops[{index}] ({shown}): {message}" if shown else f"ops[{index}]: {message}"
+        )
+    error.args = (error.message,)
+    extra = {"field": field} if field else {}
+    error.detail = {**detail, "item": index, **extra, "path": shown, "rolled_back": rolled_back}
     return error
 
 

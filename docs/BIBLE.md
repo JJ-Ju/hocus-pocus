@@ -577,7 +577,12 @@ policy, one rollback and one echo engine.
   `partial: true`. Every batch error (and each failed row's `error` with `partial`) has one
   shape: the message starts `items[i] (<path>): ` and `detail` carries `{item, path,
   rolled_back}`, where `rolled_back` is true only when every change the call (or, with
-  `partial`, the item) had made was actually undone.
+  `partial`, the item) had made was actually undone. `edit` names the op field instead
+  (2.0, review 25 papercut 3): `ops[i].<field>: ` (`ops[0].from: No node at
+  /obj/g/nope.`, `ops[2].parms.radiu: ...`), `ops[i] (<path>): ` only when no field
+  applies, and `detail` adds `field`. A missing `from`, `to` or `parent` gets the
+  parent's children as the plan leaves them as `candidates`, nearest name first, never
+  the other end of the wire.
 - **Responses:** compact JSON in the text block. 1.0 also sent the same JSON as
   `structuredContent` because clients vary in which they feed the model; measured for 1.1,
   Claude Code feeds the model only the text block, so the structured copy doubled every
@@ -773,7 +778,7 @@ takes the fields of the 1.4 tool it replaces, with that tool's semantics (§4.5 
   `predicted: true` where Houdini will number the node, and changes nothing (`_changed:
   false`: no undo step, no dirty flag, allowed in read-only mode).
 - **Failure.** A failing op rolls the call back by compensation and raises the §4.1 batch
-  error (`items[i] (<path>): ...`, `detail: {item, path, rolled_back}`); after a delete,
+  error (`ops[i].<field>: ...`, `detail: {item, field, path, rolled_back}`); after a delete,
   `rolled_back` is what undoing the whole group did. `partial` skips the up-front
   validation, reverts only a failing op and keeps the rest; the result's `failed` lists
   `{item, op, id?, error}` per failed op.

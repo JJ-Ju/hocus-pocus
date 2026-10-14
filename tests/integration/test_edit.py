@@ -189,7 +189,7 @@ def test_unknown_or_forward_ids_are_refused(v2_client):
     hou.node("/obj").createNode("geo", "g")
     unknown = v2_client.error("edit", {"ops": [{"op": "create", "parent": "$nope", "type": "box"}]})
     assert unknown["code"] == "invalid_argument" and "$nope" in unknown["message"]
-    assert unknown["message"].startswith("items[0] ($nope): ")
+    assert unknown["message"].startswith("ops[0].parent: '$nope' names no op id")
     forward = v2_client.error(
         "edit",
         {
@@ -271,7 +271,7 @@ def test_dry_run_reports_every_problem_without_changing_anything(v2_client):
         },
     )
     assert error["code"] == "name_collision"
-    assert error["message"].startswith("items[0] (/obj/g/box1): ")
+    assert error["message"].startswith("ops[0].name: /obj/g/box1 already exists.")
     problems = error["detail"]["problems"]
     assert [p["item"] for p in problems] == [0, 1, 3, 4]
     assert [p["code"] for p in problems] == [
@@ -294,7 +294,8 @@ def test_validation_refuses_before_any_change(v2_client):
             ]
         },
     )
-    assert error["code"] == "parm_not_found" and error["message"].startswith("items[3] ")
+    assert error["code"] == "parm_not_found"
+    assert error["message"].startswith("ops[3].parms.radiu: "), error["message"]
     assert "rad" in error["candidates"]
     assert error["detail"]["rolled_back"] is True
     assert hou.node("/obj").children() == () and _undo_labels() == before
@@ -329,11 +330,50 @@ def test_a_failing_op_in_the_middle_rolls_everything_back(v2_client):
         },
     )
     assert error["code"] == "invalid_value"
-    assert error["message"].startswith("items[2] (/obj/g/sphere1/rad): ")
+    assert error["message"].startswith("ops[2].value: "), error["message"]
+    assert error["detail"]["field"] == "value" and error["detail"]["path"] == "/obj/g/sphere1/rad"
     # A delete cannot be compensated; the undo of the whole step brought it back.
     assert error["detail"]["rolled_back"] is True
     assert [c.name() for c in geo.children()] == ["victim"]
     assert _undo_labels() == before
+
+
+def test_edit_errors_name_the_op_field_and_nearby_candidates(client):
+    """Review 25 papercut 3: ``ops[i].<field>``, not ``items[i] (<target>)``; candidates are
+    the parent's children by name, never the other end of the wire; the hint is the 2.0
+    node search."""
+    geo = hou.node("/obj").createNode("geo", "g")
+    geo.createNode("copytopoints::2.0", "copy1")
+    geo.createNode("box", "box1")
+    error = client.error(
+        "edit",
+        {"ops": [{"op": "connect", "from": "/obj/g/nope", "to": "/obj/g/copy1", "to_input": 0}]},
+    )
+    assert error["code"] == "node_not_found"
+    assert error["message"] == "ops[0].from: No node at /obj/g/nope."
+    assert "/obj/g/copy1" not in error.get("candidates", [])
+    assert 'search {kind: "nodes", root: "/obj/g"}' in error["hint"]
+    assert error["detail"]["field"] == "from"
+    near = client.error(
+        "edit",
+        {
+            "ops": [
+                {"op": "create", "parent": "/obj/g", "type": "null", "name": "OUT"},
+                {"op": "connect", "from": "/obj/g/bxo1", "to": "/obj/g/OUT"},
+                {"op": "connect", "from": "/obj/g/box1", "to": "/obj/g/OTU"},
+                {"op": "create", "parent": "/obj/gg", "type": "box"},
+            ],
+            "dry_run": True,
+        },
+    )
+    problems = near["detail"]["problems"]
+    assert [p["message"] for p in problems] == [
+        "ops[1].from: No node at /obj/g/bxo1.",
+        "ops[2].to: No node at /obj/g/OTU.",
+        "ops[3].parent: No node at /obj/gg.",
+    ]
+    assert near["candidates"][0] == "/obj/g/box1"  # nearest name first
+    assert geo.node("OUT") is None  # a dry run
 
 
 def test_rollback_without_a_delete_is_compensation(v2_client):

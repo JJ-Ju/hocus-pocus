@@ -106,7 +106,7 @@ def test_parse_ops_refuses_malformed_plans(ops, needle):
         tx.parse_ops(ops)
     assert info.value.code == "invalid_argument" and needle in info.value.message
     if ops:
-        assert info.value.message.startswith("items[")
+        assert info.value.message.startswith("ops[")  # review 25 papercut 3: not items[
         assert info.value.detail["rolled_back"] is True
 
 
@@ -218,8 +218,14 @@ def test_a_failing_op_rolls_the_plan_back(handlers):
     )
     with pytest.raises(ToolError) as info:
         tx.execute(plan, ctx=None)
-    assert info.value.message == "items[1] (/obj/geo1/x): bad value."
-    assert info.value.detail == {"item": 1, "path": "/obj/geo1/x", "rolled_back": True}
+    # Review 25 papercut 3: an edit error names the op field, not items[i] (path).
+    assert info.value.message == "ops[1].value: bad value."
+    assert info.value.detail == {
+        "item": 1,
+        "field": "value",
+        "path": "/obj/geo1/x",
+        "rolled_back": True,
+    }
     assert handlers["nodes"] == set()
 
 
@@ -252,7 +258,12 @@ def test_partial_reverts_only_the_failing_op(handlers):
     result = tx.execute(plan, ctx=None)
     assert handlers["nodes"] == {"/obj/a"}
     assert list(result.failures) == [1]
-    assert result.failures[1]["detail"] == {"item": 1, "path": "/obj/a/x", "rolled_back": True}
+    assert result.failures[1]["detail"] == {
+        "item": 1,
+        "field": "value",
+        "path": "/obj/a/x",
+        "rolled_back": True,
+    }
     assert [r.index for r in result.done()] == [0, 2]
 
 
@@ -521,11 +532,40 @@ def test_validate_reports_each_root_cause_once(scene):
     ]
     assert diag.problems[1].candidates and diag.problems[1].candidates[0] == "box"
     assert "size" in diag.problems[2].candidates
-    assert diag.problems[0].message.startswith("items[0] (/obj/geo1/box1): ")
+    assert diag.problems[0].message == "ops[0].name: /obj/geo1/box1 already exists."
+    assert diag.problems[1].message.startswith("ops[1].type: No Sop node type 'boxx'")
+    assert diag.problems[2].message.startswith("ops[3].parms.sise: No parm")
+    assert diag.problems[3].message == "ops[4].inputs[0].from: No node at /obj/geo1/nope."
+    assert diag.problems[3].detail["field"] == "inputs[0].from"
     with pytest.raises(ToolError) as info:
         diag.raise_if_any()
     assert info.value.code == "name_collision"
     assert [p["item"] for p in info.value.detail["problems"]] == [0, 1, 3, 4, 5, 6]
+
+
+def test_missing_wire_ends_get_candidates_from_the_plan_never_the_other_end(scene):
+    """Review 25 papercut 3: a missing from/to/parent is located at its field; the
+    candidates are the parent's children as the plan leaves them (new nodes included), by
+    name distance, without the other end of the wire."""
+    diag = _validate(
+        [
+            {"op": "create", "id": "c", "parent": "/obj/geo1", "type": "xform", "name": "copy1"},
+            {"op": "connect", "from": "/obj/geo1/nope", "to": "$c"},
+            {"op": "create", "id": "l", "parent": "/obj/geo1", "type": "xform", "name": "lift"},
+            {"op": "connect", "from": "/obj/geo1/lfit", "to": "$c"},
+            {"op": "connect", "from": "$l", "to": "/obj/geo1/copy2"},
+            {"op": "create", "parent": "/obj/geo2/inner", "type": "box"},
+        ]
+    )
+    nope, lfit, copy2, parent = diag.problems
+    assert nope.message == "ops[1].from: No node at /obj/geo1/nope."
+    assert "/obj/geo1/copy1" not in nope.candidates  # the wire's other end
+    assert lfit.message == "ops[3].from: No node at /obj/geo1/lfit."
+    assert lfit.candidates[0] == "/obj/geo1/lift"  # a node an earlier op creates
+    assert copy2.message == "ops[4].to: No node at /obj/geo1/copy2."
+    assert copy2.candidates == ["/obj/geo1/copy1"] and copy2.detail["field"] == "to"
+    assert parent.message == "ops[5].parent: No node at /obj/geo2/inner."
+    assert "/obj/geo2 does not exist either" in parent.hint and parent.candidates == []
 
 
 def test_validate_follows_deletes_and_renames(scene):
