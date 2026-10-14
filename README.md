@@ -282,7 +282,7 @@ already has a shell on your machine.
 ## Status and versioning
 
 1.0 was merged to `master` on 2026-10-12 (tag `v1.0.0`), and 1.1 to 1.4 followed (tags
-`v1.1.0` to `v1.4.0`). 2.0 is in development on `release/2.0`; its contract changes are
+`v1.1.0` to `v1.4.0`). 2.0 is the current release (tag `v2.0.0`); its contract changes are
 under **Unreleased (2.0.0)** in [`CHANGELOG.md`](CHANGELOG.md), with the upgrade notes in
 [`docs/migration-2.0.md`](docs/migration-2.0.md). HocusPocus is not on PyPI yet. It is
 qualified on Windows with Houdini 22.0.466; the code is not Windows-only, but Linux and
