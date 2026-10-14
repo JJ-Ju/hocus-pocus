@@ -6,6 +6,8 @@ Routes::
     POST /hp/v1/call        {tool, args, timeout_s, request_id} -> envelope
     GET  /hp/v1/jobs/{id}   job status (and result once done)
     GET  /hp/v1/calls/{request_id}/jobs   snapshots of the jobs a call started (progress)
+    GET  /hp/v2/resource?uri=...  a resource template read with its etag (If-None-Match:
+                            not_modified); spec-2.0 §2.7, :mod:`hocuspocus.host.resources`
     POST /hp/v1/shutdown    stop the host (not Houdini)
     POST /hp/v1/quit        {on_unsaved} -> quit Houdini after the unsaved check
 
@@ -27,13 +29,14 @@ from collections.abc import Callable
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 from hocuspocus.tools.errors import ToolError
 
 from .dispatch import error_envelope
 
 API_PREFIX = "/hp/v1"
+RESOURCE_ROUTE = "/hp/v2/resource"
 MAX_BODY_BYTES = 4 * 1024 * 1024
 LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 REQUEST_TIMEOUT_S = 60
@@ -197,6 +200,10 @@ class _Handler(BaseHTTPRequestHandler):
             job_id = path[len(f"{API_PREFIX}/jobs/") :]
             self._send_json(HTTPStatus.OK, self._job(job_id))
             return
+        if path == RESOURCE_ROUTE:
+            if self._guard(auth=True):
+                self._send_json(HTTPStatus.OK, self._resource())
+            return
         if path.startswith(f"{API_PREFIX}/calls/") and path.endswith("/jobs"):
             if not self._guard(auth=True):
                 return
@@ -268,6 +275,31 @@ class _Handler(BaseHTTPRequestHandler):
             (time.perf_counter() - started) * 1000,
         )
         self._send_json(HTTPStatus.OK, envelope)
+
+    def _resource(self) -> dict[str, Any]:
+        from .resources import serve
+
+        query = parse_qs(urlsplit(self.path).query)
+
+        def one(name: str) -> str | None:
+            values = query.get(name)
+            return values[-1] if values else None
+
+        def number(name: str) -> float | None:
+            try:
+                value = float(one(name) or "")
+            except ValueError:
+                return None
+            return value if value > 0 else None
+
+        budget = number("max_response_bytes")
+        return serve(
+            self.server.app,
+            one("uri"),
+            self.headers.get("If-None-Match"),
+            max_response_bytes=int(budget) if budget else None,
+            timeout_s=number("timeout_s"),
+        )
 
     def _job(self, job_id: str) -> dict[str, Any]:
         job = self.server.app.job
