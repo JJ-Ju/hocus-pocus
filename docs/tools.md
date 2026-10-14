@@ -2,7 +2,7 @@
 
 <!-- Generated from src/hocuspocus/tools/spec/ by `python -m hocuspocus.tools.docs`. Do not edit by hand. -->
 
-36 tools: 14 in the `minimal` profile, 31 in `core` (minimal included), 4 more in `full`, 1 more in `v2` (the 2.0 tools). Model-visible `tools/list` text: 29,126 bytes. See `docs/BIBLE.md` §4 for the design.
+37 tools: 14 in the `minimal` profile, 31 in `core` (minimal included), 4 more in `full`, 2 more in `v2` (the 2.0 tools). Model-visible `tools/list` text: 30,396 bytes. See `docs/BIBLE.md` §4 for the design.
 
 ## Contents
 
@@ -42,6 +42,7 @@
 - [`pdg`](#pdg) *(full)*
 - [`events`](#events) *(full)*
 - [`inspect`](#inspect) *(v2)*
+- [`search`](#search) *(v2)*
 
 ## houdini_status
 
@@ -1326,4 +1327,49 @@ Read the scene in one tool. what: node, parms, network, outline, geo (rows: true
 
 ```json
 {"what": "type", "target": "Sop/scatter", "parms": "*seed*"}
+```
+
+
+## search
+
+`read-only` `headless ok` · profile `v2`
+
+Search node types or nodes. kind types: node_type_search (query is a name, label or keyword; 1.4 ranking, synonyms, current_only). kind nodes: node_find under root (query is a type glob; pattern, category, flags, has_errors). Returns kind and exactly the 1.4 tool's result, paged by limit and cursor.
+
+**Notes.** Each kind takes its 1.4 tool's arguments; any other is invalid_argument naming the ones it takes. Defaults are the 1.4 tool's (types: limit 20, current_only true; nodes: root /, limit 50). types: query is required; the result is node_type_search's {results, total, common?, hint?, notes?}, plus next_cursor when total counts more matches than this page (node_type_search itself has no paging; a types page reaches the first 1000 matches). nodes: query (optional) is node_find's type glob, pattern its name glob; the result is node_find's {root, nodes, total, next_cursor?}.
+
+### Arguments
+
+| Name | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `kind` | `types` \| `nodes` | yes |  |  |
+| `query` | string |  |  | types: name or keyword; nodes: type glob. |
+| `category` | `Chop` \| `ChopNet` \| `Cop` \| `Cop2` \| `CopNet` \| `Data` \| `Director` \| `Dop` \| `Driver` \| `Lop` \| `Manager` \| `Object` \| `Shop` \| `Sop` \| `Top` \| `TopNet` \| `Vop` \| `VopNet` |  |  |  |
+| `root` | string |  |  |  |
+| `pattern` | string |  |  | nodes: name glob. |
+| `flags` | object |  |  |  |
+| `flags.display` | boolean |  |  |  |
+| `flags.render` | boolean |  |  |  |
+| `flags.bypass` | boolean |  |  |  |
+| `flags.template` | boolean |  |  |  |
+| `flags.locked` | boolean |  |  |  |
+| `has_errors` | boolean |  |  |  |
+| `recurse_locked` | boolean |  |  |  |
+| `include_hidden` | boolean |  |  |  |
+| `current_only` | boolean |  |  |  |
+| `limit` | integer |  |  | min 1; max 1000 |
+| `cursor` | string |  |  | next_cursor from the previous page. |
+
+### Examples
+
+```json
+{"kind": "types", "query": "scatter"}
+```
+
+```json
+{"kind": "types", "query": "noise", "category": "Vop", "limit": 5}
+```
+
+```json
+{"kind": "nodes", "root": "/obj", "query": "*file*", "has_errors": true}
 ```
