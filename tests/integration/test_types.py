@@ -490,3 +490,13 @@ def test_parm_glob_exact_alternatives_are_not_substring_matches(client):
         "trange",
         "f",
     } & set(flipbook["substring_matches"]), flipbook.get("substring_matches")
+
+
+def test_info_probe_leaves_a_saved_scene_clean(client, tmp_path):
+    """The probe instance is HocusPocus's temporary node: it never dirties the scene, so
+    on_unsaved: fail still lets hip_new through (docs/parity.md G1)."""
+    client.ok("hip_save", {"path": (tmp_path / "probe.hip").as_posix()})
+    client.ok("node_type_info", {"type": "Sop/copytopoints", "detail": "full"})
+    status = client.ok("houdini_status")["hip"]
+    assert (status["dirty"], status["dirty_source"]) == (False, None)
+    assert client.ok("hip_new", {"on_unsaved": "fail"})["dirty"] is False

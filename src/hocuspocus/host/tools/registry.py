@@ -108,14 +108,33 @@ class HostTool:
         return True if spec is None else spec.headless_ok
 
 
+DIRTY_SOURCES = ("tracked", "user_event", "houdini_flag")
+"""Why the scene is dirty (``houdini_status.connected.hip.dirty_source``): ``tracked``, a
+HocusPocus call changed it; ``user_event``, an ``origin: other`` node event (the user's own
+edit) arrived since the last save, load or clear; ``houdini_flag``, a GUI Houdini marked
+the hip modified between two HocusPocus calls (an edit on a node no event watches)."""
+
+
 @dataclass
 class SceneState:
-    """Scene generation counter and the host's view of the dirty flag."""
+    """Scene generation counter and the host's dirty flag (docs/BIBLE.md §3.2).
+
+    One dirty source in both modes (docs/parity.md G1): the tracked flag (agent
+    mutations) OR a change made outside HocusPocus since the last save, load or clear.
+    Houdini's own ``hasUnsavedChanges()`` is never read directly: hython reports True
+    even after a save, and the GUI flips it for HocusPocus's own temporary nodes (type
+    probes, render overrides, captures)."""
 
     generation: int = 0
     dirty: bool = False
-    """Tracked dirty flag. Authoritative headless, where ``hasUnsavedChanges()`` is
-    always True in hython 22.0; the GUI asks Houdini instead."""
+    """Tracked dirty flag: set by agent mutations, cleared by save, load and clear."""
+    user_dirty: str | None = None
+    """``user_event`` or ``houdini_flag`` once something outside HocusPocus changed the
+    scene since the last save, load or clear; None otherwise."""
+    houdini_flag: bool | None = None
+    """GUI only: Houdini's ``hasUnsavedChanges()`` at the end of the last HocusPocus
+    main-thread work item (None when unknown). A False -> True change before the next
+    work item is a change made outside HocusPocus (:meth:`check_houdini_flag`)."""
     clean_events: int = 0
     """Incremented on every save/load/clear so the dispatcher can tell whether a
     mutating call left the scene clean."""
@@ -139,10 +158,39 @@ class SceneState:
     def mark_dirty(self) -> None:
         self.dirty = True
 
+    def mark_user_dirty(self, source: str = "user_event") -> None:
+        """Something outside HocusPocus changed the scene. The first source is kept."""
+        with self._lock:
+            if self.user_dirty is None:
+                self.user_dirty = source
+
     def mark_clean(self) -> None:
         with self._lock:
             self.dirty = False
+            self.user_dirty = None
+            self.houdini_flag = False
             self.clean_events += 1
+
+    @property
+    def is_dirty(self) -> bool:
+        return self.dirty or self.user_dirty is not None
+
+    @property
+    def dirty_source(self) -> str | None:
+        """``tracked``, ``user_event`` or ``houdini_flag`` (:data:`DIRTY_SOURCES`), or None
+        when the scene is clean."""
+        return "tracked" if self.dirty else self.user_dirty
+
+    def check_houdini_flag(self, flag: bool) -> None:
+        """GUI, before a HocusPocus work item: Houdini's flag went False -> True since the
+        last one ended, so the user changed the scene in between."""
+        if flag and self.houdini_flag is False:
+            self.mark_user_dirty("houdini_flag")
+
+    def note_houdini_flag(self, flag: bool) -> None:
+        """GUI, after a HocusPocus work item: Houdini's flag as that work left it (its
+        own temporary nodes may have set it; that is not the user's change)."""
+        self.houdini_flag = bool(flag)
 
 
 @dataclass

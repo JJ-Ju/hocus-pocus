@@ -106,6 +106,21 @@ class GuiClient:
             f"import hdefereval\ndef _user_edit():\n{body}hdefereval.executeDeferred(_user_edit)\n"
         )
 
+    def user_edit_after_save(self, code: str, hip_name: str) -> None:
+        """:meth:`user_edit`, held back until the scene is saved as ``hip_name``: the
+        ``houdini_python`` call that schedules it is itself an agent mutation (tracked
+        dirty), so the test saves after it and the user's edit lands on a clean scene."""
+        body = "".join(f"    {line}\n" for line in code.strip().splitlines())
+        self.python(
+            "import hdefereval\n"
+            "def _user_edit():\n"
+            f"    if not hou.hipFile.path().endswith({hip_name!r}):\n"
+            "        hdefereval.executeDeferredAfterWaiting(_user_edit, 5)\n"
+            "        return\n"
+            f"{body}"
+            "hdefereval.executeDeferred(_user_edit)\n"
+        )
+
 
 @dataclass
 class GuiSession:
@@ -424,9 +439,57 @@ def test_hda_create_round_trip(gui: GuiSession) -> None:
     assert any(h.startswith("HocusPocus: hda create") for h in history)
 
 
+def _dirty(client: GuiClient) -> dict[str, Any]:
+    hip = client.ok("houdini_status")["hip"]
+    return {"dirty": hip["dirty"], "dirty_source": hip["dirty_source"]}
+
+
+def test_reads_and_captures_leave_the_gui_hip_clean(gui: GuiSession) -> None:
+    """G1: a type probe and a capture's temporary camera and ROP set Houdini's own flag,
+    but dirty (the one source in both modes) stays false and on_unsaved: fail passes."""
+    client = gui.client
+    _scene(client)
+    client.ok("hip_save", {"path": (gui.work_dir / "g1_reads.hip").as_posix()})
+    assert _dirty(client) == {"dirty": False, "dirty_source": None}
+    client.ok("node_type_info", {"type": "Sop/copytopoints", "detail": "full"})
+    client.ok("viewport_capture", {"source": "flipbook_rop", "resolution": [160, 120]})
+    status = client.ok("houdini_status")["hip"]
+    assert (status["dirty"], status["dirty_source"]) == (False, None)
+    assert isinstance(status["houdini_flag"], bool)  # a diagnostic only
+    assert client.ok("hip_new", {"on_unsaved": "fail"})["saved_first"] is False
+
+
+def test_user_edits_dirty_the_gui_hip(gui: GuiSession) -> None:
+    """G1: the user's edit on a watched node arrives as an origin: other event; an edit
+    on a node no event watches is seen through Houdini's flag between two calls."""
+    client = gui.client
+    _scene(client)
+    client.ok("hip_save", {"path": (gui.work_dir / "g1_a.hip").as_posix()})
+    client.user_edit_after_save("hou.node('/obj/box_geo').setName('renamed_geo')", "g1_b.hip")
+    client.ok("hip_save", {"path": (gui.work_dir / "g1_b.hip").as_posix()})
+    assert _wait_for(lambda: _dirty(client)["dirty"]), "the rename never dirtied the scene"
+    assert _dirty(client)["dirty_source"] == "user_event"
+    refused = client.error("hip_new", {"on_unsaved": "fail"})
+    assert refused["code"] == "unsaved_changes"
+    assert refused["detail"]["dirty_source"] == "user_event"
+
+    # A node made inside agent code is not watched; the user's later parm edit on it
+    # sends no event, but sets Houdini's flag between two calls.
+    client.python("hou.node('/obj/renamed_geo').createNode('sphere', 'unwatched')")
+    client.user_edit_after_save(
+        "hou.node('/obj/renamed_geo/unwatched').parm('scale').set(2.5)", "g1_c.hip"
+    )
+    client.ok("hip_save", {"path": (gui.work_dir / "g1_c.hip").as_posix()})
+    assert _wait_for(lambda: _dirty(client)["dirty"]), "the parm edit never dirtied the scene"
+    assert _dirty(client)["dirty_source"] == "houdini_flag"
+    assert client.python("hou.node('/obj/renamed_geo/unwatched').parm('scale').eval()") == 2.5
+    client.ok("hip_new", {"on_unsaved": "discard"})
+    assert _dirty(client) == {"dirty": False, "dirty_source": None}
+
+
 def test_quit_closes_the_gui(gui: GuiSession) -> None:
-    """Last: ``houdini_connect {quit}`` through the bridge's own code path. The GUI's dirty
-    flag is Houdini's ``hasUnsavedChanges()``, so ``fail`` refuses first."""
+    """Last: ``houdini_connect {quit}`` through the bridge's own code path. An agent
+    mutation sets the tracked dirty flag (G1), so ``fail`` refuses first."""
     from hocuspocus.bridge import instances as registry
     from hocuspocus.bridge import local_tools
     from hocuspocus.bridge.config import BridgeConfig

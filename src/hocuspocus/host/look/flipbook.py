@@ -37,9 +37,8 @@ from typing import Any
 
 from hocuspocus.tools.errors import ToolError
 
-from ..tools.session import scene_dirty
 from . import child as child_mod
-from .base import Backend, Env, LookResult, add_notes, check_capture_output, on_main
+from .base import Backend, Env, LookResult, check_capture_output, on_main
 from .child import ChildRender, crash_summary, exit_error
 from .framing import temporary_capture_nodes
 
@@ -251,12 +250,6 @@ def render_capture_child(
         _warm_lock.release()
 
 
-DIRTY_NOTE = (
-    "Houdini marks the hip modified when the temporary capture camera and ROP are "
-    "created, although both were deleted and nothing else changed."
-)
-
-
 class ViewportRopBackend(Backend):
     """A temporary viewport ROP (:attr:`name`) looking through the capture camera:
     in-process on the main thread in a GUI session, in a child hython headless (the kept
@@ -292,7 +285,8 @@ class ViewportRopBackend(Backend):
         """GUI: create, render and delete the ROP on the main thread. Main thread."""
         import hou
 
-        was_dirty = scene_dirty(ctx)
+        # Houdini marks the hip modified for the temporary camera and ROP; the host's
+        # dirty flag does not follow it (docs/parity.md G1), so there is nothing to note.
         errors: list[str] = []
         with temporary_capture_nodes(capture) as rop:
             try:
@@ -300,9 +294,6 @@ class ViewportRopBackend(Backend):
             except hou.OperationFailed as exc:
                 errors.append(str(exc).strip())
             errors += [str(e) for e in rop.errors()]
-        if not was_dirty and scene_dirty(ctx):
-            # Kept on the request, so it survives this ROP handing over to the next.
-            add_notes(job.held, DIRTY_NOTE)
         check_capture_output(errors, job.out_file, self.name)
         return LookResult()
 

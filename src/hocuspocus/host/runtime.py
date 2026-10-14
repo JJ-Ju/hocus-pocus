@@ -192,10 +192,17 @@ class Host:
         self.scene.mark_clean()
         hou.hipFile.addEventCallback(self._on_hip_event)
         self._hip_callback_installed = True
-        # The events ring buffer (tool ``events``) records hip and node events from here on.
+        # The events ring buffer (tool ``events``) records hip and node events from here on;
+        # a node event from outside HocusPocus (the user's edit) dirties the scene (G1).
         from .tools import events as tool_events
 
-        tool_events.install(self.executor.post, executor=self.executor)
+        tool_events.install(
+            self.executor.post,
+            executor=self.executor,
+            on_other=lambda _event: self.scene.mark_user_dirty("user_event"),
+        )
+        if self.ui:
+            self._track_houdini_flag()
 
         removed = prune_stale(self.registry.directory)
         if removed:
@@ -226,6 +233,41 @@ class Host:
             len(tools),
             self.houdini_version,
         )
+
+    def _track_houdini_flag(self) -> None:
+        """GUI: sample Houdini's own dirty flag around every HocusPocus main-thread work
+        item, so an edit the events hooks cannot see (a node nobody watches) still dirties
+        the scene when it sets the flag between two calls, while HocusPocus's own
+        temporary nodes, which set it inside a work item, do not (docs/parity.md G1)."""
+        import hou
+
+        def flag() -> bool | None:
+            try:
+                return bool(hou.hipFile.hasUnsavedChanges())
+            except Exception:
+                return None
+
+        at_start = flag()
+        if at_start:
+            # Changed after its load and before HocusPocus started: not ours.
+            self.scene.mark_user_dirty("houdini_flag")
+        if at_start is not None:
+            self.scene.note_houdini_flag(at_start)
+        inner = self.executor.work_wrapper
+        scene = self.scene
+
+        def tracked(fn: Any) -> Any:
+            before = flag()
+            if before is not None:
+                scene.check_houdini_flag(before)
+            try:
+                return fn() if inner is None else inner(fn)
+            finally:
+                after = flag()
+                if after is not None:
+                    scene.note_houdini_flag(after)
+
+        self.executor.work_wrapper = tracked
 
     def stop(self) -> None:
         if self._stopped:

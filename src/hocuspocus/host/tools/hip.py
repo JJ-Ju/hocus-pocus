@@ -14,7 +14,7 @@ from typing import Any
 from hocuspocus.tools.errors import ToolError
 
 from .registry import HostContext, tool
-from .session import scene_dirty
+from .session import dirty_source, scene_dirty
 
 ON_UNSAVED = ("fail", "save", "discard")
 UNSAVED_HINT = (
@@ -22,6 +22,12 @@ UNSAVED_HINT = (
     "hip_save (with path for an untitled scene) first."
 )
 MERGED_LIST_LIMIT = 200
+SOURCE_WHY = {
+    "tracked": " (made by HocusPocus calls)",
+    "user_event": " (edits made outside HocusPocus, in Houdini itself)",
+    "houdini_flag": " (Houdini marked the hip modified outside HocusPocus calls)",
+}
+"""How ``unsaved_changes`` names the dirty source (``detail.dirty_source``, G1)."""
 
 
 # -- helpers --------------------------------------------------------------------
@@ -154,10 +160,13 @@ def handle_unsaved(on_unsaved: Any, ctx: HostContext, action: str) -> bool:
     import hou
 
     if on_unsaved == "fail":
+        source = dirty_source(ctx)
+        why = SOURCE_WHY.get(source or "", "")
         raise ToolError(
             "unsaved_changes",
-            f"The scene {hou.hipFile.path()} has unsaved changes; refusing to {action}.",
+            f"The scene {hou.hipFile.path()} has unsaved changes{why}; refusing to {action}.",
             hint=UNSAVED_HINT,
+            detail={"dirty_source": source},
         )
     if hou.hipFile.isNewFile():
         raise ToolError(

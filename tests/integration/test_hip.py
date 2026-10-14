@@ -118,3 +118,58 @@ def test_backup_target_checked_before_writing(client, work_dir):
     finally:
         hou.putenv("HOUDINI_BACKUP_DIR", "")
     assert Path(client.ok("hip_save", {"backup": True})["backup_path"]).is_file()
+
+
+# -- one dirty source in both modes (docs/parity.md G1) ---------------------------------
+
+
+def _hip_state(client) -> dict:
+    hip = client.ok("houdini_status")["hip"]
+    return {"dirty": hip["dirty"], "dirty_source": hip["dirty_source"]}
+
+
+def test_agent_mutation_is_the_tracked_source(client, work_dir):
+    client.ok("hip_save", {"path": _fwd(work_dir / "tracked.hip")})
+    assert _hip_state(client) == {"dirty": False, "dirty_source": None}
+    client.ok("node_create", {"items": [{"parent": "/obj", "type": "null", "name": "n"}]})
+    assert _hip_state(client) == {"dirty": True, "dirty_source": "tracked"}
+    error = client.error("hip_new", {"on_unsaved": "fail"})
+    assert error["code"] == "unsaved_changes"
+    assert error["detail"]["dirty_source"] == "tracked"
+
+
+def test_user_edit_outside_hocuspocus_dirties_the_scene(client, work_dir):
+    """An edit made outside a HocusPocus call (here: on the test's main thread, between
+    calls) arrives as an ``origin: other`` event and dirties the scene: hip_new and
+    hip_open with on_unsaved: fail refuse, as they do in the GUI."""
+    saved = client.ok("hip_save", {"path": _fwd(work_dir / "user.hip")})["path"]
+    hou.node("/obj").createNode("null", "made_by_user")
+    assert _hip_state(client) == {"dirty": True, "dirty_source": "user_event"}
+    for tool, args in (("hip_new", {}), ("hip_open", {"path": saved})):
+        error = client.error(tool, {**args, "on_unsaved": "fail"})
+        assert error["code"] == "unsaved_changes", tool
+        assert error["detail"]["dirty_source"] == "user_event"
+        assert "outside HocusPocus" in error["message"]
+    assert client.ok("hip_save")["dirty"] is False
+    assert _hip_state(client) == {"dirty": False, "dirty_source": None}
+    assert client.ok("hip_new", {"on_unsaved": "fail"})["dirty"] is False
+
+
+def test_reads_and_temporary_nodes_leave_the_scene_clean(client, work_dir):
+    """Reads, and the type probe's temporary node, are HocusPocus's own: none of them
+    dirties a saved scene (G1)."""
+    client.ok(
+        "node_create",
+        {
+            "items": [
+                {"parent": "/obj", "type": "geo", "name": "g"},
+                {"parent": "/obj/g", "type": "box", "flags": {"display": True}},
+            ]
+        },
+    )
+    client.ok("hip_save", {"path": _fwd(work_dir / "reads.hip")})
+    client.ok("node_type_info", {"type": "Sop/copytopoints", "detail": "full"})
+    client.ok("node_find", {"root": "/obj"})
+    client.ok("houdini_status")
+    assert _hip_state(client) == {"dirty": False, "dirty_source": None}
+    assert client.ok("hip_new", {"on_unsaved": "fail"})["saved_first"] is False

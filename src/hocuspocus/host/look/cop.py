@@ -14,7 +14,6 @@ from hocuspocus.tools.errors import ToolError
 from ..tools._diag import a_or_an, require_node
 from ..tools.geo import num
 from ..tools.registry import HostContext
-from ..tools.session import scene_dirty
 from .base import INTERNAL_KEY, Backend, Env, LookResult, failure, mark_internal, on_main
 from .image import capture_targets, finish_capture
 
@@ -149,7 +148,6 @@ def render_cop(
             f"{node.path()} outputs {types[0]}, not an image layer.",
             hint="geo_info reads it; capture an image node instead.",
         )
-    was_dirty = scene_dirty(ctx)
     errors: list[str] = []
     with hou.undos.disabler(), muted():
         rop = node.parent().createNode("rop_image", "__hocuspocus_capture__")
@@ -185,11 +183,6 @@ def render_cop(
     notes = []
     if resolution_given:
         notes.append("resolution is ignored with cop_path: the image is the COP's own size.")
-    if not was_dirty and scene_dirty(ctx):
-        notes.append(
-            "Houdini marks the hip modified when the temporary rop_image is created, although "
-            "it was deleted and nothing else changed."
-        )
     if notes:
         info["notes"] = notes
     return info

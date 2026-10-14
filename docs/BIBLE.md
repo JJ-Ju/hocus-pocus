@@ -194,10 +194,19 @@ deletes an entry whose pid is alive but whose port refuses connections, rejects 
 (401), or answers `/health` with another pid, and selects again.
 
 **Dirty tracking.** Verified on 22.0.466: in hython `hou.hipFile.hasUnsavedChanges()` is
-always `True`, even right after a load, clear or save. Headless, the host therefore
-tracks dirtiness itself: the dispatcher marks the scene dirty after every successful
-mutating call, the `scene=False` tools mark it where they change the scene, and save,
-load and clear mark it clean. In the GUI the host asks Houdini.
+always `True`, even right after a load, clear or save, and in the GUI it turns `True` for
+HocusPocus's own temporary nodes (a `node_type_info` probe, `render`'s output override, a
+capture's camera and ROP). 2.0 (parity G1): one dirty source in both modes, `dirty` =
+the host's tracked flag OR a change made outside HocusPocus since the last save, load or
+clear. The tracked flag is set by the dispatcher after every successful mutating call
+and by the `scene=False` tools where they change the scene; a change outside HocusPocus
+is any `origin: other` node event (`events`, §4.7: the user's edit on a watched node) or,
+in the GUI, Houdini's flag going from false to true between two HocusPocus main-thread
+work items (an edit on a node no event watches). Reads and temporary nodes never set it.
+Save, load and clear (by the agent or the user) clear both. `hip_new`, `hip_open` and
+`houdini_connect {quit}` with `on_unsaved`, and `pdg cook`, decide on this flag;
+`houdini_status.connected.hip` reports `dirty`, `dirty_source: tracked|user_event|
+houdini_flag|null` and, in the GUI, Houdini's own `houdini_flag` as a diagnostic.
 
 **Scene generation.** A monotonically increasing integer bumped on
 `AfterClear`, `AfterLoad`, `AfterMerge`. Returned in every tool result's `_meta` as
@@ -481,7 +490,7 @@ as it was started from a neutral directory).
 
 | Tool | Args | Behaviour |
 |---|---|---|
-| `hip_new` | `on_unsaved: fail\|save\|discard = fail` | `hipFile.clear()`. With unsaved changes and `fail` → `code: unsaved_changes`, hint lists the options. `save` saves first (fails if the file is new/untitled: hint "use hip_save with path"). |
+| `hip_new` | `on_unsaved: fail\|save\|discard = fail` | `hipFile.clear()`. With unsaved changes and `fail` → `code: unsaved_changes`, hint lists the options and `detail.dirty_source` says whose changes they are (`tracked`, `user_event`, `houdini_flag`; §3.2, the same in the GUI and headless). `save` saves first (fails if the file is new/untitled: hint "use hip_save with path"). |
 | `hip_open` | `path`, `on_unsaved` as above, `ignore_load_warnings = true` | `hipFile.load(...)`. Returns `path`, `warnings: [...]` (load warnings are reported, not thrown), `scene_generation`. Path checked against `approved_roots` if set. |
 | `hip_save` | `path?`, `increment = false`, `backup = false` | `save(path)` is save-as when `path` given; `increment` uses `saveAndIncrementFileName()`; `backup` uses `saveAndBackup()`. Returns the real saved `path`, `dirty` after save, `bytes`. Creates directories. |
 | `hip_merge` | `path`, `node_pattern = "*"`, `overwrite_on_conflict = false`, `dry_run = false` | `dry_run` returns `collisions` from `collisionNodesIfMerged()` only. |
