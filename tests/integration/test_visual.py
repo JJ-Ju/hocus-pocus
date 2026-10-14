@@ -26,6 +26,8 @@ from hocuspocus.host.tools.visual import (  # noqa: E402
     temporary_capture_nodes,
 )
 
+pytestmark = pytest.mark.compat_1x  # the 1.4 tools (conftest: compat_client)
+
 
 def _fwd(path) -> str:
     return str(path).replace("\\", "/")
@@ -780,6 +782,8 @@ def test_headless_capture_does_not_hold_the_main_thread(client):
     def capture() -> None:
         conn = http.client.HTTPConnection("127.0.0.1", client.port, timeout=120)
         body = {"tool": "viewport_capture", "args": {"resolution": [160, 120]}}
+        if client.profile:  # a 1.4 tool: send the profile as the compat_1x client does
+            body["profile"] = client.profile
         conn.request(
             "POST",
             "/hp/v1/call",

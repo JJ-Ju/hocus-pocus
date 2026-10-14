@@ -12,6 +12,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.compat_1x  # the 1.4 tools (conftest: compat_client)
+
 hou = pytest.importorskip("hou")
 
 REPO_SRC = Path(__file__).resolve().parents[2] / "src"
@@ -208,6 +210,31 @@ def test_time_frame_drives_expressions(client):
     assert value["parms"][0]["value"] == pytest.approx(2.4)
 
 
+def test_headless_viewport_never_cooks_and_never_notes(client):
+    """G2 (a mode): only a GUI viewport cooks between calls, and only a GUI session
+    gets the once-per-session notes; headless a node made without cooking stays
+    not_cooked."""
+    assert "notes" not in client.ok("time", {"frame": 9})
+    box = _geo().createNode("box")
+    box.setDisplayFlag(True)
+    info = client.ok("node_info", {"paths": [box.path()]})
+    assert info["nodes"][0]["cook_state"] == "not_cooked"
+    assert "notes" not in info
+
+
+def test_cook_frame_range_puts_the_playbar_back(client):
+    """G4: headless nobody can move the playbar during the job, so it always goes back
+    to the frame it was on, without a note (the GUI notes either way)."""
+    box = _geo().createNode("box")
+    box.parm("tx").setExpression("$F*0.1")
+    client.ok("time", {"frame": 17})
+    result = client.ok("cook", {"paths": [box.path()], "frame_range": [1, 6], "wait_s": 60})
+    assert result["frames_cooked"] == 6
+    assert "notes" not in result
+    assert hou.frame() == 17
+    assert client.ok("time")["frame"] == 17
+
+
 def test_time_errors(client, host):
     assert client.error("time", {"range": [100, 1]})["code"] == "invalid_argument"
     assert client.error("time", {"range": [1]})["code"] == "invalid_argument"
@@ -250,10 +277,51 @@ def test_selection_bad_path(client):
     assert box.isSelected()
 
 
+def test_selection_headless_has_no_panes_to_keep(client):
+    """G3: in the GUI the result names the panes the selection moves into its network
+    (test_parity_gui.py); headless there are no panes, so it never carries
+    context_changed."""
+    from hocuspocus.host.tools.state import _context_panes, select_nodes
+
+    box = _geo().createNode("box")
+    assert _context_panes() == []
+    assert select_nodes([box]) == []
+    assert box.isSelected()
+    result = client.ok("selection", {"paths": [box.path()]})
+    assert result == {"selected": [box.path()]}
+
+
 def test_selection_allowed_read_only(client, host):
     box = _geo().createNode("box")
     host.config.read_only = True
     assert client.ok("selection", {"paths": [box.path()]})["selected"] == [box.path()]
+
+
+# -- GUI-only argument values (docs/parity.md G6) ---------------------------------------
+
+
+def _ui_required(client, tool: str) -> None:
+    _geo().createNode("box").setDisplayFlag(True)
+    error = client.error(tool, {"source": "viewer"})
+    assert error["code"] == "ui_required", tool
+    assert "headless" in error["message"]
+    assert "flipbook" in error["hint"].lower(), error["hint"]  # the headless alternative
+
+
+def test_no_whole_tool_is_gui_only():
+    """The dispatcher's whole-tool ui_required refusal is gone (it never fired: no
+    catalogue entry sets headless_ok=False); only argument values are GUI-only."""
+    from hocuspocus.host.tools import registry
+
+    assert not hasattr(registry.HostTool, "headless_ok")
+
+
+def test_viewport_capture_source_viewer_is_ui_required_headless(client):
+    _ui_required(client, "viewport_capture")
+
+
+def test_look_source_viewer_is_ui_required_headless(v2_client):
+    _ui_required(v2_client, "look")
 
 
 # -- job ---------------------------------------------------------------------------------

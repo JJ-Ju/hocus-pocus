@@ -137,6 +137,8 @@ def test_stdio_roundtrip(headless_host, tmp_path):
             # The bridge reads hocuspocus.toml from the pref dir: never the user's real one
             # (review 10 section 5), so a personal profile or budget cannot change the test.
             "HOUDINI_USER_PREF_DIR": (tmp_path / "prefs" / "houdini__HVER__").as_posix(),
+            # A 1.4 client (spec-2.0 §8): the 1.4 catalogue and status shape, unchanged.
+            "HOCUSPOCUS_PROFILE": "compat_1x",
         }
     )
     params = StdioServerParameters(
@@ -156,6 +158,8 @@ def test_stdio_roundtrip(headless_host, tmp_path):
     instructions, tools, status = anyio.run(run)
     assert instructions and "Houdini" in instructions
     assert tools, "tools/list is empty"
+    assert len(tools) == 35 and "node_info" in {tool.name for tool in tools}  # 1.4's full
+    assert (_json(status)["profile"], _json(status)["compat_1x"]) == ("full", True)
     assert status.is_error is False, status.content
     # result_content = "text": the JSON travels once, and no outputSchema is declared.
     assert status.structured_content is None
@@ -190,6 +194,7 @@ def test_bridge_launch_starts_in_the_work_dir(hython, tmp_path):
             "HOCUSPOCUS_HFS": str(hython.parent.parent),
             "HOUDINI_USER_PREF_DIR": (tmp_path / "prefs" / "houdini__HVER__").as_posix(),
             "PYTHONDONTWRITEBYTECODE": "1",
+            "HOCUSPOCUS_PROFILE": "compat_1x",  # node_find, a 1.4 tool
         }
     )
     params = StdioServerParameters(
@@ -221,6 +226,12 @@ def test_bridge_launch_starts_in_the_work_dir(hython, tmp_path):
         connected = _json(status)["connected"]
         (row,) = [i for i in _json(status)["instances"] if i["selected"]]
         assert isinstance(row["launched_by"], int) and row["launched_by"] != connected["pid"]
+        # G7: a headless launch runs the bridge's own host code; the versions are compared
+        # and agree, so there is no version_mismatch warning.
+        from hocuspocus.version import __version__
+
+        assert connected["host_version"] == row["host_version"] == __version__
+        assert not any("version_mismatch" in w for w in _json(launched).get("warnings", []))
         assert connected["env"]["HIP"] == work.as_posix()
         assert connected["env"]["JOB"] == work.as_posix()
         assert connected["hip"]["path"] == f"{work.as_posix()}/untitled.hip"
@@ -284,6 +295,7 @@ def test_a_later_bridge_names_the_server_that_launched_houdini(hython, tmp_path)
             "HOCUSPOCUS_HFS": str(hython.parent.parent),
             "HOUDINI_USER_PREF_DIR": (tmp_path / "prefs" / "houdini__HVER__").as_posix(),
             "PYTHONDONTWRITEBYTECODE": "1",
+            "HOCUSPOCUS_PROFILE": "compat_1x",  # node_find, a 1.4 tool
         }
     )
     params = StdioServerParameters(
@@ -348,6 +360,7 @@ def test_cli_launch_starts_a_houdini_no_server_owns(hython, tmp_path):
             "HOCUSPOCUS_HFS": str(hython.parent.parent),
             "HOUDINI_USER_PREF_DIR": (tmp_path / "prefs" / "houdini__HVER__").as_posix(),
             "PYTHONDONTWRITEBYTECODE": "1",
+            "HOCUSPOCUS_PROFILE": "compat_1x",  # node_find, a 1.4 tool
         }
     )
     pid = None

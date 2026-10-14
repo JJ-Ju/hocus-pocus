@@ -14,14 +14,41 @@ from typing import Any
 from hocuspocus.tools.errors import ToolError
 
 from .registry import HostContext, tool
-from .session import scene_dirty
+from .session import dirty_source, scene_dirty
 
 ON_UNSAVED = ("fail", "save", "discard")
 UNSAVED_HINT = (
     "Pass on_unsaved: 'save' to save first, 'discard' to drop the changes, or call "
     "hip_save (with path for an untitled scene) first."
 )
+"""The 1.4 text; :func:`unsaved_hint` is what a refusal says."""
+
+
+def unsaved_hint(untitled: bool) -> str:
+    """How to proceed past ``unsaved_changes``. An untitled scene has nowhere for
+    ``on_unsaved: 'save'`` to save to (review 25 papercut 9: the hint offered it first and
+    the retry failed), so it leads with ``hip_save {path}``."""
+    from hocuspocus.tools.migration import BARE, hint_tool
+
+    save = hint_tool("hip_save", path=BARE)
+    if untitled:
+        return (
+            f"The scene is untitled: {save} saves it under a name first; or pass "
+            "on_unsaved: 'discard' to drop the changes."
+        )
+    return (
+        "Pass on_unsaved: 'save' to save it first or 'discard' to drop the changes, or "
+        f"call {hint_tool('hip_save')} first."
+    )
+
+
 MERGED_LIST_LIMIT = 200
+SOURCE_WHY = {
+    "tracked": " (made by HocusPocus calls)",
+    "user_event": " (edits made outside HocusPocus, in Houdini itself)",
+    "houdini_flag": " (Houdini marked the hip modified outside HocusPocus calls)",
+}
+"""How ``unsaved_changes`` names the dirty source (``detail.dirty_source``, G1)."""
 
 
 # -- helpers --------------------------------------------------------------------
@@ -154,16 +181,19 @@ def handle_unsaved(on_unsaved: Any, ctx: HostContext, action: str) -> bool:
     import hou
 
     if on_unsaved == "fail":
+        source = dirty_source(ctx)
+        why = SOURCE_WHY.get(source or "", "")
         raise ToolError(
             "unsaved_changes",
-            f"The scene {hou.hipFile.path()} has unsaved changes; refusing to {action}.",
-            hint=UNSAVED_HINT,
+            f"The scene {hou.hipFile.path()} has unsaved changes{why}; refusing to {action}.",
+            hint=unsaved_hint(bool(hou.hipFile.isNewFile())),
+            detail={"dirty_source": source},
         )
     if hou.hipFile.isNewFile():
         raise ToolError(
             "unsaved_changes",
             "The scene is untitled, so on_unsaved: 'save' has nowhere to save it.",
-            hint="Use hip_save with path first, or on_unsaved: 'discard'.",
+            hint=unsaved_hint(True),
         )
     check_allowed(_norm(hou.hipFile.path()), ctx)
     hou.hipFile.save()

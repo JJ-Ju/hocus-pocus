@@ -27,10 +27,11 @@ from collections.abc import Iterator
 from typing import Any
 
 from hocuspocus.tools.errors import ToolError
+from hocuspocus.tools.migration import BARE, hint_tool, is_compat
 
 from ._common import (
-    DYNAMIC_MENU_NOTE,
     arg_bool,
+    dynamic_menu_note,
     elide_string,
     hou_exception_text,
     hou_message,
@@ -448,7 +449,7 @@ def _menu_dict(parm: Any, token: Any) -> dict[str, Any] | None:
     if dynamic:
         out["dynamic"] = True
         if not items:
-            out["note"] = DYNAMIC_MENU_NOTE
+            out["note"] = dynamic_menu_note()
     return out
 
 
@@ -699,10 +700,13 @@ def parm_not_found(node: Any, name: str) -> ToolError:
         else:
             hint = f"Did you mean {first}?"
     else:
-        hint = "List the node's parm names with node_info (include_defaults: true)."
+        hint = (
+            f"{hint_tool('node_info', paths=[node.path()], include=['parms'])} lists the "
+            "node's parm names."
+        )
     with contextlib.suppress(Exception):
         if node.type().nameComponents()[2] in CONTROL_NODE_TYPES:
-            hint = f"{hint} {SPARE_PARMS_HINT}"
+            hint = f"{hint} {spare_parms_hint()}"
     return ToolError(
         "parm_not_found",
         f"No parm or parm tuple '{name}' on {node.path()}.",
@@ -749,7 +753,8 @@ def resolve_path(path: Any) -> tuple[Any, Any]:
         if exc.code == "node_not_found":
             exc.hint = (
                 f"{exc.hint} Parm paths are <node path>/<parm name>, e.g. "
-                "/obj/geo1/box1/sizex; node_find locates the node."
+                f"/obj/geo1/box1/sizex; {hint_tool('node_find', root=BARE, type=BARE)} "
+                "locates the node."
             )
         raise
     return node, resolve_name(node, name)
@@ -925,12 +930,7 @@ def _coerce(parm: Any, value: Any, notes: list[str], *, for_key: bool = False) -
         raise _invalid(parm, kind, f"{path} is a toggle; pass true or false.")
     if kind in ("int", "float", "multiparm"):
         if not _is_number(value):
-            hint = (
-                "For an expression use the expression field in parm_set, or "
-                f"{EXPRESSION_SPELLINGS} as the value in node_create parms."
-                if isinstance(value, str)
-                else None
-            )
+            hint = expression_hint() if isinstance(value, str) else None
             raise _invalid(parm, kind, f"{path} is a {kind} parm; got {value!r}.", hint=hint)
         if not math.isfinite(value):
             raise _invalid(parm, kind, f"{path} cannot be set to {value}.")
@@ -1105,7 +1105,7 @@ CREATE_CALLBACK_NOTE = (
 """The same note on ``node_create``, whose parms spell the item without ``path`` (review 20
 N2)."""
 NETWORK_CALLBACK_NOTE = (
-    "{path} has a callback script that network_build does not run (clicking the parm in "
+    "{path} has a callback script that a build does not run (clicking the parm in "
     'Houdini would); pass press {{"{key}": ["{name}"]}} to run it after the build.'
 )
 """The same note on ``network_build``, whose ``press`` maps a node in data to parm names
@@ -1416,8 +1416,8 @@ def locked_error(node: Any, target: Any, exc: BaseException | None = None) -> To
         return ToolError(
             "locked",
             f"{path} is inside the locked HDA {asset}.",
-            hint=f"Call node_edit with lock: false on {asset} to allow editing its contents "
-            "(or use the hda tool), then retry.",
+            hint=f"Call {hint_tool('node_edit', path=asset, lock=False)} to allow editing its "
+            f"contents{' (or use the hda tool)' if hint_tool('hda') else ''}, then retry.",
             hou_exception=hou_exc,
         )
     locked = [p for p in _components(target) if _parm_locked(p)]
@@ -1434,12 +1434,13 @@ def locked_error(node: Any, target: Any, exc: BaseException | None = None) -> To
         message = message if message.endswith(".") else message + "."
         others = [p.name() for p in _components(target) if p not in locked]
         unlock = f"hou.parm('{first.path()}').lock(False)"
+        python = hint_tool("houdini_python", code=unlock)
         hint = (
             f"Set {', '.join(others)} only (a locked component that already holds the value is "
-            f"skipped), or change what computes {first.name()}, such as a mode menu on the node. "
-            f"Last resort: houdini_python {unlock}."
+            f"skipped), or change what computes {first.name()}, such as a mode menu on the node."
+            + (f" Last resort: {python}." if python else "")
             if others
-            else f"Unlock it in Houdini, or with houdini_python: {unlock}."
+            else "Unlock it in Houdini" + (f", or with {python}." if python else ".")
         )
         return ToolError("locked", message, hint=hint, hou_exception=hou_exc)
     return ToolError(
@@ -1505,6 +1506,8 @@ def set_parm_items(
     *,
     animation: str = "replace",
     callback_note: str = CALLBACK_NOTE,
+    rollback: Any = None,
+    frame: float | None = None,
 ) -> list[dict[str, Any]]:
     """Apply ``{parm_name: value | {expression, language} | {expr, lang}}`` to ``node`` and return per-parm results.
 
@@ -1515,6 +1518,10 @@ def set_parm_items(
     summary plus ``path`` and ``wrote_keyframe`` (no node errors: callers report those),
     with ``notes`` and, for a pressed entry, ``pressed`` and ``side_effects``, as
     ``parm_set`` returns them.
+
+    With ``rollback`` (a ``tx.Rollback``; the ``edit`` set op on an existing node) each
+    parm's keys, expression or value are snapshotted before it is set and restored when
+    the call fails; ``frame`` is ``parm_set``'s.
     """
     del ctx  # part of the shared signature; nothing here needs host state
     if not isinstance(parms, dict):
@@ -1524,7 +1531,11 @@ def set_parm_items(
         try:
             target = resolve_name(node, name)
             item = _item_from_spec(name, spec, animation)
-            results.append(_apply(node, target, item, frame=None, callback_note=callback_note))
+            if rollback is not None:
+                from ..tx import _checked
+
+                rollback.add(_checked(_snapshot(target)))
+            results.append(_apply(node, target, item, frame=frame, callback_note=callback_note))
         except ToolError as exc:
             if exc.message.startswith(f"parms.{name}:"):
                 raise
@@ -1573,6 +1584,9 @@ def parm_get(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
 
 @tool("parm_set")
 def parm_set(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
+    """A plan of ``set`` ops over the transaction engine (``host/tx.py``): each item is
+    snapshotted before it is applied, so a failing item restores its own components and,
+    without ``partial``, every earlier item (newest first)."""
     items = args.get("items")
     if not isinstance(items, list) or not items or not all(isinstance(i, dict) for i in items):
         raise ToolError("invalid_argument", "'items' must be a non-empty list of objects.")
@@ -1580,50 +1594,35 @@ def parm_set(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     partial = args.get("partial", False)
     if not isinstance(partial, bool):
         raise ToolError("invalid_argument", "'partial' must be a boolean.")
-    from .nodes import batch_error, watch_nodes  # lazy: nodes imports this module lazily too
+    from .. import tx  # lazy: tx imports the tool families
+    from .nodes import watch_nodes
 
-    rows: list[tuple[Any, dict[str, Any]]] = []
+    ops = [tx.Op("set", item, opts={"frame": frame}) for item in items]
+    # 1.4: only a ToolError is an item's failure; anything else ends the call as internal.
+    plan = tx.Plan(ops, partial=partial, tool_errors_only=True)
+    result = tx.execute(plan, ctx)
     nodes: dict[str, Any] = {}
-    applied: list[Any] = []  # restore functions of the items done so far
-    failed = 0
-    for index, item in enumerate(items):
-        path = item.get("path")
-        restore = None
-        try:
-            unknown = set(item) - ITEM_KEYS
-            if unknown:
-                raise ToolError("invalid_argument", f"Unexpected item keys {sorted(unknown)}.")
-            node, target = resolve_path(path)
-            restore = _snapshot(target)
-            result = _apply(node, target, item, frame=frame)
-        except ToolError as exc:
-            ok = restore() if restore is not None else True  # never leave it half-applied
-            if not partial:
-                for undo in reversed(applied):
-                    ok = undo() and ok
-                raise batch_error(index, path, exc, rolled_back=ok) from exc
-            failed += 1
-            error = batch_error(index, path, exc, rolled_back=ok).to_dict()
-            rows.append((None, {"path": path, "wrote_keyframe": False, "error": error}))
-            continue
-        applied.append(restore)
-        nodes.setdefault(node.path(), node)
-        rows.append((node.path(), result))
+    for res in result.done():
+        nodes.setdefault(res.node.path(), res.node)
     problems = {path: cheap_cook_problems(node) for path, node in nodes.items()}
     watch_nodes(nodes.values())
     results: list[dict[str, Any]] = []
-    for node_path, result in rows:
-        if node_path is not None:
-            diag = problems[node_path]
-            result["errors"] = diag["errors"]
-            result["warnings"] = diag["warnings"]
-            result["cook_state"] = diag["cook_state"]
-            if "hint" in diag:
-                result["hint"] = diag["hint"]
-        results.append(result)
+    for res in result.results:
+        if res.error is not None:
+            path = res.args.get("path") if isinstance(res.args, dict) else None
+            results.append({"path": path, "wrote_keyframe": False, "error": res.error})
+            continue
+        row = res.data
+        diag = problems[res.node.path()]
+        row["errors"] = diag["errors"]
+        row["warnings"] = diag["warnings"]
+        row["cook_state"] = diag["cook_state"]
+        if "hint" in diag:
+            row["hint"] = diag["hint"]
+        results.append(row)
     out: dict[str, Any] = {"results": results}
     if partial:
-        out["failed"] = failed
+        out["failed"] = len(result.failures)
     return out
 
 
@@ -1648,7 +1647,29 @@ SPARE_HINT = (
     "size?, min?, max?, menu_items?: [{token, label}], value_type?: string|int (menus), "
     "folder?, help?}], remove: [names]}."
 )
-SPARE_PARMS_HINT = "To add a control parm, use node_edit spare_parms."
+
+
+def spare_parms_hint() -> str:
+    """How to add a control parm, as the call's profile names it."""
+    return f"To add a control parm, use {hint_tool('node_edit', path=BARE, spare_parms=BARE)}."
+
+
+def expression_hint() -> str:
+    """How to pass an expression where a number was expected (``invalid_value``), as the
+    call's profile names it: the ``expression`` field of a ``set`` op on 2.0 (review 25
+    papercut 1), of a ``parm_set`` item on ``compat_1x``."""
+    if is_compat():
+        return (
+            "For an expression use the expression field in parm_set, or "
+            f"{EXPRESSION_SPELLINGS} as the value in node_create parms."
+        )
+    return (
+        "For an expression pass the expression field of a set op ("
+        f"{hint_tool('parm_set', path=BARE, expression=BARE)}), or {EXPRESSION_SPELLINGS} "
+        "as the value in a create op's parms."
+    )
+
+
 """Appended to ``parm_not_found`` on nodes that hold controls (null, subnet, geo)."""
 CONTROL_NODE_TYPES = frozenset(("null", "subnet", "geo"))
 
@@ -1906,7 +1927,8 @@ def apply_spare_parms(node: Any, plan: dict[str, Any], rollback: Any) -> dict[st
         raise ToolError(
             "locked",
             f"Cannot change the parms of {node.path()}: {hou_message(exc)}",
-            hint="Unlock the asset with node_edit lock: false first.",
+            hint=f"Unlock the asset with "
+            f"{hint_tool('node_edit', path=node.path(), lock=False)} first.",
             hou_exception=hou_exception_text(exc),
         ) from exc
     except hou.Error as exc:

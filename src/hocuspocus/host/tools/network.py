@@ -1,8 +1,9 @@
 """Network tools: ``network_describe`` and ``network_build`` over Houdini's ``hou.data`` format.
 
 See docs/BIBLE.md §4.4, §5.10 and decision D6. ``network_describe`` returns
-``childrenAsData(...)`` trimmed for agents; ``network_build`` validates the same shape and
-applies it with ``setChildrenFromData``.
+``childrenAsData(...)`` trimmed for agents; ``network_build`` validates the same shape
+(:func:`prepare_build`) and applies it with ``setChildrenFromData`` as one ``build`` op of
+the transaction engine (``host/tx.py``).
 
 Verified against 22.0.466 (and why validation is ours, not Houdini's):
 
@@ -28,7 +29,9 @@ import os
 from typing import Any
 
 from hocuspocus.tools.errors import ToolError
+from hocuspocus.tools.migration import BARE, hint_tool
 
+from .. import tx
 from . import nodes as N
 from .registry import HostContext, tool
 
@@ -41,6 +44,24 @@ MAX_PROBLEMS = 20
 
 
 # -- network_describe ---------------------------------------------------------------
+
+
+def data_hint() -> str:
+    """What ``data`` of a build is, as the call's profile names the read that produces it."""
+    return (
+        f"Pass the 'data' field of {hint_tool('network_describe', root=BARE)}, e.g. "
+        "{box1: {type: box}}."
+    )
+
+
+def type_parms_call(node_type: Any) -> str | None:
+    """The read that lists ``node_type``'s parms (``inspect {what: "type", target}`` on
+    2.0, ``node_type_info {type}`` on ``compat_1x``)."""
+    try:
+        name = f"{node_type.category().name()}/{node_type.name()}"
+    except Exception:
+        name = BARE
+    return hint_tool("node_type_info", type=name)
 
 
 def _trim_templates(templates: Any, keep: set[str]) -> Any:
@@ -311,7 +332,9 @@ def _outline(
         if after not in names:
             raise N.bad_arg(
                 f"The cursor's node {after!r} is no longer in {root.path()}.",
-                hint="The network changed between pages; call network_describe again without cursor.",
+                hint="The network changed between pages; call "
+                f"{hint_tool('network_describe', root=root.path(), format='outline')} again "
+                "without cursor.",
             )
         start = names.index(after) + 1
     budget = _Budget(N.response_budget(ctx))
@@ -404,7 +427,8 @@ def network_describe(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
         except Exception as exc:  # e.g. a node that is not a network
             raise N.bad_arg(
                 f"Cannot describe {root.path()} as a network.",
-                hint="root must be a network (e.g. /obj, a geo object, a subnet); use node_info for a leaf node.",
+                hint="root must be a network (e.g. /obj, a geo object, a subnet); use "
+                f"{hint_tool('node_info', paths=[root.path()])} for a leaf node.",
                 hou_exception=N.hou_exception_text(exc),
             ) from exc
     top = top or {}
@@ -415,7 +439,8 @@ def network_describe(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
         if after not in top:
             raise N.bad_arg(
                 f"The cursor's node {after!r} is no longer in {root.path()}.",
-                hint="The network changed between pages; call network_describe again without cursor.",
+                hint="The network changed between pages; call "
+                f"{hint_tool('network_describe', root=root.path())} again without cursor.",
             )
         start = names.index(after) + 1
     budget = _Budget(N.response_budget(ctx))
@@ -561,7 +586,7 @@ def _validate_level(
             early[name] = N.bad_arg(
                 f"{where}: each entry needs a string 'type'.",
                 hint="data maps node names to {type, parms?, inputs?, flags?, children?}; "
-                "pass the 'data' field of network_describe.",
+                f"pass the 'data' field of {hint_tool('network_describe', root=BARE)}.",
             )
             continue
         type_name = entry["type"]
@@ -580,7 +605,7 @@ def _validate_level(
                 hint=(
                     f"Closest {category.name()} types: {', '.join(candidates[:5])}."
                     if candidates
-                    else "Use node_type_search to find the type name."
+                    else f"{hint_tool('node_type_search', query=type_name)} finds the type name."
                 ),
                 candidates=candidates,
             )
@@ -785,7 +810,7 @@ def _verify_level(
                     ToolError(
                         "parm_not_found",
                         f"{where}: no parm {parm_name!r} on {node.type().name()}.",
-                        hint="Use node_type_info to list the type's parms.",
+                        hint=f"{type_parms_call(node.type())} lists the type's parms.",
                         candidates=difflib.get_close_matches(parm_name, names, n=5, cutoff=0.5),
                     ),
                     where,
@@ -929,21 +954,22 @@ def _run_presses(
     return pressed, effects
 
 
-@tool("network_build")
-def network_build(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
-    import hou
-
-    parent = N.get_node(args.get("parent"), field="parent")
+def prepare_build(parent: Any, args: dict[str, Any]) -> dict[str, Any]:
+    """Validate a ``network_build`` call (or an ``edit`` build op) against ``parent``
+    without changing anything: ``data`` normalised (types resolved, input indices filled,
+    renamed for ``on_name_collision: rename``), the node ``plan``, ``renamed``,
+    ``replaced``, ``warnings`` and the ``press`` plan. Raises the first problem with
+    ``detail.problems`` listing all of them."""
     N.ensure_can_hold_children(parent, "build in")
     data = args.get("data")
     if not isinstance(data, dict) or not data:
         raise N.bad_arg(
             "'data' must be a non-empty object of node name -> node data.",
-            hint="Pass the 'data' field of network_describe, e.g. {box1: {type: box}}.",
+            hint=data_hint(),
         )
     if set(data) >= {"root", "data"} and isinstance(data.get("data"), dict):
         raise N.bad_arg(
-            "'data' looks like a whole network_describe result.",
+            "'data' looks like a whole network read (root and data).",
             hint="Pass its 'data' field instead.",
         )
     on_collision = args.get("on_name_collision", "error") or "error"
@@ -1023,110 +1049,62 @@ def network_build(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
         existing_names=referencable,
     )
     problems.raise_if_any()
-    replaced = collisions if on_collision == "replace" else []
-    if dry_run:
+    return {
+        "data": data,
+        "plan": plan,
+        "renamed": renamed,
+        "replaced": collisions if on_collision == "replace" else [],
+        "existing": existing,
+        "warnings": warnings,
+        "press": press_plan,
+        "layout": layout,
+        "dry_run": dry_run,
+        "mode": mode,
+        "tag": tag,
+    }
+
+
+@tool("network_build")
+def network_build(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
+    parent = N.get_node(args.get("parent"), field="parent")
+    prep = prepare_build(parent, args)
+    if prep["dry_run"]:
         out: dict[str, Any] = {
             "parent": parent.path(),
             "dry_run": True,
-            "plan": plan,
-            "node_count": len(plan),
+            "plan": prep["plan"],
+            "node_count": len(prep["plan"]),
         }
-        if renamed:
-            out["renamed"] = renamed
-        if replaced:
-            out["replaces"] = [f"{parent.path().rstrip('/')}/{n}" for n in replaced]
-        if warnings:
-            out["warnings"] = warnings
+        if prep["renamed"]:
+            out["renamed"] = prep["renamed"]
+        if prep["replaced"]:
+            out["replaces"] = [f"{parent.path().rstrip('/')}/{n}" for n in prep["replaced"]]
+        if prep["warnings"]:
+            out["warnings"] = prep["warnings"]
         out[CHANGED_KEY] = False  # a dry run changes nothing: no undo step, no dirty
         return out
-
-    rollback = N.Rollback()
-    rollback.keep_display(parent)
-    originals: dict[str, Any] = {}
-    for name in replaced:
-        old = parent.node(name)
-        temp = N.unique_name(parent, f"{name}_hp_replaced", set(data))
-        old.setName(temp)
-        rollback.add(lambda old=old, name=name: old.setName(name))
-        originals[name] = old
-    top_names = list(data)
-    try:
-        parent.setChildrenFromData(
-            data, clear_content=False, force_item_creation=True, external_connections=True
-        )
-    except Exception as exc:
-        for name in top_names:
-            item = parent.item(name)
-            if item is not None and name not in existing - set(replaced):
-                with contextlib.suppress(Exception):
-                    item.destroy()
-        rollback.run()
-        if isinstance(exc, hou.PermissionError):
-            raise N.to_tool_error(exc, node=parent) from exc
-        raise N.bad_arg(
-            f"Houdini could not build the network in {parent.path()}.",
-            hint="Run with dry_run: true to validate; check names, types and parm values.",
-            hou_exception=N.hou_exception_text(exc),
-        ) from exc
-    for name in top_names:
-        item = parent.item(name)
-        if item is not None:
-            rollback.add(lambda item=item: item.destroy())
-    verify = _Problems()
-    made = _verify_level(data, parent, parent.path().rstrip("/") + "/", verify)
-    if verify.items:
-        rollback.run()
-        verify.raise_if_any()
-    # Callbacks run after the whole build is wired, as clicking them would (review 20 N2),
-    # and before replaced nodes are deleted, so a failed press still rolls back cleanly.
-    try:
-        pressed, side_effects = _run_presses(parent, press_plan, ctx)
-    except Exception:
-        rollback.run()
-        raise
-    top_nodes = [parent.node(n) for n in top_names if parent.node(n) is not None]
-    for name, old in originals.items():
-        new = parent.node(name)
-        if new is None:
-            continue
-        for conn in old.outputConnections():
-            consumer = conn.outputNode()
-            if consumer is None or consumer.parent() != parent or consumer.name() in data:
-                continue
-            consumer.setInput(conn.inputIndex(), new, conn.outputIndex())
-        old.destroy()
-    if layout and top_nodes:
-        with contextlib.suppress(Exception):
-            parent.layoutChildren(items=tuple(top_nodes))
-    if tag:
-        for node in top_nodes:
-            node.setUserData(TAG_KEY, tag)
-    N.watch_nodes(made)
+    plan = tx.Plan([tx.Op("build", args, opts={"prep": prep})], raw_errors=True)
+    data = tx.execute(plan, ctx).results[0].data
+    mode = prep["mode"]
+    top_nodes = data["top_nodes"]
+    N.watch_nodes(data["made"])
+    base = parent.path().rstrip("/")
     result: dict[str, Any] = {
         "parent": parent.path(),
         "dry_run": False,
         "created": [n.path() for n in top_nodes],
-        "created_count": len(made),
+        "created_count": len(data["made"]),
         "nodes": [
             N.summary_block(n) if mode == "summary" else N.mutation_block(n) for n in top_nodes
         ],
     }
     if mode == "summary":
         N.collapse_problems(result["nodes"])
-    if renamed:
-        result["renamed"] = {
-            f"{parent.path().rstrip('/')}/{k}": f"{parent.path().rstrip('/')}/{v}"
-            for k, v in renamed.items()
-        }
-    if replaced:
-        result["replaced"] = [f"{parent.path().rstrip('/')}/{n}" for n in replaced]
-    if warnings:
-        result["warnings"] = warnings
-    if pressed:
-        result["pressed"] = pressed
-    if side_effects:
-        result["side_effects"] = side_effects
-    notes = _callback_notes(data, parent, press_plan)
-    if notes:
-        result["notes"] = notes
+    if data["renamed"]:
+        result["renamed"] = {f"{base}/{k}": f"{base}/{v}" for k, v in data["renamed"].items()}
+    if data["replaced"]:
+        result["replaced"] = [f"{base}/{n}" for n in data["replaced"]]
+    for key in ("warnings", "pressed", "side_effects", "notes"):
+        if data[key]:
+            result[key] = data[key]
     return result

@@ -1,0 +1,35 @@
+{
+  "about": "Per-workload budgets for tests/workloads (spec-2.0 section 5.2). A run fails when a total exceeds its budget by more than 15 %. Rewrite with --update-budgets.",
+  "workloads": {
+    "city_build": {
+      "calls": 21,
+      "text_bytes": 20804,
+      "max_call_bytes": 5189,
+      "wall_s": 4.5
+    },
+    "fx_cache": {
+      "calls": 13,
+      "text_bytes": 9084,
+      "max_call_bytes": 1913,
+      "wall_s": 2.3
+    },
+    "scorecard_twelve": {
+      "calls": 49,
+      "text_bytes": 28204,
+      "max_call_bytes": 7256,
+      "wall_s": 7.5
+    },
+    "soak_200": {
+      "calls": 200,
+      "text_bytes": 100362,
+      "max_call_bytes": 3300,
+      "wall_s": 19.5
+    },
+    "vellum_usd": {
+      "calls": 14,
+      "text_bytes": 8292,
+      "max_call_bytes": 2261,
+      "wall_s": 16.8
+    }
+  }
+}

@@ -1,9 +1,14 @@
 # Quickstart
 
 This guide takes about five minutes. You start with nothing installed and finish with a
-box sitting on a mountain, plus a screenshot your agent has looked at. The commands are
+box sitting on a mountain, plus a picture your agent has looked at. The commands are
 shown for Windows (PowerShell or Git Bash). On Linux, the paths differ but the commands
 are the same.
+
+This is HocusPocus 2.0: the agent changes the scene with `edit` (every change of a task in
+one call and one undo step), reads it with `inspect` and `search`, and sees it with `look`.
+Coming from 1.4? The install is the same; [`migration-2.0.md`](migration-2.0.md) maps the
+old tool names, and `profile = "compat_1x"` keeps 1.4 scripts running for 2.0.x.
 
 You need:
 
@@ -26,7 +31,7 @@ you get two commands on your `PATH`: `hocuspocus` and `hocuspocus-mcp`.
 
 ```text
 $ hocuspocus version
-hocuspocus 1.4.0 (hp/v1, mcp 2.3.x, Python 3.12.x)
+hocuspocus 2.0.0 (hp/v1, mcp 2.3.x, Python 3.12.x)
 ```
 
 ## 2. Install the Houdini package (1 minute)
@@ -34,8 +39,8 @@ hocuspocus 1.4.0 (hp/v1, mcp 2.3.x, Python 3.12.x)
 ```text
 $ hocuspocus install-houdini
 Houdini pref dir: C:\Users\you\Documents\houdini22.0 (from hython (C:\Program Files\Side Effects Software\Houdini 22.0.466), default location)
-copied hocuspocus 1.4.0 to C:\Users\you\Documents\houdini22.0\hocuspocus\1.4.0\python\hocuspocus
-copied the Houdini payload to C:\Users\you\Documents\houdini22.0\hocuspocus\1.4.0\houdini
+copied hocuspocus 2.0.0 to C:\Users\you\Documents\houdini22.0\hocuspocus\2.0.0\python\hocuspocus
+copied the Houdini payload to C:\Users\you\Documents\houdini22.0\hocuspocus\2.0.0\houdini
 wrote C:\Users\you\Documents\houdini22.0\packages\hocuspocus.json (template: ...\houdini\hocuspocus.json.template)
 recorded the pref dirs in C:\Users\you\AppData\Local\HocusPocus\install.json (the bridge reads hocuspocus.toml from there)
 Restart Houdini to load HocusPocus.
@@ -86,13 +91,13 @@ the UI is up, the host starts by itself. Then run:
 
 ```text
 $ hocuspocus doctor
-hocuspocus 1.4.0 (bridge, hp/v1)
+hocuspocus 2.0.0 (bridge, hp/v1)
 [ok]   Houdini install: C:\Program Files\Side Effects Software\Houdini 22.0.466
 [ok]   Houdini version: 22.0.466
-[ok]   pref dir: C:\Users\you\Documents\houdini22.0 (from hython (...), default location): package JSON -> C:\Users\you\Documents\houdini22.0\hocuspocus\1.4.0\python (1.4.0)
+[ok]   pref dir: C:\Users\you\Documents\houdini22.0 (from hython (...), default location): package JSON -> C:\Users\you\Documents\houdini22.0\hocuspocus\2.0.0\python (2.0.0)
 [ok]   hocuspocus.toml: none (defaults)
-[ok]   package JSON: C:\Users\you\Documents\houdini22.0\packages\hocuspocus.json -> C:\Users\you\Documents\houdini22.0\hocuspocus\1.4.0\python
-[ok]   host/bridge version: 1.4.0
+[ok]   package JSON: C:\Users\you\Documents\houdini22.0\packages\hocuspocus.json -> C:\Users\you\Documents\houdini22.0\hocuspocus\2.0.0\python
+[ok]   host/bridge version: 2.0.0
 [ok]   instance /health: pid 18244 port 52311 GUI (untitled) Houdini 22.0.466
 
 Register with Claude Code:
@@ -116,31 +121,36 @@ MCP session will drive it instead, start it with `hocuspocus launch` (see
 
 Start `claude` in any directory and type:
 
-> Put a box on top of a mountain in /obj, then show me a screenshot.
+> Put a box on top of a mountain in /obj, then show me a picture.
 
 Expect a sequence close to this one:
 
-1. `houdini_status`. Finds your Houdini, its pid and that the hip file is `untitled.hip`.
-2. `node_create` with a batch of items: a `geo` node `/obj/scene`, a `grid` with more
-   rows and columns, a `mountain` wired to it, a `box`, and a `merge` (or a `transform`)
-   that lifts the box above the terrain, with the display flag on the last node. All of
-   this is one call and one undo step.
-3. `cook` on the display node. It returns `ok: true` and empty `errors`. If something is
-   red, the agent reads `errors` and fixes it with `parm_set` or `node_connect`.
-4. `geo_info` on the display node. Gives point counts and a bounding box, so the agent
-   can check that the box sits above the terrain.
-5. `viewport_capture`. Returns a PNG that the agent can see, plus the file path under
-   `%LOCALAPPDATA%\HocusPocus\captures\`. In the GUI, without `camera` or `fit`, it
-   captures the Scene Viewer as it is, so if the picture shows an empty grid, ask for
-   `"fit": "all"` (it frames the grab and then puts your view back) or for
-   `"source": "flipbook_rop"`, which frames the scene with a temporary camera.
+1. `houdini_status`. Finds your Houdini, its pid, its role (`editor` for a GUI) and that
+   the hip file is `untitled.hip`.
+2. One `edit` call with a list of `create` ops: a `geo` node `/obj/scene`, a `grid` with
+   more rows and columns, a `mountain` wired to it, a `box`, a `transform` that lifts the
+   box and a `merge`, with the display flag on the last node. Each op can carry an `id`,
+   and later ops wire to it as `$id`, so the whole build is one call and one undo step.
+   Its `nodes` rows report each node's errors and cook state, so no separate cook is
+   needed. If the agent is unsure of a type name it calls `search {"kind": "types"}`
+   first, or sends the `edit` with `"dry_run": true`, which checks every op and changes
+   nothing. If something is red, one more `edit` with `set` or `connect` ops fixes it.
+3. `inspect {"what": "geo", "target": ...}` on the display node. Gives point counts and
+   a bounding box, so the agent can check that the box sits above the terrain.
+4. `look {"target": "/obj/scene"}`. Returns a PNG that the agent can see, plus the file
+   path under `%LOCALAPPDATA%\HocusPocus\captures\`. It renders through a Flipbook ROP
+   with a temporary camera framed on the target (`quality: "draft"`, the default), in
+   the GUI and headless alike. Ask for `"quality": "lit"` to use the scene's lights,
+   `"final"` for a Karma render, or `"source": "viewer"` to grab your Scene Viewer exactly
+   as you see it (your view is put back afterwards).
 
 To give a network control parms, ask for them: the agent adds spare parms to a `null`
-with `node_edit` `spare_parms` and links other parms with `ch()`. A `menu` spare parm is
-a string menu by default (VEX reads the token with `chs()`); with `value_type: "int"` it
-is an int parm whose value is the item index (`ch()` or `chi()`). A graph rebuilt with
-`network_build` sets parms without running their callbacks; the result notes each one, and
-`press: {"geo1/src": ["initialize"]}` runs them after the build.
+with an `edit` `node` op (`spare_parms`) and links other parms with `ch()` in the same
+call. A `menu` spare parm is a string menu by default (VEX reads the token with `chs()`);
+with `value_type: "int"` it is an int parm whose value is the item index (`ch()` or
+`chi()`). A graph rebuilt with a `build` op (Houdini's `hou.data`) sets parms without
+running their callbacks; the result notes each one, and `press: {"geo1/src":
+["initialize"]}` runs them after the build.
 
 The nodes appear in your network editor as they are created. To revert the whole build,
 press Ctrl+Z in Houdini once, or ask the agent to call `undo`. To keep the scene, ask it
@@ -199,28 +209,33 @@ Houdini running), and `hip_save` keeps the work between sessions. When the work 
 
 ## Solaris, PDG and assets
 
-These tools need the `full` profile (see [Configuration](#configuration)):
+USD reads and looks work in the default `core` profile; PDG, `events` and HDAs need the
+`full` profile (see [Configuration](#configuration)):
 
-- **Look at a USD stage.** `viewport_capture {"lop_path": "/stage/OUT"}` renders the
-  stage through a Flipbook ROP, framed on it. `camera` also takes a LOP camera node or a
-  camera prim path. `usd_stage {"lop_path": "/stage/OUT", "summary": true}` returns the
-  prim count, the counts by type and the world bounding box in one small result. On LOP
-  nodes, the parm tools accept USD attribute names such as `inputs:intensity`.
+- **Look at a USD stage.** `look {"target": "/stage/OUT"}` renders the stage through a
+  Flipbook ROP, framed on it; `"quality": "final"` renders it with Karma. `camera` also
+  takes a LOP camera node or a camera prim path. `inspect {"what": "stage", "target":
+  "/stage/OUT", "summary": true}` returns the prim count, the counts by type and the world
+  bounding box in one small result. On LOP nodes, `set` ops and `parm_set` accept USD
+  attribute names such as `inputs:intensity`.
 - **Export USD and check it.** `render {"rop_path": "/stage/usd_rop1", "wait_s": 0}`
   renders the ROP's own frame range into its one layer in a single call, then reads the
   layer back: fewer time samples than frames fails with `cook_failed`. The result lists
   each file once, plus `layers` with every layer file the export wrote and its time
-  samples. `usd_stage` and `viewport_capture` on a `usd_rop` or `usdrender_rop` read the
-  stage it renders, and `render {"camera": "/cameras/cam"}` renders through another camera.
-- **See why PDG work failed.** A failed work item in `pdg {"action": "workitems"}`
-  carries `error` (the last error lines of its log), `log_path` and `exit_code`, and
-  `"state": "failed"` lists only the failed items. A cook result lists the first five
-  `failures`, and `problems` reports the TOP node. Graphs with ROP Fetch load the saved
-  hip, so `pdg cook` refuses unsaved changes: run `hip_save` first, or pass
-  `"save": true`.
-- **Work next to a user.** Every `events` entry says `origin: agent` or `other`
-  (`houdini` for parms Houdini wrote itself during an agent call). `undo`
-  stops before a step the user made unless you pass `include_user_steps: true`.
+  samples. `inspect {"what": "stage"}` and `look` on a `usd_rop` or `usdrender_rop` read
+  the stage it renders, and `render {"camera": "/cameras/cam"}` renders through another
+  camera.
+- **See why PDG work failed** (`full`). A failed work item in `pdg {"action":
+  "workitems"}` carries `error` (the last error lines of its log), `log_path` and
+  `exit_code`, and `"state": "failed"` lists only the failed items. A cook result lists
+  the first five `failures`, and `inspect {"what": "problems"}` reports the TOP node.
+  Graphs with ROP Fetch load the saved hip, so `pdg cook` refuses unsaved changes: run
+  `hip_save` first, or pass `"save": true`.
+- **Work next to a user.** Every `events` entry (`full`, or `inspect {"what": "events"}`)
+  says `origin: agent` or `other` (`houdini` for parms Houdini wrote itself during an
+  agent call). `undo` stops before a step the user made unless you pass
+  `include_user_steps: true`. Your own edits count as unsaved changes; the agent's reads
+  and looks never do.
 
 ## Caches, Copernicus and two Houdinis
 
@@ -231,26 +246,30 @@ These work in the default `core` profile:
   SOP: `render {"rop_path": "/obj/pyro/cache", "wait_s": 0}` returns a `job_id` at once,
   writes the node's own frame range with per-frame progress, and turns on Load from Disk
   when it is done, as the Save to Disk button would. `job {"action": "cancel"}` stops it
-  and keeps the frames already written. `geo_info` and `geo_read` take `frame` to inspect
-  the cache without moving the playbar, and `houdini_status` reports Houdini's memory.
-- **Look at a Copernicus image.** COP networks live in `/img` (`node_create {"items":
-  [{"parent": "/img", "type": "copnet"}]}`), and their nodes are category `Cop`.
-  `viewport_capture {"cop_path": "/img/copnet1/blend1"}` returns that node's image in
-  about 0.2 s, and `geo_info` on a Cop node returns its resolution and per-channel
-  min/max/mean. To write the image to disk, `render` a `rop_image` wired to the node. A
-  SOP reads a COP live through an `op:` path, for example `attribfrommap` with
+  and keeps the frames already written. `inspect {"what": "geo", "frame": 24}` reads the
+  cache at a frame without moving the playbar, and `houdini_status` reports Houdini's
+  memory. The `cache_sim` prompt walks through all of it.
+- **Look at a Copernicus image.** COP networks live in `/img` (an `edit` create op with
+  `"parent": "/img", "type": "copnet"`), and their nodes are category `Cop`.
+  `look {"target": "/img/copnet1/blend1"}` returns that node's image in about 0.2 s, and
+  `inspect {"what": "image"}` on it returns its resolution and per-channel min/max/mean.
+  To write the image to disk, `render` a `rop_image` wired to the node. A SOP reads a COP
+  live through an `op:` path, for example `attribfrommap` with
   `filename: "op:/img/copnet1/blend1"`.
 - **Drive two Houdinis.** Keep the GUI for editing and start a worker for renders with
-  `hocuspocus launch --headless`. With two running, ask the agent to pin one:
-  `houdini_connect {"pid": 3084, "name": "editor"}`, and later `{"name": "editor"}`.
-  Until one is pinned, calls that change a scene refuse with `ambiguous_instance`, and
-  reads go to the GUI. The usual hand-off is `hip_save` in the GUI, then pin the worker,
-  `hip_open` the saved hip and `render {"wait_s": 0}`, then pin the GUI again. The job id
-  (`61900-9c3e6f7ca53e`) carries the worker's pid, so `job` reaches the worker whichever
-  Houdini is pinned, and `job {"action": "list", "all": true}` lists every Houdini's jobs.
-  If the pinned Houdini exits, every call returns `instance_lost` until you pin another;
-  the bridge never switches on its own. The `hocuspocus://guide` resource has this
-  recipe, and `hocuspocus://tools` has every tool's notes.
+  `hocuspocus launch --headless`. Every Houdini has a role: `editor` for a GUI, `worker`
+  headless. With two running, ask the agent to pin one (`houdini_connect {"role":
+  "editor"}`, or `{"pid": 3084, "name": "shots"}`); until then calls that change a scene
+  refuse with `ambiguous_instance`, and reads go to the GUI. The usual hand-off is
+  `hip_save` in the GUI, `hip_open` of the saved hip on the worker, then
+  `render {"rop_path": "/out/karma1", "on": "worker", "wait_s": 0}` with the GUI still
+  pinned: `on` runs `cook`, `render`, `look` and `job` on another Houdini without moving
+  the pin. The `job_id` (`j3f9a1c`) is kept in the bridge's ledger, so `job` reaches the
+  worker whichever Houdini is pinned, even after the MCP server restarts, and
+  `job {"action": "list", "all": true}` lists every Houdini's jobs. If the pinned Houdini
+  exits, every call returns `instance_lost` until you pin another; the bridge never
+  switches on its own. The `two_houdinis` prompt and the `hocuspocus://guide` resource
+  have this recipe.
 
 ## Configuration
 
@@ -259,15 +278,17 @@ Nothing needs configuring for this guide. Two settings in
 win) matter most for scripts and other clients:
 
 ```toml
-profile = "full"            # list and allow hda, usd_stage, pdg and events (default "core"; "minimal" lists 14 tools)
+profile = "full"            # also list and allow hda, pdg and events (default "core"; "minimal" lists 10 tools; "compat_1x" the 1.4 tools)
 result_content = "both"     # also send structuredContent (default "text")
 ```
 
 - `profile` is read by the bridge, which lists the tools, and by the host inside Houdini,
   which refuses the tools outside its profile. Restart Houdini after changing it.
-  `minimal` lists 14 tools (status, connect, hip open and save, the main node and parm
-  tools, `cook`, `geo_info`, `viewport_capture` and `houdini_python`) for clients with a
+  `minimal` lists 10 tools (`houdini_status`, `houdini_connect`, `hip_open`, `hip_save`,
+  `inspect`, `search`, `edit`, `node_create`, `parm_set` and `look`) for clients with a
   small context; the argument detail they leave out is in `hocuspocus://tools`.
+  `compat_1x` serves the 35 tools of 1.4 unchanged, for scripts written against 1.4,
+  during the 2.0.x releases.
 - `result_content` decides where a result's JSON goes. The default `text` sends it once,
   in the text block, which is what Claude Code shows the model. Use `both` for a client
   that reads `structuredContent` or `outputSchema`, or `structured` for structured data
@@ -316,6 +337,13 @@ Several Houdinis are running and none is pinned (`ambiguous_instance`), or the p
 has exited (`instance_lost`). The error lists the live instances as `candidates`. Pin one
 with `houdini_connect {"pid": N}`; `houdini_connect {}` goes back to automatic selection.
 
+**`invalid_argument`: "node_info is a 1.4 tool that the 2.0 core profile does not serve"**
+
+A script or prompt written for 1.4 called a tool that 2.0 replaced. The `hint` names the
+replacement (`inspect {"what": "node"}` here); [`migration-2.0.md`](migration-2.0.md) lists
+them all. To run the script unchanged, set `profile = "compat_1x"` in `hocuspocus.toml`
+(both the bridge and Houdini read it) and restart Houdini.
+
 **`invalid_argument`: "hda is a full-profile tool, and this Houdini's host runs the core profile"**
 
 The bridge lists the `full` tools but the host in Houdini still runs `core`. Put
@@ -329,18 +357,18 @@ in Houdini's environment), and restart Houdini. If `HOUDINI_USER_PREF_DIR` conta
 You upgraded the tool but Houdini still loads the old host. Run
 `hocuspocus install-houdini`, which replaces older versions, and then restart Houdini.
 
-**Headless capture: `viewport_capture` returns `ui_required`, or each capture takes seconds**
+**Headless look: `look` returns `ui_required`, or the first look takes seconds**
 
-hython has no scene viewer, so `source: "viewer"` needs the GUI. Use the default
-`source: "auto"` or `"flipbook_rop"` (`"opengl_rop"`, its 1.3 name, still works). These
-render through a temporary Flipbook ROP (falling back to the OpenGL ROP, then Karma, with a
-note) and, without `camera`, a temporary camera framed on the scene, and they work
-headless. Headless, captures render in a child hython (a viewport render after a deleted
-ROP, or a second OpenGL render, crashes hython 22.0.466). The first capture starts it, about
-3 s; later Flipbook captures reuse it, about 0.4 s each (0.9 s for a stage), until it has been
-idle for 2 minutes. Nothing is left in your scene. `source_used: flipbook_rop` means the
-Flipbook ROP rendered it. For a flipbook of many frames, ask for a
-Flipbook ROP (`/out`, type `flipbook`) and `render`: Houdini 22 deprecates the OpenGL ROP.
+hython has no Scene Viewer, so `"source": "viewer"` needs the GUI. Leave `source` out:
+`look` renders through a temporary Flipbook ROP (falling back to the OpenGL ROP, then
+Karma, with a note) and, without `camera`, a temporary camera framed on the target, and
+that works headless. Headless, the Flipbook ROP renders a snapshot of the scene in a child
+hython (a viewport render after a deleted ROP, or a second OpenGL render, crashes hython
+22.0.466). The first look starts it, about 3 s; later looks reuse it, about 0.4 s each
+(0.9 s for a stage), until it has been idle for 2 minutes. Nothing is left in your scene.
+`backend_used` names what drew the picture (`flipbook`, `opengl`, `karma`, `viewer` or
+`rop_image`). For a flipbook of many frames, ask for a Flipbook ROP (`/out`, type
+`flipbook`) and `render`: Houdini 22 deprecates the OpenGL ROP.
 
 **Other errors.** Every tool error has a `code` and a `hint`. Agents normally act on the
 hint themselves. The full list of codes is in [`BIBLE.md`](BIBLE.md) §9.

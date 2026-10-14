@@ -80,7 +80,9 @@ def test_job_tool_list_and_not_found(client):
     assert client.ok("job", {"action": "list"}) == {"jobs": client.host.jobs.list()}
     error = client.error("job", {"action": "status", "job_id": "nope"})
     assert error["code"] == "job_not_found"
-    assert "restart" in error["hint"]
+    assert "job ids look like" in error["hint"]  # review 25 papercut 5: not the 1.x text
+    error = client.error("job", {"action": "status", "job_id": f"{client.host.pid}-nope"})
+    assert error["code"] == "job_not_found" and "restart" in error["hint"]
 
 
 def test_job_runs_hou_through_executor(client):

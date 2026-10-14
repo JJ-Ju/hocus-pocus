@@ -10,6 +10,8 @@ hou = pytest.importorskip("hou")
 
 from hocuspocus.host.tools import events as ev  # noqa: E402
 
+pytestmark = pytest.mark.compat_1x  # the 1.4 tools (conftest: compat_client)
+
 
 def _since() -> int:
     return ev.LOG.last_seq

@@ -24,10 +24,12 @@ import zipfile
 from collections.abc import Iterator
 from typing import Any
 
+from hocuspocus.tools.budget import clip, utf8_head
 from hocuspocus.tools.catalog import CATEGORIES
 from hocuspocus.tools.errors import ToolError
+from hocuspocus.tools.migration import hint_tool
 
-from ._common import DYNAMIC_MENU_NOTE, arg_bool, int_arg, menu_is_dynamic
+from ._common import arg_bool, dynamic_menu_note, int_arg, menu_is_dynamic
 from .parms import menu_label
 from .registry import HostContext, tool
 
@@ -91,7 +93,8 @@ class _HelpArchive:
                     data = handle.read(limit) if limit else handle.read()
             except (OSError, zipfile.BadZipFile, KeyError):
                 return None
-        return data.decode("utf-8", "replace")
+        # A head read can stop inside a character: drop it rather than decode it as U+FFFD.
+        return utf8_head(data) if limit else data.decode("utf-8", "replace")
 
 
 _HELP = _HelpArchive()
@@ -641,7 +644,7 @@ def shared_fields(rows: list[dict[str, Any]], keys: tuple[str, ...]) -> dict[str
 
 
 def _clip(text: str, limit: int) -> str:
-    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
+    return clip(text, limit)
 
 
 def search(
@@ -780,7 +783,8 @@ def resolve_type(type_name: str, category: str | None = None) -> Any:
             raise ToolError(
                 "node_type_not_found",
                 f"No {cat.name()} node type named {name!r}.",
-                hint="Use node_type_search to find the type by name or label.",
+                hint=f"{hint_tool('node_type_search', query=name, category=cat.name())} finds "
+                "the type by name or label.",
                 candidates=suggest_types(name, cat.name()),
             )
         return node_type
@@ -795,7 +799,7 @@ def resolve_type(type_name: str, category: str | None = None) -> Any:
         raise ToolError(
             "node_type_not_found",
             f"No node type named {name!r} in any category.",
-            hint="Use node_type_search to find the type by name or label.",
+            hint=f"{hint_tool('node_type_search', query=name)} finds the type by name or label.",
             candidates=suggest_types(name),
         )
     found.sort(key=lambda t: CATEGORY_RANK.get(t.category().name(), 99))
@@ -1158,7 +1162,7 @@ def evaluate_dynamic_menus(node_type: Any, rows: list[dict[str, Any]]) -> None:
             del row["menu"]  # a plain string parm after all
             continue
         if not items:
-            row["menu"] = {"dynamic": True, "items": [], "note": DYNAMIC_MENU_NOTE}
+            row["menu"] = {"dynamic": True, "items": [], "note": dynamic_menu_note()}
             continue
         menu: dict[str, Any] = {
             "items": [

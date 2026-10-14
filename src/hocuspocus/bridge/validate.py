@@ -19,7 +19,26 @@ import json
 import re
 from typing import Any
 
+from ..tools.budget import clip
+
 MAX_VIOLATIONS = 20
+
+ARG_RENAMES: dict[str, dict[str, str]] = {
+    "inspect": {
+        "path": "target",
+        "node_path": "target",
+        "root": "target",
+        "lop_path": "target",
+        "type": "target",
+        "rop_path": "target",
+        "cop_path": "target",
+    },
+}
+"""Per tool, a 1.4 argument name -> the 2.0 argument that replaced it (review 25 papercut
+2: ``inspect {path}`` was answered "did you mean paths, depth?"). An unknown top-level
+property in this table is reported as the rename, before any edit-distance suggestion, and
+:func:`rename_hint` shows the corrected call. ``paths`` given as one string is the same
+mistake (:func:`rename_hint`)."""
 
 _KNOWN_TYPES = frozenset({"object", "array", "string", "integer", "number", "boolean", "null"})
 
@@ -65,7 +84,7 @@ def _short(value: Any, limit: int = 60) -> str:
         text = json.dumps(value, ensure_ascii=False)
     except (TypeError, ValueError):
         text = repr(value)
-    return text if len(text) <= limit else text[: limit - 1] + "…"
+    return clip(text, limit)
 
 
 def _join(path: str, key: str) -> str:
@@ -77,8 +96,9 @@ def _label(path: str) -> str:
 
 
 class _Validator:
-    def __init__(self, root: dict[str, Any]) -> None:
+    def __init__(self, root: dict[str, Any], renames: dict[str, str] | None = None) -> None:
         self.root = root
+        self.renames = renames or {}
         self.errors: list[str] = []
 
     def _resolve(self, schema: Any) -> dict[str, Any]:
@@ -201,8 +221,11 @@ class _Validator:
             if key in props:
                 self.check(item, props[key], child)
             elif additional is False:
+                renamed = self.renames.get(key) if not path else None
                 close = difflib.get_close_matches(key, list(props), n=3, cutoff=0.6)
-                if close:
+                if renamed in props:
+                    self.errors.append(f"{child}: unknown property; 2.0 renamed it {renamed}")
+                elif close:
                     self.errors.append(
                         f"{child}: unknown property; did you mean {', '.join(close)}?"
                     )
@@ -321,11 +344,14 @@ class _Coercer(_Validator):
         return value
 
 
-def validate(value: Any, schema: dict[str, Any] | None) -> list[str]:
-    """Return human-readable violations (empty when ``value`` conforms to ``schema``)."""
+def validate(
+    value: Any, schema: dict[str, Any] | None, renames: dict[str, str] | None = None
+) -> list[str]:
+    """Return human-readable violations (empty when ``value`` conforms to ``schema``).
+    ``renames`` (a tool's :data:`ARG_RENAMES`) names the 2.0 argument for a 1.4 one."""
     if not schema:
         return []
-    validator = _Validator(schema)
+    validator = _Validator(schema, renames)
     validator.check(value, schema, "")
     return validator.errors[:MAX_VIOLATIONS]
 
@@ -333,10 +359,44 @@ def validate(value: Any, schema: dict[str, Any] | None) -> list[str]:
 SHAPE_HINT_MAX_CHARS = 400
 
 
+def rename_hint(tool: str, value: Any, schema: dict[str, Any] | None) -> str | None:
+    """The corrected call when ``value`` uses a 1.4 argument name :data:`ARG_RENAMES`
+    maps for ``tool`` (``inspect {what: "geo", path}`` -> ``inspect {what: "geo",
+    target}``), or passes ``paths`` as one string; None otherwise. A one-item list becomes
+    the string; with ``target`` already given the old argument is dropped."""
+    renames = ARG_RENAMES.get(tool)
+    if not renames or not isinstance(value, dict) or not schema:
+        return None
+    props = schema.get("properties") or {}
+    fixed: dict[str, Any] = {}
+    changed = False
+    for key, item in value.items():
+        new = renames.get(key) if key not in props else None
+        if key == "paths" and isinstance(item, str):
+            new = "target"
+        if new is None or new not in props:
+            fixed.setdefault(key, item)
+            continue
+        changed = True
+        if isinstance(item, list) and len(item) == 1:
+            item = item[0]
+        if new in value or new in fixed:
+            continue  # target was given too: drop the 1.4 spelling
+        fixed[new] = item
+    if not changed:
+        return None
+    shown = {k: fixed[k] for k in ("what", "kind", "target") if k in fixed}
+    shown.update({k: v for k, v in fixed.items() if k not in shown})
+    text = json.dumps(_elided(shown), ensure_ascii=False)
+    if len(text) > SHAPE_HINT_MAX_CHARS:
+        text = text[: SHAPE_HINT_MAX_CHARS - 1] + "…"
+    return f"{tool} takes the path as target: {tool} {text}"
+
+
 def _elided(value: Any) -> Any:
     """``value`` with long strings and lists shortened, for a hint that echoes it."""
     if isinstance(value, str) and len(value) > 80:
-        return value[:77] + "..."
+        return clip(value, 80)
     if isinstance(value, list):
         return [_elided(v) for v in value[:4]] + (["..."] if len(value) > 4 else [])
     if isinstance(value, dict):
@@ -344,28 +404,46 @@ def _elided(value: Any) -> Any:
     return value
 
 
+BATCH_KEYS: dict[str, str] = {
+    "items": "this tool takes a batch; pass the item inside items",
+    "ops": "edit takes a list of ops; pass the op inside ops",
+}
+"""The batch arrays :func:`shape_hint` wraps a flat item into, and how the hint says it."""
+
+
 def shape_hint(value: Any, schema: dict[str, Any] | None) -> str | None:
     """The corrected call when ``value`` is one flat item of a batch tool (review 21
-    papercut 1): ``parm_set {path, value}`` instead of ``{items: [{path, value}]}``.
+    papercut 1): ``parm_set {path, value}`` instead of ``{items: [{path, value}]}``, and
+    ``edit {op, path, value}`` instead of ``{ops: [{op, path, value}]}`` (review 25), or
+    the one op or item passed as an object instead of a list (``{ops: {op, ...}}``).
 
-    Returns ``wrap it: {"items": [{...the caller's own item fields...}], ...}`` when the
-    schema requires an ``items`` array of objects, ``value`` has no ``items``, and every
-    key that is not a top-level property is a property of an item; else None."""
-    if not isinstance(value, dict) or not schema or "items" in value:
+    Returns ``...: {"items": [{...the caller's own item fields...}], ...}`` when the
+    schema requires an ``items`` (or ``ops``) array of objects, ``value`` has none, and
+    every key that is not a top-level property is a property of an item; else None."""
+    if not isinstance(value, dict) or not schema:
         return None
     validator = _Validator(schema)
     root = validator._resolve(schema)
     props = root.get("properties") or {}
-    if "items" not in props or "items" not in (root.get("required") or ()):
+    key = next((k for k in BATCH_KEYS if k in props and k in (root.get("required") or ())), None)
+    if key is None:
         return None
-    array = validator._resolve(props["items"]) if isinstance(props["items"], dict) else {}
+    array = validator._resolve(props[key]) if isinstance(props[key], dict) else {}
     item = validator._resolve(array.get("items")) if isinstance(array.get("items"), dict) else {}
     item_props = item.get("properties") or {}
-    flat = {k: v for k, v in value.items() if k not in props}
-    if not flat or not item_props or any(k not in item_props for k in flat):
-        return None
-    outer = {k: v for k, v in value.items() if k in props}
-    fixed = json.dumps(_elided({"items": [flat], **outer}), ensure_ascii=False)
+    if isinstance(value.get(key), dict):  # one item as an object: the list of one
+        flat = value[key]
+        outer = {k: v for k, v in value.items() if k != key}
+        if not item_props or any(k not in item_props for k in flat):
+            return None
+    else:
+        if key in value:
+            return None
+        flat = {k: v for k, v in value.items() if k not in props}
+        if not flat or not item_props or any(k not in item_props for k in flat):
+            return None
+        outer = {k: v for k, v in value.items() if k in props}
+    fixed = json.dumps(_elided({key: [flat], **outer}), ensure_ascii=False)
     if len(fixed) > SHAPE_HINT_MAX_CHARS:
-        fixed = fixed[: SHAPE_HINT_MAX_CHARS - 1] + "…"
-    return f"this tool takes a batch; pass the item inside items: {fixed}"
+        fixed = clip(fixed, SHAPE_HINT_MAX_CHARS)
+    return f"{BATCH_KEYS[key]}: {fixed}"

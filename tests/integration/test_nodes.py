@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import pytest
 
+pytestmark = pytest.mark.compat_1x  # the 1.4 tools (conftest: compat_client)
+
 hou = pytest.importorskip("hou")
 
 
@@ -628,6 +630,7 @@ def test_find_caps_rows_to_the_response_budget(client, host):
         "tool": "node_find",
         "args": {"root": "/obj/geo1", "limit": 1000},
         "max_response_bytes": 2048,
+        "profile": "compat_1x",  # what a compat_1x bridge sends with node_find
     }
     enveloped = client.request("POST", "/hp/v1/call", body).body["result"]
     assert enveloped["nodes"] == first["nodes"] and enveloped["next_cursor"]

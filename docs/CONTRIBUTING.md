@@ -22,9 +22,12 @@ src/hocuspocus/
     __init__.py                #   start(), stop(), status(), autostart()
     __main__.py                #   hython -m hocuspocus.host
     config.py executor.py server.py dispatch.py runtime.py registry.py jobs.py undo.py
+    tx.py                      #   the transaction engine every mutation runs on (2.0)
+    look/                      #   look's and viewport_capture's backends (2.0)
     tools/                     #   one module per tool family, each registering with @tool
       registry.py _diag.py session.py hip.py code.py nodes.py network.py parms.py cook.py
-      types.py geo.py visual.py state.py hda.py usd.py pdg.py events.py
+      types.py geo.py visual.py state.py hda.py usd.py pdg.py events.py inspect.py
+      search.py edit.py look.py
   bridge/                      # OUTSIDE Houdini; official mcp SDK
     __main__.py server.py client.py instances.py launch.py local_tools.py
     validate.py budget.py config.py instructions.py
@@ -65,15 +68,21 @@ macOS the path is `.venv/bin/...`.
 
 1. **Bible.** Add the tool to the right table in `docs/BIBLE.md` §4, and update the
    count in §4.7.
-2. **Catalogue entry.** Add a `ToolSpec` to `src/hocuspocus/tools/catalog.py` with:
-   - `name`, in snake_case.
+2. **Spec file.** Create `src/hocuspocus/tools/spec/<name>.py`, named after the tool,
+   exporting `SPEC = ToolSpec(...)` built with the helpers in `spec/_helpers.py`
+   (`from ._helpers import ToolSpec, _obj, _s, ...`; a helper that two tools share goes
+   there too). Add the module name to `ORDER` in `spec/__init__.py` where the tool belongs:
+   that list, not the directory, is the order of `tools/list`, `docs/tools.md` and
+   `hocuspocus://tools`. `catalog.py` only loads the specs and answers which profile lists
+   which tool; do not define tools in it. The spec has:
+   - `name`, in snake_case, equal to the module name.
    - A `description` of at most 60 words: what the tool does and what the model needs to
      choose it. Defaults belong in the schema (`default`), not the description.
    - `notes` for argument-level detail (shapes the schema cannot state, edge cases). They
      are rendered into `docs/tools.md` and `hocuspocus://tools` but not sent in
      `tools/list` (BIBLE §4.1).
-   - `input_schema`, built with `_obj` / `_s` / `_enum` / ... and
-     `additionalProperties: false`.
+   - `input_schema`, built with `_obj` / `_s` / `_enum` / ... from `spec/_helpers.py`,
+     with `additionalProperties: false`.
    - An `output_schema` if the shape is stable. The bridge declares it only when
      `result_content` is `both` or `structured`; with the default `text` the model sees
      just the description and the result JSON in the text block (BIBLE §4.1), so put
@@ -83,13 +92,26 @@ macOS the path is `.venv/bin/...`.
      put how it behaves (shapes, edge cases, interactions with other arguments) in
      `notes`. A new feature then adds only its name and type to `tools/list`, not its
      explanation.
-   - `read_only` / `destructive` / `idempotent`, `profile`, and `headless_ok`. `profile`
-     is `core` or `full`. The `minimal` profile (BIBLE §4.1) is the `MINIMAL_TOOLS` set in
-     `catalog.py`. Add a tool to it only when a small-context client cannot work without
-     it, and update BIBLE §4.1 and `test_profiles` in the same change.
+   - `read_only` / `destructive` / `idempotent`, `profiles`, and `headless_ok`. `profiles`
+     is the tuple of profiles that list the tool (spec-2.0 §2; `tools/profiles.py`): a
+     suffix of `("minimal", "core", "full")`, since the 2.0 profiles nest (10 / 18 / 21
+     tools; `core` is the default), so a new tool is usually `("full",)` or
+     `("core", "full")`. Add one to `minimal` only when a small-context client cannot work
+     without it, and update BIBLE §4.1 and `test_profiles` in the same change.
+     `"compat_1x"` is the 1.4 catalogue and is closed: a new tool never joins it. A 1.4 tool
+     that 2.0 removed is `("compat_1x",)` and has its replacement in `tools/migration.py`,
+     which both the host's refusal and the bridge's answer quote. `v2` is read as `full`
+     for 2.0.x. The integration session host runs `full`; a test of a 1.4 tool takes
+     `compat_client` (or its module sets `pytestmark = pytest.mark.compat_1x`), which sends
+     `profile: compat_1x` with each call as a `compat_1x` bridge does.
    - At least one entry in `examples`.
+   - For a 1.4 tool that gains a 2.0 argument or result field (`on`, `role`), a
+     `v2_extra` overlay instead of a schema change: `{"input": {...}, "output": {...}}`,
+     partial schemas that `catalog.v2_spec` deep-merges for the 2.0 profiles, so the
+     `compat_1x` goldens keep 1.4's bytes (BIBLE §3.5). Describe the addition in `notes`,
+     starting "Not in compat_1x"; `docs/tools.md` marks the rows `(not in compat_1x)`.
 
-   The bridge registers the tool from this entry, so it shows up in `tools/list`
+   The bridge registers the tool from this spec, so it shows up in `tools/list`
    straight away.
 3. **Host implementation.** In the family module under `src/hocuspocus/host/tools/`,
    write:
@@ -105,7 +127,12 @@ macOS the path is `.venv/bin/...`.
    - The function runs on Houdini's main thread, inside one undo group if the tool
      mutates.
    - Raise `ToolError(code, message, hint=..., candidates=...)` for user mistakes. Use
-     only codes from `tools/errors.py` (BIBLE §9).
+     only codes from `tools/errors.py` (BIBLE §9). A hint or message that names a tool
+     builds the name with `migration.hint_tool("<1.4 or 2.0 name>", **args)`, never a
+     literal: it renders the call the active profile serves (`node_find {root}` on
+     `compat_1x`, `search {kind: "nodes", root}` on the 2.0 profiles) and returns `None`
+     where the profile has no such tool. `tests/unit/test_hint_profiles.py` fails on a
+     hint literal that names a removed 1.4 tool.
    - Register with `scene=False` when the dispatcher's undo group, read-only refusal or
      dirty marking would be wrong for the tool: `performUndo` raises inside an undo
      group (`undo`); reads must not dirty the scene (`time`, `selection`, `hda list`);
@@ -116,6 +143,11 @@ macOS the path is `.venv/bin/...`.
      The `scene=False` set is pinned in `tests/unit/test_host_tools.py`.
    - Add `main_thread=False` only for tools that wait on jobs or never touch `hou`;
      they reach `hou` through `ctx.executor.run(...)`.
+   - A tool that changes the scene builds a `tx.Plan` of ops and runs it with
+     `tx.execute` (`host/tx.py`, spec-2.0 principle 14), then shapes the per-op
+     results; it does not write its own batch loop or compensation. `edit` and the
+     1.4 mutation tools do this. A new kind of change is a new op: a handler and a
+     validator in `tx.py`, its fields in `OP_FIELDS`, and the `edit` spec's notes.
    - Tools that create or change nodes call `watch_nodes(...)` from `nodes.py` after
      their own changes, so `events` reports later edits to those nodes.
    - A new module must also be added to `TOOL_MODULES` in `host/tools/registry.py`.
@@ -134,24 +166,38 @@ macOS the path is `.venv/bin/...`.
    the tool through the real host (see `tests/integration/conftest.py`) against real
    nodes. Cover the error path and any Houdini idiom from BIBLE §5 that the tool
    touches.
-5. **Regenerate the docs.** Run `.venv/Scripts/hocuspocus docs tools`, or
-   `.venv/Scripts/python -m hocuspocus.tools.docs`, and commit `docs/tools.md`. Never
-   edit that file by hand.
+5. **Regenerate the docs and the budget report.** Run `.venv/Scripts/hocuspocus docs
+   tools`, or `.venv/Scripts/python -m hocuspocus.tools.docs`, and commit `docs/tools.md`.
+   Then run `.venv/Scripts/python -m hocuspocus.tools.docs --budget` and commit
+   `docs/redesign/budget.md`: it measures the serialised `tools/list` for every profile ×
+   `result_content` mode, appends a dated row to the history (keep the old rows) and
+   rewrites the table of the ten largest tools. Say in the commit why any number went up
+   (spec-2.0 principle 13). Never edit either file by hand; `hocuspocus://tools` is
+   rendered from the same specs by `tools/docs.py` at run time.
 6. **Unit guard.** Run `pytest tests/unit`. `tests/unit/test_catalog.py` checks the new
    entry:
-   - The name is unique and snake_case.
+   - The name is unique and snake_case, the module is named after the tool, and `ORDER`
+     lists every spec module once.
    - The description stays under the word cap, and every argument description is 12
      words or fewer.
    - The schema shape and annotations are valid.
    - The examples validate.
-   - The serialised `tools/list` result of the full profile stays within two caps
-     (`test_tools_list_budget`, BIBLE §4.1). What clients see by default,
-     `result_content = "text"` (no output schemas), stays at 32,000 bytes or less. The
-     `both` shape, with output schemas declared, stays at 44,000 bytes or less. The test
-     prints all six sizes, the three profiles in each mode, even on success. When a new tool pushes either one over, move argument detail from the
+   - The serialised `tools/list` result of the 2.0 `full` profile stays within two caps
+     (`test_tools_list_budget`, spec-2.0 §7 M3). What clients see by default,
+     `result_content = "text"` (no output schemas), stays at 24,000 bytes or less. The
+     `both` shape, with output schemas declared, stays at 34,000 bytes or less.
+     `compat_1x` keeps the 1.4 caps, 32,000 and 44,000 bytes. The test prints all eight
+     sizes, the four profiles in each mode, even on success. When a new tool pushes either
+     one over, move argument detail from the
      description into `notes` before cutting words the model needs to choose the tool.
      Never remove a tool or an argument to make room.
-   - `docs/tools.md` is current.
+   - `docs/tools.md` is current, and the latest row of `docs/redesign/budget.md` is the
+     current measurement.
+
+   `tests/unit/test_catalog_goldens.py` compares the serialised `tools/list` of every
+   profile × mode byte for byte with `tests/unit/goldens/`. The `compat_1x` goldens are
+   1.4's `full` ones and never change. A new tool changes the others on purpose: rewrite them with `.venv/Scripts/python tests/unit/test_catalog_goldens.py
+   --write` in the same commit and say why the bytes changed.
 
    `tests/unit/test_host_tools.py` checks that every `@tool` name exists in the
    catalogue. If the tool should always be registered, add its name to the list in
@@ -167,6 +213,7 @@ or into your real Houdini preferences, and they never use port 37219.
 | `tests/unit` | system Python | `.venv/Scripts/python -m pytest tests/unit -q` | about 10 s |
 | `tests/integration` (fast, the default) | hython | see below | < 90 s |
 | `tests/integration` (`slow`) | hython | the same command with `-m slow` (or `--runslow` for both) | about 3 min |
+| `tests/integration/test_parity_gui.py` (`gui`, the GUI column of [`parity.md`](parity.md)) | system Python launching `houdinifx` (isolated prefs; a window opens and closes) | `.venv/Scripts/python -m pytest tests/integration/test_parity_gui.py --rungui -q` | about 30 s |
 | `tests/e2e` | system Python spawning hython | `.venv/Scripts/python -m pytest tests/e2e -q` | < 60 s |
 
 When no hython can be found, the `houdini` and `e2e` tests skip. hython is found through
@@ -285,6 +332,82 @@ HOUDINI_HYTHON="C:/Program Files/Side Effects Software/Houdini 22.0.466/bin/hyth
   .venv/Scripts/python -m pytest tests/e2e -q -p no:cacheprovider
 ```
 
+### Workloads tier
+
+`tests/workloads/` scripts the evaluation workloads as tests (spec-2.0 §5.2) and measures
+what an agent pays for them. It is deselected by default; run it in the dev venv with:
+
+```bash
+.venv/Scripts/python -m pytest tests/workloads --runworkloads -q -s -p no:cacheprovider
+```
+
+(`-m workload` also selects it.) Like e2e, it needs hython and skips without one. One
+session fixture starts one headless host (`hython -m hocuspocus.host`) with isolated
+`HOCUSPOCUS_STATE_DIR`, `HOUDINI_USER_PREF_DIR` (`prefs/houdini__HVER__`, with
+`profile = "full"` in `prefs/houdini22.0/hocuspocus.toml`), work and temp dirs and a
+neutral cwd, all under pytest's temporary directory, and keeps one official `mcp` client
+session to the stdio bridge open for all five workloads. Between workloads it re-pins the
+host, cancels running jobs, runs `hip_new {on_unsaved: discard}` and deletes the
+workload's files (caches stay under 300 MB each).
+
+| Workload | Source | What it does | Time here |
+|---|---|---|---:|
+| `test_city_build` | review 12 | building generator with `node_edit spare_parms`, the city's for-each loop in one `node_create`, `OUT_CITY`, `cook profile`, one capture | ~5 s |
+| `test_scorecard_twelve` | review 21 | the twelve tasks: 2.4 at frame 24, three mistakes with candidates, `unsaved_changes`, `instance_lost` after a kill and a relaunch | ~8 s |
+| `test_soak_200` | review 22 | 200 calls from seed 22: the weighted mix, scheduled samples, saves, captures, canary cooks, a cancelled and a finished cook job, a `hip_open`, one-shot bridges; no leaked nodes or jobs, read p95 < 250 ms | ~20 s |
+| `test_fx_cache` | review 20 | a small pyro sim cached by `render` on `filecache::2.0` (24 frames, polled job), volumes read back, one capture | ~3 s |
+| `test_vellum_usd` | review 24 | Vellum cloth cached for 24 frames, `usd_rop` export by `render`, `sublayer` read-back with 24 time samples, a 320×180 Karma frame | ~17 s |
+
+The whole tier takes about a minute on the 1.4 release machine (budget: 12 minutes).
+
+Each test wraps `call_tool` in a `Recorder` that keeps, per call, the tool, args bytes,
+text bytes (the JSON text block the model reads; images are counted apart), elapsed time
+and `isError`, and per workload the calls, text bytes, largest call, wall time and time to
+the first image. Text bytes are counted with the session's temporary root replaced by
+`<tmp>`, so budgets do not depend on the temp path. Job polls are not recorded (only the
+final `job status`), so call counts do not depend on machine speed.
+
+**Budgets.** `tests/workloads/budgets.json` holds `calls`, `text_bytes`, `max_call_bytes`
+and `wall_s` per workload, recorded from 1.4 (the larger of two runs). A workload fails
+when any of them is more than 15 % over its budget, or on any error it did not expect.
+Every run writes its measurements, per tool as well, to `tests/workloads/last_run.json`
+(not committed). A change that raises bytes or calls per workload must say why (spec-2.0
+principle 13); when the rise is intended, re-record with
+`--update-budgets` (it rewrites the entries of the workloads that ran) and commit the new
+`budgets.json` with the change. Record wall time from a full-tier run: run alone, a
+workload can pay the capture child's 3 s start that the full run spreads differently.
+
+**Two tiers.** The tier runs the five workloads twice over: on the 1.4 tools (`1x`,
+`tests/workloads/test_*.py`, profile `compat_1x` once the 2.0 cut-over has landed, `full`
+before it) and on the 2.0 tools (`v2`, `tests/workloads/v2/test_*_v2.py`, its own host on
+the 2.0 `full` profile, `v2` before the cut-over). `--workloads v2|1x|all` (default `all`)
+selects; `.venv/Scripts/python -m pytest tests/workloads --runworkloads --workloads v2 -q`
+runs the 2.0 tier alone. The v2 workloads assert the same outcomes with `edit` (one
+transaction per step, `$id` chains), `inspect`/`search`, `houdini://` resources revalidated
+with their etag (`rec.read(uri)`; a `not_modified` answer is a call with no bytes), `look`,
+`render`/`cook` with a progress token instead of job polls, and `houdini_connect {role}`
+with `on`; calling a 1.4-only tool fails the test. They have their own
+`tests/workloads/v2/budgets.json` (the same 15 % tolerance, recorded the same way) and
+`last_run.json`, and one more check, the 2.0 exit criterion (spec-2.0 §7, M4): each
+workload must use fewer `calls` and fewer `text_bytes` than its 1.4 budget. A miss fails
+with the per-tool table so the fix can target the tool that pays. The margins the reviews
+predicted (`MARGINS` in `tests/workloads/v2/conftest.py`: calls 25 % for `city_build`,
+15 % for `fx_cache` and `vellum_usd`, 0 % for `scorecard_twelve` and `soak_200`; bytes
+20 % for `city_build`, `scorecard_twelve` and `soak_200`, 15 % for `fx_cache` and
+`vellum_usd`) are the 2.1 targets where M4 did not reach them (spec-2.0 §7, "M4 exit and
+the 2.1 targets"): reported, not enforced; do not lower them. The run ends with a 1.4/2.0
+comparison table (calls, bytes, wall, the exit and the targets not met yet).
+`HP_WORKLOADS_DUMP=<dir>` writes every v2 call's arguments and result there for debugging.
+
+To add a workload, write `tests/workloads/test_<name>.py` that takes the `workload`
+fixture, drives tools only through it (`rec.ok`, `rec.error(code=...)`, `rec.wait_job`,
+`rec.path(...)` for files), asserts the outcomes the evaluation verified, and ends with
+`rec.finish()`; then record its budget.
+
+`.github/workflows/houdini.yml` runs the tier nightly and on manual dispatch (not on
+labelled PRs), one step per tier, and uploads both `last_run.json` files. Run it yourself
+before every tag.
+
 ### CI
 
 - `.github/workflows/ci.yml` runs on every push and PR, on `windows-latest` and
@@ -323,7 +446,9 @@ capture, remember that a later capture runs in that kept process, not in a fresh
 - There is no config key or environment variable for it. To send every capture to a fresh
   child, set the module constant in the host process, for example through
   `houdini_python`: `import hocuspocus.host.tools.visual as v; v.WARM_CAPTURES = False`.
-  Set it back to `True` to re-enable it.
+  Set it back to `True` to re-enable it. Since 2.0 the kept child lives in
+  `host/look/flipbook.py`; `visual` forwards the constant there, and `look` uses the
+  same child.
 - `v.close_warm_capture()` stops the kept child; the next capture starts a new one. The
   integration tests call it before they time a cold capture.
 - If a kept child that had already rendered crashes, the capture is retried in a fresh

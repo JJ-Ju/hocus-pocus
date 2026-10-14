@@ -7,6 +7,12 @@
 * Keeps ``slow`` tests (visual child renders, stage captures, Karma, PDG cooks, 1M-point
   geometry, deliberate timeouts) out of a default run: ``--runslow`` adds them and
   ``-m slow`` runs only them (BIBLE §11).
+* Keeps the ``workload`` tier (``tests/workloads``, spec-2.0 §5.2: minutes of scripted
+  evaluation workloads against one headless host) out of every run unless
+  ``--runworkloads`` is given or a ``-m`` expression names ``workload``. It has two
+  tiers, the 1.4 workloads (``tests/workloads/test_*.py``, ``1x``) and the same five on
+  the 2.0 tools (``tests/workloads/v2``, ``v2``); ``--workloads v2|1x|all`` (default
+  ``all``) selects.
 """
 
 from __future__ import annotations
@@ -72,6 +78,24 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         default=False,
         help="also run tests marked slow (deselected by default; -m slow runs only them)",
     )
+    parser.addoption(
+        "--runworkloads",
+        action="store_true",
+        default=False,
+        help="run the workloads tier (tests/workloads, marker workload; deselected by default)",
+    )
+    parser.addoption(
+        "--workloads",
+        choices=("all", "v2", "1x"),
+        default="all",
+        help="workloads: the tier to run, v2 (tests/workloads/v2), 1x (the 1.4 workloads) or all",
+    )
+    parser.addoption(
+        "--update-budgets",
+        action="store_true",
+        default=False,
+        help="workloads: rewrite the tiers' budgets.json from this run instead of checking it",
+    )
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -80,6 +104,7 @@ def pytest_configure(config: pytest.Config) -> None:
         "houdini: needs hython (run with `hython -m pytest tests/integration`)",
         "e2e: spawns hython and the stdio bridge",
         "slow: over ~1.5 s (renders, captures, PDG cooks); run with --runslow or -m slow",
+        "workload: an evaluation workload (tests/workloads); run with --runworkloads",
     ):
         config.addinivalue_line("markers", line)
 
@@ -90,7 +115,34 @@ def _wants_slow(config: pytest.Config) -> bool:
     return bool(config.getoption("--runslow")) or "slow" in (config.option.markexpr or "")
 
 
+def _wants_workloads(config: pytest.Config) -> bool:
+    """``--runworkloads``, or a ``-m`` expression that names ``workload``."""
+    return bool(config.getoption("--runworkloads")) or "workload" in (config.option.markexpr or "")
+
+
+def _workload_tier(item: pytest.Item) -> str | None:
+    """``v2``, ``1x`` or (not a workload) ``None``."""
+    parts = Path(str(item.fspath)).parts
+    if "workloads" not in parts:
+        return None
+    return "v2" if "v2" in parts[parts.index("workloads") :] else "1x"
+
+
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    for item in items:
+        if "workloads" in Path(str(item.fspath)).parts:
+            item.add_marker(pytest.mark.workload)
+    if not _wants_workloads(config):
+        heavy = [item for item in items if "workload" in item.keywords]
+        if heavy:
+            config.hook.pytest_deselected(items=heavy)
+            items[:] = [item for item in items if "workload" not in item.keywords]
+    tier = config.getoption("--workloads")
+    if tier != "all":
+        other = [item for item in items if _workload_tier(item) not in (None, tier)]
+        if other:
+            config.hook.pytest_deselected(items=other)
+            items[:] = [item for item in items if item not in other]
     if not _wants_slow(config):
         slow = [item for item in items if "slow" in item.keywords]
         if slow:
@@ -105,7 +157,9 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
             item.add_marker(pytest.mark.houdini)
         elif "e2e" in parts:
             item.add_marker(pytest.mark.e2e)
-        if HYTHON is None and ("houdini" in item.keywords or "e2e" in item.keywords):
+        if HYTHON is None and (
+            "houdini" in item.keywords or "e2e" in item.keywords or "workload" in item.keywords
+        ):
             item.add_marker(skip)
 
 

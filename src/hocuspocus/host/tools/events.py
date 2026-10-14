@@ -100,6 +100,9 @@ class EventLog:
         self._pending_thread: int | None = None
         self._collapse: list[dict[str, Any]] = []
         self._child_seen: dict[tuple[str, str, str], float] = {}
+        self.on_other: Callable[[dict[str, Any]], None] | None = None
+        """Called (outside the lock) with every published ``origin: other`` node event:
+        the host marks the scene dirty from it (docs/parity.md G1)."""
 
     @property
     def last_seq(self) -> int:
@@ -176,7 +179,12 @@ class EventLog:
                 self._seq += 1
                 event["seq"] = self._seq
                 self._buf.append(event)
-            return event
+        if event["origin"] == OTHER and kind not in HIP_KINDS and kind != "pdg":
+            listener = self.on_other
+            if listener is not None:
+                with contextlib.suppress(Exception):
+                    listener(event)
+        return event
 
     def _repeat(self, event: dict[str, Any], held: bool) -> bool:
         """Whether ``event`` repeats one of the last :data:`DEDUPE_WINDOW` events on its
@@ -797,19 +805,22 @@ def _on_hip_event(event_type: Any) -> None:
         log.debug("hip event callback failed", exc_info=True)
 
 
-def install(post: Any = None, executor: Any = None) -> None:
+def install(post: Any = None, executor: Any = None, on_other: Any = None) -> None:
     """Register the hip callback and the context-manager callbacks. Main thread; idempotent.
 
     ``post(fn)`` queues ``fn`` for the main thread after the current work (the host's
     ``MainThreadExecutor.post``); without it, nodes the user creates are reported but
     not watched. ``executor`` (the host's ``MainThreadExecutor``) gets
     :func:`agent_work` as its work wrapper, which tells HocusPocus's own changes apart.
+    ``on_other(event)`` is called for every ``origin: other`` node event (the host marks
+    the scene dirty from it).
     """
     if _HOOKS.installed:
         return
     import hou
 
     _HOOKS.post = post
+    LOG.on_other = on_other
     if executor is not None and hasattr(executor, "work_wrapper"):
         executor.work_wrapper = agent_work
         _HOOKS.executor = executor
@@ -832,6 +843,7 @@ def uninstall() -> None:
     _forget_watched()
     _HOOKS.pending.clear()
     _HOOKS.post = None
+    LOG.on_other = None
     if _HOOKS.executor is not None:
         _HOOKS.executor.work_wrapper = None
         _HOOKS.executor = None

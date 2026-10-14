@@ -36,6 +36,22 @@ def test_a_bare_id_still_finds_a_job_of_this_process():
     assert manager.status(job_id.split("-", 1)[1])["job_id"] == job_id
 
 
+def test_only_a_pid_form_id_gets_the_1x_hint():
+    """Review 25 papercut 5: the pid-before-the-dash wording is for <pid>-<id> ids only."""
+    from hocuspocus.host.jobs import JOB_NOT_FOUND_HINT
+
+    manager = JobManager(InlineExecutor(), id_prefix="3084")
+    with pytest.raises(ToolError) as info:
+        manager.status("3084-ffff")
+    assert info.value.hint == JOB_NOT_FOUND_HINT
+    with pytest.raises(ToolError) as info:
+        manager.status("jzzzz")
+    assert "ledger ids" in info.value.hint and "before the '-'" not in info.value.hint
+    with pytest.raises(ToolError) as info:
+        manager.status("nope")
+    assert info.value.hint.startswith("This Houdini's job ids look like 3084-<id>")
+
+
 def test_another_pids_job_says_which_houdini_started_it():
     manager = JobManager(InlineExecutor(), id_prefix="3084")
     with pytest.raises(ToolError) as info:
@@ -51,4 +67,4 @@ def test_unprefixed_manager_keeps_bare_ids_and_counts_running_jobs():
     assert manager.running_count() == 0
     with pytest.raises(ToolError) as info:
         manager.status("nope")
-    assert "pid before the '-'" in (info.value.hint or "")
+    assert info.value.hint.startswith("This Houdini's job ids look like <id>;")  # not 1.x

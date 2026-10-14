@@ -109,6 +109,7 @@ SCENE_FALSE = {
     "render",
     "job",
     "viewport_capture",
+    "look",
 }
 """Tools the dispatcher must not wrap in an undo group (registry.py docstring, BIBLE §4.1)."""
 

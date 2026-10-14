@@ -33,12 +33,12 @@ from typing import Any
 
 from ..host.config import CONFIG_FILE_NAME, read_config_file
 from ..tools import paths
+from ..tools.profiles import ALIASES, DEFAULT_PROFILE, PROFILES, normalize
 
 log = logging.getLogger(__name__)
 
 DEFAULT_MAX_RESPONSE_BYTES = 16_384
 DEFAULT_TIMEOUT_S = 30.0
-PROFILES = ("minimal", "core", "full")
 RESULT_CONTENT = ("text", "both", "structured")
 """``result_content`` values; the first is the default (BIBLE §4.1)."""
 HOUDINI_MAJOR_MINOR = "22.0"
@@ -49,7 +49,9 @@ INSTALL_STATE_FILE = "install.json"
 
 @dataclass(frozen=True, slots=True)
 class BridgeConfig:
-    profile: str = "core"
+    profile: str = DEFAULT_PROFILE
+    """``minimal``, ``core`` (the default), ``full`` or ``compat_1x``
+    (:mod:`hocuspocus.tools.profiles`); ``v2`` is read as ``full``."""
     max_response_bytes: int = DEFAULT_MAX_RESPONSE_BYTES
     default_timeout_s: float = DEFAULT_TIMEOUT_S
     hfs: str = ""
@@ -242,10 +244,12 @@ def find_config_file(
 
 
 def _profile(raw: Any) -> str:
-    profile = str(raw or "core").strip().lower() or "core"
-    if profile not in PROFILES:
-        log.warning("profile=%r is not one of %s; using 'core'", raw, PROFILES)
-        return "core"
+    profile = normalize(raw)
+    if profile is None:
+        log.warning("profile=%r is not one of %s; using %r", raw, PROFILES, DEFAULT_PROFILE)
+        return DEFAULT_PROFILE
+    if str(raw).strip().lower() in ALIASES:
+        log.info("profile=%r is read as %r (the alias is kept for 2.0.x)", raw, profile)
     return profile
 
 

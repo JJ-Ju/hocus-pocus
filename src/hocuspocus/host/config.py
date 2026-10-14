@@ -16,12 +16,13 @@ from dataclasses import dataclass, field, fields, replace
 from pathlib import Path
 from typing import Any
 
+from hocuspocus.tools.profiles import DEFAULT_PROFILE, PROFILES, normalize
+
 log = logging.getLogger("hocuspocus.host.config")
 
 CONFIG_FILE_NAME = "hocuspocus.toml"
 ENV_PREFIX = "HOCUSPOCUS_"
 
-_PROFILES = ("minimal", "core", "full")
 BRIDGE_ONLY_KEYS = frozenset({"hfs", "result_content"})
 """Keys of the shared ``hocuspocus.toml`` that only the bridge reads; the host skips
 them without the "unknown key" warning."""
@@ -39,7 +40,7 @@ class HostConfig:
     max_response_bytes: int = 16384
     default_timeout_s: float = 30.0
     job_threshold_s: float = 10.0
-    profile: str = "core"
+    profile: str = DEFAULT_PROFILE
     log_level: str = "INFO"
     # Host-only settings (CLI flags / env; not part of the documented toml surface).
     port: int = 0
@@ -111,8 +112,11 @@ def _coerce(name: str, value: Any, *, from_env: bool) -> Any:
 
 
 def _validate(name: str, value: Any) -> Any:
-    if name == "profile" and value not in _PROFILES:
-        raise ValueError(f"must be one of {_PROFILES}")
+    if name == "profile":
+        profile = normalize(value)  # v2 reads as full (hocuspocus.tools.profiles)
+        if profile is None:
+            raise ValueError(f"must be one of {PROFILES}")
+        return profile
     if name == "log_level":
         value = str(value).upper()
         if value not in _LOG_LEVELS:

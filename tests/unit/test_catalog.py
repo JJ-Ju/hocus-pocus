@@ -18,7 +18,6 @@ from hocuspocus.tools import catalog  # noqa: E402
 from hocuspocus.tools.catalog import (  # noqa: E402
     ARGUMENT_DESCRIPTION_MAX_WORDS,
     DESCRIPTION_MAX_WORDS,
-    MINIMAL_TOOLS,
     TOOLS,
     TOOLS_LIST_MAX_BYTES,
     for_profile,
@@ -35,26 +34,30 @@ from hocuspocus.tools.errors import ERROR_CODES  # noqa: E402
 
 pytestmark = pytest.mark.unit
 
-# BIBLE §4.2–§4.7, in order. §4.7's tally says 30 core / 34 total, but its "9
-# node/network" undercounts the ten tools §4.4 actually lists; every listed tool ships.
+# Catalogue order: spec-2.0 §2's for the 2.0 profiles, 1.4's (BIBLE §4.2-§4.7) for compat_1x.
 EXPECTED_ORDER = [
     "houdini_status", "houdini_connect",
     "hip_new", "hip_open", "hip_save", "hip_merge",
+    "inspect", "search", "edit",
     "node_find", "node_info", "node_create", "node_delete", "node_edit", "node_copy",
     "node_connect", "node_layout", "network_describe", "network_build",
     "parm_get", "parm_set",
     "cook", "problems", "geo_info", "geo_read",
-    "viewport_capture", "render", "houdini_python", "node_type_search", "node_type_info",
-    "undo", "time", "selection", "job",
+    "viewport_capture", "render", "look", "houdini_python", "node_type_search",
+    "node_type_info", "undo", "time", "selection", "job",
     "hda", "usd_stage", "pdg", "events",
 ]  # fmt: skip
-FULL_ONLY = {"hda", "usd_stage", "pdg", "events"}
-# BIBLE §4.1 (1.3): the minimal profile, for clients with a small context.
+# spec-2.0 §2: the 2.0 profiles, transcribed.
 MINIMAL = {
-    "houdini_status", "houdini_connect", "hip_open", "hip_save", "node_find", "node_info",
-    "node_create", "node_connect", "parm_get", "parm_set", "cook", "geo_info",
-    "viewport_capture", "houdini_python",
+    "houdini_status", "houdini_connect", "hip_open", "hip_save", "inspect", "search", "edit",
+    "node_create", "parm_set", "look",
 }  # fmt: skip
+CORE = MINIMAL | {
+    "hip_new", "hip_merge", "cook", "render", "houdini_python", "job", "undo", "time",
+}  # fmt: skip
+FULL = CORE | {"hda", "pdg", "events"}
+# The 2.0 tools, which compat_1x does not list.
+NEW_IN_2 = {"inspect", "search", "edit", "look"}
 
 # BIBLE §9 code table, transcribed (`python_disabled / read_only` is one row, two codes).
 BIBLE_ERROR_CODES = {
@@ -67,15 +70,15 @@ BIBLE_ERROR_CODES = {
 }  # fmt: skip
 
 # BIBLE §4.1 annotations.
-DESTRUCTIVE = {"node_delete", "hip_new", "hip_open", "houdini_python"}
+DESTRUCTIVE = {"node_delete", "hip_new", "hip_open", "houdini_python", "edit"}
 IDEMPOTENT = {
     "parm_set", "node_connect", "node_edit", "time", "selection", "cook", "job",
-    "viewport_capture",
+    "viewport_capture", "look",
 }  # fmt: skip
 WITH_OUTPUT_SCHEMA = {
     "houdini_status", "hip_new", "hip_open", "hip_save", "hip_merge", "node_info",
     "parm_get", "parm_set", "cook", "geo_info", "geo_read", "viewport_capture", "render",
-    "node_type_search", "time", "selection", "undo", "job",
+    "node_type_search", "time", "selection", "undo", "job", "look",
 }  # fmt: skip
 
 NAME_RE = re.compile(r"^[a-z][a-z0-9_]*$")
@@ -96,33 +99,44 @@ def test_names_unique_snake_case_and_ordered() -> None:
 
 
 def test_profiles() -> None:
-    core = for_profile("core")
-    assert len(core) == 31
-    assert {spec.name for spec in TOOLS if spec.profile == "full"} == FULL_ONLY
-    assert for_profile("full") == TOOLS
-    assert [spec.name for spec in core] == [n for n in EXPECTED_ORDER if n not in FULL_ONLY]
-    minimal = for_profile("minimal")
-    assert MINIMAL_TOOLS == MINIMAL and len(minimal) == 14
-    assert [spec.name for spec in minimal] == [n for n in EXPECTED_ORDER if n in MINIMAL]
-    assert {catalog.profile_of(spec) for spec in minimal} == {"minimal"}
+    """spec-2.0 §2: minimal 10, core 18 (the default), full 21; compat_1x is 1.4's full."""
+    assert catalog.PROFILES == ("minimal", "core", "full", "compat_1x")
+    assert catalog.DEFAULT_PROFILE == "core"
+    for profile, expected, size in (
+        ("minimal", MINIMAL, 10),
+        ("core", CORE, 18),
+        ("full", FULL, 21),
+    ):
+        names = [spec.name for spec in for_profile(profile)]
+        assert len(names) == size and set(names) == expected, profile
+        assert names == [n for n in EXPECTED_ORDER if n in expected], profile
+    assert {catalog.profile_of(spec) for spec in for_profile("minimal")} == {"minimal"}
 
 
 def test_profiles_are_nested() -> None:
-    """minimal ⊂ core ⊂ full (BIBLE §4.1): a bigger profile never drops a tool, so a
-    client moving up a profile keeps every tool it knew, and the integration tier, which
-    runs its host on full, exercises every tool of every profile."""
-    assert catalog.PROFILES == ("minimal", "core", "full")
+    """minimal ⊂ core ⊂ full (spec-2.0 §2): a bigger profile never drops a tool, so a client
+    moving up a profile keeps every tool it knew. Each spec's ``profiles`` names its 2.0
+    profiles as a suffix of the three, so the nesting holds tool by tool."""
     names = {p: [spec.name for spec in for_profile(p)] for p in catalog.PROFILES}
     assert set(names["minimal"]) < set(names["core"]) < set(names["full"])
-    assert names["full"] == [spec.name for spec in TOOLS]
     for profile in catalog.PROFILES:  # each in catalogue order
-        assert names[profile] == [n for n in names["full"] if n in set(names[profile])]
+        assert names[profile] == [n for n in EXPECTED_ORDER if n in set(names[profile])]
     for spec in TOOLS:
+        assert spec.profiles, spec.name
+        assert set(spec.profiles) <= set(catalog.PROFILES), spec.name
+        assert len(set(spec.profiles)) == len(spec.profiles), spec.name
+        two = [p for p in spec.profiles if p != "compat_1x"]
+        assert two == list(catalog.PROFILES_2X[len(catalog.PROFILES_2X) - len(two) :]), spec.name
+        assert list(spec.profiles) == [p for p in catalog.PROFILES if p in spec.profiles]
         smallest = catalog.profile_of(spec)
         listed = [p for p in catalog.PROFILES if catalog.in_profile(spec, p)]
-        assert listed == list(catalog.PROFILES[catalog.PROFILES.index(smallest) :]), spec.name
+        assert listed == list(spec.profiles), spec.name
+        assert smallest == (two[0] if two else "compat_1x"), spec.name
     assert catalog.in_profile(get("pdg"), "bogus") is False  # unknown reads as core
-    assert catalog.in_profile(get("geo_read"), "bogus") is True
+    assert catalog.in_profile(get("cook"), "bogus") is True
+    assert catalog.in_profile(get("pdg"), "v2") is True  # v2 is an alias of full
+    assert catalog.for_profile("v2") is catalog.for_profile("full")
+    assert catalog.for_profile("bogus") is catalog.for_profile("core")
 
 
 def test_bridge_local_tools() -> None:
@@ -210,17 +224,20 @@ def test_validator_rejects_bad_arguments() -> None:
         validate({"pid": True}, get("houdini_connect").input_schema)
 
 
-TOOLS_LIST_DEFAULT_MAX_BYTES = 32_000
-"""Cap on what a client sees by default (1.4, BIBLE §4.1): the serialised ``tools/list``
-result of the full profile with ``result_content = "text"``, which declares no output
+TOOLS_LIST_DEFAULT_MAX_BYTES = 24_000
+"""Cap on what a client sees by default (spec-2.0 §7 M3): the serialised ``tools/list``
+result of the 2.0 full profile with ``result_content = "text"``, which declares no output
 schemas. Argument detail lives in each spec's ``notes`` (``docs/tools.md`` and
 ``hocuspocus://tools``), not in ``tools/list``."""
 
-TOOLS_LIST_BOTH_MAX_BYTES = 44_000
-"""Cap on the largest shape a client can ask for (review 11 §1.1): the full profile with
+TOOLS_LIST_BOTH_MAX_BYTES = 34_000
+"""Cap on the largest 2.0 shape a client can ask for: the full profile with
 ``result_content = "both"``, output schemas declared."""
 
-PROFILES = ("minimal", "core", "full")
+COMPAT_MAX_BYTES = {"text": 32_000, "both": 44_000}
+"""``compat_1x`` (1.4's full catalogue) keeps the 1.4 caps (BIBLE §4.1, review 11 §1.1)."""
+
+PROFILES = ("minimal", "core", "full", "compat_1x")
 MODES = ("text", "both")
 
 
@@ -241,8 +258,8 @@ def tools_list_wire_size(profile: str, result_content: str = "text") -> int:
 
 
 def test_tools_list_budget(capsys: pytest.CaptureFixture[str]) -> None:
-    """BIBLE §4.1 (1.4): cap what clients see by default (``text``) and the ``both`` shape,
-    each measured on the full profile; all six sizes are printed."""
+    """spec-2.0 §7 M3: cap what clients see by default (``text``) and the ``both`` shape on
+    the 2.0 full profile, and compat_1x at the 1.4 caps; all eight sizes are printed."""
     sizes = {(p, m): tools_list_wire_size(p, m) for m in MODES for p in PROFILES}
     caps = {"text": TOOLS_LIST_DEFAULT_MAX_BYTES, "both": TOOLS_LIST_BOTH_MAX_BYTES}
     with capsys.disabled():
@@ -254,12 +271,14 @@ def test_tools_list_budget(capsys: pytest.CaptureFixture[str]) -> None:
         print(f"\n[tools/list] names+descriptions+input schemas {tools_list_text_size(TOOLS):,} B")
     for mode in MODES:
         assert sizes["minimal", mode] < sizes["core", mode] < sizes["full", mode], sizes
+        assert sizes["full", mode] < sizes["compat_1x", mode], sizes
         assert sizes["full", mode] <= caps[mode], (
             f"tools/list (full profile, result_content {mode}) is {sizes['full', mode]:,} B, "
-            f"over the {caps[mode]:,} B cap (BIBLE §4.1). Move argument detail from the "
+            f"over the {caps[mode]:,} B cap (spec-2.0 §7 M3). Move argument detail from the "
             "description into the spec's notes (docs/tools.md, hocuspocus://tools) before "
             "raising the cap."
         )
+        assert sizes["compat_1x", mode] <= COMPAT_MAX_BYTES[mode], sizes
     assert sizes["full", "text"] < sizes["full", "both"], sizes
     assert tools_list_text_size(TOOLS) <= TOOLS_LIST_MAX_BYTES
 
@@ -311,7 +330,8 @@ def test_notes_reach_the_docs_and_guide_but_not_tools_list() -> None:
     guide = tools_text()  # hocuspocus://tools (1.3; the guide itself is instructions only)
     listed = {
         tool.name: tool
-        for tool in Bridge(BridgeConfig(profile="full"), scan=lambda: []).list_tools()
+        for profile in ("compat_1x", "full")  # together, every tool
+        for tool in Bridge(BridgeConfig(profile=profile), scan=lambda: []).list_tools()
     }
     for spec in noted:
         assert spec.notes in markdown and spec.notes in guide, spec.name
@@ -337,3 +357,96 @@ def test_tools_md_is_current() -> None:
     assert committed == render_tools_markdown(TOOLS), (
         "docs/tools.md is stale; run `python -m hocuspocus.tools.docs`"
     )
+
+
+# ---------------------------------------------------------------------------
+# 2.0 (spec-2.0 §5.1): the catalogue is loaded from one spec module per tool
+# ---------------------------------------------------------------------------
+
+
+def _spec_modules() -> set[str]:
+    import pkgutil
+
+    from hocuspocus.tools import spec as spec_package
+
+    return {
+        info.name
+        for info in pkgutil.iter_modules(spec_package.__path__)
+        if not info.name.startswith("_")
+    }
+
+
+def test_each_spec_module_is_named_after_its_tool() -> None:
+    import importlib
+
+    for name in _spec_modules():
+        module = importlib.import_module(f"hocuspocus.tools.spec.{name}")
+        assert isinstance(module.SPEC, catalog.ToolSpec), name
+        assert module.SPEC.name == name, f"spec/{name}.py defines {module.SPEC.name!r}"
+
+
+def test_spec_order_lists_every_module_once() -> None:
+    """The catalogue order is an explicit list, never directory order: it names every spec
+    module and nothing else, and the loader keeps it."""
+    from hocuspocus.tools import spec as spec_package
+
+    order = spec_package.ORDER
+    assert len(order) == len(set(order)), "a module is listed twice"
+    assert set(order) == _spec_modules(), (
+        f"missing from ORDER: {sorted(_spec_modules() - set(order))}; "
+        f"no such module: {sorted(set(order) - _spec_modules())}"
+    )
+    assert [spec.name for spec in TOOLS] == list(order)
+    assert catalog.TOOLS is spec_package.TOOLS
+
+
+def test_one_tools_reference_implementation() -> None:
+    """hocuspocus://tools is rendered by tools/docs.py, the docs/tools.md renderer."""
+    from hocuspocus.bridge import instructions
+    from hocuspocus.tools import docs
+
+    assert instructions.tools_text is docs.tools_reference
+    assert docs.tools_reference() == render_tools_markdown(TOOLS)
+    assert docs.tools_reference(for_profile("minimal")) == render_tools_markdown(
+        for_profile("minimal")
+    )
+
+
+def test_budget_md_is_current() -> None:
+    """docs/redesign/budget.md (spec-2.0 §5.1): its latest history row is the current
+    measurement, and its per-tool table is the current one."""
+    from hocuspocus.tools import docs
+
+    assert docs.TOOLS_LIST_CAPS == {
+        "text": TOOLS_LIST_DEFAULT_MAX_BYTES,
+        "both": TOOLS_LIST_BOTH_MAX_BYTES,
+    }
+    assert docs.COMPAT_TOOLS_LIST_CAPS == COMPAT_MAX_BYTES
+    path = REPO / "docs" / "redesign" / "budget.md"
+    hint = "run `python -m hocuspocus.tools.docs --budget` and commit docs/redesign/budget.md"
+    assert path.exists(), hint
+    committed = path.read_text(encoding="utf-8").replace("\r\n", "\n")
+    history = docs.parse_budget_history(committed)
+    assert history, hint
+    measured = docs.measure_budget()
+    assert history[-1]["sizes"] == measured["sizes"], (
+        f"docs/redesign/budget.md is stale (latest row {history[-1]['sizes']}, now "
+        f"{measured['sizes']}); {hint}"
+    )
+    assert measured["sizes"] == {
+        f"{p} {m}": tools_list_wire_size(p, m) for m in MODES for p in PROFILES
+    }
+    assert committed == docs.render_budget_markdown(history, measured), hint
+
+
+def test_budget_history_appends_a_dated_row(tmp_path: Path) -> None:
+    from hocuspocus.tools import docs
+
+    target = tmp_path / "budget.md"
+    docs.update_budget_markdown(target, date="2026-01-01")
+    docs.update_budget_markdown(target, date="2026-01-01")  # an exact repeat adds nothing
+    docs.update_budget_markdown(target, date="2026-01-02")
+    rows = docs.parse_budget_history(target.read_text(encoding="utf-8"))
+    assert [row["date"] for row in rows] == ["2026-01-01", "2026-01-02"]
+    assert rows[0]["sizes"] == rows[1]["sizes"]
+    assert set(rows[0]["sizes"]) == {f"{p} {m}" for m in MODES for p in PROFILES}

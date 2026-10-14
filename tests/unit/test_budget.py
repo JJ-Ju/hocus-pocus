@@ -74,3 +74,46 @@ def test_cuts_name_what_was_trimmed():
     assert by_path["text"]["total_chars"] == 50_000
     assert result["text"].startswith("y" * by_path["text"]["kept_chars"] + "…[truncated")
     assert _truncate(payload, 10**6) == (payload, [])
+
+
+# -- clipping on a character boundary (review 25 papercut 8) --------------------------------
+
+
+def test_byte_cuts_never_decode_to_a_replacement_character():
+    from hocuspocus.tools.budget import utf8_head, utf8_tail
+
+    data = "areas tha… été \U0001f600 end".encode()
+    for cut in range(len(data) + 1):
+        head, tail = utf8_head(data[:cut]), utf8_tail(data[cut:])
+        assert "�" not in head and "�" not in tail, cut
+        assert data.decode().startswith(head) and data.decode().endswith(tail)
+    assert utf8_head(data[:10]) == "areas tha"  # the 3-byte ellipsis cut after one byte
+    assert utf8_head(b"bad \xff byte") == "bad � byte"  # real damage still shows
+
+
+def test_clip_cuts_on_a_character_and_marks_it():
+    from hocuspocus.tools.budget import clip
+
+    assert clip("short", 10) == "short"
+    assert clip("abcdefghij", 5) == "abcd…"
+    assert clip("ab \U0001f600cd", 5) == "ab \U0001f600…"
+    pair = chr(0xD83D) + chr(0xDE00)  # UTF-16 text decoded with surrogatepass
+    assert clip("ab" + pair + "cd", 4) == "ab" + chr(0x2026)  # never split a surrogate pair
+
+
+def test_help_head_read_drops_a_cut_character(tmp_path):
+    import zipfile
+
+    from hocuspocus.host.tools.types import _HelpArchive
+
+    text = '"""Creates a mask, letting you limit the effect to areas thät are visible."""'
+    path = tmp_path / "nodes.zip"
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("sop/x.txt", text.encode("utf-8"))
+    help_zip = _HelpArchive()
+    help_zip._opened, help_zip._zip = True, zipfile.ZipFile(path)
+    help_zip._names = frozenset(help_zip._zip.namelist())
+    cut = text.encode("utf-8").index("ä".encode()) + 1  # inside the two-byte a-umlaut
+    head = help_zip.read("sop/x.txt", cut)
+    assert "�" not in head and head.endswith("areas th")
+    help_zip._zip.close()

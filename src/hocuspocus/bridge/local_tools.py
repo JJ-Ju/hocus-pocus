@@ -13,7 +13,9 @@ from typing import TYPE_CHECKING, Any
 from ..tools.errors import ToolError
 from ..version import __version__
 from . import instances as registry
+from . import routing
 from .client import OFFLINE_HINT
+from .ledger import ROLES
 
 if TYPE_CHECKING:
     from .server import Bridge
@@ -59,6 +61,8 @@ def connected_block(bridge: Bridge, inst: registry.Instance) -> dict[str, Any]:
     }
     if inst.name:
         block["name"] = inst.name
+    if bridge.v2:
+        block["role"] = bridge.role_of(inst)
     if inst.hip:
         block["hip"] = {"path": inst.hip}
     host_version = health.get("host_version") or health.get("version")
@@ -82,6 +86,27 @@ def connected_block(bridge: Bridge, inst: registry.Instance) -> dict[str, Any]:
         elif key in host:
             block.setdefault("_settings", {})[key] = host[key]
     return block
+
+
+VERSION_HINT = (
+    "A GUI Houdini runs the host its installed package points at: reinstall it with "
+    "`hocuspocus install-houdini` (or `--dev` for a checkout) and restart Houdini; a "
+    "headless launch always runs the bridge's own host."
+)
+
+
+def version_warning(host_version: Any) -> str | None:
+    """``version_mismatch`` as a warning (docs/parity.md G7): the host's ``host_version``
+    differs from this bridge's. Calls still work (the ``hp`` RPC version matched, or
+    ``/health`` would have raised ``version_mismatch`` as an error), but the host may lack
+    or differ in tools this bridge lists. None when they match or the host did not say."""
+    if not isinstance(host_version, str) or not host_version or host_version == __version__:
+        return None
+    return (
+        f"version_mismatch: this Houdini runs HocusPocus host {host_version} and the bridge "
+        f"is {__version__} (same hp RPC version, so calls work, but tools may differ). "
+        + VERSION_HINT
+    )
 
 
 def _split_settings(block: dict[str, Any] | None) -> dict[str, Any]:
@@ -137,36 +162,133 @@ def houdini_status(bridge: Bridge, args: dict[str, Any]) -> dict[str, Any]:
             lost_block = {"pid": sel.lost_pid, "label": lost.detail["label"]}
             warnings.append(f"{lost.message} {lost.hint[0].upper()}{lost.hint[1:]}.")
     settings = _split_settings(connected)
+    mismatch = version_warning((connected or {}).get("host_version"))
+    if mismatch:
+        warnings.append(mismatch)
     status: dict[str, Any] = {
         "connected": connected,
         **({"lost": lost_block} if lost_block else {}),
         "instances": [_row(bridge, inst, inst.pid == chosen_pid) for inst in live],
         "bridge_version": __version__,
-        "profile": bridge.config.profile,
+        # compat_1x serves 1.4's full catalogue, whose schema names the 1.4 profiles only.
+        "profile": bridge.config.profile if bridge.v2 else "full",
+        **({} if bridge.v2 else {"compat_1x": True}),
     }
     # Host settings are only known while connected; omit rather than report null.
     for key in ("read_only", "allow_python"):
         if isinstance(settings.get(key), bool):
             status[key] = settings[key]
+    if bridge.v2:
+        # spec-2.0 §2.1: Houdinis the ledger remembers that are no longer running.
+        bridge._note_live(live)
+        live_pids = {inst.pid for inst in live}
+        recent = [row for row in bridge.ledger.recent() if row["pid"] not in live_pids]
+        if recent:
+            status["recent"] = recent
     if not live:
         warnings.append(
             "No Houdini with HocusPocus is running; houdini_connect {launch: {mode}} starts one."
         )
     if warnings:
         status["warnings"] = warnings
+    if bridge.v2:
+        shape_status(status, detail=args.get("detail") is True)
     return status
+
+
+def _default_role(row: dict[str, Any]) -> str:
+    return "editor" if row.get("ui") else "worker"
+
+
+def shape_status(status: dict[str, Any], *, detail: bool = False) -> dict[str, Any]:
+    """The 2.0 ``houdini_status`` (and ``houdini://status``) shape, in place: what is the
+    default or empty is left out (spec-2.0 §7 M4). ``connected.memory`` only with
+    ``detail``; per ``connected``, ``instances[]`` and ``recent[]`` row ``role`` when it is
+    the mode's default (editor for a GUI Houdini, worker headless) and ``name`` when null;
+    per instance ``selected: false``, ``busy: false`` and ``jobs_running: 0``. Without
+    ``memory`` two reads of an unchanged session are byte-identical, so the resource's
+    etag holds."""
+    connected = status.get("connected")
+    rows = [connected] if isinstance(connected, dict) else []
+    rows += [r for r in status.get("instances") or () if isinstance(r, dict)]
+    rows += [r for r in status.get("recent") or () if isinstance(r, dict)]
+    if isinstance(connected, dict) and not detail:
+        connected.pop("memory", None)
+    for row in rows:
+        if row.get("role") == _default_role(row):
+            del row["role"]
+        if "name" in row and row["name"] is None:
+            del row["name"]
+    for row in status.get("instances") or ():
+        if isinstance(row, dict):
+            for key, default in (("selected", False), ("busy", False), ("jobs_running", 0)):
+                if key in row and row[key] == default:
+                    del row[key]
+    if not status.get("recent"):
+        status.pop("recent", None)
+    _hip_once(status)
+    return status
+
+
+def _same_path(a: Any, b: Any) -> bool:
+    return (
+        isinstance(a, str)
+        and isinstance(b, str)
+        and a.replace("\\", "/").rstrip("/") == b.replace("\\", "/").rstrip("/")
+    )
+
+
+def _hip_once(status: dict[str, Any]) -> None:
+    """Print the connected hip path once (review 25 papercut 10: five times). ``hip.path``
+    stays; what repeats it is left out where identical: ``hip.name`` (the path's last
+    segment), ``hip.recent`` entries equal to the path, ``env.HIP`` (the path's directory),
+    ``env.JOB`` when it equals that directory, ``env.HIPNAME`` (the name without ``.hip``),
+    an empty ``env``, and ``hip`` on the connected instance's ``instances[]`` row and on
+    ``recent[]`` rows."""
+    connected = status.get("connected")
+    hip = connected.get("hip") if isinstance(connected, dict) else None
+    path = hip.get("path") if isinstance(hip, dict) else None
+    if not isinstance(path, str) or not path:
+        return
+    folder, _, name = path.replace("\\", "/").rpartition("/")
+    if hip.get("name") == name:
+        del hip["name"]
+    if isinstance(hip.get("recent"), list):
+        hip["recent"] = [p for p in hip["recent"] if not _same_path(p, path)]
+        if not hip["recent"]:
+            del hip["recent"]
+    env = connected.get("env")
+    if isinstance(env, dict):
+        if _same_path(env.get("JOB"), folder):
+            del env["JOB"]
+        if _same_path(env.get("HIP"), folder):
+            del env["HIP"]
+        stem = name[: -len(".hip")] if name.lower().endswith(".hip") else name
+        if env.get("HIPNAME") in (stem, name):
+            del env["HIPNAME"]
+        if not env:
+            del connected["env"]
+    for row in status.get("instances") or ():
+        mine = isinstance(row, dict) and row.get("pid") == connected.get("pid")
+        if mine and _same_path(row.get("hip"), path):
+            del row["hip"]
+    for row in status.get("recent") or ():
+        if isinstance(row, dict) and _same_path(row.get("hip"), path):
+            del row["hip"]
 
 
 def _row(bridge: Bridge, inst: registry.Instance, selected: bool) -> dict[str, Any]:
     """One ``instances[]`` row: the registry entry, ``selected``, and from ``/health`` the
     host's ``busy`` flag and ``jobs_running`` (review 19 papercut 4)."""
     row = dict(inst.public(), selected=selected)
+    if bridge.v2:
+        row["role"] = bridge.role_of(inst)
     try:
         health = bridge.client_for(inst).health(timeout_s=ROW_HEALTH_TIMEOUT_S)
     except ToolError as exc:
         row["unreachable"] = exc.code
         return row
-    for key in ("busy", "jobs_running"):
+    for key in ("busy", "jobs_running", "host_version"):
         if key in health:
             row[key] = health[key]
     return row
@@ -197,10 +319,52 @@ def _apply_name(
         if other.pid != inst.pid and other.name and other.name == name:
             registry.set_name(other, "")
     registry.set_name(inst, name)
+    bridge.ledger.set_name(inst.pid, name)
     return replace(inst, name=name)
 
 
+def _role(args: dict[str, Any]) -> str | None:
+    """``role`` (v2), checked: ``editor`` or ``worker``."""
+    role = args.get("role")
+    if role is None:
+        return None
+    if role not in ROLES:
+        raise ToolError(
+            "invalid_argument",
+            f"role must be one of {', '.join(ROLES)}, not {role!r}.",
+            hint="houdini_connect {pid, role: 'worker'} sets a role; {role: 'worker'} pins the "
+            "least busy worker",
+        )
+    return str(role)
+
+
+def _apply_role(bridge: Bridge, inst: registry.Instance, role: str | None) -> None:
+    if role is not None:
+        bridge.ledger.set_role(inst.pid, role)
+
+
 def houdini_connect(bridge: Bridge, args: dict[str, Any]) -> dict[str, Any]:
+    """Attach, launch, detach or quit (:func:`_connect`); an attach or launch to a host
+    whose ``host_version`` is not the bridge's carries a ``version_mismatch`` warning
+    (docs/parity.md G7: a GUI Houdini runs whatever its package points at)."""
+    out = _connect(bridge, args)
+    block = out.get("connected")
+    if isinstance(block, dict):
+        mismatch = version_warning(block.get("host_version"))
+        if mismatch:
+            out.setdefault("warnings", []).append(mismatch)
+    return out
+
+
+def _connect(bridge: Bridge, args: dict[str, Any]) -> dict[str, Any]:
+    role = _role(args)
+    if role is not None and (args.get("quit") or args.get("disconnect")):
+        raise ToolError(
+            "invalid_argument",
+            "role goes with pid, name or launch (to set that Houdini's role) or alone (to pin "
+            "the least busy Houdini with that role), not with quit or disconnect.",
+            hint="houdini_connect {pid, role: 'worker'}, then houdini_connect {role: 'worker'}",
+        )
     if args.get("name") is not None and args.get("pid") is None and args.get("launch") is None:
         if args.get("quit") or args.get("disconnect"):
             raise ToolError(
@@ -208,7 +372,9 @@ def houdini_connect(bridge: Bridge, args: dict[str, Any]) -> dict[str, Any]:
                 "name goes with pid (to name that Houdini) or alone (to select it by name).",
                 hint="houdini_connect {pid, name: 'worker'}, then houdini_connect {name: 'worker'}",
             )
-        return _connect_by_name(bridge, str(args["name"]))
+        return _connect_by_name(bridge, str(args["name"]), role)
+    if role is not None and args.get("pid") is None and args.get("launch") is None:
+        return _connect_by_role(bridge, role)
     modes = [k for k in ("pid", "launch", "disconnect") if args.get(k) not in (None, False)]
     if args.get("quit"):
         # quit takes an optional pid (the Houdini to quit); nothing else.
@@ -248,6 +414,7 @@ def houdini_connect(bridge: Bridge, args: dict[str, Any]) -> dict[str, Any]:
             float(launch.get("wait_s", 90)),
         )
         instance = _apply_name(bridge, result.instance, args.get("name"), bridge.scan())
+        _apply_role(bridge, instance, role)
         block = _connect_block(bridge, instance)
         bridge.pin(instance)
         bridge.last_target = instance
@@ -274,6 +441,7 @@ def houdini_connect(bridge: Bridge, args: dict[str, Any]) -> dict[str, Any]:
                 "pick a pid from the candidates, or launch one with houdini_connect {launch}",
             )
         match = _apply_name(bridge, match, args.get("name"), live)
+        _apply_role(bridge, match, role)
         block = _connect_block(bridge, match)
         bridge.pin(match)
         bridge.last_target = match
@@ -302,7 +470,22 @@ def houdini_connect(bridge: Bridge, args: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def _connect_by_name(bridge: Bridge, name: str) -> dict[str, Any]:
+def _connect_by_role(bridge: Bridge, role: str) -> dict[str, Any]:
+    """``houdini_connect {role}`` (v2): pin the least busy live instance with ``role``."""
+    live = bridge.scan()
+    matches = routing.with_role(live, role, bridge.role_of)
+    if not matches:
+        raise routing.no_role_error(role, live, bridge.role_of)
+    match = routing.order_by_load(matches, bridge.load_of)[0]
+    block = _connect_block(bridge, match)
+    bridge.pin(match)
+    bridge.last_target = match
+    bridge.detached = False
+    _split_settings(block)
+    return {"connected": block}
+
+
+def _connect_by_name(bridge: Bridge, name: str, role: str | None = None) -> dict[str, Any]:
     """``houdini_connect {name}``: pin the live instance named ``name``."""
     live = bridge.scan()
     match = next((inst for inst in live if inst.name and inst.name == name.strip()), None)
@@ -315,6 +498,7 @@ def _connect_by_name(bridge: Bridge, name: str) -> dict[str, Any]:
             candidates=[inst.candidate() for inst in ordered],
             retryable=False,
         )
+    _apply_role(bridge, match, role)
     block = _connect_block(bridge, match)
     bridge.pin(match)
     bridge.last_target = match
@@ -352,6 +536,7 @@ def _quit(bridge: Bridge, args: dict[str, Any]) -> dict[str, Any]:
         raise ToolError.from_dict(result)
     # Forget it now: the bridge must not report this Houdini as having "exited" later.
     registry.forget(inst)
+    bridge.ledger.mark_dead(inst.pid, hip=result.get("hip") or None)
     if bridge.preferred_pid == inst.pid:
         bridge.pin(None)
     if bridge.last_target is not None and bridge.last_target.pid == inst.pid:

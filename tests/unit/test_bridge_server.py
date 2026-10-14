@@ -16,7 +16,7 @@ from hocuspocus.bridge.config import BridgeConfig
 from hocuspocus.bridge.instances import Instance
 from hocuspocus.bridge.instructions import INSTRUCTIONS
 from hocuspocus.bridge.server import Bridge, build_server, get_prompt, list_prompts
-from hocuspocus.tools.catalog import MINIMAL_TOOLS, ToolSpec
+from hocuspocus.tools.catalog import ToolSpec, for_profile
 from hocuspocus.tools.errors import ToolError
 
 pytestmark = pytest.mark.unit
@@ -93,7 +93,7 @@ FAKE_TOOLS = (
         dict(OBJ, properties={"path": {"type": "string"}}, required=["path"]),
         read_only=True,
     ),
-    ToolSpec("usd_stage", "USD.", dict(OBJ, properties={}), profile="full"),
+    ToolSpec("usd_stage", "USD.", dict(OBJ, properties={}), profiles=("compat_1x",)),
 )
 
 
@@ -105,7 +105,7 @@ class FakeClient:
             "pid": 4242,
             "houdini": "22.0.466",
             "generation": 2,
-            "host_version": "1.4.0",
+            "host_version": "2.0.0",
         }
         self.replies: dict[str, Any] = {}
         self.calls: list[tuple[str, dict, float]] = []
@@ -211,11 +211,13 @@ def test_tools_list_with_no_houdini_over_mcp_client():
 def test_profile_filters_real_catalogue():
     core = Bridge(BridgeConfig(profile="core"), scan=lambda: [])
     full = Bridge(BridgeConfig(profile="full"), scan=lambda: [])
-    assert {t.profile for t in core.tools} <= {"core"}
+    assert all("core" in t.profiles for t in core.tools)
     assert len(full.tools) >= len(core.tools)
     minimal = Bridge(BridgeConfig(profile="minimal"), scan=lambda: [])
-    assert {t.name for t in minimal.tools} == MINIMAL_TOOLS
-    assert {t.name for t in minimal.list_tools()} == MINIMAL_TOOLS
+    names = {t.name for t in for_profile("minimal")}
+    assert len(names) == 10
+    assert {t.name for t in minimal.tools} == names
+    assert {t.name for t in minimal.list_tools()} == names
 
 
 def test_tools_list_is_deterministic():
@@ -559,7 +561,7 @@ def test_status_merges_registry_health_and_host():
             "time": {"frame": 1, "fps": 24, "range": [1, 240]},
             "env": {"HIP": "C:/work"},
             "scene_generation": 5,
-            "host_version": "1.4.0",
+            "host_version": "2.0.0",
             "read_only": False,
             "allow_python": True,
         },
@@ -574,6 +576,85 @@ def test_status_merges_registry_health_and_host():
     assert status["instances"][0]["selected"] is True
     assert "token" not in json.dumps(status)
     assert status["bridge_version"] and status["profile"] == "core"
+
+
+def test_status_prints_the_hip_path_once():
+    """Review 25 papercut 10: hip.path stays; name, the identical recent entry, env.HIP,
+    env.JOB, env.HIPNAME and the connected row's hip, which repeat it, are left out (2.0)."""
+    bridge, client, _ = make_bridge()
+    path = "C:/work/a.hip"
+    client.replies["houdini_status"] = (
+        True,
+        {
+            "pid": 4242,
+            "hip": {"path": path, "name": "a.hip", "dirty": False, "recent": [path, "C:/b.hip"]},
+            "env": {"HIP": "C:/work", "JOB": "C:/work", "HIPNAME": "a"},
+        },
+        {},
+    )
+    status = structured(bridge.call_tool("houdini_status", {}))
+    conn = status["connected"]
+    assert conn["hip"] == {"path": path, "dirty": False, "recent": ["C:/b.hip"]}
+    assert "env" not in conn
+    assert "hip" not in status["instances"][0]
+    assert json.dumps(status).count("a.hip") == 1
+    # What differs from the path stays.
+    client.replies["houdini_status"] = (
+        True,
+        {
+            "pid": 4242,
+            "hip": {"path": path, "recent": [path]},
+            "env": {"HIP": "C:/w", "JOB": "D:/j"},
+        },
+        {},
+    )
+    conn = structured(bridge.call_tool("houdini_status", {}))["connected"]
+    assert conn["hip"] == {"path": path} and conn["env"] == {"HIP": "C:/w", "JOB": "D:/j"}
+
+
+def test_compat_status_keeps_the_14_hip_fields():
+    bridge, client, _ = make_bridge(config=BridgeConfig(profile="compat_1x"))
+    client.replies["houdini_status"] = (
+        True,
+        {"pid": 4242, "hip": {"path": "C:/work/a.hip", "name": "a.hip"}, "env": {"HIP": "C:/work"}},
+        {},
+    )
+    status = structured(bridge.call_tool("houdini_status", {}))
+    assert status["connected"]["hip"]["name"] == "a.hip"
+    assert status["connected"]["env"] == {"HIP": "C:/work"}
+
+
+def test_server_info_only_in_the_handshake():
+    """Review 25 papercut 4: serverInfo is stamped on initialize/server/discover only; a
+    tool result keeps _meta.instance and timing without it."""
+    import anyio
+    from mcp import types as mcp_types
+
+    from hocuspocus.bridge.server import build_server, server_info_once
+
+    key = mcp_types.SERVER_INFO_META_KEY
+    stamp = {"name": "hocuspocus", "version": "2.0.0"}
+    stamped = {
+        "content": [],
+        "_meta": {"instance": {"pid": 1}, "timing": {"main_thread_ms": 1}, key: stamp},
+    }
+
+    def run(method: str, result: Any) -> Any:
+        async def call_next(ctx: Any) -> Any:
+            return result
+
+        ctx = type("Ctx", (), {"method": method})()
+        return anyio.run(server_info_once, ctx, call_next)
+
+    out = run("tools/call", stamped)
+    assert out["_meta"] == {"instance": {"pid": 1}, "timing": {"main_thread_ms": 1}}
+    assert key in stamped["_meta"]  # the result it was given is not changed
+    assert "_meta" not in run("resources/read", {"contents": [], "_meta": {key: stamp}})
+    for method in ("server/discover", "initialize"):
+        assert run(method, stamped)["_meta"][key] == stamp
+    assert run("notifications/initialized", None) is None
+    server = build_server(Bridge(BridgeConfig(), scan=lambda: []))
+    assert server_info_once in server.middleware
 
 
 def test_status_survives_host_error():
@@ -733,7 +814,8 @@ def test_read_resource_forwards_and_errors():
 
 
 def test_resources_over_mcp_client():
-    bridge, _c, _l = make_bridge(instances=())
+    # The 1.4 resources; every 2.0 profile serves the 2.0 ones (test_bridge_resources.py).
+    bridge, _c, _l = make_bridge(instances=(), config=BridgeConfig(profile="compat_1x"))
 
     async def run():
         async with Client(build_server(bridge)) as client:
@@ -767,10 +849,48 @@ def test_resources_over_mcp_client():
 def test_prompt_requires_arguments():
     from mcp.shared.exceptions import MCPError
 
-    assert len(list_prompts()) == 4
-    with pytest.raises(MCPError):
-        get_prompt("debug_red_node", {})
-    assert "/obj" in get_prompt("inspect_scene", None).messages[0].content.text
+    from hocuspocus.bridge.instructions import PROMPTS
+
+    assert [p.name for p in list_prompts()] == list(PROMPTS) and len(PROMPTS) == 7
+    assert [p.name for p in list_prompts("core")] == list(PROMPTS)
+    assert len(list_prompts("compat_1x")) == 4  # the 1.4 prompts
+    for profile in (None, "compat_1x"):
+        with pytest.raises(MCPError):
+            get_prompt("debug_red_node", {}, profile)
+        assert "/obj" in get_prompt("inspect_scene", None, profile).messages[0].content.text
+    assert "inspect" in get_prompt("inspect_scene", None).messages[0].content.text
+    assert (
+        "network_describe"
+        in get_prompt("inspect_scene", None, "compat_1x").messages[0].content.text
+    )
+
+
+@pytest.mark.parametrize("profile", ["core", "compat_1x"])
+def test_instructions_guide_and_prompts_follow_the_profile(profile):
+    """spec-2.0 §2.8, §8: the 2.0 profiles get the 2.0 texts and the seven prompts,
+    compat_1x the 1.4 texts and the four 1.4 prompts; each guide stays within its cap."""
+    from hocuspocus.bridge.instructions import (
+        GUIDE_MAX_BYTES,
+        INSTRUCTIONS_1X,
+        PROMPTS,
+        guide_text,
+    )
+    from hocuspocus.bridge.server import PROMPTS_1X
+
+    bridge, _c, _l = make_bridge(instances=(), config=BridgeConfig(profile=profile))
+    compat = profile == "compat_1x"
+
+    async def run():
+        async with Client(build_server(bridge)) as client:
+            guide = await client.read_resource("hocuspocus://guide")
+            prompts = (await client.list_prompts()).prompts
+            return client.instructions, guide.contents[0].text, prompts
+
+    instructions, guide, prompts = anyio.run(run)
+    assert instructions == (INSTRUCTIONS_1X if compat else INSTRUCTIONS)
+    assert guide == guide_text(profile) and len(guide.encode("utf-8")) <= GUIDE_MAX_BYTES
+    assert guide != guide_text("core" if compat else "compat_1x")
+    assert [p.name for p in prompts] == list(PROMPTS_1X if compat else PROMPTS)
 
 
 # -- progress notifications (BIBLE §7) ----------------------------------------------------
@@ -918,7 +1038,8 @@ def test_result_content_both_duplicates_and_declares_output_schemas():
     by_name = {tool.name: tool for tool in real.list_tools()}
     with_schema = [spec.name for spec in real.tools if spec.output_schema is not None]
     assert with_schema and all(by_name[name].output_schema for name in with_schema)
-    assert catalog.get(with_schema[0]).output_schema == by_name[with_schema[0]].output_schema
+    listed = catalog.v2_spec(catalog.get(with_schema[0]))  # core lists the 2.0 overlay
+    assert listed.output_schema == by_name[with_schema[0]].output_schema
 
 
 def test_result_content_structured_summarises_the_text_block():

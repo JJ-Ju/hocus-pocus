@@ -9,6 +9,7 @@ verbatim, return ``structuredContent`` for arbitrary dicts, and own argument val
 
 from __future__ import annotations
 
+import dataclasses
 import difflib
 import logging
 import re
@@ -26,18 +27,19 @@ import mcp_types as types
 from mcp.server import Server
 from mcp.shared.exceptions import MCPError
 
-from ..tools import catalog
+from ..tools import catalog, migration, profiles
 from ..tools.catalog import ToolSpec
 from ..tools.errors import ToolError
 from ..version import __version__
-from . import budget
+from . import budget, routing
 from . import instances as registry
 from .client import OFFLINE_HINT, REINSTALL_HINT, HostClient
 from .config import BridgeConfig
-from .instructions import INSTRUCTIONS, guide_text, tools_text
+from .instructions import PROMPT_DEFAULTS, PROMPTS, guide_text, instructions_for, tools_text
 from .launch import Launcher
+from .ledger import Ledger, is_ledger_id, looks_like_ledger_id
 from .local_tools import LOCAL_TOOLS
-from .validate import coerce_integers, shape_hint, validate
+from .validate import ARG_RENAMES, coerce_integers, rename_hint, shape_hint, validate
 
 EXIT_GRACE_S = 1.5
 """After a lost response, how long to watch for the Houdini process to exit."""
@@ -45,6 +47,8 @@ OUTLINE_ARGS = {"root": "/", "format": "outline", "depth": 2}
 """What ``houdini://outline`` reads (review 11 B11)."""
 MAX_STALE_ENTRIES = 5
 """How many stale registry entries one call may delete before giving up."""
+LOAD_HEALTH_TIMEOUT_S = 2.0
+"""``/health`` per candidate when a role picks the least busy instance."""
 PROGRESS_INTERVAL_S = 0.5
 """How often the bridge polls the host for job progress while a call with a
 ``progressToken`` is in flight (BIBLE §7)."""
@@ -106,8 +110,9 @@ def mutates(spec: ToolSpec, args: dict[str, Any]) -> bool:
 
     With several live instances and none pinned these calls refuse with
     ``ambiguous_instance`` (review 19 papercut 2); reads go to the preferred instance.
-    ``viewport_capture`` counts as a read: it leaves no nodes, undo step or dirty flag."""
-    if spec.read_only or spec.bridge_local or spec.name == "viewport_capture":
+    ``viewport_capture`` and ``look`` count as reads: they leave no nodes, undo step or
+    dirty flag."""
+    if spec.read_only or spec.bridge_local or spec.name in ("viewport_capture", "look"):
         return False
     if spec.name in READ_ACTIONS:
         return args.get("action") not in READ_ACTIONS[spec.name]
@@ -125,9 +130,19 @@ JOB_SNAPSHOT_KEYS = (
 )  # fmt: skip
 
 
+def reads_as(name: str, args: dict[str, Any]) -> str:
+    """The 1.4 tool a call reads as for routing: ``inspect what: events`` is ``events``
+    and ``inspect what: jobs`` is ``job`` (spec-2.0 §2.3), so they get the same cursor
+    tagging and job-id routing; every other call is itself."""
+    if name == "inspect":
+        return {"events": "events", "jobs": "job"}.get(args.get("what"), name)
+    return name
+
+
 def job_owner(name: str, args: dict[str, Any]) -> int | None:
-    """The pid a ``job`` call must go to, from its ``<pid>-<id>`` job id; else None."""
-    if name != "job":
+    """The pid a ``job`` call (or ``inspect what: jobs``) must go to, from its
+    ``<pid>-<id>`` job id; else None."""
+    if reads_as(name, args) != "job":
         return None
     match = JOB_ID_RE.match(str(args.get("job_id") or ""))
     return int(match.group(1)) if match else None
@@ -146,7 +161,7 @@ def events_cursor(args: dict[str, Any]) -> tuple[int | None, int]:
     if match is None:
         raise ToolError(
             "invalid_argument",
-            f"since must be the next_since of an earlier events call ('<pid>:<seq>') or a seq "
+            f"since must be the next_since of an earlier events read ('<pid>:<seq>') or a seq "
             f"number, not {since!r}.",
             hint="pass next_since back as since, or omit it to read from the start",
         )
@@ -171,16 +186,47 @@ def tag_events(
     return out
 
 
-def unknown_job_error(job_id: str, pid: int) -> ToolError:
-    """``job_not_found`` for a job id whose pid was never a Houdini this bridge knew."""
+def _job_lister(profile: str) -> str:
+    """The call that lists every job, as ``profile`` serves it."""
+    return migration.hint_tool("job", profile, action="list", all=True) or (
+        migration.hint_tool("inspect", profile, what="jobs") or "houdini_status"
+    )
+
+
+def _job_starters(profile: str) -> str:
+    """The tools of ``profile`` that start jobs, for "as render or cook returned it"."""
+    names = [t for t in ("render", "cook", "pdg") if migration.hint_tool(t, profile)]
+    if not names:
+        return "the call that started it"
+    return names[0] if len(names) == 1 else f"{', '.join(names[:-1])} or {names[-1]}"
+
+
+def unknown_job_error(job_id: str, pid: int, profile: str = "core") -> ToolError:
+    """``job_not_found`` for a ``<pid>-<id>`` job id whose pid was never a Houdini this
+    bridge knew."""
     return ToolError(
         "job_not_found",
         f"No job {job_id}: pid {pid} is not a Houdini this server knows (no registry entry "
         "or launch record), so no job of that id ran here.",
-        hint="job {action: list, all: true} lists the live jobs of every Houdini; pass a "
-        "job_id exactly as render, cook or pdg returned it.",
+        hint=f"{_job_lister(profile)} lists the live jobs of every Houdini; pass a job_id "
+        f"exactly as {_job_starters(profile)} returned it.",
         retryable=False,
         detail={"job_id": job_id, "pid": pid},
+    )
+
+
+def ledger_job_error(job_id: str, profile: str = "core") -> ToolError:
+    """``job_not_found`` for an id of the ledger's form (``j...``) the ledger does not have
+    (review 25 papercut 5: the 1.x wording about pids and Houdini restarts was wrong for
+    it)."""
+    return ToolError(
+        "job_not_found",
+        f"No job {job_id}: this server's ledger has no job with that id.",
+        hint=f"Job ids like j3f9a1c are the ledger's: it keeps every job this server started, "
+        f"across a server restart. {_job_lister(profile)} lists them; pass a job_id exactly "
+        f"as {_job_starters(profile)} returned it.",
+        retryable=False,
+        detail={"job_id": job_id},
     )
 
 
@@ -264,9 +310,12 @@ class Bridge:
         scan: Callable[[], list[registry.Instance]] | None = None,
         launcher: Launcher | None = None,
         launches: registry.LaunchLog | None = None,
+        ledger: Ledger | None = None,
     ) -> None:
         self.config = config or BridgeConfig.load()
-        profile = self.config.profile if self.config.profile in catalog.PROFILES else "core"
+        profile = profiles.normalize(self.config.profile) or profiles.DEFAULT_PROFILE
+        if profile != self.config.profile:  # an alias (v2) or an unknown name
+            self.config = dataclasses.replace(self.config, profile=profile)
         self.tools: tuple[ToolSpec, ...] = (
             tuple(tools) if tools is not None else catalog.for_profile(profile)
         )
@@ -275,8 +324,18 @@ class Bridge:
         self.scan: Callable[[], list[registry.Instance]] = scan or (lambda: registry.scan())
         self.launches = launches or registry.LaunchLog()
         self.launcher = launcher or Launcher(
-            self.config.hfs or None, scan=self.scan, launches=self.launches
+            self.config.hfs or None,
+            scan=self.scan,
+            launches=self.launches,
+            on_launch=lambda pid, argv, work_dir, mode: self.ledger.record_launch(
+                pid, argv, work_dir, mode
+            ),
         )
+        self._ledger = ledger
+        self._reconciled = False
+        self._memory_ledger = scan is not None
+        """A bridge given a fake ``scan`` (tests) keeps its ledger in memory unless one is
+        passed in, so it never writes to the real state dir."""
         self.preferred_pid: int | None = None
         """The pinned pid (``houdini_connect {pid}`` or ``{launch}``); BIBLE §3.6."""
         self.pinned: registry.Instance | None = None
@@ -295,6 +354,55 @@ class Bridge:
         """request_id -> the instance a call in flight was sent to (progress polling)."""
         self._seen_pids: set[int] = set()
         """Every Houdini pid this bridge has seen live in the registry."""
+
+    # -- the ledger (spec-2.0 §3) -----------------------------------------------------------
+
+    @property
+    def ledger(self) -> Ledger:
+        """The bridge ledger (``<state_dir>/ledger.sqlite``), opened on first use and then
+        reconciled with the registry: remembered instances that are gone are marked dead."""
+        if self._ledger is None:
+            self._ledger = Ledger() if self._memory_ledger else Ledger.at()
+        if not self._reconciled:
+            self._reconciled = True
+            try:
+                live = self.scan()
+            except Exception:  # noqa: BLE001 - reconciling is best effort
+                log.debug("ledger reconcile scan failed", exc_info=True)
+            else:
+                self._ledger.observe(live, reconcile=True)
+        return self._ledger
+
+    @property
+    def v2(self) -> bool:
+        """Whether this bridge serves a 2.0 profile (roles, ``on``, ledger job ids,
+        resources); ``compat_1x`` serves the 1.4 surface."""
+        return profiles.is_2x(self.config.profile)
+
+    def role_of(self, inst: registry.Instance) -> str:
+        """``inst``'s role: as ``houdini_connect {role}`` set it, else editor for a GUI
+        Houdini and worker for a headless one (spec-2.0 §3)."""
+        return self.ledger.role_of(inst.pid, inst.ui)
+
+    def load_of(self, inst: registry.Instance) -> tuple[int, bool] | None:
+        """``(jobs_running, busy)`` from ``inst``'s ``/health``; None when it fails."""
+        try:
+            health = self.client_for(inst).health(timeout_s=LOAD_HEALTH_TIMEOUT_S)
+        except ToolError:
+            return None
+        return int(health.get("jobs_running") or 0), bool(health.get("busy"))
+
+    def instance_meta(self, inst: registry.Instance) -> dict[str, Any]:
+        """``_meta.instance``; the v2 profile adds the instance's ``role``."""
+        meta = instance_meta(inst)
+        if self.v2:
+            meta["role"] = self.role_of(inst)
+        return meta
+
+    def _note_live(self, live: list[registry.Instance]) -> None:
+        """Remember the live instances (``job_not_found`` vs ``instance_lost``; ledger)."""
+        self._seen_pids.update(inst.pid for inst in live)
+        self.ledger.observe(live, reconcile=True)
 
     # -- instances -----------------------------------------------------------------------
 
@@ -331,7 +439,11 @@ class Bridge:
         )
 
     def client_for(self, inst: registry.Instance) -> HostClient:
-        return self.client_factory(inst.port, inst.token)
+        client = self.client_factory(inst.port, inst.token)
+        if isinstance(client, HostClient):
+            # The host runs the 1.4 tools for a compat_1x bridge whatever its own profile.
+            client.profile = self.config.profile
+        return client
 
     def mark_verified(self, inst: registry.Instance) -> None:
         self._verified.add((inst.pid, inst.port, inst.token))
@@ -379,11 +491,11 @@ class Bridge:
         if target_pid is not None:
             live = self.scan()
             owner = next((inst for inst in live if inst.pid == target_pid), None)
-            self._seen_pids.update(inst.pid for inst in live)
+            self._note_live(live)
             if owner is None:
                 job_id = str((args or {}).get("job_id"))
                 if not self._known_pid(target_pid):
-                    raise unknown_job_error(job_id, target_pid)
+                    raise unknown_job_error(job_id, target_pid, self.config.profile)
                 raise self.job_lost_error(target_pid, job_id, live)
             self._check_hp(owner)
             return owner, [], None
@@ -394,7 +506,7 @@ class Bridge:
                 hint="call houdini_connect (with pid, launch, or no arguments) to attach again",
             )
         live = self.scan()
-        self._seen_pids.update(inst.pid for inst in live)
+        self._note_live(live)
         sel = registry.select(live, self.preferred_pid)
         if sel.lost_pid is not None:
             raise self.lost_error(live)
@@ -446,7 +558,7 @@ class Bridge:
             return True
         if any(inst is not None and inst.pid == pid for inst in (self.pinned, self.last_target)):
             return True
-        return self.launches.has(pid)
+        return self.launches.has(pid) or self.ledger.knows_pid(pid)
 
     def job_lost_error(self, pid: int, job_id: str, live: list[registry.Instance]) -> ToolError:
         """``instance_lost`` for a job whose Houdini has exited, with its last known status."""
@@ -454,8 +566,12 @@ class Bridge:
         label = cached["label"] if cached else ""
         if not label and self.pinned is not None and self.pinned.pid == pid:
             label = self.pinned.label
+        if not label:
+            remembered = self.ledger.instance(pid)
+            label = remembered["label"] if remembered else ""
         label = label or "houdini"
-        last = cached["status"] if cached else None
+        # A restarted bridge has no cache: the ledger kept the last status it saw.
+        last = cached["status"] if cached else self.ledger.last_status(job_id)
         message = (
             f"Job {job_id} ran in Houdini pid {pid} ({label}), which has exited; its jobs are gone."
         )
@@ -489,6 +605,9 @@ class Bridge:
             snapshot = {key: row[key] for key in JOB_SNAPSHOT_KEYS if key in row}
             self._jobs[job_id] = {"pid": inst.pid, "label": inst.label, "status": snapshot}
             self._jobs.move_to_end(job_id)
+            self.ledger.record_job(inst.pid, row)
+            if row is payload and row.get("state") == "done" and "result" in row:
+                self.ledger.store_result(job_id, row["result"])
         while len(self._jobs) > JOB_CACHE_SIZE:
             self._jobs.popitem(last=False)
 
@@ -567,8 +686,106 @@ class Bridge:
                 return False
             time.sleep(0.1)
 
+    # -- on and ledger job ids (spec-2.0 §2.5, §3) -------------------------------------------
+
+    def _host_job_id(self, name: str, args: dict[str, Any]) -> tuple[dict[str, Any], str | None]:
+        """``args`` with a ledger job id (``j7f3a9``) replaced by the host's ``<pid>-<id>``,
+        and that ledger id; ``job_not_found`` when the ledger has no such job."""
+        job_id = args.get("job_id")
+        if reads_as(name, args) != "job" or not looks_like_ledger_id(job_id):
+            return args, None
+        mapped = self.ledger.to_host(job_id) if is_ledger_id(job_id) else None
+        if mapped is None:
+            raise ledger_job_error(str(job_id), self.config.profile)
+        return dict(args, job_id=mapped[1]), job_id
+
+    def _remembered(self, target: routing.Target) -> dict[str, Any] | None:
+        """The ledger's row for an ``on`` pid or name that is not live (to name it)."""
+        if target.kind == "pid":
+            return self.ledger.instance(int(target.value))
+        if target.kind == "name":
+            return self.ledger.find_name(str(target.value))
+        return None
+
+    def _route(
+        self,
+        name: str,
+        args: dict[str, Any],
+        target_pid: int | None,
+        on: routing.Target | None,
+    ) -> tuple[registry.Instance, list[str], str | None]:
+        """:meth:`_resolve`, or for ``on`` the instance it names, whatever is pinned or
+        selected: no ambiguity refusal (the target is explicit) and the pin stays."""
+        if on is None:
+            return self._resolve(name, args, target_pid)
+        live = self.scan()
+        self._note_live(live)
+        inst = routing.pick(
+            on,
+            live,
+            role_of=self.role_of,
+            load=self.load_of,
+            remembered=self._remembered,
+            tool=name,
+        )
+        self._check_hp(inst)
+        return inst, [], None
+
+    def _ledger_result(self, job_id: str, exc: ToolError) -> dict[str, Any] | None:
+        """``job result`` for a finished job whose Houdini has exited: the result the
+        ledger kept, if it fetched one before (spec-2.0 §3)."""
+        row = self.ledger.job(job_id)
+        if row is None or row["state"] != "done" or not row["has_result"]:
+            return None
+        detail = exc.detail if isinstance(exc.detail, dict) else {}
+        return {
+            **row["status"],
+            "result": self.ledger.result(job_id),
+            "note": f"Houdini pid {detail.get('pid')} has exited; this is the result the "
+            "bridge ledger kept.",
+        }
+
     def forward(
         self, name: str, args: dict[str, Any], request_id: str | None = None
+    ) -> tuple[bool, dict[str, Any], dict[str, Any]]:
+        """Send a call to its Houdini: :meth:`_forward`, plus ``on`` (v2: ``cook``,
+        ``render``, ``job``, ``look``) and ledger job ids both ways (a ledger id is
+        accepted in every profile; v2 results carry ledger ids instead of host ids)."""
+        on = None
+        if "on" in args and name in routing.ROUTABLE:
+            on = routing.parse_on(args["on"])
+            args = {key: value for key, value in args.items() if key != "on"}
+        args, asked_as = self._host_job_id(name, args)
+        try:
+            ok, payload, meta = self._forward(name, args, request_id, on)
+        except ToolError as exc:
+            host_id = args.get("job_id")
+            if exc.code == "instance_lost" and args.get("action") == "result" and host_id:
+                kept = self._ledger_result(str(host_id), exc)
+                if kept is not None:
+                    ok, payload, meta = True, kept, {}
+                    return ok, self._present_jobs(payload), meta
+            if self.v2 and isinstance(host_id, str):
+                ledger_id = asked_as or self.ledger.ledger_id(host_id)
+                if ledger_id:
+                    exc.message = exc.message.replace(host_id, ledger_id)
+                    wrapped = routing.rewrite_job_ids({"detail": exc.detail}, self.ledger.ledger_id)
+                    exc.detail = wrapped["detail"]
+            raise
+        return ok, self._present_jobs(payload), meta
+
+    def _present_jobs(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """v2: the agent sees ledger job ids (opaque; the bridge knows the instance)."""
+        if not self.v2:
+            return payload
+        return routing.rewrite_job_ids(payload, self.ledger.ledger_id)
+
+    def _forward(
+        self,
+        name: str,
+        args: dict[str, Any],
+        request_id: str | None = None,
+        on: routing.Target | None = None,
     ) -> tuple[bool, dict[str, Any], dict[str, Any]]:
         request_id = request_id or uuid.uuid4().hex
         if name == "job":
@@ -576,10 +793,12 @@ class Bridge:
                 return self._job_list_all()
             args = {key: value for key, value in args.items() if key != "all"}
         target_pid = job_owner(name, args)
-        cursor = events_cursor(args) if name == "events" else None
+        if target_pid is not None:
+            on = None  # a job id names its Houdini
+        cursor = events_cursor(args) if reads_as(name, args) == "events" else None
         stale: list[str] = []
         for _attempt in range(MAX_STALE_ENTRIES):
-            inst, warnings, ambiguous = self._resolve(name, args, target_pid)
+            inst, warnings, ambiguous = self._route(name, args, target_pid, on)
             client = self.client_for(inst)
             try:
                 if (inst.pid, inst.port, inst.token) not in self._verified:
@@ -618,7 +837,7 @@ class Bridge:
                 self._inflight.pop(request_id, None)
             meta = dict(meta)
             meta.setdefault("pid", inst.pid)
-            meta["instance"] = instance_meta(inst)
+            meta["instance"] = self.instance_meta(inst)
             if ok:
                 self._remember_jobs(inst, payload)
                 if cursor is not None:
@@ -653,14 +872,23 @@ class Bridge:
         try:
             client = self.client_for(inst)
             job_id = args.get("job_id")
+            if is_ledger_id(job_id):
+                mapped = self.ledger.to_host(job_id)
+                job_id = mapped[1] if mapped else None
             if isinstance(job_id, str) and job_id:
                 ok, snapshot, _meta = client.job(job_id, timeout_s=5.0)
-                return snapshot if ok else None
-            jobs = client.call_jobs(request_id)
+                snapshot = snapshot if ok else None
+            else:
+                jobs = client.call_jobs(request_id)
+                snapshot = jobs[-1] if jobs else None
+            if not isinstance(snapshot, dict) or not isinstance(snapshot.get("job_id"), str):
+                return snapshot
+            # The poller feeds the ledger; progress is reported from the ledger's view.
+            self.ledger.record_job(inst.pid, snapshot)
+            return self.ledger.last_status(snapshot["job_id"]) or snapshot
         except Exception:  # noqa: BLE001 - progress must never fail the call
             log.debug("progress poll for %s failed", name, exc_info=True)
             return None
-        return jobs[-1] if jobs else None
 
     def _timeout(self, args: dict[str, Any]) -> float:
         for key in ("timeout_s", "wait_s"):
@@ -735,6 +963,10 @@ class Bridge:
         """Validate, dispatch and shape one ``tools/call``. Unknown tools raise ``MCPError``.
         ``request_id`` names the host call, so progress can be polled while it runs."""
         spec = self._by_name.get(name)
+        if spec is None and self.v2 and migration.replacement(name):
+            # A 1.4 name on a 2.0 profile: say what replaces it (spec-2.0 §8).
+            error = migration.removed_error(name, self.config.profile)
+            return make_result(self.config.result_content, name, error.to_dict(), is_error=True)
         if spec is None:
             close = difflib.get_close_matches(name, list(self._by_name), n=3, cutoff=0.6)
             message = f"Unknown tool: {name}." + (
@@ -745,10 +977,13 @@ class Bridge:
                 data["candidates"] = close
             raise MCPError(types.INVALID_PARAMS, message, data)
         args = dict(arguments or {})
-        violations = validate(args, spec.input_schema)
+        violations = validate(args, spec.input_schema, ARG_RENAMES.get(name))
         if violations:
-            # Review 21 papercut 1: a flat item of a batch tool gets the corrected call.
-            wrapped = shape_hint(args, spec.input_schema)
+            # Review 21 papercut 1: a flat item of a batch tool gets the corrected call;
+            # review 25 papercut 2: so does a 1.4 argument name (inspect {path} -> target).
+            wrapped = shape_hint(args, spec.input_schema) or rename_hint(
+                name, args, spec.input_schema
+            )
             error = ToolError(
                 "invalid_argument",
                 f"{len(violations)} argument problem(s) for {name}: " + "; ".join(violations[:5]),
@@ -859,7 +1094,11 @@ class Bridge:
 
     def read_resource(self, uri: str) -> types.ReadResourceResult:
         if uri in ("hocuspocus://guide", "hocuspocus://tools"):
-            text = guide_text() if uri == "hocuspocus://guide" else tools_text(self.tools)
+            text = (
+                guide_text(self.config.profile)
+                if uri == "hocuspocus://guide"
+                else tools_text(self.tools)
+            )
             return types.ReadResourceResult(
                 contents=[types.TextResourceContents(uri=uri, text=text, mime_type="text/markdown")]
             )
@@ -912,7 +1151,7 @@ def _node_path(raw: str) -> str:
 
 # -- prompts -----------------------------------------------------------------------------
 
-_PROMPTS: dict[str, tuple[str, list[tuple[str, str, bool]], str]] = {
+PROMPTS_1X: dict[str, tuple[str, list[tuple[str, str, bool]], str]] = {
     "inspect_scene": (
         "Summarise the open Houdini scene: hip file, networks, problems.",
         [("root", "Network to start from (default /obj)", False)],
@@ -973,29 +1212,44 @@ _PROMPTS: dict[str, tuple[str, list[tuple[str, str, bool]], str]] = {
         "first frame and at a quarter turn, and show both images.",
     ),
 }
-_PROMPT_DEFAULTS = {"root": "/obj", "parent": "a new geo node under /obj", "frames": "48"}
+"""The 1.4 prompts, in the 1.4 tools' words: ``compat_1x`` serves them (spec-2.0 §8); the
+2.0 profiles serve :data:`hocuspocus.bridge.instructions.PROMPTS` (spec-2.0 §2.8)."""
+PROMPT_DEFAULTS_1X = {"root": "/obj", "parent": "a new geo node under /obj", "frames": "48"}
 
 
-def list_prompts() -> list[types.Prompt]:
+def _prompts(
+    profile: str | None,
+) -> tuple[dict[str, tuple[str, list[tuple[str, str, bool]], str]], dict[str, str]]:
+    """The prompt table and defaults for ``profile`` (``None``: a 2.0 profile)."""
+    if profile is not None and not profiles.is_2x(profile):
+        return PROMPTS_1X, PROMPT_DEFAULTS_1X
+    return PROMPTS, PROMPT_DEFAULTS
+
+
+def list_prompts(profile: str | None = None) -> list[types.Prompt]:
+    table, _defaults = _prompts(profile)
     return [
         types.Prompt(
             name=name,
             description=desc,
             arguments=[types.PromptArgument(name=a, description=d, required=r) for a, d, r in args],
         )
-        for name, (desc, args, _tpl) in _PROMPTS.items()
+        for name, (desc, args, _tpl) in table.items()
     ]
 
 
-def get_prompt(name: str, arguments: dict[str, str] | None) -> types.GetPromptResult:
-    if name not in _PROMPTS:
-        raise MCPError(
-            types.INVALID_PARAMS, f"Unknown prompt: {name}", {"prompts": sorted(_PROMPTS)}
-        )
-    desc, spec, template = _PROMPTS[name]
-    values = dict(_PROMPT_DEFAULTS)
+def get_prompt(
+    name: str, arguments: dict[str, str] | None, profile: str | None = None
+) -> types.GetPromptResult:
+    table, defaults = _prompts(profile)
+    if name not in table:
+        raise MCPError(types.INVALID_PARAMS, f"Unknown prompt: {name}", {"prompts": sorted(table)})
+    desc, spec, template = table[name]
+    values = dict(defaults)
     values.update({k: v for k, v in (arguments or {}).items() if v})
-    missing = [a for a, _d, required in spec if required and not values.get(a)]
+    # Defaults fill optional arguments only: a required one must come from the caller.
+    given = {k for k, v in (arguments or {}).items() if v}
+    missing = [a for a, _d, required in spec if required and a not in given]
     if missing:
         raise MCPError(types.INVALID_PARAMS, f"Prompt {name} needs: {', '.join(missing)}")
     text = template.format(**{a: values.get(a, "") for a, _d, _r in spec})
@@ -1099,6 +1353,28 @@ async def _call_with_progress(
     return result
 
 
+HANDSHAKE_METHODS = frozenset({"initialize", "server/discover"})
+"""The requests whose result carries ``serverInfo`` (:func:`server_info_once`)."""
+
+
+async def server_info_once(ctx: Any, call_next: Any) -> Any:
+    """Server middleware: keep the SDK's ``_meta`` ``serverInfo`` stamp on the handshake
+    (``initialize``, ``server/discover``, where the client reads it) and drop it from every
+    other result (review 25 papercut 4: about 200 B repeated in every tool result's
+    ``_meta``). ``_meta.instance`` and ``_meta.timing`` are untouched."""
+    result = await call_next(ctx)
+    if getattr(ctx, "method", None) in HANDSHAKE_METHODS or not isinstance(result, dict):
+        return result
+    meta = result.get("_meta")
+    if not isinstance(meta, dict) or types.SERVER_INFO_META_KEY not in meta:
+        return result
+    rest = {key: value for key, value in meta.items() if key != types.SERVER_INFO_META_KEY}
+    out = {key: value for key, value in result.items() if key != "_meta"}
+    if rest:
+        out["_meta"] = rest
+    return out
+
+
 def build_server(bridge: Bridge | None = None) -> Server[Any]:
     bridge = bridge or Bridge()
 
@@ -1127,12 +1403,12 @@ def build_server(bridge: Bridge | None = None) -> Server[Any]:
         return await anyio.to_thread.run_sync(bridge.read_resource, str(params.uri))
 
     async def on_list_prompts(ctx: Any, params: Any) -> types.ListPromptsResult:
-        return types.ListPromptsResult(prompts=list_prompts())
+        return types.ListPromptsResult(prompts=list_prompts(bridge.config.profile))
 
     async def on_get_prompt(
         ctx: Any, params: types.GetPromptRequestParams
     ) -> types.GetPromptResult:
-        return get_prompt(params.name, params.arguments)
+        return get_prompt(params.name, params.arguments, bridge.config.profile)
 
     def tool_schema(name: str) -> dict[str, Any] | None:
         spec = bridge._by_name.get(name)
@@ -1143,7 +1419,7 @@ def build_server(bridge: Bridge | None = None) -> Server[Any]:
         version=__version__,
         title="HocusPocus",
         description="Drive a live SideFX Houdini session.",
-        instructions=INSTRUCTIONS,
+        instructions=instructions_for(bridge.config.profile),
         get_tool_input_schema=tool_schema,
         on_list_tools=on_list_tools,
         on_call_tool=on_call_tool,
@@ -1154,6 +1430,10 @@ def build_server(bridge: Bridge | None = None) -> Server[Any]:
         on_get_prompt=on_get_prompt,
     )
     server.bridge = bridge  # type: ignore[attr-defined]
+    server.middleware.append(server_info_once)
+    from .resources import install as install_resources
+
+    install_resources(server, bridge)  # profile v2: resources with etags and subscriptions
     return server
 
 
@@ -1161,5 +1441,6 @@ async def serve_stdio(bridge: Bridge | None = None) -> None:
     from mcp.server.stdio import stdio_server
 
     server = build_server(bridge)
+    _ = server.bridge.ledger  # type: ignore[attr-defined]  # open and reconcile it at start
     async with stdio_server() as (read_stream, write_stream):
         await server.run(read_stream, write_stream, server.create_initialization_options())

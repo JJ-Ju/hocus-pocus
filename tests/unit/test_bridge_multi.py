@@ -67,7 +67,7 @@ class Host:
             "pid": self.inst.pid,
             "houdini": "22.0.466",
             "generation": 1,
-            "host_version": "1.4.0",
+            "host_version": "2.0.0",
             **self.health_extra,
         }
 
@@ -100,7 +100,8 @@ def make(*instances: Instance, config: BridgeConfig | None = None):
         return hosts[port]
 
     bridge = Bridge(
-        config or BridgeConfig(profile="full"),
+        # The 1.4 tools these tests call are served by compat_1x (spec-2.0 §8).
+        config or BridgeConfig(profile="compat_1x"),
         client_factory=factory,
         scan=lambda: list(live),
     )
@@ -546,12 +547,32 @@ def test_guide_is_instructions_and_recipes_under_8_kb():
     assert "opengl_rop" not in guide and 'type: "opengl"' not in guide
 
 
+def test_v2_guide_is_under_6_5_kb_and_warns_about_gui_dialogs():
+    """spec-2.0 §7 M4: the 2.0 guide fits 6.5 KB with every recipe, and carries the GUI
+    modal-dialog paragraph (docs/parity.md G5)."""
+    from hocuspocus.bridge.instructions import GUIDE_2X_MAX_BYTES, guide_text
+
+    guide = guide_text("core")
+    assert len(guide.encode("utf-8")) <= GUIDE_2X_MAX_BYTES == 6656
+    for heading in (
+        "### Build, check and look",
+        "### Two Houdinis",
+        "### Copernicus",
+        "### Flipbook frames",
+        "### Add a spare parm",
+        "### GUI sessions: never open a dialog",
+    ):
+        assert heading in guide, heading
+    assert "hou.ui" in guide and "houdini_busy" in guide and "busy: true" in guide
+
+
 def test_tools_resource_is_the_reference_for_the_profile():
     bridge, _hosts, _live = make(GUI, config=BridgeConfig(profile="core"))
     resources = {str(r.uri): r for r in bridge.list_resources()}
     assert "hocuspocus://tools" in resources
     text = bridge.read_resource("hocuspocus://tools").contents[0].text
-    assert "## houdini_status" in text and "## viewport_capture" in text
+    assert "## houdini_status" in text and "## look" in text
+    assert "## viewport_capture" not in text  # compat_1x only
     assert "## events" not in text  # a full-profile tool
     full, _h, _l = make(GUI)
     assert "## events" in full.read_resource("hocuspocus://tools").contents[0].text
@@ -566,9 +587,10 @@ def test_instructions_mention_pinning_and_the_tool_reference():
 
 
 def _prompt(name, args=None):
+    """The 1.4 prompts, which compat_1x keeps serving (spec-2.0 §8)."""
     from hocuspocus.bridge.server import get_prompt
 
-    return get_prompt(name, args).messages[0].content.text
+    return get_prompt(name, args, "compat_1x").messages[0].content.text
 
 
 def test_inspect_scene_reads_the_outline_and_asks_to_pin():
@@ -617,7 +639,7 @@ def test_made_up_job_id_is_job_not_found_not_a_dead_houdini(job_id):
     assert (
         "exited" not in error["message"] and "not a Houdini this server knows" in error["message"]
     )
-    assert "job {action: list, all: true}" in error["hint"]
+    assert 'job {action: "list", all: true}' in error["hint"]
     assert all(call[0] != "job" for host in hosts.values() for call in host.calls)
 
 

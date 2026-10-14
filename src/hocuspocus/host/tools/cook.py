@@ -19,6 +19,7 @@ import time
 from typing import Any
 
 from hocuspocus.tools.errors import ToolError
+from hocuspocus.tools.migration import hint_tool
 
 from ..dispatch import call_timeout
 from ._common import bad_arg, number, parse_limit
@@ -497,6 +498,26 @@ def collapse_frames(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return out
 
 
+MAX_FRAME_ROWS = 12
+"""``summary: bbox`` rows a ``frame_range`` result carries at most (spec-2.0 §7 M4)."""
+
+
+def frame_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """``{frames}`` for a result: :func:`collapse_frames`, and past :data:`MAX_FRAME_ROWS`
+    runs only the first and last six with ``frames_truncated: true`` and ``frames_rows``,
+    the number of runs (review 22 soak: 24 bbox rows were 3 KB of a 24-frame cook). The
+    same rows go into a job's result, so a pushed-progress completion carries no more."""
+    runs = collapse_frames(rows)
+    if len(runs) <= MAX_FRAME_ROWS:
+        return {"frames": runs}
+    half = MAX_FRAME_ROWS // 2
+    return {
+        "frames": runs[:half] + runs[-half:],
+        "frames_truncated": True,
+        "frames_rows": len(runs),
+    }
+
+
 def _merge_frame_report(
     merged: dict[str, dict[str, Any]], report: dict[str, Any], frame: float
 ) -> None:
@@ -525,6 +546,79 @@ def _restore_frame(ctx: HostContext, previous: float) -> None:
     from .visual import run_with_fallback
 
     run_with_fallback(ctx.executor, lambda: hou.setFrame(previous), 60.0)
+
+
+FRAME_EPS = 1e-6
+
+
+class Playhead:
+    """The playbar around a ranged cook (docs/parity.md G4). No ``hou``: the caller reads
+    and sets the frame on the main thread.
+
+    In a GUI session every frame of ``cook {frame_range}`` is a visible ``setFrame``
+    between idle ticks, and the user may scrub in between. The cook needs its frames, so
+    a step still sets its own; but at the end the playbar goes back to the start frame
+    only when nobody moved it during the job. When the user moved it, it stays where the
+    user put it last (a scrub before the last step is put back after it)."""
+
+    def __init__(self, start: float) -> None:
+        self.start = start
+        self.last: float | None = None
+        """The frame the last step set."""
+        self.user: float | None = None
+        """The frame the user moved the playbar to during the job, if they did."""
+
+    def before_step(self, now: float) -> None:
+        if self.last is not None and abs(now - self.last) > FRAME_EPS:
+            self.user = now
+
+    def stepped(self, frame: float) -> None:
+        self.last = frame
+
+    def finish(self, now: float) -> tuple[str, float]:
+        """``(action, frame)``: ``restore`` (set ``frame``, the start), ``user`` (set
+        ``frame``, where the user moved it before the last step) or ``moved`` (leave it:
+        the user moved it after the last step)."""
+        self.before_step(now)
+        if self.user is None:
+            return "restore", self.start
+        if abs(now - self.user) <= FRAME_EPS:
+            return "moved", now
+        return "user", self.user
+
+    def note(self, action: str, frame: float, ui: bool) -> str | None:
+        if action == "restore":
+            if not ui:
+                return None
+            return (
+                "The GUI playbar stepped through the cooked frames and was put back to frame "
+                f"{_num(frame)}."
+            )
+        return (
+            f"The playbar was moved to frame {_num(frame)} during the cook, so it was left "
+            f"there rather than put back to frame {_num(self.start)}."
+        )
+
+
+def _finish_playhead(ctx: HostContext, playhead: Playhead) -> str | None:
+    """Put the playbar where :class:`Playhead` says, even after a cancel; the note to
+    add, if any. Never raises."""
+    import hou
+
+    from .visual import run_with_fallback
+
+    outcome: dict[str, Any] = {}
+
+    def finish() -> None:
+        action, frame = playhead.finish(hou.frame())
+        if action != "moved":
+            hou.setFrame(frame)
+        outcome.update(action=action, frame=frame)
+
+    failed = run_with_fallback(ctx.executor, finish, 60.0)
+    if failed or not outcome:
+        return None
+    return playhead.note(outcome["action"], outcome["frame"], bool(ctx.ui))
 
 
 class _Inline:
@@ -705,21 +799,27 @@ def _ranged(
     """Cook every frame as its own main-thread step (a sim advances one frame per step)."""
     import hou
 
-    previous = job.run_main(hou.frame, timeout_s)
+    playhead = Playhead(job.run_main(hou.frame, timeout_s))
     total = len(frames)
     frame_rows: list[dict[str, Any]] = []
     merged: dict[str, dict[str, Any]] = {}
     started = time.perf_counter()
     cooked = 0
+    playbar_note: str | None = None
+
+    def step(frame: float) -> Any:
+        playhead.before_step(hou.frame())
+        out = _frame_step(paths, frame, force, summary)
+        playhead.stepped(frame)
+        return out
+
     try:
         for index, value in enumerate(frames):
             # The count is current, the frames finished (review 20 N7).
             job.set_progress(
                 index, total, f"{index}/{total} frames done, cooking frame {_num(value)}"
             )
-            reports, rows = job.run_main(
-                lambda f=value: _frame_step(paths, f, force, summary), JOB_STEP_TIMEOUT_S
-            )
+            reports, rows = job.run_main(lambda f=value: step(f), JOB_STEP_TIMEOUT_S)
             cooked += 1
             frame_rows.extend(rows)
             for report in reports:
@@ -732,19 +832,21 @@ def _ranged(
 
         partial: dict[str, Any] = {"frames_cooked": cooked, "results": list(merged.values())}
         if summary == "bbox":
-            partial["frames"] = collapse_frames(frame_rows)
+            partial.update(frame_summary(frame_rows))
         raise cancelled_with_partial(job, partial, f"{cooked} of {total} frames") from exc
     finally:
-        _restore_frame(ctx, previous)
+        playbar_note = _finish_playhead(ctx, playhead)
     job.set_progress(total, total, "done")
-    step = frames[1] - frames[0] if total > 1 else 1.0
+    increment = frames[1] - frames[0] if total > 1 else 1.0
     extra: dict[str, Any] = {
-        "frame_range": [_num(frames[0]), _num(frames[-1]), _num(step)],
+        "frame_range": [_num(frames[0]), _num(frames[-1]), _num(increment)],
         "frames_cooked": total,
         "total_ms": round((time.perf_counter() - started) * 1000, 1),
     }
     if summary == "bbox":
-        extra["frames"] = collapse_frames(frame_rows)
+        extra.update(frame_summary(frame_rows))
+    if playbar_note:
+        extra["notes"] = [playbar_note]
     return [merged[p] for p in paths], extra
 
 
@@ -770,7 +872,8 @@ def writer_notes(paths: list[str]) -> list[str]:
             notes.append(
                 f"Cooking {path} does not write files: a cook passes its input through. "
                 f"render {{rop_path: {path}}} saves its frame range as a job with progress and "
-                f"cancel; parm_set press on {path}/execute saves in one blocking call."
+                f"cancel; {hint_tool('parm_set', path=f'{path}/execute', press=True)} saves in "
+                "one blocking call."
             )
     return notes
 
@@ -1170,7 +1273,7 @@ def _parse_problems_cursor(cursor: Any) -> tuple[int, int, int | None]:
         raise ToolError(
             "invalid_argument",
             f"Invalid cursor {cursor!r}.",
-            hint="Pass next_cursor from the previous problems result unchanged.",
+            hint="Pass next_cursor from the previous result unchanged.",
         )
     return offset, node_start, end
 

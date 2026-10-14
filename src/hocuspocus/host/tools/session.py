@@ -74,20 +74,36 @@ def recent_files(ctx: HostContext, limit: int = RECENT_LIMIT) -> list[str]:
 
 
 def scene_dirty(ctx: HostContext) -> bool:
-    """The dirty flag to report.
+    """The dirty flag every tool reports and ``on_unsaved`` (``hip_new``, ``hip_open``,
+    ``houdini_connect {quit}``) and ``pdg cook`` decide on, the same in both modes
+    (docs/parity.md G1, BIBLE §3.2): the host's tracked flag (agent mutations) OR a change
+    made outside HocusPocus since the last save, load or clear (an ``origin: other`` node
+    event, or in the GUI Houdini's flag set between two calls).
 
-    GUI: ``hou.hipFile.hasUnsavedChanges()``. Headless: the host's tracked flag, because
-    hython 22.0 reports ``hasUnsavedChanges() == True`` even right after a load, clear or
-    save (verified on 22.0.466), so it carries no information there.
+    Not ``hou.hipFile.hasUnsavedChanges()``: hython 22.0 reports True even right after a
+    load, clear or save (verified on 22.0.466), and the GUI sets it for HocusPocus's own
+    temporary nodes (a ``node_type_info`` probe, ``render``'s output override, a capture's
+    camera and ROP), which would make a mere read refuse ``on_unsaved: fail``.
     """
-    if ctx.ui:
-        import hou
+    return ctx.scene.is_dirty
 
-        try:
-            return bool(hou.hipFile.hasUnsavedChanges())
-        except Exception:
-            return ctx.scene.dirty
-    return ctx.scene.dirty
+
+def dirty_source(ctx: HostContext) -> str | None:
+    """``tracked``, ``user_event`` or ``houdini_flag``; None when clean (:func:`scene_dirty`)."""
+    return ctx.scene.dirty_source
+
+
+def houdini_flag(ctx: HostContext) -> bool | None:
+    """Houdini's own ``hasUnsavedChanges()``, a diagnostic (GUI only; None headless,
+    where it is always True)."""
+    if not ctx.ui:
+        return None
+    import hou
+
+    try:
+        return bool(hou.hipFile.hasUnsavedChanges())
+    except Exception:
+        return None
 
 
 def hip_block(ctx: HostContext, *, include_recent: bool = True) -> dict[str, Any]:
@@ -98,6 +114,7 @@ def hip_block(ctx: HostContext, *, include_recent: bool = True) -> dict[str, Any
         "path": path,
         "name": hou.hipFile.basename(),
         "dirty": scene_dirty(ctx),
+        "dirty_source": dirty_source(ctx),
         "is_new": bool(hou.hipFile.isNewFile()),
     }
     if include_recent:
@@ -193,12 +210,50 @@ def memory_block() -> dict[str, Any] | None:
 
 UNTITLED_NOTE = "$HIP is the launch directory until you hip_save."
 
+VIEWPORT_NOTES = {
+    "time": (
+        "GUI session: the Scene Viewer recooks the displayed nodes at the new frame on "
+        "Houdini's next idle tick, outside this call (a time-dependent display network, such "
+        "as a simulation, steps there); headless nothing cooks until asked. Said once per "
+        "session."
+    ),
+    "cook_state": (
+        "GUI session: the Scene Viewer cooks displayed nodes on its own between calls, so "
+        "cook_state can read cooked (with their errors) although no call cooked them; "
+        "headless a node stays not_cooked until a call cooks it. Said once per session."
+    ),
+}
+"""The GUI viewport cooks between calls (docs/parity.md G2, a mode): said once per
+session, by ``time`` (a frame change) and ``node_info``/``inspect`` (``cook_state``)."""
+
+_VIEWPORT_NOTED: set[str] = set()
+
+
+def viewport_note(ctx: HostContext, kind: str) -> str | None:
+    """:data:`VIEWPORT_NOTES` ``[kind]`` the first time it applies in this session, in a
+    GUI Houdini only (``hou.isUIAvailable()``); else None. Main thread."""
+    if not ctx.ui or kind in _VIEWPORT_NOTED:
+        return None
+    import hou
+
+    try:
+        if not hou.isUIAvailable():
+            return None
+    except Exception:
+        return None
+    _VIEWPORT_NOTED.add(kind)
+    return VIEWPORT_NOTES[kind]
+
 
 def session_info(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     import hou
 
     config = ctx.config
     hip = hip_block(ctx)
+    flag = houdini_flag(ctx)
+    if flag is not None:
+        # A diagnostic only (G1): dirty and dirty_source decide, never this.
+        hip["houdini_flag"] = flag
     if hip.get("is_new"):
         hip["note"] = UNTITLED_NOTE
     out = {
@@ -218,7 +273,9 @@ def session_info(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
         "allow_python": bool(config.allow_python),
         "profile": config.profile,
     }
-    memory = memory_block()
+    # detail: false (the houdini://status resource, spec-2.0 §7 M4) leaves the memory
+    # figures out: they move between two reads of an unchanged session.
+    memory = memory_block() if args.get("detail") is not False else None
     if memory is not None:
         out["memory"] = memory
     return out

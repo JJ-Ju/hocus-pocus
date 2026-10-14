@@ -25,10 +25,25 @@ OFFLINE_HINT = (
     "start it with `hocuspocus launch` and attach by pid"
 )
 REINSTALL_HINT = "run `hocuspocus install-houdini` and restart Houdini"
-DELIVERY_HINT = (
-    "The call may or may not have run in Houdini. Inspect state (houdini_status, node_info, "
-    "undo history) before repeating it; never blindly repeat a mutation."
-)
+
+
+def delivery_hint(profile: str | None) -> str:
+    """What to check after a lost response, naming the reads ``profile`` serves."""
+    from ..tools.migration import hint_tool
+
+    reads = ", ".join(
+        r for r in ("houdini_status", hint_tool("node_info", profile), _undo(profile)) if r
+    )
+    return (
+        f"The call may or may not have run in Houdini. Inspect state ({reads}) before "
+        "repeating it; never blindly repeat a mutation."
+    )
+
+
+def _undo(profile: str | None) -> str | None:
+    from ..tools.migration import hint_tool
+
+    return "undo history" if hint_tool("undo", profile) else None
 
 
 def _json_dumps(obj: Any) -> bytes:
@@ -50,6 +65,9 @@ class HostClient:
         self.port = int(port)
         self.token = token
         self.connect_timeout_s = connect_timeout_s
+        self.profile: str | None = None
+        """The bridge's profile, sent with every call: a ``compat_1x`` bridge's calls run
+        the 1.4 tools whatever the host's own profile (spec-2.0 §8)."""
 
     # -- transport ---------------------------------------------------------------------
 
@@ -100,7 +118,7 @@ class HostClient:
                 "delivery_unknown",
                 f"The request to Houdini (port {self.port}) was sent but no complete response "
                 f"arrived ({exc.__class__.__name__}: {exc}).",
-                hint=DELIVERY_HINT,
+                hint=delivery_hint(self.profile or "core"),
             ) from exc
         finally:
             conn.close()
@@ -175,6 +193,8 @@ class HostClient:
         }
         if max_response_bytes:
             body["max_response_bytes"] = int(max_response_bytes)
+        if self.profile:
+            body["profile"] = self.profile
         status, data = self._request(
             "POST", "/call", body, read_timeout_s=float(timeout_s) + RESPONSE_GRACE_S
         )

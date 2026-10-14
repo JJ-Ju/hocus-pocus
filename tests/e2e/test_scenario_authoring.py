@@ -17,6 +17,11 @@ Tasks (docs/redesign/review/06-hands-on-friction-log.md):
 9. Deliberate mistakes: bad type, bad parm, wire to input 7. Each is an ``isError``
    result with a code and candidates or labels, never a protocol error.
 
+The bridge runs ``compat_1x`` (spec-2.0 §8): the scenario calls the 1.4 tools unchanged, the
+M3 exit criterion ("a 1.4 client script runs unchanged under compat_1x"). The host keeps
+its default profile, ``core``; the bridge's calls carry ``compat_1x``.
+``test_scenario_authoring_v2.py`` does the same build with ``edit``, ``inspect`` and ``look``.
+
 Never uses port 37219; hython runs from a neutral cwd with isolated state and pref dirs.
 """
 
@@ -308,6 +313,7 @@ def test_scenario_authoring(headless_host, tmp_path):
             "PYTHONPATH": str(SRC),
             # Never the user's real pref dir (and its hocuspocus.toml) for the bridge.
             "HOUDINI_USER_PREF_DIR": (tmp_path / "bridge-prefs" / "houdini__HVER__").as_posix(),
+            "HOCUSPOCUS_PROFILE": "compat_1x",  # the 1.4 tools, unchanged
         }
     )
     params = StdioServerParameters(

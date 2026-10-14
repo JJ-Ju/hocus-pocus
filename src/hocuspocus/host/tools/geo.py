@@ -18,6 +18,7 @@ import re
 from typing import Any
 
 from hocuspocus.tools.errors import ToolError
+from hocuspocus.tools.migration import BARE, hint_tool
 
 from ._common import int_arg, parse_offset
 from ._diag import a_or_an, collect_problems, refresh_stale, require_node
@@ -116,7 +117,7 @@ def cooked_geometry(sop: Any, frame: Any = None) -> Any:
         raise ToolError(
             "cook_failed",
             f"{sop.path()} failed to cook.",
-            hint="Fix the errors in detail (see also the problems tool), then retry.",
+            hint=cook_failed_hint(sop),
             hou_exception=f"hou.OperationFailed: {exc}",
             detail={"path": sop.path(), **problems},
         ) from exc
@@ -126,10 +127,20 @@ def cooked_geometry(sop: Any, frame: Any = None) -> Any:
         raise ToolError(
             "cook_failed",
             f"{sop.path()} has cook errors: {errors[0] if errors else 'no geometry'}",
-            hint="Fix the errors in detail (see also the problems tool), then retry.",
+            hint=cook_failed_hint(sop),
             detail={"path": sop.path(), **problems},
         )
     return geo
+
+
+def cook_failed_hint(node: Any) -> str:
+    """``cook_failed``'s hint, naming the problems read the call's profile serves."""
+    parent = node.parent()
+    root = parent.path() if parent is not None else node.path()
+    return (
+        f"Fix the errors in detail ({hint_tool('problems', root=root)} also finds upstream "
+        "causes), then retry."
+    )
 
 
 # -- value formatting -------------------------------------------------------------
@@ -326,8 +337,8 @@ def _attributes(geo: Any, out: dict[str, Any], mode: str = "full") -> dict[str, 
         out["internal_attribute_count"] = len(internal)
         shown = ", ".join(internal[:6]) + (", ..." if len(internal) > 6 else "")
         out.setdefault("notes", []).append(
-            f"{len(internal)} solver-internal attribute(s) left out ({shown}); geo_read "
-            "with attribs reads them."
+            f"{len(internal)} solver-internal attribute(s) left out ({shown}); "
+            f"{hint_tool('geo_read', path=BARE, attribs=BARE)} reads them."
         )
     if mode == "names":
         attributes["detail"] = [a.name() for a in detail_attribs]
