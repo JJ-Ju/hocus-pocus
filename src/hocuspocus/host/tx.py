@@ -1056,6 +1056,7 @@ def _op_select(args: Any, opts: dict[str, Any], index: int, st: State) -> OpResu
     import hou
 
     from .tools import nodes as N
+    from .tools.state import CONTEXT_CHANGED_NOTE, select_nodes
 
     if not isinstance(args, dict):
         raise N.bad_arg(f"items[{index}] must be an object.")
@@ -1076,12 +1077,14 @@ def _op_select(args: Any, opts: dict[str, Any], index: int, st: State) -> OpResu
                 node.setSelected(True, clear_all_selected=False)
 
     st.rollback.add(restore)
-    hou.clearAllSelected()
-    for node in nodes:
-        node.setSelected(True, clear_all_selected=False)
-    return OpResult(
-        index, Op("select", args), data={"selected": [n.path() for n in hou.selectedNodes()]}
-    )
+    # GUI: context_changed names the panes the selection takes into its network
+    # (docs/parity.md G3).
+    moved = select_nodes(nodes)
+    data: dict[str, Any] = {"selected": [n.path() for n in hou.selectedNodes()]}
+    if moved:
+        data["context_changed"] = moved
+        data["notes"] = [CONTEXT_CHANGED_NOTE]
+    return OpResult(index, Op("select", args), data=data)
 
 
 HANDLERS: dict[str, Callable[[Any, dict[str, Any], int, State], OpResult]] = {
@@ -2134,5 +2137,5 @@ def _op_row(res: OpResult, mode: str, st: State) -> dict[str, Any]:
                 row[key] = data[key]
         return row
     if kind == "select":
-        return {"selected": data["selected"]}
+        return dict(data)
     return {}

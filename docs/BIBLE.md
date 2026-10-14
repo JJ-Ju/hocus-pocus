@@ -745,7 +745,7 @@ takes the fields of the 1.4 tool it replaces, with that tool's semantics (§4.5 
 | `copy` | `paths`, `to_parent`, `names`, `with_inputs = true`, `position_offset` (`node_copy`) | the copy, when there is one | `paths` |
 | `layout` | `parent`, `paths`, `mode: children \| good_position` (`node_layout`) | the parent | — |
 | `build` | `parent`, `data` (Houdini's `hou.data`, as `inspect what: network` returns it), `on_name_collision: error \| rename \| replace`, `layout = true`, `tag`, `press: {node: [parms]}` (`network_build`) | the parent | `created`, `pressed`, `side_effects` |
-| `select` | `paths` (an empty list clears) (`selection` set) | — | `selected` |
+| `select` | `paths` (an empty list clears) (`selection` set) | — | `selected`; in the GUI `context_changed` and a note when the selection takes the unpinned Scene Viewer and Network Editor into its network (parity G3: Houdini couples the two, so putting the panes back would change the selection) |
 
 - **References.** An op's `id` names its node (the table's third column); a later op writes
   `$id`, `$id/child` or `$id/parm` in its path fields (`parent`, `path`, `paths`, `node`,

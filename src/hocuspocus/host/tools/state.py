@@ -213,6 +213,66 @@ def time_(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
 # -- selection --------------------------------------------------------------------------
 
 
+def _context_panes() -> list[Any]:
+    """GUI: every Scene Viewer and Network Editor that is not pinned. Empty headless
+    (there are no panes)."""
+    import hou
+
+    if not hou.isUIAvailable():
+        return []
+    kinds = (hou.paneTabType.SceneViewer, hou.paneTabType.NetworkEditor)
+    out = []
+    for tab in hou.ui.paneTabs():
+        try:
+            if tab.type() in kinds and not tab.isPin():
+                out.append(tab)
+        except Exception:  # a pane closing under us
+            continue
+    return out
+
+
+def select_nodes(nodes: list[Any]) -> list[str]:
+    """Select exactly ``nodes``; return the panes the selection takes into another
+    network (``context_changed``, docs/parity.md G3). Main thread.
+
+    In the GUI, selecting makes the last node current, and on the next idle tick every
+    unpinned Scene Viewer and Network Editor follows it into its network (the next
+    viewer ``look``/``viewport_capture`` then shows that network with the rest
+    ghosted). Putting a pane back is not possible without losing the selection: Houdini
+    couples them, and ``setPwd`` selects a node of the pane's network instead (verified
+    on 22.0.466, the Scene Viewer alone too). So the selection wins and the result names
+    the panes that will move, as ``<pane name> (<network>)``. Headless: no panes."""
+    import hou
+
+    hou.clearAllSelected()
+    for node in nodes:
+        node.setSelected(True, clear_all_selected=False)
+    if not nodes:
+        return []
+    try:
+        target = nodes[-1].parent()
+    except Exception:
+        return []
+    if target is None:
+        return []
+    moved: list[str] = []
+    for tab in _context_panes():
+        try:
+            if tab.pwd().path() != target.path():
+                moved.append(f"{tab.name()} ({target.path()})")
+        except Exception:
+            continue
+    return moved
+
+
+CONTEXT_CHANGED_NOTE = (
+    "Houdini takes the Scene Viewer and Network Editor listed in context_changed into the "
+    "selection's network on its next idle tick (putting them back would change the "
+    "selection). A look or viewport_capture with source viewer then shows that network; "
+    "the default sources are not affected."
+)
+
+
 @tool("selection", scene=False)
 def selection(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     import hou
@@ -230,11 +290,13 @@ def selection(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     label = make_label("selection", {"paths": paths} if paths else {"undo_label": "clear"})
     # Houdini records each selection change as an undo entry; make the call one step.
     with hou_undo_group(label):
-        hou.clearAllSelected()
-        for node in nodes:
-            node.setSelected(True, clear_all_selected=False)
+        moved = select_nodes(nodes)
     ctx.undo.record(label, "selection")
-    return {"selected": [n.path() for n in hou.selectedNodes()]}
+    out: dict[str, Any] = {"selected": [n.path() for n in hou.selectedNodes()]}
+    if moved:
+        out["context_changed"] = moved
+        out["notes"] = [CONTEXT_CHANGED_NOTE]
+    return out
 
 
 # -- job --------------------------------------------------------------------------------

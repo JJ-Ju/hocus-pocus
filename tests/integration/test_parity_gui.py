@@ -55,6 +55,17 @@ result = {
     "pivot": [round(v, 4) for v in view.pivot()],
 }
 """
+PANES = """
+kinds = (hou.paneTabType.SceneViewer, hou.paneTabType.NetworkEditor)
+result = {t.name(): t.pwd().path() for t in hou.ui.paneTabs() if t.type() in kinds}
+"""
+PANES_TO_OBJ = """
+kinds = (hou.paneTabType.SceneViewer, hou.paneTabType.NetworkEditor)
+for t in hou.ui.paneTabs():
+    if t.type() in kinds:
+        t.setPwd(hou.node('/obj'))
+hou.clearAllSelected()
+"""
 
 
 def _check_output_schema(tool: str, result: Any) -> None:
@@ -485,6 +496,48 @@ def test_user_edits_dirty_the_gui_hip(gui: GuiSession) -> None:
     assert client.python("hou.node('/obj/renamed_geo/unwatched').parm('scale').eval()") == 2.5
     client.ok("hip_new", {"on_unsaved": "discard"})
     assert _dirty(client) == {"dirty": False, "dirty_source": None}
+
+
+def test_selection_names_the_panes_it_moves(gui: GuiSession) -> None:
+    """G3: selecting a SOP takes the unpinned Scene Viewer and Network Editor into its
+    network on the next idle tick. Putting them back would change the selection (Houdini
+    couples the two), so ``selection`` and ``edit {op: select}`` keep the selection and
+    name the panes in ``context_changed``; a selection in the panes' own network moves
+    nothing and says nothing."""
+    client = gui.client
+    _scene(client)
+    client.python(PANES_TO_OBJ)
+    before = client.python(PANES)
+    assert before and set(before.values()) == {"/obj"}
+
+    # The object is in /obj, where the panes are: nothing moves.
+    same = client.ok("selection", {"paths": ["/obj/box_geo"]})
+    assert same == {"selected": ["/obj/box_geo"]}
+    time.sleep(1.0)  # several idle ticks: a follow would have happened by now
+    assert client.python(PANES) == before
+
+    moving = {f"{name} (/obj/box_geo)" for name in before}
+    chosen = client.ok("selection", {"paths": ["/obj/box_geo/box1"]})
+    assert chosen["selected"] == ["/obj/box_geo/box1"]
+    assert set(chosen["context_changed"]) == moving
+    assert chosen["notes"]
+    time.sleep(1.0)
+    assert set(client.python(PANES).values()) == {"/obj/box_geo"}  # as reported
+    assert client.python("[n.path() for n in hou.selectedNodes()]") == ["/obj/box_geo/box1"]
+
+    client.python(PANES_TO_OBJ)
+    client.python("import hocuspocus.host as h\nh.current().config.profile = 'v2'")
+    try:
+        edited = client.ok("edit", {"ops": [{"op": "select", "paths": ["/obj/box_geo/box1"]}]})
+    finally:
+        client.python("import hocuspocus.host as h\nh.current().config.profile = 'full'")
+    row = edited["results"][0]
+    assert row["selected"] == ["/obj/box_geo/box1"]
+    assert set(row["context_changed"]) == moving
+    time.sleep(1.0)
+    assert set(client.python(PANES).values()) == {"/obj/box_geo"}
+    assert client.python("[n.path() for n in hou.selectedNodes()]") == ["/obj/box_geo/box1"]
+    client.python(PANES_TO_OBJ)
 
 
 def test_quit_closes_the_gui(gui: GuiSession) -> None:

@@ -12,6 +12,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.compat_1x  # the 1.4 tools (conftest: compat_client)
+
 hou = pytest.importorskip("hou")
 
 REPO_SRC = Path(__file__).resolve().parents[2] / "src"
@@ -248,6 +250,20 @@ def test_selection_bad_path(client):
     assert "/obj/geo1/box1" in error["candidates"]
     # Nothing changed on failure.
     assert box.isSelected()
+
+
+def test_selection_headless_has_no_panes_to_keep(client):
+    """G3: in the GUI the result names the panes the selection moves into its network
+    (test_parity_gui.py); headless there are no panes, so it never carries
+    context_changed."""
+    from hocuspocus.host.tools.state import _context_panes, select_nodes
+
+    box = _geo().createNode("box")
+    assert _context_panes() == []
+    assert select_nodes([box]) == []
+    assert box.isSelected()
+    result = client.ok("selection", {"paths": [box.path()]})
+    assert result == {"selected": [box.path()]}
 
 
 def test_selection_allowed_read_only(client, host):
