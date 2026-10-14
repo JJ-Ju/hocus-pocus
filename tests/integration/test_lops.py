@@ -447,6 +447,32 @@ def test_locked_component_error_names_it(client):
     assert "resolutionx" in error["hint"]
 
 
+# -- viewport_capture of a ROP LOP (review 23 P2-10) ------------------------------------
+
+
+@pytest.mark.slow
+def test_capture_a_rop_lop_captures_the_stage_it_renders(client, work_dir):
+    """A ROP inside a LOP network has no output stage; viewport_capture now captures the
+    LOP it renders (its input, or loppath) and says so, instead of refusing."""
+    nodes = _lop_scene(work_dir)
+    result = client.ok(
+        "viewport_capture",
+        {"lop_path": nodes["rop"].path(), "camera": "/cameras/cam1", "resolution": [160, 90]},
+    )
+    assert result["scene"] == "stage"
+    assert result["lop_path"] == nodes["rset"].path()
+    note = f"Captured {nodes['rset'].path()}, the LOP {nodes['rop'].path()} renders"
+    assert any(n.startswith(note) for n in result["notes"]), result["notes"]
+    assert _center_lit(result["image"])
+
+
+def test_capture_a_rop_lop_without_input_is_refused(client):
+    rop = hou.node("/stage").createNode("usd_rop", "lonely")
+    error = client.error("viewport_capture", {"lop_path": rop.path()})
+    assert error["code"] == "invalid_argument"
+    assert "no output stage" in error["message"]
+
+
 # -- usd_stage on a ROP LOP (papercut 10) -----------------------------------------------
 
 

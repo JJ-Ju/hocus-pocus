@@ -1816,12 +1816,41 @@ STAGE_NOTE = (
 )
 
 
+def rop_lop_source(lop_path: Any) -> tuple[Any, str | None]:
+    """For a ROP inside a LOP network (``usdrender_rop``, ``usd_rop``), which has no output
+    stage, the LOP it renders (``loppath``, else its input) and a note; any other value
+    unchanged. A ROP LOP with neither is left for :func:`resolve_lop` to refuse (review 23
+    P2-10). Main thread."""
+    import hou
+
+    if not isinstance(lop_path, str) or not lop_path.strip().startswith("/"):
+        return lop_path, None
+    node = hou.node(lop_path.strip())
+    if (
+        not isinstance(node, hou.RopNode)
+        or isinstance(node, hou.LopNode)
+        or node.type().category() != hou.lopNodeTypeCategory()
+    ):
+        return lop_path, None
+    source = None
+    with contextlib.suppress(Exception):
+        source = _usd_source_lop(node)
+    if source is None:
+        return lop_path, None
+    return source.path(), (
+        f"Captured {source.path()}, the LOP {node.path()} renders: a ROP has no output stage."
+    )
+
+
 def _resolve_capture(parsed: dict[str, Any]) -> dict[str, Any]:
     """The capture target plus a note when /obj was captured but /stage has a display
-    LOP. Main thread."""
+    LOP, or when ``lop_path`` was a ROP LOP. Main thread."""
     _refuse_cop_as("camera", parsed["camera"])
     _refuse_cop_as("lop_path", parsed["lop_path"])
-    target = capture_target(parsed["camera"], parsed["lop_path"])
+    lop_path, rop_note = rop_lop_source(parsed["lop_path"])
+    target = capture_target(parsed["camera"], lop_path)
+    if rop_note:
+        target["note"] = rop_note
     if target["scene"] == "obj" and parsed["camera"] is None:
         display = _stage_display()
         notes = [STAGE_NOTE.format(lop=display.path())] if display is not None else []

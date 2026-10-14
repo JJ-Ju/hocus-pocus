@@ -1361,7 +1361,9 @@ _VISUAL: tuple[ToolSpec, ...] = (
             "temporary rop_image in its network (about 0.2 s, deleted afterwards, outside undo): "
             "scene cop, layer {layer_type, resolution, data_window}, the image at the COP's own "
             "resolution (resolution is ignored). Without camera, lop_path or cop_path a note "
-            "names the COP networks under /img."
+            "names the COP networks under /img. lop_path naming a ROP in a LOP network "
+            "(usdrender_rop, usd_rop: no output stage) captures the LOP it renders (loppath, "
+            "else its input), with a note."
         ),
         input_schema=_obj(
             {
