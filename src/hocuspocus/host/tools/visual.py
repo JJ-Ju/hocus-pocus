@@ -3,24 +3,37 @@
 Images go back as ``{"image": {"png_base64", "mime_type"}}`` (the bridge turns that into
 MCP image content) and are also written under ``<state_dir>/captures``.
 
-**Headless OpenGL renders run in a child hython.** In hython 22.0.466 the second
+**Captures render through the Flipbook ROP** (1.4). Houdini 22 deprecates the OpenGL ROP
+(``Driver/opengl``) for the Flipbook ROP (``Driver/flipbook``), which has the same output,
+resolution, camera and LOP-source parms. viewport_capture's ROP source tries, in order, the
+Flipbook ROP, the OpenGL ROP and a temporary Karma CPU ROP (:func:`capture_chain`); each
+step that fails says why in ``notes`` and ``source_used`` names the one that ran.
+
+**Headless viewport renders run in a child hython.** In hython 22.0.466 the second
 ``RopNode.render()`` of any OpenGL ROP in a process segfaults inside the Vulkan viewport
 renderer (``GR_FillAttributesVK`` / ``RV_ShaderVariableSet``), whatever the node, frame,
-output or geometry; one multi-frame ``render()`` call is fine. So headless, the host
-snapshots the scene (``saveChildrenToFile`` per manager: no hip save, no event side
-effects) and renders it in a short-lived ``hython`` (about 3 s per call). In a GUI session
-OpenGL ROPs render in-process. Every other ROP type renders in-process, frame by frame,
-through the main-thread executor.
+output or geometry; one multi-frame ``render()`` call is fine. The Flipbook ROP renders
+the same ROP again in-process (other frames, cameras, resolutions, geometry), but once a
+Flipbook ROP that has rendered is deleted (``destroy()`` or ``hip_new``), the next Flipbook
+render in that hython segfaults at the same place (``RV_ShaderVariableSet::create``), and
+a capture's temporary ROP is always deleted. So headless, the host snapshots the scene
+(``saveChildrenToFile`` per manager: no hip save, no event side effects) and renders
+Flipbook and OpenGL ROPs in a short-lived ``hython`` (about 3 s per call). In a GUI session
+both render in-process (a temporary Flipbook ROP created, rendered and deleted four times,
+then again after ``hipFile.clear()``, did not crash in houdinifx 22.0.466). Every other ROP
+type renders in-process, frame by frame, through the main-thread executor.
 
-**A child that renders a stage runs single-threaded** (``HOUDINI_MAXTHREADS=1``, review 16
-N1). Headless, the Vulkan device is created lazily by the first code that draws; for a
-stage of more than a few thousand polygons the OpenGL ROP's LOP source updates the meshes
-in parallel, so the device is created on a TBB worker while other workers wait on it, and
-hython segfaults in the driver (``RV_Instance::initializeDevice`` under
+**An OpenGL child that renders a stage runs single-threaded** (``HOUDINI_MAXTHREADS=1``,
+review 16 N1). Headless, the Vulkan device is created lazily by the first code that draws;
+for a stage of more than a few thousand polygons the OpenGL ROP's LOP source updates the
+meshes in parallel, so the device is created on a TBB worker while other workers wait on
+it, and hython segfaults in the driver (``RV_Instance::initializeDevice`` under
 ``GR_PrimPacked::updateInstanceGeometry``; exit 139, also in a fresh hython that loads the
-hip itself). One thread creates the device on the rendering thread. If a stage capture's
-child still crashes, viewport_capture renders the frame with a temporary Karma ROP in
-the host instead (``source_used: "karma"``).
+hip itself). One thread creates the device on the rendering thread. The Flipbook ROP does
+not have this crash (review 16's city stage rendered multi-threaded in 5 of 5 fresh
+hythons), so its children keep every thread. If a stage capture's child still crashes,
+the next ROP of the chain renders it, and Karma, in the host, last
+(``source_used: "karma"``).
 """
 
 from __future__ import annotations
@@ -58,10 +71,17 @@ BACKGROUND = (64, 64, 64)
 """Alpha is composited onto mid grey so silhouettes read on light and dark clients."""
 VIEW_DIRECTION = (0.62, 0.45, 0.85)
 """Camera offset direction for fit framing: a three-quarter view from front-right-above."""
-SOURCES = ("auto", "viewer", "opengl_rop")
+SOURCES = ("auto", "viewer", "flipbook_rop", "opengl_rop")
+"""``opengl_rop`` is the 1.3 name of ``flipbook_rop``: both run :func:`capture_chain`."""
+CAPTURE_ROPS = ("flipbook", "opengl")
+"""The viewport ROP types viewport_capture tries, in order, before Karma (1.4)."""
+ROP_SOURCE_USED = {"flipbook": "flipbook_rop", "opengl": "opengl_rop", "karma": "karma"}
+ROP_LABELS = {"flipbook": "Flipbook ROP", "opengl": "OpenGL ROP", "karma": "Karma"}
+VIEWPORT_ROP_TYPES = frozenset(CAPTURE_ROPS)
+"""ROP types whose headless renders go through a child hython (module docstring)."""
 FITS = ("all", "selected", "none")
 OUTPUT_PARMS = (
-    "picture",  # opengl, karma
+    "picture",  # flipbook, opengl, karma
     "vm_picture",  # mantra (ifd)
     "sopoutput",  # geometry
     "copoutput",  # comp
@@ -100,8 +120,8 @@ DARK_MEAN = 8.0
 """A thumbnail whose mean luminance (0..255), measured on the flattened image the agent
 receives, is below this is reported as nearly black."""
 NO_LIGHTS_NOTE = (
-    "Scene has no lights; an OpenGL render relies on the ROP's headlight setting and other "
-    "renderers may render black."
+    "Scene has no lights; a Flipbook or OpenGL ROP render relies on the ROP's headlight "
+    "setting and other renderers may render black."
 )
 
 
@@ -309,8 +329,9 @@ def capture_camera(hou, capture, created):
 
 
 def build_capture(hou, capture, created):
-    # viewport_capture's camera and OpenGL ROP. Every node made is appended to created.
-    rop = hou.node("/out").createNode("opengl")
+    # viewport_capture's camera and viewport ROP (rop_type: flipbook or opengl, the same
+    # parms). Every node made is appended to created.
+    rop = hou.node("/out").createNode(capture.get("rop_type") or "flipbook")
     created.append(rop)
     for name, value in capture["rop_parms"].items():
         rop.parm(name).set(value)
@@ -480,8 +501,11 @@ class ChildRender:
     ) -> None:
         self.tmp_dir = tmp_dir
         self.spec = dict(snapshot, rop=rop, frames=list(frames), parms=parms or {})
-        self.single_thread = single_thread or bool((snapshot.get("capture") or {}).get("lop"))
-        """A stage render: see the module docstring (review 16 N1)."""
+        capture = snapshot.get("capture") or {}
+        self.single_thread = single_thread or bool(
+            capture.get("lop") and capture.get("rop_type") == "opengl"
+        )
+        """An OpenGL ROP rendering a stage: see the module docstring (review 16 N1)."""
         self.proc: subprocess.Popen[bytes] | None = None
         self.log_path = os.path.join(tmp_dir, "child.log")
 
@@ -590,8 +614,13 @@ def render_isolated(
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
+def rop_core_type(rop_node: Any) -> str:
+    return rop_node.type().name().split("::")[0]
+
+
 def needs_isolation(rop_node: Any, ctx: HostContext) -> bool:
-    return not ctx.ui and rop_node.type().name().split("::")[0] == "opengl"
+    """Headless Flipbook and OpenGL ROPs render in a child hython (module docstring)."""
+    return not ctx.ui and rop_core_type(rop_node) in VIEWPORT_ROP_TYPES
 
 
 # -- Copernicus images (review 18) ----------------------------------------------------
@@ -1232,8 +1261,8 @@ def _capture_spec(
 
 @contextlib.contextmanager
 def temporary_capture_nodes(spec: dict[str, Any]) -> Iterator[Any]:
-    """Create the capture camera (unless the spec names one) and OpenGL ROP in the live
-    scene for an in-process render, outside undo, and delete them afterwards, restoring
+    """Create the capture camera (unless the spec names one) and the spec's viewport ROP
+    (``rop_type``) in the live scene for an in-process render, outside undo, and delete them afterwards, restoring
     the selection. Yields the ROP. Main thread."""
     import hou
 
@@ -1262,47 +1291,138 @@ def temporary_capture_nodes(spec: dict[str, Any]) -> Iterator[Any]:
                     node.setSelected(True)
 
 
-def _capture_opengl(
+def capture_chain(available: Any) -> list[str]:
+    """The renderers a ROP-source capture tries, in order: the Flipbook ROP, the OpenGL ROP
+    (each when this Houdini has the type) and Karma last. No ``hou``."""
+    have = set(available)
+    return [t for t in CAPTURE_ROPS if t in have] + ["karma"]
+
+
+def available_capture_rops() -> list[str]:
+    """The :data:`CAPTURE_ROPS` this Houdini has (22.0 has both; older builds lack the
+    Flipbook ROP). Main thread."""
+    import hou
+
+    category = hou.ropNodeTypeCategory()
+    return [t for t in CAPTURE_ROPS if hou.nodeType(category, t) is not None]
+
+
+def fallback_note(failures: list[tuple[str, str]], used: str) -> str | None:
+    """Why a capture used a later renderer of :func:`capture_chain`: one note naming each
+    ROP that did not render and why (``failures``: ``(rop type, reason)``)."""
+    if not failures:
+        return None
+    why = "; ".join(f"the {ROP_LABELS[t]} {reason}" for t, reason in failures)
+    if used == "karma":
+        return karma_note(why)
+    return f"Rendered with the {ROP_LABELS[used]} because {why}."
+
+
+def run_capture_chain(
+    chain: list[str],
+    *,
+    stage: bool,
+    source: str,
+    render_rop: Any,
+    render_karma: Any,
+) -> tuple[str, dict[str, Any], list[str]]:
+    """Render one capture with the first renderer of ``chain`` that works. ``render_rop``
+    (a ROP type) returns the render outcome or raises; a crashed child moves on to the next
+    renderer, any other error is raised. Karma runs only after a crash or skip. Returns
+    ``(renderer, outcome, notes)``. Headless, a stage whose child crashed once is not sent
+    to that ROP again in this process when ``source`` is ``auto`` (each crash costs
+    seconds)."""
+    failures: list[tuple[str, str]] = []
+    crash: ToolError | None = None
+    for renderer in chain:
+        if renderer == "karma":
+            if not failures:
+                break  # nothing crashed: the last ROP's error was raised already
+            karma_after_crash(render_karma, crash)
+            return "karma", {}, [n for n in (fallback_note(failures, "karma"),) if n]
+        if stage and source == "auto" and renderer in _stage_crashed:
+            failures.append(
+                (renderer, "was skipped (it crashed a stage capture earlier in this session)")
+            )
+            continue
+        try:
+            outcome = render_rop(renderer)
+        except ToolError as exc:
+            if not child_crashed(exc):
+                raise
+            crash = exc
+            if stage:
+                _stage_crashed[renderer] = exc.message
+            failures.append((renderer, f"crashed its render process ({exc.message})"))
+            continue
+        return renderer, outcome, [n for n in (fallback_note(failures, renderer),) if n]
+    raise ToolError("internal", "No renderer could capture the scene.")
+
+
+def _capture_rop(
     ctx: HostContext,
     target: dict[str, Any],
     frame: float,
     res: tuple[int, int],
     fit: str,
     out_file: str,
+    source: str = "auto",
 ) -> dict[str, Any]:
+    """The ROP source on the main thread: in a child hython headless, in-process in the GUI.
+    Sets ``source_used``. Main thread."""
     import hou
 
     spec, info = _capture_spec(target, res, fit, out_file, ctx.scene.generation)
-    errors: list[str] = []
+    chain = capture_chain(available_capture_rops())
     if not ctx.ui:
         # Headless: the child hython builds camera and ROP in its own copy of the scene.
-        try:
-            outcome = render_isolated(None, [frame, frame, 1], capture=spec)
-        except ToolError as exc:
-            if not child_crashed(exc):
-                raise
-            karma_after_crash(lambda: capture_with_karma(spec, frame, res, out_file), exc)
-            info["source_used"] = "karma"
-            info["notes"] = [karma_note(f"the OpenGL render process crashed ({exc.message})")]
-            return info
-        errors = outcome.get("errors") or []
-        if outcome.get("notes"):
-            info["notes"] = outcome["notes"]
-    else:
+        def render_rop(rop_type: str) -> dict[str, Any]:
+            outcome = render_isolated(
+                None, [frame, frame, 1], capture=dict(spec, rop_type=rop_type)
+            )
+            _check_capture_output(outcome.get("errors") or [], out_file, rop_type)
+            return outcome
+
+        used, outcome, notes = run_capture_chain(
+            chain,
+            stage=spec.get("lop") is not None,
+            source=source,
+            render_rop=render_rop,
+            render_karma=lambda: capture_with_karma(spec, frame, res, out_file),
+        )
+        info["source_used"] = ROP_SOURCE_USED[used]
+        _add_notes(info, *(outcome.get("notes") or []), *notes)
+        return info
+    # GUI: in-process. A ROP that renders no image hands over to the next viewport ROP; a
+    # crash here would take Houdini down, so there is no crash fallback (and no Karma).
+    failures: list[tuple[str, str]] = []
+    rops = [t for t in chain if t != "karma"]
+    for i, rop_type in enumerate(rops):
         was_dirty = scene_dirty(ctx)
-        with temporary_capture_nodes(spec) as rop:
+        errors: list[str] = []
+        with temporary_capture_nodes(dict(spec, rop_type=rop_type)) as rop:
             try:
                 rop.render(frame_range=(frame, frame), verbose=False)
             except hou.OperationFailed as exc:
                 errors.append(str(exc).strip())
             errors += [str(e) for e in rop.errors()]
         if not was_dirty and scene_dirty(ctx):
-            info["notes"] = [
+            _add_notes(
+                info,
                 "Houdini marks the hip modified when the temporary capture camera and ROP are "
-                "created, although both were deleted and nothing else changed."
-            ]
-    _check_capture_output(errors, out_file)
-    return info
+                "created, although both were deleted and nothing else changed.",
+            )
+        try:
+            _check_capture_output(errors, out_file, rop_type)
+        except ToolError as exc:
+            if i == len(rops) - 1:
+                raise
+            failures.append((rop_type, f"produced no image ({exc.message})"))
+            continue
+        info["source_used"] = ROP_SOURCE_USED[rop_type]
+        _add_notes(info, fallback_note(failures, rop_type))
+        return info
+    raise ToolError("internal", "This Houdini has neither a Flipbook ROP nor an OpenGL ROP.")
 
 
 GENERIC_FAILURE = "The attempted operation failed."
@@ -1340,9 +1460,9 @@ def failure(message: str, errors: list[str]) -> tuple[str, dict[str, Any]]:
     return f"{message}: {lines[0] if lines else 'no output file'}", detail
 
 
-def _check_capture_output(errors: list[str], out_file: str) -> None:
+def _check_capture_output(errors: list[str], out_file: str, rop_type: str = "flipbook") -> None:
     if errors or not os.path.isfile(out_file):
-        message, detail = failure("The OpenGL ROP did not produce an image", errors)
+        message, detail = failure(f"The {ROP_LABELS[rop_type]} did not produce an image", errors)
         raise ToolError(
             "cook_failed",
             message,
@@ -1353,14 +1473,15 @@ def _check_capture_output(errors: list[str], out_file: str) -> None:
 
 KARMA_SAMPLES = 2
 """Pixel samples of the Karma fallback: a quick look, not a final frame."""
-_gl_stage_crashed: list[str] = []
-"""Set when a headless stage capture's OpenGL child crashed in this process: later stage
-captures with source auto go straight to Karma (each crash costs seconds)."""
+_stage_crashed: dict[str, str] = {}
+"""ROP type -> crash message, set when a headless stage capture's child of that ROP crashed
+in this process: later stage captures with source auto skip that ROP (each crash costs
+seconds)."""
 
 
 def child_crashed(exc: ToolError) -> bool:
     """Whether a child render failed by crashing (not a licence refusal, a timeout or a
-    cancel), so another renderer may succeed where the OpenGL ROP did not."""
+    cancel), so another renderer may succeed where a viewport ROP did not."""
     return (
         exc.code == "internal"
         and str(exc.hou_exception or "").startswith("render process exit")
@@ -1438,7 +1559,7 @@ def capture_with_karma(
     spec: dict[str, Any], frame: float, res: tuple[int, int], out_file: str
 ) -> None:
     """Render one capture frame with a temporary Karma CPU ROP in the host (review 16 N1):
-    the fallback when the OpenGL child crashed. Karma has no second-render crash, so its
+    the fallback when the viewport ROP children crashed. Karma has no second-render crash, so its
     ROP renders in-process (husk is its own process). Deletes every node it made, outside
     undo and events, and puts the selection back. Raises ``cook_failed`` with the end of
     the husk log. Main thread."""
@@ -1483,8 +1604,8 @@ def capture_with_karma(
 
 
 def karma_after_crash(run: Any, crash: ToolError | None) -> None:
-    """Run the Karma fallback; if it fails after an OpenGL crash, say both, with the
-    crashed child's short log as ``detail.opengl_log``."""
+    """Run the Karma fallback; if it fails after a viewport ROP child crashed, say both,
+    with the crashed child's short log as ``detail.opengl_log`` (the 1.3 name, kept)."""
     try:
         run()
     except ToolError as exc:
@@ -1494,8 +1615,8 @@ def karma_after_crash(run: Any, crash: ToolError | None) -> None:
         detail["opengl_log"] = (crash.detail or {}).get("log", "")
         raise ToolError(
             exc.code,
-            f"The OpenGL render process crashed ({crash.message}) and the Karma fallback "
-            f"failed: {exc.message}",
+            f"The viewport ROP render process crashed ({crash.message}) and the Karma "
+            f"fallback failed: {exc.message}",
             hint=exc.hint,
             detail=detail,
         ) from exc
@@ -1532,7 +1653,7 @@ def _viewer_context_note(viewer: Any, target: dict[str, Any]) -> tuple[str | Non
         return context, None
     return context, (
         f"The viewer shows {context}, not {wanted}: it draws that network's context (other "
-        "objects ghosted or hidden). source opengl_rop renders the whole scene."
+        "objects ghosted or hidden). source flipbook_rop renders the whole scene."
     )
 
 
@@ -1585,7 +1706,7 @@ def _capture_viewer(
             "internal",
             "The Scene Viewer flipbook did not write an image.",
             hou_exception="flipbook produced no file",
-            hint="Retry with source 'opengl_rop'.",
+            hint="Retry with source 'flipbook_rop'.",
         )
     info: dict[str, Any] = {
         "scene": target["scene"],
@@ -1719,7 +1840,7 @@ def _add_notes(info: dict[str, Any], *notes: Any) -> None:
 
 
 def _capture_main(parsed: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
-    """The whole capture on the main thread: the GUI path (viewer or in-process OpenGL
+    """The whole capture on the main thread: the GUI path (viewer or in-process viewport
     ROP), and headless when called inline on the main thread."""
     source, res = parsed["source"], parsed["res"]
     target = _resolve_capture(parsed)
@@ -1730,15 +1851,15 @@ def _capture_main(parsed: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
             raise ToolError(
                 "invalid_argument",
                 "source 'viewer' captures the Scene Viewer as it is; a stage capture (a LOP "
-                "camera or lop_path) renders through an OpenGL ROP.",
-                hint="Use source 'opengl_rop' or 'auto'.",
+                "camera or lop_path) renders through a Flipbook ROP.",
+                hint="Use source 'flipbook_rop' or 'auto'.",
             )
         viewer = _scene_viewer()
         if viewer is None:
             raise ToolError(
                 "invalid_value",
                 "No Scene Viewer pane is open.",
-                hint="Open a Scene Viewer, or use source 'opengl_rop'.",
+                hint="Open a Scene Viewer, or use source 'flipbook_rop'.",
             )
     elif source == "auto" and ctx.ui and target["scene"] == "obj" and target["camera"] is None:
         # With a camera, auto renders through the ROP: fast in the GUI, and it leaves the
@@ -1749,8 +1870,7 @@ def _capture_main(parsed: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
         info = _capture_viewer(viewer, target, frame, res, out_file, fit)
         info["source_used"] = "viewer"
     else:
-        info = _capture_opengl(ctx, target, frame, res, parsed["fit"], out_file)
-        info.setdefault("source_used", "opengl_rop")
+        info = _capture_rop(ctx, target, frame, res, parsed["fit"], out_file, source)
     _add_notes(info, target.get("note"))
     return _finish_capture(out_file, res, frame, info, extra_path)
 
@@ -1771,6 +1891,7 @@ def _capture_headless(parsed: dict[str, Any], ctx: HostContext, timeout_s: float
             snapshot = snapshot_scene(tmp_dir)
             snapshot["capture"] = spec
             return {
+                "chain": capture_chain(available_capture_rops()),
                 "frame": frame,
                 "extra_path": extra_path,
                 "out_file": out_file,
@@ -1781,41 +1902,35 @@ def _capture_headless(parsed: dict[str, Any], ctx: HostContext, timeout_s: float
         prep = ctx.executor.run(prepare, timeout_s)
         frame = prep["frame"]
         spec = prep["snapshot"]["capture"]
-        stage = spec.get("lop") is not None
-        reason = None
-        crash: ToolError | None = None
-        if stage and _gl_stage_crashed and parsed["source"] == "auto":
-            reason = "an earlier OpenGL stage capture crashed its render process in this session"
-        else:
-            child = ChildRender(prep["snapshot"], tmp_dir, "", [frame, frame, 1])
+
+        def render_rop(rop_type: str) -> dict[str, Any]:
+            snapshot = dict(prep["snapshot"], capture=dict(spec, rop_type=rop_type))
+            child = ChildRender(snapshot, tmp_dir, "", [frame, frame, 1])
             child.start()
             try:
                 outcome = child.wait(timeout_s=max(1.0, deadline - time.monotonic()))
-            except ToolError as exc:
-                if not child_crashed(exc):
-                    raise
-                if stage:
-                    _gl_stage_crashed[:] = [exc.message]
-                crash = exc
-                reason = f"the OpenGL render process crashed ({exc.message})"
             finally:
                 child.kill()
-    finally:
-        shutil.rmtree(tmp_dir, ignore_errors=True)
-    if reason is not None:
-        karma_after_crash(
-            lambda: ctx.executor.run(
+            _check_capture_output(outcome.get("errors") or [], prep["out_file"], rop_type)
+            return outcome
+
+        def render_karma() -> None:
+            ctx.executor.run(
                 lambda: capture_with_karma(spec, frame, res, prep["out_file"]),
                 max(1.0, deadline - time.monotonic()),
-            ),
-            crash,
+            )
+
+        used, outcome, notes = run_capture_chain(
+            prep["chain"],
+            stage=spec.get("lop") is not None,
+            source=parsed["source"],
+            render_rop=render_rop,
+            render_karma=render_karma,
         )
-        info = dict(prep["info"], source_used="karma")
-        _add_notes(info, karma_note(reason))
-        return _finish_capture(prep["out_file"], res, frame, info, prep["extra_path"])
-    _check_capture_output(outcome.get("errors") or [], prep["out_file"])
-    info = dict(prep["info"], source_used="opengl_rop")
-    _add_notes(info, *(outcome.get("notes") or []))
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+    info = dict(prep["info"], source_used=ROP_SOURCE_USED[used])
+    _add_notes(info, *(outcome.get("notes") or []), *notes)
     return _finish_capture(prep["out_file"], res, frame, info, prep["extra_path"])
 
 
@@ -1828,7 +1943,7 @@ def viewport_capture(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
         raise ToolError(
             "ui_required",
             "source 'viewer' captures the GUI Scene Viewer, and this Houdini is headless.",
-            hint="Use source 'opengl_rop' (or 'auto'), which renders headless.",
+            hint="Use source 'flipbook_rop' (or 'auto'), which renders headless.",
         )
     timeout_s = float(call_timeout(None) or ctx.config.default_timeout_s)
     if parsed["cop_path"] is not None:
@@ -2218,8 +2333,8 @@ def _not_a_render_node(node: Any) -> ToolError:
     return ToolError(
         "invalid_argument",
         f"{node.path()} ({node.type().name()}) is not a render node.",
-        hint="Pass a ROP such as /out/karma1 or /out/opengl1, or a writer SOP such as a File "
-        "Cache or rop_geometry.",
+        hint="Pass a ROP such as /out/karma1 or /out/flipbook1, or a writer SOP such as a "
+        "File Cache or rop_geometry.",
     )
 
 
@@ -2379,6 +2494,7 @@ def _prepare_render(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
         "rop": rop.path(),
         "owner": owner.path() if rop is not owner else None,
         "type": rop.type().name(),
+        "core_type": rop_core_type(rop),
         "frames": frames,
         "frame_list": _frame_list(frames),
         "parm": parm.name() if parm is not None else None,
@@ -2516,7 +2632,8 @@ def _render_job(plan: dict[str, Any], ctx: HostContext, thumbnail: bool) -> Any:
                 plan["rop"],
                 plan["frames"],
                 parms,
-                single_thread=plan.get("stage_source", False),
+                # An OpenGL ROP on a stage (review 16 N1); the Flipbook ROP keeps its threads.
+                single_thread=plan.get("stage_source", False) and plan["core_type"] == "opengl",
             )
             child.start()
 

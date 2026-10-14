@@ -2,7 +2,7 @@
 
 <!-- Generated from src/hocuspocus/tools/catalog.py by `python -m hocuspocus.tools.docs`. Do not edit by hand. -->
 
-35 tools: 14 in the `minimal` profile, 31 in `core` (minimal included), 4 more in `full`. Model-visible `tools/list` text: 26,576 bytes. See `docs/BIBLE.md` §4 for the design.
+35 tools: 14 in the `minimal` profile, 31 in `core` (minimal included), 4 more in `full`. Model-visible `tools/list` text: 26,594 bytes. See `docs/BIBLE.md` §4 for the design.
 
 ## Contents
 
@@ -809,9 +809,9 @@ Read attribute values like the geometry spreadsheet: count rows of one class fro
 
 `idempotent` `headless ok` · profile `minimal`
 
-Look at /obj, a LOP stage or a COP: a PNG (long side at most 1024), path, size, camera_used, scene. camera: OBJ or LOP camera, or camera prim (lop_path); cop_path: a Cop node's image. auto: the GUI viewer if present and no camera, else an OpenGL ROP (headless too) framed per fit. Leaves no nodes, undo step or dirty flag.
+Look at /obj, a LOP stage or a COP: a PNG (long side at most 1024), path, size, camera_used, scene. camera: OBJ or LOP camera, or camera prim (lop_path); cop_path: a Cop node's image. auto: the GUI viewer if present and no camera, else a Flipbook ROP (headless too) framed per fit. Leaves no nodes, undo step or dirty flag.
 
-**Notes.** fit has no default: without it the viewer source captures the view as it is and the OpenGL ROP source frames all; fit none reuses the last framing. With fit the viewer frames all or selected for the grab and puts the view back, as it does after looking through camera; context is the viewer's network, and notes say when that is not the captured scene. Without camera or lop_path the stage's display LOP is captured when /obj displays nothing; otherwise a note names it. A stage renders through the OpenGL ROP's LOP source (scene: stage, lop_path). source_used is viewer, opengl_rop or karma: when a headless OpenGL render process crashes, the frame is rendered with a temporary Karma CPU ROP (2 samples, same camera and resolution) and a note says why; later stage captures then go straight to Karma. Lights are refused as cameras; camera errors list the scene's cameras. path also writes the PNG there. Both files are opaque, on the same grey as the image (the OpenGL ROP itself writes a transparent background). image.attached is true when the PNG went out as MCP image content. cop_path (a Cop node, or a COP network's display node) renders it through a temporary rop_image in its network (about 0.2 s, deleted afterwards, outside undo): scene cop, layer {layer_type, resolution, data_window}, the image at the COP's own resolution (resolution is ignored). Without camera, lop_path or cop_path a note names the COP networks under /img.
+**Notes.** fit has no default: without it the viewer source captures the view as it is and the ROP source frames all; fit none reuses the last framing. With fit the viewer frames all or selected for the grab and puts the view back, as it does after looking through camera; context is the viewer's network, and notes say when that is not the captured scene. Without camera or lop_path the stage's display LOP is captured when /obj displays nothing; otherwise a note names it. A stage renders through the ROP's LOP source (scene: stage, lop_path). The ROP source (flipbook_rop; opengl_rop is its 1.3 name and does the same) tries the Flipbook ROP, then the deprecated OpenGL ROP, then a temporary Karma CPU ROP (2 samples, same camera and resolution): headless, a ROP whose render process crashes hands the frame to the next, a note says why, and later stage captures with source auto skip that ROP. source_used is viewer, flipbook_rop, opengl_rop or karma. Lights are refused as cameras; camera errors list the scene's cameras. path also writes the PNG there. Both files are opaque, on the same grey as the image (the Flipbook and OpenGL ROPs write a transparent background). image.attached is true when the PNG went out as MCP image content. cop_path (a Cop node, or a COP network's display node) renders it through a temporary rop_image in its network (about 0.2 s, deleted afterwards, outside undo): scene cop, layer {layer_type, resolution, data_window}, the image at the COP's own resolution (resolution is ignored). Without camera, lop_path or cop_path a note names the COP networks under /img.
 
 ### Arguments
 
@@ -823,7 +823,7 @@ Look at /obj, a LOP stage or a COP: a PNG (long side at most 1024), path, size, 
 | `frame` | number |  |  | Default current frame. |
 | `resolution` | array<integer> |  | `[1024,768]` | min items 2; max items 2 |
 | `fit` | `all` \| `selected` \| `none` |  |  |  |
-| `source` | `auto` \| `viewer` \| `opengl_rop` |  | `"auto"` |  |
+| `source` | `auto` \| `viewer` \| `flipbook_rop` \| `opengl_rop` |  | `"auto"` |  |
 | `path` | string |  |  | Also write the PNG here (must end in .png). |
 
 ### Returns
@@ -848,7 +848,7 @@ Look at /obj, a LOP stage or a COP: a PNG (long side at most 1024), path, size, 
 ```
 
 ```json
-{"camera": "/obj/cam1", "frame": 48, "source": "opengl_rop"}
+{"camera": "/obj/cam1", "frame": 48, "source": "flipbook_rop"}
 ```
 
 
@@ -856,9 +856,9 @@ Look at /obj, a LOP stage or a COP: a PNG (long side at most 1024), path, size, 
 
 `headless ok` · profile `core`
 
-Render any ROP (Karma, OpenGL, ...) or writer SOP (File Cache, rop_geometry: own frame range) for frames [start, end, inc] (default current frame), optionally overriding output. Waits up to wait_s (default the job threshold): if done, returns outputs, a thumbnail and notes; else job_id to poll with job.
+Render any ROP (Karma, Flipbook, ...) or writer SOP (File Cache, rop_geometry: own frame range) for frames [start, end, inc] (default current frame), optionally overriding output. Waits up to wait_s (default the job threshold): if done, returns outputs, a thumbnail and notes; else job_id to poll with job.
 
-**Notes.** Above 5 outputs the result, inline or from job result, has outputs_summary and outputs_sample (the first 2 and last 2) instead of outputs; missing lists up to 20 paths. Every expected output is checked against approved_roots. viewport_capture is the quick look. notes warn when the scene has no lights, when the thumbnail (as sent, flattened onto grey) is nearly black, and when every pixel is transparent (empty), and say why an image output has no thumbnail (an extension it cannot read). thumbnail.image.attached is true when the image went out as MCP image content. The thumbnail is inline only, flattened onto grey; the ROP's own output files are left as written, alpha included. USD render ROPs (Lop usdrender_rop, Driver usdrender): outputs come from outputimage, else the RenderProduct productName of the render settings the ROP uses (EXR thumbnails too), never lopoutput; output overrides outputimage; a note says when nothing resolves; a husk failure carries the end of its log in detail.log_tail. A writer SOP (File Cache, rop_geometry or rop_alembic SOP) renders its own frame range unless frames is given; a File Cache renders through the ROP inside it (no output override), then turns on Load from Disk as its Save to Disk button does (side_effects: {parm: [old, new]}). A cancelled render's job result is the cancelled error with detail {last_status, partial: {outputs_summary}} (the files written before the cancel). A Cop node is not a ROP: the error's candidates are the rop_image nodes in its network (viewport_capture cop_path looks at it). A COP image needs no lights, so no lights note. A thumbnail PIL cannot read (a float TIFF) is converted with iconvert; if that fails too, a note says why.
+**Notes.** Above 5 outputs the result, inline or from job result, has outputs_summary and outputs_sample (the first 2 and last 2) instead of outputs; missing lists up to 20 paths. Every expected output is checked against approved_roots. viewport_capture is the quick look. Headless, a Flipbook or OpenGL ROP renders in a short-lived child hython (a few seconds to start), since a second viewport render can crash the host. notes warn when the scene has no lights, when the thumbnail (as sent, flattened onto grey) is nearly black, and when every pixel is transparent (empty), and say why an image output has no thumbnail (an extension it cannot read). thumbnail.image.attached is true when the image went out as MCP image content. The thumbnail is inline only, flattened onto grey; the ROP's own output files are left as written, alpha included. USD render ROPs (Lop usdrender_rop, Driver usdrender): outputs come from outputimage, else the RenderProduct productName of the render settings the ROP uses (EXR thumbnails too), never lopoutput; output overrides outputimage; a note says when nothing resolves; a husk failure carries the end of its log in detail.log_tail. A writer SOP (File Cache, rop_geometry or rop_alembic SOP) renders its own frame range unless frames is given; a File Cache renders through the ROP inside it (no output override), then turns on Load from Disk as its Save to Disk button does (side_effects: {parm: [old, new]}). A cancelled render's job result is the cancelled error with detail {last_status, partial: {outputs_summary}} (the files written before the cancel). A Cop node is not a ROP: the error's candidates are the rop_image nodes in its network (viewport_capture cop_path looks at it). A COP image needs no lights, so no lights note. A thumbnail PIL cannot read (a float TIFF) is converted with iconvert; if that fails too, a note says why.
 
 ### Arguments
 

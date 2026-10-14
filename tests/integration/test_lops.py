@@ -157,7 +157,7 @@ def test_capture_lop_camera_renders_the_stage(client, work_dir):
     assert result["scene"] == "stage"
     assert result["lop_path"] == nodes["rset"].path()  # the displayed LOP
     assert result["camera_used"] == "/cameras/cam1"
-    assert result["source_used"] == "opengl_rop"
+    assert result["source_used"] == "flipbook_rop"
     assert _center_lit(result["image"])
     assert [c.name() for c in hou.node("/stage").children()] == [
         "sphere1",
@@ -292,7 +292,7 @@ def test_capture_city_stage_headless(client, work_dir):
         "viewport_capture", {"lop_path": nodes["rset"].path(), "resolution": [320, 180]}
     )
     assert result["scene"] == "stage"
-    assert result["source_used"] == "opengl_rop"
+    assert result["source_used"] == "flipbook_rop"
     assert result["camera_used"] == "temporary"
     assert _decode(result["image"]).convert("L").getextrema()[1] > 80
     assert [c.name() for c in hou.node("/stage").children()] == before
@@ -305,7 +305,7 @@ def test_capture_falls_back_to_karma_when_the_child_crashes(client, work_dir, mo
     from hocuspocus.host.tools import visual
 
     monkeypatch.setattr(visual, "_CHILD_SCRIPT", "import os\nos._exit(139)\n")
-    monkeypatch.setattr(visual, "_gl_stage_crashed", [])
+    monkeypatch.setattr(visual, "_stage_crashed", {})
     nodes = _city_scene()
     before = {n: [c.name() for c in hou.node(n).children()] for n in ("/stage", "/out", "/obj")}
     result = client.ok("viewport_capture", {"camera": nodes["cam"].path(), "resolution": [160, 90]})
@@ -324,6 +324,26 @@ def test_capture_falls_back_to_karma_when_the_child_crashes(client, work_dir, mo
     lo, hi = _decode(framed["image"]).convert("L").getextrema()
     assert hi - lo > 20
     assert {n: [c.name() for c in hou.node(n).children()] for n in before} == before
+
+
+@pytest.mark.slow
+def test_stage_capture_falls_back_to_the_opengl_rop(client, work_dir, crash_capture_child):
+    """1.4: a stage whose Flipbook ROP child crashes is captured by the OpenGL ROP (its
+    child single-threaded); with source auto the next stage capture skips the Flipbook ROP
+    and says so. No deprecation note for the temporary OpenGL ROP."""
+    crash_capture_child("flipbook")
+    nodes = _lop_scene(work_dir)
+    before = [c.name() for c in hou.node("/stage").children()]
+    result = client.ok("viewport_capture", {"camera": nodes["cam"].path(), "resolution": [160, 90]})
+    assert result["scene"] == "stage" and result["source_used"] == "opengl_rop"
+    notes = " ".join(result["notes"])
+    assert "Flipbook ROP crashed its render process" in notes, notes
+    assert "deprecat" not in notes.lower()
+    assert _center_lit(result["image"])
+    again = client.ok("viewport_capture", {"lop_path": "/stage", "resolution": [160, 90]})
+    assert again["source_used"] == "opengl_rop"
+    assert any("skipped" in n and "earlier" in n for n in again["notes"]), again["notes"]
+    assert [c.name() for c in hou.node("/stage").children()] == before
 
 
 @pytest.mark.slow

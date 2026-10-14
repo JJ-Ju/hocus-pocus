@@ -1320,24 +1320,26 @@ _VISUAL: tuple[ToolSpec, ...] = (
             "Look at /obj, a LOP stage or a COP: a PNG (long side at most 1024), path, size, "
             "camera_used, scene. camera: OBJ or LOP camera, or camera prim (lop_path); cop_path: "
             "a Cop node's image. auto: the "
-            "GUI viewer if present and no camera, else an OpenGL ROP (headless too) framed per "
+            "GUI viewer if present and no camera, else a Flipbook ROP (headless too) framed per "
             "fit. Leaves no nodes, undo step or dirty flag."
         ),
         notes=(
             "fit has no default: without it the viewer source captures the view as it is and the "
-            "OpenGL ROP source frames all; fit none reuses the last framing. With fit the viewer "
+            "ROP source frames all; fit none reuses the last framing. With fit the viewer "
             "frames all or selected for the grab and puts the view back, as "
             "it does after looking through camera; context is the viewer's network, and notes say "
             "when that is not the captured scene. Without camera or lop_path the stage's display "
             "LOP is captured when /obj displays nothing; otherwise a note names it. A stage renders "
-            "through the OpenGL ROP's LOP source (scene: stage, lop_path). source_used is viewer, "
-            "opengl_rop or karma: when a headless OpenGL render process crashes, the frame is "
-            "rendered with a temporary Karma CPU ROP (2 samples, same camera and resolution) and "
-            "a note says why; later stage captures then go straight to Karma. Lights are refused as "
+            "through the ROP's LOP source (scene: stage, lop_path). The ROP source (flipbook_rop; "
+            "opengl_rop is its 1.3 name and does the same) tries the Flipbook ROP, then the "
+            "deprecated OpenGL ROP, then a temporary Karma CPU ROP (2 samples, same camera and "
+            "resolution): headless, a ROP whose render process crashes hands the frame to the "
+            "next, a note says why, and later stage captures with source auto skip that ROP. "
+            "source_used is viewer, flipbook_rop, opengl_rop or karma. Lights are refused as "
             "cameras; camera errors list the scene's cameras. path also writes the PNG there. Both "
             "files are "
-            "opaque, on the same grey as the image (the OpenGL ROP itself writes a transparent "
-            "background). image.attached is true when the PNG went out as MCP image content. "
+            "opaque, on the same grey as the image (the Flipbook and OpenGL ROPs write a "
+            "transparent background). image.attached is true when the PNG went out as MCP image content. "
             "cop_path (a Cop node, or a COP network's display node) renders it through a "
             "temporary rop_image in its network (about 0.2 s, deleted afterwards, outside undo): "
             "scene cop, layer {layer_type, resolution, data_window}, the image at the COP's own "
@@ -1354,7 +1356,7 @@ _VISUAL: tuple[ToolSpec, ...] = (
                     {"type": "integer", "minimum": 16}, minItems=2, maxItems=2, default=[1024, 768]
                 ),
                 "fit": _enum(("all", "selected", "none")),
-                "source": _enum(("auto", "viewer", "opengl_rop"), "auto"),
+                "source": _enum(("auto", "viewer", "flipbook_rop", "opengl_rop"), "auto"),
                 "path": _s("Also write the PNG here (must end in .png)."),
             }
         ),
@@ -1375,15 +1377,15 @@ _VISUAL: tuple[ToolSpec, ...] = (
             },
             ("path", "width", "height"),
         ),
-        # Not read_only: in the GUI the opengl_rop source creates a temporary camera and ROP
+        # Not read_only: in the GUI the ROP source creates a temporary camera and ROP
         # (deleted afterwards, outside undo) and Houdini may mark the hip modified (§4.7).
         idempotent=True,
-        examples=({}, {"camera": "/obj/cam1", "frame": 48, "source": "opengl_rop"}),
+        examples=({}, {"camera": "/obj/cam1", "frame": 48, "source": "flipbook_rop"}),
     ),
     ToolSpec(
         name="render",
         description=(
-            "Render any ROP (Karma, OpenGL, ...) or writer SOP (File Cache, rop_geometry: own "
+            "Render any ROP (Karma, Flipbook, ...) or writer SOP (File Cache, rop_geometry: own "
             "frame range) for frames [start, end, inc] (default current frame), optionally "
             "overriding output. Waits up to wait_s (default the job threshold): if done, returns "
             "outputs, a thumbnail and notes; else job_id to poll with job."
@@ -1393,6 +1395,8 @@ _VISUAL: tuple[ToolSpec, ...] = (
             "outputs_sample (the first 2 and last 2) instead of outputs; missing lists up to 20 "
             "paths. Every "
             "expected output is checked against approved_roots. viewport_capture is the quick look."
+            " Headless, a Flipbook or OpenGL ROP renders in a short-lived child hython (a few "
+            "seconds to start), since a second viewport render can crash the host."
             " notes warn when the scene has no lights, when the thumbnail (as sent, flattened onto "
             "grey) is nearly black, and when every pixel is transparent (empty), "
             "and say why an image output has no thumbnail (an extension it cannot read). "

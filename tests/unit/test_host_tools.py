@@ -240,6 +240,71 @@ def test_run_with_fallback_queues_a_retry_and_never_raises():
     assert "also failed" in note
 
 
+def test_capture_fallback_chain_is_ordered():
+    """1.4: the ROP source tries the Flipbook ROP, then the OpenGL ROP (each when Houdini
+    has it), then Karma; a crashed child moves on, any other error stops the chain, and
+    the note names every ROP that did not render."""
+    from hocuspocus.host.tools.visual import capture_chain, run_capture_chain
+
+    assert capture_chain({"opengl", "flipbook"}) == ["flipbook", "opengl", "karma"]
+    assert capture_chain(["opengl"]) == ["opengl", "karma"]
+    assert capture_chain([]) == ["karma"]
+
+    def crashed(code=139):
+        return ToolError(
+            "internal",
+            f"The render process exited with code {code}.",
+            hint="See detail.log for the render process output.",
+            hou_exception=f"render process exit {code}",
+            detail={"log": "Segmentation fault"},
+        )
+
+    def attempt(fail: set[str], tried: list[str]):
+        def render_rop(rop_type):
+            tried.append(rop_type)
+            if rop_type in fail:
+                raise crashed()
+            return {"errors": [], "notes": []}
+
+        return render_rop
+
+    chain = ["flipbook", "opengl", "karma"]
+    tried: list[str] = []
+    used, _, notes = run_capture_chain(
+        chain, stage=False, source="auto", render_rop=attempt(set(), tried), render_karma=None
+    )
+    assert (used, tried, notes) == ("flipbook", ["flipbook"], [])
+
+    tried = []
+    used, _, notes = run_capture_chain(
+        chain,
+        stage=False,
+        source="auto",
+        render_rop=attempt({"flipbook"}, tried),
+        render_karma=None,
+    )
+    assert (used, tried) == ("opengl", ["flipbook", "opengl"])
+    assert notes[0].startswith("Rendered with the OpenGL ROP because the Flipbook ROP crashed")
+
+    tried, karma = [], []
+    used, _, notes = run_capture_chain(
+        chain,
+        stage=False,
+        source="auto",
+        render_rop=attempt({"flipbook", "opengl"}, tried),
+        render_karma=lambda: karma.append(1),
+    )
+    assert (used, tried, karma) == ("karma", ["flipbook", "opengl"], [1])
+    assert "Karma" in notes[0] and "Flipbook ROP" in notes[0] and "OpenGL ROP" in notes[0]
+
+    def refused(rop_type):
+        raise ToolError("cook_failed", "The Flipbook ROP did not produce an image: x")
+
+    with pytest.raises(ToolError) as err:
+        run_capture_chain(chain, stage=False, source="auto", render_rop=refused, render_karma=None)
+    assert err.value.code == "cook_failed"
+
+
 def test_prune_captures_keeps_the_newest(tmp_path):
     import os
 
