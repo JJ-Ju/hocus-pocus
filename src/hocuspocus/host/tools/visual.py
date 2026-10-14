@@ -2322,6 +2322,142 @@ def usd_render_outputs(rop: Any, frames: list[float]) -> tuple[list[str], str | 
     return paths, None
 
 
+# -- single-file ROPs: USD, Alembic (review 23 P0-1) -----------------------------------
+
+USD_EXTS = (".usd", ".usda", ".usdc", ".usdz")
+LAYERS_LISTED = 20
+"""A USD render lists at most this many layer files."""
+SAMPLE_SLACK = 1e-3
+
+
+def single_file_kind(path: str) -> str | None:
+    """``usd`` or ``abc`` for an output file that holds every frame of a range, from its
+    extension; None for any other file. No ``hou``."""
+    ext = os.path.splitext(path)[1].lower()
+    if ext in USD_EXTS:
+        return "usd"
+    return "abc" if ext == ".abc" else None
+
+
+def _layer_dependencies(layer: Any, path: str) -> list[str]:
+    """The files ``layer`` (opened from ``path``) composes: sublayers, references and
+    payloads, relative paths resolved against its directory. No ``hou``."""
+    out = []
+    for dep in layer.GetCompositionAssetDependencies():
+        dep = str(dep).split(":SDF_FORMAT_ARGS:")[0]
+        if not dep or dep.startswith("anon:"):
+            continue
+        full = dep if os.path.isabs(dep) else os.path.join(os.path.dirname(path), dep)
+        out.append(_norm(os.path.normpath(full)))
+    return out
+
+
+def usd_layers(root: str, since: float | None = None) -> list[dict[str, Any]]:
+    """Every USD layer file a render wrote: ``root`` and the files it composes, followed
+    through each layer (a sopimport's save path is a sublayer of a usd_rop's root layer),
+    then USD files in ``root``'s directory modified since ``since`` that none of them
+    reached. Rows ``{path, bytes, time_samples, time_codes?}``, at most
+    :data:`LAYERS_LISTED`. Opened as anonymous copies, so the session's cached layers are
+    neither used nor reloaded. ``pxr``, no ``hou``."""
+    from pxr import Sdf
+
+    queue, seen, rows = [_norm(root)], set(), []
+    scanned = False
+    while len(rows) < LAYERS_LISTED:
+        if not queue:
+            if scanned or since is None:
+                break
+            scanned = True
+            folder = os.path.dirname(_norm(root))
+            with contextlib.suppress(OSError):
+                for name in sorted(os.listdir(folder)):
+                    full = _norm(os.path.join(folder, name))
+                    if os.path.splitext(name)[1].lower() not in USD_EXTS:
+                        continue
+                    with contextlib.suppress(OSError):
+                        if os.path.getmtime(full) >= since - WRITTEN_SLACK_S:
+                            queue.append(full)
+            continue
+        path = queue.pop(0)
+        key = os.path.normcase(path)
+        if key in seen or not os.path.isfile(path):
+            continue
+        seen.add(key)
+        row: dict[str, Any] = {"path": path, "bytes": os.path.getsize(path)}
+        layer = None
+        with contextlib.suppress(Exception):
+            layer = Sdf.Layer.OpenAsAnonymous(path)
+        if layer is not None:
+            samples = sorted(layer.ListAllTimeSamples())
+            row["time_samples"] = len(samples)
+            if samples:
+                row["time_codes"] = [frame_num(samples[0]), frame_num(samples[-1])]
+            queue.extend(_layer_dependencies(layer, path))
+        rows.append(row)
+    return rows
+
+
+def _lost_frames(rop: str, path: str, found: str, frames: list[float]) -> ToolError:
+    return ToolError(
+        "cook_failed",
+        f"{rop} wrote {found} for {len(frames)} frames to {os.path.basename(path)}: a "
+        "single-file output lost frames.",
+        hint="Check the ROP's frame range parms and that the input is animated, then render "
+        "again with frames.",
+        detail={"path": path, "frames": [frame_num(frames[0]), frame_num(frames[-1])]},
+    )
+
+
+def check_single_file(
+    rop: str, path: str, frames: list[float], since: float | None = None
+) -> dict[str, Any]:
+    """Read back a single-file output after a range render (review 23 P0-1: frame by
+    frame, each call overwrote the file and only the last frame's sample survived). USD:
+    the layer with the most time samples must have one per frame; none at all is a static
+    stage (a note). Alembic: the archive's time range must cover the frames. Raises
+    ``cook_failed``; returns ``{notes?, layers?}``. Main thread (``hou.fps``)."""
+    import hou
+
+    kind = single_file_kind(path)
+    out: dict[str, Any] = {}
+    if len(frames) < 2 or kind is None or not os.path.isfile(path):
+        return out
+    start, end = frames[0], frames[-1]
+    if kind == "usd":
+        layers = usd_layers(path, since)
+        out["layers"] = layers
+        counts = []
+        for row in layers:
+            codes = row.get("time_codes")
+            if codes and codes[-1] >= start - SAMPLE_SLACK and codes[0] <= end + SAMPLE_SLACK:
+                counts.append((row["time_samples"], row["path"]))
+        if not counts:
+            out["notes"] = [
+                f"No layer {rop} wrote has time samples: the exported stage is static over "
+                f"frames {frame_num(start)}-{frame_num(end)}."
+            ]
+            return out
+        best, where = max(counts)
+        if best < len(frames):
+            plural = "s" if best != 1 else ""
+            raise _lost_frames(rop, where, f"{best} time sample{plural}", frames)
+        return out
+    import _alembic_hom_extensions as alembic
+
+    span = None
+    with contextlib.suppress(Exception):
+        span = alembic.alembicTimeRange(path)
+    fps = hou.fps()
+    if span is None:
+        raise _lost_frames(rop, path, "a single time sample", frames)
+    first, last = span[0] * fps, span[1] * fps
+    if first > start + SAMPLE_SLACK or last < end - SAMPLE_SLACK:
+        raise _lost_frames(
+            rop, path, f"frames {frame_num(round(first, 3))}-{frame_num(round(last, 3))}", frames
+        )
+    return out
+
+
 def _not_a_render_node(node: Any) -> ToolError:
     if is_cop_node(node) or is_cop_network(node):
         return ToolError(
@@ -2490,6 +2626,11 @@ def _prepare_render(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
             f"{rop.path()} renders to MPlay ({parm.name()} = {expected[0]!r}), which needs a GUI.",
             hint="Pass output with a file path such as $HIP/render/$OS.$F4.png.",
         )
+    # One file for the whole range (a USD layer, an Alembic archive, any path without $F):
+    # one render() call writes every frame; frame by frame each call overwrote the file
+    # (review 23 P0-1).
+    distinct = {_norm(p) for p in expected if p.strip()}
+    single_file = len(_frame_list(frames)) > 1 and len(distinct) == 1
     return {
         "rop": rop.path(),
         "owner": owner.path() if rop is not owner else None,
@@ -2502,6 +2643,7 @@ def _prepare_render(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
         "output": output,
         "expected": [_norm(p) for p in expected],
         "usd": usd,
+        "single_file": single_file,
         "note": note,
         "isolate": needs_isolation(rop, ctx),
         "stage_source": rop.parm("opsource") is not None and rop.parm("opsource").eval() == 1,
@@ -2731,10 +2873,72 @@ def _render_job(plan: dict[str, Any], ctx: HostContext, thumbnail: bool) -> Any:
             errors += [str(e) for e in node.errors()]
             return errors
 
+        def render_range(on_frame: Any) -> list[str]:
+            """One render() call over the whole range, ``on_frame`` after each frame."""
+            node = hou.node(plan["rop"])
+            if node is None:
+                return [f"{plan['rop']} was deleted during the render."]
+
+            def event(_node: Any, kind: Any, _time: float) -> None:
+                if kind == hou.ropRenderEventType.PostFrame:
+                    with contextlib.suppress(Exception):
+                        on_frame()
+
+            errors: list[str] = []
+            hooked = False
+            with contextlib.suppress(Exception):
+                node.addRenderEventCallback(event)
+                hooked = True
+            try:
+                start, end, inc = plan["frames"]
+                node.render(frame_range=(start, end, inc), verbose=False)
+            except hou.OperationFailed as exc:
+                errors.append(str(exc).strip())
+            finally:
+                if hooked:
+                    with contextlib.suppress(Exception):
+                        node.removeRenderEventCallback(event)
+            errors += [str(e) for e in node.errors()]
+            return errors
+
+        def run_single_file(total: int) -> None:
+            done = [0]
+            name = os.path.basename(plan["expected"][0])
+
+            def on_frame() -> None:
+                done[0] = min(total, done[0] + 1)
+                job.set_progress(done[0], total, f"{done[0]}/{total} frames written to {name}")
+
+            job.set_progress(0, total, f"0/{total} frames written to {name} (one render call)")
+            started = time.time()
+            try:
+                errors = job.run_main(lambda: render_range(on_frame), timeout_s=FRAME_TIMEOUT_S)
+            except ToolError as exc:
+                if exc.code != "cancelled":
+                    raise
+                partial, written = _render_partial(plan)
+                raise cancelled_with_partial(job, partial, written) from exc
+            if errors:
+                message, detail = failure(f"{plan['rop']} failed to render", errors)
+                raise ToolError("cook_failed", message, detail=detail or None)
+            # The call cannot stop mid-range, so a cancel sent during it is too late: the
+            # file is complete and is read back (no cancel check here).
+            readback.update(
+                ctx.executor.run(
+                    lambda: check_single_file(
+                        plan.get("owner") or plan["rop"], plan["expected"][0], frame_list, started
+                    ),
+                    ctx.config.default_timeout_s,
+                )
+            )
+
+        readback: dict[str, Any] = {}
         try:
             job.run_main(apply_override)
             total = len(frame_list)
-            for i, frame in enumerate(frame_list):
+            if plan.get("single_file"):
+                run_single_file(total)
+            for i, frame in enumerate([] if plan.get("single_file") else frame_list):
                 # The count is current, the frames finished (review 20 N7).
                 job.set_progress(
                     i, total, f"{i}/{total} frames done, rendering frame {frame_num(frame)}"
@@ -2780,6 +2984,7 @@ def _render_job(plan: dict[str, Any], ctx: HostContext, thumbnail: bool) -> Any:
             for folder in log_dir:
                 shutil.rmtree(folder, ignore_errors=True)
         result = _render_result(plan, thumbnail)
+        notes.extend(readback.get("notes") or [])
         if side_effects:
             result["side_effects"] = side_effects
         if notes:

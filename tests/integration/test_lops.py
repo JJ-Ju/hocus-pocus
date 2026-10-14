@@ -459,6 +459,77 @@ def test_usd_stage_on_a_render_rop_points_at_its_input(client, work_dir):
     assert error["candidates"] == [nodes["rset"].path()]
 
 
+# -- single-file USD exports (review 23 P0-1) -------------------------------------------
+
+
+def _usd_export(work_dir: Path, frames=(1, 12)):
+    """An animated box -> sopimport (its save path under work_dir/usd) -> usd_rop writing
+    work_dir/usd/anim.usd over ``frames`` (trange normal). Returns the ROP."""
+    geo = hou.node("/obj").createNode("geo", "anim")
+    box = geo.createNode("box")
+    box.parm("ty").setExpression("$F * 0.1")
+    box.setDisplayFlag(True)
+    imp = hou.node("/stage").createNode("sopimport", "anim_import")
+    imp.parm("soppath").set(box.path())
+    imp.parm("savepath").set(_fwd(work_dir / "usd" / "$OS.usd"))
+    rop = hou.node("/stage").createNode("usd_rop", "export_usd")
+    rop.setInput(0, imp)
+    rop.parm("lopoutput").set(_fwd(work_dir / "usd" / "anim.usd"))
+    rop.parm("trange").set(1)
+    for name, value in zip(("f1", "f2"), frames, strict=True):
+        rop.parm(name).deleteAllKeyframes()
+        rop.parm(name).set(value)
+    return rop
+
+
+def _samples(path: Path) -> list[float]:
+    from pxr import Sdf
+
+    return list(Sdf.Layer.OpenAsAnonymous(_fwd(path)).ListAllTimeSamples())
+
+
+def test_render_usd_rop_writes_every_frame_in_one_call(client, work_dir):
+    """Review 23 P0-1: frame by frame, every render() call overwrote the one layer and
+    left frame 12's sample only. One render() call over the range writes all 12."""
+    rop = _usd_export(work_dir)
+    result = client.ok("render", {"rop_path": rop.path(), "frames": [1, 12]})
+    assert result["state"] == "done", result
+    assert result["frames"] == [1, 12, 1]
+    samples = _samples(work_dir / "usd" / "anim_import.usd")
+    assert samples == [float(f) for f in range(1, 13)], samples
+    status = client.ok("job", {"action": "status", "job_id": result["job_id"]})
+    assert status["current"] == status["total"] == 12, status
+
+
+def test_render_fails_when_a_usd_layer_lost_frames(client, work_dir):
+    """The read-back that guards P0-1: a layer written frame by frame holds one sample for
+    12 frames, which is cook_failed naming the layer."""
+    from hocuspocus.host.tools import visual
+
+    rop = _usd_export(work_dir)
+    for frame in range(1, 13):
+        rop.render(frame_range=(frame, frame), verbose=False)
+    assert len(_samples(work_dir / "usd" / "anim_import.usd")) == 1
+    with pytest.raises(visual.ToolError) as caught:
+        visual.check_single_file(
+            rop.path(), _fwd(work_dir / "usd" / "anim.usd"), [float(f) for f in range(1, 13)]
+        )
+    assert caught.value.code == "cook_failed"
+    assert "1 time sample" in caught.value.message and "12 frames" in caught.value.message
+
+
+def test_render_usdexport_sop_writes_every_frame(client, work_dir):
+    geo = hou.node("/obj").createNode("geo", "anim")
+    box = geo.createNode("box")
+    box.parm("ty").setExpression("$F * 0.1")
+    export = geo.createNode("usdexport", "usd_out")
+    export.setInput(0, box)
+    export.parm("lopoutput").set(_fwd(work_dir / "sop.usd"))
+    result = client.ok("render", {"rop_path": export.path(), "frames": [1, 6]})
+    assert result["state"] == "done", result
+    assert len(_samples(work_dir / "sop.usd")) == 6
+
+
 # -- node_type_info filters (papercut 8) ------------------------------------------------
 
 

@@ -900,3 +900,44 @@ def test_render_cancelled_job_result_carries_the_partial_outputs(client, work_di
     assert summary["last"] == _fwd(written[-1])
     assert summary["missing_count"] == 60 - len(written)
     assert cache.parm("loadfromdisk").eval() == 0  # Save to Disk's side effects need a full save
+
+
+# -- single-file ROPs (review 23 P0-1) ------------------------------------------------
+
+
+def _alembic_rop(work_dir: Path, name: str = "anim.abc"):
+    geo = hou.node("/obj").createNode("geo", "anim")
+    box = geo.createNode("box")
+    box.parm("ty").setExpression("$F * 0.1")
+    rop = hou.node("/out").createNode("alembic", "abc")
+    rop.parm("sop_path").set(box.path())
+    rop.parm("filename").set(_fwd(work_dir / name))
+    return rop
+
+
+def _abc_frames(path: Path) -> tuple[float, float] | None:
+    import _alembic_hom_extensions as abc
+
+    span = abc.alembicTimeRange(_fwd(path))
+    return None if span is None else tuple(round(t * hou.fps(), 3) for t in span)
+
+
+def test_render_alembic_rop_writes_the_range_in_one_call(client, work_dir):
+    rop = _alembic_rop(work_dir)
+    result = client.ok("render", {"rop_path": rop.path(), "frames": [1, 12]})
+    assert result["state"] == "done", result
+    assert _abc_frames(work_dir / "anim.abc") == (1.0, 12.0)
+
+
+def test_render_fails_when_an_alembic_file_lost_frames(client, work_dir):
+    from hocuspocus.host.tools import visual
+
+    rop = _alembic_rop(work_dir)
+    for frame in range(1, 13):
+        rop.render(frame_range=(frame, frame), verbose=False)
+    with pytest.raises(visual.ToolError) as caught:
+        visual.check_single_file(
+            rop.path(), _fwd(work_dir / "anim.abc"), [float(f) for f in range(1, 13)]
+        )
+    assert caught.value.code == "cook_failed"
+    assert "12 frames" in caught.value.message
