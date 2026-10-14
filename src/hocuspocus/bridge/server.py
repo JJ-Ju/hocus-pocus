@@ -36,6 +36,7 @@ from .client import OFFLINE_HINT, REINSTALL_HINT, HostClient
 from .config import BridgeConfig
 from .instructions import INSTRUCTIONS, guide_text, tools_text
 from .launch import Launcher
+from .ledger import Ledger
 from .local_tools import LOCAL_TOOLS
 from .validate import coerce_integers, shape_hint, validate
 
@@ -274,6 +275,7 @@ class Bridge:
         scan: Callable[[], list[registry.Instance]] | None = None,
         launcher: Launcher | None = None,
         launches: registry.LaunchLog | None = None,
+        ledger: Ledger | None = None,
     ) -> None:
         self.config = config or BridgeConfig.load()
         profile = self.config.profile if self.config.profile in catalog.PROFILES else "core"
@@ -285,8 +287,18 @@ class Bridge:
         self.scan: Callable[[], list[registry.Instance]] = scan or (lambda: registry.scan())
         self.launches = launches or registry.LaunchLog()
         self.launcher = launcher or Launcher(
-            self.config.hfs or None, scan=self.scan, launches=self.launches
+            self.config.hfs or None,
+            scan=self.scan,
+            launches=self.launches,
+            on_launch=lambda pid, argv, work_dir, mode: self.ledger.record_launch(
+                pid, argv, work_dir, mode
+            ),
         )
+        self._ledger = ledger
+        self._reconciled = False
+        self._memory_ledger = scan is not None
+        """A bridge given a fake ``scan`` (tests) keeps its ledger in memory unless one is
+        passed in, so it never writes to the real state dir."""
         self.preferred_pid: int | None = None
         """The pinned pid (``houdini_connect {pid}`` or ``{launch}``); BIBLE §3.6."""
         self.pinned: registry.Instance | None = None
@@ -305,6 +317,29 @@ class Bridge:
         """request_id -> the instance a call in flight was sent to (progress polling)."""
         self._seen_pids: set[int] = set()
         """Every Houdini pid this bridge has seen live in the registry."""
+
+    # -- the ledger (spec-2.0 §3) -----------------------------------------------------------
+
+    @property
+    def ledger(self) -> Ledger:
+        """The bridge ledger (``<state_dir>/ledger.sqlite``), opened on first use and then
+        reconciled with the registry: remembered instances that are gone are marked dead."""
+        if self._ledger is None:
+            self._ledger = Ledger() if self._memory_ledger else Ledger.at()
+        if not self._reconciled:
+            self._reconciled = True
+            try:
+                live = self.scan()
+            except Exception:  # noqa: BLE001 - reconciling is best effort
+                log.debug("ledger reconcile scan failed", exc_info=True)
+            else:
+                self._ledger.observe(live, reconcile=True)
+        return self._ledger
+
+    def _note_live(self, live: list[registry.Instance]) -> None:
+        """Remember the live instances (``job_not_found`` vs ``instance_lost``; ledger)."""
+        self._seen_pids.update(inst.pid for inst in live)
+        self.ledger.observe(live, reconcile=True)
 
     # -- instances -----------------------------------------------------------------------
 
@@ -389,7 +424,7 @@ class Bridge:
         if target_pid is not None:
             live = self.scan()
             owner = next((inst for inst in live if inst.pid == target_pid), None)
-            self._seen_pids.update(inst.pid for inst in live)
+            self._note_live(live)
             if owner is None:
                 job_id = str((args or {}).get("job_id"))
                 if not self._known_pid(target_pid):
@@ -404,7 +439,7 @@ class Bridge:
                 hint="call houdini_connect (with pid, launch, or no arguments) to attach again",
             )
         live = self.scan()
-        self._seen_pids.update(inst.pid for inst in live)
+        self._note_live(live)
         sel = registry.select(live, self.preferred_pid)
         if sel.lost_pid is not None:
             raise self.lost_error(live)
@@ -456,7 +491,7 @@ class Bridge:
             return True
         if any(inst is not None and inst.pid == pid for inst in (self.pinned, self.last_target)):
             return True
-        return self.launches.has(pid)
+        return self.launches.has(pid) or self.ledger.knows_pid(pid)
 
     def job_lost_error(self, pid: int, job_id: str, live: list[registry.Instance]) -> ToolError:
         """``instance_lost`` for a job whose Houdini has exited, with its last known status."""
@@ -464,8 +499,12 @@ class Bridge:
         label = cached["label"] if cached else ""
         if not label and self.pinned is not None and self.pinned.pid == pid:
             label = self.pinned.label
+        if not label:
+            remembered = self.ledger.instance(pid)
+            label = remembered["label"] if remembered else ""
         label = label or "houdini"
-        last = cached["status"] if cached else None
+        # A restarted bridge has no cache: the ledger kept the last status it saw.
+        last = cached["status"] if cached else self.ledger.last_status(job_id)
         message = (
             f"Job {job_id} ran in Houdini pid {pid} ({label}), which has exited; its jobs are gone."
         )
@@ -499,6 +538,9 @@ class Bridge:
             snapshot = {key: row[key] for key in JOB_SNAPSHOT_KEYS if key in row}
             self._jobs[job_id] = {"pid": inst.pid, "label": inst.label, "status": snapshot}
             self._jobs.move_to_end(job_id)
+            self.ledger.record_job(inst.pid, row)
+            if row is payload and row.get("state") == "done" and "result" in row:
+                self.ledger.store_result(job_id, row["result"])
         while len(self._jobs) > JOB_CACHE_SIZE:
             self._jobs.popitem(last=False)
 
@@ -665,12 +707,18 @@ class Bridge:
             job_id = args.get("job_id")
             if isinstance(job_id, str) and job_id:
                 ok, snapshot, _meta = client.job(job_id, timeout_s=5.0)
-                return snapshot if ok else None
-            jobs = client.call_jobs(request_id)
+                snapshot = snapshot if ok else None
+            else:
+                jobs = client.call_jobs(request_id)
+                snapshot = jobs[-1] if jobs else None
+            if not isinstance(snapshot, dict) or not isinstance(snapshot.get("job_id"), str):
+                return snapshot
+            # The poller feeds the ledger; progress is reported from the ledger's view.
+            self.ledger.record_job(inst.pid, snapshot)
+            return self.ledger.last_status(snapshot["job_id"]) or snapshot
         except Exception:  # noqa: BLE001 - progress must never fail the call
             log.debug("progress poll for %s failed", name, exc_info=True)
             return None
-        return jobs[-1] if jobs else None
 
     def _timeout(self, args: dict[str, Any]) -> float:
         for key in ("timeout_s", "wait_s"):
@@ -1171,5 +1219,6 @@ async def serve_stdio(bridge: Bridge | None = None) -> None:
     from mcp.server.stdio import stdio_server
 
     server = build_server(bridge)
+    _ = server.bridge.ledger  # type: ignore[attr-defined]  # open and reconcile it at start
     async with stdio_server() as (read_stream, write_stream):
         await server.run(read_stream, write_stream, server.create_initialization_options())

@@ -7,6 +7,7 @@ Tests inject ``spawner``/``scan``/``sleep`` so nothing is actually launched.
 
 from __future__ import annotations
 
+import contextlib
 import glob
 import json
 import os
@@ -368,6 +369,13 @@ class Spawned:
     outlives: bool
     before: frozenset[int]
     """Pids registered before the spawn (a GUI hand-off registers under a new pid)."""
+    cwd: Path | None = None
+    """The directory the child started in (its untitled ``$HIP``)."""
+
+
+LaunchHook = Callable[[int, tuple[str, ...], "Path | None", str], None]
+"""``on_launch(pid, argv, work_dir, mode)``: called once a launched Houdini registered
+(the bridge writes the ledger's ``launches`` row; spec-2.0 §3)."""
 
 
 class Launcher:
@@ -384,8 +392,10 @@ class Launcher:
         launches: registry.LaunchLog | None = None,
         python_dir: Callable[[Mapping[str, str] | None], tuple[Path, str]] = host_python_dir,
         owned: bool = True,
+        on_launch: LaunchHook | None = None,
     ) -> None:
         self.config_hfs = config_hfs
+        self.on_launch = on_launch
         self.owned = owned
         """True for a bridge launch: the child is tagged with ``HOCUSPOCUS_LAUNCHED_BY`` and
         recorded in the launch log. False for ``hocuspocus launch``, whose Houdini belongs
@@ -497,7 +507,7 @@ class Launcher:
         except Exception:
             outlives = False
         return Spawned(
-            proc, mode, tuple(argv), str(log_path) if log_path else None, outlives, before
+            proc, mode, tuple(argv), str(log_path) if log_path else None, outlives, before, cwd
         )
 
     def wait(self, spawned: Spawned, wait_s: float = DEFAULT_WAIT_S) -> LaunchResult:
@@ -514,6 +524,9 @@ class Launcher:
             if found is not None:
                 if self.owned:
                     self.launches.record(found, mode=mode, outlives_server=spawned.outlives)
+                if self.on_launch is not None:
+                    with contextlib.suppress(Exception):  # a record must never fail a launch
+                        self.on_launch(found.pid, spawned.argv, spawned.cwd, mode)
                 return LaunchResult(found, mode, spawned.argv, log_text, spawned.outlives)
             code = proc.poll()
             if code is not None:
