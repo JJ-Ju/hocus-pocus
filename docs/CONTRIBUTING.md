@@ -73,8 +73,8 @@ macOS the path is `.venv/bin/...`.
    (`from ._helpers import ToolSpec, _obj, _s, ...`; a helper that two tools share goes
    there too). Add the module name to `ORDER` in `spec/__init__.py` where the tool belongs:
    that list, not the directory, is the order of `tools/list`, `docs/tools.md` and
-   `hocuspocus://tools`. `catalog.py` only loads the specs and owns the profile sets; do
-   not define tools in it. The spec has:
+   `hocuspocus://tools`. `catalog.py` only loads the specs and answers which profile lists
+   which tool; do not define tools in it. The spec has:
    - `name`, in snake_case, equal to the module name.
    - A `description` of at most 60 words: what the tool does and what the model needs to
      choose it. Defaults belong in the schema (`default`), not the description.
@@ -92,18 +92,24 @@ macOS the path is `.venv/bin/...`.
      put how it behaves (shapes, edge cases, interactions with other arguments) in
      `notes`. A new feature then adds only its name and type to `tools/list`, not its
      explanation.
-   - `read_only` / `destructive` / `idempotent`, `profile`, and `headless_ok`. `profile`
-     is `core`, `full`, or `v2` for a 2.0 tool (spec-2.0 §7 M1; BIBLE §4.9), which only
-     the v2 profile lists; its integration tests take the `v2_client` fixture, which puts
-     the session host on v2 for that test. The `minimal` profile (BIBLE §4.1) is the `MINIMAL_TOOLS` set in
-     `catalog.py`. Add a tool to it only when a small-context client cannot work without
-     it, and update BIBLE §4.1 and `test_profiles` in the same change.
+   - `read_only` / `destructive` / `idempotent`, `profiles`, and `headless_ok`. `profiles`
+     is the tuple of profiles that list the tool (spec-2.0 §2; `tools/profiles.py`): a
+     suffix of `("minimal", "core", "full")`, since the 2.0 profiles nest (10 / 18 / 21
+     tools; `core` is the default), so a new tool is usually `("full",)` or
+     `("core", "full")`. Add one to `minimal` only when a small-context client cannot work
+     without it, and update BIBLE §4.1 and `test_profiles` in the same change.
+     `"compat_1x"` is the 1.4 catalogue and is closed: a new tool never joins it. A 1.4 tool
+     that 2.0 removed is `("compat_1x",)` and has its replacement in `tools/migration.py`,
+     which both the host's refusal and the bridge's answer quote. `v2` is read as `full`
+     for 2.0.x. The integration session host runs `full`; a test of a 1.4 tool takes
+     `compat_client` (or its module sets `pytestmark = pytest.mark.compat_1x`), which sends
+     `profile: compat_1x` with each call as a `compat_1x` bridge does.
    - At least one entry in `examples`.
-   - For a 1.x tool that gains a 2.0 argument or result field (`on`, `role`), a
+   - For a 1.4 tool that gains a 2.0 argument or result field (`on`, `role`), a
      `v2_extra` overlay instead of a schema change: `{"input": {...}, "output": {...}}`,
-     partial schemas that `catalog.v2_spec` deep-merges for the `v2` listing only, so the
-     1.x goldens keep their bytes (BIBLE §3.5). Describe the addition in `notes`, starting
-     "v2 profile"; `docs/tools.md` marks the rows `(v2 profile)`.
+     partial schemas that `catalog.v2_spec` deep-merges for the 2.0 profiles, so the
+     `compat_1x` goldens keep 1.4's bytes (BIBLE §3.5). Describe the addition in `notes`,
+     starting "Not in compat_1x"; `docs/tools.md` marks the rows `(not in compat_1x)`.
 
    The bridge registers the tool from this spec, so it shows up in `tools/list`
    straight away.
@@ -171,19 +177,21 @@ macOS the path is `.venv/bin/...`.
      words or fewer.
    - The schema shape and annotations are valid.
    - The examples validate.
-   - The serialised `tools/list` result of the full profile stays within two caps
-     (`test_tools_list_budget`, BIBLE §4.1). What clients see by default,
-     `result_content = "text"` (no output schemas), stays at 32,000 bytes or less. The
-     `both` shape, with output schemas declared, stays at 44,000 bytes or less. The test
-     prints all six sizes, the three profiles in each mode, even on success. When a new tool pushes either one over, move argument detail from the
+   - The serialised `tools/list` result of the 2.0 `full` profile stays within two caps
+     (`test_tools_list_budget`, spec-2.0 §7 M3). What clients see by default,
+     `result_content = "text"` (no output schemas), stays at 24,000 bytes or less. The
+     `both` shape, with output schemas declared, stays at 34,000 bytes or less.
+     `compat_1x` keeps the 1.4 caps, 32,000 and 44,000 bytes. The test prints all eight
+     sizes, the four profiles in each mode, even on success. When a new tool pushes either
+     one over, move argument detail from the
      description into `notes` before cutting words the model needs to choose the tool.
      Never remove a tool or an argument to make room.
    - `docs/tools.md` is current, and the latest row of `docs/redesign/budget.md` is the
      current measurement.
 
    `tests/unit/test_catalog_goldens.py` compares the serialised `tools/list` of every
-   profile × mode byte for byte with `tests/unit/goldens/`. A new tool changes them on
-   purpose: rewrite them with `.venv/Scripts/python tests/unit/test_catalog_goldens.py
+   profile × mode byte for byte with `tests/unit/goldens/`. The `compat_1x` goldens are
+   1.4's `full` ones and never change. A new tool changes the others on purpose: rewrite them with `.venv/Scripts/python tests/unit/test_catalog_goldens.py
    --write` in the same commit and say why the bytes changed.
 
    `tests/unit/test_host_tools.py` checks that every `@tool` name exists in the

@@ -361,7 +361,10 @@ list it), `headless_ok` and `bridge_local`. `spec/__init__.py` loads them in its
 `ORDER` (never directory order) and `tools/catalog.py` is the stdlib-only loader both
 processes import: the host to map names to implementations and to refuse tools outside its
 profile, the bridge to register MCP tools. `tools/profiles.py` names the profiles and
-`tools/migration.py` the removed 1.4 tools and their replacements. From the same objects
+`tools/migration.py` the removed 1.4 tools and their replacements. Every `/hp/v1/call`
+carries the bridge's profile: a host runs the 1.4 tools for a `compat_1x` bridge whatever
+its own profile, and a 2.0 profile (bridge or host) answers a removed 1.4 tool with
+`invalid_argument` and the migration hint. From the same objects
 `hocuspocus docs tools` renders `docs/tools.md`, the bridge serves `hocuspocus://tools`, and
 `python -m hocuspocus.tools.docs --budget` measures every profile's `tools/list` and appends
 a dated row to `docs/redesign/budget.md`. Unit tests assert that `ORDER` names every module
