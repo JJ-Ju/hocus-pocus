@@ -248,7 +248,10 @@ Responsibilities:
    payloads at item boundaries and setting `truncated: true` plus `next_cursor` when the
    host supplied one. Images are exempt from the byte cap but downscaled by the host.
 
-The bridge keeps **no durable state**. Restarting it loses nothing.
+The bridge keeps **no durable state** it needs to work: restarting it loses nothing.
+2.0 (spec-2.0 §3, M2): it also keeps a memory, the ledger `<state_dir>/ledger.sqlite`
+(§4.9), so a restarted bridge still knows the roles, the Houdinis that have exited and the
+jobs it saw start; the registry stays the authority on what is live.
 
 ### 3.4 Host RPC contract (`hp/v1`)
 
@@ -297,7 +300,12 @@ it; a unit test asserts every catalogue entry has an implementation, a descripti
 under the word cap, and a passing example. 2.0 (spec-2.0 §5.1): each tool is a module
 `tools/spec/<tool>.py` exporting `SPEC`, `catalog.py` loads them in the explicit
 `spec.ORDER`, and `docs/tools.md`, `hocuspocus://tools` and `docs/redesign/budget.md` are
-all generated from those objects.
+all generated from those objects. 2.0 M2: a 1.x tool that gains 2.0 arguments (`on`,
+`role`) or result fields (`role`, `recent`) declares them as `v2_extra`, a partial input
+and output schema that `catalog.v2_spec` deep-merges into the spec for the `v2` listing
+only (dicts merge key by key, new keys last; anything else replaces). The 1.x profiles
+list the plain spec, so their `tools/list` bytes stay those of 1.4 (the goldens); the
+detail goes in `notes`, and `docs/tools.md` marks those rows `(v2 profile)`.
 
 ### 3.6 Lifecycle and multiple instances
 
@@ -635,6 +643,50 @@ answers a match with no contents and `_meta.not_modified: true`, and serves `sta
 heartbeat; nodes and events are re-read when the events seq or scene generation moved, and
 every 5 s regardless) and sends `notifications/resources/updated` when an etag changes.
 
+**Ledger, roles and `on` (spec-2.0 §2.1, §2.5, §3, M2).** The bridge keeps
+`<state_dir>/ledger.sqlite` (`bridge/ledger.py`; SQLite in WAL mode, one connection per
+bridge; every profile writes it, only `v2` shows it). Tables: `instances(pid, name, role,
+label, ui, hip, started, last_seen, launched_by, houdini, alive)`, `jobs(id, host_id,
+instance_pid, tool, state, progress, message, started, finished, result_path, result,
+status, updated)` and `launches(pid, argv, work_dir, time, mode)`; `host_id` (the host's
+`<pid>-<id>`), `status` (the last host snapshot), `result` (inline) and `alive` are
+additions to the spec's columns. On first use the bridge reconciles it with the registry
+(instances not live are marked dead) and every scan keeps it current; a reused pid with a
+new `started` starts a new row. Jobs are recorded when a call returns a `job_id`, from
+`job status`/`list`/`result` answers and from the progress poller; `job result` stores
+the result, spilled to `<state_dir>/jobs/<id>.json` over 16 KB; finished rows beyond 500
+are pruned. A file that cannot be opened falls back to memory, a bridge built with a fake
+`scan` (tests) uses memory, and a ledger error is logged and never fails a call.
+`ledger.jobs_snapshot()` serves `houdini://jobs` readers.
+
+- **Roles.** `editor` (default for a GUI Houdini) or `worker` (headless), stored in the
+  ledger. `houdini_connect {pid|name|launch, role}` sets one; `{role}` alone pins the
+  least busy live Houdini with that role (fewest `jobs_running`, then not `busy`, both from
+  `/health`, then GUI first and newest first); none is `houdini_offline` with the
+  candidates and their roles. `houdini_status` rows and `connected` carry `role`;
+  `recent` lists up to five dead instances the ledger remembers (`{pid, label, ui, role,
+  hip, started, last_seen, alive: false, name?}`, newest first), `houdini_connect {quit}`
+  included. `_meta.instance` gains `role`.
+- **`on`.** `cook`, `render`, `job` and `look` take `on: pid | name | role`
+  (`bridge/routing.py`; an integer or digit string is a pid, `editor`/`worker` a role,
+  any other string a name). The bridge sends that call to the Houdini it names whatever
+  is pinned or selected, without moving the pin and without the ambiguity refusal (the
+  target is explicit), tags `_meta.instance` with it and records the job against it. A
+  role picks the least busy live Houdini with it; a pid or name the ledger remembers that
+  has exited is `instance_lost` (§3.6: never run elsewhere), one it never knew
+  `houdini_offline` with the candidates. A job id always goes to its own Houdini, so `on`
+  matters to `job` only for `list`. `edit`, `hip_*` and every other tool have no `on` and
+  use the pinned or selected instance.
+- **Job ids.** In `v2` a result's `job_id` (and each `jobs[]` row's, and an error's
+  `detail.job_id`/`detail.last_status.job_id`) is the ledger's opaque id, `j` and five hex
+  digits (more on a collision); `job` accepts a ledger id or a host id in every profile,
+  and the 1.x profiles keep returning host ids. A ledger id the ledger does not have is
+  `job_not_found`. After a bridge restart a ledger id still reaches its Houdini; when that
+  Houdini has exited, `job status` is `instance_lost` with the ledger's last status, and
+  `job result` of a finished job returns the stored result with a note.
+- **Progress.** The poller (§7) writes each snapshot to the ledger and reports progress
+  from the ledger's row, so a `job` call with a ledger id is polled through its host id.
+
 ---
 
 ## 5. Houdini idioms the implementation must honour
@@ -739,7 +791,8 @@ restart returns `job_not_found` with that explanation.
 the pid of the Houdini that runs it (a bare `<id>` still finds a job of that process).
 The bridge sends `job` (and `houdini://job/{id}`) to the instance the pid names, whatever
 is selected or pinned; when that Houdini has exited the answer is `instance_lost` with the
-last status the bridge saw for the job in `detail.last_status`. `job {action: list}` lists
+last status the bridge saw for the job in `detail.last_status` (2.0 M2: also after a
+bridge restart, from the ledger; in `v2` ids are opaque ledger ids, §4.9). `job {action: list}` lists
 the selected Houdini's jobs; `{action: list, all: true}` asks every live instance and adds
 `pid` to each row and `instances: [{pid, label, jobs, running}]`. A host asked for another
 pid's job answers `job_not_found` naming both pids.
@@ -829,7 +882,7 @@ Stable codes (the complete set; adding one is a design change):
 |---|---|---|
 | `houdini_offline` | no live instance; names the pid (and hip) the bridge was driving if it exited, and says its unsaved changes are lost | after connect (`retryable: false` when nothing is running) |
 | `ambiguous_instance` | several live instances, none pinned, and the call changes a scene (1.3, §3.3 rule 3); `candidates` as for `instance_lost`, `hint` names the `houdini_connect {"pid": …}` call for each | no; after `houdini_connect {pid}` |
-| `instance_lost` | the pinned Houdini exited (1.3); names its pid and label, `candidates` are the live instances as `{pid, label, ui, hip}`; the bridge does not switch on its own (§3.6) | no; after an explicit `houdini_connect` |
+| `instance_lost` | the pinned Houdini exited (1.3), or the one an `on` names (2.0, §4.9); names its pid and label, `candidates` are the live instances as `{pid, label, ui, hip}`; the bridge does not switch on its own (§3.6) | no; after an explicit `houdini_connect` |
 | `houdini_busy` | main-thread timeout | yes |
 | `delivery_unknown` | request sent, response lost (becomes `houdini_offline` "exited while running <tool>" when the process is gone within 1.5 s) | inspect first |
 | `version_mismatch` | host `hp/vN` ≠ bridge | after reinstall |
@@ -847,7 +900,7 @@ Stable codes (the complete set; adding one is a design change):
 | `path_not_allowed` | `approved_roots` | no |
 | `ui_required` | GUI-only tool headless | no |
 | `python_disabled` / `read_only` | config | no |
-| `job_not_found` | job id; 1.4 (review 21 papercut 3): also a `<pid>-<id>` whose pid this bridge never knew (never live in the registry, no job of it seen, no launch record), which 1.3 reported as `instance_lost` for a Houdini that had never run | no |
+| `job_not_found` | job id; 1.4 (review 21 papercut 3): also a `<pid>-<id>` whose pid this bridge never knew (never live in the registry, no job of it seen, no launch record), which 1.3 reported as `instance_lost` for a Houdini that had never run; 2.0: a ledger id the bridge ledger does not have | no |
 | `cancelled` | job cancelled | — |
 | `python_exception` | `houdini_python` code raised (`SyntaxError` and `SystemExit` included): `message` is `<type>: <text>`, `detail` carries `stdout`, `stderr`, `traceback` and `rolled_back`, and the code's scene changes are undone (1.1; in 1.0 a successful result with `ok: false`) | after fixing the code |
 | `internal` | anything else; **must** carry `hou_exception` and traceback in `detail` | maybe |

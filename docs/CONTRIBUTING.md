@@ -98,6 +98,11 @@ macOS the path is `.venv/bin/...`.
      `catalog.py`. Add a tool to it only when a small-context client cannot work without
      it, and update BIBLE §4.1 and `test_profiles` in the same change.
    - At least one entry in `examples`.
+   - For a 1.x tool that gains a 2.0 argument or result field (`on`, `role`), a
+     `v2_extra` overlay instead of a schema change: `{"input": {...}, "output": {...}}`,
+     partial schemas that `catalog.v2_spec` deep-merges for the `v2` listing only, so the
+     1.x goldens keep their bytes (BIBLE §3.5). Describe the addition in `notes`, starting
+     "v2 profile"; `docs/tools.md` marks the rows `(v2 profile)`.
 
    The bridge registers the tool from this spec, so it shows up in `tools/list`
    straight away.

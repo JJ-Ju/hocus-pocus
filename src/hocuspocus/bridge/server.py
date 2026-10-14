@@ -737,7 +737,8 @@ class Bridge:
                 ledger_id = asked_as or self.ledger.ledger_id(host_id)
                 if ledger_id:
                     exc.message = exc.message.replace(host_id, ledger_id)
-                    exc.detail = routing.rewrite_job_ids(exc.detail, self.ledger.ledger_id)
+                    wrapped = routing.rewrite_job_ids({"detail": exc.detail}, self.ledger.ledger_id)
+                    exc.detail = wrapped["detail"]
             raise
         return ok, self._present_jobs(payload), meta
 

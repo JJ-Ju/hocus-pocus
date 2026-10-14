@@ -154,6 +154,7 @@ def houdini_status(bridge: Bridge, args: dict[str, Any]) -> dict[str, Any]:
             status[key] = settings[key]
     if bridge.v2:
         # spec-2.0 §2.1: Houdinis the ledger remembers that are no longer running.
+        bridge._note_live(live)
         live_pids = {inst.pid for inst in live}
         recent = [row for row in bridge.ledger.recent() if row["pid"] not in live_pids]
         if recent:
