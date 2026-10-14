@@ -65,15 +65,21 @@ macOS the path is `.venv/bin/...`.
 
 1. **Bible.** Add the tool to the right table in `docs/BIBLE.md` §4, and update the
    count in §4.7.
-2. **Catalogue entry.** Add a `ToolSpec` to `src/hocuspocus/tools/catalog.py` with:
-   - `name`, in snake_case.
+2. **Spec file.** Create `src/hocuspocus/tools/spec/<name>.py`, named after the tool,
+   exporting `SPEC = ToolSpec(...)` built with the helpers in `spec/_helpers.py`
+   (`from ._helpers import ToolSpec, _obj, _s, ...`; a helper that two tools share goes
+   there too). Add the module name to `ORDER` in `spec/__init__.py` where the tool belongs:
+   that list, not the directory, is the order of `tools/list`, `docs/tools.md` and
+   `hocuspocus://tools`. `catalog.py` only loads the specs and owns the profile sets; do
+   not define tools in it. The spec has:
+   - `name`, in snake_case, equal to the module name.
    - A `description` of at most 60 words: what the tool does and what the model needs to
      choose it. Defaults belong in the schema (`default`), not the description.
    - `notes` for argument-level detail (shapes the schema cannot state, edge cases). They
      are rendered into `docs/tools.md` and `hocuspocus://tools` but not sent in
      `tools/list` (BIBLE §4.1).
-   - `input_schema`, built with `_obj` / `_s` / `_enum` / ... and
-     `additionalProperties: false`.
+   - `input_schema`, built with `_obj` / `_s` / `_enum` / ... from `spec/_helpers.py`,
+     with `additionalProperties: false`.
    - An `output_schema` if the shape is stable. The bridge declares it only when
      `result_content` is `both` or `structured`; with the default `text` the model sees
      just the description and the result JSON in the text block (BIBLE §4.1), so put
@@ -89,7 +95,7 @@ macOS the path is `.venv/bin/...`.
      it, and update BIBLE §4.1 and `test_profiles` in the same change.
    - At least one entry in `examples`.
 
-   The bridge registers the tool from this entry, so it shows up in `tools/list`
+   The bridge registers the tool from this spec, so it shows up in `tools/list`
    straight away.
 3. **Host implementation.** In the family module under `src/hocuspocus/host/tools/`,
    write:
@@ -134,12 +140,18 @@ macOS the path is `.venv/bin/...`.
    the tool through the real host (see `tests/integration/conftest.py`) against real
    nodes. Cover the error path and any Houdini idiom from BIBLE §5 that the tool
    touches.
-5. **Regenerate the docs.** Run `.venv/Scripts/hocuspocus docs tools`, or
-   `.venv/Scripts/python -m hocuspocus.tools.docs`, and commit `docs/tools.md`. Never
-   edit that file by hand.
+5. **Regenerate the docs and the budget report.** Run `.venv/Scripts/hocuspocus docs
+   tools`, or `.venv/Scripts/python -m hocuspocus.tools.docs`, and commit `docs/tools.md`.
+   Then run `.venv/Scripts/python -m hocuspocus.tools.docs --budget` and commit
+   `docs/redesign/budget.md`: it measures the serialised `tools/list` for every profile ×
+   `result_content` mode, appends a dated row to the history (keep the old rows) and
+   rewrites the table of the ten largest tools. Say in the commit why any number went up
+   (spec-2.0 principle 13). Never edit either file by hand; `hocuspocus://tools` is
+   rendered from the same specs by `tools/docs.py` at run time.
 6. **Unit guard.** Run `pytest tests/unit`. `tests/unit/test_catalog.py` checks the new
    entry:
-   - The name is unique and snake_case.
+   - The name is unique and snake_case, the module is named after the tool, and `ORDER`
+     lists every spec module once.
    - The description stays under the word cap, and every argument description is 12
      words or fewer.
    - The schema shape and annotations are valid.
@@ -151,7 +163,13 @@ macOS the path is `.venv/bin/...`.
      prints all six sizes, the three profiles in each mode, even on success. When a new tool pushes either one over, move argument detail from the
      description into `notes` before cutting words the model needs to choose the tool.
      Never remove a tool or an argument to make room.
-   - `docs/tools.md` is current.
+   - `docs/tools.md` is current, and the latest row of `docs/redesign/budget.md` is the
+     current measurement.
+
+   `tests/unit/test_catalog_goldens.py` compares the serialised `tools/list` of every
+   profile × mode byte for byte with `tests/unit/goldens/`. A new tool changes them on
+   purpose: rewrite them with `.venv/Scripts/python tests/unit/test_catalog_goldens.py
+   --write` in the same commit and say why the bytes changed.
 
    `tests/unit/test_host_tools.py` checks that every `@tool` name exists in the
    catalogue. If the tool should always be registered, add its name to the list in

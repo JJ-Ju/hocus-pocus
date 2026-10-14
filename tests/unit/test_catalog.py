@@ -337,3 +337,95 @@ def test_tools_md_is_current() -> None:
     assert committed == render_tools_markdown(TOOLS), (
         "docs/tools.md is stale; run `python -m hocuspocus.tools.docs`"
     )
+
+
+# ---------------------------------------------------------------------------
+# 2.0 (spec-2.0 §5.1): the catalogue is loaded from one spec module per tool
+# ---------------------------------------------------------------------------
+
+
+def _spec_modules() -> set[str]:
+    import pkgutil
+
+    from hocuspocus.tools import spec as spec_package
+
+    return {
+        info.name
+        for info in pkgutil.iter_modules(spec_package.__path__)
+        if not info.name.startswith("_")
+    }
+
+
+def test_each_spec_module_is_named_after_its_tool() -> None:
+    import importlib
+
+    for name in _spec_modules():
+        module = importlib.import_module(f"hocuspocus.tools.spec.{name}")
+        assert isinstance(module.SPEC, catalog.ToolSpec), name
+        assert module.SPEC.name == name, f"spec/{name}.py defines {module.SPEC.name!r}"
+
+
+def test_spec_order_lists_every_module_once() -> None:
+    """The catalogue order is an explicit list, never directory order: it names every spec
+    module and nothing else, and the loader keeps it."""
+    from hocuspocus.tools import spec as spec_package
+
+    order = spec_package.ORDER
+    assert len(order) == len(set(order)), "a module is listed twice"
+    assert set(order) == _spec_modules(), (
+        f"missing from ORDER: {sorted(_spec_modules() - set(order))}; "
+        f"no such module: {sorted(set(order) - _spec_modules())}"
+    )
+    assert [spec.name for spec in TOOLS] == list(order)
+    assert catalog.TOOLS is spec_package.TOOLS
+
+
+def test_one_tools_reference_implementation() -> None:
+    """hocuspocus://tools is rendered by tools/docs.py, the docs/tools.md renderer."""
+    from hocuspocus.bridge import instructions
+    from hocuspocus.tools import docs
+
+    assert instructions.tools_text is docs.tools_reference
+    assert docs.tools_reference() == render_tools_markdown(TOOLS)
+    assert docs.tools_reference(for_profile("minimal")) == render_tools_markdown(
+        for_profile("minimal")
+    )
+
+
+def test_budget_md_is_current() -> None:
+    """docs/redesign/budget.md (spec-2.0 §5.1): its latest history row is the current
+    measurement, and its per-tool table is the current one."""
+    from hocuspocus.tools import docs
+
+    assert docs.TOOLS_LIST_CAPS == {
+        "text": TOOLS_LIST_DEFAULT_MAX_BYTES,
+        "both": TOOLS_LIST_BOTH_MAX_BYTES,
+    }
+    path = REPO / "docs" / "redesign" / "budget.md"
+    hint = "run `python -m hocuspocus.tools.docs --budget` and commit docs/redesign/budget.md"
+    assert path.exists(), hint
+    committed = path.read_text(encoding="utf-8").replace("\r\n", "\n")
+    history = docs.parse_budget_history(committed)
+    assert history, hint
+    measured = docs.measure_budget()
+    assert history[-1]["sizes"] == measured["sizes"], (
+        f"docs/redesign/budget.md is stale (latest row {history[-1]['sizes']}, now "
+        f"{measured['sizes']}); {hint}"
+    )
+    assert measured["sizes"] == {
+        f"{p} {m}": tools_list_wire_size(p, m) for m in MODES for p in PROFILES
+    }
+    assert committed == docs.render_budget_markdown(history, measured), hint
+
+
+def test_budget_history_appends_a_dated_row(tmp_path: Path) -> None:
+    from hocuspocus.tools import docs
+
+    target = tmp_path / "budget.md"
+    docs.update_budget_markdown(target, date="2026-01-01")
+    docs.update_budget_markdown(target, date="2026-01-01")  # an exact repeat adds nothing
+    docs.update_budget_markdown(target, date="2026-01-02")
+    rows = docs.parse_budget_history(target.read_text(encoding="utf-8"))
+    assert [row["date"] for row in rows] == ["2026-01-01", "2026-01-02"]
+    assert rows[0]["sizes"] == rows[1]["sizes"]
+    assert set(rows[0]["sizes"]) == {f"{p} {m}" for m in MODES for p in PROFILES}

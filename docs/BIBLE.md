@@ -291,7 +291,10 @@ annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint
 imports it to map names to implementations and to reject unknown tools; the bridge
 imports it to register MCP tools; `hocuspocus docs tools` renders `docs/tools.md` from
 it; a unit test asserts every catalogue entry has an implementation, a description
-under the word cap, and a passing example.
+under the word cap, and a passing example. 2.0 (spec-2.0 §5.1): each tool is a module
+`tools/spec/<tool>.py` exporting `SPEC`, `catalog.py` loads them in the explicit
+`spec.ORDER`, and `docs/tools.md`, `hocuspocus://tools` and `docs/redesign/budget.md` are
+all generated from those objects.
 
 ### 3.6 Lifecycle and multiple instances
 
