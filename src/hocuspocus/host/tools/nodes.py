@@ -555,12 +555,13 @@ def node_block(
     return out
 
 
-def mutation_block(node: Any, **extra: Any) -> dict[str, Any]:
-    """Compact per-node block for mutation results: path, type, flags, problems."""
+def mutation_block(node: Any, *, cook: bool = True, **extra: Any) -> dict[str, Any]:
+    """Compact per-node block for mutation results: path, type, flags, problems. Without
+    ``cook`` the problems are read as they are (``cook_state`` from ``needsToCook()``)."""
     out: dict[str, Any] = {"path": node.path(), "name": node.name(), "type": node.type().name()}
     out.update(extra)
     out["flags"] = node_flags(node)
-    out.update(cheap_cook_problems(node))
+    out.update(cheap_cook_problems(node) if cook else collect_problems(node, cook=False))
     return out
 
 
@@ -627,6 +628,9 @@ def summary_block(
     for key in ("errors", "warnings", "cook_state", "hint"):
         if key in problems:
             out[key] = problems[key]
+    if "cook_time_ms" in problems:
+        # Review 22 finding 2: a slow create is usually Houdini's first cook of an HDA.
+        out["cook_ms"] = problems["cook_time_ms"]
     return out
 
 
@@ -1368,6 +1372,7 @@ def node_create(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     if layout not in ("good_position", "none"):
         raise bad_arg("'layout' must be 'good_position' or 'none'.")
     partial = arg_bool(args, "partial", False)
+    cook = arg_bool(args, "cook", True)
     mode = return_mode(args)
     rollback = Rollback()
     baselines: dict[int, dict[str, tuple[Any, ...]]] = {}
@@ -1381,12 +1386,19 @@ def node_create(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
         _create_item_path,
     )
     created = list(done.items())  # item order
+
+    def problems_of(node: Any) -> dict[str, Any]:
+        return cheap_cook_problems(node) if cook else collect_problems(node, cook=False)
+
     if mode == "summary":
-        blocks = {index: summary_block(node) for index, node in created}
+        blocks = {index: summary_block(node, problems_of(node)) for index, node in created}
     else:
         blocks = {}
         for index, node in created:
-            block = node_block(node, DEFAULT_INCLUDE, problems=cheap_cook_problems(node))
+            problems = problems_of(node)
+            block = node_block(node, DEFAULT_INCLUDE, problems=problems)
+            if "cook_time_ms" in problems:
+                block["cook_ms"] = block.pop("cook_time_ms")
             keep = call_edited_parms(
                 node, baselines.get(node.sessionId(), {}), items[index].get("parms") or {}
             )
@@ -1613,7 +1625,9 @@ def node_edit(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
             continue
         entry = done[index]
         node = entry["node"]
-        block = mutation_block(node, **entry["extra"])
+        # Review 22 finding 3: a rename recooked a mountain HDA (~200 ms). An edit reports
+        # problems as they are; only cook and creates cook.
+        block = mutation_block(node, cook=False, **entry["extra"])
         block["comment"] = node.comment()
         block["position"] = _round(node.position())
         block["color"] = _round(node.color().rgb())

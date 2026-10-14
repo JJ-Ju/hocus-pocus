@@ -83,12 +83,35 @@ def _note_rolled_back(outcome: Any, ctx: HostContext) -> None:
         undo.rolled_back(tuple(redo_after))
 
 
-def make_meta(ctx: HostContext, *, undo_label: str | None, started: float) -> dict[str, Any]:
-    return {
+def make_meta(
+    ctx: HostContext,
+    *,
+    undo_label: str | None,
+    started: float,
+    timing: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    meta: dict[str, Any] = {
         "scene_generation": ctx.scene.generation,
         "undo_label": undo_label,
         "elapsed_ms": int(round((time.perf_counter() - started) * 1000)),
     }
+    if timing is not None:
+        meta["timing"] = timing_block(timing)
+    return meta
+
+
+def timing_block(timing: dict[str, Any]) -> dict[str, Any]:
+    """``_meta.timing`` (review 22 finding 2): ``main_thread_ms``, the time the tool ran
+    on Houdini's main thread (0 for tools that run off it), and ``queue_ms``, the wait
+    for the main thread before that."""
+    work = timing.get("work_s")
+    out: dict[str, Any] = {
+        "main_thread_ms": round(work * 1000, 1) if work is not None and timing.get("main") else 0
+    }
+    waited = timing.get("waited_s")
+    if timing.get("main") and work is not None and waited is not None:
+        out["queue_ms"] = round(max(0.0, waited - work) * 1000, 1)
+    return out
 
 
 def ok_envelope(result: Any, meta: dict[str, Any]) -> dict[str, Any]:
@@ -183,6 +206,7 @@ class Dispatcher:
         envelope) is what :func:`current_request_id` returns while the tool runs."""
         started = time.perf_counter()
         undo_label: str | None = None
+        timing: dict[str, Any] = {}
         try:
             if not isinstance(tool, str) or not tool:
                 raise ToolError(
@@ -241,14 +265,23 @@ class Dispatcher:
                 self.response_budget(max_response_bytes),
                 effective,
                 request_id if isinstance(request_id, str) and request_id else None,
+                timing,
             )
-            result = self.ctx.executor.run(work, effective) if impl.main_thread else work()
+            timing["main"] = impl.main_thread
+            sent = time.perf_counter()
+            try:
+                result = self.ctx.executor.run(work, effective) if impl.main_thread else work()
+            finally:
+                timing["waited_s"] = time.perf_counter() - sent
             changed = _pop_changed(result)
             if read_only_dry_run and changed is not False:
                 raise _read_only_error(tool)
             if changed is False:
                 undo_label = None
-            return ok_envelope(result, make_meta(self.ctx, undo_label=undo_label, started=started))
+            return ok_envelope(
+                result,
+                make_meta(self.ctx, undo_label=undo_label, started=started, timing=timing),
+            )
         except BaseException as exc:
             if isinstance(exc, KeyboardInterrupt | SystemExit):
                 raise
@@ -256,7 +289,7 @@ class Dispatcher:
             if error.code == "internal":
                 self.ctx.logger.error("tool %s failed: %s", tool, error.message, exc_info=exc)
             return error_envelope(
-                error, make_meta(self.ctx, undo_label=undo_label, started=started)
+                error, make_meta(self.ctx, undo_label=undo_label, started=started, timing=timing)
             )
 
     def _work(
@@ -267,6 +300,7 @@ class Dispatcher:
         budget: int,
         timeout_s: float,
         request_id: str | None = None,
+        timing: dict[str, Any] | None = None,
     ) -> Callable[[], Any]:
         ctx = self.ctx
 
@@ -276,11 +310,14 @@ class Dispatcher:
             ctx.extras["max_response_bytes"] = budget
             _CALL.timeout_s = timeout_s
             _CALL.request_id = request_id
+            began = time.perf_counter()
             try:
                 return run_tool()
             finally:
                 _CALL.timeout_s = None
                 _CALL.request_id = None
+                if timing is not None:
+                    timing["work_s"] = time.perf_counter() - began
 
         def run_tool() -> Any:
             if undo_label is None:

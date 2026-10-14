@@ -145,7 +145,8 @@ class HostClient:
             "error",
             "_meta",
         }, envelope
-        assert set(envelope["_meta"]) == {"scene_generation", "undo_label", "elapsed_ms"}
+        assert set(envelope["_meta"]) == {"scene_generation", "undo_label", "elapsed_ms", "timing"}
+        assert envelope["_meta"]["timing"]["main_thread_ms"] >= 0
         return envelope
 
     def ok(self, tool: str, args: dict[str, Any] | None = None, **kw: Any) -> dict[str, Any]:

@@ -204,7 +204,9 @@ def test_ok_envelope_shape(stack):
     assert body["ok"] is True
     assert body["result"] == {"echo": {"a": 1}}
     assert set(body) == {"ok", "result", "_meta"}
-    assert set(body["_meta"]) == {"scene_generation", "undo_label", "elapsed_ms"}
+    assert set(body["_meta"]) == {"scene_generation", "undo_label", "elapsed_ms", "timing"}
+    assert set(body["_meta"]["timing"]) <= {"main_thread_ms", "queue_ms"}
+    assert body["_meta"]["timing"]["main_thread_ms"] >= 0
     assert body["_meta"]["scene_generation"] == 7
     assert body["_meta"]["undo_label"] is None
     assert stack["groups"] == []

@@ -631,7 +631,10 @@ _NODES: tuple[ToolSpec, ...] = (
             "{index or name, from, output (default 0)}. "
             "layout good_position places new nodes. return full gives node_info blocks listing only"
             " the parms the call set, with strings over 200 characters as {elided, head}; identical"
-            " error lists after the first become errors_same_as."
+            " error lists after the first become errors_same_as. Each new node is cooked once to "
+            "report its problems, and its row carries cook_ms (a first cook of an HDA such as "
+            "mountain can take 200 ms); cook: false skips that cook (cook_state: not_cooked), for "
+            "batch builders that cook once at the end."
         ),
         input_schema=_obj(
             {
@@ -658,6 +661,7 @@ _NODES: tuple[ToolSpec, ...] = (
                 ),
                 "layout": _enum(("good_position", "none"), "good_position"),
                 "exact_type": _b(False),
+                "cook": _b(True),
                 "partial": _partial(),
                 "return": _return(),
             },
@@ -1428,7 +1432,10 @@ _VISUAL: tuple[ToolSpec, ...] = (
             "the error's candidates are the rop_image nodes in its network (viewport_capture "
             "cop_path looks at it). A COP image needs no lights, so no lights note. A thumbnail "
             "PIL cannot read (a float TIFF) is converted with iconvert; if that fails too, a note "
-            "says why."
+            "says why. A ROP whose output is one file for the range (USD layer, Alembic archive, "
+            "a path without $F) renders it in one call (a cancel waits for its end) and is read "
+            "back: a USD layer set or Alembic archive with fewer frames than asked fails with "
+            "cook_failed; a USD export without time samples gets a static-stage note."
         ),
         input_schema=_obj(
             {
