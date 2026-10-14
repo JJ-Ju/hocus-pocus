@@ -167,6 +167,12 @@ decisions are D30 to D34 in `docs/BIBLE.md` §15.
 - **Camera-missing renders** (review 21 papercut 5): see the contract change above.
 - **The guide's flat examples.** The spare-parm and Copernicus recipes used flat
   `parm_set` and `node_create` calls that the schema rejects; they now use `items`.
+- **Shared USD layers** (review 24 N1, P1): a USD render whose layer replaced another ROP's samples with fewer (48 to 3) says so first in `notes` and sets `layers[].overwrote_samples`; layers another ROP also writes get `shared_with`.
+- **`cook profile` on a warm solver** (review 24 N3): a re-solve of the frame the simulation stood on is `resimulated: "current_frame"`, not `true`; cache reads stay `false`, and `simulated_frames` gives the range when known.
+- **Exact `parms` alternatives** (review 24 N2): `node_type_info parms: "*pin*|group"` no longer lists `group` in `substring_matches`.
+- **`render camera` against `opsource`** (review 24 N4): a camera prim on a viewport ROP reading /obj, or an OBJ camera on one reading a stage, fails naming `opsource`; an override adds a `Rendered through` note.
+- **`_meta.timing` off the main thread** (review 24 N5): job-backed tools sum the main-thread steps run for the call, or report `off_main_thread: true`.
+- **Layer row paths** (review 24 N7): `usd_stage` layer rows use forward slashes and drop a `save_path` equal to the identifier.
 
 ### Upgrading from 1.3
 

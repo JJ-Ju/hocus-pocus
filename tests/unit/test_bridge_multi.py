@@ -67,7 +67,7 @@ class Host:
             "pid": self.inst.pid,
             "houdini": "22.0.466",
             "generation": 1,
-            "host_version": "1.3.0",
+            "host_version": "1.4.0",
             **self.health_extra,
         }
 
