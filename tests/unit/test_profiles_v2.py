@@ -141,3 +141,89 @@ def test_host_refuses_v2_tools_below_v2_and_names_the_profile() -> None:
         "result": {"answered": True},
         "_meta": dispatcher.call("probe", {})["_meta"],
     }
+
+
+# -- the 2.0 tools through the bridge -------------------------------------------------------
+
+
+class _Host:
+    """A fake host answering ``inspect`` the way the real one does for events and jobs."""
+
+    def __init__(self, inst: Any) -> None:
+        self.inst = inst
+        self.calls: list[tuple[str, dict[str, Any]]] = []
+
+    def health(self, timeout_s: float = 5.0) -> dict[str, Any]:
+        return {"ok": True, "hp": 1, "pid": self.inst.pid, "houdini": "22.0.466",
+                "generation": 1, "host_version": "1.4.0"}  # fmt: skip
+
+    def call(self, tool, args, timeout_s, request_id=None, max_response_bytes=None):
+        self.calls.append((tool, dict(args or {})))
+        if args.get("what") == "events":
+            body = {"events": [], "next_since": max(args.get("since", 0), 9), "dropped": 0}
+        else:
+            body = {"jobs": []}
+        return True, {"what": args.get("what"), "target": None, "etag": "e", **body}, {}
+
+    def job(self, job_id, timeout_s=10.0):
+        return self.call("job", {"action": "status", "job_id": job_id}, timeout_s)
+
+    def call_jobs(self, request_id, timeout_s=5.0):
+        return []
+
+
+def _v2_bridge(tmp_path, monkeypatch, *pids: int):
+    from hocuspocus.bridge.instances import Instance
+    from hocuspocus.bridge.server import Bridge
+
+    monkeypatch.setenv("HOCUSPOCUS_STATE_DIR", str(tmp_path / "state"))
+    live = [
+        Instance(
+            pid=pid,
+            port=50000 + i,
+            token=f"t{i}",
+            houdini="22.0.466",
+            ui=False,
+            started="2026-10-14T10:00:00Z",
+            label="hython",
+        )  # fmt: skip
+        for i, pid in enumerate(pids)
+    ]
+    hosts = {inst.port: _Host(inst) for inst in live}
+    bridge = Bridge(
+        BridgeConfig(profile="v2"),
+        client_factory=lambda port, token: hosts[port],
+        scan=lambda: list(live),
+    )
+    bridge.exit_grace_s = 0.0
+    return bridge, hosts, live
+
+
+def _data(result) -> dict[str, Any]:
+    return json.loads(result.content[0].text)
+
+
+def test_inspect_events_cursor_is_tagged_like_events(tmp_path, monkeypatch) -> None:
+    """spec-2.0 §2.3: inspect what: events is events, so next_since is '<pid>:<seq>' and
+    round-trips, and a cursor of another Houdini reads from the start with a note."""
+    bridge, hosts, live = _v2_bridge(tmp_path, monkeypatch, 3084)
+    first = _data(bridge.call_tool("inspect", {"what": "events"}))
+    assert first["next_since"] == "3084:9" and first["what"] == "events"
+    _data(bridge.call_tool("inspect", {"what": "events", "since": first["next_since"]}))
+    host = hosts[live[0].port]
+    assert host.calls[-1] == ("inspect", {"what": "events", "since": 9})
+    other = _data(bridge.call_tool("inspect", {"what": "events", "since": "61900:4"}))
+    assert other["reset"] is True and "pid 61900" in other["note"]
+    assert host.calls[-1] == ("inspect", {"what": "events", "since": 0})
+    error = _data(bridge.call_tool("inspect", {"what": "events", "since": "soon"}))
+    assert error["code"] == "invalid_argument" and "next_since" in error["message"]
+
+
+def test_inspect_jobs_routes_a_job_id_to_its_houdini(tmp_path, monkeypatch) -> None:
+    bridge, hosts, live = _v2_bridge(tmp_path, monkeypatch, 3084, 61900)
+    bridge.call_tool("houdini_connect", {"pid": 3084})
+    _data(bridge.call_tool("inspect", {"what": "jobs", "job_id": "61900-9c3e"}))
+    assert hosts[live[1].port].calls[-1] == ("inspect", {"what": "jobs", "job_id": "61900-9c3e"})
+    assert not any(tool == "inspect" for tool, _ in hosts[live[0].port].calls)
+    _data(bridge.call_tool("inspect", {"what": "jobs"}))  # a list goes to the pinned one
+    assert hosts[live[0].port].calls[-1] == ("inspect", {"what": "jobs"})

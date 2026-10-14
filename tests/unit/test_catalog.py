@@ -47,10 +47,11 @@ EXPECTED_ORDER = [
     "viewport_capture", "render", "houdini_python", "node_type_search", "node_type_info",
     "undo", "time", "selection", "job",
     "hda", "usd_stage", "pdg", "events",
+    "inspect",
 ]  # fmt: skip
 FULL_ONLY = {"hda", "usd_stage", "pdg", "events"}
 # spec-2.0 §7 M1: the 2.0 tools, listed only by the v2 profile (full plus these).
-V2_ONLY: set[str] = set()
+V2_ONLY = {"inspect"}
 # BIBLE §4.1 (1.3): the minimal profile, for clients with a small context.
 MINIMAL = {
     "houdini_status", "houdini_connect", "hip_open", "hip_save", "node_find", "node_info",
@@ -104,7 +105,9 @@ def test_profiles() -> None:
     assert {spec.name for spec in TOOLS if spec.profile == "v2"} == V2_ONLY
     assert for_profile("full") == tuple(spec for spec in TOOLS if spec.name not in V2_ONLY)
     assert [spec.name for spec in for_profile("v2")] == [spec.name for spec in TOOLS]
-    assert [spec.name for spec in core] == [n for n in EXPECTED_ORDER if n not in FULL_ONLY]
+    assert [spec.name for spec in core] == [
+        n for n in EXPECTED_ORDER if n not in FULL_ONLY | V2_ONLY
+    ]
     minimal = for_profile("minimal")
     assert MINIMAL_TOOLS == MINIMAL and len(minimal) == 14
     assert [spec.name for spec in minimal] == [n for n in EXPECTED_ORDER if n in MINIMAL]
@@ -118,7 +121,7 @@ def test_profiles_are_nested() -> None:
     assert catalog.PROFILES == ("minimal", "core", "full", "v2")
     names = {p: [spec.name for spec in for_profile(p)] for p in catalog.PROFILES}
     assert set(names["minimal"]) < set(names["core"]) < set(names["full"])
-    assert set(names["full"]) <= set(names["v2"])
+    assert set(names["full"]) < set(names["v2"])
     assert set(names["v2"]) - set(names["full"]) == V2_ONLY
     assert names["v2"] == [spec.name for spec in TOOLS]
     for profile in catalog.PROFILES:  # each in catalogue order

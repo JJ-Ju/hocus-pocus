@@ -232,6 +232,18 @@ def client(host: Any) -> HostClient:
     return HostClient(host)
 
 
+@pytest.fixture
+def v2_client(host: Any, client: HostClient) -> Any:
+    """``client`` with the host on the ``v2`` profile (full plus the 2.0 tools, spec-2.0
+    §7 M1) for this test only; every other test keeps the session's ``full`` host."""
+    saved = host.config.profile
+    host.config.profile = "v2"
+    try:
+        yield client
+    finally:
+        host.config.profile = saved
+
+
 @pytest.fixture(autouse=True)
 def clean_scene(request: pytest.FixtureRequest) -> Any:
     if hou is None or "host" not in request.fixturenames and "client" not in request.fixturenames:

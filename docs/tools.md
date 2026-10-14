@@ -2,7 +2,7 @@
 
 <!-- Generated from src/hocuspocus/tools/spec/ by `python -m hocuspocus.tools.docs`. Do not edit by hand. -->
 
-35 tools: 14 in the `minimal` profile, 31 in `core` (minimal included), 4 more in `full`. Model-visible `tools/list` text: 26,919 bytes. See `docs/BIBLE.md` §4 for the design.
+36 tools: 14 in the `minimal` profile, 31 in `core` (minimal included), 4 more in `full`, 1 more in `v2` (the 2.0 tools). Model-visible `tools/list` text: 29,126 bytes. See `docs/BIBLE.md` §4 for the design.
 
 ## Contents
 
@@ -41,6 +41,7 @@
 - [`usd_stage`](#usd_stage) *(full)*
 - [`pdg`](#pdg) *(full)*
 - [`events`](#events) *(full)*
+- [`inspect`](#inspect) *(v2)*
 
 ## houdini_status
 
@@ -1263,4 +1264,66 @@ What changed since your last call: hip, node (created, renamed, deleted, parms o
 
 ```json
 {"since": "3084:42", "limit": 20}
+```
+
+
+## inspect
+
+`read-only` `headless ok` · profile `v2`
+
+Read the scene in one tool. what: node, parms, network, outline, geo (rows: true for values), image (Cop), stage (USD), problems, type, events or jobs; target is the node, LOP, Cop or node type. Returns what, target, etag and exactly the result of the matching 1.4 read (node_info, parm_get, network_describe, geo_info/geo_read, usd_stage, problems, node_type_info, events, job).
+
+**Notes.** Each what takes its 1.4 tool's arguments; any other option is invalid_argument naming the ones it takes. node: node_info (target or paths; include, include_defaults, recurse_locked). parms: parm_get (a parm or tuple path as target, or paths; frame, include, full_strings); with a node as target it reads the node's non-default parm tuples (all with include_defaults; those whose name or label match the glob parms, a|b, when given; folders, separators and buttons left out), and parms: [] when there are none. network: network_describe format data (target is root; depth, include_defaults, include_positions, recurse_locked, cursor). outline: network_describe format outline (target default /; depth, recurse_locked, cursor). geo: geo_info (frame, attributes), or with rows: true geo_read (class, attribs, start, count, group, stats, cursor, frame). image: geo_info on a Cop node or COP network (frame); another node is invalid_argument. stage: usd_stage (target is lop_path; prim, depth, include, attribs, summary, time, limit, cursor). problems: problems (target is root, default /; include_warnings, cook_uncooked, recurse_locked, timeout_s, limit, cursor). type: node_type_info (target is type; category, include_parms, include_help, folder, parms, detail). events: events, no target (since, limit; next_since as with events). jobs: job list, or job status with job_id, no target. Defaults are the 1.4 tool's. target echoes what was read (/ for a default root, paths when paths were given, null for events and jobs). etag is <pid>:<scene_generation>:<16 hex>, a digest of the options and, per addressed node and its ancestors below / (and every node under the root for network, outline and problems), its session id, modificationTime, cookCount and flags, plus the frame for node, parms, geo, image and stage; for type the Houdini version and the asset library's path and mtimes; for events the last seq; for jobs each job's id, state, progress and message. An unchanged etag means an unchanged answer, except for an expression that reads a value changed elsewhere without a recook.
+
+### Arguments
+
+| Name | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `what` | `node` \| `parms` \| `network` \| `outline` \| `geo` \| `image` \| `stage` \| `problems` \| `type` \| `events` \| `jobs` | yes |  |  |
+| `target` | string |  |  | Node, parm, LOP, Cop or type path. |
+| `paths` | array<string> |  |  | node, parms: several paths. (min items 1) |
+| `include` | array<string> |  |  |  |
+| `include_defaults` | boolean |  |  |  |
+| `recurse_locked` | boolean |  |  |  |
+| `frame` | number |  |  |  |
+| `full_strings` | boolean |  |  |  |
+| `parms` | string |  |  | parms, type: name or label glob. |
+| `depth` | integer |  |  | min 1 |
+| `include_positions` | boolean |  |  |  |
+| `cursor` | string |  |  | next_cursor from the previous page. |
+| `attributes` | `full` \| `names` |  |  |  |
+| `rows` | boolean |  |  |  |
+| `class` | `point` \| `prim` \| `vertex` \| `detail` |  |  |  |
+| `attribs` | string \| array<string> |  |  |  |
+| `start` | integer |  |  | min 0 |
+| `count` | integer |  |  | min 1; max 10000 |
+| `group` | string |  |  |  |
+| `stats` | boolean |  |  |  |
+| `prim` | string |  |  |  |
+| `summary` | boolean |  |  |  |
+| `time` | number |  |  |  |
+| `limit` | integer |  |  | min 1; max 1000 |
+| `include_warnings` | boolean |  |  |  |
+| `cook_uncooked` | boolean |  |  |  |
+| `timeout_s` | number |  |  | min 1 |
+| `category` | `Chop` \| `ChopNet` \| `Cop` \| `Cop2` \| `CopNet` \| `Data` \| `Director` \| `Dop` \| `Driver` \| `Lop` \| `Manager` \| `Object` \| `Shop` \| `Sop` \| `Top` \| `TopNet` \| `Vop` \| `VopNet` |  |  |  |
+| `include_parms` | boolean |  |  |  |
+| `include_help` | boolean |  |  |  |
+| `folder` | string |  |  |  |
+| `detail` | `compact` \| `full` \| `folders` |  |  |  |
+| `since` | integer \| string |  |  |  |
+| `job_id` | string |  |  |  |
+
+### Examples
+
+```json
+{"what": "parms", "target": "/obj/geo1/box1", "parms": "size|t"}
+```
+
+```json
+{"what": "geo", "target": "/obj/geo1/OUT", "rows": true, "attribs": ["P"], "count": 5}
+```
+
+```json
+{"what": "type", "target": "Sop/scatter", "parms": "*seed*"}
 ```

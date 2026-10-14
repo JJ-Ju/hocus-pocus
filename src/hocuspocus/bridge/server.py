@@ -125,9 +125,19 @@ JOB_SNAPSHOT_KEYS = (
 )  # fmt: skip
 
 
+def reads_as(name: str, args: dict[str, Any]) -> str:
+    """The 1.4 tool a call reads as for routing: ``inspect what: events`` is ``events``
+    and ``inspect what: jobs`` is ``job`` (spec-2.0 §2.3), so they get the same cursor
+    tagging and job-id routing; every other call is itself."""
+    if name == "inspect":
+        return {"events": "events", "jobs": "job"}.get(args.get("what"), name)
+    return name
+
+
 def job_owner(name: str, args: dict[str, Any]) -> int | None:
-    """The pid a ``job`` call must go to, from its ``<pid>-<id>`` job id; else None."""
-    if name != "job":
+    """The pid a ``job`` call (or ``inspect what: jobs``) must go to, from its
+    ``<pid>-<id>`` job id; else None."""
+    if reads_as(name, args) != "job":
         return None
     match = JOB_ID_RE.match(str(args.get("job_id") or ""))
     return int(match.group(1)) if match else None
@@ -576,7 +586,7 @@ class Bridge:
                 return self._job_list_all()
             args = {key: value for key, value in args.items() if key != "all"}
         target_pid = job_owner(name, args)
-        cursor = events_cursor(args) if name == "events" else None
+        cursor = events_cursor(args) if reads_as(name, args) == "events" else None
         stale: list[str] = []
         for _attempt in range(MAX_STALE_ENTRIES):
             inst, warnings, ambiguous = self._resolve(name, args, target_pid)
