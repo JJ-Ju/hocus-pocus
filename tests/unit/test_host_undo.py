@@ -209,4 +209,61 @@ def test_every_call_writes_one_log_line(caplog):
     assert lines[0].startswith("call ok_tool ") and lines[0].endswith(f" ok {pid}")
     assert f"{envelope['_meta']['elapsed_ms']} ms main 0 ms" in lines[0]
     assert lines[1].endswith(f" invalid_value {pid}") and lines[2].startswith("call no_such_tool ")
-    assert envelope["_meta"]["timing"] == {"main_thread_ms": 0}
+    # Review 24 N5: ran entirely off the main thread, and says so.
+    assert envelope["_meta"]["timing"] == {"main_thread_ms": 0, "off_main_thread": True}
+
+
+def test_off_main_thread_calls_report_the_main_thread_steps_run_for_them():
+    """Review 24 N5: render, cook and job reported main_thread_ms 0, even a 1.9 s profile
+    cook. Steps an off-main-thread tool runs, and steps of the jobs it starts that finish
+    within its wait, are summed; a job step finishing after the call returns is not."""
+    import threading
+    import time
+
+    from hocuspocus.host.executor import MainThreadExecutor
+
+    executor = MainThreadExecutor("headless", main_thread_ident=threading.get_ident())
+    executor.start()
+    jobs = JobManager(executor)
+    ctx = HostContext(
+        config=HostConfig(),
+        executor=executor,
+        logger=logging.getLogger("hocuspocus.host.test_calls"),
+        scene=SceneState(),
+        jobs=jobs,
+        undo=UndoHistory(),
+    )
+    release = threading.Event()
+
+    def waits_on_jobs(args, c):
+        c.executor.run(lambda: time.sleep(0.05), 5.0)
+        done = c.jobs.start("t", lambda job: job.run_main(lambda: time.sleep(0.05)))
+        done.done_event.wait(5.0)
+
+        def later(job):
+            release.wait(5.0)
+            job.run_main(lambda: time.sleep(0.2))
+
+        c.jobs.start("t", later)  # its step runs after the call returned
+        return {"ok": True}
+
+    tools = {
+        "waits": HostTool("waits", waits_on_jobs, read_only=True, main_thread=False),
+        "idle": HostTool("idle", lambda a, c: {}, read_only=True, main_thread=False),
+    }
+    dispatcher = Dispatcher(ctx, tools.get)
+    box = {}
+    caller = threading.Thread(target=lambda: box.update(env=dispatcher.call("waits", {})))
+    caller.start()
+    while caller.is_alive():
+        executor.pump_once(0.01)
+    release.set()
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline and jobs.running_count():
+        executor.pump_once(0.01)
+    timing = box["env"]["_meta"]["timing"]
+    assert 80 <= timing["main_thread_ms"] < 250, timing  # two 50 ms steps, not the 200
+    assert timing["queue_ms"] >= 0 and "off_main_thread" not in timing, timing
+    idle = dispatcher.call("idle", {})["_meta"]["timing"]
+    assert idle == {"main_thread_ms": 0, "off_main_thread": True}
+    executor.stop()

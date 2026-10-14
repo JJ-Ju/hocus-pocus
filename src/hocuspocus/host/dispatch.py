@@ -17,6 +17,7 @@ from typing import Any
 from hocuspocus.tools.catalog import in_profile, profile_of
 from hocuspocus.tools.errors import ToolError
 
+from .executor import MainThreadMeter, metering
 from .tools.registry import HostContext, HostTool
 from .undo import UndoGroupFactory, make_label
 
@@ -103,8 +104,18 @@ def make_meta(
 
 def timing_block(timing: dict[str, Any]) -> dict[str, Any]:
     """``_meta.timing`` (review 22 finding 2): ``main_thread_ms``, the time the tool ran
-    on Houdini's main thread (0 for tools that run off it), and ``queue_ms``, the wait
-    for the main thread before that."""
+    on Houdini's main thread, and ``queue_ms``, the wait for the main thread before that.
+    A tool that runs off the main thread reports the sum of the main-thread steps run on
+    its behalf, its jobs' steps finished within its wait included (review 24 N5), or
+    ``0`` with ``off_main_thread: true`` when it ran none."""
+    metered = timing.get("metered")
+    if metered is not None:
+        if not metered["steps"]:
+            return {"main_thread_ms": 0, "off_main_thread": True}
+        return {
+            "main_thread_ms": round(metered["main_s"] * 1000, 1),
+            "queue_ms": round(metered["queue_s"] * 1000, 1),
+        }
     work = timing.get("work_s")
     out: dict[str, Any] = {
         "main_thread_ms": round(work * 1000, 1) if work is not None and timing.get("main") else 0
@@ -301,10 +312,18 @@ class Dispatcher:
             )
             timing["main"] = impl.main_thread
             sent = time.perf_counter()
-            try:
-                result = self.ctx.executor.run(work, effective) if impl.main_thread else work()
-            finally:
-                timing["waited_s"] = time.perf_counter() - sent
+            if impl.main_thread:
+                try:
+                    result = self.ctx.executor.run(work, effective)
+                finally:
+                    timing["waited_s"] = time.perf_counter() - sent
+            else:
+                meter = MainThreadMeter()
+                try:
+                    with metering(meter):
+                        result = work()
+                finally:
+                    timing["metered"] = meter.close()
             changed = _pop_changed(result)
             if read_only_dry_run and changed is not False:
                 raise _read_only_error(tool)

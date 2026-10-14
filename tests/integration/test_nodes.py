@@ -1300,6 +1300,22 @@ def test_create_rows_carry_cook_ms_and_cook_false_skips_the_cook(client):
     assert hou.node(row["path"]).needsToCook()
 
 
+def test_job_backed_calls_report_their_main_thread_time(client):
+    """Review 24 N5: cook, render and job reported main_thread_ms 0, even a 1.9 s
+    profile cook. The steps a job ran within the call's wait are counted now; a call that
+    ran nothing on the main thread says off_main_thread."""
+    geo = hou.node("/obj").createNode("geo", "geo1")
+    python = geo.createNode("python", "slow")
+    python.parm("python").set("import time\ntime.sleep(0.15)")
+    envelope = client.call("cook", {"paths": [python.path()], "profile": True})
+    assert envelope["ok"], envelope
+    timing = envelope["_meta"]["timing"]
+    assert timing["main_thread_ms"] >= 140 and "off_main_thread" not in timing, timing
+    assert timing["queue_ms"] >= 0
+    listed = client.call("job", {"action": "list"})["_meta"]["timing"]
+    assert listed == {"main_thread_ms": 0, "off_main_thread": True}, listed
+
+
 def test_node_edit_never_cooks(client):
     geo = hou.node("/obj").createNode("geo", "geo1")
     box = geo.createNode("box", "box1")  # never cooked

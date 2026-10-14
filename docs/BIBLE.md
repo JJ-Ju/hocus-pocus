@@ -267,9 +267,14 @@ The bridge maps `ok:false` to an MCP `isError: true` result whose text is the er
 JSON (and whose `structuredContent` is the error object when `result_content` is `both`
 or `structured`, §4.1). `_meta` is passed through as
 tool-result `_meta`. 1.4 (review 22 finding 2): `_meta.timing` is on every call, success
-or error: `main_thread_ms` is the time the tool ran on Houdini's main thread (0 for a tool
-that runs off it, such as `job` or `events`) and `queue_ms` the wait for the main thread
-before that, so latency drift can be split between the bridge, the queue and Houdini.
+or error: `main_thread_ms` is the time the tool ran on Houdini's main thread and `queue_ms`
+the wait for the main thread before that, so latency drift can be split between the bridge,
+the queue and Houdini. For a tool that runs off the main thread (`render`, `cook`, `pdg`,
+`viewport_capture`, `events`, `job`), both are the sums over the main-thread steps run on the
+call's behalf: its own executor calls and the steps of jobs it started that finished while it
+waited (review 24 N5: a 1.9 s `cook {profile}` said `0`); a step finishing after the call
+returned is not counted. A call that ran no main-thread step reports
+`{"main_thread_ms": 0, "off_main_thread": true}`.
 The protocol version `hp/v1` is in the path; incompatible changes
 bump it and the bridge refuses to talk to an older host with `code: version_mismatch`
 and the hint "run `hocuspocus install-houdini` and restart Houdini".
