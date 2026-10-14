@@ -1457,7 +1457,11 @@ _VISUAL: tuple[ToolSpec, ...] = (
             "cook_failed; a USD export without time samples gets a static-stage note. outputs "
             "lists each file once; a USD export adds layers: [{path, bytes, time_samples, "
             "time_codes?}], its root layer, every layer file it composes (a sopimport save path) "
-            "and USD files the render wrote beside it, at most 20."
+            "and USD files the render wrote beside it, at most 20. camera overrides the ROP's "
+            "camera for this render (restored afterwards): an OBJ camera for its camera parm, a "
+            "camera prim for a ROP reading a stage (cameraprim) or a USD render ROP "
+            "(override_camera). A ROP whose camera parm names a missing node fails with "
+            "node_not_found naming the parm, the scene's cameras as candidates."
         ),
         input_schema=_obj(
             {
@@ -1466,6 +1470,7 @@ _VISUAL: tuple[ToolSpec, ...] = (
                     {"type": "number"}, "[start, end] or [start, end, inc]", minItems=2, maxItems=3
                 ),
                 "output": _s("Output path override."),
+                "camera": _s(),
                 "wait_s": _n(None, minimum=0),
                 "thumbnail": _b(True),
             },

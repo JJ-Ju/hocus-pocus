@@ -943,3 +943,51 @@ def test_render_fails_when_an_alembic_file_lost_frames(client, work_dir):
         )
     assert caught.value.code == "cook_failed"
     assert "12 frames" in caught.value.message
+
+
+# -- the ROP's camera (review 21 papercut 5) ------------------------------------------
+
+
+def test_render_a_rop_whose_camera_is_missing_names_the_parm(client, work_dir):
+    """A fresh OpenGL ROP points at /obj/cam1; when that is missing, render said only
+    "No camera specified for render." It now fails before rendering, naming the parm and
+    the scene's cameras."""
+    _toy_scene()
+    rop = hou.node("/out").createNode("opengl", "gl_nocam")
+    rop.parm("picture").set(_fwd(work_dir / "nocam.$F4.png"))
+    error = client.error("render", {"rop_path": rop.path()})
+    assert error["code"] == "node_not_found", error
+    assert "camera" in error["message"] and "/obj/cam1" in error["message"], error
+    assert not error.get("candidates")
+    assert "pass camera" in error["hint"] and "cam" in error["hint"], error
+    other = hou.node("/obj").createNode("cam", "shot_cam")
+    error = client.error("render", {"rop_path": rop.path()})
+    assert error["candidates"] == [other.path()], error
+    assert not list(work_dir.glob("nocam.*"))
+
+
+def test_render_camera_override_is_checked(client, work_dir):
+    geo = _toy_scene()
+    rop = _opengl_rop(work_dir)
+    error = client.error("render", {"rop_path": rop.path(), "camera": geo.path()})
+    assert error["code"] == "invalid_argument", error
+    assert error["candidates"] == ["/obj/rendercam"], error
+    error = client.error("render", {"rop_path": rop.path(), "camera": "/obj/nope"})
+    assert error["code"] == "node_not_found", error
+    bgeo = _bgeo_rop(work_dir, "c.$F4.bgeo.sc")
+    error = client.error("render", {"rop_path": bgeo.path(), "camera": "/obj/rendercam"})
+    assert error["code"] == "invalid_argument" and "camera" in error["message"], error
+
+
+@pytest.mark.slow
+def test_render_camera_override_renders_through_it(client, work_dir):
+    _toy_scene()
+    rop = _opengl_rop(work_dir)
+    rop.parm("camera").set("/obj/cam1")  # missing: the override replaces it
+    far = hou.node("/obj").createNode("cam", "far")
+    far.parmTuple("t").set((0, 0.5, 40))
+    far.parm("resx").set(320)
+    far.parm("resy").set(240)
+    result = client.ok("render", {"rop_path": rop.path(), "frames": [1, 1], "camera": far.path()})
+    assert result["outputs"] == [_fwd(work_dir / "gl.0001.png")]
+    assert rop.parm("camera").eval() == "/obj/cam1"

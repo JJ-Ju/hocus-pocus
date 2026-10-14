@@ -2517,6 +2517,67 @@ def check_single_file(
     return out
 
 
+def rop_camera_parm(rop: Any) -> str | None:
+    """The parm naming the camera ``rop`` renders through: ``override_camera`` (a prim) on
+    a USD render ROP, ``cameraprim`` on a viewport ROP reading a stage, else ``camera`` (an
+    OBJ camera); None when it has none. Main thread."""
+    if is_usd_render_rop(rop):
+        return "override_camera" if rop.parm("override_camera") is not None else None
+    source = rop.parm("opsource")
+    if source is not None and rop.parm("cameraprim") is not None:
+        with contextlib.suppress(Exception):
+            if source.eval() == 1:
+                return "cameraprim"
+    return "camera" if rop.parm("camera") is not None else None
+
+
+def rop_camera(rop: Any, override: Any) -> dict[str, str]:
+    """The temporary camera parm value for ``render``'s ``camera`` override, checked
+    (``{}`` without one). Without an override, a ROP whose ``camera`` parm names a node
+    that does not exist fails here with ``node_not_found``, naming the parm and listing the
+    scene's OBJ cameras (review 21 papercut 5: the render said only "No camera specified
+    for render."). Main thread."""
+    name = rop_camera_parm(rop)
+    if override is not None:
+        if not isinstance(override, str) or not override.strip():
+            raise ToolError("invalid_argument", "'camera' must be a camera node or prim path.")
+        override = override.strip()
+        if name is None:
+            raise ToolError(
+                "invalid_argument",
+                f"{rop.path()} ({rop.type().name()}) has no camera parm to override.",
+                hint="Render without camera; this ROP does not render through a camera.",
+            )
+        if name == "camera":
+            return {name: _obj_camera(override).path()}
+        if not override.startswith("/"):
+            raise ToolError(
+                "invalid_argument",
+                f"{rop.path()} renders a stage: camera must be a camera prim path such as "
+                "/cameras/cam1.",
+            )
+        return {name: override}
+    if name != "camera":
+        return {}
+    value = rop.parm("camera").eval().strip()
+    if value and rop.node(value) is not None:
+        return {}
+    cameras = [c for c in scene_cameras() if c.startswith("/obj/")]
+    what = f"points at {value}, which does not exist" if value else "is empty"
+    hint = (
+        f"Cameras here: {', '.join(cameras)}. Set the ROP's camera parm to one, or pass camera."
+        if cameras
+        else "Create a camera (node_create cam in /obj) and set the ROP's camera parm, or pass "
+        "camera; viewport_capture frames the scene without one."
+    )
+    raise ToolError(
+        "node_not_found",
+        f"{rop.path()}'s camera parm {what}.",
+        hint=hint,
+        candidates=cameras,
+    )
+
+
 def _not_a_render_node(node: Any) -> ToolError:
     if is_cop_node(node) or is_cop_network(node):
         return ToolError(
@@ -2686,6 +2747,7 @@ def _prepare_render(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
             f"{rop.path()} renders to MPlay ({parm.name()} = {expected[0]!r}), which needs a GUI.",
             hint="Pass output with a file path such as $HIP/render/$OS.$F4.png.",
         )
+    camera_parms = rop_camera(rop, args.get("camera"))
     # One file for the whole range (a USD layer, an Alembic archive, any path without $F):
     # one render() call writes every frame; frame by frame each call overwrote the file
     # (review 23 P0-1).
@@ -2702,6 +2764,7 @@ def _prepare_render(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
         "parm": parm.name() if parm is not None else None,
         "image_rop": usd or (parm is not None and parm.name() in IMAGE_PARMS),
         "output": output,
+        "camera_parms": camera_parms,
         # One file per path: a single-file ROP's 48 frames are one output (review 23 P1-3).
         "expected": list(dict.fromkeys(_norm(p) for p in expected)),
         "usd": usd,
@@ -2834,6 +2897,7 @@ def _render_job(plan: dict[str, Any], ctx: HostContext, thumbnail: bool) -> Any:
         try:
             snapshot = job.run_main(lambda: snapshot_scene(tmp_dir))
             parms = {plan["parm"]: plan["output"]} if plan["output"] is not None else {}
+            parms.update(plan.get("camera_parms") or {})
             child = ChildRender(
                 snapshot,
                 tmp_dir,
@@ -2885,8 +2949,9 @@ def _render_job(plan: dict[str, Any], ctx: HostContext, thumbnail: bool) -> Any:
         log_dir: list[str] = []
 
         def temporary_parms(node: Any) -> dict[str, Any]:
-            """The output override and, on USD render ROPs, husk logs to read on failure."""
-            parms: dict[str, Any] = {}
+            """The camera and output overrides and, on USD render ROPs, husk logs to read on
+            failure."""
+            parms: dict[str, Any] = dict(plan.get("camera_parms") or {})
             if plan["output"] is not None:
                 parms[plan["parm"]] = plan["output"]
             names = ("husk_log", "husk_stdout", "husk_stderr")
