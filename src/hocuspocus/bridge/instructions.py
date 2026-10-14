@@ -1,17 +1,17 @@
 """Server ``instructions`` (shipped in ``initialize``), the ``hocuspocus://guide`` text and
 the ``hocuspocus://tools`` reference.
 
-See docs/BIBLE.md §4.8. Keep ``INSTRUCTIONS`` under 400 words and the guide under
-:data:`GUIDE_MAX_BYTES`; unit tests enforce both.
+The reference is built by :func:`hocuspocus.tools.docs.tools_reference` (re-exported here as
+``tools_text``), the same renderer as ``docs/tools.md``. See docs/BIBLE.md §4.8. Keep
+``INSTRUCTIONS`` under 400 words and the guide under :data:`GUIDE_MAX_BYTES`; unit tests
+enforce both.
 """
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-from typing import TYPE_CHECKING
+from hocuspocus.tools.docs import tools_reference as tools_text
 
-if TYPE_CHECKING:
-    from hocuspocus.tools.catalog import ToolSpec
+__all__ = ["GUIDE_MAX_BYTES", "INSTRUCTIONS", "guide_text", "tools_text"]
 
 GUIDE_MAX_BYTES = 8192
 """``hocuspocus://guide`` is instructions and recipes only (review 19 papercut 10: with the
@@ -146,13 +146,3 @@ def guide_text() -> str:
     """The operating manual: instructions, resources and recipes (BIBLE §4.8). The per-tool
     reference is :func:`tools_text` (``hocuspocus://tools``)."""
     return "".join([GUIDE_HEADER, INSTRUCTIONS, "\n\n", RESOURCES, RECIPES])
-
-
-def tools_text(tools: Sequence[ToolSpec] | None = None) -> str:
-    """``hocuspocus://tools``: the per-tool reference rendered from the catalogue (the same
-    text as ``docs/tools.md``, including each tool's ``notes``, which ``tools/list`` leaves
-    out; BIBLE §4.1). ``tools`` defaults to the whole catalogue."""
-    from hocuspocus.tools.catalog import TOOLS
-    from hocuspocus.tools.docs import render_tools_markdown
-
-    return render_tools_markdown(tuple(tools) if tools is not None else TOOLS)

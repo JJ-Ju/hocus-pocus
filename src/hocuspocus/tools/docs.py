@@ -4,13 +4,26 @@
 - ``tools_list_text_size(tools)`` measures model-visible ``tools/list`` text.
 - ``validate_examples(tools)`` checks every example (and every schema default) against
   its input schema with a small JSON Schema subset validator.
+- ``tools_reference(tools)`` is the ``hocuspocus://tools`` resource the bridge serves (the
+  same text as ``docs/tools.md``).
+- ``update_budget_markdown(path)`` writes ``docs/redesign/budget.md`` (spec-2.0 §5.1): the
+  serialised ``tools/list`` bytes per profile × ``result_content`` mode, one dated history
+  row per run, and the tools that contribute most.
 
-Regenerate the docs with ``python -m hocuspocus.tools.docs [OUTPUT]``.
+All of them render the same objects, the ``SPEC`` of each module in
+``hocuspocus/tools/spec/`` as :data:`hocuspocus.tools.catalog.TOOLS` loads them.
+
+Regenerate the docs with ``python -m hocuspocus.tools.docs [OUTPUT]`` and the budget report
+with ``python -m hocuspocus.tools.docs --budget [OUTPUT]``. The budget report measures what
+the bridge really sends, so it imports the bridge and the ``mcp`` SDK when it runs: it needs
+the dev install, never Houdini, and nothing else in this module imports them.
 """
 
 from __future__ import annotations
 
+import datetime
 import json
+import re
 import sys
 from collections.abc import Iterable, Sequence
 from pathlib import Path
@@ -20,8 +33,13 @@ from hocuspocus.tools.catalog import TOOLS, ToolSpec, profile_of
 
 __all__ = [
     "SchemaError",
+    "measure_budget",
+    "render_budget_markdown",
     "render_tools_markdown",
     "tools_list_text_size",
+    "tools_list_wire",
+    "tools_reference",
+    "update_budget_markdown",
     "validate",
     "validate_examples",
     "write_tools_markdown",
@@ -326,7 +344,7 @@ def render_tools_markdown(tools: Sequence[ToolSpec]) -> str:
     out: list[str] = [
         "# HocusPocus tools",
         "",
-        "<!-- Generated from src/hocuspocus/tools/catalog.py by `python -m hocuspocus.tools.docs`."
+        "<!-- Generated from src/hocuspocus/tools/spec/ by `python -m hocuspocus.tools.docs`."
         " Do not edit by hand. -->",
         "",
         f"{len(tools)} tools: {minimal} in the `minimal` profile, {core} in `core` (minimal "
@@ -373,6 +391,13 @@ def render_tools_markdown(tools: Sequence[ToolSpec]) -> str:
     return "\n".join(out) + "\n"
 
 
+def tools_reference(tools: Sequence[ToolSpec] | None = None) -> str:
+    """``hocuspocus://tools``: the per-tool reference the bridge serves, the same text as
+    ``docs/tools.md`` (including each tool's ``notes``, which ``tools/list`` leaves out;
+    BIBLE §4.1). ``tools`` defaults to the whole catalogue; the bridge passes its profile's."""
+    return render_tools_markdown(tuple(tools) if tools is not None else TOOLS)
+
+
 def write_tools_markdown(path: str | Path, tools: Sequence[ToolSpec] = TOOLS) -> Path:
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -386,8 +411,166 @@ def default_output_path() -> Path:
     return Path(__file__).resolve().parents[3] / "docs" / "tools.md"
 
 
+# ---------------------------------------------------------------------------
+# Budget report (docs/redesign/budget.md)
+# ---------------------------------------------------------------------------
+
+BUDGET_PROFILES: tuple[str, ...] = ("minimal", "core", "full")
+BUDGET_MODES: tuple[str, ...] = ("text", "both")
+TOOLS_LIST_CAPS: dict[str, int] = {"text": 32_000, "both": 44_000}
+"""BIBLE §4.1 (1.4) caps on the full profile's serialised ``tools/list`` per
+``result_content`` mode; ``test_tools_list_budget`` enforces them."""
+BUDGET_TOP = 10
+BUDGET_COLUMNS: tuple[str, ...] = tuple(f"{p} {m}" for m in BUDGET_MODES for p in BUDGET_PROFILES)
+"""History columns, ``"<profile> <mode>"``: the three profiles in ``text``, then in ``both``."""
+_HISTORY_HEADING = "## History"
+_CONTRIBUTION_HEADING = "## Per-tool contribution"
+_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+
+def tools_list_wire(profile: str, result_content: str = "text") -> dict[str, Any]:
+    """The ``tools/list`` result the bridge sends for ``profile`` in ``result_content`` mode,
+    as the JSON object the MCP SDK serialises. Imports the bridge (dev install only)."""
+    import mcp_types as types
+
+    from hocuspocus.bridge.config import BridgeConfig
+    from hocuspocus.bridge.server import Bridge
+
+    bridge = Bridge(BridgeConfig(profile=profile, result_content=result_content), scan=lambda: [])
+    result = types.ListToolsResult(tools=bridge.list_tools())
+    return result.model_dump(by_alias=True, mode="json", exclude_none=True)
+
+
+def _wire_size(value: Any) -> int:
+    return len(_compact(value).encode("utf-8"))
+
+
+def measure_budget() -> dict[str, Any]:
+    """Bytes of the serialised ``tools/list`` result per profile × mode (``sizes``, keyed as
+    :data:`BUDGET_COLUMNS`) and each tool's part of the full profile's result (``tools``:
+    name -> ``{mode: bytes}``, the tool's entry plus its separating comma)."""
+    sizes: dict[str, int] = {}
+    per_tool: dict[str, dict[str, int]] = {}
+    for mode in BUDGET_MODES:
+        for profile in BUDGET_PROFILES:
+            payload = tools_list_wire(profile, mode)
+            sizes[f"{profile} {mode}"] = _wire_size(payload)
+            if profile == "full":
+                for entry in payload["tools"]:
+                    per_tool.setdefault(entry["name"], {})[mode] = _wire_size(entry) + 1
+    return {"sizes": sizes, "tools": per_tool}
+
+
+def _budget_row(row: dict[str, Any]) -> str:
+    cells = [row["date"], row["version"], *(f"{row['sizes'][c]:,}" for c in BUDGET_COLUMNS)]
+    return "| " + " | ".join(cells) + " |"
+
+
+def parse_budget_history(text: str) -> list[dict[str, Any]]:
+    """The history rows of a budget report as ``{date, version, sizes}``, oldest first."""
+    rows: list[dict[str, Any]] = []
+    if _HISTORY_HEADING not in text:
+        return rows
+    section = text.split(_HISTORY_HEADING, 1)[1].split("\n## ", 1)[0]
+    for line in section.splitlines():
+        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+        if len(cells) != 2 + len(BUDGET_COLUMNS) or not _DATE.fullmatch(cells[0]):
+            continue
+        numbers = [int(cell.replace(",", "")) for cell in cells[2:]]
+        rows.append(
+            {
+                "date": cells[0],
+                "version": cells[1],
+                "sizes": dict(zip(BUDGET_COLUMNS, numbers, strict=True)),
+            }
+        )
+    return rows
+
+
+def render_budget_markdown(history: Sequence[dict[str, Any]], measured: dict[str, Any]) -> str:
+    """The whole report: the history table (``history``, oldest first; its last row is the
+    current measurement) and the :data:`BUDGET_TOP` largest tools of ``measured``."""
+    full = {mode: measured["sizes"][f"full {mode}"] for mode in BUDGET_MODES}
+
+    def cells(label: str, by_mode: dict[str, int]) -> str:
+        parts = [label]
+        for mode in BUDGET_MODES:
+            parts += [f"{by_mode[mode]:,}", f"{100 * by_mode[mode] / full[mode]:.1f} %"]
+        return "| " + " | ".join(parts) + " |"
+
+    out = [
+        "# tools/list budget",
+        "",
+        "<!-- Generated by `python -m hocuspocus.tools.docs --budget`, which appends a dated "
+        "row to the history on every run. Do not edit by hand. -->",
+        "",
+        "Bytes of the serialised `tools/list` result the bridge sends (compact JSON, as the "
+        "MCP SDK writes it), per profile and `result_content` mode (BIBLE §4.1, spec-2.0 "
+        "§5.1). `text` is what clients see by default (no output schemas); `both` declares "
+        f"them. Caps on the full profile: `text` ≤ {TOOLS_LIST_CAPS['text']:,} B, `both` ≤ "
+        f"{TOOLS_LIST_CAPS['both']:,} B. A change that raises a number says why in its commit.",
+        "",
+        _HISTORY_HEADING,
+        "",
+        "| Date | Version | " + " | ".join(BUDGET_COLUMNS) + " |",
+        "|---|---|" + "---:|" * len(BUDGET_COLUMNS),
+        *(_budget_row(row) for row in history),
+        "",
+        _CONTRIBUTION_HEADING,
+        "",
+        f"The {BUDGET_TOP} largest tools in the latest run, by the bytes of their entry in the "
+        "full profile's `tools/list` (name, description, input schema and annotations, plus "
+        "the output schema in `both`). Notes and examples are never in `tools/list`.",
+        "",
+        "| Tool | text | of full text | both | of full both |",
+        "|---|---:|---:|---:|---:|",
+    ]
+    ranked = sorted(measured["tools"].items(), key=lambda item: (-item[1]["text"], item[0]))
+    top, rest = ranked[:BUDGET_TOP], ranked[BUDGET_TOP:]
+    out += [cells(f"`{name}`", by_mode) for name, by_mode in top]
+    others = {mode: sum(by_mode[mode] for _, by_mode in rest) for mode in BUDGET_MODES}
+    out.append(cells(f"{len(rest)} other tools", others))
+    listed = {mode: sum(by_mode[mode] for by_mode in measured["tools"].values()) for mode in full}
+    out.append(cells("result envelope", {mode: full[mode] - listed[mode] for mode in full}))
+    return "\n".join(out) + "\n"
+
+
+def default_budget_path() -> Path:
+    """``docs/redesign/budget.md`` of the checkout this module lives in."""
+    return Path(__file__).resolve().parents[3] / "docs" / "redesign" / "budget.md"
+
+
+def update_budget_markdown(
+    path: str | Path | None = None, date: str | None = None
+) -> tuple[Path, dict[str, Any]]:
+    """Measure, append a dated row to the history kept in ``path`` and rewrite the report.
+    A run that would repeat the last row exactly (same date, version and sizes) adds none."""
+    from hocuspocus.version import __version__
+
+    target = Path(path) if path is not None else default_budget_path()
+    existing = target.read_text(encoding="utf-8") if target.exists() else ""
+    history = parse_budget_history(existing)
+    measured = measure_budget()
+    row = {
+        "date": date or datetime.date.today().isoformat(),
+        "version": __version__,
+        "sizes": measured["sizes"],
+    }
+    if not history or history[-1] != row:
+        history.append(row)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with open(target, "w", encoding="utf-8", newline="\n") as handle:
+        handle.write(render_budget_markdown(history, measured))
+    return target, measured
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
+    if args[:1] == ["--budget"]:
+        target, measured = update_budget_markdown(args[1] if len(args) > 1 else None)
+        sizes = ", ".join(f"{key} {value:,} B" for key, value in measured["sizes"].items())
+        print(f"wrote {target} ({sizes})")
+        return 0
     target = write_tools_markdown(args[0] if args else default_output_path())
     print(f"wrote {target} ({tools_list_text_size(TOOLS)} bytes of tools/list text)")
     return 0
