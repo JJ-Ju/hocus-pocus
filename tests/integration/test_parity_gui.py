@@ -615,9 +615,8 @@ def test_selection_names_the_panes_it_moves(gui: GuiSession) -> None:
 
     client.python(PANES_TO_OBJ)
     edited = client.ok("edit", {"ops": [{"op": "select", "paths": ["/obj/box_geo/box1"]}]})
-    row = edited["results"][0]
-    assert row["selected"] == ["/obj/box_geo/box1"]
-    assert set(row["context_changed"]) == moving
+    assert edited["selected"] == ["/obj/box_geo/box1"]
+    assert set(edited["context_changed"]) == moving
     time.sleep(1.0)
     assert set(client.python(PANES).values()) == {"/obj/box_geo"}
     assert client.python("[n.path() for n in hou.selectedNodes()]") == ["/obj/box_geo/box1"]
