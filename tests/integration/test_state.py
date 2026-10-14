@@ -56,6 +56,34 @@ def test_undo_and_redo_node_create(client):
     assert redone["next_undo"] == result["performed"][0]
 
 
+def test_redo_never_reapplies_a_rolled_back_houdini_python(client):
+    """Review 21 papercut 2: the failed call's rollback left it on the redo stack, and
+    redo re-created /obj/pyjunk2 from code that had raised."""
+    client.ok("node_create", {"items": [{"parent": "/obj", "type": "geo", "name": "keep"}]})
+    code = 'hou.node("/obj").createNode("geo", "pyjunk2")\n1/0'
+    error = client.error("houdini_python", {"code": code})
+    assert error["code"] == "python_exception" and error["detail"]["rolled_back"] is True
+    assert hou.node("/obj/pyjunk2") is None
+    history = client.ok("undo", {"action": "history"})
+    assert history["redo"] == [] and history["rolled_back"][0].startswith(
+        "HocusPocus: houdini_python"
+    )
+    redo = client.ok("undo", {"action": "redo"})
+    assert redo["performed"] == [] and redo["skipped"] == history["rolled_back"]
+    assert "rolled back" in redo["note"] and redo["next_redo"] is None
+    assert redo["redo_count"] == 0
+    assert hou.node("/obj/pyjunk2") is None
+    # Undo of the create puts it above the failed call: redo applies it, then stops.
+    client.ok("undo", {"action": "undo"})
+    assert hou.node("/obj/keep") is None
+    again = client.ok("undo", {"action": "redo", "steps": 2})
+    assert len(again["performed"]) == 1 and again["performed"][0].startswith(
+        "HocusPocus: node_create"
+    )
+    assert again["skipped"] and hou.node("/obj/keep") is not None
+    assert hou.node("/obj/pyjunk2") is None
+
+
 def test_undo_multiple_steps_and_empty_stack(client):
     _geo()
     hou.undos.clear()

@@ -124,3 +124,53 @@ def test_dispatcher_keeps_a_tool_supplied_rolled_back(fake_hou):
 
     _ctx, dispatcher = _dispatcher(hou_undo_group, fn)
     assert dispatcher.call("mutate", {})["error"]["detail"]["rolled_back"] is False
+
+
+# -- a rolled-back call is not redoable (review 21 papercut 2) ------------------------------
+
+
+class RedoUndos(FakeUndos):
+    """FakeUndos with Houdini's redo stack: an undo moves the entry onto it."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.redo: list[str] = []
+
+    def redoLabels(self) -> tuple[str, ...]:  # noqa: N802 - hou API
+        return tuple(reversed(self.redo))
+
+    def performUndo(self) -> None:  # noqa: N802 - hou API
+        self.redo.append(self.stack.pop())
+
+
+def test_dispatcher_remembers_a_rolled_back_call_on_the_redo_stack(monkeypatch):
+    undos = RedoUndos()
+    monkeypatch.setitem(sys.modules, "hou", types.SimpleNamespace(undos=undos))
+
+    def fn(args, ctx):
+        raise ToolError("python_exception", "ZeroDivisionError", detail={"rolled_back": None})
+
+    ctx, dispatcher = _dispatcher(hou_undo_group, fn)
+    assert dispatcher.call("mutate", {})["error"]["detail"]["rolled_back"] is True
+    redo = undos.redoLabels()
+    assert redo == ("HocusPocus: mutate",)
+    assert ctx.undo.rolled_back_in(redo) == {0}
+
+
+def test_rolled_back_entry_is_found_under_later_undos_and_forgotten_once_gone():
+    history = UndoHistory()
+    history.rolled_back(("HocusPocus: houdini_python 1/0",))
+    # Undoing an older step puts it on top; the failed call stays at the bottom.
+    assert history.rolled_back_in(
+        ("HocusPocus: parm_set 1 parm", "HocusPocus: houdini_python 1/0")
+    ) == {1}
+    # A new change cleared the redo stack; a later stack with the same label is not it.
+    assert history.rolled_back_in(()) == set()
+    assert history.rolled_back_in(("HocusPocus: houdini_python 1/0",)) == set()
+
+
+def test_nothing_is_remembered_when_the_group_recorded_nothing():
+    history = UndoHistory()
+    history.rolled_back(None)
+    history.rolled_back(())
+    assert history.rolled_back_in(("x",)) == set()

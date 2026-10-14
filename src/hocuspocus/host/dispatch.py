@@ -74,6 +74,15 @@ def _report_rollback(error: ToolError, outcome: Any, ctx: HostContext) -> None:
         detail[ROLLED_BACK_KEY] = rolled_back
 
 
+def _note_rolled_back(outcome: Any, ctx: HostContext) -> None:
+    """Tell the undo history that a rollback left this call on the redo stack, so
+    ``undo {action: redo}`` will not re-apply it (review 21 papercut 2)."""
+    redo_after = getattr(outcome, "redo_after", None)
+    undo = getattr(ctx, "undo", None)
+    if redo_after and undo is not None and hasattr(undo, "rolled_back"):
+        undo.rolled_back(tuple(redo_after))
+
+
 def make_meta(ctx: HostContext, *, undo_label: str | None, started: float) -> dict[str, Any]:
     return {
         "scene_generation": ctx.scene.generation,
@@ -284,6 +293,10 @@ class Dispatcher:
                     result = impl.fn(args, ctx)
             except ToolError as exc:
                 _report_rollback(exc, outcome, ctx)
+                _note_rolled_back(outcome, ctx)
+                raise
+            except Exception:
+                _note_rolled_back(outcome, ctx)
                 raise
             # A tool that says it changed nothing (a dry run) records no label and does
             # not dirty the scene.

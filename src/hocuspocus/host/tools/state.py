@@ -50,11 +50,15 @@ def _undo_state(ctx: HostContext) -> dict[str, Any]:
 
     undo_labels = _labels(hou.undos.undoLabels)
     redo_labels = _labels(hou.undos.redoLabels)
+    # Review 21 papercut 2: a call that failed and was rolled back is not redoable.
+    skip = ctx.undo.rolled_back_in(redo_labels)
+    redoable = [label for i, label in enumerate(redo_labels) if i not in skip]
+    next_redo = redo_labels[0] if redo_labels and 0 not in skip else None
     return {
         "next_undo": undo_labels[0] if undo_labels else None,
-        "next_redo": redo_labels[0] if redo_labels else None,
+        "next_redo": next_redo,
         "undo_count": len(undo_labels),
-        "redo_count": len(redo_labels),
+        "redo_count": len(redoable),
         "dirty": scene_dirty(ctx),
         "scene_generation": ctx.scene.generation,
     }
@@ -68,13 +72,24 @@ def undo(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     if action not in UNDO_ACTIONS:
         raise bad_arg(f"action must be one of {', '.join(UNDO_ACTIONS)}; got {action!r}.")
     if action == "history":
-        return {
-            "history": _labels(hou.undos.undoLabels)[:HISTORY_LIMIT],
-            "redo": _labels(hou.undos.redoLabels)[:HISTORY_LIMIT],
+        undo_labels = _labels(hou.undos.undoLabels)
+        redo_labels = _labels(hou.undos.redoLabels)
+        skip = ctx.undo.rolled_back_in(redo_labels)
+        redoable = [label for i, label in enumerate(redo_labels) if i not in skip]
+        out: dict[str, Any] = {
+            "history": undo_labels[:HISTORY_LIMIT],
+            "redo": redoable[:HISTORY_LIMIT],
             "enabled": bool(hou.undos.areEnabled()),
             "note": f"Newest first. Labels starting with {LABEL_PREFIX.strip()!r} are "
             "HocusPocus calls; the rest are the user's or Houdini's own steps.",
         }
+        if skip:
+            out["rolled_back"] = [redo_labels[i] for i in sorted(skip)]
+            out["note"] += (
+                " rolled_back: calls that failed and were undone; Houdini keeps them on its "
+                "redo stack, and redo stops before them."
+            )
+        return out
     steps = args.get("steps", 1)
     if isinstance(steps, bool) or not isinstance(steps, int) or steps < 1:
         raise bad_arg(f"steps must be an integer >= 1; got {steps!r}.")
@@ -86,10 +101,17 @@ def undo(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     perform = hou.undos.performUndo if action == "undo" else hou.undos.performRedo
     performed: list[str] = []
     user_steps: list[str] = []
+    skipped: list[str] = []
     blocked_by: str | None = None
     for _ in range(steps):
         pending = _labels(labels_fn)
         if not pending:
+            break
+        if action == "redo" and 0 in ctx.undo.rolled_back_in(pending):
+            # Review 21 papercut 2: this entry is a call that failed and was rolled back;
+            # redoing it would re-apply what raised. It is the oldest redo entry (the
+            # failed call's own changes had cleared the stack), so nothing lies past it.
+            skipped.append(pending[0])
             break
         if not pending[0].startswith(LABEL_PREFIX):
             # Review 15 papercut 4: a step that is not HocusPocus's is the user's (or
@@ -116,7 +138,14 @@ def undo(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     result: dict[str, Any] = {"performed": performed}
     if user_steps:
         result["user_steps"] = user_steps
-    if blocked_by is not None:
+    if skipped:
+        result["skipped"] = skipped
+        result["note"] = (
+            f"{len(performed)} of {steps} step(s) performed: {skipped[0]!r} is a call that "
+            "failed and was rolled back, so it is not redone. Repeat the call itself (fixed) "
+            "to apply it."
+        )
+    elif blocked_by is not None:
         result["blocked_by"] = blocked_by
         result["note"] = (
             f"{len(performed)} of {steps} step(s) performed: stopped before {blocked_by!r}, "

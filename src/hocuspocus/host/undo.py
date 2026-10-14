@@ -15,6 +15,8 @@ from collections.abc import Callable, Iterator, Mapping
 from typing import Any
 
 LABEL_PREFIX = "HocusPocus: "
+ROLLED_BACK_MEMORY = 20
+"""How many rolled-back calls :class:`UndoHistory` remembers."""
 LABEL_MAX_CHARS = 100
 """Labels are ASCII and at most this long, so Houdini stores them verbatim and the
 rollback check (newest label == ours) holds (review 10 section 1.7)."""
@@ -75,12 +77,15 @@ class UndoOutcome:
     recorded nothing. It is False when undo is disabled (``hou.undos.areEnabled()``
     false, or a ``disabler`` left active), because then nothing could be undone."""
 
-    __slots__ = ("failed", "rolled_back", "undo_enabled")
+    __slots__ = ("failed", "redo_after", "rolled_back", "undo_enabled")
 
     def __init__(self) -> None:
         self.failed = False
         self.rolled_back = False
         self.undo_enabled = True
+        self.redo_after: tuple[str, ...] | None = None
+        """The redo labels (next first) right after the rollback undid the group, whose
+        entry is then the next redo; None when nothing was undone."""
 
 
 @contextlib.contextmanager
@@ -111,6 +116,8 @@ def hou_undo_group(label: str) -> Iterator[UndoOutcome]:
             with contextlib.suppress(Exception):  # never mask the original error
                 hou.undos.performUndo()
                 outcome.rolled_back = _undo_labels(hou) != after
+                if outcome.rolled_back:
+                    outcome.redo_after = _redo_labels(hou)
         else:
             outcome.rolled_back = True  # the group recorded nothing to undo
         raise
@@ -130,15 +137,32 @@ def _undo_labels(hou: Any) -> tuple[str, ...]:
         return ()
 
 
+def _redo_labels(hou: Any) -> tuple[str, ...]:
+    try:
+        return tuple(hou.undos.redoLabels())
+    except Exception:  # pragma: no cover - undo disabled or unavailable
+        return ()
+
+
 UndoGroupFactory = Callable[[str], contextlib.AbstractContextManager[Any]]
 
 
 class UndoHistory:
-    """Labels of undo groups this host opened, newest last."""
+    """Labels of undo groups this host opened, newest last, and the calls that failed and
+    were rolled back.
+
+    A rollback undoes the failed call's group, which leaves it on Houdini's redo stack:
+    ``undo {action: redo}`` would then re-run code that raised (review 21 papercut 2).
+    Houdini cannot drop one redo entry, so :meth:`rolled_back` remembers the redo stack
+    as it was right after the rollback; while the current stack still ends with that
+    snapshot, the snapshot's top entry is the rolled-back call (:meth:`rolled_back_in`)
+    and ``redo`` stops before it. A new undoable change clears Houdini's redo stack, and
+    with it the entry."""
 
     def __init__(self, maxlen: int = 200) -> None:
         self._labels: deque[dict[str, Any]] = deque(maxlen=maxlen)
         self._lock = threading.Lock()
+        self._rolled_back: list[tuple[str, ...]] = []
 
     def record(self, label: str, tool: str) -> None:
         with self._lock:
@@ -147,3 +171,26 @@ class UndoHistory:
     def labels(self, limit: int = 20) -> list[str]:
         with self._lock:
             return [entry["label"] for entry in list(self._labels)[-limit:]][::-1]
+
+    def rolled_back(self, redo_after: tuple[str, ...] | None) -> None:
+        """A failed call was undone; ``redo_after`` is the redo stack right after (its
+        first label is the rolled-back call)."""
+        if not redo_after:
+            return
+        with self._lock:
+            self._rolled_back.append(tuple(redo_after))
+            del self._rolled_back[:-ROLLED_BACK_MEMORY]
+
+    def rolled_back_in(self, redo: Any) -> set[int]:
+        """Indexes into ``redo`` (Houdini's redo labels, next first) of rolled-back calls.
+        Snapshots the stack no longer ends with are forgotten."""
+        redo = tuple(redo)
+        found: set[int] = set()
+        with self._lock:
+            alive = []
+            for snapshot in self._rolled_back:
+                if len(snapshot) <= len(redo) and redo[len(redo) - len(snapshot) :] == snapshot:
+                    alive.append(snapshot)
+                    found.add(len(redo) - len(snapshot))
+            self._rolled_back = alive
+        return found
