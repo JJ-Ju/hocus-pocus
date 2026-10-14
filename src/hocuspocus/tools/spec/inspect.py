@@ -15,20 +15,23 @@ SPEC = ToolSpec(
     description=(
         "Read the scene in one tool. what: node, parms, network, outline, geo (rows: true for "
         "values), image (Cop), stage (USD), problems, type, events or jobs; target is the "
-        "node, LOP, Cop or node type. Returns what, target, etag and exactly the result of "
-        "the matching 1.4 read (node_info, parm_get, network_describe, geo_info/geo_read, "
-        "usd_stage, problems, node_type_info, events, job)."
+        "node, LOP, Cop or node type. Returns an etag and the result of the matching 1.4 "
+        "read (node_info, parm_get, network_describe, geo_info/geo_read, usd_stage, "
+        "problems, node_type_info, events, job)."
     ),
     notes=(
         "Each what takes its 1.4 tool's arguments; any other option is invalid_argument "
-        "naming the ones it takes. node: node_info (target or paths; include, "
-        "include_defaults, recurse_locked). parms: parm_get (a parm or tuple path as target, "
+        "naming the ones it takes. The result is the 1.4 tool's, without what and target "
+        "(the caller knows them), with two 2.0 trims. node: node_info (target or paths; "
+        "include, include_defaults, recurse_locked), rows without session_id. parms: parm_get (a parm or tuple path as target, "
         "or paths; frame, include, full_strings); with a node as target it reads the node's "
         "non-default parm tuples (all with include_defaults; those whose name or label match "
         "the glob parms, a|b, when given; folders, separators and buttons left out), and "
         "parms: [] when there are none. network: network_describe format data (target is "
         "root; depth, include_defaults, include_positions, recurse_locked, cursor). outline: "
-        "network_describe format outline (target default /; depth, recurse_locked, cursor). "
+        "network_describe format outline (target default /; depth, recurse_locked, cursor), "
+        "without format; a row leaves out name when it is the path's last segment, errors "
+        "at 0, and inputs unless wiring: true. "
         "geo: geo_info (frame, attributes), or with rows: true geo_read (class, attribs, "
         "start, count, group, stats, cursor, frame). image: geo_info on a Cop node or COP "
         "network (frame); another node is invalid_argument. stage: usd_stage (target is "
@@ -37,8 +40,7 @@ SPEC = ToolSpec(
         "recurse_locked, timeout_s, limit, cursor). type: node_type_info (target is type; "
         "category, include_parms, include_help, folder, parms, detail). events: events, no "
         "target (since, limit; next_since as with events). jobs: job list, or job status "
-        "with job_id, no target. Defaults are the 1.4 tool's. target echoes what was read "
-        "(/ for a default root, paths when paths were given, null for events and jobs). "
+        "with job_id, no target. Defaults are the 1.4 tool's. "
         "etag is <pid>:<scene_generation>:<16 hex>, a digest of the options and, per "
         "addressed node and its ancestors below / (and every node under the root for network, "
         "outline and problems), its session id, modificationTime, cookCount and flags, plus "
@@ -60,6 +62,7 @@ SPEC = ToolSpec(
             "parms": _s("parms, type: name or label glob."),
             "depth": _i(None, minimum=1),
             "include_positions": {"type": "boolean"},
+            "wiring": {"type": "boolean"},
             "cursor": _cursor(),
             "attributes": _enum(("full", "names")),
             "rows": {"type": "boolean"},

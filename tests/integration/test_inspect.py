@@ -1,6 +1,6 @@
 """``inspect`` (spec-2.0 §2.3) against real Houdini: each ``what`` returns its 1.4 read's
-result byte for byte, plus only ``what``, ``target`` and ``etag``; the etag is stable while
-nothing changes and moves when the addressed node does."""
+result plus only ``etag`` (``node`` and ``outline`` with their 2.0 trims, M4); the etag is
+stable while nothing changes and moves when the addressed node does."""
 
 from __future__ import annotations
 
@@ -15,23 +15,49 @@ import pytest
 hou = pytest.importorskip("hou")
 
 ETAG = re.compile(r"^\d+:\d+:[0-9a-f]{16}$")
-ADDED = ("what", "target", "etag")
+ADDED = ("etag",)
 
 
 def _bytes(value: Any) -> bytes:
     return json.dumps(value, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
 
 
+def _trimmed(what: str, old: dict[str, Any], wiring: bool = False) -> dict[str, Any]:
+    """The 1.4 result with inspect's 2.0 trims (spec-2.0 §7 M4): node rows without
+    session_id; outline without format, and rows without a name that is the path's last
+    segment, errors at 0, or (unless wiring) inputs."""
+    out = json.loads(json.dumps(old))
+    if what == "node":
+        for row in out["nodes"]:
+            row.pop("session_id", None)
+    elif what == "outline":
+        out.pop("format", None)
+
+        def trim(rows: list[dict[str, Any]]) -> None:
+            for row in rows:
+                if row.get("name") == row["path"].rsplit("/", 1)[-1]:
+                    del row["name"]
+                if row.get("errors") == 0:
+                    del row["errors"]
+                if not wiring:
+                    row.pop("inputs", None)
+                trim(row.get("children", []))
+
+        trim(out["nodes"])
+    return out
+
+
 def _same(client, what: str, target: Any, options: dict[str, Any], tool: str, args) -> dict:
-    """``inspect`` returns ``tool``'s result plus only what/target/etag, in that order."""
+    """``inspect`` returns ``tool``'s result (trimmed for 2.0) plus only the etag, first."""
     old = client.ok(tool, args)
     call = {"what": what, **({} if target is None else {"target": target}), **options}
     new = client.ok("inspect", call)
-    assert list(new)[:3] == list(ADDED), list(new)
-    assert new["what"] == what
+    assert list(new)[: len(ADDED)] == list(ADDED), list(new)
+    assert "what" not in new and "target" not in new, list(new)
     assert ETAG.match(new["etag"]), new["etag"]
     rest = {k: v for k, v in new.items() if k not in ADDED}
-    assert _bytes(rest) == _bytes(old), (what, set(rest) ^ set(old))
+    expected = _trimmed(what, old, options.get("wiring", False))
+    assert _bytes(rest) == _bytes(expected), (what, set(rest) ^ set(expected))
     return new
 
 
@@ -53,12 +79,14 @@ def _geo():
 def test_node_is_node_info(v2_client):
     _net, box, _ = _geo()
     new = _same(v2_client, "node", box.path(), {}, "node_info", {"paths": [box.path()]})
-    assert new["target"] == box.path() and new["nodes"][0]["path"] == box.path()
+    assert new["nodes"][0]["path"] == box.path() and "session_id" not in new["nodes"][0]
     args = {"include": ["flags", "children"], "include_defaults": True}
     paths = ["/obj/geo1", box.path()]
     many = _same(v2_client, "node", None, {"paths": paths, **args}, "node_info",
                  {"paths": paths, **args})  # fmt: skip
-    assert many["target"] == paths
+    assert [row["path"] for row in many["nodes"]] == paths
+    for row in many["nodes"]:  # no 1.4 extras the call did not ask for
+        assert not {"session_id", "hda", "position", "comment"} & set(row), row
 
 
 def test_parms_is_parm_get(v2_client):
@@ -97,16 +125,29 @@ def test_network_is_network_describe_data(v2_client):
     options = {"depth": 1, "include_positions": True}
     new = _same(v2_client, "network", geo.path(), options, "network_describe",
                 {"root": geo.path(), "format": "data", **options})  # fmt: skip
-    assert new["target"] == geo.path()
+    assert new["root"] == geo.path()
 
 
 def test_outline_is_network_describe_outline(v2_client):
     _geo()
     new = _same(v2_client, "outline", None, {}, "network_describe",
                 {"root": "/", "format": "outline"})  # fmt: skip
-    assert new["target"] == "/"
-    _same(v2_client, "outline", "/obj", {"depth": 3}, "network_describe",
-          {"root": "/obj", "format": "outline", "depth": 3})  # fmt: skip
+    assert new["root"] == "/" and "format" not in new
+    deep = _same(v2_client, "outline", "/obj", {"depth": 3}, "network_describe",
+                 {"root": "/obj", "format": "outline", "depth": 3})  # fmt: skip
+    (geo,) = deep["nodes"]
+    assert geo == {
+        "path": "/obj/geo1", "type": "geo", "children_count": 2, "display": "/obj/geo1/xform1",
+        "flags": ["display"],
+        "children": [{"path": "/obj/geo1/box1", "type": "box"},
+                     {"path": "/obj/geo1/xform1", "type": "xform",
+                      "flags": ["display", "render"]}],
+    }, geo  # fmt: skip
+    wired = _same(v2_client, "outline", "/obj", {"depth": 3, "wiring": True},
+                  "network_describe", {"root": "/obj", "format": "outline", "depth": 3})  # fmt: skip
+    assert wired["nodes"][0]["children"][1]["inputs"] == ["/obj/geo1/box1"]
+    error = v2_client.error("inspect", {"what": "outline", "wiring": "yes"})
+    assert error["code"] == "invalid_argument"
 
 
 def test_geo_is_geo_info_and_rows_is_geo_read(v2_client):
@@ -155,7 +196,7 @@ def test_problems_is_problems(v2_client):
     options = {"cook_uncooked": True}
     v2_client.ok("problems", options)  # the first scan cooks; both reads below see the result
     new = _same(v2_client, "problems", None, options, "problems", options)
-    assert new["target"] == "/"
+    assert new["root"] == "/"
     assert any(row.get("path") == bad.path() for row in new["problems"]), new
     _same(v2_client, "problems", geo.path(), {"include_warnings": False}, "problems",
           {"root": geo.path(), "include_warnings": False})  # fmt: skip
@@ -165,7 +206,7 @@ def test_type_is_node_type_info(v2_client):
     options = {"parms": "*seed*"}
     new = _same(v2_client, "type", "Sop/scatter", options, "node_type_info",
                 {"type": "Sop/scatter", **options})  # fmt: skip
-    assert new["target"] == "Sop/scatter"
+    assert new["name"] == "scatter" or new["name"].startswith("scatter::"), new["name"]
     _same(v2_client, "type", "box", {"category": "Sop", "detail": "folders"}, "node_type_info",
           {"type": "box", "category": "Sop", "detail": "folders"})  # fmt: skip
     again = v2_client.ok("inspect", {"what": "type", "target": "Sop/scatter", **options})
@@ -186,7 +227,6 @@ def test_events_is_events(v2_client):
     assert len(first["events"]) == 2
     new = _same(v2_client, "events", None, {"since": 0, "limit": 1000}, "events",
                 {"since": 0, "limit": 1000})  # fmt: skip
-    assert new["target"] is None
     cursor = new["next_since"]
     while True:  # pages end at the response budget: read to the end of the ring buffer
         later = v2_client.ok("inspect", {"what": "events", "since": cursor})
@@ -202,7 +242,7 @@ def test_events_is_events(v2_client):
 
 def test_jobs_is_job_list_and_status(v2_client, host):
     new = _same(v2_client, "jobs", None, {}, "job", {"action": "list"})
-    assert new["target"] is None and isinstance(new["jobs"], list)
+    assert isinstance(new["jobs"], list)
     started = host.jobs.start("cook", lambda job: {"done": True}, label="probe")
     deadline = time.monotonic() + 5
     while host.jobs.status(started.id)["state"] == "running" and time.monotonic() < deadline:
@@ -274,7 +314,7 @@ def test_inspect_errors_name_the_options(v2_client):
 
 def test_a_full_host_refuses_the_1x_reads_with_their_inspect_what(client):
     """spec-2.0 §8: node_info on a 2.0 profile names inspect what: node."""
-    assert client.ok("inspect", {"what": "outline"})["what"] == "outline"
+    assert "nodes" in client.ok("inspect", {"what": "outline"})
     error = client.error("node_info", {"paths": ["/obj"]})
     assert error["code"] == "invalid_argument" and "1.4 tool" in error["message"]
     assert error["hint"].startswith("In 2.0 use inspect what: node.")

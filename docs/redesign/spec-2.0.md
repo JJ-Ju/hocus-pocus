@@ -60,7 +60,7 @@ that survive keep their semantics unless listed in §8.
 
 | Tool | Spec |
 |---|---|
-| `inspect` | `{target, what, ...}`. `what` ∈ `node` (1.4 `node_info`), `parms` (`parm_get` on a node or paths), `network` (`network_describe data`), `outline`, `geo` (`geo_info` + `geo_read` via `rows`), `image` (COP summary), `stage` (`usd_stage`), `problems`, `type` (`node_type_info`), `events` (`since`), `jobs`. One schema with per-`what` options in `notes`; the result carries `what` and an `etag`. Read-only, idempotent. |
+| `inspect` | `{target, what, ...}`. `what` ∈ `node` (1.4 `node_info`), `parms` (`parm_get` on a node or paths), `network` (`network_describe data`), `outline`, `geo` (`geo_info` + `geo_read` via `rows`), `image` (COP summary), `stage` (`usd_stage`), `problems`, `type` (`node_type_info`), `events` (`since`), `jobs`. One schema with per-`what` options in `notes`; the result carries an `etag` (not `what` or `target`, which the caller knows). Read-only, idempotent. |
 | `search` | `{query, kind: types \| nodes, category?, root?, limit, cursor}`. Types: 1.4 ranking, synonyms, `current_only`. Nodes: `node_find` filters. |
 
 Both remain for clients that never read resources. Their results are byte-identical to the

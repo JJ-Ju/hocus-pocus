@@ -695,7 +695,7 @@ argument names; per-`what` options in `notes`. An option the `what` does not tak
 | `node` | a node path, or `paths` for several | `node_info` | `include`, `include_defaults`, `recurse_locked` | Per node: path, type block, flags, inputs and outputs with labels, non-default parms, errors, warnings, cook state (Appendix A). |
 | `parms` | a parm or tuple path, `paths`, or a node | `parm_get` | `frame`, `include`, `full_strings`; with a node: `parms` (glob on name or label, `a\|b`), `include_defaults` | A node target reads its non-default parm tuples (all with `include_defaults`, those the glob matches with `parms`; folders, separators and buttons left out), and `parms: []` when there are none. |
 | `network` | the root network | `network_describe` `format: data` | `depth`, `include_defaults`, `include_positions`, `recurse_locked`, `cursor` | Houdini's `hou.data` of the children, locked-HDA children replaced by `{type, hda_locked}`; the format `edit`'s `build` op takes. |
-| `outline` | the root (default `/`) | `network_describe` `format: outline` | `depth`, `recurse_locked`, `cursor` | The scene as a compact tree: display nodes, error counts, input sources, flags that are on, no parms. How an agent reads a graph in one call. |
+| `outline` | the root (default `/`) | `network_describe` `format: outline` | `depth`, `recurse_locked`, `cursor`, `wiring` | The scene as a compact tree: display nodes, error counts, flags that are on, no parms; input sources with `wiring: true`. How an agent reads a graph in one call. |
 | `geo` | a SOP, or an OBJ (its display SOP) | `geo_info`; with `rows: true` `geo_read` | `frame`, `attributes`; rows: `class`, `attribs`, `start`, `count`, `group`, `stats`, `cursor` | Counts, bbox, prim types, attributes, groups, volumes; rows as arrays under `columns`, `stats` over the whole class. |
 | `image` | a Cop node or COP network (its display node) | `geo_info` on a COP | `frame` | `kind: image`, resolution, data window, per-channel min/max/mean; another node is `invalid_argument`. The picture is `look`'s. |
 | `stage` | a LOP (or a ROP in a LOP network: the LOP it renders) | `usd_stage` | `prim`, `depth`, `include`, `attribs`, `summary`, `time`, `limit`, `cursor` | Prim rows, attributes, xforms, bindings, layer stack; `summary` gives counts by type and the world bbox. |
@@ -704,9 +704,10 @@ argument names; per-`what` options in `notes`. An option the `what` does not tak
 | `events` | — | `events` | `since`, `limit` | The ring buffer since a cursor (§4.7 `events`); `next_since` is `<pid>:<seq>`. |
 | `jobs` | — | `job list`, or `job status` with `job_id` | `job_id` | The jobs of the Houdini (ledger ids on the 2.0 profiles, §3.8). |
 
-Returns `{what, target, etag, ...the 1.4 result}` byte for byte; `target` echoes what was
-read (`/` for a default root, `paths` when paths were given, `null` for `events` and
-`jobs`). `etag` = `<pid>:<scene_generation>:<16 hex>`, a BLAKE2b digest of the options and,
+Returns `{etag, ...the 1.4 result}`; `what` and `target` are not echoed (the caller knows
+them). Two reads are trimmed for 2.0 (spec-2.0 §7 M4): `node` rows leave out `session_id`,
+and `outline` leaves out `format` and, per row, `name` when it is the path's last segment,
+`errors` at 0, and `inputs` unless `wiring: true`. `etag` = `<pid>:<scene_generation>:<16 hex>`, a BLAKE2b digest of the options and,
 per addressed node and its ancestors below `/` (plus every node under the root for
 `network`, `outline` and `problems`), its `sessionId`, `modificationTime`, `cookCount` and
 flags, with the frame for `node`, `parms`, `geo`, `image` and `stage`; for `type` the

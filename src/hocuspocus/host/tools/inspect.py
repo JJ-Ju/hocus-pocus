@@ -5,7 +5,10 @@ that reads ``what`` (``node_info``, ``parm_get``, ``network_describe``, ``geo_in
 ``geo_read``, ``usd_stage``, ``problems``, ``node_type_info``, ``events``, ``job``), looked
 up in the host registry at call time, so the read code exists once and a reimplementation
 of a 1.4 tool (spec-2.0 §4, ``host/tx.py``) is picked up here too. The result is
-``{what, target, etag, ...the 1.4 result}``; nothing of the 1.4 result is changed.
+``{etag, ...the 1.4 result}``: the caller knows its ``what`` and ``target``, so they are not
+echoed. Two reads are shaped for 2.0 (:func:`shape`): ``node`` rows leave out
+``session_id``; ``outline`` leaves out ``format`` and, per row, ``name`` when it is the
+path's last segment, ``errors: 0``, and ``inputs`` unless ``wiring: true``.
 
 Registered with ``main_thread=False`` because two of its reads must not hold the main
 thread (``events`` and ``job`` run off it in 1.4); the others run on it through the
@@ -66,7 +69,7 @@ OPTIONS: dict[str, frozenset[str]] = {
     "network": frozenset(
         {"depth", "include_defaults", "include_positions", "recurse_locked", "cursor"}
     ),
-    "outline": frozenset({"depth", "recurse_locked", "cursor"}),
+    "outline": frozenset({"depth", "recurse_locked", "cursor", "wiring"}),
     "geo": frozenset({"frame", "attributes", "rows"}) | GEO_READ_OPTIONS,
     "image": frozenset({"frame"}),
     "stage": frozenset(
@@ -141,6 +144,8 @@ def _check_args(what: str, target: Any, options: dict[str, Any]) -> None:
             raise bad_arg(f"what: {what} needs target or paths.")
         if target is not None and options.get("paths") is not None:
             raise bad_arg("Pass target or paths, not both.")
+    if what == "outline" and not isinstance(options.get("wiring", False), bool):
+        raise bad_arg("'wiring' must be a boolean.")
     if what == "geo":
         rows = options.get("rows", False)
         if not isinstance(rows, bool):
@@ -332,6 +337,42 @@ def _scene_etag(
     return make_etag(ctx, parts)
 
 
+# -- 2.0 shaping ---------------------------------------------------------------------------
+
+
+INSPECT_ONLY = frozenset({"wiring"})
+"""Options ``inspect`` takes itself; they are not passed to the 1.4 read."""
+
+
+def _compact_outline(rows: Any, wiring: bool) -> None:
+    for row in rows if isinstance(rows, list) else ():
+        if not isinstance(row, dict):
+            continue
+        path = row.get("path")
+        if isinstance(path, str) and row.get("name") == path.rsplit("/", 1)[-1]:
+            del row["name"]
+        if row.get("errors") == 0:
+            del row["errors"]
+        if row.get("children_count") == 0:
+            del row["children_count"]
+        if not wiring:
+            row.pop("inputs", None)
+        _compact_outline(row.get("children"), wiring)
+
+
+def shape(what: str, result: dict[str, Any], options: dict[str, Any]) -> dict[str, Any]:
+    """The 2.0 shape of a 1.4 read (in place): what the caller already knows, or did not
+    ask for, is left out."""
+    if what == "node":
+        for row in result.get("nodes") or ():
+            if isinstance(row, dict):
+                row.pop("session_id", None)
+    elif what == "outline":
+        result.pop("format", None)
+        _compact_outline(result.get("nodes"), options.get("wiring") is True)
+    return result
+
+
 # -- the tool ------------------------------------------------------------------------------
 
 
@@ -351,7 +392,8 @@ def _scene_read(
     elif what in ("network", "outline"):
         root = target if target is not None else "/"
         fmt = "data" if what == "network" else "outline"
-        result = _impl("network_describe")({"root": root, "format": fmt, **options}, ctx)
+        passed = {k: v for k, v in options.items() if k not in INSPECT_ONLY}
+        result = _impl("network_describe")({"root": root, "format": fmt, **passed}, ctx)
     elif what == "geo":
         rows = options.get("rows", False)
         args = {"path": target, **{k: v for k, v in options.items() if k != "rows"}}
@@ -392,7 +434,6 @@ def inspect(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
 
         result = _impl("events")(options, ctx)
         etag = make_etag(ctx, {"what": what, "options": options, "seq": LOG.last_seq})
-        shown: Any = None
     elif what == "jobs":
         job_id = options.get("job_id")
         call = {"action": "list"} if job_id is None else {"action": "status", "job_id": job_id}
@@ -401,14 +442,7 @@ def inspect(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
         keys = ("job_id", "state", "progress", "message")
         sig = [[row.get(k) for k in keys] for row in rows or [] if isinstance(row, dict)]
         etag = make_etag(ctx, {"what": what, "options": options, "jobs": sig})
-        shown = None
     else:
         read = _on_main(ctx, lambda: _scene_read(ctx, what, target, options))
-        result, etag = read["result"], read["etag"]
-        if what in ("node", "parms") and target is None:
-            shown = options.get("paths")
-        elif target is None and what in TARGET_DEFAULT_ROOT:
-            shown = "/"
-        else:
-            shown = target
-    return {"what": what, "target": shown, "etag": etag, **result}
+        result, etag = shape(what, read["result"], options), read["etag"]
+    return {"etag": etag, **result}
