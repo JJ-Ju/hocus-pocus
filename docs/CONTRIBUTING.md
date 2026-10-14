@@ -90,7 +90,9 @@ macOS the path is `.venv/bin/...`.
      `notes`. A new feature then adds only its name and type to `tools/list`, not its
      explanation.
    - `read_only` / `destructive` / `idempotent`, `profile`, and `headless_ok`. `profile`
-     is `core` or `full`. The `minimal` profile (BIBLE §4.1) is the `MINIMAL_TOOLS` set in
+     is `core`, `full`, or `v2` for a 2.0 tool (spec-2.0 §7 M1; BIBLE §4.9), which only
+     the v2 profile lists; its integration tests take the `v2_client` fixture, which puts
+     the session host on v2 for that test. The `minimal` profile (BIBLE §4.1) is the `MINIMAL_TOOLS` set in
      `catalog.py`. Add a tool to it only when a small-context client cannot work without
      it, and update BIBLE §4.1 and `test_profiles` in the same change.
    - At least one entry in `examples`.

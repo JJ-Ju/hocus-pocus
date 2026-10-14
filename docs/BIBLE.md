@@ -533,7 +533,8 @@ Recent files (`hip_info` / status): the hip files saved or loaded in this host s
 
 Count: 2 session + 4 hip + 10 node/network + 2 parm + 4 cook/geo + 2 visual + 1 code +
 2 types + 4 state/job = **31 in `core`**, plus 4 in `full` = 35. `minimal` is 14 of the
-core tools (§4.1).
+core tools (§4.1). 2.0 M1 adds the tools of §4.9 to the `v2` profile only (37 with
+`inspect` and `search`).
 
 ### 4.8 Resources, prompts, instructions
 
@@ -597,6 +598,18 @@ capture takes `frame`).
 > "folders"` first. Add spare parms with `node_edit` `spare_parms` (recipe in
 > `hocuspocus://guide`). The resource `houdini://outline` is the whole scene as a
 > compact tree; `hocuspocus://tools` is the full tool reference.
+
+### 4.9 2.0 (v2 profile)
+
+spec-2.0 §2.3 and §7 M1: the 2.0 tools, listed and allowed only by `profile = "v2"`
+(`full` plus these, alongside the 1.4 names; §3.7, §4.1). Each one runs the registered
+host implementation of the 1.4 tool it stands for, looked up at call time, so the 1.4
+code is never duplicated, and returns that tool's result unchanged plus a few keys.
+
+| Tool | Args | Behaviour |
+|---|---|---|
+| `inspect` | `what: node\|parms\|network\|outline\|geo\|image\|stage\|problems\|type\|events\|jobs`, `target?`, plus the arguments of the matching 1.4 read (one flat schema, the union of their names; per-`what` options in `notes`) | `node` = `node_info` (`target` or `paths`), `parms` = `parm_get` (a parm path, `paths`, or a node: its non-default tuples, all with `include_defaults`, or those a `parms` glob matches), `network` = `network_describe` `data`, `outline` = `network_describe` `outline` (root `/` by default), `geo` = `geo_info`, or `geo_read` with `rows: true`, `image` = `geo_info` on a Cop node or COP network, `stage` = `usd_stage`, `problems` = `problems` (root `/` by default), `type` = `node_type_info`, `events` = `events`, `jobs` = `job list` (or `job status` with `job_id`). An option the `what` does not take is `invalid_argument` naming those it takes. Returns `{what, target, etag, ...the 1.4 result}` byte for byte. `etag` = `<pid>:<scene_generation>:<16 hex>`, a BLAKE2b digest of the options and, per addressed node and its ancestors below `/` (plus every node under the root for `network`, `outline`, `problems`), its `sessionId`, `modificationTime`, `cookCount` and flags, with the frame for `node`, `parms`, `geo`, `image`, `stage`; for `type` the Houdini version and the asset library's path and mtimes; for `events` the last seq; for `jobs` each job's id, state, progress and message. `/` is left out of the ancestors because its `modificationTime` moves on every edit. The bridge routes `what: events` and `what: jobs` as it routes `events` and `job` (pid-tagged `next_since`, job ids sent to their Houdini). Read-only, idempotent. |
+| `search` | `kind: types\|nodes`, `query?`, `category?`, `limit`, `cursor`; types: `include_hidden`, `current_only`; nodes: `root`, `pattern`, `flags`, `has_errors`, `recurse_locked` | `types` = `node_type_search` (`query` required; 1.4 ranking, synonyms, `current_only`), `nodes` = `node_find` (`query` is its `type` glob). Returns `{kind, ...the 1.4 result}`: `{results, total, common?, ...}` for types, `{root, nodes, total, next_cursor?}` for nodes. `node_type_search` has no paging, so `kind: types` pages it: page n asks for the first offset + limit matches and keeps the last `limit`, adding `next_cursor` (`t:<offset>`) while `total` counts more, up to the first 1000 matches. Read-only. |
 
 ---
 
