@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import contextlib
 import fnmatch
+import os
 import re
 from collections.abc import Iterator
 from typing import Any
@@ -575,15 +576,21 @@ def summary_block(stage: Any, prim: str, frame: float) -> dict[str, Any]:
     return block
 
 
+def _fwd(path: str) -> str:
+    """A layer identifier or path with forward slashes, as every path HocusPocus returns
+    (review 24 N7: save_path repeated the identifier with backslashes)."""
+    return str(path).replace("\\", "/")
+
+
 def layer_row(layer: Any) -> dict[str, Any]:
     """One layer of the stack (review 23 papercut 4: anonymous ids only, so nothing said
     that ``sopimport`` would save its data to a second file): ``identifier``, plus
     ``save_path`` (where Houdini saves an anonymous LOP layer, from its HoudiniLayerInfo,
-    or a file layer's own path), ``owner_node`` (the LOP that created it) and
+    or a file layer's own path when it differs from the identifier), ``owner_node`` (the LOP that created it) and
     ``time_codes`` ([start, end] when the layer authors them)."""
     import hou
 
-    row: dict[str, Any] = {"identifier": layer.identifier}
+    row: dict[str, Any] = {"identifier": _fwd(layer.identifier)}
     info: dict[str, Any] = {}
     with contextlib.suppress(Exception):
         prim = layer.GetPrimAtPath("/HoudiniLayerInfo")
@@ -592,8 +599,9 @@ def layer_row(layer: Any) -> dict[str, Any]:
     save = info.get("HoudiniSavePath")
     if not save and not layer.anonymous:
         save = layer.realPath or None
-    if save:
-        row["save_path"] = str(save)
+    # Forward slashes, and no save_path that repeats the identifier (review 24 N7).
+    if save and os.path.normcase(_fwd(str(save))) != os.path.normcase(row["identifier"]):
+        row["save_path"] = _fwd(str(save))
     # HoudiniCreatorNode can be the SOP a sopimport read; the owner is the first LOP
     # among the creator and the editors.
     ids = [info.get("HoudiniCreatorNode")]
@@ -622,7 +630,7 @@ def layers_block(stage: Any, lop: Any) -> dict[str, Any]:
     try:
         active = lop.activeLayer()
         if active is not None:
-            block["active"] = active.identifier
+            block["active"] = _fwd(active.identifier)
     except Exception:
         pass
     return block

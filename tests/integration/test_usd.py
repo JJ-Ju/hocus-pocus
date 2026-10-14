@@ -146,8 +146,13 @@ def test_layer_rows_name_save_path_and_owner(client, work_dir):
     rows = result["layers"]["stack"]
     saved = [r for r in rows if r.get("save_path") == target]
     assert saved and saved[0]["owner_node"] == imp.path()
-    files = [r for r in rows if r.get("save_path", "").endswith("base.usda")]
+    files = [r for r in rows if r["identifier"].endswith("base.usda")]
     assert files and files[0]["time_codes"] == [1, 48]
+    # Review 24 N7: forward slashes, and no save_path repeating the identifier.
+    assert files[0]["identifier"] == layer_file.as_posix(), files
+    assert "save_path" not in files[0], files
+    assert not any("\\" in str(v) for r in rows for v in r.values()), rows
+    assert "\\" not in result["layers"].get("active", "")
 
 
 def test_paging(client):

@@ -1836,8 +1836,9 @@ _FULL: tuple[ToolSpec, ...] = (
             "A ROP in a LOP network (usd_rop, usdrender_rop) has no stage: the LOP it renders "
             "(its loppath, else its input) is read, with a note. layers.stack rows are "
             "{identifier, save_path?, owner_node?, time_codes?}: where Houdini saves an "
-            "anonymous layer (a sopimport's save path) or a file layer's path, the LOP that "
-            "made it, and [start, end] when the layer authors them."
+            "anonymous layer (a sopimport's save path) or a file layer's path when it differs "
+            "from the identifier, the LOP that made it, and [start, end] when the layer authors "
+            "them; paths use forward slashes."
         ),
         input_schema=_obj(
             {
