@@ -8,6 +8,11 @@ response arrives. Each test starts from ``hou.hipFile.clear()``.
 
 See docs/CONTRIBUTING.md for the exact command (isolated ``HOUDINI_USER_PREF_DIR``,
 neutral working directory).
+
+``test_parity_gui.py`` (marker ``gui``) is the GUI column of docs/parity.md: it runs in the
+dev venv's Python, launches ``houdinifx`` with an isolated pref dir and drives it over HTTP.
+It is deselected unless ``--rungui`` is given (which also implies ``--runslow``); nothing
+here changes for the headless tier.
 """
 
 from __future__ import annotations
@@ -40,6 +45,35 @@ def check_output_schema(tool: str, result: Any) -> None:
     if spec is None or spec.bridge_local or spec.output_schema is None:
         return
     validate(result, spec.output_schema, f"{tool}")
+
+
+def pytest_addoption(parser: pytest.Parser) -> None:
+    parser.addoption(
+        "--rungui",
+        action="store_true",
+        default=False,
+        help="run the GUI parity session (marker gui: launches houdinifx with an isolated "
+        "pref dir; implies --runslow)",
+    )
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    config.addinivalue_line(
+        "markers", "gui: launches a GUI houdinifx (docs/parity.md); run with --rungui"
+    )
+    if config.getoption("--rungui", default=False):
+        # The GUI session is also marked slow, which tests/conftest.py deselects unless
+        # asked for; --rungui asks for it.
+        config.option.runslow = True
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    if config.getoption("--rungui", default=False):
+        return
+    gui = [item for item in items if "gui" in item.keywords]
+    if gui:
+        config.hook.pytest_deselected(items=gui)
+        items[:] = [item for item in items if "gui" not in item.keywords]
 
 
 def pytest_sessionstart(session: pytest.Session) -> None:
