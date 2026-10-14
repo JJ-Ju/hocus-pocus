@@ -14,6 +14,8 @@ import pytest
 
 hou = pytest.importorskip("hou")
 
+from hocuspocus.host import resources as host_resources  # noqa: E402
+
 ETAG = re.compile(r"^\d+:\d+:[0-9a-f]{16}$")
 ADDED = ("etag",)
 
@@ -257,7 +259,7 @@ def test_jobs_is_job_list_and_status(v2_client, host):
 # -- etag ---------------------------------------------------------------------------------
 
 
-def test_etag_is_stable_and_moves_with_the_node(v2_client, host):
+def test_etag_is_the_body_digest_and_moves_with_the_answer(v2_client, host):
     _net, box, xform = _geo()
     call = {"what": "node", "target": box.path()}
     first = v2_client.ok("inspect", call)["etag"]
@@ -268,23 +270,28 @@ def test_etag_is_stable_and_moves_with_the_node(v2_client, host):
     v2_client.ok("parm_set", {"items": [{"path": f"{box.path()}/sizey", "value": 3}]})
     after_parm = v2_client.ok("inspect", call)["etag"]
     assert after_parm != first
-    box.bypass(True)  # a flag: modificationTime does not move, the flags part does
+    box.bypass(True)  # a flag the body reports
     after_flag = v2_client.ok("inspect", call)["etag"]
     assert after_flag != after_parm
     box.bypass(False)
     # Another option set, another etag.
     other = v2_client.ok("inspect", {**call, "include": ["flags"]})["etag"]
     assert other != v2_client.ok("inspect", call)["etag"]
-    # A change below a network moves the network's etag, not a sibling's node etag.
+    # The etag is the digest of the body: what the answer does not show leaves it alone.
     net = {"what": "outline", "target": "/obj/geo1"}
-    before_net = v2_client.ok("inspect", net)["etag"]
+    before_net = v2_client.ok("inspect", net)
     sibling = v2_client.ok("inspect", {"what": "node", "target": box.path()})["etag"]
-    xform.parm("tx").set(4.0)
-    assert v2_client.ok("inspect", net)["etag"] != before_net
+    xform.parm("tx").set(4.0)  # the outline shows no parms
+    assert v2_client.ok("inspect", net)["etag"] == before_net["etag"]
     assert v2_client.ok("inspect", {"what": "node", "target": box.path()})["etag"] == sibling
-    # Geometry: an upstream edit recooks the read node, so its cookCount moves.
+    hou.node("/obj/geo1").createNode("null", "extra")  # the outline shows children
+    assert v2_client.ok("inspect", net)["etag"] != before_net["etag"]
+    body = {k: v for k, v in before_net.items() if k != "etag"}
+    assert before_net["etag"] == host_resources.content_etag(host.scene.generation, body)
+    # Geometry: a recook that changes nothing keeps the etag; an upstream edit moves it.
     geo_call = {"what": "geo", "target": xform.path()}
     geo_first = v2_client.ok("inspect", geo_call)["etag"]
+    xform.cook(force=True)
     assert v2_client.ok("inspect", geo_call)["etag"] == geo_first
     box.parm("sizez").set(5.0)
     assert v2_client.ok("inspect", geo_call)["etag"] != geo_first

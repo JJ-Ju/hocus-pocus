@@ -3,8 +3,7 @@
 A ``houdini://`` URI is parsed here into the ``inspect`` (or ``search``, or the host's
 ``houdini_status``) call it stands for, and that call runs through the host dispatcher
 exactly as ``POST /hp/v1/call`` runs it, so the resource body is byte for byte the tool's
-result for the same options (the ``inspect`` result carries ``what``, ``target`` and
-``etag``). The route answers ``{uri, etag, body}``, or ``{uri, etag, not_modified: true}``
+result for the same options (the ``inspect`` result carries its ``etag``). The route answers ``{uri, etag, body}``, or ``{uri, etag, not_modified: true}``
 when the request's ``If-None-Match`` names the current etag (the read still runs: the
 saving is the bytes on the wire and in the model's context).
 
@@ -26,10 +25,11 @@ Templates (RFC 6570; a ``{path}`` may be percent-encoded, ``%2Fobj%2Fgeo1``, or 
     houdini://status                                         the host's houdini_status
     houdini://instances                                      served by the bridge only
 
-The etag of an ``inspect`` resource is the ``inspect`` etag (``host/tools/inspect.py``).
-``types`` and ``status`` have no etag of their own; theirs is
-``<pid>:<scene_generation>:<16 hex>``, a BLAKE2b digest of the options and the body, so it
-moves exactly when the body does. ``_meta.events_seq`` (the event ring buffer's last seq)
+Every etag is :func:`content_etag`: ``<pid>:<scene_generation>:<16 hex>``, the first 16
+hex digits of a BLAKE2b digest of the canonical JSON of the body (sorted keys, compact
+separators, an ``inspect`` body without its own ``etag`` key), so it moves exactly when
+the body does and a recook that changes nothing keeps it (spec-2.0 §2.7, M4). The
+``inspect`` result carries the same etag (``host/tools/inspect.py``). ``_meta.events_seq`` (the event ring buffer's last seq)
 lets the bridge's subscription poller skip re-reading nodes while nothing happened.
 
 Parsing is pure Python (no ``hou``), shared with the bridge (``bridge/resources.py``).
@@ -230,13 +230,14 @@ def _call(kind: str, tail: str, q: dict[str, Any]) -> tuple[str, dict[str, Any]]
 # -- etags ------------------------------------------------------------------------------------
 
 
-def content_etag(generation: Any, args: dict[str, Any], body: Any) -> str:
-    """``<pid>:<scene_generation>:<16 hex>`` over the call's options and its body."""
-    blob = json.dumps(
-        {"args": args, "body": body}, sort_keys=True, separators=(",", ":"), default=str
-    )
+def content_etag(generation: Any, body: Any, *, pid: Any = None) -> str:
+    """``<pid>:<scene_generation>:<16 hex>``: BLAKE2b of the canonical JSON of ``body``
+    (an ``etag`` key in it left out)."""
+    if isinstance(body, dict) and "etag" in body:
+        body = {k: v for k, v in body.items() if k != "etag"}
+    blob = json.dumps(body, sort_keys=True, separators=(",", ":"), default=str)
     digest = hashlib.blake2b(blob.encode("utf-8"), digest_size=ETAG_HEX // 2).hexdigest()
-    return f"{os.getpid()}:{generation}:{digest}"
+    return f"{pid or os.getpid()}:{generation}:{digest}"
 
 
 def etag_matches(if_none_match: Any, etag: str) -> bool:
@@ -296,7 +297,7 @@ def serve(
     if route.tool == "inspect" and isinstance(body, dict) and isinstance(body.get("etag"), str):
         etag = body["etag"]
     else:
-        etag = content_etag(meta.get("scene_generation"), route.args, body)
+        etag = content_etag(meta.get("scene_generation"), body)
     meta["etag"] = etag
     seq = _events_seq()
     if seq is not None:

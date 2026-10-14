@@ -41,13 +41,11 @@ SPEC = ToolSpec(
         "category, include_parms, include_help, folder, parms, detail). events: events, no "
         "target (since, limit; next_since as with events). jobs: job list, or job status "
         "with job_id, no target. Defaults are the 1.4 tool's. "
-        "etag is <pid>:<scene_generation>:<16 hex>, a digest of the options and, per "
-        "addressed node and its ancestors below / (and every node under the root for network, "
-        "outline and problems), its session id, modificationTime, cookCount and flags, plus "
-        "the frame for node, parms, geo, image and stage; for type the Houdini version and "
-        "the asset library's path and mtimes; for events the last seq; for jobs each job's "
-        "id, state, progress and message. An unchanged etag means an unchanged answer, "
-        "except for an expression that reads a value changed elsewhere without a recook."
+        "etag is <pid>:<scene_generation>:<16 hex>, the first 16 hex digits of a BLAKE2b "
+        "digest of the result's canonical JSON (sorted keys, compact): it moves exactly "
+        "when the answer does, and the matching houdini:// resource has the same etag, so "
+        "a read with If-None-Match after a change that left this answer alone (a look, a "
+        "cook elsewhere) is not_modified."
     ),
     input_schema=_obj(
         {

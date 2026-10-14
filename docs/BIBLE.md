@@ -538,10 +538,14 @@ policy, one rollback and one echo engine.
 - **One answer, two doors.** The host's `GET /hp/v2/resource?uri=` (`host/resources.py`)
   parses a URI into its `inspect` call (`types`: `search kind: types`; `status`: the host's
   `houdini_status`) and runs it through the dispatcher, so a resource's body is the
-  matching tool result byte for byte and its etag is that result's `etag` (`types` and
-  `status`: a digest of options and body). The bridge serves `status` and `instances`
-  itself.
-- **ETags.** `<pid>:<scene_generation>:<16 hex>` (the digest is §4.4's). The bridge
+  matching tool result byte for byte and its etag is that result's `etag`. The bridge
+  serves `status` and `instances` itself (etag `bridge:<16 hex>` of the body).
+- **ETags.** `<pid>:<scene_generation>:<16 hex>`, the first 16 hex digits of a BLAKE2b
+  digest of the canonical JSON of the body (sorted keys, compact separators, an `inspect`
+  body without its own `etag`), for every resource and `inspect` (2.0 M4: the earlier
+  digest of cook counts gave byte-identical bodies a new etag after any recook, so the
+  soak never revalidated). The host builds the body anyway; a change that leaves the
+  answer alone (a `look`, a cook elsewhere) keeps the etag. The bridge
   forwards the client's `_meta["If-None-Match"]` (or `_meta.etag`), returns `_meta.etag` and
   `_meta.cache_control` (`no-cache` for `houdini://`: keep it, but revalidate;
   `max-age=86400` for the static `hocuspocus://` texts), and answers a match with no
@@ -707,14 +711,9 @@ argument names; per-`what` options in `notes`. An option the `what` does not tak
 Returns `{etag, ...the 1.4 result}`; `what` and `target` are not echoed (the caller knows
 them). Two reads are trimmed for 2.0 (spec-2.0 §7 M4): `node` rows leave out `session_id`,
 and `outline` leaves out `format` and, per row, `name` when it is the path's last segment,
-`errors` at 0, and `inputs` unless `wiring: true`. `etag` = `<pid>:<scene_generation>:<16 hex>`, a BLAKE2b digest of the options and,
-per addressed node and its ancestors below `/` (plus every node under the root for
-`network`, `outline` and `problems`), its `sessionId`, `modificationTime`, `cookCount` and
-flags, with the frame for `node`, `parms`, `geo`, `image` and `stage`; for `type` the
-Houdini version and the asset library's path and mtimes; for `events` the last seq; for
-`jobs` each job's id, state, progress and message. `/` is left out of the ancestors because
-its `modificationTime` moves on every edit. An unchanged etag means an unchanged answer,
-except for an expression that reads a value changed elsewhere without a recook. The bridge
+`errors` at 0, and `inputs` unless `wiring: true`. `etag` is §3.10's (the digest of the
+canonical body), so an unchanged etag is an unchanged answer and the matching resource has
+the same etag. The bridge
 routes `what: events` and `what: jobs` as it routes `events` and `job` (pid-tagged
 `next_since`, job ids sent to their Houdini). spec-2.0 §2.6 also lists `what: pdg` for
 `pdg workitems`; it is not built, and `pdg {action: "workitems"}` (full) is the read.

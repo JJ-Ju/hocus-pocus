@@ -117,8 +117,11 @@ Templates (RFC 6570), all read-only, each with an `etag` and `Cache-Control`-sty
 - `houdini://events{?since,limit}`
 - `hocuspocus://guide`, `hocuspocus://tools`
 
-ETag = `<pid>:<scene_generation>:<hash of the addressed node's and its ancestors' mtimes or
-of the type library mtime>`. Resource subscriptions (`resources/subscribe`) are supported for
+ETag = `<pid>:<scene_generation>:<16-hex BLAKE2b of the canonical body>` (sorted keys,
+compact separators; an `inspect` body without its own `etag`), for every resource and
+`inspect`. The host builds the body anyway, so the etag moves exactly when the answer does
+(M4: hashing mtimes and cook counts gave byte-identical bodies a new etag after any recook,
+and the soak never hit `not_modified`). Resource subscriptions (`resources/subscribe`) are supported for
 `status`, `jobs`, `events`, and `node/{path}`; the host publishes change notifications from
 the event ring buffer.
 

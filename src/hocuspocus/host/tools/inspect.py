@@ -15,42 +15,23 @@ thread (``events`` and ``job`` run off it in 1.4); the others run on it through 
 executor, in one main-thread step together with their etag, as the 1.4 tool would.
 
 The etag (spec-2.0 §2.7) is ``"<pid>:<scene_generation>:<h>"``, ``h`` the first 16 hex
-digits of a BLAKE2b digest of a canonical JSON of:
-
-* the call's ``what`` and options (two option sets never share an etag);
-* per addressed node and each of its ancestors bar ``/`` (whose ``modificationTime``
-  moves on every edit anywhere; for ``network``, ``outline`` and ``problems`` also every
-  node under the root): ``path``, ``sessionId()``,
-  ``modificationTime()`` (Houdini bumps it on parm, name, comment, position and input
-  edits), ``cookCount()`` (moves when a node recooks, so upstream changes show in ``geo``,
-  ``image``, ``stage`` and ``problems``, read after the call's own cook) and the flags
-  (``modificationTime`` ignores flag changes);
-* the current frame for the frame-dependent reads (``node``, ``parms``, ``geo``,
-  ``image``, ``stage``);
-* ``type``: the Houdini version, and for an asset its library path, the library file's
-  mtime and the definition's ``modificationTime()``;
-* ``events``: the host's last event seq; ``jobs``: each job's id, state, progress and
-  message.
-
-``scene_generation`` moves on every hip load, clear and merge. The etag is cheap (no
-``asData`` digest: about 1.5 µs per node against 1 ms for ``parmsAsData``) and honest for
-edits made through HocusPocus or the UI; a parm whose expression reads another node's
-value that changed without a cook keeps its etag until something recooks.
+digits of a BLAKE2b digest of the canonical JSON of the result body (sorted keys, compact
+separators; :func:`hocuspocus.host.resources.content_etag`). The host builds the body
+anyway, so the etag moves exactly when the answer does: a recook that changes nothing (a
+``look``, a ``cook`` elsewhere) keeps it, and a resource read with ``If-None-Match`` answers
+``not_modified``. ``scene_generation`` moves on every hip load, clear and merge.
 """
 
 from __future__ import annotations
 
-import contextlib
 import fnmatch
-import hashlib
-import json
-import os
 from collections.abc import Callable
 from typing import Any
 
 from hocuspocus.tools.errors import ToolError
 
 from ..dispatch import _CALL, call_timeout, current_request_id
+from ..resources import content_etag
 from ._common import bad_arg, get_node
 from .registry import HostContext, tool
 from .registry import get as get_tool
@@ -85,12 +66,7 @@ OPTIONS: dict[str, frozenset[str]] = {
 """The options each ``what`` takes: the arguments of its 1.4 tool (spec ``notes``)."""
 
 TARGET_REQUIRED = frozenset({"network", "geo", "image", "stage", "type"})
-TARGET_DEFAULT_ROOT = frozenset({"outline", "problems"})
 NO_TARGET = frozenset({"events", "jobs"})
-FRAME_DEPENDENT = frozenset({"node", "parms", "geo", "image", "stage"})
-SUBTREE = frozenset({"network", "outline", "problems"})
-
-ETAG_HEX = 16
 
 
 # -- running a 1.4 read -------------------------------------------------------------------
@@ -202,9 +178,8 @@ def _node_parm_paths(node: Any, pattern: Any, include_defaults: bool) -> list[st
     return paths
 
 
-def _parms_args(target: Any, options: dict[str, Any]) -> tuple[dict[str, Any], Any]:
-    """``parm_get`` arguments (``None`` when a node has no parm to read) and the nodes the
-    etag covers."""
+def _parms_args(target: Any, options: dict[str, Any]) -> dict[str, Any] | None:
+    """``parm_get`` arguments (``None`` when a node has no parm to read)."""
     import hou
 
     rest = {k: v for k, v in options.items() if k not in ("parms", "include_defaults", "paths")}
@@ -216,13 +191,12 @@ def _parms_args(target: Any, options: dict[str, Any]) -> tuple[dict[str, Any], A
                 hint="Pass the node's path as target, or parm paths without them.",
             )
         paths = options.get("paths") if target is None else [target]
-        owners = [p.rsplit("/", 1)[0] for p in paths if isinstance(p, str)] if paths else []
-        return {"paths": paths, **rest}, owners
+        return {"paths": paths, **rest}
     include_defaults = options.get("include_defaults", False)
     if not isinstance(include_defaults, bool):
         raise bad_arg("'include_defaults' must be a boolean.")
     paths = _node_parm_paths(node, options.get("parms"), include_defaults)
-    return ({"paths": paths, **rest} if paths else None), [node.path()]
+    return {"paths": paths, **rest} if paths else None
 
 
 def _image_check(target: str) -> None:
@@ -239,102 +213,9 @@ def _image_check(target: str) -> None:
 # -- etag ----------------------------------------------------------------------------------
 
 
-def _node_sig(node: Any) -> list[Any]:
-    from .nodes import node_flags
-
-    sig: list[Any] = [node.path(), node.sessionId()]
-    for getter in ("modificationTime", "cookCount"):
-        try:
-            value = getattr(node, getter)()
-            sig.append(value.isoformat() if hasattr(value, "isoformat") else value)
-        except Exception:
-            sig.append(None)
-    sig.append(sorted(k for k, v in node_flags(node).items() if v))
-    return sig
-
-
-def _chain(node: Any) -> list[Any]:
-    """``node`` and its ancestors, without the root ``/`` unless it is ``node``: the root's
-    ``modificationTime()`` moves on every edit anywhere in the scene."""
-    out = [node]
-    parent = node.parent()
-    while parent is not None and parent.parent() is not None:
-        out.append(parent)
-        parent = parent.parent()
-    return out
-
-
-def _scene_sig(paths: list[str], *, subtree: bool, recurse_locked: bool) -> list[Any]:
-    import hou
-
-    sigs: list[Any] = []
-    seen: set[int] = set()
-    for path in paths:
-        node = hou.node(path) if isinstance(path, str) else None
-        if node is None:
-            sigs.append([path, None])
-            continue
-        members = _chain(node)
-        if subtree:
-            with contextlib.suppress(Exception):
-                members += list(
-                    node.allSubChildren(top_down=True, recurse_in_locked_nodes=recurse_locked)
-                )
-        for member in members:
-            key = member.sessionId()
-            if key not in seen:
-                seen.add(key)
-                sigs.append(_node_sig(member))
-    return sigs
-
-
-def _type_sig(target: str, category: Any) -> list[Any]:
-    import hou
-
-    from .types import resolve_type
-
-    sig: list[Any] = [hou.applicationVersionString()]
-    node_type = resolve_type(target, category if isinstance(category, str) else None)
-    sig.append(node_type.nameWithCategory())
-    definition = node_type.definition()
-    if definition is not None:
-        library = definition.libraryFilePath()
-        try:
-            mtime = os.path.getmtime(library)
-        except OSError:
-            mtime = None
-        sig += [library, mtime, definition.modificationTime()]
-    return sig
-
-
-def make_etag(ctx: HostContext, parts: Any) -> str:
-    blob = json.dumps(parts, sort_keys=True, separators=(",", ":"), default=str)
-    digest = hashlib.blake2b(blob.encode("utf-8"), digest_size=ETAG_HEX // 2).hexdigest()
-    return f"{ctx.pid or os.getpid()}:{ctx.scene.generation}:{digest}"
-
-
-def _addressed(what: str, target: Any, result: dict[str, Any], owners: Any) -> list[str]:
-    if what in ("node", "parms"):
-        return list(owners)
-    if what in ("geo", "image") and isinstance(result.get("path"), str):
-        return [result["path"]]  # the SOP or Cop actually read (an OBJ's display SOP)
-    return [target]
-
-
-def _scene_etag(
-    ctx: HostContext, what: str, target: Any, options: dict[str, Any], paths: list[str]
-) -> str:
-    import hou
-
-    parts: dict[str, Any] = {"what": what, "options": options, "target": target}
-    parts["nodes"] = _scene_sig(
-        paths,
-        subtree=what in SUBTREE,
-        recurse_locked=bool(options.get("recurse_locked", False)),
-    )
-    if what in FRAME_DEPENDENT:
-        parts["frame"] = hou.frame()
-    return make_etag(ctx, parts)
+def make_etag(ctx: HostContext, body: Any) -> str:
+    """``<pid>:<scene_generation>:<16 hex>`` of the canonical body (without its etag)."""
+    return content_etag(ctx.scene.generation, body, pid=ctx.pid)
 
 
 # -- 2.0 shaping ---------------------------------------------------------------------------
@@ -379,16 +260,14 @@ def shape(what: str, result: dict[str, Any], options: dict[str, Any]) -> dict[st
 def _scene_read(
     ctx: HostContext, what: str, target: Any, options: dict[str, Any]
 ) -> dict[str, Any]:
-    """One main-thread step: the 1.4 read and its etag."""
-    owners: Any = []
+    """One main-thread step: the 1.4 read, shaped for 2.0, with its etag."""
     if what == "node":
         paths = options.get("paths") if target is None else [target]
         args = {"paths": paths, **{k: v for k, v in options.items() if k != "paths"}}
-        owners = [p for p in paths if isinstance(p, str)] if isinstance(paths, list) else []
         result = _impl("node_info")(args, ctx)
     elif what == "parms":
-        args, owners = _parms_args(target, options)
-        result = {"parms": []} if args is None else _impl("parm_get")(args, ctx)
+        parm_args = _parms_args(target, options)
+        result = {"parms": []} if parm_args is None else _impl("parm_get")(parm_args, ctx)
     elif what in ("network", "outline"):
         root = target if target is not None else "/"
         fmt = "data" if what == "network" else "outline"
@@ -408,14 +287,8 @@ def _scene_read(
         result = _impl("problems")(args, ctx)
     else:  # type
         result = _impl("node_type_info")({"type": target, **options}, ctx)
-        etag = make_etag(
-            ctx,
-            {"what": what, "options": options, "type": _type_sig(target, options.get("category"))},
-        )
-        return {"etag": etag, "result": result}
-    shown = target if target is not None else ("/" if what in TARGET_DEFAULT_ROOT else None)
-    etag = _scene_etag(ctx, what, shown, options, _addressed(what, shown, result, owners))
-    return {"etag": etag, "result": result}
+    body = shape(what, result, options)
+    return {"etag": make_etag(ctx, body), **body}
 
 
 @tool("inspect", main_thread=False)
@@ -430,19 +303,11 @@ def inspect(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     options = {k: v for k, v in args.items() if k not in ("what", "target")}
     _check_args(what, target, options)
     if what == "events":
-        from .events import LOG
-
         result = _impl("events")(options, ctx)
-        etag = make_etag(ctx, {"what": what, "options": options, "seq": LOG.last_seq})
     elif what == "jobs":
         job_id = options.get("job_id")
         call = {"action": "list"} if job_id is None else {"action": "status", "job_id": job_id}
         result = _impl("job")(call, ctx)
-        rows = result.get("jobs") if job_id is None else [result]
-        keys = ("job_id", "state", "progress", "message")
-        sig = [[row.get(k) for k in keys] for row in rows or [] if isinstance(row, dict)]
-        etag = make_etag(ctx, {"what": what, "options": options, "jobs": sig})
     else:
-        read = _on_main(ctx, lambda: _scene_read(ctx, what, target, options))
-        result, etag = shape(what, read["result"], options), read["etag"]
-    return {"etag": etag, **result}
+        return _on_main(ctx, lambda: _scene_read(ctx, what, target, options))
+    return {"etag": make_etag(ctx, result), **result}

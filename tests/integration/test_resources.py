@@ -1,7 +1,8 @@
 """``GET /hp/v2/resource`` (spec-2.0 §2.7, §4) against real Houdini: every template's body
 is byte for byte the ``inspect`` (or ``search``, ``houdini_status``) result for the same
-options, its etag is that result's etag, ``If-None-Match`` answers ``not_modified``, and
-the etag moves when the node does."""
+options, its etag is that result's etag (the digest of the body), ``If-None-Match`` answers
+``not_modified``, also across a change that leaves the body alone (a ``look``), and the
+etag moves when the node does."""
 
 from __future__ import annotations
 
@@ -103,6 +104,31 @@ def test_node_etag_moves_with_a_parm(v2_client):
     moved = _read(v2_client, uri, first["etag"])
     assert "not_modified" not in moved and moved["etag"] != first["etag"]
     assert _read(v2_client, uri, moved["etag"])["not_modified"] is True
+
+
+SOAK_READS = (
+    "houdini://geo/obj/geo1/xform1",
+    "houdini://node/obj/geo1/xform1",
+    "houdini://outline?root=/obj",
+    "houdini://problems?root=/obj",
+)
+
+
+@pytest.mark.slow
+def test_identical_reads_around_a_look_are_not_modified(v2_client):
+    """The soak's pattern (review 22): read, do something unrelated that recooks (a look
+    renders the displayed geometry), read again with the etag. The bodies did not change,
+    so the second reads are not_modified: the etag digests the body, not cook counts."""
+    _scene()
+    first = {uri: _read(v2_client, uri) for uri in SOAK_READS}
+    looked = v2_client.ok("look", {"target": "/obj/geo1", "resolution": [64, 48]})
+    assert looked["backend_used"]
+    for uri, read in first.items():
+        again = _read(v2_client, uri, read["etag"])
+        assert again == {"uri": uri, "etag": read["etag"], "not_modified": True}, (uri, again)
+    v2_client.ok("parm_set", {"items": [{"path": "/obj/geo1/xform1/ty", "value": 2.0}]})
+    moved = _read(v2_client, "houdini://geo/obj/geo1/xform1", first[SOAK_READS[0]]["etag"])
+    assert "not_modified" not in moved and moved["body"]["bbox"]["max"][1] > 0.5
 
 
 def test_resource_errors(v2_client):
