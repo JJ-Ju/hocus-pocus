@@ -9,6 +9,7 @@ verbatim, return ``structuredContent`` for arbitrary dicts, and own argument val
 
 from __future__ import annotations
 
+import dataclasses
 import difflib
 import logging
 import re
@@ -26,7 +27,7 @@ import mcp_types as types
 from mcp.server import Server
 from mcp.shared.exceptions import MCPError
 
-from ..tools import catalog
+from ..tools import catalog, migration, profiles
 from ..tools.catalog import ToolSpec
 from ..tools.errors import ToolError
 from ..version import __version__
@@ -281,7 +282,9 @@ class Bridge:
         ledger: Ledger | None = None,
     ) -> None:
         self.config = config or BridgeConfig.load()
-        profile = self.config.profile if self.config.profile in catalog.PROFILES else "core"
+        profile = profiles.normalize(self.config.profile) or profiles.DEFAULT_PROFILE
+        if profile != self.config.profile:  # an alias (v2) or an unknown name
+            self.config = dataclasses.replace(self.config, profile=profile)
         self.tools: tuple[ToolSpec, ...] = (
             tuple(tools) if tools is not None else catalog.for_profile(profile)
         )
@@ -341,8 +344,9 @@ class Bridge:
 
     @property
     def v2(self) -> bool:
-        """Whether this bridge serves the ``v2`` profile (roles, ``on``, ledger job ids)."""
-        return self.config.profile == "v2"
+        """Whether this bridge serves a 2.0 profile (roles, ``on``, ledger job ids,
+        resources); ``compat_1x`` serves the 1.4 surface."""
+        return profiles.is_2x(self.config.profile)
 
     def role_of(self, inst: registry.Instance) -> str:
         """``inst``'s role: as ``houdini_connect {role}`` set it, else editor for a GUI
@@ -404,7 +408,11 @@ class Bridge:
         )
 
     def client_for(self, inst: registry.Instance) -> HostClient:
-        return self.client_factory(inst.port, inst.token)
+        client = self.client_factory(inst.port, inst.token)
+        if isinstance(client, HostClient):
+            # The host runs the 1.4 tools for a compat_1x bridge whatever its own profile.
+            client.profile = self.config.profile
+        return client
 
     def mark_verified(self, inst: registry.Instance) -> None:
         self._verified.add((inst.pid, inst.port, inst.token))
@@ -931,6 +939,10 @@ class Bridge:
         """Validate, dispatch and shape one ``tools/call``. Unknown tools raise ``MCPError``.
         ``request_id`` names the host call, so progress can be polled while it runs."""
         spec = self._by_name.get(name)
+        if spec is None and self.v2 and migration.replacement(name):
+            # A 1.4 name on a 2.0 profile: say what replaces it (spec-2.0 §8).
+            error = migration.removed_error(name, self.config.profile)
+            return make_result(self.config.result_content, name, error.to_dict(), is_error=True)
         if spec is None:
             close = difflib.get_close_matches(name, list(self._by_name), n=3, cutoff=0.6)
             message = f"Unknown tool: {name}." + (

@@ -6,6 +6,7 @@ from ._helpers import ToolSpec, _arr, _b, _cursor, _enum, _limit, _n, _obj, _s
 
 SPEC = ToolSpec(
     name="pdg",
+    profiles=("full", "compat_1x"),
     description=(
         "Drive a TOP node: cook its work items as a job (block waits up to timeout_s, capped at"
         " the job threshold), status, workitems (paged; failed items say why), cancel, dirty."
@@ -46,7 +47,6 @@ SPEC = ToolSpec(
         ("action", "top_path"),
     ),
     # Registered scene=False: work items are not hip state (no undo group).
-    profile="full",
     examples=(
         {"action": "cook", "top_path": "/tasks/topnet1/ropfetch1"},
         {"action": "workitems", "top_path": "/tasks/topnet1/ropfetch1", "limit": 20},

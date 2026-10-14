@@ -6,6 +6,7 @@ from ._helpers import ToolSpec, _enum, _n, _obj, _s
 
 SPEC = ToolSpec(
     name="houdini_python",
+    profiles=("core", "full", "compat_1x"),
     description=(
         "Run Python (hou bound) or HScript on Houdini's main thread in one undo step, for "
         "anything no tool covers. Returns stdout, stderr and result. An uncaught exception "

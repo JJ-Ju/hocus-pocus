@@ -6,6 +6,7 @@ from ._helpers import ToolSpec, _arr, _flags, _obj, _partial, _s, _t, _xy
 
 SPEC = ToolSpec(
     name="node_edit",
+    profiles=("compat_1x",),
     description=(
         "Change node properties in one undo step: rename, flags, bypass, color, comment, "
         "position, lock (false allows editing a locked HDA's contents). spare_parms adds {name,"

@@ -6,6 +6,7 @@ from ._helpers import ToolSpec, _b, _obj, _paths
 
 SPEC = ToolSpec(
     name="node_delete",
+    profiles=("compat_1x",),
     description=(
         "Delete nodes in one undo step and return the deleted paths. keep_connections "
         "reconnects input 0 to the deleted node's outputs where possible, like deleting in the "

@@ -6,6 +6,7 @@ from ._helpers import ToolSpec, _arr, _b, _enum, _obj, _return, _s
 
 SPEC = ToolSpec(
     name="network_build",
+    profiles=("compat_1x",),
     description=(
         "Build or update a network under parent from Houdini's hou.data childrenAsData format "
         "(what network_describe returns) in one undo step. Types and inputs are validated "

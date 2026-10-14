@@ -21,6 +21,7 @@ from ._helpers import (
 
 SPEC = ToolSpec(
     name="parm_set",
+    profiles=("minimal", "core", "full", "compat_1x"),
     description=(
         "Set parms in one undo step. Each item takes one of value, expression, keyframe(s), "
         "channel_ref, ramp, multiparm_count, revert_to_default, press. Tuple paths take lists, "

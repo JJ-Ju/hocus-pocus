@@ -6,6 +6,7 @@ from ._helpers import _JOB_STATES, ToolSpec, _b, _enum, _obj, _objs, _out, _s, _
 
 SPEC = ToolSpec(
     name="job",
+    profiles=("core", "full", "compat_1x"),
     description=(
         "Jobs from render, cook or pdg: status (state, progress, message), result (the "
         "tool's result once done), cancel, list."
@@ -22,7 +23,7 @@ SPEC = ToolSpec(
         "done, as current does. cancel adds cancelled: true, or cancelled: false and a note "
         "when the job had already finished. A cancelled job's result is the cancelled error, "
         "whose detail holds the last status (state cancelled). "
-        "v2 profile (spec-2.0 §2.5, §3): job ids are opaque ledger ids such as j7f3a9; the "
+        "Not in compat_1x (spec-2.0 §2.5, §3): job ids are opaque ledger ids such as j7f3a9; the "
         "bridge ledger maps each to its Houdini and job, and job accepts either form (any "
         "profile). Jobs are kept in the ledger across bridge restarts: job status after a "
         "restart answers from the live Houdini, and for one that has exited instance_lost "

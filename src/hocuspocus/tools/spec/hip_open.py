@@ -6,6 +6,7 @@ from ._helpers import ToolSpec, _b, _list, _obj, _on_unsaved, _out, _s, _t
 
 SPEC = ToolSpec(
     name="hip_open",
+    profiles=("minimal", "core", "full", "compat_1x"),
     description=(
         "Load a hip file, replacing the current scene; on_unsaved as in hip_new. Load warnings "
         "are returned in warnings, not raised, unless ignore_load_warnings is false. hip_merge "

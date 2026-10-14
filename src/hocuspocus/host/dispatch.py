@@ -14,8 +14,10 @@ import traceback
 from collections.abc import Callable, Mapping
 from typing import Any
 
-from hocuspocus.tools.catalog import in_profile, profile_of
+from hocuspocus.tools import migration
+from hocuspocus.tools.catalog import ToolSpec, host_accepts, profile_of
 from hocuspocus.tools.errors import ToolError
+from hocuspocus.tools.profiles import COMPAT_1X, normalize
 
 from .executor import MainThreadMeter, metering
 from .tools.registry import HostContext, HostTool
@@ -187,6 +189,32 @@ def log_call(logger: Any, tool: Any, envelope: dict[str, Any]) -> None:
         )
 
 
+def profile_error(
+    spec: ToolSpec, host_profile: str, client_profile: Any = None
+) -> ToolError | None:
+    """Why a host on ``host_profile`` refuses ``spec``, or ``None`` when it runs it
+    (spec-2.0 §2, §8; BIBLE §3.5). A call from a ``compat_1x`` bridge (``client_profile``)
+    runs as ``compat_1x``: every 1.4 tool and every 2.0 one. A 1.4 tool that 2.0 removed is
+    refused by the 2.0 profiles with its replacement (:mod:`hocuspocus.tools.migration`);
+    a 2.0 tool outside the host's profile names the profile that lists it."""
+    compat = isinstance(client_profile, str) and normalize(client_profile) == COMPAT_1X
+    effective = COMPAT_1X if compat else (normalize(host_profile) or "core")
+    if host_accepts(spec, effective):
+        return None
+    if migration.replacement(spec.name):
+        return migration.removed_error(spec.name, effective)
+    needed = profile_of(spec)
+    # full is the largest 2.0 profile; for the others "full" also lists the tool.
+    wider = "" if needed == "full" else ' (or "full")'
+    return ToolError(
+        "invalid_argument",
+        f"{spec.name} is a {needed}-profile tool, and this Houdini's host runs the "
+        f"{effective} profile.",
+        hint=f'Set profile = "{needed}"{wider} in hocuspocus.toml (host and bridge read it) '
+        f"or HOCUSPOCUS_PROFILE={needed} in Houdini's environment, and restart Houdini.",
+    )
+
+
 class Dispatcher:
     """Run one tool call and produce the ``hp/v1`` envelope."""
 
@@ -229,13 +257,16 @@ class Dispatcher:
         timeout_s: Any = None,
         max_response_bytes: Any = None,
         request_id: Any = None,
+        profile: Any = None,
     ) -> dict[str, Any]:
         """Run ``tool``. ``max_response_bytes`` (from the request envelope; the config
         value when absent) is exposed to the tool as ``ctx.extras["max_response_bytes"]``
         so paged tools can cap rows to the client's budget. ``request_id`` (also from the
-        envelope) is what :func:`current_request_id` returns while the tool runs. Every
-        call writes one line to the host log (:func:`log_call`)."""
-        envelope = self._call(tool, args, timeout_s, max_response_bytes, request_id)
+        envelope) is what :func:`current_request_id` returns while the tool runs.
+        ``profile`` (also from the envelope) is the bridge's: ``compat_1x`` runs the 1.4
+        tools whatever the host's own profile (:func:`profile_error`). Every call writes
+        one line to the host log (:func:`log_call`)."""
+        envelope = self._call(tool, args, timeout_s, max_response_bytes, request_id, profile)
         log_call(self.ctx.logger, tool, envelope)
         return envelope
 
@@ -246,6 +277,7 @@ class Dispatcher:
         timeout_s: Any,
         max_response_bytes: Any,
         request_id: Any,
+        profile: Any = None,
     ) -> dict[str, Any]:
         started = time.perf_counter()
         undo_label: str | None = None
@@ -273,25 +305,12 @@ class Dispatcher:
                     hint=NOT_IMPLEMENTED_HINT,
                 )
             spec = impl.spec
-            host_profile = getattr(self.ctx.config, "profile", "full")
-            if spec is not None and not in_profile(spec, host_profile):
-                needed = profile_of(spec)
-                # v2 is the largest profile; for the others "full" also lists the tool.
-                wider = "" if needed == "v2" else ' (or "full")'
-                raise ToolError(
-                    "invalid_argument",
-                    f"{tool} is a {needed}-profile tool, and this Houdini's host runs the "
-                    f"{host_profile} profile.",
-                    hint=f'Set profile = "{needed}"{wider} in hocuspocus.toml (host and '
-                    f"bridge read it) or HOCUSPOCUS_PROFILE={needed} in Houdini's environment, "
-                    "and restart Houdini.",
-                )
-            if not impl.headless_ok and not self.ctx.ui:
-                raise ToolError(
-                    "ui_required",
-                    f"{tool} needs a GUI Houdini session.",
-                    hint="Connect to a GUI Houdini (houdini_connect), or use the headless alternative.",
-                )
+            if spec is not None:
+                refused = profile_error(spec, getattr(self.ctx.config, "profile", "full"), profile)
+                if refused is not None:
+                    raise refused
+            # No whole tool is GUI-only (docs/parity.md G6): the GUI-only argument values
+            # (look and viewport_capture source: viewer) answer ui_required themselves.
             mutating = impl.mutating
             # A dry run may proceed in read-only mode, without an undo group, provided the
             # tool then reports ``_changed: false`` (checked below).

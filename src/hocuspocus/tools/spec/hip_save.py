@@ -6,6 +6,7 @@ from ._helpers import ToolSpec, _b, _obj, _out, _s, _t
 
 SPEC = ToolSpec(
     name="hip_save",
+    profiles=("minimal", "core", "full", "compat_1x"),
     description=(
         "Save the hip file. path saves as (creating directories; an untitled scene needs it); "
         "increment saves to the next version number in the file name; backup keeps a backup "

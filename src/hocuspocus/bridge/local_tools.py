@@ -146,7 +146,9 @@ def houdini_status(bridge: Bridge, args: dict[str, Any]) -> dict[str, Any]:
         **({"lost": lost_block} if lost_block else {}),
         "instances": [_row(bridge, inst, inst.pid == chosen_pid) for inst in live],
         "bridge_version": __version__,
-        "profile": bridge.config.profile,
+        # compat_1x serves 1.4's full catalogue, whose schema names the 1.4 profiles only.
+        "profile": bridge.config.profile if bridge.v2 else "full",
+        **({} if bridge.v2 else {"compat_1x": True}),
     }
     # Host settings are only known while connected; omit rather than report null.
     for key in ("read_only", "allow_python"):

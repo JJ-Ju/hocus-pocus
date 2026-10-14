@@ -6,6 +6,7 @@ from ._helpers import ToolSpec, _enum, _frame, _list, _nullable, _obj, _objs, _o
 
 SPEC = ToolSpec(
     name="geo_info",
+    profiles=("compat_1x",),
     description=(
         "Summarise the geometry of a SOP (or an OBJ's display SOP): point, prim "
         "and vertex counts, bounding box, primitive types, attributes per class with type and "

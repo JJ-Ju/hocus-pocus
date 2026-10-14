@@ -6,6 +6,7 @@ from ._helpers import ToolSpec, _arr, _i, _obj, _partial, _s
 
 SPEC = ToolSpec(
     name="node_connect",
+    profiles=("compat_1x",),
     description=(
         "Wire inputs in one undo step: each item connects output from_output of from into to's "
         'to_input (an index, an input name, or "next" for the next free input of merge-style '

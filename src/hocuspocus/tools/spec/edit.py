@@ -1,4 +1,4 @@
-"""Catalogue entry for ``edit`` (spec-2.0 §2.4; BIBLE §4.9, v2 profile)."""
+"""Catalogue entry for ``edit`` (spec-2.0 §2.4; BIBLE §4.9)."""
 
 from __future__ import annotations
 
@@ -19,6 +19,7 @@ OPS = ("create", "delete", "connect", "set", "node", "copy", "layout", "build", 
 
 SPEC = ToolSpec(
     name="edit",
+    profiles=("minimal", "core", "full"),
     description=(
         "Change the scene in one undo step. ops run in order, each {op, "
         "id?, ...}: create, delete, connect, set, node (rename, flags, color, comment, "
@@ -124,7 +125,6 @@ SPEC = ToolSpec(
         ("ops",),
     ),
     destructive=True,
-    profile="v2",
     examples=(
         {
             "ops": [

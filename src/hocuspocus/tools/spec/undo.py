@@ -6,6 +6,7 @@ from ._helpers import ToolSpec, _b, _enum, _i, _list, _obj, _out, _t
 
 SPEC = ToolSpec(
     name="undo",
+    profiles=("core", "full", "compat_1x"),
     description=(
         "Undo or redo steps (default 1) and return the labels performed, or list the last 20 "
         "undo labels with history. Every HocusPocus mutation is one step labelled "

@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from ._helpers import PROFILES, PROFILES_1X, ROLES, ToolSpec, _connected_block, _obj, _out, _t
+from ._helpers import PROFILES_2X, ROLES, ToolSpec, _connected_block, _obj, _out, _t
 
 SPEC = ToolSpec(
     name="houdini_status",
+    profiles=("minimal", "core", "full", "compat_1x"),
     description=(
         "Start here. Reports the connected Houdini (pid, version, GUI or headless, hip path and"
         " dirty state, $HIP/$JOB, frame, recent files, scene_generation), every live instance "
@@ -22,7 +23,9 @@ SPEC = ToolSpec(
         "Houdini has exited, connected is null and lost: {pid, label} names it. "
         "connected.memory is {rss_mb, peak_mb}: the Houdini process's resident and peak "
         "memory (watch it while a sim cache fills). "
-        "v2 profile (spec-2.0 §2.1): every instances[] row and connected carry role, editor "
+        "profile is minimal, core or full; under compat_1x it reads full (the 1.4 "
+        "catalogue) with compat_1x: true. Not in compat_1x (spec-2.0 §2.1): every "
+        "instances[] row and connected carry role, editor "
         "(the default for a GUI Houdini) or worker (headless), as houdini_connect {role} set "
         "it; recent lists up to 5 Houdinis the bridge ledger remembers that are no longer "
         "running, most recently seen first, each {pid, label, ui, role, hip (its last hip "
@@ -47,7 +50,7 @@ SPEC = ToolSpec(
                 ),
             },
             "bridge_version": _t("string"),
-            "profile": {"type": "string", "enum": list(PROFILES_1X)},
+            "profile": {"type": "string", "enum": list(PROFILES_2X)},
             "read_only": _t("boolean"),
             "allow_python": _t("boolean"),
         },
@@ -62,7 +65,6 @@ SPEC = ToolSpec(
                 "instances": {
                     "items": {"properties": {"role": {"type": "string", "enum": list(ROLES)}}}
                 },
-                "profile": {"enum": list(PROFILES)},
                 "recent": {"type": "array", "items": {"type": "object"}},
             }
         }

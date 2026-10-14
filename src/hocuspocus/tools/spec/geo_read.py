@@ -6,6 +6,7 @@ from ._helpers import ToolSpec, _arr, _b, _cursor, _enum, _i, _list, _n, _obj, _
 
 SPEC = ToolSpec(
     name="geo_read",
+    profiles=("compat_1x",),
     description=(
         "Read attribute values like the geometry spreadsheet: count rows of one class from "
         "start, optionally within group, at frame. stats adds min/max/mean and "

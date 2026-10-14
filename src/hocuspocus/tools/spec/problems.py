@@ -6,6 +6,7 @@ from ._helpers import ToolSpec, _b, _cursor, _limit, _n, _obj, _s
 
 SPEC = ToolSpec(
     name="problems",
+    profiles=("compat_1x",),
     description=(
         "Explain red nodes: lists nodes in a subtree with errors or warnings, broken channel "
         "references, missing files, unconnected required inputs; errored nodes changed since "

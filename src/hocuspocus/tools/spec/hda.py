@@ -6,6 +6,7 @@ from ._helpers import ToolSpec, _b, _cursor, _enum, _i, _limit, _obj, _s
 
 SPEC = ToolSpec(
     name="hda",
+    profiles=("full", "compat_1x"),
     description=(
         "Digital assets: create turns subnet path into an HDA; save updates the definition from"
         " path, spare parms included; unlock allows editing; match reverts to the definition "
@@ -40,7 +41,6 @@ SPEC = ToolSpec(
     ),
     # Registered scene=False: list must not open an undo group or dirty the scene; the
     # mutating actions open their own group (§4.1).
-    profile="full",
     examples=(
         {
             "action": "create",

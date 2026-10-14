@@ -6,6 +6,7 @@ from ._helpers import ToolSpec, _b, _cursor, _enum, _i, _obj, _s
 
 SPEC = ToolSpec(
     name="network_describe",
+    profiles=("compat_1x",),
     description=(
         "Read a whole network as Houdini's hou.data childrenAsData (types, non-default parms, "
         "expressions, wiring, flags) to depth; data feeds network_build. format outline is a "

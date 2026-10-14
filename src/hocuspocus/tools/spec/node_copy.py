@@ -6,6 +6,7 @@ from ._helpers import ToolSpec, _arr, _b, _obj, _paths, _return, _s, _xy
 
 SPEC = ToolSpec(
     name="node_copy",
+    profiles=("compat_1x",),
     description=(
         "Copy nodes into to_parent, which may be their own network. names renames the copies in"
         " paths order; with_inputs keeps wiring among copied nodes; position_offset shifts "

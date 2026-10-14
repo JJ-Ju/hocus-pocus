@@ -6,6 +6,7 @@ from ._helpers import CATEGORIES, ToolSpec, _b, _enum, _obj, _s
 
 SPEC = ToolSpec(
     name="node_type_info",
+    profiles=("compat_1x",),
     description=(
         "Describe one node type: label, version, named inputs and outputs, parms by folder. "
         "detail compact gives name, label, type, default rows; full adds size, range, menu and "

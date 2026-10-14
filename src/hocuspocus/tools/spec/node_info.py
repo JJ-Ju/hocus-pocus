@@ -19,6 +19,7 @@ from ._helpers import (
 
 SPEC = ToolSpec(
     name="node_info",
+    profiles=("compat_1x",),
     description=(
         "Read nodes in detail: type, flags, inputs with names and sources, non-default parms "
         "(value, raw, expression; long strings elided), errors, warnings, cook state. parm_get "

@@ -18,6 +18,7 @@ from ._helpers import (
 
 SPEC = ToolSpec(
     name="parm_get",
+    profiles=("compat_1x",),
     description=(
         "Read parms by parm (.../tx), tuple (.../t: all components) or component path: value at"
         " frame, raw if different, expression, is_default, locked (parm lock), hda_locked. "

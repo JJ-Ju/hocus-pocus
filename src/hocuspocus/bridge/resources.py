@@ -44,6 +44,7 @@ from mcp.shared.exceptions import MCPError
 
 from ..host import resources as host_resources
 from ..tools.errors import ToolError
+from ..tools.profiles import is_2x
 from . import budget
 from . import instances as registry
 from .client import DELIVERY_HINT, OFFLINE_HINT, REINSTALL_HINT
@@ -57,7 +58,6 @@ __all__ = ["ResourceHub", "fetch", "host_resource", "install", "read"]
 
 log = logging.getLogger(__name__)
 
-PROFILE = "v2"
 POLL_INTERVAL_S = 0.5
 FALLBACK_TICKS = 10
 """Every this many ticks ``node`` subscriptions are re-read even when no event arrived (a
@@ -106,7 +106,9 @@ no contents.
 
 
 def enabled(bridge: Bridge) -> bool:
-    return getattr(bridge.config, "profile", None) == PROFILE
+    """The 2.0 resources are served on every 2.0 profile; ``compat_1x`` serves 1.4's."""
+    profile = getattr(bridge.config, "profile", None)
+    return isinstance(profile, str) and is_2x(profile)
 
 
 def v2_guide_text() -> str:

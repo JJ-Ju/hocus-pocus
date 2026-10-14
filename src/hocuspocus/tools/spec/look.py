@@ -1,4 +1,4 @@
-"""Catalogue entry for ``look`` (spec-2.0 §2.5; BIBLE §4.9, v2 profile)."""
+"""Catalogue entry for ``look`` (spec-2.0 §2.5; BIBLE §4.9)."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ from ._helpers import ToolSpec, _arr, _enum, _frame, _image, _list, _obj, _on, _
 
 SPEC = ToolSpec(
     name="look",
+    profiles=("minimal", "core", "full"),
     description=(
         "Look at the scene: a PNG (long side at most 1024). target: an object, SOP, LOP, Cop "
         "node or ROP (default the display). quality draft is a Flipbook ROP (headless too), "
@@ -34,7 +35,7 @@ SPEC = ToolSpec(
         "ui_required. chain is the planned order of backends; backend_used the one that "
         "drew; notes say why an earlier one did not. fit: all, selected or none (reuse the "
         "last automatic framing); without camera an automatic camera frames the target, "
-        "else everything (camera_used temporary). on (v2 profile) picks the Houdini (pid, "
+        "else everything (camera_used temporary). on picks the Houdini (pid, "
         "instance name or role); the bridge routes it, as for cook and render. Headless, the Flipbook and OpenGL ROPs render a "
         "snapshot of the scene in a child hython, kept warm between looks (about 0.3 s after "
         "a 3 s first start): every node, the asset libraries outside $HFS, $HIP/$JOB, global "
@@ -81,7 +82,6 @@ SPEC = ToolSpec(
     # As viewport_capture: in the GUI the ROP backends make a temporary camera and ROP
     # (deleted afterwards, outside undo) and Houdini may mark the hip modified.
     idempotent=True,
-    profile="v2",
     examples=(
         {},
         {"target": "/obj/geo1/scatter1", "quality": "lit", "resolution": [640, 480]},

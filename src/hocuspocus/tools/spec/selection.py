@@ -6,6 +6,7 @@ from ._helpers import ToolSpec, _arr, _list, _obj, _out
 
 SPEC = ToolSpec(
     name="selection",
+    profiles=("compat_1x",),
     description=(
         "Read or set the node selection. Omit paths to get the selected node paths; pass paths "
         "to select exactly those (an empty list clears the selection)."

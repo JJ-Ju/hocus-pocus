@@ -1,4 +1,4 @@
-"""Catalogue entry for ``inspect`` (spec-2.0 §2.3; BIBLE §4.9, v2 profile)."""
+"""Catalogue entry for ``inspect`` (spec-2.0 §2.3; BIBLE §4.9)."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ WHATS = (
 
 SPEC = ToolSpec(
     name="inspect",
+    profiles=("minimal", "core", "full"),
     description=(
         "Read the scene in one tool. what: node, parms, network, outline, geo (rows: true for "
         "values), image (Cop), stage (USD), problems, type, events or jobs; target is the "
@@ -86,7 +87,6 @@ SPEC = ToolSpec(
         ("what",),
     ),
     read_only=True,
-    profile="v2",
     examples=(
         {"what": "parms", "target": "/obj/geo1/box1", "parms": "size|t"},
         {"what": "geo", "target": "/obj/geo1/OUT", "rows": True, "attribs": ["P"], "count": 5},

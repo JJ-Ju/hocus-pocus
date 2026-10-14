@@ -6,6 +6,7 @@ from ._helpers import ToolSpec, _arr, _enum, _frame, _image, _list, _obj, _out, 
 
 SPEC = ToolSpec(
     name="viewport_capture",
+    profiles=("compat_1x",),
     description=(
         "Look at /obj, a LOP stage or a COP: a PNG (long side at most 1024), path, size, "
         "camera_used, scene. camera: OBJ or LOP camera, or camera prim (lop_path); cop_path: "

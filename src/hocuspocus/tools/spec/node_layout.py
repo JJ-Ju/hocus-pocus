@@ -6,6 +6,7 @@ from ._helpers import ToolSpec, _arr, _enum, _obj, _s
 
 SPEC = ToolSpec(
     name="node_layout",
+    profiles=("compat_1x",),
     description=(
         "Tidy a network. mode children lays out the children of parent, or only paths; "
         "good_position moves each node in paths to a free spot near its inputs."

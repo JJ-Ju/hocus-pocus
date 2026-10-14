@@ -6,6 +6,7 @@ from ._helpers import ToolSpec, _arr, _b, _cursor, _enum, _i, _limit, _n, _obj, 
 
 SPEC = ToolSpec(
     name="usd_stage",
+    profiles=("compat_1x",),
     description=(
         "Read a LOP's USD stage: prims (path, type) under prim (path or glob) to depth; "
         "include adds attributes (attribs: name glob), xform, bindings, layers. summary: "
@@ -44,7 +45,6 @@ SPEC = ToolSpec(
         ("lop_path",),
     ),
     read_only=True,
-    profile="full",
     examples=(
         {"lop_path": "/stage/OUT"},
         {"lop_path": "/stage/OUT", "prim": "/geo", "depth": 3, "include": ["attributes"]},

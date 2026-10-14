@@ -6,6 +6,7 @@ from ._helpers import CATEGORIES, ToolSpec, _b, _enum, _limit, _list, _obj, _out
 
 SPEC = ToolSpec(
     name="node_type_search",
+    profiles=("compat_1x",),
     description=(
         "Find node types by name, label, description or keyword, in all 18 categories or one. "
         "Rows: name, label, category, version, description (clipped), input range, deprecated. "

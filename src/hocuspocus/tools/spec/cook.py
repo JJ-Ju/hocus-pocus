@@ -21,6 +21,7 @@ from ._helpers import (
 
 SPEC = ToolSpec(
     name="cook",
+    profiles=("core", "full", "compat_1x"),
     description=(
         "Cook nodes and report per node ok, errors, warnings, cook_time_ms. Cooking never "
         "writes files (render does). profile force-cooks each input chain: chain (top 10), "
@@ -56,7 +57,7 @@ SPEC = ToolSpec(
         "min(timeout_s, job threshold); 0 returns the job at once). A cancelled cook's job "
         "result is the cancelled error with detail {last_status, partial: {frames_cooked, "
         "results, frames?}}. "
-        "v2 profile (spec-2.0 §2.5): on runs this call on another Houdini without moving the pin: a pid, a name (houdini_connect {pid, name}) or a role (editor or worker; the least busy live one, by jobs_running then busy). The result's _meta.instance names it and its job is recorded against it. A pid or name the bridge remembers that has exited is instance_lost, one it never knew houdini_offline with the candidates; a role nobody has is houdini_offline. Without on the call goes to the pinned or selected Houdini as always."
+        "Not in compat_1x (spec-2.0 §2.5): on runs this call on another Houdini without moving the pin: a pid, a name (houdini_connect {pid, name}) or a role (editor or worker; the least busy live one, by jobs_running then busy). The result's _meta.instance names it and its job is recorded against it. A pid or name the bridge remembers that has exited is instance_lost, one it never knew houdini_offline with the candidates; a role nobody has is houdini_offline. Without on the call goes to the pinned or selected Houdini as always."
     ),
     input_schema=_obj(
         {

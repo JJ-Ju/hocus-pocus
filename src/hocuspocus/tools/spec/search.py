@@ -1,4 +1,4 @@
-"""Catalogue entry for ``search`` (spec-2.0 §2.3; BIBLE §4.9, v2 profile)."""
+"""Catalogue entry for ``search`` (spec-2.0 §2.3; BIBLE §4.9)."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ from ._helpers import CATEGORIES, ToolSpec, _cursor, _enum, _flags, _i, _obj, _s
 
 SPEC = ToolSpec(
     name="search",
+    profiles=("minimal", "core", "full"),
     description=(
         "Search node types or nodes. kind types: node_type_search (query is a name, label "
         "or keyword; 1.4 ranking, synonyms, current_only). kind nodes: node_find under root "
@@ -40,7 +41,6 @@ SPEC = ToolSpec(
         ("kind",),
     ),
     read_only=True,
-    profile="v2",
     examples=(
         {"kind": "types", "query": "scatter"},
         {"kind": "types", "query": "noise", "category": "Vop", "limit": 5},

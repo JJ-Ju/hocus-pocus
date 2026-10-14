@@ -50,6 +50,9 @@ class HostClient:
         self.port = int(port)
         self.token = token
         self.connect_timeout_s = connect_timeout_s
+        self.profile: str | None = None
+        """The bridge's profile, sent with every call: a ``compat_1x`` bridge's calls run
+        the 1.4 tools whatever the host's own profile (spec-2.0 §8)."""
 
     # -- transport ---------------------------------------------------------------------
 
@@ -175,6 +178,8 @@ class HostClient:
         }
         if max_response_bytes:
             body["max_response_bytes"] = int(max_response_bytes)
+        if self.profile:
+            body["profile"] = self.profile
         status, data = self._request(
             "POST", "/call", body, read_timeout_s=float(timeout_s) + RESPONSE_GRACE_S
         )

@@ -6,6 +6,7 @@ from ._helpers import CATEGORIES, ToolSpec, _b, _cursor, _enum, _flags, _limit, 
 
 SPEC = ToolSpec(
     name="node_find",
+    profiles=("compat_1x",),
     description=(
         "Search a subtree for nodes (name and type globs, category, flags, has_errors). Rows: "
         "path, type, category, flags, input_count, child_count, has_errors. Locked HDAs are not"

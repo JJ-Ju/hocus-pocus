@@ -6,6 +6,7 @@ from ._helpers import ToolSpec, _limit, _obj
 
 SPEC = ToolSpec(
     name="events",
+    profiles=("full", "compat_1x"),
     description=(
         "What changed since your last call: hip, node (created, renamed, deleted, parms or "
         "flags changed on nodes HocusPocus touched or read) and pdg events with seq and "
@@ -31,6 +32,5 @@ SPEC = ToolSpec(
     ),
     input_schema=_obj({"since": {"type": ["integer", "string"], "default": 0}, "limit": _limit()}),
     read_only=True,
-    profile="full",
     examples=({}, {"since": "3084:42", "limit": 20}),
 )

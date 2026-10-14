@@ -15,16 +15,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-Profile = Literal["minimal", "core", "full", "v2"]
+from ..profiles import COMPAT_1X, PROFILES, PROFILES_2X  # noqa: F401 - re-exported
 
-PROFILES: tuple[str, ...] = ("minimal", "core", "full", "v2")
-"""Nested, smallest first (BIBLE §3.5, §3.7): each profile lists every tool of the one before.
-``v2`` (spec-2.0 §7 M1) is ``full`` plus the 2.0 tools (``inspect``, ``search``, ...)."""
-
-PROFILES_1X: tuple[str, ...] = PROFILES[:3]
-"""The 1.x profiles. ``houdini_status``'s output schema names these in every 1.x profile, so
-their ``tools/list`` bytes stay those of 1.4; the ``v2`` listing names all four
-(``catalog.for_profile``)."""
+Profile = Literal["minimal", "core", "full", "compat_1x"]
 
 HP_RPC_VERSION = 1
 """Host RPC contract version (the ``v1`` in ``/hp/v1/...``)."""
@@ -55,21 +48,24 @@ class ToolSpec:
     read_only: bool = False
     destructive: bool = False
     idempotent: bool = False
-    profile: Profile = "core"
-    """``core``, ``full`` or ``v2`` (2.0 tools); membership of ``minimal`` is
-    :data:`MINIMAL_TOOLS`."""
+    profiles: tuple[Profile, ...] = ()
+    """The profiles that list this tool (spec-2.0 §2, §8; ``hocuspocus.tools.profiles``):
+    its 2.0 profiles, a suffix of ``("minimal", "core", "full")`` since they nest, plus
+    ``"compat_1x"`` for a 1.4 tool. A 1.4 tool that 2.0 removes is ``("compat_1x",)``
+    and names its replacement in ``hocuspocus.tools.migration``; a 2.0-only tool has no
+    ``compat_1x``. A unit test checks every spec against these rules."""
     headless_ok: bool = True
     bridge_local: bool = False
     """True when the bridge answers this tool itself (``houdini_status``, ``houdini_connect``)."""
     examples: tuple[dict[str, Any], ...] = field(default_factory=tuple)
     """Example argument objects; rendered into docs/tools.md and validated by a unit test."""
     v2_extra: dict[str, Any] = field(default_factory=dict)
-    """What the ``v2`` profile adds to a 1.x tool (spec-2.0 §7 M2): ``{"input": overlay,
+    """What the 2.0 profiles add to a 1.4 tool (spec-2.0 §2.1, §2.5): ``{"input": overlay,
     "output": overlay}``, each a partial schema deep-merged into ``input_schema`` /
     ``output_schema`` (dicts merge key by key, anything else replaces) by
-    ``catalog.for_profile("v2")``. The 1.x profiles list the spec without it, so their
-    ``tools/list`` bytes stay those of 1.4; the argument's detail goes in ``notes``, marked
-    as v2. A 2.0 tool (``profile="v2"``) never needs one."""
+    ``catalog.for_profile`` for every 2.0 profile. ``compat_1x`` lists the spec without it,
+    so its ``tools/list`` bytes stay those of 1.4's ``full``; the argument's detail goes in
+    ``notes``. A 2.0-only tool never needs one."""
 
     def annotations(self) -> dict[str, Any]:
         """MCP ToolAnnotations as a plain dict."""
