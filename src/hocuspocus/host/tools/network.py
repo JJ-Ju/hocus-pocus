@@ -929,6 +929,116 @@ def _run_presses(
     return pressed, effects
 
 
+def prepare_build(parent: Any, args: dict[str, Any]) -> dict[str, Any]:
+    """Validate a ``network_build`` call (or an ``edit`` build op) against ``parent``
+    without changing anything: ``data`` normalised (types resolved, input indices filled,
+    renamed for ``on_name_collision: rename``), the node ``plan``, ``renamed``,
+    ``replaced``, ``warnings`` and the ``press`` plan. Raises the first problem with
+    ``detail.problems`` listing all of them."""
+    N.ensure_can_hold_children(parent, "build in")
+    data = args.get("data")
+    if not isinstance(data, dict) or not data:
+        raise N.bad_arg(
+            "'data' must be a non-empty object of node name -> node data.",
+            hint="Pass the 'data' field of network_describe, e.g. {box1: {type: box}}.",
+        )
+    if set(data) >= {"root", "data"} and isinstance(data.get("data"), dict):
+        raise N.bad_arg(
+            "'data' looks like a whole network_describe result.",
+            hint="Pass its 'data' field instead.",
+        )
+    on_collision = args.get("on_name_collision", "error") or "error"
+    if on_collision not in ON_COLLISION:
+        raise N.bad_arg(f"on_name_collision must be one of {', '.join(ON_COLLISION)}.")
+    layout = N.arg_bool(args, "layout", True)
+    dry_run = N.arg_bool(args, "dry_run", False)
+    mode = N.return_mode(args)
+    tag = args.get("tag")
+    if tag is not None and not isinstance(tag, str):
+        raise N.bad_arg("'tag' must be a string.")
+
+    data = json.loads(json.dumps(data))  # private copy: validation normalises in place
+    existing = {c.name() for c in parent.children()}
+    # Network boxes, sticky notes and dots share the namespace (Houdini would give the
+    # new node another name) but are not nodes: they are never "replaced".
+    items = (
+        {item.name() for item in parent.allItems()} - existing
+        if hasattr(parent, "allItems")
+        else set()
+    )
+    collisions = [name for name in data if name in existing]
+    item_collisions = [name for name in data if name in items]
+    problems = _Problems()
+    renamed: dict[str, str] = {}
+    if (collisions or item_collisions) and on_collision == "error":
+        clashing = collisions + item_collisions
+        suggestions = []
+        taken = set(data) | items
+        for name in clashing:
+            free = N.unique_name(parent, name, taken)
+            taken.add(free)
+            suggestions.append(free)
+        problems.add(
+            ToolError(
+                "name_collision",
+                f"{len(clashing)} name(s) already exist in {parent.path()}: "
+                + ", ".join(clashing[:10]),
+                hint="Pass on_name_collision: 'rename' to build under free names, 'replace' to "
+                "swap the existing nodes out (downstream wires move to the new ones), or "
+                "rename the entries in data.",
+                candidates=suggestions,
+            ),
+            parent.path(),
+        )
+    elif item_collisions and on_collision == "replace":
+        problems.add(
+            ToolError(
+                "name_collision",
+                f"{', '.join(item_collisions[:10])} in {parent.path()} is a network box, sticky "
+                "note or dot, not a node; replace only swaps nodes.",
+                hint="Rename the entries in data, or pass on_name_collision: 'rename'.",
+                candidates=[N.unique_name(parent, n, set(data) | items) for n in item_collisions],
+            ),
+            parent.path(),
+        )
+    elif (collisions or item_collisions) and on_collision == "rename":
+        taken = set(data) | existing | items
+        for name in collisions + item_collisions:
+            free = N.unique_name(parent, name, taken)
+            taken.add(free)
+            renamed[name] = free
+        data = _rename_refs(data, renamed)
+    press_plan = _press_plan(args.get("press"), data, parent, renamed)
+    plan: list[dict[str, Any]] = []
+    warnings: list[str] = []
+    # Existing children stay referencable by name except those being replaced/renamed away.
+    referencable = existing - set(collisions) if on_collision != "error" else existing
+    _validate_level(
+        data,
+        category=parent.childTypeCategory(),
+        container=parent,
+        prefix=parent.path().rstrip("/") + "/",
+        problems=problems,
+        plan=plan,
+        warnings=warnings,
+        existing_names=referencable,
+    )
+    problems.raise_if_any()
+    return {
+        "data": data,
+        "plan": plan,
+        "renamed": renamed,
+        "replaced": collisions if on_collision == "replace" else [],
+        "existing": existing,
+        "warnings": warnings,
+        "press": press_plan,
+        "layout": layout,
+        "dry_run": dry_run,
+        "mode": mode,
+        "tag": tag,
+    }
+
+
 @tool("network_build")
 def network_build(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     import hou

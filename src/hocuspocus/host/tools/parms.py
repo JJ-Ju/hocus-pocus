@@ -1505,6 +1505,8 @@ def set_parm_items(
     *,
     animation: str = "replace",
     callback_note: str = CALLBACK_NOTE,
+    rollback: Any = None,
+    frame: float | None = None,
 ) -> list[dict[str, Any]]:
     """Apply ``{parm_name: value | {expression, language} | {expr, lang}}`` to ``node`` and return per-parm results.
 
@@ -1515,6 +1517,10 @@ def set_parm_items(
     summary plus ``path`` and ``wrote_keyframe`` (no node errors: callers report those),
     with ``notes`` and, for a pressed entry, ``pressed`` and ``side_effects``, as
     ``parm_set`` returns them.
+
+    With ``rollback`` (a ``tx.Rollback``; the ``edit`` set op on an existing node) each
+    parm's keys, expression or value are snapshotted before it is set and restored when
+    the call fails; ``frame`` is ``parm_set``'s.
     """
     del ctx  # part of the shared signature; nothing here needs host state
     if not isinstance(parms, dict):
@@ -1524,7 +1530,11 @@ def set_parm_items(
         try:
             target = resolve_name(node, name)
             item = _item_from_spec(name, spec, animation)
-            results.append(_apply(node, target, item, frame=None, callback_note=callback_note))
+            if rollback is not None:
+                from ..tx import _checked
+
+                rollback.add(_checked(_snapshot(target)))
+            results.append(_apply(node, target, item, frame=frame, callback_note=callback_note))
         except ToolError as exc:
             if exc.message.startswith(f"parms.{name}:"):
                 raise

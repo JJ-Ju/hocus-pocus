@@ -1745,6 +1745,10 @@ def _connect_source(src_path: Any, dest: Any, field: str = "from") -> Any:
     raise error
 
 
+connect_source = _connect_source
+"""The wiring-source lookup under the name the transaction engine (``host/tx.py``) uses."""
+
+
 def _connect_one(item: Any, index: int, rollback: Rollback) -> dict[str, Any]:
     if not isinstance(item, dict) or "to" not in item or "from" not in item:
         raise bad_arg(f"items[{index}] needs 'from' (path or null) and 'to'.")

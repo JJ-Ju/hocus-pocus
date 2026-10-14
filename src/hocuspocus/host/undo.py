@@ -38,6 +38,9 @@ def summarize(tool: str, args: Mapping[str, Any]) -> str:
     undo_label = args.get("undo_label")
     if isinstance(undo_label, str) and undo_label.strip():
         return _short(undo_label, 80)
+    ops = args.get("ops")
+    if isinstance(ops, list):  # edit (spec-2.0 §2.4): "HocusPocus: edit <n> ops"
+        return f"{len(ops)} op{'s' if len(ops) != 1 else ''}"
     items = args.get("items")
     if isinstance(items, list):
         noun = "parm" if tool.startswith("parm") else "item"
