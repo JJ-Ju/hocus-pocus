@@ -8,9 +8,9 @@ of a 1.4 tool (spec-2.0 §4, ``host/tx.py``) is picked up here too. The result i
 ``{etag, ...the 1.4 result}`` projected for 2.0 (:func:`project`): the caller knows its
 ``what`` and ``target``, so they are not echoed; ``node`` rows leave out ``session_id``;
 ``outline`` leaves out ``format`` and, per row, ``name`` when it is the path's last
-segment, ``errors: 0``, and ``inputs`` unless ``wiring: true``; and ``node`` and ``parms``
-leave out what is default or empty (spec-2.0 M4 "read shapes"), unless ``detail: full``
-asks for the 1.4 shape.
+segment, ``errors: 0``, and ``inputs`` unless ``wiring: true``; and ``node``, ``parms`` and
+``geo`` leave out what is default or empty (spec-2.0 M4 "read shapes"), unless ``detail:
+full`` asks for the 1.4 shape.
 
 Registered with ``main_thread=False`` because two of its reads must not hold the main
 thread (``events`` and ``job`` run off it in 1.4); the others run on it through the
@@ -55,7 +55,7 @@ OPTIONS: dict[str, frozenset[str]] = {
         {"depth", "include_defaults", "include_positions", "recurse_locked", "cursor"}
     ),
     "outline": frozenset({"depth", "recurse_locked", "cursor", "wiring"}),
-    "geo": frozenset({"frame", "attributes", "rows"}) | GEO_READ_OPTIONS,
+    "geo": frozenset({"frame", "attributes", "rows", "detail"}) | GEO_READ_OPTIONS,
     "image": frozenset({"frame"}),
     "stage": frozenset(
         {"prim", "depth", "include", "attribs", "summary", "time", "limit", "cursor"}
@@ -243,7 +243,7 @@ INSPECT_ONLY = frozenset({"wiring", "detail"})
 DETAILS = ("compact", "full")
 """``detail`` of the projected reads; ``type`` also takes ``folders``."""
 
-PROJECTED = frozenset({"node", "parms"})
+PROJECTED = frozenset({"node", "parms", "geo"})
 
 PLAIN_PARM_TYPES = frozenset({"float", "int", "string", "toggle"})
 """Parm types a compact parm row leaves out: the JSON value already says them."""
@@ -414,6 +414,128 @@ def compact_node(row: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _attribute_type(row: dict[str, Any]) -> str:
+    """``{type, size, type_info}`` as ``"float3"``, ``"float3:color"``, ``"int[]"``."""
+    kind = str(row.get("type", ""))
+    array = kind.endswith("[]")
+    base = kind[:-2] if array else kind
+    size = row.get("size", 1)
+    text = base + ("" if size in (1, None) else str(size)) + ("[]" if array else "")
+    info = row.get("type_info")
+    return f"{text}:{info}" if info else text
+
+
+def _detail_value(value: Any) -> Any:
+    if isinstance(value, dict) and "elided" in value and isinstance(value.get("keys"), list):
+        return {"elided": value["elided"], "key_count": len(value["keys"])}
+    return value
+
+
+def compact_attributes(attributes: Any) -> Any:
+    """Per class ``{name: "float3:color"}`` (detail ``{name: {type, value}}``), or the
+    names list (``attributes: names``); empty classes left out."""
+    if not isinstance(attributes, dict):
+        return attributes
+    out: dict[str, Any] = {}
+    for cls, rows in attributes.items():
+        if not rows:
+            continue
+        if not isinstance(rows, list) or not all(isinstance(r, dict) and "name" in r for r in rows):
+            out[cls] = rows
+            continue
+        entries: dict[str, Any] = {}
+        for row in rows:
+            kind = _attribute_type(row)
+            if "value" in row:
+                entries[row["name"]] = {"type": kind, "value": _detail_value(row["value"])}
+            else:
+                entries[row["name"]] = kind
+        out[cls] = entries
+    return out
+
+
+def compact_groups(groups: Any) -> Any:
+    """Per class ``{name: count}``; empty classes left out (``None`` when all are)."""
+    if not isinstance(groups, dict):
+        return groups
+    out: dict[str, Any] = {}
+    for cls, rows in groups.items():
+        if not rows:
+            continue
+        if isinstance(rows, list) and all(isinstance(r, dict) and "name" in r for r in rows):
+            out[cls] = {r["name"]: r.get("count") for r in rows}
+        else:
+            out[cls] = rows
+    return out or None
+
+
+def compact_intrinsics(intrinsics: Any) -> Any:
+    """Volume and VDB rows (``<kind>_columns``, ``<kind>``) with every column that has one
+    value in all rows (resolution, voxel size, class) said once in ``<kind>_common``."""
+    if not isinstance(intrinsics, dict):
+        return intrinsics
+    out = dict(intrinsics)
+    for kind in ("volume", "vdb"):
+        columns, rows = out.get(f"{kind}_columns"), out.get(kind)
+        if not isinstance(columns, list) or not isinstance(rows, list) or len(rows) < 2:
+            continue
+        if not all(isinstance(r, list) and len(r) == len(columns) for r in rows):
+            continue
+        same = [
+            i
+            for i, name in enumerate(columns)
+            if name not in ("name", "prim") and all(r[i] == rows[0][i] for r in rows)
+        ]
+        if not same:
+            continue
+        keep = [i for i in range(len(columns)) if i not in same]
+        common = {columns[i]: rows[0][i] for i in same}
+        rebuilt: dict[str, Any] = {}
+        for key, value in out.items():
+            if key == f"{kind}_columns":
+                rebuilt[key] = [columns[i] for i in keep]
+                rebuilt[f"{kind}_common"] = common
+            elif key == kind:
+                rebuilt[key] = [[r[i] for i in keep] for r in rows]
+            else:
+                rebuilt[key] = value
+        out = rebuilt
+    return out
+
+
+INTERNAL_NOTE = "solver-internal attribute(s) left out"
+"""The ``geo_info`` note that ``internal_attribute_count`` already says."""
+
+
+def compact_geo(result: dict[str, Any]) -> dict[str, Any]:
+    """A ``geo_info`` summary: compact attributes and groups, volume columns shared by
+    every row said once, no ``bbox.center`` (the middle of min and max), no note
+    repeating ``internal_attribute_count``. Images and
+    ``rows: true`` reads are already columnar and stay as they are."""
+    if result.get("kind") == "image" or "columns" in result:
+        return result
+    out: dict[str, Any] = {}
+    for key, value in result.items():
+        if key == "attributes":
+            value = compact_attributes(value)
+            if not value:
+                continue
+        elif key == "groups":
+            value = compact_groups(value)
+            if value is None:
+                continue
+        elif key == "bbox" and isinstance(value, dict):
+            value = {k: v for k, v in value.items() if k != "center"}
+        elif key == "intrinsics":
+            value = compact_intrinsics(value)
+        elif key == "notes" and isinstance(value, list):
+            value = [n for n in value if not (isinstance(n, str) and INTERNAL_NOTE in n)]
+            if not value:
+                continue
+        out[key] = value
+    return out
+
+
 def _compact_outline(rows: Any, wiring: bool) -> None:
     for row in rows if isinstance(rows, list) else ():
         if not isinstance(row, dict):
@@ -453,7 +575,7 @@ def project(what: str, result: dict[str, Any], options: dict[str, Any]) -> dict[
             key = "name" if options.get("by_name") else "path"
             result["parms"] = compact_parms(result["parms"], key)
         return result
-    return result
+    return compact_geo(result)
 
 
 # -- the tool ------------------------------------------------------------------------------

@@ -1,7 +1,7 @@
 """``inspect`` (spec-2.0 §2.3) against real Houdini: each ``what`` returns its 1.4 read's
 result plus only ``etag`` (``node`` and ``outline`` with their 2.0 trims, M4) with
-``detail: full``, and by default for node and parms the compact projection (spec-2.0 M4
-"read shapes": defaults and empties left out); the etag is stable while nothing changes
+``detail: full``, and by default for node, parms and geo the compact projection (spec-2.0
+M4 "read shapes": defaults and empties left out); the etag is stable while nothing changes
 and moves when the addressed node does."""
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ from hocuspocus.host import resources as host_resources  # noqa: E402
 
 ETAG = re.compile(r"^\d+:\d+:[0-9a-f]{16}$")
 ADDED = ("etag",)
-PROJECTED = frozenset({"node", "parms"})
+PROJECTED = frozenset({"node", "parms", "geo"})
 """The reads with a compact shape; ``detail: full`` gives their 1.4 shape."""
 
 
@@ -317,6 +317,30 @@ def test_parms_compact_rows_keep_what_matters(v2_client):
     assert got[f"{xform.path()}/tz"] == {"value": 0.0, "locked": True}, got
     order = got[f"{xform.path()}/xOrd"]
     assert isinstance(order, dict) and order.get("type") == "menu", order
+
+
+def test_geo_compact_summary(v2_client):
+    _net, box, xform = _geo()
+    group = xform.parent().createNode("groupcreate", "tops")
+    group.setFirstInput(xform)
+    group.parm("groupname").set("tops")
+    color = xform.parent().createNode("color", "paint")
+    color.setFirstInput(group)
+    color.setDisplayFlag(True)
+    old = v2_client.ok("geo_info", {"path": color.path()})
+    new = v2_client.ok("inspect", {"what": "geo", "target": color.path()})
+    assert new["attributes"]["point"]["P"] == "float3:position", new["attributes"]
+    cd = {**new["attributes"].get("point", {}), **new["attributes"].get("prim", {})}["Cd"]
+    assert cd == "float3:color", new["attributes"]
+    assert "vertex" not in new["attributes"] and "detail" not in new["attributes"]
+    assert new["groups"] == {"prim": {"tops": old["groups"]["prim"][0]["count"]}}, new
+    assert set(new["bbox"]) == {"min", "max", "size"}
+    for key in ("path", "point_count", "prim_count", "vertex_count", "prim_types"):
+        assert new[key] == old[key], key
+    full = v2_client.ok("inspect", {"what": "geo", "target": color.path(), "detail": "full"})
+    assert full["groups"] == old["groups"] and full["bbox"] == old["bbox"]
+    plain = v2_client.ok("inspect", {"what": "geo", "target": box.path()})
+    assert "groups" not in plain
 
 
 # -- etag ---------------------------------------------------------------------------------
