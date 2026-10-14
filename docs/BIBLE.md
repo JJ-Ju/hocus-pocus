@@ -684,7 +684,10 @@ Recent files (`hip_info` / status): the hip files saved or loaded in this host s
 (2.0, spec-2.0 §2.3, D36) Two read tools for every client, including those that never
 read resources. Both run the registered host implementation of the 1.4 read they stand
 for, looked up at call time, so the 1.4 code is never duplicated, and return that read's
-result unchanged plus a few keys; the matching resource (§3.10) returns the same bytes.
+result projected for 2.0 (spec-2.0 M4 "read shapes": what is default or empty is left out,
+a plain value is said as a value, what every row shares is said once in `common`), or
+with `detail: full` the 1.4 result unchanged plus a few keys; the matching resource
+(§3.10) runs the same call and returns the same bytes.
 Both are read-only and idempotent. The 1.4 reads' arguments and result shapes are in
 Appendix A (`node_info`, `parm_get`, `network_describe`, `geo_info`, `geo_read`,
 `usd_stage`, `problems`, `node_type_info`, `node_find`, `node_type_search`); `events` and
@@ -696,34 +699,41 @@ argument names; per-`what` options in `notes`. An option the `what` does not tak
 
 | `what` | `target` | Runs (1.4) | Options | Notes |
 |---|---|---|---|---|
-| `node` | a node path, or `paths` for several | `node_info` | `include`, `include_defaults`, `recurse_locked` | Per node: path, type block, flags, inputs and outputs with labels, non-default parms, errors, warnings, cook state (Appendix A). |
-| `parms` | a parm or tuple path, `paths`, or a node | `parm_get` | `frame`, `include`, `full_strings`; with a node: `parms` (glob on name or label, `a\|b`), `include_defaults` | A node target reads its non-default parm tuples (all with `include_defaults`, those the glob matches with `parms`; folders, separators and buttons left out), and `parms: []` when there are none. |
+| `node` | a node path, or `paths` for several | `node_info` | `include`, `include_defaults`, `recurse_locked`, `detail` | Per node: path, type, flags, inputs, non-default parms, errors, warnings, cook state (Appendix A). Compact: `name` only when it is not the path's last segment; `type: "Sop/box"`; `flags` the list of those on; `inputs` positional sources (a path for output 0, `{path, output}`, `null`; trailing empty slots left out); `outputs` (when included) positional lists of destinations; `parms: {name: value}`, or `{name: {value, expression \| expressions, language?, keyed?, locked?, menu_token?, raw?}}` when more than the value matters; no `is_default`, empty `errors`/`warnings`/`messages`, `cook_state: cooked`, `children_count: 0`. |
+| `parms` | a parm or tuple path, `paths`, or a node | `parm_get` | `frame`, `include`, `full_strings`, `detail`; with a node: `parms` (glob on name or label, `a\|b`), `include_defaults` | A node target reads its non-default parm tuples (all with `include_defaults`, those the glob matches with `parms`; folders, separators and buttons left out), and `parms: []` when there are none. Compact: `parms: {path: value or row}` (by tuple name for a node target), rows as in `node` plus `type` when not float/int/string/toggle, `hda_locked` when true, `keyframes` when any and the `include` sections; no `kind`, `tuple`, `component_names`, `is_default`. |
 | `network` | the root network | `network_describe` `format: data` | `depth`, `include_defaults`, `include_positions`, `recurse_locked`, `cursor` | Houdini's `hou.data` of the children, locked-HDA children replaced by `{type, hda_locked}`; the format `edit`'s `build` op takes. |
-| `outline` | the root (default `/`) | `network_describe` `format: outline` | `depth`, `recurse_locked`, `cursor`, `wiring` | The scene as a compact tree: display nodes, error counts, flags that are on, no parms; input sources with `wiring: true`. How an agent reads a graph in one call. |
-| `geo` | a SOP, or an OBJ (its display SOP) | `geo_info`; with `rows: true` `geo_read` | `frame`, `attributes`; rows: `class`, `attribs`, `start`, `count`, `group`, `stats`, `cursor` | Counts, bbox, prim types, attributes, groups, volumes; rows as arrays under `columns`, `stats` over the whole class. |
+| `outline` | the root (default `/`) | `network_describe` `format: outline` | `depth`, `recurse_locked`, `cursor`, `wiring`, `detail` | The scene as a compact tree: display nodes, error counts, flags that are on, no parms; input sources with `wiring: true`. How an agent reads a graph in one call. Compact: also no `children_count` where `children` lists that many. |
+| `geo` | a SOP, or an OBJ (its display SOP) | `geo_info`; with `rows: true` `geo_read` | `frame`, `attributes`, `detail`; rows: `class`, `attribs`, `start`, `count`, `group`, `stats`, `cursor` | Counts, bbox, prim types, attributes, groups, volumes; rows as arrays under `columns`, `stats` over the whole class. Compact summary: attributes per class `{name: "float3:color"}` (type, size when not 1, `:type_info`; detail `{name: {type, value}}`, an elided dict `{elided, key_count}`), groups `{name: count}`, empty classes and empty `groups` left out, `bbox` without `center`, volume/VDB columns equal in every row said once in `volume_common`/`vdb_common`, `internal_attribute_count` without its note. Rows and images unchanged. |
 | `image` | a Cop node or COP network (its display node) | `geo_info` on a COP | `frame` | `kind: image`, resolution, data window, per-channel min/max/mean; another node is `invalid_argument`. The picture is `look`'s. |
 | `stage` | a LOP (or a ROP in a LOP network: the LOP it renders) | `usd_stage` | `prim`, `depth`, `include`, `attribs`, `summary`, `time`, `limit`, `cursor` | Prim rows, attributes, xforms, bindings, layer stack; `summary` gives counts by type and the world bbox. |
-| `problems` | the root (default `/`) | `problems` | `include_warnings`, `cook_uncooked`, `recurse_locked`, `timeout_s`, `limit`, `cursor` | The "why is my node red" read: errors and warnings, broken references, missing files, unconnected required inputs, failed TOP work items. |
-| `type` | `category/name`, or a bare name with `category` | `node_type_info` | `category`, `include_parms`, `include_help`, `folder`, `parms`, `detail` | `compact` parm rows by folder by default; `detail: folders` first for large FX types. |
+| `problems` | the root (default `/`) | `problems` | `include_warnings`, `cook_uncooked`, `recurse_locked`, `timeout_s`, `limit`, `cursor`, `detail` | The "why is my node red" read: errors and warnings, broken references, missing files, unconnected required inputs, failed TOP work items. Compact: no empty `counts`, no `nodes_with_problems: 0`. |
+| `type` | `category/name`, or a bare name with `category` | `node_type_info` | `category`, `include_parms`, `include_help`, `folder`, `parms`, `detail` | `compact` parm rows by folder by default; `detail: folders` first for large FX types. Compact and folders: no `is_current_version: true`, empty `version`, `detail: compact` echo or its constant hint, `inputs_count` (kept with `folders`); inputs and outputs as their labels, the lone default output left out. `detail: full` is `node_type_info`'s full result. |
 | `events` | — | `events` | `since`, `limit` | The ring buffer since a cursor (§4.7 `events`); `next_since` is `<pid>:<seq>`. |
 | `jobs` | — | `job list`, or `job status` with `job_id` | `job_id` | The jobs of the Houdini (ledger ids on the 2.0 profiles, §3.8). |
 
 Returns `{etag, ...the 1.4 result}`; `what` and `target` are not echoed (the caller knows
-them). Two reads are trimmed for 2.0 (spec-2.0 §7 M4): `node` rows leave out `session_id`,
+them). Every 2.0 read leaves out what the caller knows: `node` rows leave out `session_id`,
 and `outline` leaves out `format` and, per row, `name` when it is the path's last segment,
-`errors` at 0, and `inputs` unless `wiring: true`. `etag` is §3.10's (the digest of the
+`errors` at 0, and `inputs` unless `wiring: true`. `node`, `parms`, `outline`, `geo`,
+`problems` and `type` are compact by default (the Notes column: defaults and empties
+omitted) and take `detail: compact | full` (`type` also `folders`); `detail: full` restores
+the 1.4 shape with only the trims above (the integration tests compare it with the 1.4
+reads under `compat_1x`, whose own shapes never change). `etag` is §3.10's (the digest of the
 canonical body), so an unchanged etag is an unchanged answer and the matching resource has
 the same etag. The bridge
 routes `what: events` and `what: jobs` as it routes `events` and `job` (pid-tagged
 `next_since`, job ids sent to their Houdini). spec-2.0 §2.6 also lists `what: pdg` for
 `pdg workitems`; it is not built, and `pdg {action: "workitems"}` (full) is the read.
 
-**`search`** `{kind, query?, category?, limit, cursor, ...}`.
+**`search`** `{kind, query?, category?, limit, cursor, detail, ...}`.
 
 | `kind` | Runs (1.4) | `query` | Other options | Result |
 |---|---|---|---|---|
-| `types` | `node_type_search` | required: a name, label or keyword (1.4 ranking, Houdini synonyms, Cop compositing words) | `category`, `include_hidden`, `current_only` (default true) | `{kind, results, total, common?, hint?, notes?, next_cursor?}`; rows `name, label, category, version, description, inputs, deprecated`, `other_versions` folded into the current version's row. |
-| `nodes` | `node_find` | optional: a type glob | `root` (default `/`), `pattern` (name glob, `hou.Node.glob`), `flags`, `has_errors`, `recurse_locked` | `{kind, root, nodes, total, next_cursor?}`; rows `path, type, category, flags, input_count, child_count, has_errors`. |
+| `types` | `node_type_search` | required: a name, label or keyword (1.4 ranking, Houdini synonyms, Cop compositing words) | `category`, `include_hidden`, `current_only` (default true) | `{results, common?, total, hint?, notes?, next_cursor?}`; rows `{name, label, description}` (description capped at 80 characters), plus `inputs: "min-max"` unless 1-1, `deprecated`/`hidden` only when true, `other_versions` when non-empty (folded into the current version's row), `child_category`; no `version`; `common` hoists `category`, and `child_category`/`typical_parents` the rows share. |
+| `nodes` | `node_find` | optional: a type glob | `root` (default `/`), `pattern` (name glob, `hou.Node.glob`), `flags`, `has_errors`, `recurse_locked` | `{root?, nodes, common?, total, next_cursor?}` (`root` only when the call did not name it); rows `{path, type}` plus `flags` (the list of those on) when any is on, `has_errors` only when true, `child_count`/`input_count` only above 0; `common: {category}` is the category most rows share, a row in another one names its type `Object/geo`; `next_cursor` is the last row's path. |
+
+Compact by default (spec-2.0 M4 "read shapes"; `kind` is not echoed); `detail: full`
+returns `{kind, ...the 1.4 result}` byte for byte.
 
 `node_type_search` has no paging, so `kind: types` pages it: page n asks for the first
 offset + limit matches and keeps the last `limit`, adding `next_cursor` (`t:<offset>`)
@@ -1278,7 +1288,7 @@ only it. `conftest.py` finds hython via
 | Tier | Runner | Scope | Budget |
 |---|---|---|---|
 | `tests/unit` | system Python | catalogue integrity (every spec has an impl, schema, annotations, ≤ 60-word description, ≤ 12-word argument descriptions, passing examples; `tools/list` within the §4.1 caps per profile and mode; `compat_1x` byte-identical to the 1.4 goldens), bridge instance selection, routing and ledger with a fake host, resources and etags, offline behaviour, error mapping, budget truncation, config parsing, the guide size, `cli` path resolution | < 10 s |
-| `tests/integration` | `hython -m pytest` | in-process host: one `hou` session per run, `hipFile.clear()` per test, every tool exercised against real nodes; the idioms in §5 each have a test; the transaction engine, `inspect`/`search` byte identity with the 1.4 reads, the look backends | fast (default) < 90 s; `slow` about 3 min |
+| `tests/integration` | `hython -m pytest` | in-process host: one `hou` session per run, `hipFile.clear()` per test, every tool exercised against real nodes; the idioms in §5 each have a test; the transaction engine, `inspect`/`search` byte identity with the 1.4 reads (`detail: full`) and their compact projections, the look backends | fast (default) < 90 s; `slow` about 3 min |
 | `tests/e2e` | system Python spawning hython | official `mcp` client → `hocuspocus-mcp` stdio → `hython -m hocuspocus.host` on an ephemeral port with an isolated `HOUDINI_USER_PREF_DIR` and a neutral cwd: a stdio round trip, review 06 tasks 2, 3, 4, 6 and 9 as one scripted scenario, a bridge launch that checks the work dir, two Houdinis | < 60 s |
 | `tests/workloads` (2.0) | system Python spawning hython (`--runworkloads`) | the evaluation workloads as scripts, each against its budget (below) | about 1 min; budget 12 min |
 | `tests/integration/test_parity_gui.py` (2.0, `gui`, `--rungui`) | system Python launching `houdinifx` with isolated prefs | the GUI column of the parity matrix (below) | about 30 s |
