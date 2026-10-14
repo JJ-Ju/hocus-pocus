@@ -1583,6 +1583,9 @@ def parm_get(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
 
 @tool("parm_set")
 def parm_set(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
+    """A plan of ``set`` ops over the transaction engine (``host/tx.py``): each item is
+    snapshotted before it is applied, so a failing item restores its own components and,
+    without ``partial``, every earlier item (newest first)."""
     items = args.get("items")
     if not isinstance(items, list) or not items or not all(isinstance(i, dict) for i in items):
         raise ToolError("invalid_argument", "'items' must be a non-empty list of objects.")
@@ -1590,50 +1593,35 @@ def parm_set(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     partial = args.get("partial", False)
     if not isinstance(partial, bool):
         raise ToolError("invalid_argument", "'partial' must be a boolean.")
-    from .nodes import batch_error, watch_nodes  # lazy: nodes imports this module lazily too
+    from .. import tx  # lazy: tx imports the tool families
+    from .nodes import watch_nodes
 
-    rows: list[tuple[Any, dict[str, Any]]] = []
+    ops = [tx.Op("set", item, opts={"frame": frame}) for item in items]
+    # 1.4: only a ToolError is an item's failure; anything else ends the call as internal.
+    plan = tx.Plan(ops, partial=partial, tool_errors_only=True)
+    result = tx.execute(plan, ctx)
     nodes: dict[str, Any] = {}
-    applied: list[Any] = []  # restore functions of the items done so far
-    failed = 0
-    for index, item in enumerate(items):
-        path = item.get("path")
-        restore = None
-        try:
-            unknown = set(item) - ITEM_KEYS
-            if unknown:
-                raise ToolError("invalid_argument", f"Unexpected item keys {sorted(unknown)}.")
-            node, target = resolve_path(path)
-            restore = _snapshot(target)
-            result = _apply(node, target, item, frame=frame)
-        except ToolError as exc:
-            ok = restore() if restore is not None else True  # never leave it half-applied
-            if not partial:
-                for undo in reversed(applied):
-                    ok = undo() and ok
-                raise batch_error(index, path, exc, rolled_back=ok) from exc
-            failed += 1
-            error = batch_error(index, path, exc, rolled_back=ok).to_dict()
-            rows.append((None, {"path": path, "wrote_keyframe": False, "error": error}))
-            continue
-        applied.append(restore)
-        nodes.setdefault(node.path(), node)
-        rows.append((node.path(), result))
+    for res in result.done():
+        nodes.setdefault(res.node.path(), res.node)
     problems = {path: cheap_cook_problems(node) for path, node in nodes.items()}
     watch_nodes(nodes.values())
     results: list[dict[str, Any]] = []
-    for node_path, result in rows:
-        if node_path is not None:
-            diag = problems[node_path]
-            result["errors"] = diag["errors"]
-            result["warnings"] = diag["warnings"]
-            result["cook_state"] = diag["cook_state"]
-            if "hint" in diag:
-                result["hint"] = diag["hint"]
-        results.append(result)
+    for res in result.results:
+        if res.error is not None:
+            path = res.args.get("path") if isinstance(res.args, dict) else None
+            results.append({"path": path, "wrote_keyframe": False, "error": res.error})
+            continue
+        row = res.data
+        diag = problems[res.node.path()]
+        row["errors"] = diag["errors"]
+        row["warnings"] = diag["warnings"]
+        row["cook_state"] = diag["cook_state"]
+        if "hint" in diag:
+            row["hint"] = diag["hint"]
+        results.append(row)
     out: dict[str, Any] = {"results": results}
     if partial:
-        out["failed"] = failed
+        out["failed"] = len(result.failures)
     return out
 
 

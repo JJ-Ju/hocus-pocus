@@ -4,9 +4,12 @@ See docs/BIBLE.md §4.4 and §5. Node paths are identity and results carry final
 paths. Every mutation result reports each touched node's ``errors/warnings`` after a
 cheap cook (``_diag.cheap_cook_problems``).
 
-Rollback: ``hou.undos.performUndo()`` refuses to run inside an open undo group, and the
-dispatcher's group is open while a tool runs, so batch tools undo their own work by
-compensation (:class:`Rollback`) when an item fails and ``partial`` is false.
+The mutation tools (``node_create``, ``node_delete``, ``node_edit``, ``node_copy``,
+``node_connect``, ``node_layout``) are plan builders over the transaction engine
+(``host/tx.py``, spec-2.0 principle 14): it runs their items as ops and rolls a failing
+call back by compensation (:class:`Rollback`, re-exported here), because
+``hou.undos.performUndo()`` refuses to run inside the dispatcher's open undo group. Each
+tool shapes the engine's per-op results into its 1.4 result.
 """
 
 from __future__ import annotations
@@ -14,11 +17,13 @@ from __future__ import annotations
 import contextlib
 import difflib
 import re
-from collections.abc import Callable, Iterable
+from collections.abc import Iterable
 from typing import Any
 
 from hocuspocus.tools.errors import ToolError
 
+from .. import tx
+from ..tx import Rollback  # noqa: F401 (re-exported: the compensation the batch tools share)
 from ._common import (  # noqa: F401 (re-exported for the other tool modules)
     CURSOR_HINT,
     DEFAULT_LIMIT,
@@ -664,47 +669,7 @@ def watch_nodes(nodes: Iterable[Any]) -> None:
             events.watch_node(node)
 
 
-# -- rollback ---------------------------------------------------------------------
-
-
-class Rollback:
-    """Compensating actions run newest-first when a batch fails (see module docstring)."""
-
-    def __init__(self) -> None:
-        self._actions: list[Callable[[], Any]] = []
-
-    def add(self, action: Callable[[], Any]) -> None:
-        self._actions.append(action)
-
-    def mark(self) -> int:
-        return len(self._actions)
-
-    def run(self, since: int = 0) -> bool:
-        """Undo newest-first back to ``since``. Returns whether every compensating action
-        succeeded (vacuously true when there was nothing to undo): the ``rolled_back`` a
-        batch error reports, never assumed."""
-        ok = True
-        while len(self._actions) > since:
-            action = self._actions.pop()
-            try:
-                action()
-            except Exception:
-                ok = False
-        return ok
-
-    def destroy_later(self, node: Any) -> None:
-        self.add(lambda: node.destroy())
-
-    def keep_display(self, parent: Any) -> None:
-        """Restore ``parent``'s display/render node (SOP-style networks) on rollback."""
-        for getter, setter in (("displayNode", "setDisplayFlag"), ("renderNode", "setRenderFlag")):
-            fn = getattr(parent, getter, None)
-            if not callable(fn):
-                continue
-            with contextlib.suppress(Exception):
-                current = fn()
-                if current is not None:
-                    self.add(lambda current=current, setter=setter: getattr(current, setter)(True))
+# -- errors -----------------------------------------------------------------------
 
 
 def to_tool_error(exc: BaseException, *, node: Any = None, op: str | None = None) -> ToolError:
@@ -797,33 +762,6 @@ def batch_error(index: int, path: Any, exc: BaseException, *, rolled_back: bool)
     detail = error.detail if isinstance(error.detail, dict) else {}
     error.detail = {**detail, "item": index, "path": shown, "rolled_back": rolled_back}
     return error
-
-
-def run_batch(
-    items: list[Any],
-    partial: bool,
-    rollback: Rollback,
-    apply: Callable[[Any, int], Any],
-    path_of: Callable[[Any], Any],
-) -> tuple[dict[int, Any], dict[int, dict[str, Any]]]:
-    """Apply ``apply(item, index)`` to every item (BIBLE §4.1 batch semantics).
-
-    A failure rolls back the whole call and raises :func:`batch_error`, or with
-    ``partial`` rolls back that item only and records the error dict in ``failures``."""
-    done: dict[int, Any] = {}
-    failures: dict[int, dict[str, Any]] = {}
-    for index, item in enumerate(items):
-        mark = rollback.mark()
-        try:
-            done[index] = apply(item, index)
-        except Exception as exc:
-            path = path_of(item) if isinstance(item, dict) else None
-            if not partial:
-                ok = rollback.run()
-                raise batch_error(index, path, exc, rolled_back=ok) from exc
-            ok = rollback.run(mark)
-            failures[index] = batch_error(index, path, exc, rolled_back=ok).to_dict()
-    return done, failures
 
 
 # -- wiring helpers ---------------------------------------------------------------
@@ -1129,132 +1067,6 @@ def node_info(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     return {"nodes": nodes}
 
 
-def _create_one(
-    item: Any,
-    index: int,
-    args: dict[str, Any],
-    ctx: HostContext,
-    rollback: Rollback,
-    created: dict[int, dict[str, tuple[Any, ...]]],
-    pairs: dict[int, str],
-    extras: dict[int, dict[str, Any]],
-) -> Any:
-    """Create one ``node_create`` item; ``created`` maps the new node's session id to its
-    parm state right after ``createNode`` (see :func:`parm_state`), ``pairs`` to the
-    ``block_begin`` a new ``block_end`` was paired with (see :func:`pair_block_end`),
-    ``extras`` to the ``notes`` and ``side_effects`` its parms reported."""
-    import hou
-
-    if not isinstance(item, dict):
-        raise bad_arg(f"items[{index}] must be an object.")
-    parent = get_node(item.get("parent"), field="parent")
-    ensure_can_hold_children(parent)
-    type_name = item.get("type")
-    if not isinstance(type_name, str) or not type_name:
-        raise bad_arg(f"items[{index}].type must be a non-empty string.")
-    name = item.get("name")
-    if name is not None:
-        check_name(name)
-        existing = parent.node(name)
-        if existing is not None:
-            free = unique_name(parent, name)
-            raise ToolError(
-                "name_collision",
-                f"{existing.path()} already exists ({existing.type().name()}).",
-                hint=f"Pick another name (e.g. {free!r}), omit name to let Houdini number it, "
-                "or edit the existing node.",
-                candidates=[free],
-            )
-    exact = arg_bool(args, "exact_type", False)
-    node_type = resolve_type(parent, type_name, exact=exact)
-    rollback.keep_display(parent)
-    try:
-        node = parent.createNode(node_type.name(), name, exact_type_name=True)
-    except hou.PermissionError as exc:
-        raise to_tool_error(exc, node=parent) from exc
-    except hou.OperationFailed as exc:
-        message = hou_message(exc)
-        if "name" in message.lower() and "type" not in message.lower():
-            raise bad_arg(
-                f"Houdini rejected the node name {name!r}.",
-                hint="Use letters, digits, '_', '.' and '-'.",
-                hou_exception=hou_exception_text(exc),
-            ) from exc
-        raise type_not_found(parent, type_name, parent.childTypeCategory()) from exc
-    rollback.destroy_later(node)
-    created[node.sessionId()] = parm_state(node)
-    note = deprecation_note(node.type())
-    if note:
-        extra = extras.setdefault(node.sessionId(), {})
-        extra["deprecated"] = True
-        key = node.type().nameWithCategory()
-        if key not in _DEPRECATION_NOTED:
-            # Review 22 finding 10: 37 mountain creates repeated the same ~150 B note.
-            _DEPRECATION_NOTED.add(key)
-            extra.setdefault("notes", []).append(note)
-    parms = item.get("parms")
-    pressed: dict[str, Any] = {}
-    if parms:
-        if not isinstance(parms, dict):
-            raise bad_arg(f"items[{index}].parms must be an object.")
-        # A {value, press: true} entry runs its callback after the plain values are set
-        # and the inputs are wired, as clicking it in the parameter pane would (review 20 N2).
-        plain = {k: v for k, v in parms.items() if not _is_press(v)}
-        pressed = {k: v for k, v in parms.items() if _is_press(v)}
-        _set_create_parms(node, plain, ctx, extras)
-    for link_index, link in enumerate(item.get("inputs") or []):
-        if not isinstance(link, dict) or "from" not in link:
-            raise bad_arg(
-                f"items[{index}].inputs[{link_index}] must be {{index|name, from, output}}.",
-            )
-        if "index" in link and "name" in link:
-            raise bad_arg(
-                f"items[{index}].inputs[{link_index}]: pass index or name, not both.",
-            )
-        src = _connect_source(link["from"], node, field="inputs.from")
-        target = link.get("name") if "name" in link else link.get("index", link_index)
-        dest_index = resolve_input_index(node, target)
-        output = check_output_index(src, link.get("output", 0))
-        connect(node, dest_index, src, output, None)
-    set_flags(node, item.get("flags"))
-    if pressed:
-        _set_create_parms(node, pressed, ctx, extras)
-    begin = pair_block_end(node, rollback)
-    if begin is not None:
-        pairs[node.sessionId()] = begin.path()
-    position = item.get("position")
-    if position is not None:
-        node.setPosition(arg_xy(position, f"items[{index}].position"))
-    elif args.get("layout", "good_position") == "good_position":
-        with contextlib.suppress(Exception):
-            node.moveToGoodPosition(move_inputs=False, move_outputs=False, move_unconnected=False)
-    return node
-
-
-def _is_press(spec: Any) -> bool:
-    return isinstance(spec, dict) and spec.get("press") is True
-
-
-def _set_create_parms(
-    node: Any, parms: dict[str, Any], ctx: HostContext, extras: dict[int, dict[str, Any]]
-) -> None:
-    """Set ``node_create`` parms through the ``parm_set`` engine and keep what its results
-    report: the skipped-callback note and a press's ``side_effects`` (review 20 N2)."""
-    if not parms:
-        return
-    from .parms import CREATE_CALLBACK_NOTE, set_parm_items  # lazy: parms imports this module
-
-    results = set_parm_items(
-        node, parms, ctx, animation="replace", callback_note=CREATE_CALLBACK_NOTE
-    )
-    extra = extras.setdefault(node.sessionId(), {})
-    for result in results:
-        for note in result.get("notes") or ():
-            extra.setdefault("notes", []).append(note)
-        if result.get("side_effects"):
-            extra.setdefault("side_effects", {}).update(result["side_effects"])
-
-
 _DEPRECATION_NOTED: set[str] = set()
 """Types whose deprecation note ``node_create`` has given in this host session: later rows
 of the type carry only ``deprecated: true``."""
@@ -1366,12 +1178,9 @@ def pair_block_end(node: Any, rollback: Rollback) -> Any:
     return begin
 
 
-def _create_item_path(item: dict[str, Any]) -> Any:
-    """What a ``node_create`` error names: ``parent/name``, else the parent."""
-    parent, name = item.get("parent"), item.get("name")
-    if isinstance(parent, str) and isinstance(name, str) and name:
-        return f"{parent.rstrip('/')}/{name}"
-    return parent
+# -- the 1.4 mutation tools: plan builders over the transaction engine (host/tx.py) ------
+# Each builds a tx.Plan from its 1.4 arguments and shapes tx.execute's per-op results
+# into its 1.4 result (spec-2.0 principle 14: one undo policy, one rollback, one engine).
 
 
 @tool("node_create")
@@ -1383,18 +1192,11 @@ def node_create(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     partial = arg_bool(args, "partial", False)
     cook = arg_bool(args, "cook", True)
     mode = return_mode(args)
-    rollback = Rollback()
-    baselines: dict[int, dict[str, tuple[Any, ...]]] = {}
-    pairs: dict[int, str] = {}
-    extras: dict[int, dict[str, Any]] = {}
-    done, failures = run_batch(
-        items,
-        partial,
-        rollback,
-        lambda item, index: _create_one(item, index, args, ctx, rollback, baselines, pairs, extras),
-        _create_item_path,
-    )
-    created = list(done.items())  # item order
+    opts = {"exact_type": args.get("exact_type"), "cook": cook, "layout": layout}
+    plan = tx.Plan([tx.Op("create", item, opts=opts) for item in items], partial=partial)
+    result = tx.execute(plan, ctx)
+    state, failures = result.state, result.failures
+    created = [(res.index, res.node) for res in result.done()]  # item order
 
     def problems_of(node: Any) -> dict[str, Any]:
         return cheap_cook_problems(node) if cook else collect_problems(node, cook=False)
@@ -1409,14 +1211,14 @@ def node_create(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
             if "cook_time_ms" in problems:
                 block["cook_ms"] = block.pop("cook_time_ms")
             keep = call_edited_parms(
-                node, baselines.get(node.sessionId(), {}), items[index].get("parms") or {}
+                node, state.baselines.get(node.sessionId(), {}), items[index].get("parms") or {}
             )
             block["parms"] = [row for row in block["parms"] if row["name"] in keep]
             blocks[index] = block  # parm rows elide long strings (summarize_parm)
     for index, node in created:
-        if node.sessionId() in pairs:
-            blocks[index]["paired_with"] = pairs[node.sessionId()]
-        add_create_extras(blocks[index], extras.get(node.sessionId()))
+        if node.sessionId() in state.pairs:
+            blocks[index]["paired_with"] = state.pairs[node.sessionId()]
+        add_create_extras(blocks[index], state.extras.get(node.sessionId()))
     results = [blocks.get(i) or {"error": failures[i]} for i in range(len(items))]
     if mode == "summary":
         collapse_problems(results)
@@ -1429,290 +1231,45 @@ def node_create(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
 
 @tool("node_delete")
 def node_delete(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
-    paths = arg_list(args, "paths")
-    keep = arg_bool(args, "keep_connections", True)
-    nodes = []
-    for path in paths:
-        node = get_node(path, field="paths")
-        if node.path() == "/" or node.parent() is None or node.parent().path() == "/":
-            raise bad_arg(
-                f"Refusing to delete the manager {node.path()}.",
-                hint="Delete nodes inside it instead.",
-            )
-        ensure_editable(node, "delete")
-        nodes.append(node)
-    selected_paths = {n.path() for n in nodes}
-    # Drop nodes whose ancestor is also being deleted, and duplicates.
-    unique: list[Any] = []
-    seen: set[str] = set()
-    for node in nodes:
-        path = node.path()
-        if path in seen or any(path.startswith(p + "/") for p in selected_paths):
-            continue
-        seen.add(path)
-        unique.append(node)
-    deleted: list[str] = []
-    reconnected: list[dict[str, Any]] = []
-    touched: dict[str, Any] = {}
-    for node in unique:
-        path = node.path()
-        if keep:
-            source = next((c for c in node.inputConnections() if c.inputIndex() == 0), None)
-            if source is not None and source.inputNode() is not None:
-                src, src_out = source.inputNode(), source.outputIndex()
-                for conn in node.outputConnections():
-                    dest = conn.outputNode()
-                    if dest is None:
-                        continue
-                    with contextlib.suppress(Exception):
-                        dest.setInput(conn.inputIndex(), src, src_out)
-                        reconnected.append(
-                            {"from": src.path(), "to": dest.path(), "input": conn.inputIndex()}
-                        )
-                        touched[dest.path()] = dest
-        else:
-            # destroy() splices input 0 through to the outputs by itself; cut them first.
-            for conn in node.outputConnections():
-                dest = conn.outputNode()
-                if dest is not None:
-                    with contextlib.suppress(Exception):
-                        dest.setInput(conn.inputIndex(), None)
-        try:
-            node.destroy()
-        except Exception as exc:
-            raise to_tool_error(exc, node=node) from exc
-        deleted.append(path)
-        touched.pop(path, None)
-    result: dict[str, Any] = {"deleted": deleted}
-    if reconnected:
-        alive = [n for p, n in touched.items() if p not in seen]
-        result["reconnected"] = [r for r in reconnected if r["to"] not in seen]
-        result["nodes"] = [mutation_block(n) for n in alive]
+    plan = tx.Plan([tx.Op("delete", args)], raw_errors=True)
+    data = tx.execute(plan, ctx).results[0].data
+    result: dict[str, Any] = {"deleted": data["deleted"]}
+    if data["any_reconnected"]:
+        result["reconnected"] = data["reconnected"]
+        result["nodes"] = [mutation_block(n) for n in data["alive"]]
     return result
-
-
-def _check_color(color: Any) -> tuple[float, float, float]:
-    if (
-        not isinstance(color, list)
-        or len(color) != 3
-        or not all(isinstance(c, int | float) and not isinstance(c, bool) for c in color)
-    ):
-        raise bad_arg("'color' must be [r, g, b] with 0-1 floats.")
-    return float(color[0]), float(color[1]), float(color[2])
-
-
-def _edit_one(item: Any, index: int, rollback: Rollback) -> dict[str, Any]:
-    """Validate every field of one ``node_edit`` item, then apply it with ``lock`` last.
-
-    ``lock: true`` runs ``matchCurrentDefinition()``, which discards edits made inside the
-    asset; compensation cannot bring them back, so nothing may fail after it.
-    """
-    import hou
-
-    if not isinstance(item, dict):
-        raise bad_arg(f"items[{index}] must be an object.")
-    node = get_node(item.get("path"))
-    old_path = node.path()
-    # -- validate ------------------------------------------------------------------
-    lock = item.get("lock")
-    if lock is not None:
-        if not isinstance(lock, bool):
-            raise bad_arg("'lock' must be a boolean.")
-        if hda_block(node) is None:
-            raise bad_arg(
-                f"{node.path()} ({node.type().name()}) is not a digital asset; lock applies to HDAs.",
-                hint="Use flags.bypass or the hard-lock flag for ordinary nodes.",
-            )
-        ensure_editable(node, "lock or unlock")
-    else:
-        ensure_editable(node, "edit")
-    name = item.get("name")
-    if name is not None and name != node.name():
-        check_name(name)
-        existing = node.parent().node(name)
-        if existing is not None:
-            free = unique_name(node.parent(), name)
-            raise ToolError(
-                "name_collision",
-                f"{existing.path()} already exists.",
-                hint=f"Pick another name, e.g. {free!r}.",
-                candidates=[free],
-            )
-    else:
-        name = None
-    flags = dict(item.get("flags") or {})
-    if item.get("bypass") is not None:
-        flags["bypass"] = item["bypass"]
-    check_flags(node, flags)
-    color = item.get("color")
-    rgb = _check_color(color) if color is not None else None
-    comment = item.get("comment")
-    if comment is not None and not isinstance(comment, str):
-        raise bad_arg("'comment' must be a string.")
-    position = item.get("position")
-    xy = arg_xy(position, "position") if position is not None else None
-    spare_plan = None
-    if item.get("spare_parms") is not None:
-        from .parms import plan_spare_parms  # lazy: parms imports this module
-
-        # A locked asset's own instance takes spare parms (the wrangle "Create spare
-        # parameters" button does that); nodes inside a locked asset were refused above.
-        spare_plan = plan_spare_parms(node, item["spare_parms"])
-    # -- apply ---------------------------------------------------------------------
-    try:
-        if name is not None:
-            old_name = node.name()
-            node.setName(name)
-            rollback.add(lambda: node.setName(old_name))
-    except hou.OperationFailed as exc:
-        raise to_tool_error(exc, node=node, op="rename") from exc
-    if flags:
-        before = node_flags(node)
-        rollback.keep_display(node.parent())
-
-        def restore_flags(before: dict[str, bool] = before) -> None:
-            for key, value in before.items():
-                setter = getattr(node, _FLAG_SETTERS.get(key, ""), None)
-                if callable(setter):
-                    setter(value)
-
-        rollback.add(restore_flags)
-        set_flags(node, flags)
-    if rgb is not None:
-        old_color = node.color()
-        node.setColor(hou.Color(rgb))
-        rollback.add(lambda: node.setColor(old_color))
-    if comment is not None:
-        old_comment = node.comment()
-        node.setComment(comment)
-        rollback.add(lambda: node.setComment(old_comment))
-        with contextlib.suppress(Exception):
-            node.setGenericFlag(hou.nodeFlag.DisplayComment, bool(comment))
-    if xy is not None:
-        old_pos = node.position()
-        node.setPosition(xy)
-        rollback.add(lambda: node.setPosition(old_pos))
-    spare = None
-    if spare_plan is not None:
-        from .parms import apply_spare_parms
-
-        spare = apply_spare_parms(node, spare_plan, rollback)
-    if lock is not None:
-        was_locked = _is_locked_hda(node)
-        if lock and not was_locked:
-            node.matchCurrentDefinition()
-            rollback.add(lambda: node.allowEditingOfContents())
-        elif not lock and was_locked:
-            node.allowEditingOfContents()
-            rollback.add(lambda: node.matchCurrentDefinition())
-    extra: dict[str, Any] = {}
-    if node.path() != old_path:
-        extra["old_path"] = old_path
-    if lock is not None:
-        extra["hda"] = hda_block(node)
-    if spare is not None:
-        extra["spare_parms"] = spare
-    return {"node": node, "extra": extra}
 
 
 @tool("node_edit")
 def node_edit(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     items = arg_list(args, "items")
     partial = arg_bool(args, "partial", False)
-    rollback = Rollback()
-    done, failures = run_batch(
-        items,
-        partial,
-        rollback,
-        lambda item, index: _edit_one(item, index, rollback),
-        lambda item: item.get("path"),
-    )
+    result = tx.execute(tx.Plan([tx.Op("node", item) for item in items], partial=partial), ctx)
     results = []
-    for index in range(len(items)):
-        if index in failures:
-            results.append({"error": failures[index]})
+    for res in result.results:
+        if res.error is not None:
+            results.append({"error": res.error})
             continue
-        entry = done[index]
-        node = entry["node"]
+        node = res.node
         # Review 22 finding 3: a rename recooked a mountain HDA (~200 ms). An edit reports
         # problems as they are; only cook and creates cook.
-        block = mutation_block(node, cook=False, **entry["extra"])
+        block = mutation_block(node, cook=False, **res.extra)
         block["comment"] = node.comment()
         block["position"] = _round(node.position())
         block["color"] = _round(node.color().rgb())
         results.append(block)
-    watch_nodes(entry["node"] for entry in done.values())
+    watch_nodes(res.node for res in result.done())
     out: dict[str, Any] = {"results": results}
-    if failures:
-        out["failed"] = len(failures)
+    if result.failures:
+        out["failed"] = len(result.failures)
     return out
 
 
 @tool("node_copy")
 def node_copy(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
-    import hou
-
-    paths = arg_list(args, "paths")
-    dest = get_node(args.get("to_parent"), field="to_parent")
-    ensure_can_hold_children(dest, "copy nodes into")
-    names = args.get("names") or []
-    if not isinstance(names, list) or len(names) > len(paths):
-        raise bad_arg("'names' must be a list no longer than 'paths'.")
-    for name in names:
-        check_name(name, "names")
-    if len(set(names)) != len(names):
-        raise bad_arg("'names' must not repeat.")
-    with_inputs = arg_bool(args, "with_inputs", True)
     mode = return_mode(args)
-    offset = args.get("position_offset")
-    offset_xy = arg_xy(offset, "position_offset") if offset is not None else None
-    sources = [get_node(p, field="paths") for p in paths]
-    category = dest.childTypeCategory()
-    for src in sources:
-        if src.type().category() != category:
-            raise bad_arg(
-                f"{src.path()} is {a_or_an(src.type().category().name())} node; {dest.path()} holds "
-                f"{category.name()} nodes.",
-                hint="Copy into a network of the same context.",
-            )
-    for name in names:
-        existing = dest.node(name)
-        if existing is not None:
-            free = unique_name(dest, name, names)
-            raise ToolError(
-                "name_collision",
-                f"{existing.path()} already exists.",
-                hint=f"Pick another name, e.g. {free!r}, or omit names to let Houdini number copies.",
-                candidates=[free],
-            )
-    rollback = Rollback()
-    try:
-        copies = list(dest.copyItems(tuple(sources)))
-    except hou.OperationFailed as exc:
-        raise bad_arg(
-            f"Houdini could not copy into {dest.path()}.",
-            hint="All sources must share a context with to_parent.",
-            hou_exception=hou_exception_text(exc),
-        ) from exc
-    copies = [c for c in copies if isinstance(c, hou.Node)]
-    for copy in copies:
-        rollback.destroy_later(copy)
-    try:
-        for copy, name in zip(copies, names, strict=False):
-            try:
-                copy.setName(name)
-            except hou.OperationFailed as exc:
-                raise to_tool_error(exc, node=copy, op="rename") from exc
-        for copy in copies:
-            if not with_inputs:
-                for conn in copy.inputConnections():
-                    copy.setInput(conn.inputIndex(), None)
-            if offset_xy is not None:
-                pos = copy.position()
-                copy.setPosition((pos[0] + offset_xy[0], pos[1] + offset_xy[1]))
-    except Exception as exc:
-        rollback.run()
-        raise to_tool_error(exc) from exc
+    data = tx.execute(tx.Plan([tx.Op("copy", args)], raw_errors=True), ctx).results[0].data
+    sources, copies = data["sources"], data["copies"]
     block = summary_block if mode == "summary" else mutation_block
     results = [block(copy, source=src.path()) for src, copy in zip(sources, copies, strict=False)]
     if mode == "summary":
@@ -1749,96 +1306,35 @@ connect_source = _connect_source
 """The wiring-source lookup under the name the transaction engine (``host/tx.py``) uses."""
 
 
-def _connect_one(item: Any, index: int, rollback: Rollback) -> dict[str, Any]:
-    if not isinstance(item, dict) or "to" not in item or "from" not in item:
-        raise bad_arg(f"items[{index}] needs 'from' (path or null) and 'to'.")
-    dest = get_node(item.get("to"), field="to")
-    ensure_editable(dest, "rewire")
-    src_path = item.get("from")
-    src = None if src_path is None else _connect_source(src_path, dest)
-    to_input = item.get("to_input", 0)
-    index_or_next = resolve_input_index(dest, to_input)
-    if src is None:
-        if index_or_next == "next":
-            raise bad_arg(
-                "to_input 'next' cannot disconnect.",
-                hint="Pass the input index or name to disconnect.",
-            )
-        used = connect(dest, index_or_next, None, 0, rollback)
-        output = 0
-    else:
-        output = check_output_index(src, item.get("from_output", 0))
-        used = connect(dest, index_or_next, src, output, rollback)
-    names = list(dest.inputNames())
-    return {
-        "node": dest,
-        "extra": {
-            "input": used,
-            "input_name": names[used] if used < len(names) else f"input{used + 1}",
-            "from": src.path() if src is not None else None,
-            "from_output": output,
-        },
-    }
-
-
 @tool("node_connect")
 def node_connect(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     items = arg_list(args, "items")
     partial = arg_bool(args, "partial", False)
-    rollback = Rollback()
-    done, failures = run_batch(
-        items,
-        partial,
-        rollback,
-        lambda item, index: _connect_one(item, index, rollback),
-        lambda item: item.get("to"),
-    )
+    result = tx.execute(tx.Plan([tx.Op("connect", item) for item in items], partial=partial), ctx)
     results = []
-    for index in range(len(items)):
-        if index in failures:
-            results.append({"error": failures[index]})
+    for res in result.results:
+        if res.error is not None:
+            results.append({"error": res.error})
             continue
-        entry = done[index]
-        block = mutation_block(entry["node"], **entry["extra"])
+        block = mutation_block(res.node, **res.extra)
         block["to"] = block["path"]
         results.append(block)
-    watch_nodes(entry["node"] for entry in done.values())
+    watch_nodes(res.node for res in result.done())
     out: dict[str, Any] = {"results": results}
-    if failures:
-        out["failed"] = len(failures)
+    if result.failures:
+        out["failed"] = len(result.failures)
     return out
 
 
 @tool("node_layout")
 def node_layout(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
-    parent = get_node(args.get("parent"), field="parent")
-    ensure_can_hold_children(parent, "lay out")
-    mode = args.get("mode", "children")
-    if mode not in ("children", "good_position"):
-        raise bad_arg("'mode' must be 'children' or 'good_position'.")
-    raw_paths = arg_list(args, "paths", required=False)
-    nodes = [get_node(p, field="paths", relative_to=parent) for p in raw_paths]
-    for node in nodes:
-        if node.parent() != parent:
-            raise bad_arg(
-                f"{node.path()} is not a child of {parent.path()}.",
-                hint="paths must be children of parent.",
-            )
-    if mode == "children":
-        if nodes:
-            parent.layoutChildren(items=tuple(nodes))
-        else:
-            parent.layoutChildren()
-        moved = nodes or list(parent.children())
-    else:
-        moved = nodes or list(parent.children())
-        for node in moved:
-            node.moveToGoodPosition()
+    data = tx.execute(tx.Plan([tx.Op("layout", args)], raw_errors=True), ctx).results[0].data
+    parent, moved = data["parent"], data["moved"]
     rows = [{"path": n.path(), "position": _round(n.position())} for n in moved]
     chunk = rows[:CHILDREN_LIST_LIMIT]
     out: dict[str, Any] = {
         "parent": parent.path(),
-        "mode": mode,
+        "mode": data["mode"],
         "nodes": chunk,
         "count": len(rows),
     }

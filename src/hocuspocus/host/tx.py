@@ -198,6 +198,9 @@ class Plan:
     defer_rollback: bool = False
     """``edit``: when compensation could not revert everything (a delete ran), report
     ``rolled_back: null`` so the dispatcher fills in what undoing the whole group did."""
+    tool_errors_only: bool = False
+    """``parm_set`` (1.4): only a :class:`ToolError` is an op's failure; any other
+    exception ends the call at once and the dispatcher's undo group rolls it back."""
 
     @property
     def declared(self) -> set[str]:
@@ -395,6 +398,8 @@ def execute(plan: Plan, ctx: Any) -> Result:
             if op.id and res.path:
                 state.ids[op.id] = res.path
         except Exception as exc:
+            if plan.tool_errors_only and not isinstance(exc, ToolError):
+                raise
             if plan.raw_errors:
                 state.rollback.run()
                 raise

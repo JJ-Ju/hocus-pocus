@@ -1,8 +1,9 @@
 """Network tools: ``network_describe`` and ``network_build`` over Houdini's ``hou.data`` format.
 
 See docs/BIBLE.md §4.4, §5.10 and decision D6. ``network_describe`` returns
-``childrenAsData(...)`` trimmed for agents; ``network_build`` validates the same shape and
-applies it with ``setChildrenFromData``.
+``childrenAsData(...)`` trimmed for agents; ``network_build`` validates the same shape
+(:func:`prepare_build`) and applies it with ``setChildrenFromData`` as one ``build`` op of
+the transaction engine (``host/tx.py``).
 
 Verified against 22.0.466 (and why validation is ours, not Houdini's):
 
@@ -29,6 +30,7 @@ from typing import Any
 
 from hocuspocus.tools.errors import ToolError
 
+from .. import tx
 from . import nodes as N
 from .registry import HostContext, tool
 
@@ -1041,202 +1043,45 @@ def prepare_build(parent: Any, args: dict[str, Any]) -> dict[str, Any]:
 
 @tool("network_build")
 def network_build(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
-    import hou
-
     parent = N.get_node(args.get("parent"), field="parent")
-    N.ensure_can_hold_children(parent, "build in")
-    data = args.get("data")
-    if not isinstance(data, dict) or not data:
-        raise N.bad_arg(
-            "'data' must be a non-empty object of node name -> node data.",
-            hint="Pass the 'data' field of network_describe, e.g. {box1: {type: box}}.",
-        )
-    if set(data) >= {"root", "data"} and isinstance(data.get("data"), dict):
-        raise N.bad_arg(
-            "'data' looks like a whole network_describe result.",
-            hint="Pass its 'data' field instead.",
-        )
-    on_collision = args.get("on_name_collision", "error") or "error"
-    if on_collision not in ON_COLLISION:
-        raise N.bad_arg(f"on_name_collision must be one of {', '.join(ON_COLLISION)}.")
-    layout = N.arg_bool(args, "layout", True)
-    dry_run = N.arg_bool(args, "dry_run", False)
-    mode = N.return_mode(args)
-    tag = args.get("tag")
-    if tag is not None and not isinstance(tag, str):
-        raise N.bad_arg("'tag' must be a string.")
-
-    data = json.loads(json.dumps(data))  # private copy: validation normalises in place
-    existing = {c.name() for c in parent.children()}
-    # Network boxes, sticky notes and dots share the namespace (Houdini would give the
-    # new node another name) but are not nodes: they are never "replaced".
-    items = (
-        {item.name() for item in parent.allItems()} - existing
-        if hasattr(parent, "allItems")
-        else set()
-    )
-    collisions = [name for name in data if name in existing]
-    item_collisions = [name for name in data if name in items]
-    problems = _Problems()
-    renamed: dict[str, str] = {}
-    if (collisions or item_collisions) and on_collision == "error":
-        clashing = collisions + item_collisions
-        suggestions = []
-        taken = set(data) | items
-        for name in clashing:
-            free = N.unique_name(parent, name, taken)
-            taken.add(free)
-            suggestions.append(free)
-        problems.add(
-            ToolError(
-                "name_collision",
-                f"{len(clashing)} name(s) already exist in {parent.path()}: "
-                + ", ".join(clashing[:10]),
-                hint="Pass on_name_collision: 'rename' to build under free names, 'replace' to "
-                "swap the existing nodes out (downstream wires move to the new ones), or "
-                "rename the entries in data.",
-                candidates=suggestions,
-            ),
-            parent.path(),
-        )
-    elif item_collisions and on_collision == "replace":
-        problems.add(
-            ToolError(
-                "name_collision",
-                f"{', '.join(item_collisions[:10])} in {parent.path()} is a network box, sticky "
-                "note or dot, not a node; replace only swaps nodes.",
-                hint="Rename the entries in data, or pass on_name_collision: 'rename'.",
-                candidates=[N.unique_name(parent, n, set(data) | items) for n in item_collisions],
-            ),
-            parent.path(),
-        )
-    elif (collisions or item_collisions) and on_collision == "rename":
-        taken = set(data) | existing | items
-        for name in collisions + item_collisions:
-            free = N.unique_name(parent, name, taken)
-            taken.add(free)
-            renamed[name] = free
-        data = _rename_refs(data, renamed)
-    press_plan = _press_plan(args.get("press"), data, parent, renamed)
-    plan: list[dict[str, Any]] = []
-    warnings: list[str] = []
-    # Existing children stay referencable by name except those being replaced/renamed away.
-    referencable = existing - set(collisions) if on_collision != "error" else existing
-    _validate_level(
-        data,
-        category=parent.childTypeCategory(),
-        container=parent,
-        prefix=parent.path().rstrip("/") + "/",
-        problems=problems,
-        plan=plan,
-        warnings=warnings,
-        existing_names=referencable,
-    )
-    problems.raise_if_any()
-    replaced = collisions if on_collision == "replace" else []
-    if dry_run:
+    prep = prepare_build(parent, args)
+    if prep["dry_run"]:
         out: dict[str, Any] = {
             "parent": parent.path(),
             "dry_run": True,
-            "plan": plan,
-            "node_count": len(plan),
+            "plan": prep["plan"],
+            "node_count": len(prep["plan"]),
         }
-        if renamed:
-            out["renamed"] = renamed
-        if replaced:
-            out["replaces"] = [f"{parent.path().rstrip('/')}/{n}" for n in replaced]
-        if warnings:
-            out["warnings"] = warnings
+        if prep["renamed"]:
+            out["renamed"] = prep["renamed"]
+        if prep["replaced"]:
+            out["replaces"] = [f"{parent.path().rstrip('/')}/{n}" for n in prep["replaced"]]
+        if prep["warnings"]:
+            out["warnings"] = prep["warnings"]
         out[CHANGED_KEY] = False  # a dry run changes nothing: no undo step, no dirty
         return out
-
-    rollback = N.Rollback()
-    rollback.keep_display(parent)
-    originals: dict[str, Any] = {}
-    for name in replaced:
-        old = parent.node(name)
-        temp = N.unique_name(parent, f"{name}_hp_replaced", set(data))
-        old.setName(temp)
-        rollback.add(lambda old=old, name=name: old.setName(name))
-        originals[name] = old
-    top_names = list(data)
-    try:
-        parent.setChildrenFromData(
-            data, clear_content=False, force_item_creation=True, external_connections=True
-        )
-    except Exception as exc:
-        for name in top_names:
-            item = parent.item(name)
-            if item is not None and name not in existing - set(replaced):
-                with contextlib.suppress(Exception):
-                    item.destroy()
-        rollback.run()
-        if isinstance(exc, hou.PermissionError):
-            raise N.to_tool_error(exc, node=parent) from exc
-        raise N.bad_arg(
-            f"Houdini could not build the network in {parent.path()}.",
-            hint="Run with dry_run: true to validate; check names, types and parm values.",
-            hou_exception=N.hou_exception_text(exc),
-        ) from exc
-    for name in top_names:
-        item = parent.item(name)
-        if item is not None:
-            rollback.add(lambda item=item: item.destroy())
-    verify = _Problems()
-    made = _verify_level(data, parent, parent.path().rstrip("/") + "/", verify)
-    if verify.items:
-        rollback.run()
-        verify.raise_if_any()
-    # Callbacks run after the whole build is wired, as clicking them would (review 20 N2),
-    # and before replaced nodes are deleted, so a failed press still rolls back cleanly.
-    try:
-        pressed, side_effects = _run_presses(parent, press_plan, ctx)
-    except Exception:
-        rollback.run()
-        raise
-    top_nodes = [parent.node(n) for n in top_names if parent.node(n) is not None]
-    for name, old in originals.items():
-        new = parent.node(name)
-        if new is None:
-            continue
-        for conn in old.outputConnections():
-            consumer = conn.outputNode()
-            if consumer is None or consumer.parent() != parent or consumer.name() in data:
-                continue
-            consumer.setInput(conn.inputIndex(), new, conn.outputIndex())
-        old.destroy()
-    if layout and top_nodes:
-        with contextlib.suppress(Exception):
-            parent.layoutChildren(items=tuple(top_nodes))
-    if tag:
-        for node in top_nodes:
-            node.setUserData(TAG_KEY, tag)
-    N.watch_nodes(made)
+    plan = tx.Plan([tx.Op("build", args, opts={"prep": prep})], raw_errors=True)
+    data = tx.execute(plan, ctx).results[0].data
+    mode = prep["mode"]
+    top_nodes = data["top_nodes"]
+    N.watch_nodes(data["made"])
+    base = parent.path().rstrip("/")
     result: dict[str, Any] = {
         "parent": parent.path(),
         "dry_run": False,
         "created": [n.path() for n in top_nodes],
-        "created_count": len(made),
+        "created_count": len(data["made"]),
         "nodes": [
             N.summary_block(n) if mode == "summary" else N.mutation_block(n) for n in top_nodes
         ],
     }
     if mode == "summary":
         N.collapse_problems(result["nodes"])
-    if renamed:
-        result["renamed"] = {
-            f"{parent.path().rstrip('/')}/{k}": f"{parent.path().rstrip('/')}/{v}"
-            for k, v in renamed.items()
-        }
-    if replaced:
-        result["replaced"] = [f"{parent.path().rstrip('/')}/{n}" for n in replaced]
-    if warnings:
-        result["warnings"] = warnings
-    if pressed:
-        result["pressed"] = pressed
-    if side_effects:
-        result["side_effects"] = side_effects
-    notes = _callback_notes(data, parent, press_plan)
-    if notes:
-        result["notes"] = notes
+    if data["renamed"]:
+        result["renamed"] = {f"{base}/{k}": f"{base}/{v}" for k, v in data["renamed"].items()}
+    if data["replaced"]:
+        result["replaced"] = [f"{base}/{n}" for n in data["replaced"]]
+    for key in ("warnings", "pressed", "side_effects", "notes"):
+        if data[key]:
+            result[key] = data[key]
     return result
