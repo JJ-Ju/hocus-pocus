@@ -210,19 +210,23 @@ def test_validator_rejects_bad_arguments() -> None:
         validate({"pid": True}, get("houdini_connect").input_schema)
 
 
-TOOLS_LIST_WIRE_MAX_BYTES = 44_000
-"""Cap on the serialised ``tools/list`` result a client receives (review 11 §1.1): names,
-descriptions, input and output schemas and annotations, for the full profile."""
+TOOLS_LIST_DEFAULT_MAX_BYTES = 32_000
+"""Cap on what a client sees by default (1.4, BIBLE §4.1): the serialised ``tools/list``
+result of the full profile with ``result_content = "text"``, which declares no output
+schemas. Argument detail lives in each spec's ``notes`` (``docs/tools.md`` and
+``hocuspocus://tools``), not in ``tools/list``."""
 
-TOOLS_LIST_WIRE_TARGET_BYTES = 40_000
-"""1.2 headroom target (BIBLE §4.1): the full profile sits at or under 40,000 bytes, leaving
-4 KB under the cap for new tools. Argument detail lives in each spec's ``notes``
-(``docs/tools.md`` and ``hocuspocus://guide``), not in ``tools/list``."""
+TOOLS_LIST_BOTH_MAX_BYTES = 44_000
+"""Cap on the largest shape a client can ask for (review 11 §1.1): the full profile with
+``result_content = "both"``, output schemas declared."""
+
+PROFILES = ("minimal", "core", "full")
+MODES = ("text", "both")
 
 
-def tools_list_wire_size(profile: str, result_content: str = "both") -> int:
+def tools_list_wire_size(profile: str, result_content: str = "text") -> int:
     """Bytes of the ``ListToolsResult`` the bridge sends, serialised as the SDK does.
-    ``both`` (output schemas declared) is the largest; the ``text`` default omits them."""
+    ``text`` (the default) declares no output schemas; ``both`` declares them."""
     import json
 
     import mcp_types as types
@@ -237,22 +241,26 @@ def tools_list_wire_size(profile: str, result_content: str = "both") -> int:
 
 
 def test_tools_list_budget(capsys: pytest.CaptureFixture[str]) -> None:
-    sizes = {profile: tools_list_wire_size(profile) for profile in ("minimal", "core", "full")}
+    """BIBLE §4.1 (1.4): cap what clients see by default (``text``) and the ``both`` shape,
+    each measured on the full profile; all six sizes are printed."""
+    sizes = {(p, m): tools_list_wire_size(p, m) for m in MODES for p in PROFILES}
+    caps = {"text": TOOLS_LIST_DEFAULT_MAX_BYTES, "both": TOOLS_LIST_BOTH_MAX_BYTES}
     with capsys.disabled():
-        print(
-            f"\n[tools/list] serialised: minimal {sizes['minimal']:,} B, core "
-            f"{sizes['core']:,} B, full {sizes['full']:,} B "
-            f"(cap {TOOLS_LIST_WIRE_MAX_BYTES:,} B; full without output schemas, the "
-            f"text default: {tools_list_wire_size('full', 'text'):,} B); "
-            f"names+descriptions+input schemas {tools_list_text_size(TOOLS):,} B"
+        for mode in MODES:
+            row = ", ".join(f"{p} {sizes[p, mode]:,} B" for p in PROFILES)
+            print(
+                f"\n[tools/list] result_content={mode}: {row} (full cap {caps[mode]:,} B)", end=""
+            )
+        print(f"\n[tools/list] names+descriptions+input schemas {tools_list_text_size(TOOLS):,} B")
+    for mode in MODES:
+        assert sizes["minimal", mode] < sizes["core", mode] < sizes["full", mode], sizes
+        assert sizes["full", mode] <= caps[mode], (
+            f"tools/list (full profile, result_content {mode}) is {sizes['full', mode]:,} B, "
+            f"over the {caps[mode]:,} B cap (BIBLE §4.1). Move argument detail from the "
+            "description into the spec's notes (docs/tools.md, hocuspocus://tools) before "
+            "raising the cap."
         )
-    assert sizes["minimal"] < sizes["core"] < sizes["full"] <= TOOLS_LIST_WIRE_MAX_BYTES, sizes
-    assert sizes["full"] <= TOOLS_LIST_WIRE_TARGET_BYTES, (
-        f"tools/list (full profile, output schemas declared) is {sizes['full']:,} B, over the "
-        f"{TOOLS_LIST_WIRE_TARGET_BYTES:,} B headroom target (BIBLE §4.1; hard cap "
-        f"{TOOLS_LIST_WIRE_MAX_BYTES:,} B). Move argument detail from the description into the "
-        "spec's notes (docs/tools.md, hocuspocus://guide) before raising the target."
-    )
+    assert sizes["full", "text"] < sizes["full", "both"], sizes
     assert tools_list_text_size(TOOLS) <= TOOLS_LIST_MAX_BYTES
 
 

@@ -373,11 +373,15 @@ as it was started from a neutral directory).
   data in `structuredContent` and puts a one-line summary in the text block
   (`<tool>: ok`, or `<code>: <message>` for an error). Error results follow the same rule;
   images are image blocks in every mode. Key casing is `snake_case` in both directions.
-- **Budget:** `tools/list` ≤ 11,000 tokens total, CI-tested on what clients receive: the
-  serialised `tools/list` result of the full profile (names, descriptions, input and output
-  schemas, annotations) is ≤ 44,000 bytes (names, descriptions and input schemas alone stay
-  ≤ 48 KB), and 1.2 keeps it ≤ 40,000 bytes so new tools have 4 KB of headroom (a second
-  assertion in `test_tools_list_budget`; 39.4 KB when the target was set, down from 44.0 KB). Each
+- **Budget** (1.4): CI-tested (`test_tools_list_budget`) on the serialised `tools/list`
+  result of the full profile, in the two shapes a client can receive: with the default
+  `result_content = "text"`, what clients see by default (names, descriptions, input
+  schemas, annotations; no output schemas), it is ≤ 32,000 bytes; with `both` (output
+  schemas declared too) ≤ 44,000 bytes. Names, descriptions and input schemas alone stay
+  ≤ 48 KB. The test prints all six sizes (three profiles × two modes); at 1.4.0 they were
+  14.2/27.1/30.5 KB (`text`, minimal/core/full) and 20.4/36.6/40.0 KB (`both`). Until 1.3
+  the cap was on `both` alone, with a 40,000 B headroom target that every new argument
+  fought although default clients never received the output schemas it counted. Each
   description ≤ 60 words: what the tool does and what the model must know to pick it.
   Argument-level detail (shapes the schema cannot state, edge cases, defaults the schema
   already declares) lives in the spec's `notes`, which `docs/tools.md` and the resource
@@ -398,8 +402,8 @@ as it was started from a neutral directory).
   and the host allows only the profile's tools. `minimal`, for clients with a small
   context, is `houdini_status`, `houdini_connect`, `hip_open`, `hip_save`, `node_find`,
   `node_info`, `node_create`, `node_connect`, `parm_get`, `parm_set`, `cook`, `geo_info`,
-  `viewport_capture` and `houdini_python` (14; 20.4 KB of `tools/list` against 36.6 KB
-  for `core` and 40.0 KB for `full`, output schemas declared). `houdini_python` covers
+  `viewport_capture` and `houdini_python` (14; 14.2 KB of `tools/list` against 27.1 KB
+  for `core` and 30.5 KB for `full` in the default `text` mode). `houdini_python` covers
   what the others leave out.
 - **Non-default only:** parm listings show parms where `isAtDefault()` is false unless
   `include_defaults: true`.
@@ -854,7 +858,7 @@ only it. `conftest.py` finds hython via
 
 | Tier | Runner | Scope | Budget |
 |---|---|---|---|
-| `tests/unit` | system Python | catalogue integrity (every tool has impl, schema, annotations, ≤ 60-word description, serialised `tools/list` ≤ 44,000 B and ≤ 40,000 B target), bridge instance selection and offline behaviour with a fake host, error mapping, budget truncation, config parsing, `cli` path resolution | < 10 s |
+| `tests/unit` | system Python | catalogue integrity (every tool has impl, schema, annotations, ≤ 60-word description, serialised full-profile `tools/list` ≤ 32,000 B in the default `text` mode and ≤ 44,000 B in `both`), bridge instance selection and offline behaviour with a fake host, error mapping, budget truncation, config parsing, `cli` path resolution | < 10 s |
 | `tests/integration` | `hython -m pytest` | in-process host: one `hou` session per run, `hipFile.clear()` per test, every tool exercised against real nodes; the idioms in §5 each have a test | fast (default) < 90 s; `slow` about 3 min |
 | `tests/e2e` | system Python spawning hython | official `mcp` client → `hocuspocus-mcp` stdio → `hython -m hocuspocus.host` on an ephemeral port with an isolated `HOUDINI_USER_PREF_DIR` and a neutral cwd: a stdio round trip, review 06 tasks 2, 3, 4, 6 and 9 as one scripted scenario, and a bridge launch that checks the work dir | < 60 s |
 | GUI (manual; no `tests/gui` directory) | checklist | package loads in `houdinifx`, autostart, viewer capture; run before a release and logged in `docs/redesign/progress.md` | — |
@@ -936,7 +940,7 @@ overlap (one agent per host tool family).
 - **D18** (1.1) An uncaught `houdini_python` exception is an `isError` result with `code: python_exception`, rolled back. *A failure returned as a success was easy to miss (review 07), and its half-applied scene changes stayed behind.*
 - **D19** (1.1) `node_type_search` defaults to `current_only`, with `other_versions` on the row. *Older versions about doubled search results (review 09) without helping the agent choose a type.*
 - **D20** (1.1) A Houdini that outlives its clients comes from the `hocuspocus launch` CLI, not from new process-ownership tricks in the bridge. *Detaching from a client's process tree is not reliable on Windows (review 08); a Houdini the client never started is not in its process tree.*
-- **D21** (1.2) Argument-level detail lives in a tool spec's `notes`, which `docs/tools.md` and `hocuspocus://guide` (1.3: `hocuspocus://tools`) render and `tools/list` leaves out; `tools/list` stays ≤ 40,000 bytes (§4.1). *At 43,999 B against the 44,000 B cap no fix could add a word; the model needs the description to pick a tool and the detail only when it uses an argument.*
+- **D21** (1.2) Argument-level detail lives in a tool spec's `notes`, which `docs/tools.md` and `hocuspocus://guide` (1.3: `hocuspocus://tools`) render and `tools/list` leaves out; `tools/list` stays ≤ 40,000 bytes (§4.1; 1.4: D30 replaces that target). *At 43,999 B against the 44,000 B cap no fix could add a word; the model needs the description to pick a tool and the detail only when it uses an argument.*
 - **D22** (1.2) Every `events` entry carries `origin: agent|other`, and the host holds a call's events until its work ends, publishing none for a rolled-back call (§4.7). *Next to a user, the agent could not tell its own edits from the user's (review 15), and a rolled-back call's events would describe changes that no longer exist.*
 - **D23** (1.2) `undo`/`redo` stop at the first step not labelled `HocusPocus:` unless `include_user_steps: true` (§4.7). *In review 15 `undo {steps: 2}` silently undid the user's own edit; crossing a user step needs explicit consent, as discarding unsaved work does (D11).*
 - **D24** (1.2) `pdg cook` refuses an untitled or unsaved scene when the graph has out-of-process ROP TOPs; `save: true` saves first (§4.7). *Those work items load the hip on disk, so in review 14 a dirty scene cooked the old parms and reported success.*
@@ -945,6 +949,7 @@ overlap (one agent per host tool family).
 - **D27** (1.3) Writers write through `render`; `cook` never writes files. `render` takes File Cache and ROP SOPs as jobs with progress and cancel, `cook` on a writer says it wrote nothing, and a save-button `press` checks its files (§4.5, §4.6, §4.7). *In review 17 `cook {frame_range}` on a File Cache reported success with no cache on disk, and the Save button reported success writing to a drive that did not exist.*
 - **D28** (1.3) A `minimal` profile of 14 tools for clients with a small context, and argument descriptions of at most 12 words with the detail in `notes` (§3.5, §4.1). *Every new argument fought the 40,000 B `tools/list` cap; the cap now pays for an argument's name and type, not its explanation, and a small client gets 20.4 KB.*
 - **D29** (1.3) Integration tests over about 1.5 s are marked `slow` and run only with `--runslow` or `-m slow`; CI runs both sets (§11). *The tier had grown to about 4 minutes; the fast set, run before every host commit, is about 50 s.*
+- **D30** (1.4) The `tools/list` budget caps what clients see by default: the full profile with `result_content = "text"` ≤ 32,000 B, and `both` ≤ 44,000 B; the 40,000 B target on `both` is gone (§4.1). *The old target measured output schemas that the default `text` mode never sends, so it spent the headroom of the shape nobody received; no tool or argument was removed.*
 
 ### Verified deviations (M5 reconciliation)
 

@@ -144,13 +144,13 @@ macOS the path is `.venv/bin/...`.
      words or fewer.
    - The schema shape and annotations are valid.
    - The examples validate.
-   - The serialised `tools/list` result stays at 44,000 bytes or less
-     (`test_tools_list_budget`). It measures the largest shape a client can receive: the
-     full profile with `result_content = "both"`, so output schemas count even though the
-     `text` default leaves them out. A second assertion keeps that size at 40,000 bytes or
-     less, the 1.2 headroom target. The test prints the minimal, core, full and
-     text-default sizes. When a new tool pushes it over, move argument detail from the description
-     into `notes` before cutting words the model needs to choose the tool.
+   - The serialised `tools/list` result of the full profile stays within two caps
+     (`test_tools_list_budget`, BIBLE §4.1). What clients see by default,
+     `result_content = "text"` (no output schemas), stays at 32,000 bytes or less. The
+     `both` shape, with output schemas declared, stays at 44,000 bytes or less. The test
+     prints all six sizes, the three profiles in each mode, even on success. When a new tool pushes either one over, move argument detail from the
+     description into `notes` before cutting words the model needs to choose the tool.
+     Never remove a tool or an argument to make room.
    - `docs/tools.md` is current.
 
    `tests/unit/test_host_tools.py` checks that every `@tool` name exists in the
