@@ -15,17 +15,22 @@ because a second viewport render in one hython can crash it (BIBLE §8); the chi
   with ``saveChildrenToFile``: parms, keys, expressions, flags, locked SOP data, and the
   contents of unlocked assets; no hip save, no event side effects;
 * the asset libraries loaded from outside ``$HFS`` (the file names; the child installs
-  them), but not ``Embedded`` libraries as such (whether the ``.cpio`` carries their
-  definitions is unverified);
+  them); ``Embedded`` definitions are not in that list, but the ``.cpio`` carries them
+  and the child renders their instances (``tests/integration/test_parity_headless.py``);
 * ``$HIP``, ``$HIPFILE``, ``$HIPNAME`` and ``$JOB``, the global hscript variables
   (``set -g``) and the ``hou.session`` source;
 * the fps, the playbar range and the frame (the look's ``frame`` is rendered).
 
 It does not carry the current take (a note says so; the child renders the root take),
 in-memory simulation caches (the child re-cooks a DOP network up to the frame: slow, and
-it can time out), variables set with ``hou.putenv`` other than the four above, or
-anything held only by a Python object in the host. Karma and ``rop_image`` always render
-in the host, on the live scene, headless too.
+it can time out; a note names every DOP network standing past its start frame,
+:func:`~.child.cached_simulations`), variables set with ``hou.putenv`` other than the
+four above, or anything held only by a Python object in the host. Karma and
+``rop_image`` always render in the host, on the live scene, headless too.
+
+Observed while testing that (22.0.466): when a SOP network's display and render flags
+are on different nodes, the child's Flipbook draws the render-flag node, where the GUI
+viewport shows the display-flag one.
 """
 
 from __future__ import annotations

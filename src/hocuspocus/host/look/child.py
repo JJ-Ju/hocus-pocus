@@ -37,6 +37,7 @@ from typing import Any
 from hocuspocus.tools.errors import ToolError
 
 from ..tools.hip import _norm
+from .base import INTERNAL_KEY
 
 CHILD_TIMEOUT_S = 600.0
 CRASH_LOG_CHARS = 600
@@ -301,6 +302,10 @@ def snapshot_scene(tmp_dir: str) -> dict[str, Any]:
                 f"The headless render uses the root take; take "
                 f"{hou.takes.currentTake().name()!r} is not carried."
             )
+    with contextlib.suppress(Exception):
+        note = simulation_cache_note(cached_simulations())
+        if note:
+            notes.append(note)
     return {
         "files": files,
         "hdas": hdas,
@@ -314,6 +319,53 @@ def snapshot_scene(tmp_dir: str) -> dict[str, Any]:
         "hfs": hou.text.expandString("$HFS"),
         "hython": _hython(),
     }
+
+
+SIM_NOTE_CAP = 3
+
+
+def cached_simulations() -> list[dict[str, Any]]:
+    """``{path, frame, start}`` for every DOP network (an object or SOP ``dopnet``, also the
+    ones inside solver SOPs) whose simulation stands past its start frame: it holds
+    simulated frames in memory, which the snapshot cannot carry (docs/parity.md G8).
+    Main thread."""
+    import hou
+
+    out = []
+    for category in (hou.objNodeTypeCategory(), hou.sopNodeTypeCategory()):
+        node_type = hou.nodeType(category, "dopnet")
+        if node_type is None:
+            continue
+        for net in node_type.instances():
+            with contextlib.suppress(Exception):
+                if net.userData(INTERNAL_KEY):
+                    continue
+                start_parm = net.parm("startframe")
+                start = float(start_parm.eval()) if start_parm is not None else 1.0
+                frame = float(hou.timeToFrame(net.simulation().time()))
+                if frame > start + 1e-6:
+                    out.append({"path": net.path(), "frame": frame, "start": start})
+    return out
+
+
+def simulation_cache_note(sims: list[dict[str, Any]]) -> str | None:
+    """The note for :func:`cached_simulations`, or None. No ``hou``."""
+    if not sims:
+        return None
+
+    def num(value: float) -> str:
+        return f"{value:g}"
+
+    shown = ", ".join(
+        f"{s['path']} (frames {num(s['start'])}-{num(s['frame'])})" for s in sims[:SIM_NOTE_CAP]
+    )
+    more = f" and {len(sims) - SIM_NOTE_CAP} more" if len(sims) > SIM_NOTE_CAP else ""
+    return (
+        f"The headless render gets a snapshot of the scene, not the simulation frames held in "
+        f"memory by {shown}{more}: its child hython re-simulates them up to the frame "
+        "(slow; it can time out). Cache the simulation to disk (a File Cache SOP) to look at "
+        "it quickly, or look from a GUI session, which renders the live scene."
+    )
 
 
 def crash_summary(log: str, limit: int = CRASH_LOG_CHARS) -> str:

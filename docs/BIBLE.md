@@ -1099,10 +1099,11 @@ the snapshot and child hython. `render` of a Flipbook or OpenGL ROP headless use
 policy (Appendix A). The settings named above stay settable on
 `hocuspocus.host.tools.visual`, which forwards them to the look module that owns them.
 What a headless snapshot carries is the contract in `host/look/base.py` and `look`'s notes:
-every node (`saveChildrenToFile` per manager), the asset libraries outside `$HFS`,
+every node (`saveChildrenToFile` per manager, which also carries the definitions of
+`Embedded` assets: the child renders them), the asset libraries outside `$HFS`,
 `$HIP`/`$JOB`, global variables and `hou.session`; not the current take (a note says so),
-in-memory simulation caches (the child re-simulates to the frame) or variables set with
-`hou.putenv` (parity G8). The temporary nodes a GUI look makes set only Houdini's own flag,
+in-memory simulation caches (the child re-simulates to the frame; a note names every DOP
+network that stands past its start frame) or variables set with `hou.putenv` (parity G8). The temporary nodes a GUI look makes set only Houdini's own flag,
 inside the call, which the dirty flag of §3.2 ignores: a look never dirties the scene.
 
 ---
