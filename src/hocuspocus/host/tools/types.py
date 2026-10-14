@@ -1246,35 +1246,41 @@ def filter_parms(rows: list[dict[str, Any]], pattern: str) -> list[dict[str, Any
     Review 23 papercut 7: ``*pin*`` also matched eight ``*damping*`` parms. Rows where a
     wildcard pattern's text starts a word of the label or name (``Pin Type``, ``pin_group``)
     come first; the others matched only inside a word and get ``matched_by:
-    "substring"``."""
+    "substring"``. Review 24 N2: an alternative without wildcards is an exact match, so
+    the rows it matches rank with the word-start matches and are never marked, whatever
+    the other alternatives are (``*pin*|group`` listed ``group`` as a substring match)."""
     import fnmatch
 
     pats = [p.strip().lower() for p in pattern.split("|") if p.strip()]
-    hits = [
-        row
-        for row in rows
-        if any(
-            fnmatch.fnmatchcase(row["name"].lower(), pat)
-            or fnmatch.fnmatchcase((row.get("label") or "").lower(), pat)
-            for pat in pats
+
+    def matches(row: dict[str, Any], pat: str) -> bool:
+        return fnmatch.fnmatchcase(row["name"].lower(), pat) or fnmatch.fnmatchcase(
+            (row.get("label") or "").lower(), pat
         )
-    ]
-    cores = [core for pat in pats if (core := _glob_core(pat)) is not None]
-    if not cores:
-        return hits
+
     words, inside = [], []
-    for row in hits:
-        if _starts_a_word(row, cores):
+    for row in rows:
+        hit = [pat for pat in pats if matches(row, pat)]
+        if not hit:
+            continue
+        # An exact alternative, or a glob with wildcards inside its text (p*n*), has no
+        # word to start: never marked.
+        cores = [_glob_core(pat) for pat in hit]
+        if any(core is None for core in cores) or _starts_a_word(row, cores):
             words.append(row)
         else:
             inside.append(dict(row, matched_by="substring"))
     return words + inside
 
 
+def _has_wildcard(pattern: str) -> bool:
+    return any(ch in pattern for ch in "*?[")
+
+
 def _glob_core(pattern: str) -> str | None:
     """The literal text of a wildcard glob such as ``*pin*`` or ``pin*``; None for an
     exact name (no wildcard) or a glob with wildcards inside its text."""
-    if not any(ch in pattern for ch in "*?["):
+    if not _has_wildcard(pattern):
         return None
     core = pattern.strip("*")
     return core if core and not any(ch in core for ch in "*?[]") else None

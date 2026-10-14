@@ -464,3 +464,29 @@ def test_parm_glob_lists_word_matches_first_and_marks_substrings(client):
     )
     assert rows[: len(rows) - len(marked)] == [r for r in rows if "matched_by" not in r]
     assert result["substring_matches"] == marked
+
+
+def test_parm_glob_exact_alternatives_are_not_substring_matches(client):
+    """Review 24 N2: three of the "11 substring matches" were the exact names asked for."""
+    glob = "*pin*|grouptype|constrainttype|group"
+    result = client.ok(
+        "node_type_info", {"type": "Sop/vellumconstraints", "parms": glob, "detail": "full"}
+    )
+    names = [r["name"] for r in result["parms"]]
+    assert {"grouptype", "constrainttype", "group"} <= set(names), names
+    inside = result.get("substring_matches", [])
+    assert not {"grouptype", "constrainttype", "group"} & set(inside), inside
+    exact = [r for r in result["parms"] if r["name"] in ("grouptype", "constrainttype", "group")]
+    assert all("matched_by" not in r for r in exact), exact
+    if inside:
+        assert any(n.startswith(f"{len(inside)} parm(s) matched") for n in result["notes"])
+    flipbook = client.ok(
+        "node_type_info",
+        {"type": "Driver/flipbook", "parms": "camera|loppath|trange|f|*output*"},
+    )
+    assert "substring_matches" not in flipbook or not {
+        "camera",
+        "loppath",
+        "trange",
+        "f",
+    } & set(flipbook["substring_matches"]), flipbook.get("substring_matches")

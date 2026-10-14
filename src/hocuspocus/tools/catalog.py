@@ -1616,7 +1616,8 @@ _VISUAL: tuple[ToolSpec, ...] = (
             "parms or detail full to list them. A wildcard parms glob lists the parms it matches "
             "at the start of a name or label word first (*pin*: Pin Type); those it matches only "
             "inside a word (damping) follow, named in substring_matches with a note and marked "
-            "matched_by: substring in detail full."
+            "matched_by: substring in detail full. An alternative without wildcards "
+            "(*pin*|group: group) is an exact match, never a substring match."
         ),
         input_schema=_obj(
             {
