@@ -24,6 +24,7 @@ import zipfile
 from collections.abc import Iterator
 from typing import Any
 
+from hocuspocus.tools.budget import clip, utf8_head
 from hocuspocus.tools.catalog import CATEGORIES
 from hocuspocus.tools.errors import ToolError
 from hocuspocus.tools.migration import hint_tool
@@ -92,7 +93,8 @@ class _HelpArchive:
                     data = handle.read(limit) if limit else handle.read()
             except (OSError, zipfile.BadZipFile, KeyError):
                 return None
-        return data.decode("utf-8", "replace")
+        # A head read can stop inside a character: drop it rather than decode it as U+FFFD.
+        return utf8_head(data) if limit else data.decode("utf-8", "replace")
 
 
 _HELP = _HelpArchive()
@@ -642,7 +644,7 @@ def shared_fields(rows: list[dict[str, Any]], keys: tuple[str, ...]) -> dict[str
 
 
 def _clip(text: str, limit: int) -> str:
-    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
+    return clip(text, limit)
 
 
 def search(

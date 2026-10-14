@@ -578,6 +578,52 @@ def test_status_merges_registry_health_and_host():
     assert status["bridge_version"] and status["profile"] == "core"
 
 
+def test_status_prints_the_hip_path_once():
+    """Review 25 papercut 10: hip.path stays; name, the identical recent entry, env.HIP,
+    env.JOB, env.HIPNAME and the connected row's hip, which repeat it, are left out (2.0)."""
+    bridge, client, _ = make_bridge()
+    path = "C:/work/a.hip"
+    client.replies["houdini_status"] = (
+        True,
+        {
+            "pid": 4242,
+            "hip": {"path": path, "name": "a.hip", "dirty": False, "recent": [path, "C:/b.hip"]},
+            "env": {"HIP": "C:/work", "JOB": "C:/work", "HIPNAME": "a"},
+        },
+        {},
+    )
+    status = structured(bridge.call_tool("houdini_status", {}))
+    conn = status["connected"]
+    assert conn["hip"] == {"path": path, "dirty": False, "recent": ["C:/b.hip"]}
+    assert "env" not in conn
+    assert "hip" not in status["instances"][0]
+    assert json.dumps(status).count("a.hip") == 1
+    # What differs from the path stays.
+    client.replies["houdini_status"] = (
+        True,
+        {
+            "pid": 4242,
+            "hip": {"path": path, "recent": [path]},
+            "env": {"HIP": "C:/w", "JOB": "D:/j"},
+        },
+        {},
+    )
+    conn = structured(bridge.call_tool("houdini_status", {}))["connected"]
+    assert conn["hip"] == {"path": path} and conn["env"] == {"HIP": "C:/w", "JOB": "D:/j"}
+
+
+def test_compat_status_keeps_the_14_hip_fields():
+    bridge, client, _ = make_bridge(config=BridgeConfig(profile="compat_1x"))
+    client.replies["houdini_status"] = (
+        True,
+        {"pid": 4242, "hip": {"path": "C:/work/a.hip", "name": "a.hip"}, "env": {"HIP": "C:/work"}},
+        {},
+    )
+    status = structured(bridge.call_tool("houdini_status", {}))
+    assert status["connected"]["hip"]["name"] == "a.hip"
+    assert status["connected"]["env"] == {"HIP": "C:/work"}
+
+
 def test_status_survives_host_error():
     bridge, client, _ = make_bridge()
     client.replies["houdini_status"] = (False, {"code": "houdini_busy", "message": "busy"}, {})

@@ -49,10 +49,14 @@ keeps it. Every other 1.4 tool (`houdini_status`, `houdini_connect`, `hip_*`,
 
 Notes on the table:
 
-- **Results.** `inspect` returns `{what, target, etag, ...}` followed by exactly the 1.4
-  read's result, so code that reads `nodes`, `parms` or `point_count` keeps working after
-  stripping the three new keys. `search` adds `kind`. `search kind: types` pages
-  (`next_cursor`), which `node_type_search` did not.
+- **Results.** `inspect` returns the 1.4 read's result plus `etag`, without `what` or
+  `target` (the caller knows them). By default (`detail: "compact"`) the result is
+  projected: defaults and empty fields are left out and rows are shortened (parm rows
+  become `{name: value}`, attribute rows are shortened), so code that reads the 1.4
+  keys (`nodes`, `parms`, `point_count`) finds them, but not every 1.4 field in them;
+  `detail: "full"` returns the 1.4 shape unchanged. `search` returns `{results, total,
+  common?, next_cursor?}`, without `kind`; `search kind: types` pages (`next_cursor`),
+  which `node_type_search` did not.
 - **The path argument is `target`** for every `inspect`: `paths`, `root`, `path`,
   `lop_path` and `type` become `target` (`paths` is still accepted for `node` and
   `parms`). Passing a 1.4 name answers `invalid_argument` with the corrected call in

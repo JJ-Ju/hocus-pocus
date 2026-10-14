@@ -10,12 +10,41 @@ for results that are not paged (paged results never lose rows: ``bridge/budget.p
 
 from __future__ import annotations
 
+import codecs
 import json
 from typing import Any
 
 STRING_MARKER = "…[truncated {n} chars]"
 MIN_STRING_CHARS = 64
 """Strings are never shortened below this many characters."""
+
+
+def utf8_head(data: bytes) -> str:
+    """``data``, a prefix of UTF-8 text cut at any byte, decoded without the partial
+    character the cut left at its end (review 25 papercut 8: a ``read(n)`` of a help file
+    ended in U+FFFD once decoded with ``replace``)."""
+    # Not final: an incomplete last sequence is held back instead of decoded as U+FFFD.
+    return codecs.getincrementaldecoder("utf-8")("replace").decode(data, final=False)
+
+
+def utf8_tail(data: bytes) -> str:
+    """``data``, a suffix of UTF-8 text cut at any byte (the end of a log), decoded without
+    the partial character the cut left at its start."""
+    start = 0
+    while start < min(3, len(data)) and data[start] & 0xC0 == 0x80:
+        start += 1
+    return data[start:].decode("utf-8", "replace")
+
+
+def clip(text: str, limit: int, mark: str = "…") -> str:
+    """``text`` cut to at most ``limit`` characters, on a character boundary (never inside
+    a surrogate pair), ending in ``mark`` when cut."""
+    if len(text) <= limit:
+        return text
+    cut = max(0, limit - len(mark))
+    if cut and 0xD800 <= ord(text[cut - 1]) <= 0xDBFF:
+        cut -= 1
+    return text[:cut].rstrip() + mark
 
 
 def dumps(obj: Any) -> str:

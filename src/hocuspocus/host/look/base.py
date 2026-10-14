@@ -42,6 +42,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from hocuspocus.tools.budget import utf8_tail
 from hocuspocus.tools.errors import ToolError
 from hocuspocus.tools.migration import hint_tool
 
@@ -184,7 +185,7 @@ def log_tail(paths: list[str], lines: int = LOG_TAIL_LINES) -> list[str]:
         if not path or not os.path.isfile(path):
             continue
         with contextlib.suppress(OSError):
-            data = Path(path).read_bytes()[-20_000:].decode("utf-8", "replace")
+            data = utf8_tail(Path(path).read_bytes()[-20_000:])
             found = [line.rstrip() for line in data.splitlines() if line.strip()]
             out.extend(found[-(lines - len(out)) :])
     return out

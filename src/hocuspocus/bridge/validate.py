@@ -19,6 +19,8 @@ import json
 import re
 from typing import Any
 
+from ..tools.budget import clip
+
 MAX_VIOLATIONS = 20
 
 ARG_RENAMES: dict[str, dict[str, str]] = {
@@ -82,7 +84,7 @@ def _short(value: Any, limit: int = 60) -> str:
         text = json.dumps(value, ensure_ascii=False)
     except (TypeError, ValueError):
         text = repr(value)
-    return text if len(text) <= limit else text[: limit - 1] + "…"
+    return clip(text, limit)
 
 
 def _join(path: str, key: str) -> str:
@@ -394,7 +396,7 @@ def rename_hint(tool: str, value: Any, schema: dict[str, Any] | None) -> str | N
 def _elided(value: Any) -> Any:
     """``value`` with long strings and lists shortened, for a hint that echoes it."""
     if isinstance(value, str) and len(value) > 80:
-        return value[:77] + "..."
+        return clip(value, 80)
     if isinstance(value, list):
         return [_elided(v) for v in value[:4]] + (["..."] if len(value) > 4 else [])
     if isinstance(value, dict):

@@ -226,7 +226,55 @@ def shape_status(status: dict[str, Any], *, detail: bool = False) -> dict[str, A
                     del row[key]
     if not status.get("recent"):
         status.pop("recent", None)
+    _hip_once(status)
     return status
+
+
+def _same_path(a: Any, b: Any) -> bool:
+    return (
+        isinstance(a, str)
+        and isinstance(b, str)
+        and a.replace("\\", "/").rstrip("/") == b.replace("\\", "/").rstrip("/")
+    )
+
+
+def _hip_once(status: dict[str, Any]) -> None:
+    """Print the connected hip path once (review 25 papercut 10: five times). ``hip.path``
+    stays; what repeats it is left out where identical: ``hip.name`` (the path's last
+    segment), ``hip.recent`` entries equal to the path, ``env.HIP`` (the path's directory),
+    ``env.JOB`` when it equals that directory, ``env.HIPNAME`` (the name without ``.hip``),
+    an empty ``env``, and ``hip`` on the connected instance's ``instances[]`` row and on
+    ``recent[]`` rows."""
+    connected = status.get("connected")
+    hip = connected.get("hip") if isinstance(connected, dict) else None
+    path = hip.get("path") if isinstance(hip, dict) else None
+    if not isinstance(path, str) or not path:
+        return
+    folder, _, name = path.replace("\\", "/").rpartition("/")
+    if hip.get("name") == name:
+        del hip["name"]
+    if isinstance(hip.get("recent"), list):
+        hip["recent"] = [p for p in hip["recent"] if not _same_path(p, path)]
+        if not hip["recent"]:
+            del hip["recent"]
+    env = connected.get("env")
+    if isinstance(env, dict):
+        if _same_path(env.get("JOB"), folder):
+            del env["JOB"]
+        if _same_path(env.get("HIP"), folder):
+            del env["HIP"]
+        stem = name[: -len(".hip")] if name.lower().endswith(".hip") else name
+        if env.get("HIPNAME") in (stem, name):
+            del env["HIPNAME"]
+        if not env:
+            del connected["env"]
+    for row in status.get("instances") or ():
+        mine = isinstance(row, dict) and row.get("pid") == connected.get("pid")
+        if mine and _same_path(row.get("hip"), path):
+            del row["hip"]
+    for row in status.get("recent") or ():
+        if isinstance(row, dict) and _same_path(row.get("hip"), path):
+            del row["hip"]
 
 
 def _row(bridge: Bridge, inst: registry.Instance, selected: bool) -> dict[str, Any]:

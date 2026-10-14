@@ -34,7 +34,11 @@ SPEC = ToolSpec(
         "for a GUI Houdini, worker headless), name when unset, and on instances[] rows "
         "selected: false, busy: false and jobs_running: 0; recent when no dead Houdini is "
         "remembered; connected.memory unless detail: true (so two reads of an unchanged "
-        "session match, and houdini://status, shaped the same, keeps its etag)."
+        "session match, and houdini://status, shaped the same, keeps its etag). The hip "
+        "path is printed once, as connected.hip.path: what only repeats it is left out "
+        "(hip.name, a hip.recent entry equal to it, env.HIP when it is the path's folder, "
+        "env.JOB when it is that folder too, env.HIPNAME, an empty env, and hip on the "
+        "connected instance's row and on recent rows)."
     ),
     input_schema=_obj({}),
     output_schema=_out(

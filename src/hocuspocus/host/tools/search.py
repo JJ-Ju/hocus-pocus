@@ -23,6 +23,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from hocuspocus.tools.budget import clip
+
 from ._common import CURSOR_HINT, bad_arg
 from .registry import HostContext, tool
 from .registry import get as get_tool
@@ -61,9 +63,9 @@ DESCRIPTION_CHARS = 80
 
 
 def _clip(text: Any, limit: int = DESCRIPTION_CHARS) -> Any:
-    if not isinstance(text, str) or len(text) <= limit:
+    if not isinstance(text, str):
         return text
-    return text[: limit - 1].rstrip() + "…"
+    return clip(text, limit)
 
 
 def _hoist(rows: list[dict[str, Any]], keys: tuple[str, ...], common: dict[str, Any]) -> None:

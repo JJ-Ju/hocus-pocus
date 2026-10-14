@@ -34,6 +34,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from hocuspocus.tools.budget import utf8_tail
 from hocuspocus.tools.errors import ToolError
 
 from ..tools.hip import _norm
@@ -502,7 +503,7 @@ class ChildRender:
             data = Path(self.log_path).read_bytes()
         except OSError:
             return ""
-        return data[-limit:].decode("utf-8", "replace")
+        return utf8_tail(data[-limit:])
 
 
 def child_crashed(exc: ToolError) -> bool:

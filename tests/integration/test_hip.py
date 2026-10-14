@@ -140,6 +140,19 @@ def test_agent_mutation_is_the_tracked_source(client, work_dir):
     assert error["detail"]["dirty_source"] == "tracked"
 
 
+def test_untitled_scene_hint_leads_with_hip_save(client):
+    """Review 25 papercut 9: on an untitled scene on_unsaved: 'save' has nowhere to save,
+    so the refusal offers hip_save {path} and discard, not save."""
+    assert hou.hipFile.isNewFile()
+    client.ok("node_create", {"items": [{"parent": "/obj", "type": "null"}]})
+    refused = client.error("hip_new", {})
+    assert refused["code"] == "unsaved_changes"
+    assert refused["hint"].startswith("The scene is untitled: hip_save {path} saves it")
+    assert "on_unsaved: 'save'" not in refused["hint"] and "'discard'" in refused["hint"]
+    cannot = client.error("hip_new", {"on_unsaved": "save"})
+    assert "nowhere to save" in cannot["message"] and cannot["hint"] == refused["hint"]
+
+
 def test_user_edit_outside_hocuspocus_dirties_the_scene(client, work_dir):
     """An edit made outside a HocusPocus call (here: on the test's main thread, between
     calls) arrives as an ``origin: other`` event and dirties the scene: hip_new and
