@@ -173,7 +173,8 @@ present, must name a loopback host; 403 otherwise (the `Host` check stops DNS re
 from reading `/health`). Request body cap 4 MB; idle connections time out after 60 s.
 The host runs only the tools of its own `profile` (§3.7): a `core` host answers a
 full-profile tool with `invalid_argument` and the hint to set `profile = "full"`; a
-`full` host answers a 2.0 tool (`inspect`, `search`) with the hint `profile = "v2"`.
+`full` host answers a 2.0 tool (`inspect`, `search`, `edit`) with the hint
+`profile = "v2"`.
 
 **Instance registry entry.** On start the host writes
 `<state_dir>/instances/<pid>.json`:
@@ -444,7 +445,7 @@ as it was started from a neutral directory).
   `node_edit` never cooks (a rename recooked a mountain), reporting `cook_state` from
   `needsToCook()` and the errors already on the node.
 - **Annotations:** read tools `readOnlyHint: true`; `node_delete`, `hip_new`,
-  `hip_open`, `houdini_python` `destructiveHint: true`; `parm_set`, `node_connect`,
+  `hip_open`, `houdini_python`, `edit` `destructiveHint: true`; `parm_set`, `node_connect`,
   `node_edit`, `time`, `selection`, `cook`, `job`, `viewport_capture`
   `idempotentHint: true`; all `openWorldHint: false`. A tool whose only side effect is a
   cook, a temporary capture ROP or host-side job state is `readOnlyHint: false`,
@@ -533,8 +534,8 @@ Recent files (`hip_info` / status): the hip files saved or loaded in this host s
 
 Count: 2 session + 4 hip + 10 node/network + 2 parm + 4 cook/geo + 2 visual + 1 code +
 2 types + 4 state/job = **31 in `core`**, plus 4 in `full` = 35. `minimal` is 14 of the
-core tools (§4.1). 2.0 M1 adds the tools of §4.9 to the `v2` profile only (37 with
-`inspect` and `search`).
+core tools (§4.1). 2.0 M1 adds the tools of §4.9 to the `v2` profile only (38 with
+`inspect`, `search` and `edit`).
 
 ### 4.8 Resources, prompts, instructions
 
@@ -601,15 +602,18 @@ capture takes `frame`).
 
 ### 4.9 2.0 (v2 profile)
 
-spec-2.0 §2.3 and §7 M1: the 2.0 tools, listed and allowed only by `profile = "v2"`
-(`full` plus these, alongside the 1.4 names; §3.7, §4.1). Each one runs the registered
-host implementation of the 1.4 tool it stands for, looked up at call time, so the 1.4
-code is never duplicated, and returns that tool's result unchanged plus a few keys.
+spec-2.0 §2.3, §2.4 and §7 M1: the 2.0 tools, listed and allowed only by `profile =
+"v2"` (`full` plus these, alongside the 1.4 names; §3.7, §4.1). `inspect` and `search`
+run the registered host implementation of the 1.4 tool they stand for, looked up at
+call time, so the 1.4 code is never duplicated, and return that tool's result
+unchanged plus a few keys. `edit` and the 1.4 mutation tools share one engine instead:
+the 1.4 tools build its plans (spec-2.0 principle 14).
 
 | Tool | Args | Behaviour |
 |---|---|---|
 | `inspect` | `what: node\|parms\|network\|outline\|geo\|image\|stage\|problems\|type\|events\|jobs`, `target?`, plus the arguments of the matching 1.4 read (one flat schema, the union of their names; per-`what` options in `notes`) | `node` = `node_info` (`target` or `paths`), `parms` = `parm_get` (a parm path, `paths`, or a node: its non-default tuples, all with `include_defaults`, or those a `parms` glob matches), `network` = `network_describe` `data`, `outline` = `network_describe` `outline` (root `/` by default), `geo` = `geo_info`, or `geo_read` with `rows: true`, `image` = `geo_info` on a Cop node or COP network, `stage` = `usd_stage`, `problems` = `problems` (root `/` by default), `type` = `node_type_info`, `events` = `events`, `jobs` = `job list` (or `job status` with `job_id`). An option the `what` does not take is `invalid_argument` naming those it takes. Returns `{what, target, etag, ...the 1.4 result}` byte for byte. `etag` = `<pid>:<scene_generation>:<16 hex>`, a BLAKE2b digest of the options and, per addressed node and its ancestors below `/` (plus every node under the root for `network`, `outline`, `problems`), its `sessionId`, `modificationTime`, `cookCount` and flags, with the frame for `node`, `parms`, `geo`, `image`, `stage`; for `type` the Houdini version and the asset library's path and mtimes; for `events` the last seq; for `jobs` each job's id, state, progress and message. `/` is left out of the ancestors because its `modificationTime` moves on every edit. The bridge routes `what: events` and `what: jobs` as it routes `events` and `job` (pid-tagged `next_since`, job ids sent to their Houdini). Read-only, idempotent. |
 | `search` | `kind: types\|nodes`, `query?`, `category?`, `limit`, `cursor`; types: `include_hidden`, `current_only`; nodes: `root`, `pattern`, `flags`, `has_errors`, `recurse_locked` | `types` = `node_type_search` (`query` required; 1.4 ranking, synonyms, `current_only`), `nodes` = `node_find` (`query` is its `type` glob). Returns `{kind, ...the 1.4 result}`: `{results, total, common?, ...}` for types, `{root, nodes, total, next_cursor?}` for nodes. `node_type_search` has no paging, so `kind: types` pages it: page n asks for the first offset + limit matches and keeps the last `limit`, adding `next_cursor` (`t:<offset>`) while `total` counts more, up to the first 1000 matches. Read-only. |
+| `edit` | `ops: [{op, id?, ...}]`, `dry_run = false`, `return: summary\|full = summary`, `partial = false`. `op`: `create` (the `node_create` item, with `exact_type`, `cook` and `layout` per op), `delete` (`paths` or `path`, `keep_connections`), `connect` (the `node_connect` item), `set` (one `parm_set` item with `frame`, or `{node, parms}` as `node_create` takes parms), `node` (the `node_edit` item), `copy` (the `node_copy` arguments), `layout` (`node_layout`'s), `build` (`network_build`'s: `parent`, `data`, `on_name_collision`, `layout`, `tag`, `press`), `select` (`paths`; empty clears) | The transaction engine's front end (`host/tx.py`; spec-2.0 §2.4, principle 14). Ops run in order in one undo group labelled `HocusPocus: edit <n> ops`. An `id` names the op's node (the created node, the connect target, the set or node op's node, the single copy, the layout or build parent); a later op writes `$id`, `$id/child` or `$id/parm` in its path fields (`parent`, `path`, `paths`, `node`, `from`, `to`, `to_parent`, `channel_ref`, `inputs[].from`; never in parm values, where `$F` is Houdini's), resolved to the path the op produced; a `$name` no op declares, or one whose op has not produced a node, is `invalid_argument`. Before anything changes the plan is validated against the scene as the earlier ops leave it (types resolve in the parent's category, parents exist and are networks, parm and tuple names exist on the node or its type or are spare parms an earlier op adds, inputs by index, name, `next` or `$id` in the same network, names free, locked assets refused; an op that depends on a failed op is not reported again); every problem is listed in `detail.problems` of the first one's error. `dry_run` returns that plan, `{dry_run, ops, plan: [{op, id?, path, ...}]}` with resolved paths and `predicted: true` where Houdini will number the node, and changes nothing (`_changed: false`, so no undo step, no dirty flag, allowed read-only). A failing op rolls the call back by compensation and raises the §4.1 batch error (`items[i] (<path>): ...`, `detail: {item, path, rolled_back}`); a delete cannot be compensated, so after one `rolled_back` is what undoing the whole group did (the dispatcher fills it in). `partial` skips the up-front validation, reverts only a failing op and keeps the rest; its row carries `error` and the result `failed`. Result: `results` (one row per op: `op`, `id?`, `path` (final, after later renames) and what it did: `paired_with`, `deprecated`, `notes`, `side_effects`, a set's `value` or `values`, a connect's `input` and `from`, `old_path`, `spare_parms`, `deleted`, `reconnected`, `paths`, `created`, `pressed`, `selected`) and `nodes` (the §4.1 summary row per touched node, `path, type, errors, warnings, cook_state, cook_ms`, each cooked once after every op ran; nodes only a `node` op touched, and `cook: false` creates, are not cooked; identical error lists become `errors_same_as`). `return: full` adds `name`, `flags` and `messages` to `nodes` and the 1.4 full rows to `results` (a create's `parms` lists only the parms the call set, strings over 200 characters as `{elided, head}`; a set's whole `parm_set` row). The review-07 build (geo, box, mountain, subdivide, OUT) is one call of under 1 KB. Destructive (`delete`), not idempotent. The 1.4 mutation tools (`node_create`, `parm_set`, `node_connect`, `node_delete`, `node_edit`, `node_copy`, `node_layout`, `network_build`) are plan builders over the same engine with their 1.4 contracts unchanged. |
 
 ---
 
@@ -856,8 +860,10 @@ src/hocuspocus/
     __init__.py                # start(), stop(), status(), autostart()
     __main__.py                # hython -m hocuspocus.host
     config.py executor.py server.py dispatch.py runtime.py registry.py jobs.py undo.py
+    tx.py                      # the transaction engine every mutation runs on (2.0)
     tools/ registry.py _diag.py session.py hip.py code.py nodes.py network.py parms.py
            cook.py types.py geo.py visual.py state.py hda.py usd.py pdg.py events.py
+           inspect.py search.py edit.py
   bridge/                      # OUTSIDE Houdini. mcp SDK.
     __main__.py server.py client.py instances.py launch.py local_tools.py
     validate.py budget.py config.py instructions.py

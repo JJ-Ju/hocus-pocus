@@ -22,9 +22,11 @@ src/hocuspocus/
     __init__.py                #   start(), stop(), status(), autostart()
     __main__.py                #   hython -m hocuspocus.host
     config.py executor.py server.py dispatch.py runtime.py registry.py jobs.py undo.py
+    tx.py                      #   the transaction engine every mutation runs on (2.0)
     tools/                     #   one module per tool family, each registering with @tool
       registry.py _diag.py session.py hip.py code.py nodes.py network.py parms.py cook.py
-      types.py geo.py visual.py state.py hda.py usd.py pdg.py events.py
+      types.py geo.py visual.py state.py hda.py usd.py pdg.py events.py inspect.py
+      search.py edit.py
   bridge/                      # OUTSIDE Houdini; official mcp SDK
     __main__.py server.py client.py instances.py launch.py local_tools.py
     validate.py budget.py config.py instructions.py
@@ -124,6 +126,11 @@ macOS the path is `.venv/bin/...`.
      The `scene=False` set is pinned in `tests/unit/test_host_tools.py`.
    - Add `main_thread=False` only for tools that wait on jobs or never touch `hou`;
      they reach `hou` through `ctx.executor.run(...)`.
+   - A tool that changes the scene builds a `tx.Plan` of ops and runs it with
+     `tx.execute` (`host/tx.py`, spec-2.0 principle 14), then shapes the per-op
+     results; it does not write its own batch loop or compensation. `edit` and the
+     1.4 mutation tools do this. A new kind of change is a new op: a handler and a
+     validator in `tx.py`, its fields in `OP_FIELDS`, and the `edit` spec's notes.
    - Tools that create or change nodes call `watch_nodes(...)` from `nodes.py` after
      their own changes, so `events` reports later edits to those nodes.
    - A new module must also be added to `TOOL_MODULES` in `host/tools/registry.py`.
