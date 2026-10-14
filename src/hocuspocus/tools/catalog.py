@@ -1259,9 +1259,20 @@ _COOK: tuple[ToolSpec, ...] = (
             "per-element values. A Cop node (or a COP network's display node) gives kind: image, "
             "output, layer_type (Mono, RGB, RGBA, ...), resolution, data_window, pixel_scale, "
             "storage, border, constant?, channels {r: {min, max, mean}, ...} of its first "
-            "output, and other_outputs [{name, layer_type}]."
+            "output, and other_outputs [{name, layer_type}]. attributes: names lists only the "
+            "attribute names per class (no types or detail values). Solver internals (Vellum "
+            "and DOP bookkeeping such as pprevious, hitnml, dPw, varmap, and names starting "
+            "with __) are left out and counted in internal_attribute_count with a note; "
+            "geo_read with attribs reads them."
         ),
-        input_schema=_obj({"path": _s("SOP or OBJ path."), "frame": _frame()}, ("path",)),
+        input_schema=_obj(
+            {
+                "path": _s("SOP or OBJ path."),
+                "frame": _frame(),
+                "attributes": _enum(("full", "names"), "full"),
+            },
+            ("path",),
+        ),
         output_schema=_out(
             {
                 "path": _t("string"),
@@ -1272,7 +1283,12 @@ _COOK: tuple[ToolSpec, ...] = (
                     _out({k: _list("number") for k in ("min", "max", "size", "center")})
                 ),
                 "prim_types": {"type": "object", "additionalProperties": _t("integer")},
-                "attributes": _out({k: _objs() for k in ("point", "vertex", "prim", "detail")}),
+                "attributes": _out(
+                    {
+                        k: {"type": "array", "items": {"type": ["object", "string"]}}
+                        for k in ("point", "vertex", "prim", "detail")
+                    }
+                ),
                 "groups": _out({k: _objs() for k in ("point", "prim", "edge", "vertex")}),
                 "intrinsics": _t("object"),
             },
@@ -1526,7 +1542,9 @@ _VISUAL: tuple[ToolSpec, ...] = (
             "menus (remap's Threshold, blend's Over), and compositing words name their Cop type "
             "(threshold: remap, gradient: ramp, composite or over: blend, text: font, write: "
             "rop_image). A network type's row adds child_category and typical_parents (CopNet "
-            "copnet: /img). Results with legacy Cop2 types carry a note that Copernicus is Cop."
+            "copnet: /img); when every row shares them they are said once, in common. "
+            "is_current_version is on rows only with current_only false. Results with legacy "
+            "Cop2 types carry a note that Copernicus is Cop."
         ),
         input_schema=_obj(
             {
@@ -1579,7 +1597,10 @@ _VISUAL: tuple[ToolSpec, ...] = (
             "builds (a Copernicus signature). Menu labels lose their ![icon] markup. A compact "
             "listing over 8 KB leaves out the parms a menu hides at its default (the per-pattern "
             "parms of the other patterns): variants {menu parm: parms left out} and a note; pass "
-            "parms or detail full to list them."
+            "parms or detail full to list them. A wildcard parms glob lists the parms it matches "
+            "at the start of a name or label word first (*pin*: Pin Type); those it matches only "
+            "inside a word (damping) follow, named in substring_matches with a note and marked "
+            "matched_by: substring in detail full."
         ),
         input_schema=_obj(
             {

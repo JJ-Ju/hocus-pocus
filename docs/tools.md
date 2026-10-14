@@ -2,7 +2,7 @@
 
 <!-- Generated from src/hocuspocus/tools/catalog.py by `python -m hocuspocus.tools.docs`. Do not edit by hand. -->
 
-35 tools: 14 in the `minimal` profile, 31 in `core` (minimal included), 4 more in `full`. Model-visible `tools/list` text: 26,812 bytes. See `docs/BIBLE.md` §4 for the design.
+35 tools: 14 in the `minimal` profile, 31 in `core` (minimal included), 4 more in `full`. Model-visible `tools/list` text: 26,884 bytes. See `docs/BIBLE.md` §4 for the design.
 
 ## Contents
 
@@ -732,7 +732,7 @@ Explain red nodes: lists nodes in a subtree with errors or warnings, broken chan
 
 Summarise the geometry of a SOP (or an OBJ's display SOP): point, prim and vertex counts, bounding box, primitive types, attributes per class with type and size, detail attribute values, groups with counts. On a Cop node: the image's layer type, resolution and channel min/max/mean.
 
-**Notes.** frame evaluates the geometry at that frame without moving the playbar. intrinsics lists every volume as a row under volume_columns [name, prim, resolution, voxel_size, min, max] and every VDB under vdb_columns [name, prim, class, value_type, active_voxels, voxel_size] (at most 100 each; volume_total or vdb_total then counts them all), and the first packed primitives. Detail attribute values are capped: arrays at 16 items, strings at 200 characters, and a dict longer than 200 characters as {elided, keys}; hou vectors and matrices are lists. geo_read reads per-element values. A Cop node (or a COP network's display node) gives kind: image, output, layer_type (Mono, RGB, RGBA, ...), resolution, data_window, pixel_scale, storage, border, constant?, channels {r: {min, max, mean}, ...} of its first output, and other_outputs [{name, layer_type}].
+**Notes.** frame evaluates the geometry at that frame without moving the playbar. intrinsics lists every volume as a row under volume_columns [name, prim, resolution, voxel_size, min, max] and every VDB under vdb_columns [name, prim, class, value_type, active_voxels, voxel_size] (at most 100 each; volume_total or vdb_total then counts them all), and the first packed primitives. Detail attribute values are capped: arrays at 16 items, strings at 200 characters, and a dict longer than 200 characters as {elided, keys}; hou vectors and matrices are lists. geo_read reads per-element values. A Cop node (or a COP network's display node) gives kind: image, output, layer_type (Mono, RGB, RGBA, ...), resolution, data_window, pixel_scale, storage, border, constant?, channels {r: {min, max, mean}, ...} of its first output, and other_outputs [{name, layer_type}]. attributes: names lists only the attribute names per class (no types or detail values). Solver internals (Vellum and DOP bookkeeping such as pprevious, hitnml, dPw, varmap, and names starting with __) are left out and counted in internal_attribute_count with a note; geo_read with attribs reads them.
 
 ### Arguments
 
@@ -740,6 +740,7 @@ Summarise the geometry of a SOP (or an OBJ's display SOP): point, prim and verte
 |---|---|---|---|---|
 | `path` | string | yes |  | SOP or OBJ path. |
 | `frame` | number |  |  | Default current frame. |
+| `attributes` | `full` \| `names` |  | `"full"` |  |
 
 ### Returns
 
@@ -930,7 +931,7 @@ Run Python (hou bound) or HScript on Houdini's main thread in one undo step, for
 
 Find node types by name, label, description or keyword, in all 18 categories or one. Rows: name, label, category, version, description (clipped), input range, deprecated. Current versions only, older ones named in other_versions, unless current_only is false. Exact names rank first; total counts every match.
 
-**Notes.** total is the real number of matching types, not a cap: a plain-language query also matches on single description words, so broad queries can match hundreds of types. Raise limit (up to 1000) to see them all. Cop types also match the labels of their menus (remap's Threshold, blend's Over), and compositing words name their Cop type (threshold: remap, gradient: ramp, composite or over: blend, text: font, write: rop_image). A network type's row adds child_category and typical_parents (CopNet copnet: /img). Results with legacy Cop2 types carry a note that Copernicus is Cop.
+**Notes.** total is the real number of matching types, not a cap: a plain-language query also matches on single description words, so broad queries can match hundreds of types. Raise limit (up to 1000) to see them all. Cop types also match the labels of their menus (remap's Threshold, blend's Over), and compositing words name their Cop type (threshold: remap, gradient: ramp, composite or over: blend, text: font, write: rop_image). A network type's row adds child_category and typical_parents (CopNet copnet: /img); when every row shares them they are said once, in common. is_current_version is on rows only with current_only false. Results with legacy Cop2 types carry a note that Copernicus is Cop.
 
 ### Arguments
 
@@ -964,7 +965,7 @@ Find node types by name, label, description or keyword, in all 18 categories or 
 
 Describe one node type: label, version, named inputs and outputs, parms by folder. detail compact gives name, label, type, default rows; full adds size, range, menu and folder; folders lists folders with parm counts. folder and parms (globs, a|b) narrow the parms.
 
-**Notes.** folder takes a label, an "A / B" path, or "" / "(no folder)" for the top-level parms. include_help adds the first ~2 KB of the node help. With folder or parms the inputs list becomes inputs_count, and detail full leaves out the folder list. In detail full a script menu (pdg_cachemode) or a menu built from input geometry (a SOP group) is evaluated on a temporary instance: menu {items, dynamic: true}, or items [] with a note when it evaluates empty there; so is a string menu only the node builds (a Copernicus signature). Menu labels lose their ![icon] markup. A compact listing over 8 KB leaves out the parms a menu hides at its default (the per-pattern parms of the other patterns): variants {menu parm: parms left out} and a note; pass parms or detail full to list them.
+**Notes.** folder takes a label, an "A / B" path, or "" / "(no folder)" for the top-level parms. include_help adds the first ~2 KB of the node help. With folder or parms the inputs list becomes inputs_count, and detail full leaves out the folder list. In detail full a script menu (pdg_cachemode) or a menu built from input geometry (a SOP group) is evaluated on a temporary instance: menu {items, dynamic: true}, or items [] with a note when it evaluates empty there; so is a string menu only the node builds (a Copernicus signature). Menu labels lose their ![icon] markup. A compact listing over 8 KB leaves out the parms a menu hides at its default (the per-pattern parms of the other patterns): variants {menu parm: parms left out} and a note; pass parms or detail full to list them. A wildcard parms glob lists the parms it matches at the start of a name or label word first (*pin*: Pin Type); those it matches only inside a word (damping) follow, named in substring_matches with a note and marked matched_by: substring in detail full.
 
 ### Arguments
 

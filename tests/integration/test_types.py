@@ -50,7 +50,7 @@ def test_search_ranks_exact_current_version_first(client, query, category, expec
     result = client.ok("node_type_search", args)
     assert _names(result)[0] == expected, _names(result)
     top = result["results"][0]
-    assert top["is_current_version"] is True
+    assert "is_current_version" not in top  # current_only: every row is current (1.4)
     assert top["deprecated"] is False
     assert result["total"] >= len(result["results"])
 
@@ -117,7 +117,7 @@ def test_search_current_only_folds_older_versions(client):
     assert names[0] == "scatter::2.0"
     assert "scatter" not in names
     assert result["results"][0]["other_versions"] == ["scatter"]
-    assert all(r["is_current_version"] for r in result["results"])
+    assert all("is_current_version" not in r for r in result["results"])
     every = client.ok(
         "node_type_search",
         {"query": "scatter", "category": "Sop", "limit": 10, "current_only": False},
@@ -437,3 +437,30 @@ def test_info_top_level_folder_and_parm_alternatives(client):
     assert client.error("node_type_info", {"type": "Sop/box", "parms": "|"})["code"] == (
         "invalid_argument"
     )
+
+
+def test_search_rows_drop_constant_fields(client):
+    """Review 23 papercut 6: every row repeated is_current_version (and network fields)."""
+    folded = client.ok("node_type_search", {"query": "vellum", "category": "Sop", "limit": 40})
+    assert folded["results"] and all("is_current_version" not in r for r in folded["results"])
+    every = client.ok(
+        "node_type_search",
+        {"query": "vellum", "category": "Sop", "limit": 40, "current_only": False},
+    )
+    assert all("is_current_version" in r for r in every["results"])
+    if "common" in folded:
+        assert all("child_category" not in r for r in folded["results"])
+
+
+def test_parm_glob_lists_word_matches_first_and_marks_substrings(client):
+    """Review 23 papercut 7: *pin* matched the damping parms too."""
+    result = client.ok(
+        "node_type_info", {"type": "Sop/vellumconstraints", "parms": "*pin*", "detail": "full"}
+    )
+    rows = result["parms"]
+    marked = [r["name"] for r in rows if r.get("matched_by") == "substring"]
+    assert marked and all(
+        "pin" not in r["label"].lower().split() for r in rows if r["name"] in marked
+    )
+    assert rows[: len(rows) - len(marked)] == [r for r in rows if "matched_by" not in r]
+    assert result["substring_matches"] == marked
