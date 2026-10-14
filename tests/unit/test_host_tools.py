@@ -460,3 +460,57 @@ def test_frames_print_as_integers_when_whole():
     assert frame_num(12.5) == 12.5
     assert f"frame {frame_num(1.0)}" == "frame 1"
     assert frame_num(float("nan")) == "nan"
+
+
+def test_a_layer_whose_samples_shrank_or_moved_is_an_overwrite():
+    """Review 24 N1: a second usd_rop rewrote a shared sopimport layer, 48 samples to 3."""
+    from hocuspocus.host.tools.visual import overwrote_samples
+
+    def row(n, codes=None):
+        return {"time_samples": n, **({"time_codes": codes} if codes else {})}
+
+    assert overwrote_samples(row(48, [1, 48]), row(3, [1, 3]))
+    assert overwrote_samples(row(48, [1, 48]), row(48, [49, 96]))  # moved
+    assert not overwrote_samples(row(48, [1, 48]), row(48, [1, 48]))  # the same render again
+    assert not overwrote_samples(row(48, [1, 48]), row(96, [1, 96]))  # covers the old range
+    assert not overwrote_samples(row(0), row(3, [1, 3]))  # nothing to lose
+
+
+def test_layer_overwrites_mark_rows_and_name_the_other_rop():
+    from hocuspocus.host.tools.visual import layer_overwrites
+
+    shared = "C:/w/usd/collider_import.usd"
+    layers = [
+        {"path": "C:/w/usd/probe.usd", "bytes": 700, "time_samples": 0},
+        {"path": shared, "bytes": 1838, "time_samples": 3, "time_codes": [1, 3]},
+    ]
+    before = {
+        __import__("os").path.normcase(shared): {
+            "path": shared,
+            "time_samples": 48,
+            "time_codes": [1, 48],
+        }
+    }
+    notes = layer_overwrites(
+        layers,
+        before,
+        {shared: ["/stage/export_usd"]},
+        {shared: "/stage/collider_import"},
+    )
+    assert layers[1]["overwrote_samples"] == 48
+    assert layers[1]["shared_with"] == ["/stage/export_usd"]
+    assert "overwrote_samples" not in layers[0] and "shared_with" not in layers[0]
+    assert notes == [
+        "Overwrote collider_import.usd, which had 48 samples (1-48), with 3 samples (1-3); "
+        "two ROPs share this layer path: /stage/export_usd also writes it (the save path of "
+        "/stage/collider_import); re-render that ROP to restore its samples."
+    ]
+    # Shared but nothing lost yet (the first render): a warning, no overwrite mark.
+    fresh = [dict(layers[1])]
+    fresh[0].pop("overwrote_samples")
+    warned = layer_overwrites(fresh, {}, {shared: ["/stage/export_usd"]}, {})
+    assert "overwrote_samples" not in fresh[0]
+    assert warned == [
+        "/stage/export_usd also writes collider_import.usd: rendering either ROP replaces the "
+        "other's time samples in it."
+    ]

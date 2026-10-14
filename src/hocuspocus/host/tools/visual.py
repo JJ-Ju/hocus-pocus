@@ -2793,6 +2793,168 @@ def check_single_file(
     return out
 
 
+# -- shared USD layers (review 24 N1) ------------------------------------------------
+
+USD_WRITER_TYPES = (("Lop", "usd_rop"), ("Driver", "usd"), ("Sop", "usdexport"))
+"""ROPs that write USD layer files (not husk renders): their ``lopoutput`` and the save
+paths of the LOPs they export can collide."""
+
+
+def _layer_key(path: str) -> str:
+    return os.path.normcase(_norm(path))
+
+
+def usd_save_paths(rop: Any) -> dict[str, str]:
+    """``{save path: LOP path}`` for the LOPs a USD writer ROP exports that save their layer
+    to a file of their own (a ``sopimport``'s ``savepath``, on by default as
+    ``$HIP/usd/$OS.usd`` whatever the ROP's output). Main thread."""
+    import hou
+
+    out: dict[str, str] = {}
+    lop = None
+    with contextlib.suppress(Exception):
+        lop = rop.inputs()[0] if isinstance(rop, hou.LopNode) and rop.inputs() else None
+        if lop is None and rop.parm("loppath") is not None:
+            lop = _usd_source_lop(rop)
+    if not isinstance(lop, hou.LopNode):
+        return out
+    try:
+        nodes = [lop, *lop.inputAncestors()]
+    except Exception:
+        nodes = [lop]
+    for node in nodes:
+        parm = node.parm("savepath") if isinstance(node, hou.LopNode) else None
+        if parm is None:
+            continue
+        with contextlib.suppress(Exception):
+            enable = node.parm("enable_savepath")
+            if enable is not None and not int(enable.eval()):
+                continue
+            value = parm.eval().strip()
+            if value and single_file_kind(value) == "usd":
+                out.setdefault(_norm(value), node.path())
+    return out
+
+
+def usd_writer_rops() -> list[Any]:
+    """Every USD writer ROP in the scene (:data:`USD_WRITER_TYPES`). Main thread."""
+    import hou
+
+    categories = {
+        "Lop": hou.lopNodeTypeCategory,
+        "Driver": hou.ropNodeTypeCategory,
+        "Sop": hou.sopNodeTypeCategory,
+    }
+    found = []
+    for category, name in USD_WRITER_TYPES:
+        with contextlib.suppress(Exception):
+            node_type = hou.nodeType(categories[category](), name)
+            if node_type is not None:
+                found.extend(node_type.instances())
+    return found
+
+
+def shared_layer_writers(rop: Any, root: str, saves: dict[str, str]) -> dict[str, list[str]]:
+    """``{layer path: [other ROP paths]}`` for the layer files ``rop`` writes (its root
+    layer ``root`` and the save paths ``saves``) that another USD writer ROP in the scene
+    writes too: the same ``lopoutput``, or a LOP save path they both export. Main thread."""
+    mine = {_layer_key(root): _norm(root)}
+    mine.update({_layer_key(path): path for path in saves})
+    shared: dict[str, list[str]] = {}
+    for other in usd_writer_rops():
+        if other.path() == rop.path():
+            continue
+        theirs: set[str] = set()
+        with contextlib.suppress(Exception):
+            value = other.parm("lopoutput").eval().strip()
+            if value:
+                theirs.add(_layer_key(value))
+        theirs.update(_layer_key(path) for path in usd_save_paths(other))
+        for key in sorted(theirs & set(mine)):
+            shared.setdefault(mine[key], []).append(other.path())
+    return shared
+
+
+def layer_snapshot(paths: list[str]) -> dict[str, dict[str, Any]]:
+    """``{normcase path: layer row}`` for the USD layer files that exist now among
+    ``paths`` and the layers they compose (:func:`usd_layers`), taken before a render so
+    its read-back can tell what it replaced. ``pxr``, no ``hou``."""
+    out: dict[str, dict[str, Any]] = {}
+    for path in paths:
+        if not os.path.isfile(path) or _layer_key(path) in out:
+            continue
+        with contextlib.suppress(Exception):
+            for row in usd_layers(path):
+                out.setdefault(_layer_key(row["path"]), row)
+    return out
+
+
+def _samples_text(row: dict[str, Any]) -> str:
+    count = row.get("time_samples") or 0
+    text = f"{count} sample{'s' if count != 1 else ''}"
+    codes = row.get("time_codes")
+    if codes:
+        text += f" ({frame_num(codes[0])}-{frame_num(codes[-1])})"
+    return text
+
+
+def overwrote_samples(before: dict[str, Any], after: dict[str, Any]) -> bool:
+    """Whether a render replaced a layer's time samples with fewer, or with time codes
+    that no longer cover the old range (review 24 N1). No ``hou``."""
+    old = before.get("time_samples") or 0
+    if not old:
+        return False
+    new = after.get("time_samples") or 0
+    if new < old:
+        return True
+    was, now = before.get("time_codes"), after.get("time_codes")
+    if not was or not now:
+        return False
+    return now[0] > was[0] + SAMPLE_SLACK or now[-1] < was[-1] - SAMPLE_SLACK
+
+
+def layer_overwrites(
+    layers: list[dict[str, Any]],
+    before: dict[str, dict[str, Any]],
+    shared: dict[str, list[str]],
+    saves: dict[str, str],
+) -> list[str]:
+    """Mark the layer rows a USD render replaced (review 24 N1: a second ``usd_rop``
+    rewrote the ``sopimport`` save path another ROP had written with 48 samples, silently):
+    ``overwrote_samples`` (the sample count it had) on a row whose samples shrank or moved,
+    and ``shared_with`` (the other ROPs writing that file). Returns the notes, the
+    overwrites first. No ``hou``."""
+    shared_keys = {_layer_key(path): rops for path, rops in shared.items()}
+    owners = {_layer_key(path): node for path, node in saves.items()}
+    overwrites, warnings = [], []
+    for row in layers:
+        key = _layer_key(row["path"])
+        name = os.path.basename(row["path"])
+        others = shared_keys.get(key)
+        if others:
+            row["shared_with"] = others
+        where = f" (the save path of {owners[key]})" if key in owners else ""
+        old = before.get(key)
+        if old is not None and overwrote_samples(old, row):
+            row["overwrote_samples"] = old.get("time_samples") or 0
+            why = (
+                f"two ROPs share this layer path: {', '.join(others)} also writes it{where}; "
+                "re-render that ROP to restore its samples"
+                if others
+                else "an earlier render wrote it; re-render that one to restore its samples"
+            )
+            overwrites.append(
+                f"Overwrote {name}, which had {_samples_text(old)}, with {_samples_text(row)}; "
+                f"{why}."
+            )
+        elif others:
+            warnings.append(
+                f"{', '.join(others)} also writes {name}{where}: rendering either ROP replaces "
+                "the other's time samples in it."
+            )
+    return overwrites + warnings
+
+
 def rop_camera_parm(rop: Any) -> str | None:
     """The parm naming the camera ``rop`` renders through: ``override_camera`` (a prim) on
     a USD render ROP, ``cameraprim`` on a viewport ROP reading a stage, else ``camera`` (an
@@ -3030,6 +3192,16 @@ def _prepare_render(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     distinct = {_norm(p) for p in expected if p.strip()}
     single_file = len(_frame_list(frames)) > 1 and len(distinct) == 1
     readback = len(distinct) == 1 and single_file_kind(next(iter(distinct))) is not None
+    layer_watch = None
+    if readback and single_file_kind(next(iter(distinct))) == "usd":
+        # What the layer files hold now, and which other ROPs write them (review 24 N1).
+        root = next(iter(distinct))
+        saves = usd_save_paths(rop)
+        layer_watch = {
+            "before": layer_snapshot([root, *saves]),
+            "shared": shared_layer_writers(rop, root, saves),
+            "saves": saves,
+        }
     return {
         "rop": rop.path(),
         "owner": owner.path() if rop is not owner else None,
@@ -3046,6 +3218,7 @@ def _prepare_render(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
         "usd": usd,
         "single_file": single_file,
         "readback": readback,
+        "layer_watch": layer_watch,
         "note": note,
         "range_note": range_note,
         "isolate": needs_isolation(rop, ctx),
@@ -3395,6 +3568,12 @@ def _render_job(plan: dict[str, Any], ctx: HostContext, thumbnail: bool) -> Any:
             for folder in log_dir:
                 shutil.rmtree(folder, ignore_errors=True)
         result = _render_result(plan, thumbnail)
+        watch = plan.get("layer_watch")
+        if readback.get("layers") and watch:
+            # First, so an overwritten layer is the first thing read (review 24 N1).
+            notes[:0] = layer_overwrites(
+                readback["layers"], watch["before"], watch["shared"], watch["saves"]
+            )
         notes.extend(readback.get("notes") or [])
         if readback.get("layers"):
             result["layers"] = readback["layers"]

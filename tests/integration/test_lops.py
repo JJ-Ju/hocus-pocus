@@ -591,6 +591,56 @@ def test_render_without_frames_uses_the_rops_frame_range(client, work_dir):
     assert not any("frame range" in n or "current frame" in n for n in given.get("notes", []))
 
 
+@pytest.mark.slow
+def test_render_says_when_a_second_usd_rop_overwrote_a_shared_layer(client, work_dir):
+    """Review 24 N1: a second usd_rop with its own lopoutput, wired to the same sopimport,
+    rewrote that sopimport's save path layer (48 samples to 3) and said nothing."""
+    export = _usd_export(work_dir, frames=(1, 48))
+    imp = export.inputs()[0]
+    probe = hou.node("/stage").createNode("usd_rop", "single_probe")
+    probe.setInput(0, imp)
+    probe.parm("lopoutput").set(_fwd(work_dir / "usd" / "probe.usd"))
+    shared = _fwd(work_dir / "usd" / "anim_import.usd")
+    first = client.ok("render", {"rop_path": export.path()})
+    assert first["state"] == "done", first
+    rows = {Path(row["path"]).name: row for row in first["layers"]}
+    assert rows["anim_import.usd"]["time_samples"] == 48
+    assert "overwrote_samples" not in rows["anim_import.usd"]
+    # The first render already warns that another ROP writes the same layer.
+    assert rows["anim_import.usd"]["shared_with"] == [probe.path()], rows
+    assert any(n.startswith(f"{probe.path()} also writes anim_import.usd") for n in first["notes"])
+
+    second = client.ok("render", {"rop_path": probe.path(), "frames": [1, 3]})
+    assert second["state"] == "done", second
+    rows = {Path(row["path"]).name: row for row in second["layers"]}
+    clobbered = rows["anim_import.usd"]
+    assert clobbered["path"] == shared
+    assert clobbered["time_samples"] == 3 and clobbered["time_codes"] == [1, 3]
+    assert clobbered["overwrote_samples"] == 48 and clobbered["shared_with"] == [export.path()]
+    assert "overwrote_samples" not in rows["probe.usd"]
+    assert second["notes"][0] == (
+        "Overwrote anim_import.usd, which had 48 samples (1-48), with 3 samples (1-3); two "
+        f"ROPs share this layer path: {export.path()} also writes it (the save path of "
+        f"{imp.path()}); re-render that ROP to restore its samples."
+    ), second["notes"]
+    # Rendering the same ROP again replaces nothing it had.
+    again = client.ok("render", {"rop_path": probe.path(), "frames": [1, 3]})
+    assert not any(n.startswith("Overwrote") for n in again.get("notes", [])), again
+    assert all("overwrote_samples" not in row for row in again["layers"])
+
+
+@pytest.mark.slow
+def test_render_warns_when_two_usd_rops_share_a_lopoutput(client, work_dir):
+    export = _usd_export(work_dir, frames=(1, 4))
+    twin = hou.node("/stage").createNode("usd_rop", "twin")
+    twin.setInput(0, export.inputs()[0])
+    twin.parm("lopoutput").set(export.parm("lopoutput").unexpandedString())
+    result = client.ok("render", {"rop_path": export.path()})
+    root = next(r for r in result["layers"] if Path(r["path"]).name == "anim.usd")
+    assert root["shared_with"] == [twin.path()], result["layers"]
+    assert any(n.startswith(f"{twin.path()} also writes anim.usd") for n in result["notes"])
+
+
 # -- node_type_info filters (papercut 8) ------------------------------------------------
 
 
