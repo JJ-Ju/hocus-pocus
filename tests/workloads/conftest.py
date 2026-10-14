@@ -1,8 +1,8 @@
 """The workloads tier (docs/redesign/spec-2.0.md §5.2): the evaluation workloads as tests.
 
 One headless host (``hython -m hocuspocus.host``) serves the whole session, with an
-isolated ``HOCUSPOCUS_STATE_DIR``, ``HOUDINI_USER_PREF_DIR`` (``__HVER__``, with
-``profile = "full"`` in ``prefs/houdini22.0/hocuspocus.toml``), work dir and temp dir, and
+isolated ``HOCUSPOCUS_STATE_DIR``, ``HOUDINI_USER_PREF_DIR`` (``__HVER__``, with the
+tier's ``profile`` in ``prefs/houdini22.0/hocuspocus.toml``), work dir and temp dir, and
 a neutral cwd. One persistent official ``mcp`` client session drives the stdio bridge
 (``python -m hocuspocus.bridge``) from a background event loop, so the tests stay
 synchronous and every workload talks to the same bridge, as an agent would.
@@ -32,7 +32,8 @@ import subprocess
 import sys
 import threading
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -43,6 +44,11 @@ SRC = Path(__file__).resolve().parents[2] / "src"
 HERE = Path(__file__).resolve().parent
 BUDGETS = HERE / "budgets.json"
 LAST_RUN = HERE / "last_run.json"
+try:  # spec-2.0 M3 cut-over: the 1.4 catalogue is ``compat_1x``, ``full`` the 2.0 one
+    from hocuspocus.tools.profiles import COMPAT_1X as PROFILE_1X
+except ImportError:  # before it: ``full`` is the 1.4 catalogue
+    PROFILE_1X = "full"
+"""The profile the 1.4 workloads run under; the 2.0 workloads (``v2/``) choose their own."""
 TOLERANCE = 1.15
 """A workload fails when a measured total exceeds its budget by more than 15 % (§5.2)."""
 BUDGET_KEYS = ("calls", "text_bytes", "max_call_bytes", "wall_s")
@@ -115,8 +121,14 @@ class McpSession:
         assert self.loop is not None
         return asyncio.run_coroutine_threadsafe(coro, self.loop).result(timeout)
 
-    def call(self, name: str, args: dict[str, Any], timeout: float = CALL_TIMEOUT_S) -> Any:
-        return self._submit(self.client.call_tool(name, args), timeout)
+    def call(
+        self,
+        name: str,
+        args: dict[str, Any],
+        timeout: float = CALL_TIMEOUT_S,
+        progress: Callable[..., Any] | None = None,
+    ) -> Any:
+        return self._submit(self.client.call_tool(name, args, progress_callback=progress), timeout)
 
     def read_resource(self, uri: str, timeout: float = 60.0) -> Any:
         return self._submit(self.client.read_resource(uri), timeout)
@@ -185,6 +197,10 @@ class Recorder:
     finished: dict[str, Any] | None = None
     session_config: Any = None
     """The pytest config (for ``--update-budgets``)."""
+    budgets: Path = BUDGETS
+    progress: list[Any] = field(default_factory=list)
+    """``(progress, total, message)`` notifications received by calls made with
+    ``progress=True``."""
 
     # -- calling ------------------------------------------------------------------------
 
@@ -201,13 +217,16 @@ class Recorder:
         expect_error: bool = False,
         one_shot: bool = False,
         timeout: float = CALL_TIMEOUT_S,
+        progress: bool = False,
     ) -> Result:
         args = args or {}
         t0 = time.perf_counter()
         if one_shot:
             raw = self.session.one_shot(tool, args, timeout=timeout)
         else:
-            raw = self.session.call(tool, args, timeout=timeout)
+            raw = self.session.call(
+                tool, args, timeout=timeout, progress=self._on_progress if progress else None
+            )
         elapsed = time.perf_counter() - t0
         text = "".join(getattr(c, "text", "") or "" for c in raw.content)
         images = [c for c in raw.content if getattr(c, "type", "") == "image"]
@@ -236,6 +255,9 @@ class Recorder:
         if images and self.first_image_s is None:
             self.first_image_s = time.perf_counter() - self.started
         return Result(is_error, data, len(images), raw)
+
+    async def _on_progress(self, progress: float, total: float | None, message: str | None) -> None:
+        self.progress.append((progress, total, message))
 
     def ok(self, tool: str, args: dict[str, Any] | None = None, **kw: Any) -> Result:
         result = self.call(tool, args, **kw)
@@ -337,12 +359,12 @@ class Recorder:
         assert not self.unexpected_errors, "unexpected errors:\n" + self.report()
         config = self.session_config
         if config.getoption("--update-budgets"):
-            _update_budget(self.name, totals)
+            _update_budget(self.name, totals, self.budgets)
             return totals
-        budgets = _read_json(BUDGETS)
+        budgets = _read_json(self.budgets)
         budget = budgets.get("workloads", {}).get(self.name)
         if budget is None:
-            pytest.fail(f"no budget for {self.name} in {BUDGETS.name}; run with --update-budgets")
+            pytest.fail(f"no budget for {self.name} in {self.budgets}; run with --update-budgets")
         over = [
             f"{key} {totals[key]} > {budget[key]} x {TOLERANCE} = {_limit(key, budget[key]):.1f}"
             for key in BUDGET_KEYS
@@ -369,8 +391,8 @@ def _write_json(path: Path, data: dict[str, Any]) -> None:
     path.write_text(text, encoding="utf-8", newline="\n")
 
 
-def _update_budget(name: str, totals: dict[str, Any]) -> None:
-    data = _read_json(BUDGETS) or {}
+def _update_budget(name: str, totals: dict[str, Any], path: Path = BUDGETS) -> None:
+    data = _read_json(path) or {}
     data.setdefault(
         "about",
         "Per-workload budgets for tests/workloads (spec-2.0 section 5.2). A run fails when a total "
@@ -384,11 +406,11 @@ def _update_budget(name: str, totals: dict[str, Any]) -> None:
         "wall_s": math.ceil(totals["wall_s"] * 10) / 10,
     }
     data["workloads"] = dict(sorted(data["workloads"].items()))
-    _write_json(BUDGETS, data)
+    _write_json(path, data)
 
 
-def _record_last_run(name: str, rec: Recorder, outcome: str) -> None:
-    data = _read_json(LAST_RUN)
+def _record_last_run(name: str, rec: Recorder, outcome: str, path: Path = LAST_RUN) -> None:
+    data = _read_json(path)
     data.setdefault("workloads", {})
     totals = rec.finished or rec.totals()
     data["workloads"][name] = {
@@ -397,7 +419,7 @@ def _record_last_run(name: str, rec: Recorder, outcome: str) -> None:
         "per_tool": rec.per_tool(),
         "recorded": time.strftime("%Y-%m-%dT%H:%M:%S"),
     }
-    _write_json(LAST_RUN, data)
+    _write_json(path, data)
 
 
 # -- fixtures -----------------------------------------------------------------------------
@@ -430,12 +452,19 @@ def _stop_host(host: Host) -> None:
 
 @pytest.fixture(scope="session")
 def wl_host(hython: Path, tmp_path_factory: pytest.TempPathFactory) -> Iterator[Host]:
-    root = tmp_path_factory.mktemp("wl")
+    with start_host(hython, tmp_path_factory.mktemp("wl"), PROFILE_1X) as host:
+        yield host
+
+
+@contextmanager
+def start_host(hython: Path, root: Path, profile: str) -> Iterator[Host]:
+    """A headless host under ``root``; it and its bridges serve ``profile``."""
     state, prefs, cwd, work, tmp = (root / d for d in ("state", "prefs", "cwd", "work", "tmp"))
     for d in (state, cwd, work, tmp, prefs / "houdini22.0"):
         d.mkdir(parents=True, exist_ok=True)
     # Houdini expands __HVER__, so the toml lives in the expanded directory (CONTRIBUTING).
-    (prefs / "houdini22.0" / "hocuspocus.toml").write_text('profile = "full"\n', encoding="utf-8")
+    toml = prefs / "houdini22.0" / "hocuspocus.toml"
+    toml.write_text(f'profile = "{profile}"\n', encoding="utf-8")
     env = dict(os.environ)
     env.update(
         {
@@ -443,7 +472,7 @@ def wl_host(hython: Path, tmp_path_factory: pytest.TempPathFactory) -> Iterator[
             "HOCUSPOCUS_STATE_DIR": str(state),
             "HOCUSPOCUS_WORK_DIR": str(work),
             "HOCUSPOCUS_HFS": str(hython.parent.parent),
-            "HOCUSPOCUS_PROFILE": "full",
+            "HOCUSPOCUS_PROFILE": profile,
             # Houdini ignores HOUDINI_USER_PREF_DIR without the __HVER__ token.
             "HOUDINI_USER_PREF_DIR": fwd(prefs / "houdini__HVER__"),
             "PYTHONDONTWRITEBYTECODE": "1",
@@ -511,17 +540,24 @@ def kill_pid(pid: int) -> None:
 
 @pytest.fixture(scope="session")
 def wl_session(wl_host: Host) -> Iterator[McpSession]:
+    with open_session(wl_host) as session:
+        yield session
+
+
+@contextmanager
+def open_session(host: Host) -> Iterator[McpSession]:
+    """A persistent MCP session through a stdio bridge, pinned to ``host``."""
     from mcp.client.stdio import StdioServerParameters
 
     params = StdioServerParameters(
         command=sys.executable,
         args=["-m", "hocuspocus.bridge"],
-        env=wl_host.env,
-        cwd=str(wl_host.root / "cwd"),
+        env=host.env,
+        cwd=str(host.root / "cwd"),
     )
     session = McpSession(params).start()
     try:
-        pinned = session.call("houdini_connect", {"pid": wl_host.pid})
+        pinned = session.call("houdini_connect", {"pid": host.pid})
         assert not pinned.is_error, pinned.content
         yield session
     finally:
@@ -547,16 +583,32 @@ def _housekeeping(session: McpSession, host: Host) -> None:
 def workload(
     request: pytest.FixtureRequest, wl_session: McpSession, wl_host: Host
 ) -> Iterator[Recorder]:
+    with recording(request, wl_session, wl_host) as rec:
+        yield rec
+
+
+@contextmanager
+def recording(
+    request: pytest.FixtureRequest,
+    session: McpSession,
+    host: Host,
+    *,
+    factory: type[Recorder] = Recorder,
+    budgets: Path = BUDGETS,
+    last_run: Path = LAST_RUN,
+) -> Iterator[Recorder]:
+    """One workload's recorder: a clean scene before and after, its totals in ``last_run``."""
     name = request.node.name.removeprefix("test_")
-    work = wl_host.work / name
+    work = host.work / name
     work.mkdir(parents=True, exist_ok=True)
-    _housekeeping(wl_session, wl_host)
-    prefixes = {str(wl_host.root), fwd(wl_host.root)}
+    _housekeeping(session, host)
+    prefixes = {str(host.root), fwd(host.root)}
     prefixes |= {p.replace("\\", "\\\\") for p in prefixes}  # as JSON escapes it
-    rec = Recorder(
-        session=wl_session, name=name, work=work, normalise=sorted(prefixes, key=len, reverse=True)
+    rec = factory(
+        session=session, name=name, work=work, normalise=sorted(prefixes, key=len, reverse=True)
     )
     rec.session_config = request.config
+    rec.budgets = budgets
     outcome = "error"
     try:
         yield rec
@@ -566,11 +618,11 @@ def workload(
             report = getattr(request.node, "rep_call", None)
             if report is not None:
                 outcome = report.outcome
-            _record_last_run(name, rec, outcome)
+            _record_last_run(name, rec, outcome, last_run)
         try:
-            _housekeeping(wl_session, wl_host)
+            _housekeeping(session, host)
         finally:
-            _kill_launched(wl_host.state, keep={wl_host.pid})
+            _kill_launched(host.state, keep={host.pid})
             shutil.rmtree(work, ignore_errors=True)
 
 
