@@ -1,7 +1,143 @@
 # Changelog
 
 This project uses [Semantic Versioning](https://semver.org/). The 0.9 compatibility
-policy does not apply to 1.0.
+policy does not apply to 1.0. 2.0 changes the tool surface; `compat_1x` keeps the 1.4
+one for the 2.0.x releases.
+
+## Unreleased (2.0.0)
+
+2.0 changes the contract where every evaluation since 1.0 (reviews 07 to 24) said it
+matters: calls per task and bytes per call. Scene changes become one transaction tool,
+`edit`; reads become one tool, `inspect`, plus `search`, and every read is also a resource
+with an ETag; pictures become one tool, `look`, that picks its renderer from a quality
+level; and a bridge ledger remembers Houdinis, roles and jobs across restarts. The default
+`core` profile lists 18 tools instead of 31. The plan is `docs/redesign/spec-2.0.md`, the
+design `docs/BIBLE.md` (rewritten for 2.0; decisions D35 to D44), and
+**[`docs/migration-2.0.md`](docs/migration-2.0.md) maps every 1.4 tool to its 2.0
+replacement**. `profile = "compat_1x"` keeps 1.4 client scripts running unchanged for the
+2.0.x releases.
+
+### Contract changes
+
+- **The default profiles serve the 2.0 surface.** `minimal` (10 tools), `core` (18, the
+  default) and `full` (21) list `inspect`, `search`, `edit` and `look` and no longer list
+  the 18 per-noun 1.4 tools they replace (see **Removed**). `minimal` is `houdini_status`,
+  `houdini_connect`, `hip_open`, `hip_save`, `inspect`, `search`, `edit`, `node_create`,
+  `parm_set`, `look`; `core` adds `hip_new`, `hip_merge`, `cook`, `render`,
+  `houdini_python`, `job`, `undo`, `time`; `full` adds `hda`, `pdg`, `events`.
+- **`compat_1x`** serves the 1.4 `full` catalogue (35 tools) with 1.4 schemas, results,
+  annotations, resources, prompts and instructions, running on the 2.0 engines. It is
+  served for 2.0.x and removed in 2.1. The `v2` profile of the development branch reads as
+  `full`.
+- **A removed 1.4 tool names its replacement.** Called on a 2.0 profile, `node_info` (and
+  every other removed tool) answers `invalid_argument` with the 2.0 call in `hint` and the
+  `compat_1x` setting that keeps it.
+- **Every scene change runs on one transaction engine** (`host/tx.py`, D35).
+  `node_create`, `parm_set` and the 1.4 mutation tools of `compat_1x` build `edit` plans
+  and return their 1.4 results unchanged: one undo policy, one rollback, one echo.
+- **Job ids are opaque** on the 2.0 profiles: the bridge ledger's id (`j3f9a1c`) instead of
+  `<pid>-<id>`. `job` still accepts host ids in every profile, and `compat_1x` keeps
+  returning them. `events` cursors (`next_since`, `<pid>:<seq>`) are unchanged.
+- **One dirty flag in both modes** (parity G1). What tools report as `dirty`, and what
+  `on_unsaved` and `pdg cook` refuse, is the agent's own changes or a change made outside
+  HocusPocus since the last save, load or clear, never Houdini's raw
+  `hasUnsavedChanges()`; see **Fixed**.
+- **`tools/list` budget** (D44). The 2.0 `full` profile is capped at 24,000 B (`text`) and
+  34,000 B (`both`); `compat_1x` keeps the 1.4 caps of 32,000 B and 44,000 B and is
+  byte-identical to 1.4's `full`. At the cut-over: 14.8/20.3/22.8 KB `text` and
+  17.9/26.6/29.1 KB `both` for minimal/core/full, against 14.4/27.4/30.8 KB `text` at
+  1.4.0.
+
+### Added
+
+- **`edit`**: every scene change of a task in one call and one undo step
+  (`HocusPocus: edit <n> ops`). Ops `create`, `delete`, `connect`, `set`, `node`, `copy`,
+  `layout`, `build` and `select` take the fields of the 1.4 tool each replaces. An op's
+  `id` is `$id` (or `$id/child`, `$id/parm`) in later ops' paths. The whole plan is
+  validated against the scene before anything changes and every problem is reported at
+  once; `dry_run: true` returns the plan with resolved paths and changes nothing. A failing
+  op rolls the call back (`partial: true` keeps the others). The result is one row per op
+  plus one summary row per touched node, each cooked once at the end. The review-07 build
+  is one call of under 1 KB.
+- **`inspect`** `{what, target}`: `node`, `parms`, `network`, `outline`, `geo` (rows with
+  `rows: true`), `image`, `stage`, `problems`, `type`, `events` and `jobs`, returning the
+  matching 1.4 read's result byte for byte plus `what`, `target` and an `etag`. A node as
+  `parms` target reads its non-default parms.
+- **`search`** `{kind: types | nodes}`: `node_type_search` (now paged with `next_cursor`)
+  and `node_find`.
+- **`look`** `{target?, quality: draft | lit | final}`: one picture of an object, SOP, LOP,
+  Cop node or ROP (default the display). `draft` is the Flipbook ROP (headless too, with
+  the kept child: about 0.4 s after the first), `lit` adds the scene's lights (Karma at 2
+  samples when there are none), `final` renders Karma at the ROP's samples (else 32);
+  `source: viewer` grabs the GUI Scene Viewer. Returns `backend_used`, `chain` and notes.
+  The capture and render backends are one package, `host/look/`.
+- **Resources with ETags and subscriptions.** `houdini://instances`, `jobs`,
+  `node/{path}`, `outline{?root,depth}`, `network/{path}`, `geo/{path}`, `image/{path}`,
+  `stage/{lop}`, `type/{category}/{name}`, `types{?q}`, `problems{?root}` and
+  `events{?since,limit}`, each the matching `inspect` or `search` result byte for byte
+  (`GET /hp/v2/resource` on the host). Every read returns `_meta.etag`; `If-None-Match`
+  with it answers `not_modified` with no contents. `status`, `jobs`, `events` and
+  `node/{path}` can be subscribed to (`notifications/resources/updated` when the etag
+  changes).
+- **The bridge ledger** (`<state_dir>/ledger.sqlite`): instances with names and roles,
+  jobs and launches, kept across bridge restarts. `houdini_status` lists `recent`, the
+  Houdinis that exited; a job's id reaches its Houdini after a bridge restart, and a
+  finished job's stored result is returned with a note.
+- **Roles and `on`.** Every Houdini is an `editor` (GUI) or a `worker` (headless);
+  `houdini_connect {role}` sets one or pins the least busy Houdini with it. `cook`,
+  `render`, `look` and `job` take `on` (a pid, name or role) to run on another Houdini
+  without moving the pin.
+- **Prompts** `cache_sim`, `two_houdinis` and `lookdev_karma`, and the four 1.4 prompts,
+  the server instructions and `hocuspocus://guide` rewritten for the 2.0 tools.
+- **`houdini_status`** reports `hip.dirty_source` (`tracked`, `user_event`,
+  `houdini_flag`) and Houdini's own flag as the diagnostic `houdini_flag`; an
+  `unsaved_changes` error carries `detail.dirty_source`.
+- **Spec files** (D41): one module per tool under `tools/spec/`; `docs/tools.md`,
+  `hocuspocus://tools` and the new `docs/redesign/budget.md` are generated from them.
+- **The workloads tier** (D42): `tests/workloads/` scripts five evaluations (city build,
+  scorecard twelve, a 200-call soak, FX cache, Vellum to USD) with call, byte and time
+  budgets recorded from 1.4, failing on a 15 % regression; nightly on the Houdini runner.
+- **The parity matrix** (D43): `docs/parity.md` lists every tool × GUI/headless as same,
+  mode or gap, and `tests/integration/test_parity_gui.py` (`--rungui`) runs the GUI column
+  in a scripted `houdinifx` session.
+- **`docs/migration-2.0.md`.**
+
+### Fixed
+
+- **A read no longer dirties the GUI hip** (parity G1). In 1.4 the GUI reported Houdini's
+  own `hasUnsavedChanges()`, which HocusPocus's temporary nodes set: after a capture,
+  `node_type_info` or `render {output}`, `hip_new`, `hip_open` and `houdini_connect
+  {quit}` with `on_unsaved: fail` refused and `pdg cook` called the scene unsaved, in the
+  GUI only. The captures' "Houdini marked the hip modified" notes are gone with it.
+
+### Upgrading from 1.4
+
+Read **[`docs/migration-2.0.md`](docs/migration-2.0.md)**. In short:
+
+- Run `hocuspocus install-houdini` and restart Houdini, as for every release.
+- Agents need nothing: the instructions, guide and prompts name the 2.0 tools.
+- A script that calls 1.4 tools either moves to the 2.0 names (the error `hint` names each
+  replacement) or sets `profile = "compat_1x"` for the bridge and Houdini until 2.1.
+- Treat `job_id` as an opaque string; `<pid>-<id>` ids are still accepted.
+- `viewport_capture`'s GUI default (the viewer as it is) is `look {source: "viewer"}`;
+  `look`'s own default renders a Flipbook ROP framed on the target.
+- `inspect` results carry `what`, `target` and `etag` before the 1.4 result's keys;
+  `edit` returns `results` per op and `nodes` per touched node.
+- The resources `houdini://nodetype/...`, `houdini://node/{path}/parms`,
+  `.../geo` and `houdini://job/{id}` are `houdini://type/...`, `houdini://node/{path}?parms=*`,
+  `houdini://geo/{path}` and `houdini://jobs` on the 2.0 profiles.
+
+### Removed (from the default profiles; still in `compat_1x` for 2.0.x)
+
+- `node_find`, `node_info`, `network_describe`, `parm_get`, `problems`, `geo_info`,
+  `geo_read`, `node_type_search`, `node_type_info`, `usd_stage`: use `inspect` and `search`.
+- `node_delete`, `node_edit`, `node_copy`, `node_connect`, `node_layout`, `network_build`,
+  `selection`: use `edit` ops (`selection` is read with `houdini_python`).
+- `viewport_capture`: use `look`.
+- The 1.4 resources `houdini://nodetype/{category}/{name}`, `houdini://node/{path}/parms`,
+  `houdini://node/{path}/geo` and `houdini://job/{id}`.
+- 2.1 removes `compat_1x`, the `v2` alias and, once Houdini 22.5 is the floor, the
+  OpenGL ROP backend.
 
 ## 1.4.0 (2026-10-13)
 
