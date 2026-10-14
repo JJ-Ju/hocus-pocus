@@ -2435,21 +2435,27 @@ def _lost_frames(rop: str, path: str, found: str, frames: list[float]) -> ToolEr
 def check_single_file(
     rop: str, path: str, frames: list[float], since: float | None = None
 ) -> dict[str, Any]:
-    """Read back a single-file output after a range render (review 23 P0-1: frame by
-    frame, each call overwrote the file and only the last frame's sample survived). USD:
-    the layer with the most time samples must have one per frame; none at all is a static
-    stage (a note). Alembic: the archive's time range must cover the frames. Raises
-    ``cook_failed``; returns ``{notes?, layers?}``. Main thread (``hou.fps``)."""
+    """Read back a single-file output after a render (review 23 P0-1: frame by frame,
+    each call overwrote the file and only the last frame's sample survived). USD: lists
+    :func:`usd_layers`, and over a range the layer with the most time samples must have
+    one per frame; none at all is a static stage (a note). Alembic: the archive's time
+    range must cover the frames. Raises ``cook_failed``; returns ``{notes?, layers?}``.
+    Main thread (``hou.fps``)."""
     import hou
 
     kind = single_file_kind(path)
     out: dict[str, Any] = {}
-    if len(frames) < 2 or kind is None or not os.path.isfile(path):
+    if kind is None or not os.path.isfile(path):
+        return out
+    if kind == "usd":
+        # Every layer file written, not only the root (review 23 P1-3: the data was in the
+        # sopimport's save path, a sublayer of a 697 B root layer).
+        layers = usd_layers(path, since)
+        out["layers"] = layers
+    if len(frames) < 2:
         return out
     start, end = frames[0], frames[-1]
     if kind == "usd":
-        layers = usd_layers(path, since)
-        out["layers"] = layers
         counts = []
         for row in layers:
             codes = row.get("time_codes")
@@ -2656,6 +2662,7 @@ def _prepare_render(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     # (review 23 P0-1).
     distinct = {_norm(p) for p in expected if p.strip()}
     single_file = len(_frame_list(frames)) > 1 and len(distinct) == 1
+    readback = len(distinct) == 1 and single_file_kind(next(iter(distinct))) is not None
     return {
         "rop": rop.path(),
         "owner": owner.path() if rop is not owner else None,
@@ -2666,9 +2673,11 @@ def _prepare_render(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
         "parm": parm.name() if parm is not None else None,
         "image_rop": usd or (parm is not None and parm.name() in IMAGE_PARMS),
         "output": output,
-        "expected": [_norm(p) for p in expected],
+        # One file per path: a single-file ROP's 48 frames are one output (review 23 P1-3).
+        "expected": list(dict.fromkeys(_norm(p) for p in expected)),
         "usd": usd,
         "single_file": single_file,
+        "readback": readback,
         "note": note,
         "range_note": range_note,
         "isolate": needs_isolation(rop, ctx),
@@ -2938,7 +2947,6 @@ def _render_job(plan: dict[str, Any], ctx: HostContext, thumbnail: bool) -> Any:
                 job.set_progress(done[0], total, f"{done[0]}/{total} frames written to {name}")
 
             job.set_progress(0, total, f"0/{total} frames written to {name} (one render call)")
-            started = time.time()
             try:
                 errors = job.run_main(lambda: render_range(on_frame), timeout_s=FRAME_TIMEOUT_S)
             except ToolError as exc:
@@ -2949,18 +2957,9 @@ def _render_job(plan: dict[str, Any], ctx: HostContext, thumbnail: bool) -> Any:
             if errors:
                 message, detail = failure(f"{plan['rop']} failed to render", errors)
                 raise ToolError("cook_failed", message, detail=detail or None)
-            # The call cannot stop mid-range, so a cancel sent during it is too late: the
-            # file is complete and is read back (no cancel check here).
-            readback.update(
-                ctx.executor.run(
-                    lambda: check_single_file(
-                        plan.get("owner") or plan["rop"], plan["expected"][0], frame_list, started
-                    ),
-                    ctx.config.default_timeout_s,
-                )
-            )
 
         readback: dict[str, Any] = {}
+        started = time.time()
         try:
             job.run_main(apply_override)
             total = len(frame_list)
@@ -2996,6 +2995,20 @@ def _render_job(plan: dict[str, Any], ctx: HostContext, thumbnail: bool) -> Any:
                         hint=hint,
                         detail=detail,
                     )
+            if plan.get("readback"):
+                # A single-file range render cannot stop mid-range, so a cancel sent during
+                # it is too late: the file is complete and is read back (no cancel check).
+                readback.update(
+                    ctx.executor.run(
+                        lambda: check_single_file(
+                            plan.get("owner") or plan["rop"],
+                            plan["expected"][0],
+                            frame_list,
+                            started,
+                        ),
+                        ctx.config.default_timeout_s,
+                    )
+                )
             job.set_progress(total, total, "done")
             if plan.get("owner"):
                 effects = job.run_main(lambda: _writer_side_effects(plan["owner"]))
@@ -3013,6 +3026,8 @@ def _render_job(plan: dict[str, Any], ctx: HostContext, thumbnail: bool) -> Any:
                 shutil.rmtree(folder, ignore_errors=True)
         result = _render_result(plan, thumbnail)
         notes.extend(readback.get("notes") or [])
+        if readback.get("layers"):
+            result["layers"] = readback["layers"]
         if side_effects:
             result["side_effects"] = side_effects
         if notes:

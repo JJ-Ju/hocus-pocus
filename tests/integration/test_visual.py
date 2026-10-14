@@ -926,6 +926,8 @@ def test_render_alembic_rop_writes_the_range_in_one_call(client, work_dir):
     rop = _alembic_rop(work_dir)
     result = client.ok("render", {"rop_path": rop.path(), "frames": [1, 12]})
     assert result["state"] == "done", result
+    assert result["outputs"] == [_fwd(work_dir / "anim.abc")]
+    assert "outputs_sample" not in result and "layers" not in result
     assert _abc_frames(work_dir / "anim.abc") == (1.0, 12.0)
 
 

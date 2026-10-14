@@ -495,6 +495,15 @@ def test_render_usd_rop_writes_every_frame_in_one_call(client, work_dir):
     result = client.ok("render", {"rop_path": rop.path(), "frames": [1, 12]})
     assert result["state"] == "done", result
     assert result["frames"] == [1, 12, 1]
+    # Review 23 P1-3: one file is one output, and the layers that hold the data are listed.
+    assert result["outputs"] == [_fwd(work_dir / "usd" / "anim.usd")]
+    assert "outputs_sample" not in result and "outputs_summary" not in result
+    layers = {Path(row["path"]).name: row for row in result["layers"]}
+    assert set(layers) == {"anim.usd", "anim_import.usd"}, result["layers"]
+    assert layers["anim_import.usd"]["time_samples"] == 12
+    assert layers["anim_import.usd"]["time_codes"] == [1, 12]
+    assert layers["anim.usd"]["time_samples"] == 0 and "time_codes" not in layers["anim.usd"]
+    assert all(row["bytes"] == Path(row["path"]).stat().st_size for row in result["layers"])
     samples = _samples(work_dir / "usd" / "anim_import.usd")
     assert samples == [float(f) for f in range(1, 13)], samples
     status = client.ok("job", {"action": "status", "job_id": result["job_id"]})
@@ -527,6 +536,8 @@ def test_render_usdexport_sop_writes_every_frame(client, work_dir):
     export.parm("lopoutput").set(_fwd(work_dir / "sop.usd"))
     result = client.ok("render", {"rop_path": export.path(), "frames": [1, 6]})
     assert result["state"] == "done", result
+    assert result["outputs"] == [_fwd(work_dir / "sop.usd")]
+    assert [row["time_samples"] for row in result["layers"]] == [6], result["layers"]
     assert len(_samples(work_dir / "sop.usd")) == 6
 
 
@@ -540,10 +551,14 @@ def test_render_without_frames_uses_the_rops_frame_range(client, work_dir):
     assert any("own frame range 1-6" in n for n in result["notes"]), result
     assert len(_samples(work_dir / "usd" / "anim_import.usd")) == 6
     rop.parm("trange").set(0)
+    rop.parm("lopoutput").set(_fwd(work_dir / "usd" / "still.usd"))
     hou.setFrame(3)
     current = client.ok("render", {"rop_path": rop.path()})
     assert current["frames"] == [3, 3, 1], current
     assert any("current frame (3) only" in n for n in current["notes"]), current
+    # One frame of a USD export lists its layers too (no time samples to check).
+    assert current["outputs"] == [_fwd(work_dir / "usd" / "still.usd")]
+    assert Path(current["layers"][0]["path"]).name == "still.usd", current["layers"]
     given = client.ok("render", {"rop_path": rop.path(), "frames": [2, 4]})
     assert not any("frame range" in n or "current frame" in n for n in given.get("notes", []))
 

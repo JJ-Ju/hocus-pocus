@@ -1436,7 +1436,10 @@ _VISUAL: tuple[ToolSpec, ...] = (
             "says why. A ROP whose output is one file for the range (USD layer, Alembic archive, "
             "a path without $F) renders it in one call (a cancel waits for its end) and is read "
             "back: a USD layer set or Alembic archive with fewer frames than asked fails with "
-            "cook_failed; a USD export without time samples gets a static-stage note."
+            "cook_failed; a USD export without time samples gets a static-stage note. outputs "
+            "lists each file once; a USD export adds layers: [{path, bytes, time_samples, "
+            "time_codes?}], its root layer, every layer file it composes (a sopimport save path) "
+            "and USD files the render wrote beside it, at most 20."
         ),
         input_schema=_obj(
             {
@@ -1459,6 +1462,7 @@ _VISUAL: tuple[ToolSpec, ...] = (
                 "outputs": _list(),
                 "outputs_summary": _t("object"),
                 "missing": _list(),
+                "layers": _objs(),
                 "thumbnail": _out(
                     {
                         "path": _t("string"),
