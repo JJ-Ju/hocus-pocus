@@ -112,9 +112,28 @@ def _on_main(ctx: HostContext, fn: Callable[[], Any]) -> Any:
 # -- arguments -----------------------------------------------------------------------------
 
 
+def _example(what: str) -> str:
+    """A placeholder ``target`` for ``what`` in a corrected-call hint."""
+    return {
+        "type": "Sop/scatter",
+        "stage": "/stage/OUT",
+        "image": "/img/comp/OUT",
+        "parms": "/obj/geo1/box1/size",
+    }.get(what, "/obj/geo1")
+
+
 def _check_args(what: str, target: Any, options: dict[str, Any]) -> None:
     allowed = OPTIONS[what]
     extra = sorted(set(options) - allowed)
+    paths = options.get("paths")
+    if "paths" in extra and what not in NO_TARGET and isinstance(paths, list) and paths:
+        # Review 25 papercut 2: one path is target for every what but node and parms.
+        first = paths[0] if isinstance(paths[0], str) else "<path>"
+        raise bad_arg(
+            f"what: {what} takes one path as target, not paths.",
+            hint=f'inspect {{what: "{what}", target: "{first}"}}'
+            + ("; one inspect per path." if len(paths) > 1 else "."),
+        )
     if extra:
         raise bad_arg(
             f"what: {what} does not take {', '.join(extra)}.",
@@ -127,10 +146,17 @@ def _check_args(what: str, target: Any, options: dict[str, Any]) -> None:
         raise bad_arg("'target' must be a non-empty path string.")
     if what in TARGET_REQUIRED and target is None:
         noun = "a node type such as Sop/scatter" if what == "type" else "a node path"
-        raise bad_arg(f"what: {what} needs target ({noun}).")
+        raise bad_arg(
+            f"what: {what} needs target ({noun}).",
+            hint=f'inspect {{what: "{what}", target: "{_example(what)}"}}',
+        )
     if what in ("node", "parms"):
         if target is None and options.get("paths") is None:
-            raise bad_arg(f"what: {what} needs target or paths.")
+            raise bad_arg(
+                f"what: {what} needs target or paths.",
+                hint=f'inspect {{what: "{what}", target: "{_example(what)}"}}, or paths: '
+                "[...] for several.",
+            )
         if target is not None and options.get("paths") is not None:
             raise bad_arg("Pass target or paths, not both.")
     if what != "type" and options.get("detail", "compact") not in DETAILS:

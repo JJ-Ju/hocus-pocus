@@ -264,6 +264,68 @@ def test_bridge_error_for_a_flat_parm_set_shows_the_items_form():
     assert '{"items": [{"path": "/obj/geo1/box1/sizex", "value": 2}]}' in error["hint"]
 
 
+@pytest.mark.parametrize(
+    ("args", "fixed"),
+    [
+        ({"what": "node", "path": "/obj/a"}, {"what": "node", "target": "/obj/a"}),
+        ({"what": "node", "node_path": "/obj/a"}, {"what": "node", "target": "/obj/a"}),
+        ({"what": "network", "root": "/obj"}, {"what": "network", "target": "/obj"}),
+        ({"what": "type", "type": "Sop/box"}, {"what": "type", "target": "Sop/box"}),
+        (
+            {"what": "stage", "lop_path": "/stage/OUT", "prim": "/geo"},
+            {"what": "stage", "target": "/stage/OUT", "prim": "/geo"},
+        ),
+        ({"what": "geo", "rop_path": "/out/r"}, {"what": "geo", "target": "/out/r"}),
+        ({"what": "geo", "path": ["/obj/a/OUT"]}, {"what": "geo", "target": "/obj/a/OUT"}),
+        ({"what": "node", "paths": "/obj/a"}, {"what": "node", "target": "/obj/a"}),
+        (
+            {"what": "node", "target": "/obj/a", "path": "/obj/a"},
+            {"what": "node", "target": "/obj/a"},
+        ),
+    ],
+)
+def test_inspect_1x_argument_names_get_the_target_call(args, fixed):
+    """Review 25 papercut 2: the rename is named before any edit-distance guess, and the hint
+    is the corrected call, which validates."""
+    from hocuspocus.bridge.validate import ARG_RENAMES, rename_hint
+
+    schema = _catalog_schema("inspect")
+    violations = validate(args, schema, ARG_RENAMES["inspect"])
+    assert violations
+    renamed = [v for v in violations if "unknown property" in v]
+    for violation in renamed:
+        assert "2.0 renamed it target" in violation and "did you mean" not in violation
+    hint = rename_hint("inspect", args, schema)
+    assert hint.startswith("inspect takes the path as target: inspect {")
+    call = json.loads(hint.split("target: inspect ", 1)[1])
+    assert call == fixed and list(call)[:2] == ["what", "target"]
+    assert not validate(call, schema)
+
+
+def test_renames_apply_only_to_their_tool_and_level():
+    from hocuspocus.bridge.validate import ARG_RENAMES, rename_hint
+
+    schema = _catalog_schema("inspect")
+    assert rename_hint("inspect", {"what": "node", "bogus": 1}, schema) is None
+    assert (
+        rename_hint("search", {"kind": "nodes", "path": "/obj"}, _catalog_schema("search")) is None
+    )
+    [violation] = validate({"what": "node", "bogus_frame": 1}, schema, ARG_RENAMES["inspect"])
+    assert "did you mean frame?" in violation
+
+
+def test_bridge_error_for_inspect_path_shows_the_target_call():
+    from hocuspocus.bridge.config import BridgeConfig
+    from hocuspocus.bridge.server import Bridge
+
+    bridge = Bridge(BridgeConfig(profile="core"), scan=lambda: [])
+    result = bridge.call_tool("inspect", {"what": "geo", "path": "/obj/geo1/OUT"})
+    error = json.loads(result.content[0].text)
+    assert error["code"] == "invalid_argument"
+    assert "path: unknown property; 2.0 renamed it target" in error["message"]
+    assert error["hint"].endswith('inspect {"what": "geo", "target": "/obj/geo1/OUT"}')
+
+
 def test_guide_examples_use_the_items_form():
     import re
 

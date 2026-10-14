@@ -39,7 +39,7 @@ from .instructions import PROMPT_DEFAULTS, PROMPTS, guide_text, instructions_for
 from .launch import Launcher
 from .ledger import Ledger, is_ledger_id
 from .local_tools import LOCAL_TOOLS
-from .validate import coerce_integers, shape_hint, validate
+from .validate import ARG_RENAMES, coerce_integers, rename_hint, shape_hint, validate
 
 EXIT_GRACE_S = 1.5
 """After a lost response, how long to watch for the Houdini process to exit."""
@@ -953,10 +953,13 @@ class Bridge:
                 data["candidates"] = close
             raise MCPError(types.INVALID_PARAMS, message, data)
         args = dict(arguments or {})
-        violations = validate(args, spec.input_schema)
+        violations = validate(args, spec.input_schema, ARG_RENAMES.get(name))
         if violations:
-            # Review 21 papercut 1: a flat item of a batch tool gets the corrected call.
-            wrapped = shape_hint(args, spec.input_schema)
+            # Review 21 papercut 1: a flat item of a batch tool gets the corrected call;
+            # review 25 papercut 2: so does a 1.4 argument name (inspect {path} -> target).
+            wrapped = shape_hint(args, spec.input_schema) or rename_hint(
+                name, args, spec.input_schema
+            )
             error = ToolError(
                 "invalid_argument",
                 f"{len(violations)} argument problem(s) for {name}: " + "; ".join(violations[:5]),

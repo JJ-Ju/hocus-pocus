@@ -55,7 +55,9 @@ Notes on the table:
   (`next_cursor`), which `node_type_search` did not.
 - **The path argument is `target`** for every `inspect`: `paths`, `root`, `path`,
   `lop_path` and `type` become `target` (`paths` is still accepted for `node` and
-  `parms`). `node_find`'s `type` glob is `search`'s `query`.
+  `parms`). Passing a 1.4 name answers `invalid_argument` with the corrected call in
+  `hint`, for example `inspect takes the path as target: inspect {"what": "geo",
+  "target": "/obj/geo1/OUT"}`. `node_find`'s `type` glob is `search`'s `query`.
 - **`edit` returns one row per op and one summary row per touched node**: `results:
   [{op, id?, path, ...}]` and `nodes: [{path, type, errors, warnings, cook_state,
   cook_ms}]`, not the per-tool shapes of 1.4. The row fields are the 1.4 ones (`deleted`,

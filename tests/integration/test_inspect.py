@@ -433,6 +433,11 @@ def test_inspect_errors_name_the_options(v2_client):
     assert error["code"] == "invalid_argument" and "no target" in error["message"]
     error = v2_client.error("inspect", {"what": "geo"})
     assert error["code"] == "invalid_argument" and "needs target" in error["message"]
+    assert error["hint"] == 'inspect {what: "geo", target: "/obj/geo1"}'
+    # Review 25 papercut 2: paths on a what that takes one path is the target call.
+    error = v2_client.error("inspect", {"what": "geo", "paths": [box.path()]})
+    assert error["message"] == "what: geo takes one path as target, not paths."
+    assert error["hint"] == f'inspect {{what: "geo", target: "{box.path()}"}}.'
     error = v2_client.error("inspect", {"what": "node", "target": "/obj/nope"})
     assert error["code"] == "node_not_found"
 

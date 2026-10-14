@@ -21,6 +21,23 @@ from typing import Any
 
 MAX_VIOLATIONS = 20
 
+ARG_RENAMES: dict[str, dict[str, str]] = {
+    "inspect": {
+        "path": "target",
+        "node_path": "target",
+        "root": "target",
+        "lop_path": "target",
+        "type": "target",
+        "rop_path": "target",
+        "cop_path": "target",
+    },
+}
+"""Per tool, a 1.4 argument name -> the 2.0 argument that replaced it (review 25 papercut
+2: ``inspect {path}`` was answered "did you mean paths, depth?"). An unknown top-level
+property in this table is reported as the rename, before any edit-distance suggestion, and
+:func:`rename_hint` shows the corrected call. ``paths`` given as one string is the same
+mistake (:func:`rename_hint`)."""
+
 _KNOWN_TYPES = frozenset({"object", "array", "string", "integer", "number", "boolean", "null"})
 
 
@@ -77,8 +94,9 @@ def _label(path: str) -> str:
 
 
 class _Validator:
-    def __init__(self, root: dict[str, Any]) -> None:
+    def __init__(self, root: dict[str, Any], renames: dict[str, str] | None = None) -> None:
         self.root = root
+        self.renames = renames or {}
         self.errors: list[str] = []
 
     def _resolve(self, schema: Any) -> dict[str, Any]:
@@ -201,8 +219,11 @@ class _Validator:
             if key in props:
                 self.check(item, props[key], child)
             elif additional is False:
+                renamed = self.renames.get(key) if not path else None
                 close = difflib.get_close_matches(key, list(props), n=3, cutoff=0.6)
-                if close:
+                if renamed in props:
+                    self.errors.append(f"{child}: unknown property; 2.0 renamed it {renamed}")
+                elif close:
                     self.errors.append(
                         f"{child}: unknown property; did you mean {', '.join(close)}?"
                     )
@@ -321,16 +342,53 @@ class _Coercer(_Validator):
         return value
 
 
-def validate(value: Any, schema: dict[str, Any] | None) -> list[str]:
-    """Return human-readable violations (empty when ``value`` conforms to ``schema``)."""
+def validate(
+    value: Any, schema: dict[str, Any] | None, renames: dict[str, str] | None = None
+) -> list[str]:
+    """Return human-readable violations (empty when ``value`` conforms to ``schema``).
+    ``renames`` (a tool's :data:`ARG_RENAMES`) names the 2.0 argument for a 1.4 one."""
     if not schema:
         return []
-    validator = _Validator(schema)
+    validator = _Validator(schema, renames)
     validator.check(value, schema, "")
     return validator.errors[:MAX_VIOLATIONS]
 
 
 SHAPE_HINT_MAX_CHARS = 400
+
+
+def rename_hint(tool: str, value: Any, schema: dict[str, Any] | None) -> str | None:
+    """The corrected call when ``value`` uses a 1.4 argument name :data:`ARG_RENAMES`
+    maps for ``tool`` (``inspect {what: "geo", path}`` -> ``inspect {what: "geo",
+    target}``), or passes ``paths`` as one string; None otherwise. A one-item list becomes
+    the string; with ``target`` already given the old argument is dropped."""
+    renames = ARG_RENAMES.get(tool)
+    if not renames or not isinstance(value, dict) or not schema:
+        return None
+    props = schema.get("properties") or {}
+    fixed: dict[str, Any] = {}
+    changed = False
+    for key, item in value.items():
+        new = renames.get(key) if key not in props else None
+        if key == "paths" and isinstance(item, str):
+            new = "target"
+        if new is None or new not in props:
+            fixed.setdefault(key, item)
+            continue
+        changed = True
+        if isinstance(item, list) and len(item) == 1:
+            item = item[0]
+        if new in value or new in fixed:
+            continue  # target was given too: drop the 1.4 spelling
+        fixed[new] = item
+    if not changed:
+        return None
+    shown = {k: fixed[k] for k in ("what", "kind", "target") if k in fixed}
+    shown.update({k: v for k, v in fixed.items() if k not in shown})
+    text = json.dumps(_elided(shown), ensure_ascii=False)
+    if len(text) > SHAPE_HINT_MAX_CHARS:
+        text = text[: SHAPE_HINT_MAX_CHARS - 1] + "…"
+    return f"{tool} takes the path as target: {tool} {text}"
 
 
 def _elided(value: Any) -> Any:
