@@ -88,6 +88,27 @@ def connected_block(bridge: Bridge, inst: registry.Instance) -> dict[str, Any]:
     return block
 
 
+VERSION_HINT = (
+    "A GUI Houdini runs the host its installed package points at: reinstall it with "
+    "`hocuspocus install-houdini` (or `--dev` for a checkout) and restart Houdini; a "
+    "headless launch always runs the bridge's own host."
+)
+
+
+def version_warning(host_version: Any) -> str | None:
+    """``version_mismatch`` as a warning (docs/parity.md G7): the host's ``host_version``
+    differs from this bridge's. Calls still work (the ``hp`` RPC version matched, or
+    ``/health`` would have raised ``version_mismatch`` as an error), but the host may lack
+    or differ in tools this bridge lists. None when they match or the host did not say."""
+    if not isinstance(host_version, str) or not host_version or host_version == __version__:
+        return None
+    return (
+        f"version_mismatch: this Houdini runs HocusPocus host {host_version} and the bridge "
+        f"is {__version__} (same hp RPC version, so calls work, but tools may differ). "
+        + VERSION_HINT
+    )
+
+
 def _split_settings(block: dict[str, Any] | None) -> dict[str, Any]:
     if not block:
         return {}
@@ -141,6 +162,9 @@ def houdini_status(bridge: Bridge, args: dict[str, Any]) -> dict[str, Any]:
             lost_block = {"pid": sel.lost_pid, "label": lost.detail["label"]}
             warnings.append(f"{lost.message} {lost.hint[0].upper()}{lost.hint[1:]}.")
     settings = _split_settings(connected)
+    mismatch = version_warning((connected or {}).get("host_version"))
+    if mismatch:
+        warnings.append(mismatch)
     status: dict[str, Any] = {
         "connected": connected,
         **({"lost": lost_block} if lost_block else {}),
@@ -181,7 +205,7 @@ def _row(bridge: Bridge, inst: registry.Instance, selected: bool) -> dict[str, A
     except ToolError as exc:
         row["unreachable"] = exc.code
         return row
-    for key in ("busy", "jobs_running"):
+    for key in ("busy", "jobs_running", "host_version"):
         if key in health:
             row[key] = health[key]
     return row
@@ -237,6 +261,19 @@ def _apply_role(bridge: Bridge, inst: registry.Instance, role: str | None) -> No
 
 
 def houdini_connect(bridge: Bridge, args: dict[str, Any]) -> dict[str, Any]:
+    """Attach, launch, detach or quit (:func:`_connect`); an attach or launch to a host
+    whose ``host_version`` is not the bridge's carries a ``version_mismatch`` warning
+    (docs/parity.md G7: a GUI Houdini runs whatever its package points at)."""
+    out = _connect(bridge, args)
+    block = out.get("connected")
+    if isinstance(block, dict):
+        mismatch = version_warning(block.get("host_version"))
+        if mismatch:
+            out.setdefault("warnings", []).append(mismatch)
+    return out
+
+
+def _connect(bridge: Bridge, args: dict[str, Any]) -> dict[str, Any]:
     role = _role(args)
     if role is not None and (args.get("quit") or args.get("disconnect")):
         raise ToolError(

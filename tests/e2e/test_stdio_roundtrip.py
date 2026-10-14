@@ -226,6 +226,12 @@ def test_bridge_launch_starts_in_the_work_dir(hython, tmp_path):
         connected = _json(status)["connected"]
         (row,) = [i for i in _json(status)["instances"] if i["selected"]]
         assert isinstance(row["launched_by"], int) and row["launched_by"] != connected["pid"]
+        # G7: a headless launch runs the bridge's own host code; the versions are compared
+        # and agree, so there is no version_mismatch warning.
+        from hocuspocus.version import __version__
+
+        assert connected["host_version"] == row["host_version"] == __version__
+        assert not any("version_mismatch" in w for w in _json(launched).get("warnings", []))
         assert connected["env"]["HIP"] == work.as_posix()
         assert connected["env"]["JOB"] == work.as_posix()
         assert connected["hip"]["path"] == f"{work.as_posix()}/untitled.hip"
