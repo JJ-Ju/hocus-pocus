@@ -529,3 +529,12 @@ def test_geo_read_at_a_frame_leaves_the_playbar(client):
     assert hou.frame() == 1
     stats = client.ok("geo_read", {"path": box.path(), "class": "detail", "frame": 3})
     assert stats["frame"] == 3
+
+
+def test_geo_info_missing_node_hint_matches_cook(client):
+    """Review 22 finding 8: geo_info said only 'Check the node name.'."""
+    for path in ("/obj/soak_missing", "/obj/soak_missing/out"):
+        geo = client.error("geo_info", {"path": path})
+        cook = client.error("cook", {"paths": [path]})
+        assert geo["code"] == cook["code"] == "node_not_found"
+        assert geo["hint"] == cook["hint"] and "node_find" in geo["hint"]

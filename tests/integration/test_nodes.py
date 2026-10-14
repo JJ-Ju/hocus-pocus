@@ -472,6 +472,34 @@ def test_node_not_found_is_one_shape_across_tools(client):
     assert "Parm paths are" in errors[2]["hint"]
 
 
+def test_missing_wiring_source_names_itself_and_its_parent(client):
+    """Review 21 papercut 4: the prefix named the target, the candidate was the target
+    itself and the hint said only 'Check the node name.'"""
+    make_chain()
+    error = client.error(
+        "node_connect",
+        {"items": [{"from": "/obj/geo1/nope", "to": "/obj/geo1/OUT", "to_input": 0}]},
+    )
+    assert error["code"] == "node_not_found"
+    assert error["message"].startswith("items[0] (/obj/geo1/nope): ")
+    assert "/obj/geo1/OUT" in error["message"]  # what it was to be wired into
+    assert error["detail"]["path"] == "/obj/geo1/nope"
+    assert "/obj/geo1/OUT" not in error.get("candidates", [])
+    assert 'node_find {root: "/obj/geo1"}' in error["hint"]
+    created = client.error(
+        "node_create",
+        {"items": [{"parent": "/obj/geo1", "type": "null", "inputs": [{"from": "xfrom2"}]}]},
+    )
+    assert created["message"].startswith("items[0] (/obj/geo1/xfrom2): ")
+    assert created["candidates"][0] == "/obj/geo1/xform1"
+
+
+def test_missing_parent_hint_names_node_find_on_the_nearest_ancestor(client):
+    error = client.error("node_info", {"paths": ["/obj/soak_missing/out"]})
+    assert "/obj/soak_missing does not exist either" in error["hint"]
+    assert 'node_find {root: "/obj"}' in error["hint"]
+
+
 # -- node_find ---------------------------------------------------------------------
 
 
