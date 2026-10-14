@@ -17,7 +17,7 @@ SPEC = ToolSpec(
         "Each kind takes its 1.4 tool's arguments; any other is invalid_argument naming "
         "the ones it takes. Defaults are the 1.4 tool's (types: limit 20, current_only "
         "true; nodes: root /, limit 50). types: query is required; the result is "
-        "node_type_search's {results, total, common?, hint?, notes?}, plus next_cursor when "
+        "node_type_search's {results, common?, total, hint?, notes?}, plus next_cursor when "
         "total counts more matches than this page (node_type_search itself has no paging; a "
         "types page reaches the first 1000 matches). nodes: query (optional) is node_find's "
         "type glob, pattern its name glob; the result is node_find's {root?, nodes, "
@@ -28,8 +28,14 @@ SPEC = ToolSpec(
         "has_errors only when true, child_count and input_count only when above 0; common: "
         "{category} holds the category most rows share, and a row in another category names "
         "its type as Category/type (Object/geo); next_cursor is the last row's path (cursor "
-        "takes it, or node_find's after:<path>). types is node_type_search's result "
-        "plus kind."
+        "takes it, or node_find's after:<path>). types: a row is {name, label, "
+        "description} with description capped at 80 characters, plus inputs as 'min-max' "
+        "unless 1-1, deprecated and hidden only when true, other_versions only when "
+        "non-empty, current and is_current_version: false for an older version; version is "
+        "not given (a namespaced version is in the name); common hoists category, "
+        "child_category and typical_parents when every row shares them, and "
+        "typical_parents (where a type of that category goes) also when only some rows "
+        "carry it."
     ),
     input_schema=_obj(
         {

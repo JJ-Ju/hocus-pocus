@@ -1,8 +1,7 @@
 """``search`` (spec-2.0 §2.3) against real Houdini: ``kind: types`` is ``node_type_search``
 and ``kind: nodes`` is ``node_find``; with ``detail: full`` byte for byte plus only ``kind``,
-``kind: nodes`` by default compact (spec-2.0 M4 "read shapes": defaults and empties left
-out, the shared category in ``common``, no ``kind`` or named ``root`` echo); types pages by
-cursor."""
+by default compact (spec-2.0 M4 "read shapes": defaults and empties left out, shared
+fields in ``common``, no ``kind`` or named ``root`` echo); types pages by cursor."""
 
 from __future__ import annotations
 
@@ -27,7 +26,7 @@ def _same(client, kind: str, options: dict[str, Any], tool: str, args: dict[str,
     rest = {k: v for k, v in new.items() if k != "kind"}
     assert _bytes(rest) == _bytes(old), (kind, set(rest) ^ set(old))
     compact = client.ok("search", {"kind": kind, **options})
-    assert ("kind" in compact) == (kind == "types"), compact  # nodes: compact
+    assert "kind" not in compact, compact
     return compact
 
 
@@ -51,6 +50,28 @@ def test_types_is_node_type_search(v2_client):
     _same(v2_client, "types", options, "node_type_search", options)
     options = {"query": "copy to points", "include_hidden": True, "limit": 1000}
     _same(v2_client, "types", options, "node_type_search", options)
+
+
+def test_types_rows_are_compact(v2_client):
+    """spec-2.0 M4: {name, label, description <= 80} plus only what is not the default;
+    category (and typical_parents) said once in common."""
+    old = v2_client.ok("node_type_search", {"query": "vellum", "category": "Sop", "limit": 10})
+    new = v2_client.ok("search", {"kind": "types", "query": "vellum", "category": "Sop",
+                                  "limit": 10})  # fmt: skip
+    assert new["common"]["category"] == "Sop"
+    assert new["common"]["typical_parents"] == ["a geo object such as /obj/geo1"]
+    assert new["total"] == old["total"] and new["next_cursor"] == "t:10"
+    assert len(new["results"]) == len(old["results"])
+    for row, full in zip(new["results"], old["results"], strict=True):
+        assert row["name"] == full["name"] and row["label"] == full["label"]
+        assert len(row["description"]) <= 80
+        assert full["description"].startswith(row["description"].rstrip("…"))
+        assert not {"category", "version", "typical_parents"} & set(row), row
+        assert row.get("deprecated", False) == full["deprecated"]
+        assert row.get("other_versions", []) == full.get("other_versions", [])
+        lo, hi = full["inputs"]["min"], full["inputs"]["max"]
+        assert row.get("inputs") == (None if (lo, hi) == (1, 1) else f"{lo}-{hi}"), row
+    assert len(_bytes(new)) < 0.8 * len(_bytes(old))
 
 
 def test_types_pages_by_cursor(v2_client):

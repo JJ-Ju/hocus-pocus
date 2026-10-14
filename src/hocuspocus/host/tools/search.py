@@ -12,11 +12,11 @@ synonyms and filters exist once):
 * ``nodes``: ``node_find`` (``query`` as its ``type`` glob, ``root``, ``pattern``,
   ``category``, ``flags``, ``has_errors``, ``recurse_locked``, ``limit``, ``cursor``).
 
-The ``nodes`` result is projected for 2.0 (spec-2.0 M4 "read shapes";
-:func:`compact_nodes`): no ``kind`` echo (the caller knows it, as ``inspect`` leaves out
+The result is projected for 2.0 (spec-2.0 M4 "read shapes"; :func:`compact_nodes`,
+:func:`compact_types`): no ``kind`` echo (the caller knows it, as ``inspect`` leaves out
 ``what``), no ``root`` echo when the call named it, rows without what is default or empty,
 and what the rows share said once in ``common``. ``detail: full`` returns ``{kind, ...the
-1.4 result}`` unchanged; ``types`` returns ``{kind, ...}`` unchanged.
+1.4 result}`` unchanged.
 """
 
 from __future__ import annotations
@@ -55,6 +55,29 @@ TYPES_CURSOR = "t:"
 
 
 # -- 2.0 projections -----------------------------------------------------------------------
+
+DESCRIPTION_CHARS = 80
+"""A compact types row's description is capped at this many characters."""
+
+
+def _clip(text: Any, limit: int = DESCRIPTION_CHARS) -> Any:
+    if not isinstance(text, str) or len(text) <= limit:
+        return text
+    return text[: limit - 1].rstrip() + "…"
+
+
+def _hoist(rows: list[dict[str, Any]], keys: tuple[str, ...], common: dict[str, Any]) -> None:
+    """Move each of ``keys`` that every row carries with one value into ``common``."""
+    if not rows:
+        return
+    for key in keys:
+        if key in common or any(key not in row for row in rows):
+            continue
+        value = rows[0][key]
+        if all(row[key] == value for row in rows):
+            common[key] = value
+            for row in rows:
+                del row[key]
 
 
 def _hoist_majority(rows: list[dict[str, Any]], key: str, common: dict[str, Any]) -> None:
@@ -118,6 +141,64 @@ def compact_nodes(result: dict[str, Any], *, root_given: bool = False) -> dict[s
         out[key] = rows if key == "nodes" else value
         if key == "nodes" and common:
             out["common"] = common
+    return out
+
+
+def _inputs(value: Any) -> Any:
+    """``{min, max}`` as ``"min-max"``; ``None`` (left out) for the usual 1-1."""
+    if not isinstance(value, dict) or set(value) != {"min", "max"}:
+        return value
+    if value["min"] == 1 and value["max"] == 1:
+        return None
+    return f"{value['min']}-{value['max']}"
+
+
+def compact_type_row(row: dict[str, Any]) -> dict[str, Any]:
+    """A ``node_type_search`` row: ``{name, label, description (80 chars), inputs?:
+    "min-max", ...}`` without ``version``, ``deprecated``/``hidden`` when false,
+    ``is_current_version: true`` or empty ``other_versions``."""
+    out: dict[str, Any] = {}
+    for key, value in row.items():
+        if key == "version":
+            continue  # a namespaced version is in the name; detail: full has the rest
+        if key in ("deprecated", "hidden") and not value:
+            continue
+        if key == "is_current_version" and value is True:
+            continue
+        if key == "other_versions" and not value:
+            continue
+        if key == "description":
+            value = _clip(value)
+        if key == "inputs":
+            value = _inputs(value)
+            if value is None:
+                continue
+        out[key] = value
+    return out
+
+
+def compact_types(result: dict[str, Any]) -> dict[str, Any]:
+    """``node_type_search``'s result with compact rows; ``common`` also hoists
+    ``category`` when every row shares it, and then ``typical_parents`` (where a type of
+    that category goes, the same for each row that names it)."""
+    rows = [compact_type_row(r) if isinstance(r, dict) else r for r in result.get("results", [])]
+    dict_rows = [r for r in rows if isinstance(r, dict)]
+    common = dict(result.get("common") or {})
+    _hoist(dict_rows, ("category", "child_category", "typical_parents"), common)
+    parents = [r["typical_parents"] for r in dict_rows if "typical_parents" in r]
+    if "category" in common and parents and all(p == parents[0] for p in parents):
+        common.setdefault("typical_parents", parents[0])
+        for row in dict_rows:
+            if row.get("typical_parents") == common["typical_parents"]:
+                del row["typical_parents"]
+    out: dict[str, Any] = {}
+    for key, value in result.items():
+        if key == "results":
+            out["results"] = rows
+            if common:
+                out["common"] = common
+        elif key != "common":
+            out[key] = value
     return out
 
 
@@ -194,7 +275,7 @@ def search(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
         if not isinstance(query, str) or not query.strip():
             raise bad_arg("kind: types needs query (a name, label or keyword).")
         types = _types(options, ctx)
-        return {"kind": kind, **types}
+        return {"kind": kind, **types} if full else compact_types(types)
     nodes = _nodes(options, ctx)
     if full:
         return {"kind": kind, **nodes}
