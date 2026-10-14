@@ -1402,8 +1402,8 @@ _VISUAL: tuple[ToolSpec, ...] = (
     ToolSpec(
         name="render",
         description=(
-            "Render any ROP (Karma, Flipbook, ...) or writer SOP (File Cache, rop_geometry: own "
-            "frame range) for frames [start, end, inc] (default current frame), optionally "
+            "Render any ROP (Karma, Flipbook, USD, ...) or writer SOP (File Cache, rop_geometry) "
+            "for frames [start, end, inc] (default the ROP's own frame range), optionally "
             "overriding output. Waits up to wait_s (default the job threshold): if done, returns "
             "outputs, a thumbnail and notes; else job_id to poll with job."
         ),
@@ -1423,8 +1423,9 @@ _VISUAL: tuple[ToolSpec, ...] = (
             "outputs come from outputimage, else the RenderProduct productName of the render "
             "settings the ROP uses (EXR thumbnails too), never lopoutput; output overrides "
             "outputimage; a note says when nothing resolves; a husk failure carries the end of "
-            "its log in detail.log_tail. A writer SOP (File Cache, rop_geometry or rop_alembic "
-            "SOP) renders its own frame range unless frames is given; a File Cache renders "
+            "its log in detail.log_tail. Without frames a ROP or writer SOP (File Cache, "
+            "rop_geometry or rop_alembic SOP) renders its own Valid Frame Range, or the current "
+            "frame when set to Render Current Frame; a note says which. A File Cache renders "
             "through the ROP inside it (no output override), then turns on Load from Disk as its "
             "Save to Disk button does (side_effects: {parm: [old, new]}). A cancelled render's "
             "job result is the cancelled error with detail {last_status, partial: "

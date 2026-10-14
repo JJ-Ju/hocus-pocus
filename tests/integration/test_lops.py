@@ -530,6 +530,24 @@ def test_render_usdexport_sop_writes_every_frame(client, work_dir):
     assert len(_samples(work_dir / "sop.usd")) == 6
 
 
+def test_render_without_frames_uses_the_rops_frame_range(client, work_dir):
+    """Review 23 P1-2: render without frames used the current frame even on a ROP set to
+    a frame range. It now renders the ROP's own range, and a ROP set to Render Current
+    Frame renders that frame; a note says which."""
+    rop = _usd_export(work_dir, frames=(1, 6))
+    result = client.ok("render", {"rop_path": rop.path()})
+    assert result["frames"] == [1, 6, 1], result
+    assert any("own frame range 1-6" in n for n in result["notes"]), result
+    assert len(_samples(work_dir / "usd" / "anim_import.usd")) == 6
+    rop.parm("trange").set(0)
+    hou.setFrame(3)
+    current = client.ok("render", {"rop_path": rop.path()})
+    assert current["frames"] == [3, 3, 1], current
+    assert any("current frame (3) only" in n for n in current["notes"]), current
+    given = client.ok("render", {"rop_path": rop.path(), "frames": [2, 4]})
+    assert not any("frame range" in n or "current frame" in n for n in given.get("notes", []))
+
+
 # -- node_type_info filters (papercut 8) ------------------------------------------------
 
 

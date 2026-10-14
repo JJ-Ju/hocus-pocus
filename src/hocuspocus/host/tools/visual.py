@@ -2102,6 +2102,30 @@ def rop_frame_range(rop: Any) -> list[float] | None:
     return [start, end, inc]
 
 
+def default_frames(rop: Any, name: str) -> tuple[list[float], str | None]:
+    """The frames ``render`` renders without ``frames``: the ROP's own Valid Frame Range,
+    else the current frame, with a note saying which (review 23 P1-2: a usd_rop set to
+    frames 1-48 rendered frame 1 only, silently). Main thread."""
+    import hou
+
+    own = rop_frame_range(rop)
+    if own is not None:
+        start, end, inc = own
+        step = f" step {frame_num(inc)}" if inc != 1 else ""
+        return own, (
+            f"Rendered {name}'s own frame range {frame_num(start)}-{frame_num(end)}{step}; "
+            "pass frames to render others."
+        )
+    frame = hou.frame()
+    note = None
+    if rop.parm("trange") is not None:
+        note = (
+            f"Rendered the current frame ({frame_num(frame)}) only: {name}'s Valid Frame Range "
+            "is 'Render Current Frame'. Pass frames to render a range."
+        )
+    return [frame, frame, 1.0], note
+
+
 def expected_outputs(rop: Any, frames: list[float]) -> list[str]:
     """The files ``rop`` writes for ``frames`` (``[start, end, inc]``), from its output
     parm; MPlay and empty outputs are left out. Main thread."""
@@ -2573,12 +2597,13 @@ def _prepare_render(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     rop = owner if callable(getattr(owner, "render", None)) else writer_rop(owner)
     if rop is None:
         raise _not_a_render_node(owner)
-    # A writer SOP (File Cache, rop_geometry SOP) renders its own frame range by default;
-    # a File Cache renders through the ROP inside it (review 17 P1-3).
-    writer = rop is not owner or owner.type().category().name() == "Sop"
+    # Without frames every ROP renders its own Valid Frame Range, as writer SOPs did since
+    # review 17 P1-3 (review 23 P1-2), or the current frame when it is set to that; a File
+    # Cache renders through the ROP inside it.
     frames = _frames(args.get("frames"))
+    range_note = None
     if frames is None:
-        frames = (rop_frame_range(rop) if writer else None) or [hou.frame(), hou.frame(), 1.0]
+        frames, range_note = default_frames(rop, owner.path())
     output = args.get("output")
     parm = _output_parm(rop)
     usd = is_usd_render_rop(rop)
@@ -2645,6 +2670,7 @@ def _prepare_render(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
         "usd": usd,
         "single_file": single_file,
         "note": note,
+        "range_note": range_note,
         "isolate": needs_isolation(rop, ctx),
         "stage_source": rop.parm("opsource") is not None and rop.parm("opsource").eval() == 1,
         "hfs": hou.text.expandString("$HFS"),
@@ -2698,6 +2724,8 @@ def _render_result(plan: dict[str, Any], thumbnail: bool) -> dict[str, Any]:
     notes: list[str] = []
     if plan.get("owner"):
         notes.append(f"{plan['owner']} rendered through its ROP {plan['rop']}.")
+    if plan.get("range_note"):
+        notes.append(plan["range_note"])
     images = [
         p for p in plan["expected"] if os.path.splitext(p)[1].lower() in IMAGE_EXTS | CONVERT_EXTS
     ]
