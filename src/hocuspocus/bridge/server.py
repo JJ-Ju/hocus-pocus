@@ -1353,6 +1353,28 @@ async def _call_with_progress(
     return result
 
 
+HANDSHAKE_METHODS = frozenset({"initialize", "server/discover"})
+"""The requests whose result carries ``serverInfo`` (:func:`server_info_once`)."""
+
+
+async def server_info_once(ctx: Any, call_next: Any) -> Any:
+    """Server middleware: keep the SDK's ``_meta`` ``serverInfo`` stamp on the handshake
+    (``initialize``, ``server/discover``, where the client reads it) and drop it from every
+    other result (review 25 papercut 4: about 200 B repeated in every tool result's
+    ``_meta``). ``_meta.instance`` and ``_meta.timing`` are untouched."""
+    result = await call_next(ctx)
+    if getattr(ctx, "method", None) in HANDSHAKE_METHODS or not isinstance(result, dict):
+        return result
+    meta = result.get("_meta")
+    if not isinstance(meta, dict) or types.SERVER_INFO_META_KEY not in meta:
+        return result
+    rest = {key: value for key, value in meta.items() if key != types.SERVER_INFO_META_KEY}
+    out = {key: value for key, value in result.items() if key != "_meta"}
+    if rest:
+        out["_meta"] = rest
+    return out
+
+
 def build_server(bridge: Bridge | None = None) -> Server[Any]:
     bridge = bridge or Bridge()
 
@@ -1408,6 +1430,7 @@ def build_server(bridge: Bridge | None = None) -> Server[Any]:
         on_get_prompt=on_get_prompt,
     )
     server.bridge = bridge  # type: ignore[attr-defined]
+    server.middleware.append(server_info_once)
     from .resources import install as install_resources
 
     install_resources(server, bridge)  # profile v2: resources with etags and subscriptions

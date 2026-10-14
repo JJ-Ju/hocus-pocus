@@ -105,7 +105,7 @@ class FakeClient:
             "pid": 4242,
             "houdini": "22.0.466",
             "generation": 2,
-            "host_version": "1.4.0",
+            "host_version": "2.0.0",
         }
         self.replies: dict[str, Any] = {}
         self.calls: list[tuple[str, dict, float]] = []
@@ -561,7 +561,7 @@ def test_status_merges_registry_health_and_host():
             "time": {"frame": 1, "fps": 24, "range": [1, 240]},
             "env": {"HIP": "C:/work"},
             "scene_generation": 5,
-            "host_version": "1.4.0",
+            "host_version": "2.0.0",
             "read_only": False,
             "allow_python": True,
         },
@@ -622,6 +622,39 @@ def test_compat_status_keeps_the_14_hip_fields():
     status = structured(bridge.call_tool("houdini_status", {}))
     assert status["connected"]["hip"]["name"] == "a.hip"
     assert status["connected"]["env"] == {"HIP": "C:/work"}
+
+
+def test_server_info_only_in_the_handshake():
+    """Review 25 papercut 4: serverInfo is stamped on initialize/server/discover only; a
+    tool result keeps _meta.instance and timing without it."""
+    import anyio
+    from mcp import types as mcp_types
+
+    from hocuspocus.bridge.server import build_server, server_info_once
+
+    key = mcp_types.SERVER_INFO_META_KEY
+    stamp = {"name": "hocuspocus", "version": "2.0.0"}
+    stamped = {
+        "content": [],
+        "_meta": {"instance": {"pid": 1}, "timing": {"main_thread_ms": 1}, key: stamp},
+    }
+
+    def run(method: str, result: Any) -> Any:
+        async def call_next(ctx: Any) -> Any:
+            return result
+
+        ctx = type("Ctx", (), {"method": method})()
+        return anyio.run(server_info_once, ctx, call_next)
+
+    out = run("tools/call", stamped)
+    assert out["_meta"] == {"instance": {"pid": 1}, "timing": {"main_thread_ms": 1}}
+    assert key in stamped["_meta"]  # the result it was given is not changed
+    assert "_meta" not in run("resources/read", {"contents": [], "_meta": {key: stamp}})
+    for method in ("server/discover", "initialize"):
+        assert run(method, stamped)["_meta"][key] == stamp
+    assert run("notifications/initialized", None) is None
+    server = build_server(Bridge(BridgeConfig(), scan=lambda: []))
+    assert server_info_once in server.middleware
 
 
 def test_status_survives_host_error():

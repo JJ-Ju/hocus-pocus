@@ -337,7 +337,10 @@ the queue and Houdini. For a tool that runs off the main thread (`render`, `cook
 call's behalf: its own executor calls and the steps of jobs it started that finished while it
 waited (review 24 N5: a 1.9 s `cook {profile}` said `0`); a step finishing after the call
 returned is not counted. A call that ran no main-thread step reports
-`{"main_thread_ms": 0, "off_main_thread": true}`.
+`{"main_thread_ms": 0, "off_main_thread": true}`. 2.0 (review 25 papercut 4): the MCP SDK's
+`_meta` `serverInfo` stamp (about 200 B) goes on the handshake only (`initialize`,
+`server/discover`, where the client reads it); a bridge middleware
+(`bridge/server.py` `server_info_once`) drops it from every other result.
 The protocol version `hp/v1` is in the path; incompatible changes
 bump it and the bridge refuses to talk to an older host with `code: version_mismatch`
 and the hint "run `hocuspocus install-houdini` and restart Houdini".

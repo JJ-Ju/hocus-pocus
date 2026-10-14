@@ -272,7 +272,7 @@ class _Host:
 
     def health(self, timeout_s: float = 5.0) -> dict[str, Any]:
         return {"ok": True, "hp": 1, "pid": self.inst.pid, "houdini": "22.0.466",
-                "generation": 1, "host_version": "1.4.0"}  # fmt: skip
+                "generation": 1, "host_version": "2.0.0"}  # fmt: skip
 
     def call(self, tool, args, timeout_s, request_id=None, max_response_bytes=None):
         self.calls.append((tool, dict(args or {})))

@@ -4,7 +4,9 @@ This project uses [Semantic Versioning](https://semver.org/). The 0.9 compatibil
 policy does not apply to 1.0. 2.0 changes the tool surface; `compat_1x` keeps the 1.4
 one for the 2.0.x releases.
 
-## Unreleased (2.0.0)
+## Unreleased
+
+## 2.0.0 (2026-10-14)
 
 2.0 changes the contract where every evaluation since 1.0 (reviews 07 to 24) said it
 matters: calls per task and bytes per call. Scene changes become one transaction tool,
@@ -16,6 +18,30 @@ design `docs/BIBLE.md` (rewritten for 2.0; decisions D35 to D44), and
 **[`docs/migration-2.0.md`](docs/migration-2.0.md) maps every 1.4 tool to its 2.0
 replacement**. `profile = "compat_1x"` keeps 1.4 client scripts running unchanged for the
 2.0.x releases.
+
+### Measured
+
+- **Scorecard** (`docs/redesign/review/25-scorecard-2.0.md`): a fresh agent ran review 21's
+  twelve tasks on the default `core` profile with only the MCP surface. 111 round trips
+  and 435.6 KB on the wire against 1.3's 122 and 458.1 KB; 52.6 KB of tool-result text
+  (about 13.2k tokens) against 57.7 KB; `tools/list` 20.5 KB (18 tools) against 30.7 KB
+  (35). Every task call succeeded on the first try; the 5-node build with its layout was
+  one call (588 B). It scored 2.0 4 / 5 / 5 / 4 / 5 / 5 (1.3: 4 / 5 / 5 / 5 / 5 / 5): error
+  quality dropped because the server's own hints named 1.4 tools `core` refuses. This
+  release fixes the five papercuts the review asked for before tagging (see **Fixed**), and
+  its task 9 is now `tests/e2e/test_error_quality_v2.py`: 20 deliberate mistakes on
+  `core`, every message and hint naming only `core` tools.
+- **Workloads** (`tests/workloads`, spec-2.0 §7): each 2.0 workload uses fewer calls and
+  fewer text bytes than its 1.4 budget, the M4 exit. The cuts against the margins the
+  reviews predicted (the 2.1 targets where unmet):
+
+  | Workload | Calls 1.4 → 2.0 | Cut (target) | Text bytes 1.4 → 2.0 | Cut (target) |
+  |---|---:|---:|---:|---:|
+  | `city_build` | 21 → 15 | 29 % (25 %) | 20,804 → 13,916 | 33 % (20 %) |
+  | `fx_cache` | 13 → 11 | 15 % (15 %) | 9,084 → 7,114 | 22 % (15 %) |
+  | `scorecard_twelve` | 49 → 48 | 2 % (0 %) | 28,204 → 23,250 | 18 % (20 %, a 2.1 target) |
+  | `soak_200` | 200 → 177 | 12 % (0 %) | 100,362 → 68,867 | 31 % (20 %) |
+  | `vellum_usd` | 14 → 11 | 21 % (15 %) | 8,292 → 6,063 | 27 % (15 %) |
 
 ### Contract changes
 
@@ -61,7 +87,9 @@ replacement**. `profile = "compat_1x"` keeps 1.4 client scripts running unchange
   is one call of under 1 KB.
 - **`inspect`** `{what, target}`: `node`, `parms`, `network`, `outline`, `geo` (rows with
   `rows: true`), `image`, `stage`, `problems`, `type`, `events` and `jobs`, returning the
-  matching 1.4 read's result byte for byte plus `what`, `target` and an `etag`. A node as
+  matching 1.4 read's result plus an `etag` (without `what` or `target`), projected
+  compactly by default (defaults and empties left out; `detail: "full"` for the 1.4
+  shape). A node as
   `parms` target reads its non-default parms.
 - **`search`** `{kind: types | nodes}`: `node_type_search` (now paged with `next_cursor`)
   and `node_find`.
@@ -104,6 +132,40 @@ replacement**. `profile = "compat_1x"` keeps 1.4 client scripts running unchange
 
 ### Fixed
 
+- **Hints name only the active profile's tools** (review 25 papercut 1). On `core` the
+  server's own hints sent the agent to `node_find`, `node_type_info`, `node_type_search`,
+  "the problems tool" and `viewport_capture`, which `core` refuses. Every hint and message
+  that names a tool now goes through `tools/migration.py` `hint_tool`, which renders
+  `search {kind: "nodes", root}`, `inspect {what: "type", target}`, `search {kind:
+  "types", query}`, `inspect {what: "problems"}`, `look` and the `edit` `set` and
+  `create` ops on the 2.0 profiles, keeps the 1.4 names on `compat_1x`, and leaves out a
+  clause whose tool the profile lacks. Hints that pointed at `docs/tools.md` point at
+  `hocuspocus://tools`. A unit test checks a fixture of errors in every profile.
+- **`inspect` steers the 1.4 path arguments to `target`** (papercut 2): `path`,
+  `node_path`, `root`, `lop_path`, `type` and `rop_path` answer "2.0 renamed it target"
+  before any edit-distance guess, with the corrected call in `hint`; `paths` as one
+  string, or on a `what` that takes one path, too. A flat `edit` op, or `ops` given as an
+  object, gets the call with the op inside `ops`.
+- **`edit` errors are located at the op field** (papercut 3): `ops[0].from: No node at
+  /obj/g/nope.` instead of `items[0] (/obj/g/copy1): ...`, with `detail.field`; a missing
+  `from`, `to` or `parent` lists the parent's children as the plan leaves them, nearest
+  first, never the other end of the wire.
+- **Version 2.0.0 everywhere, and `serverInfo` once** (papercut 4): `server_info.version`,
+  `bridge_version`, `host_version` and the package said 1.4.0. The MCP `serverInfo` stamp
+  (about 200 B) is kept on the handshake (`initialize`, `server/discover`) and dropped from
+  every other result's `_meta`, which keeps `instance` and `timing`.
+- **`job_not_found` for a ledger-form id describes the ledger** (papercut 5): `jzzzz` got
+  the 1.x hint about the pid before the `-` and Houdini restarts. The bridge answers every
+  `j...` id the ledger lacks itself; the 1.x hint is for `<pid>-<id>` ids only.
+- **No U+FFFD in clipped text** (papercut 8): the help-header read and the log tails cut
+  bytes and decoded a split character as U+FFFD; they now cut on a character boundary
+  (`tools/budget.py` `utf8_head`, `utf8_tail`, `clip`).
+- **`hip_new` on an untitled scene** (papercut 9) leads its hint with `hip_save {path}` or
+  `discard`, not `on_unsaved: 'save'`, which has nowhere to save to.
+- **`houdini_status` prints the hip path once** (papercut 10): `connected.hip.path` stays;
+  `hip.name`, a `hip.recent` entry, `env.HIP`, `env.JOB` and `env.HIPNAME` that only repeat
+  it, and `hip` on the connected instance's row and on `recent` rows, are left out
+  (`compat_1x` keeps the 1.4 fields).
 - **A read no longer dirties the GUI hip** (parity G1). In 1.4 the GUI reported Houdini's
   own `hasUnsavedChanges()`, which HocusPocus's temporary nodes set: after a capture,
   `node_type_info` or `render {output}`, `hip_new`, `hip_open` and `houdini_connect
@@ -121,8 +183,11 @@ Read **[`docs/migration-2.0.md`](docs/migration-2.0.md)**. In short:
 - Treat `job_id` as an opaque string; `<pid>-<id>` ids are still accepted.
 - `viewport_capture`'s GUI default (the viewer as it is) is `look {source: "viewer"}`;
   `look`'s own default renders a Flipbook ROP framed on the target.
-- `inspect` results carry `what`, `target` and `etag` before the 1.4 result's keys;
-  `edit` returns `results` per op and `nodes` per touched node.
+- `inspect` results are the 1.4 read's keys plus `etag`, compact by default (`detail:
+  "full"` for the 1.4 shape); `edit` returns `results` per op and `nodes` per touched
+  node.
+- `edit` errors name the op field (`ops[0].from: ...`, `detail.field`); the 1.4 batch
+  tools keep `items[i] (<path>): ...`.
 - The resources `houdini://nodetype/...`, `houdini://node/{path}/parms`,
   `.../geo` and `houdini://job/{id}` are `houdini://type/...`, `houdini://node/{path}?parms=*`,
   `houdini://geo/{path}` and `houdini://jobs` on the 2.0 profiles.
