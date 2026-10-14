@@ -171,6 +171,19 @@ def tag_events(
     return out
 
 
+def unknown_job_error(job_id: str, pid: int) -> ToolError:
+    """``job_not_found`` for a job id whose pid was never a Houdini this bridge knew."""
+    return ToolError(
+        "job_not_found",
+        f"No job {job_id}: pid {pid} is not a Houdini this server knows (no registry entry "
+        "or launch record), so no job of that id ran here.",
+        hint="job {action: list, all: true} lists the live jobs of every Houdini; pass a "
+        "job_id exactly as render, cook or pdg returned it.",
+        retryable=False,
+        detail={"job_id": job_id, "pid": pid},
+    )
+
+
 def instance_meta(inst: registry.Instance) -> dict[str, Any]:
     """``_meta.instance``: which Houdini answered (review 19 papercut 4)."""
     out: dict[str, Any] = {"pid": inst.pid, "label": inst.label}
@@ -280,6 +293,8 @@ class Bridge:
         """job_id -> {pid, label, status}: the last snapshot of every job this bridge saw."""
         self._inflight: dict[str, registry.Instance] = {}
         """request_id -> the instance a call in flight was sent to (progress polling)."""
+        self._seen_pids: set[int] = set()
+        """Every Houdini pid this bridge has seen live in the registry."""
 
     # -- instances -----------------------------------------------------------------------
 
@@ -364,8 +379,12 @@ class Bridge:
         if target_pid is not None:
             live = self.scan()
             owner = next((inst for inst in live if inst.pid == target_pid), None)
+            self._seen_pids.update(inst.pid for inst in live)
             if owner is None:
-                raise self.job_lost_error(target_pid, str((args or {}).get("job_id")), live)
+                job_id = str((args or {}).get("job_id"))
+                if not self._known_pid(target_pid):
+                    raise unknown_job_error(job_id, target_pid)
+                raise self.job_lost_error(target_pid, job_id, live)
             self._check_hp(owner)
             return owner, [], None
         if self.detached:
@@ -375,6 +394,7 @@ class Bridge:
                 hint="call houdini_connect (with pid, launch, or no arguments) to attach again",
             )
         live = self.scan()
+        self._seen_pids.update(inst.pid for inst in live)
         sel = registry.select(live, self.preferred_pid)
         if sel.lost_pid is not None:
             raise self.lost_error(live)
@@ -417,6 +437,16 @@ class Bridge:
             )
 
     # -- jobs (review 19 papercut 3) -------------------------------------------------------
+
+    def _known_pid(self, pid: int) -> bool:
+        """Whether ``pid`` was ever one of ours: seen live in the registry, the owner of a
+        job this bridge saw, the pin or the last target, or in a launch record (review 21
+        papercut 3: a made-up job id must not be reported as a Houdini that exited)."""
+        if pid in self._seen_pids or any(job["pid"] == pid for job in self._jobs.values()):
+            return True
+        if any(inst is not None and inst.pid == pid for inst in (self.pinned, self.last_target)):
+            return True
+        return self.launches.has(pid)
 
     def job_lost_error(self, pid: int, job_id: str, live: list[registry.Instance]) -> ToolError:
         """``instance_lost`` for a job whose Houdini has exited, with its last known status."""
