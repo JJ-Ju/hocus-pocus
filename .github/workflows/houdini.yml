@@ -107,15 +107,28 @@ jobs:
           exit $LASTEXITCODE
 
       # The workloads tier (spec-2.0 §5.2): the five evaluation workloads against one
-      # headless host, each checked against tests/workloads/budgets.json (+15 %). Nightly
-      # and on manual dispatch only, not on labelled PRs.
-      - name: Workloads tier (pytest tests/workloads --runworkloads)
+      # headless host, both tiers: the 1.4 tools (1x, tests/workloads/budgets.json) and the
+      # 2.0 tools (v2, tests/workloads/v2/budgets.json, plus the M4 margins below 1.4), each
+      # +15 %. Two steps, so a v2 margin failure does not hide the 1x result. Nightly and on
+      # manual dispatch only, not on labelled PRs.
+      - name: Workloads tier, 1.4 tools (pytest tests/workloads --runworkloads --workloads 1x)
         if: ${{ !cancelled() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
         run: |
           $root = Join-Path $env:RUNNER_TEMP "hp-wl"
           New-Item -ItemType Directory -Force $root | Out-Null
           & "$env:GITHUB_WORKSPACE\.venv\Scripts\python.exe" -m pytest tests/workloads `
-            --runworkloads -q -s -p no:cacheprovider --basetemp (Join-Path $root "tmp") --durations=10
+            --runworkloads --workloads 1x -q -s -p no:cacheprovider `
+            --basetemp (Join-Path $root "tmp") --durations=10
+          exit $LASTEXITCODE
+
+      - name: Workloads tier, 2.0 tools (pytest tests/workloads --runworkloads --workloads v2)
+        if: ${{ !cancelled() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP "hp-wl2"
+          New-Item -ItemType Directory -Force $root | Out-Null
+          & "$env:GITHUB_WORKSPACE\.venv\Scripts\python.exe" -m pytest tests/workloads `
+            --runworkloads --workloads v2 -q -s -p no:cacheprovider `
+            --basetemp (Join-Path $root "tmp") --durations=10
           exit $LASTEXITCODE
 
       - name: Upload the workloads' measurements
@@ -123,5 +136,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: workloads-last-run
-          path: tests/workloads/last_run.json
+          path: |
+            tests/workloads/last_run.json
+            tests/workloads/v2/last_run.json
           if-no-files-found: ignore

@@ -364,13 +364,33 @@ principle 13); when the rise is intended, re-record with
 `budgets.json` with the change. Record wall time from a full-tier run: run alone, a
 workload can pay the capture child's 3 s start that the full run spreads differently.
 
+**Two tiers.** The tier runs the five workloads twice over: on the 1.4 tools (`1x`,
+`tests/workloads/test_*.py`, profile `compat_1x` once the 2.0 cut-over has landed, `full`
+before it) and on the 2.0 tools (`v2`, `tests/workloads/v2/test_*_v2.py`, its own host on
+the 2.0 `full` profile, `v2` before the cut-over). `--workloads v2|1x|all` (default `all`)
+selects; `.venv/Scripts/python -m pytest tests/workloads --runworkloads --workloads v2 -q`
+runs the 2.0 tier alone. The v2 workloads assert the same outcomes with `edit` (one
+transaction per step, `$id` chains), `inspect`/`search`, `houdini://` resources revalidated
+with their etag (`rec.read(uri)`; a `not_modified` answer is a call with no bytes), `look`,
+`render`/`cook` with a progress token instead of job polls, and `houdini_connect {role}`
+with `on`; calling a 1.4-only tool fails the test. They have their own
+`tests/workloads/v2/budgets.json` (the same 15 % tolerance, recorded the same way) and
+`last_run.json`, and one more check, the 2.0 exit criterion (spec-2.0 §7, M4): each
+workload's `calls` and `text_bytes` must be below its 1.4 budget by the margins the reviews
+predicted (25 % calls and 20 % bytes for `city_build`, `scorecard_twelve` and `soak_200`,
+15 % for `fx_cache` and `vellum_usd`; `MARGINS` in `tests/workloads/v2/conftest.py`). A
+miss fails with the per-tool table so the fix can target the tool that pays; do not relax
+the margins. The run ends with a 1.4/2.0 comparison table (calls, bytes, wall, margin).
+`HP_WORKLOADS_DUMP=<dir>` writes every v2 call's arguments and result there for debugging.
+
 To add a workload, write `tests/workloads/test_<name>.py` that takes the `workload`
 fixture, drives tools only through it (`rec.ok`, `rec.error(code=...)`, `rec.wait_job`,
 `rec.path(...)` for files), asserts the outcomes the evaluation verified, and ends with
 `rec.finish()`; then record its budget.
 
 `.github/workflows/houdini.yml` runs the tier nightly and on manual dispatch (not on
-labelled PRs) and uploads `last_run.json`. Run it yourself before every tag.
+labelled PRs), one step per tier, and uploads both `last_run.json` files. Run it yourself
+before every tag.
 
 ### CI
 
