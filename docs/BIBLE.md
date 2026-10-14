@@ -1,9 +1,9 @@
 # HocusPocus Design Bible
 
-**Version:** 1.3 (2026-10-12, branch `release/1.3`; 1.0, 1.1 and 1.2 shipped the same
-day). This document remains the design authority for 1.x. Rows and sentences marked
-(1.1), (1.2) or (1.3) changed in that release. The contract decisions are D16 to D20 for
-1.1, D21 to D24 for 1.2 and D25 to D29 for 1.3 (§15).
+**Version:** 1.4 (2026-10-13, branch `release/1.4`; 1.0 to 1.3 shipped on 2026-10-12).
+This document remains the design authority for 1.x. Rows and sentences marked (1.1),
+(1.2), (1.3) or (1.4) changed in that release. The contract decisions are D16 to D20 for
+1.1, D21 to D24 for 1.2, D25 to D29 for 1.3 and D30 to D34 for 1.4 (§15).
 **Status:** authoritative. When code and this document disagree, one of them is wrong
 and the disagreement is a bug to fix, not a fact to live with.
 
@@ -386,7 +386,7 @@ as it was started from a neutral directory).
   schemas, annotations; no output schemas), it is ≤ 32,000 bytes; with `both` (output
   schemas declared too) ≤ 44,000 bytes. Names, descriptions and input schemas alone stay
   ≤ 48 KB. The test prints all six sizes (three profiles × two modes); at 1.4.0 they were
-  14.2/27.1/30.5 KB (`text`, minimal/core/full) and 20.4/36.6/40.0 KB (`both`). Until 1.3
+  14.4/27.4/30.8 KB (`text`, minimal/core/full) and 20.6/37.0/40.4 KB (`both`). Until 1.3
   the cap was on `both` alone, with a 40,000 B headroom target that every new argument
   fought although default clients never received the output schemas it counted. Each
   description ≤ 60 words: what the tool does and what the model must know to pick it.
@@ -412,8 +412,8 @@ as it was started from a neutral directory).
   and the host allows only the profile's tools. `minimal`, for clients with a small
   context, is `houdini_status`, `houdini_connect`, `hip_open`, `hip_save`, `node_find`,
   `node_info`, `node_create`, `node_connect`, `parm_get`, `parm_set`, `cook`, `geo_info`,
-  `viewport_capture` and `houdini_python` (14; 14.2 KB of `tools/list` against 27.1 KB
-  for `core` and 30.5 KB for `full` in the default `text` mode). `houdini_python` covers
+  `viewport_capture` and `houdini_python` (14; 14.4 KB of `tools/list` against 27.4 KB
+  for `core` and 30.8 KB for `full` in the default `text` mode at 1.4.0). `houdini_python` covers
   what the others leave out.
 - **Non-default only:** parm listings show parms where `isAtDefault()` is false unless
   `include_defaults: true`.
@@ -751,7 +751,10 @@ changes, when it exited, after 200 captures, or after 110 s idle; it exits by it
 is busy, an OpenGL or Karma step of the chain, and `render` of a user's ROP still use a
 fresh child. A crash of a kept child that had already rendered retries that capture in a
 fresh child with a note, and later captures in that Houdini use fresh children; a crash of
-a new kept child is a crash as before (§8 chain).
+a new kept child is a crash as before (§8 chain). There is no setting for it: the module
+constant `hocuspocus.host.tools.visual.WARM_CAPTURES = False`, set inside the host process,
+sends every capture to a fresh child, and `close_warm_capture()` stops the kept one (the
+integration tests do that before timing a cold capture).
 
 **An OpenGL ROP child that renders a stage runs single-threaded** (`HOUDINI_MAXTHREADS=1`,
 review 16 N1): its LOP source creates the Vulkan device on a TBB worker and crashes for a
@@ -780,8 +783,8 @@ Stable codes (the complete set; adding one is a design change):
 | `houdini_busy` | main-thread timeout | yes |
 | `delivery_unknown` | request sent, response lost (becomes `houdini_offline` "exited while running <tool>" when the process is gone within 1.5 s) | inspect first |
 | `version_mismatch` | host `hp/vN` ≠ bridge | after reinstall |
-| `invalid_argument` | schema / shape | no |
-| `node_not_found` | path | no |
+| `invalid_argument` | schema / shape; 1.4 (review 21 papercut 1): a batch tool given one flat item (`parm_set {path, value}`) gets the corrected call as `hint`, its own fields wrapped in `items` | no |
+| `node_not_found` | path; 1.4 (review 21 papercut 4, review 22 finding 8): `candidates` are near-miss children of the missing node's parent (never the node being wired), the hint names `node_find` on that parent or on the nearest existing ancestor, and a missing wiring source prefixes a batch error with its own path; a render ROP whose `camera` parm names a missing node (§4.7 `render`) | no |
 | `parm_not_found` | parm/tuple | no |
 | `node_type_not_found` | type (with candidates) | no |
 | `invalid_input` | wiring index/name (with labels) | no |
@@ -1012,6 +1015,9 @@ overlap (one agent per host tool family).
 - **D29** (1.3) Integration tests over about 1.5 s are marked `slow` and run only with `--runslow` or `-m slow`; CI runs both sets (§11). *The tier had grown to about 4 minutes; the fast set, run before every host commit, is about 50 s.*
 - **D30** (1.4) The `tools/list` budget caps what clients see by default: the full profile with `result_content = "text"` ≤ 32,000 B, and `both` ≤ 44,000 B; the 40,000 B target on `both` is gone (§4.1). *The old target measured output schemas that the default `text` mode never sends, so it spent the headroom of the shape nobody received; no tool or argument was removed.*
 - **D31** (1.4) `viewport_capture`'s ROP source renders through the Flipbook ROP, then the OpenGL ROP, then Karma; `flipbook_rop` is the source's name and `opengl_rop` stays as an alias, and headless Flipbook renders keep the child hython (§8). *Houdini 22 deprecates the OpenGL ROP; the Flipbook ROP has no second-render or large-stage crash of its own, but a render after a deleted Flipbook ROP still segfaults hython, so only the single-thread workaround could go.*
+- **D32** (1.4) `render` renders a ROP whose output is one file for the whole range (USD, Alembic, a path without `$F`) in one `rop.render()` call and verifies it by reading the file back: fewer time samples (or a shorter archive range) than frames asked is `cook_failed`; outputs are listed once, with a USD export's `layers` (§4.7, §7). *In review 23 a 48-frame `usd_rop` render, one call per frame, overwrote its layer each time, kept frame 48's sample and reported 48 outputs and `done`; only a read-back can tell a frozen export from an animated one.*
+- **D33** (1.4) Headless Flipbook captures reuse one kept child hython, keyed on the hython, the child script and the installed HDA libraries' mtimes, replaced after 200 captures or 110 s idle and gone after 120 s idle; a crash of a kept child falls back to fresh children for the session (§8). *Fresh children cost 2.9-3.7 s per capture, 69 % of review 22's tool time; the Flipbook ROP survives re-rendering the same ROP in one hython, so a kept child that never deletes it renders a later capture in about 0.4 s.*
+- **D34** (1.4) When the bridge trims a page to the budget it rewrites the cursor to resume after the last row kept (`events` `next_since` `<pid>:<seq>` with `more: true`, `after:<path>`, `after:<name>`, integer offsets), and a page whose cursor it cannot rewrite is sent whole with `over_budget: true` (§4.1). *In review 22 a trimmed `events` page kept the host's cursor, the last seq scanned, so a client following it silently skipped every dropped event; a budget cut must never lose rows.*
 
 ### Verified deviations (M5 reconciliation)
 
