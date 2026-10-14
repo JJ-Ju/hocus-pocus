@@ -5,10 +5,12 @@ that reads ``what`` (``node_info``, ``parm_get``, ``network_describe``, ``geo_in
 ``geo_read``, ``usd_stage``, ``problems``, ``node_type_info``, ``events``, ``job``), looked
 up in the host registry at call time, so the read code exists once and a reimplementation
 of a 1.4 tool (spec-2.0 §4, ``host/tx.py``) is picked up here too. The result is
-``{etag, ...the 1.4 result}``: the caller knows its ``what`` and ``target``, so they are not
-echoed. Two reads are shaped for 2.0 (:func:`shape`): ``node`` rows leave out
-``session_id``; ``outline`` leaves out ``format`` and, per row, ``name`` when it is the
-path's last segment, ``errors: 0``, and ``inputs`` unless ``wiring: true``.
+``{etag, ...the 1.4 result}`` projected for 2.0 (:func:`project`): the caller knows its
+``what`` and ``target``, so they are not echoed; ``node`` rows leave out ``session_id``;
+``outline`` leaves out ``format`` and, per row, ``name`` when it is the path's last
+segment, ``errors: 0``, and ``inputs`` unless ``wiring: true``; and ``node`` and ``parms``
+leave out what is default or empty (spec-2.0 M4 "read shapes"), unless ``detail: full``
+asks for the 1.4 shape.
 
 Registered with ``main_thread=False`` because two of its reads must not hold the main
 thread (``events`` and ``job`` run off it in 1.4); the others run on it through the
@@ -45,8 +47,10 @@ WHATS: tuple[str, ...] = (
 GEO_READ_OPTIONS = frozenset({"class", "attribs", "start", "count", "group", "stats", "cursor"})
 
 OPTIONS: dict[str, frozenset[str]] = {
-    "node": frozenset({"paths", "include", "include_defaults", "recurse_locked"}),
-    "parms": frozenset({"paths", "frame", "include", "full_strings", "include_defaults", "parms"}),
+    "node": frozenset({"paths", "include", "include_defaults", "recurse_locked", "detail"}),
+    "parms": frozenset(
+        {"paths", "frame", "include", "full_strings", "include_defaults", "parms", "detail"}
+    ),
     "network": frozenset(
         {"depth", "include_defaults", "include_positions", "recurse_locked", "cursor"}
     ),
@@ -120,6 +124,11 @@ def _check_args(what: str, target: Any, options: dict[str, Any]) -> None:
             raise bad_arg(f"what: {what} needs target or paths.")
         if target is not None and options.get("paths") is not None:
             raise bad_arg("Pass target or paths, not both.")
+    if what != "type" and options.get("detail", "compact") not in DETAILS:
+        raise bad_arg(
+            f"what: {what} takes detail compact or full; got {options['detail']!r}.",
+            hint="detail: full returns the 1.4 shape; folders is for what: type.",
+        )
     if what == "outline" and not isinstance(options.get("wiring", False), bool):
         raise bad_arg("'wiring' must be a boolean.")
     if what == "geo":
@@ -218,11 +227,191 @@ def make_etag(ctx: HostContext, body: Any) -> str:
     return content_etag(ctx.scene.generation, body, pid=ctx.pid)
 
 
-# -- 2.0 shaping ---------------------------------------------------------------------------
+# -- 2.0 projections ---------------------------------------------------------------------
+#
+# spec-2.0 M4 "read shapes": each read leaves out what is default or empty, says a plain
+# value as a value, and keeps a full row only where something beyond the value matters.
+# ``detail: full`` returns the 1.4 shape (only ``etag`` added; ``node`` rows still leave
+# out ``session_id``, ``outline`` keeps its 2.0 trims). Pure functions over the 1.4
+# result, so the resources (which run ``inspect``) share them.
 
 
-INSPECT_ONLY = frozenset({"wiring"})
-"""Options ``inspect`` takes itself; they are not passed to the 1.4 read."""
+INSPECT_ONLY = frozenset({"wiring", "detail"})
+"""Options ``inspect`` takes itself (except for ``type``, whose ``detail`` is
+``node_type_info``'s); they are not passed to the 1.4 read."""
+
+DETAILS = ("compact", "full")
+"""``detail`` of the projected reads; ``type`` also takes ``folders``."""
+
+PROJECTED = frozenset({"node", "parms"})
+
+PLAIN_PARM_TYPES = frozenset({"float", "int", "string", "toggle"})
+"""Parm types a compact parm row leaves out: the JSON value already says them."""
+
+DEFAULT_LANGUAGE = "hscript"
+
+
+def _numbers_equal(raw: Any, value: Any) -> bool:
+    if isinstance(value, bool) or not isinstance(value, int | float) or not isinstance(raw, str):
+        return False
+    try:
+        return float(raw) == float(value)
+    except ValueError:
+        return False
+
+
+def _no_keys(keyframes: Any) -> bool:
+    if not isinstance(keyframes, dict):
+        return False
+    if not keyframes or keyframes.get("count") == 0:
+        return True
+    return all(isinstance(v, dict) and v.get("count") == 0 for v in keyframes.values())
+
+
+def _raw_says_nothing(raw: Any, value: Any, expression: Any, expressions: Any) -> bool:
+    """``raw`` repeats the expression (a parm) or, per component, an expression or the
+    value (a tuple)."""
+    if not isinstance(raw, list):
+        return expression is not None and raw == expression
+    if not isinstance(value, list) or len(value) != len(raw) or not isinstance(expressions, dict):
+        return False
+    texts = [e.get("expression") for e in expressions.values() if isinstance(e, dict)]
+    return all(r in texts or _numbers_equal(r, v) for r, v in zip(raw, value, strict=True))
+
+
+def compact_parm(row: dict[str, Any]) -> Any:
+    """A parm row (``node_info``'s or ``parm_get``'s) as its value, or as ``{value, ...}``
+    with only what matters beyond the value: an expression (``language`` when not
+    hscript), keys, a lock, a menu token unlike the value, ``raw`` unlike the value and
+    the expression, a type the value does not say, and any ``include`` section."""
+    out: dict[str, Any] = {}
+    value = row.get("value")
+    expression = row.get("expression")
+    expressions = row.get("expressions")
+    for key, item in row.items():
+        if key in ("path", "name", "kind", "tuple", "component_names", "is_default"):
+            continue
+        if key == "type" and item in PLAIN_PARM_TYPES:
+            continue
+        if key in ("locked", "hda_locked") and item is False:
+            continue
+        if key == "language" and item == DEFAULT_LANGUAGE:
+            continue
+        if key == "menu_token" and item == value:
+            continue
+        if key == "keyframes" and _no_keys(item):
+            continue
+        if key == "raw" and _raw_says_nothing(item, value, expression, expressions):
+            continue
+        if key == "expressions" and isinstance(item, dict):
+            item = {
+                comp: e["expression"]
+                if isinstance(e, dict) and e.get("language") == DEFAULT_LANGUAGE
+                else e
+                for comp, e in item.items()
+            }
+        out[key] = item
+    if set(out) == {"value"} and not isinstance(value, dict):
+        return value
+    return out
+
+
+def compact_parms(rows: Any, key: str) -> Any:
+    """Parm rows as ``{row[key]: value or row}`` in their order (the rows unchanged when
+    two share a key)."""
+    if not rows or not isinstance(rows, list):
+        return rows  # parms: [] says there are none
+    if not all(isinstance(r, dict) and key in r for r in rows):
+        return rows
+    if len({row[key] for row in rows}) != len(rows):
+        return rows
+    return {row[key]: compact_parm(row) for row in rows}
+
+
+def _input_ref(source: Any) -> Any:
+    if (
+        isinstance(source, dict)
+        and source.get("output", 0) == 0
+        and set(source)
+        <= {
+            "path",
+            "output",
+        }
+    ):
+        return source.get("path")
+    return source
+
+
+def compact_inputs(rows: Any) -> Any:
+    """``[{index, name, label, from}]`` as positional sources: a path (output 0), ``{path,
+    output}``, or null; trailing unconnected inputs left out."""
+    if not isinstance(rows, list) or not all(isinstance(r, dict) and "from" in r for r in rows):
+        return rows
+    refs = [_input_ref(row["from"]) for row in rows]
+    while refs and refs[-1] is None:
+        refs.pop()
+    return refs
+
+
+def compact_outputs(rows: Any) -> Any:
+    """``[{index, name, to: [{path, input}]}]`` as positional lists of destinations (a path
+    for input 0, else ``{path, input}``)."""
+    if not isinstance(rows, list) or not all(isinstance(r, dict) and "to" in r for r in rows):
+        return rows
+    return [
+        [d["path"] if isinstance(d, dict) and d.get("input") == 0 else d for d in row["to"]]
+        for row in rows
+    ]
+
+
+def _type_name(block: dict[str, Any]) -> str:
+    category = block.get("category")
+    return f"{category}/{block['name']}" if category else str(block["name"])
+
+
+_UNSET = object()
+NODE_DEFAULTS: dict[str, Any] = {
+    "errors": [],
+    "warnings": [],
+    "messages": [],
+    "cook_state": "cooked",
+    "children_count": 0,
+}
+"""``node_info`` values a compact row leaves out."""
+
+
+def compact_node(row: dict[str, Any]) -> dict[str, Any]:
+    """A ``node_info`` row without the defaults: ``name`` when it is the path's last
+    segment, ``type`` as ``Category/name``, flags as the list of those on, inputs and
+    outputs positional, parms as ``{name: value}``, and no empty errors, warnings or
+    messages, ``cook_state: cooked`` or ``children_count: 0``."""
+    out: dict[str, Any] = {}
+    path = row.get("path")
+    for key, value in row.items():
+        if key == "session_id":
+            continue
+        if key == "name" and isinstance(path, str) and value == path.rsplit("/", 1)[-1]:
+            continue
+        if key == "type" and isinstance(value, dict) and "name" in value:
+            value = _type_name(value)
+        elif key == "flags" and isinstance(value, dict):
+            value = [name for name, on in value.items() if on]
+            if not value:
+                continue
+        elif key == "inputs":
+            value = compact_inputs(value)
+            if value == []:
+                continue
+        elif key == "outputs":
+            value = compact_outputs(value)
+        elif key == "parms":
+            value = compact_parms(value, "name")
+            if value in ([], {}):
+                continue
+        elif NODE_DEFAULTS.get(key, _UNSET) == value:
+            continue
+        out[key] = value
+    return out
 
 
 def _compact_outline(rows: Any, wiring: bool) -> None:
@@ -241,9 +430,10 @@ def _compact_outline(rows: Any, wiring: bool) -> None:
         _compact_outline(row.get("children"), wiring)
 
 
-def shape(what: str, result: dict[str, Any], options: dict[str, Any]) -> dict[str, Any]:
-    """The 2.0 shape of a 1.4 read (in place): what the caller already knows, or did not
-    ask for, is left out."""
+def project(what: str, result: dict[str, Any], options: dict[str, Any]) -> dict[str, Any]:
+    """The 2.0 shape of a 1.4 read (``result`` may be changed in place): what the caller
+    already knows or did not ask for, and what is default or empty, is left out;
+    ``detail: full`` keeps the 1.4 shape apart from the trims every 2.0 read has."""
     if what == "node":
         for row in result.get("nodes") or ():
             if isinstance(row, dict):
@@ -251,6 +441,18 @@ def shape(what: str, result: dict[str, Any], options: dict[str, Any]) -> dict[st
     elif what == "outline":
         result.pop("format", None)
         _compact_outline(result.get("nodes"), options.get("wiring") is True)
+    if what not in PROJECTED or options.get("detail") == "full":
+        return result
+    if what == "node":
+        nodes = result.get("nodes")
+        if isinstance(nodes, list):
+            result["nodes"] = [compact_node(r) if isinstance(r, dict) else r for r in nodes]
+        return result
+    if what == "parms":
+        if "parms" in result:
+            key = "name" if options.get("by_name") else "path"
+            result["parms"] = compact_parms(result["parms"], key)
+        return result
     return result
 
 
@@ -260,14 +462,21 @@ def shape(what: str, result: dict[str, Any], options: dict[str, Any]) -> dict[st
 def _scene_read(
     ctx: HostContext, what: str, target: Any, options: dict[str, Any]
 ) -> dict[str, Any]:
-    """One main-thread step: the 1.4 read, shaped for 2.0, with its etag."""
+    """One main-thread step: the 1.4 read, projected for 2.0, with its etag."""
+    shape_options = options
+    if what != "type":  # detail is node_type_info's own; for the others it is inspect's
+        options = {k: v for k, v in options.items() if k != "detail"}
     if what == "node":
         paths = options.get("paths") if target is None else [target]
         args = {"paths": paths, **{k: v for k, v in options.items() if k != "paths"}}
         result = _impl("node_info")(args, ctx)
     elif what == "parms":
+        import hou
+
         parm_args = _parms_args(target, options)
         result = {"parms": []} if parm_args is None else _impl("parm_get")(parm_args, ctx)
+        if isinstance(target, str) and target.startswith("/") and hou.node(target) is not None:
+            shape_options = {**shape_options, "by_name": True}  # a node's parms by name
     elif what in ("network", "outline"):
         root = target if target is not None else "/"
         fmt = "data" if what == "network" else "outline"
@@ -287,7 +496,7 @@ def _scene_read(
         result = _impl("problems")(args, ctx)
     else:  # type
         result = _impl("node_type_info")({"type": target, **options}, ctx)
-    body = shape(what, result, options)
+    body = project(what, result, shape_options)
     return {"etag": make_etag(ctx, body), **body}
 
 

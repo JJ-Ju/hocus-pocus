@@ -38,13 +38,6 @@ MAX_BYTES = 8_000
 GEO = "/obj/terrain"
 
 
-def _parm(rows: list[dict[str, Any]], name: str) -> dict[str, Any]:
-    for row in rows:
-        if row.get("name") == name:
-            return row
-    raise AssertionError(f"parm {name} not in {[r.get('name') for r in rows]}")
-
-
 async def _scenario(rec: Recorder) -> None:
     # -- 1. the whole build, one undo step ------------------------------------------------
     built = await rec.ok(
@@ -118,9 +111,9 @@ async def _scenario(rec: Recorder) -> None:
         },
     )
     mountain, out = read["nodes"]
-    assert mountain["inputs"][0]["from"]["path"] == f"{GEO}/box1"
-    assert out["inputs"][0]["from"]["path"] == f"{GEO}/subdivide1"
-    assert mountain["errors"] == [] and out["errors"] == []
+    assert mountain["inputs"] == [f"{GEO}/box1"]  # compact: positional sources
+    assert out["inputs"] == [f"{GEO}/subdivide1"]
+    assert "errors" not in mountain and "errors" not in out  # compact: empty left out
     assert out["position"] != mountain["position"]  # laid out
     assert out["position"][1] < mountain["position"][1]  # flowing downwards
 
@@ -129,9 +122,9 @@ async def _scenario(rec: Recorder) -> None:
         "inspect",
         {"what": "parms", "target": f"{GEO}/mountain1", "parms": "height|offset", "frame": 24},
     )
-    assert _parm(parms["parms"], "height")["value"] == pytest.approx(0.5)
-    offset = _parm(parms["parms"], "offset")
-    assert offset["raw"][0] == "$F*0.1", offset
+    assert parms["parms"]["height"] == pytest.approx(0.5)  # compact: {name: value}
+    offset = parms["parms"]["offset"]
+    assert offset["expressions"]["offsetx"] == "$F*0.1", offset
     assert offset["value"][0] == pytest.approx(2.4), offset
 
     # -- 4. the copies cook -----------------------------------------------------------------

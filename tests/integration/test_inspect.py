@@ -1,6 +1,8 @@
 """``inspect`` (spec-2.0 §2.3) against real Houdini: each ``what`` returns its 1.4 read's
-result plus only ``etag`` (``node`` and ``outline`` with their 2.0 trims, M4); the etag is
-stable while nothing changes and moves when the addressed node does."""
+result plus only ``etag`` (``node`` and ``outline`` with their 2.0 trims, M4) with
+``detail: full``, and by default for node and parms the compact projection (spec-2.0 M4
+"read shapes": defaults and empties left out); the etag is stable while nothing changes
+and moves when the addressed node does."""
 
 from __future__ import annotations
 
@@ -18,6 +20,8 @@ from hocuspocus.host import resources as host_resources  # noqa: E402
 
 ETAG = re.compile(r"^\d+:\d+:[0-9a-f]{16}$")
 ADDED = ("etag",)
+PROJECTED = frozenset({"node", "parms"})
+"""The reads with a compact shape; ``detail: full`` gives their 1.4 shape."""
 
 
 def _bytes(value: Any) -> bytes:
@@ -50,17 +54,24 @@ def _trimmed(what: str, old: dict[str, Any], wiring: bool = False) -> dict[str, 
 
 
 def _same(client, what: str, target: Any, options: dict[str, Any], tool: str, args) -> dict:
-    """``inspect`` returns ``tool``'s result (trimmed for 2.0) plus only the etag, first."""
+    """``inspect`` with ``detail: full`` returns ``tool``'s result (trimmed for 2.0) plus
+    only the etag, first; returns the default (compact) result of the same call."""
     old = client.ok(tool, args)
     call = {"what": what, **({} if target is None else {"target": target}), **options}
-    new = client.ok("inspect", call)
+    full = {"detail": "full"} if what in PROJECTED and what != "type" else {}
+    new = client.ok("inspect", {**call, **full})
     assert list(new)[: len(ADDED)] == list(ADDED), list(new)
     assert "what" not in new and "target" not in new, list(new)
     assert ETAG.match(new["etag"]), new["etag"]
     rest = {k: v for k, v in new.items() if k not in ADDED}
     expected = _trimmed(what, old, options.get("wiring", False))
     assert _bytes(rest) == _bytes(expected), (what, set(rest) ^ set(expected))
-    return new
+    if not full:
+        return new
+    compact = client.ok("inspect", call)
+    assert ETAG.match(compact["etag"]) and "what" not in compact, list(compact)
+    assert len(_bytes(compact)) <= len(_bytes(new)), (what, compact, new)
+    return compact
 
 
 def _geo():
@@ -96,23 +107,28 @@ def test_parms_is_parm_get(v2_client):
     options = {"frame": 1, "include": ["template"]}
     new = _same(v2_client, "parms", f"{box.path()}/size", options, "parm_get",
                 {"paths": [f"{box.path()}/size"], **options})  # fmt: skip
-    assert new["parms"][0]["value"] == [2.0, 1.0, 1.0]
+    size = new["parms"][f"{box.path()}/size"]
+    assert size["value"] == [2.0, 1.0, 1.0] and "template" in size, size
     paths = [f"{box.path()}/sizex", f"{box.path()}/t"]
-    _same(v2_client, "parms", None, {"paths": paths}, "parm_get", {"paths": paths})
+    plain = _same(v2_client, "parms", None, {"paths": paths}, "parm_get", {"paths": paths})
+    assert plain["parms"] == {paths[0]: 2.0, paths[1]: [0.0, 0.0, 0.0]}, plain
 
 
 def test_parms_on_a_node_reads_its_non_default_tuples(v2_client):
     _net, box, xform = _geo()
     non_default = _same(v2_client, "parms", box.path(), {}, "parm_get",
                         {"paths": [f"{box.path()}/size"]})  # fmt: skip
-    assert [row["name"] for row in non_default["parms"]] == ["size"]
+    assert non_default["parms"] == {"size": [2.0, 1.0, 1.0]}, non_default
     globbed = v2_client.ok("inspect", {"what": "parms", "target": xform.path(), "parms": "t|r"})
-    assert [row["tuple"] for row in globbed["parms"]] == ["t", "r"]
+    assert list(globbed["parms"]) == ["t", "r"]
+    full = v2_client.ok(
+        "inspect", {"what": "parms", "target": xform.path(), "parms": "t|r", "detail": "full"}
+    )
+    assert [row["tuple"] for row in full["parms"]] == ["t", "r"]
     everything = v2_client.ok(
         "inspect", {"what": "parms", "target": box.path(), "include_defaults": True}
     )
-    names = [row.get("tuple", row["name"]) for row in everything["parms"]]
-    assert {"size", "t", "type"} <= set(names) and len(names) > 5
+    assert {"size", "t", "type"} <= set(everything["parms"]) and len(everything["parms"]) > 5
     nothing = hou.node("/obj").createNode("null", "plain")
     empty = v2_client.ok("inspect", {"what": "parms", "target": nothing.path()})
     assert empty["parms"] == []
@@ -254,6 +270,53 @@ def test_jobs_is_job_list_and_status(v2_client, host):
     assert status["job_id"] == started.id
     missing = v2_client.error("inspect", {"what": "jobs", "job_id": "1-nope"})
     assert missing["code"] == "job_not_found"
+
+
+# -- compact shapes (spec-2.0 M4 "read shapes") -------------------------------------------
+
+
+def test_node_compact_shape(v2_client):
+    """node rows: Category/type, the flags that are on, positional inputs, parms as
+    {name: value} with a row only where more than the value matters, no empty errors or
+    cooked cook_state; detail: full is the 1.4 row."""
+    geo, box, xform = _geo()
+    xform.parm("ry").setExpression("$F*3")
+    merge = geo.createNode("copytopoints", "copy1")
+    merge.setInput(1, xform)
+    xform.cook(force=True)
+    call = {"what": "node", "paths": [xform.path(), merge.path()],
+            "include": ["flags", "inputs", "parms", "errors"]}  # fmt: skip
+    rows = v2_client.ok("inspect", call)["nodes"]
+    assert rows[0] == {
+        "path": xform.path(), "type": "Sop/xform", "flags": ["display", "render"],
+        "inputs": [box.path()],
+        "parms": {"t": [0.0, 1.5, 0.0], "r": {"value": [0.0, 3.0, 0.0],
+                                            "expressions": {"ry": "$F*3"}}},
+    }, rows[0]  # fmt: skip
+    assert rows[1]["inputs"] == [None, xform.path()], rows[1]
+    assert rows[1]["cook_state"] == "not_cooked" and "flags" not in rows[1], rows[1]
+    full = v2_client.ok("inspect", {**call, "detail": "full"})["nodes"]
+    assert full[0]["type"]["name"] == "xform" and full[0]["errors"] == []
+    assert full[1]["inputs"][1]["from"] == {"path": xform.path(), "output": 0}
+    assert full[0]["parms"][1]["name"] == "r" and full[0]["parms"][1]["is_default"] is False
+    outputs = v2_client.ok("inspect", {"what": "node", "target": box.path(),
+                                       "include": ["outputs"]})  # fmt: skip
+    assert outputs["nodes"][0]["outputs"] == [[xform.path()]], outputs
+
+
+def test_parms_compact_rows_keep_what_matters(v2_client):
+    _net, box, xform = _geo()
+    xform.parm("ry").setExpression("$F*3")
+    xform.parm("rx").setExpression("hou.frame()", hou.exprLanguage.Python)
+    xform.parm("tz").lock(True)
+    got = v2_client.ok("inspect", {"what": "parms", "paths": [
+        f"{xform.path()}/ry", f"{xform.path()}/rx", f"{xform.path()}/tz",
+        f"{xform.path()}/xOrd"]})["parms"]  # fmt: skip
+    assert got[f"{xform.path()}/ry"] == {"value": 3.0, "expression": "$F*3"}, got
+    assert got[f"{xform.path()}/rx"]["language"] == "python", got
+    assert got[f"{xform.path()}/tz"] == {"value": 0.0, "locked": True}, got
+    order = got[f"{xform.path()}/xOrd"]
+    assert isinstance(order, dict) and order.get("type") == "menu", order
 
 
 # -- etag ---------------------------------------------------------------------------------

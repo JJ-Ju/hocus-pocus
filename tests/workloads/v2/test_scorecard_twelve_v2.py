@@ -24,10 +24,6 @@ GEO = "/obj/terrain"
 SCENE = "houdini://outline?root=/&depth=2"
 
 
-def _parm(block: dict, name: str) -> dict:
-    return next(row for row in block["parms"] if row["name"] == name)
-
-
 def test_scorecard_twelve(workload, wl_host):
     rec = workload
 
@@ -68,13 +64,13 @@ def test_scorecard_twelve(workload, wl_host):
     # -- 3. read back ---------------------------------------------------------------------
     info = rec.ok("inspect", {"what": "node", "paths": [f"{GEO}/mountain1", f"{GEO}/OUT"]})
     mountain, out = info["nodes"]
-    assert _parm(mountain, "height")["value"] == pytest.approx(0.5)
-    assert mountain["errors"] == [] and out["flags"]["display"] is True
+    assert mountain["parms"]["height"] == pytest.approx(0.5)  # compact: {name: value}
+    assert "errors" not in mountain and "display" in out["flags"]  # no empty errors
     parms = rec.ok(
         "inspect",
         {"what": "parms", "paths": [f"{GEO}/mountain1/offset", f"{GEO}/mountain1/height"]},
     )
-    assert parms["parms"][0]["kind"] == "tuple", parms.data
+    assert isinstance(parms["parms"][f"{GEO}/mountain1/offset"]["value"], list), parms.data
     geo = rec.ok("inspect", {"what": "geo", "target": f"{GEO}/OUT"})
     assert geo["point_count"] > 0 and geo["prim_count"] > 0
     rows = rec.ok(
@@ -87,12 +83,11 @@ def test_scorecard_twelve(workload, wl_host):
 
     # -- 4. frame 24: the expression reads 2.4 ------------------------------------------
     assert rec.ok("time", {"frame": 24})["frame"] == 24
-    (offsetx,) = rec.ok("inspect", {"what": "parms", "target": f"{GEO}/mountain1/offsetx"})["parms"]
-    assert offsetx["value"] == 2.4 and offsetx["raw"] == "$F*0.1", offsetx
-    (later,) = rec.ok(
-        "inspect", {"what": "parms", "target": f"{GEO}/mountain1/offsetx", "frame": 48}
-    )["parms"]
-    assert later["value"] == 4.8, later
+    offsetx_path = f"{GEO}/mountain1/offsetx"
+    offsetx = rec.ok("inspect", {"what": "parms", "target": offsetx_path})["parms"][offsetx_path]
+    assert offsetx["value"] == 2.4 and offsetx["expression"] == "$F*0.1", offsetx
+    later = rec.ok("inspect", {"what": "parms", "target": offsetx_path, "frame": 48})["parms"]
+    assert later[offsetx_path]["value"] == 4.8, later
     rec.ok("time", {"frame": 1})
 
     # -- 5. save and dirty ----------------------------------------------------------------
