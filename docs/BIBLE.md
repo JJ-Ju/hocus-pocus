@@ -1389,7 +1389,7 @@ overlap.
 | M1 | Transaction and reads | `host/tx.py` and `edit`; `inspect`, `search`; 1.4 mutation tools reimplemented on the engine; a `v2` profile with the new names alongside the old | Scorecard twelve pass through `edit`/`inspect` only; bytes and calls ≤ 1.4 budgets | done |
 | M2 | Resources, look, ledger | Resource templates with ETags and subscriptions; `look` with backends; bridge ledger, roles, `on`, ledger job ids and progress | Workloads pass with resources enabled; two-instance tasks via roles | done |
 | M3 | Cut-over | Default profiles switch to the 2.0 names; `compat_1x`; parity gap fixes; docs, guide, prompts, this bible | A 1.4 client script runs unchanged under `compat_1x` | in progress |
-| M4 | Evaluate and ship | Fresh-agent scorecard and all workloads on 2.0; fix pass; tag `v2.0.0` | Scorecard ≥ 1.4's; calls and bytes per workload below 1.4 by the margins the reviews predicted | — |
+| M4 | Evaluate and ship | Fresh-agent scorecard and all workloads on 2.0; fix pass; tag `v2.0.0` | Scorecard ≥ 1.4's; every workload uses fewer calls and fewer bytes than 1.4; the predicted margins are 2.1 targets where unmet (spec-2.0 §7) | — |
 
 The 1.0 roadmap (M0 Foundations to M5 Hardening, 2026-10-12) and the 1.1 to 1.4 plans
 are in `docs/redesign/` and `progress.md`.

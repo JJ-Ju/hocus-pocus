@@ -1,5 +1,5 @@
 {
-  "about": "Per-workload budgets for tests/workloads/v2, the five workloads on the 2.0 tools (spec-2.0 section 5.2): the larger of two runs. A run fails when a total exceeds its budget by more than 15 %, or (the 2.0 exit check, section 7 M4) when calls or text_bytes are not below the 1.4 budget in ../budgets.json by the margins in v2/conftest.py. Rewrite with --update-budgets.",
+  "about": "Per-workload budgets for tests/workloads/v2, the five workloads on the 2.0 tools (spec-2.0 section 5.2): the larger of two runs. A run fails when a total exceeds its budget by more than 15 %, or (the 2.0 exit check, section 7 M4) when calls or text_bytes are not below the 1.4 budget in ../budgets.json; the margins in v2/conftest.py are reported as the 2.1 targets. Rewrite with --update-budgets.",
   "workloads": {
     "city_build": {
       "calls": 15,

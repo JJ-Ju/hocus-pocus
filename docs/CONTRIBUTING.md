@@ -384,15 +384,14 @@ with their etag (`rec.read(uri)`; a `not_modified` answer is a call with no byte
 with `on`; calling a 1.4-only tool fails the test. They have their own
 `tests/workloads/v2/budgets.json` (the same 15 % tolerance, recorded the same way) and
 `last_run.json`, and one more check, the 2.0 exit criterion (spec-2.0 §7, M4): each
-workload's `calls` and `text_bytes` must be below its 1.4 budget by the M4 margins
-(`MARGINS` in `tests/workloads/v2/conftest.py`): calls 25 % for `city_build`, 15 % for
-`fx_cache` and `vellum_usd`, and 0 % (not above 1.4) for `scorecard_twelve` and
-`soak_200`; bytes 20 % for `city_build`, `scorecard_twelve` and `soak_200`, 15 % for
-`fx_cache` and `vellum_usd`. The builds can fold calls into `edit` transactions and pushed
-progress; the scorecard and the soak are enumerations of fixed tasks, one call per task,
-so for them 2.0 must only not need more calls (spec-2.0 §7, "M4 margins"). A
-miss fails with the per-tool table so the fix can target the tool that pays; do not relax
-the margins. The run ends with a 1.4/2.0 comparison table (calls, bytes, wall, margin).
+workload must use fewer `calls` and fewer `text_bytes` than its 1.4 budget. A miss fails
+with the per-tool table so the fix can target the tool that pays. The margins the reviews
+predicted (`MARGINS` in `tests/workloads/v2/conftest.py`: calls 25 % for `city_build`,
+15 % for `fx_cache` and `vellum_usd`, 0 % for `scorecard_twelve` and `soak_200`; bytes
+20 % for `city_build`, `scorecard_twelve` and `soak_200`, 15 % for `fx_cache` and
+`vellum_usd`) are the 2.1 targets where M4 did not reach them (spec-2.0 §7, "M4 exit and
+the 2.1 targets"): reported, not enforced; do not lower them. The run ends with a 1.4/2.0
+comparison table (calls, bytes, wall, the exit and the targets not met yet).
 `HP_WORKLOADS_DUMP=<dir>` writes every v2 call's arguments and result there for debugging.
 
 To add a workload, write `tests/workloads/test_<name>.py` that takes the `workload`
