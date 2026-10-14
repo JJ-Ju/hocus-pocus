@@ -453,6 +453,35 @@ def test_resimulated_trusts_the_solve_stats_then_the_simulation_state():
     assert resimulated(None, state(0.1, 9), None) is None
 
 
+def test_a_warm_solver_that_re_solved_its_frame_is_current_frame_only():
+    """Review 24 N3: profile force-cooks a warm solver's inputs, so Houdini re-solves the
+    frame the simulation stands on (77 ms on Vellum); the solve stats are booked on that
+    frame however many were stepped, so the simulation's time tells one from many."""
+    from hocuspocus.host.tools.cook import CURRENT_FRAME, resimulated, simulated_frames
+
+    def state(time, memory, frame, start=1.0):
+        return {"time": time, "memory": memory, "frame": frame, "start": start}
+
+    warm = state(23 / 24, 9_972_592, 24.0)
+    resolved = state(23 / 24, 9_973_088, 24.0)
+    assert resimulated(warm, resolved, 25.9) == CURRENT_FRAME
+    assert simulated_frames(warm, resolved, CURRENT_FRAME) == [24, 24]
+    assert resimulated(warm, warm, 0.0) is False
+    assert simulated_frames(warm, warm, False) is None
+    assert resimulated(warm, resolved, None) == CURRENT_FRAME  # no monitor: memory, same time
+    fresh, done = state(0.0, 0, 1.0), state(23 / 24, 9_972_592, 24.0)
+    assert resimulated(fresh, done, 1365.8) is True  # an empty simulation at its start
+    assert simulated_frames(fresh, done, True) == [1, 24]
+    reset = state(0.0, 437_744, 1.0)
+    later = state(25 / 24, 10_802_004, 26.0)
+    assert resimulated(reset, later, 855.6) is True
+    assert simulated_frames(reset, later, True) == [1, 26]
+    assert simulated_frames(warm, later, True) == [25, 26]  # stepped on from frame 24
+    earlier = state(9 / 24, 9_973_088, 10.0)
+    assert simulated_frames(later, earlier, True) is None  # moved back: unknown which
+    assert resimulated(state(0.0, 0, 1.0), state(0.0, 500, 1.0), 12.0) is True  # frame 1
+
+
 def test_frames_print_as_integers_when_whole():
     from hocuspocus.host.tools.geo import frame_num
 

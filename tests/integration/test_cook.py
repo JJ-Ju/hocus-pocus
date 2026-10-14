@@ -944,10 +944,10 @@ def test_cook_profile_on_a_sim_says_whether_it_resimulated(client):
     assert row["simulation"]["resimulated"] is True
     assert any("simulat" in n for n in first["notes"])
     # Profiling the same frame again force-cooks the solver's inputs, so Houdini re-solves
-    # its newest frame: resimulated comes from the DOP solve stats, not a guess.
+    # its newest frame only (review 24 N3), or reads it from the cache.
     again = client.ok("cook", {"paths": [solver.path()], "profile": True, "frame": 3})
     row = next(r for r in again["chain"] if r["path"] == solver.path())
-    assert isinstance(row["simulation"]["resimulated"], bool)
+    assert row["simulation"]["resimulated"] in (False, "current_frame"), row
 
 
 def _small_pyro():
@@ -1011,6 +1011,48 @@ def test_cook_profile_says_null_when_the_sim_gives_no_signal(client, monkeypatch
     sim = _sim_row(result, solver)
     assert sim["resimulated"] is None, sim
     assert any("unknown" in n for n in result["notes"])
+
+
+def _vellum_cloth():
+    geo = _geo("cloth")
+    grid = geo.createNode("grid")
+    grid.parm("rows").set(10)
+    grid.parm("cols").set(10)
+    grid.parm("ty").set(3)
+    cloth = geo.createNode("vellumconstraints")
+    cloth.setInput(0, grid)
+    solver = geo.createNode("vellumsolver")
+    for index in range(3):
+        solver.setInput(index, cloth, index)
+    solver.setDisplayFlag(True)
+    return solver
+
+
+@pytest.mark.slow
+def test_cook_profile_on_vellum_tells_full_runs_current_frame_and_cache_reads(client):
+    """Review 24 N3: repeat profiles of a warm Vellum solver said resimulated: true and
+    "simulated frames ... up to frame 24", though only frame 24 was re-solved (the
+    profile force-cooks the solver's inputs)."""
+    solver = _vellum_cloth()
+
+    def profile(frame):
+        result = client.ok("cook", {"paths": [solver.path()], "profile": True, "frame": frame})
+        note = next(n for n in result["notes"] if n.startswith(solver.path()))
+        return _sim_row(result, solver), note
+
+    fresh, note = profile(12)
+    assert fresh["resimulated"] is True and fresh["simulated_frames"] == [1, 12], fresh
+    assert "simulated frames 1-12" in note, note
+    warm, note = profile(12)
+    assert warm["resimulated"] == "current_frame", warm
+    assert warm["simulated_frames"] == [12, 12] and warm["frame"] == 12, warm
+    assert "re-solved only frame 12" in note and "simulated frames" not in note, note
+    cached, note = profile(6)
+    assert cached["resimulated"] is False and "simulated_frames" not in cached, cached
+    assert "did not re-simulate" in note, note
+    solver.parm("resimulate").pressButton()
+    reset, note = profile(12)
+    assert reset["resimulated"] is True and reset["simulated_frames"] == [1, 12], reset
 
 
 def test_houdini_status_reports_process_memory(client):
