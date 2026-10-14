@@ -1315,3 +1315,19 @@ def test_node_edit_never_cooks(client):
     assert row["path"] == "/obj/geo1/base" and row["cook_state"] == "not_cooked"
     assert "cook_time_ms" not in row
     assert box.needsToCook()
+
+
+def test_outline_inputs_name_a_non_zero_source_output(client):
+    """Review 23 papercut 5: the outline dropped the output index, so Vellum's constraint
+    output wired as geometry looked right."""
+    geo = hou.node("/obj").createNode("geo", "geo1")
+    box = geo.createNode("box", "box1")
+    split = geo.createNode("split", "split1")
+    split.setInput(0, box)
+    merge = geo.createNode("merge", "merge1")
+    merge.setInput(0, split, 0)
+    merge.setInput(1, split, 1)
+    result = client.ok("network_describe", {"root": geo.path(), "format": "outline"})
+    rows = {row["name"]: row for row in result["nodes"]}
+    assert rows["merge1"]["inputs"] == ["/obj/geo1/split1", "/obj/geo1/split1:1"]
+    assert rows["split1"]["inputs"] == ["/obj/geo1/box1"]

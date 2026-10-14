@@ -210,13 +210,24 @@ def _shipped_asset(node: Any) -> bool:
 
 
 def _outline_inputs(node: Any) -> list[str | None]:
+    """Source path per input slot; ``"<path>:<n>"`` when the source's output ``n`` is not
+    0 (review 23 papercut 5: Vellum's constraint output wired as geometry was invisible)."""
     try:
         sources = list(node.inputs())
     except Exception:
         return []
+    outputs: dict[int, int] = {}
+    try:
+        for conn in node.inputConnections():
+            outputs[conn.inputIndex()] = conn.outputIndex()
+    except Exception:
+        pass
     while sources and sources[-1] is None:
         sources.pop()
-    return [None if source is None else source.path() for source in sources]
+    return [
+        None if source is None else source.path() + (f":{outputs[i]}" if outputs.get(i, 0) else "")
+        for i, source in enumerate(sources)
+    ]
 
 
 def _outline_entry(
@@ -225,7 +236,8 @@ def _outline_entry(
     """``{path, name, type, children_count?, display?, errors, inputs?, flags?, hda_locked?,
     children?}``: no parms, so a whole scene fits in one page (``houdini://outline``).
 
-    ``inputs`` (1.2, review 12 papercut 4) lists the source node path per input slot, with
+    ``inputs`` (1.2, review 12 papercut 4) lists the source node path per input slot
+    (``path:n`` for output ``n`` > 0, 1.4), with
     ``null`` for an empty slot before a wired one, and is left out when nothing is wired;
     ``flags`` lists only the flags that are on (``["display", "render"]``), left out when
     none is.

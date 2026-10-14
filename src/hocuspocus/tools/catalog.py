@@ -855,7 +855,8 @@ _NODES: tuple[ToolSpec, ...] = (
         notes=(
             "depth defaults to 1, and to 2 for outline. A locked HDA appears as {type, hda_locked}."
             " Outline rows: path, name, type, children_count (left out at 0), display, errors, "
-            "inputs (source path per input slot, null for an empty slot before a wired one; left "
+            "inputs (source path per input slot, path:n when the source's output n is not 0, "
+            "null for an empty slot before a wired one; left "
             'out when nothing is wired), flags (only the ones that are on, e.g. ["display", '
             '"render"]; left out when none), and hda_locked only for locked assets not shipped with'
             " Houdini. Truncated pages carry truncated and next_cursor."
