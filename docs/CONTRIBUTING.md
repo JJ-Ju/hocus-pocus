@@ -304,6 +304,59 @@ HOUDINI_HYTHON="C:/Program Files/Side Effects Software/Houdini 22.0.466/bin/hyth
   .venv/Scripts/python -m pytest tests/e2e -q -p no:cacheprovider
 ```
 
+### Workloads tier
+
+`tests/workloads/` scripts the evaluation workloads as tests (spec-2.0 §5.2) and measures
+what an agent pays for them. It is deselected by default; run it in the dev venv with:
+
+```bash
+.venv/Scripts/python -m pytest tests/workloads --runworkloads -q -s -p no:cacheprovider
+```
+
+(`-m workload` also selects it.) Like e2e, it needs hython and skips without one. One
+session fixture starts one headless host (`hython -m hocuspocus.host`) with isolated
+`HOCUSPOCUS_STATE_DIR`, `HOUDINI_USER_PREF_DIR` (`prefs/houdini__HVER__`, with
+`profile = "full"` in `prefs/houdini22.0/hocuspocus.toml`), work and temp dirs and a
+neutral cwd, all under pytest's temporary directory, and keeps one official `mcp` client
+session to the stdio bridge open for all five workloads. Between workloads it re-pins the
+host, cancels running jobs, runs `hip_new {on_unsaved: discard}` and deletes the
+workload's files (caches stay under 300 MB each).
+
+| Workload | Source | What it does | Time here |
+|---|---|---|---:|
+| `test_city_build` | review 12 | building generator with `node_edit spare_parms`, the city's for-each loop in one `node_create`, `OUT_CITY`, `cook profile`, one capture | ~5 s |
+| `test_scorecard_twelve` | review 21 | the twelve tasks: 2.4 at frame 24, three mistakes with candidates, `unsaved_changes`, `instance_lost` after a kill and a relaunch | ~8 s |
+| `test_soak_200` | review 22 | 200 calls from seed 22: the weighted mix, scheduled samples, saves, captures, canary cooks, a cancelled and a finished cook job, a `hip_open`, one-shot bridges; no leaked nodes or jobs, read p95 < 250 ms | ~20 s |
+| `test_fx_cache` | review 20 | a small pyro sim cached by `render` on `filecache::2.0` (24 frames, polled job), volumes read back, one capture | ~3 s |
+| `test_vellum_usd` | review 24 | Vellum cloth cached for 24 frames, `usd_rop` export by `render`, `sublayer` read-back with 24 time samples, a 320×180 Karma frame | ~17 s |
+
+The whole tier takes about a minute on the 1.4 release machine (budget: 12 minutes).
+
+Each test wraps `call_tool` in a `Recorder` that keeps, per call, the tool, args bytes,
+text bytes (the JSON text block the model reads; images are counted apart), elapsed time
+and `isError`, and per workload the calls, text bytes, largest call, wall time and time to
+the first image. Text bytes are counted with the session's temporary root replaced by
+`<tmp>`, so budgets do not depend on the temp path. Job polls are not recorded (only the
+final `job status`), so call counts do not depend on machine speed.
+
+**Budgets.** `tests/workloads/budgets.json` holds `calls`, `text_bytes`, `max_call_bytes`
+and `wall_s` per workload, recorded from 1.4 (the larger of two runs). A workload fails
+when any of them is more than 15 % over its budget, or on any error it did not expect.
+Every run writes its measurements, per tool as well, to `tests/workloads/last_run.json`
+(not committed). A change that raises bytes or calls per workload must say why (spec-2.0
+principle 13); when the rise is intended, re-record with
+`--update-budgets` (it rewrites the entries of the workloads that ran) and commit the new
+`budgets.json` with the change. Record wall time from a full-tier run: run alone, a
+workload can pay the capture child's 3 s start that the full run spreads differently.
+
+To add a workload, write `tests/workloads/test_<name>.py` that takes the `workload`
+fixture, drives tools only through it (`rec.ok`, `rec.error(code=...)`, `rec.wait_job`,
+`rec.path(...)` for files), asserts the outcomes the evaluation verified, and ends with
+`rec.finish()`; then record its budget.
+
+`.github/workflows/houdini.yml` runs the tier nightly and on manual dispatch (not on
+labelled PRs) and uploads `last_run.json`. Run it yourself before every tag.
+
 ### CI
 
 - `.github/workflows/ci.yml` runs on every push and PR, on `windows-latest` and

@@ -1,4 +1,4 @@
-# Integration (inside hython) + e2e tiers against a real, licensed Houdini.
+# Integration (inside hython), e2e and workloads tiers against a real, licensed Houdini.
 #
 # REQUIRES A SELF-HOSTED RUNNER labelled `houdini` (Windows, Houdini 22 installed and
 # licensed). GitHub-hosted runners cannot run hython. Runs nightly, on manual dispatch and
@@ -105,3 +105,23 @@ jobs:
           $env:HOCUSPOCUS_STATE_DIR = Join-Path $root "state"
           & "$env:GITHUB_WORKSPACE\.venv\Scripts\python.exe" -m pytest tests/e2e -q -p no:cacheprovider
           exit $LASTEXITCODE
+
+      # The workloads tier (spec-2.0 §5.2): the five evaluation workloads against one
+      # headless host, each checked against tests/workloads/budgets.json (+15 %). Nightly
+      # and on manual dispatch only, not on labelled PRs.
+      - name: Workloads tier (pytest tests/workloads --runworkloads)
+        if: ${{ !cancelled() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP "hp-wl"
+          New-Item -ItemType Directory -Force $root | Out-Null
+          & "$env:GITHUB_WORKSPACE\.venv\Scripts\python.exe" -m pytest tests/workloads `
+            --runworkloads -q -s -p no:cacheprovider --basetemp (Join-Path $root "tmp") --durations=10
+          exit $LASTEXITCODE
+
+      - name: Upload the workloads' measurements
+        if: ${{ !cancelled() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: workloads-last-run
+          path: tests/workloads/last_run.json
+          if-no-files-found: ignore
