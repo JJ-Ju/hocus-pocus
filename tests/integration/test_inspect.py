@@ -272,7 +272,9 @@ def test_inspect_errors_name_the_options(v2_client):
     assert error["code"] == "node_not_found"
 
 
-def test_a_full_host_refuses_inspect(client):
-    error = client.error("inspect", {"what": "outline"})
-    assert error["code"] == "invalid_argument" and "v2-profile" in error["message"]
-    assert 'profile = "v2"' in error["hint"]
+def test_a_full_host_refuses_the_1x_reads_with_their_inspect_what(client):
+    """spec-2.0 §8: node_info on a 2.0 profile names inspect what: node."""
+    assert client.ok("inspect", {"what": "outline"})["what"] == "outline"
+    error = client.error("node_info", {"paths": ["/obj"]})
+    assert error["code"] == "invalid_argument" and "1.4 tool" in error["message"]
+    assert error["hint"].startswith("In 2.0 use inspect what: node.")

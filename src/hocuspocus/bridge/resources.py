@@ -48,7 +48,6 @@ from ..tools.profiles import is_2x
 from . import budget
 from . import instances as registry
 from .client import DELIVERY_HINT, OFFLINE_HINT, REINSTALL_HINT
-from .instructions import RESOURCES as RESOURCES_1X
 from .instructions import guide_text, tools_text
 
 if TYPE_CHECKING:
@@ -84,26 +83,6 @@ RESOURCES: tuple[tuple[str, str, str, str], ...] = (
     (TOOLS_URI, "tools", "text/markdown", "The tool reference and resource templates (large)."),
 )
 
-GUIDE_RESOURCES = """## Resources
-
-Attach these for context. Each is also a tool call with the same JSON (`inspect`, `search`,
-`houdini_status`), and every read carries `_meta.etag`: send it back as
-`_meta["If-None-Match"]` and an unchanged resource answers `_meta.not_modified: true` with
-no contents.
-
-- `houdini://status`, `houdini://instances`, `houdini://jobs`, `houdini://problems{?root}`,
-  `houdini://events{?since,limit}`.
-- `houdini://outline{?root,depth}`: the scene as a compact tree. Start here.
-- `houdini://node/{path}{?include,parms,include_defaults}`, `network/{path}`,
-  `geo/{path}`, `image/{path}`, `stage/{lop}`: `inspect` with that `what`.
-- `houdini://type/{category}/{name}`, `houdini://types{?q}`: a node type, a type search.
-- Subscribe to `status`, `jobs`, `events` or `node/{path}`:
-  `notifications/resources/updated` arrives when its etag changes.
-- `hocuspocus://tools`: the tool reference and every template. Large: read it for one
-  tool's notes when a result surprises you.
-
-"""
-
 
 def enabled(bridge: Bridge) -> bool:
     """The 2.0 resources are served on every 2.0 profile; ``compat_1x`` serves 1.4's."""
@@ -112,8 +91,9 @@ def enabled(bridge: Bridge) -> bool:
 
 
 def v2_guide_text() -> str:
-    """The guide with the 2.0 resources paragraph in place of the 1.4 one."""
-    return guide_text().replace(RESOURCES_1X, GUIDE_RESOURCES)
+    """The 2.0 guide, whose resources paragraph names these templates (the 2.0 profiles
+    serve it; ``compat_1x`` serves the 1.4 one from ``Bridge.read_resource``)."""
+    return guide_text()
 
 
 def v2_tools_text(tools: Any) -> str:

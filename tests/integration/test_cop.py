@@ -13,6 +13,8 @@ hou = pytest.importorskip("hou")
 
 from hocuspocus.host.tools import events as ev  # noqa: E402
 
+pytestmark = pytest.mark.compat_1x  # the 1.4 tools (conftest: compat_client)
+
 
 def _fwd(path) -> str:
     return str(path).replace("\\", "/")

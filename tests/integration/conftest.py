@@ -9,6 +9,12 @@ response arrives. Each test starts from ``hou.hipFile.clear()``.
 See docs/CONTRIBUTING.md for the exact command (isolated ``HOUDINI_USER_PREF_DIR``,
 neutral working directory).
 
+Profiles (spec-2.0 §2, §8): the session host runs ``full``, the largest 2.0 profile, which
+refuses the 1.4 tools 2.0 removed. ``compat_client`` sends ``profile: compat_1x`` with every
+call, as a ``compat_1x`` bridge does, so the host runs the 1.4 tools (and the 2.0 ones). A
+module written against the 1.4 tools sets ``pytestmark = pytest.mark.compat_1x``, which makes
+its ``client`` the compat client; every other module's ``client`` is the plain ``full`` one.
+
 ``test_parity_gui.py`` (marker ``gui``) is the GUI column of docs/parity.md: it runs in the
 dev venv's Python, launches ``houdinifx`` with an isolated pref dir and drives it over HTTP.
 It is deselected unless ``--rungui`` is given (which also implies ``--runslow``); nothing
@@ -61,6 +67,10 @@ def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line(
         "markers", "gui: launches a GUI houdinifx (docs/parity.md); run with --rungui"
     )
+    config.addinivalue_line(
+        "markers",
+        "compat_1x: the module calls the 1.4 tools; its client fixture sends profile compat_1x",
+    )
     if config.getoption("--rungui", default=False):
         # The GUI session is also marked slow, which tests/conftest.py deselects unless
         # asked for; --rungui asks for it.
@@ -105,10 +115,12 @@ class Response:
 
 
 class HostClient:
-    """HTTP client that pumps the main-thread executor while it waits."""
+    """HTTP client that pumps the main-thread executor while it waits. ``profile`` is sent
+    with every call, as the bridge sends its own (``compat_1x`` runs the 1.4 tools)."""
 
-    def __init__(self, host: Any) -> None:
+    def __init__(self, host: Any, profile: str | None = None) -> None:
         self.host = host
+        self.profile = profile
 
     @property
     def port(self) -> int:
@@ -171,6 +183,8 @@ class HostClient:
         }
         if timeout_s is not None:
             body["timeout_s"] = timeout_s
+        if self.profile:
+            body["profile"] = self.profile
         response = self.request("POST", "/hp/v1/call", body)
         assert response.status == 200, response.body
         envelope = response.body
@@ -213,7 +227,8 @@ def host(hp_dirs: dict[str, Path]) -> Any:
 
     os.environ["HOCUSPOCUS_STATE_DIR"] = str(hp_dirs["state"])
     # profile "full", never minimal or core: those hosts refuse the tools outside them
-    # (pdg, hda, geo_read, ...), and full lists every tool (test_profiles_are_nested).
+    # (pdg, hda, events), and full lists every 2.0 tool (test_profiles_are_nested). The 1.4
+    # tools run through compat_client (module docstring).
     config = HostConfig(
         state_dir=str(hp_dirs["state"]), pref_dir=str(hp_dirs["prefs"]), profile="full"
     )
@@ -228,20 +243,26 @@ def host(hp_dirs: dict[str, Path]) -> Any:
 
 
 @pytest.fixture
-def client(host: Any) -> HostClient:
+def compat_client(host: Any) -> HostClient:
+    """A client whose calls carry ``profile: compat_1x``, as a ``compat_1x`` bridge's do: the
+    ``full`` host runs every 1.4 tool for it, and the 2.0 tools too (spec-2.0 §8)."""
+    return HostClient(host, profile="compat_1x")
+
+
+@pytest.fixture
+def client(host: Any, request: pytest.FixtureRequest) -> HostClient:
+    """The session's ``full`` host; ``compat_client`` in a module marked ``compat_1x``."""
+    if request.node.get_closest_marker("compat_1x") is not None:
+        return request.getfixturevalue("compat_client")
     return HostClient(host)
 
 
 @pytest.fixture
-def v2_client(host: Any, client: HostClient) -> Any:
-    """``client`` with the host on the ``v2`` profile (full plus the 2.0 tools, spec-2.0
-    §7 M1) for this test only; every other test keeps the session's ``full`` host."""
-    saved = host.config.profile
-    host.config.profile = "v2"
-    try:
-        yield client
-    finally:
-        host.config.profile = saved
+def v2_client(compat_client: HostClient) -> HostClient:
+    """The M1-M2 fixture of the 2.0 tools' tests, which compare each 2.0 tool with the 1.4
+    tools it replaces (``_same``): both run under ``compat_1x``. A 2.0-only test can take
+    ``client``, since the session host runs ``full``."""
+    return compat_client
 
 
 @pytest.fixture(autouse=True)

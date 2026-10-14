@@ -86,9 +86,15 @@ def test_review_07_build_in_one_call_under_1_kb(v2_client):
     assert hou.node("/obj/terrain") is None
 
 
-def test_edit_needs_the_v2_profile(client):
-    error = client.error("edit", {"ops": [{"op": "select", "paths": []}]})
-    assert error["code"] == "invalid_argument" and 'profile = "v2"' in error["hint"]
+def test_the_full_host_runs_edit_and_refuses_the_1x_tools_it_replaces(client, compat_client):
+    """spec-2.0 §8: the session host (full) runs edit for any client and answers a 1.4
+    mutation tool with the edit op that replaces it; a compat_1x call still runs it."""
+    client.ok("edit", {"ops": [{"op": "create", "parent": "/obj", "type": "geo"}], "dry_run": True})
+    error = client.error("node_delete", {"paths": ["/obj/nope"]})
+    assert error["code"] == "invalid_argument" and "edit op: delete" in error["hint"]
+    assert compat_client.error("node_delete", {"paths": ["/obj/nope"]})["code"] == (
+        "node_not_found"
+    )
 
 
 # -- every op type ----------------------------------------------------------------------

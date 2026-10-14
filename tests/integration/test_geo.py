@@ -7,6 +7,8 @@ import time
 
 import pytest
 
+pytestmark = pytest.mark.compat_1x  # the 1.4 tools (conftest: compat_client)
+
 hou = pytest.importorskip("hou")
 
 

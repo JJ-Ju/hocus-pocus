@@ -142,9 +142,9 @@ def _props(spec) -> dict[str, Any]:
     return spec.input_schema.get("properties") or {}
 
 
-def test_on_and_role_are_listed_by_v2_only():
-    v2 = {spec.name: spec for spec in catalog.for_profile("v2")}
-    for profile in ("minimal", "core", "full"):
+def test_on_and_role_are_listed_by_the_2x_profiles_only():
+    v2 = {spec.name: spec for spec in catalog.for_profile("full")}
+    for profile in ("compat_1x",):
         for spec in catalog.for_profile(profile):
             assert "on" not in _props(spec) and "role" not in _props(spec), (profile, spec.name)
     for name in ("cook", "render", "job"):
@@ -158,11 +158,11 @@ def test_on_and_role_are_listed_by_v2_only():
     assert out["instances"]["items"]["properties"]["role"]["enum"] == ["editor", "worker"]
     assert out["recent"]["type"] == "array"
     for name in routing.ROUTABLE & set(v2):
-        assert "on" in _props(v2[name]) and "v2 profile" in v2[name].notes, name
+        assert "on" in _props(v2[name]) and " on " in f" {v2[name].notes} ", name
 
 
 def test_overlay_arguments_follow_the_catalogue_rules():
-    for spec in catalog.for_profile("v2"):
+    for spec in catalog.for_profile("full"):
         added = (spec.v2_extra.get("input") or {}).get("properties") or {}
         for name, schema in added.items():
             words = len(str(schema.get("description", "")).split())
@@ -221,7 +221,7 @@ class Host:
         return True, {"quitting": True, "pid": self.inst.pid, "hip": self.inst.hip}, {}
 
 
-def make(*live_instances: Instance, profile: str = "v2", ledger: Ledger | None = None):
+def make(*live_instances: Instance, profile: str = "full", ledger: Ledger | None = None):
     live = list(live_instances)
     hosts = {inst.port: Host(inst) for inst in (GUI, W1, W2)}
     bridge = Bridge(
@@ -256,7 +256,7 @@ def test_on_worker_runs_beside_the_pinned_editor():
     assert bridge.ledger.job(job_id)["pid"] == W1.pid
     listed = data(bridge.call_tool("job", {"action": "list", "on": W1.pid}))
     assert [row["job_id"] for row in listed["jobs"]] == [job_id]
-    edit = bridge.call_tool("node_info", {"paths": ["/obj"]})
+    edit = bridge.call_tool("inspect", {"what": "node", "target": "/obj"})
     assert edit.meta["instance"]["pid"] == GUI.pid  # everything else: the pin
 
 
@@ -283,8 +283,8 @@ def test_on_a_remembered_dead_instance_is_instance_lost():
     assert error["code"] == "houdini_offline"
 
 
-def test_full_profile_has_no_on_and_keeps_host_job_ids():
-    bridge, _hosts, _live = make(W1, profile="full")
+def test_compat_1x_has_no_on_and_keeps_host_job_ids():
+    bridge, _hosts, _live = make(W1, profile="compat_1x")
     error = data(bridge.call_tool("render", {"rop_path": "/out/geo", "on": "worker"}))
     assert error["code"] == "invalid_argument"
     result = data(bridge.call_tool("render", {"rop_path": "/out/geo"}))
@@ -361,7 +361,7 @@ def test_connect_sets_roles_that_status_reports():
     assert named["connected"]["pid"] == W2.pid and named["connected"]["role"] == "editor"
 
 
-def test_recent_lists_quit_and_dead_instances_in_v2_only(tmp_path):
+def test_recent_lists_quit_and_dead_instances_outside_compat_1x_only(tmp_path):
     ledger = Ledger.at(tmp_path / "state")
     bridge, _hosts, live = make(GUI, W1, W2, ledger=ledger)
     bridge.call_tool("houdini_connect", {"pid": W1.pid})
@@ -375,7 +375,7 @@ def test_recent_lists_quit_and_dead_instances_in_v2_only(tmp_path):
     assert recent[W1.pid]["hip"] == "C:/work/w1.hip" and recent[W1.pid]["role"] == "worker"
     assert recent[W2.pid]["name"] == "farm" and recent[W2.pid]["alive"] is False
     assert [row["pid"] for row in status["instances"]] == [GUI.pid]
-    full, _h, _l = make(GUI, profile="full", ledger=ledger)
+    full, _h, _l = make(GUI, profile="compat_1x", ledger=ledger)
     status = data(full.call_tool("houdini_status", {}))
     assert "recent" not in status and "role" not in status["instances"][0]
     assert "role" not in (status["connected"] or {})

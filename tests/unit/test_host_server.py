@@ -81,6 +81,8 @@ def _tools():
         "pdg": HostTool("pdg", echo, read_only=True, main_thread=False, scene=False),
         "geo_info": HostTool("geo_info", echo, read_only=True),
         "geo_read": HostTool("geo_read", echo, read_only=True),
+        "inspect": HostTool("inspect", echo, read_only=True),
+        "time": HostTool("time", echo, read_only=True),
         "starts_job": HostTool(
             "starts_job", starts_job, read_only=True, main_thread=False, scene=False
         ),
@@ -491,12 +493,51 @@ def test_a_core_host_refuses_full_profile_tools(stack):
 
 
 def test_a_minimal_host_refuses_tools_outside_minimal(stack):
-    """1.3 (BIBLE §3.7): the host honours minimal as it honours core."""
+    """spec-2.0 §2 (BIBLE §3.5): the host honours minimal as it honours core."""
     dispatcher, ctx = stack["dispatcher"], stack["ctx"]
     ctx.config.profile = "minimal"
-    assert dispatcher.call("geo_info", {})["ok"] is True
-    error = dispatcher.call("geo_read", {})["error"]
+    assert dispatcher.call("inspect", {})["ok"] is True
+    error = dispatcher.call("time", {})["error"]
     assert error["code"] == "invalid_argument"
     assert "core-profile" in error["message"] and "minimal profile" in error["message"]
     assert 'profile = "core"' in error["hint"]
     assert "full-profile" in dispatcher.call("pdg", {})["error"]["message"]
+
+
+@pytest.mark.parametrize("profile", ["minimal", "core", "full"])
+def test_a_2x_host_refuses_a_removed_1x_tool_with_its_replacement(stack, profile):
+    """spec-2.0 §8: a 1.4 tool 2.0 removed names its 2.0 replacement on every 2.0 profile."""
+    dispatcher, ctx = stack["dispatcher"], stack["ctx"]
+    ctx.config.profile = profile
+    error = dispatcher.call("geo_read", {})["error"]
+    assert error["code"] == "invalid_argument"
+    assert error["message"] == (
+        f"geo_read is a 1.4 tool that the 2.0 {profile} profile does not serve."
+    )
+    assert error["hint"].startswith("In 2.0 use inspect what: geo with rows: true.")
+    assert 'profile = "compat_1x"' in error["hint"]
+    assert error["detail"]["replacement"] == "inspect what: geo with rows: true"
+
+
+@pytest.mark.parametrize("profile", ["minimal", "core", "full"])
+def test_a_compat_1x_bridge_runs_the_1x_tools_on_any_host(stack, profile):
+    """spec-2.0 §8: the bridge sends its profile; a compat_1x call runs every 1.4 tool (and
+    the 2.0 ones) whatever the host's own profile, over HTTP as in process."""
+    dispatcher, ctx = stack["dispatcher"], stack["ctx"]
+    ctx.config.profile = profile
+    for tool in ("geo_read", "pdg", "inspect"):
+        assert dispatcher.call(tool, {}, profile="compat_1x")["ok"] is True, tool
+    assert dispatcher.call("geo_read", {}, profile="full")["ok"] is False  # only compat widens
+    _, body = _request(
+        stack["server"], "POST", "/hp/v1/call", {"tool": "geo_info", "profile": "compat_1x"}
+    )
+    assert body["ok"] is True, body
+    _, body = _request(stack["server"], "POST", "/hp/v1/call", {"tool": "geo_info"})
+    assert body["ok"] is False and "inspect what: geo" in body["error"]["hint"]
+
+
+def test_a_compat_1x_host_runs_every_tool(stack):
+    dispatcher, ctx = stack["dispatcher"], stack["ctx"]
+    ctx.config.profile = "compat_1x"
+    for tool in ("geo_read", "pdg", "inspect", "time"):
+        assert dispatcher.call(tool, {})["ok"] is True, tool

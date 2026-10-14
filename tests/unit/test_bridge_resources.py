@@ -361,8 +361,8 @@ def test_v2_lists_templates_and_resources_and_sets_capabilities():
     assert "hocuspocus://guide" in listed
 
 
-def test_other_profiles_keep_the_1x_resources():
-    bridge, _app, _client = make_bridge(profile="full")
+def test_compat_1x_keeps_the_1x_resources():
+    bridge, _app, _client = make_bridge(profile="compat_1x")
 
     async def main():
         async with Client(build_server(bridge), mode="legacy") as client:

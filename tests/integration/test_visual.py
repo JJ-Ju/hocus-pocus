@@ -26,6 +26,8 @@ from hocuspocus.host.tools.visual import (  # noqa: E402
     temporary_capture_nodes,
 )
 
+pytestmark = pytest.mark.compat_1x  # the 1.4 tools (conftest: compat_client)
+
 
 def _fwd(path) -> str:
     return str(path).replace("\\", "/")

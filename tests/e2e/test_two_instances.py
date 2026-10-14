@@ -35,7 +35,7 @@ def _env(tmp_path: Path, hython: Path) -> dict[str, str]:
             "PYTHONPATH": str(SRC),
             "HOCUSPOCUS_STATE_DIR": str(tmp_path / "state"),
             "HOCUSPOCUS_HFS": str(hython.parent.parent),
-            "HOCUSPOCUS_PROFILE": "full",
+            "HOCUSPOCUS_PROFILE": "compat_1x",  # node_find, a 1.4 tool
             # Houdini ignores HOUDINI_USER_PREF_DIR without the __HVER__ token.
             "HOUDINI_USER_PREF_DIR": (tmp_path / "prefs" / "houdini__HVER__").as_posix(),
             "PYTHONDONTWRITEBYTECODE": "1",

@@ -178,7 +178,7 @@ class Host:
         return [dict(self.snapshot)] if self.snapshot else []
 
 
-def _bridge(tmp_path, live, profile="full"):
+def _bridge(tmp_path, live, profile="compat_1x"):
     hosts = {inst.port: Host(inst) for inst in (GUI, WORKER)}
     bridge = Bridge(
         BridgeConfig(profile=profile),
@@ -195,7 +195,7 @@ def test_a_job_a_call_starts_is_recorded_with_its_result(tmp_path):
     bridge, _hosts = _bridge(tmp_path, live)
     result = bridge.call_tool("render", {"rop_path": "/out/k"})
     host_id = json.loads(result.content[0].text)["job_id"]
-    assert host_id == f"{WORKER.pid}-00ab12cd34ef"  # full profile: the 1.4 id
+    assert host_id == f"{WORKER.pid}-00ab12cd34ef"  # compat_1x: the 1.4 id
     job_id = bridge.ledger.ledger_id(host_id)
     assert bridge.ledger.job(job_id)["tool"] == "render"
     bridge.call_tool("job", {"action": "result", "job_id": host_id})

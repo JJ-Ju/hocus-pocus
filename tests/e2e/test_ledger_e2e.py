@@ -2,7 +2,7 @@
 
 Two headless Houdinis started with `hocuspocus launch --headless` into one isolated state
 dir, driven by two `hocuspocus-mcp` processes in turn (the second one is the bridge
-"restarted"), profile v2:
+"restarted"), profile full (the 2.0 surface):
 
 1. roles: both start as workers; one becomes the editor and is pinned;
 2. `render {on: "worker"}` runs on the other one while the editor stays pinned, and returns
@@ -43,7 +43,7 @@ def test_ledger_roles_on_and_a_bridge_restart(hython, tmp_path):
     from mcp import Client
     from mcp.client.stdio import StdioServerParameters
 
-    env = dict(_env(tmp_path, hython), HOCUSPOCUS_PROFILE="v2")
+    env = dict(_env(tmp_path, hython), HOCUSPOCUS_PROFILE="full")
     state = tmp_path / "state"
     pids: list[int] = []
     try:
@@ -103,7 +103,7 @@ def test_ledger_roles_on_and_a_bridge_restart(hython, tmp_path):
                 out["status1"] = await call("houdini_status", {})
                 job_id = _json(out["render"]).get("job_id")
                 out["job1"] = await call("job", {"action": "status", "job_id": job_id})
-                out["editor_read"] = await call("node_find", {"root": "/obj"})
+                out["editor_read"] = await call("search", {"kind": "nodes", "root": "/obj"})
             return out
 
         async def second_bridge(job_id: str) -> dict[str, object]:

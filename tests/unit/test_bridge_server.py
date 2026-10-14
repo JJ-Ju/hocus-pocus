@@ -16,7 +16,7 @@ from hocuspocus.bridge.config import BridgeConfig
 from hocuspocus.bridge.instances import Instance
 from hocuspocus.bridge.instructions import INSTRUCTIONS
 from hocuspocus.bridge.server import Bridge, build_server, get_prompt, list_prompts
-from hocuspocus.tools.catalog import MINIMAL_TOOLS, ToolSpec
+from hocuspocus.tools.catalog import ToolSpec, for_profile
 from hocuspocus.tools.errors import ToolError
 
 pytestmark = pytest.mark.unit
@@ -93,7 +93,7 @@ FAKE_TOOLS = (
         dict(OBJ, properties={"path": {"type": "string"}}, required=["path"]),
         read_only=True,
     ),
-    ToolSpec("usd_stage", "USD.", dict(OBJ, properties={}), profile="full"),
+    ToolSpec("usd_stage", "USD.", dict(OBJ, properties={}), profiles=("compat_1x",)),
 )
 
 
@@ -211,11 +211,13 @@ def test_tools_list_with_no_houdini_over_mcp_client():
 def test_profile_filters_real_catalogue():
     core = Bridge(BridgeConfig(profile="core"), scan=lambda: [])
     full = Bridge(BridgeConfig(profile="full"), scan=lambda: [])
-    assert {t.profile for t in core.tools} <= {"core"}
+    assert all("core" in t.profiles for t in core.tools)
     assert len(full.tools) >= len(core.tools)
     minimal = Bridge(BridgeConfig(profile="minimal"), scan=lambda: [])
-    assert {t.name for t in minimal.tools} == MINIMAL_TOOLS
-    assert {t.name for t in minimal.list_tools()} == MINIMAL_TOOLS
+    names = {t.name for t in for_profile("minimal")}
+    assert len(names) == 10
+    assert {t.name for t in minimal.tools} == names
+    assert {t.name for t in minimal.list_tools()} == names
 
 
 def test_tools_list_is_deterministic():
@@ -733,7 +735,8 @@ def test_read_resource_forwards_and_errors():
 
 
 def test_resources_over_mcp_client():
-    bridge, _c, _l = make_bridge(instances=())
+    # The 1.4 resources; every 2.0 profile serves the 2.0 ones (test_bridge_resources.py).
+    bridge, _c, _l = make_bridge(instances=(), config=BridgeConfig(profile="compat_1x"))
 
     async def run():
         async with Client(build_server(bridge)) as client:
@@ -767,10 +770,48 @@ def test_resources_over_mcp_client():
 def test_prompt_requires_arguments():
     from mcp.shared.exceptions import MCPError
 
-    assert len(list_prompts()) == 4
-    with pytest.raises(MCPError):
-        get_prompt("debug_red_node", {})
-    assert "/obj" in get_prompt("inspect_scene", None).messages[0].content.text
+    from hocuspocus.bridge.instructions import PROMPTS
+
+    assert [p.name for p in list_prompts()] == list(PROMPTS) and len(PROMPTS) == 7
+    assert [p.name for p in list_prompts("core")] == list(PROMPTS)
+    assert len(list_prompts("compat_1x")) == 4  # the 1.4 prompts
+    for profile in (None, "compat_1x"):
+        with pytest.raises(MCPError):
+            get_prompt("debug_red_node", {}, profile)
+        assert "/obj" in get_prompt("inspect_scene", None, profile).messages[0].content.text
+    assert "inspect" in get_prompt("inspect_scene", None).messages[0].content.text
+    assert (
+        "network_describe"
+        in get_prompt("inspect_scene", None, "compat_1x").messages[0].content.text
+    )
+
+
+@pytest.mark.parametrize("profile", ["core", "compat_1x"])
+def test_instructions_guide_and_prompts_follow_the_profile(profile):
+    """spec-2.0 §2.8, §8: the 2.0 profiles get the 2.0 texts and the seven prompts,
+    compat_1x the 1.4 texts and the four 1.4 prompts; each guide stays within its cap."""
+    from hocuspocus.bridge.instructions import (
+        GUIDE_MAX_BYTES,
+        INSTRUCTIONS_1X,
+        PROMPTS,
+        guide_text,
+    )
+    from hocuspocus.bridge.server import PROMPTS_1X
+
+    bridge, _c, _l = make_bridge(instances=(), config=BridgeConfig(profile=profile))
+    compat = profile == "compat_1x"
+
+    async def run():
+        async with Client(build_server(bridge)) as client:
+            guide = await client.read_resource("hocuspocus://guide")
+            prompts = (await client.list_prompts()).prompts
+            return client.instructions, guide.contents[0].text, prompts
+
+    instructions, guide, prompts = anyio.run(run)
+    assert instructions == (INSTRUCTIONS_1X if compat else INSTRUCTIONS)
+    assert guide == guide_text(profile) and len(guide.encode("utf-8")) <= GUIDE_MAX_BYTES
+    assert guide != guide_text("core" if compat else "compat_1x")
+    assert [p.name for p in prompts] == list(PROMPTS_1X if compat else PROMPTS)
 
 
 # -- progress notifications (BIBLE §7) ----------------------------------------------------
@@ -918,7 +959,8 @@ def test_result_content_both_duplicates_and_declares_output_schemas():
     by_name = {tool.name: tool for tool in real.list_tools()}
     with_schema = [spec.name for spec in real.tools if spec.output_schema is not None]
     assert with_schema and all(by_name[name].output_schema for name in with_schema)
-    assert catalog.get(with_schema[0]).output_schema == by_name[with_schema[0]].output_schema
+    listed = catalog.v2_spec(catalog.get(with_schema[0]))  # core lists the 2.0 overlay
+    assert listed.output_schema == by_name[with_schema[0]].output_schema
 
 
 def test_result_content_structured_summarises_the_text_block():

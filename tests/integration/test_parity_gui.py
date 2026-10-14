@@ -5,9 +5,10 @@ Runs in the dev venv's Python, not in hython::
     .venv/Scripts/python -m pytest tests/integration/test_parity_gui.py --rungui -q
 
 One session fixture launches ``houdinifx`` through :mod:`hocuspocus.bridge.launch` with an
-isolated ``HOUDINI_USER_PREF_DIR`` (the dev package JSON and a ``profile = "full"`` toml in
-it), an isolated ``HOCUSPOCUS_STATE_DIR`` and an ephemeral port, waits for the registry
-entry and drives the host over ``POST /hp/v1/call`` with the bridge's own
+isolated ``HOUDINI_USER_PREF_DIR`` (the dev package JSON and a ``profile = "compat_1x"`` toml
+in it: the rows call the 1.4 tools, and a compat_1x host runs the 2.0 ones too), an
+isolated ``HOCUSPOCUS_STATE_DIR`` and an ephemeral port, waits for the registry entry
+and drives the host over ``POST /hp/v1/call`` with the bridge's own
 :class:`~hocuspocus.bridge.client.HostClient`. The tests assert the ``mode`` rows of the
 matrix: what a GUI session does differently from a headless one. A GUI window appears on
 the desktop; ``test_quit_closes_the_gui`` (last) closes it with ``houdini_connect {quit}``
@@ -205,7 +206,7 @@ def gui(tmp_path_factory: pytest.TempPathFactory) -> Iterator[GuiSession]:
     state.mkdir()
     work.mkdir()
     (expanded / "packages" / "hocuspocus.json").write_text(_package_json(), encoding="utf-8")
-    (expanded / "hocuspocus.toml").write_text('profile = "full"\n', encoding="utf-8")
+    (expanded / "hocuspocus.toml").write_text('profile = "compat_1x"\n', encoding="utf-8")
 
     env = {k: v for k, v in os.environ.items() if not k.startswith("HOCUSPOCUS_")}
     env.pop("PYTHONHOME", None)
@@ -573,11 +574,7 @@ def test_selection_names_the_panes_it_moves(gui: GuiSession) -> None:
     assert client.python("[n.path() for n in hou.selectedNodes()]") == ["/obj/box_geo/box1"]
 
     client.python(PANES_TO_OBJ)
-    client.python("import hocuspocus.host as h\nh.current().config.profile = 'v2'")
-    try:
-        edited = client.ok("edit", {"ops": [{"op": "select", "paths": ["/obj/box_geo/box1"]}]})
-    finally:
-        client.python("import hocuspocus.host as h\nh.current().config.profile = 'full'")
+    edited = client.ok("edit", {"ops": [{"op": "select", "paths": ["/obj/box_geo/box1"]}]})
     row = edited["results"][0]
     assert row["selected"] == ["/obj/box_geo/box1"]
     assert set(row["context_changed"]) == moving

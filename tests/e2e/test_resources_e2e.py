@@ -1,10 +1,10 @@
-"""End to end, profile v2 (spec-2.0 §2.7): the official MCP client lists the resource
+"""End to end, profile full (spec-2.0 §2.7): the official MCP client lists the resource
 templates, reads a node resource twice (the second read, with the first etag as
 ``_meta["If-None-Match"]``, is ``not_modified``), subscribes to the node and receives
 ``notifications/resources/updated`` within 2 s of a ``parm_set``; over the 2026-07-28
 ``subscriptions/listen`` stream and over a handshake-era ``resources/subscribe``.
 
-The host and the bridge read ``profile = "v2"`` from ``hocuspocus.toml`` in the isolated
+The host and the bridge read ``profile = "full"`` from ``hocuspocus.toml`` in the isolated
 pref dir (``prefs/houdini22.0/``). Never uses port 37219; hython runs from a neutral cwd.
 """
 
@@ -52,7 +52,7 @@ def v2_host(tmp_path_factory):
     for d in (state, prefs / "houdini22.0", cwd):
         d.mkdir(parents=True)
     # Houdini expands __HVER__: the host and the bridge read prefs/houdini22.0/.
-    (prefs / "houdini22.0" / "hocuspocus.toml").write_text('profile = "v2"\n', encoding="utf-8")
+    (prefs / "houdini22.0" / "hocuspocus.toml").write_text('profile = "full"\n', encoding="utf-8")
     env = dict(os.environ)
     env.pop("HOCUSPOCUS_PROFILE", None)
     env.update(
@@ -114,7 +114,7 @@ def _text(result) -> dict:
 
 async def _build(client) -> None:
     status = _text(await client.call_tool("houdini_status", {}))
-    assert status["profile"] == "v2", status
+    assert status["profile"] == "full", status
     await client.call_tool("hip_new", {"on_unsaved": "discard"})
     made = await client.call_tool(
         "node_create",

@@ -35,7 +35,7 @@ from . import budget, routing
 from . import instances as registry
 from .client import OFFLINE_HINT, REINSTALL_HINT, HostClient
 from .config import BridgeConfig
-from .instructions import INSTRUCTIONS, guide_text, tools_text
+from .instructions import PROMPT_DEFAULTS, PROMPTS, guide_text, instructions_for, tools_text
 from .launch import Launcher
 from .ledger import Ledger, is_ledger_id
 from .local_tools import LOCAL_TOOLS
@@ -1067,7 +1067,11 @@ class Bridge:
 
     def read_resource(self, uri: str) -> types.ReadResourceResult:
         if uri in ("hocuspocus://guide", "hocuspocus://tools"):
-            text = guide_text() if uri == "hocuspocus://guide" else tools_text(self.tools)
+            text = (
+                guide_text(self.config.profile)
+                if uri == "hocuspocus://guide"
+                else tools_text(self.tools)
+            )
             return types.ReadResourceResult(
                 contents=[types.TextResourceContents(uri=uri, text=text, mime_type="text/markdown")]
             )
@@ -1120,7 +1124,7 @@ def _node_path(raw: str) -> str:
 
 # -- prompts -----------------------------------------------------------------------------
 
-_PROMPTS: dict[str, tuple[str, list[tuple[str, str, bool]], str]] = {
+PROMPTS_1X: dict[str, tuple[str, list[tuple[str, str, bool]], str]] = {
     "inspect_scene": (
         "Summarise the open Houdini scene: hip file, networks, problems.",
         [("root", "Network to start from (default /obj)", False)],
@@ -1181,29 +1185,44 @@ _PROMPTS: dict[str, tuple[str, list[tuple[str, str, bool]], str]] = {
         "first frame and at a quarter turn, and show both images.",
     ),
 }
-_PROMPT_DEFAULTS = {"root": "/obj", "parent": "a new geo node under /obj", "frames": "48"}
+"""The 1.4 prompts, in the 1.4 tools' words: ``compat_1x`` serves them (spec-2.0 §8); the
+2.0 profiles serve :data:`hocuspocus.bridge.instructions.PROMPTS` (spec-2.0 §2.8)."""
+PROMPT_DEFAULTS_1X = {"root": "/obj", "parent": "a new geo node under /obj", "frames": "48"}
 
 
-def list_prompts() -> list[types.Prompt]:
+def _prompts(
+    profile: str | None,
+) -> tuple[dict[str, tuple[str, list[tuple[str, str, bool]], str]], dict[str, str]]:
+    """The prompt table and defaults for ``profile`` (``None``: a 2.0 profile)."""
+    if profile is not None and not profiles.is_2x(profile):
+        return PROMPTS_1X, PROMPT_DEFAULTS_1X
+    return PROMPTS, PROMPT_DEFAULTS
+
+
+def list_prompts(profile: str | None = None) -> list[types.Prompt]:
+    table, _defaults = _prompts(profile)
     return [
         types.Prompt(
             name=name,
             description=desc,
             arguments=[types.PromptArgument(name=a, description=d, required=r) for a, d, r in args],
         )
-        for name, (desc, args, _tpl) in _PROMPTS.items()
+        for name, (desc, args, _tpl) in table.items()
     ]
 
 
-def get_prompt(name: str, arguments: dict[str, str] | None) -> types.GetPromptResult:
-    if name not in _PROMPTS:
-        raise MCPError(
-            types.INVALID_PARAMS, f"Unknown prompt: {name}", {"prompts": sorted(_PROMPTS)}
-        )
-    desc, spec, template = _PROMPTS[name]
-    values = dict(_PROMPT_DEFAULTS)
+def get_prompt(
+    name: str, arguments: dict[str, str] | None, profile: str | None = None
+) -> types.GetPromptResult:
+    table, defaults = _prompts(profile)
+    if name not in table:
+        raise MCPError(types.INVALID_PARAMS, f"Unknown prompt: {name}", {"prompts": sorted(table)})
+    desc, spec, template = table[name]
+    values = dict(defaults)
     values.update({k: v for k, v in (arguments or {}).items() if v})
-    missing = [a for a, _d, required in spec if required and not values.get(a)]
+    # Defaults fill optional arguments only: a required one must come from the caller.
+    given = {k for k, v in (arguments or {}).items() if v}
+    missing = [a for a, _d, required in spec if required and a not in given]
     if missing:
         raise MCPError(types.INVALID_PARAMS, f"Prompt {name} needs: {', '.join(missing)}")
     text = template.format(**{a: values.get(a, "") for a, _d, _r in spec})
@@ -1335,12 +1354,12 @@ def build_server(bridge: Bridge | None = None) -> Server[Any]:
         return await anyio.to_thread.run_sync(bridge.read_resource, str(params.uri))
 
     async def on_list_prompts(ctx: Any, params: Any) -> types.ListPromptsResult:
-        return types.ListPromptsResult(prompts=list_prompts())
+        return types.ListPromptsResult(prompts=list_prompts(bridge.config.profile))
 
     async def on_get_prompt(
         ctx: Any, params: types.GetPromptRequestParams
     ) -> types.GetPromptResult:
-        return get_prompt(params.name, params.arguments)
+        return get_prompt(params.name, params.arguments, bridge.config.profile)
 
     def tool_schema(name: str) -> dict[str, Any] | None:
         spec = bridge._by_name.get(name)
@@ -1351,7 +1370,7 @@ def build_server(bridge: Bridge | None = None) -> Server[Any]:
         version=__version__,
         title="HocusPocus",
         description="Drive a live SideFX Houdini session.",
-        instructions=INSTRUCTIONS,
+        instructions=instructions_for(bridge.config.profile),
         get_tool_input_schema=tool_schema,
         on_list_tools=on_list_tools,
         on_call_tool=on_call_tool,

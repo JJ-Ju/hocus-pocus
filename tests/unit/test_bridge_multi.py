@@ -100,7 +100,8 @@ def make(*instances: Instance, config: BridgeConfig | None = None):
         return hosts[port]
 
     bridge = Bridge(
-        config or BridgeConfig(profile="full"),
+        # The 1.4 tools these tests call are served by compat_1x (spec-2.0 §8).
+        config or BridgeConfig(profile="compat_1x"),
         client_factory=factory,
         scan=lambda: list(live),
     )
@@ -551,7 +552,8 @@ def test_tools_resource_is_the_reference_for_the_profile():
     resources = {str(r.uri): r for r in bridge.list_resources()}
     assert "hocuspocus://tools" in resources
     text = bridge.read_resource("hocuspocus://tools").contents[0].text
-    assert "## houdini_status" in text and "## viewport_capture" in text
+    assert "## houdini_status" in text and "## look" in text
+    assert "## viewport_capture" not in text  # compat_1x only
     assert "## events" not in text  # a full-profile tool
     full, _h, _l = make(GUI)
     assert "## events" in full.read_resource("hocuspocus://tools").contents[0].text
@@ -566,9 +568,10 @@ def test_instructions_mention_pinning_and_the_tool_reference():
 
 
 def _prompt(name, args=None):
+    """The 1.4 prompts, which compat_1x keeps serving (spec-2.0 §8)."""
     from hocuspocus.bridge.server import get_prompt
 
-    return get_prompt(name, args).messages[0].content.text
+    return get_prompt(name, args, "compat_1x").messages[0].content.text
 
 
 def test_inspect_scene_reads_the_outline_and_asks_to_pin():

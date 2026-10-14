@@ -227,6 +227,8 @@ def test_look_at_a_cop_node(v2_client):
     assert error["code"] == "invalid_argument"
 
 
-def test_a_full_host_refuses_look(client):
-    error = client.error("look", {})
-    assert error["code"] == "invalid_argument" and "v2-profile" in error["message"]
+def test_a_full_host_refuses_viewport_capture_and_names_look(client):
+    """spec-2.0 §8: viewport_capture is compat_1x only; the 2.0 profiles name look."""
+    error = client.error("viewport_capture", {})
+    assert error["code"] == "invalid_argument" and "1.4 tool" in error["message"]
+    assert error["hint"].startswith("In 2.0 use look ")
