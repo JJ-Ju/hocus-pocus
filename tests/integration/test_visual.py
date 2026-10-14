@@ -782,6 +782,8 @@ def test_headless_capture_does_not_hold_the_main_thread(client):
     def capture() -> None:
         conn = http.client.HTTPConnection("127.0.0.1", client.port, timeout=120)
         body = {"tool": "viewport_capture", "args": {"resolution": [160, 120]}}
+        if client.profile:  # a 1.4 tool: send the profile as the compat_1x client does
+            body["profile"] = client.profile
         conn.request(
             "POST",
             "/hp/v1/call",
