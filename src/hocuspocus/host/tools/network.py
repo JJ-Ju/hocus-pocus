@@ -14,6 +14,9 @@ Verified against 22.0.466 (and why validation is ours, not Houdini's):
 - It does not run node init scripts: a rebuilt ``geo`` object has no render-property spare
   parms unless the data carries them as ``parmtemplates``.
 - ``childrenAsData(position=False)`` still emits ``position``; positions are stripped here.
+- It sets parms without running their callback scripts, as a plain ``parm.set`` does: a
+  menu such as pyrosource's ``initialize`` keeps its token and applies nothing. Such parms
+  get a note, and the ``press`` argument runs them after the build (1.4).
 """
 
 from __future__ import annotations
@@ -821,6 +824,99 @@ def _verify_level(
     return made
 
 
+def _data_paths(data: dict[str, Any], prefix: str = "") -> list[str]:
+    """Every node in ``data`` as a path relative to the parent (``geo1/src``)."""
+    out: list[str] = []
+    for name, entry in data.items():
+        if not isinstance(entry, dict) or entry.get("type") in SPECIAL_TYPES:
+            continue
+        out.append(prefix + name)
+        if isinstance(entry.get("children"), dict):
+            out.extend(_data_paths(entry["children"], f"{prefix}{name}/"))
+    return out
+
+
+def _press_plan(
+    press: Any, data: dict[str, Any], parent: Any, renamed: dict[str, str]
+) -> dict[str, list[str]]:
+    """Validate ``press: {node: [parm names]}`` against ``data`` (before the build, so a
+    dry run checks it too). A node is a path relative to ``parent`` or an absolute path
+    under it, and must be built by this call. Returns ``{relative path: names}``."""
+    if press is None:
+        return {}
+    if not isinstance(press, dict):
+        raise N.bad_arg("'press' must be an object {node: [parm names]}.")
+    base = parent.path().rstrip("/") + "/"
+    known = _data_paths(data)
+    plan: dict[str, list[str]] = {}
+    for key, names in press.items():
+        if (
+            not isinstance(names, list)
+            or not names
+            or not all(isinstance(n, str) and n for n in names)
+        ):
+            raise N.bad_arg(f"press[{key!r}] must be a non-empty list of parm names.")
+        rel = key[len(base) :] if key.startswith(base) else key
+        head, _, rest = rel.partition("/")
+        rel = renamed.get(head, head) + (f"/{rest}" if rest else "")
+        if rel not in known:
+            raise N.bad_arg(
+                f"press names {key!r}, which this call does not build.",
+                hint="press keys are nodes in data, relative to parent (geo1/src) or absolute.",
+                candidates=difflib.get_close_matches(rel, known, n=5, cutoff=0.0)[:5] or known[:5],
+            )
+        plan.setdefault(rel, []).extend(names)
+    return plan
+
+
+def _callback_notes(
+    data: dict[str, Any], container: Any, plan: dict[str, list[str]], prefix: str = ""
+) -> list[str]:
+    """A note for each menu or toggle that data set and whose callback did not run
+    (``setChildrenFromData`` runs none; review 20 N2), unless ``press`` ran it."""
+    from .parms import NETWORK_CALLBACK_NOTE, skips_callback
+
+    notes: list[str] = []
+    for name, entry in data.items():
+        if not isinstance(entry, dict) or entry.get("type") in SPECIAL_TYPES:
+            continue
+        node = container.node(name)
+        if node is None:
+            continue
+        rel = prefix + name
+        for parm_name in entry.get("parms") or {}:
+            parm = node.parm(parm_name)
+            if parm is None or parm_name in plan.get(rel, ()):
+                continue
+            with contextlib.suppress(Exception):
+                if skips_callback(parm):
+                    notes.append(
+                        NETWORK_CALLBACK_NOTE.format(path=parm.path(), key=rel, name=parm_name)
+                    )
+        if isinstance(entry.get("children"), dict):
+            notes.extend(_callback_notes(entry["children"], node, plan, f"{rel}/"))
+    return notes
+
+
+def _run_presses(
+    parent: Any, plan: dict[str, list[str]], ctx: HostContext
+) -> tuple[list[str], dict[str, dict[str, Any]]]:
+    """Run the planned callbacks through the ``parm_set`` press engine, in ``press``
+    order. Returns the pressed parm paths and ``side_effects`` per node path."""
+    from .parms import set_parm_items
+
+    pressed: list[str] = []
+    effects: dict[str, dict[str, Any]] = {}
+    for rel, names in plan.items():
+        node = parent.node(rel)
+        for name in names:
+            (row,) = set_parm_items(node, {name: {"press": True}}, ctx)
+            pressed.append(row.get("path") or f"{node.path()}/{name}")
+            if row.get("side_effects"):
+                effects.setdefault(node.path(), {}).update(row["side_effects"])
+    return pressed, effects
+
+
 @tool("network_build")
 def network_build(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     import hou
@@ -899,6 +995,7 @@ def network_build(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
             taken.add(free)
             renamed[name] = free
         data = _rename_refs(data, renamed)
+    press_plan = _press_plan(args.get("press"), data, parent, renamed)
     plan: list[dict[str, Any]] = []
     warnings: list[str] = []
     # Existing children stay referencable by name except those being replaced/renamed away.
@@ -968,6 +1065,13 @@ def network_build(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     if verify.items:
         rollback.run()
         verify.raise_if_any()
+    # Callbacks run after the whole build is wired, as clicking them would (review 20 N2),
+    # and before replaced nodes are deleted, so a failed press still rolls back cleanly.
+    try:
+        pressed, side_effects = _run_presses(parent, press_plan, ctx)
+    except Exception:
+        rollback.run()
+        raise
     top_nodes = [parent.node(n) for n in top_names if parent.node(n) is not None]
     for name, old in originals.items():
         new = parent.node(name)
@@ -1006,4 +1110,11 @@ def network_build(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
         result["replaced"] = [f"{parent.path().rstrip('/')}/{n}" for n in replaced]
     if warnings:
         result["warnings"] = warnings
+    if pressed:
+        result["pressed"] = pressed
+    if side_effects:
+        result["side_effects"] = side_effects
+    notes = _callback_notes(data, parent, press_plan)
+    if notes:
+        result["notes"] = notes
     return result

@@ -885,7 +885,15 @@ _NODES: tuple[ToolSpec, ...] = (
         notes=(
             "Input entries are {from, from_index, to_index}; a missing to_index is the entry's "
             "position in the list. return full adds flags. tag is stored as the userData "
-            "hocuspocus:tag."
+            "hocuspocus:tag. setChildrenFromData sets parms without running their callback "
+            "scripts: a menu or toggle with one that data sets gets a note in notes (as on "
+            "node_create). press: {node: [parm names]} runs those callbacks (menus, toggles, "
+            "buttons) after the build is wired, in order, inside the same undo step; a node is "
+            "a path in data relative to parent (geo1/src) or absolute, and must be built by "
+            "this call. The result adds pressed (parm paths) and side_effects: {node path: "
+            "{parm: [old, new]}}. A press that fails rolls the whole build back; dry_run "
+            "validates the node names. data keeps Houdini's hou.data format, so press is an "
+            "argument, not a key inside an entry."
         ),
         input_schema=_obj(
             {
@@ -899,6 +907,11 @@ _NODES: tuple[ToolSpec, ...] = (
                 "dry_run": _b(False),
                 # bible §5.14: the only userData HocusPocus may write into a scene.
                 "tag": _s("Stored as userData hocuspocus:tag."),
+                "press": {
+                    "type": "object",
+                    "description": "Callbacks to run after the build: {node: [parm names]}.",
+                    "additionalProperties": _arr({"type": "string"}, minItems=1),
+                },
                 "return": _return(),
             },
             ("parent", "data"),

@@ -2,7 +2,7 @@
 
 <!-- Generated from src/hocuspocus/tools/catalog.py by `python -m hocuspocus.tools.docs`. Do not edit by hand. -->
 
-35 tools: 14 in the `minimal` profile, 31 in `core` (minimal included), 4 more in `full`. Model-visible `tools/list` text: 26,594 bytes. See `docs/BIBLE.md` §4 for the design.
+35 tools: 14 in the `minimal` profile, 31 in `core` (minimal included), 4 more in `full`. Model-visible `tools/list` text: 26,771 bytes. See `docs/BIBLE.md` §4 for the design.
 
 ## Contents
 
@@ -538,7 +538,7 @@ Read a whole network as Houdini's hou.data childrenAsData (types, non-default pa
 
 Build or update a network under parent from Houdini's hou.data childrenAsData format (what network_describe returns) in one undo step. Types and inputs are validated first; dry_run stops there. Returns created paths and per node path, type and problems.
 
-**Notes.** Input entries are {from, from_index, to_index}; a missing to_index is the entry's position in the list. return full adds flags. tag is stored as the userData hocuspocus:tag.
+**Notes.** Input entries are {from, from_index, to_index}; a missing to_index is the entry's position in the list. return full adds flags. tag is stored as the userData hocuspocus:tag. setChildrenFromData sets parms without running their callback scripts: a menu or toggle with one that data sets gets a note in notes (as on node_create). press: {node: [parm names]} runs those callbacks (menus, toggles, buttons) after the build is wired, in order, inside the same undo step; a node is a path in data relative to parent (geo1/src) or absolute, and must be built by this call. The result adds pressed (parm paths) and side_effects: {node path: {parm: [old, new]}}. A press that fails rolls the whole build back; dry_run validates the node names. data keeps Houdini's hou.data format, so press is an argument, not a key inside an entry.
 
 ### Arguments
 
@@ -550,6 +550,7 @@ Build or update a network under parent from Houdini's hou.data childrenAsData fo
 | `layout` | boolean |  | `true` |  |
 | `dry_run` | boolean |  | `false` |  |
 | `tag` | string |  |  | Stored as userData hocuspocus:tag. |
+| `press` | object<string, array<string>> |  |  | Callbacks to run after the build: {node: [parm names]}. |
 | `return` | `full` \| `summary` |  | `"summary"` |  |
 
 ### Examples
