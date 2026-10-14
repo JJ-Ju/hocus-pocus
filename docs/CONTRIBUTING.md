@@ -295,6 +295,43 @@ HOUDINI_HYTHON="C:/Program Files/Side Effects Software/Houdini 22.0.466/bin/hyth
   **self-hosted runner labelled `houdini`** with a licensed Houdini 22. It runs nightly,
   on manual dispatch and on PRs labelled `houdini`.
 
+## Debugging the host
+
+**The host log.** Each host writes `<state_dir>/logs/host-<pid>.log` (rotating, 5 MB, two
+backups; `<state_dir>` is `%LOCALAPPDATA%\HocusPocus` on Windows unless
+`HOCUSPOCUS_STATE_DIR` says otherwise). Since 1.4 every tool call adds one INFO line
+(BIBLE §3.2):
+
+```text
+2026-10-13 22:24:01,512 INFO hocuspocus.host: call node_create 231 ms main 228.4 ms ok pid 60396
+```
+
+The fields are the tool, the elapsed ms, the ms on Houdini's main thread, `ok` or the
+error `code`, and the host pid. The same split is in every result's `_meta.timing`
+(`main_thread_ms`, `queue_ms`), and mutation rows carry `cook_ms`: a slow call whose
+`main_thread_ms` is mostly `cook_ms` is Houdini cooking, not HocusPocus. Failures that
+reach `internal` also log their traceback at ERROR.
+
+**The kept capture child.** Headless, the first Flipbook `viewport_capture` starts a child
+hython that stays up and renders every later capture (about 0.4 s instead of 3 s; BIBLE §8,
+D33). Its work dir is a `hp-warm-*` directory under the system temp dir, with its log in
+`child.log` there. It is replaced when the child script, the hython or an installed HDA
+library changes, after 200 captures (`WARM_MAX_USES`) or 110 s idle, and it exits by
+itself after 120 s idle (`WARM_IDLE_S`) or when the host goes away. When you debug a
+capture, remember that a later capture runs in that kept process, not in a fresh one:
+
+- There is no config key or environment variable for it. To send every capture to a fresh
+  child, set the module constant in the host process, for example through
+  `houdini_python`: `import hocuspocus.host.tools.visual as v; v.WARM_CAPTURES = False`.
+  Set it back to `True` to re-enable it.
+- `v.close_warm_capture()` stops the kept child; the next capture starts a new one. The
+  integration tests call it before they time a cold capture.
+- If a kept child that had already rendered crashes, the capture is retried in a fresh
+  child with a note, and kept children stay off for the rest of that host session.
+- `render` of a user's Flipbook or OpenGL ROP, the OpenGL step of the capture chain and a
+  capture while the kept child is busy always use a fresh child; the Karma step renders in
+  the host itself.
+
 ## Release
 
 1. Bump the version in both `pyproject.toml` (`[project] version`) and
