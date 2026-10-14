@@ -538,8 +538,12 @@ def test_guide_is_instructions_and_recipes_under_8_kb():
         "op:/img/",
         "spare_parms",
         "hocuspocus://tools",
+        "### Flipbook frames",
     ):
         assert needle in guide, needle
+    # 1.4: the guide recommends the Flipbook ROP, never the OpenGL ROP it replaces.
+    assert "Driver/flipbook" in guide and "deprecate" in guide
+    assert "opengl_rop" not in guide and 'type: "opengl"' not in guide
 
 
 def test_tools_resource_is_the_reference_for_the_profile():

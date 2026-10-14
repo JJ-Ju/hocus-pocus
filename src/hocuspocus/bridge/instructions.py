@@ -41,6 +41,8 @@ server exits (`launched.outlives_server` says): `hip_save` before the session en
 session open for long jobs, or attach by pid to one started with `hocuspocus launch`. \
 `viewport_capture` frames per `fit` on both paths and restores the user's view afterwards; \
 without `fit` or `camera` the GUI viewer is captured as it is. `lop_path` captures a stage. \
+For a flipbook of many frames, `render` a Flipbook ROP (`Driver/flipbook`, recipe in the \
+guide); Houdini 22 deprecates the OpenGL ROP. \
 `node_type_info` is large \
 for FX types: pass `parms` globs, or `detail: "folders"` first. Add spare parms with \
 `node_edit` `spare_parms` (recipe in `hocuspocus://guide`). The resource `houdini://outline` \
@@ -97,6 +99,16 @@ COP node: `viewport_capture {cop_path: "/img/net/node"}` returns its image in ab
 writes nothing. SOPs read a COP live through an `op:` path, e.g. `attribfrommap` with
 `filename: "op:/img/net/node"`. Compositing verbs: over and multiply are `blend` modes, a
 threshold is `remap` (op threshold), a gradient is `ramp`, text is `font`.
+
+### Flipbook frames (Flipbook ROP)
+
+`viewport_capture` is one frame. For a sequence, create a `flipbook` ROP in `/out` (the
+OpenGL ROP it replaces is deprecated in Houdini 22) with `camera` (an OBJ camera), `picture`
+(e.g. `$HIP/flip/$OS.$F4.png`), `trange: 1` and `f1`/`f2`, plus `tres: 1` with `res1`/`res2`
+to override the camera's resolution; for a stage set `opsource: 1`, `loppath` and
+`cameraprim`. Then `render {rop_path: "/out/flipbook1", wait_s: 0}` and poll the `job_id`:
+the result lists the frames and returns the last one as a thumbnail. Headless it renders in
+a short-lived child hython, a few seconds to start.
 
 ### Add a spare parm (node_edit spare_parms)
 

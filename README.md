@@ -148,8 +148,8 @@ The bridge also serves resources and prompts:
 
 In a GUI session, `viewport_capture` without `camera` or `fit` grabs the Scene Viewer as
 it is; an explicit `fit` frames the grab, and the user's view is put back afterwards.
-With a `camera` or `lop_path` (a LOP stage), or `"source": "opengl_rop"`, it renders
-through an OpenGL ROP, framed by a temporary camera when no `camera` is given.
+With a `camera` or `lop_path` (a LOP stage), or `"source": "flipbook_rop"`, it renders
+through a Flipbook ROP, framed by a temporary camera when no `camera` is given.
 `cop_path` shows a Copernicus node's image in about 0.2 s. To write a cache, `render` the
 File Cache (`cook` never writes files): it runs as a job you can poll and cancel.
 
@@ -195,7 +195,7 @@ host by hand instead, use `hython -m hocuspocus.host [--hip FILE] [--port N]
 [--read-only] [--no-python] ...` from a neutral directory (hython puts its cwd on
 `HOUDINI_PATH`); it prints `{"pid", "port", "token_file"}` and serves until stopped.
 Tools that need the UI return `ui_required` headless; `viewport_capture` works through
-an OpenGL ROP in a short-lived child hython (about 3 s).
+a Flipbook ROP in a short-lived child hython (about 3 s).
 
 **Two Houdinis.** Several can run at once, for example the GUI for editing and a
 `hocuspocus launch --headless` worker for renders. `houdini_status` lists them (`busy`,

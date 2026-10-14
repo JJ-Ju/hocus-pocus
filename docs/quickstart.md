@@ -133,7 +133,7 @@ Expect a sequence close to this one:
    `%LOCALAPPDATA%\HocusPocus\captures\`. In the GUI, without `camera` or `fit`, it
    captures the Scene Viewer as it is, so if the picture shows an empty grid, ask for
    `"fit": "all"` (it frames the grab and then puts your view back) or for
-   `"source": "opengl_rop"`, which frames the scene with a temporary camera.
+   `"source": "flipbook_rop"`, which frames the scene with a temporary camera.
 
 To give a network control parms, ask for them: the agent adds spare parms to a `null`
 with `node_edit` `spare_parms` and links other parms with `ch()`. A `menu` spare parm is
@@ -200,7 +200,7 @@ Houdini running), and `hip_save` keeps the work between sessions. When the work 
 These tools need the `full` profile (see [Configuration](#configuration)):
 
 - **Look at a USD stage.** `viewport_capture {"lop_path": "/stage/OUT"}` renders the
-  stage through an OpenGL ROP, framed on it. `camera` also takes a LOP camera node or a
+  stage through a Flipbook ROP, framed on it. `camera` also takes a LOP camera node or a
   camera prim path. `usd_stage {"lop_path": "/stage/OUT", "summary": true}` returns the
   prim count, the counts by type and the world bounding box in one small result. On LOP
   nodes, the parm tools accept USD attribute names such as `inputs:intensity`.
@@ -323,11 +323,13 @@ You upgraded the tool but Houdini still loads the old host. Run
 **Headless capture: `viewport_capture` returns `ui_required`, or each capture takes seconds**
 
 hython has no scene viewer, so `source: "viewer"` needs the GUI. Use the default
-`source: "auto"` or `"opengl_rop"`. These render through a temporary OpenGL ROP and,
-without `camera`, a temporary camera framed on the scene, and they work headless.
-Headless, each capture renders in a short-lived child hython (a second OpenGL render in
-one hython process crashes Houdini 22.0.466), so every capture takes about 3 s. Nothing
-is left in your scene.
+`source: "auto"` or `"flipbook_rop"` (`"opengl_rop"`, its 1.3 name, still works). These
+render through a temporary Flipbook ROP (falling back to the OpenGL ROP, then Karma, with a
+note) and, without `camera`, a temporary camera framed on the scene, and they work
+headless. Headless, each capture renders in a short-lived child hython (a viewport render
+after a deleted ROP, or a second OpenGL render, crashes hython 22.0.466), so every capture
+takes about 3 s. Nothing is left in your scene. For a flipbook of many frames, ask for a
+Flipbook ROP (`/out`, type `flipbook`) and `render`: Houdini 22 deprecates the OpenGL ROP.
 
 **Other errors.** Every tool error has a `code` and a `hint`. Agents normally act on the
 hint themselves. The full list of codes is in [`BIBLE.md`](BIBLE.md) §9.
