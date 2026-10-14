@@ -70,6 +70,7 @@ TOOL_MODULES = (
     "events",
     "inspect",
     "search",
+    "edit",
 )
 """Modules under ``hocuspocus.host.tools`` imported by :func:`load_all`."""
 
