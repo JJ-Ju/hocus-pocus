@@ -1212,6 +1212,9 @@ def build_server(bridge: Bridge | None = None) -> Server[Any]:
         on_get_prompt=on_get_prompt,
     )
     server.bridge = bridge  # type: ignore[attr-defined]
+    from .resources import install as install_resources
+
+    install_resources(server, bridge)  # profile v2: resources with etags and subscriptions
     return server
 
 
