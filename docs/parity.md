@@ -1,0 +1,124 @@
+# GUI/headless parity matrix
+
+**Status:** 2.0 M0 (spec-2.0 §5.3), written against `release/2.0` at `9b00985` (host 1.4.0,
+Houdini 22.0.466). Every row was found by reading the code (citations are `file:line` under
+`src/hocuspocus/` unless a path says otherwise); the rows marked *probed* were also checked in
+a scripted `houdinifx` session with an isolated pref dir. The GUI column is executed by
+`tests/integration/test_parity_gui.py` (markers `slow` and `gui`, deselected unless `--rungui`):
+
+```bash
+.venv/Scripts/python -m pytest tests/integration/test_parity_gui.py --rungui -q
+```
+
+It runs in the dev venv's Python (no hython), launches `houdinifx` through
+`bridge/launch.py` with an isolated `HOUDINI_USER_PREF_DIR` (the dev package JSON and a
+`profile = "full"` toml), an isolated `HOCUSPOCUS_STATE_DIR` and port 0, drives the host over
+`POST /hp/v1/call`, and closes Houdini with `houdini_connect {quit}`. About 30 s on the 1.4
+release machine. The headless column is the ordinary integration tier.
+
+Legend:
+
+- **same**: identical behaviour and result shape in both.
+- **mode**: a deliberate, documented difference (BIBLE, `notes`, or a tool's own result).
+- **gap**: a difference that is undocumented, surprising to an agent, or risky. Each gap is
+  listed below with a proposed 2.0 resolution: make it a **mode** (document it and say so in
+  the result) or make it the **same**.
+
+## Gaps and proposed resolutions
+
+| # | Gap | Where | 2.0 resolution |
+|---|---|---|---|
+| G1 | **Read-only and `scene=False` calls dirty the GUI hip.** The GUI reports `hou.hipFile.hasUnsavedChanges()`, headless the host's tracked flag (`host/tools/session.py:76-90`). Temporary nodes made outside undo still flip Houdini's flag: `node_type_info`'s probe instance (`host/tools/types.py:872-899`, *probed*: `dirty` false → true after `node_type_info Sop/copytopoints detail: full`, no note) and `render`'s output/camera override set and restored on the user's ROP (`host/tools/visual.py:3491-3516`, *probed*: true after a `render {output}`, no note). Captures say so in `notes` (`visual.py:1688-1693`, `visual.py:1095-1097`) but still leave the flag set. Knock-on: after a mere read, `hip_new`/`hip_open {on_unsaved: fail}` and `houdini_connect {quit}` refuse with `unsaved_changes` (`host/tools/hip.py:152`, `host/runtime.py:293`) and `pdg cook` refuses a "dirty" scene (`host/tools/pdg.py:528`), only in the GUI. | session, types, visual, hip, pdg | **Same.** One dirty source in both modes: the host's tracked flag (set by agent mutations, `dispatch.py:394-395`) OR any `origin: other` node or hip event since the last clean event (the user's edits, already in the events ring, `host/tools/events.py:155-161`). Houdini's own flag becomes a diagnostic only. In 2.0 the `look` backends and `inspect what: type` go through one temporary-node helper that records the pre-call state. |
+| G2 | **The GUI viewport cooks displayed nodes on idle; headless never does.** *Probed*: a time-dependent display SOP's `cookCount()` went 1 → 2 after `time {frame: 30}` with no other call, and a displayed node made with `node_create {cook: false}` read `cook_state: "cooked"` a second later (headless: `not_cooked`, `host/tools/_diag.py:154-160`). So `cook_state` in mutation rows and `node_info`, `problems`' never-cooked set, `cook`'s `cook_time_ms` (already warm) and the cost of `time` (it can step a simulation) differ, and nothing says why. | nodes, cook, state | **Mode.** Document it in the BIBLE and the guide; in a GUI session `time` adds a note when the display network is time-dependent ("the viewport will recook /obj/x at frame N"), and summary rows may carry `cooked_by: "viewport"` when the node cooked between calls. |
+| G3 | **`selection` moves the user's panes.** Selecting a SOP takes the Scene Viewer and the Network Editor into its network (*probed*: both `pwd()` went `/obj` → `/obj/box_geo`), and the result says nothing (review 15 papercut 7, still open). The next `viewport_capture` with `source: auto` then captures that context with other objects ghosted. Headless there are no panes (`host/tools/state.py:216-237`). | state, visual | **Same.** Save and restore each pane's `pwd()` around `setSelected` (as `_capture_viewer` does for the view), or report `context_changed: {viewer, network_editor}`. In 2.0 this is the `edit` `select` op; do it there. |
+| G4 | **`cook {frame_range}` walks the GUI playbar.** Each frame is a `hou.setFrame` main-thread step (`host/tools/cook.py:582`) with idle ticks in between, so the user sees the playbar and viewport step through the range, a scrub by the user in between races with the job, and the restore at the end (`cook.py:527`) puts back the frame from the start of the job, overriding the user's scrub. Headless it is invisible. | cook | **Mode.** Document it (BIBLE §4.6 says only that the frame is restored), and in the GUI restore only when the frame is still the job's last one (the user did not move it); add `notes` when the user moved it. |
+| G5 | **Modal UI blocks the GUI main thread; headless it raises.** `houdini_python` code that calls a modal `hou.ui` function (`displayMessage`, `selectFile`, `readInput`) stops inside C++ where the `sys.settrace` deadline cannot fire (`host/tools/code.py:101-118`); the executor answers `houdini_busy` with `started: true` (`host/executor.py:99-117`) and Houdini stays blocked until a person clicks. The same holds for parm callbacks run by `press` (`host/tools/visual.py:2522`), creation scripts and hip load scripts (`456.py`) that open dialogs. Headless `hou.ui` raises and the call fails cleanly. Unverified: whether the event-loop pump (`executor.py:285-299`) runs while a *user's* modal dialog is open; the `houdini_busy` message assumes it does not. | code, parms, nodes, hip, executor | **Same.** During a HocusPocus call, replace the modal `hou.ui` entry points with stubs that raise a `ToolError("ui_required", ...)` naming the call, so agent code behaves as headless; and extend `test_parity_gui.py` with a user dialog closed by a timer to pin down the executor's behaviour. |
+| G6 | **`ui_required` for whole tools is dead code.** No catalogue entry sets `headless_ok=False` (`tools/catalog.py:57` default), so the dispatcher's refusal (`host/dispatch.py:287-292`) and the bridge's "(GUI only)" suffix (`bridge/server.py:678-679`) never fire; the only GUI-only form is `viewport_capture {source: viewer}`, refused inside the tool (`host/tools/visual.py:2247-2252`). BIBLE §3.6 still says "UI-only tools return `ui_required`". | dispatch, catalogue | **Mode, at argument level.** Replace `headless_ok` with a per-argument GUI-only marker in the 2.0 spec files (`look {source: viewer}`), rendered into `notes`, and fix BIBLE §3.6 when it is rewritten. |
+| G7 | **GUI and headless hosts can run different host code.** A headless launch puts a version-matched directory on `PYTHONPATH` (`bridge/launch.py:445-457`, `launch.py:179-209`); a GUI launch adds nothing and runs whatever the installed package points at (`launch.py:433-444`, `houdini/scripts/python/uiready.py:14-17`). A stale package gives a GUI host older than the bridge; `host_version` is shown in `houdini_status` (`bridge/local_tools.py:64-66`) but never compared. | launch | **Same.** The bridge compares `/health.host_version` with its own on connect and launch and adds a warning (or `version_mismatch` for an `hp` change); the 2.0 ledger records the version per instance. |
+| G8 | **Headless captures render a snapshot, not the live scene.** The child gets `saveChildrenToFile` per manager, non-`$HFS` HDA libraries, `$HIP`/`$JOB`/`set -g` variables and `hou.session` (`host/tools/visual.py:498-543`). It does not get the current take (a note says so, `visual.py:524-530`), in-memory simulation caches (the child re-simulates up to the frame: slow, can time out), `Embedded` HDA libraries are skipped from the library list (`visual.py:512-514`; whether the `.cpio` carries their definitions is unverified), nor environment set with `hou.putenv` beyond `HIP`/`JOB`. The GUI renders the live scene in-process. Same for `render` of a Flipbook or OpenGL ROP (`visual.py:897-899`). | visual | **Mode.** Document the snapshot's contents in the 2.0 `look` backend contract (`can_run`), add a note when the captured network contains a DOP simulation with cached frames, and add a headless test for an embedded HDA. |
+
+Not gaps, but worth knowing: review 19's "`hip_save` in the GUI emits `ParmTupleChanged`
+on a ROP" was not reproduced with a Geometry ROP in the probe session (only `AfterSave`
+was recorded).
+
+## Session, lifecycle and the main thread
+
+| Area | GUI | Headless | Row | Evidence | GUI test |
+|---|---|---|---|---|---|
+| Host start | `uiready.py` calls `hocuspocus.host.autostart()` once the UI exists, unless `autostart = false`; failures go to the status bar | `hython -m hocuspocus.host` always starts; prints one JSON line; moves to `--work-dir` (default `HOCUSPOCUS_WORK_DIR`, else home) and clears the scene there | mode | `houdini/scripts/python/uiready.py:14-26`, `host/__init__.py:108-120`, `host/__main__.py:47-66` | `test_host_runs_the_gui_backend` |
+| Executor | `hou.ui.addEventLoopCallback` pump, 50 ms drain budget per idle tick, not re-entrant | the main thread is the pump (`pump_forever`) | mode | `host/executor.py:159-165`, `executor.py:285-299`, `executor.py:277-283` | `test_host_runs_the_gui_backend` (`backend: gui`) |
+| `houdini_busy` | the queue also waits behind the user: a long user cook, a drag, a modal dialog (see G5) | only another call holds the main thread | mode | `host/executor.py:99-117`, `executor.py:204-215` | — |
+| `/health.busy`, `houdini_status.instances[].busy` | true after 1 s of a held main thread or a waiting call, including user activity | true only while a call runs | mode | `host/runtime.py:38`, `runtime.py:329-341` | — |
+| Registry entry | `ui: true`, label `houdinifx` | `ui: false`, label `hython` | mode | `host/runtime.py:146`, `runtime.py:153`, `runtime.py:203-216` | `test_host_runs_the_gui_backend` |
+| Bridge selection | with several instances and no pin, reads go to a GUI first | after GUI sessions | mode | `bridge/instances.py:203-207` | — |
+| `houdini_status` | `hip.dirty` from `hasUnsavedChanges()`; `hip.recent` from the session list, then the `file.history` the GUI writes | `dirty` from the tracked flag (hython reports `hasUnsavedChanges() == True` after a load, clear or save); `recent` only from the session list | mode (G1 for the dirty source) | `host/tools/session.py:57-90` | `test_quit_closes_the_gui` (`unsaved_changes` from Houdini's flag) |
+| `houdini_connect {launch}` | `houdinifx` (or `houdini`) with the hip as argv; needs the installed package to autostart; accepts a registration from a handed-off child pid; no log file | `hython -m hocuspocus.host --hip … [--work-dir]` with a version-matched `PYTHONPATH`; log under `logs/launch-headless-*.log` | mode (G7 for the host code) | `bridge/launch.py:433-457`, `launch.py:508-513`, `launch.py:542-550` | fixture `gui` (launch through `Launcher`) |
+| `houdini_connect {quit}` | `on_unsaved` check, then `hou.exit(suppress_save_prompt=True)` posted to the main thread; `BeforeQuit` removes the registry entry | the same check, then the pump loop stops | mode | `host/runtime.py:272-314`, `runtime.py:372-376`, `bridge/local_tools.py:326-369` | `test_quit_closes_the_gui` |
+
+## Hip files
+
+| Tool | GUI | Headless | Row | Evidence | GUI test |
+|---|---|---|---|---|---|
+| `hip_new` | `clear(suppress_save_prompt=True)`: no save prompt; `on_unsaved` decided by Houdini's flag | same call; tracked flag | same (G1: a capture or `node_type_info` can make `fail` refuse in the GUI) | `host/tools/hip.py:143-170`, `hip.py:195-208` | each test's `_scene` (`discard`) |
+| `hip_open` | `load(suppress_save_prompt=True, ignore_load_warnings=False)`: warnings come back as `warnings`, no dialog; load scripts that open UI do (G5) | same | same (G1, G5) | `host/tools/hip.py:211-248` | — |
+| `hip_save` | `hipFile.save`; the GUI also updates its title, recent files and `file.history` | `hipFile.save`; `recent` is the host's list | mode | `host/tools/hip.py:251-300`, `host/runtime.py:393-396` | — |
+| `hip_merge` | `hipFile.merge` inside the call's undo group | same | same | `host/tools/hip.py:303-361` | — |
+| Save prompts (`hip_*`, quit) | never shown: every clear, load and exit passes `suppress_save_prompt=True`; `on_unsaved` replaces them | no prompts exist | same | `host/tools/hip.py:203`, `hip.py:226`, `host/runtime.py:312` | `test_quit_closes_the_gui` |
+
+## Nodes, parms, cooking, geometry
+
+| Tool | GUI | Headless | Row | Evidence | GUI test |
+|---|---|---|---|---|---|
+| `node_find`, `network_describe`, `geo_info`, `geo_read`, `usd_stage`, `parm_get`, `node_type_search` | read-only, no undo group | same | same (`cook_state` and cook counts: G2) | `host/dispatch.py:373-375` | — |
+| `node_info` | as headless; `cook_state` of a displayed node is usually `cooked` (viewport) | `not_cooked` until something cooks it | same (G2) | `host/tools/_diag.py:154-160` | probe |
+| `node_create`, `node_delete`, `node_edit`, `node_copy`, `node_connect`, `node_layout`, `network_build`, `parm_set` | one undo group `HocusPocus: <tool> …` that interleaves with the user's own undo steps; `dirty` from Houdini; a display-flag change makes the viewport cook on the next idle tick (outside the call and its `cook_ms`) | one undo group, nothing else on the stack; tracked flag | mode (undo interleaving, documented in BIBLE §4.7 `undo`); G2 | `host/dispatch.py:373-401`, `host/undo.py:91-120` | `test_undo_history_interleaves_agent_and_user_steps` |
+| `parm_set {press}`, `node_create`/`network_build` `press` | the callback runs in the GUI; a callback that opens a dialog blocks (G5) | `hou.ui` raises inside the callback | gap (G5) | `host/tools/parms.py:1135`, `host/tools/visual.py:2522` | — |
+| Frame arguments (`parm_get`, `geo_read`, `usd_stage`, `cook {frame}`) | `hou.setFrame` and back inside one main-thread call (no idle tick in between, so the viewport does not draw the other frame); `geo_read` uses `geometryAtFrame` | same | same | `host/tools/parms.py:132-136`, `host/tools/cook.py:84-89`, `host/tools/usd.py:647-652`, `host/tools/geo.py:736` | — |
+| `cook {frame_range}` | per-frame main-thread steps between idle ticks: the playbar and viewport step visibly; the start frame is restored | invisible | gap (G4) | `host/tools/cook.py:461`, `cook.py:527`, `cook.py:582` | — |
+| `cook {profile}` | the stopped `hou.PerfMonProfile` stays in the Performance Monitor's list | nothing to see | mode | `host/tools/cook.py:187-199` | — |
+| `problems` | as headless; nodes the viewport cooked are not "never cooked" | same walk | same (G2) | `host/tools/_diag.py:154-160` | — |
+
+## Visual feedback
+
+| Tool / source | GUI | Headless | Row | Evidence | GUI test |
+|---|---|---|---|---|---|
+| `viewport_capture {source: viewer}` | Scene Viewer flipbook of one frame, what the user sees (HUD, licence watermark, the viewer's network context with a note when it is not the captured scene's); `camera` or an explicit `fit` change the view only for the grab and the view and camera are restored | `ui_required` | mode | `host/tools/visual.py:1939-2004`, `visual.py:2247-2252` | `test_viewer_capture_fits_and_restores_the_view` |
+| `viewport_capture {source: auto}` | `/obj` without `camera`: the viewer, as it is (`fit_used: none` unless `fit` is passed); with a camera, a stage or a COP: the ROP source in-process | always the ROP source in a child; `fit` defaults to `all` | mode (same call, different picture; spec-2.0 §2.5 makes the viewer opt-in) | `host/tools/visual.py:2172-2181`, `visual.py:2012` | `test_viewer_capture_fits_and_restores_the_view`, `test_rop_capture_runs_in_process` |
+| `viewport_capture {source: flipbook_rop \| opengl_rop}` | in-process on the main thread (the UI waits, ~0.3 s): temporary camera and ROP created outside undo and `events`, rendered, deleted, selection restored; a ROP that writes no image hands over to the next; no Karma step (a crash would take Houdini down); a note when Houdini marked the hip modified | snapshot + child hython off the main thread; a crashed child hands over to the next ROP and Karma (in the host) last | mode (G1 for the flag it leaves, G8 for the snapshot) | `host/tools/visual.py:1538-1567`, `visual.py:1638-1704`, `visual.py:2186-2239` | `test_rop_capture_runs_in_process` |
+| Kept capture child (`WarmCapture`) | never started | first Flipbook capture starts it; ~0.35 s per later capture; replaced on script, hython or HDA library change, after 200 uses or 110 s idle | mode | `host/tools/visual.py:685-691`, `visual.py:2214-2234`; BIBLE §8 | `test_rop_capture_runs_in_process` (`_warm['child'] is None`) |
+| `viewport_capture {cop_path}` | temporary `rop_image` in the live COP network, in-process; note when the hip is marked modified | the same, in-process (COPs need no child) | same (G1 for the flag) | `host/tools/visual.py:1059-1097`, `visual.py:2254-2257` | probe |
+| `viewport_capture {lop_path \| LOP camera}` | Flipbook ROP with a LOP source, in-process (`viewer` refused for a stage) | the same ROP in the child, OpenGL child single-threaded | mode | `host/tools/visual.py:2157-2164`; BIBLE §8 | — |
+| `frame` argument | the playbar stays where it was (viewer and ROP) | the child renders the frame; the host's frame is untouched | same | `host/tools/visual.py:1971`, `visual.py:2054-2064` | `test_time_moves_the_playbar_and_captures_do_not` |
+| `render` (Flipbook/OpenGL ROP) | in-process, frame by frame through the executor | snapshot + child hython | mode (G8) | `host/tools/visual.py:897-899`, `visual.py:3296` | — |
+| `render` (Karma, Mantra, writers, USD) | in-process; `output`/`camera` overrides set and restored outside undo leave Houdini's flag set | in-process; tracked flag untouched | gap (G1) | `host/tools/visual.py:3491-3516`, `visual.py:3630-3634` | probe |
+
+## Code, types, state
+
+| Tool | GUI | Headless | Row | Evidence | GUI test |
+|---|---|---|---|---|---|
+| `houdini_python` deadline | `sys.settrace` on the main thread stops Python code 1 s (≤ 10 %) before `timeout_s`; the UI is frozen while the code runs | same mechanism; nothing to freeze | same | `host/tools/code.py:93-118` | — |
+| `houdini_python` and `hou.ui` | `hou.ui` works; modal calls block (G5); `hdefereval` imports, and deferred code runs after the call, outside its undo group and outside `events`' agent window (it is the user's) | `hou.ui` raises; `hdefereval` refuses to import (`$HFS/houdini/python3.13libs/hdefereval.py:240-241`) | mode (G5 for modal calls) | `host/tools/code.py:126-160` | `test_undo_history_interleaves_agent_and_user_steps`, `test_events_record_a_manual_rename` (manual edits via `hdefereval`) |
+| `node_type_info` | probe instance (menus, inputs) in the live scene, outside undo and `events`: flips Houdini's flag | same probe; tracked flag untouched | gap (G1) | `host/tools/types.py:842-899`, `types.py:1148`, `types.py:1455` | probe |
+| `undo` | history interleaves agent steps (`HocusPocus: …`) with the user's and Houdini's own (`Rename Node …`, parm changes); `undo` stops at the first non-HocusPocus step with `blocked_by` unless `include_user_steps` | only agent steps (and test-made ones) | mode | `host/tools/state.py:67-162` | `test_undo_history_interleaves_agent_and_user_steps` |
+| `time` | `hou.setFrame` moves the visible playbar and the viewport recooks displayed nodes (G2); `range` sets the frame and playback range | `hou.setFrame` sets the evaluation time; nothing recooks until asked | mode (G2) | `host/tools/state.py:168-210` | `test_time_moves_the_playbar_and_captures_do_not` |
+| `selection` | one undo step (Houdini records each change); the user's selection is read too; panes follow a SOP selection (G3) | one undo step; only the agent's selection | gap (G3) | `host/tools/state.py:216-237` | probe |
+| `job` | jobs step through the executor between idle ticks; the GUI stays responsive | jobs step through the pump | same | `host/tools/state.py:246-263`; BIBLE §7 | — |
+
+## Full profile
+
+| Tool | GUI | Headless | Row | Evidence | GUI test |
+|---|---|---|---|---|---|
+| `hda` | create, save, match, unlock, install, reload, list: same HOM calls in one undo group `HocusPocus: hda <action> <path>` that interleaves with user steps; `dirty` from Houdini | same | same | `host/tools/hda.py:397-436` | `test_hda_create_round_trip` |
+| `pdg` | non-blocking cook polled through the executor; `cook` refuses an untitled or dirty scene, dirtiness from Houdini's flag (G1) | same, tracked flag | same (G1) | `host/tools/pdg.py:520-535` | — |
+| `events` | user edits arrive with `origin: other` (anything outside a HocusPocus call's main-thread work); user-created nodes under a manager are watched on the next idle tick | `other` only from code outside the executor; watched on the next queue item | mode | `host/tools/events.py:155-161`, `events.py:420-436`, `events.py:721-734` | `test_events_record_a_manual_rename` |
+| `usd_stage` | read-only | same | same | `host/tools/usd.py:647-652` | — |
+
+## Bridge resources and prompts
+
+| Item | GUI | Headless | Row | Evidence |
+|---|---|---|---|---|
+| Resources (`houdini://…`, `hocuspocus://…`) | the tool they map to | same | same | `bridge/server.py:839-907` |
+| Prompt `inspect_scene` | asks which Houdini to inspect, or pins "the GUI session", when several run | same text | same | `bridge/server.py:916-927` |
+| Prompt `build_sop_chain` | ends with `viewport_capture {fit: all}`: the viewer framed for the grab and restored | the same call frames through the ROP | mode (`auto` above) | `bridge/server.py:928-946` |
+| Prompt `debug_red_node` | — | — | same | `bridge/server.py:947-957` |
+| Prompt `turntable_preview` | branches on `houdini_status.ui`: "do not change the playbar range in a GUI session" (each capture takes `frame`) | may set the range | mode | `bridge/server.py:958-972` |
