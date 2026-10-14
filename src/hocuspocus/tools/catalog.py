@@ -1896,7 +1896,7 @@ _FULL: tuple[ToolSpec, ...] = (
         description=(
             "What changed since your last call: hip, node (created, renamed, deleted, parms or "
             "flags changed on nodes HocusPocus touched or read) and pdg events with seq and "
-            "origin (agent|other). Pass next_since back as since."
+            "origin (agent|houdini|other). Pass next_since back as since."
         ),
         notes=(
             "Watched nodes: those HocusPocus created, edited, read with node_info or listed with"
@@ -1912,7 +1912,9 @@ _FULL: tuple[ToolSpec, ...] = (
             "reset: true with a note and that Houdini's events from the start. A call that "
             "fails and is rolled back records "
             "nothing, nor does a node created and deleted within one call, a tool's own "
-            "set-and-restore, or Houdini's save-time writes on TOP networks."
+            "set-and-restore, or Houdini's save-time writes on TOP networks. In a call that "
+            "sets parms (parm_set, node_create parms), the parms it did not set but Houdini "
+            "wrote (callbacks, a camera's *Converted parms, guide scale) are origin houdini."
         ),
         input_schema=_obj(
             {"since": {"type": ["integer", "string"], "default": 0}, "limit": _limit()}

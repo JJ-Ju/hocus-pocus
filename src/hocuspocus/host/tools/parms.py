@@ -1128,7 +1128,10 @@ def _apply(
     ``callback_note`` is the note for a plain set of a callback menu or toggle."""
     import hou
 
+    from .events import note_explicit  # lazy: events imports nodes, which imports this
+
     path = _target_path(target)
+    note_explicit(target)  # its events are the agent's; Houdini's own writes are not
     # press next to a value sets the value, then runs the parm's callback (review 17 P1-4).
     press_after = item.get("press") is True and item.get("value") is not None
     present = [

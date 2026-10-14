@@ -546,3 +546,34 @@ def test_events_pages_end_at_the_response_budget_and_skip_nothing(client):
         assert page["next_since"] == page["events"][-1]["seq"]
         cursor = page["next_since"]
     assert seen == list(range(since + 1, since + 61))
+
+
+def test_houdini_own_parm_writes_are_not_the_agents(client):
+    """Review 23 papercut 9: parms Houdini wrote itself inside a call (a camera's
+    *Converted parms, a light's guide scale) were reported as origin agent. Here a
+    callback writes b when the agent sets and presses a."""
+    node = hou.node("/obj").createNode("null", "ctl")
+    group = node.parmTemplateGroup()
+    group.append(
+        hou.IntParmTemplate(
+            "a",
+            "A",
+            1,
+            script_callback="hou.pwd().parm('b').set(hou.pwd().evalParm('a') + 1)",
+            script_callback_language=hou.scriptLanguage.Python,
+        )
+    )
+    group.append(hou.IntParmTemplate("b", "B", 1))
+    node.setParmTemplateGroup(group)
+    client.ok("node_info", {"paths": [node.path()]})  # watched from now on
+    since = _since()
+    client.ok("parm_set", {"items": [{"path": f"{node.path()}/a", "value": 3, "press": True}]})
+    assert node.evalParm("b") == 4
+    events = [e for e in _read(client, since) if e["kind"] == "ParmTupleChanged"]
+    by_parm = {e["detail"].get("parm"): e["origin"] for e in events}
+    assert by_parm == {"a": "agent", "b": "houdini"}, by_parm
+    # houdini_python sets nothing through parm_set: every write is the agent's code.
+    since = _since()
+    client.ok("houdini_python", {"code": f"hou.node('{node.path()}').parm('b').set(9)"})
+    events = [e for e in _read(client, since) if e["kind"] == "ParmTupleChanged"]
+    assert events and all(e["origin"] == "agent" for e in events)
