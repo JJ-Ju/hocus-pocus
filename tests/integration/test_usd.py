@@ -120,10 +120,34 @@ def test_layers(client):
     out = _scene()
     result = client.ok("usd_stage", {"lop_path": out.path(), "include": ["layers"]})
     layers = result["layers"]
-    assert layers["stack"] and all(isinstance(i, str) for i in layers["stack"])
+    assert layers["stack"] and all(isinstance(i["identifier"], str) for i in layers["stack"])
     assert isinstance(layers["active"], str) and layers["active"]
     # Session sublayers (viewport state, solo lights, ...) are excluded.
-    assert not any("Viewport State" in i for i in layers["stack"])
+    assert not any("Viewport State" in i["identifier"] for i in layers["stack"])
+
+
+def test_layer_rows_name_save_path_and_owner(client, work_dir):
+    """Review 23 papercut 4: anonymous ids only; nothing said sopimport saves a file."""
+    geo = hou.node("/obj").createNode("geo", "g")
+    box = geo.createNode("box")
+    imp = hou.node("/stage").createNode("sopimport", "collider_import")
+    imp.parm("soppath").set(box.path())
+    imp.parm("enable_savepath").set(1)
+    target = (work_dir / "usd" / "collider_import.usd").as_posix()
+    imp.parm("savepath").set(target)
+    layer_file = work_dir / "base.usda"
+    layer_file.write_text(
+        "#usda 1.0\n(\n    startTimeCode = 1\n    endTimeCode = 48\n)\n", encoding="utf-8"
+    )
+    sub = hou.node("/stage").createNode("sublayer", "base")
+    sub.parm("filepath1").set(layer_file.as_posix())
+    sub.setInput(0, imp)
+    result = client.ok("usd_stage", {"lop_path": sub.path(), "include": ["layers"]})
+    rows = result["layers"]["stack"]
+    saved = [r for r in rows if r.get("save_path") == target]
+    assert saved and saved[0]["owner_node"] == imp.path()
+    files = [r for r in rows if r.get("save_path", "").endswith("base.usda")]
+    assert files and files[0]["time_codes"] == [1, 48]
 
 
 def test_paging(client):

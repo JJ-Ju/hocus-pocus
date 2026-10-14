@@ -1815,7 +1815,11 @@ _FULL: tuple[ToolSpec, ...] = (
             "local, and world only when it differs. total is on every page (counted up to "
             "100000, then total_capped). summary returns {total_prims, counts_by_type, "
             "bbox_world: {min, max, size}} for the whole subtree (default and render purposes). "
-            "A render ROP in a LOP network has no stage: the error names its input."
+            "A ROP in a LOP network (usd_rop, usdrender_rop) has no stage: the LOP it renders "
+            "(its loppath, else its input) is read, with a note. layers.stack rows are "
+            "{identifier, save_path?, owner_node?, time_codes?}: where Houdini saves an "
+            "anonymous layer (a sopimport's save path) or a file layer's path, the LOP that "
+            "made it, and [start, end] when the layer authors them."
         ),
         input_schema=_obj(
             {

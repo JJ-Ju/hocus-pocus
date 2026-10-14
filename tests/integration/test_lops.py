@@ -476,13 +476,15 @@ def test_capture_a_rop_lop_without_input_is_refused(client):
 # -- usd_stage on a ROP LOP (papercut 10) -----------------------------------------------
 
 
-def test_usd_stage_on_a_render_rop_points_at_its_input(client, work_dir):
+def test_usd_stage_on_a_render_rop_reads_its_input(client, work_dir):
+    """Review 23 papercut 10: the tool knew the right node and still refused (1.4)."""
     nodes = _lop_scene(work_dir)
-    error = client.error("usd_stage", {"lop_path": nodes["rop"].path()})
-    assert error["code"] == "invalid_argument"
-    assert "not a LOP" not in error["message"]
-    assert nodes["rset"].path() in error["message"]
-    assert error["candidates"] == [nodes["rset"].path()]
+    result = client.ok("usd_stage", {"lop_path": nodes["rop"].path()})
+    assert result["lop_path"] == nodes["rset"].path()
+    assert nodes["rop"].path() in result["note"] and result["prims"]
+    lonely = hou.node("/stage").createNode("usd_rop", "lonely_stage")
+    error = client.error("usd_stage", {"lop_path": lonely.path()})
+    assert error["code"] == "invalid_argument" and "no output stage" in error["message"]
 
 
 # -- single-file USD exports (review 23 P0-1) -------------------------------------------

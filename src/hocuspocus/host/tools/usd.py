@@ -214,6 +214,37 @@ def resolve_lop(path: Any) -> Any:
     return node
 
 
+def rop_stage_source(lop_path: Any) -> tuple[Any, str | None]:
+    """For a ROP inside a LOP network (``usd_rop``, ``usdrender_rop``), which has no stage
+    of its own, the LOP it renders (its ``loppath``, else its first input) and a note;
+    anything else unchanged. A ROP with neither is left to :func:`resolve_lop`'s error
+    (review 23 papercut 10)."""
+    import hou
+
+    if not isinstance(lop_path, str) or not lop_path.strip().startswith("/"):
+        return lop_path, None
+    node = hou.node(lop_path.strip())
+    if (
+        node is None
+        or isinstance(node, hou.LopNode)
+        or not isinstance(node, hou.RopNode)
+        or node.type().category() != hou.lopNodeTypeCategory()
+    ):
+        return lop_path, None
+    source = None
+    with contextlib.suppress(Exception):
+        text = node.parm("loppath").eval() if node.parm("loppath") is not None else ""
+        source = node.node(text) if text else None
+    if not isinstance(source, hou.LopNode):
+        inputs = [n for n in node.inputs() if n is not None]
+        source = inputs[0] if inputs and isinstance(inputs[0], hou.LopNode) else None
+    if source is None:
+        return lop_path, None
+    return source.path(), (
+        f"Read {source.path()}, the stage {node.path()} renders: a ROP has no stage of its own."
+    )
+
+
 def cooked_stage(lop: Any) -> Any:
     report = collect_problems(lop, cook=True)
     stage = None
@@ -544,11 +575,50 @@ def summary_block(stage: Any, prim: str, frame: float) -> dict[str, Any]:
     return block
 
 
+def layer_row(layer: Any) -> dict[str, Any]:
+    """One layer of the stack (review 23 papercut 4: anonymous ids only, so nothing said
+    that ``sopimport`` would save its data to a second file): ``identifier``, plus
+    ``save_path`` (where Houdini saves an anonymous LOP layer, from its HoudiniLayerInfo,
+    or a file layer's own path), ``owner_node`` (the LOP that created it) and
+    ``time_codes`` ([start, end] when the layer authors them)."""
+    import hou
+
+    row: dict[str, Any] = {"identifier": layer.identifier}
+    info: dict[str, Any] = {}
+    with contextlib.suppress(Exception):
+        prim = layer.GetPrimAtPath("/HoudiniLayerInfo")
+        if prim:
+            info = dict(prim.customData)
+    save = info.get("HoudiniSavePath")
+    if not save and not layer.anonymous:
+        save = layer.realPath or None
+    if save:
+        row["save_path"] = str(save)
+    # HoudiniCreatorNode can be the SOP a sopimport read; the owner is the first LOP
+    # among the creator and the editors.
+    ids = [info.get("HoudiniCreatorNode")]
+    with contextlib.suppress(Exception):
+        ids += [int(i) for i in info.get("HoudiniEditorNodes") or ()]
+    nodes = []
+    for sid in ids:
+        with contextlib.suppress(Exception):
+            node = hou.nodeBySessionId(int(sid)) if sid is not None else None
+            if node is not None:
+                nodes.append(node)
+    owner = next((n for n in nodes if isinstance(n, hou.LopNode)), None)
+    if owner is not None:
+        row["owner_node"] = owner.path()
+    with contextlib.suppress(Exception):
+        if layer.HasStartTimeCode() or layer.HasEndTimeCode():
+            row["time_codes"] = [_num(layer.startTimeCode), _num(layer.endTimeCode)]
+    return row
+
+
 def layers_block(stage: Any, lop: Any) -> dict[str, Any]:
-    stack = [layer.identifier for layer in stage.GetLayerStack(includeSessionLayers=False)]
-    block: dict[str, Any] = {"stack": stack[:LAYER_CAP]}
-    if len(stack) > LAYER_CAP:
-        block["stack_total"] = len(stack)
+    layers = list(stage.GetLayerStack(includeSessionLayers=False))
+    block: dict[str, Any] = {"stack": [layer_row(layer) for layer in layers[:LAYER_CAP]]}
+    if len(layers) > LAYER_CAP:
+        block["stack_total"] = len(layers)
     try:
         active = lop.activeLayer()
         if active is not None:
@@ -596,17 +666,21 @@ def usd_stage(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     page([], limit, cursor)  # validate before cooking
     start = int(cursor) if cursor not in (None, "") else 0
     size = DEFAULT_LIMIT if limit is None else limit
-    lop = resolve_lop(args.get("lop_path"))
+    source, rop_note = rop_stage_source(args.get("lop_path"))
+    lop = resolve_lop(source)
     with _at_frame(requested):
         frame = float(hou.frame())
         stage = cooked_stage(lop)
         if summary:
-            return {
+            out = {
                 "lop_path": lop.path(),
                 "time": _num(frame),
                 "prim": prim,
                 "summary": summary_block(stage, prim, frame),
             }
+            if rop_note:
+                out["note"] = rop_note
+            return out
         prims = collect_prims(stage, prim, depth, stop=start + size + 1)
         chunk, nxt = page(prims, limit, cursor)
         time = Usd.TimeCode(frame)
@@ -625,4 +699,6 @@ def usd_stage(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
             result["next_cursor"] = nxt
         if "layers" in include:
             result["layers"] = layers_block(stage, lop)
+        if rop_note:
+            result["note"] = rop_note
     return result
