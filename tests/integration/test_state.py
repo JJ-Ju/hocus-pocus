@@ -285,6 +285,33 @@ def test_selection_allowed_read_only(client, host):
     assert client.ok("selection", {"paths": [box.path()]})["selected"] == [box.path()]
 
 
+# -- GUI-only argument values (docs/parity.md G6) ---------------------------------------
+
+
+def _ui_required(client, tool: str) -> None:
+    _geo().createNode("box").setDisplayFlag(True)
+    error = client.error(tool, {"source": "viewer"})
+    assert error["code"] == "ui_required", tool
+    assert "headless" in error["message"]
+    assert "flipbook" in error["hint"].lower(), error["hint"]  # the headless alternative
+
+
+def test_no_whole_tool_is_gui_only():
+    """The dispatcher's whole-tool ui_required refusal is gone (it never fired: no
+    catalogue entry sets headless_ok=False); only argument values are GUI-only."""
+    from hocuspocus.host.tools import registry
+
+    assert not hasattr(registry.HostTool, "headless_ok")
+
+
+def test_viewport_capture_source_viewer_is_ui_required_headless(client):
+    _ui_required(client, "viewport_capture")
+
+
+def test_look_source_viewer_is_ui_required_headless(v2_client):
+    _ui_required(v2_client, "look")
+
+
 # -- job ---------------------------------------------------------------------------------
 
 

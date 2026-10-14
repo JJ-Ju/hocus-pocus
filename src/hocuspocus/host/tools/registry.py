@@ -102,11 +102,6 @@ class HostTool:
             return not spec.read_only
         return not bool(self.read_only)
 
-    @property
-    def headless_ok(self) -> bool:
-        spec = self.spec
-        return True if spec is None else spec.headless_ok
-
 
 DIRTY_SOURCES = ("tracked", "user_event", "houdini_flag")
 """Why the scene is dirty (``houdini_status.connected.hip.dirty_source``): ``tracked``, a
