@@ -7,7 +7,8 @@ roles and ``on``). The ``compat_1x`` profile, which serves the 1.4 catalogue for
 gets the 1.4 texts (``*_1X``) from :func:`instructions_for` and :func:`guide_text`. The
 reference is built by :func:`hocuspocus.tools.docs.tools_reference` (re-exported here as
 ``tools_text``), the same renderer as ``docs/tools.md``. Keep ``INSTRUCTIONS`` under 400
-words and every guide under :data:`GUIDE_MAX_BYTES`; unit tests enforce both.
+words, every guide under :data:`GUIDE_MAX_BYTES` and the 2.0 guide under
+:data:`GUIDE_2X_MAX_BYTES`; unit tests enforce them.
 
 :data:`PROMPTS` has the shape of the bridge's prompt table (``name -> (description,
 [(argument, description, required)], template)``, templates formatted with
@@ -15,16 +16,13 @@ words and every guide under :data:`GUIDE_MAX_BYTES`; unit tests enforce both.
 as is.
 """
 
-# TODO(2.0 M3, parity G5): add stream B's modal-dialog paragraph (docs/parity.md) to the
-# GUI notes of the guide once it lands there; it was not in docs/parity.md when the 2.0
-# guide was written.
-
 from __future__ import annotations
 
 from hocuspocus.tools.docs import tools_reference as tools_text
 
 __all__ = [
     "COMPAT_PROFILE",
+    "GUIDE_2X_MAX_BYTES",
     "GUIDE_MAX_BYTES",
     "INSTRUCTIONS",
     "INSTRUCTIONS_1X",
@@ -41,60 +39,52 @@ GUIDE_MAX_BYTES = 8192
 """``hocuspocus://guide`` is instructions and recipes only (review 19 papercut 10: with the
 tool reference appended it was 52 KB); the reference is ``hocuspocus://tools``."""
 
+GUIDE_2X_MAX_BYTES = 6656
+"""The 2.0 guide's own cap, 6.5 KB (spec-2.0 §7 M4: the scorecard reads it once, and at
+7.7 KB it outgrew 1.4's 7.3 KB guide)."""
+
 COMPAT_PROFILE = "compat_1x"
 """The profile that serves the 1.4 catalogue for 2.0.x (spec-2.0 §8) and gets the 1.4
 instructions and guide."""
 
 INSTRUCTIONS = """\
-HocusPocus drives a live Houdini. Identity is Houdini paths. Start with `houdini_status`; \
-if nothing is connected, `houdini_connect` can launch Houdini (GUI or headless hython) or \
-attach to a running one by pid. With several Houdinis running, pin one with \
-`houdini_connect {pid}` (or `{name}`, or `{role: "editor"}`): until then calls that change a \
-scene refuse with `ambiguous_instance`, and if the pinned one exits calls return \
-`instance_lost` instead of switching. `cook`, `render`, `look` and `job` take `on` (a pid, a \
-name or a role such as `worker`) to run on another Houdini without moving the pin. \
-Change the scene with `edit`: one call is one undo step, its ops run in order (`create`, \
-`connect`, `set`, `node`, `delete`, `copy`, `layout`, `build`, `select`), and an op's `id` \
-is `$id` in later ops' paths. `dry_run: true` validates every op and resolves paths without \
-changing anything; a failing op rolls the whole call back. The result's `nodes` rows carry \
-each touched node's errors and warnings. For one quick change `parm_set {items: [{path, \
-value}]}` and `node_create {items: [...]}` remain. Tuple paths like `.../t` take lists, \
-component paths like `.../tx` take scalars; expressions go in `expression`. Read with \
-`inspect {what, target}` (`what`: node, parms, network, outline, geo, image, stage, \
-problems, type, events, jobs) and find with `search {kind: "types"}` or `{kind: "nodes"}`. \
-See the result with `look {target}`: `quality: "draft"` (a Flipbook ROP, headless too) for \
-checks, `lit` with the scene's lights, `final` for Karma. Long cooks and renders return a \
-`job_id`; poll it with `job`. When no tool fits, `houdini_python` runs `hou` code. Results \
-are compact: non-default parms only, lists paged with `cursor`; `truncated: true` means the \
-response budget cut a list. Errors carry `code`, `hint` and `candidates`; read them and \
-adjust. `delivery_unknown` means the call may or may not have run: inspect state before \
-repeating it. `_meta.scene_generation` changes when the scene is cleared or loaded. Hip \
-tools refuse to discard unsaved work unless told to. A \
-Houdini started with `houdini_connect {launch}` usually closes when this server exits \
-(`launched.outlives_server` says): `hip_save` before the session ends, or attach by pid to \
-one started with `hocuspocus launch`. `inspect {what: "type"}` is large for FX types: pass \
-`parms` globs, or `detail: "folders"` first. Add spare parms with an `edit` `node` op's \
-`spare_parms` (recipe in `hocuspocus://guide`). The resource `houdini://outline` is the \
-whole scene as a compact tree; `hocuspocus://tools` is the full tool reference."""
+HocusPocus drives a live Houdini; identity is Houdini paths. Start with `houdini_status`; \
+if nothing is connected, `houdini_connect` launches Houdini (GUI or headless) or attaches \
+by pid. With several Houdinis, pin one with `houdini_connect {pid}` (or `{name}`, \
+`{role}`): until then scene changes refuse with `ambiguous_instance`; if the pinned one \
+exits, calls return `instance_lost`. `cook`, `render`, `look` and `job` take `on` (pid, \
+name or role) to run elsewhere without moving the pin. Change the scene with `edit`: one \
+call, one undo step; ops (`create`, `connect`, `set`, `node`, `delete`, `copy`, `layout`, \
+`build`, `select`) run in order and an op's `id` is `$id` in later paths. `dry_run: true` \
+validates and resolves paths without changing anything; a failing op rolls the call back. \
+The result is a row per touched node (errors and warnings only when present) and `ids`. \
+`parm_set {items: [{path, value}]}` and `node_create {items: [...]}` remain for quick \
+changes. Tuple paths (`.../t`) take lists, components (`.../tx`) scalars; expressions go \
+in `expression`. Read with `inspect {what, target}` (node, parms, network, outline, geo, \
+image, stage, problems, type, events, jobs; for FX types pass `parms` globs or \
+`detail: "folders"`); find with `search {kind: "types" | "nodes"}`. `look {target}` shows \
+it: `quality` `draft` (Flipbook), `lit` or `final` (Karma). Long cooks and renders return \
+a `job_id` for `job`. `houdini_python` runs `hou` code when no tool fits. Results are \
+compact (non-default parms, lists paged by `cursor`; `truncated: true` means the budget \
+cut a list). Errors carry `code`, `hint` and `candidates`: adjust to them. After \
+`delivery_unknown`, inspect before repeating. `_meta.scene_generation` changes when the \
+scene is cleared or loaded. Hip tools refuse to discard unsaved work unless told to. A \
+Houdini from `houdini_connect {launch}` usually closes with this server \
+(`launched.outlives_server` says): `hip_save` first, or attach by pid to one started with \
+`hocuspocus launch`. Spare parms: `edit` `node` op `spare_parms`. `houdini://outline` is \
+the scene as a compact tree, `hocuspocus://guide` has recipes, `hocuspocus://tools` the \
+full reference."""
 
 RESOURCES = """## Resources
 
-Attach these for context. Each read is also a tool call with the same JSON (`inspect`,
-`search`, `houdini_status`) and carries `_meta.etag`: send it back as
-`_meta["If-None-Match"]` and an unchanged resource answers `_meta.not_modified: true`.
-
-- `houdini://outline{?root,depth}`: the scene as a compact tree with display nodes, error
-  counts, inputs and the flags that are on (`inspect {what: "outline"}`; under
-  `compat_1x`, `network_describe {root: "/", format: "outline", depth: 2}`). Start here.
-- `houdini://status`, `houdini://instances`, `houdini://jobs`, `houdini://problems{?root}`,
-  `houdini://events{?since,limit}`.
-- `houdini://node/{path}`, `network/{path}`, `geo/{path}`, `image/{path}`,
-  `stage/{lop}`: `inspect` with that `what`. `houdini://type/{category}/{name}` and
-  `houdini://types{?q}`: a node type, a type search.
-- Subscribe to `status`, `jobs`, `events` or `node/{path}`:
-  `notifications/resources/updated` arrives when the etag changes.
-- `hocuspocus://tools`: the tool reference. Large: read it for one tool's notes when a
-  result surprises you, not up front.
+Each is the JSON of a tool call (`inspect`, `search`, `houdini_status`) with
+`_meta.etag`: send it back as `_meta["If-None-Match"]` and an unchanged one answers
+`_meta.not_modified: true`. Start with `houdini://outline{?root,depth}` (under `compat_1x`
+`network_describe {root: "/", format: "outline", depth: 2}`); then `status`, `instances`,
+`jobs`, `problems`, `events`, and `node/`, `network/`, `geo/`, `image/`, `stage/`,
+`type/{category}/{name}`, `types{?q}`. Subscribing to `status`, `jobs`, `events` or
+`node/{path}` sends `notifications/resources/updated` when the etag changes.
+`hocuspocus://tools` is the large tool reference: read one tool's notes when surprised.
 
 """
 
@@ -110,56 +100,45 @@ RECIPES = """## Recipes
           "inputs": [{"index": 0, "from": "$grid"}], "flags": {"display": true}}]}
 ```
 
-Unsure of a type or parm name? Send it with `dry_run: true` first: every problem comes back
-at once. Then `inspect {what: "geo", target: "/obj/terrain/mtn"}` for counts and bounds,
-and `look {target: "/obj/terrain"}`.
+Unsure of a name? Send it with `dry_run: true` first: every problem comes back at once.
+Then `inspect {what: "geo", target: "/obj/terrain/mtn"}` and `look {target: "/obj/terrain"}`.
 
 ### Two Houdinis: edit in the GUI, render on a worker
 
-`houdini_status` lists every instance with `pid`, `role` (`editor` for a GUI, `worker`
-headless), `busy`, `jobs_running` and `selected`; `recent` lists those that exited. With
-several running and none pinned, reads go to the GUI and calls that change a scene refuse
-with `ambiguous_instance`, so pin first:
+Roles: `editor` (GUI), `worker` (headless). With several Houdinis and none pinned,
+reads go to the GUI and changes refuse with `ambiguous_instance`:
 
-1. `houdini_connect {role: "editor"}`, edit, then `hip_save`.
-2. `houdini_connect {role: "worker"}` (`{launch: {mode: "headless"}, role: "worker"}`
-   starts one), `hip_open` the saved hip, then `houdini_connect {role: "editor"}`.
-3. `render {rop_path, on: "worker", wait_s: 0}` renders there without moving the pin.
-   `job` reaches the job's Houdini whatever is pinned, also after a server restart;
-   `job {action: list, all: true}` lists every instance's jobs. 1.x ids (`<pid>-<id>`)
-   still work.
+1. `houdini_connect {role: "editor"}`, edit, `hip_save`.
+2. `houdini_connect {role: "worker"}` (with `launch: {mode: "headless"}` to start one),
+   `hip_open` the hip, `houdini_connect {role: "editor"}`.
+3. `render {rop_path, on: "worker", wait_s: 0}`. `job` finds the job's Houdini whatever
+   is pinned, after a server restart too; `{action: list, all: true}` lists all jobs; 1.x
+   ids (`<pid>-<id>`) still work.
 
-If the pinned Houdini exits, every call returns `instance_lost` naming it and the live
-candidates; nothing switches on its own. Pin another with `houdini_connect {pid}`, or
-`houdini_connect {}` for automatic selection. `events` numbers events per Houdini: pass
-`next_since` (`<pid>:<seq>`) back as `since`; a cursor from another Houdini answers
-`reset: true`.
+A pinned Houdini that exits gives `instance_lost` with the live candidates; pin another,
+or `houdini_connect {}`. `events` cursors (`<pid>:<seq>`) are per Houdini; another's
+answers `reset: true`.
 
 ### Copernicus (COP) images
 
-Copernicus networks live in `/img`: an `edit` create op with `parent: "/img", type:
-"copnet"`, then nodes inside it with category `Cop` (`Cop2` is the legacy compositor).
-`look {target: "/img/net/node"}` returns a COP node's image in about 0.2 s;
-`inspect {what: "image"}` gives its resolution and per-channel stats. To write files, wire
-a `Cop/rop_image` (its `copoutput` parm is the file, e.g. `$HIP/img/name.$F4.png`) and
-`render {rop_path: "/img/net/rop_image1"}`, which also returns a thumbnail. Cooking a ROP
-writes nothing. SOPs read a COP live through an `op:` path, e.g. `attribfrommap` with
-`filename: "op:/img/net/node"`. Compositing verbs: over and multiply are `blend` modes, a
-threshold is `remap`, a gradient is `ramp`, text is `font`.
+Create a `copnet` in `/img`, then `Cop` nodes in it (`Cop2` is legacy).
+`look {target: "/img/net/node"}` shows one in about 0.2 s; `inspect {what: "image"}`
+gives resolution and channel stats. To write files, wire `Cop/rop_image` (`copoutput`,
+e.g. `$HIP/img/name.$F4.png`) and `render {rop_path: "/img/net/rop_image1"}`; cooking a
+ROP writes nothing. SOPs read a COP through `op:/img/net/node` (`attribfrommap`). Over and
+multiply are `blend` modes, threshold is `remap`, gradient `ramp`, text `font`.
 
 ### Flipbook frames (Flipbook ROP)
 
-`look` is one frame. For a sequence, create a `flipbook` ROP in `/out` (`Driver/flipbook`;
-Houdini 22 deprecates the OpenGL ROP it replaces) with `camera` (an OBJ camera), `picture`
-(e.g. `$HIP/flip/$OS.$F4.png`), `trange: 1` and `f1`/`f2`, plus `tres: 1` with
-`res1`/`res2`; for a stage set `opsource: 1`, `loppath` and `cameraprim`. Then
-`render {rop_path: "/out/flipbook1", wait_s: 0}` and poll the `job_id`: the result lists
-the frames and returns the last one as a thumbnail.
+`look` is one frame. For a sequence, create `Driver/flipbook` in `/out` (Houdini 22
+deprecates the OpenGL ROP) with `camera`, `picture` (e.g. `$HIP/flip/$OS.$F4.png`),
+`trange: 1`, `f1`/`f2`, and `tres: 1` with `res1`/`res2` (a stage: `opsource: 1`,
+`loppath`, `cameraprim`). `render {rop_path: "/out/flipbook1", wait_s: 0}` returns a job;
+its result lists the frames with the last as a thumbnail.
 
 ### Add a spare parm (edit node op)
 
-Add a control parm to a null, subnet, geo object or an unlocked HDA instance and link
-other parms to it with `ch()`, in one call:
+On a null, subnet, geo object or unlocked HDA instance, linked with `ch()` in one call:
 
 ```json
 {"ops": [{"op": "node", "path": "/obj/geo1/CONTROLS",
@@ -169,9 +148,16 @@ other parms to it with `ch()`, in one call:
           "expression": "ch(\\"../CONTROLS/glue_strength\\")"}]}
 ```
 
-A `ch()` to a parm that does not exist evaluates to 0 silently. A `menu` is a string menu
-by default: VEX reads its token with `chs()`. With `value_type: "int"` it is an int parm
-whose value is the item index, read with `ch()` or `chi()`.
+A `ch()` to a missing parm evaluates to 0 silently. A `menu` is a string menu (VEX reads
+the token with `chs()`); with `value_type: "int"` its value is the item index (`ch()`).
+
+### GUI sessions: never open a dialog
+
+A modal `hou.ui` call (`displayMessage`, `selectFile`, `readInput`) from
+`houdini_python`, a `press`ed callback or a creation or load script blocks a GUI Houdini
+until a person answers: every call returns `houdini_busy` (headless it raises). Pass
+values as arguments, print instead, and press only buttons that open no dialog. If calls
+keep returning `houdini_busy` with `busy: true` and no job, ask the user to look.
 """
 
 GUIDE_HEADER = """\

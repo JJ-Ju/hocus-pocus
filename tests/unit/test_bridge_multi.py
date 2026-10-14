@@ -547,6 +547,25 @@ def test_guide_is_instructions_and_recipes_under_8_kb():
     assert "opengl_rop" not in guide and 'type: "opengl"' not in guide
 
 
+def test_v2_guide_is_under_6_5_kb_and_warns_about_gui_dialogs():
+    """spec-2.0 §7 M4: the 2.0 guide fits 6.5 KB with every recipe, and carries the GUI
+    modal-dialog paragraph (docs/parity.md G5)."""
+    from hocuspocus.bridge.instructions import GUIDE_2X_MAX_BYTES, guide_text
+
+    guide = guide_text("core")
+    assert len(guide.encode("utf-8")) <= GUIDE_2X_MAX_BYTES == 6656
+    for heading in (
+        "### Build, check and look",
+        "### Two Houdinis",
+        "### Copernicus",
+        "### Flipbook frames",
+        "### Add a spare parm",
+        "### GUI sessions: never open a dialog",
+    ):
+        assert heading in guide, heading
+    assert "hou.ui" in guide and "houdini_busy" in guide and "busy: true" in guide
+
+
 def test_tools_resource_is_the_reference_for_the_profile():
     bridge, _hosts, _live = make(GUI, config=BridgeConfig(profile="core"))
     resources = {str(r.uri): r for r in bridge.list_resources()}

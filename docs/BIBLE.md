@@ -839,8 +839,9 @@ the 35 tools of 1.4 (Appendix A). `usd_stage` and `selection` have no 2.0 tool o
 - `houdini://problems{?root}`, `houdini://events{?since,limit}` (subscribable)
 - `hocuspocus://guide` — the operating manual: the instructions below, the resources and
   recipes (build and check with `edit`, two Houdinis with roles and `on`, Copernicus,
-  Flipbook frames, spare parms); at most 8 KB, a unit test enforces it (1.3, review 19
-  papercut 10: with the tool reference appended it was 52 KB)
+  Flipbook frames, spare parms, no dialogs in a GUI session); at most 8 KB, the 2.0 guide
+  at most 6.5 KB (M4), unit tests enforce both (1.3, review 19 papercut 10: with the tool
+  reference appended it was 52 KB)
 - `hocuspocus://tools` — the tool reference rendered from the spec files for the bridge's
   profile (the text of `docs/tools.md`, every tool's `notes` and examples, and the
   resource templates)
