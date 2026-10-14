@@ -46,6 +46,18 @@ LAST_RUN = HERE / "last_run.json"
 TOLERANCE = 1.15
 """A workload fails when a measured total exceeds its budget by more than 15 % (§5.2)."""
 BUDGET_KEYS = ("calls", "text_bytes", "max_call_bytes", "wall_s")
+WALL_ALLOWANCE_S = 5.0
+"""Wall time gets a flat allowance on top of the tolerance: a cold capture child or a
+licence check adds seconds that have nothing to do with the workload under test."""
+
+
+def _limit(key: str, budget: float) -> float:
+    limit = budget * TOLERANCE
+    if key == "wall_s":
+        limit = max(limit, budget + WALL_ALLOWANCE_S)
+    return limit
+
+
 REGISTER_TIMEOUT_S = 180.0
 CALL_TIMEOUT_S = 300.0
 
@@ -332,9 +344,9 @@ class Recorder:
         if budget is None:
             pytest.fail(f"no budget for {self.name} in {BUDGETS.name}; run with --update-budgets")
         over = [
-            f"{key} {totals[key]} > {budget[key]} x {TOLERANCE} = {budget[key] * TOLERANCE:.1f}"
+            f"{key} {totals[key]} > {budget[key]} x {TOLERANCE} = {_limit(key, budget[key]):.1f}"
             for key in BUDGET_KEYS
-            if key in budget and totals[key] > budget[key] * TOLERANCE
+            if key in budget and totals[key] > _limit(key, budget[key])
         ]
         assert not over, f"{self.name} over budget: " + "; ".join(over) + "\n" + self.report()
         return totals

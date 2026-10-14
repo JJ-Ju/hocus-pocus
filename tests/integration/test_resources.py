@@ -23,6 +23,15 @@ def _bytes(value: Any) -> bytes:
     return json.dumps(value, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
 
 
+def _stable(payload):
+    """Drop fields that legitimately differ between two consecutive reads (memory figures)."""
+    if isinstance(payload, dict):
+        return {k: _stable(v) for k, v in payload.items() if k not in {"memory", "elapsed_ms"}}
+    if isinstance(payload, list):
+        return [_stable(v) for v in payload]
+    return payload
+
+
 def _read(client, uri: str, if_none_match: str | None = None) -> dict[str, Any]:
     headers = {"If-None-Match": if_none_match} if if_none_match else None
     response = client.request("GET", f"/hp/v2/resource?uri={quote(uri, safe='')}", headers=headers)
@@ -78,7 +87,7 @@ def test_resource_is_its_tool_call(v2_client, uri):
     v2_client.ok(route.tool, dict(route.args))  # first reads cook; both reads below see it
     resource = _read(v2_client, uri)
     tool = v2_client.ok(route.tool, dict(route.args))
-    assert _bytes(resource["body"]) == _bytes(tool), uri
+    assert _bytes(_stable(resource["body"])) == _bytes(_stable(tool)), uri
     if route.tool == "inspect":
         assert resource["etag"] == tool["etag"]
     assert ETAG.match(resource["etag"]), resource["etag"]
