@@ -1472,7 +1472,10 @@ _VISUAL: tuple[ToolSpec, ...] = (
             "camera for this render (restored afterwards): an OBJ camera for its camera parm, a "
             "camera prim for a ROP reading a stage (cameraprim) or a USD render ROP "
             "(override_camera). A ROP whose camera parm names a missing node fails with "
-            "node_not_found naming the parm, the scene's cameras as candidates."
+            "node_not_found naming the parm, the scene's cameras as candidates. On a Flipbook or "
+            "OpenGL ROP a camera that does not fit opsource (a prim or camera LOP at obj, an OBJ "
+            "camera at lop) is invalid_argument naming opsource; an override adds a note "
+            "(Rendered through <camera> (<parm> restored).)."
         ),
         input_schema=_obj(
             {

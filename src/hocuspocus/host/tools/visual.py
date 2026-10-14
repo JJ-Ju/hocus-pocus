@@ -2969,6 +2969,72 @@ def rop_camera_parm(rop: Any) -> str | None:
     return "camera" if rop.parm("camera") is not None else None
 
 
+def _looks_like_prim(lop: Any, path: str) -> bool:
+    """Whether ``path``, which names no node, is a prim: one on ``lop``'s stage, or (no
+    LOP to look in) a path whose parent is not a node either (``/cameras/cam``, not
+    ``/obj/nope``). Main thread."""
+    import hou
+
+    if lop is not None:
+        with contextlib.suppress(Exception):
+            from .usd import cooked_stage
+
+            return bool(cooked_stage(lop).GetPrimAtPath(path))
+        return False
+    parent = path.rstrip("/").rsplit("/", 1)[0] or "/"
+    return parent != "/" and hou.node(parent) is None
+
+
+def _check_camera_source(rop: Any, name: str, override: str) -> None:
+    """Refuse a ``camera`` override that does not fit a viewport ROP's ``opsource`` (review
+    24 N4: a camera prim on a Flipbook ROP reading /obj failed with "No node at
+    /cameras/cam" and a hint about /cameras, and finding ``opsource`` took two calls): a
+    prim path or LOP camera while it reads /obj, an OBJ camera while it reads a stage. The
+    error names ``opsource`` and the value to set. Main thread."""
+    import hou
+
+    source = rop.parm("opsource")
+    if source is None or rop.parm("cameraprim") is None or not override.startswith("/"):
+        return
+    node = hou.node(override)
+    loppath = rop.parm("loppath")
+    lop_value = loppath.eval().strip() if loppath is not None else ""
+    lop = rop.node(lop_value) if lop_value else None
+    if name == "camera":
+        prim = override
+        if node is not None:
+            if not _is_lop_camera(node):
+                return
+            prim = node.parm("primpath").eval()
+        elif not _looks_like_prim(lop, override):
+            return  # a missing node: node_not_found, with the scene's cameras
+        where = f" from {lop.path()}" if lop is not None else ""
+        then = (
+            f"then render with camera {prim}"
+            if lop is not None
+            else "set loppath to the LOP whose stage has it, then render with camera " + prim
+        )
+        what = (
+            f"{override} is a LOP camera (prim {prim})"
+            if node is not None
+            else f"{override} is not a node"
+        )
+        raise ToolError(
+            "invalid_argument",
+            f"{rop.path()} reads /obj (opsource: obj), and {what}; set opsource to lop to "
+            f"render the camera prim {prim}{where}.",
+            hint=f'parm_set {rop.path()} opsource: "lop", {then}; or pass an OBJ camera.',
+        )
+    if name == "cameraprim" and node is not None and _is_obj_camera(node):
+        raise ToolError(
+            "invalid_argument",
+            f"{rop.path()} reads a stage (opsource: lop), and {override} is an OBJ camera; set "
+            "opsource to obj to render through it.",
+            hint=f'parm_set {rop.path()} opsource: "obj", then render with camera {override}; '
+            "or pass a camera prim path.",
+        )
+
+
 def rop_camera(rop: Any, override: Any) -> dict[str, str]:
     """The temporary camera parm value for ``render``'s ``camera`` override, checked
     (``{}`` without one). Without an override, a ROP whose ``camera`` parm names a node
@@ -2986,6 +3052,7 @@ def rop_camera(rop: Any, override: Any) -> dict[str, str]:
                 f"{rop.path()} ({rop.type().name()}) has no camera parm to override.",
                 hint="Render without camera; this ROP does not render through a camera.",
             )
+        _check_camera_source(rop, name, override)
         if name == "camera":
             return {name: _obj_camera(override).path()}
         if not override.startswith("/"):
@@ -3186,6 +3253,10 @@ def _prepare_render(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
             hint="Pass output with a file path such as $HIP/render/$OS.$F4.png.",
         )
     camera_parms = rop_camera(rop, args.get("camera"))
+    camera_note = None
+    if camera_parms and args.get("camera") is not None:
+        parm_name, value = next(iter(camera_parms.items()))
+        camera_note = f"Rendered through {value} ({parm_name} restored)."
     # One file for the whole range (a USD layer, an Alembic archive, any path without $F):
     # one render() call writes every frame; frame by frame each call overwrote the file
     # (review 23 P0-1).
@@ -3212,6 +3283,7 @@ def _prepare_render(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
         "parm": parm.name() if parm is not None else None,
         "image_rop": usd or (parm is not None and parm.name() in IMAGE_PARMS),
         "output": output,
+        "camera_note": camera_note,
         "camera_parms": camera_parms,
         # One file per path: a single-file ROP's 48 frames are one output (review 23 P1-3).
         "expected": list(dict.fromkeys(_norm(p) for p in expected)),
@@ -3276,6 +3348,8 @@ def _render_result(plan: dict[str, Any], thumbnail: bool) -> dict[str, Any]:
         notes.append(f"{plan['owner']} rendered through its ROP {plan['rop']}.")
     if plan.get("range_note"):
         notes.append(plan["range_note"])
+    if plan.get("camera_note") and outputs:
+        notes.append(plan["camera_note"])
     images = [
         p for p in plan["expected"] if os.path.splitext(p)[1].lower() in IMAGE_EXTS | CONVERT_EXTS
     ]

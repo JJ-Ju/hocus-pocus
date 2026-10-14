@@ -641,6 +641,62 @@ def test_render_warns_when_two_usd_rops_share_a_lopoutput(client, work_dir):
     assert any(n.startswith(f"{twin.path()} also writes anim.usd") for n in result["notes"])
 
 
+def _stage_flipbook(work_dir: Path, nodes: dict):
+    rop = hou.node("/out").createNode("flipbook", "fb")
+    rop.parm("loppath").set(nodes["rset"].path())
+    rop.parm("picture").set(_fwd(work_dir / "fb.$F4.png"))
+    for name in ("resx", "resy"):
+        if rop.parm(name) is not None:
+            rop.parm(name).set(64)
+    return rop
+
+
+def test_render_camera_that_does_not_fit_opsource_names_it(client, work_dir):
+    """Review 24 N4: a camera prim on a Flipbook ROP at opsource obj failed with "No node
+    at /cameras/cam1" and a hint about /cameras; finding opsource took two calls."""
+    nodes = _lop_scene(work_dir)
+    rop = _stage_flipbook(work_dir, nodes)
+    assert rop.parm("opsource").evalAsString() == "obj"
+    error = client.error("render", {"rop_path": rop.path(), "camera": "/cameras/cam1"})
+    assert error["code"] == "invalid_argument", error
+    assert error["message"] == (
+        f"{rop.path()} reads /obj (opsource: obj), and /cameras/cam1 is not a node; set "
+        f"opsource to lop to render the camera prim /cameras/cam1 from {nodes['rset'].path()}."
+    ), error
+    assert f'parm_set {rop.path()} opsource: "lop"' in error["hint"], error
+    # The camera LOP node itself: the same hint, naming its prim.
+    error = client.error("render", {"rop_path": rop.path(), "camera": nodes["cam"].path()})
+    assert "opsource" in error["message"] and "prim /cameras/cam1" in error["message"], error
+    # The other way round: an OBJ camera on a ROP reading the stage.
+    rop.parm("opsource").set("lop")
+    cam = hou.node("/obj").createNode("cam", "objcam")
+    error = client.error("render", {"rop_path": rop.path(), "camera": cam.path()})
+    assert error["code"] == "invalid_argument", error
+    assert "opsource: lop" in error["message"] and "OBJ camera" in error["message"], error
+    assert f'parm_set {rop.path()} opsource: "obj"' in error["hint"], error
+    # Without loppath the hint says to set it too; a missing /obj node is still not found.
+    bare = hou.node("/out").createNode("flipbook", "bare")
+    error = client.error("render", {"rop_path": bare.path(), "camera": "/cameras/cam1"})
+    assert "opsource" in error["message"] and "set loppath" in error["hint"], error
+    error = client.error("render", {"rop_path": bare.path(), "camera": "/obj/nope"})
+    assert error["code"] == "node_not_found", error
+    assert not list(work_dir.glob("fb.*"))
+
+
+@pytest.mark.slow
+def test_render_camera_prim_override_says_it_was_used(client, work_dir):
+    nodes = _lop_scene(work_dir)
+    rop = _stage_flipbook(work_dir, nodes)
+    rop.parm("opsource").set("lop")
+    rop.parm("cameraprim").set("/cameras/elsewhere")
+    result = client.ok(
+        "render", {"rop_path": rop.path(), "frames": [1, 1], "camera": "/cameras/cam1"}
+    )
+    assert result["outputs"] == [_fwd(work_dir / "fb.0001.png")], result
+    assert "Rendered through /cameras/cam1 (cameraprim restored)." in result["notes"], result
+    assert rop.parm("cameraprim").eval() == "/cameras/elsewhere"
+
+
 # -- node_type_info filters (papercut 8) ------------------------------------------------
 
 

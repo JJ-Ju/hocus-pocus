@@ -993,6 +993,7 @@ def test_render_camera_override_renders_through_it(client, work_dir):
     far.parm("resy").set(240)
     result = client.ok("render", {"rop_path": rop.path(), "frames": [1, 1], "camera": far.path()})
     assert result["outputs"] == [_fwd(work_dir / "gl.0001.png")]
+    assert "Rendered through /obj/far (camera restored)." in result["notes"], result
     assert rop.parm("camera").eval() == "/obj/cam1"
 
 
