@@ -71,13 +71,15 @@ TOOLS_2X = frozenset(
 
 MARGINS: dict[str, tuple[float, float]] = {
     "city_build": (0.25, 0.20),
-    "scorecard_twelve": (0.25, 0.20),
-    "soak_200": (0.25, 0.20),
+    "scorecard_twelve": (0.0, 0.20),
+    "soak_200": (0.0, 0.20),
     "fx_cache": (0.15, 0.15),
     "vellum_usd": (0.15, 0.15),
 }
 """Per workload, the fraction by which 2.0's ``calls`` and ``text_bytes`` must be below the
-1.4 budget (the margins reviews 12, 20, 21, 22 and 24 predicted)."""
+1.4 budget (spec-2.0 §7, "M4 margins"): the margins reviews 12, 20, 21, 22 and 24
+predicted, except calls for the scorecard and the soak, enumerations of fixed tasks with
+one call per task, where 2.0 must only not exceed 1.4 (0 %)."""
 
 RESULTS: dict[str, dict[str, Any]] = {}
 """This run's v2 totals and margin verdicts, for the comparison table."""
