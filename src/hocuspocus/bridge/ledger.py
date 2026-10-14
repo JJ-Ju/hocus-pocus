@@ -78,6 +78,17 @@ def is_ledger_id(job_id: Any) -> bool:
     return isinstance(job_id, str) and JOB_ID_RE.match(job_id) is not None
 
 
+LEDGER_FORM_RE = re.compile(r"^j[0-9A-Za-z]+$")
+"""What a caller who means a ledger id writes: ``j`` and letters or digits, no ``-``. A host
+id is ``<pid>-<hex>`` (or its bare hex, which never starts with ``j``)."""
+
+
+def looks_like_ledger_id(job_id: Any) -> bool:
+    """Whether ``job_id`` has the ledger's form (``jzzzz`` too), so a miss is answered
+    about the ledger rather than about the 1.x ``<pid>-<id>`` ids (review 25 papercut 5)."""
+    return isinstance(job_id, str) and LEDGER_FORM_RE.match(job_id) is not None
+
+
 def _iso(seconds: float | None) -> str | None:
     if seconds is None:
         return None

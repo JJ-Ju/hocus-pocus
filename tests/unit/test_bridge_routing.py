@@ -301,6 +301,20 @@ def test_unknown_ledger_id_is_job_not_found():
     assert error["code"] == "job_not_found" and "jabcde" in error["message"]
 
 
+@pytest.mark.parametrize("job_id", ["jzzzz", "jabcde", "j7f3a9c1"])
+def test_a_ledger_form_id_is_answered_about_the_ledger(job_id):
+    """Review 25 papercut 5: jzzzz (not even hex) got the 1.x hint about the pid before the
+    '-' and Houdini restarts; any j... id is the ledger's and is answered by the bridge."""
+    bridge, hosts, _live = make(W1)
+    error = data(bridge.call_tool("job", {"action": "status", "job_id": job_id}))
+    assert error["code"] == "job_not_found" and error["retryable"] is False
+    assert error["message"] == f"No job {job_id}: this server's ledger has no job with that id."
+    assert "ledger" in error["hint"] and "survive" not in error["hint"]
+    assert "before the '-'" not in error["hint"]
+    assert 'job {action: "list", all: true}' in error["hint"]
+    assert all(call[0] != "job" for host in hosts.values() for call in host.calls)
+
+
 def test_dead_instance_job_status_and_result_from_the_ledger():
     bridge, _hosts, live = make(W1)
     job_id = data(bridge.call_tool("render", {"rop_path": "/out/geo"}))["job_id"]

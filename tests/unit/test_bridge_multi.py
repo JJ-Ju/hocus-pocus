@@ -639,7 +639,7 @@ def test_made_up_job_id_is_job_not_found_not_a_dead_houdini(job_id):
     assert (
         "exited" not in error["message"] and "not a Houdini this server knows" in error["message"]
     )
-    assert "job {action: list, all: true}" in error["hint"]
+    assert 'job {action: "list", all: true}' in error["hint"]
     assert all(call[0] != "job" for host in hosts.values() for call in host.calls)
 
 

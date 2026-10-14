@@ -155,11 +155,19 @@ def _bridge_errors(profile: str) -> list[Any]:
     from hocuspocus.bridge.server import Bridge
 
     bridge = Bridge(BridgeConfig(profile=profile), scan=lambda: [])
-    out: list[Any] = [delivery_hint(profile)]
+    from hocuspocus.bridge.server import ledger_job_error, unknown_job_error
+
+    out: list[Any] = [
+        delivery_hint(profile),
+        ledger_job_error("jzzzz", profile),
+        unknown_job_error("123-abc", 123, profile),
+    ]
     calls: list[tuple[str, dict[str, Any]]] = [
         ("parm_set", {"path": "/obj/geo1/box1/sizex", "value": 1}),  # flat batch item
         ("houdini_connect", {"bogus": 1}),
     ]
+    if profile != "minimal":
+        calls.append(("job", {"action": "status", "job_id": "jzzzz"}))  # the ledger's form
     if profile != "compat_1x":
         calls += [
             ("inspect", {"what": "node", "path": "/obj/geo1"}),

@@ -1165,7 +1165,7 @@ Stable codes (the complete set; adding one is a design change):
 | `path_not_allowed` | `approved_roots` | no |
 | `ui_required` | a GUI-only argument form headless (`look {source: "viewer"}`) | no |
 | `python_disabled` / `read_only` | config | no |
-| `job_not_found` | job id; 1.4 (review 21 papercut 3): also a `<pid>-<id>` whose pid this bridge never knew (never live in the registry, no job of it seen, no launch record), which 1.3 reported as `instance_lost` for a Houdini that had never run; 2.0: a ledger id the bridge ledger does not have | no |
+| `job_not_found` | job id; 1.4 (review 21 papercut 3): also a `<pid>-<id>` whose pid this bridge never knew (never live in the registry, no job of it seen, no launch record), which 1.3 reported as `instance_lost` for a Houdini that had never run; 2.0: a ledger id the bridge ledger does not have, answered by the bridge for any id of the ledger form (`j` and letters or digits; review 25 papercut 5) with a hint about ledger ids; the 1.x hint (the pid before the `-`, jobs end with their Houdini) only for a `<pid>-<id>` id | no |
 | `cancelled` | job cancelled | — |
 | `python_exception` | `houdini_python` code raised (`SyntaxError` and `SystemExit` included): `message` is `<type>: <text>`, `detail` carries `stdout`, `stderr`, `traceback` and `rolled_back`, and the code's scene changes are undone (1.1; in 1.0 a successful result with `ok: false`) | after fixing the code |
 | `internal` | anything else; **must** carry `hou_exception` and traceback in `detail` | maybe |

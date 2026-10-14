@@ -37,7 +37,7 @@ from .client import OFFLINE_HINT, REINSTALL_HINT, HostClient
 from .config import BridgeConfig
 from .instructions import PROMPT_DEFAULTS, PROMPTS, guide_text, instructions_for, tools_text
 from .launch import Launcher
-from .ledger import Ledger, is_ledger_id
+from .ledger import Ledger, is_ledger_id, looks_like_ledger_id
 from .local_tools import LOCAL_TOOLS
 from .validate import ARG_RENAMES, coerce_integers, rename_hint, shape_hint, validate
 
@@ -186,16 +186,47 @@ def tag_events(
     return out
 
 
-def unknown_job_error(job_id: str, pid: int) -> ToolError:
-    """``job_not_found`` for a job id whose pid was never a Houdini this bridge knew."""
+def _job_lister(profile: str) -> str:
+    """The call that lists every job, as ``profile`` serves it."""
+    return migration.hint_tool("job", profile, action="list", all=True) or (
+        migration.hint_tool("inspect", profile, what="jobs") or "houdini_status"
+    )
+
+
+def _job_starters(profile: str) -> str:
+    """The tools of ``profile`` that start jobs, for "as render or cook returned it"."""
+    names = [t for t in ("render", "cook", "pdg") if migration.hint_tool(t, profile)]
+    if not names:
+        return "the call that started it"
+    return names[0] if len(names) == 1 else f"{', '.join(names[:-1])} or {names[-1]}"
+
+
+def unknown_job_error(job_id: str, pid: int, profile: str = "core") -> ToolError:
+    """``job_not_found`` for a ``<pid>-<id>`` job id whose pid was never a Houdini this
+    bridge knew."""
     return ToolError(
         "job_not_found",
         f"No job {job_id}: pid {pid} is not a Houdini this server knows (no registry entry "
         "or launch record), so no job of that id ran here.",
-        hint="job {action: list, all: true} lists the live jobs of every Houdini; pass a "
-        "job_id exactly as render, cook or pdg returned it.",
+        hint=f"{_job_lister(profile)} lists the live jobs of every Houdini; pass a job_id "
+        f"exactly as {_job_starters(profile)} returned it.",
         retryable=False,
         detail={"job_id": job_id, "pid": pid},
+    )
+
+
+def ledger_job_error(job_id: str, profile: str = "core") -> ToolError:
+    """``job_not_found`` for an id of the ledger's form (``j...``) the ledger does not have
+    (review 25 papercut 5: the 1.x wording about pids and Houdini restarts was wrong for
+    it)."""
+    return ToolError(
+        "job_not_found",
+        f"No job {job_id}: this server's ledger has no job with that id.",
+        hint=f"Job ids like j3f9a1c are the ledger's: it keeps every job this server started, "
+        f"across a server restart. {_job_lister(profile)} lists them; pass a job_id exactly "
+        f"as {_job_starters(profile)} returned it.",
+        retryable=False,
+        detail={"job_id": job_id},
     )
 
 
@@ -464,7 +495,7 @@ class Bridge:
             if owner is None:
                 job_id = str((args or {}).get("job_id"))
                 if not self._known_pid(target_pid):
-                    raise unknown_job_error(job_id, target_pid)
+                    raise unknown_job_error(job_id, target_pid, self.config.profile)
                 raise self.job_lost_error(target_pid, job_id, live)
             self._check_hp(owner)
             return owner, [], None
@@ -661,18 +692,11 @@ class Bridge:
         """``args`` with a ledger job id (``j7f3a9``) replaced by the host's ``<pid>-<id>``,
         and that ledger id; ``job_not_found`` when the ledger has no such job."""
         job_id = args.get("job_id")
-        if reads_as(name, args) != "job" or not is_ledger_id(job_id):
+        if reads_as(name, args) != "job" or not looks_like_ledger_id(job_id):
             return args, None
-        mapped = self.ledger.to_host(job_id)
+        mapped = self.ledger.to_host(job_id) if is_ledger_id(job_id) else None
         if mapped is None:
-            raise ToolError(
-                "job_not_found",
-                f"No job {job_id}: this server's ledger has no job with that id.",
-                hint="job {action: list, all: true} lists the live jobs of every Houdini; pass a "
-                "job_id exactly as render, cook or pdg returned it.",
-                retryable=False,
-                detail={"job_id": job_id},
-            )
+            raise ledger_job_error(str(job_id), self.config.profile)
         return dict(args, job_id=mapped[1]), job_id
 
     def _remembered(self, target: routing.Target) -> dict[str, Any] | None:

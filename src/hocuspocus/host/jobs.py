@@ -32,6 +32,23 @@ JOB_NOT_FOUND_HINT = (
     "and do not survive a Houdini restart; use job with action 'list' to see this "
     "Houdini's jobs, or {action: 'list', all: true} for every running Houdini's."
 )
+"""The hint for a ``<pid>-<id>`` job id this Houdini does not have (the 1.x id form)."""
+
+
+def other_id_hint(job_id: str, prefix: str | None) -> str:
+    """The hint for a job id that is not of the ``<pid>-<id>`` form (review 25 papercut
+    5): a ledger-form id (``j...``) belongs to the MCP server, which maps it to this
+    Houdini's ids; anything else is not an id this Houdini gave out."""
+    from hocuspocus.tools.migration import hint_tool
+
+    lister = hint_tool("job", action="list") or 'inspect {what: "jobs"}'
+    form = f"{prefix}-<id>" if prefix else "<id>"
+    if job_id.startswith("j"):
+        return (
+            f"Ids like {job_id} are the MCP server's ledger ids; send them through the server, "
+            f"which maps them to this Houdini's {form} ids. {lister} lists this Houdini's jobs."
+        )
+    return f"This Houdini's job ids look like {form}; {lister} lists its jobs."
 
 
 class JobContext:
@@ -228,7 +245,12 @@ class JobManager:
                     hint="The bridge sends job calls to the Houdini that started the job; "
                     f"if pid {owner} has exited, its jobs are gone.",
                 )
-            raise ToolError("job_not_found", f"No job with id {job_id!r}.", hint=JOB_NOT_FOUND_HINT)
+            hint = (
+                JOB_NOT_FOUND_HINT
+                if dash and owner.isdigit()
+                else other_id_hint(job_id, self._prefix)
+            )
+            raise ToolError("job_not_found", f"No job with id {job_id!r}.", hint=hint)
         return job
 
     def status(self, job_id: str) -> dict[str, Any]:
