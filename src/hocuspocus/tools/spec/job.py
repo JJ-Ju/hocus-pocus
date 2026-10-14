@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from ._helpers import _JOB_STATES, ToolSpec, _b, _enum, _obj, _objs, _out, _s, _t
+from ._helpers import _JOB_STATES, ToolSpec, _b, _enum, _obj, _objs, _out, _s, _t, _v2_on
 
 SPEC = ToolSpec(
     name="job",
@@ -21,7 +21,15 @@ SPEC = ToolSpec(
         "nodes: {name: 'finished/total'}. A frame-by-frame job's message counts the frames "
         "done, as current does. cancel adds cancelled: true, or cancelled: false and a note "
         "when the job had already finished. A cancelled job's result is the cancelled error, "
-        "whose detail holds the last status (state cancelled)."
+        "whose detail holds the last status (state cancelled). "
+        "v2 profile (spec-2.0 §2.5, §3): job ids are opaque ledger ids such as j7f3a9; the "
+        "bridge ledger maps each to its Houdini and job, and job accepts either form (any "
+        "profile). Jobs are kept in the ledger across bridge restarts: job status after a "
+        "restart answers from the live Houdini, and for one that has exited instance_lost "
+        "carries the last status the ledger saw; job result of a finished job whose Houdini "
+        "has exited returns the result the ledger kept, if it fetched one before (results "
+        "over 16 KB are stored in <state_dir>/jobs/<id>.json). on (pid, name or role) picks "
+        "the Houdini for list (and for a bare id); a job id always goes to its own Houdini."
     ),
     input_schema=_obj(
         {
@@ -46,6 +54,7 @@ SPEC = ToolSpec(
     ),
     # Reads and cancel only touch host-side jobs; repeating any action is harmless.
     idempotent=True,
+    v2_extra=_v2_on(),
     examples=(
         {"action": "status", "job_id": "61900-9c3e6f7ca53e"},
         {"action": "list", "all": True},

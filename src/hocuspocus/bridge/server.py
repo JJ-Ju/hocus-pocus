@@ -30,13 +30,13 @@ from ..tools import catalog
 from ..tools.catalog import ToolSpec
 from ..tools.errors import ToolError
 from ..version import __version__
-from . import budget
+from . import budget, routing
 from . import instances as registry
 from .client import OFFLINE_HINT, REINSTALL_HINT, HostClient
 from .config import BridgeConfig
 from .instructions import INSTRUCTIONS, guide_text, tools_text
 from .launch import Launcher
-from .ledger import Ledger
+from .ledger import Ledger, is_ledger_id
 from .local_tools import LOCAL_TOOLS
 from .validate import coerce_integers, shape_hint, validate
 
@@ -646,8 +646,112 @@ class Bridge:
                 return False
             time.sleep(0.1)
 
+    # -- on and ledger job ids (spec-2.0 §2.5, §3) -------------------------------------------
+
+    def _host_job_id(self, name: str, args: dict[str, Any]) -> tuple[dict[str, Any], str | None]:
+        """``args`` with a ledger job id (``j7f3a9``) replaced by the host's ``<pid>-<id>``,
+        and that ledger id; ``job_not_found`` when the ledger has no such job."""
+        job_id = args.get("job_id")
+        if reads_as(name, args) != "job" or not is_ledger_id(job_id):
+            return args, None
+        mapped = self.ledger.to_host(job_id)
+        if mapped is None:
+            raise ToolError(
+                "job_not_found",
+                f"No job {job_id}: this server's ledger has no job with that id.",
+                hint="job {action: list, all: true} lists the live jobs of every Houdini; pass a "
+                "job_id exactly as render, cook or pdg returned it.",
+                retryable=False,
+                detail={"job_id": job_id},
+            )
+        return dict(args, job_id=mapped[1]), job_id
+
+    def _remembered(self, target: routing.Target) -> dict[str, Any] | None:
+        """The ledger's row for an ``on`` pid or name that is not live (to name it)."""
+        if target.kind == "pid":
+            return self.ledger.instance(int(target.value))
+        if target.kind == "name":
+            return self.ledger.find_name(str(target.value))
+        return None
+
+    def _route(
+        self,
+        name: str,
+        args: dict[str, Any],
+        target_pid: int | None,
+        on: routing.Target | None,
+    ) -> tuple[registry.Instance, list[str], str | None]:
+        """:meth:`_resolve`, or for ``on`` the instance it names, whatever is pinned or
+        selected: no ambiguity refusal (the target is explicit) and the pin stays."""
+        if on is None:
+            return self._resolve(name, args, target_pid)
+        live = self.scan()
+        self._note_live(live)
+        inst = routing.pick(
+            on,
+            live,
+            role_of=self.role_of,
+            load=self.load_of,
+            remembered=self._remembered,
+            tool=name,
+        )
+        self._check_hp(inst)
+        return inst, [], None
+
+    def _ledger_result(self, job_id: str, exc: ToolError) -> dict[str, Any] | None:
+        """``job result`` for a finished job whose Houdini has exited: the result the
+        ledger kept, if it fetched one before (spec-2.0 §3)."""
+        row = self.ledger.job(job_id)
+        if row is None or row["state"] != "done" or not row["has_result"]:
+            return None
+        detail = exc.detail if isinstance(exc.detail, dict) else {}
+        return {
+            **row["status"],
+            "result": self.ledger.result(job_id),
+            "note": f"Houdini pid {detail.get('pid')} has exited; this is the result the "
+            "bridge ledger kept.",
+        }
+
     def forward(
         self, name: str, args: dict[str, Any], request_id: str | None = None
+    ) -> tuple[bool, dict[str, Any], dict[str, Any]]:
+        """Send a call to its Houdini: :meth:`_forward`, plus ``on`` (v2: ``cook``,
+        ``render``, ``job``, ``look``) and ledger job ids both ways (a ledger id is
+        accepted in every profile; v2 results carry ledger ids instead of host ids)."""
+        on = None
+        if "on" in args and name in routing.ROUTABLE:
+            on = routing.parse_on(args["on"])
+            args = {key: value for key, value in args.items() if key != "on"}
+        args, asked_as = self._host_job_id(name, args)
+        try:
+            ok, payload, meta = self._forward(name, args, request_id, on)
+        except ToolError as exc:
+            host_id = args.get("job_id")
+            if exc.code == "instance_lost" and args.get("action") == "result" and host_id:
+                kept = self._ledger_result(str(host_id), exc)
+                if kept is not None:
+                    ok, payload, meta = True, kept, {}
+                    return ok, self._present_jobs(payload), meta
+            if self.v2 and isinstance(host_id, str):
+                ledger_id = asked_as or self.ledger.ledger_id(host_id)
+                if ledger_id:
+                    exc.message = exc.message.replace(host_id, ledger_id)
+                    exc.detail = routing.rewrite_job_ids(exc.detail, self.ledger.ledger_id)
+            raise
+        return ok, self._present_jobs(payload), meta
+
+    def _present_jobs(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """v2: the agent sees ledger job ids (opaque; the bridge knows the instance)."""
+        if not self.v2:
+            return payload
+        return routing.rewrite_job_ids(payload, self.ledger.ledger_id)
+
+    def _forward(
+        self,
+        name: str,
+        args: dict[str, Any],
+        request_id: str | None = None,
+        on: routing.Target | None = None,
     ) -> tuple[bool, dict[str, Any], dict[str, Any]]:
         request_id = request_id or uuid.uuid4().hex
         if name == "job":
@@ -655,10 +759,12 @@ class Bridge:
                 return self._job_list_all()
             args = {key: value for key, value in args.items() if key != "all"}
         target_pid = job_owner(name, args)
+        if target_pid is not None:
+            on = None  # a job id names its Houdini
         cursor = events_cursor(args) if reads_as(name, args) == "events" else None
         stale: list[str] = []
         for _attempt in range(MAX_STALE_ENTRIES):
-            inst, warnings, ambiguous = self._resolve(name, args, target_pid)
+            inst, warnings, ambiguous = self._route(name, args, target_pid, on)
             client = self.client_for(inst)
             try:
                 if (inst.pid, inst.port, inst.token) not in self._verified:
@@ -732,6 +838,9 @@ class Bridge:
         try:
             client = self.client_for(inst)
             job_id = args.get("job_id")
+            if is_ledger_id(job_id):
+                mapped = self.ledger.to_host(job_id)
+                job_id = mapped[1] if mapped else None
             if isinstance(job_id, str) and job_id:
                 ok, snapshot, _meta = client.job(job_id, timeout_s=5.0)
                 snapshot = snapshot if ok else None

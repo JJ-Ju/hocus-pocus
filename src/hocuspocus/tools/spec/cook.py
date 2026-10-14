@@ -16,6 +16,7 @@ from ._helpers import (
     _paths,
     _problems,
     _t,
+    _v2_on,
 )
 
 SPEC = ToolSpec(
@@ -54,7 +55,8 @@ SPEC = ToolSpec(
         "wait_s is how long the call waits before returning the job (default "
         "min(timeout_s, job threshold); 0 returns the job at once). A cancelled cook's job "
         "result is the cancelled error with detail {last_status, partial: {frames_cooked, "
-        "results, frames?}}."
+        "results, frames?}}. "
+        "v2 profile (spec-2.0 §2.5): on runs this call on another Houdini without moving the pin: a pid, a name (houdini_connect {pid, name}) or a role (editor or worker; the least busy live one, by jobs_running then busy). The result's _meta.instance names it and its job is recorded against it. A pid or name the bridge remembers that has exited is instance_lost, one it never knew houdini_offline with the candidates; a role nobody has is houdini_offline. Without on the call goes to the pinned or selected Houdini as always."
     ),
     input_schema=_obj(
         {
@@ -97,6 +99,7 @@ SPEC = ToolSpec(
     # §4.1: a cook changes no hip state but is not a pure read (it computes, may run
     # Python SOPs); repeating it is harmless.
     idempotent=True,
+    v2_extra=_v2_on(),
     examples=(
         {"paths": ["/obj/geo1/OUT"]},
         {"paths": ["/obj/geo1/OUT"], "profile": True},
