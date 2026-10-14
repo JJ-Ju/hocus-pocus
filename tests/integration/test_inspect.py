@@ -173,21 +173,30 @@ def test_type_is_node_type_info(v2_client):
 
 
 def test_events_is_events(v2_client):
+    from hocuspocus.host.tools.events import LOG
+
+    # Recorded through the log itself: another test stops a second in-process host, which
+    # removes the process's Houdini callbacks (test_host_lifecycle), so hou-side edits may
+    # record nothing in a full run.
     _net, box, _ = _geo()
-    v2_client.ok("node_info", {"paths": [box.path()]})  # watched from now on
-    box.parm("sizey").set(4.0)
+    LOG.record("NameChanged", box.path(), {"old_name": "box0"})
+    LOG.record("NameChanged", box.path(), {"old_name": "box00"})
     first = _same(v2_client, "events", None, {"since": 0, "limit": 2}, "events",
                   {"since": 0, "limit": 2})  # fmt: skip
     assert len(first["events"]) == 2
     new = _same(v2_client, "events", None, {"since": 0, "limit": 1000}, "events",
                 {"since": 0, "limit": 1000})  # fmt: skip
     assert new["target"] is None
-    later = v2_client.ok("inspect", {"what": "events", "since": new["next_since"]})
-    assert later["events"] == []
-    same = v2_client.ok("inspect", {"what": "events", "since": new["next_since"]})
+    cursor = new["next_since"]
+    while True:  # pages end at the response budget: read to the end of the ring buffer
+        later = v2_client.ok("inspect", {"what": "events", "since": cursor})
+        if not later["events"]:
+            break
+        cursor = later["next_since"]
+    same = v2_client.ok("inspect", {"what": "events", "since": cursor})
     assert same["etag"] == later["etag"]
-    box.parm("tx").set(6.0)  # another tuple: a burst on size would join the last event
-    moved = v2_client.ok("inspect", {"what": "events", "since": new["next_since"]})
+    LOG.record("NameChanged", box.path(), {"old_name": "box000"})
+    moved = v2_client.ok("inspect", {"what": "events", "since": cursor})
     assert moved["etag"] != later["etag"] and moved["events"]
 
 
