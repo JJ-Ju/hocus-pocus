@@ -264,6 +264,22 @@ def test_bridge_error_for_a_flat_parm_set_shows_the_items_form():
     assert '{"items": [{"path": "/obj/geo1/box1/sizex", "value": 2}]}' in error["hint"]
 
 
+def test_a_flat_edit_op_or_an_ops_object_gets_the_ops_list():
+    """Review 25 task 9: edit {op, path, value} and edit {ops: {...}} get the call with the
+    op inside ops."""
+    from hocuspocus.bridge.validate import shape_hint
+
+    schema = _catalog_schema("edit")
+    op = {"op": "set", "path": "/obj/g/box1/sizex", "value": 2}
+    for args in (op, {"ops": op}, {**op, "dry_run": True}):
+        assert validate(args, schema)
+        hint = shape_hint(args, schema)
+        assert hint.startswith("edit takes a list of ops; pass the op inside ops: ")
+        fixed = json.loads(hint.split("inside ops: ", 1)[1])
+        assert fixed["ops"] == [op] and not validate(fixed, schema)
+    assert shape_hint({"ops": [op], "bogus": 1}, schema) is None
+
+
 @pytest.mark.parametrize(
     ("args", "fixed"),
     [

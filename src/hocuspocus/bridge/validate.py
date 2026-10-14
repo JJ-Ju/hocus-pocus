@@ -404,28 +404,46 @@ def _elided(value: Any) -> Any:
     return value
 
 
+BATCH_KEYS: dict[str, str] = {
+    "items": "this tool takes a batch; pass the item inside items",
+    "ops": "edit takes a list of ops; pass the op inside ops",
+}
+"""The batch arrays :func:`shape_hint` wraps a flat item into, and how the hint says it."""
+
+
 def shape_hint(value: Any, schema: dict[str, Any] | None) -> str | None:
     """The corrected call when ``value`` is one flat item of a batch tool (review 21
-    papercut 1): ``parm_set {path, value}`` instead of ``{items: [{path, value}]}``.
+    papercut 1): ``parm_set {path, value}`` instead of ``{items: [{path, value}]}``, and
+    ``edit {op, path, value}`` instead of ``{ops: [{op, path, value}]}`` (review 25), or
+    the one op or item passed as an object instead of a list (``{ops: {op, ...}}``).
 
-    Returns ``wrap it: {"items": [{...the caller's own item fields...}], ...}`` when the
-    schema requires an ``items`` array of objects, ``value`` has no ``items``, and every
-    key that is not a top-level property is a property of an item; else None."""
-    if not isinstance(value, dict) or not schema or "items" in value:
+    Returns ``...: {"items": [{...the caller's own item fields...}], ...}`` when the
+    schema requires an ``items`` (or ``ops``) array of objects, ``value`` has none, and
+    every key that is not a top-level property is a property of an item; else None."""
+    if not isinstance(value, dict) or not schema:
         return None
     validator = _Validator(schema)
     root = validator._resolve(schema)
     props = root.get("properties") or {}
-    if "items" not in props or "items" not in (root.get("required") or ()):
+    key = next((k for k in BATCH_KEYS if k in props and k in (root.get("required") or ())), None)
+    if key is None:
         return None
-    array = validator._resolve(props["items"]) if isinstance(props["items"], dict) else {}
+    array = validator._resolve(props[key]) if isinstance(props[key], dict) else {}
     item = validator._resolve(array.get("items")) if isinstance(array.get("items"), dict) else {}
     item_props = item.get("properties") or {}
-    flat = {k: v for k, v in value.items() if k not in props}
-    if not flat or not item_props or any(k not in item_props for k in flat):
-        return None
-    outer = {k: v for k, v in value.items() if k in props}
-    fixed = json.dumps(_elided({"items": [flat], **outer}), ensure_ascii=False)
+    if isinstance(value.get(key), dict):  # one item as an object: the list of one
+        flat = value[key]
+        outer = {k: v for k, v in value.items() if k != key}
+        if not item_props or any(k not in item_props for k in flat):
+            return None
+    else:
+        if key in value:
+            return None
+        flat = {k: v for k, v in value.items() if k not in props}
+        if not flat or not item_props or any(k not in item_props for k in flat):
+            return None
+        outer = {k: v for k, v in value.items() if k in props}
+    fixed = json.dumps(_elided({key: [flat], **outer}), ensure_ascii=False)
     if len(fixed) > SHAPE_HINT_MAX_CHARS:
-        fixed = fixed[: SHAPE_HINT_MAX_CHARS - 1] + "…"
-    return f"this tool takes a batch; pass the item inside items: {fixed}"
+        fixed = clip(fixed, SHAPE_HINT_MAX_CHARS)
+    return f"{BATCH_KEYS[key]}: {fixed}"
