@@ -1302,13 +1302,17 @@ the margins the reviews predicted.
 
 **The parity matrix** (2.0, spec-2.0 §5.3, D43). [`docs/parity.md`](parity.md) lists every
 tool and resource × (GUI, headless) as **same**, **mode** (a deliberate, documented
-difference) or **gap**, with the code that makes it so. Each gap carries its 2.0
-resolution: G1 (a read dirtied the GUI hip) is the one dirty source of §3.2; G6 (no
-whole tool is GUI-only) is §3.6; G8 (headless looks render a snapshot) is §8's contract;
-the others (the GUI viewport cooking between calls, selection moving the user's panes,
-`cook {frame_range}` walking the playbar, modal dialogs blocking the GUI, a stale GUI
-package) are tracked there. `tests/integration/test_parity_gui.py` executes the GUI
-column in a scripted `houdinifx` session; the headless column is the integration tier.
+difference) or **gap**, with the code that makes it so. M3 closed the gaps, each with
+its status in the matrix: G1 (a read dirtied the GUI hip) is the one dirty source of
+§3.2; G2 (the GUI viewport cooks between calls) a once-per-session note (§4.7 `time`);
+G3 (a selection moves the user's panes) `context_changed` on `edit` `select` (§4.5); G4
+(`cook {frame_range}` walks the playbar) a restore only when the user did not move it
+(§4.6); G5 (modal dialogs block the GUI) guidance for the guide; G6 (no whole tool is
+GUI-only) §3.6; G7 (a stale GUI package) the `version_mismatch` warning (§4.2); G8
+(headless looks render a snapshot) §8's contract and its notes.
+`tests/integration/test_parity_gui.py` executes the GUI column in a scripted `houdinifx`
+session; the headless column is the integration tier (with
+`tests/integration/test_parity_headless.py` for G8).
 
 Hygiene rules: never write into the repo at test time; never use port 37219; isolated
 pref dir per run; clean interpreter exit. CI: GitHub Actions `windows-latest` and
