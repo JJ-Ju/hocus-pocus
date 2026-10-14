@@ -1,0 +1,35 @@
+{
+  "about": "Per-workload budgets for tests/workloads/v2, the five workloads on the 2.0 tools (spec-2.0 section 5.2): the larger of two runs. A run fails when a total exceeds its budget by more than 15 %, or (the 2.0 exit check, section 7 M4) when calls or text_bytes are not below the 1.4 budget in ../budgets.json by the margins in v2/conftest.py. Rewrite with --update-budgets.",
+  "workloads": {
+    "city_build": {
+      "calls": 15,
+      "text_bytes": 22501,
+      "max_call_bytes": 5721,
+      "wall_s": 5.6
+    },
+    "fx_cache": {
+      "calls": 11,
+      "text_bytes": 9297,
+      "max_call_bytes": 1948,
+      "wall_s": 3.1
+    },
+    "scorecard_twelve": {
+      "calls": 48,
+      "text_bytes": 30579,
+      "max_call_bytes": 7609,
+      "wall_s": 8.6
+    },
+    "soak_200": {
+      "calls": 177,
+      "text_bytes": 105586,
+      "max_call_bytes": 3117,
+      "wall_s": 25.2
+    },
+    "vellum_usd": {
+      "calls": 11,
+      "text_bytes": 8463,
+      "max_call_bytes": 2297,
+      "wall_s": 21.2
+    }
+  }
+}

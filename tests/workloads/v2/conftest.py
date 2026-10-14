@@ -10,6 +10,11 @@ chains), ``inspect`` and ``search`` for reads, ``houdini://`` resources with
 ``_meta["If-None-Match"]`` where a read repeats (:meth:`RecorderV2.read`; a not-modified
 answer is a call with no bytes), ``look``, ``cook``/``render``/``job`` (``on`` to address a
 worker, a progress token so a job's call waits for its end), ``houdini_connect {role}``.
+
+The 2.0 exit check (spec-2.0 §7, M4): each workload's ``calls`` and ``text_bytes`` must be
+below its 1.4 budget (``tests/workloads/budgets.json``) by :data:`MARGINS`, the margins the
+reviews predicted. A workload that misses one fails with the per-tool table, so the fix can
+be targeted; the margins are not relaxed. The end of the run prints the 1.4/2.0 comparison.
 """
 
 from __future__ import annotations
@@ -64,9 +69,22 @@ TOOLS_2X = frozenset(
 )  # fmt: skip
 """The 2.0 tool surface (spec-2.0 §2); a v2 workload calling anything else fails."""
 
+MARGINS: dict[str, tuple[float, float]] = {
+    "city_build": (0.25, 0.20),
+    "scorecard_twelve": (0.25, 0.20),
+    "soak_200": (0.25, 0.20),
+    "fx_cache": (0.15, 0.15),
+    "vellum_usd": (0.15, 0.15),
+}
+"""Per workload, the fraction by which 2.0's ``calls`` and ``text_bytes`` must be below the
+1.4 budget (the margins reviews 12, 20, 21, 22 and 24 predicted)."""
+
+RESULTS: dict[str, dict[str, Any]] = {}
+"""This run's v2 totals and margin verdicts, for the comparison table."""
+
 
 class RecorderV2(Recorder):
-    """The recorder, plus resource reads with ETags."""
+    """The recorder, plus resource reads with ETags and the 2.0 exit check."""
 
     etags: dict[str, str]
 
@@ -113,6 +131,52 @@ class RecorderV2(Recorder):
         except json.JSONDecodeError:  # hocuspocus://guide and tools are Markdown
             return text, got
 
+    def finish(self, extra: dict[str, Any] | None = None) -> dict[str, Any]:
+        try:
+            totals = super().finish(extra)
+        finally:
+            if self.finished is not None:
+                verdict = margin_verdict(self.name, self.finished)
+                RESULTS[self.name] = {**self.finished, **verdict}
+        missed = RESULTS[self.name]["missed"]
+        assert not missed, (
+            f"{self.name} misses the 2.0 exit margin (spec-2.0 §7 M4): "
+            + "; ".join(missed)
+            + "\nper tool:\n"
+            + per_tool_table(self)
+            + "\ncalls:\n"
+            + self.report()
+        )
+        return totals
+
+
+def margin_verdict(name: str, totals: dict[str, Any]) -> dict[str, Any]:
+    budget = harness._read_json(BUDGETS_1X).get("workloads", {}).get(name, {})
+    calls_margin, bytes_margin = MARGINS[name]
+    missed = []
+    for key, margin in (("calls", calls_margin), ("text_bytes", bytes_margin)):
+        if key not in budget:
+            missed.append(f"no 1.4 budget for {key}")
+            continue
+        limit = budget[key] * (1 - margin)
+        if totals[key] > limit:
+            cut = 1 - totals[key] / budget[key]
+            missed.append(
+                f"{key} {totals[key]} vs 1.4 {budget[key]}: {cut:+.0%} below, "
+                f"needs {margin:.0%} (<= {limit:.0f})"
+            )
+    return {"budget_1x": budget, "missed": missed}
+
+
+def per_tool_table(rec: Recorder) -> str:
+    rows = sorted(rec.per_tool().items(), key=lambda kv: -kv[1]["text_bytes"])
+    lines = [f"  {'tool':<26} {'calls':>5} {'bytes':>8} {'max':>7}"]
+    lines += [
+        f"  {tool:<26} {row['calls']:>5} {row['text_bytes']:>8} {row['max_bytes']:>7}"
+        for tool, row in rows
+    ]
+    return "\n".join(lines)
+
 
 # -- fixtures (override the 1.4 tier's for tests under v2/) ---------------------------------
 
@@ -135,3 +199,32 @@ def workload(request: pytest.FixtureRequest, wl_session: Any, wl_host: Any) -> I
         request, wl_session, wl_host, factory=RecorderV2, budgets=BUDGETS, last_run=LAST_RUN
     ) as rec:
         yield rec
+
+
+# -- the comparison table -------------------------------------------------------------------
+
+
+def pytest_terminal_summary(terminalreporter: Any) -> None:
+    if not RESULTS:
+        return
+    tr = terminalreporter
+    tr.section("workloads: 1.4 budget vs 2.0 (spec-2.0 §7 M4 margins)")
+    tr.write_line(
+        f"{'workload':<17} {'calls 1.4':>9} {'2.0':>5} {'cut':>5} {'need':>5}  "
+        f"{'bytes 1.4':>9} {'2.0':>7} {'cut':>5} {'need':>5}  {'wall 1.4':>8} {'2.0':>6}  margin"
+    )
+    for name in sorted(RESULTS):
+        r = RESULTS[name]
+        b = r["budget_1x"]
+        calls_margin, bytes_margin = MARGINS[name]
+        tr.write_line(
+            f"{name:<17} {b.get('calls', '-'):>9} {r['calls']:>5} {_cut(r, b, 'calls'):>5} "
+            f"{calls_margin:>5.0%}  {b.get('text_bytes', '-'):>9} {r['text_bytes']:>7} "
+            f"{_cut(r, b, 'text_bytes'):>5} {bytes_margin:>5.0%}  "
+            f"{b.get('wall_s', '-'):>8} {r['wall_s']:>6}  "
+            + ("met" if not r["missed"] else "MISSED: " + "; ".join(r["missed"]))
+        )
+
+
+def _cut(r: dict[str, Any], b: dict[str, Any], key: str) -> str:
+    return f"{1 - r[key] / b[key]:+.0%}" if b.get(key) else "-"
