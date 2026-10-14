@@ -1,3 +1,5 @@
+> **Status: evaluation record.** HocusPocus 1.3.0, run from branch `release/1.4` at `32450ef` on 2026-10-13. See [`../README.md`](../README.md).
+
 # 22 — Soak test of 1.3.0: 616 calls in one session against one headless host
 
 **Seat:** a reliability engineer running plan-1.4 workload 22. I drove HocusPocus only through the official `mcp` SDK client over stdio, using the same pattern as `tests/e2e/test_stdio_roundtrip.py`. I read the host and bridge source only after the run, to explain two findings (sections 5.1 and 5.2).

@@ -1,3 +1,5 @@
+> **Status: evaluation record.** HocusPocus 1.3.0, run from branch `release/1.4` at `32450ef` on 2026-10-13. See [`../README.md`](../README.md).
+
 # 23 — Vellum cloth + USD round trip on 1.3.0
 
 **Seat:** an AI agent working as an FX/pipeline TD, running workload 23 of `plan-1.4.md` through the MCP tools only. I read `docs/tools.md`, the README, the quickstart, review 20 and the `hocuspocus://guide` resource (6,412 B). I did not read the server source for the workload. I only looked at `cli.py` during setup, to confirm that `hocuspocus launch --headless` sets `PYTHONPATH` itself, because `install-houdini` would also write into the default pref dirs, which I had to avoid.
