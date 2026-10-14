@@ -30,6 +30,8 @@ from pathlib import Path
 from typing import Any
 
 from hocuspocus.tools.catalog import TOOLS, ToolSpec, get, profile_of, v2_spec
+from hocuspocus.tools.migration import REPLACEMENTS
+from hocuspocus.tools.profiles import COMPAT_1X
 
 __all__ = [
     "SchemaError",
@@ -337,8 +339,9 @@ def _badges(spec: ToolSpec) -> str:
     return " ".join(f"`{badge}`" for badge in badges)
 
 
-V2_MARK = "*(v2 profile)*"
-"""Marks an argument or result key that only the ``v2`` profile lists (``v2_extra``)."""
+V2_MARK = "*(not in compat_1x)*"
+"""Marks an argument or result key a 1.4 tool gains in the 2.0 profiles (``v2_extra``), which
+``compat_1x`` does not list."""
 
 
 def _v2_names(spec: ToolSpec, part: str) -> set[str]:
@@ -350,21 +353,34 @@ def _v2_names(spec: ToolSpec, part: str) -> set[str]:
     return added - set(schema.get("properties") or {})
 
 
+def _profiles_line(spec: ToolSpec) -> str:
+    """The profiles that list ``spec`` and, for a removed 1.4 tool, its replacement."""
+    line = "profiles " + ", ".join(f"`{name}`" for name in spec.profiles)
+    if spec.name in REPLACEMENTS:
+        line += f" · 2.0: {REPLACEMENTS[spec.name]}"
+    return line
+
+
 def render_tools_markdown(tools: Sequence[ToolSpec]) -> str:
     """Render the full ``docs/tools.md`` text (LF line endings, trailing newline)."""
-    minimal = sum(1 for spec in tools if profile_of(spec) == "minimal")
-    core = sum(1 for spec in tools if spec.profile == "core")
-    v2 = sum(1 for spec in tools if spec.profile == "v2")
-    full = len(tools) - core - v2
-    v2_part = f", {v2} more in `v2` (the 2.0 tools)" if v2 else ""
+    counts = {p: sum(1 for spec in tools if p in spec.profiles) for p in ("minimal", "core")}
+    full = sum(1 for spec in tools if "full" in spec.profiles)
+    compat = sum(1 for spec in tools if COMPAT_1X in spec.profiles)
+    compat_only = sum(1 for spec in tools if profile_of(spec) == COMPAT_1X)
+    compat_part = (
+        f" `compat_1x` lists the {compat} 1.4 tools with their 1.4 schemas, {compat_only} of "
+        "them only there (each names its 2.0 replacement)."
+        if compat
+        else ""
+    )
     out: list[str] = [
         "# HocusPocus tools",
         "",
         "<!-- Generated from src/hocuspocus/tools/spec/ by `python -m hocuspocus.tools.docs`."
         " Do not edit by hand. -->",
         "",
-        f"{len(tools)} tools: {minimal} in the `minimal` profile, {core} in `core` (minimal "
-        f"included), {full} more in `full`{v2_part}. "
+        f"{len(tools)} tools. The 2.0 profiles nest: {counts['minimal']} in `minimal`, "
+        f"{counts['core']} in `core` (the default), {full} in `full`.{compat_part} "
         f"Model-visible `tools/list` text: {tools_list_text_size(tools):,} bytes. "
         "See `docs/BIBLE.md` §4 for the design.",
         "",
@@ -372,16 +388,18 @@ def render_tools_markdown(tools: Sequence[ToolSpec]) -> str:
         "",
     ]
     for spec in tools:
-        suffix = {"full": " *(full)*", "minimal": " *(minimal)*", "v2": " *(v2)*"}.get(
-            profile_of(spec), ""
-        )
+        suffix = {
+            "full": " *(full)*",
+            "minimal": " *(minimal)*",
+            COMPAT_1X: " *(compat_1x)*",
+        }.get(profile_of(spec), "")
         out.append(f"- [`{spec.name}`](#{spec.name}){suffix}")
     for spec in tools:
         out += [
             "",
             f"## {spec.name}",
             "",
-            f"{_badges(spec)} · profile `{profile_of(spec)}`",
+            f"{_badges(spec)} · {_profiles_line(spec)}",
             "",
             spec.description,
             "",
@@ -443,19 +461,26 @@ def default_output_path() -> Path:
 # Budget report (docs/redesign/budget.md)
 # ---------------------------------------------------------------------------
 
-BUDGET_PROFILES: tuple[str, ...] = ("minimal", "core", "full", "v2")
+BUDGET_PROFILES: tuple[str, ...] = ("minimal", "core", "full", COMPAT_1X)
 BUDGET_MODES: tuple[str, ...] = ("text", "both")
-TOOLS_LIST_CAPS: dict[str, int] = {"text": 32_000, "both": 44_000}
-"""BIBLE §4.1 (1.4) caps on the full profile's serialised ``tools/list`` per
+TOOLS_LIST_CAPS: dict[str, int] = {"text": 24_000, "both": 34_000}
+"""spec-2.0 §7 M3 caps on the 2.0 ``full`` profile's serialised ``tools/list`` per
 ``result_content`` mode; ``test_tools_list_budget`` enforces them."""
+COMPAT_TOOLS_LIST_CAPS: dict[str, int] = {"text": 32_000, "both": 44_000}
+"""BIBLE §4.1 (1.4) caps, kept by ``compat_1x`` (1.4's ``full`` catalogue)."""
 BUDGET_TOP = 10
 BUDGET_COLUMNS: tuple[str, ...] = tuple(f"{p} {m}" for m in BUDGET_MODES for p in BUDGET_PROFILES)
-"""History columns, ``"<profile> <mode>"``: the four profiles in ``text``, then in ``both``."""
+"""What one run measures, ``"<profile> <mode>"``: the four profiles in ``text``, then in
+``both``."""
+HISTORY_COLUMNS: tuple[str, ...] = tuple(
+    f"{p} {m}" for m in BUDGET_MODES for p in ("minimal", "core", "full", "v2", COMPAT_1X)
+)
+"""The history table's columns: :data:`BUDGET_COLUMNS` plus ``v2``, the M1-M2 preview
+profile measured before the 2.0 cut-over (rows show ``—`` where a profile did not exist)."""
 LEGACY_BUDGET_COLUMNS: tuple[str, ...] = tuple(
     f"{p} {m}" for m in BUDGET_MODES for p in ("minimal", "core", "full")
 )
-"""Columns of rows recorded before the ``v2`` profile (1.4): read back with no ``v2`` sizes,
-which the table shows as ``—``."""
+"""Columns of a 1.4 row read without a header."""
 _HISTORY_HEADING = "## History"
 _CONTRIBUTION_HEADING = "## Per-tool contribution"
 _DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
@@ -499,7 +524,7 @@ def _budget_row(row: dict[str, Any]) -> str:
     cells = [
         row["date"],
         row["version"],
-        *(f"{sizes[c]:,}" if c in sizes else "—" for c in BUDGET_COLUMNS),
+        *(f"{sizes[c]:,}" if c in sizes else "—" for c in HISTORY_COLUMNS),
     ]
     return "| " + " | ".join(cells) + " |"
 
@@ -510,12 +535,16 @@ def parse_budget_history(text: str) -> list[dict[str, Any]]:
     if _HISTORY_HEADING not in text:
         return rows
     section = text.split(_HISTORY_HEADING, 1)[1].split("\n## ", 1)[0]
+    header: tuple[str, ...] | None = None
     for line in section.splitlines():
         cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+        if cells[:2] == ["Date", "Version"]:
+            header = tuple(cells[2:])  # the table names its columns
+            continue
         if not _DATE.fullmatch(cells[0]):
             continue
-        if len(cells) == 2 + len(BUDGET_COLUMNS):
-            columns = BUDGET_COLUMNS
+        if header is not None and len(cells) == 2 + len(header):
+            columns = header
         elif len(cells) == 2 + len(LEGACY_BUDGET_COLUMNS):
             columns = LEGACY_BUDGET_COLUMNS
         else:
@@ -549,15 +578,19 @@ def render_budget_markdown(history: Sequence[dict[str, Any]], measured: dict[str
         "Bytes of the serialised `tools/list` result the bridge sends (compact JSON, as the "
         "MCP SDK writes it), per profile and `result_content` mode (BIBLE §4.1, spec-2.0 "
         "§5.1). `text` is what clients see by default (no output schemas); `both` declares "
-        f"them. Caps on the full profile: `text` ≤ {TOOLS_LIST_CAPS['text']:,} B, `both` ≤ "
-        f"{TOOLS_LIST_CAPS['both']:,} B. `v2` (full plus the 2.0 tools, spec-2.0 §7 M1) is "
-        "measured but has no cap of its own; rows from before it show `—` there. A change "
-        "that raises a number says why in its commit.",
+        f"them. Caps on the 2.0 `full` profile (spec-2.0 §7 M3): `text` ≤ "
+        f"{TOOLS_LIST_CAPS['text']:,} B, `both` ≤ {TOOLS_LIST_CAPS['both']:,} B; `compat_1x` "
+        f"(1.4's `full` catalogue) keeps the 1.4 caps, `text` ≤ "
+        f"{COMPAT_TOOLS_LIST_CAPS['text']:,} B, `both` ≤ {COMPAT_TOOLS_LIST_CAPS['both']:,} B. "
+        "Rows before the 2.0 cut-over measure the 1.4 profiles under `minimal`, `core` and "
+        "`full`, and `v2` (1.4's full plus the 2.0 tools, spec-2.0 §7 M1-M2); from the "
+        "cut-over those three are the 2.0 profiles and 1.4's full is `compat_1x`. `—` marks "
+        "a profile that did not exist. A change that raises a number says why in its commit.",
         "",
         _HISTORY_HEADING,
         "",
-        "| Date | Version | " + " | ".join(BUDGET_COLUMNS) + " |",
-        "|---|---|" + "---:|" * len(BUDGET_COLUMNS),
+        "| Date | Version | " + " | ".join(HISTORY_COLUMNS) + " |",
+        "|---|---|" + "---:|" * len(HISTORY_COLUMNS),
         *(_budget_row(row) for row in history),
         "",
         _CONTRIBUTION_HEADING,

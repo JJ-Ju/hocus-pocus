@@ -18,7 +18,6 @@ from hocuspocus.tools import catalog  # noqa: E402
 from hocuspocus.tools.catalog import (  # noqa: E402
     ARGUMENT_DESCRIPTION_MAX_WORDS,
     DESCRIPTION_MAX_WORDS,
-    MINIMAL_TOOLS,
     TOOLS,
     TOOLS_LIST_MAX_BYTES,
     for_profile,
@@ -35,29 +34,30 @@ from hocuspocus.tools.errors import ERROR_CODES  # noqa: E402
 
 pytestmark = pytest.mark.unit
 
-# BIBLE §4.2–§4.7, in order. §4.7's tally says 30 core / 34 total, but its "9
-# node/network" undercounts the ten tools §4.4 actually lists; every listed tool ships.
+# Catalogue order: spec-2.0 §2's for the 2.0 profiles, 1.4's (BIBLE §4.2-§4.7) for compat_1x.
 EXPECTED_ORDER = [
     "houdini_status", "houdini_connect",
     "hip_new", "hip_open", "hip_save", "hip_merge",
+    "inspect", "search", "edit",
     "node_find", "node_info", "node_create", "node_delete", "node_edit", "node_copy",
     "node_connect", "node_layout", "network_describe", "network_build",
     "parm_get", "parm_set",
     "cook", "problems", "geo_info", "geo_read",
-    "viewport_capture", "render", "houdini_python", "node_type_search", "node_type_info",
-    "undo", "time", "selection", "job",
+    "viewport_capture", "render", "look", "houdini_python", "node_type_search",
+    "node_type_info", "undo", "time", "selection", "job",
     "hda", "usd_stage", "pdg", "events",
-    "inspect", "search", "edit", "look",
 ]  # fmt: skip
-FULL_ONLY = {"hda", "usd_stage", "pdg", "events"}
-# spec-2.0 §7 M1: the 2.0 tools, listed only by the v2 profile (full plus these).
-V2_ONLY = {"inspect", "search", "edit", "look"}
-# BIBLE §4.1 (1.3): the minimal profile, for clients with a small context.
+# spec-2.0 §2: the 2.0 profiles, transcribed.
 MINIMAL = {
-    "houdini_status", "houdini_connect", "hip_open", "hip_save", "node_find", "node_info",
-    "node_create", "node_connect", "parm_get", "parm_set", "cook", "geo_info",
-    "viewport_capture", "houdini_python",
+    "houdini_status", "houdini_connect", "hip_open", "hip_save", "inspect", "search", "edit",
+    "node_create", "parm_set", "look",
 }  # fmt: skip
+CORE = MINIMAL | {
+    "hip_new", "hip_merge", "cook", "render", "houdini_python", "job", "undo", "time",
+}  # fmt: skip
+FULL = CORE | {"hda", "pdg", "events"}
+# The 2.0 tools, which compat_1x does not list.
+NEW_IN_2 = {"inspect", "search", "edit", "look"}
 
 # BIBLE §9 code table, transcribed (`python_disabled / read_only` is one row, two codes).
 BIBLE_ERROR_CODES = {
@@ -99,39 +99,44 @@ def test_names_unique_snake_case_and_ordered() -> None:
 
 
 def test_profiles() -> None:
-    core = for_profile("core")
-    assert len(core) == 31
-    assert {spec.name for spec in TOOLS if spec.profile == "full"} == FULL_ONLY
-    assert {spec.name for spec in TOOLS if spec.profile == "v2"} == V2_ONLY
-    assert for_profile("full") == tuple(spec for spec in TOOLS if spec.name not in V2_ONLY)
-    assert [spec.name for spec in for_profile("v2")] == [spec.name for spec in TOOLS]
-    assert [spec.name for spec in core] == [
-        n for n in EXPECTED_ORDER if n not in FULL_ONLY | V2_ONLY
-    ]
-    minimal = for_profile("minimal")
-    assert MINIMAL_TOOLS == MINIMAL and len(minimal) == 14
-    assert [spec.name for spec in minimal] == [n for n in EXPECTED_ORDER if n in MINIMAL]
-    assert {catalog.profile_of(spec) for spec in minimal} == {"minimal"}
+    """spec-2.0 §2: minimal 10, core 18 (the default), full 21; compat_1x is 1.4's full."""
+    assert catalog.PROFILES == ("minimal", "core", "full", "compat_1x")
+    assert catalog.DEFAULT_PROFILE == "core"
+    for profile, expected, size in (
+        ("minimal", MINIMAL, 10),
+        ("core", CORE, 18),
+        ("full", FULL, 21),
+    ):
+        names = [spec.name for spec in for_profile(profile)]
+        assert len(names) == size and set(names) == expected, profile
+        assert names == [n for n in EXPECTED_ORDER if n in expected], profile
+    assert {catalog.profile_of(spec) for spec in for_profile("minimal")} == {"minimal"}
 
 
 def test_profiles_are_nested() -> None:
-    """minimal ⊂ core ⊂ full ⊂ v2 (BIBLE §4.1, spec-2.0 §7 M1): a bigger profile never
-    drops a tool, so a client moving up a profile keeps every tool it knew. The integration
-    tier runs its host on full and the 2.0 tools' tests switch it to v2."""
-    assert catalog.PROFILES == ("minimal", "core", "full", "v2")
+    """minimal ⊂ core ⊂ full (spec-2.0 §2): a bigger profile never drops a tool, so a client
+    moving up a profile keeps every tool it knew. Each spec's ``profiles`` names its 2.0
+    profiles as a suffix of the three, so the nesting holds tool by tool."""
     names = {p: [spec.name for spec in for_profile(p)] for p in catalog.PROFILES}
     assert set(names["minimal"]) < set(names["core"]) < set(names["full"])
-    assert set(names["full"]) < set(names["v2"])
-    assert set(names["v2"]) - set(names["full"]) == V2_ONLY
-    assert names["v2"] == [spec.name for spec in TOOLS]
     for profile in catalog.PROFILES:  # each in catalogue order
-        assert names[profile] == [n for n in names["v2"] if n in set(names[profile])]
+        assert names[profile] == [n for n in EXPECTED_ORDER if n in set(names[profile])]
     for spec in TOOLS:
+        assert spec.profiles, spec.name
+        assert set(spec.profiles) <= set(catalog.PROFILES), spec.name
+        assert len(set(spec.profiles)) == len(spec.profiles), spec.name
+        two = [p for p in spec.profiles if p != "compat_1x"]
+        assert two == list(catalog.PROFILES_2X[len(catalog.PROFILES_2X) - len(two) :]), spec.name
+        assert list(spec.profiles) == [p for p in catalog.PROFILES if p in spec.profiles]
         smallest = catalog.profile_of(spec)
         listed = [p for p in catalog.PROFILES if catalog.in_profile(spec, p)]
-        assert listed == list(catalog.PROFILES[catalog.PROFILES.index(smallest) :]), spec.name
+        assert listed == list(spec.profiles), spec.name
+        assert smallest == (two[0] if two else "compat_1x"), spec.name
     assert catalog.in_profile(get("pdg"), "bogus") is False  # unknown reads as core
-    assert catalog.in_profile(get("geo_read"), "bogus") is True
+    assert catalog.in_profile(get("cook"), "bogus") is True
+    assert catalog.in_profile(get("pdg"), "v2") is True  # v2 is an alias of full
+    assert catalog.for_profile("v2") is catalog.for_profile("full")
+    assert catalog.for_profile("bogus") is catalog.for_profile("core")
 
 
 def test_bridge_local_tools() -> None:
@@ -219,17 +224,20 @@ def test_validator_rejects_bad_arguments() -> None:
         validate({"pid": True}, get("houdini_connect").input_schema)
 
 
-TOOLS_LIST_DEFAULT_MAX_BYTES = 32_000
-"""Cap on what a client sees by default (1.4, BIBLE §4.1): the serialised ``tools/list``
-result of the full profile with ``result_content = "text"``, which declares no output
+TOOLS_LIST_DEFAULT_MAX_BYTES = 24_000
+"""Cap on what a client sees by default (spec-2.0 §7 M3): the serialised ``tools/list``
+result of the 2.0 full profile with ``result_content = "text"``, which declares no output
 schemas. Argument detail lives in each spec's ``notes`` (``docs/tools.md`` and
 ``hocuspocus://tools``), not in ``tools/list``."""
 
-TOOLS_LIST_BOTH_MAX_BYTES = 44_000
-"""Cap on the largest shape a client can ask for (review 11 §1.1): the full profile with
+TOOLS_LIST_BOTH_MAX_BYTES = 34_000
+"""Cap on the largest 2.0 shape a client can ask for: the full profile with
 ``result_content = "both"``, output schemas declared."""
 
-PROFILES = ("minimal", "core", "full", "v2")
+COMPAT_MAX_BYTES = {"text": 32_000, "both": 44_000}
+"""``compat_1x`` (1.4's full catalogue) keeps the 1.4 caps (BIBLE §4.1, review 11 §1.1)."""
+
+PROFILES = ("minimal", "core", "full", "compat_1x")
 MODES = ("text", "both")
 
 
@@ -250,9 +258,8 @@ def tools_list_wire_size(profile: str, result_content: str = "text") -> int:
 
 
 def test_tools_list_budget(capsys: pytest.CaptureFixture[str]) -> None:
-    """BIBLE §4.1 (1.4): cap what clients see by default (``text``) and the ``both`` shape,
-    each measured on the full profile; all eight sizes (four profiles) are printed. v2 has
-    no cap of its own (spec-2.0 §7 M1) but never lists less than full."""
+    """spec-2.0 §7 M3: cap what clients see by default (``text``) and the ``both`` shape on
+    the 2.0 full profile, and compat_1x at the 1.4 caps; all eight sizes are printed."""
     sizes = {(p, m): tools_list_wire_size(p, m) for m in MODES for p in PROFILES}
     caps = {"text": TOOLS_LIST_DEFAULT_MAX_BYTES, "both": TOOLS_LIST_BOTH_MAX_BYTES}
     with capsys.disabled():
@@ -264,13 +271,14 @@ def test_tools_list_budget(capsys: pytest.CaptureFixture[str]) -> None:
         print(f"\n[tools/list] names+descriptions+input schemas {tools_list_text_size(TOOLS):,} B")
     for mode in MODES:
         assert sizes["minimal", mode] < sizes["core", mode] < sizes["full", mode], sizes
-        assert sizes["full", mode] <= sizes["v2", mode], sizes
+        assert sizes["full", mode] < sizes["compat_1x", mode], sizes
         assert sizes["full", mode] <= caps[mode], (
             f"tools/list (full profile, result_content {mode}) is {sizes['full', mode]:,} B, "
-            f"over the {caps[mode]:,} B cap (BIBLE §4.1). Move argument detail from the "
+            f"over the {caps[mode]:,} B cap (spec-2.0 §7 M3). Move argument detail from the "
             "description into the spec's notes (docs/tools.md, hocuspocus://tools) before "
             "raising the cap."
         )
+        assert sizes["compat_1x", mode] <= COMPAT_MAX_BYTES[mode], sizes
     assert sizes["full", "text"] < sizes["full", "both"], sizes
     assert tools_list_text_size(TOOLS) <= TOOLS_LIST_MAX_BYTES
 
@@ -321,7 +329,9 @@ def test_notes_reach_the_docs_and_guide_but_not_tools_list() -> None:
     markdown = render_tools_markdown(TOOLS)
     guide = tools_text()  # hocuspocus://tools (1.3; the guide itself is instructions only)
     listed = {
-        tool.name: tool for tool in Bridge(BridgeConfig(profile="v2"), scan=lambda: []).list_tools()
+        tool.name: tool
+        for profile in ("compat_1x", "full")  # together, every tool
+        for tool in Bridge(BridgeConfig(profile=profile), scan=lambda: []).list_tools()
     }
     for spec in noted:
         assert spec.notes in markdown and spec.notes in guide, spec.name
@@ -411,6 +421,7 @@ def test_budget_md_is_current() -> None:
         "text": TOOLS_LIST_DEFAULT_MAX_BYTES,
         "both": TOOLS_LIST_BOTH_MAX_BYTES,
     }
+    assert docs.COMPAT_TOOLS_LIST_CAPS == COMPAT_MAX_BYTES
     path = REPO / "docs" / "redesign" / "budget.md"
     hint = "run `python -m hocuspocus.tools.docs --budget` and commit docs/redesign/budget.md"
     assert path.exists(), hint

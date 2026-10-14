@@ -1,6 +1,7 @@
 """The advertised surface does not move (spec-2.0 §5.1): the serialised ``tools/list`` of
-every profile × ``result_content`` mode is byte-identical to a golden captured from 1.4
-(the ``v2`` goldens, spec-2.0 §7 M1, from the commit that added that profile).
+every profile × ``result_content`` mode is byte-identical to its golden. The ``compat_1x``
+goldens are 1.4's ``full`` ones, unchanged since 1.4 (spec-2.0 §8: a 1.4 client sees the
+1.4 surface byte for byte); the 2.0 profiles' are from the M3 cut-over.
 
 A change to the catalogue that changes ``tools/list`` must update the goldens in the same
 commit and say why. Regenerate them with
@@ -17,7 +18,7 @@ import pytest
 
 REPO = Path(__file__).resolve().parents[2]
 GOLDENS = Path(__file__).resolve().parent / "goldens"
-PROFILES = ("minimal", "core", "full", "v2")
+PROFILES = ("minimal", "core", "full", "compat_1x")
 MODES = ("text", "both")
 
 pytestmark = pytest.mark.unit
