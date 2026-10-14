@@ -364,6 +364,46 @@ def test_time_moves_the_playbar_and_captures_do_not(gui: GuiSession) -> None:
     assert client.ok("time")["frame"] == 12
 
 
+def test_viewport_cooks_between_calls_and_says_so_once(gui: GuiSession) -> None:
+    """G2 (a mode): the GUI viewport cooks displayed nodes between calls. ``time`` says
+    so with its first frame change and ``node_info`` with its first ``cook_state``, once
+    per session each."""
+    client = gui.client
+    _scene(client)
+    client.python("import hocuspocus.host.tools.session as s\ns._VIEWPORT_NOTED.clear()")
+    first = client.ok("time", {"frame": 3})
+    assert "Scene Viewer recooks" in first["notes"][0]
+    assert "notes" not in client.ok("time", {"frame": 4})
+    assert "notes" not in client.ok("time")  # a read changes no frame
+
+    client.ok(
+        "node_create",
+        {
+            "items": [
+                {
+                    "parent": "/obj/box_geo",
+                    "type": "sphere",
+                    "name": "uncooked",
+                    "cook": False,
+                    "flags": {"display": True},
+                }
+            ]
+        },
+    )
+
+    def cooked_by_viewport() -> bool:
+        info = client.ok("node_info", {"paths": ["/obj/box_geo/uncooked"]})
+        return info["nodes"][0]["cook_state"] == "cooked"
+
+    assert _wait_for(cooked_by_viewport), "the viewport never cooked the displayed node"
+    client.python(
+        "import hocuspocus.host.tools.session as s\ns._VIEWPORT_NOTED.discard('cook_state')"
+    )
+    noted = client.ok("node_info", {"paths": ["/obj/box_geo/uncooked"]})
+    assert "cook_state can read cooked" in noted["notes"][0]
+    assert "notes" not in client.ok("node_info", {"paths": ["/obj/box_geo/uncooked"]})
+
+
 SCRUB_DURING_COOK = """
 import hdefereval
 _scrub_tries = [0]
@@ -575,8 +615,9 @@ def test_selection_names_the_panes_it_moves(gui: GuiSession) -> None:
 
     client.python(PANES_TO_OBJ)
     edited = client.ok("edit", {"ops": [{"op": "select", "paths": ["/obj/box_geo/box1"]}]})
-    assert edited["selected"] == ["/obj/box_geo/box1"]
-    assert set(edited["context_changed"]) == moving
+    row = edited["results"][0]
+    assert row["selected"] == ["/obj/box_geo/box1"]
+    assert set(row["context_changed"]) == moving
     time.sleep(1.0)
     assert set(client.python(PANES).values()) == {"/obj/box_geo"}
     assert client.python("[n.path() for n in hou.selectedNodes()]") == ["/obj/box_geo/box1"]

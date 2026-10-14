@@ -210,6 +210,40 @@ def memory_block() -> dict[str, Any] | None:
 
 UNTITLED_NOTE = "$HIP is the launch directory until you hip_save."
 
+VIEWPORT_NOTES = {
+    "time": (
+        "GUI session: the Scene Viewer recooks the displayed nodes at the new frame on "
+        "Houdini's next idle tick, outside this call (a time-dependent display network, such "
+        "as a simulation, steps there); headless nothing cooks until asked. Said once per "
+        "session."
+    ),
+    "cook_state": (
+        "GUI session: the Scene Viewer cooks displayed nodes on its own between calls, so "
+        "cook_state can read cooked (with their errors) although no call cooked them; "
+        "headless a node stays not_cooked until a call cooks it. Said once per session."
+    ),
+}
+"""The GUI viewport cooks between calls (docs/parity.md G2, a mode): said once per
+session, by ``time`` (a frame change) and ``node_info``/``inspect`` (``cook_state``)."""
+
+_VIEWPORT_NOTED: set[str] = set()
+
+
+def viewport_note(ctx: HostContext, kind: str) -> str | None:
+    """:data:`VIEWPORT_NOTES` ``[kind]`` the first time it applies in this session, in a
+    GUI Houdini only (``hou.isUIAvailable()``); else None. Main thread."""
+    if not ctx.ui or kind in _VIEWPORT_NOTED:
+        return None
+    import hou
+
+    try:
+        if not hou.isUIAvailable():
+            return None
+    except Exception:
+        return None
+    _VIEWPORT_NOTED.add(kind)
+    return VIEWPORT_NOTES[kind]
+
 
 def session_info(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     import hou

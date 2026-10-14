@@ -210,6 +210,18 @@ def test_time_frame_drives_expressions(client):
     assert value["parms"][0]["value"] == pytest.approx(2.4)
 
 
+def test_headless_viewport_never_cooks_and_never_notes(client):
+    """G2 (a mode): only a GUI viewport cooks between calls, and only a GUI session
+    gets the once-per-session notes; headless a node made without cooking stays
+    not_cooked."""
+    assert "notes" not in client.ok("time", {"frame": 9})
+    box = _geo().createNode("box")
+    box.setDisplayFlag(True)
+    info = client.ok("node_info", {"paths": [box.path()]})
+    assert info["nodes"][0]["cook_state"] == "not_cooked"
+    assert "notes" not in info
+
+
 def test_cook_frame_range_puts_the_playbar_back(client):
     """G4: headless nobody can move the playbar during the job, so it always goes back
     to the frame it was on, without a note (the GUI notes either way)."""

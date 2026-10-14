@@ -27,7 +27,7 @@ from hocuspocus.tools.errors import ToolError
 from ..undo import LABEL_PREFIX, hou_undo_group, make_label
 from ._common import bad_arg, get_node, hou_exception_text, hou_message, number, refuse_if_read_only
 from .registry import HostContext, tool
-from .session import scene_dirty, time_block
+from .session import scene_dirty, time_block, viewport_note
 
 HISTORY_LIMIT = 20
 
@@ -207,7 +207,11 @@ def time_(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
         hou.setFrame(frame)
     if changes_settings:
         ctx.scene.mark_dirty()
-    return time_block()
+    out = time_block()
+    note = viewport_note(ctx, "time") if frame is not None else None
+    if note:
+        out["notes"] = [note]
+    return out
 
 
 # -- selection --------------------------------------------------------------------------
