@@ -307,12 +307,14 @@ def test_cook_frame_range_bbox_summary(client):
         hou.setFrame(1)
     assert result["ok"] is True
     assert result["frame_range"] == [1, 24, 1]
+    # 24 runs (every frame differs): at most 12 rows, the first six and the last six.
     frames = result["frames"]
-    assert [row["frame"] for row in frames] == list(range(1, 25))
+    assert [row["frame"] for row in frames] == [*range(1, 7), *range(19, 25)]
+    assert result["frames_truncated"] is True and result["frames_rows"] == 24
     assert all(row["point_count"] == 200 for row in frames)
     widths = [row["bbox_max"][0] - row["bbox_min"][0] for row in frames]
     assert widths[-1] > widths[0] + 4, widths
-    assert len({round(w, 3) for w in widths}) > 20
+    assert len({round(w, 3) for w in widths}) > 10
     assert result["results"][0]["path"] == scatter.path()
 
     # An object reads its display SOP; step thins the frames; summary none drops them.
@@ -320,7 +322,8 @@ def test_cook_frame_range_bbox_summary(client):
         "cook", {"paths": [geo.path()], "frame_range": [1, 24, 6], "summary": "bbox"}
     )
     assert [row["frame"] for row in by_obj["frames"]] == [1, 7, 13, 19]
-    assert by_obj["frames"][1]["bbox_max"] == frames[6]["bbox_max"]
+    assert "frames_truncated" not in by_obj
+    assert by_obj["frames"][3]["bbox_max"] == frames[6]["bbox_max"]  # frame 19
     plain = client.ok("cook", {"paths": [scatter.path()], "frame_range": [1, 4]})
     assert "frames" not in plain and plain["frames_cooked"] == 4
 
@@ -360,7 +363,8 @@ def test_cook_frame_range_as_a_job_reports_frame_progress(client):
     assert status["progress"] == 1.0 and status["current"] == 24 and status["total"] == 24
     assert any("frames done, cooking frame" in m for m in messages), messages
     final = client.ok("job", {"action": "result", "job_id": job_id})["result"]
-    assert len(final["frames"]) == 24
+    # The job's result (what a pushed-progress completion returns) is capped the same way.
+    assert len(final["frames"]) == 12 and final["frames_rows"] == 24
     assert final["frames"][0]["bbox_min"] != final["frames"][-1]["bbox_min"]
     assert hou.frame() == 1
 

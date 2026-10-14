@@ -497,6 +497,26 @@ def collapse_frames(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return out
 
 
+MAX_FRAME_ROWS = 12
+"""``summary: bbox`` rows a ``frame_range`` result carries at most (spec-2.0 §7 M4)."""
+
+
+def frame_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """``{frames}`` for a result: :func:`collapse_frames`, and past :data:`MAX_FRAME_ROWS`
+    runs only the first and last six with ``frames_truncated: true`` and ``frames_rows``,
+    the number of runs (review 22 soak: 24 bbox rows were 3 KB of a 24-frame cook). The
+    same rows go into a job's result, so a pushed-progress completion carries no more."""
+    runs = collapse_frames(rows)
+    if len(runs) <= MAX_FRAME_ROWS:
+        return {"frames": runs}
+    half = MAX_FRAME_ROWS // 2
+    return {
+        "frames": runs[:half] + runs[-half:],
+        "frames_truncated": True,
+        "frames_rows": len(runs),
+    }
+
+
 def _merge_frame_report(
     merged: dict[str, dict[str, Any]], report: dict[str, Any], frame: float
 ) -> None:
@@ -811,7 +831,7 @@ def _ranged(
 
         partial: dict[str, Any] = {"frames_cooked": cooked, "results": list(merged.values())}
         if summary == "bbox":
-            partial["frames"] = collapse_frames(frame_rows)
+            partial.update(frame_summary(frame_rows))
         raise cancelled_with_partial(job, partial, f"{cooked} of {total} frames") from exc
     finally:
         playbar_note = _finish_playhead(ctx, playhead)
@@ -823,7 +843,7 @@ def _ranged(
         "total_ms": round((time.perf_counter() - started) * 1000, 1),
     }
     if summary == "bbox":
-        extra["frames"] = collapse_frames(frame_rows)
+        extra.update(frame_summary(frame_rows))
     if playbar_note:
         extra["notes"] = [playbar_note]
     return [merged[p] for p in paths], extra
