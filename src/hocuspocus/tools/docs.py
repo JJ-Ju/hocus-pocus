@@ -29,7 +29,7 @@ from collections.abc import Iterable, Sequence
 from pathlib import Path
 from typing import Any
 
-from hocuspocus.tools.catalog import TOOLS, ToolSpec, profile_of
+from hocuspocus.tools.catalog import TOOLS, ToolSpec, get, profile_of, v2_spec
 
 __all__ = [
     "SchemaError",
@@ -337,6 +337,19 @@ def _badges(spec: ToolSpec) -> str:
     return " ".join(f"`{badge}`" for badge in badges)
 
 
+V2_MARK = "*(v2 profile)*"
+"""Marks an argument or result key that only the ``v2`` profile lists (``v2_extra``)."""
+
+
+def _v2_names(spec: ToolSpec, part: str) -> set[str]:
+    """Top-level names ``spec.v2_extra[part]`` adds to the 1.x spec of that name (not the
+    ones it only changes, such as ``houdini_status``'s ``profile`` enum)."""
+    added = set(((spec.v2_extra or {}).get(part) or {}).get("properties") or {})
+    base = get(spec.name) or spec
+    schema = base.input_schema if part == "input" else (base.output_schema or {})
+    return added - set(schema.get("properties") or {})
+
+
 def render_tools_markdown(tools: Sequence[ToolSpec]) -> str:
     """Render the full ``docs/tools.md`` text (LF line endings, trailing newline)."""
     minimal = sum(1 for spec in tools if profile_of(spec) == "minimal")
@@ -375,7 +388,13 @@ def render_tools_markdown(tools: Sequence[ToolSpec]) -> str:
         ]
         if spec.notes:
             out += [f"**Notes.** {spec.notes}", ""]
-        rows = _argument_rows(spec.input_schema)
+        # A 1.x tool's v2_extra arguments (spec-2.0 §7 M2) are listed, marked as v2 only.
+        full_spec = v2_spec(spec)
+        v2_args = {f"`{name}`" for name in _v2_names(spec, "input")}
+        rows = [
+            (*row[:4], f"{row[4]} {V2_MARK}".strip()) if row[0] in v2_args else row
+            for row in _argument_rows(full_spec.input_schema)
+        ]
         out += ["### Arguments", ""]
         if rows:
             out += ["| Name | Type | Required | Default | Description |", "|---|---|---|---|---|"]
@@ -383,9 +402,13 @@ def render_tools_markdown(tools: Sequence[ToolSpec]) -> str:
         else:
             out.append("None.")
         out.append("")
-        if spec.output_schema:
+        if full_spec.output_schema:
+            v2_keys = _v2_names(spec, "output")
             out += ["### Returns", ""]
-            out += _returns_lines(spec.output_schema)
+            out += [
+                f"{line} {V2_MARK}" if line.split("`")[1] in v2_keys else line
+                for line in _returns_lines(full_spec.output_schema)
+            ]
             out.append("")
         if spec.examples:
             out += ["### Examples", ""]

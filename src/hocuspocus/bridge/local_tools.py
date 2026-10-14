@@ -13,7 +13,9 @@ from typing import TYPE_CHECKING, Any
 from ..tools.errors import ToolError
 from ..version import __version__
 from . import instances as registry
+from . import routing
 from .client import OFFLINE_HINT
+from .ledger import ROLES
 
 if TYPE_CHECKING:
     from .server import Bridge
@@ -59,6 +61,8 @@ def connected_block(bridge: Bridge, inst: registry.Instance) -> dict[str, Any]:
     }
     if inst.name:
         block["name"] = inst.name
+    if bridge.v2:
+        block["role"] = bridge.role_of(inst)
     if inst.hip:
         block["hip"] = {"path": inst.hip}
     host_version = health.get("host_version") or health.get("version")
@@ -148,6 +152,12 @@ def houdini_status(bridge: Bridge, args: dict[str, Any]) -> dict[str, Any]:
     for key in ("read_only", "allow_python"):
         if isinstance(settings.get(key), bool):
             status[key] = settings[key]
+    if bridge.v2:
+        # spec-2.0 §2.1: Houdinis the ledger remembers that are no longer running.
+        live_pids = {inst.pid for inst in live}
+        recent = [row for row in bridge.ledger.recent() if row["pid"] not in live_pids]
+        if recent:
+            status["recent"] = recent
     if not live:
         warnings.append(
             "No Houdini with HocusPocus is running; houdini_connect {launch: {mode}} starts one."
@@ -161,6 +171,8 @@ def _row(bridge: Bridge, inst: registry.Instance, selected: bool) -> dict[str, A
     """One ``instances[]`` row: the registry entry, ``selected``, and from ``/health`` the
     host's ``busy`` flag and ``jobs_running`` (review 19 papercut 4)."""
     row = dict(inst.public(), selected=selected)
+    if bridge.v2:
+        row["role"] = bridge.role_of(inst)
     try:
         health = bridge.client_for(inst).health(timeout_s=ROW_HEALTH_TIMEOUT_S)
     except ToolError as exc:
@@ -197,10 +209,39 @@ def _apply_name(
         if other.pid != inst.pid and other.name and other.name == name:
             registry.set_name(other, "")
     registry.set_name(inst, name)
+    bridge.ledger.set_name(inst.pid, name)
     return replace(inst, name=name)
 
 
+def _role(args: dict[str, Any]) -> str | None:
+    """``role`` (v2), checked: ``editor`` or ``worker``."""
+    role = args.get("role")
+    if role is None:
+        return None
+    if role not in ROLES:
+        raise ToolError(
+            "invalid_argument",
+            f"role must be one of {', '.join(ROLES)}, not {role!r}.",
+            hint="houdini_connect {pid, role: 'worker'} sets a role; {role: 'worker'} pins the "
+            "least busy worker",
+        )
+    return str(role)
+
+
+def _apply_role(bridge: Bridge, inst: registry.Instance, role: str | None) -> None:
+    if role is not None:
+        bridge.ledger.set_role(inst.pid, role)
+
+
 def houdini_connect(bridge: Bridge, args: dict[str, Any]) -> dict[str, Any]:
+    role = _role(args)
+    if role is not None and (args.get("quit") or args.get("disconnect")):
+        raise ToolError(
+            "invalid_argument",
+            "role goes with pid, name or launch (to set that Houdini's role) or alone (to pin "
+            "the least busy Houdini with that role), not with quit or disconnect.",
+            hint="houdini_connect {pid, role: 'worker'}, then houdini_connect {role: 'worker'}",
+        )
     if args.get("name") is not None and args.get("pid") is None and args.get("launch") is None:
         if args.get("quit") or args.get("disconnect"):
             raise ToolError(
@@ -208,7 +249,9 @@ def houdini_connect(bridge: Bridge, args: dict[str, Any]) -> dict[str, Any]:
                 "name goes with pid (to name that Houdini) or alone (to select it by name).",
                 hint="houdini_connect {pid, name: 'worker'}, then houdini_connect {name: 'worker'}",
             )
-        return _connect_by_name(bridge, str(args["name"]))
+        return _connect_by_name(bridge, str(args["name"]), role)
+    if role is not None and args.get("pid") is None and args.get("launch") is None:
+        return _connect_by_role(bridge, role)
     modes = [k for k in ("pid", "launch", "disconnect") if args.get(k) not in (None, False)]
     if args.get("quit"):
         # quit takes an optional pid (the Houdini to quit); nothing else.
@@ -248,6 +291,7 @@ def houdini_connect(bridge: Bridge, args: dict[str, Any]) -> dict[str, Any]:
             float(launch.get("wait_s", 90)),
         )
         instance = _apply_name(bridge, result.instance, args.get("name"), bridge.scan())
+        _apply_role(bridge, instance, role)
         block = _connect_block(bridge, instance)
         bridge.pin(instance)
         bridge.last_target = instance
@@ -274,6 +318,7 @@ def houdini_connect(bridge: Bridge, args: dict[str, Any]) -> dict[str, Any]:
                 "pick a pid from the candidates, or launch one with houdini_connect {launch}",
             )
         match = _apply_name(bridge, match, args.get("name"), live)
+        _apply_role(bridge, match, role)
         block = _connect_block(bridge, match)
         bridge.pin(match)
         bridge.last_target = match
@@ -302,7 +347,22 @@ def houdini_connect(bridge: Bridge, args: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def _connect_by_name(bridge: Bridge, name: str) -> dict[str, Any]:
+def _connect_by_role(bridge: Bridge, role: str) -> dict[str, Any]:
+    """``houdini_connect {role}`` (v2): pin the least busy live instance with ``role``."""
+    live = bridge.scan()
+    matches = routing.with_role(live, role, bridge.role_of)
+    if not matches:
+        raise routing.no_role_error(role, live, bridge.role_of)
+    match = routing.order_by_load(matches, bridge.load_of)[0]
+    block = _connect_block(bridge, match)
+    bridge.pin(match)
+    bridge.last_target = match
+    bridge.detached = False
+    _split_settings(block)
+    return {"connected": block}
+
+
+def _connect_by_name(bridge: Bridge, name: str, role: str | None = None) -> dict[str, Any]:
     """``houdini_connect {name}``: pin the live instance named ``name``."""
     live = bridge.scan()
     match = next((inst for inst in live if inst.name and inst.name == name.strip()), None)
@@ -315,6 +375,7 @@ def _connect_by_name(bridge: Bridge, name: str) -> dict[str, Any]:
             candidates=[inst.candidate() for inst in ordered],
             retryable=False,
         )
+    _apply_role(bridge, match, role)
     block = _connect_block(bridge, match)
     bridge.pin(match)
     bridge.last_target = match
@@ -352,6 +413,7 @@ def _quit(bridge: Bridge, args: dict[str, Any]) -> dict[str, Any]:
         raise ToolError.from_dict(result)
     # Forget it now: the bridge must not report this Houdini as having "exited" later.
     registry.forget(inst)
+    bridge.ledger.mark_dead(inst.pid, hip=result.get("hip") or None)
     if bridge.preferred_pid == inst.pid:
         bridge.pin(None)
     if bridge.last_target is not None and bridge.last_target.pid == inst.pid:

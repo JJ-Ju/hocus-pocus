@@ -50,8 +50,10 @@ def test_houdini_status_names_v2_only_in_the_v2_listing() -> None:
         assert _status_profile_enum(for_profile(profile)) == ["minimal", "core", "full"]
     assert _status_profile_enum(TOOLS) == ["minimal", "core", "full"]
     assert _status_profile_enum(for_profile("v2")) == ["minimal", "core", "full", "v2"]
-    unpatched = [spec for spec in for_profile("v2") if spec.name != "houdini_status"]
-    assert all(spec is catalog.get(spec.name) for spec in unpatched)
+    # Only specs with a v2_extra overlay (spec-2.0 §7 M2) differ from the 1.x ones.
+    for spec in for_profile("v2"):
+        base = catalog.get(spec.name)
+        assert (spec is base) is (not base.v2_extra), spec.name
 
 
 def test_bridge_reads_v2_from_toml_and_env(tmp_path, monkeypatch) -> None:

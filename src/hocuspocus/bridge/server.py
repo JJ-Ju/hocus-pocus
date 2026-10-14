@@ -46,6 +46,8 @@ OUTLINE_ARGS = {"root": "/", "format": "outline", "depth": 2}
 """What ``houdini://outline`` reads (review 11 B11)."""
 MAX_STALE_ENTRIES = 5
 """How many stale registry entries one call may delete before giving up."""
+LOAD_HEALTH_TIMEOUT_S = 2.0
+"""``/health`` per candidate when a role picks the least busy instance."""
 PROGRESS_INTERVAL_S = 0.5
 """How often the bridge polls the host for job progress while a call with a
 ``progressToken`` is in flight (BIBLE §7)."""
@@ -335,6 +337,31 @@ class Bridge:
             else:
                 self._ledger.observe(live, reconcile=True)
         return self._ledger
+
+    @property
+    def v2(self) -> bool:
+        """Whether this bridge serves the ``v2`` profile (roles, ``on``, ledger job ids)."""
+        return self.config.profile == "v2"
+
+    def role_of(self, inst: registry.Instance) -> str:
+        """``inst``'s role: as ``houdini_connect {role}`` set it, else editor for a GUI
+        Houdini and worker for a headless one (spec-2.0 §3)."""
+        return self.ledger.role_of(inst.pid, inst.ui)
+
+    def load_of(self, inst: registry.Instance) -> tuple[int, bool] | None:
+        """``(jobs_running, busy)`` from ``inst``'s ``/health``; None when it fails."""
+        try:
+            health = self.client_for(inst).health(timeout_s=LOAD_HEALTH_TIMEOUT_S)
+        except ToolError:
+            return None
+        return int(health.get("jobs_running") or 0), bool(health.get("busy"))
+
+    def instance_meta(self, inst: registry.Instance) -> dict[str, Any]:
+        """``_meta.instance``; the v2 profile adds the instance's ``role``."""
+        meta = instance_meta(inst)
+        if self.v2:
+            meta["role"] = self.role_of(inst)
+        return meta
 
     def _note_live(self, live: list[registry.Instance]) -> None:
         """Remember the live instances (``job_not_found`` vs ``instance_lost``; ledger)."""
@@ -670,7 +697,7 @@ class Bridge:
                 self._inflight.pop(request_id, None)
             meta = dict(meta)
             meta.setdefault("pid", inst.pid)
-            meta["instance"] = instance_meta(inst)
+            meta["instance"] = self.instance_meta(inst)
             if ok:
                 self._remember_jobs(inst, payload)
                 if cursor is not None:

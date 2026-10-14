@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from ._helpers import PROFILES_1X, ToolSpec, _connected_block, _obj, _out, _t
+from ._helpers import PROFILES, PROFILES_1X, ROLES, ToolSpec, _connected_block, _obj, _out, _t
 
 SPEC = ToolSpec(
     name="houdini_status",
@@ -21,7 +21,12 @@ SPEC = ToolSpec(
         "refuse with ambiguous_instance: pin one with houdini_connect {pid}. When the pinned "
         "Houdini has exited, connected is null and lost: {pid, label} names it. "
         "connected.memory is {rss_mb, peak_mb}: the Houdini process's resident and peak "
-        "memory (watch it while a sim cache fills)."
+        "memory (watch it while a sim cache fills). "
+        "v2 profile (spec-2.0 §2.1): every instances[] row and connected carry role, editor "
+        "(the default for a GUI Houdini) or worker (headless), as houdini_connect {role} set "
+        "it; recent lists up to 5 Houdinis the bridge ledger remembers that are no longer "
+        "running, most recently seen first, each {pid, label, ui, role, hip (its last hip "
+        "file), started, last_seen, alive: false, name?}. The ledger survives a bridge restart."
     ),
     input_schema=_obj({}),
     output_schema=_out(
@@ -51,4 +56,15 @@ SPEC = ToolSpec(
     read_only=True,
     bridge_local=True,
     examples=({},),
+    v2_extra={
+        "output": {
+            "properties": {
+                "instances": {
+                    "items": {"properties": {"role": {"type": "string", "enum": list(ROLES)}}}
+                },
+                "profile": {"enum": list(PROFILES)},
+                "recent": {"type": "array", "items": {"type": "object"}},
+            }
+        }
+    },
 )

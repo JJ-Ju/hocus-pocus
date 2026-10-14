@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from ._helpers import ToolSpec, _b, _enum, _i, _n, _obj, _s
+from ._helpers import ROLES, ToolSpec, _b, _enum, _i, _n, _obj, _s
 
 SPEC = ToolSpec(
     name="houdini_connect",
@@ -24,7 +24,14 @@ SPEC = ToolSpec(
         "with unsaved changes on_unsaved fail (default) refuses with unsaved_changes, save "
         "saves first, discard drops them. It returns {quit, pid, exited, saved?} and forgets "
         "the registry entry. To keep one alive across sessions, start it with `hocuspocus "
-        "launch` and attach by pid."
+        "launch` and attach by pid. "
+        "v2 profile (spec-2.0 §2.1): role (editor or worker) sets the role of the Houdini "
+        "given by pid, name or launch (default: editor for a GUI Houdini, worker for a "
+        "headless one), kept in the bridge ledger across bridge restarts. {role} alone pins "
+        "the least busy live Houdini with that role (fewest jobs_running, then not busy, then"
+        " GUI first and newest first); none is houdini_offline with the candidates and their "
+        "roles. cook, render, job and look take on: pid, name or role to run one call on "
+        "another Houdini without moving the pin."
     ),
     input_schema=_obj(
         {
@@ -44,6 +51,7 @@ SPEC = ToolSpec(
         }
     ),
     bridge_local=True,
+    v2_extra={"input": {"properties": {"role": _enum(ROLES)}}},
     examples=(
         {"pid": 12345, "name": "worker"},
         {"launch": {"mode": "headless", "hip": "C:/work/shot.hip"}},

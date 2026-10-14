@@ -51,7 +51,7 @@
 
 Start here. Reports the connected Houdini (pid, version, GUI or headless, hip path and dirty state, $HIP/$JOB, frame, recent files, scene_generation), every live instance and the bridge settings. Works with no Houdini running (connected: null).
 
-**Notes.** Also reports $HIPNAME, fps, the frame range, and the bridge's profile, read_only and allow_python. An untitled scene's hip carries a note that $HIP is the launch directory until hip_save. Each instances[] row has pid, port, label, houdini, ui, hip, started, launched_by, name (when given), selected (the pinned instance, or the one reads go to), busy (the main thread has been held for over a second) and jobs_running. With several instances and none pinned, tools that change a scene refuse with ambiguous_instance: pin one with houdini_connect {pid}. When the pinned Houdini has exited, connected is null and lost: {pid, label} names it. connected.memory is {rss_mb, peak_mb}: the Houdini process's resident and peak memory (watch it while a sim cache fills).
+**Notes.** Also reports $HIPNAME, fps, the frame range, and the bridge's profile, read_only and allow_python. An untitled scene's hip carries a note that $HIP is the launch directory until hip_save. Each instances[] row has pid, port, label, houdini, ui, hip, started, launched_by, name (when given), selected (the pinned instance, or the one reads go to), busy (the main thread has been held for over a second) and jobs_running. With several instances and none pinned, tools that change a scene refuse with ambiguous_instance: pin one with houdini_connect {pid}. When the pinned Houdini has exited, connected is null and lost: {pid, label} names it. connected.memory is {rss_mb, peak_mb}: the Houdini process's resident and peak memory (watch it while a sim cache fills). v2 profile (spec-2.0 §2.1): every instances[] row and connected carry role, editor (the default for a GUI Houdini) or worker (headless), as houdini_connect {role} set it; recent lists up to 5 Houdinis the bridge ledger remembers that are no longer running, most recently seen first, each {pid, label, ui, role, hip (its last hip file), started, last_seen, alive: false, name?}. The ledger survives a bridge restart.
 
 ### Arguments
 
@@ -60,11 +60,12 @@ None.
 ### Returns
 
 - `connected` (object | null): `pid`, `port`, `label`, `houdini`, `ui`, `hip`, `time`, `env`, `scene_generation`, `host_version` — always present
-- `instances` (array<object>): `pid`, `label`, `houdini`, `ui`, `hip`, `started`, `launched_by` — always present
+- `instances` (array<object>): `pid`, `label`, `houdini`, `ui`, `hip`, `started`, `launched_by`, `role` — always present
 - `bridge_version` (string) — always present
-- `profile` (`minimal` | `core` | `full`)
+- `profile` (`minimal` | `core` | `full` | `v2`)
 - `read_only` (boolean)
 - `allow_python` (boolean)
+- `recent` (array<object>) *(v2 profile)*
 
 ### Examples
 
@@ -79,7 +80,7 @@ None.
 
 Choose the Houdini this session drives: pid attaches, launch starts one (gui or headless, optional hip), disconnect drops the selection, quit closes it. A launched Houdini usually closes with this server (launched.outlives_server says); `hocuspocus launch` starts one that outlives it.
 
-**Notes.** pid (or launch) pins that Houdini: the pin holds until the next houdini_connect, and if it exits every call returns instance_lost rather than switching. {} unpins (automatic selection). name labels the Houdini given by pid or launch, shown in houdini_status and in _meta.instance; {name} alone pins the Houdini with that name. A pid that is not running is houdini_offline with the live candidates. launch waits up to wait_s seconds for the new host to register. A launched Houdini starts in HOCUSPOCUS_WORK_DIR (default: the home directory), which is the untitled scene's $HIP and $JOB. quit closes the selected Houdini (or pid) through its host: with unsaved changes on_unsaved fail (default) refuses with unsaved_changes, save saves first, discard drops them. It returns {quit, pid, exited, saved?} and forgets the registry entry. To keep one alive across sessions, start it with `hocuspocus launch` and attach by pid.
+**Notes.** pid (or launch) pins that Houdini: the pin holds until the next houdini_connect, and if it exits every call returns instance_lost rather than switching. {} unpins (automatic selection). name labels the Houdini given by pid or launch, shown in houdini_status and in _meta.instance; {name} alone pins the Houdini with that name. A pid that is not running is houdini_offline with the live candidates. launch waits up to wait_s seconds for the new host to register. A launched Houdini starts in HOCUSPOCUS_WORK_DIR (default: the home directory), which is the untitled scene's $HIP and $JOB. quit closes the selected Houdini (or pid) through its host: with unsaved changes on_unsaved fail (default) refuses with unsaved_changes, save saves first, discard drops them. It returns {quit, pid, exited, saved?} and forgets the registry entry. To keep one alive across sessions, start it with `hocuspocus launch` and attach by pid. v2 profile (spec-2.0 §2.1): role (editor or worker) sets the role of the Houdini given by pid, name or launch (default: editor for a GUI Houdini, worker for a headless one), kept in the bridge ledger across bridge restarts. {role} alone pins the least busy live Houdini with that role (fewest jobs_running, then not busy, then GUI first and newest first); none is houdini_offline with the candidates and their roles. cook, render, job and look take on: pid, name or role to run one call on another Houdini without moving the pin.
 
 ### Arguments
 
@@ -94,6 +95,7 @@ Choose the Houdini this session drives: pid attaches, launch starts one (gui or 
 | `disconnect` | boolean |  | `false` |  |
 | `quit` | boolean |  | `false` |  |
 | `on_unsaved` | `fail` \| `save` \| `discard` |  |  |  |
+| `role` | `editor` \| `worker` |  |  | *(v2 profile)* |
 
 ### Examples
 

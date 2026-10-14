@@ -63,6 +63,13 @@ class ToolSpec:
     """True when the bridge answers this tool itself (``houdini_status``, ``houdini_connect``)."""
     examples: tuple[dict[str, Any], ...] = field(default_factory=tuple)
     """Example argument objects; rendered into docs/tools.md and validated by a unit test."""
+    v2_extra: dict[str, Any] = field(default_factory=dict)
+    """What the ``v2`` profile adds to a 1.x tool (spec-2.0 §7 M2): ``{"input": overlay,
+    "output": overlay}``, each a partial schema deep-merged into ``input_schema`` /
+    ``output_schema`` (dicts merge key by key, anything else replaces) by
+    ``catalog.for_profile("v2")``. The 1.x profiles list the spec without it, so their
+    ``tools/list`` bytes stay those of 1.4; the argument's detail goes in ``notes``, marked
+    as v2. A 2.0 tool (``profile="v2"``) never needs one."""
 
     def annotations(self) -> dict[str, Any]:
         """MCP ToolAnnotations as a plain dict."""
@@ -267,6 +274,20 @@ def _image() -> dict[str, Any]:
 
 
 _JOB_STATES = ["running", "done", "failed", "cancelled"]
+
+ROLES: tuple[str, ...] = ("editor", "worker")
+"""Instance roles (spec-2.0 §2.1, §3): ``editor`` by default for a GUI Houdini, ``worker``
+for a headless one; ``houdini_connect {role}`` changes it."""
+
+
+def _on() -> dict[str, Any]:
+    """``on`` (v2): the instance a ``cook``/``render``/``job``/``look`` call runs on."""
+    return {"type": ["integer", "string"], "description": "Instance to run on: pid, name or role."}
+
+
+def _v2_on() -> dict[str, Any]:
+    """The ``v2_extra`` of a tool that accepts ``on``."""
+    return {"input": {"properties": {"on": _on()}}}
 
 
 def _connected_block() -> dict[str, Any]:
