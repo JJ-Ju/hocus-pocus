@@ -524,3 +524,25 @@ def test_repeated_child_events_are_dropped():
         ("ChildDeleted", "/stage/a"),
         ("ChildCreated", "/stage/a"),
     ]
+
+
+def test_events_pages_end_at_the_response_budget_and_skip_nothing(client):
+    """Review 22 finding 1: a page cut by the byte budget resumes at the next event."""
+    since = _since()
+    for i in range(60):
+        ev.LOG.record("ParmTupleChanged", f"/obj/budget_geo{i}", {"parm": "t"}, origin="agent")
+    seen: list[int] = []
+    cursor = since
+    for _ in range(60):
+        body = {
+            "tool": "events",
+            "args": {"since": cursor, "limit": 1000},
+            "max_response_bytes": 2048,
+        }
+        page = client.request("POST", "/hp/v1/call", body).body["result"]
+        seen += [e["seq"] for e in page["events"]]
+        if not page.get("more"):
+            break
+        assert page["next_since"] == page["events"][-1]["seq"]
+        cursor = page["next_since"]
+    assert seen == list(range(since + 1, since + 61))

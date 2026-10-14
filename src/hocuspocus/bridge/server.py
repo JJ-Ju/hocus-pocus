@@ -727,7 +727,8 @@ class Bridge:
         # 50.0 validates as an integer; the host checks isinstance(..., int) (review 10).
         args = coerce_integers(args, spec.input_schema)
         ok, payload, meta = self.invoke(name, args, request_id)
-        pageable = "cursor" in (spec.input_schema.get("properties") or {})
+        props = spec.input_schema.get("properties") or {}
+        pageable = "cursor" in props or "since" in props  # events pages by since
         return self.shape(ok, payload, meta, args=args, pageable=pageable, tool=name)
 
     def shape(
@@ -746,7 +747,7 @@ class Bridge:
             return make_result(mode, tool, payload, is_error=True, meta=meta)
         result, images = budget.extract_images(payload)
         result, cuts = budget.apply_budget(
-            result, self.config.max_response_bytes, args, pageable=pageable
+            result, self.config.max_response_bytes, args, pageable=pageable, tool=tool
         )
         if cuts:
             meta[budget.TRUNCATION_META_KEY] = cuts

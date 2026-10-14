@@ -395,9 +395,12 @@ as it was started from a neutral directory).
   `cursor`; results carry `next_cursor` when more exist and `total` when cheap. A budget
   cut never loses rows: the bridge sends `max_response_bytes` in the `/hp/v1/call`
   envelope, list tools end a page at that budget with `next_cursor` at the first row not
-  returned, and the bridge trims a still-oversized page only when its cursor is an integer
-  offset (rewriting `next_cursor` to offset + rows kept), else returns it whole with
-  `over_budget: true`.
+  returned, and the bridge trims a still-oversized page only when it can rewrite the cursor
+  to resume after the last row kept: an integer offset (`next_cursor` = offset + rows kept),
+  `node_find`'s `after:<path>`, `network_describe`'s `after:<name>`, or `events`'
+  `next_since` (`<pid>:<seq>` of the last kept event, with `more: true`; 1.4, review 22
+  finding 1: the host's cursor skipped every event the cut dropped). Any other page is
+  returned whole with `over_budget: true`. `events` also ends its pages at the budget.
 - **Profiles** (1.3): `minimal ⊂ core ⊂ full`, set by `profile` (§3.7); the bridge lists
   and the host allows only the profile's tools. `minimal`, for clients with a small
   context, is `houdini_status`, `houdini_connect`, `hip_open`, `hip_save`, `node_find`,
@@ -520,7 +523,7 @@ core tools (§4.1).
 - `houdini://nodetype/{category}/{name}`
 - `houdini://job/{id}` (routed to the Houdini in the job id, §7)
 - `hocuspocus://guide` — the operating manual: the instructions below, the resources and
-  recipes (two Houdinis, Copernicus, spare parms); at most 8 KB, a unit test enforces it
+  recipes (two Houdinis, Copernicus, Flipbook frames (1.4), spare parms); at most 8 KB, a unit test enforces it
   (1.3, review 19 papercut 10: with the tool reference appended it was 52 KB)
 - `hocuspocus://tools` — the tool reference rendered from the catalogue for the bridge's
   profile (the text of `docs/tools.md`, every tool's `notes` and examples; 1.3)
@@ -564,7 +567,9 @@ capture takes `frame`).
 > ends, keep one session open for long jobs, or attach by pid to one started with
 > `hocuspocus launch`. `viewport_capture` frames per `fit` on both paths and restores the
 > user's view afterwards; without `fit` or `camera` the GUI viewer is captured as it is.
-> `lop_path` captures a stage. `node_type_info` is large for FX types: pass `parms` globs, or `detail:
+> `lop_path` captures a stage. For a flipbook of many frames, `render` a Flipbook ROP
+> (`Driver/flipbook`, recipe in the guide); Houdini 22 deprecates the OpenGL ROP.
+> `node_type_info` is large for FX types: pass `parms` globs, or `detail:
 > "folders"` first. Add spare parms with `node_edit` `spare_parms` (recipe in
 > `hocuspocus://guide`). The resource `houdini://outline` is the whole scene as a
 > compact tree; `hocuspocus://tools` is the full tool reference.

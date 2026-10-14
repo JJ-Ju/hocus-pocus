@@ -49,7 +49,7 @@ from collections import deque
 from collections.abc import Callable, Iterator
 from typing import Any
 
-from ._common import int_arg
+from ._common import ROW_ENVELOPE_BYTES, compact_size, int_arg, response_budget
 from .registry import HostContext, tool
 
 log = logging.getLogger("hocuspocus.host.events")
@@ -272,7 +272,10 @@ class EventLog:
 
     # -- reading ------------------------------------------------------------------
 
-    def read(self, since: int, limit: int) -> dict[str, Any]:
+    def read(self, since: int, limit: int, budget: int | None = None) -> dict[str, Any]:
+        """Events after ``since``: at most ``limit`` and, with ``budget``, at most that many
+        bytes (at least one event). ``next_since`` is the seq of the last event returned,
+        so a page cut by either never skips an event (review 22 finding 1)."""
         with self._lock:
             events = list(self._buf)
             last = self._seq
@@ -287,10 +290,17 @@ class EventLog:
         oldest = snapshot[0]["seq"] if snapshot else last + 1
         newer = [e for e in snapshot if e["seq"] > since]
         chunk = newer[:limit]
+        if budget is not None:
+            used = ROW_ENVELOPE_BYTES
+            for kept, event in enumerate(chunk):
+                used += compact_size(event) + 1
+                if kept and used > budget:
+                    chunk = chunk[:kept]
+                    break
         out["events"] = chunk
         out["next_since"] = chunk[-1]["seq"] if chunk else max(since, last)
         out["dropped"] = max(0, oldest - since - 1)
-        if len(newer) > limit:
+        if len(newer) > len(chunk):
             out["more"] = True
         return out
 
@@ -806,4 +816,4 @@ def record_pdg(path: str, event: str, **detail: Any) -> None:
 def events(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     since = int_arg(args, "since", 0, 0)
     limit = int_arg(args, "limit", DEFAULT_LIMIT, 1, 1000)
-    return LOG.read(since, limit)
+    return LOG.read(since, limit, response_budget(ctx))
