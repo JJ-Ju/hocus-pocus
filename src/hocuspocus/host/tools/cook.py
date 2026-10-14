@@ -527,6 +527,79 @@ def _restore_frame(ctx: HostContext, previous: float) -> None:
     run_with_fallback(ctx.executor, lambda: hou.setFrame(previous), 60.0)
 
 
+FRAME_EPS = 1e-6
+
+
+class Playhead:
+    """The playbar around a ranged cook (docs/parity.md G4). No ``hou``: the caller reads
+    and sets the frame on the main thread.
+
+    In a GUI session every frame of ``cook {frame_range}`` is a visible ``setFrame``
+    between idle ticks, and the user may scrub in between. The cook needs its frames, so
+    a step still sets its own; but at the end the playbar goes back to the start frame
+    only when nobody moved it during the job. When the user moved it, it stays where the
+    user put it last (a scrub before the last step is put back after it)."""
+
+    def __init__(self, start: float) -> None:
+        self.start = start
+        self.last: float | None = None
+        """The frame the last step set."""
+        self.user: float | None = None
+        """The frame the user moved the playbar to during the job, if they did."""
+
+    def before_step(self, now: float) -> None:
+        if self.last is not None and abs(now - self.last) > FRAME_EPS:
+            self.user = now
+
+    def stepped(self, frame: float) -> None:
+        self.last = frame
+
+    def finish(self, now: float) -> tuple[str, float]:
+        """``(action, frame)``: ``restore`` (set ``frame``, the start), ``user`` (set
+        ``frame``, where the user moved it before the last step) or ``moved`` (leave it:
+        the user moved it after the last step)."""
+        self.before_step(now)
+        if self.user is None:
+            return "restore", self.start
+        if abs(now - self.user) <= FRAME_EPS:
+            return "moved", now
+        return "user", self.user
+
+    def note(self, action: str, frame: float, ui: bool) -> str | None:
+        if action == "restore":
+            if not ui:
+                return None
+            return (
+                "The GUI playbar stepped through the cooked frames and was put back to frame "
+                f"{_num(frame)}."
+            )
+        return (
+            f"The playbar was moved to frame {_num(frame)} during the cook, so it was left "
+            f"there rather than put back to frame {_num(self.start)}."
+        )
+
+
+def _finish_playhead(ctx: HostContext, playhead: Playhead) -> str | None:
+    """Put the playbar where :class:`Playhead` says, even after a cancel; the note to
+    add, if any. Never raises."""
+    import hou
+
+    from .visual import run_with_fallback
+
+    outcome: dict[str, Any] = {}
+
+    def finish() -> None:
+        action, frame = playhead.finish(hou.frame())
+        if action != "moved":
+            hou.setFrame(frame)
+        outcome.update(action=action, frame=frame)
+
+    failed = run_with_fallback(ctx.executor, finish, 60.0)
+    if failed or not outcome:
+        return None
+    return playhead.note(outcome["action"], outcome["frame"], bool(ctx.ui))
+
+
 class _Inline:
     """Stands in for a job when ``cook`` runs on the main thread itself (GUI shell, tests)."""
 
@@ -705,21 +778,27 @@ def _ranged(
     """Cook every frame as its own main-thread step (a sim advances one frame per step)."""
     import hou
 
-    previous = job.run_main(hou.frame, timeout_s)
+    playhead = Playhead(job.run_main(hou.frame, timeout_s))
     total = len(frames)
     frame_rows: list[dict[str, Any]] = []
     merged: dict[str, dict[str, Any]] = {}
     started = time.perf_counter()
     cooked = 0
+    playbar_note: str | None = None
+
+    def step(frame: float) -> Any:
+        playhead.before_step(hou.frame())
+        out = _frame_step(paths, frame, force, summary)
+        playhead.stepped(frame)
+        return out
+
     try:
         for index, value in enumerate(frames):
             # The count is current, the frames finished (review 20 N7).
             job.set_progress(
                 index, total, f"{index}/{total} frames done, cooking frame {_num(value)}"
             )
-            reports, rows = job.run_main(
-                lambda f=value: _frame_step(paths, f, force, summary), JOB_STEP_TIMEOUT_S
-            )
+            reports, rows = job.run_main(lambda f=value: step(f), JOB_STEP_TIMEOUT_S)
             cooked += 1
             frame_rows.extend(rows)
             for report in reports:
@@ -735,16 +814,18 @@ def _ranged(
             partial["frames"] = collapse_frames(frame_rows)
         raise cancelled_with_partial(job, partial, f"{cooked} of {total} frames") from exc
     finally:
-        _restore_frame(ctx, previous)
+        playbar_note = _finish_playhead(ctx, playhead)
     job.set_progress(total, total, "done")
-    step = frames[1] - frames[0] if total > 1 else 1.0
+    increment = frames[1] - frames[0] if total > 1 else 1.0
     extra: dict[str, Any] = {
-        "frame_range": [_num(frames[0]), _num(frames[-1]), _num(step)],
+        "frame_range": [_num(frames[0]), _num(frames[-1]), _num(increment)],
         "frames_cooked": total,
         "total_ms": round((time.perf_counter() - started) * 1000, 1),
     }
     if summary == "bbox":
         extra["frames"] = collapse_frames(frame_rows)
+    if playbar_note:
+        extra["notes"] = [playbar_note]
     return [merged[p] for p in paths], extra
 
 

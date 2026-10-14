@@ -210,6 +210,19 @@ def test_time_frame_drives_expressions(client):
     assert value["parms"][0]["value"] == pytest.approx(2.4)
 
 
+def test_cook_frame_range_puts_the_playbar_back(client):
+    """G4: headless nobody can move the playbar during the job, so it always goes back
+    to the frame it was on, without a note (the GUI notes either way)."""
+    box = _geo().createNode("box")
+    box.parm("tx").setExpression("$F*0.1")
+    client.ok("time", {"frame": 17})
+    result = client.ok("cook", {"paths": [box.path()], "frame_range": [1, 6], "wait_s": 60})
+    assert result["frames_cooked"] == 6
+    assert "notes" not in result
+    assert hou.frame() == 17
+    assert client.ok("time")["frame"] == 17
+
+
 def test_time_errors(client, host):
     assert client.error("time", {"range": [100, 1]})["code"] == "invalid_argument"
     assert client.error("time", {"range": [1]})["code"] == "invalid_argument"

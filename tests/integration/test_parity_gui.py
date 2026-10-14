@@ -363,6 +363,53 @@ def test_time_moves_the_playbar_and_captures_do_not(gui: GuiSession) -> None:
     assert client.ok("time")["frame"] == 12
 
 
+SCRUB_DURING_COOK = """
+import hdefereval
+_scrub_tries = [0]
+def _scrub():
+    _scrub_tries[0] += 1
+    if 3 <= hou.frame() <= 20:
+        hou.setFrame(200)
+    elif _scrub_tries[0] < 5000:
+        hdefereval.executeDeferredAfterWaiting(_scrub, 1)
+hdefereval.executeDeferred(_scrub)
+"""
+
+
+def test_cook_frame_range_leaves_a_scrubbed_playbar(gui: GuiSession) -> None:
+    """G4: ``cook {frame_range}`` steps the visible playbar; it goes back to the start
+    frame only when the user did not move it during the job, and says so either way."""
+    client = gui.client
+    _scene(client)
+    client.ok(
+        "node_create",
+        {
+            "items": [
+                {
+                    "parent": "/obj/box_geo",
+                    "type": "python",
+                    "name": "slow",
+                    "inputs": [{"index": 0, "from": "/obj/box_geo/box1"}],
+                    "parms": {"python": "import time\ntime.sleep(0.05)\n"},
+                }
+            ]
+        },
+    )
+    client.ok("time", {"frame": 50, "range": [1, 240]})
+    cook = {"paths": ["/obj/box_geo/slow"], "frame_range": [1, 30], "force": True, "wait_s": 60}
+
+    untouched = client.ok("cook", cook)
+    assert untouched["frames_cooked"] == 30
+    assert client.python("hou.frame()") == 50
+    assert any("put back to frame 50" in n for n in untouched["notes"]), untouched.get("notes")
+
+    client.python(SCRUB_DURING_COOK)  # the user drags the playbar to 200 mid-job
+    scrubbed = client.ok("cook", cook)
+    assert scrubbed["frames_cooked"] == 30
+    assert client.python("hou.frame()") == 200
+    assert any("moved to frame 200" in n for n in scrubbed["notes"]), scrubbed.get("notes")
+
+
 def test_undo_history_interleaves_agent_and_user_steps(gui: GuiSession) -> None:
     client = gui.client
     _scene(client)
