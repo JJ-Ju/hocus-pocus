@@ -214,12 +214,9 @@ def finish_capture(
     frame: float,
     info: dict[str, Any],
     extra_path: Any,
-    *,
-    extra_key: str = "also_written",
 ) -> dict[str, Any]:
     """Flatten the capture onto the inline image's grey, encode it and copy it to
-    ``extra_path``, reported under ``extra_key`` (``viewport_capture``'s
-    ``also_written``, ``look``'s ``output``). No ``hou``."""
+    ``extra_path`` (``look``'s ``output``), reported as ``output``. No ``hou``."""
     flatten_png_in_place(out_file)
     image = encode_png(out_file, IMAGE_MAX_SIDE)
     result: dict[str, Any] = {
@@ -233,6 +230,6 @@ def finish_capture(
     }
     if extra_path is not None:
         write_copy(out_file, extra_path)
-        result[extra_key] = extra_path
+        result["output"] = extra_path
     prune_captures(Path(out_file).parent)
     return result

@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from ._helpers import PROFILES_2X, ROLES, ToolSpec, _connected_block, _obj, _out, _t
+from ._helpers import PROFILES, ROLES, ToolSpec, _connected_block, _obj, _out, _t
 
 SPEC = ToolSpec(
     name="houdini_status",
-    profiles=("minimal", "core", "full", "compat_1x"),
+    profiles=("minimal", "core", "full"),
     description=(
         "Start here. Reports the connected Houdini (pid, version, GUI or headless, hip path and"
         " dirty state, $HIP/$JOB, frame, recent files, scene_generation), every live instance "
@@ -23,8 +23,8 @@ SPEC = ToolSpec(
         "Houdini has exited, connected is null and lost: {pid, label} names it. "
         "connected.memory is {rss_mb, peak_mb}: the Houdini process's resident and peak "
         "memory (watch it while a sim cache fills). "
-        "profile is minimal, core or full; under compat_1x it reads full (the 1.4 "
-        "catalogue) with compat_1x: true. Not in compat_1x (spec-2.0 §2.1): every "
+        "profile is minimal, core or full; a removed profile name in the config (compat_1x, "
+        "v2) reads as full with a warning in warnings. (2.0, spec-2.0 §2.1) every "
         "instances[] row and connected carry role, editor "
         "(the default for a GUI Houdini) or worker (headless), as houdini_connect {role} set "
         "it; recent lists up to 5 Houdinis the bridge ledger remembers that are no longer "
@@ -40,7 +40,7 @@ SPEC = ToolSpec(
         "env.JOB when it is that folder too, env.HIPNAME, an empty env, and hip on the "
         "connected instance's row and on recent rows)."
     ),
-    input_schema=_obj({}),
+    input_schema=_obj({"detail": {"type": "boolean", "default": False}}),
     output_schema=_out(
         {
             "connected": {"anyOf": [_connected_block(), _t("null")]},
@@ -55,28 +55,19 @@ SPEC = ToolSpec(
                         "hip": _t("string"),
                         "started": _t("string"),
                         "launched_by": _t(["integer", "null"]),
+                        "role": {"type": "string", "enum": list(ROLES)},
                     }
                 ),
             },
             "bridge_version": _t("string"),
-            "profile": {"type": "string", "enum": list(PROFILES_2X)},
+            "profile": {"type": "string", "enum": list(PROFILES)},
             "read_only": _t("boolean"),
             "allow_python": _t("boolean"),
+            "recent": {"type": "array", "items": {"type": "object"}},
         },
         ("connected", "instances", "bridge_version"),
     ),
     read_only=True,
     bridge_local=True,
     examples=({},),
-    v2_extra={
-        "input": {"properties": {"detail": {"type": "boolean", "default": False}}},
-        "output": {
-            "properties": {
-                "instances": {
-                    "items": {"properties": {"role": {"type": "string", "enum": list(ROLES)}}}
-                },
-                "recent": {"type": "array", "items": {"type": "object"}},
-            }
-        },
-    },
 )

@@ -188,8 +188,8 @@ def test_search_errors_name_the_options(v2_client):
 
 
 def test_a_full_host_runs_search_and_refuses_the_1x_finders(client):
-    """spec-2.0 §8: node_find and node_type_search name their search kind."""
+    """2.1: node_find and node_type_search, removed 1.4 tools, name their search kind."""
     assert client.ok("search", {"kind": "types", "query": "box"})["results"]
-    error = client.error("node_type_search", {"query": "box"})
+    error = client.error("node_type_search", {"query": "box"}, wire=True)
     assert error["code"] == "invalid_argument" and "search kind: types" in error["hint"]
-    assert "search kind: nodes" in client.error("node_find", {})["hint"]
+    assert "search kind: nodes" in client.error("node_find", {}, wire=True)["hint"]

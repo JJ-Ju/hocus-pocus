@@ -1,9 +1,10 @@
-"""The 2.0 workloads tier: the five workloads of ``tests/workloads`` on the 2.0 tools.
+"""The workloads tier: the five evaluation workloads on the 2.0 tools.
 
-Same harness as the 1.4 tier (``tests/workloads/conftest.py``: one headless host, one
-persistent ``mcp`` session through the stdio bridge, the :class:`Recorder`), with its own
-host serving the 2.0 profile (:data:`PROFILE`), its own ``budgets.json`` (each total at most
-115 % of its budget) and ``last_run.json``.
+The harness is ``tests/workloads/conftest.py`` (one headless host, one persistent ``mcp``
+session through the stdio bridge, the :class:`Recorder`); here the host serves ``full``
+(:data:`PROFILE`), with this tier's ``budgets.json`` (each total at most 115 % of its
+budget) and ``last_run.json``. Until 2.1 the same five workloads also ran on the 1.4 tools
+under ``compat_1x``; 2.1 removed them with the profile and kept their budgets as numbers.
 
 Each workload uses only the 2.0 surface: ``edit`` (one transaction per logical step, ``$id``
 chains), ``inspect`` and ``search`` for reads, ``houdini://`` resources with
@@ -32,8 +33,8 @@ from typing import Any
 import pytest
 
 
-def _tier_1x() -> Any:
-    """The 1.4 tier's conftest, loaded under its own name (pytest imports every conftest as
+def _harness() -> Any:
+    """The harness conftest, loaded under its own name (pytest imports every conftest as
     ``conftest`` and drops the previous one from ``sys.modules``)."""
     path = Path(__file__).resolve().parents[1] / "conftest.py"
     spec = importlib.util.spec_from_file_location("hp_workloads_harness", path)
@@ -44,7 +45,7 @@ def _tier_1x() -> Any:
     return module
 
 
-harness = _tier_1x()
+harness = _harness()
 Recorder = harness.Recorder
 
 HERE = Path(__file__).resolve().parent
@@ -53,15 +54,7 @@ LAST_RUN = HERE / "last_run.json"
 BUDGETS_1X = harness.BUDGETS
 
 
-def _profile() -> str:
-    """``full`` once it lists the 2.0 tools (spec-2.0 M3), before that ``v2`` (M1-M2)."""
-    from hocuspocus.tools import catalog
-
-    names = {spec.name for spec in catalog.for_profile("full")}
-    return "full" if {"edit", "inspect", "search", "look"} <= names else "v2"
-
-
-PROFILE = _profile()
+PROFILE = "full"
 TOOLS_2X = frozenset(
     {
         "houdini_status", "houdini_connect", "hip_new", "hip_open", "hip_save", "hip_merge",
@@ -184,7 +177,7 @@ def per_tool_table(rec: Recorder) -> str:
     return "\n".join(lines)
 
 
-# -- fixtures (override the 1.4 tier's for tests under v2/) ---------------------------------
+# -- fixtures -------------------------------------------------------------------------------
 
 
 @pytest.fixture(scope="session")

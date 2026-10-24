@@ -11,15 +11,14 @@ tools cannot live with that and register with ``scene=False``, taking on whichev
 those duties apply themselves:
 
 * ``undo`` — ``hou.undos.performUndo``/``performRedo`` raise inside an undo group.
-* ``time``, ``selection``, ``hda`` — reads (``time`` with no arguments, ``hda list``)
+* ``time``, ``hda`` — reads (``time`` with no arguments, ``hda list``)
   must not open an undo group or dirty the scene; setting opens its own group and marks
   dirty.
 * ``cook``, ``pdg``, ``render``, ``job`` — a cook, PDG work items, rendered files and
   host-side jobs are not hip state; these also run off the main thread
   (``main_thread=False``) so they can wait on jobs and reach ``hou`` only through the
   executor.
-* ``viewport_capture``, ``look`` — a look leaves the scene as it was (its camera and ROP are
-  temporary), so it must not add an undo step or dirty the scene. It also runs off the
+* ``look`` — a look leaves the scene as it was (its camera and ROP are temporary), so it must not add an undo step or dirty the scene. It also runs off the
   main thread: headless, it snapshots the scene in one executor call and waits for the
   child hython without holding the main thread; the GUI path is one executor call.
 
@@ -31,7 +30,7 @@ read-only mode (refusing them afterwards if the marker is missing).
 The catalogue annotations describe what the agent sees, not the registration: these
 tools are ``readOnlyHint: false`` (they can change something), ``destructiveHint:
 false``, and ``idempotentHint: true`` when repeating the call is harmless (``time``,
-``selection``, ``cook``, ``job``). A unit test pins the ``scene=False`` set.
+``cook``, ``job``, ``look``). A unit test pins the ``scene=False`` set.
 """
 
 from __future__ import annotations

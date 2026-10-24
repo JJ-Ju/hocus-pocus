@@ -6,7 +6,7 @@ from ._helpers import ToolSpec, _arr, _b, _cursor, _enum, _limit, _n, _obj, _s
 
 SPEC = ToolSpec(
     name="pdg",
-    profiles=("full", "compat_1x"),
+    profiles=("full",),
     description=(
         "Drive a TOP node: cook its work items as a job (block waits up to timeout_s, capped at"
         " the job threshold), status, workitems (paged; failed items say why), cancel, dirty."

@@ -17,10 +17,7 @@ quality)
                         :data:`~.karma.FINAL_SAMPLES`
 ======================  ==========================================================
 
-A stage is never sent to the viewer. ``viewport_capture`` (:func:`capture_plan`) keeps its
-1.4 policy: ``source: viewer`` is the viewer; ``auto`` in a GUI session looks at ``/obj``
-through the viewer when there is no camera and a Scene Viewer is open; everything else is
-the viewport ROP chain (:func:`capture_chain`).
+A stage is never sent to the viewer.
 
 Running a chain: headless, :func:`run_capture_chain` moves on when a child render
 *crashes* and runs Karma only after a crash; in a GUI session a ROP that *writes no image*
@@ -39,7 +36,7 @@ from .base import ROP_LABELS, Env
 from .child import child_crashed
 
 CAPTURE_ROPS = ("flipbook", "opengl")
-"""The viewport ROP types viewport_capture tries, in order, before Karma (1.4)."""
+"""The viewport ROP types a draft or lit look tries, in order, before Karma."""
 QUALITIES = ("draft", "lit", "final")
 LIT_ROP_PARMS = {"lighting": 3}
 """The Flipbook ROP's Lighting menu at "High Quality Lighting with Shadows" (index 3): the
@@ -52,13 +49,6 @@ in this process: later stage captures with source auto skip that ROP (each crash
 seconds)."""
 
 
-def capture_chain(available: Any) -> list[str]:
-    """The renderers a ROP-source capture tries, in order: the Flipbook ROP, the OpenGL ROP
-    (each when this Houdini has the type) and Karma last. No ``hou``."""
-    have = set(available)
-    return [t for t in CAPTURE_ROPS if t in have] + ["karma"]
-
-
 def available_capture_rops() -> list[str]:
     """The :data:`CAPTURE_ROPS` this Houdini has (22.0 has both; older builds lack the
     Flipbook ROP). Main thread."""
@@ -69,8 +59,8 @@ def available_capture_rops() -> list[str]:
 
 
 def fallback_note(failures: list[tuple[str, str]], used: str) -> str | None:
-    """Why a capture used a later renderer of :func:`capture_chain`: one note naming each
-    ROP that did not render and why (``failures``: ``(rop type, reason)``)."""
+    """Why a capture used a later renderer of its chain: one note naming each ROP that
+    did not render and why (``failures``: ``(rop type, reason)``)."""
     if not failures:
         return None
     why = "; ".join(f"the {ROP_LABELS[t]} {reason}" for t, reason in failures)
@@ -218,30 +208,3 @@ def plan(spec: Any, env: Env) -> Plan:
             )
         return Plan(("karma",), samples=karma_mod.KARMA_SAMPLES)
     return Plan(chain, rop_parms=dict(LIT_ROP_PARMS) if spec.quality == "lit" else {})
-
-
-def capture_plan(spec: Any, env: Env) -> Plan:
-    """``viewport_capture``'s 1.4 chain: ``source`` ``viewer`` (checked here), ``auto``
-    through the viewer in a GUI session for ``/obj`` without a camera when a Scene Viewer
-    is open, else the viewport ROPs (:func:`capture_chain`; Karma only headless)."""
-    if spec.source == "viewer":
-        if spec.kind == "lop":
-            raise ToolError(
-                "invalid_argument",
-                "source 'viewer' captures the Scene Viewer as it is; a stage capture (a LOP "
-                "camera or lop_path) renders through a Flipbook ROP.",
-                hint="Use source 'flipbook_rop' or 'auto'.",
-            )
-        if not env.viewer:
-            raise ToolError(
-                "invalid_value",
-                "No Scene Viewer pane is open.",
-                hint="Open a Scene Viewer, or use source 'flipbook_rop'.",
-            )
-        return Plan(("viewer",))
-    # With a camera, auto renders through the ROP: fast in the GUI, and it leaves the
-    # user's view alone (review 15 papercut 1).
-    if spec.source == "auto" and env.viewer and spec.kind == "obj" and spec.camera is None:
-        return Plan(("viewer",))
-    chain = capture_chain(env.rops)
-    return Plan(tuple(t for t in chain if t != "karma") if env.ui else tuple(chain))

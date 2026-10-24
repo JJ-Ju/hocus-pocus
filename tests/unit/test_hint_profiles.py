@@ -9,8 +9,8 @@ Two checks:
   call. Every ``message``, ``hint`` and note is scanned for ``\\b[a-z_]+\\b`` candidates
   that are tool names; none may be outside the profile's listing (from the catalogue).
 * **Static.** No string literal in a hint or message of ``host/`` or ``bridge/`` names a
-  1.4 tool 2.0 removed: such a name only reaches a hint through
-  :func:`~hocuspocus.tools.migration.hint_tool`, which renders it for the profile.
+  1.4 tool 2.0 replaced (2.1 removed them): such a name only reaches a hint through
+  :func:`~hocuspocus.tools.migration.hint_tool`, which renders its 2.0 call.
 
 A snake_case candidate (``node_find``) always counts as naming a tool. A one-word tool name
 is also an English word (cook, look, render, search, time, undo, job, events, problems), so
@@ -37,8 +37,10 @@ from hocuspocus.tools.errors import ToolError
 
 pytestmark = pytest.mark.unit
 
-PROFILES = ("minimal", "core", "full", "compat_1x")
-TOOL_NAMES = frozenset(spec.name for spec in catalog.TOOLS)
+PROFILES = ("minimal", "core", "full")
+TOOL_NAMES = frozenset(spec.name for spec in catalog.TOOLS) | frozenset(migration.REPLACEMENTS)
+"""The tools a text can name: the catalogue's and the removed 1.4 ones (no profile serves
+those, so a text that names one fails the check)."""
 SRC = Path(__file__).resolve().parents[2] / "src" / "hocuspocus"
 
 
@@ -168,13 +170,12 @@ def _bridge_errors(profile: str) -> list[Any]:
     ]
     if profile != "minimal":
         calls.append(("job", {"action": "status", "job_id": "jzzzz"}))  # the ledger's form
-    if profile != "compat_1x":
-        calls += [
-            ("inspect", {"what": "node", "path": "/obj/geo1"}),
-            ("inspect", {"what": "node", "bogus_frame": 1}),
-            ("edit", {"op": "set", "path": "/obj/a/t", "value": 1}),
-            ("search", {"query": "box"}),
-        ]
+    calls += [
+        ("inspect", {"what": "node", "path": "/obj/geo1"}),
+        ("inspect", {"what": "node", "bogus_frame": 1}),
+        ("edit", {"op": "set", "path": "/obj/a/t", "value": 1}),
+        ("search", {"query": "box"}),
+    ]
     for name, args in calls:
         result = bridge.call_tool(name, args)
         assert result.is_error, (name, args)
@@ -191,9 +192,16 @@ def _payload(result: Any) -> dict[str, Any]:
 
 
 def _refusals(profile: str) -> list[tuple[str, Any]]:
-    if profile == "compat_1x":
-        return []
-    return [(tool, migration.removed_error(tool, profile)) for tool in migration.REPLACEMENTS]
+    """Every removed 1.4 tool's refusal, as the host builds it and as the bridge answers it."""
+    from hocuspocus.bridge.config import BridgeConfig
+    from hocuspocus.bridge.server import Bridge
+
+    bridge = Bridge(BridgeConfig(profile=profile), scan=lambda: [])
+    out: list[tuple[str, Any]] = []
+    for tool in migration.REPLACEMENTS:
+        out.append((tool, migration.removed_error(tool, profile)))
+        out.append((tool, _payload(bridge.call_tool(tool, {}))))
+    return out
 
 
 @pytest.fixture
@@ -242,30 +250,26 @@ def test_hints_name_the_2x_call_on_2x_profiles(scene) -> None:
             'edit {ops: [{op: "set", path, expression}]}'
             in __import__("hocuspocus.host.tools.parms", fromlist=["x"]).expression_hint()
         )
-    with migration.using_profile("compat_1x"):
-        assert 'node_type_search {query: "mountian"}' in first(EDIT_MISTAKES[0]).hint
-        assert 'node_find {root: "/obj/geo1"}' in first(EDIT_MISTAKES[4]).hint
 
 
 def test_hint_tool_renders_each_profile() -> None:
     h = migration.hint_tool
     assert h("node_find", "core", root="/obj") == 'search {kind: "nodes", root: "/obj"}'
-    assert h("node_find", "compat_1x", root="/obj") == 'node_find {root: "/obj"}'
     assert h("node_info", "full", paths=["/obj/a"]) == 'inspect {what: "node", target: "/obj/a"}'
     assert h("viewport_capture", "minimal") == "look {}"
     assert h("problems", "core") == 'inspect {what: "problems"}'
-    assert h("problems", "compat_1x") == "problems"
     assert h("parm_set", "core", path=migration.BARE) == 'edit {ops: [{op: "set", path}]}'
-    assert h("parm_set", "compat_1x", path=migration.BARE) == "parm_set {items: [{path}]}"
     assert h("cook", "minimal") is None and h("cook", "core", paths=["/a"]) == (
         'cook {paths: ["/a"]}'
     )
     assert h("hda", "core") is None and h("hda", "full") == "hda"
     assert migration.current_profile() == "full"
-    with migration.using_profile("v2") as resolved:
-        assert resolved == "full" and migration.current_profile() == "full"
-    with migration.using_profile("compat_1x"):
-        assert migration.is_compat() and h("node_type_info") == "node_type_info"
+    with migration.using_profile("minimal") as resolved:
+        assert resolved == "minimal" and h("node_type_info") == 'inspect {what: "type"}'
+    # A removed profile name never reaches here resolved (the config reads it as full);
+    # as an unknown name it is the default.
+    with migration.using_profile("compat_1x") as resolved:
+        assert resolved == "core" and h("node_find") == 'search {kind: "nodes"}'
 
 
 # -- the static guard -------------------------------------------------------------------------

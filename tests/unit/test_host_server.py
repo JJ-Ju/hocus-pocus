@@ -505,39 +505,34 @@ def test_a_minimal_host_refuses_tools_outside_minimal(stack):
 
 
 @pytest.mark.parametrize("profile", ["minimal", "core", "full"])
-def test_a_2x_host_refuses_a_removed_1x_tool_with_its_replacement(stack, profile):
-    """spec-2.0 §8: a 1.4 tool 2.0 removed names its 2.0 replacement on every 2.0 profile."""
+def test_a_host_refuses_a_removed_1x_tool_with_its_replacement(stack, profile):
+    """BIBLE §3.2, §13: a 1.4 tool 2.1 removed answers invalid_argument naming its 2.0
+    replacement on every profile, from the migration table, before any lookup (the fake
+    registry here still has geo_read and geo_info, as a stale host might)."""
     dispatcher, ctx = stack["dispatcher"], stack["ctx"]
     ctx.config.profile = profile
     error = dispatcher.call("geo_read", {})["error"]
     assert error["code"] == "invalid_argument"
-    assert error["message"] == (
-        f"geo_read is a 1.4 tool that the 2.0 {profile} profile does not serve."
-    )
-    assert error["hint"].startswith("In 2.0 use inspect what: geo with rows: true.")
-    assert 'profile = "compat_1x"' in error["hint"]
-    assert error["detail"]["replacement"] == "inspect what: geo with rows: true"
+    assert error["message"] == "geo_read is a 1.4 tool; HocusPocus 2.1 removed it."
+    assert error["hint"].startswith("Use inspect what: geo with rows: true.")
+    assert "docs/migration-2.0.md" in error["hint"] and "compat_1x" not in error["hint"]
+    assert error["detail"] == {
+        "tool": "geo_read",
+        "replacement": "inspect what: geo with rows: true",
+        "profile": profile,
+    }
 
 
-@pytest.mark.parametrize("profile", ["minimal", "core", "full"])
-def test_a_compat_1x_bridge_runs_the_1x_tools_on_any_host(stack, profile):
-    """spec-2.0 §8: the bridge sends its profile; a compat_1x call runs every 1.4 tool (and
-    the 2.0 ones) whatever the host's own profile, over HTTP as in process."""
+@pytest.mark.parametrize("client_profile", [None, "full", "compat_1x"])
+def test_a_removed_tool_is_refused_whatever_profile_the_call_carries(stack, client_profile):
+    """2.1: the envelope's profile no longer widens what a host runs (a 2.0.x compat_1x
+    bridge's calls are refused like any other), over HTTP as in process."""
     dispatcher, ctx = stack["dispatcher"], stack["ctx"]
-    ctx.config.profile = profile
-    for tool in ("geo_read", "pdg", "inspect"):
-        assert dispatcher.call(tool, {}, profile="compat_1x")["ok"] is True, tool
-    assert dispatcher.call("geo_read", {}, profile="full")["ok"] is False  # only compat widens
-    _, body = _request(
-        stack["server"], "POST", "/hp/v1/call", {"tool": "geo_info", "profile": "compat_1x"}
-    )
-    assert body["ok"] is True, body
-    _, body = _request(stack["server"], "POST", "/hp/v1/call", {"tool": "geo_info"})
+    ctx.config.profile = "full"
+    for tool in ("geo_read", "geo_info"):
+        envelope = dispatcher.call(tool, {}, profile=client_profile)
+        assert envelope["ok"] is False and envelope["error"]["code"] == "invalid_argument"
+    assert dispatcher.call("pdg", {}, profile=client_profile)["ok"] is True
+    call = {"tool": "geo_info", **({"profile": client_profile} if client_profile else {})}
+    _, body = _request(stack["server"], "POST", "/hp/v1/call", call)
     assert body["ok"] is False and "inspect what: geo" in body["error"]["hint"]
-
-
-def test_a_compat_1x_host_runs_every_tool(stack):
-    dispatcher, ctx = stack["dispatcher"], stack["ctx"]
-    ctx.config.profile = "compat_1x"
-    for tool in ("geo_read", "pdg", "inspect", "time"):
-        assert dispatcher.call(tool, {})["ok"] is True, tool

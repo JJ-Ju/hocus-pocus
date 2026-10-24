@@ -5,8 +5,8 @@ Runs in the dev venv's Python, not in hython::
     .venv/Scripts/python -m pytest tests/integration/test_parity_gui.py --rungui -q
 
 One session fixture launches ``houdinifx`` through :mod:`hocuspocus.bridge.launch` with an
-isolated ``HOUDINI_USER_PREF_DIR`` (the dev package JSON and a ``profile = "compat_1x"`` toml
-in it: the rows call the 1.4 tools, and a compat_1x host runs the 2.0 ones too), an
+isolated ``HOUDINI_USER_PREF_DIR`` (the dev package JSON and a ``profile = "full"`` toml
+in it; the rows the 1.4 tools had call their 2.0 forms since 2.1), an
 isolated ``HOCUSPOCUS_STATE_DIR`` and an ephemeral port, waits for the registry entry
 and drives the host over ``POST /hp/v1/call`` with the bridge's own
 :class:`~hocuspocus.bridge.client.HostClient`. The tests assert the ``mode`` rows of the
@@ -216,7 +216,7 @@ def gui(tmp_path_factory: pytest.TempPathFactory) -> Iterator[GuiSession]:
     state.mkdir()
     work.mkdir()
     (expanded / "packages" / "hocuspocus.json").write_text(_package_json(), encoding="utf-8")
-    (expanded / "hocuspocus.toml").write_text('profile = "compat_1x"\n', encoding="utf-8")
+    (expanded / "hocuspocus.toml").write_text('profile = "full"\n', encoding="utf-8")
     # G5: a creation script and a load script that open a dialog, each only for the one
     # node or hip file its test makes (Houdini reads the script paths at start-up).
     (expanded / "scripts" / "obj").mkdir(parents=True)
@@ -311,18 +311,16 @@ def test_viewer_capture_fits_and_restores_the_view(gui: GuiSession) -> None:
     before = client.view_state()
     assert before["camera"] is None  # the free perspective view
 
-    # auto in the GUI, /obj, no camera: the Scene Viewer as it is (parity: mode).
-    as_is = client.ok("viewport_capture", {"resolution": [320, 240]})
-    assert as_is["source_used"] == "viewer"
+    # source viewer in the GUI, /obj, no camera: the Scene Viewer as it is (parity: mode).
+    as_is = client.ok("look", {"source": "viewer", "resolution": [320, 240]})
+    assert as_is["backend_used"] == "viewer"
     assert as_is["fit_used"] == "none"
     assert as_is["image"]["png_base64"]
     assert client.view_state() == before
 
     # An explicit fit frames the free view for the grab only.
-    fitted = client.ok(
-        "viewport_capture", {"source": "viewer", "fit": "all", "resolution": [320, 240]}
-    )
-    assert fitted["source_used"] == "viewer"
+    fitted = client.ok("look", {"source": "viewer", "fit": "all", "resolution": [320, 240]})
+    assert fitted["backend_used"] == "viewer"
     assert fitted["fit_used"] == "all"
     assert fitted["image"]["png_base64"] != as_is["image"]["png_base64"]
     assert client.view_state() == before
@@ -331,25 +329,23 @@ def test_viewer_capture_fits_and_restores_the_view(gui: GuiSession) -> None:
     client.ok("node_create", {"items": [{"parent": "/obj", "type": "cam", "name": "cam1"}]})
     client.ok("parm_set", {"items": [{"path": "/obj/cam1/t", "value": [0, 1, 6]}]})
     through = client.ok(
-        "viewport_capture", {"source": "viewer", "camera": "/obj/cam1", "resolution": [320, 240]}
+        "look", {"source": "viewer", "camera": "/obj/cam1", "resolution": [320, 240]}
     )
     assert through["camera_used"] == "/obj/cam1"
     assert client.view_state() == before
 
 
 def test_rop_capture_runs_in_process(gui: GuiSession) -> None:
-    """auto with a camera renders a temporary viewport ROP in the GUI process: no kept
+    """look auto renders a temporary viewport ROP in the GUI process: no kept
     child hython (headless only), and the user's view is untouched."""
     client = gui.client
     _scene(client)
     client.ok("node_create", {"items": [{"parent": "/obj", "type": "cam", "name": "cam1"}]})
     before = client.view_state()
-    shot = client.ok("viewport_capture", {"camera": "/obj/cam1", "resolution": [320, 240]})
-    assert shot["source_used"] in ("flipbook_rop", "opengl_rop")
+    shot = client.ok("look", {"camera": "/obj/cam1", "resolution": [320, 240]})
+    assert shot["backend_used"] in ("flipbook", "opengl")
     assert shot["camera_used"] == "/obj/cam1"
-    framed = client.ok(
-        "viewport_capture", {"source": "flipbook_rop", "fit": "all", "resolution": [320, 240]}
-    )
+    framed = client.ok("look", {"fit": "all", "resolution": [320, 240]})
     assert framed["fit_used"] == "all"
     assert framed["camera_used"] == "temporary"
     assert client.view_state() == before
@@ -373,15 +369,16 @@ def test_time_moves_the_playbar_and_captures_do_not(gui: GuiSession) -> None:
     assert moved["range"] == [1, 48]
     assert client.python("hou.frame()") == 12
     assert client.python("list(hou.playbar.playbackRange())") == [1, 48]
-    for source in ("viewer", "flipbook_rop"):
-        client.ok("viewport_capture", {"source": source, "frame": 5, "resolution": [160, 120]})
+    for source in ("viewer", "auto"):
+        client.ok("look", {"source": source, "frame": 5, "resolution": [160, 120]})
         assert client.python("hou.frame()") == 12, source
     assert client.ok("time")["frame"] == 12
 
 
 def test_viewport_cooks_between_calls_and_says_so_once(gui: GuiSession) -> None:
     """G2 (a mode): the GUI viewport cooks displayed nodes between calls. ``time`` says
-    so with its first frame change and ``node_info`` with its first ``cook_state``, once
+    so with its first frame change and ``inspect`` (what: node) with its first
+    ``cook_state``, once
     per session each."""
     client = gui.client
     _scene(client)
@@ -407,16 +404,19 @@ def test_viewport_cooks_between_calls_and_says_so_once(gui: GuiSession) -> None:
     )
 
     def cooked_by_viewport() -> bool:
-        info = client.ok("node_info", {"paths": ["/obj/box_geo/uncooked"]})
+        info = client.ok("inspect", UNCOOKED)
         return info["nodes"][0]["cook_state"] == "cooked"
 
     assert _wait_for(cooked_by_viewport), "the viewport never cooked the displayed node"
     client.python(
         "import hocuspocus.host.tools.session as s\ns._VIEWPORT_NOTED.discard('cook_state')"
     )
-    noted = client.ok("node_info", {"paths": ["/obj/box_geo/uncooked"]})
+    noted = client.ok("inspect", UNCOOKED)
     assert "cook_state can read cooked" in noted["notes"][0]
-    assert "notes" not in client.ok("node_info", {"paths": ["/obj/box_geo/uncooked"]})
+    assert "notes" not in client.ok("inspect", UNCOOKED)
+
+
+UNCOOKED = {"what": "node", "paths": ["/obj/box_geo/uncooked"], "detail": "full"}
 
 
 SCRUB_DURING_COOK = """
@@ -565,8 +565,8 @@ def test_reads_and_captures_leave_the_gui_hip_clean(gui: GuiSession) -> None:
     _scene(client)
     client.ok("hip_save", {"path": (gui.work_dir / "g1_reads.hip").as_posix()})
     assert _dirty(client) == {"dirty": False, "dirty_source": None}
-    client.ok("node_type_info", {"type": "Sop/copytopoints", "detail": "full"})
-    client.ok("viewport_capture", {"source": "flipbook_rop", "resolution": [160, 120]})
+    client.ok("inspect", {"what": "type", "target": "Sop/copytopoints", "detail": "full"})
+    client.ok("look", {"resolution": [160, 120]})
     status = client.ok("houdini_status")["hip"]
     assert (status["dirty"], status["dirty_source"]) == (False, None)
     assert isinstance(status["houdini_flag"], bool)  # a diagnostic only
@@ -604,7 +604,7 @@ def test_user_edits_dirty_the_gui_hip(gui: GuiSession) -> None:
 def test_selection_names_the_panes_it_moves(gui: GuiSession) -> None:
     """G3: selecting a SOP takes the unpinned Scene Viewer and Network Editor into its
     network on the next idle tick. Putting them back would change the selection (Houdini
-    couples the two), so ``selection`` and ``edit {op: select}`` keep the selection and
+    couples the two), so ``edit {op: select}`` keeps the selection and
     name the panes in ``context_changed``; a selection in the panes' own network moves
     nothing and says nothing."""
     client = gui.client
@@ -614,13 +614,13 @@ def test_selection_names_the_panes_it_moves(gui: GuiSession) -> None:
     assert before and set(before.values()) == {"/obj"}
 
     # The object is in /obj, where the panes are: nothing moves.
-    same = client.ok("selection", {"paths": ["/obj/box_geo"]})
-    assert same == {"selected": ["/obj/box_geo"]}
+    same = client.ok("edit", {"ops": [{"op": "select", "paths": ["/obj/box_geo"]}]})
+    assert same["selected"] == ["/obj/box_geo"] and "context_changed" not in same
     time.sleep(1.0)  # several idle ticks: a follow would have happened by now
     assert client.python(PANES) == before
 
     moving = {f"{name} (/obj/box_geo)" for name in before}
-    chosen = client.ok("selection", {"paths": ["/obj/box_geo/box1"]})
+    chosen = client.ok("edit", {"ops": [{"op": "select", "paths": ["/obj/box_geo/box1"]}]})
     assert chosen["selected"] == ["/obj/box_geo/box1"]
     assert set(chosen["context_changed"]) == moving
     assert chosen["notes"]

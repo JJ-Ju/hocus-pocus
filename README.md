@@ -26,10 +26,10 @@ resource with an ETag, and `look` picks the renderer from a `quality` level inst
 asking the agent to choose one. A bridge ledger remembers Houdinis, their roles and jobs
 across restarts, so `cook`, `render` and `look` run on a headless worker with
 `on: "worker"` while the GUI stays pinned. The default profile has 18 tools instead of
-31, and its `tools/list` is about 20 KB instead of 27 KB. 1.4 client scripts keep working
-for the 2.0.x releases with `profile = "compat_1x"`, and
+31, and its `tools/list` is about 20 KB instead of 27 KB.
 [`docs/migration-2.0.md`](docs/migration-2.0.md) maps every removed tool to its
-replacement.
+replacement (2.0.x's `compat_1x` profile, which kept 1.4 scripts running, is removed in
+2.1).
 
 ## What it can do
 
@@ -165,8 +165,9 @@ grabs the GUI Scene Viewer as you see it. To write a cache, `render` the File Ca
 (`cook` never writes files): it runs as a job you can poll and cancel.
 
 **Upgrading from 1.4.** `node_info`, `viewport_capture` and the other per-noun tools are
-not in the 2.0 profiles; called there, each names its replacement. `profile = "compat_1x"`
-serves the 1.4 catalogue for 2.0.x (2.1 removes it): [`docs/migration-2.0.md`](docs/migration-2.0.md).
+gone; called, each answers `invalid_argument` naming its replacement. 2.1 removed
+`profile = "compat_1x"`, which served them for 2.0.x; left in a config it reads as `full`
+with a warning: [`docs/migration-2.0.md`](docs/migration-2.0.md).
 
 ## Headless use and launching
 
@@ -237,7 +238,7 @@ approved_roots = []         # host: if non-empty, hip/hda/render paths must be u
 max_response_bytes = 16384  # both: response budget
 default_timeout_s = 30      # both: per-call timeout
 job_threshold_s = 10        # host: cooks longer than this become jobs
-profile = "core"            # both: "minimal" (10 tools), "core" (18), "full" (21: adds hda, pdg, events), "compat_1x" (the 1.4 tools)
+profile = "core"            # both: "minimal" (10 tools), "core" (18), "full" (21: adds hda, pdg, events)
 hfs = ""                    # bridge: Houdini install used by houdini_connect launch
 result_content = "text"     # bridge: text | both | structured (where result JSON goes)
 log_level = "INFO"          # host
@@ -250,7 +251,7 @@ Houdini's environment as well as the client's, and restart Houdini.
 
 | Bridge variable | Default | Meaning |
 |---|---|---|
-| `HOCUSPOCUS_PROFILE` | `core` | `minimal` lists 10 tools; `full` also lists `hda`, `pdg`, `events`; `compat_1x` the 35 tools of 1.4 |
+| `HOCUSPOCUS_PROFILE` | `core` | `minimal` lists 10 tools; `full` also lists `hda`, `pdg`, `events` |
 | `HOCUSPOCUS_MAX_RESPONSE_BYTES` | `16384` | response budget; lists are truncated with `truncated: true` |
 | `HOCUSPOCUS_DEFAULT_TIMEOUT_S` | `30` | per-call timeout sent to the host |
 | `HOCUSPOCUS_HFS` | auto | Houdini install used by `houdini_connect` launch |

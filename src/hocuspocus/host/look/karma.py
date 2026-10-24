@@ -4,9 +4,8 @@ For a stage it is a ``karmarendersettings`` LOP and a ``usdrender_rop`` after th
 LOP; for ``/obj`` a ``/out`` ``karma`` ROP. Karma has no second-render crash and husk is
 its own process, so it renders in-process, GUI and headless alike, on the live scene (no
 snapshot). Every node it makes is deleted afterwards, outside undo and events, and the
-selection is put back. ``viewport_capture`` runs it only when the viewport ROP children
-crashed (:data:`KARMA_SAMPLES` samples per pixel); ``look`` also runs it for ``quality:
-lit`` without lights (:data:`LIT_SAMPLES`) and for ``quality: final`` (the target ROP's
+selection is put back. ``look`` runs it when the viewport ROP children crashed
+headless (:data:`KARMA_SAMPLES` samples per pixel), for ``quality: lit`` without lights (:data:`LIT_SAMPLES`) and for ``quality: final`` (the target ROP's
 samples, else :data:`FINAL_SAMPLES`).
 """
 

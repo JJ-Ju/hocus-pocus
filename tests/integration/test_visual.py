@@ -1,4 +1,5 @@
-"""viewport_capture and render against real Houdini (headless hython).
+"""look (draft: the Flipbook ROP, its OpenGL ROP fallback) and render against real
+Houdini (headless hython). In 1.4 these were viewport_capture's tests.
 
 Headless Flipbook and OpenGL ROP renders go through a child hython (see
 hocuspocus.host.tools.visual), so these tests also prove the host survives repeated
@@ -25,8 +26,6 @@ from hocuspocus.host.tools.visual import (  # noqa: E402
     TEMPORARY_CAMERA,
     temporary_capture_nodes,
 )
-
-pytestmark = pytest.mark.compat_1x  # the 1.4 tools (conftest: compat_client)
 
 
 def _fwd(path) -> str:
@@ -62,7 +61,7 @@ def _wait_job(client, job_id: str, timeout_s: float = 120.0) -> dict:
     raise AssertionError(f"job {job_id} still running after {timeout_s}s")
 
 
-# -- viewport_capture -----------------------------------------------------------------
+# -- look draft (1.4: viewport_capture) -----------------------------------------------
 
 
 @pytest.mark.slow
@@ -72,13 +71,13 @@ def test_capture_headless_twice(client):
     results = []
     for _ in range(2):
         started = time.perf_counter()
-        envelope = client.call("viewport_capture", {})
+        envelope = client.call("look", {})
         timings.append(time.perf_counter() - started)
         assert envelope["ok"], envelope
         results.append(envelope["result"])
-    print(f"\nviewport_capture headless: first {timings[0]:.2f}s, second {timings[1]:.2f}s")
+    print(f"\nlook headless: first {timings[0]:.2f}s, second {timings[1]:.2f}s")
     for result in results:
-        assert result["source_used"] == "flipbook_rop"
+        assert result["backend_used"] == "flipbook"
         assert result["camera_used"] == TEMPORARY_CAMERA
         assert result["fit_used"] == "all"
         assert (result["width"], result["height"]) == (1024, 768)
@@ -92,27 +91,14 @@ def test_capture_headless_twice(client):
 
 
 @pytest.mark.slow
-def test_capture_sources_render_through_the_flipbook_rop(client):
-    """1.4: flipbook_rop is the ROP source; opengl_rop, its 1.3 name, runs the same chain.
-    The temporary ROP is HocusPocus's own, so no deprecation note."""
-    _toy_scene()
-    for source in ("flipbook_rop", "opengl_rop", "auto"):
-        result = client.ok("viewport_capture", {"source": source, "resolution": [160, 120]})
-        assert result["source_used"] == "flipbook_rop", (source, result)
-        assert result["rendered"] == [160, 120]
-        assert _not_blank(_decode(result["image"]))
-        assert not any("deprecat" in n.lower() for n in result.get("notes", [])), result
-
-
-@pytest.mark.slow
 def test_capture_falls_back_from_the_flipbook_rop_to_the_opengl_rop(client, crash_capture_child):
     """A Flipbook ROP child that crashes hands the frame to the OpenGL ROP, and notes say
     so; still no deprecation note for the temporary OpenGL ROP, and no node left behind."""
     crash_capture_child("flipbook")
     _toy_scene()
     nodes = _all_nodes()
-    result = client.ok("viewport_capture", {"resolution": [160, 120]})
-    assert result["source_used"] == "opengl_rop"
+    result = client.ok("look", {"resolution": [160, 120]})
+    assert result["backend_used"] == "opengl"
     notes = " ".join(result["notes"])
     assert "Flipbook ROP crashed its render process" in notes, notes
     assert "Rendered with the OpenGL ROP" in notes, notes
@@ -138,8 +124,8 @@ def test_capture_leaves_the_scene_untouched(client, work_dir):
     nodes = _all_nodes()
     history = client.ok("undo", {"action": "history"})
     assert client.host.scene.dirty is False
-    client.ok("viewport_capture", {"resolution": [160, 120]})
-    client.ok("viewport_capture", {"camera": cam.path(), "resolution": [160, 120]})
+    client.ok("look", {"resolution": [160, 120]})
+    client.ok("look", {"camera": cam.path(), "resolution": [160, 120]})
     after = _all_nodes()
     assert after == nodes, (set(after) - set(nodes), set(nodes) - set(after))
     assert client.ok("undo", {"action": "history"}) == history
@@ -189,7 +175,7 @@ def test_temporary_capture_nodes_are_removed_outside_undo(client):
 def test_capture_frames_the_geometry(client):
     geo = _toy_scene()
     geo.parmTuple("t").set((40, 5, -30))
-    result = client.ok("viewport_capture", {"resolution": [320, 240]})
+    result = client.ok("look", {"resolution": [320, 240]})
     img = _decode(result["image"]).convert("RGB")
     # The toy fills the frame around the centre, wherever it is in world space.
     centre = img.getpixel((160, 120))
@@ -198,27 +184,20 @@ def test_capture_frames_the_geometry(client):
 
 
 @pytest.mark.slow
-def test_capture_downscales_and_writes_extra_path(client, work_dir):
+def test_capture_downscales_the_inline_image(client):
     _toy_scene()
-    extra = work_dir / "shots" / "wide.png"
-    result = client.ok(
-        "viewport_capture", {"resolution": [1600, 900], "path": _fwd(extra), "frame": 3}
-    )
+    result = client.ok("look", {"resolution": [1600, 900], "frame": 3})
     assert result["rendered"] == [1600, 900]
     assert (result["width"], result["height"]) == (1024, 576)
     assert result["frame"] == 3
-    assert result["also_written"] == _fwd(extra)
-    with Image.open(extra) as written:
-        assert written.size == (1600, 900)
-    # Review 12: files on disk have the inline image's opaque grey, not a transparent
+    # Review 12: the file on disk has the inline image's opaque grey, not a transparent
     # background that most viewers show as white.
-    for path in (extra, Path(result["path"])):
-        with Image.open(path) as written:
-            assert written.mode == "RGB", (path, written.mode)
-            assert written.getpixel((0, 0)) == BACKGROUND
-            assert _not_blank(written)
-    inline = _decode(result["image"]).convert("RGB")
-    with Image.open(extra) as written:
+    with Image.open(result["path"]) as written:
+        assert written.size == (1600, 900)
+        assert written.mode == "RGB", written.mode
+        assert written.getpixel((0, 0)) == BACKGROUND
+        assert _not_blank(written)
+        inline = _decode(result["image"]).convert("RGB")
         assert inline.getpixel((0, 0)) == written.getpixel((0, 0))
 
 
@@ -227,7 +206,7 @@ def test_capture_explicit_camera(client):
     _toy_scene()
     cam = hou.node("/obj").createNode("cam", "shotcam")
     cam.parmTuple("t").set((0, 0.5, 5))
-    result = client.ok("viewport_capture", {"camera": cam.path(), "resolution": [200, 100]})
+    result = client.ok("look", {"camera": cam.path(), "resolution": [200, 100]})
     assert result["camera_used"] == "/obj/shotcam"
     assert result["fit_used"] == "none"
     assert (result["width"], result["height"]) == (200, 100)
@@ -240,29 +219,23 @@ def test_capture_fit_selected_and_none(client):
     other.createNode("box").setDisplayFlag(True)
     other.parmTuple("t").set((100, 0, 0))
     geo.setSelected(True, clear_all_selected=True)
-    result = client.ok("viewport_capture", {"fit": "selected", "resolution": [160, 120]})
+    result = client.ok("look", {"fit": "selected", "resolution": [160, 120]})
     assert result["fit_used"] == "selected"
     hou.clearAllSelected()
-    result = client.ok("viewport_capture", {"fit": "selected", "resolution": [160, 120]})
+    result = client.ok("look", {"fit": "selected", "resolution": [160, 120]})
     assert result["fit_used"] == "all"  # nothing selected: falls back to everything
-    framed = client.ok("viewport_capture", {"fit": "all", "resolution": [160, 120]})
-    result = client.ok("viewport_capture", {"fit": "none", "resolution": [160, 120]})
+    framed = client.ok("look", {"fit": "all", "resolution": [160, 120]})
+    result = client.ok("look", {"fit": "none", "resolution": [160, 120]})
     assert result["fit_used"] == "none"  # reuses the last automatic framing
     with Image.open(framed["path"]) as a, Image.open(result["path"]) as b:
         assert a.convert("L").tobytes() == b.convert("L").tobytes()
 
 
-def test_capture_viewer_headless_is_ui_required(client):
-    error = client.error("viewport_capture", {"source": "viewer"})
-    assert error["code"] == "ui_required"
-    assert "flipbook_rop" in error["hint"]
-
-
 def test_capture_bad_camera(client):
     _toy_scene()
-    error = client.error("viewport_capture", {"camera": "/obj/nocam"})
+    error = client.error("look", {"camera": "/obj/nocam"})
     assert error["code"] == "node_not_found"
-    error = client.error("viewport_capture", {"camera": "/obj/toy"})
+    error = client.error("look", {"camera": "/obj/toy"})
     assert error["code"] == "invalid_argument"
     assert "not a camera" in error["message"]
     assert not error.get("candidates")  # the scene has no camera yet
@@ -273,11 +246,11 @@ def test_capture_light_is_not_a_camera_and_errors_list_cameras(client):
     _toy_scene()
     hou.node("/obj").createNode("cam", "shotcam")
     sun = hou.node("/obj").createNode("hlight", "sun")
-    error = client.error("viewport_capture", {"camera": sun.path()})
+    error = client.error("look", {"camera": sun.path()})
     assert error["code"] == "invalid_argument"
     assert "is a light" in error["message"]
     assert error["candidates"] == ["/obj/shotcam"]
-    error = client.error("viewport_capture", {"camera": "/obj/toy"})
+    error = client.error("look", {"camera": "/obj/toy"})
     assert error["candidates"] == ["/obj/shotcam"]
     assert "/obj/shotcam" in error["hint"]
 
@@ -385,14 +358,8 @@ def test_viewer_capture_restores_the_view(client, work_dir):
 
 
 def test_capture_bad_arguments(client):
-    assert client.error("viewport_capture", {"resolution": [10, 10]})["code"] == "invalid_argument"
-    assert client.error("viewport_capture", {"fit": "most"})["code"] == "invalid_argument"
-
-
-def test_capture_path_outside_approved_roots(client, work_dir):
-    client.host.config.approved_roots = [str(work_dir / "allowed")]
-    error = client.error("viewport_capture", {"path": _fwd(work_dir / "elsewhere" / "x.png")})
-    assert error["code"] == "path_not_allowed"
+    assert client.error("look", {"resolution": [10, 10]})["code"] == "invalid_argument"
+    assert client.error("look", {"fit": "most"})["code"] == "invalid_argument"
 
 
 # -- render ---------------------------------------------------------------------------
@@ -678,16 +645,10 @@ def test_capture_after_an_outside_fix(client):
     parm.revertToDefaults()
     box.cook()
     assert box.errors()  # the stale error is still there
-    result = client.ok("viewport_capture", {"resolution": [320, 240]})
+    result = client.ok("look", {"resolution": [320, 240]})
     assert result["camera_used"] == TEMPORARY_CAMERA
     assert _not_blank(_decode(result["image"]))
     assert not box.errors() and not mountain.errors()
-
-
-def test_capture_path_must_be_png(client, work_dir):
-    error = client.error("viewport_capture", {"path": _fwd(work_dir / "x.jpg")})
-    assert error["code"] == "invalid_argument"
-    assert ".png" in error["message"]
 
 
 @pytest.mark.slow
@@ -702,7 +663,7 @@ def test_captures_dir_is_pruned_to_newest_50(client):
         os.utime(path, (1_000_000 + i, 1_000_000 + i))
         old.append(path)
     _toy_scene()
-    result = client.ok("viewport_capture", {"resolution": [64, 48]})
+    result = client.ok("look", {"resolution": [64, 48]})
     remaining = sorted(captures.iterdir())
     assert len(remaining) == 50
     assert Path(result["path"]) in remaining
@@ -752,14 +713,10 @@ def test_headless_capture_matches_the_live_scene(client, driver):
     expected = tx.evalAtFrame(frame)
     assert abs(expected) > 1  # the object is visibly off-centre
     try:
-        live = client.ok(
-            "viewport_capture", {"camera": cam.path(), "frame": frame, "resolution": [160, 120]}
-        )
+        live = client.ok("look", {"camera": cam.path(), "frame": frame, "resolution": [160, 120]})
         tx.deleteAllKeyframes()
         tx.set(expected)
-        static = client.ok(
-            "viewport_capture", {"camera": cam.path(), "frame": frame, "resolution": [160, 120]}
-        )
+        static = client.ok("look", {"camera": cam.path(), "frame": frame, "resolution": [160, 120]})
     finally:
         hou.setFps(24, False, False, True)
         hou.hscript("set -u HP_OFFSET")
@@ -781,9 +738,7 @@ def test_headless_capture_does_not_hold_the_main_thread(client):
 
     def capture() -> None:
         conn = http.client.HTTPConnection("127.0.0.1", client.port, timeout=120)
-        body = {"tool": "viewport_capture", "args": {"resolution": [160, 120]}}
-        if client.profile:  # a 1.4 tool: send the profile as the compat_1x client does
-            body["profile"] = client.profile
+        body = {"tool": "look", "args": {"resolution": [160, 120]}}
         conn.request(
             "POST",
             "/hp/v1/call",
@@ -811,12 +766,12 @@ def test_fit_none_does_not_reuse_framing_from_another_scene(client):
     far = hou.node("/obj").createNode("geo", "far")
     far.createNode("box").setDisplayFlag(True)
     far.parmTuple("t").set((100, 0, 0))
-    client.ok("viewport_capture", {"fit": "all", "resolution": [64, 48]})
+    client.ok("look", {"fit": "all", "resolution": [64, 48]})
     client.ok("hip_new", {"on_unsaved": "discard"})
     _toy_scene()
-    result = client.ok("viewport_capture", {"fit": "none", "resolution": [64, 48]})
+    result = client.ok("look", {"fit": "none", "resolution": [64, 48]})
     assert result["fit_used"] == "all"  # reframed: the old framing was for another scene
-    again = client.ok("viewport_capture", {"fit": "none", "resolution": [64, 48]})
+    again = client.ok("look", {"fit": "none", "resolution": [64, 48]})
     assert again["fit_used"] == "none"
 
 
@@ -855,9 +810,9 @@ def test_render_a_file_cache_refuses_an_output_override(client, work_dir):
     _geo, _box, cache = _file_cache(work_dir)
     error = client.error("render", {"rop_path": cache.path(), "output": _fwd(work_dir / "x.bgeo")})
     assert error["code"] == "invalid_argument"
-    # Review 20 N4: the hint names the menu token parm_set takes, not an index.
-    assert 'filemethod: "explicit"' in error["hint"], error
-    assert cache.path() in error["hint"] and "file: " in error["hint"]
+    # Review 20 N4: the hint names the menu token a set takes, not an index.
+    assert f'path: "{cache.path()}/filemethod", value: "explicit"' in error["hint"], error
+    assert "then file to the path" in error["hint"]
     assert "explicit" in cache.parm("filemethod").menuItems()
 
 
@@ -1014,7 +969,7 @@ def test_headless_captures_reuse_a_kept_child(client):
     visual.close_warm_capture()
     geo = _toy_scene()
     started = time.perf_counter()
-    first = client.ok("viewport_capture", {"resolution": [160, 120]})
+    first = client.ok("look", {"resolution": [160, 120]})
     cold_s = time.perf_counter() - started
     child = visual._warm["child"]
     assert child is not None and child.proc.poll() is None
@@ -1023,20 +978,20 @@ def test_headless_captures_reuse_a_kept_child(client):
     imp.parm("soppath").set(geo.path())
     started = time.perf_counter()
     geo.parmTuple("t").set((3, 0, 0))
-    moved = client.ok("viewport_capture", {"resolution": [160, 120], "fit": "none"})
-    stage = client.ok("viewport_capture", {"lop_path": imp.path(), "resolution": [160, 120]})
+    moved = client.ok("look", {"resolution": [160, 120], "fit": "none"})
+    stage = client.ok("look", {"target": imp.path(), "resolution": [160, 120]})
     warm_s = (time.perf_counter() - started) / 2
     print(f"\ncapture: first (child start) {cold_s:.2f}s, kept child {warm_s:.2f}s per capture")
     assert visual._warm["child"].proc.pid == pid
     assert stage["scene"] == "stage" and first["scene"] == moved["scene"] == "obj"
     for result in (first, stage, moved):
-        assert result["source_used"] == "flipbook_rop", result
+        assert result["backend_used"] == "flipbook", result
         assert _not_blank(_decode(result["image"]))
     assert _centroid_x(moved["image"]) > _centroid_x(first["image"]) + 10
     assert warm_s < cold_s
     child.proc.kill()  # a kept child that went away is replaced
     child.proc.wait(10)
-    again = client.ok("viewport_capture", {"resolution": [160, 120]})
+    again = client.ok("look", {"resolution": [160, 120]})
     assert visual._warm["child"].proc.pid != pid
     assert "notes" not in again or not any("kept" in n for n in again["notes"])
 
@@ -1048,7 +1003,7 @@ def test_a_kept_child_that_crashes_falls_back_to_a_fresh_one(client, monkeypatch
     visual.close_warm_capture()
     monkeypatch.setitem(visual._warm, "disabled", None)
     _toy_scene()
-    client.ok("viewport_capture", {"resolution": [96, 72]})
+    client.ok("look", {"resolution": [96, 72]})
     real_wait = visual.WarmCapture._wait
 
     def crash_after_first(self, request, offset, timeout_s):
@@ -1059,11 +1014,11 @@ def test_a_kept_child_that_crashes_falls_back_to_a_fresh_one(client, monkeypatch
         return real_wait(self, request, offset, timeout_s)
 
     monkeypatch.setattr(visual.WarmCapture, "_wait", crash_after_first)
-    result = client.ok("viewport_capture", {"resolution": [96, 72]})
-    assert result["source_used"] == "flipbook_rop"
+    result = client.ok("look", {"resolution": [96, 72]})
+    assert result["backend_used"] == "flipbook"
     assert visual.WARM_CRASH_NOTE in result["notes"], result
     assert _not_blank(_decode(result["image"]))
     assert visual._warm["disabled"] and visual._warm["child"] is None
-    later = client.ok("viewport_capture", {"resolution": [96, 72]})
+    later = client.ok("look", {"resolution": [96, 72]})
     assert visual._warm["child"] is None  # fresh children from now on
     assert visual.WARM_CRASH_NOTE not in later.get("notes", [])

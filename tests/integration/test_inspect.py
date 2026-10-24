@@ -443,8 +443,8 @@ def test_inspect_errors_name_the_options(v2_client):
 
 
 def test_a_full_host_refuses_the_1x_reads_with_their_inspect_what(client):
-    """spec-2.0 §8: node_info on a 2.0 profile names inspect what: node."""
+    """2.1: node_info, a removed 1.4 tool, names inspect what: node."""
     assert "nodes" in client.ok("inspect", {"what": "outline"})
-    error = client.error("node_info", {"paths": ["/obj"]})
+    error = client.error("node_info", {"paths": ["/obj"]}, wire=True)
     assert error["code"] == "invalid_argument" and "1.4 tool" in error["message"]
-    assert error["hint"].startswith("In 2.0 use inspect what: node.")
+    assert error["hint"].startswith("Use inspect what: node.")

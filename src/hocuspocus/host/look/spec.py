@@ -4,7 +4,7 @@ main thread.
 
 ``look``'s ``target`` decides the kind:
 
-* omitted: the display, as ``viewport_capture`` without arguments (``/obj``, or the
+* omitted: the display (``/obj``, or the
   ``/stage`` display LOP when ``/obj`` displays nothing): ``obj`` or ``lop``;
 * ``/obj``, an object, or a ROP in ``/out``: ``obj``. An object is framed (``fit_used:
   target``); a ROP lends its camera and its Karma samples (``final``);
@@ -83,15 +83,12 @@ class Prepared:
 
 @dataclass
 class LookSpec:
-    """One look: ``look``'s arguments, or ``viewport_capture``'s mapped onto the same."""
+    """One look: ``look``'s arguments."""
 
-    tool: str = "look"
     target: str | None = None
     kind: str | None = None
     """``obj``, ``sop``, ``lop`` or ``cop``, resolved from the target (main thread)."""
     camera: Any = None
-    lop_path: Any = None
-    """``viewport_capture`` only (``look`` passes a LOP as ``target``)."""
     frame: Any = None
     res: tuple[int, int] = DEFAULT_RESOLUTION
     resolution_given: bool = False
@@ -99,9 +96,9 @@ class LookSpec:
     fit_given: bool = False
     quality: str = "draft"
     source: str = "auto"
-    """``look``: ``auto`` or ``viewer``; ``viewport_capture``: its 1.4 values."""
+    """``auto`` or ``viewer``."""
     path: Any = None
-    """``viewport_capture``'s extra PNG path."""
+    """``output``: the file the picture is also saved to (:func:`parse_output`)."""
     rop_samples: int | None = None
     """Samples per pixel of a ROP target (``final``)."""
     prepared: Prepared | None = None
@@ -131,7 +128,6 @@ def parse_look_args(args: dict[str, Any]) -> LookSpec:
         raise ToolError("invalid_argument", "'camera' must be a camera node or prim path.")
     output = parse_output(args.get("output"))
     return LookSpec(
-        tool="look",
         target=target.strip() if target else None,
         camera=camera,
         frame=parse_frame(args.get("frame")),

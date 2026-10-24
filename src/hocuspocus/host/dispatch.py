@@ -15,9 +15,9 @@ from collections.abc import Callable, Mapping
 from typing import Any
 
 from hocuspocus.tools import migration
-from hocuspocus.tools.catalog import ToolSpec, host_accepts, profile_of
+from hocuspocus.tools.catalog import ToolSpec, in_profile, profile_of
 from hocuspocus.tools.errors import ToolError
-from hocuspocus.tools.profiles import COMPAT_1X, normalize
+from hocuspocus.tools.profiles import normalize
 
 from . import modal
 from .executor import MainThreadMeter, metering
@@ -198,20 +198,14 @@ def hint_profile(host_profile: Any, client_profile: Any = None) -> str:
     return normalize(host_profile) or "core"
 
 
-def profile_error(
-    spec: ToolSpec, host_profile: str, client_profile: Any = None
-) -> ToolError | None:
+def profile_error(spec: ToolSpec, host_profile: str) -> ToolError | None:
     """Why a host on ``host_profile`` refuses ``spec``, or ``None`` when it runs it
-    (spec-2.0 §2, §8; BIBLE §3.5). A call from a ``compat_1x`` bridge (``client_profile``)
-    runs as ``compat_1x``: every 1.4 tool and every 2.0 one. A 1.4 tool that 2.0 removed is
-    refused by the 2.0 profiles with its replacement (:mod:`hocuspocus.tools.migration`);
-    a 2.0 tool outside the host's profile names the profile that lists it."""
-    compat = isinstance(client_profile, str) and normalize(client_profile) == COMPAT_1X
-    effective = COMPAT_1X if compat else (normalize(host_profile) or "core")
-    if host_accepts(spec, effective):
+    (spec-2.0 §2; BIBLE §3.2, §3.5): a tool outside the host's profile names the profile
+    that lists it. (A removed 1.4 tool has no spec; :meth:`Dispatcher._call` answers it
+    from :mod:`hocuspocus.tools.migration` before looking anything up.)"""
+    effective = normalize(host_profile) or "core"
+    if in_profile(spec, effective):
         return None
-    if migration.replacement(spec.name):
-        return migration.removed_error(spec.name, effective)
     needed = profile_of(spec)
     # full is the largest 2.0 profile; for the others "full" also lists the tool.
     wider = "" if needed == "full" else ' (or "full")'
@@ -298,9 +292,10 @@ class Dispatcher:
         value when absent) is exposed to the tool as ``ctx.extras["max_response_bytes"]``
         so paged tools can cap rows to the client's budget. ``request_id`` (also from the
         envelope) is what :func:`current_request_id` returns while the tool runs.
-        ``profile`` (also from the envelope) is the bridge's: ``compat_1x`` runs the 1.4
-        tools whatever the host's own profile (:func:`profile_error`). Every call writes
-        one line to the host log (:func:`log_call`)."""
+        ``profile`` (also from the envelope) is the bridge's: hints and messages name the
+        tools it serves (:func:`hint_profile`); which tools run is the host's own profile
+        (:func:`profile_error`). Every call writes one line to the host log
+        (:func:`log_call`)."""
         envelope = self._call(tool, args, timeout_s, max_response_bytes, request_id, profile)
         log_call(self.ctx.logger, tool, envelope)
         return envelope
@@ -326,6 +321,11 @@ class Dispatcher:
                 args = {}
             if not isinstance(args, dict):
                 raise ToolError("invalid_argument", "Request field 'args' must be an object.")
+            if migration.replacement(tool):
+                # A 1.4 tool 2.1 removed (with compat_1x): name its replacement (BIBLE §3.2).
+                raise migration.removed_error(
+                    tool, hint_profile(getattr(self.ctx.config, "profile", "full"), profile)
+                )
             impl = self.lookup(tool)
             if impl is None:
                 if self.known_tool(tool):
@@ -341,11 +341,11 @@ class Dispatcher:
                 )
             spec = impl.spec
             if spec is not None:
-                refused = profile_error(spec, getattr(self.ctx.config, "profile", "full"), profile)
+                refused = profile_error(spec, getattr(self.ctx.config, "profile", "full"))
                 if refused is not None:
                     raise refused
-            # No whole tool is GUI-only (docs/parity.md G6): the GUI-only argument values
-            # (look and viewport_capture source: viewer) answer ui_required themselves.
+            # No whole tool is GUI-only (docs/parity.md G6): the GUI-only argument value
+            # (look source: viewer) answers ui_required itself.
             mutating = impl.mutating
             # A dry run may proceed in read-only mode, without an undo group, provided the
             # tool then reports ``_changed: false`` (checked below).

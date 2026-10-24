@@ -242,8 +242,8 @@ def missing_node_error(path: str, *, message: str | None = None, exclude: Any = 
     """The one ``node_not_found`` for ``path`` (review 21 papercut 4): ``candidates`` are
     near-miss children of the missing node's parent (never ``exclude``, such as the node
     being wired), and the hint names the node search on that parent (``search {kind:
-    "nodes", root}``, ``node_find`` on ``compat_1x``), or on the nearest ancestor that
-    exists when the parent is missing too."""
+    "nodes", root}``), or on the nearest ancestor that exists when the parent is missing
+    too."""
     import difflib
 
     import hou

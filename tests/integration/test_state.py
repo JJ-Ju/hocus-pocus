@@ -12,8 +12,6 @@ from pathlib import Path
 
 import pytest
 
-pytestmark = pytest.mark.compat_1x  # the 1.4 tools (conftest: compat_client)
-
 hou = pytest.importorskip("hou")
 
 REPO_SRC = Path(__file__).resolve().parents[2] / "src"
@@ -245,24 +243,26 @@ def test_time_errors(client, host):
     assert client.ok("time", {"frame": 5})["frame"] == 5
 
 
-# -- selection --------------------------------------------------------------------------
+# -- edit select op (1.4: selection) ---------------------------------------------------
+
+
+def select(client, paths):
+    return client.ok("edit", {"ops": [{"op": "select", "paths": paths}]})
 
 
 def test_selection_read_set_clear(client):
     geo = _geo()
     a, b, c = (geo.createNode("box", n) for n in ("a", "b", "c"))
     c.setSelected(True)
-    assert client.ok("selection", {})["selected"] == [c.path()]
-
-    result = client.ok("selection", {"paths": [a.path(), b.path()]})
+    result = select(client, [a.path(), b.path()])
     assert sorted(result["selected"]) == sorted([a.path(), b.path()])
     assert not c.isSelected()
     assert sorted(n.path() for n in hou.selectedNodes()) == sorted([a.path(), b.path()])
 
     # One call is one undo step.
-    assert hou.undos.undoLabels()[0].startswith("HocusPocus: selection")
+    assert hou.undos.undoLabels()[0].startswith("HocusPocus: edit")
 
-    assert client.ok("selection", {"paths": []})["selected"] == []
+    assert select(client, [])["selected"] == []
     assert hou.selectedNodes() == ()
 
 
@@ -270,7 +270,7 @@ def test_selection_bad_path(client):
     geo = _geo()
     box = geo.createNode("box")
     box.setSelected(True)
-    error = client.error("selection", {"paths": ["/obj/geo1/boxx"]})
+    error = client.error("edit", {"ops": [{"op": "select", "paths": ["/obj/geo1/boxx"]}]})
     assert error["code"] == "node_not_found"
     assert "/obj/geo1/box1" in error["candidates"]
     # Nothing changed on failure.
@@ -287,14 +287,19 @@ def test_selection_headless_has_no_panes_to_keep(client):
     assert _context_panes() == []
     assert select_nodes([box]) == []
     assert box.isSelected()
-    result = client.ok("selection", {"paths": [box.path()]})
-    assert result == {"selected": [box.path()]}
+    result = select(client, [box.path()])
+    assert result["selected"] == [box.path()] and "context_changed" not in result
 
 
-def test_selection_allowed_read_only(client, host):
+def test_selection_is_refused_read_only(client, host):
+    """2.1: the 1.4 selection tool ran in read-only mode; an edit select op is an edit, so
+    read-only refuses it (a dry run still validates)."""
     box = _geo().createNode("box")
     host.config.read_only = True
-    assert client.ok("selection", {"paths": [box.path()]})["selected"] == [box.path()]
+    error = client.error("edit", {"ops": [{"op": "select", "paths": [box.path()]}]})
+    assert error["code"] == "read_only"
+    dry = client.ok("edit", {"ops": [{"op": "select", "paths": [box.path()]}], "dry_run": True})
+    assert dry["dry_run"] is True and not box.isSelected()
 
 
 # -- GUI-only argument values (docs/parity.md G6) ---------------------------------------
@@ -314,10 +319,6 @@ def test_no_whole_tool_is_gui_only():
     from hocuspocus.host.tools import registry
 
     assert not hasattr(registry.HostTool, "headless_ok")
-
-
-def test_viewport_capture_source_viewer_is_ui_required_headless(client):
-    _ui_required(client, "viewport_capture")
 
 
 def test_look_source_viewer_is_ui_required_headless(v2_client):

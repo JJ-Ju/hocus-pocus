@@ -13,7 +13,6 @@ from hocuspocus.tools.errors import ToolError
 from ..tools._diag import require_node
 from . import child
 from .base import INTERNAL_KEY, TEMPORARY_CAMERA, mark_internal
-from .cop import _cop_networks, _refuse_cop_as
 
 VIEW_DIRECTION = (0.62, 0.45, 0.85)
 """Camera offset direction for fit framing: a three-quarter view from front-right-above."""
@@ -84,7 +83,7 @@ def _no_camera(message: str, stage: Any = None) -> ToolError:
     return ToolError(
         "invalid_argument",
         message,
-        hint=hint + " A LOP camera node, or a camera prim with lop_path, captures the stage.",
+        hint=hint + " A LOP camera node, or a camera prim with a LOP target, shows the stage.",
         candidates=cameras,
     )
 
@@ -166,7 +165,8 @@ def capture_target(camera: Any, lop_path: Any) -> dict[str, Any]:
         }
     if lop is not None and _is_obj_camera(node):
         raise _no_camera(
-            f"{node.path()} is an OBJ camera, and lop_path captures a stage.", cooked_stage(lop)
+            f"{node.path()} is an OBJ camera, and the target {lop.path()} is a stage.",
+            cooked_stage(lop),
         )
     return {"scene": "obj", "camera": _obj_camera(camera)}
 
@@ -476,13 +476,6 @@ def temporary_capture_nodes(spec: dict[str, Any]) -> Iterator[Any]:
                         node.setSelected(True)
 
 
-COP_NOTE = "The scene also has COP networks ({nets}); pass cop_path (a Cop node) to capture one."
-STAGE_NOTE = (
-    "The scene also has a stage ({lop} is displayed in /stage); pass lop_path (or a LOP "
-    "camera) to capture it."
-)
-
-
 def rop_lop_source(lop_path: Any) -> tuple[Any, str | None]:
     """For a ROP inside a LOP network (``usdrender_rop``, ``usd_rop``), which has no output
     stage, the LOP it renders (``loppath``, else its input) and a note; any other value
@@ -507,26 +500,6 @@ def rop_lop_source(lop_path: Any) -> tuple[Any, str | None]:
     return source.path(), (
         f"Captured {source.path()}, the LOP {node.path()} renders: a ROP has no output stage."
     )
-
-
-def _resolve_capture(parsed: dict[str, Any]) -> dict[str, Any]:
-    """The capture target plus a note when /obj was captured but /stage has a display
-    LOP, or when ``lop_path`` was a ROP LOP. Main thread."""
-    _refuse_cop_as("camera", parsed["camera"])
-    _refuse_cop_as("lop_path", parsed["lop_path"])
-    lop_path, rop_note = rop_lop_source(parsed["lop_path"])
-    target = capture_target(parsed["camera"], lop_path)
-    if rop_note:
-        target["note"] = rop_note
-    if target["scene"] == "obj" and parsed["camera"] is None:
-        display = _stage_display()
-        notes = [STAGE_NOTE.format(lop=display.path())] if display is not None else []
-        nets = _cop_networks()
-        if nets:
-            notes.append(COP_NOTE.format(nets=", ".join(nets)))
-        if notes:
-            target["note"] = " ".join(notes)
-    return target
 
 
 def _usd_source_lop(rop: Any) -> Any:

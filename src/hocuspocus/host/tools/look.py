@@ -5,12 +5,12 @@
 output?}``
 resolves ``target`` into a kind (:mod:`hocuspocus.host.look.spec`), asks the policy
 (:func:`hocuspocus.host.look.select.plan`) for a chain of backends, renders along it
-(:mod:`hocuspocus.host.look.run`, the same code ``viewport_capture`` runs) and returns the
+(:mod:`hocuspocus.host.look.run`) and returns the
 image plus ``{backend_used, chain, quality, target, scene, context, camera_used, fit_used,
 frame, path, width, height, rendered, notes, output?}``. ``on`` is the bridge's: it routes the
 call to an instance and is ignored here.
 
-Registered like ``viewport_capture``: ``scene=False`` (a look leaves no nodes, undo step
+Registered with ``scene=False`` (a look leaves no nodes, undo step
 or dirty flag; its temporary nodes are made outside undo) and ``main_thread=False``
 (headless, the child hython renders while the main thread stays free).
 """
@@ -40,7 +40,6 @@ def _context(target: dict[str, Any]) -> str | None:
 def _finish(spec: LookSpec, used: str, plan: select.Plan, info: dict[str, Any]) -> dict[str, Any]:
     job = spec.prepared
     assert job is not None
-    info.pop("source_used", None)
     notes = [*plan.notes, *info.pop("notes", [])]
     context = info.pop("context", None) or _context(job.target)
     out: dict[str, Any] = {
@@ -56,7 +55,7 @@ def _finish(spec: LookSpec, used: str, plan: select.Plan, info: dict[str, Any]) 
     size = cop_size(info) if used == "rop_image" else job.res
     # output (2.1): the flattened capture at its rendered size, also written there (PNG
     # or JPEG); the image is still returned inline (BIBLE §8: never only a path).
-    return finish_capture(job.out_file, size, job.frame, out, job.extra_path, extra_key="output")
+    return finish_capture(job.out_file, size, job.frame, out, job.extra_path)
 
 
 @tool("look", scene=False, main_thread=False)

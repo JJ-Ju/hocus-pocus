@@ -9,11 +9,17 @@ response arrives. Each test starts from ``hou.hipFile.clear()``.
 See docs/CONTRIBUTING.md for the exact command (isolated ``HOUDINI_USER_PREF_DIR``,
 neutral working directory).
 
-Profiles (spec-2.0 §2, §8): the session host runs ``full``, the largest 2.0 profile, which
-refuses the 1.4 tools 2.0 removed. ``compat_client`` sends ``profile: compat_1x`` with every
-call, as a ``compat_1x`` bridge does, so the host runs the 1.4 tools (and the 2.0 ones). A
-module written against the 1.4 tools sets ``pytestmark = pytest.mark.compat_1x``, which makes
-its ``client`` the compat client; every other module's ``client`` is the plain ``full`` one.
+Profiles (spec-2.0 §2): the session host runs ``full``, the largest profile.
+
+The 1.4 read engines (BIBLE Appendix A). 2.1 removed the 1.4 tools with ``compat_1x``; the
+reads behind ``inspect`` and ``search`` are still host functions named after them
+(``nodes.node_info``, ``geo.geo_read``, ...). The engine tests call them by those names:
+``client.call("node_info", args)`` runs :data:`READ_ENGINES`'s function in process, on
+hython's main thread (the test thread), and returns an envelope of the same shape, so a
+test sees the engine's own result or error exactly, without ``inspect``'s 2.0 projection.
+Any other removed 1.4 name goes to the host and answers ``invalid_argument``; the 1.4
+mutation tools and ``viewport_capture`` have no engine of their own (``edit`` ops and
+``look`` replace them).
 
 ``test_parity_gui.py`` (marker ``gui``) is the GUI column of docs/parity.md: it runs in the
 dev venv's Python, launches ``houdinifx`` with an isolated pref dir and drives it over HTTP.
@@ -67,10 +73,6 @@ def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line(
         "markers", "gui: launches a GUI houdinifx (docs/parity.md); run with --rungui"
     )
-    config.addinivalue_line(
-        "markers",
-        "compat_1x: the module calls the 1.4 tools; its client fixture sends profile compat_1x",
-    )
     if config.getoption("--rungui", default=False):
         # The GUI session is also marked slow, which tests/conftest.py deselects unless
         # asked for; --rungui asks for it.
@@ -114,9 +116,60 @@ class Response:
     headers: dict[str, str]
 
 
+READ_ENGINES: dict[str, tuple[str, str]] = {
+    "node_find": ("nodes", "node_find"),
+    "node_info": ("nodes", "node_info"),
+    "network_describe": ("network", "network_describe"),
+    "parm_get": ("parms", "parm_get"),
+    "problems": ("cook", "problems"),
+    "geo_info": ("geo", "geo_info"),
+    "geo_read": ("geo", "geo_read"),
+    "node_type_search": ("types", "node_type_search"),
+    "node_type_info": ("types", "node_type_info"),
+    "usd_stage": ("usd", "usd_stage"),
+}
+"""1.4 read name -> ``(hocuspocus.host.tools module, function)``: the engine ``inspect`` or
+``search`` runs for it (module docstring)."""
+
+
+def run_read_engine(host: Any, tool: str, args: dict[str, Any], timeout_s: Any) -> dict:
+    """One 1.4 read engine called in process on the main thread, as the dispatcher would
+    run it (the call's response budget and timeout set), wrapped in an ``hp/v1`` envelope.
+    ``_meta`` carries the scene generation; the rest is what a read reports."""
+    import importlib
+
+    from hocuspocus.host import dispatch
+
+    module, name = READ_ENGINES[tool]
+    fn = getattr(importlib.import_module(f"hocuspocus.host.tools.{module}"), name)
+    ctx = host.ctx
+    started = time.perf_counter()
+    ctx.extras["max_response_bytes"] = int(host.config.max_response_bytes)
+    saved = getattr(dispatch._CALL, "timeout_s", None)
+    dispatch._CALL.timeout_s = dispatch.Dispatcher(ctx, lambda n: None).effective_timeout(
+        args, timeout_s
+    )
+    try:
+        result = fn(dict(args), ctx)
+        envelope: dict[str, Any] = {"ok": True, "result": result}
+    except Exception as exc:  # noqa: BLE001 - the dispatcher maps every failure
+        envelope = {"ok": False, "error": dispatch.tool_error_from_exception(exc).to_dict()}
+    finally:
+        dispatch._CALL.timeout_s = saved
+    envelope["_meta"] = {
+        "scene_generation": ctx.scene.generation,
+        "undo_label": None,
+        "elapsed_ms": int(round((time.perf_counter() - started) * 1000)),
+        "timing": {"main_thread_ms": 0},
+    }
+    return envelope
+
+
 class HostClient:
     """HTTP client that pumps the main-thread executor while it waits. ``profile`` is sent
-    with every call, as the bridge sends its own (``compat_1x`` runs the 1.4 tools)."""
+    with every call, as the bridge sends its own (the host's hints name that profile's
+    tools). A 1.4 read name runs its engine in process (:func:`run_read_engine`) unless
+    ``wire=True`` sends it to the host, which refuses it as a removed tool."""
 
     def __init__(self, host: Any, profile: str | None = None) -> None:
         self.host = host
@@ -174,8 +227,14 @@ class HostClient:
         return box["response"]
 
     def call(
-        self, tool: str, args: dict[str, Any] | None = None, timeout_s: float | None = None
+        self,
+        tool: str,
+        args: dict[str, Any] | None = None,
+        timeout_s: float | None = None,
+        wire: bool = False,
     ) -> dict[str, Any]:
+        if tool in READ_ENGINES and not wire:
+            return run_read_engine(self.host, tool, args or {}, timeout_s)
         body: dict[str, Any] = {
             "tool": tool,
             "args": args or {},
@@ -227,8 +286,7 @@ def host(hp_dirs: dict[str, Path]) -> Any:
 
     os.environ["HOCUSPOCUS_STATE_DIR"] = str(hp_dirs["state"])
     # profile "full", never minimal or core: those hosts refuse the tools outside them
-    # (pdg, hda, events), and full lists every 2.0 tool (test_profiles_are_nested). The 1.4
-    # tools run through compat_client (module docstring).
+    # (pdg, hda, events), and full lists every tool (test_profiles_are_nested).
     config = HostConfig(
         state_dir=str(hp_dirs["state"]), pref_dir=str(hp_dirs["prefs"]), profile="full"
     )
@@ -243,26 +301,16 @@ def host(hp_dirs: dict[str, Path]) -> Any:
 
 
 @pytest.fixture
-def compat_client(host: Any) -> HostClient:
-    """A client whose calls carry ``profile: compat_1x``, as a ``compat_1x`` bridge's do: the
-    ``full`` host runs every 1.4 tool for it, and the 2.0 tools too (spec-2.0 §8)."""
-    return HostClient(host, profile="compat_1x")
-
-
-@pytest.fixture
-def client(host: Any, request: pytest.FixtureRequest) -> HostClient:
-    """The session's ``full`` host; ``compat_client`` in a module marked ``compat_1x``."""
-    if request.node.get_closest_marker("compat_1x") is not None:
-        return request.getfixturevalue("compat_client")
+def client(host: Any) -> HostClient:
+    """The session's ``full`` host."""
     return HostClient(host)
 
 
 @pytest.fixture
-def v2_client(compat_client: HostClient) -> HostClient:
-    """The M1-M2 fixture of the 2.0 tools' tests, which compare each 2.0 tool with the 1.4
-    tools it replaces (``_same``): both run under ``compat_1x``. A 2.0-only test can take
-    ``client``, since the session host runs ``full``."""
-    return compat_client
+def v2_client(client: HostClient) -> HostClient:
+    """The fixture of the 2.0 tools' tests, which compare each 2.0 tool with the 1.4 read
+    engine it runs (``_same``): the same client (module docstring)."""
+    return client
 
 
 @pytest.fixture(autouse=True)
@@ -284,7 +332,7 @@ def work_dir(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def crash_capture_child(monkeypatch: pytest.MonkeyPatch) -> Any:
-    """``crash(rop_type)`` makes every viewport_capture child that renders ``rop_type``
+    """``crash(rop_type)`` makes every look child that renders ``rop_type``
     (``flipbook`` or ``opengl``) exit as a segfault would, and forgets earlier crashes."""
     from hocuspocus.host.tools import visual
 

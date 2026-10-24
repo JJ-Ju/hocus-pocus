@@ -107,7 +107,7 @@ def show_target(hou, capture):
 
 
 def build_capture(hou, capture, created):
-    # viewport_capture's camera and viewport ROP (rop_type: flipbook or opengl, the same
+    # The capture's camera and viewport ROP (rop_type: flipbook or opengl, the same
     # parms). Every node made is appended to created.
     rop = hou.node("/out").createNode(capture.get("rop_type") or "flipbook")
     created.append(rop)

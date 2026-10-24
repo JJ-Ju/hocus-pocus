@@ -1,4 +1,9 @@
-"""The workloads tier (docs/redesign/spec-2.0.md §5.2): the evaluation workloads as tests.
+"""The workloads harness (docs/redesign/spec-2.0.md §5.2): the evaluation workloads as tests.
+
+The workloads are the 2.0 tier in ``v2/``, whose conftest loads this module for its
+fixtures. The 1.4 workloads ran here under ``compat_1x`` until 2.1 removed that profile;
+their totals stay in ``budgets.json`` (:data:`BUDGETS`) as the baseline the 2.0 tier is
+compared with (spec-2.0 §7).
 
 One headless host (``hython -m hocuspocus.host``) serves the whole session, with an
 isolated ``HOCUSPOCUS_STATE_DIR``, ``HOUDINI_USER_PREF_DIR`` (``__HVER__``, with the
@@ -7,12 +12,12 @@ a neutral cwd. One persistent official ``mcp`` client session drives the stdio b
 (``python -m hocuspocus.bridge``) from a background event loop, so the tests stay
 synchronous and every workload talks to the same bridge, as an agent would.
 
-The ``workload`` fixture hands each test a :class:`Recorder`. It wraps ``call_tool`` and
+The tier's ``workload`` fixture hands each test a :class:`Recorder`. It wraps ``call_tool`` and
 records, per call: tool, args bytes, text bytes (the JSON text block the model reads; image
 content is counted apart), elapsed time and ``isError``. Per workload it totals calls, text
 bytes, the largest call, wall time and the time to the first image. ``Recorder.finish``
-checks the totals against ``budgets.json`` (each at most 115 % of its budget), or with
-``--update-budgets`` records them there; either way they go to ``last_run.json``.
+checks the totals against the tier's ``budgets.json`` (each at most 115 % of its budget), or
+with ``--update-budgets`` records them there; either way they go to its ``last_run.json``.
 
 Text bytes are counted with this session's temporary root replaced by ``<tmp>``, so a
 budget does not depend on how long the machine's temp path is. Between workloads the
@@ -43,12 +48,7 @@ import pytest
 SRC = Path(__file__).resolve().parents[2] / "src"
 HERE = Path(__file__).resolve().parent
 BUDGETS = HERE / "budgets.json"
-LAST_RUN = HERE / "last_run.json"
-try:  # spec-2.0 M3 cut-over: the 1.4 catalogue is ``compat_1x``, ``full`` the 2.0 one
-    from hocuspocus.tools.profiles import COMPAT_1X as PROFILE_1X
-except ImportError:  # before it: ``full`` is the 1.4 catalogue
-    PROFILE_1X = "full"
-"""The profile the 1.4 workloads run under; the 2.0 workloads (``v2/``) choose their own."""
+"""The 1.4 workloads' last budgets (removed in 2.1): numbers only, the 2.0 baseline."""
 TOLERANCE = 1.15
 """A workload fails when a measured total exceeds its budget by more than 15 % (§5.2)."""
 BUDGET_KEYS = ("calls", "text_bytes", "max_call_bytes", "wall_s")
@@ -391,7 +391,7 @@ def _write_json(path: Path, data: dict[str, Any]) -> None:
     path.write_text(text, encoding="utf-8", newline="\n")
 
 
-def _update_budget(name: str, totals: dict[str, Any], path: Path = BUDGETS) -> None:
+def _update_budget(name: str, totals: dict[str, Any], path: Path) -> None:
     data = _read_json(path) or {}
     data.setdefault(
         "about",
@@ -409,7 +409,7 @@ def _update_budget(name: str, totals: dict[str, Any], path: Path = BUDGETS) -> N
     _write_json(path, data)
 
 
-def _record_last_run(name: str, rec: Recorder, outcome: str, path: Path = LAST_RUN) -> None:
+def _record_last_run(name: str, rec: Recorder, outcome: str, path: Path) -> None:
     data = _read_json(path)
     data.setdefault("workloads", {})
     totals = rec.finished or rec.totals()
@@ -448,12 +448,6 @@ def _stop_host(host: Host) -> None:
     except Exception:  # noqa: BLE001 - fall back to a hard stop of *our* process
         host.proc.kill()
         host.proc.wait(timeout=30)
-
-
-@pytest.fixture(scope="session")
-def wl_host(hython: Path, tmp_path_factory: pytest.TempPathFactory) -> Iterator[Host]:
-    with start_host(hython, tmp_path_factory.mktemp("wl"), PROFILE_1X) as host:
-        yield host
 
 
 @contextmanager
@@ -538,12 +532,6 @@ def kill_pid(pid: int) -> None:
         os.kill(pid, signal.SIGKILL)
 
 
-@pytest.fixture(scope="session")
-def wl_session(wl_host: Host) -> Iterator[McpSession]:
-    with open_session(wl_host) as session:
-        yield session
-
-
 @contextmanager
 def open_session(host: Host) -> Iterator[McpSession]:
     """A persistent MCP session through a stdio bridge, pinned to ``host``."""
@@ -579,14 +567,6 @@ def _housekeeping(session: McpSession, host: Host) -> None:
     session.call("time", {"frame": 1})
 
 
-@pytest.fixture
-def workload(
-    request: pytest.FixtureRequest, wl_session: McpSession, wl_host: Host
-) -> Iterator[Recorder]:
-    with recording(request, wl_session, wl_host) as rec:
-        yield rec
-
-
 @contextmanager
 def recording(
     request: pytest.FixtureRequest,
@@ -594,8 +574,8 @@ def recording(
     host: Host,
     *,
     factory: type[Recorder] = Recorder,
-    budgets: Path = BUDGETS,
-    last_run: Path = LAST_RUN,
+    budgets: Path,
+    last_run: Path,
 ) -> Iterator[Recorder]:
     """One workload's recorder: a clean scene before and after, its totals in ``last_run``."""
     name = request.node.name.removeprefix("test_")

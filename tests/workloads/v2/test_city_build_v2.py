@@ -1,4 +1,4 @@
-"""Review 12's city rebuild on the 2.0 tools (the 1.4 version: ``../test_city_build.py``).
+"""Review 12's city rebuild on the 2.0 tools (the scene: ``city_scene.py``).
 
 The same building generator and city, in three ``edit`` transactions instead of six
 ``node_create``/``node_edit``/``parm_set`` round trips: the two objects with their spare-parm
@@ -11,12 +11,12 @@ from __future__ import annotations
 
 from typing import Any
 
+import city_scene as w1
 import pytest
-from wl2 import creates, load_1x, node_problems, rows_by_path
+from wl2 import creates, node_problems, rows_by_path
 
 pytestmark = pytest.mark.timeout(300)
 
-w1 = load_1x("test_city_build")
 B, C = w1.B, w1.C
 
 

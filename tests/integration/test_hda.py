@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import pytest
 
-pytestmark = pytest.mark.compat_1x  # the 1.4 tools (conftest: compat_client)
-
 hou = pytest.importorskip("hou")
 
 
@@ -76,10 +74,11 @@ def test_save_promotes_spare_parms(client, tmp_path):
     result, _ = _create(client, tmp_path, "hptest::meteors::1.0")
     path = result["path"]
     client.ok(
-        "node_edit",
+        "edit",
         {
-            "items": [
+            "ops": [
                 {
+                    "op": "node",
                     "path": path,
                     "spare_parms": {
                         "add": [{"name": "speed_scale", "type": "float", "default": 1}]
