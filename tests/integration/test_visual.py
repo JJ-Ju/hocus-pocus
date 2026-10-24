@@ -656,6 +656,8 @@ def test_captures_dir_is_pruned_to_newest_50(client):
     from hocuspocus.host.tools.visual import _captures
 
     captures = _captures(client.host.ctx)
+    for leftover in captures.iterdir():  # earlier tests' captures are newer than old[]
+        leftover.unlink()
     old = []
     for i in range(60):
         path = captures / f"capture_old_{i:03d}.png"
