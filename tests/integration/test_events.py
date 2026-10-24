@@ -385,7 +385,7 @@ def test_hda_rebuild_is_one_event(client, work_dir):
         },
     )
     since = _since()
-    library = (work_dir / "rock.hda").as_posix()
+    library = (work_dir / f"rock{hou.hda.defaultFileExtension()}").as_posix()
     client.ok(
         "hda",
         {

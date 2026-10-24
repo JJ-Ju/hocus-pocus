@@ -2,7 +2,7 @@
 
 <!-- Generated from src/hocuspocus/tools/spec/ by `python -m hocuspocus.tools.docs`. Do not edit by hand. -->
 
-21 tools. The profiles nest: 10 in `minimal`, 18 in `core` (the default), 21 in `full`. Model-visible `tools/list` text: 20,706 bytes. See `docs/BIBLE.md` §4 for the design.
+21 tools. The profiles nest: 10 in `minimal`, 19 in `core` (the default), 21 in `full`. Model-visible `tools/list` text: 20,845 bytes. See `docs/BIBLE.md` §4 for the design.
 
 ## Contents
 
@@ -24,7 +24,7 @@
 - [`undo`](#undo)
 - [`time`](#time)
 - [`job`](#job)
-- [`hda`](#hda) *(full)*
+- [`hda`](#hda)
 - [`pdg`](#pdg) *(full)*
 - [`events`](#events) *(full)*
 
@@ -809,17 +809,17 @@ Jobs from render, cook or pdg: status (state, progress, message), result (the to
 
 ## hda
 
-`headless ok` · profiles `full`
+`headless ok` · profiles `core`, `full`
 
-Digital assets: create turns subnet path into an HDA; save updates the definition from path, spare parms included; unlock allows editing; match reverts to the definition and locks; install and reload take library_path; list shows loaded libraries or library_path's definitions.
+Digital assets: create turns subnet path into an HDA; save writes path's contents and spare parms to its definition; unlock allows editing; match reverts and locks; install, uninstall and reload take library_path; list shows loaded libraries; info describes one definition. interface edits parms as spare_parms does.
 
-**Notes.** create takes name, label (or description), version, library_path and optional min_inputs/max_inputs. save copies the instance's spare parms into the asset's interface (promoted lists them; promote_spare_parms: false keeps them on the instance). list is paged by limit and cursor; install of a loaded library says already_loaded. node_type_info and node_type_search report the definition's version and, without help, its label as description.
+**Notes.** create takes name, label (or description), version, library_path and optional min_inputs/max_inputs, and promotes the subnet's spare parms (2.1), so the definition has the interface at once. save copies the instance's spare parms into the asset's interface (promoted lists them; promote_spare_parms: false keeps them on the instance) and also takes label, version and min_inputs/max_inputs; lock: true locks the instance to the saved definition (matchCurrentDefinition) after saving. interface (create, save) is the asset's parm interface in the edit node op's spare_parms shape {add, change, remove}: on create it is added to the subnet first; on save it changes any parm of the definition, and the result lists interface {add, change, remove}. help (create, save) is the HelpText section (Houdini wiki markup; an empty string removes it). action uninstall takes library_path (a loaded library): instances stay and fall back to another loaded definition or the copy embedded in the hip, named per path in instances. info takes path (an instance) or name (Category/type, e.g. Sop/studio::rock::1.0) and returns type, label, version, library, is_current: false and current_library when another definition wins, other_libraries, inputs, sections (names), help_chars, interface {parms, folders}, instances (a count) and, for path, instance {hda_locked, matches_definition}. list is paged by limit and cursor; install of a loaded library says already_loaded. list and info only read. A library the asset is written to (create, save) must carry the licence's extension: .hda or .otl on Commercial, .hdalc or .otllc on Indie, .hdanc or .otlnc on Apprentice and Education; another is invalid_argument with the corrected path as candidate. inspect {what: type} and search {kind: types} report the definition's version and, without help, its label as description.
 
 ### Arguments
 
 | Name | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `action` | `create` \| `save` \| `unlock` \| `match` \| `install` \| `reload` \| `list` | yes |  |  |
+| `action` | `create` \| `save` \| `unlock` \| `match` \| `install` \| `uninstall` \| `reload` \| `list` \| `info` | yes |  |  |
 | `path` | string |  |  | Node path. |
 | `library_path` | string |  |  | .hda file. |
 | `name` | string |  |  | Type name. |
@@ -829,17 +829,24 @@ Digital assets: create turns subnet path into an HDA; save updates the definitio
 | `min_inputs` | integer |  |  | min 0; max 9999 |
 | `max_inputs` | integer |  |  | min 0; max 9999 |
 | `promote_spare_parms` | boolean |  | `true` |  |
+| `interface` | object |  |  |  |
+| `help` | string |  |  |  |
+| `lock` | boolean |  |  |  |
 | `limit` | integer |  | `50` | min 1; max 1000 |
 | `cursor` | string |  |  | next_cursor from the previous page. |
 
 ### Examples
 
 ```json
-{"action": "create", "path": "/obj/geo1/subnet1", "name": "studio::rock", "library_path": "C:/hda/rock.hda"}
+{"action": "create", "path": "/obj/geo1/subnet1", "name": "studio::rock::1.0", "library_path": "$HIP/hda/rock.hdalc", "interface": {"add": [{"name": "seed", "type": "int", "default": 1}]}}
 ```
 
 ```json
-{"action": "list"}
+{"action": "save", "path": "/obj/geo1/rock", "interface": {"change": [{"name": "seed", "default": 7}]}, "help": "= Rock =\nA procedural rock.", "lock": true}
+```
+
+```json
+{"action": "info", "path": "/obj/geo1/rock"}
 ```
 
 

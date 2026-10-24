@@ -1,7 +1,8 @@
 """Profile names (spec-2.0 §2; BIBLE §3.5, §4.1). Stdlib only and import-free, so the host's
 config can read it at Houdini startup without loading the catalogue.
 
-The profiles nest, smallest first: ``minimal`` (10 tools) ⊂ ``core`` (18, the default) ⊂
+The profiles nest, smallest first: ``minimal`` (10 tools) ⊂ ``core`` (19, the default;
+2.1 adds ``hda``, D47) ⊂
 ``full`` (21). Which tools a profile lists is each spec's ``profiles`` tuple
 (``tools/spec/<tool>.py``).
 
