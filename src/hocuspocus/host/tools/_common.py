@@ -39,6 +39,29 @@ __all__ = [
 ]
 
 ARG_HINT = "Check the argument against the tool's schema (hocuspocus://tools)."
+"""The default hint when the running call's tool is unknown; :func:`arg_hint` names it."""
+
+
+def reference_hint(tool: str | None) -> str:
+    """Where ``tool``'s reference is: ``inspect {what: "tool", target: "<tool>"}``, which
+    every client can call, then the ``hocuspocus://tools`` resource, which not every
+    client can read (review 26 P1 #10)."""
+    from hocuspocus.tools.migration import hint_tool
+
+    route = hint_tool("inspect", what="tool", target=tool) if tool else None
+    return f"{route} or hocuspocus://tools" if route else "hocuspocus://tools"
+
+
+def arg_hint() -> str:
+    """``bad_arg``'s default hint: the running tool's reference (:func:`reference_hint`)."""
+    from ..dispatch import current_tool
+
+    tool = current_tool()
+    if not tool:
+        return ARG_HINT
+    return f"Check the argument against {tool}'s reference: {reference_hint(tool)}."
+
+
 DEFAULT_LIMIT = 50
 DEFAULT_RESPONSE_BYTES = 16384
 ROW_ENVELOPE_BYTES = 256
@@ -51,7 +74,7 @@ CURSOR_HINT = "Pass next_cursor from the previous page unchanged, or omit cursor
 
 def bad_arg(message: str, **kw: Any) -> ToolError:
     """An ``invalid_argument`` error; every error carries a hint (docs/BIBLE.md §1.5)."""
-    kw.setdefault("hint", ARG_HINT)
+    kw.setdefault("hint", arg_hint())
     return ToolError("invalid_argument", message, **kw)
 
 

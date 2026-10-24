@@ -364,36 +364,51 @@ def render_tools_markdown(tools: Sequence[ToolSpec]) -> str:
         suffix = {"full": " *(full)*", "minimal": " *(minimal)*"}.get(profile_of(spec), "")
         out.append(f"- [`{spec.name}`](#{spec.name}){suffix}")
     for spec in tools:
-        out += [
-            "",
-            f"## {spec.name}",
-            "",
-            f"{_badges(spec)} · {_profiles_line(spec)}",
-            "",
-            spec.description,
-            "",
-        ]
-        if spec.notes:
-            out += [f"**Notes.** {spec.notes}", ""]
-        rows = _argument_rows(spec.input_schema)
-        out += ["### Arguments", ""]
-        if rows:
-            out += ["| Name | Type | Required | Default | Description |", "|---|---|---|---|---|"]
-            out += ["| " + " | ".join(_cell(c) for c in row) + " |" for row in rows]
-        else:
-            out.append("None.")
-        out.append("")
-        if spec.output_schema:
-            out += ["### Returns", ""]
-            out += _returns_lines(spec.output_schema)
-            out.append("")
-        if spec.examples:
-            out += ["### Examples", ""]
-            for example in spec.examples:
-                out += ["```json", json.dumps(example, ensure_ascii=False), "```", ""]
+        out += ["", *tool_section_lines(spec), ""]
     while out and out[-1] == "":
         out.pop()
     return "\n".join(out) + "\n"
+
+
+def tool_section_lines(spec: ToolSpec) -> list[str]:
+    """One tool's section of ``docs/tools.md`` (heading, badges, description, notes,
+    arguments, returns, examples), as lines: also what ``inspect {what: "tool", target}``
+    returns (2.1, D51)."""
+    out: list[str] = []
+    out += [
+        f"## {spec.name}",
+        "",
+        f"{_badges(spec)} · {_profiles_line(spec)}",
+        "",
+        spec.description,
+        "",
+    ]
+    if spec.notes:
+        out += [f"**Notes.** {spec.notes}", ""]
+    rows = _argument_rows(spec.input_schema)
+    out += ["### Arguments", ""]
+    if rows:
+        out += ["| Name | Type | Required | Default | Description |", "|---|---|---|---|---|"]
+        out += ["| " + " | ".join(_cell(c) for c in row) + " |" for row in rows]
+    else:
+        out.append("None.")
+    out.append("")
+    if spec.output_schema:
+        out += ["### Returns", ""]
+        out += _returns_lines(spec.output_schema)
+        out.append("")
+    if spec.examples:
+        out += ["### Examples", ""]
+        for example in spec.examples:
+            out += ["```json", json.dumps(example, ensure_ascii=False), "```", ""]
+    while out and out[-1] == "":
+        out.pop()
+    return out
+
+
+def tool_section(spec: ToolSpec) -> str:
+    """:func:`tool_section_lines` as text with a trailing newline."""
+    return "\n".join(tool_section_lines(spec)) + "\n"
 
 
 def tools_reference(tools: Sequence[ToolSpec] | None = None) -> str:
