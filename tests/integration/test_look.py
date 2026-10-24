@@ -7,6 +7,7 @@ Karma; a stage and a Cop node too. The 1.4 viewport_capture tests, converted to 
 from __future__ import annotations
 
 import base64
+import contextlib
 import io
 import os
 import time
@@ -314,14 +315,14 @@ def test_look_output_on_obj_draft(client, tmp_path):
 # -- a SOP shown alone, and the size asked (2.1, review 26 P1 #3 and #5) ------------------
 
 
-def _coverage(result: dict) -> float:
-    """The share of pixels that differ from the corner (the background)."""
-    img = _decode(result["image"]).convert("L")
-    bg = img.getpixel((0, 0))
-    hits = [
-        abs(img.getpixel((x, y)) - bg) > 12 for y in range(img.height) for x in range(img.width)
-    ]
-    return sum(hits) / len(hits)
+def _changed(a: dict, b: dict) -> float:
+    """The share of pixels whose grey differs by more than 12 between two looks."""
+    from PIL import ImageChops
+
+    diff = ImageChops.difference(
+        _decode(a["image"]).convert("L"), _decode(b["image"]).convert("L")
+    ).point(lambda p: 255 if p > 12 else 0)
+    return diff.histogram()[255] / (diff.width * diff.height)
 
 
 def _nested_scene(library: str | None = None):
@@ -372,11 +373,13 @@ def test_look_at_a_sop_inside_a_subnet_shows_it_alone(v2_client, work_dir, lock)
     finally:
         if library:
             hou.hipFile.clear(suppress_save_prompt=True)
-            hou.hda.uninstallFile(library)
+            with contextlib.suppress(hou.OperationFailed):
+                hou.hda.uninstallFile(library)
 
 
 def _look_alone(v2_client, visual, geo, sub, lock):
     inner = f"{sub.path()}/inner_box"
+    wall = hou.node("/obj/wall")
     before = _nodes()
     undo_before = list(hou.undos.undoLabels())
     flags = (geo.displayNode().path(), sub.node("inner_box").isDisplayFlagSet())
@@ -386,24 +389,27 @@ def _look_alone(v2_client, visual, geo, sub, lock):
     assert alone["backend_used"] == "flipbook" and alone["fit_used"] == "target"
     assert any("alone" in n for n in alone["notes"]), alone
     assert visual._warm["child"].proc.pid == pid  # the warm child drew it
-    # Framed on the small box: alone it leaves background around it; with the wall
-    # drawn, the wall fills the frame.
     assert _contrast(alone) > 40
-    # The same framing (fit none reuses it) with the wall and the far sphere drawn.
+    # The same framing (fit none reuses it) of the object: the wall behind is drawn.
     with_wall = v2_client.ok("look", {"target": geo.path(), "fit": "none", "resolution": RES})
-    if os.environ.get("HP_LOOK_DUMP"):
-        for name, shot in (("whole", whole), ("alone", alone), ("with_wall", with_wall)):
-            _decode(shot["image"]).save(os.path.join(os.environ["HP_LOOK_DUMP"], f"{name}.png"))
-    assert _coverage(with_wall) > _coverage(alone) + 0.2, (_coverage(with_wall), _coverage(alone))
-    assert whole["image"] != alone["image"]
     final = v2_client.ok("look", {"target": inner, "quality": "final", "resolution": RES})
     assert final["backend_used"] == "karma"
-    assert _coverage(final) < _coverage(with_wall) - 0.2, (_coverage(final), _coverage(with_wall))
     assert _nodes() == before
     assert list(hou.undos.undoLabels()) == undo_before
     assert (geo.displayNode().path(), sub.node("inner_box").isDisplayFlagSet()) == flags
     if lock:
         assert sub.isLockedHDA()
+    # Alone means as if nothing else were in the scene: hide the wall and look again.
+    wall.setDisplayFlag(False)
+    bare = v2_client.ok("look", {"target": inner, "resolution": RES})
+    bare_final = v2_client.ok("look", {"target": inner, "quality": "final", "resolution": RES})
+    if os.environ.get("HP_LOOK_DUMP"):
+        shots = {"whole": whole, "alone": alone, "with_wall": with_wall, "bare": bare}
+        for name, shot in {**shots, "final": final, "bare_final": bare_final}.items():
+            _decode(shot["image"]).save(os.path.join(os.environ["HP_LOOK_DUMP"], f"{name}.png"))
+    assert _changed(alone, bare) < 0.01, _changed(alone, bare)
+    assert _changed(final, bare_final) < 0.03, _changed(final, bare_final)
+    assert _changed(alone, with_wall) > 0.05, _changed(alone, with_wall)
 
 
 @pytest.mark.slow
