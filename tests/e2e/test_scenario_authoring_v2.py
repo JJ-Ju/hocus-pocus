@@ -193,7 +193,7 @@ def test_scenario_authoring_v2(headless_host, tmp_path):  # noqa: F811 - the fix
         "bytes\n" + rec.report()
     )
     print(summary)  # shown with -s, and in the report when an assertion fails
-    assert len(listed) == 18 and {"edit", "inspect", "look"} <= set(listed), listed  # core
+    assert len(listed) == 19 and {"edit", "inspect", "look"} <= set(listed), listed  # core
     assert "node_info" not in listed
     assert {name for name, _size, _err in rec.calls} == {"edit", "inspect", "look"}, summary
     assert len(rec.calls) <= MAX_CALLS, summary

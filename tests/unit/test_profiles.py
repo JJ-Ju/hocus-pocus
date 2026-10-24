@@ -58,7 +58,7 @@ def _status_profile_enum(tools: tuple[ToolSpec, ...]) -> list[str]:
 def test_profile_sizes_and_nesting() -> None:
     assert catalog.PROFILES == ("minimal", "core", "full")
     sizes = {profile: len(_names(profile)) for profile in catalog.PROFILES}
-    assert sizes == {"minimal": 10, "core": 18, "full": 21}
+    assert sizes == {"minimal": 10, "core": 19, "full": 21}
     assert set(_names("minimal")) < set(_names("core")) < set(_names("full"))
     assert catalog.DEFAULT_PROFILE == "core"
 

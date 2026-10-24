@@ -40,13 +40,38 @@ SPEC = ToolSpec(
         "position_offset, as node_copy. layout: parent, paths, mode, as node_layout. build: "
         "parent, data, on_name_collision, layout (boolean), tag, press, as network_build. "
         "select: paths (an empty list clears). "
+        "path (2.1) is every op's name for the node it acts on, next to the 1.4 field: a "
+        "create op's path is the new node's (parent plus name), connect's is to, layout's and "
+        "build's parent, copy's, select's and delete's paths [path], a set op's with parms "
+        "its node, and a node op also takes node; both spellings at once must agree. "
+        "set (2.1) also takes patch, [{find, replace, all?}] (one object is a list of one): "
+        "edits of a string parm's text in order, each find occurring exactly once (all: true, "
+        "at least once), else invalid_value naming the nearest lines as candidates; and "
+        "value_file, a UTF-8 text file ($HIP and ~ expand, approved_roots, at most 8 MB) "
+        "whose text becomes a string parm's value. Both write plain text (a parm with keys or "
+        "an expression is refused), also as {node, parms: {name: {patch}}}; the result row "
+        "adds patched_lines or value_file. inspect {what: parms, target, full_strings: true} "
+        "reads a long string back whole. "
+        "spare_parms: {add: [{name, type: float, int, string, toggle, menu, button, vector, "
+        "color, file, folder, separator or label, label, default, size, min, max, "
+        "min_strict, max_strict, menu_items [{token, label}] (menus and strings), value_type "
+        "(menus: string or int), help, disable_when and hide_when (Houdini conditions such "
+        "as { parm == 1 }, naming parms of the node), join_next, tags {}, callback (Python), "
+        "hidden, folder_type (folders: tabs, collapsible, simple, radio), folder (a label, "
+        "or [labels] for nested folders, made as tabs when missing), before or after (a parm "
+        "name)}], change: [{name, the same fields}] (keeps the value; folder, before or after "
+        "moves it), remove: [names]}; change and remove touch spare parms only (hda "
+        "interface edits an asset's own). "
         "An id (letters, digits, _) names the op's node: the created node, the connect "
         "target, the set or node op's node, the single copy, the layout or build parent. "
         "$id, or $id/child and $id/parm, works in the path fields (parent, path, paths, "
         "node, from, to, to_parent, channel_ref, inputs[].from), never in parm values, and "
         "resolves to the path the op produced. Every op is validated before anything "
-        "changes (types, parents and their category, parm names, inputs, free names, locked "
-        "assets) against the scene as the earlier ops leave it; dry_run returns that plan, "
+        "changes (types, parents and their category, parm names, set values on existing "
+        "nodes (type, range, menu, tuple size, locked component, patch, value_file), "
+        "spare_parms shapes and conditions, inputs, free names, sets and changes inside a "
+        "locked asset: locked, the hint naming the unlock) against the scene as the earlier "
+        "ops leave it; dry_run returns that plan, "
         "with predicted: true on a path Houdini will number. A failing op rolls the whole "
         "call back; the error names the op field, ops[i].<field>: ... (ops[i] (path) when "
         "none applies; a missing from, to or parent lists the parent's nearest children as "
@@ -93,6 +118,8 @@ SPEC = ToolSpec(
                         "to": _s(),
                         "to_input": {"type": ["integer", "string"]},
                         "value": {},
+                        "patch": {"type": ["array", "object"]},
+                        "value_file": _s(),
                         "expression": _s(),
                         "language": _enum(("hscript", "python")),
                         "keyframe": {"type": "object"},

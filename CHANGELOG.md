@@ -16,6 +16,28 @@ one for the 2.0.x releases, and 2.1 removes it.
 - `hocuspocus doctor` reports the licence state, parsed from `sesictrl diagnostic` (else
   `hserver -l`) next to the Houdini install. It shows ok, info or a warning with the
   sign-in hint, never a failure, and it now names a hython that could not get a licence.
+- **HDA lifecycle without Python** (BIBLE §4.7, D47; review 26 P1 friction 1). `hda` is
+  in the default `core` profile (19 tools) and gains `uninstall` (instances stay, each
+  named with the definition it fell back to), `info` (library, version, sections, current
+  or not, inputs, interface, instances, the instance's lock state), `interface` on
+  `create` and `save` (the `spare_parms` shape, on `save` applied to any parm of the
+  definition), `help` (the `HelpText` section), `lock: true` on `save` (relock after
+  saving) and `label`, `version` and input counts on `save`. `list` and `info` only read.
+- **Long string parms** (§4.5, D48; friction 2). An `edit` `set` takes `patch: [{find,
+  replace, all?}]` to change a snippet in place (each `find` must occur exactly once; a
+  miss is `invalid_value` naming the nearest lines) and `value_file` to set a string parm
+  from a UTF-8 file (`approved_roots` apply). The result row says `patched_lines` or
+  `value_file`.
+- **Spare parm interface fields** (§4.5, D50; friction 7). `spare_parms` adds folder
+  entries with `folder_type` (tabs, collapsible, simple, radio), nested `folder` lists,
+  `before`/`after` placement, `disable_when`/`hide_when` (the parms they name are
+  checked), `join_next`, `tags`, `callback`, `hidden`, `min_strict`/`max_strict`, string
+  menus, `file`, `separator` and `label` types, and `change` entries that edit an
+  existing spare parm in place.
+- `path` names the node of every `edit` op (D49; friction 6): `create`'s new node, a
+  `set`'s node with `parms`, `connect`'s `to`, `layout`'s and `build`'s `parent`, and
+  `copy`'s, `select`'s and `delete`'s `paths`; a `node` op also takes `node`. The 1.4
+  field names still work.
 
 ### Changed
 
@@ -33,6 +55,17 @@ one for the 2.0.x releases, and 2.1 removes it.
   to have it closed if it keeps happening: measured, nothing HocusPocus sends runs while a
   user's modal dialog is open. The guide recipe "GUI sessions: never open a dialog" says
   both (8 bytes shorter).
+- `edit` validation, and so `dry_run`, refuses what the run would (D49; friction 6): a
+  `set` value of the wrong type, range, menu or tuple size on an existing node, a `set`
+  inside a locked asset (`locked`, with the unlock call), a `patch` that does not match
+  and a missing or disallowed `value_file`, and malformed `spare_parms` on a node the
+  same call creates.
+- `hda create` promotes the subnet's spare parms into the new definition at once, and
+  `create`/`save` refuse a library whose extension does not match the licence (`.hdalc`
+  on Indie, `.hdanc` on Apprentice and Education, `.hda`/`.otl` on Commercial) with the
+  corrected path as the candidate; Houdini writes any extension it is given.
+- `tools/list` (`text`): `minimal` +67 B, `core` +1,371 B (the `hda` tool), `full`
+  +206 B.
 - CI: `.github/workflows/unit.yml` runs ruff and the unit tier on Linux, macOS and
   Windows for Python 3.11 to 3.13 (portability audit,
   `docs/redesign/review/27-portability.md`).

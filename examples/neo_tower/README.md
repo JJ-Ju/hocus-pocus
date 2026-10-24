@@ -31,8 +31,9 @@ geo = hou.node("/obj").createNode("geo", "tower")
 tower = geo.createNode("hp::neo_tower::1.0")
 ```
 
-Through HocusPocus, `node_create {parent: "/obj/tower", type: "hp::neo_tower::1.0"}` works
-once the file is installed. There is no install tool yet, so P1 used `houdini_python`.
+Through HocusPocus, `hda {action: "install", library_path: "<repo>/examples/neo_tower/neo_tower.hdalc"}`
+then `node_create {parent: "/obj/tower", type: "hp::neo_tower::1.0"}` (2.1; P1 had no install
+tool and used `houdini_python`).
 
 The build scene `work/neo_tower_p1.hiplc` is not committed. It holds the asset instance
 (`/obj/neo_tower_build/neo_tower`), a preview object, cameras (hero, close-up, roof,

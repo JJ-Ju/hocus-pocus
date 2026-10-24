@@ -469,6 +469,13 @@ class FakeScene:
 def scene(monkeypatch) -> FakeScene:
     fake = FakeScene()
     monkeypatch.setitem(sys.modules, "hou", fake.module())
+    # The value checks of a set (types, ranges, patch, value_file) and the spare parm
+    # templates need real parms and hou.ParmTemplate classes: the integration tier
+    # (test_edit.py) covers them; here only names, paths and ids are validated.
+    from hocuspocus.host.tools import spare
+
+    monkeypatch.setattr(tx, "_check_set_value", lambda *args: None)
+    monkeypatch.setattr(spare, "check_new_node", lambda _t, _p, _s, spec: spare.add_names(spec))
     return fake
 
 

@@ -31,9 +31,10 @@ jobs in a small **ledger**, and forwards tool calls and resource reads over an
 authenticated loopback HTTP channel to a small stdlib-only **host** running inside Houdini.
 The host executes every `hou` call on Houdini's main thread, runs every scene change
 through one **transaction engine** as one named undo group, and returns compact JSON in
-Houdini's own vocabulary. The default profile has 18 tools: `edit` changes the scene in one
+Houdini's own vocabulary. The default profile has 19 tools: `edit` changes the scene in one
 transaction, `inspect` and `search` read it (and every read is also a resource with an
-ETag), `look` returns a picture from the cheapest renderer that answers the question, and
+ETag), `look` returns a picture from the cheapest renderer that answers the question, `hda`
+makes and ships digital assets, and
 session, hip, cook, render, job, undo, time and a Python escape hatch cover the rest. Errors
 tell the agent what to do next. Nothing the agent needs is ever redacted, and nothing it
 doesn't need is ever sent.
@@ -46,7 +47,7 @@ doesn't need is ever sent.
    indices and labels, node type names, flags, cook, hip. If an LLM that has read the
    SideFX docs cannot guess a tool's arguments, the tool is wrong. No invented carriers,
    documents, bundles, checkouts, grids, or revision counters on the agent surface.
-2. **Small surface, deep tools.** 18 tools by default (2.0), few enough to hold in one's
+2. **Small surface, deep tools.** 19 tools by default (18 in 2.0; 2.1 adds `hda`, D47), few enough to hold in one's
    head, each doing one thing well with a few well-chosen options. Batch inputs where Houdini users batch
    (create several nodes, set several parms). `tools/list` stays under a hard token
    budget (§4.1).
@@ -662,9 +663,9 @@ and `selection`, built plans the same way; 2.1 removed them.)
   bridge lists and the host allows only the profile's tools.
   - `minimal` (10), for clients with a small context: `houdini_status`, `houdini_connect`,
     `hip_open`, `hip_save`, `inspect`, `search`, `edit`, `node_create`, `parm_set`, `look`.
-  - `core` (18, the default): `minimal` plus `hip_new`, `hip_merge`, `cook`, `render`,
-    `houdini_python`, `job`, `undo`, `time`.
-  - `full` (21): `core` plus `hda`, `pdg`, `events`.
+  - `core` (19, the default): `minimal` plus `hip_new`, `hip_merge`, `cook`, `render`,
+    `houdini_python`, `job`, `undo`, `time`, `hda` (2.1, D47; 2.0's core had 18).
+  - `full` (21): `core` plus `pdg`, `events`.
   - (2.1, D46) `compat_1x` (35: the 1.4 `full` catalogue on the 2.0 engines, Appendix A),
     served for the 2.0.x releases (D39), and the `v2` alias are removed; either name is
     read as `full` with a warning (§3.7). A 1.4 tool name answers `invalid_argument` with
@@ -694,7 +695,7 @@ and `selection`, built plans the same way; 2.1 removed them.)
   `undo`, `time`, `hda`, `cook`, `pdg`, `render`, `job` and `look` register with
   `scene=False` and do that work
   themselves where it applies: `performUndo` raises inside an undo group; reads (`time`
-  with no arguments, `hda list`) must not open a group or dirty the scene; cooks, work
+  with no arguments, `hda list` and `info`) must not open a group or dirty the scene; cooks, work
   items, renders, looks and jobs are not hip state. Their annotations still say
   `readOnlyHint: false`. `host/tools/registry.py` documents the convention and a unit test
   pins the set.
@@ -794,11 +795,11 @@ takes the fields of the 1.4 tool it replaces, with that tool's semantics (§4.5 
 
 | `op` | Fields (1.4 source) | `id` names | Result row adds |
 |---|---|---|---|
-| `create` | `parent`, `type`, `name`, `parms` (`{name: value \| {expression, language} \| item}`), `inputs: [{index \| name, from, output}]`, `flags`, `position`; per op `exact_type`, `cook` (false: no echo cook) and `layout` (`good_position` \| `none`) (a `node_create` item) | the created node | `paired_with` (a `block_end`), `deprecated`, `notes` (callbacks that did not run), `side_effects` (with `press`) |
+| `create` | `parent`, `type`, `name` (2.1: or `path`, the new node's path), `parms` (`{name: value \| {expression, language} \| item}`), `inputs: [{index \| name, from, output}]`, `flags`, `position`; per op `exact_type`, `cook` (false: no echo cook) and `layout` (`good_position` \| `none`) (a `node_create` item) | the created node | `paired_with` (a `block_end`), `deprecated`, `notes` (callbacks that did not run), `side_effects` (with `press`) |
 | `delete` | `paths` (or `path`), `keep_connections = true` (`node_delete`) | — | `deleted`, `reconnected` |
 | `connect` | `from` (`null` disconnects), `from_output = 0`, `to`, `to_input` (index, name or `next`) (a `node_connect` item) | the `to` node | `input`, `from` |
-| `set` | one `parm_set` item (`path` plus `value`, `expression`, `keyframe(s)`, `channel_ref`, `ramp`, `multiparm_count`, `revert_to_default` or `press`; `language`, `animation`, `frame`), or `{node, parms: {name: value \| item}}` for several parms of one node | the node | `value` or `values`, `wrote_keyframe`, `pressed`, `side_effects`, `outputs_summary` (a writer's save button) |
-| `node` | `path` plus `name`, `flags`, `bypass`, `color`, `comment`, `position`, `lock`, `spare_parms: {add, remove}` (a `node_edit` item) | the node | `old_path`, `spare_parms: {added, removed}` |
+| `set` | one `parm_set` item (`path` plus `value`, `expression`, `keyframe(s)`, `channel_ref`, `ramp`, `multiparm_count`, `revert_to_default`, `press`, or (2.1) `patch` or `value_file`; `language`, `animation`, `frame`), or `{node, parms: {name: value \| item}}` (2.1: `path` for `node`) for several parms of one node | the node | `value` or `values`, `wrote_keyframe`, `pressed`, `side_effects`, `outputs_summary` (a writer's save button), `patched_lines`, `value_file` |
+| `node` | `path` (2.1: or `node`) plus `name`, `flags`, `bypass`, `color`, `comment`, `position`, `lock`, `spare_parms: {add, change, remove}` (a `node_edit` item; below) | the node | `old_path`, `spare_parms: {added, removed, changed?}` |
 | `copy` | `paths`, `to_parent`, `names`, `with_inputs = true`, `position_offset` (`node_copy`) | the copy, when there is one | `paths` |
 | `layout` | `parent`, `paths`, `mode: children \| good_position` (`node_layout`) | the parent | — |
 | `build` | `parent`, `data` (Houdini's `hou.data`, as `inspect what: network` returns it), `on_name_collision: error \| rename \| replace`, `layout = true`, `tag`, `press: {node: [parms]}` (`network_build`) | the parent | `created`, `pressed`, `side_effects` |
@@ -809,8 +810,49 @@ takes the fields of the 1.4 tool it replaces, with that tool's semantics (§4.5 
   `from`, `to`, `to_parent`, `channel_ref`, `inputs[].from`; never in parm values, where
   `$F` is Houdini's), resolved to the path the op produced. A `$name` no op declares, or one
   whose op has not produced a node, is `invalid_argument`.
+- **`path` is every op's node key** (2.1, D49; review 26 P1 friction 6). Next to the 1.4
+  field each op keeps, `path` names the node the op acts on: a `create` op's `path` is the
+  new node's (`parent` plus `name`, `$id/name` allowed), `connect`'s is `to`, `layout`'s and
+  `build`'s `parent`, `copy`'s, `select`'s and `delete`'s `paths: [path]`, and a `set` op's
+  `path` with `parms` is its `node`; a `node` op also takes `node` for `path`. Both
+  spellings at once must agree, else `invalid_argument`. Errors name the 1.4 field.
+- **Long strings** (2.1, D48; review 26 P1 friction 2). `set` takes `patch: [{find,
+  replace, all?}]` (one object is a list of one) for a string parm: the edits apply in order
+  to its text (`unexpandedString()`), each `find` must occur exactly once (`all: true`: at
+  least once, every occurrence replaced), and a miss is `invalid_value` that changes nothing:
+  zero matches name the nearest lines as `candidates` (`line 2: float h = ...`) and say when
+  only whitespace differs; several name the lines. `value_file` sets a string parm to a UTF-8
+  text file's contents (`$HIP` and `~` expand, `approved_roots` apply, at most 8 MB). Both
+  write plain text: a parm with keyframes or an expression is refused. The result row adds
+  `patched_lines` or `value_file`; `inspect {what: parms, target, full_strings: true}` reads
+  the whole string back.
+- **Spare parms and asset interfaces** (2.1, D50; review 26 P1 friction 7). `spare_parms`
+  (and `hda`'s `interface`, §4.7) is `{add, change, remove}`, applied to the node's
+  `parmTemplateGroup()` and set back with `setParmTemplateGroup()` (the engine is
+  `host/tools/spare.py`). `add` entries are `{name, type, ...}` with `type` one of `float`,
+  `int`, `string`, `toggle`, `menu`, `button`, `vector`, `color`, `file` (a file-reference
+  string), `folder` (`label`, `folder_type: tabs | collapsible | simple | radio`, `name`
+  defaulting to `hp_<label>`), `separator` or `label`; the fields are Houdini's template
+  fields, named as the readers report them: `label`, `default`, `size`, `min`, `max`,
+  `min_strict`, `max_strict`, `menu_items: [{token, label}]` (menus, and strings as a
+  replace menu), `value_type` (menus: `string` or `int`, 1.2), `help`, `disable_when` and
+  `hide_when` (Houdini conditions, `{ interior == 0 }`; every parm a condition names must
+  exist once the spec is applied, else `invalid_value` with candidates; an empty string
+  clears), `join_next`, `tags` (merged), `callback` (Python), `hidden`. Placement is
+  `folder` (a label, or a list of labels for nested folders; missing folders are made as
+  tabs), `before` or `after` (a parm name). `change: [{name, ...the same fields}]` edits an
+  existing template in place and keeps the value (`folder`, `before` or `after` moves it; a
+  folder may be named by its label); on a node only spare parms and spare folders may be
+  changed or removed (`invalid_argument` names the type's parm), on an asset any parm of
+  the interface. Removes run first, then changes (each from the group as the removes left
+  it), then adds in order. The result row's `spare_parms` adds `changed`.
 - **Validation and `dry_run`.** Before anything changes the whole plan is validated against
-  the scene as the earlier ops leave it (§3.9); every problem is listed in
+  the scene as the earlier ops leave it (§3.9); 2.1 (D49) also checks what the run would
+  refuse: a `set`'s value on an existing node (type, range, menu, tuple size, a locked
+  component, `patch` matches, `value_file`), a `set` inside a locked asset (`locked`, the
+  hint naming the `node` op with `lock: false`, `allowEditingOfContents`), and `spare_parms`
+  on a node the plan creates (shapes, conditions, names against its type). A spare parm an
+  earlier op adds is checked when the op runs. Every problem is listed in
   `detail.problems` of the first one's error, so one call reports every mistake. `dry_run`
   returns that plan, `{dry_run, ops, plan: [{op, id?, path, ...}]}` with resolved paths and
   `predicted: true` where Houdini will number the node, and changes nothing (`_changed:
@@ -864,14 +906,14 @@ false` for a locked HDA).
 |---|---|---|
 | `undo` | `action: undo\|redo\|history`, `steps = 1`, `include_user_steps = false` | `history` lists the last 20 undo labels (and `redo` labels), with `total` and `redo_total` counting them all (1.4, review 22 finding 9; `hip_open` and `hip_new` clear the history); `undo`/`redo` returns the labels `performed` plus `next_undo`, `next_redo`, `undo_count`, `redo_count`, `dirty`, `scene_generation`. They stop at the first step not labelled `HocusPocus:` (the user's or Houdini's) and name it in `blocked_by`; `include_user_steps` crosses such steps and lists them in `user_steps` (1.2). 1.4 (review 21 papercut 2): a call that failed and was rolled back stays on Houdini's redo stack, which cannot drop one entry; the host remembers the redo stack right after each rollback, `redo` stops before such an entry and names it in `skipped` with a note, and `history` leaves it out of `redo` and lists it under `rolled_back` (`next_redo` and `redo_count` skip it too). |
 | `time` | `frame?`, `range?: [start, end]`, `fps?` | Omitting all fields reads. Sets with `hou.setFrame`, `hou.playbar.setFrameRange` (works headless), `hou.setFps`. 2.0 (parity G2, a mode): in a GUI session the Scene Viewer recooks the displayed nodes at the new frame on Houdini's next idle tick, outside the call (a displayed simulation steps there), and it cooks displayed nodes between calls, so `cook_state` can read `cooked` without a cook call; headless nothing cooks until asked. The first frame change and the first `node_info`/`inspect` `cook_state` of a GUI session each carry a note saying so (once per session; `hou.isUIAvailable()`). |
-| `hda` *(full profile)* | `action: create\|save\|unlock\|match\|install\|reload\|list`, plus action-specific fields (`path`, `library_path`, `name`, `label` or `description`, `version`, `min_inputs`, `max_inputs`; `promote_spare_parms = true` for `save`; `limit`/`cursor` for `list`) | Thin wrappers over `createDigitalAsset`, `definition().updateFromNode`, `allowEditingOfContents`, `matchCurrentDefinition`, `hou.hda.installFile/reloadFile/loadedFiles`. `save` also copies the instance's spare parms into the definition's parm template group (`promote_spare_parms = true`, 1.2). `list` shows long paths, not 8.3 short names; `inspect what: type`/`search kind: types` report the definition's version, its label as `description` when there is no help, and types as `Sop/ns::name` (1.2). |
+| `hda` *(core, 2.1)* | `action: create\|save\|unlock\|match\|install\|uninstall\|reload\|list\|info`, plus action-specific fields (`path`, `library_path`, `name`, `label` or `description`, `version`, `min_inputs`, `max_inputs`; `promote_spare_parms = true`, `interface` and `help` for `create` and `save`; `lock` for `save`; `limit`/`cursor` for `list`) | Thin wrappers over `createDigitalAsset`, `definition().updateFromNode`, `allowEditingOfContents`, `matchCurrentDefinition`, `hou.hda.installFile/uninstallFile/reloadFile/loadedFiles`. `save` also copies the instance's spare parms into the definition's parm template group (`promote_spare_parms = true`, 1.2). `list` shows long paths, not 8.3 short names; `inspect what: type`/`search kind: types` report the definition's version, its label as `description` when there is no help, and types as `Sop/ns::name` (1.2). 2.1 (D47, review 26 P1 friction 1): `create` promotes the subnet's spare parms too (`createDigitalAsset` leaves them on the instance); `interface` is the asset's parm interface in the `spare_parms` shape (§4.5), added to the subnet before `create` and applied to the definition's whole group on `save` (any parm, not only spares), the result naming `interface: {add, change, remove}`; `help` is the `HelpText` section (an empty string removes it); `save` also sets `label`, `version` and the input counts, writes the definition to its library (so a reinstall reads the interface and help back), and with `lock: true` runs `matchCurrentDefinition()` afterwards. `uninstall` takes a loaded `library_path` and names, per instance left in the scene, the definition it fell back to (another library, or `Embedded`, the copy in the hip). `info` (`path` of an instance, or `name` as `Category/type`) returns type, label, version, library, `is_current: false` with `current_library` when another definition wins, `other_libraries`, inputs, section names, `help_chars`, `interface: {parms, folders}`, the instance count and, for `path`, `instance: {hda_locked, matches_definition}`. `list` and `info` only read (read-only mode, bridge `READ_ACTIONS`). A library `create` or `save` writes must carry the licence's extension (§5.19), else `invalid_argument` with the corrected path as the candidate. |
 | `pdg` *(full)* | `action: cook\|status\|workitems\|cancel\|dirty`, `top_path`, `block = false`, `save = false`, `timeout_s = 30`, `attribs?`, `state?`, `limit`, `cursor` | `cookWorkItems(block=False)` as a job polled in short main-thread steps, with `progress`/`current`/`total` counting finished work items; `block` waits `min(timeout_s, job_threshold_s)` for the result, then returns `{job_id, state: "running"}` (§7); `status` from `getPDGNode()`; `workitems` paged with state and output files. A failed item carries `error` (its log's last error lines), `log_path` and `exit_code`; a cook result lists the first 5 `failures` of the graph (1.2). Out-of-process ROP TOPs load the saved hip, so `cook` refuses an untitled or dirty scene with `unsaved_changes`; `save: true` saves first (1.2). A cook whose items were cancelled ends `cancelled`, never `done`; `cancel` also cancels the job cooking the graph and returns the status after the cook stopped (1.2). `inspect what: node` on a TOP node adds `pdg_state: {cooked, failed, total}` (1.2). `workitems` takes `attribs: [names]` (per-item values) and a `state` filter, reports `cook_time_s`, and gives output files relative to one `output_root` (1.2). |
 | `events` *(full)* | `since = 0`, `limit` | Host-side ring buffer of hip events and node events (`ChildCreated`, `NameChanged`, `ParmTupleChanged` on nodes the agent touched, `BeingDeleted`) with a monotonic sequence. For "what did the user change since my last call". 1.2: every event has `origin: agent\|other` (1.4, review 23 papercut 9: or `houdini` for a parm Houdini wrote itself inside a call that set parms explicitly, such as a camera's `*Converted` parms, a light's guide scale, `labelparm*` or a callback's writes; only the parms `parm_set` or `node_create` set are `agent` then, and a call that sets none, such as `houdini_python`, keeps every write `agent`) (agent = inside a HocusPocus call: the host holds a call's events and publishes them when its main-thread work ends, none if it was rolled back, without nodes created and deleted within it, and without changes made while undo is disabled, such as `render`'s output-parm set and restore); nodes read with `inspect what: node` or listed by `what: network` are watched too; nested nodes created in one batch get their `ChildCreated`; `FlagChanged` names the flags; 1.3 (review 16 papercut 9): `ParmTupleChanged` on a multi-component tuple names the `components` whose value or keys changed instead of a `count` (a burst within 0.1 s is one event with their union) and lists in `keyed` those of them with keyframes now, from a per-tuple snapshot taken when the node is watched; spare parm edits are one `SpareParmsChanged`; `hda create/match/unlock` are one `hda_contents_rebuilt`; the `pdg` tool records `kind: "pdg"` events (`cook_start`, `work_item_failed`, `cook_done`); Houdini's save-time writes on TOP networks (1.3: and on `/stage`) are dropped; 1.3 (review 18 papercut 10): one ramp edit is one `ParmTupleChanged` on the ramp parm, not one per key parm. 1.3 (review 19 papercut 8): seq restarts in every Houdini, so the bridge returns `next_since` as `<pid>:<seq>` and takes it back as `since` (a bare seq still works); a cursor from another Houdini is read from the start with `reset: true` and a `note`. The host keeps plain integers. |
 
 Count (2.0): 2 session + 4 hip + 3 read and mutation (`inspect`, `search`, `edit`) + 2
 conveniences (`node_create`, `parm_set`) + 5 execution (`cook`, `render`, `look`,
-`houdini_python`, `job`) + 2 state (`undo`, `time`) = **18 in `core`**, plus 3 in `full`
-(`hda`, `pdg`, `events`) = 21. `minimal` is 10 of the core tools (§4.1). 2.0.x's
+`houdini_python`, `job`) + 2 state (`undo`, `time`) + `hda` (2.1, D47) = **19 in
+`core`**, plus 2 in `full` (`pdg`, `events`) = 21. `minimal` is 10 of the core tools (§4.1). 2.0.x's
 `compat_1x` listed the 35 tools of 1.4 (Appendix A; removed in 2.1, D46). `usd_stage` and
 `selection` have no 2.0 tool of their own:
 `inspect what: stage` and the `edit` `select` op replace them (a selection is read with
@@ -1010,6 +1052,15 @@ Verified in review 04 against 22.0.466; each is a test case.
     Cop and Chop networks) whose errors predate a cook that is not pending, and says
     `hint: "...cook with force: true"` when it skipped that because the last cook took
     over 2 s.
+19. **Asset libraries follow the licence.** (2.1) `createDigitalAsset` and
+    `HDADefinition.save` write whatever extension they are given, so an Indie session asked
+    for `rock.hda` writes a limited-commercial asset under a commercial name, and an
+    Apprentice or Education one a non-commercial asset. `hou.licenseCategory()` decides:
+    Commercial writes `.hda`/`.otl`, Indie `.hdalc`/`.otllc`, Apprentice, ApprenticeHD and
+    Education `.hdanc`/`.otlnc`; `hou.hda.defaultFileExtension()` is Houdini's pick.
+    `createDigitalAsset` also leaves a subnet's spare parms on the new instance (the
+    definition's group is empty) until `setParmTemplateGroup`; `ParmTemplateGroup.find`
+    returns a copy, so a change is a `replace` (verified on 22.0.466).
 
 
 ---
@@ -1514,6 +1565,10 @@ bible (tag `v1.4.0`). D35 to D44 are the 2.0 decisions, D45 on the 2.1 ones.
 - **D44** (2.0) Budget policy: the 2.0 `full` profile's `tools/list` is capped at 24,000 B (`text`) and 34,000 B (`both`); `compat_1x` keeps the 1.4 caps of 32,000 B and 44,000 B (§4.1; 2.1 removed those with it, D46). *The 2.0 surface fits in less, and a cap set at the new size keeps it there; the 1.4 catalogue cannot shrink without breaking the scripts it exists for.*
 - **D45** (2.1) During a call in a GUI session the modal `hou.ui` dialogs are stubs that raise `ui_required`, and a call that reached one fails, rolled back, even when a callback swallowed the refusal; a load script's refusal is a warning on the loaded scene (§3.2, §9). *A dialog blocked Houdini's main thread until a person clicked, where the `houdini_python` deadline cannot fire, and every later call returned `houdini_busy`; headless the same code already failed. The refusal is a `SystemExit` as well because Houdini shows a blocking error window for any other exception from a parm callback.*
 - **D46** (2.1) The `compat_1x` profile and the `v2` alias are removed with the 18 1.4 tools, the 1.4 resources, prompts, instructions and caps (D39, §13). A 1.4 tool name answers `invalid_argument` with its 2.0 replacement in `hint` on every profile, from the migration table kept as data (`tools/migration.py`), in the bridge and in the host, before its arguments are read. `profile = "compat_1x"` or `"v2"` (toml or `HOCUSPOCUS_PROFILE`) is read as `full` with a warning, which both processes log and `houdini_status` returns in `warnings`; it is not refused (§3.7, §4.1). *Refusing would leave a client with a server that never starts and the reason in a log it does not read: the host's config already ignores a bad value with a warning because start-up must never raise into Houdini, and a bridge that exits on start shows only a dead server. `full` is the nearest profile to both names (`v2` already read as `full`; `compat_1x` was 1.4's `full`), so every 2.0 tool the old script could reach is there, and each 1.4 call it still makes is answered with the call to make instead.*
+- **D47** (2.1) The HDA lifecycle is the `hda` tool, now in `core` (19 tools), not `edit` ops: it gains `uninstall`, `info`, `interface` (the `spare_parms` shape on the asset's whole interface), `help`, `lock` on `save`, and the licence's library extension (§4.7, §5.19). *All six `houdini_python` escapes of the neo_tower dogfood (review 26 P1) were asset lifecycle, run on `core`, where `hda` was missing. The lifecycle mixes reads (`list`, `info`), Houdini's library state (`install`, `uninstall`, not hip state and not compensable in a transaction) and files on disk, while `edit` ops are compensated scene changes with a dry run; as `edit` ops it would also have needed a read path in `inspect` and fields every `edit` call pays for in `minimal` too. Moving the existing tool costs `core` 1,304 B of `tools/list` and `full` 139 B.*
+- **D48** (2.1) `edit`'s `set` patches a string parm's text with `patch: [{find, replace, all?}]`, each `find` matching exactly once (else `invalid_value` naming the nearest lines), and sets one from a file with `value_file` under `approved_roots` (§4.5). *In review 26 a one- or two-line VEX change cost resending 16 KB, 120 KB of the 150 KB the agent sent; an exact-match patch that refuses an ambiguous or missing `find` cannot silently edit the wrong line, and its candidates make the retry one call.*
+- **D49** (2.1) `path` names the node of every `edit` op next to the 1.4 field, and validation (so `dry_run`) checks what the run would refuse: set values on existing nodes, sets inside a locked asset, and spare parm shapes on created nodes (§4.5). *Review 26: `create` took `parent`, `node` `path` and `set` `node`, and one `set` with `path` failed; `dry_run` passed a malformed `spare_parms` and a `set` inside a locked asset that both then failed for real, so a dry run did not save the round trip it exists for.*
+- **D50** (2.1) `spare_parms` speaks Houdini's template fields: folder entries with a folder type, `disable_when`/`hide_when` (names checked), `join_next`, `tags`, `callback`, `hidden`, strict ranges, string menus, file, separator and label parms, `before`/`after`/nested-folder placement and `change` (§4.5). *The dogfood built its asset's interface (tabs, disable-when rules, new defaults) through `houdini_python` because `spare_parms` could not say it; the same shape is `hda`'s `interface`, so an asset interface needs no Python.*
 
 ### Verified deviations (M5 reconciliation, 1.0; still true)
 
@@ -1529,7 +1584,7 @@ Facts found while implementing, now reflected above:
 - (1.x) The surface was 35 tools, 31 in `core` (Appendix A, D4).
 - All cursors, including `geo_read.next_cursor`, are opaque strings (§4.1).
 - (2.0) No `/hp/v2/call` or `/hp/v2/jobs` route was needed: the call shape did not change and the bridge polls progress (§3.4, §7).
-- (2.0) The surface is 18 tools in `core`, 21 in `full`, 10 in `minimal`, and the 35 1.4 tools in `compat_1x` (§4.7, D40); 2.1 removed `compat_1x` (D46).
+- (2.0) The surface is 18 tools in `core`, 21 in `full`, 10 in `minimal`, and the 35 1.4 tools in `compat_1x` (§4.7, D40); 2.1 removed `compat_1x` (D46) and moved `hda` into `core` (19, D47).
 
 ---
 

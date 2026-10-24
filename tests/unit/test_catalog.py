@@ -48,9 +48,9 @@ MINIMAL = {
     "node_create", "parm_set", "look",
 }  # fmt: skip
 CORE = MINIMAL | {
-    "hip_new", "hip_merge", "cook", "render", "houdini_python", "job", "undo", "time",
+    "hip_new", "hip_merge", "cook", "render", "houdini_python", "job", "undo", "time", "hda",
 }  # fmt: skip
-FULL = CORE | {"hda", "pdg", "events"}
+FULL = CORE | {"pdg", "events"}
 
 # BIBLE §9 code table, transcribed (`python_disabled / read_only` is one row, two codes).
 BIBLE_ERROR_CODES = {
@@ -88,12 +88,13 @@ def test_names_unique_snake_case_and_ordered() -> None:
 
 
 def test_profiles() -> None:
-    """spec-2.0 §2: minimal 10, core 18 (the default), full 21 (2.1 removed compat_1x)."""
+    """spec-2.0 §2: minimal 10, core 19 (the default; 2.1 adds hda, D47), full 21 (2.1
+    removed compat_1x)."""
     assert catalog.PROFILES == ("minimal", "core", "full")
     assert catalog.DEFAULT_PROFILE == "core"
     for profile, expected, size in (
         ("minimal", MINIMAL, 10),
-        ("core", CORE, 18),
+        ("core", CORE, 19),
         ("full", FULL, 21),
     ):
         names = [spec.name for spec in for_profile(profile)]

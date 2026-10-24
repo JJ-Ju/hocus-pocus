@@ -255,6 +255,23 @@ def test_which_calls_count_as_changing_a_scene(tool, args, refused):
     assert (code == "ambiguous_instance") is refused, data(result)
 
 
+@pytest.mark.parametrize(
+    ("args", "refused"),
+    [
+        ({"action": "list"}, False),
+        ({"action": "info", "path": "/obj/geo1/rock"}, False),
+        ({"action": "uninstall", "library_path": "C:/hda/rock.hdalc"}, True),
+        ({"action": "save", "path": "/obj/geo1/rock", "lock": True}, True),
+    ],
+)
+def test_hda_reads_on_the_2x_profiles(args, refused):
+    """2.1 (D47): hda is in core; list and info only read."""
+    bridge, _hosts, _live = make(GUI, WORKER, config=BridgeConfig(profile="core"))
+    result = bridge.call_tool("hda", args)
+    code = data(result).get("code") if result.is_error else None
+    assert (code == "ambiguous_instance") is refused, data(result)
+
+
 def test_pinned_instance_takes_mutations_without_the_warning():
     bridge, hosts, _live = make(GUI, WORKER)
     bridge.call_tool("houdini_connect", {"pid": WORKER.pid})

@@ -271,5 +271,5 @@ def test_error_quality_v2(headless_host, tmp_path):  # noqa: F811 - the fixture 
     if failures:
         raise AssertionError(f"{failures[0]}\nmistakes so far:\n{report}") from failures[0]
     print(f"\n[error_quality_v2] {len(check.errors)} mistakes, every hint core-only\n{report}")
-    assert len(check.listed) == 18 and "node_find" not in check.listed  # core
+    assert len(check.listed) == 19 and "node_find" not in check.listed  # core
     assert len(check.errors) >= 20
