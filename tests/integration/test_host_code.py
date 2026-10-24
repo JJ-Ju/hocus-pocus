@@ -120,3 +120,12 @@ def test_marks_scene_dirty(client):
     assert client.ok("houdini_status")["hip"]["dirty"] is False
     client.ok("houdini_python", {"code": "hou.node('/obj').createNode('geo')"})
     assert client.ok("houdini_status")["hip"]["dirty"] is True
+
+
+def test_headless_modal_dialogs_still_raise_as_before(client):
+    """docs/parity.md G5: headless there is no hou.ui, nothing is stubbed, and a dialog
+    call fails as a python_exception (the GUI answers ui_required)."""
+    assert not hasattr(hou, "ui")
+    error = client.error("houdini_python", {"code": "hou.ui.displayMessage('hello')"})
+    assert error["code"] == "python_exception"
+    assert error["message"].startswith("AttributeError")
