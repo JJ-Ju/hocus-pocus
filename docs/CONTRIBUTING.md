@@ -128,7 +128,11 @@ macOS the path is `.venv/bin/...`.
      literal: it renders the 2.0 call for a 1.4 name (`node_find {root}` is
      `search {kind: "nodes", root}`) and returns `None`
      where the profile has no such tool. `tests/unit/test_hint_profiles.py` fails on a
-     hint literal that names a removed 1.4 tool.
+     hint literal that names a removed 1.4 tool. A hint that sends the agent to a tool's
+     reference uses `reference_hint("<tool>")` from `host/tools/_common.py`
+     (`inspect {what: "tool", target: "<tool>"} or hocuspocus://tools`), never the
+     resource alone: some clients cannot read resources (D51); `bad_arg`'s default hint
+     already names the running tool's.
    - Register with `scene=False` when the dispatcher's undo group, read-only refusal or
      dirty marking would be wrong for the tool: `performUndo` raises inside an undo
      group (`undo`); reads must not dirty the scene (`time`, `selection`, `hda list`);
