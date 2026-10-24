@@ -89,30 +89,45 @@ def capture_camera(hou, capture, created):
     return None, camera
 
 
-def show_target(hou, capture):
-    # look at a SOP that is not displayed: move its network's display and render flags to
-    # it in the scene that renders. Returns [(display, render)] paths of the nodes that
-    # had them, for an in-process caller to put back.
-    moved = []
-    for path in capture.get("display") or ():
-        node = hou.node(path)
-        if node is None:
-            continue
-        parent = node.parent()
-        display, render = parent.displayNode(), parent.renderNode()
-        moved.append((display.path() if display else None, render.path() if render else None))
-        node.setDisplayFlag(True)
-        node.setRenderFlag(True)
-    return moved
+def isolate_target(hou, capture, created):
+    # look at a SOP: its geometry alone (review 26 P1 #3). A temporary object merges it in
+    # world space (an Object Merge reads a SOP anywhere: inside a subnet or a locked
+    # asset, outside /obj) and the ROP draws only that object. Returns its path, or None.
+    target = capture.get("isolate")
+    if not target:
+        return None
+    obj = hou.node("/obj").createNode("geo")
+    created.append(obj)
+    obj.setName("hocuspocus_look_target", unique_name=True)
+    for child in obj.children():
+        child.destroy()
+    merge = obj.createNode("object_merge", "target")
+    merge.parm("objpath1").set(target["sop"])
+    merge.parm("xformtype").set(1)  # into this object: the source object's transform
+    merge.setDisplayFlag(True)
+    merge.setRenderFlag(True)
+    material = target.get("material")
+    if material and obj.parm("shop_materialpath") is not None:
+        obj.parm("shop_materialpath").set(material)
+    return obj.path()
+
+
+def show_only(rop, isolated):
+    # The viewport ROP draws every object, or only the isolated one.
+    parm = rop.parm("vobjects")
+    if parm is not None:
+        parm.set(isolated or "*")
 
 
 def build_capture(hou, capture, created):
     # viewport_capture's camera and viewport ROP (rop_type: flipbook or opengl, the same
     # parms). Every node made is appended to created.
+    isolated = isolate_target(hou, capture, created)
     rop = hou.node("/out").createNode(capture.get("rop_type") or "flipbook")
     created.append(rop)
     for name, value in capture["rop_parms"].items():
         rop.parm(name).set(value)
+    show_only(rop, isolated)
     lop, camera = capture_camera(hou, capture, created)
     if lop is not None:
         # A stage: the ROP reads the LOP through the camera prim.
@@ -178,6 +193,7 @@ def reuse_capture(hou, capture, rop):
     # The kept ROP looks through the new capture's camera (built in the new scene).
     for name, value in capture["rop_parms"].items():
         rop.parm(name).set(value)
+    show_only(rop, isolate_target(hou, capture, []))
     lop, camera = capture_camera(hou, capture, [])
     if lop is not None:
         rop.parm("opsource").set(1)
@@ -195,8 +211,6 @@ def render(hou, spec, kept):
         clear_scene(hou, set(rop.path() for rop in kept.values()))
     load_scene(hou, spec, notes)
     capture = spec.get("capture")
-    if capture:
-        show_target(hou, capture)
     if capture:
         rop_type = capture.get("rop_type") or "flipbook"
         if rop_type in kept:

@@ -73,8 +73,8 @@ def prepare(
             fit = "target"
         job.capture, job.info = _capture_spec(target, spec.res, fit, out_file, ctx.scene.generation)
         job.capture["rop_parms"].update(plan.rop_parms)
-        if target.get("display"):
-            job.capture["display"] = list(target["display"])
+        if target.get("isolate"):
+            job.capture["isolate"] = dict(target["isolate"])
         if not ctx.ui and CHILD_BACKENDS & set(plan.chain):
             job.snapshot = child.snapshot_scene(tmp_dir)
     return job, plan

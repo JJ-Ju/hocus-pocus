@@ -413,41 +413,12 @@ def _capture_spec(
 
 
 @contextlib.contextmanager
-def temporary_display(spec: dict[str, Any]) -> Iterator[None]:
-    """For an in-process render of a look at a SOP that is not displayed (``display`` in
-    the capture spec): move its network's display and render flags to it, outside undo
-    and events, and put them back afterwards. A no-op for every other capture. Main
-    thread."""
-    if not spec.get("display"):
-        yield
-        return
-    import hou
-
-    from ..tools.events import muted
-
-    namespace: dict[str, Any] = {}
-    exec(child._BUILD_CAPTURE, namespace)
-    with hou.undos.disabler(), muted():
-        moved = namespace["show_target"](hou, spec)
-    try:
-        yield
-    finally:
-        with hou.undos.disabler(), muted():
-            for display, render in moved:
-                with contextlib.suppress(Exception):
-                    if display:
-                        hou.node(display).setDisplayFlag(True)
-                with contextlib.suppress(Exception):
-                    if render:
-                        hou.node(render).setRenderFlag(True)
-
-
-@contextlib.contextmanager
 def temporary_capture_nodes(spec: dict[str, Any]) -> Iterator[Any]:
     """Create the capture camera (unless the spec names one) and the spec's viewport ROP
     (``rop_type``) in the live scene for an in-process render, outside undo, and delete
-    them afterwards, restoring the selection (and, for a look at a SOP, the display flag:
-    :func:`temporary_display`). Yields the ROP. Main thread."""
+    them afterwards, restoring the selection; a look at a SOP also makes the temporary
+    object that shows it alone (``isolate_target`` in :data:`~.child._BUILD_CAPTURE`).
+    Yields the ROP. Main thread."""
     import hou
 
     from ..tools.events import muted
@@ -456,24 +427,23 @@ def temporary_capture_nodes(spec: dict[str, Any]) -> Iterator[Any]:
     created: list[Any] = []
     namespace: dict[str, Any] = {}
     exec(child._BUILD_CAPTURE, namespace)  # the same builder the child hython runs
-    with temporary_display(spec):
-        try:
-            with hou.undos.disabler(), muted():
-                try:
-                    rop = namespace["build_capture"](hou, spec, created)
-                finally:
-                    for node in created:
-                        mark_internal(node)
-            yield rop
-        finally:
-            with hou.undos.disabler(), muted():
-                for node in reversed(created):
-                    with contextlib.suppress(Exception):
-                        node.destroy()
+    try:
+        with hou.undos.disabler(), muted():
+            try:
+                rop = namespace["build_capture"](hou, spec, created)
+            finally:
+                for node in created:
+                    mark_internal(node)
+        yield rop
+    finally:
+        with hou.undos.disabler(), muted():
+            for node in reversed(created):
                 with contextlib.suppress(Exception):
-                    hou.clearAllSelected()
-                    for node in selected:
-                        node.setSelected(True)
+                    node.destroy()
+            with contextlib.suppress(Exception):
+                hou.clearAllSelected()
+                for node in selected:
+                    node.setSelected(True)
 
 
 COP_NOTE = "The scene also has COP networks ({nets}); pass cop_path (a Cop node) to capture one."

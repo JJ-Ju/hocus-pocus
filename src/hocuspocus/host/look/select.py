@@ -220,6 +220,14 @@ def plan(spec: Any, env: Env) -> Plan:
     return Plan(chain, rop_parms=dict(LIT_ROP_PARMS) if spec.quality == "lit" else {})
 
 
+LIT_VIEWPORT_NOTE = (
+    "lit drew the scene's lights in the {rop} (high quality lighting with shadows); "
+    "quality final renders them in Karma."
+)
+"""Said when ``lit`` rendered a viewport ROP (review 26 P1 #5: with scene lights, lit
+switched to the Flipbook ROP and only ``backend_used`` said so)."""
+
+
 def capture_plan(spec: Any, env: Env) -> Plan:
     """``viewport_capture``'s 1.4 chain: ``source`` ``viewer`` (checked here), ``auto``
     through the viewer in a GUI session for ``/obj`` without a camera when a Scene Viewer

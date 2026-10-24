@@ -174,6 +174,17 @@ def encode_png(
             shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
+def image_size(path: str) -> tuple[int, int] | None:
+    """The pixel size of the image file at ``path``, or None when PIL cannot read it."""
+    try:
+        from PIL import Image
+
+        with Image.open(path) as im:
+            return int(im.size[0]), int(im.size[1])
+    except Exception:
+        return None
+
+
 def capture_targets(parsed: dict[str, Any], ctx: HostContext) -> tuple[float, Any, str]:
     """Frame, checked extra path and capture file for one capture. Main thread."""
     import hou

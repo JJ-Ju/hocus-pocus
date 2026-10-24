@@ -309,3 +309,121 @@ def test_look_output_on_obj_draft(client, tmp_path):
     with Image.open(target) as im:
         assert list(im.size) == RES
     assert _contrast(result) > 40
+
+
+# -- a SOP shown alone, and the size asked (2.1, review 26 P1 #3 and #5) ------------------
+
+
+def _coverage(result: dict) -> float:
+    """The share of pixels that differ from the corner (the background)."""
+    img = _decode(result["image"]).convert("L")
+    bg = img.getpixel((0, 0))
+    hits = [
+        abs(img.getpixel((x, y)) - bg) > 12 for y in range(img.height) for x in range(img.width)
+    ]
+    return sum(hits) / len(hits)
+
+
+def _nested_scene(library: str | None = None):
+    """/obj/tower: a subnet (a locked asset saved to ``library`` when given) whose output
+    merges a small box with a sphere far away; /obj/wall: a large box right behind the
+    small one, which fills the frame unless the look shows the small box alone. (A locked
+    asset whose definition is ``Embedded`` draws nothing in the headless child at all: its
+    snapshot carries no contents, a gap of the snapshot, not of a SOP look.)"""
+    geo = hou.node("/obj").createNode("geo", "tower")
+    sub = geo.createNode("subnet", "massing")
+    inner = sub.createNode("box", "inner_box")
+    inner.parmTuple("size").set((0.5, 0.5, 0.5))
+    far = sub.createNode("sphere", "far")
+    far.parmTuple("t").set((30, 0, 0))
+    merge = sub.createNode("merge", "both")
+    merge.setInput(0, inner)
+    merge.setInput(1, far)
+    out = sub.createNode("output", "output0")
+    out.setInput(0, merge)
+    sub.setDisplayFlag(True)
+    sub.setRenderFlag(True)
+    if library:
+        asset = sub.createDigitalAsset(
+            name="hp_look_test::massing::1.0", hda_file_name=library, description="Massing"
+        )
+        asset.matchCurrentDefinition()
+        assert asset.isLockedHDA()
+        sub = asset
+    wall = hou.node("/obj").createNode("geo", "wall")
+    box = wall.createNode("box", "big")
+    box.parmTuple("size").set((40, 40, 40))
+    box.parmTuple("t").set((0, 0, -25))
+    box.setDisplayFlag(True)
+    return geo, sub
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("lock", [False, True], ids=["subnet", "locked_asset"])
+def test_look_at_a_sop_inside_a_subnet_shows_it_alone(v2_client, work_dir, lock):
+    """Review 26 P1 #3: a SOP inside a subnet or a locked asset is shown alone (the wall
+    behind it and the subnet's other output are not drawn), through the kept child, and
+    the scene keeps no trace."""
+    from hocuspocus.host.tools import visual
+
+    library = (work_dir / "hp_look_massing.hda").as_posix() if lock else None
+    try:
+        _look_alone(v2_client, visual, *_nested_scene(library), lock)
+    finally:
+        if library:
+            hou.hipFile.clear(suppress_save_prompt=True)
+            hou.hda.uninstallFile(library)
+
+
+def _look_alone(v2_client, visual, geo, sub, lock):
+    inner = f"{sub.path()}/inner_box"
+    before = _nodes()
+    undo_before = list(hou.undos.undoLabels())
+    flags = (geo.displayNode().path(), sub.node("inner_box").isDisplayFlagSet())
+    whole = v2_client.ok("look", {"target": geo.path(), "resolution": RES})
+    pid = visual._warm["child"].proc.pid
+    alone = v2_client.ok("look", {"target": inner, "resolution": RES})
+    assert alone["backend_used"] == "flipbook" and alone["fit_used"] == "target"
+    assert any("alone" in n for n in alone["notes"]), alone
+    assert visual._warm["child"].proc.pid == pid  # the warm child drew it
+    # Framed on the small box: alone it leaves background around it; with the wall
+    # drawn, the wall fills the frame.
+    assert _contrast(alone) > 40
+    # The same framing (fit none reuses it) with the wall and the far sphere drawn.
+    with_wall = v2_client.ok("look", {"target": geo.path(), "fit": "none", "resolution": RES})
+    if os.environ.get("HP_LOOK_DUMP"):
+        for name, shot in (("whole", whole), ("alone", alone), ("with_wall", with_wall)):
+            _decode(shot["image"]).save(os.path.join(os.environ["HP_LOOK_DUMP"], f"{name}.png"))
+    assert _coverage(with_wall) > _coverage(alone) + 0.2, (_coverage(with_wall), _coverage(alone))
+    assert whole["image"] != alone["image"]
+    final = v2_client.ok("look", {"target": inner, "quality": "final", "resolution": RES})
+    assert final["backend_used"] == "karma"
+    assert _coverage(final) < _coverage(with_wall) - 0.2, (_coverage(final), _coverage(with_wall))
+    assert _nodes() == before
+    assert list(hou.undos.undoLabels()) == undo_before
+    assert (geo.displayNode().path(), sub.node("inner_box").isDisplayFlagSet()) == flags
+    if lock:
+        assert sub.isLockedHDA()
+
+
+@pytest.mark.slow
+def test_look_honours_the_resolution_and_names_the_backend(v2_client):
+    """Review 26 P1 #5: Karma renders the size asked (22.0's Karma ROP rendered 1280x720
+    whatever the override said), a look through a camera without resolution takes the
+    camera's aspect, and lit says which renderer drew the scene's lights."""
+    _obj_scene()
+    cam = hou.node("/obj").createNode("cam", "shot")
+    cam.parmTuple("t").set((0, 1, 12))
+    cam.parm("resx").set(1920)
+    cam.parm("resy").set(1080)
+    dark = v2_client.ok("look", {"quality": "lit", "camera": cam.path(), "resolution": RES})
+    assert dark["backend_used"] == "karma" and dark["rendered"] == RES
+    assert (dark["width"], dark["height"]) == tuple(RES)
+    assert any("1920x1080" in n for n in dark["notes"]), dark
+    camera_size = v2_client.ok("look", {"quality": "final", "camera": cam.path()})
+    assert camera_size["rendered"] == [1024, 576], camera_size
+    assert not any("asked" in n for n in camera_size.get("notes", []))
+    hou.node("/obj").createNode("hlight::2.0", "key").parmTuple("t").set((3, 4, 5))
+    lit = v2_client.ok("look", {"quality": "lit", "resolution": RES})
+    assert lit["backend_used"] == "flipbook" and lit["rendered"] == RES
+    assert any("Flipbook ROP" in n for n in lit["notes"]), lit
