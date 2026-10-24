@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .bridge import licence
 from .tools import catalog
 from .version import __version__
 
@@ -90,9 +91,17 @@ def _hython(hfs: Path) -> Path:
 
 
 def run_hython(
-    hfs: Path, code: str, timeout_s: float, *, environ: Mapping[str, str] | None = None
+    hfs: Path,
+    code: str,
+    timeout_s: float,
+    *,
+    environ: Mapping[str, str] | None = None,
+    failure: list[str] | None = None,
 ) -> str | None:
-    """Run ``hython -c code`` from a neutral cwd; return the last stdout line or ``None``."""
+    """Run ``hython -c code`` from a neutral cwd; return the last stdout line or ``None``.
+
+    On a non-zero exit, ``failure`` (when given) receives hython's stderr and stdout, so a
+    caller can tell a licence refusal from other failures."""
     env = dict(os.environ if environ is None else environ)
     env.pop("PYTHONPATH", None)
     try:
@@ -109,6 +118,8 @@ def run_hython(
     except (OSError, subprocess.TimeoutExpired):
         return None
     if proc.returncode != 0:
+        if failure is not None:
+            failure.append(f"{proc.stderr or ''}\n{proc.stdout or ''}")
         return None
     lines = [line.strip() for line in proc.stdout.splitlines() if line.strip()]
     return lines[-1] if lines else None
@@ -665,6 +676,20 @@ def _check_pref_dirs(report: Report, states: Sequence[PackageState]) -> None:
         )
 
 
+def licence_state(hfs: Path) -> Any:
+    """``sesictrl diagnostic`` / ``hserver -l`` next to ``hfs``, parsed (tests replace it)."""
+    return licence.licence_state(hfs)
+
+
+def _check_licence(report: Report, hfs: Path) -> None:
+    """A licence line for doctor: ok, a warning, or info; never a failure (2.1)."""
+    try:
+        level, text = licence.verdict(licence_state(hfs))
+    except Exception as exc:  # a diagnostic must never break doctor
+        level, text = "info", f"not checked ({exc})"
+    {"ok": report.ok, "warn": report.warn}.get(level, report.info)("licence", text)
+
+
 def doctor(
     args: argparse.Namespace,
     out: Callable[[str], None] = print,
@@ -683,10 +708,17 @@ def doctor(
         )
     else:
         report.ok("Houdini install", str(hfs))
+        failure: list[str] = []
         version = run_hython(
-            hfs, "import hou; print(hou.applicationVersionString())", HYTHON_VERSION_TIMEOUT_S
+            hfs,
+            "import hou; print(hou.applicationVersionString())",
+            HYTHON_VERSION_TIMEOUT_S,
+            failure=failure,
         )
-        if version is None:
+        refused = licence.log_excerpt("\n".join(failure))
+        if version is None and refused:
+            report.warn("Houdini version", f'hython could not get a licence: "{refused}"')
+        elif version is None:
             report.warn("Houdini version", "hython did not answer (licence or startup problem?)")
         else:
             parts = tuple(int(n) for n in re.findall(r"\d+", version)[:2])
@@ -699,6 +731,7 @@ def doctor(
                 )
             else:
                 report.ok("Houdini version", version)
+        _check_licence(report, hfs)
 
     from .bridge.config import dedupe_dirs, find_config_file, installed_pref_dirs, same_dir_key
 

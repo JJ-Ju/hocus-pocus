@@ -300,7 +300,21 @@ Responsibilities:
 7. **Launch Houdini.** `houdini_connect {launch: {mode: "gui"|"headless", hip?, wait_s}}`
    runs `houdinifx.exe`/`houdini.exe` (GUI) or `hython -m hocuspocus.host` (headless) from
    the detected `$HFS` (config, `HFS` env, or the newest `Side Effects Software/Houdini 22.*`),
-   then polls the registry until the new pid appears or `wait_s` elapses.
+   then polls the registry until the new pid appears or `wait_s` elapses. 2.1 (review 26
+   P1 #1): a licence failure ends the wait at once (`bridge/licence.py`). Without a
+   licence, Houdini 22.0.466's hython prints `No licenses could be found to run this
+   application.` / `Please check for a valid license server host` and exits with code 3,
+   and houdinifx prints nothing: about 1 s after starting it opens the License
+   Administrator (`hkey`, as a child process) and its own window titled `Unable to Acquire
+   a License`, then exits with code 3 some seconds later. So these all mean no licence: a
+   launch log line like those, exit code 3, or, during a GUI wait, that window or an hkey
+   child. The answer is `houdini_offline` with `retryable: false`, a message that says
+   Houdini could not get a licence, `detail: {reason: "licence", exit_code?, log_excerpt?,
+   log?, seen?, license_administrator_pid?}`, and a hint to sign in with the License
+   Administrator or `sesictrl login` (or `hserver -S` for a licence server) and launch
+   again. The hint says an agent cannot sign in, and it never names `install-houdini`. A
+   GUI Houdini caught waiting on that dialog is stopped; the License Administrator stays
+   open for the user. `hocuspocus launch` fails with the same message.
 8. **Budget responses.** Enforce `max_response_bytes` (default 16 KB) by truncating list
    payloads at item boundaries and setting `truncated: true` plus `next_cursor` when the
    host supplied one (§4.1). Images are exempt from the byte cap but downscaled by the host.
@@ -1148,7 +1162,7 @@ own. `tests/unit/test_hint_profiles.py` checks a fixture of errors in every prof
 Stable codes (the complete set; adding one is a design change):
 
 | code | when | retryable |
-| `houdini_offline` | no live instance; names the pid (and hip) the bridge was driving if it exited, and says its unsaved changes are lost | after connect (`retryable: false` when nothing is running) |
+| `houdini_offline` | no live instance; names the pid (and hip) the bridge was driving if it exited, and says its unsaved changes are lost; 2.1: a launch that could not get a licence (`detail.reason: "licence"`, §3.3 rule 7) | after connect (`retryable: false` when nothing is running, and for a licence failure until someone signs in) |
 | `ambiguous_instance` | several live instances, none pinned, and the call changes a scene (1.3, §3.3 rule 3); `candidates` as for `instance_lost`, `hint` names the `houdini_connect {"pid": …}` call for each | no; after `houdini_connect {pid}` |
 | `instance_lost` | the pinned Houdini exited (1.3), or the one an `on` or a job id names (2.0, §3.6, §3.8); names its pid and label, `candidates` are the live instances as `{pid, label, ui, hip}`; the bridge does not switch on its own (§3.6) | no; after an explicit `houdini_connect` |
 | `houdini_busy` | main-thread timeout | yes |
@@ -1211,7 +1225,7 @@ src/hocuspocus/
            cook.py types.py geo.py visual.py state.py hda.py usd.py pdg.py events.py
            inspect.py search.py edit.py look.py
   bridge/                      # OUTSIDE Houdini. mcp SDK.
-    __main__.py server.py client.py instances.py launch.py local_tools.py
+    __main__.py server.py client.py instances.py launch.py licence.py local_tools.py
     validate.py budget.py config.py instructions.py
     ledger.py                  # the SQLite ledger (§3.8)
     routing.py                 # on and roles (§3.6)
@@ -1267,7 +1281,11 @@ for the current project only.
    `hocuspocus.toml` without asking hython (§3.7).
 4. Prints what it did and the restart note. Idempotent; replaces older versions.
 
-`hocuspocus doctor` checks: HFS found, Houdini version, every candidate pref dir with
+`hocuspocus doctor` checks: HFS found, Houdini version (2.1: names a licence refusal by
+hython), the licence (2.1: `sesictrl diagnostic`, else `hserver -l`, from `$HFS/bin`;
+ok when licences are installed or the account is signed in, info for a studio licence
+server or when the tools are missing, otherwise a warning with the sign-in hint; never a
+failure), every candidate pref dir with
 whether its package JSON is present and current (warning, with the command to run, when
 one has it and another does not), which
 `hocuspocus.toml` the bridge reads, package JSON present and pointing at an existing

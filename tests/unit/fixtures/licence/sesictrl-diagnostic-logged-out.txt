@@ -1,0 +1,64 @@
+Diagnostic Output:
+==================
+If you are having licensing problems, please save this information and email it
+to support@sidefx.com.
+
+License Administrator output:
+=============================
+Generated on:                                Sat Oct 24 17:54:08 2026
+Local host name:                             HOSTNAME
+Local server code:                           0000aaaa
+Local ip address:                            192.0.2.10
+System:                                      Microsoft Windows 11 Pro x64 (windows-x86_64-cl19.42)
+Number of servers:                           1
+License server name:                         http://localhost:1715 (HOSTNAME)
+   License server server code:               0000bbbb
+   Server ip address:                        fe80::1
+   Reported host name:                       HOSTNAME
+   Reported host ip address:                 fe80::1
+   Running in container:                     No
+   License server is running:                Yes
+   May read licenses from server:            Yes
+   Has SERVER license:                       Yes
+   License server version:                   22.0.466
+   May modify server from this machine:      Yes
+   Redundant Configuration Enabled:          Yes
+License Administrator version:               22.0.466
+Http NoProxy:                                localhost,127.0.0.1 (default)
+Http Proxy:                                  (none)
+Can retrieve:                                https://www.sidefx.com/api/license/ Yes 
+Can Manage Licenses:                         No
+Login Based Account:                         No
+Logged In:                                   No
+
+
+Installed licenses:
+===================
+
+
+hserver -l output:
+==================
+Hostname:	HOSTNAME	[Microsoft Windows 11 Pro x64]
+Uptime:		5 days, 13:33:37	[Started: Mon Oct 19 04:20:32 2026]
+License Server:	https://www.sidefx.com/license/sesinetd
+Connected To:	https://www.sidefx.com/license/sesinetd
+Server Version:	sesinetd22.0.10917
+Version:	Houdini22.0.466
+ReadAccess (Ipv4):	
+WriteAccess (Ipv4):	
+ReadAccess (Ipv6):	
+WriteAccess (Ipv6):	
+Using Http: Yes
+Enabled IPv6: false
+Used Licenses: None
+
+    39,554 of 63,092 MB available
+    CPU Usage:16% load
+
+
+HTTP(s) Backend Info:
+==================
+library:                     libcurl/8.9.1 (Windows)
+SSL Version:                 Schannel
+Features:                    AsyncDNS HTTPS-proxy IPv6
+

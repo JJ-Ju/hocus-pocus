@@ -29,7 +29,7 @@ src/hocuspocus/
       types.py geo.py visual.py state.py hda.py usd.py pdg.py events.py inspect.py
       search.py edit.py look.py
   bridge/                      # OUTSIDE Houdini; official mcp SDK
-    __main__.py server.py client.py instances.py launch.py local_tools.py
+    __main__.py server.py client.py instances.py launch.py licence.py local_tools.py
     validate.py budget.py config.py instructions.py
 houdini/                       # Houdini package payload (hpath); deliberately NOT the repo root
   hocuspocus.json.template     #   rendered to <prefs>/packages/hocuspocus.json

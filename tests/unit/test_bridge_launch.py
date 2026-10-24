@@ -36,27 +36,46 @@ class FakeProc:
     def __init__(self, pid: int, exit_code: int | None = None) -> None:
         self.pid = pid
         self.exit_code = exit_code
+        self.terminated = False
 
     def poll(self):
         return self.exit_code
+
+    def terminate(self):
+        self.terminated = True
+
+
+FIXTURES = Path(__file__).parent / "fixtures" / "licence"
 
 
 class Harness:
     """A fake spawner plus a fake registry the 'launched' host registers into."""
 
     def __init__(
-        self, pid: int = 9001, register: bool = True, exit_code: int | None = None
+        self,
+        pid: int = 9001,
+        register: bool = True,
+        exit_code: int | None = None,
+        log_bytes: bytes | None = None,
     ) -> None:
         self.pid = pid
         self.register = register
         self.exit_code = exit_code
+        self.log_bytes = log_bytes
+        """Written to the launch log, as the child's stdout and stderr would be."""
         self.live: list[Instance] = []
         self.spawned: list[tuple[list[str], dict, Path, Path | None]] = []
+        self.procs: list[FakeProc] = []
         self.polls = 0
 
     def spawner(self, argv, env, cwd, log_path):
         self.spawned.append((argv, env, cwd, log_path))
-        return FakeProc(self.pid, self.exit_code)
+        if log_path is not None and self.log_bytes is not None:
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            log_path.write_bytes(self.log_bytes)
+        proc = FakeProc(self.pid, self.exit_code)
+        self.procs.append(proc)
+        return proc
 
     def scan(self):
         self.polls += 1
@@ -71,7 +90,11 @@ class Harness:
 
 
 def make_launcher(
-    hfs: Path, harness: Harness, clock_step: float = 1.0, outlives: bool | None = None
+    hfs: Path,
+    harness: Harness,
+    clock_step: float = 1.0,
+    outlives: bool | None = None,
+    gui_probe=None,
 ) -> Launcher:
     t = [0.0]
 
@@ -84,15 +107,18 @@ def make_launcher(
     extra: dict = {"python_dir": lambda environ: (hfs.parent / "hostpkg", "test")}
     if outlives is not None:
         extra["outlives"] = lambda proc: outlives
-    return Launcher(
+    launcher = Launcher(
         str(hfs),
         spawner=harness.spawner,
         scan=harness.scan,
         sleep=sleep,
         clock=clock,
         environ={},
+        gui_probe=gui_probe,
         **extra,
     )
+    launcher.test_clock = t
+    return launcher
 
 
 def test_detect_hfs_prefers_explicit_then_env(tmp_path):
@@ -193,10 +219,157 @@ def test_launch_times_out_with_hint(tmp_path):
 
 def test_launch_reports_early_exit(tmp_path):
     hfs = fake_hfs(tmp_path / "hfs")
-    harness = Harness(register=False, exit_code=3)
+    harness = Harness(register=False, exit_code=1, log_bytes=b"Traceback ...\nImportError\n")
     with pytest.raises(ToolError) as info:
         make_launcher(hfs, harness).launch("headless", None, wait_s=30)
-    assert "exited with code 3" in info.value.message
+    assert "exited with code 1" in info.value.message
+    assert info.value.detail["exit_code"] == 1
+    assert "licence" not in info.value.message
+
+
+# -- licence failures (2.1, review 26 P1 #1) -------------------------------------------
+
+
+def _assert_licence_error(error: ToolError) -> None:
+    assert error.code == "houdini_offline"  # the closed code set (BIBLE §9)
+    assert error.retryable is False
+    assert "could not get a licence" in error.message
+    hint = error.hint or ""
+    assert "hkey" in hint and "sesictrl login" in hint and "hserver" in hint
+    assert "install-houdini" not in hint and "doctor" not in hint
+    assert error.detail["reason"] == "licence"
+
+
+def test_headless_licence_failure_is_named_from_the_real_log(tmp_path):
+    """Houdini 22.0.466's own words (fixture) and exit code 3 make a licence error."""
+    log = (FIXTURES / "hython-no-licence.log").read_bytes()
+    harness = Harness(register=False, exit_code=3, log_bytes=log)
+    launcher = make_launcher(fake_hfs(tmp_path / "hfs"), harness)
+    with pytest.raises(ToolError) as info:
+        launcher.launch("headless", None, wait_s=90)
+    error = info.value
+    _assert_licence_error(error)
+    assert "No licenses could be found to run this application." in error.message
+    assert error.detail["exit_code"] == 3
+    assert error.detail["log_excerpt"] == (
+        "No licenses could be found to run this application. "
+        "Please check for a valid license server host"
+    )
+    assert error.detail["log"].endswith(".log")
+    assert launcher.test_clock[0] <= 1  # answered at once, not after wait_s
+    assert error.to_dict()["retryable"] is False
+
+
+def test_licence_text_wins_over_an_unusual_exit_code(tmp_path):
+    log = (FIXTURES / "hython-no-licence.log").read_bytes()
+    harness = Harness(register=False, exit_code=1, log_bytes=log)
+    with pytest.raises(ToolError) as info:
+        make_launcher(fake_hfs(tmp_path / "hfs"), harness).launch("headless", None, wait_s=30)
+    _assert_licence_error(info.value)
+    assert info.value.detail["exit_code"] == 1
+
+
+def test_exit_code_3_without_a_log_is_a_licence_failure(tmp_path):
+    """houdinifx prints nothing; its exit code 3 is the licence refusal."""
+    harness = Harness(register=False, exit_code=3)
+    with pytest.raises(ToolError) as info:
+        make_launcher(fake_hfs(tmp_path / "hfs"), harness).launch("gui", None, wait_s=90)
+    _assert_licence_error(info.value)
+    assert "exit code 3" in info.value.message
+    assert "log_excerpt" not in info.value.detail
+
+
+def test_gui_licence_dialog_ends_the_wait_within_seconds(tmp_path):
+    """The dialog (or hkey) appears about 1 s after houdinifx starts: the launch answers
+    then, stops the Houdini it started, and leaves the License Administrator up."""
+    seen = []
+
+    def probe(pid):
+        seen.append(pid)
+        if len(seen) < 3:
+            return None
+        return launch.licence.GuiSignal(
+            "dialog", title="Unable to Acquire a License", admin_pid=4242
+        )
+
+    harness = Harness(register=False)
+    launcher = make_launcher(fake_hfs(tmp_path / "hfs"), harness, clock_step=0.5, gui_probe=probe)
+    with pytest.raises(ToolError) as info:
+        launcher.launch("gui", None, wait_s=90)
+    error = info.value
+    _assert_licence_error(error)
+    assert set(seen) == {9001}
+    assert launcher.test_clock[0] <= 2.0
+    assert "Unable to Acquire a License" in error.message
+    assert "stopped the Houdini it started" in error.message
+    assert harness.procs[0].terminated is True
+    assert error.detail["seen"] == "dialog"
+    assert error.detail["license_administrator_pid"] == 4242
+    assert "exit_code" not in error.detail  # still running when it was stopped
+
+
+def test_gui_licence_administrator_alone_is_enough(tmp_path):
+    probe = lambda pid: launch.licence.GuiSignal("license_administrator", admin_pid=77)  # noqa: E731
+    harness = Harness(register=False)
+    with pytest.raises(ToolError) as info:
+        make_launcher(fake_hfs(tmp_path / "hfs"), harness, gui_probe=probe).launch(
+            "gui", None, wait_s=90
+        )
+    _assert_licence_error(info.value)
+    assert "License Administrator" in info.value.message
+
+
+def test_headless_launch_never_probes_windows(tmp_path):
+    called = []
+    harness = Harness()
+    launcher = make_launcher(
+        fake_hfs(tmp_path / "hfs"), harness, gui_probe=lambda pid: called.append(pid)
+    )
+    assert launcher.launch("headless", None, wait_s=30).instance.pid == 9001
+    assert called == []
+
+
+def test_a_failing_probe_changes_nothing(tmp_path):
+    def probe(pid):
+        raise OSError("no display")
+
+    harness = Harness(register=False)
+    with pytest.raises(ToolError) as info:
+        make_launcher(fake_hfs(tmp_path / "hfs"), harness, gui_probe=probe).launch(
+            "gui", None, wait_s=5
+        )
+    assert "did not register within 5s" in info.value.message
+    assert "licence" in (info.value.hint or "")  # the GUI timeout hint names it first
+
+
+def test_a_registered_gui_is_never_probed_after_it_registers(tmp_path):
+    """A licensed GUI: the probe answers None and the launch succeeds as before."""
+    harness = Harness()
+    launcher = make_launcher(fake_hfs(tmp_path / "hfs"), harness, gui_probe=lambda pid: None)
+    assert launcher.launch("gui", None, wait_s=30).instance.pid == 9001
+    assert harness.procs[0].terminated is False
+
+
+def test_houdini_connect_launch_answers_the_licence_error(tmp_path):
+    log = (FIXTURES / "hython-no-licence.log").read_bytes()
+    harness = Harness(register=False, exit_code=3, log_bytes=log)
+    launcher = make_launcher(fake_hfs(tmp_path / "hfs"), harness)
+    from hocuspocus.tools import catalog
+
+    bridge = Bridge(
+        BridgeConfig(),
+        tools=catalog.TOOLS or None,
+        client_factory=lambda p, t: None,
+        scan=harness.scan,
+        launcher=launcher,
+    )
+    result = bridge.call_tool("houdini_connect", {"launch": {"mode": "headless"}})
+    assert result.is_error is True
+    out = json.loads(result.content[0].text)
+    assert out["code"] == "houdini_offline" and out["retryable"] is False
+    assert "could not get a licence" in out["message"]
+    assert "hkey" in out["hint"] and "install-houdini" not in out["hint"]
+    assert out["detail"]["exit_code"] == 3 and "No licenses" in out["detail"]["log_excerpt"]
 
 
 def test_launch_missing_hip(tmp_path):
