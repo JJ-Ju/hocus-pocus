@@ -19,7 +19,7 @@ from ._helpers import (
 
 SPEC = ToolSpec(
     name="node_create",
-    profiles=("minimal", "core", "full", "compat_1x"),
+    profiles=("minimal", "core", "full"),
     description=(
         "Create nodes in one undo step. type resolves like createNode (box gets the current "
         "version; exact_type disables). Items may wire to earlier items; a block_end pairs with"

@@ -100,36 +100,9 @@ def test_plan_notes_say_why_lit_used_karma_and_quality_is_ignored_for_a_cop():
     assert select.plan(_spec("cop", "draft"), HEADLESS).notes == ()
 
 
-# viewport_capture keeps its 1.4 policy: (kind, source, camera, env) -> chain
-CAPTURE_PLANS = [
-    ("obj", "auto", None, HEADLESS, ROPS_HEADLESS),
-    ("lop", "auto", None, HEADLESS, ROPS_HEADLESS),
-    ("obj", "flipbook_rop", None, HEADLESS, ROPS_HEADLESS),
-    ("obj", "opengl_rop", None, HEADLESS, ROPS_HEADLESS),
-    ("obj", "auto", None, GUI, ("viewer",)),  # 1.4: auto is the viewer in the GUI
-    ("obj", "auto", None, GUI_NO_VIEWER, ROPS_GUI),
-    ("obj", "auto", "/obj/cam1", GUI, ROPS_GUI),  # with a camera, the ROP
-    ("lop", "auto", None, GUI, ROPS_GUI),
-    ("obj", "flipbook_rop", None, GUI, ROPS_GUI),
-    ("obj", "viewer", None, GUI, ("viewer",)),
-]
-
-
-@pytest.mark.parametrize(("kind", "source", "camera", "env", "chain"), CAPTURE_PLANS)
-def test_viewport_capture_plan_is_1_4s(kind, source, camera, env, chain):
-    plan = select.capture_plan(_spec(kind, source=source, camera=camera), env)
-    assert plan.chain == chain
-    assert plan.samples is None and plan.rop_parms == {}
-
-
-@pytest.mark.parametrize(
-    ("kind", "env", "code"),
-    [("lop", GUI, "invalid_argument"), ("obj", GUI_NO_VIEWER, "invalid_value")],
-)
-def test_viewport_capture_viewer_refusals(kind, env, code):
-    with pytest.raises(ToolError) as caught:
-        select.capture_plan(_spec(kind, source="viewer"), env)
-    assert caught.value.code == code
+def test_viewport_captures_1_4_policy_is_gone():
+    """2.1 removed viewport_capture and its 1.4 chain policy with compat_1x."""
+    assert not hasattr(select, "capture_plan") and not hasattr(select, "capture_chain")
 
 
 @pytest.mark.parametrize(
@@ -216,21 +189,16 @@ def test_finish_capture_writes_output_as_png_or_jpeg(tmp_path):
     capture.parent.mkdir()
     Image.new("RGBA", (1600, 800), (255, 0, 0, 0)).save(capture)
     png = tmp_path / "out" / "deep" / "look.png"
-    result = finish_capture(
-        str(capture), (1600, 800), 1.0, {"backend_used": "flipbook"}, str(png), extra_key="output"
-    )
+    result = finish_capture(str(capture), (1600, 800), 1.0, {"backend_used": "flipbook"}, str(png))
     assert result["output"] == str(png) and "also_written" not in result
     assert result["image"]["png_base64"] and result["width"] == 1024  # inline: downscaled
     with Image.open(png) as im:
         assert im.size == (1600, 800) and im.mode == "RGB"  # file: rendered size, flat
         assert im.getpixel((0, 0)) == BACKGROUND
     jpg = tmp_path / "out" / "look.jpg"
-    result = finish_capture(str(capture), (1600, 800), 1.0, {}, str(jpg), extra_key="output")
+    result = finish_capture(str(capture), (1600, 800), 1.0, {}, str(jpg))
     with Image.open(jpg) as im:
         assert im.format == "JPEG" and im.size == (1600, 800)
-    # viewport_capture keeps its 1.4 key
-    legacy = finish_capture(str(capture), (1600, 800), 1.0, {}, str(tmp_path / "v.png"))
-    assert legacy["also_written"] == str(tmp_path / "v.png")
 
 
 def test_unwritable_output_is_invalid_argument(tmp_path):

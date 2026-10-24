@@ -1,10 +1,10 @@
-"""Node tools against real Houdini (docs/BIBLE.md §4.4, §5)."""
+"""Node tools against real Houdini (docs/BIBLE.md §4.4, §5): node_create, the node read
+engines (node_info, node_find; conftest READ_ENGINES) and the edit ops that replaced the
+1.4 mutation tools in 2.1 (delete, node, copy, connect, layout)."""
 
 from __future__ import annotations
 
 import pytest
-
-pytestmark = pytest.mark.compat_1x  # the 1.4 tools (conftest: compat_client)
 
 hou = pytest.importorskip("hou")
 
@@ -332,21 +332,30 @@ def test_create_copy_and_build_summary_results(client):
         "node_create", {"items": [{"parent": "/obj/geo1", "type": "box"}], "return": "full"}
     )
     assert "parms" in full["results"][0] and "flags" in full["results"][0]
+    # The edit copy and build ops (the 1.4 node_copy and network_build) echo summary rows.
     copied = client.ok(
-        "node_copy",
-        {"paths": ["/obj/geo1/x0", "/obj/geo1/x1"], "to_parent": "/obj/geo1", "return": "summary"},
+        "edit",
+        {
+            "ops": [
+                {"op": "copy", "paths": ["/obj/geo1/x0", "/obj/geo1/x1"], "to_parent": "/obj/geo1"}
+            ]
+        },
     )
-    keys = {"path", "type", "errors", "warnings", "cook_state", "hint", "source", "cook_ms"}
+    keys = {"path", "type", "errors", "warnings", "cook_state", "hint", "cook_ms"}
     keys |= {"errors_same_as", "warnings_same_as"}
-    assert all(set(row) <= keys for row in copied["results"])
-    texts = [tuple(row["errors"]) for row in copied["results"] if row.get("errors")]
+    assert copied["nodes"] and all(set(row) <= keys for row in copied["nodes"])
+    texts = [tuple(row["errors"]) for row in copied["nodes"] if row.get("errors")]
     assert len(texts) == len(set(texts))
     built = client.ok(
-        "network_build",
+        "edit",
         {
-            "parent": "/obj/geo1",
-            "data": {"b1": {"type": "box"}, "b2": {"type": "box"}},
-            "return": "summary",
+            "ops": [
+                {
+                    "op": "build",
+                    "parent": "/obj/geo1",
+                    "data": {"b1": {"type": "box"}, "b2": {"type": "box"}},
+                }
+            ]
         },
     )
     assert [n["path"] for n in built["nodes"]] == ["/obj/geo1/b1", "/obj/geo1/b2"]
@@ -354,7 +363,7 @@ def test_create_copy_and_build_summary_results(client):
     assert geo.node("b2") is not None
 
 
-# -- node_info ---------------------------------------------------------------------
+# -- node_info (inspect what: node) ------------------------------------------------
 
 
 def test_info_sections(client):
@@ -456,7 +465,8 @@ def test_info_not_found(client):
 
 
 def test_node_not_found_is_one_shape_across_tools(client):
-    """Node, network, parm and cook tools share _diag.require_node's error."""
+    """Node, network, parm and cook reads and the edit ops share _diag.require_node's
+    error."""
     make_chain()
     missing = "/obj/geo1/xfrom1"
     errors = [
@@ -465,44 +475,39 @@ def test_node_not_found_is_one_shape_across_tools(client):
         client.error("parm_get", {"paths": [f"{missing}/tx"]}),
         client.error("cook", {"paths": [missing]}),
         client.error(
-            "node_connect", {"items": [{"from": "xfrom1", "to": "/obj/geo1/OUT", "to_input": 0}]}
+            "edit",
+            {"ops": [{"op": "connect", "from": "xfrom1", "to": "/obj/geo1/OUT", "to_input": 0}]},
         ),
     ]
     assert {e["code"] for e in errors} == {"node_not_found"}
     assert {e["message"] for e in errors[:4]} == {f"No node at {missing}."}
+    assert errors[4]["message"] == f"ops[0].from: No node at {missing}."
     assert all(e["candidates"][0] == "/obj/geo1/xform1" for e in errors)
     assert "Parm paths are" in errors[2]["hint"]
 
 
 def test_missing_wiring_source_names_itself_and_its_parent(client):
     """Review 21 papercut 4: the prefix named the target, the candidate was the target
-    itself and the hint said only 'Check the node name.'"""
+    itself and the hint said only 'Check the node name.' (The edit connect op's form is
+    test_edit.py's test_edit_errors_name_the_op_field_and_nearby_candidates.)"""
     make_chain()
-    error = client.error(
-        "node_connect",
-        {"items": [{"from": "/obj/geo1/nope", "to": "/obj/geo1/OUT", "to_input": 0}]},
-    )
-    assert error["code"] == "node_not_found"
-    assert error["message"].startswith("items[0] (/obj/geo1/nope): ")
-    assert "/obj/geo1/OUT" in error["message"]  # what it was to be wired into
-    assert error["detail"]["path"] == "/obj/geo1/nope"
-    assert "/obj/geo1/OUT" not in error.get("candidates", [])
-    assert 'node_find {root: "/obj/geo1"}' in error["hint"]
     created = client.error(
         "node_create",
         {"items": [{"parent": "/obj/geo1", "type": "null", "inputs": [{"from": "xfrom2"}]}]},
     )
+    assert created["code"] == "node_not_found"
     assert created["message"].startswith("items[0] (/obj/geo1/xfrom2): ")
     assert created["candidates"][0] == "/obj/geo1/xform1"
+    assert 'search {kind: "nodes", root: "/obj/geo1"}' in created["hint"]
 
 
-def test_missing_parent_hint_names_node_find_on_the_nearest_ancestor(client):
+def test_missing_parent_hint_names_the_node_search_on_the_nearest_ancestor(client):
     error = client.error("node_info", {"paths": ["/obj/soak_missing/out"]})
     assert "/obj/soak_missing does not exist either" in error["hint"]
-    assert 'node_find {root: "/obj"}' in error["hint"]
+    assert 'search {kind: "nodes", root: "/obj"}' in error["hint"]
 
 
-# -- node_find ---------------------------------------------------------------------
+# -- node_find (search kind: nodes) -----------------------------------------------
 
 
 def test_find_filters_and_pages(client):
@@ -627,10 +632,9 @@ def test_find_caps_rows_to_the_response_budget(client, host):
     assert len(paths) == 60 == len(set(paths))
     # The bridge sends its budget in the /hp/v1/call envelope; the host pages by it.
     body = {
-        "tool": "node_find",
-        "args": {"root": "/obj/geo1", "limit": 1000},
+        "tool": "search",
+        "args": {"kind": "nodes", "root": "/obj/geo1", "limit": 1000, "detail": "full"},
         "max_response_bytes": 2048,
-        "profile": "compat_1x",  # what a compat_1x bridge sends with node_find
     }
     enveloped = client.request("POST", "/hp/v1/call", body).body["result"]
     assert enveloped["nodes"] == first["nodes"] and enveloped["next_cursor"]
@@ -641,12 +645,12 @@ def test_find_root_not_found(client):
     assert error["code"] == "node_not_found" and "/obj" in error["candidates"]
 
 
-# -- node_delete -------------------------------------------------------------------
+# -- edit delete op (1.4: node_delete) ---------------------------------------------
 
 
 def test_delete_keeps_connections(client):
     geo, box, xform, null = make_chain()
-    result = client.ok("node_delete", {"paths": ["/obj/geo1/xform1"]})
+    result = client.ok("edit", {"ops": [{"op": "delete", "paths": ["/obj/geo1/xform1"]}]})
     assert result["deleted"] == ["/obj/geo1/xform1"]
     assert result["reconnected"] == [{"from": "/obj/geo1/box1", "to": "/obj/geo1/OUT", "input": 0}]
     assert null.inputs()[0].path() == "/obj/geo1/box1"
@@ -654,28 +658,34 @@ def test_delete_keeps_connections(client):
 
 def test_delete_without_connections_and_missing(client):
     geo, box, xform, null = make_chain()
-    client.ok("node_delete", {"paths": ["/obj/geo1/xform1"], "keep_connections": False})
+    client.ok(
+        "edit",
+        {"ops": [{"op": "delete", "paths": ["/obj/geo1/xform1"], "keep_connections": False}]},
+    )
     assert null.inputs() == ()
-    error = client.error("node_delete", {"paths": ["/obj/geo1/nope"]})
+    error = client.error("edit", {"ops": [{"op": "delete", "paths": ["/obj/geo1/nope"]}]})
     assert error["code"] == "node_not_found" and error["hint"]
 
 
 def test_delete_inside_locked_refused(client):
     _geo, mountain = make_locked_mountain()
-    error = client.error("node_delete", {"paths": [mountain.children()[0].path()]})
+    error = client.error(
+        "edit", {"ops": [{"op": "delete", "paths": [mountain.children()[0].path()]}]}
+    )
     assert error["code"] == "locked"
 
 
-# -- node_edit ---------------------------------------------------------------------
+# -- edit node op (1.4: node_edit) ------------------------------------------------
 
 
 def test_edit_rename_flags_color_comment_position(client):
     geo, box, xform, null = make_chain()
     result = client.ok(
-        "node_edit",
+        "edit",
         {
-            "items": [
+            "ops": [
                 {
+                    "op": "node",
                     "path": "/obj/geo1/box1",
                     "name": "base_box",
                     "color": [1, 0, 0],
@@ -683,13 +693,20 @@ def test_edit_rename_flags_color_comment_position(client):
                     "position": [3, 4],
                     "bypass": True,
                 },
-                {"path": "/obj/geo1/xform1", "flags": {"display": True, "template": True}},
-            ]
+                {
+                    "op": "node",
+                    "path": "/obj/geo1/xform1",
+                    "flags": {"display": True, "template": True},
+                },
+            ],
+            "return": "full",
         },
     )
     first, second = result["results"]
+    nodes = {row["path"]: row for row in result["nodes"]}
     assert first["old_path"] == "/obj/geo1/box1" and first["path"] == "/obj/geo1/base_box"
-    assert first["flags"]["bypass"] is True and first["color"] == [1.0, 0.0, 0.0]
+    assert nodes["/obj/geo1/base_box"]["flags"]["bypass"] is True
+    assert first["color"] == [1.0, 0.0, 0.0]
     assert first["comment"] == "OUT" and first["position"] == [3.0, 4.0]
     assert "old_path" not in second
     assert xform.isDisplayFlagSet() and xform.isTemplateFlagSet()
@@ -698,11 +715,11 @@ def test_edit_rename_flags_color_comment_position(client):
 def test_edit_rename_collision_and_rollback(client):
     geo, box, xform, null = make_chain()
     error = client.error(
-        "node_edit",
+        "edit",
         {
-            "items": [
-                {"path": "/obj/geo1/xform1", "name": "moved", "comment": "c"},
-                {"path": "/obj/geo1/OUT", "name": "box1"},
+            "ops": [
+                {"op": "node", "path": "/obj/geo1/xform1", "name": "moved", "comment": "c"},
+                {"op": "node", "path": "/obj/geo1/OUT", "name": "box1"},
             ]
         },
     )
@@ -712,20 +729,28 @@ def test_edit_rename_collision_and_rollback(client):
 
 def test_edit_object_has_no_bypass_flag(client):
     make_chain()
-    error = client.error("node_edit", {"items": [{"path": "/obj/geo1", "flags": {"bypass": True}}]})
+    error = client.error(
+        "edit", {"ops": [{"op": "node", "path": "/obj/geo1", "flags": {"bypass": True}}]}
+    )
     assert error["code"] == "invalid_argument" and "display" in error["hint"]
 
 
 def test_edit_lock_unlock_hda(client):
     _geo, mountain = make_locked_mountain()
-    result = client.ok("node_edit", {"items": [{"path": mountain.path(), "lock": False}]})
+
+    def node_op(**fields):
+        return client.ok("edit", {"ops": [{"op": "node", **fields}], "return": "ops"})
+
+    result = node_op(path=mountain.path(), lock=False)
     assert result["results"][0]["hda"]["hda_locked"] is False
     assert not mountain.isLockedHDA()
     created = client.ok("node_create", {"items": [{"parent": mountain.path(), "type": "null"}]})
     assert created["created"][0].startswith(mountain.path() + "/")
-    relocked = client.ok("node_edit", {"items": [{"path": mountain.path(), "lock": True}]})
+    relocked = node_op(path=mountain.path(), lock=True)
     assert relocked["results"][0]["hda"]["hda_locked"] is True
-    error = client.error("node_edit", {"items": [{"path": "/obj/terrain/grid1", "lock": False}]})
+    error = client.error(
+        "edit", {"ops": [{"op": "node", "path": "/obj/terrain/grid1", "lock": False}]}
+    )
     assert error["code"] == "invalid_argument" and error["hint"]
 
 
@@ -741,28 +766,33 @@ def test_edit_validates_everything_before_locking(client):
         {"position": [1]},
     ):
         error = client.error(
-            "node_edit", {"items": [{"path": mountain.path(), "lock": True, **bad}]}
+            "edit", {"ops": [{"op": "node", "path": mountain.path(), "lock": True, **bad}]}
         )
         assert error["code"] == "invalid_argument", (bad, error)
         assert not mountain.isLockedHDA(), bad
         assert mountain.node("my_edit") is not None, bad
     result = client.ok(
-        "node_edit",
+        "edit",
         {
-            "items": [
-                {"path": mountain.path(), "lock": True, "name": "bad name!"},
-                {"path": mountain.path(), "comment": "kept"},
+            "ops": [
+                {"op": "node", "path": mountain.path(), "lock": True, "name": "bad name!"},
+                {"op": "node", "path": mountain.path(), "comment": "kept"},
             ],
             "partial": True,
+            "return": "ops",
         },
     )
     assert result["failed"] == 1 and result["results"][0]["error"]["code"] == "invalid_argument"
     assert mountain.node("my_edit") is not None and mountain.comment() == "kept"
     renamed = client.ok(
-        "node_edit", {"items": [{"path": mountain.path(), "lock": True, "name": "peaks"}]}
+        "edit",
+        {
+            "ops": [{"op": "node", "path": mountain.path(), "lock": True, "name": "peaks"}],
+            "return": "ops",
+        },
     )
-    block = renamed["results"][0]
-    assert block["path"].endswith("/peaks") and block["hda"]["hda_locked"] is True
+    row = renamed["results"][0]
+    assert row["path"].endswith("/peaks") and row["hda"]["hda_locked"] is True
 
 
 def test_operation_failed_maps_to_a_stable_code(client):
@@ -774,55 +804,42 @@ def test_operation_failed_maps_to_a_stable_code(client):
     assert renamed.code == "name_collision" and renamed.hou_exception
 
 
-# -- node_copy ---------------------------------------------------------------------
+# -- edit copy op (1.4: node_copy) ------------------------------------------------
 
 
 def test_copy_within_and_across_networks(client):
     geo, box, xform, null = make_chain()
-    same = client.ok(
-        "node_copy",
-        {
-            "paths": ["/obj/geo1/box1", "/obj/geo1/xform1"],
-            "to_parent": "/obj/geo1",
-            "names": ["box_copy"],
-        },
-    )
+
+    def copy(**fields):
+        ops = [{"op": "copy", "paths": ["/obj/geo1/box1", "/obj/geo1/xform1"], **fields}]
+        return client.ok("edit", {"ops": ops, "return": "full"})["results"][0]
+
+    same = copy(to_parent="/obj/geo1", names=["box_copy"])
     assert same["paths"] == ["/obj/geo1/box_copy", "/obj/geo1/xform2"]
     copied = hou.node("/obj/geo1/xform2")
     assert copied.inputs()[0].path() == "/obj/geo1/box_copy"
     hou.node("/obj").createNode("geo", "other")
-    across = client.ok(
-        "node_copy",
-        {
-            "paths": ["/obj/geo1/box1", "/obj/geo1/xform1"],
-            "to_parent": "/obj/other",
-            "with_inputs": False,
-            "position_offset": [5, 1],
-        },
-    )
+    across = copy(to_parent="/obj/other", with_inputs=False, position_offset=[5, 1])
     assert across["paths"] == ["/obj/other/box1", "/obj/other/xform1"]
     assert hou.node("/obj/other/xform1").inputs() == ()
     hou.node("/obj").createNode("geo", "plain")
-    client.ok(
-        "node_copy", {"paths": ["/obj/geo1/box1", "/obj/geo1/xform1"], "to_parent": "/obj/plain"}
-    )
+    copy(to_parent="/obj/plain")
     moved = hou.node("/obj/other/xform1").position()
     plain = hou.node("/obj/plain/xform1").position()
     assert (moved[0], moved[1]) == pytest.approx((plain[0] + 5, plain[1] + 1))
-    assert across["results"][0]["source"] == "/obj/geo1/box1"
+    assert across["sources"] == ["/obj/geo1/box1", "/obj/geo1/xform1"]
 
 
 def test_copy_errors(client):
     make_chain()
-    error = client.error(
-        "node_copy", {"paths": ["/obj/geo1/box1"], "to_parent": "/obj/geo1", "names": ["xform1"]}
-    )
+    collide = {"op": "copy", "paths": ["/obj/geo1/box1"], "to_parent": "/obj/geo1"}
+    error = client.error("edit", {"ops": [{**collide, "names": ["xform1"]}]})
     assert error["code"] == "name_collision"
-    error = client.error("node_copy", {"paths": ["/obj/geo1/box1"], "to_parent": "/obj"})
+    error = client.error("edit", {"ops": [{**collide, "to_parent": "/obj"}]})
     assert error["code"] == "invalid_argument" and error["hint"]
 
 
-# -- node_connect ------------------------------------------------------------------
+# -- edit connect op (1.4: node_connect) -------------------------------------------
 
 
 def test_connect_index_name_next_and_disconnect(client):
@@ -830,17 +847,15 @@ def test_connect_index_name_next_and_disconnect(client):
     sphere = geo.createNode("sphere", "sphere1")
     merge = geo.createNode("merge", "merge1")
     copy = geo.createNode("copytopoints", "copy1")
+    wires = [
+        {"from": "/obj/geo1/box1", "to": "/obj/geo1/merge1", "to_input": "next"},
+        {"from": "/obj/geo1/sphere1", "to": "/obj/geo1/merge1", "to_input": "next"},
+        {"from": "/obj/geo1/box1", "to": "/obj/geo1/copy1", "to_input": "input2"},
+        {"from": "/obj/geo1/sphere1", "to": "/obj/geo1/copy1", "to_input": 0},
+        {"from": None, "to": "/obj/geo1/OUT", "to_input": 0},
+    ]
     result = client.ok(
-        "node_connect",
-        {
-            "items": [
-                {"from": "/obj/geo1/box1", "to": "/obj/geo1/merge1", "to_input": "next"},
-                {"from": "/obj/geo1/sphere1", "to": "/obj/geo1/merge1", "to_input": "next"},
-                {"from": "/obj/geo1/box1", "to": "/obj/geo1/copy1", "to_input": "input2"},
-                {"from": "/obj/geo1/sphere1", "to": "/obj/geo1/copy1", "to_input": 0},
-                {"from": None, "to": "/obj/geo1/OUT", "to_input": 0},
-            ]
-        },
+        "edit", {"ops": [{"op": "connect", **wire} for wire in wires], "return": "full"}
     )
     rows = result["results"]
     assert [r["input"] for r in rows] == [0, 1, 1, 0, 0]
@@ -848,40 +863,41 @@ def test_connect_index_name_next_and_disconnect(client):
     assert [n.name() for n in merge.inputs()] == ["box1", "sphere1"]
     assert [n.name() for n in copy.inputs()] == ["sphere1", "box1"]
     assert null.inputs() == ()
-    assert rows[4]["from"] is None and "errors" in rows[4]
+    out = next(row for row in result["nodes"] if row["path"] == "/obj/geo1/OUT")
+    assert rows[4]["from"] is None and "errors" in out
     del sphere
 
 
 def test_connect_invalid_input_lists_labels(client):
     geo, box, xform, null = make_chain()
     geo.createNode("copytopoints", "copy1")
-    error = client.error(
-        "node_connect",
-        {"items": [{"from": "/obj/geo1/box1", "to": "/obj/geo1/copy1", "to_input": 5}]},
-    )
+
+    def connect_error(**wire):
+        return client.error("edit", {"ops": [{"op": "connect", **wire}]})
+
+    error = connect_error(**{"from": "/obj/geo1/box1"}, to="/obj/geo1/copy1", to_input=5)
     assert error["code"] == "invalid_input"
     assert "0: input1 (Geometry to Copy)" in error["hint"]
     assert "1: input2 (Target Points to Copy to)" in error["hint"]
-    error = client.error(
-        "node_connect",
-        {"items": [{"from": "/obj/geo1/box1", "to": "/obj/geo1/copy1", "to_input": "target"}]},
-    )
+    error = connect_error(**{"from": "/obj/geo1/box1"}, to="/obj/geo1/copy1", to_input="target")
     assert error["code"] == "invalid_input" and "input2" in error["candidates"]
-    error = client.error(
-        "node_connect",
-        {"items": [{"from": "/obj/geo1/box1", "from_output": 2, "to": "/obj/geo1/copy1"}]},
-    )
+    error = connect_error(**{"from": "/obj/geo1/box1"}, from_output=2, to="/obj/geo1/copy1")
     assert error["code"] == "invalid_input" and error["hint"]
 
 
 def test_connect_batch_rolls_back(client):
     geo, box, xform, null = make_chain()
     error = client.error(
-        "node_connect",
+        "edit",
         {
-            "items": [
-                {"from": "/obj/geo1/box1", "to": "/obj/geo1/OUT"},
-                {"from": "/obj/geo1/box1", "to": "/obj/geo1/xform1", "to_input": 9},
+            "ops": [
+                {"op": "connect", "from": "/obj/geo1/box1", "to": "/obj/geo1/OUT"},
+                {
+                    "op": "connect",
+                    "from": "/obj/geo1/box1",
+                    "to": "/obj/geo1/xform1",
+                    "to_input": 9,
+                },
             ]
         },
     )
@@ -892,13 +908,14 @@ def test_connect_batch_rolls_back(client):
 def test_connect_partial(client):
     geo, box, xform, null = make_chain()
     result = client.ok(
-        "node_connect",
+        "edit",
         {
-            "items": [
-                {"from": "/obj/geo1/box1", "to": "/obj/geo1/OUT"},
-                {"from": "/obj/geo1/box1", "to": "/obj/geo1/nope"},
+            "ops": [
+                {"op": "connect", "from": "/obj/geo1/box1", "to": "/obj/geo1/OUT"},
+                {"op": "connect", "from": "/obj/geo1/box1", "to": "/obj/geo1/nope"},
             ],
             "partial": True,
+            "return": "ops",
         },
     )
     assert result["failed"] == 1
@@ -906,22 +923,26 @@ def test_connect_partial(client):
     assert null.inputs()[0].path() == "/obj/geo1/box1"
 
 
-# -- node_layout -------------------------------------------------------------------
+# -- edit layout op (1.4: node_layout) ---------------------------------------------
 
 
 def test_layout_modes(client):
     geo, box, xform, null = make_chain()
-    result = client.ok("node_layout", {"parent": "/obj/geo1"})
-    assert result["count"] == 3
+
+    def layout(**fields):
+        ops = [{"op": "layout", "parent": "/obj/geo1", **fields}]
+        return client.ok("edit", {"ops": ops, "return": "ops"})["results"][0]
+
+    assert layout()["count"] == 3
     ys = [box.position()[1], xform.position()[1], null.position()[1]]
     assert ys[0] > ys[1] > ys[2]
     extra = geo.createNode("null", "loose")
-    moved = client.ok(
-        "node_layout", {"parent": "/obj/geo1", "paths": ["loose"], "mode": "good_position"}
-    )
-    assert moved["nodes"][0]["path"] == "/obj/geo1/loose"
+    moved = layout(paths=["loose"], mode="good_position")
+    assert moved["count"] == 1 and moved["mode"] == "good_position"
     assert list(extra.position()) != [0.0, 0.0]
-    error = client.error("node_layout", {"parent": "/obj/geo1", "paths": ["/obj/geo1"]})
+    error = client.error(
+        "edit", {"ops": [{"op": "layout", "parent": "/obj/geo1", "paths": ["/obj/geo1"]}]}
+    )
     assert error["code"] == "invalid_argument"
 
 
@@ -938,8 +959,8 @@ def test_locked_means_the_sop_lock_flag(client):
 
 
 def test_mutation_echo_defaults_to_summary(client):
-    """1.1 (review 11 B5): summary is the default echo of node_create, node_copy and
-    network_build."""
+    """1.1 (review 11 B5): summary is the default echo of node_create (edit's summary echo
+    is test_edit.py's test_summary_and_full_echo)."""
     geo = hou.node("/obj").createNode("geo", "geo1")
     summary_keys = {"path", "type", "errors", "warnings", "cook_state", "hint", "source", "cook_ms"}
     summary_keys |= {"errors_same_as", "warnings_same_as", "paired_with"}
@@ -948,10 +969,6 @@ def test_mutation_echo_defaults_to_summary(client):
     )
     assert set(created["results"][0]) <= summary_keys
     assert created["results"][0]["type"] == "box"
-    copied = client.ok("node_copy", {"paths": [f"{geo.path()}/b"], "to_parent": geo.path()})
-    assert set(copied["results"][0]) <= summary_keys
-    built = client.ok("network_build", {"parent": geo.path(), "data": {"s": {"type": "sphere"}}})
-    assert set(built["nodes"][0]) <= summary_keys
 
 
 def test_full_echo_omits_values_the_creation_script_set(client):
@@ -976,26 +993,14 @@ def test_full_echo_omits_values_the_creation_script_set(client):
 
 def test_batch_errors_share_one_shape(client):
     """Review 10 §4: every batch tool prefixes items[i] (<path>) and reports detail
-    {item, path, rolled_back} with rolled_back as actually performed."""
+    {item, path, rolled_back} with rolled_back as actually performed. (2.1: the batch
+    tools are node_create and parm_set; edit names the op field, test_edit.py.)"""
     geo, box, xform, null = make_chain()
     cases = [
         (
             "node_create",
             [{"parent": "/obj/geo1", "type": "sphere"}, {"parent": "/obj/geo1", "type": "nope"}],
             "/obj/geo1",
-        ),
-        (
-            "node_edit",
-            [{"path": box.path(), "comment": "x"}, {"path": xform.path(), "name": "bad name"}],
-            xform.path(),
-        ),
-        (
-            "node_connect",
-            [
-                {"from": box.path(), "to": null.path()},
-                {"from": box.path(), "to": xform.path(), "to_input": 9},
-            ],
-            xform.path(),
         ),
         (
             "parm_set",
@@ -1016,16 +1021,17 @@ def test_batch_errors_share_one_shape(client):
         assert row["message"].startswith(f"items[1] ({path}): "), tool
         assert row["detail"]["item"] == 1 and row["detail"]["path"] == path, tool
         assert row["detail"]["rolled_back"] is True, tool
-    assert box.comment() == "x" and null.inputs()[0] == box  # the partial runs kept item 0
+    assert geo.node("sphere1") is not None  # the partial runs kept item 0
     assert box.parm("sizex").eval() == 4.0
     # A one-item call has the same shape.
-    error = client.error("node_edit", {"items": [{"path": xform.path(), "name": "bad name"}]})
-    assert error["message"].startswith(f"items[0] ({xform.path()}): ")
+    error = client.error("node_create", {"items": [{"parent": "/obj/geo1", "type": "nope"}]})
+    assert error["message"].startswith("items[0] (/obj/geo1): ")
     assert error["detail"]["item"] == 0 and error["detail"]["rolled_back"] is True
 
 
 def test_batch_rollback_reports_a_failed_compensation(client, monkeypatch):
-    """rolled_back is false when an undo step itself fails (never assumed)."""
+    """rolled_back is false when an undo step itself fails (never assumed). A batch tool
+    (node_create) compensates item by item; edit's rollback is its undo group."""
     from hocuspocus.host.tools import nodes
 
     geo, box, xform, null = make_chain()
@@ -1039,13 +1045,24 @@ def test_batch_rollback_reports_a_failed_compensation(client, monkeypatch):
 
     monkeypatch.setattr(nodes.Rollback, "add", add)
     error = client.error(
-        "node_edit",
-        {"items": [{"path": box.path(), "comment": "x"}, {"path": "/obj/geo1/nope"}]},
+        "node_create",
+        {
+            "items": [
+                {"parent": geo.path(), "type": "sphere"},
+                {"parent": geo.path(), "type": "box", "parms": {"sizex": "x"}},  # fails when run
+            ]
+        },
     )
     assert error["detail"]["rolled_back"] is False
 
 
-# -- node_edit spare_parms (review 11 B9) ------------------------------------------
+# -- edit node op spare_parms (review 11 B9) ---------------------------------------
+
+
+def spare_op(client, path, spare, ok=True):
+    """An edit node op with spare_parms (the 1.4 node_edit spare_parms, review 11 B9)."""
+    call = {"ops": [{"op": "node", "path": path, "spare_parms": spare}], "return": "ops"}
+    return client.ok("edit", call) if ok else client.error("edit", call)
 
 
 def test_edit_adds_and_removes_spare_parms(client):
@@ -1067,7 +1084,7 @@ def test_edit_adds_and_removes_spare_parms(client):
             {"name": "reset", "type": "button"},
         ]
     }  # fmt: skip
-    result = client.ok("node_edit", {"items": [{"path": wrangle.path(), "spare_parms": spare}]})
+    result = spare_op(client, wrangle.path(), spare)
     added = result["results"][0]["spare_parms"]["added"]
     assert added == [
         f"{wrangle.path()}/{n}" for n in ("glue", "mode", "enable", "offset", "tint", "reset")
@@ -1086,10 +1103,7 @@ def test_edit_adds_and_removes_spare_parms(client):
     assert geometry.points()[0].attribValue("mode") == 1
     got = client.ok("parm_get", {"paths": [f"{wrangle.path()}/glue"], "include": ["template"]})
     assert got["parms"][0]["template"]["max"] == 10
-    removed = client.ok(
-        "node_edit",
-        {"items": [{"path": wrangle.path(), "spare_parms": {"remove": ["glue", "tint"]}}]},
-    )
+    removed = spare_op(client, wrangle.path(), {"remove": ["glue", "tint"]})
     assert removed["results"][0]["spare_parms"]["removed"] == [
         f"{wrangle.path()}/glue",
         f"{wrangle.path()}/tint",
@@ -1103,14 +1117,16 @@ def test_edit_spare_parms_validation_and_rollback(client):
     geo = hou.node("/obj").createNode("geo", "geo1")
     null = geo.createNode("null", "CTRL")
     error = client.error(
-        "node_edit",
+        "edit",
         {
-            "items": [
-                {"path": null.path(), "spare_parms": {"add": [{"name": "a", "type": "float"}]}},
-                {"path": null.path(), "spare_parms": {"add": [{"name": "b", "type": "ramp"}]}},
+            "ops": [
+                {"op": "node", "path": null.path(),
+                 "spare_parms": {"add": [{"name": "a", "type": "float"}]}},
+                {"op": "node", "path": null.path(),
+                 "spare_parms": {"add": [{"name": "b", "type": "ramp"}]}},
             ]
         },
-    )
+    )  # fmt: skip
     assert error["code"] == "invalid_argument" and "float" in error["hint"]
     assert error["detail"]["rolled_back"] is True and null.parm("a") is None
     for bad, code in (
@@ -1122,12 +1138,11 @@ def test_edit_spare_parms_validation_and_rollback(client):
         ({"remove": ["copyinput"]}, "invalid_argument"),
         ({"remove": ["nope"]}, "parm_not_found"),
     ):
-        error = client.error("node_edit", {"items": [{"path": null.path(), "spare_parms": bad}]})
+        error = spare_op(client, null.path(), bad, ok=False)
         assert error["code"] == code, (bad, error)
     _geo, mountain = make_locked_mountain()
     inner = mountain.children()[0].path()
-    add = {"add": [{"name": "g", "type": "float"}]}
-    error = client.error("node_edit", {"items": [{"path": inner, "spare_parms": add}]})
+    error = spare_op(client, inner, {"add": [{"name": "g", "type": "float"}]}, ok=False)
     assert error["code"] == "locked"
 
 
@@ -1148,7 +1163,7 @@ def test_edit_spare_menu_value_types(client):
             {"name": "roof_e", "type": "menu", "value_type": "string", "menu_items": roofs},
         ]
     }  # fmt: skip
-    client.ok("node_edit", {"items": [{"path": ctrl.path(), "spare_parms": spare}]})
+    spare_op(client, ctrl.path(), spare)
     roof_i = ctrl.parm("roof_i")
     template = roof_i.parmTemplate()
     assert template.type() == hou.parmTemplateType.Int
@@ -1177,9 +1192,7 @@ def test_edit_spare_menu_value_types(client):
         ({"name": "m", "type": "menu", "value_type": "int", "menu_items": roofs, "default": 7},
          "invalid_value"),
     ):  # fmt: skip
-        error = client.error(
-            "node_edit", {"items": [{"path": ctrl.path(), "spare_parms": {"add": [bad]}}]}
-        )
+        error = spare_op(client, ctrl.path(), {"add": [bad]}, ok=False)
         assert error["code"] == code, (bad, error)
     assert "value_type" in error["hint"] or "index" in error["hint"]
 
@@ -1319,20 +1332,24 @@ def test_job_backed_calls_report_their_main_thread_time(client):
     assert listed == {"main_thread_ms": 0, "off_main_thread": True}, listed
 
 
-def test_node_edit_never_cooks(client):
+def test_node_op_never_cooks(client):
+    """Review 22 finding 3: a rename recooked a mountain HDA; an edit node op (the 1.4
+    node_edit) reports problems as they are."""
     geo = hou.node("/obj").createNode("geo", "geo1")
     box = geo.createNode("box", "box1")  # never cooked
     result = client.ok(
-        "node_edit",
+        "edit",
         {
-            "items": [
-                {"path": box.path(), "name": "base", "comment": "c", "color": [1, 0, 0]},
-            ]
+            "ops": [
+                {"op": "node", "path": box.path(), "name": "base", "comment": "c",
+                 "color": [1, 0, 0]},
+            ],
+            "return": "ops",
         },
-    )
-    row = result["results"][0]
+    )  # fmt: skip
+    row = result["nodes"][0]
     assert row["path"] == "/obj/geo1/base" and row["cook_state"] == "not_cooked"
-    assert "cook_time_ms" not in row
+    assert "cook_ms" not in row
     assert box.needsToCook()
 
 

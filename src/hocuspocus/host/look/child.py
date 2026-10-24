@@ -120,7 +120,7 @@ def show_only(rop, isolated):
 
 
 def build_capture(hou, capture, created):
-    # viewport_capture's camera and viewport ROP (rop_type: flipbook or opengl, the same
+    # The capture's camera and viewport ROP (rop_type: flipbook or opengl, the same
     # parms). Every node made is appended to created.
     isolated = isolate_target(hou, capture, created)
     rop = hou.node("/out").createNode(capture.get("rop_type") or "flipbook")

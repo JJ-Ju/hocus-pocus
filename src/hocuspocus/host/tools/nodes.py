@@ -564,16 +564,6 @@ def node_block(
     return out
 
 
-def mutation_block(node: Any, *, cook: bool = True, **extra: Any) -> dict[str, Any]:
-    """Compact per-node block for mutation results: path, type, flags, problems. Without
-    ``cook`` the problems are read as they are (``cook_state`` from ``needsToCook()``)."""
-    out: dict[str, Any] = {"path": node.path(), "name": node.name(), "type": node.type().name()}
-    out.update(extra)
-    out["flags"] = node_flags(node)
-    out.update(cheap_cook_problems(node) if cook else collect_problems(node, cook=False))
-    return out
-
-
 RETURN_MODES = ("full", "summary")
 DEFAULT_RETURN = "summary"
 """1.1 (review 11 B5): mutation echoes are path, type and problems unless asked for more."""
@@ -1060,7 +1050,6 @@ def _locked_root_error(root: Any) -> ToolError:
     )
 
 
-@tool("node_find")
 def node_find(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     from hocuspocus.tools.catalog import CATEGORIES
 
@@ -1146,7 +1135,6 @@ def node_find(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     return result
 
 
-@tool("node_info")
 def node_info(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     paths = arg_list(args, "paths")
     include = args.get("include")
@@ -1303,9 +1291,10 @@ def pair_block_end(node: Any, rollback: Rollback) -> Any:
     return begin
 
 
-# -- the 1.4 mutation tools: plan builders over the transaction engine (host/tx.py) ------
-# Each builds a tx.Plan from its 1.4 arguments and shapes tx.execute's per-op results
-# into its 1.4 result (spec-2.0 principle 14: one undo policy, one rollback, one engine).
+# -- node_create: a plan builder over the transaction engine (host/tx.py) ---------------
+# It builds a tx.Plan from its 1.4 arguments and shapes tx.execute's per-op results into
+# its 1.4 result (spec-2.0 principle 14: one undo policy, one rollback, one engine). The
+# other 1.4 mutation tools were removed in 2.1; edit runs their ops.
 
 
 @tool("node_create")
@@ -1354,55 +1343,6 @@ def node_create(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     return out
 
 
-@tool("node_delete")
-def node_delete(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
-    plan = tx.Plan([tx.Op("delete", args)], raw_errors=True)
-    data = tx.execute(plan, ctx).results[0].data
-    result: dict[str, Any] = {"deleted": data["deleted"]}
-    if data["any_reconnected"]:
-        result["reconnected"] = data["reconnected"]
-        result["nodes"] = [mutation_block(n) for n in data["alive"]]
-    return result
-
-
-@tool("node_edit")
-def node_edit(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
-    items = arg_list(args, "items")
-    partial = arg_bool(args, "partial", False)
-    result = tx.execute(tx.Plan([tx.Op("node", item) for item in items], partial=partial), ctx)
-    results = []
-    for res in result.results:
-        if res.error is not None:
-            results.append({"error": res.error})
-            continue
-        node = res.node
-        # Review 22 finding 3: a rename recooked a mountain HDA (~200 ms). An edit reports
-        # problems as they are; only cook and creates cook.
-        block = mutation_block(node, cook=False, **res.extra)
-        block["comment"] = node.comment()
-        block["position"] = _round(node.position())
-        block["color"] = _round(node.color().rgb())
-        results.append(block)
-    watch_nodes(res.node for res in result.done())
-    out: dict[str, Any] = {"results": results}
-    if result.failures:
-        out["failed"] = len(result.failures)
-    return out
-
-
-@tool("node_copy")
-def node_copy(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
-    mode = return_mode(args)
-    data = tx.execute(tx.Plan([tx.Op("copy", args)], raw_errors=True), ctx).results[0].data
-    sources, copies = data["sources"], data["copies"]
-    block = summary_block if mode == "summary" else mutation_block
-    results = [block(copy, source=src.path()) for src, copy in zip(sources, copies, strict=False)]
-    if mode == "summary":
-        collapse_problems(results)
-    watch_nodes(copies)
-    return {"paths": [c.path() for c in copies], "results": results}
-
-
 def _connect_source(src_path: Any, dest: Any, field: str = "from") -> Any:
     """The ``from`` node of a wiring item. A missing one is reported by its own path, with
     near misses from its parent (never ``dest``) and a ``node_find`` hint on that parent
@@ -1429,40 +1369,3 @@ def _connect_source(src_path: Any, dest: Any, field: str = "from") -> Any:
 
 connect_source = _connect_source
 """The wiring-source lookup under the name the transaction engine (``host/tx.py``) uses."""
-
-
-@tool("node_connect")
-def node_connect(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
-    items = arg_list(args, "items")
-    partial = arg_bool(args, "partial", False)
-    result = tx.execute(tx.Plan([tx.Op("connect", item) for item in items], partial=partial), ctx)
-    results = []
-    for res in result.results:
-        if res.error is not None:
-            results.append({"error": res.error})
-            continue
-        block = mutation_block(res.node, **res.extra)
-        block["to"] = block["path"]
-        results.append(block)
-    watch_nodes(res.node for res in result.done())
-    out: dict[str, Any] = {"results": results}
-    if result.failures:
-        out["failed"] = len(result.failures)
-    return out
-
-
-@tool("node_layout")
-def node_layout(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
-    data = tx.execute(tx.Plan([tx.Op("layout", args)], raw_errors=True), ctx).results[0].data
-    parent, moved = data["parent"], data["moved"]
-    rows = [{"path": n.path(), "position": _round(n.position())} for n in moved]
-    chunk = rows[:CHILDREN_LIST_LIMIT]
-    out: dict[str, Any] = {
-        "parent": parent.path(),
-        "mode": data["mode"],
-        "nodes": chunk,
-        "count": len(rows),
-    }
-    if len(rows) > len(chunk):
-        out["truncated"] = True
-    return out

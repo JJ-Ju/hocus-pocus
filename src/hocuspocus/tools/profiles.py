@@ -1,44 +1,71 @@
-"""Profile names (spec-2.0 §2, §8; BIBLE §3.5). Stdlib only and import-free, so the host's
+"""Profile names (spec-2.0 §2; BIBLE §3.5, §4.1). Stdlib only and import-free, so the host's
 config can read it at Houdini startup without loading the catalogue.
 
-The 2.0 profiles nest, smallest first: ``minimal`` (10 tools) ⊂ ``core`` (18, the default) ⊂
-``full`` (21). ``compat_1x`` is the 1.4 ``full`` catalogue (35 tools, 1.4 schemas) for a 1.x
-client script, served for the 2.0.x releases and removed in 2.1. ``v2``, the M1-M2 preview
-of the 2.0 surface, is read as ``full`` for 2.0.x. Which tools a profile lists is each
-spec's ``profiles`` tuple (``tools/spec/<tool>.py``).
+The profiles nest, smallest first: ``minimal`` (10 tools) ⊂ ``core`` (18, the default) ⊂
+``full`` (21). Which tools a profile lists is each spec's ``profiles`` tuple
+(``tools/spec/<tool>.py``).
+
+2.1 removed ``compat_1x`` (the 1.4 catalogue, served for 2.0.x) and ``v2`` (the M1-M2
+preview name of ``full``). Configured anyway, either is read as ``full`` with a warning
+(:data:`REMOVED`, :func:`removed_warning`; BIBLE D46): both processes resolve it the same
+way, so host and bridge still agree, and a removed 1.4 tool answers ``invalid_argument``
+with its 2.0 replacement (``tools/migration.py``).
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-PROFILES_2X: tuple[str, ...] = ("minimal", "core", "full")
-"""The 2.0 profiles, nested, smallest first."""
-
-COMPAT_1X = "compat_1x"
-"""The 1.4 catalogue: every 1.4 tool with its 1.4 schema (spec-2.0 §8)."""
-
-PROFILES: tuple[str, ...] = (*PROFILES_2X, COMPAT_1X)
-"""Every profile name ``hocuspocus.toml`` and ``HOCUSPOCUS_PROFILE`` accept (plus
-:data:`ALIASES`)."""
+PROFILES: tuple[str, ...] = ("minimal", "core", "full")
+"""Every profile name ``hocuspocus.toml`` and ``HOCUSPOCUS_PROFILE`` accept, nested,
+smallest first."""
 
 DEFAULT_PROFILE = "core"
 
-ALIASES: dict[str, str] = {"v2": "full"}
-"""Old names read as a current profile; ``v2`` is kept for 2.0.x only."""
+REMOVED: dict[str, str] = {"compat_1x": "full", "v2": "full"}
+"""Profile names 2.1 removed -> the profile they are read as, with a warning (BIBLE D46).
+``compat_1x`` served 1.4's ``full`` catalogue and ``v2`` was read as ``full`` in 2.0.x, so
+``full`` is the 2.0 profile closest to what each served."""
+
+
+def _key(raw: Any) -> str:
+    return str(raw if raw is not None else "").strip().lower()
 
 
 def normalize(raw: Any) -> str | None:
-    """``raw`` as a profile name (case and whitespace ignored, aliases resolved); ``None``
-    when it names no profile. An empty value is :data:`DEFAULT_PROFILE`."""
-    value = str(raw if raw is not None else "").strip().lower()
+    """``raw`` as a profile name (case and whitespace ignored); ``None`` when it names no
+    profile, a removed one included (:func:`resolve` reads those). An empty value is
+    :data:`DEFAULT_PROFILE`."""
+    value = _key(raw)
     if not value:
         return DEFAULT_PROFILE
-    value = ALIASES.get(value, value)
     return value if value in PROFILES else None
 
 
-def is_2x(profile: str) -> bool:
-    """Whether ``profile`` serves the 2.0 surface (roles, ``on``, resources, ledger job
-    ids); ``compat_1x`` serves the 1.4 one."""
-    return profile != COMPAT_1X
+def removed_warning(raw: Any) -> str | None:
+    """The warning for a removed profile name (:data:`REMOVED`), or ``None`` for any other
+    value."""
+    value = _key(raw)
+    if value not in REMOVED:
+        return None
+    use = REMOVED[value]
+    was = (
+        "the 1.4 catalogue for 2.0.x"
+        if value == "compat_1x"
+        else "the 2.0 preview name of full, read as full in 2.0.x"
+    )
+    return (
+        f'profile = "{value}" ({was}) was removed in HocusPocus 2.1; using "{use}". '
+        "A 1.4 tool name answers invalid_argument with its 2.0 replacement "
+        '(docs/migration-2.0.md). Set profile = "minimal", "core" or "full".'
+    )
+
+
+def resolve(raw: Any) -> tuple[str | None, str | None]:
+    """``(profile, warning)`` for a configured value: a profile name as :func:`normalize`
+    reads it, or for a removed one (:data:`REMOVED`) the profile it is read as and the
+    warning to log. ``(None, None)`` when ``raw`` names nothing."""
+    warning = removed_warning(raw)
+    if warning is not None:
+        return REMOVED[_key(raw)], warning
+    return normalize(raw), None

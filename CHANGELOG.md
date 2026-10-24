@@ -1,8 +1,8 @@
 # Changelog
 
 This project uses [Semantic Versioning](https://semver.org/). The 0.9 compatibility
-policy does not apply to 1.0. 2.0 changes the tool surface; `compat_1x` keeps the 1.4
-one for the 2.0.x releases.
+policy does not apply to 1.0. 2.0 changes the tool surface; `compat_1x` kept the 1.4
+one for the 2.0.x releases, and 2.1 removes it.
 
 ## 2.1.0 (unreleased)
 
@@ -36,6 +36,33 @@ one for the 2.0.x releases.
 - CI: `.github/workflows/unit.yml` runs ruff and the unit tier on Linux, macOS and
   Windows for Python 3.11 to 3.13 (portability audit,
   `docs/redesign/review/27-portability.md`).
+
+### Removed
+
+- **The `compat_1x` profile and the `v2` alias** (BIBLE D46, `docs/migration-2.0.md` §8).
+  With them go the 18 1.4 tools only `compat_1x` listed (`node_find`, `node_info`,
+  `node_delete`, `node_edit`, `node_copy`, `node_connect`, `node_layout`,
+  `network_describe`, `network_build`, `parm_get`, `problems`, `geo_info`, `geo_read`,
+  `viewport_capture`, `node_type_search`, `node_type_info`, `selection`, `usd_stage`):
+  their specs, and their host implementations where no 2.0 tool uses them (the read
+  engines behind `inspect` and `search` stay as host functions). Also removed: the 1.4
+  resources (`houdini://node/{path}/parms`, `houdini://node/{path}/geo`,
+  `houdini://nodetype/{category}/{name}`, `houdini://job/{id}`), the four 1.4 prompts, the
+  1.4 instructions and guide, the `compat_1x` goldens and its `tools/list` caps (32,000 B
+  `text`, 44,000 B `both`; the 2.0 caps are unchanged), `viewport_capture`'s 1.4 source
+  names (`flipbook_rop`, `opengl_rop`) and its extra `path`, and the 1.4 workloads tier
+  (`--workloads 1x`; its budgets stay in `tests/workloads/budgets.json` as the baseline
+  the 2.0 tier is compared with). The OpenGL ROP backend of `look` stays.
+- A 1.4 tool name still answers `invalid_argument`, now on every profile and before its
+  arguments are read, with its 2.0 replacement in `hint` and `detail: {tool,
+  replacement, profile}` (the migration table is kept as data). `profile = "compat_1x"`
+  or `"v2"` in `hocuspocus.toml` or `HOCUSPOCUS_PROFILE` is read as `full` with a
+  warning, logged by the bridge and the host and returned in `houdini_status.warnings`;
+  nothing refuses to start.
+- Since the selection is set only through `edit` now, read-only mode refuses setting it
+  (`read_only`; a `dry_run` still validates). 1.4's `selection` tool was allowed there.
+- `job` results always carry ledger ids (`j` + hex); a host id `<pid>-<id>` is still
+  accepted everywhere.
 
 ### Fixed
 

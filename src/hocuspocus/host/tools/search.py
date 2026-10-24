@@ -1,8 +1,7 @@
 """``search`` (spec-2.0 §2.3): one search tool over ``node_type_search`` and ``node_find``.
 
-``{kind: types | nodes, query?, ...options}`` runs the registered implementation of the
-1.4 tool for ``kind`` (looked up in the host registry at call time, so the ranking,
-synonyms and filters exist once):
+``{kind: types | nodes, query?, ...options}`` runs the engine of the 1.4 tool for
+``kind`` (2.1 removed them as tools; the ranking, synonyms and filters exist once):
 
 * ``types``: ``node_type_search`` (``query``, ``category``, ``include_hidden``,
   ``current_only``, ``limit``). 1.4 has no paging there, so ``search`` pages it: page
@@ -26,8 +25,9 @@ from typing import Any
 from hocuspocus.tools.budget import clip
 
 from ._common import CURSOR_HINT, bad_arg
+from .nodes import node_find
 from .registry import HostContext, tool
-from .registry import get as get_tool
+from .types import node_type_search
 
 KINDS = ("types", "nodes")
 DETAILS = ("compact", "full")
@@ -234,7 +234,7 @@ def _types(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     call = {k: v for k, v in args.items() if k not in ("cursor", "limit")}
     if offset or "limit" in args:
         call["limit"] = offset + limit
-    result = get_tool("node_type_search").fn(call, ctx)
+    result = node_type_search(call, ctx)
     if offset:
         result["results"] = result["results"][offset:]
     shown = offset + len(result["results"])
@@ -255,7 +255,7 @@ def _nodes(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     cursor = call.get("cursor")
     if isinstance(cursor, str) and cursor.startswith("/"):
         call["cursor"] = NODES_CURSOR + cursor
-    return get_tool("node_find").fn(call, ctx)
+    return node_find(call, ctx)
 
 
 @tool("search")

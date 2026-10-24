@@ -1,5 +1,5 @@
 """Solaris workloads through the tools (review 13): render on USD render ROPs,
-viewport_capture of a stage, USD attribute names for LOP parms, computed tuple
+look at a stage (1.4: viewport_capture), USD attribute names for LOP parms, computed tuple
 components, and the hints a lookdev session leans on."""
 
 from __future__ import annotations
@@ -10,8 +10,6 @@ import json
 from pathlib import Path
 
 import pytest
-
-pytestmark = pytest.mark.compat_1x  # the 1.4 tools (conftest: compat_client)
 
 hou = pytest.importorskip("hou")
 Image = pytest.importorskip("PIL.Image")
@@ -140,7 +138,7 @@ def test_usd_render_outputs_note_when_nothing_resolves(client):
     assert "outputimage" in note and "RenderProduct" in note
 
 
-# -- viewport_capture of a stage (papercut 3) -------------------------------------------
+# -- look at a stage (papercut 3) -------------------------------------------------------
 
 
 def _center_lit(image: dict) -> bool:
@@ -155,11 +153,11 @@ def _center_lit(image: dict) -> bool:
 def test_capture_lop_camera_renders_the_stage(client, work_dir):
     nodes = _lop_scene(work_dir)
     hou.node("/obj").createNode("geo", "unrelated").createNode("box").setDisplayFlag(True)
-    result = client.ok("viewport_capture", {"camera": nodes["cam"].path(), "resolution": [160, 90]})
+    result = client.ok("look", {"camera": nodes["cam"].path(), "resolution": [160, 90]})
     assert result["scene"] == "stage"
     assert result["lop_path"] == nodes["rset"].path()  # the displayed LOP
     assert result["camera_used"] == "/cameras/cam1"
-    assert result["source_used"] == "flipbook_rop"
+    assert result["backend_used"] == "flipbook"
     assert _center_lit(result["image"])
     assert [c.name() for c in hou.node("/stage").children()] == [
         "sphere1",
@@ -176,8 +174,8 @@ def test_capture_lop_camera_renders_the_stage(client, work_dir):
 def test_capture_camera_prim_with_lop_path(client, work_dir):
     nodes = _lop_scene(work_dir)
     result = client.ok(
-        "viewport_capture",
-        {"camera": "/cameras/cam1", "lop_path": nodes["cam"].path(), "resolution": [160, 90]},
+        "look",
+        {"camera": "/cameras/cam1", "target": nodes["cam"].path(), "resolution": [160, 90]},
     )
     assert result["scene"] == "stage"
     assert result["lop_path"] == nodes["cam"].path()
@@ -187,7 +185,7 @@ def test_capture_camera_prim_with_lop_path(client, work_dir):
 @pytest.mark.slow
 def test_capture_lop_path_frames_the_stage(client, work_dir):
     nodes = _lop_scene(work_dir)
-    result = client.ok("viewport_capture", {"lop_path": "/stage", "resolution": [160, 120]})
+    result = client.ok("look", {"target": "/stage", "resolution": [160, 120]})
     assert result["scene"] == "stage"
     assert result["lop_path"] == nodes["rset"].path()
     assert result["camera_used"] == "temporary"
@@ -198,7 +196,7 @@ def test_capture_lop_path_frames_the_stage(client, work_dir):
 @pytest.mark.slow
 def test_capture_without_obj_geometry_uses_the_stage(client, work_dir):
     _lop_scene(work_dir)
-    result = client.ok("viewport_capture", {"resolution": [160, 120]})
+    result = client.ok("look", {"resolution": [160, 120]})
     assert result["scene"] == "stage"
     assert _center_lit(result["image"])
 
@@ -207,24 +205,22 @@ def test_capture_without_obj_geometry_uses_the_stage(client, work_dir):
 def test_capture_obj_scene_notes_the_stage(client, work_dir):
     _lop_scene(work_dir)
     hou.node("/obj").createNode("geo", "g").createNode("box").setDisplayFlag(True)
-    result = client.ok("viewport_capture", {"resolution": [160, 120]})
+    result = client.ok("look", {"resolution": [160, 120]})
     assert result["scene"] == "obj"
-    assert any("lop_path" in note and "/stage/rset" in note for note in result["notes"])
+    assert any("target" in note and "/stage/rset" in note for note in result["notes"])
 
 
 def test_capture_bad_lop_camera_lists_cameras(client, work_dir):
     nodes = _lop_scene(work_dir)
-    error = client.error("viewport_capture", {"camera": nodes["rset"].path()})
+    error = client.error("look", {"camera": nodes["rset"].path()})
     assert error["code"] == "invalid_argument"
     assert "not a camera" in error["message"]
     assert nodes["cam"].path() in error["candidates"]
     assert "OBJ camera such as" not in error["hint"]
-    missing = client.error(
-        "viewport_capture", {"camera": "/cameras/nope", "lop_path": nodes["rset"].path()}
-    )
+    missing = client.error("look", {"camera": "/cameras/nope", "target": nodes["rset"].path()})
     assert missing["code"] == "invalid_argument"
     assert "/cameras/cam1" in missing["candidates"]
-    viewer = client.error("viewport_capture", {"lop_path": "/stage", "source": "viewer"})
+    viewer = client.error("look", {"target": "/stage", "source": "viewer"})
     assert viewer["code"] in ("ui_required", "invalid_argument")
 
 
@@ -290,11 +286,9 @@ def test_capture_city_stage_headless(client, work_dir):
     """N1: the review-16 scene shape captures through the OpenGL child (single-threaded)."""
     nodes = _city_scene()
     before = [c.name() for c in hou.node("/stage").children()]
-    result = client.ok(
-        "viewport_capture", {"lop_path": nodes["rset"].path(), "resolution": [320, 180]}
-    )
+    result = client.ok("look", {"target": nodes["rset"].path(), "resolution": [320, 180]})
     assert result["scene"] == "stage"
-    assert result["source_used"] == "flipbook_rop"
+    assert result["backend_used"] == "flipbook"
     assert result["camera_used"] == "temporary"
     assert _decode(result["image"]).convert("L").getextrema()[1] > 80
     assert [c.name() for c in hou.node("/stage").children()] == before
@@ -310,8 +304,8 @@ def test_capture_falls_back_to_karma_when_the_child_crashes(client, work_dir, mo
     monkeypatch.setattr(visual, "_stage_crashed", {})
     nodes = _city_scene()
     before = {n: [c.name() for c in hou.node(n).children()] for n in ("/stage", "/out", "/obj")}
-    result = client.ok("viewport_capture", {"camera": nodes["cam"].path(), "resolution": [160, 90]})
-    assert result["source_used"] == "karma"
+    result = client.ok("look", {"camera": nodes["cam"].path(), "resolution": [160, 90]})
+    assert result["backend_used"] == "karma"
     assert result["camera_used"] == "/cameras/cam_main"
     assert result["rendered"] == [160, 90]
     assert (result["width"], result["height"]) == (160, 90)
@@ -319,8 +313,8 @@ def test_capture_falls_back_to_karma_when_the_child_crashes(client, work_dir, mo
     lo, hi = _decode(result["image"]).convert("L").getextrema()
     assert hi - lo > 20
     assert {n: [c.name() for c in hou.node(n).children()] for n in before} == before
-    framed = client.ok("viewport_capture", {"lop_path": "/stage", "resolution": [160, 90]})
-    assert framed["source_used"] == "karma"
+    framed = client.ok("look", {"target": "/stage", "resolution": [160, 90]})
+    assert framed["backend_used"] == "karma"
     assert framed["camera_used"] == "temporary"
     assert any("earlier" in n for n in framed["notes"]), framed["notes"]
     lo, hi = _decode(framed["image"]).convert("L").getextrema()
@@ -336,14 +330,14 @@ def test_stage_capture_falls_back_to_the_opengl_rop(client, work_dir, crash_capt
     crash_capture_child("flipbook")
     nodes = _lop_scene(work_dir)
     before = [c.name() for c in hou.node("/stage").children()]
-    result = client.ok("viewport_capture", {"camera": nodes["cam"].path(), "resolution": [160, 90]})
-    assert result["scene"] == "stage" and result["source_used"] == "opengl_rop"
+    result = client.ok("look", {"camera": nodes["cam"].path(), "resolution": [160, 90]})
+    assert result["scene"] == "stage" and result["backend_used"] == "opengl"
     notes = " ".join(result["notes"])
     assert "Flipbook ROP crashed its render process" in notes, notes
     assert "deprecat" not in notes.lower()
     assert _center_lit(result["image"])
-    again = client.ok("viewport_capture", {"lop_path": "/stage", "resolution": [160, 90]})
-    assert again["source_used"] == "opengl_rop"
+    again = client.ok("look", {"target": "/stage", "resolution": [160, 90]})
+    assert again["backend_used"] == "opengl"
     assert any("skipped" in n and "earlier" in n for n in again["notes"]), again["notes"]
     assert [c.name() for c in hou.node("/stage").children()] == before
 
@@ -366,7 +360,7 @@ def test_capture_crash_error_is_short(client, work_dir, monkeypatch):
 
     monkeypatch.setattr(visual, "capture_with_karma", no_karma)
     hou.node("/obj").createNode("geo", "g").createNode("box").setDisplayFlag(True)
-    error = client.error("viewport_capture", {"resolution": [64, 64]})
+    error = client.error("look", {"resolution": [64, 64]})
     assert error["code"] == "cook_failed"
     assert "crashed" in error["message"] and "karma failed too" in error["message"]
     log = error["detail"]["opengl_log"]
@@ -449,17 +443,17 @@ def test_locked_component_error_names_it(client):
     assert "resolutionx" in error["hint"]
 
 
-# -- viewport_capture of a ROP LOP (review 23 P2-10) ------------------------------------
+# -- look at a ROP LOP (review 23 P2-10) ------------------------------------------------
 
 
 @pytest.mark.slow
 def test_capture_a_rop_lop_captures_the_stage_it_renders(client, work_dir):
-    """A ROP inside a LOP network has no output stage; viewport_capture now captures the
+    """A ROP inside a LOP network has no output stage; look captures the
     LOP it renders (its input, or loppath) and says so, instead of refusing."""
     nodes = _lop_scene(work_dir)
     result = client.ok(
-        "viewport_capture",
-        {"lop_path": nodes["rop"].path(), "camera": "/cameras/cam1", "resolution": [160, 90]},
+        "look",
+        {"target": nodes["rop"].path(), "camera": "/cameras/cam1", "resolution": [160, 90]},
     )
     assert result["scene"] == "stage"
     assert result["lop_path"] == nodes["rset"].path()
@@ -470,7 +464,7 @@ def test_capture_a_rop_lop_captures_the_stage_it_renders(client, work_dir):
 
 def test_capture_a_rop_lop_without_input_is_refused(client):
     rop = hou.node("/stage").createNode("usd_rop", "lonely")
-    error = client.error("viewport_capture", {"lop_path": rop.path()})
+    error = client.error("look", {"target": rop.path()})
     assert error["code"] == "invalid_argument"
     assert "no output stage" in error["message"]
 
@@ -665,7 +659,7 @@ def test_render_camera_that_does_not_fit_opsource_names_it(client, work_dir):
         f"{rop.path()} reads /obj (opsource: obj), and /cameras/cam1 is not a node; set "
         f"opsource to lop to render the camera prim /cameras/cam1 from {nodes['rset'].path()}."
     ), error
-    assert f'parm_set {rop.path()} opsource: "lop"' in error["hint"], error
+    assert f'{{op: "set", path: "{rop.path()}/opsource", value: "lop"}}' in error["hint"], error
     # The camera LOP node itself: the same hint, naming its prim.
     error = client.error("render", {"rop_path": rop.path(), "camera": nodes["cam"].path()})
     assert "opsource" in error["message"] and "prim /cameras/cam1" in error["message"], error
@@ -675,7 +669,7 @@ def test_render_camera_that_does_not_fit_opsource_names_it(client, work_dir):
     error = client.error("render", {"rop_path": rop.path(), "camera": cam.path()})
     assert error["code"] == "invalid_argument", error
     assert "opsource: lop" in error["message"] and "OBJ camera" in error["message"], error
-    assert f'parm_set {rop.path()} opsource: "obj"' in error["hint"], error
+    assert f'{{op: "set", path: "{rop.path()}/opsource", value: "obj"}}' in error["hint"], error
     # Without loppath the hint says to set it too; a missing /obj node is still not found.
     bare = hou.node("/out").createNode("flipbook", "bare")
     error = client.error("render", {"rop_path": bare.path(), "camera": "/cameras/cam1"})

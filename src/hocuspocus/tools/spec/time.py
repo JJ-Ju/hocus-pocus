@@ -6,7 +6,7 @@ from ._helpers import ToolSpec, _arr, _list, _n, _obj, _out, _t
 
 SPEC = ToolSpec(
     name="time",
-    profiles=("core", "full", "compat_1x"),
+    profiles=("core", "full"),
     description=(
         "Read or set playbar time. With no arguments returns frame, fps and range. frame sets "
         "the current frame, range [start, end] the frame range, fps the frame rate."

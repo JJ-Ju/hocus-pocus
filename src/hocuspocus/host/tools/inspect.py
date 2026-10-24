@@ -1,10 +1,9 @@
 """``inspect`` (spec-2.0 §2.3): one read tool over the 1.4 reads.
 
-``{target?, what, ...options}`` dispatches to the registered implementation of the 1.4 tool
-that reads ``what`` (``node_info``, ``parm_get``, ``network_describe``, ``geo_info`` /
-``geo_read``, ``usd_stage``, ``problems``, ``node_type_info``, ``events``, ``job``), looked
-up in the host registry at call time, so the read code exists once and a reimplementation
-of a 1.4 tool (spec-2.0 §4, ``host/tx.py``) is picked up here too. The result is
+``{target?, what, ...options}`` runs the engine of the 1.4 read for ``what``
+(``node_info``, ``parm_get``, ``network_describe``, ``geo_info`` / ``geo_read``,
+``usd_stage``, ``problems``, ``node_type_info``; 2.1 removed them as tools) or the
+``events`` and ``job`` tools (:func:`_impl`), so the read code exists once. The result is
 ``{etag, ...the 1.4 result}`` projected for 2.0 (:func:`project`): the caller knows its
 ``what`` and ``target``, so they are not echoed; ``node`` rows leave out ``session_id``;
 ``outline`` leaves out ``format`` and, per row, ``name`` when it is the path's last
@@ -30,13 +29,10 @@ import fnmatch
 from collections.abc import Callable
 from typing import Any
 
-from hocuspocus.tools.errors import ToolError
-
 from ..dispatch import _CALL, call_timeout, current_request_id
 from ..resources import content_etag
 from ._common import bad_arg, get_node
 from .registry import HostContext, tool
-from .registry import get as get_tool
 from .types import COMPACT_HINT
 
 WHATS: tuple[str, ...] = (
@@ -86,10 +82,23 @@ NO_TARGET = frozenset({"events", "jobs"})
 
 
 def _impl(name: str) -> Callable[[dict[str, Any], HostContext], Any]:
-    registered = get_tool(name)
-    if registered is None:  # pragma: no cover - every 1.4 read is registered
-        raise ToolError("internal", f"inspect: the {name} implementation is not registered.")
-    return registered.fn
+    """The read ``inspect`` runs for a 1.4 name: the engine function of that 1.4 tool
+    (2.1: none of them is a tool), or the ``events`` and ``job`` tools'. Imported here, at
+    call time, because those modules import this package's helpers."""
+    from . import cook, events, geo, network, nodes, parms, state, types, usd
+
+    return {
+        "node_info": nodes.node_info,
+        "parm_get": parms.parm_get,
+        "network_describe": network.network_describe,
+        "geo_info": geo.geo_info,
+        "geo_read": geo.geo_read,
+        "usd_stage": usd.usd_stage,
+        "problems": cook.problems,
+        "node_type_info": types.node_type_info,
+        "events": events.events,
+        "job": state.job,
+    }[name]
 
 
 def _on_main(ctx: HostContext, fn: Callable[[], Any]) -> Any:

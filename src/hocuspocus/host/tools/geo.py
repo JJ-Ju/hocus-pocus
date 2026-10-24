@@ -22,7 +22,7 @@ from hocuspocus.tools.migration import BARE, hint_tool
 
 from ._common import int_arg, parse_offset
 from ._diag import a_or_an, collect_problems, refresh_stale, require_node
-from .registry import HostContext, tool
+from .registry import HostContext
 
 CLASSES = ("point", "prim", "vertex", "detail")
 LIST_CAP = 60
@@ -473,7 +473,6 @@ def _cop_info(path: Any, frame: Any) -> dict[str, Any] | None:
     return out
 
 
-@tool("geo_info")
 def geo_info(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     frame = args.get("frame")
     image = _cop_info(args.get("path"), frame)
@@ -720,7 +719,6 @@ BULK_SHARE = 4
 per-element reads); smaller pages read only their own rows."""
 
 
-@tool("geo_read")
 def geo_read(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     import numpy as np
 

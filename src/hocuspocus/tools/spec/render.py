@@ -12,15 +12,15 @@ from ._helpers import (
     _n,
     _obj,
     _objs,
+    _on,
     _out,
     _s,
     _t,
-    _v2_on,
 )
 
 SPEC = ToolSpec(
     name="render",
-    profiles=("core", "full", "compat_1x"),
+    profiles=("core", "full"),
     description=(
         "Render any ROP (Karma, Flipbook, USD, ...) or writer SOP (File Cache, rop_geometry) "
         "for frames [start, end, inc] (default the ROP's own frame range), optionally "
@@ -31,7 +31,7 @@ SPEC = ToolSpec(
         "Above 5 outputs the result, inline or from job result, has outputs_summary and "
         "outputs_sample (the first 2 and last 2) instead of outputs; missing lists up to 20 "
         "paths. Every "
-        "expected output is checked against approved_roots. viewport_capture is the quick look."
+        "expected output is checked against approved_roots. look is the quick picture."
         " Headless, a Flipbook or OpenGL ROP renders in a short-lived child hython (a few "
         "seconds to start), since a second viewport render can crash the host."
         " notes warn when the scene has no lights, when the thumbnail (as sent, flattened onto "
@@ -50,8 +50,8 @@ SPEC = ToolSpec(
         "Save to Disk button does (side_effects: {parm: [old, new]}). A cancelled render's "
         "job result is the cancelled error with detail {last_status, partial: "
         "{outputs_summary}} (the files written before the cancel). A Cop node is not a ROP: "
-        "the error's candidates are the rop_image nodes in its network (viewport_capture "
-        "cop_path looks at it). A COP image needs no lights, so no lights note. A thumbnail "
+        "the error's candidates are the rop_image nodes in its network (look with it as "
+        "target shows it). A COP image needs no lights, so no lights note. A thumbnail "
         "PIL cannot read (a float TIFF) is converted with iconvert; if that fails too, a note "
         "says why. A ROP whose output is one file for the range (USD layer, Alembic archive, "
         "a path without $F) renders it in one call (a cancel waits for its end) and is read "
@@ -71,7 +71,7 @@ SPEC = ToolSpec(
         "OpenGL ROP a camera that does not fit opsource (a prim or camera LOP at obj, an OBJ "
         "camera at lop) is invalid_argument naming opsource; an override adds a note "
         "(Rendered through <camera> (<parm> restored).). "
-        "Not in compat_1x (spec-2.0 §2.5): on runs this call on another Houdini without moving the pin: a pid, a name (houdini_connect {pid, name}) or a role (editor or worker; the least busy live one, by jobs_running then busy). The result's _meta.instance names it and its job is recorded against it. A pid or name the bridge remembers that has exited is instance_lost, one it never knew houdini_offline with the candidates; a role nobody has is houdini_offline. Without on the call goes to the pinned or selected Houdini as always."
+        "(2.0, spec-2.0 §2.5) on runs this call on another Houdini without moving the pin: a pid, a name (houdini_connect {pid, name}) or a role (editor or worker; the least busy live one, by jobs_running then busy). The result's _meta.instance names it and its job is recorded against it. A pid or name the bridge remembers that has exited is instance_lost, one it never knew houdini_offline with the candidates; a role nobody has is houdini_offline. Without on the call goes to the pinned or selected Houdini as always."
     ),
     input_schema=_obj(
         {
@@ -83,6 +83,7 @@ SPEC = ToolSpec(
             "camera": _s(),
             "wait_s": _n(None, minimum=0),
             "thumbnail": _b(True),
+            "on": _on(),
         },
         ("rop_path",),
     ),
@@ -108,7 +109,6 @@ SPEC = ToolSpec(
         },
         ("job_id", "state"),
     ),
-    v2_extra=_v2_on(),
     examples=(
         {"rop_path": "/out/karma1"},
         {"rop_path": "/out/karma1", "frames": [1, 24], "wait_s": 0},

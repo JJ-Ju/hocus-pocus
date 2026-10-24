@@ -1,4 +1,4 @@
-"""M3: ``test_scenario_authoring``'s build with the 2.0 tools only (spec-2.0 §2.3-§2.5).
+"""M3: the 1.4 authoring scenario's build with the 2.0 tools only (spec-2.0 §2.3-§2.5).
 
 Official MCP client → ``hocuspocus-mcp`` (stdio, the default ``core`` profile) → headless
 ``hython -m hocuspocus.host``. The same scene as the 1.4 scenario (review 06 tasks 2, 3, 4,
@@ -27,9 +27,9 @@ from typing import Any
 
 import pytest
 
-# The 1.4 scenario's hython fixtures and recorder (tests/e2e is on sys.path under pytest's
+# The scenarios' hython fixtures and recorder (tests/e2e is on sys.path under pytest's
 # default import mode); headless_host and hython are fixtures, used by name below.
-from test_scenario_authoring import SRC, Recorder, headless_host, hython  # noqa: F401
+from scenario_host import SRC, Recorder, headless_host, hython  # noqa: F401
 
 pytestmark = pytest.mark.e2e
 

@@ -34,7 +34,7 @@ from hocuspocus.tools.migration import hint_tool
 
 from ._common import DEFAULT_LIMIT, bad_arg, get_node, page
 from ._diag import a_or_an, collect_problems
-from .registry import HostContext, tool
+from .registry import HostContext
 
 INCLUDE = ("attributes", "xform", "bindings", "layers")
 HIDDEN_PRIMS = frozenset({"/HoudiniLayerInfo"})
@@ -653,7 +653,6 @@ def _at_frame(frame: float | None) -> Iterator[None]:
             hou.setFrame(previous)
 
 
-@tool("usd_stage")
 def usd_stage(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     import hou
     from pxr import Usd, UsdGeom

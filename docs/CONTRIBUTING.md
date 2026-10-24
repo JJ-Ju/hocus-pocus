@@ -23,7 +23,7 @@ src/hocuspocus/
     __main__.py                #   hython -m hocuspocus.host
     config.py executor.py server.py dispatch.py runtime.py registry.py jobs.py undo.py
     tx.py                      #   the transaction engine every mutation runs on (2.0)
-    look/                      #   look's and viewport_capture's backends (2.0)
+    look/                      #   look's backends, policy and snapshot (2.0)
     tools/                     #   one module per tool family, each registering with @tool
       registry.py _diag.py session.py hip.py code.py nodes.py network.py parms.py cook.py
       types.py geo.py visual.py state.py hda.py usd.py pdg.py events.py inspect.py
@@ -98,18 +98,14 @@ macOS the path is `.venv/bin/...`.
      tools; `core` is the default), so a new tool is usually `("full",)` or
      `("core", "full")`. Add one to `minimal` only when a small-context client cannot work
      without it, and update BIBLE §4.1 and `test_profiles` in the same change.
-     `"compat_1x"` is the 1.4 catalogue and is closed: a new tool never joins it. A 1.4 tool
-     that 2.0 removed is `("compat_1x",)` and has its replacement in `tools/migration.py`,
-     which both the host's refusal and the bridge's answer quote. `v2` is read as `full`
-     for 2.0.x. The integration session host runs `full`; a test of a 1.4 tool takes
-     `compat_client` (or its module sets `pytestmark = pytest.mark.compat_1x`), which sends
-     `profile: compat_1x` with each call as a `compat_1x` bridge does.
+     A 1.4 tool that 2.0 removed has no spec: its name and replacement are a row of
+     `tools/migration.py` `REPLACEMENTS`, which both the host's refusal and the bridge's
+     answer quote (2.1 removed `compat_1x` and the `v2` alias, BIBLE D46; either name in a
+     config reads as `full` with a warning). The integration session host runs `full`; the
+     1.4 read engines behind `inspect` and `search` are tested in process through the
+     conftest's `READ_ENGINES` (`client.call("node_info", ...)` runs `nodes.node_info`
+     directly; `wire=True` sends the name to the host, which refuses it).
    - At least one entry in `examples`.
-   - For a 1.4 tool that gains a 2.0 argument or result field (`on`, `role`), a
-     `v2_extra` overlay instead of a schema change: `{"input": {...}, "output": {...}}`,
-     partial schemas that `catalog.v2_spec` deep-merges for the 2.0 profiles, so the
-     `compat_1x` goldens keep 1.4's bytes (BIBLE §3.5). Describe the addition in `notes`,
-     starting "Not in compat_1x"; `docs/tools.md` marks the rows `(not in compat_1x)`.
 
    The bridge registers the tool from this spec, so it shows up in `tools/list`
    straight away.
@@ -129,8 +125,8 @@ macOS the path is `.venv/bin/...`.
    - Raise `ToolError(code, message, hint=..., candidates=...)` for user mistakes. Use
      only codes from `tools/errors.py` (BIBLE §9). A hint or message that names a tool
      builds the name with `migration.hint_tool("<1.4 or 2.0 name>", **args)`, never a
-     literal: it renders the call the active profile serves (`node_find {root}` on
-     `compat_1x`, `search {kind: "nodes", root}` on the 2.0 profiles) and returns `None`
+     literal: it renders the 2.0 call for a 1.4 name (`node_find {root}` is
+     `search {kind: "nodes", root}`) and returns `None`
      where the profile has no such tool. `tests/unit/test_hint_profiles.py` fails on a
      hint literal that names a removed 1.4 tool.
    - Register with `scene=False` when the dispatcher's undo group, read-only refusal or
@@ -186,8 +182,8 @@ macOS the path is `.venv/bin/...`.
      (`test_tools_list_budget`, spec-2.0 §7 M3). What clients see by default,
      `result_content = "text"` (no output schemas), stays at 24,000 bytes or less. The
      `both` shape, with output schemas declared, stays at 34,000 bytes or less.
-     `compat_1x` keeps the 1.4 caps, 32,000 and 44,000 bytes. The test prints all eight
-     sizes, the four profiles in each mode, even on success. When a new tool pushes either
+     The test prints all six
+     sizes, the three profiles in each mode, even on success. When a new tool pushes either
      one over, move argument detail from the
      description into `notes` before cutting words the model needs to choose the tool.
      Never remove a tool or an argument to make room.
@@ -195,8 +191,7 @@ macOS the path is `.venv/bin/...`.
      current measurement.
 
    `tests/unit/test_catalog_goldens.py` compares the serialised `tools/list` of every
-   profile × mode byte for byte with `tests/unit/goldens/`. The `compat_1x` goldens are
-   1.4's `full` ones and never change. A new tool changes the others on purpose: rewrite them with `.venv/Scripts/python tests/unit/test_catalog_goldens.py
+   profile × mode byte for byte with `tests/unit/goldens/`. A new tool changes them on purpose: rewrite them with `.venv/Scripts/python tests/unit/test_catalog_goldens.py
    --write` in the same commit and say why the bytes changed.
 
    `tests/unit/test_host_tools.py` checks that every `@tool` name exists in the
@@ -352,7 +347,7 @@ workload's files (caches stay under 300 MB each).
 
 | Workload | Source | What it does | Time here |
 |---|---|---|---:|
-| `test_city_build` | review 12 | building generator with `node_edit spare_parms`, the city's for-each loop in one `node_create`, `OUT_CITY`, `cook profile`, one capture | ~5 s |
+| `test_city_build` | review 12 | building generator with spare-parm controls (`edit` `node` op), the city's for-each loop in one `edit`, `OUT_CITY`, `cook profile`, one `look` | ~5 s |
 | `test_scorecard_twelve` | review 21 | the twelve tasks: 2.4 at frame 24, three mistakes with candidates, `unsaved_changes`, `instance_lost` after a kill and a relaunch | ~8 s |
 | `test_soak_200` | review 22 | 200 calls from seed 22: the weighted mix, scheduled samples, saves, captures, canary cooks, a cancelled and a finished cook job, a `hip_open`, one-shot bridges; no leaked nodes or jobs, read p95 < 250 ms | ~20 s |
 | `test_fx_cache` | review 20 | a small pyro sim cached by `render` on `filecache::2.0` (24 frames, polled job), volumes read back, one capture | ~3 s |
@@ -367,28 +362,30 @@ the first image. Text bytes are counted with the session's temporary root replac
 `<tmp>`, so budgets do not depend on the temp path. Job polls are not recorded (only the
 final `job status`), so call counts do not depend on machine speed.
 
-**Budgets.** `tests/workloads/budgets.json` holds `calls`, `text_bytes`, `max_call_bytes`
-and `wall_s` per workload, recorded from 1.4 (the larger of two runs). A workload fails
+**Budgets.** `tests/workloads/v2/budgets.json` holds `calls`, `text_bytes`,
+`max_call_bytes` and `wall_s` per workload. A workload fails
 when any of them is more than 15 % over its budget, or on any error it did not expect.
-Every run writes its measurements, per tool as well, to `tests/workloads/last_run.json`
+`tests/workloads/budgets.json` holds the same numbers recorded from the 1.4 workloads
+(the larger of two runs); 2.1 removed those workloads with `compat_1x` and keeps the
+numbers as the baseline below.
+Every run writes its measurements, per tool as well, to `tests/workloads/v2/last_run.json`
 (not committed). A change that raises bytes or calls per workload must say why (spec-2.0
 principle 13); when the rise is intended, re-record with
 `--update-budgets` (it rewrites the entries of the workloads that ran) and commit the new
 `budgets.json` with the change. Record wall time from a full-tier run: run alone, a
 workload can pay the capture child's 3 s start that the full run spreads differently.
 
-**Two tiers.** The tier runs the five workloads twice over: on the 1.4 tools (`1x`,
-`tests/workloads/test_*.py`, profile `compat_1x` once the 2.0 cut-over has landed, `full`
-before it) and on the 2.0 tools (`v2`, `tests/workloads/v2/test_*_v2.py`, its own host on
-the 2.0 `full` profile, `v2` before the cut-over). `--workloads v2|1x|all` (default `all`)
-selects; `.venv/Scripts/python -m pytest tests/workloads --runworkloads --workloads v2 -q`
-runs the 2.0 tier alone. The v2 workloads assert the same outcomes with `edit` (one
+**One tier.** The five workloads run on the 2.0 tools (`tests/workloads/v2/test_*_v2.py`,
+a host on the `full` profile); `.venv/Scripts/python -m pytest tests/workloads
+--runworkloads --workloads v2 -q` runs them (`--workloads all` is the same). Until 2.1 a
+second tier ran the same five on the 1.4 tools under `compat_1x` (`--workloads 1x`); the
+scene content both shared is in `tests/workloads/v2/city_scene.py` and `soak_model.py`,
+and `tests/workloads/conftest.py` is the harness. The workloads assert their outcomes with `edit` (one
 transaction per step, `$id` chains), `inspect`/`search`, `houdini://` resources revalidated
 with their etag (`rec.read(uri)`; a `not_modified` answer is a call with no bytes), `look`,
 `render`/`cook` with a progress token instead of job polls, and `houdini_connect {role}`
 with `on`; calling a 1.4-only tool fails the test. They have their own
-`tests/workloads/v2/budgets.json` (the same 15 % tolerance, recorded the same way) and
-`last_run.json`, and one more check, the 2.0 exit criterion (spec-2.0 §7, M4): each
+`tests/workloads/v2/budgets.json` and `last_run.json` (above), and one more check, the 2.0 exit criterion (spec-2.0 §7, M4): each
 workload must use fewer `calls` and fewer `text_bytes` than its 1.4 budget. A miss fails
 with the per-tool table so the fix can target the tool that pays. The margins the reviews
 predicted (`MARGINS` in `tests/workloads/v2/conftest.py`: calls 25 % for `city_build`,
@@ -439,7 +436,7 @@ error `code`, and the host pid. The same split is in every result's `_meta.timin
 `main_thread_ms` is mostly `cook_ms` is Houdini cooking, not HocusPocus. Failures that
 reach `internal` also log their traceback at ERROR.
 
-**The kept capture child.** Headless, the first Flipbook `viewport_capture` starts a child
+**The kept capture child.** Headless, the first Flipbook `look` starts a child
 hython that stays up and renders every later capture (about 0.4 s instead of 3 s; BIBLE §8,
 D33). Its work dir is a `hp-warm-*` directory under the system temp dir, with its log in
 `child.log` there. It is replaced when the child script, the hython or an installed HDA

@@ -66,8 +66,8 @@ class HostClient:
         self.token = token
         self.connect_timeout_s = connect_timeout_s
         self.profile: str | None = None
-        """The bridge's profile, sent with every call: a ``compat_1x`` bridge's calls run
-        the 1.4 tools whatever the host's own profile (spec-2.0 §8)."""
+        """The bridge's profile, sent with every call, so the host's hints and messages
+        name only the tools that profile serves (BIBLE §9)."""
 
     # -- transport ---------------------------------------------------------------------
 

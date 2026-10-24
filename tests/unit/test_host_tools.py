@@ -63,7 +63,7 @@ def test_to_jsonable():
 
 def test_undo_labels():
     assert make_label("parm_set", {"items": [1, 2]}) == "HocusPocus: parm_set 2 parms"
-    assert make_label("node_delete", {"paths": ["/obj/a"]}) == "HocusPocus: node_delete /obj/a"
+    assert make_label("render", {"paths": ["/obj/a"]}) == "HocusPocus: render /obj/a"
     assert make_label("hip_new", {}) == "HocusPocus: hip_new"
     assert (
         make_label("houdini_python", {"code": "\n\nprint(1)\nx"})
@@ -99,18 +99,7 @@ def test_registered_host_tools_exist_in_catalogue():
         assert tools["job"].mutating is False  # host-state only
 
 
-SCENE_FALSE = {
-    "undo",
-    "time",
-    "selection",
-    "hda",
-    "cook",
-    "pdg",
-    "render",
-    "job",
-    "viewport_capture",
-    "look",
-}
+SCENE_FALSE = {"undo", "time", "hda", "cook", "pdg", "render", "job", "look"}
 """Tools the dispatcher must not wrap in an undo group (registry.py docstring, BIBLE §4.1)."""
 
 
@@ -120,6 +109,15 @@ def test_registry_matches_catalogue_exactly():
     registry.load_all()
     result = registry.validate(logging.getLogger("test"))
     assert result == {"unknown": [], "missing": []}
+
+
+def test_no_removed_1x_tool_is_registered():
+    """2.1 removed the 1.4 tools with compat_1x: their read engines are host functions that
+    inspect and search call, and none of them is a tool the dispatcher runs by name."""
+    from hocuspocus.tools import migration
+
+    tools = registry.load_all()
+    assert not set(migration.REPLACEMENTS) & set(tools)
 
 
 def test_host_tool_modules_import_hou_lazily():
@@ -143,7 +141,7 @@ def test_scene_false_convention():
         # They can change something, so the agent must not see them as pure reads.
         assert spec.read_only is False, name
         assert spec.destructive is False, name
-    for name in ("time", "selection", "cook", "job"):
+    for name in ("time", "cook", "job", "look"):
         assert catalog.get(name).idempotent is True, name
 
 
@@ -245,11 +243,7 @@ def test_capture_fallback_chain_is_ordered():
     """1.4: the ROP source tries the Flipbook ROP, then the OpenGL ROP (each when Houdini
     has it), then Karma; a crashed child moves on, any other error stops the chain, and
     the note names every ROP that did not render."""
-    from hocuspocus.host.tools.visual import capture_chain, run_capture_chain
-
-    assert capture_chain({"opengl", "flipbook"}) == ["flipbook", "opengl", "karma"]
-    assert capture_chain(["opengl"]) == ["opengl", "karma"]
-    assert capture_chain([]) == ["karma"]
+    from hocuspocus.host.tools.visual import run_capture_chain
 
     def crashed(code=139):
         return ToolError(

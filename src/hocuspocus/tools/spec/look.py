@@ -86,7 +86,7 @@ SPEC = ToolSpec(
         },
         ("backend_used", "chain", "scene", "path", "width", "height"),
     ),
-    # As viewport_capture: in the GUI the ROP backends make a temporary camera and ROP
+    # In the GUI the ROP backends make a temporary camera and ROP
     # (deleted afterwards, outside undo) and Houdini may mark the hip modified.
     idempotent=True,
     examples=(

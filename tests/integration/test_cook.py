@@ -6,8 +6,6 @@ import time
 
 import pytest
 
-pytestmark = pytest.mark.compat_1x  # the 1.4 tools (conftest: compat_client)
-
 hou = pytest.importorskip("hou")
 
 
@@ -15,9 +13,13 @@ def _geo(name: str = "geo1"):
     return hou.node("/obj").createNode("geo", name)
 
 
-def _slow_python_sop(parent, seconds: float, name: str = "slow"):
+def _slow_python_sop(parent, seconds: float, name: str = "slow", time_dependent: bool = False):
+    """A Python SOP that sleeps ``seconds`` per cook. Not time dependent, a frame range
+    cooks it once and reuses the result; ``time_dependent`` (it reads ``hou.frame()``)
+    makes every frame sleep."""
     node = parent.createNode("python", name)
-    node.parm("python").set(f"import time\ntime.sleep({seconds})")
+    frame = "hou.frame()\n" if time_dependent else ""
+    node.parm("python").set(f"import time\n{frame}time.sleep({seconds})")
     return node
 
 
@@ -891,7 +893,7 @@ def test_cook_wait_s_zero_returns_a_job_at_once(client):
 def test_cook_cancelled_frame_range_keeps_the_frames_cooked(client):
     geo = _geo()
     box = geo.createNode("box")
-    slow = _slow_python_sop(geo, 0.05)
+    slow = _slow_python_sop(geo, 0.05, time_dependent=True)
     slow.setInput(0, box)
     hou.setFrame(7)
     result = client.ok(

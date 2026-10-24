@@ -6,7 +6,7 @@ from ._helpers import ROLES, ToolSpec, _b, _enum, _i, _n, _obj, _s
 
 SPEC = ToolSpec(
     name="houdini_connect",
-    profiles=("minimal", "core", "full", "compat_1x"),
+    profiles=("minimal", "core", "full"),
     description=(
         "Choose the Houdini this session drives: pid attaches, launch starts one (gui or "
         "headless, optional hip), disconnect drops the selection, quit closes it. A launched "
@@ -26,7 +26,7 @@ SPEC = ToolSpec(
         "saves first, discard drops them. It returns {quit, pid, exited, saved?} and forgets "
         "the registry entry. To keep one alive across sessions, start it with `hocuspocus "
         "launch` and attach by pid. "
-        "Not in compat_1x (spec-2.0 §2.1): role (editor or worker) sets the role of the Houdini "
+        "(2.0, spec-2.0 §2.1) role (editor or worker) sets the role of the Houdini "
         "given by pid, name or launch (default: editor for a GUI Houdini, worker for a "
         "headless one), kept in the bridge ledger across bridge restarts. {role} alone pins "
         "the least busy live Houdini with that role (fewest jobs_running, then not busy, then"
@@ -49,10 +49,10 @@ SPEC = ToolSpec(
             "disconnect": _b(False),
             "quit": _b(False),
             "on_unsaved": _enum(("fail", "save", "discard")),
+            "role": _enum(ROLES),
         }
     ),
     bridge_local=True,
-    v2_extra={"input": {"properties": {"role": _enum(ROLES)}}},
     examples=(
         {"pid": 12345, "name": "worker"},
         {"launch": {"mode": "headless", "hip": "C:/work/shot.hip"}},

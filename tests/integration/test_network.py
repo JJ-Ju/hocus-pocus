@@ -6,8 +6,6 @@ import json
 
 import pytest
 
-pytestmark = pytest.mark.compat_1x  # the 1.4 tools (conftest: compat_client)
-
 hou = pytest.importorskip("hou")
 
 
@@ -112,13 +110,26 @@ def test_describe_not_found(client):
 # -- network_build -----------------------------------------------------------------
 
 
+def build(client, parent, data, **fields):
+    """One edit build op (the 1.4 network_build): its row, with the call's per-node rows as
+    ``nodes`` (``return: full``: flags, errors and warnings on every row)."""
+    op = {"op": "build", "parent": parent, "data": data, **fields}
+    result = client.ok("edit", {"ops": [op], "return": "full"})
+    return {**result["results"][0], "nodes": result["nodes"]}
+
+
+def build_error(client, parent, data, **fields):
+    op = {"op": "build", "parent": parent, "data": data, **fields}
+    return client.error("edit", {"ops": [op]})
+
+
 def test_build_round_trip(client):
     make_five_chain()
     before = client.ok("network_describe", {"root": "/obj/geo1"})
     hou.node("/obj").createNode("geo", "copy")
-    built = client.ok("network_build", {"parent": "/obj/copy", "data": before["data"]})
+    built = build(client, "/obj/copy", before["data"])
     assert built["created"] == [f"/obj/copy/{n}" for n in before["data"]]
-    assert all("errors" in block for block in built["nodes"])
+    assert built["nodes"] and all("errors" in block for block in built["nodes"])
     after = client.ok("network_describe", {"root": "/obj/copy"})
     assert strip_positions(after["data"]) == strip_positions(before["data"])
     assert hou.node("/obj/copy/xform1").parm("ty").expression() == "$F*0.1"
@@ -135,14 +146,15 @@ def test_build_dry_run_and_tag(client):
             "flags": {"display": True},
         },
     }
-    plan = client.ok("network_build", {"parent": "/obj/g", "data": data, "dry_run": True})
+    op = {"op": "build", "parent": "/obj/g", "data": data}
+    plan = client.ok("edit", {"ops": [op], "dry_run": True})
     assert plan["dry_run"] is True
-    # hou.data type names are exact (an old-version node round-trips as itself).
-    assert [p["type"] for p in plan["plan"]] == ["box", "copytopoints", "merge"]
+    assert plan["plan"][0]["nodes"] == ["/obj/g/box1", "/obj/g/copy1", "/obj/g/merge1"]
     assert hou.node("/obj/g").children() == ()
-    built = client.ok("network_build", {"parent": "/obj/g", "data": data, "tag": "t1"})
+    built = build(client, "/obj/g", data, tag="t1")
     merge = hou.node("/obj/g/merge1")
     assert [n.name() for n in merge.inputs()] == ["box1", "copy1"]  # to_index filled by position
+    # hou.data type names are exact (an old-version node round-trips as itself).
     assert hou.node("/obj/g/copy1").type().name() == "copytopoints"
     assert merge.isDisplayFlagSet()
     assert merge.userData("hocuspocus:tag") == "t1"
@@ -151,32 +163,26 @@ def test_build_dry_run_and_tag(client):
 
 def test_build_validation_errors(client):
     hou.node("/obj").createNode("geo", "g")
-    error = client.error("network_build", {"parent": "/obj/g", "data": {"a": {"type": "boxx"}}})
+    error = build_error(client, "/obj/g", {"a": {"type": "boxx"}})
     assert error["code"] == "node_type_not_found" and "box" in error["candidates"]
-    error = client.error(
-        "network_build",
-        {
-            "parent": "/obj/g",
-            "data": {"a": {"type": "xform", "inputs": [{"from": "bx"}]}, "bx1": {"type": "box"}},
-        },
+    error = build_error(
+        client,
+        "/obj/g",
+        {"a": {"type": "xform", "inputs": [{"from": "bx"}]}, "bx1": {"type": "box"}},
     )
     assert error["code"] == "node_not_found" and "bx1" in error["candidates"]
-    error = client.error(
-        "network_build",
+    error = build_error(
+        client,
+        "/obj/g",
         {
-            "parent": "/obj/g",
-            "data": {
-                "b": {"type": "box"},
-                "x": {"type": "xform", "inputs": [{"from": "b", "to_index": 4}]},
-                "y": {"type": "nope"},
-            },
+            "b": {"type": "box"},
+            "x": {"type": "xform", "inputs": [{"from": "b", "to_index": 4}]},
+            "y": {"type": "nope"},
         },
     )
     assert error["code"] == "invalid_input" and error["hint"]
     assert len(error["detail"]["problems"]) == 2
-    error = client.error(
-        "network_build", {"parent": "/obj/g", "data": {"bad name": {"type": "box"}}}
-    )
+    error = build_error(client, "/obj/g", {"bad name": {"type": "box"}})
     assert error["code"] == "invalid_argument"
     assert hou.node("/obj/g").children() == ()
 
@@ -185,14 +191,10 @@ def test_build_unknown_parm_rolls_back(client):
     hou.node("/obj").createNode("geo", "g")
     keep = hou.node("/obj/g").createNode("null", "keep")
     keep.setDisplayFlag(True)
-    error = client.error(
-        "network_build",
-        {
-            "parent": "/obj/g",
-            "data": {
-                "b": {"type": "box", "parms": {"sizze": [1, 2, 3]}, "flags": {"display": True}}
-            },
-        },
+    error = build_error(
+        client,
+        "/obj/g",
+        {"b": {"type": "box", "parms": {"sizze": [1, 2, 3]}, "flags": {"display": True}}},
     )
     assert error["code"] == "parm_not_found" and "size" in error["candidates"]
     assert [c.name() for c in hou.node("/obj/g").children()] == ["keep"]
@@ -205,22 +207,17 @@ def test_build_name_collisions(client):
     consumer = geo.createNode("null", "OUT")
     consumer.setInput(0, old_box)
     data = {"box1": {"type": "sphere"}, "x": {"type": "xform", "inputs": [{"from": "box1"}]}}
-    error = client.error("network_build", {"parent": "/obj/g", "data": data})
+    error = build_error(client, "/obj/g", data)
     assert error["code"] == "name_collision" and error["candidates"] and error["hint"]
     assert [c.name() for c in geo.children()] == ["box1", "OUT"]
 
-    renamed = client.ok(
-        "network_build", {"parent": "/obj/g", "data": data, "on_name_collision": "rename"}
-    )
+    renamed = build(client, "/obj/g", data, on_name_collision="rename")
     new_name = renamed["renamed"]["/obj/g/box1"]
     assert hou.node(new_name).type().name() == "sphere"
     assert hou.node("/obj/g/x").inputs()[0].path() == new_name
     assert hou.node("/obj/g/box1").type().name() == "box"
 
-    replaced = client.ok(
-        "network_build",
-        {"parent": "/obj/g", "data": {"box1": {"type": "torus"}}, "on_name_collision": "replace"},
-    )
+    replaced = build(client, "/obj/g", {"box1": {"type": "torus"}}, on_name_collision="replace")
     assert replaced["replaced"] == ["/obj/g/box1"]
     assert hou.node("/obj/g/box1").type().name() == "torus"
     assert consumer.inputs()[0].path() == "/obj/g/box1"  # downstream wire moved to the new node
@@ -229,9 +226,7 @@ def test_build_name_collisions(client):
 
 def test_build_refuses_locked_parent(client):
     geo = make_five_chain()
-    error = client.error(
-        "network_build", {"parent": "/obj/geo1/mountain1", "data": {"n": {"type": "null"}}}
-    )
+    error = build_error(client, "/obj/geo1/mountain1", {"n": {"type": "null"}})
     assert error["code"] == "locked" and error["hint"]
     assert hou.node("/obj/geo1/mountain1").isLockedHDA()
     assert geo.node("mountain1").children()
@@ -243,7 +238,7 @@ def test_build_ignores_locked_children_from_recurse_locked(client):
         "network_describe", {"root": "/obj/geo1", "depth": 2, "recurse_locked": True}
     )
     hou.node("/obj").createNode("geo", "copy")
-    built = client.ok("network_build", {"parent": "/obj/copy", "data": described["data"]})
+    built = build(client, "/obj/copy", described["data"])
     assert any("mountain1" in w for w in built["warnings"])
     assert hou.node("/obj/copy/mountain1").isLockedHDA()
 
@@ -251,12 +246,12 @@ def test_build_ignores_locked_children_from_recurse_locked(client):
 def test_build_subnet_children(client):
     hou.node("/obj").createNode("geo", "g")
     data = {"sub": {"type": "subnet", "children": {"a": {"type": "box"}, "b": {"type": "nope"}}}}
-    error = client.error("network_build", {"parent": "/obj/g", "data": data})
+    error = build_error(client, "/obj/g", data)
     assert error["code"] == "node_type_not_found" and error["detail"]["problems"][0]["at"].endswith(
         "sub/b"
     )
     data["sub"]["children"]["b"] = {"type": "xform", "inputs": [{"from": "a"}]}
-    built = client.ok("network_build", {"parent": "/obj/g", "data": data})
+    built = build(client, "/obj/g", data)
     assert built["created_count"] == 3
     assert hou.node("/obj/g/sub/b").inputs()[0].path() == "/obj/g/sub/a"
 
@@ -268,16 +263,17 @@ def test_build_dry_run_changes_nothing_even_read_only(client, host):
     hou.node("/obj").createNode("geo", "g")
     host.scene.mark_clean()
     data = {"box1": {"type": "box"}, "x": {"type": "xform", "inputs": [{"from": "box1"}]}}
-    envelope = client.call("network_build", {"parent": "/obj/g", "data": data, "dry_run": True})
+    call = {"ops": [{"op": "build", "parent": "/obj/g", "data": data}], "dry_run": True}
+    envelope = client.call("edit", call)
     assert envelope["ok"] is True, envelope
     assert envelope["_meta"]["undo_label"] is None
     assert envelope["result"].get("dirty") in (None, False)
     assert "_changed" not in envelope["result"]
     assert host.scene.dirty is False
     host.config.read_only = True
-    plan = client.ok("network_build", {"parent": "/obj/g", "data": data, "dry_run": True})
-    assert plan["dry_run"] is True and plan["node_count"] == 2
-    refused = client.error("network_build", {"parent": "/obj/g", "data": data})
+    plan = client.ok("edit", call)
+    assert plan["dry_run"] is True and plan["plan"][0]["nodes"] == ["/obj/g/box1", "/obj/g/x"]
+    refused = build_error(client, "/obj/g", data)
     assert refused["code"] == "read_only"
     assert hou.node("/obj/g").children() == ()
 
@@ -285,31 +281,27 @@ def test_build_dry_run_changes_nothing_even_read_only(client, host):
 def test_build_validates_from_index_and_duplicate_to_index(client):
     geo = hou.node("/obj").createNode("geo", "g")
     geo.createNode("box", "existing")
-    error = client.error(
-        "network_build",
+    error = build_error(
+        client,
+        "/obj/g",
         {
-            "parent": "/obj/g",
-            "data": {
-                "b": {"type": "box"},
-                "x": {"type": "xform", "inputs": [{"from": "b", "from_index": 3}]},
-                "y": {"type": "xform", "inputs": [{"from": "existing", "from_index": 1}]},
-            },
+            "b": {"type": "box"},
+            "x": {"type": "xform", "inputs": [{"from": "b", "from_index": 3}]},
+            "y": {"type": "xform", "inputs": [{"from": "existing", "from_index": 1}]},
         },
     )
     assert error["code"] == "invalid_input"
     problems = error["detail"]["problems"]
     assert len(problems) == 2 and all("output" in p["message"] for p in problems)
-    error = client.error(
-        "network_build",
+    error = build_error(
+        client,
+        "/obj/g",
         {
-            "parent": "/obj/g",
-            "data": {
-                "b": {"type": "box"},
-                "s": {"type": "sphere"},
-                "m": {
-                    "type": "merge",
-                    "inputs": [{"from": "b", "to_index": 0}, {"from": "s", "to_index": 0}],
-                },
+            "b": {"type": "box"},
+            "s": {"type": "sphere"},
+            "m": {
+                "type": "merge",
+                "inputs": [{"from": "b", "to_index": 0}, {"from": "s", "to_index": 0}],
             },
         },
     )
@@ -337,29 +329,17 @@ def test_build_replace_ignores_network_box_names(client):
     geo.createNetworkBox("box1")
     geo.createStickyNote("note1")
     old = geo.createNode("null", "keep")
-    error = client.error(
-        "network_build",
-        {
-            "parent": "/obj/g",
-            "data": {"box1": {"type": "box"}, "keep": {"type": "null"}},
-            "on_name_collision": "replace",
-        },
+    error = build_error(
+        client,
+        "/obj/g",
+        {"box1": {"type": "box"}, "keep": {"type": "null"}},
+        on_name_collision="replace",
     )
     assert error["code"] == "name_collision" and "network box" in error["message"]
     assert geo.node("keep") == old
-    built = client.ok(
-        "network_build",
-        {
-            "parent": "/obj/g",
-            "data": {"keep": {"type": "box"}},
-            "on_name_collision": "replace",
-        },
-    )
+    built = build(client, "/obj/g", {"keep": {"type": "box"}}, on_name_collision="replace")
     assert built["replaced"] == ["/obj/g/keep"] and geo.node("keep").type().name() == "box"
-    renamed = client.ok(
-        "network_build",
-        {"parent": "/obj/g", "data": {"box1": {"type": "box"}}, "on_name_collision": "rename"},
-    )
+    renamed = build(client, "/obj/g", {"box1": {"type": "box"}}, on_name_collision="rename")
     assert renamed["renamed"]["/obj/g/box1"] != "/obj/g/box1"
 
 
@@ -507,32 +487,28 @@ def test_describe_outline_is_budgeted_and_paged(client, host):
 
 def test_build_accepts_to_index_by_input_name(client):
     hou.node("/obj").createNode("geo", "g")
-    result = client.ok(
-        "network_build",
+    result = build(
+        client,
+        "/obj/g",
         {
-            "parent": "/obj/g",
-            "data": {
-                "b": {"type": "box"},
-                "pts": {"type": "scatter", "inputs": [{"from": "b"}]},
-                "copy": {
-                    "type": "copytopoints",
-                    "inputs": [
-                        {"from": "b", "to_index": "input1"},
-                        {"from": "pts", "to_index": "input2"},
-                    ],
-                },
+            "b": {"type": "box"},
+            "pts": {"type": "scatter", "inputs": [{"from": "b"}]},
+            "copy": {
+                "type": "copytopoints",
+                "inputs": [
+                    {"from": "b", "to_index": "input1"},
+                    {"from": "pts", "to_index": "input2"},
+                ],
             },
         },
     )
     assert "/obj/g/copy" in result["created"]
     copy = hou.node("/obj/g/copy")
     assert [n.name() for n in copy.inputs()] == ["b", "pts"]
-    error = client.error(
-        "network_build",
-        {
-            "parent": "/obj/g",
-            "data": {"c2": {"type": "copytopoints", "inputs": [{"from": "b", "to_index": "nope"}]}},
-        },
+    error = build_error(
+        client,
+        "/obj/g",
+        {"c2": {"type": "copytopoints", "inputs": [{"from": "b", "to_index": "nope"}]}},
     )
     assert error["code"] == "invalid_input"
 
@@ -555,7 +531,7 @@ def test_build_notes_callbacks_it_did_not_run(client):
     """A menu with a callback script set from data is set, but setChildrenFromData does not
     run the callback; the result says so, as node_create does, and names press."""
     geo = hou.node("/obj").createNode("geo", "pyro")
-    result = client.ok("network_build", {"parent": geo.path(), "data": _pyro_data()})
+    result = build(client, geo.path(), _pyro_data())
     src = hou.node(f"{geo.path()}/src")
     assert src.parm("initialize").evalAsString() == "source"
     assert src.parm("attributes").eval() == 0  # the callback did not run
@@ -566,10 +542,7 @@ def test_build_notes_callbacks_it_did_not_run(client):
 
 def test_build_press_runs_callbacks_after_the_build(client):
     geo = hou.node("/obj").createNode("geo", "pyro")
-    result = client.ok(
-        "network_build",
-        {"parent": geo.path(), "data": _pyro_data(), "press": {"src": ["initialize"]}},
-    )
+    result = build(client, geo.path(), _pyro_data(), press={"src": ["initialize"]})
     src = hou.node(f"{geo.path()}/src")
     # initialize is an action menu: its callback applies the preset and resets it to none.
     assert src.parm("initialize").evalAsString() == "none"
@@ -584,53 +557,29 @@ def test_build_press_runs_callbacks_after_the_build(client):
 
 
 def test_build_press_takes_nested_and_absolute_paths(client):
-    result = client.ok(
-        "network_build",
-        {
-            "parent": "/obj",
-            "data": {"pyro": {"type": "geo", "children": _pyro_data()}},
-            "press": {"/obj/pyro/src": ["initialize"]},
-        },
-    )
+    data = {"pyro": {"type": "geo", "children": _pyro_data()}}
+    result = build(client, "/obj", data, press={"/obj/pyro/src": ["initialize"]})
     assert hou.node("/obj/pyro/src").parm("attributes").eval() == 2
     assert result["pressed"] == ["/obj/pyro/src/initialize"]
     hou.node("/obj/pyro").destroy()
-    client.ok(
-        "network_build",
-        {
-            "parent": "/obj",
-            "data": {"pyro": {"type": "geo", "children": _pyro_data()}},
-            "press": {"pyro/src": ["initialize"]},
-        },
-    )
+    build(client, "/obj", data, press={"pyro/src": ["initialize"]})
     assert hou.node("/obj/pyro/src").parm("attributes").eval() == 2
 
 
 def test_build_press_errors_roll_back(client):
     geo = hou.node("/obj").createNode("geo", "pyro")
-    error = client.error(
-        "network_build",
-        {"parent": geo.path(), "data": _pyro_data(), "press": {"nope": ["initialize"]}},
-    )
+    error = build_error(client, geo.path(), _pyro_data(), press={"nope": ["initialize"]})
     assert error["code"] == "invalid_argument" and "src" in error["candidates"]
-    error = client.error(
-        "network_build",
-        {"parent": geo.path(), "data": _pyro_data(), "press": {"src": ["initialise"]}},
-    )
+    error = build_error(client, geo.path(), _pyro_data(), press={"src": ["initialise"]})
     assert error["code"] == "parm_not_found" and "initialize" in error["candidates"]
-    error = client.error(
-        "network_build",
-        {"parent": geo.path(), "data": _pyro_data(), "press": {"sphere1": ["radx"]}},
-    )
+    error = build_error(client, geo.path(), _pyro_data(), press={"sphere1": ["radx"]})
     assert error["code"] == "invalid_value", error  # no callback to run
     assert geo.children() == ()
-    dry = client.ok(
-        "network_build",
-        {
-            "parent": geo.path(),
-            "data": _pyro_data(),
-            "press": {"src": ["initialize"]},
-            "dry_run": True,
-        },
-    )
+    op = {
+        "op": "build",
+        "parent": geo.path(),
+        "data": _pyro_data(),
+        "press": {"src": ["initialize"]},
+    }
+    dry = client.ok("edit", {"ops": [op], "dry_run": True})
     assert dry["dry_run"] is True and geo.children() == ()

@@ -51,8 +51,6 @@ TEMPORARY_CAMERA = "temporary"
 INTERNAL_KEY = "hocuspocus:internal"
 """User data key marking HocusPocus's own temporary nodes."""
 ROP_LABELS = {"flipbook": "Flipbook ROP", "opengl": "OpenGL ROP", "karma": "Karma"}
-ROP_SOURCE_USED = {"flipbook": "flipbook_rop", "opengl": "opengl_rop", "karma": "karma"}
-"""``viewport_capture``'s ``source_used`` for each ROP backend (1.4 names)."""
 
 
 @dataclass(frozen=True)
