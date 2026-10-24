@@ -4,7 +4,58 @@ This project uses [Semantic Versioning](https://semver.org/). The 0.9 compatibil
 policy does not apply to 1.0. 2.0 changes the tool surface; `compat_1x` keeps the 1.4
 one for the 2.0.x releases.
 
-## Unreleased
+## 2.1.0 (unreleased)
+
+### Added
+
+- `look {output}` saves the picture to a `.png` or `.jpg`/`.jpeg` file: the capture at
+  its rendered size, flattened onto grey, with `$HIP` and `~` expanded and parent folders
+  created. The path is checked against `approved_roots` before anything renders
+  (`path_not_allowed`), and the result names it as `output`. The image is still returned
+  inline (review 26 P1 #3).
+- `hocuspocus doctor` reports the licence state, parsed from `sesictrl diagnostic` (else
+  `hserver -l`) next to the Houdini install. It shows ok, info or a warning with the
+  sign-in hint, never a failure, and it now names a hython that could not get a licence.
+
+### Changed
+
+- **A modal `hou.ui` dialog no longer blocks a GUI Houdini** (parity G5, BIBLE §3.2,
+  D45). During a call in a GUI session the `display*`, `read*` and `select*` dialogs of
+  `hou.ui` are stubs that raise `ui_required` naming the call (`detail.refused`), so
+  `houdini_python` code, a pressed parm callback or a creation script that asks for one
+  fails at once and is rolled back, where 2.0 answered `houdini_busy` and every later call
+  waited until a person clicked. A hip load script's dialog is refused too, and `hip_open`
+  reports it in `warnings` (the file is loaded). Houdini's own `hou.ui` is back between
+  calls; headless nothing changes. The refusal is also a `SystemExit`, because Houdini
+  answers any other exception from a parm callback with a blocking error window of its
+  own. `ui_required`'s description says so.
+- `houdini_busy` for a call that never started names "a dialog open in Houdini" and asks
+  to have it closed if it keeps happening: measured, nothing HocusPocus sends runs while a
+  user's modal dialog is open. The guide recipe "GUI sessions: never open a dialog" says
+  both (8 bytes shorter).
+- CI: `.github/workflows/unit.yml` runs ruff and the unit tier on Linux, macOS and
+  Windows for Python 3.11 to 3.13 (portability audit,
+  `docs/redesign/review/27-portability.md`).
+
+### Fixed
+
+- A launch without a licence now says so, and answers within seconds (review 26 P1 #1).
+  `houdini_connect {launch}` and `hocuspocus launch` recognise a licence line in the
+  launch log, exit code 3, or, for a GUI, the "Unable to Acquire a License" window or the
+  License Administrator (hkey) opening. They answer `houdini_offline` with
+  `retryable: false`, a message saying Houdini could not get a licence,
+  `detail: {reason: "licence", exit_code, log_excerpt, ...}`, and a hint to sign in with
+  hkey or `sesictrl login` and launch again. Before, a GUI launch waited the full
+  `wait_s` (90 s) and then hinted at `install-houdini`. A GUI Houdini stuck on that
+  dialog is stopped; the License Administrator stays open.
+- Linux and macOS: a launched Houdini that exited or crashed stayed a zombie child of the
+  bridge and still counted as alive, so a call it dropped answered `delivery_unknown`
+  instead of `houdini_offline`, with no `instance_lost`. Zombies now count as dead.
+- Linux and macOS: a headless launch also accepts a host that registers under a child pid
+  of the `hython` wrapper script, if its registry entry names this bridge as its launcher.
+  Before, such a launch timed out.
+- The headless host shuts down cleanly on SIGHUP (a closing terminal) as on SIGTERM, and
+  removes its registry entry.
 
 ## 2.0.0 (2026-10-14)
 

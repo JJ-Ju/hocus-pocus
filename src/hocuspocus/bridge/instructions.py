@@ -145,10 +145,10 @@ the token with `chs()`); with `value_type: "int"` its value is the item index (`
 ### GUI sessions: never open a dialog
 
 A modal `hou.ui` call (`displayMessage`, `selectFile`, `readInput`) from
-`houdini_python`, a `press`ed callback or a creation or load script blocks a GUI Houdini
-until a person answers: every call returns `houdini_busy` (headless it raises). Pass
-values as arguments, print instead, and press only buttons that open no dialog. If calls
-keep returning `houdini_busy` with `busy: true` and no job, ask the user to look.
+`houdini_python`, a `press`ed callback or a creation script fails the call with
+`ui_required`, rolled back (a load script's is a hip_open warning). Pass values as
+arguments and print instead. A dialog the user has open holds Houdini: calls return
+`houdini_busy`; if they keep doing so with `busy: true` and no job, ask the user to look.
 """
 
 GUIDE_HEADER = """\

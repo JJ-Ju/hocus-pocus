@@ -19,6 +19,7 @@ from hocuspocus.tools.catalog import ToolSpec, in_profile, profile_of
 from hocuspocus.tools.errors import ToolError
 from hocuspocus.tools.profiles import normalize
 
+from . import modal
 from .executor import MainThreadMeter, metering
 from .tools.registry import HostContext, HostTool
 from .undo import UndoGroupFactory, make_label
@@ -217,6 +218,32 @@ def profile_error(spec: ToolSpec, host_profile: str) -> ToolError | None:
     )
 
 
+def run_refusing_dialogs(impl: HostTool, args: dict[str, Any], ctx: HostContext) -> Any:
+    """Run the tool, failing it with ``ui_required`` when it reached a modal ``hou.ui``
+    stub (GUI only, docs/parity.md G5, :mod:`hocuspocus.host.modal`), also when the stub's
+    exception was swallowed (a parm callback, a creation script) or turned into another
+    error (``houdini_python``'s ``python_exception``). Raised here, inside the call's undo
+    group, so the call rolls back. A call that loaded or cleared the scene (a hip load
+    script) succeeds with a warning instead: the file is loaded."""
+    with modal.collecting() as refused:
+        generation = ctx.scene.generation
+        try:
+            result = impl.fn(args, ctx)
+        except Exception as exc:
+            if refused:
+                raise modal.refused_error(impl.name, refused, exc, mutating=impl.mutating) from exc
+            raise
+        if not refused:
+            return result
+        if ctx.scene.generation != generation and isinstance(result, dict):
+            warnings = result.get("warnings")
+            if not isinstance(warnings, list):
+                warnings = result["warnings"] = []
+            warnings.append(modal.load_warning(refused))
+            return result
+        raise modal.refused_error(impl.name, refused, None, mutating=impl.mutating)
+
+
 class Dispatcher:
     """Run one tool call and produce the ``hp/v1`` envelope."""
 
@@ -364,7 +391,7 @@ class Dispatcher:
                 make_meta(self.ctx, undo_label=undo_label, started=started, timing=timing),
             )
         except BaseException as exc:
-            if isinstance(exc, KeyboardInterrupt | SystemExit):
+            if isinstance(exc, KeyboardInterrupt | SystemExit) and not isinstance(exc, ToolError):
                 raise
             error = tool_error_from_exception(exc)
             if error.code == "internal":
@@ -404,13 +431,13 @@ class Dispatcher:
 
         def run_tool() -> Any:
             if undo_label is None:
-                return impl.fn(args, ctx)
+                return run_refusing_dialogs(impl, args, ctx)
             clean_events = ctx.scene.clean_events
             ctx.extras[ROLLED_BACK_KEY] = None
             outcome = None
             try:
                 with self.undo_group(undo_label) as outcome:
-                    result = impl.fn(args, ctx)
+                    result = run_refusing_dialogs(impl, args, ctx)
             except ToolError as exc:
                 _report_rollback(exc, outcome, ctx)
                 _note_rolled_back(outcome, ctx)

@@ -107,9 +107,8 @@ def mutates(spec: ToolSpec, args: dict[str, Any]) -> bool:
 
     With several live instances and none pinned these calls refuse with
     ``ambiguous_instance`` (review 19 papercut 2); reads go to the preferred instance.
-    ``viewport_capture`` and ``look`` count as reads: they leave no nodes, undo step or
-    dirty flag."""
-    if spec.read_only or spec.bridge_local or spec.name in ("viewport_capture", "look"):
+    ``look`` counts as a read: it leaves no nodes, undo step or dirty flag."""
+    if spec.read_only or spec.bridge_local or spec.name == "look":
         return False
     if spec.name in READ_ACTIONS:
         return args.get("action") not in READ_ACTIONS[spec.name]

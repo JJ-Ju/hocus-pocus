@@ -235,7 +235,7 @@ def cop_hint(node: Any) -> str:
     net = node if is_cop_network(node) else node.parent()
     where = net.path() if net is not None else "the COP network"
     return (
-        f"{hint_tool('viewport_capture', cop_path=node.path())} returns the image; to write "
+        f"{hint_tool('look', target=node.path())} returns the image; to write "
         f"files, render a Cop rop_image inside {where} (coppath = the node)."
     )
 
@@ -1030,7 +1030,7 @@ def rop_camera(rop: Any, override: Any) -> dict[str, str]:
         else hint_join(
             f"Create a camera ({hint_tool('node_create', parent='/obj', type='cam')}) and set "
             "the ROP's camera parm, or pass camera;",
-            hint_tool("viewport_capture"),
+            hint_tool("look"),
             "frames the scene without one.",
         )
     )

@@ -218,7 +218,7 @@ async def _scenario(check: Checker) -> None:
         "render", {"rop_path": "/out/gl", "output": "$HIP/render/gl.$F4.png"}, "node_not_found"
     )
     assert 'edit {ops: [{op: "create", parent: "/obj", type: "cam"}]}' in rop["hint"]
-    assert "look {}" in rop["hint"]
+    assert "look frames the scene without one" in rop["hint"]
     untitled = await check.mistake("hip_new", {}, "unsaved_changes")
     assert untitled["hint"].startswith("The scene is untitled: hip_save {path} saves it")
 

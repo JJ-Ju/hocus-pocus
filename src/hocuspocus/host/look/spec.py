@@ -97,14 +97,15 @@ class LookSpec:
     quality: str = "draft"
     source: str = "auto"
     """``auto`` or ``viewer``."""
+    path: Any = None
+    """``output``: the file the picture is also saved to (:func:`parse_output`)."""
     rop_samples: int | None = None
     """Samples per pixel of a ROP target (``final``)."""
     prepared: Prepared | None = None
 
     def parsed(self) -> dict[str, Any]:
-        """The keys :func:`~.image.capture_targets` reads (``look`` writes no extra
-        PNG path)."""
-        return {"frame": self.frame, "path": None}
+        """The keys :func:`~.image.capture_targets` reads."""
+        return {"frame": self.frame, "path": self.path}
 
 
 def parse_look_args(args: dict[str, Any]) -> LookSpec:
@@ -125,6 +126,7 @@ def parse_look_args(args: dict[str, Any]) -> LookSpec:
     camera = args.get("camera")
     if camera is not None and (not isinstance(camera, str) or not camera.strip()):
         raise ToolError("invalid_argument", "'camera' must be a camera node or prim path.")
+    output = parse_output(args.get("output"))
     return LookSpec(
         target=target.strip() if target else None,
         camera=camera,
@@ -135,7 +137,31 @@ def parse_look_args(args: dict[str, Any]) -> LookSpec:
         fit_given=fit is not None,
         quality=quality,
         source=source,
+        path=output,
     )
+
+
+OUTPUT_EXTS = (".png", ".jpg", ".jpeg")
+
+
+def parse_output(value: Any) -> str | None:
+    """``look``'s ``output``: a file path ending in .png, .jpg or .jpeg (2.1, review 26
+    P1 #3). ``$HIP``-style variables and ``~`` are expanded, and ``approved_roots``
+    checked, on the main thread (:func:`~.image.capture_targets`)."""
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise ToolError("invalid_argument", "'output' must be a file path.")
+    if not value.strip().lower().endswith(OUTPUT_EXTS):
+        from hocuspocus.tools.migration import hint_tool
+
+        render = hint_tool("render")
+        raise ToolError(
+            "invalid_argument",
+            f"'output' must end in .png or .jpg (got {value.strip()!r}).",
+            hint=f"{render} writes other formats (EXR, TIFF) from a ROP." if render else None,
+        )
+    return value.strip()
 
 
 # -- target resolution (main thread) ---------------------------------------------------

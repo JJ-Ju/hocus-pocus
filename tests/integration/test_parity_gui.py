@@ -40,6 +40,16 @@ pytestmark = [pytest.mark.slow, pytest.mark.gui]
 REPO = Path(__file__).resolve().parents[2]
 DEV_PACKAGE = Path.home() / "houdini22.0" / "packages" / "hocuspocus.json"
 """The dev package ``install-houdini --dev`` writes; copied into the isolated prefs."""
+ON_CREATED = """\
+node = kwargs["node"]
+if node.name().startswith("dialog_made"):
+    hou.ui.displayMessage("HocusPocus G5 test: a creation script dialog")
+"""
+LOAD_SCRIPT = """\
+import hou
+if hou.hipFile.basename().startswith("dialog_456"):
+    hou.ui.displayMessage("HocusPocus G5 test: a load script dialog")
+"""
 LAUNCH_WAIT_S = 240.0
 CALL_TIMEOUT_S = 60.0
 FORBIDDEN_PORT = 37219
@@ -207,6 +217,11 @@ def gui(tmp_path_factory: pytest.TempPathFactory) -> Iterator[GuiSession]:
     work.mkdir()
     (expanded / "packages" / "hocuspocus.json").write_text(_package_json(), encoding="utf-8")
     (expanded / "hocuspocus.toml").write_text('profile = "full"\n', encoding="utf-8")
+    # G5: a creation script and a load script that open a dialog, each only for the one
+    # node or hip file its test makes (Houdini reads the script paths at start-up).
+    (expanded / "scripts" / "obj").mkdir(parents=True)
+    (expanded / "scripts" / "obj" / "null_OnCreated.py").write_text(ON_CREATED, encoding="utf-8")
+    (expanded / "scripts" / "456.py").write_text(LOAD_SCRIPT, encoding="utf-8")
 
     env = {k: v for k, v in os.environ.items() if not k.startswith("HOCUSPOCUS_")}
     env.pop("PYTHONHOME", None)
@@ -621,6 +636,276 @@ def test_selection_names_the_panes_it_moves(gui: GuiSession) -> None:
     assert set(client.python(PANES).values()) == {"/obj/box_geo"}
     assert client.python("[n.path() for n in hou.selectedNodes()]") == ["/obj/box_geo/box1"]
     client.python(PANES_TO_OBJ)
+
+
+STUB_PROBE = """
+import hdefereval
+import hocuspocus.host.modal as _m
+def _probe():
+    _m._gui_probe = getattr(hou.ui.displayMessage, "_hocuspocus_stub", False)
+hdefereval.executeDeferred(_probe)
+"""
+
+
+def _stubs_outside_calls(client: GuiClient) -> Any:
+    """Whether ``hou.ui.displayMessage`` is the HocusPocus stub when the user's own code
+    runs (an idle tick after the call, outside the executor): it must not be."""
+    client.python("import hocuspocus.host.modal as m\nm.__dict__.pop('_gui_probe', None)")
+    client.python(STUB_PROBE)
+    probe = "import hocuspocus.host.modal as m\nresult = getattr(m, '_gui_probe', None)"
+    _wait_for(lambda: client.python(probe) is not None, timeout_s=10.0)
+    return client.python(probe)
+
+
+def test_agent_code_opening_a_dialog_gets_ui_required(gui: GuiSession) -> None:
+    """G5: a modal ``hou.ui`` call in ``houdini_python`` fails at once with
+    ``ui_required`` instead of blocking the GUI until someone clicks; Houdini stays
+    responsive and the user's own ``hou.ui`` is untouched between calls."""
+    client = gui.client
+    _scene(client)
+    started = time.monotonic()
+    refused = client.error(
+        "houdini_python",
+        {"code": "print('before')\nhou.ui.displayMessage('HocusPocus G5: never shown')"},
+        timeout_s=20.0,
+    )
+    assert time.monotonic() - started < 10.0
+    assert refused["code"] == "ui_required"
+    assert "hou.ui.displayMessage()" in refused["message"]
+    assert "block Houdini's main thread until a person answers" in refused["message"]
+    assert refused["detail"]["refused"] == ["displayMessage"]
+    assert refused["detail"]["stdout"] == "before\n"
+    assert "rolled_back" in refused["detail"]
+    for code, name in (
+        ("hou.ui.selectFile()", "selectFile"),
+        ("hou.ui.readInput('name?')", "readInput"),
+        ("hou.ui.selectNode()", "selectNode"),
+        ("hou.ui.displayConfirmation('sure?')", "displayConfirmation"),
+    ):
+        error = client.error("houdini_python", {"code": code}, timeout_s=20.0)
+        assert error["code"] == "ui_required", (code, error)
+        assert error["detail"]["refused"] == [name]
+    # Responsive: the next call runs at once, and a non-modal hou.ui call still works.
+    assert client.python("1 + 1") == 2
+    client.python("hou.ui.setStatusMessage('HocusPocus G5 test')")
+    # Inside a call the stub is in place; outside, Houdini's own function is back.
+    assert client.python("getattr(hou.ui.displayMessage, '_hocuspocus_stub', False)") is True
+    assert _stubs_outside_calls(client) is False
+
+
+DIALOG_BUTTON = """
+node = hou.node('/obj').createNode('null', 'dialog_button')
+group = node.parmTemplateGroup()
+group.append(hou.ButtonParmTemplate(
+    'ask', 'Ask',
+    script_callback="kwargs['node'].parm('tx').set(5); hou.ui.displayMessage('pressed'); "
+    "kwargs['node'].parm('ty').set(7)",
+    script_callback_language=hou.scriptLanguage.Python))
+node.setParmTemplateGroup(group)
+"""
+
+
+def test_a_pressed_callback_that_opens_a_dialog_gets_ui_required(gui: GuiSession) -> None:
+    """G5: a button callback that opens a dialog, pressed through ``parm_set {press}``
+    or an ``edit`` set op, fails with ``ui_required`` (Houdini catches the stub's
+    exception inside the callback, the dispatcher still sees it) and is rolled back."""
+    client = gui.client
+    _scene(client)
+    client.python(DIALOG_BUTTON)
+    started = time.monotonic()
+    refused = client.error(
+        "parm_set", {"items": [{"path": "/obj/dialog_button/ask", "press": True}]}, timeout_s=20.0
+    )
+    assert time.monotonic() - started < 10.0
+    assert refused["code"] == "ui_required", refused
+    assert "hou.ui.displayMessage()" in refused["message"]
+    assert refused["message"].startswith("parm_set reached")
+    assert refused["detail"]["refused"] == ["displayMessage"]
+    assert refused["detail"]["rolled_back"] is True
+    # The callback's change before the dialog was undone; the one after never ran.
+    assert client.python("hou.parm('/obj/dialog_button/tx').eval()") == 0.0
+    assert client.python("hou.parm('/obj/dialog_button/ty').eval()") == 0.0
+
+    edited = client.error(
+        "edit",
+        {"ops": [{"op": "set", "path": "/obj/dialog_button/ask", "press": True}]},
+        timeout_s=20.0,
+    )
+    assert edited["code"] == "ui_required", edited
+    assert client.python("hou.parm('/obj/dialog_button/tx').eval()") == 0.0
+    assert client.python("1 + 1") == 2
+    assert _stubs_outside_calls(client) is False
+
+
+def test_creation_and_load_scripts_that_open_a_dialog(gui: GuiSession) -> None:
+    """G5: a creation script's dialog fails the call that made the node (rolled back); a
+    hip load script's dialog leaves the file loaded, and the load says so in
+    ``warnings``. Neither blocks Houdini."""
+    client = gui.client
+    _scene(client)
+    refused = client.error(
+        "node_create", {"items": [{"parent": "/obj", "type": "null", "name": "dialog_made"}]}
+    )
+    assert refused["code"] == "ui_required", refused
+    assert refused["detail"]["refused"] == ["displayMessage"]
+    assert refused["detail"]["rolled_back"] is True
+    assert client.python("hou.node('/obj/dialog_made') is None") is True
+    assert client.python("1 + 1") == 2
+
+    # An Indie or Apprentice licence saves as .hiplc: open the file it wrote.
+    hip = client.ok("hip_save", {"path": (gui.work_dir / "dialog_456.hip").as_posix()})["path"]
+    loaded = client.ok("hip_open", {"path": hip, "on_unsaved": "discard"})
+    assert any("hou.ui.displayMessage()" in w for w in loaded["warnings"]), loaded
+    assert client.python("hou.hipFile.basename()").startswith("dialog_456")
+    assert client.python("hou.node('/obj/box_geo') is not None") is True
+    assert client.python("1 + 1") == 2
+    client.ok("hip_new", {"on_unsaved": "discard"})
+
+
+def _close_native_dialogs(pid: int) -> int:
+    """Close the dialogs of Houdini ``pid`` that Qt's ``activeModalWidget`` cannot see
+    (Houdini's own message windows, titled "Houdini"), as a person clicking their close
+    box would. Windows only; returns how many it closed."""
+    if sys.platform != "win32":  # pragma: no cover - the GUI runner is Windows today
+        return 0
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.windll.user32
+    proto = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    closed = []
+
+    def visit(hwnd: Any, _param: Any) -> bool:
+        owner = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(owner))
+        if owner.value == pid and user32.IsWindowVisible(hwnd):
+            length = user32.GetWindowTextLengthW(hwnd)
+            title = ctypes.create_unicode_buffer(length + 1)
+            user32.GetWindowTextW(hwnd, title, length + 1)
+            if title.value == "Houdini":
+                user32.PostMessageW(hwnd, 0x0010, 0, 0)  # WM_CLOSE
+                closed.append(hwnd)
+        return True
+
+    user32.EnumWindows(proto(visit), 0)
+    return len(closed)
+
+
+USER_DIALOG = """
+import json, time
+import hdefereval
+from PySide6 import QtCore, QtWidgets
+_marker = {marker!r}
+def _log(event):
+    with open(_marker, "a", encoding="utf-8") as f:
+        f.write(json.dumps({{"event": event, "t": time.time()}}) + "\\n")
+_tries = [0]
+_done = [False]
+def _close():
+    if _done[0]:  # closed already: never touch a later test's dialog
+        return
+    _tries[0] += 1
+    w = QtWidgets.QApplication.activeModalWidget()
+    if w is None:
+        w = next((t for t in QtWidgets.QApplication.topLevelWidgets()
+                  if t.isVisible() and t.isModal()), None)
+    if w is None:
+        _log("no_modal_widget")
+        if _tries[0] < 40:
+            QtCore.QTimer.singleShot(250, _close)
+        return
+    _log("closing " + type(w).__name__)
+    if hasattr(w, "done"):
+        w.done(0)
+    else:
+        w.close()
+def _open():
+    QtCore.QTimer.singleShot({close_ms}, _close)
+    _log("opened")
+    if {kind!r} == "hou_ui":
+        hou.ui.displayMessage("HocusPocus G5 test: a user dialog, closed by a timer")
+    else:
+        box = QtWidgets.QMessageBox(hou.qt.mainWindow())
+        box.setText("HocusPocus G5 test: a user Qt dialog, closed by a timer")
+        box.exec()
+    _done[0] = True
+    _log("closed")
+if {source!r} == "qt_event":
+    hdefereval.executeDeferred(lambda: QtCore.QTimer.singleShot(0, _open))
+else:
+    hdefereval.executeDeferred(_open)
+"""
+
+DIALOG_OPEN_MS = 8000
+PROBE_TIMEOUT_S = 3.0
+
+
+def _events(marker: Path) -> list[str]:
+    try:
+        lines = marker.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+    return [json.loads(line)["event"] for line in lines if line.strip()]
+
+
+def _measure_user_dialog(gui: GuiSession, kind: str, source: str) -> dict[str, Any]:
+    """Open a user's modal dialog outside any call (``kind``: ``hou_ui`` or ``qt``; from
+    ``source``: a Qt event like a shelf click, or an event-loop callback like
+    ``hdefereval``), closed by a timer after :data:`DIALOG_OPEN_MS`, and send a call while
+    it is open. Returns what that call saw."""
+    client = gui.client
+    marker = gui.work_dir / f"user_dialog_{kind}_{source}.jsonl"
+    client.python(
+        USER_DIALOG.format(
+            marker=marker.as_posix(), close_ms=DIALOG_OPEN_MS, kind=kind, source=source
+        )
+    )
+    assert _wait_for(lambda: "opened" in _events(marker), timeout_s=20.0), _events(marker)
+    sent = time.monotonic()
+    ok, result, _meta = client.call(
+        "houdini_python", {"code": "result = 'pumped'"}, timeout_s=PROBE_TIMEOUT_S
+    )
+    answered_s = round(time.monotonic() - sent, 2)
+    still_open = "closed" not in _events(marker)
+    closed = _wait_for(lambda: "closed" in _events(marker), timeout_s=DIALOG_OPEN_MS / 1000 + 5)
+    native = 0
+    if not closed:  # a Houdini message window, which Qt's timer cannot find
+        native = _close_native_dialogs(gui.instance.pid)
+        closed = _wait_for(lambda: "closed" in _events(marker), timeout_s=20.0)
+    assert closed, f"neither the timer nor WM_CLOSE closed the user's dialog: {_events(marker)}"
+    # Houdini is free again once the dialog is gone.
+    assert client.python("1 + 1") == 2
+    return {
+        "ok": ok,
+        "code": None if ok else result.get("code"),
+        "started": None if ok else (result.get("detail") or {}).get("started"),
+        "answered_s": answered_s,
+        "while_open": still_open,
+        "closer": [e for e in _events(marker) if e.startswith("closing")]
+        + (["WM_CLOSE"] if native else []),
+    }
+
+
+@pytest.mark.parametrize("source", ["qt_event", "event_loop_callback"])
+@pytest.mark.parametrize("kind", ["qt", "hou_ui"])
+def test_executor_while_a_user_dialog_is_open(gui: GuiSession, kind: str, source: str) -> None:
+    """G5, measured on 22.0.466: the executor's pump (a ``hou.ui`` event-loop callback)
+    does not run while the user has a modal dialog open, whether it is a ``hou.ui``
+    dialog (Houdini's own window) or a Qt ``exec()``, and whether it was opened from a Qt
+    event (a shelf click) or an event-loop callback (``hdefereval``); Qt timers do run.
+    A call sent meanwhile never starts and answers ``houdini_busy`` with
+    ``started: false`` after its timeout, then Houdini is free once the dialog closes."""
+    _scene(gui.client)
+    seen = _measure_user_dialog(gui, kind, source)
+    print(f"G5 user dialog {kind} from {source}: {seen}")
+    assert seen["while_open"], seen  # the probe call ran while the dialog was open
+    assert seen["closer"], seen
+    assert seen["ok"] is False, seen
+    assert seen["code"] == "houdini_busy", seen
+    assert seen["started"] is False, seen
+    assert seen["answered_s"] >= PROBE_TIMEOUT_S - 0.5, seen
+    # hou.ui dialogs are Houdini windows Qt cannot see; a Qt dialog closes from its timer.
+    assert seen["closer"] == (["WM_CLOSE"] if kind == "hou_ui" else ["closing QMessageBox"])
 
 
 def test_quit_closes_the_gui(gui: GuiSession) -> None:

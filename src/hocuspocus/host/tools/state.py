@@ -278,7 +278,7 @@ def context_changed_note() -> str:
     return (
         "Houdini takes the Scene Viewer and Network Editor listed in context_changed into "
         "the selection's network on its next idle tick (putting them back would change the "
-        f"selection). {hint_tool('viewport_capture', source='viewer')} then shows that "
+        f"selection). {hint_tool('look', source='viewer')} then shows that "
         "network; the default sources are not affected."
     )
 
