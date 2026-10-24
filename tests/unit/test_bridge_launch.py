@@ -590,6 +590,27 @@ def test_headless_launch_waits_for_its_own_pid(tmp_path):
     assert launcher.launch("headless", None, wait_s=30).instance.pid == 9001
 
 
+def test_headless_launch_accepts_a_wrapper_child_that_names_this_bridge(tmp_path):
+    """POSIX ``$HFS/bin/hython`` is a wrapper script: should it run hython-bin as a child,
+    the host registers under another pid. That one counts only when its registry entry
+    says this bridge launched it; a stranger (or an unowned launch) never does."""
+    harness = Harness(register=False)
+    bin_child = Instance(
+        pid=9002, port=2, token="y", started="2026-10-12T12:00:02Z", launched_by=os.getpid()
+    )
+    stranger = Instance(pid=7777, port=1, token="x", started="2026-10-12T12:00:01Z")
+    launcher = make_launcher(fake_hfs(tmp_path / "hfs"), harness)
+    launcher.scan = lambda: [stranger, bin_child] if harness.spawned else []
+    assert launcher.launch("headless", None, wait_s=30).instance.pid == 9002
+
+    other = Harness(register=False)
+    unowned = make_launcher(fake_hfs(tmp_path / "hfs2"), other)
+    unowned.owned = False  # hocuspocus launch: the child is not tagged with this pid
+    unowned.scan = lambda: [bin_child] if other.spawned else []
+    with pytest.raises(ToolError, match="did not register"):
+        unowned.launch("headless", None, wait_s=3)
+
+
 def test_relative_hip_is_resolved_before_launch(tmp_path, monkeypatch):
     (tmp_path / "shot.hip").write_text("")
     monkeypatch.chdir(tmp_path)

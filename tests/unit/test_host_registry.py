@@ -4,9 +4,11 @@ import json
 import os
 import subprocess
 import sys
+import time
 
 import pytest
 
+from hocuspocus.host import registry as host_registry
 from hocuspocus.host.registry import (
     InstanceRegistry,
     list_entries,
@@ -89,6 +91,79 @@ def test_pid_alive_for_running_child_does_not_kill_it():
     finally:
         child.kill()
         child.wait()
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32" or not hasattr(os, "waitid"), reason="POSIX zombies, os.waitid"
+)
+def test_pid_alive_treats_an_unreaped_child_as_dead():
+    """A launched Houdini that exits stays a zombie child of the bridge until reaped;
+    kill(pid, 0) still succeeds for it. It is dead, and Popen can still reap it."""
+    child = subprocess.Popen([sys.executable, "-c", "pass"])
+    flags = os.WEXITED | os.WNOHANG | os.WNOWAIT
+    deadline = time.monotonic() + 10
+    while os.waitid(os.P_PID, child.pid, flags) is None and time.monotonic() < deadline:
+        time.sleep(0.01)
+    os.kill(child.pid, 0)  # the zombie still answers
+    assert pid_alive(child.pid) is False
+    assert child.wait(5) == 0  # left for Popen: the exit code is not lost
+
+
+class _Exited:
+    """What os.waitid returns for an exited child."""
+
+    si_pid = 4242
+
+
+def _posix_without_signals(monkeypatch):
+    monkeypatch.setattr(host_registry.sys, "platform", "linux")
+    monkeypatch.setattr(host_registry.os, "kill", lambda pid, sig: None)
+    for name, value in (("P_PID", 1), ("WEXITED", 4), ("WNOHANG", 1), ("WNOWAIT", 0x1000000)):
+        monkeypatch.setattr(host_registry.os, name, value, raising=False)
+
+
+def test_pid_alive_zombie_detection_with_fakes(monkeypatch):
+    """The same rule on any platform: our exited child (waitid with WNOWAIT), else the
+    state letter in /proc/<pid>/stat."""
+    _posix_without_signals(monkeypatch)
+    calls = []
+
+    def exited_child(idtype, pid, options):
+        calls.append(options)
+        return _Exited()
+
+    monkeypatch.setattr(host_registry.os, "waitid", exited_child, raising=False)
+    assert pid_alive(4242) is False
+    assert calls and calls[0] & 0x1000000  # WNOWAIT: never reaps it
+
+    def not_our_child(idtype, pid, options):
+        raise ChildProcessError(10, "No child processes")
+
+    monkeypatch.setattr(host_registry.os, "waitid", not_our_child, raising=False)
+    states = {"state": "Z"}
+    monkeypatch.setattr(host_registry, "_proc_state", lambda pid: states["state"])
+    assert pid_alive(4242) is False
+    states["state"] = "S"
+    assert pid_alive(4242) is True
+    states["state"] = None  # macOS: no /proc
+    assert pid_alive(4242) is True
+
+    monkeypatch.delattr(host_registry.os, "waitid", raising=False)  # macOS before 3.13
+    states["state"] = "Z"
+    assert pid_alive(4242) is False
+
+
+def test_proc_state_parses_a_command_name_with_spaces_and_parens(tmp_path, monkeypatch):
+    stat = tmp_path / "stat"
+    stat.write_text("4242 (my (odd) cmd) Z 1 4242 4242 0 -1 4194560\n", encoding="ascii")
+    real_path = host_registry.Path
+
+    def fake_path(text):
+        return stat if text == "/proc/4242/stat" else real_path(text)
+
+    monkeypatch.setattr(host_registry, "Path", fake_path)
+    assert host_registry._proc_state(4242) == "Z"
+    assert host_registry._proc_state(4243) is None
 
 
 def test_prune_stale(tmp_path):

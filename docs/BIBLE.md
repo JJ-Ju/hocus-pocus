@@ -186,6 +186,25 @@ full traceback, runs inline if already on the main thread, and raises
 `HoudiniBusy` after `timeout` seconds (the work still completes; the result is
 discarded). Requests are serialised: one `hou` operation at a time.
 
+**Modal dialogs** (2.1, parity G5, D45). A modal `hou.ui` dialog stops the main thread
+inside C++ until a person answers it, where no deadline can fire. So the GUI executor
+runs every main-thread work item with the modal entry points of `hou.ui` (the `display*`,
+`read*` and `select*` dialogs, `host/modal.py` `MODAL_CALLS`) replaced on its class by
+stubs, and puts Houdini's own back when the item ends, also on an exception; between calls
+the user's `hou.ui` is untouched, and headless there is no `hou.ui` to patch. A stub raises
+`ui_required` naming the call. Its error is a `ToolError` that is also a `SystemExit`,
+because Houdini answers any other exception from a parm callback with its own modal "Error
+running callback" window (verified on 22.0.466; `SystemExit` shows none and does not
+exit), and the executor and dispatcher never re-raise it as an exit. The dispatcher fails
+a call that reached a stub with `ui_required` inside the call's undo group, so it rolls
+back, also when a callback or script swallowed the refusal or `houdini_python` reported
+it as `python_exception` (its `detail` is kept, with `refused`); a call that loaded or
+cleared the scene (a hip load script) succeeds with a `warnings` entry instead, since the
+file is loaded. Not covered: Qt dialogs a script builds itself, `hou.ui.waitUntil`, and
+functions captured before the call. A dialog the *user* has open still holds the pump
+(verified: event-loop callbacks do not run inside it, Qt timers do), so calls answer
+`houdini_busy` with `started: false` until it closes.
+
 **Undo.** Every mutating tool call runs inside exactly one
 `hou.undos.group("HocusPocus: <tool> <summary>")` (ASCII, at most 100 characters); an
 `edit` call is labelled `HocusPocus: edit <n> ops`. Every scene change in it is an op of the
@@ -1181,7 +1200,7 @@ Stable codes (the complete set; adding one is a design change):
 | `unsaved_changes` | hip_new/open without consent | with `on_unsaved` |
 | `file_not_found` | hip/hda/merge path | no |
 | `path_not_allowed` | `approved_roots` | no |
-| `ui_required` | a GUI-only argument form headless (`look {source: "viewer"}`) | no |
+| `ui_required` | a GUI-only argument form headless (`look {source: "viewer"}`); (2.1) a modal `hou.ui` dialog reached during a call in a GUI session, `detail.refused` naming it (§3.2) | no |
 | `python_disabled` / `read_only` | config | no |
 | `job_not_found` | job id; 1.4 (review 21 papercut 3): also a `<pid>-<id>` whose pid this bridge never knew (never live in the registry, no job of it seen, no launch record), which 1.3 reported as `instance_lost` for a Houdini that had never run; 2.0: a ledger id the bridge ledger does not have, answered by the bridge for any id of the ledger form (`j` and letters or digits; review 25 papercut 5) with a hint about ledger ids; the 1.x hint (the pid before the `-`, jobs end with their Houdini) only for a `<pid>-<id>` id | no |
 | `cancelled` | job cancelled | — |
@@ -1242,7 +1261,7 @@ docs/
   redesign/README.md  redesign/progress.md  redesign/spec-2.0.md  redesign/budget.md (generated)
   redesign/review/*.md  redesign/evidence/
 README.md  LICENSE  CHANGELOG.md
-.github/workflows/ci.yml  houdini.yml
+.github/workflows/ci.yml  unit.yml  houdini.yml
 ```
 
 The repo root is **not** on `HOUDINI_PATH`: hython puts `$HIP` (its cwd) on
@@ -1353,7 +1372,7 @@ its status in the matrix: G1 (a read dirtied the GUI hip) is the one dirty sourc
 §3.2; G2 (the GUI viewport cooks between calls) a once-per-session note (§4.7 `time`);
 G3 (a selection moves the user's panes) `context_changed` on `edit` `select` (§4.5); G4
 (`cook {frame_range}` walks the playbar) a restore only when the user did not move it
-(§4.6); G5 (modal dialogs block the GUI) guidance for the guide; G6 (no whole tool is
+(§4.6); G5 (modal dialogs block the GUI) the modal stubs of §3.2 (2.1); G6 (no whole tool is
 GUI-only) §3.6; G7 (a stale GUI package) the `version_mismatch` warning (§4.2); G8
 (headless looks render a snapshot) §8's contract and its notes.
 `tests/integration/test_parity_gui.py` executes the GUI column in a scripted `houdinifx`
@@ -1363,7 +1382,9 @@ session; the headless column is the integration tier (with
 Hygiene rules: never write into the repo at test time; never use port 37219; isolated
 pref dir per run; clean interpreter exit. CI: GitHub Actions `windows-latest` and
 `ubuntu-latest` run `ruff check`, `ruff format --check`, the unit tier and a
-`docs/tools.md` freshness check (`ci.yml`); a self-hosted Windows runner labelled
+`docs/tools.md` freshness check (`ci.yml`); (2.1) `ubuntu-latest`, `macos-latest` and
+`windows-latest` run ruff and the unit tier for Python 3.11 to 3.13 (`unit.yml`; the
+portability audit, review 27); a self-hosted Windows runner labelled
 `houdini` runs integration (the fast set, then `-m slow`) + e2e nightly, on manual dispatch and on PRs labelled
 `houdini` (`houdini.yml`). The workloads tier is a step of `houdini.yml`, and its measurements are
 uploaded as an artifact (`tests/workloads/last_run.json`).
@@ -1435,7 +1456,7 @@ are in `docs/redesign/` and `progress.md`.
 ## 15. Decision log
 
 D1 to D34 are carried over from 1.x unchanged; their section references are to the 1.4
-bible (tag `v1.4.0`). D35 to D44 are the 2.0 decisions.
+bible (tag `v1.4.0`). D35 to D44 are the 2.0 decisions, D45 on the 2.1 ones.
 
 - **D1** Two processes; stdlib host, SDK bridge. *Dependency isolation and offline tools.*
 - **D2** Official `mcp>=2.3` SDK, `MCPServer`, stdio only. *No hand-rolled protocol.*
@@ -1481,6 +1502,7 @@ bible (tag `v1.4.0`). D35 to D44 are the 2.0 decisions.
 - **D42** (2.0) The evaluation workloads are a test tier with recorded budgets, failing on a 15 % regression (§11). *Every review measured calls and bytes per task by hand once per release; a regression is now a red build.*
 - **D43** (2.0) GUI/headless behaviour is a documented matrix with a tested GUI column; a gap is resolved as same or as a documented mode (§11, `docs/parity.md`). *Differences such as a read dirtying the GUI hip were found by accident.*
 - **D44** (2.0) Budget policy: the 2.0 `full` profile's `tools/list` is capped at 24,000 B (`text`) and 34,000 B (`both`); `compat_1x` keeps the 1.4 caps of 32,000 B and 44,000 B (§4.1). *The 2.0 surface fits in less, and a cap set at the new size keeps it there; the 1.4 catalogue cannot shrink without breaking the scripts it exists for.*
+- **D45** (2.1) During a call in a GUI session the modal `hou.ui` dialogs are stubs that raise `ui_required`, and a call that reached one fails, rolled back, even when a callback swallowed the refusal; a load script's refusal is a warning on the loaded scene (§3.2, §9). *A dialog blocked Houdini's main thread until a person clicked, where the `houdini_python` deadline cannot fire, and every later call returned `houdini_busy`; headless the same code already failed. The refusal is a `SystemExit` as well because Houdini shows a blocking error window for any other exception from a parm callback.*
 
 ### Verified deviations (M5 reconciliation, 1.0; still true)
 

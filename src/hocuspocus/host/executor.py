@@ -110,10 +110,15 @@ def _busy(timeout_s: float, *, started: bool) -> ToolError:
         )
     else:
         message = (
-            f"Houdini's main thread was busy for {timeout_s:g}s (a modal dialog, a "
-            "long cook, or another call); the call was not started."
+            f"Houdini's main thread was busy for {timeout_s:g}s (a dialog open in "
+            "Houdini, a long cook, or another call); the call was not started."
         )
-        hint = "Retry shortly; the call had no effect."
+        # Measured (docs/parity.md G5): nothing HocusPocus runs while a user's modal
+        # dialog is open; HocusPocus refuses dialogs of its own during a call.
+        hint = (
+            "Retry shortly; the call had no effect. If it keeps happening, ask the user to "
+            "close any dialog open in Houdini."
+        )
     return ToolError(
         "houdini_busy", message, hint=hint, detail={"started": started, "timeout_s": timeout_s}
     )
@@ -129,6 +134,7 @@ class MainThreadExecutor:
         add_callback: Callable[[Callable[[], None]], Any] | None = None,
         remove_callback: Callable[[Callable[[], None]], Any] | None = None,
         main_thread_ident: int | None = None,
+        modal_guard: Callable[[], contextlib.AbstractContextManager[Any]] | None = None,
     ) -> None:
         self._queue: queue.Queue[_Work] = queue.Queue()
         self._add_callback = add_callback
@@ -143,6 +149,10 @@ class MainThreadExecutor:
         self.work_wrapper: Callable[[Callable[[], Any]], Any] | None = None
         """Runs each queued callable (``wrapper(fn)``) when set: the ``events`` hooks use it
         to tell HocusPocus's own scene changes from the user's."""
+        self.modal_guard = modal_guard
+        """Entered around each queued callable when set (``guard()`` is a context
+        manager). The GUI backend on a real ``hou`` sets it to the modal ``hou.ui`` stubs
+        (:mod:`hocuspocus.host.modal`, docs/parity.md G5)."""
 
     # -- lifecycle ---------------------------------------------------------------
 
@@ -164,6 +174,10 @@ class MainThreadExecutor:
 
                 self._add_callback = hou.ui.addEventLoopCallback
                 self._remove_callback = hou.ui.removeEventLoopCallback
+                if self.modal_guard is None:
+                    from .modal import ModalStubs
+
+                    self.modal_guard = ModalStubs().active
             self._add_callback(self._on_idle)
         self._running = True
         log.debug("executor started (%s backend)", self.backend)
@@ -309,14 +323,18 @@ class MainThreadExecutor:
             work.state = "running"
         reraise: BaseException | None = None
         wrapper = self.work_wrapper
+        guard = self.modal_guard
         self._current_started = work.started = time.monotonic()
         try:
-            work.result = work.fn() if wrapper is None else wrapper(work.fn)
+            with guard() if guard is not None else contextlib.nullcontext():
+                work.result = work.fn() if wrapper is None else wrapper(work.fn)
         except BaseException as exc:  # transported to the caller
             work.exc = exc
             with contextlib.suppress(Exception):  # exceptions that reject attributes
                 exc.hp_traceback = traceback.format_exc()  # type: ignore[attr-defined]
-            if isinstance(exc, KeyboardInterrupt | SystemExit):
+            # A refused modal dialog (host/modal.py) is a ToolError that is also a
+            # SystemExit: transported to the caller like any tool error, never re-raised.
+            if isinstance(exc, KeyboardInterrupt | SystemExit) and not isinstance(exc, ToolError):
                 reraise = exc
         finally:
             work.finished = time.monotonic()

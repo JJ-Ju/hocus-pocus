@@ -524,8 +524,21 @@ class Launcher:
             found = next((inst for inst in live if inst.pid == proc.pid), None)
             if found is None and mode == "gui":
                 # GUI launchers can hand off to a child process: accept a new registration.
-                # Headless hython never does, so only its own pid counts there.
                 found = next((inst for inst in live if inst.pid not in spawned.before), None)
+            elif found is None and self.owned:
+                # Headless hython is its own pid on Windows. On Linux and macOS
+                # $HFS/bin/hython is a wrapper script; should one start hython-bin as a
+                # child instead of exec'ing it, the host registers under another pid.
+                # Accept that one only when it names this bridge as its launcher, so a
+                # Houdini the user starts meanwhile is never taken for it (review 10 §1.9).
+                found = next(
+                    (
+                        inst
+                        for inst in live
+                        if inst.pid not in spawned.before and inst.launched_by == os.getpid()
+                    ),
+                    None,
+                )
             if found is not None:
                 if self.owned:
                     self.launches.record(found, mode=mode, outlives_server=spawned.outlives)

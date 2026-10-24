@@ -1,0 +1,70 @@
+# Lint (ruff) and the unit tier on Linux, macOS and Windows for every supported Python
+# (2.1 plan, stream B: the portability audit, docs/redesign/review/27-portability.md).
+# No Houdini: the unit tier runs on plain CPython with fakes (docs/BIBLE.md §11). The
+# hython, GUI and e2e tiers need a licensed Houdini and run on the self-hosted runner
+# (houdini.yml). Every run uses an isolated HOCUSPOCUS_STATE_DIR under $RUNNER_TEMP, and
+# no test writes the runner user's Houdini prefs.
+name: unit
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: unit-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit:
+    name: ruff + unit (${{ matrix.os }}, Python ${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python: ["3.11", "3.12", "3.13"]
+    defaults:
+      run:
+        shell: bash
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - uses: astral-sh/setup-uv@v6
+
+      - name: Install (uv venv + editable dev install)
+        run: |
+          uv venv --python "${{ matrix.python }}" .venv
+          uv pip install --python .venv -e ".[dev]"
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            echo "$GITHUB_WORKSPACE/.venv/Scripts" >> "$GITHUB_PATH"
+          else
+            echo "$GITHUB_WORKSPACE/.venv/bin" >> "$GITHUB_PATH"
+          fi
+
+      - name: Isolate the state dir
+        run: |
+          mkdir -p "$RUNNER_TEMP/hp-state"
+          echo "HOCUSPOCUS_STATE_DIR=$RUNNER_TEMP/hp-state" >> "$GITHUB_ENV"
+
+      - name: Python and platform
+        run: python -c "import platform, sys; print(sys.version); print(platform.platform())"
+
+      - name: ruff check
+        run: ruff check src tests
+
+      - name: ruff format --check
+        run: ruff format --check src tests
+
+      - name: Unit tests
+        run: python -m pytest tests/unit -q -p no:cacheprovider -rs

@@ -43,7 +43,7 @@ docs/
   redesign/README.md             # index of the reviews, evaluations and plans
   redesign/review/*.md  redesign/progress.md  redesign/evidence/
 README.md  CHANGELOG.md  LICENSE
-.github/workflows/ci.yml  houdini.yml
+.github/workflows/ci.yml  unit.yml  houdini.yml
 ```
 
 Three rules come with this layout:
@@ -413,6 +413,10 @@ before every tag.
 - `.github/workflows/ci.yml` runs on every push and PR, on `windows-latest` and
   `ubuntu-latest`. It runs `ruff check`, `ruff format --check`, the unit tier, and a
   check that `docs/tools.md` is fresh. It does not need Houdini.
+- `.github/workflows/unit.yml` (2.1) runs ruff and the unit tier on `ubuntu-latest`,
+  `macos-latest` and `windows-latest` for Python 3.11, 3.12 and 3.13, so Linux and macOS
+  path, permission and process code is exercised (`tests/unit/test_portability.py`,
+  review 27). It does not need Houdini.
 - `.github/workflows/houdini.yml` runs the integration tier twice (the fast set, then
   `-m slow`) and the e2e tier. It needs a
   **self-hosted runner labelled `houdini`** with a licensed Houdini 22. It runs nightly,
