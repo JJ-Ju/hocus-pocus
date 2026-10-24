@@ -47,7 +47,8 @@ OP_KINDS = ("create", "delete", "connect", "set", "node", "copy", "layout", "bui
 SET_ITEM_FIELDS = frozenset(
     (
         "path", "value", "expression", "language", "keyframe", "keyframes", "channel_ref",
-        "ramp", "multiparm_count", "revert_to_default", "press", "animation",
+        "ramp", "multiparm_count", "revert_to_default", "press", "animation", "patch",
+        "value_file",
     )
 )  # fmt: skip
 
@@ -64,20 +65,46 @@ OP_FIELDS: dict[str, frozenset[str]] = {
             "exact_type",
             "cook",
             "layout",
+            "path",
         )
     ),  # fmt: skip
     "delete": frozenset(("paths", "path", "keep_connections")),
-    "connect": frozenset(("from", "from_output", "to", "to_input")),
+    "connect": frozenset(("from", "from_output", "to", "to_input", "path")),
     "set": SET_ITEM_FIELDS | {"frame", "node", "parms"},
     "node": frozenset(
-        ("path", "name", "flags", "color", "comment", "position", "lock", "bypass", "spare_parms")
-    ),
-    "copy": frozenset(("paths", "to_parent", "names", "with_inputs", "position_offset")),
-    "layout": frozenset(("parent", "paths", "mode")),
-    "build": frozenset(("parent", "data", "on_name_collision", "layout", "tag", "press")),
-    "select": frozenset(("paths",)),
+        (
+            "path",
+            "node",
+            "name",
+            "flags",
+            "color",
+            "comment",
+            "position",
+            "lock",
+            "bypass",
+            "spare_parms",
+        )
+    ),  # fmt: skip
+    "copy": frozenset(("paths", "path", "to_parent", "names", "with_inputs", "position_offset")),
+    "layout": frozenset(("parent", "path", "paths", "mode")),
+    "build": frozenset(("parent", "path", "data", "on_name_collision", "layout", "tag", "press")),
+    "select": frozenset(("paths", "path")),
 }
-"""The fields each ``edit`` op takes besides ``op`` and ``id``."""
+"""The fields each ``edit`` op takes besides ``op`` and ``id``. ``path`` is every op's
+canonical name for the node it acts on (review 26 P1 friction 6; :data:`PATH_ALIASES`)."""
+
+PATH_ALIASES: dict[str, str] = {
+    "connect": "to",
+    "layout": "parent",
+    "build": "parent",
+    "copy": "paths",
+    "select": "paths",
+    "delete": "paths",
+}
+"""``edit`` ops whose node field has its 1.4 name: ``path`` is read as that field (a list
+field takes ``[path]``). ``create``'s ``path`` is the new node's (``parent`` + ``name``), a
+``node`` op's ``node`` is its ``path``, and a ``set`` op's ``path`` with ``parms`` is its
+``node``."""
 
 OPTION_FIELDS: dict[str, tuple[str, ...]] = {
     "create": ("exact_type", "cook", "layout"),
@@ -588,7 +615,7 @@ def _op_set(args: Any, opts: dict[str, Any], index: int, st: State) -> OpResult:
         raise ToolError("invalid_argument", f"Unexpected item keys {sorted(unknown)}.")
     node, target = P.resolve_path(args.get("path"))
     st.rollback.add(_checked(P._snapshot(target)))  # never leave an item half-applied
-    row = P._apply(node, target, args, frame=frame)
+    row = P._apply(node, target, args, frame=frame, ctx=st.ctx)
     return OpResult(index, Op("set", args), node=node, path=node.path(), nodes=[node], data=row)
 
 
@@ -685,7 +712,7 @@ def plan_node_edit(item: Any, index: int, node: Any = None) -> dict[str, Any]:
     xy = N.arg_xy(position, "position") if position is not None else None
     spare_plan = None
     if item.get("spare_parms") is not None:
-        from .tools.parms import plan_spare_parms
+        from .tools.spare import plan_spare_parms
 
         # A locked asset's own instance takes spare parms (the wrangle "Create spare
         # parameters" button does that); nodes inside a locked asset were refused above.
@@ -750,7 +777,7 @@ def _op_node(args: Any, opts: dict[str, Any], index: int, st: State) -> OpResult
         rollback.add(lambda: node.setPosition(old_pos))
     spare = None
     if plan["spare"] is not None:
-        from .tools.parms import apply_spare_parms
+        from .tools.spare import apply_spare_parms
 
         spare = apply_spare_parms(node, plan["spare"], rollback)
     lock = plan["lock"]
@@ -1182,17 +1209,64 @@ def _parse_op(raw: Any, seen: set[str]) -> Op:
             ),
             sorted(unknown)[0],
         )
-    if kind == "delete":
-        if "path" in fields and "paths" in fields:
-            raise at_field(bad_arg("Pass path or paths to a delete op, not both."), "path")
-        if "path" in fields:
-            fields["paths"] = [fields.pop("path")]
+    _canonical_path(kind, fields)
     opts = {k: fields.pop(k) for k in OPTION_FIELDS.get(kind, ()) if k in fields}
     if kind == "set" and "frame" in opts:
         from .tools.parms import _frame_arg
 
         opts["frame"] = _frame_arg(opts["frame"])
     return Op(kind, fields, op_id, opts)
+
+
+def _canonical_path(kind: str, fields: dict[str, Any]) -> None:
+    """Read ``path`` (and a ``node`` op's ``node``) as the op's own node field, in place
+    (:data:`PATH_ALIASES`). Both spellings at once is ``invalid_argument`` unless they
+    agree."""
+    from .tools.nodes import bad_arg
+
+    def merge(alias: str, target: str, value: Any) -> None:
+        if target in fields and fields[target] != value:
+            raise at_field(
+                bad_arg(
+                    f"A {kind} op takes {alias} or {target}, not both.",
+                    hint=f"{alias} is the same field as {target} on a {kind} op.",
+                ),
+                alias,
+            )
+        fields[target] = value
+
+    if kind == "node" and "node" in fields:
+        merge("node", "path", fields.pop("node"))
+        return
+    if "path" not in fields:
+        return
+    if kind == "set":
+        if "parms" in fields:
+            merge("path", "node", fields.pop("path"))
+        return
+    if kind == "create":
+        path = fields.pop("path")
+        parent, _, name = (
+            path.rstrip("/").rpartition("/") if isinstance(path, str) else ("", "", "")
+        )
+        if not isinstance(path, str) or "/" not in path or not name:
+            raise at_field(
+                bad_arg(
+                    f"A create op's path is the new node's path, <parent>/<name>; got {path!r}.",
+                    hint="Pass path: /obj/geo1/box1 (or $id/box1), or parent and name.",
+                ),
+                "path",
+            )
+        merge("path", "parent", parent or "/")
+        merge("path", "name", name)
+        return
+    target = PATH_ALIASES.get(kind)
+    if target is None:
+        return
+    value = fields.pop("path")
+    if target == "paths":
+        value = [value]
+    merge("path", target, value)
 
 
 # -- validate --------------------------------------------------------------------------
@@ -1276,7 +1350,9 @@ class Sim:
     """The scene as the plan's earlier ops leave it, without changing anything: real
     nodes (minus deleted and renamed ones) plus virtual nodes (:class:`VNode`)."""
 
-    def __init__(self) -> None:
+    def __init__(self, ctx: Any = None) -> None:
+        self.ctx = ctx
+        """The host context (``approved_roots`` for a ``value_file``)."""
         self.virtual: dict[str, VNode] = {}
         self.gone: set[str] = set()
         """Real (``hou``) paths of nodes an earlier op deletes."""
@@ -1425,7 +1501,7 @@ def validate(plan: Plan, ctx: Any) -> Diagnostics:
     changes nothing. Ops that depend on an op that failed are not reported again."""
     from .tools.nodes import batch_error
 
-    sim = Sim()
+    sim = Sim(ctx)
     ids: dict[str, str] = {}
     failed: set[str] = set()
     declared = plan.declared
@@ -1887,11 +1963,13 @@ def _v_set(args: Any, opts: dict[str, Any], index: int, sim: Sim) -> dict[str, A
         parms = args.get("parms")
         if not isinstance(parms, dict) or not parms:
             raise ToolError("invalid_argument", "parms must be an object {name: value}.")
+        _check_editable(node, "node")
         animation = args.get("animation") or "replace"
         for name, spec in parms.items():
             with located(f"parms.{name}"):
-                _item_from_spec(name, spec, animation)
+                item = _item_from_spec(name, spec, animation)
                 _check_parm(sim, node_path, node, name)
+                _check_set_value(sim, node_path, node, name, item)
         return {"path": node_path, "parms": list(parms)}
     unknown = set(args) - SET_ITEM_FIELDS
     if unknown:
@@ -1909,9 +1987,36 @@ def _v_set(args: Any, opts: dict[str, Any], index: int, sim: Sim) -> dict[str, A
     node_path, _, name = text.rpartition("/")
     node_path, node = sim.lookup(node_path, "path")
     _check_value_fields(args, text)
+    _check_editable(node, "path")
     with located("path"):
         _check_parm(sim, node_path, node, name)
+    _check_set_value(sim, node_path, node, name, args)
     return {"path": f"{node_path}/{name}"}
+
+
+def _check_editable(node: Any, field: str) -> None:
+    """A set inside a locked asset fails when it runs; validation says so first (review
+    26 P1 friction 6: ``dry_run`` passed it)."""
+    if isinstance(node, VNode):
+        return
+    from .tools.nodes import ensure_editable
+
+    with located(field):
+        ensure_editable(node, "set parms on")
+
+
+def _check_set_value(sim: Sim, node_path: str, node: Any, name: str, item: dict[str, Any]) -> None:
+    """The value checks of the set itself (type, range, menu, tuple size, locked
+    component, patch, value_file) on an existing node; a spare parm an earlier op adds,
+    or a node the plan creates, is checked when the op runs."""
+    if isinstance(node, VNode) or name in sim.spare.get(node_path, set()):
+        return
+    from .tools import parms as P
+
+    target = P.resolve_name(node, name)
+    field = next((f for f in ("patch", "value_file") if item.get(f) is not None), "value")
+    with located(field if field != "value" or "value" in item else "path"):
+        P.check_item(node, target, item, sim.ctx)
 
 
 def _v_node(args: Any, opts: dict[str, Any], index: int, sim: Sim) -> dict[str, Any]:
@@ -1922,7 +2027,9 @@ def _v_node(args: Any, opts: dict[str, Any], index: int, sim: Sim) -> dict[str, 
     path, target = sim.lookup(args.get("path"), "path")
     parent_path = path.rpartition("/")[0] or "/"
     name = args.get("name")
-    spare_names = _spare_add_names(args.get("spare_parms"))
+    from .tools import spare as S
+
+    spare_names = S.add_names(args.get("spare_parms"))
     if isinstance(target, VNode):
         if name is not None:
             N.check_name(name)
@@ -1941,6 +2048,11 @@ def _v_node(args: Any, opts: dict[str, Any], index: int, sim: Sim) -> dict[str, 
                 f"{path} is created by this call; lock applies to an existing digital asset.",
                 hint="Lock or unlock the asset in a later call.",
             )
+        if args.get("spare_parms") is not None:
+            # The shapes, conditions and names, as the op checks them on the real node
+            # (review 26 P1 friction 6: dry_run accepted a malformed spec).
+            with located("spare_parms"):
+                spare_names = S.check_new_node(target.type, path, target.spare, args["spare_parms"])
         target.spare |= spare_names
     else:
         plan_node_edit(args, index, node=target)
@@ -1967,16 +2079,6 @@ def _v_node(args: Any, opts: dict[str, Any], index: int, sim: Sim) -> dict[str, 
             sim.spare[new_path] = sim.spare.pop(path, set())
         row = {"path": new_path, "old_path": path}
     return row
-
-
-def _spare_add_names(spec: Any) -> set[str]:
-    if not isinstance(spec, dict):
-        return set()
-    return {
-        entry["name"]
-        for entry in spec.get("add") or []
-        if isinstance(entry, dict) and isinstance(entry.get("name"), str)
-    }
 
 
 def _v_copy(args: Any, opts: dict[str, Any], index: int, sim: Sim) -> dict[str, Any]:
@@ -2341,7 +2443,7 @@ def _short_parm_row(row: dict[str, Any]) -> dict[str, Any]:
     press's side effects)."""
     keep = (
         "path", "value", "raw", "expression", "expressions", "keyed", "pressed",
-        "side_effects", "outputs_summary", "notes",
+        "side_effects", "outputs_summary", "notes", "patched_lines", "value_file",
     )  # fmt: skip
     out = {k: row[k] for k in keep if k in row}
     if row.get("wrote_keyframe"):
