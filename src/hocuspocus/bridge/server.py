@@ -91,7 +91,7 @@ def launcher_exited_error(record: dict[str, Any]) -> ToolError:
 READ_ACTIONS: dict[str, frozenset[str]] = {
     "job": frozenset({"status", "result", "list"}),
     "undo": frozenset({"history"}),
-    "hda": frozenset({"list"}),
+    "hda": frozenset({"list", "info"}),
     "pdg": frozenset({"status", "workitems"}),
 }
 """Actions of ``scene=False`` tools that only read (BIBLE §4.1)."""

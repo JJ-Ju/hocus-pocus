@@ -262,7 +262,7 @@ def test_hint_tool_renders_each_profile() -> None:
     assert h("cook", "minimal") is None and h("cook", "core", paths=["/a"]) == (
         'cook {paths: ["/a"]}'
     )
-    assert h("hda", "core") is None and h("hda", "full") == "hda"
+    assert h("hda", "minimal") is None and h("hda", "core") == "hda"  # 2.1: D47
     assert migration.current_profile() == "full"
     with migration.using_profile("minimal") as resolved:
         assert resolved == "minimal" and h("node_type_info") == 'inspect {what: "type"}'

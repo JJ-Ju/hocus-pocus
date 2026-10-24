@@ -129,7 +129,7 @@ was recorded).
 
 | Tool | GUI | Headless | Row | Evidence | GUI test |
 |---|---|---|---|---|---|
-| `hda` | create, save, match, unlock, install, reload, list: same HOM calls in one undo group `HocusPocus: hda <action> <path>` that interleaves with user steps; `dirty` from Houdini | same | same | `host/tools/hda.py:397-436` | `test_hda_create_round_trip` |
+| `hda` | create, save, match, unlock, install, uninstall, reload, list, info (2.1): same HOM calls in one undo group `HocusPocus: hda <action> <path>` that interleaves with user steps (list and info read, no group); `dirty` from Houdini | same | same | `host/tools/hda.py:752-791` | `test_hda_create_round_trip` |
 | `pdg` | non-blocking cook polled through the executor; `cook` refuses an untitled or dirty scene, dirtiness from the one dirty source (G1) | same | same | `host/tools/pdg.py:520-535` | — |
 | `events` | user edits arrive with `origin: other` (anything outside a HocusPocus call's main-thread work); user-created nodes under a manager are watched on the next idle tick | `other` only from code outside the executor; watched on the next queue item | mode | `host/tools/events.py:155-161`, `events.py:420-436`, `events.py:721-734` | `test_events_record_a_manual_rename` |
 | `inspect {what: stage}` (all profiles) | read-only | same | same | `host/tools/usd.py:647-652` | — |

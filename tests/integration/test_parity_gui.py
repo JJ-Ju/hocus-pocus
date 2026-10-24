@@ -564,7 +564,8 @@ def test_hda_create_round_trip(gui: GuiSession) -> None:
             ]
         },
     )
-    library = (gui.work_dir / "otls" / "hp_gui_rock.hda").as_posix()
+    ext = client.python("hou.hda.defaultFileExtension()")  # the licence's (D47)
+    library = (gui.work_dir / "otls" / f"hp_gui_rock{ext}").as_posix()
     made = client.ok(
         "hda",
         {

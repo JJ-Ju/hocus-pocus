@@ -2,7 +2,7 @@
 
 <!-- Generated from src/hocuspocus/tools/spec/ by `python -m hocuspocus.tools.docs`. Do not edit by hand. -->
 
-21 tools. The profiles nest: 10 in `minimal`, 18 in `core` (the default), 21 in `full`. Model-visible `tools/list` text: 20,618 bytes. See `docs/BIBLE.md` §4 for the design.
+21 tools. The profiles nest: 10 in `minimal`, 19 in `core` (the default), 21 in `full`. Model-visible `tools/list` text: 20,824 bytes. See `docs/BIBLE.md` §4 for the design.
 
 ## Contents
 
@@ -24,7 +24,7 @@
 - [`undo`](#undo)
 - [`time`](#time)
 - [`job`](#job)
-- [`hda`](#hda) *(full)*
+- [`hda`](#hda)
 - [`pdg`](#pdg) *(full)*
 - [`events`](#events) *(full)*
 
@@ -344,7 +344,7 @@ Search node types or nodes. kind types: node_type_search (query is a name, label
 
 Change the scene in one undo step. ops run in order, each {op, id?, ...}: create, delete, connect, set, node (rename, flags, color, comment, position, lock, spare_parms), copy, layout, build (hou.data), select; later ops name an earlier op's node as $id. dry_run validates, returning resolved paths. A failure rolls all back unless partial. Returns per-node rows (problems only) and ids.
 
-**Notes.** Each op takes the fields of the 1.4 tool it replaces. create: parent, type, name, parms, inputs [{index or name, from, output}], flags, position, and per op exact_type, cook (false skips the echo's cook) and layout (good_position | none), as node_create. delete: paths (or path), keep_connections, as node_delete. connect: from (null disconnects), from_output, to, to_input (index, name or next), as node_connect. set: one parm_set item (path plus value, expression, keyframe(s), channel_ref, ramp, multiparm_count, revert_to_default or press; language, animation, frame), or {node, parms: {name: value or item}} for several parms of one node. node: path plus name, flags, bypass, color, comment, position, lock, spare_parms, as node_edit. copy: paths, to_parent, names, with_inputs, position_offset, as node_copy. layout: parent, paths, mode, as node_layout. build: parent, data, on_name_collision, layout (boolean), tag, press, as network_build. select: paths (an empty list clears). An id (letters, digits, _) names the op's node: the created node, the connect target, the set or node op's node, the single copy, the layout or build parent. $id, or $id/child and $id/parm, works in the path fields (parent, path, paths, node, from, to, to_parent, channel_ref, inputs[].from), never in parm values, and resolves to the path the op produced. Every op is validated before anything changes (types, parents and their category, parm names, inputs, free names, locked assets) against the scene as the earlier ops leave it; dry_run returns that plan, with predicted: true on a path Houdini will number. A failing op rolls the whole call back; the error names the op field, ops[i].<field>: ... (ops[i] (path) when none applies; a missing from, to or parent lists the parent's nearest children as candidates), with detail.field and detail.rolled_back as performed (a delete cannot be compensated, so the dispatcher's undo of the step decides). With partial, ops run without the up-front validation and a failing op reverts only itself. Result (return summary): nodes, one row per touched node, each cooked once after every op ran (node ops do not cook): path and type, plus errors and warnings when not empty (a list repeated downstream becomes errors_same_as), cook_state when not cooked, cook_ms from 1 ms, and the ops' results for that node (old_path, paired_with, deprecated, hda, notes, side_effects); ids {id: path} for every op id; deleted, reconnected, selected (context_changed), renamed, replaced when an op did that; failed [{item, op, id, error}] with partial. return ops adds results, one row per op (op, id, path, and what it did: set values, input and from, spare_parms, created, copies); return full gives the 1.4 full shapes (flags and messages on nodes, create parms the call set, strings over 200 characters as {elided, head}) and failed as a count. The undo label is HocusPocus: edit <n> ops.
+**Notes.** Each op takes the fields of the 1.4 tool it replaces. create: parent, type, name, parms, inputs [{index or name, from, output}], flags, position, and per op exact_type, cook (false skips the echo's cook) and layout (good_position | none), as node_create. delete: paths (or path), keep_connections, as node_delete. connect: from (null disconnects), from_output, to, to_input (index, name or next), as node_connect. set: one parm_set item (path plus value, expression, keyframe(s), channel_ref, ramp, multiparm_count, revert_to_default or press; language, animation, frame), or {node, parms: {name: value or item}} for several parms of one node. node: path plus name, flags, bypass, color, comment, position, lock, spare_parms, as node_edit. copy: paths, to_parent, names, with_inputs, position_offset, as node_copy. layout: parent, paths, mode, as node_layout. build: parent, data, on_name_collision, layout (boolean), tag, press, as network_build. select: paths (an empty list clears). path (2.1) is every op's name for the node it acts on, next to the 1.4 field: a create op's path is the new node's (parent plus name), connect's is to, layout's and build's parent, copy's, select's and delete's paths [path], a set op's with parms its node, and a node op also takes node; both spellings at once must agree. set (2.1) also takes patch, [{find, replace, all?}] (one object is a list of one): edits of a string parm's text in order, each find occurring exactly once (all: true, at least once), else invalid_value naming the nearest lines as candidates; and value_file, a UTF-8 text file ($HIP and ~ expand, approved_roots, at most 8 MB) whose text becomes a string parm's value. Both write plain text (a parm with keys or an expression is refused), also as {node, parms: {name: {patch}}}; the result row adds patched_lines or value_file. inspect {what: parms, target, full_strings: true} reads a long string back whole. spare_parms: {add: [{name, type: float, int, string, toggle, menu, button, vector, color, file, folder, separator or label, label, default, size, min, max, min_strict, max_strict, menu_items [{token, label}] (menus and strings), value_type (menus: string or int), help, disable_when and hide_when (Houdini conditions such as { parm == 1 }, naming parms of the node), join_next, tags {}, callback (Python), hidden, folder_type (folders: tabs, collapsible, simple, radio), folder (a label, or [labels] for nested folders, made as tabs when missing), before or after (a parm name)}], change: [{name, the same fields}] (keeps the value; folder, before or after moves it), remove: [names]}; change and remove touch spare parms only (hda interface edits an asset's own). An id (letters, digits, _) names the op's node: the created node, the connect target, the set or node op's node, the single copy, the layout or build parent. $id, or $id/child and $id/parm, works in the path fields (parent, path, paths, node, from, to, to_parent, channel_ref, inputs[].from), never in parm values, and resolves to the path the op produced. Every op is validated before anything changes (types, parents and their category, parm names, set values on existing nodes (type, range, menu, tuple size, locked component, patch, value_file), spare_parms shapes and conditions, inputs, free names, sets and changes inside a locked asset: locked, the hint naming the unlock) against the scene as the earlier ops leave it; dry_run returns that plan, with predicted: true on a path Houdini will number. A failing op rolls the whole call back; the error names the op field, ops[i].<field>: ... (ops[i] (path) when none applies; a missing from, to or parent lists the parent's nearest children as candidates), with detail.field and detail.rolled_back as performed (a delete cannot be compensated, so the dispatcher's undo of the step decides). With partial, ops run without the up-front validation and a failing op reverts only itself. Result (return summary): nodes, one row per touched node, each cooked once after every op ran (node ops do not cook): path and type, plus errors and warnings when not empty (a list repeated downstream becomes errors_same_as), cook_state when not cooked, cook_ms from 1 ms, and the ops' results for that node (old_path, paired_with, deprecated, hda, notes, side_effects); ids {id: path} for every op id; deleted, reconnected, selected (context_changed), renamed, replaced when an op did that; failed [{item, op, id, error}] with partial. return ops adds results, one row per op (op, id, path, and what it did: set values, input and from, spare_parms, created, copies); return full gives the 1.4 full shapes (flags and messages on nodes, create parms the call set, strings over 200 characters as {elided, head}) and failed as a count. The undo label is HocusPocus: edit <n> ops.
 
 ### Arguments
 
@@ -371,6 +371,8 @@ Change the scene in one undo step. ops run in order, each {op, id?, ...}: create
 | `ops[].to` | string |  |  |  |
 | `ops[].to_input` | integer \| string |  |  |  |
 | `ops[].value` | any |  |  |  |
+| `ops[].patch` | array \| object |  |  |  |
+| `ops[].value_file` | string |  |  |  |
 | `ops[].expression` | string |  |  |  |
 | `ops[].language` | `hscript` \| `python` |  |  |  |
 | `ops[].keyframe` | object |  |  |  |
@@ -808,17 +810,17 @@ Jobs from render, cook or pdg: status (state, progress, message), result (the to
 
 ## hda
 
-`headless ok` · profiles `full`
+`headless ok` · profiles `core`, `full`
 
-Digital assets: create turns subnet path into an HDA; save updates the definition from path, spare parms included; unlock allows editing; match reverts to the definition and locks; install and reload take library_path; list shows loaded libraries or library_path's definitions.
+Digital assets: create turns subnet path into an HDA; save writes path's contents and spare parms to its definition; unlock allows editing; match reverts and locks; install, uninstall and reload take library_path; list shows loaded libraries; info describes one definition. interface edits parms as spare_parms does.
 
-**Notes.** create takes name, label (or description), version, library_path and optional min_inputs/max_inputs. save copies the instance's spare parms into the asset's interface (promoted lists them; promote_spare_parms: false keeps them on the instance). list is paged by limit and cursor; install of a loaded library says already_loaded. node_type_info and node_type_search report the definition's version and, without help, its label as description.
+**Notes.** create takes name, label (or description), version, library_path and optional min_inputs/max_inputs, and promotes the subnet's spare parms (2.1), so the definition has the interface at once. save copies the instance's spare parms into the asset's interface (promoted lists them; promote_spare_parms: false keeps them on the instance) and also takes label, version and min_inputs/max_inputs; lock: true locks the instance to the saved definition (matchCurrentDefinition) after saving. interface (create, save) is the asset's parm interface in the edit node op's spare_parms shape {add, change, remove}: on create it is added to the subnet first; on save it changes any parm of the definition, and the result lists interface {add, change, remove}. help (create, save) is the HelpText section (Houdini wiki markup; an empty string removes it). action uninstall takes library_path (a loaded library): instances stay and fall back to another loaded definition or the copy embedded in the hip, named per path in instances. info takes path (an instance) or name (Category/type, e.g. Sop/studio::rock::1.0) and returns type, label, version, library, is_current: false and current_library when another definition wins, other_libraries, inputs, sections (names), help_chars, interface {parms, folders}, instances (a count) and, for path, instance {hda_locked, matches_definition}. list is paged by limit and cursor; install of a loaded library says already_loaded. list and info only read. A library the asset is written to (create, save) must carry the licence's extension: .hda or .otl on Commercial, .hdalc or .otllc on Indie, .hdanc or .otlnc on Apprentice and Education; another is invalid_argument with the corrected path as candidate. inspect {what: type} and search {kind: types} report the definition's version and, without help, its label as description.
 
 ### Arguments
 
 | Name | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `action` | `create` \| `save` \| `unlock` \| `match` \| `install` \| `reload` \| `list` | yes |  |  |
+| `action` | `create` \| `save` \| `unlock` \| `match` \| `install` \| `uninstall` \| `reload` \| `list` \| `info` | yes |  |  |
 | `path` | string |  |  | Node path. |
 | `library_path` | string |  |  | .hda file. |
 | `name` | string |  |  | Type name. |
@@ -828,17 +830,24 @@ Digital assets: create turns subnet path into an HDA; save updates the definitio
 | `min_inputs` | integer |  |  | min 0; max 9999 |
 | `max_inputs` | integer |  |  | min 0; max 9999 |
 | `promote_spare_parms` | boolean |  | `true` |  |
+| `interface` | object |  |  |  |
+| `help` | string |  |  |  |
+| `lock` | boolean |  |  |  |
 | `limit` | integer |  | `50` | min 1; max 1000 |
 | `cursor` | string |  |  | next_cursor from the previous page. |
 
 ### Examples
 
 ```json
-{"action": "create", "path": "/obj/geo1/subnet1", "name": "studio::rock", "library_path": "C:/hda/rock.hda"}
+{"action": "create", "path": "/obj/geo1/subnet1", "name": "studio::rock::1.0", "library_path": "$HIP/hda/rock.hdalc", "interface": {"add": [{"name": "seed", "type": "int", "default": 1}]}}
 ```
 
 ```json
-{"action": "list"}
+{"action": "save", "path": "/obj/geo1/rock", "interface": {"change": [{"name": "seed", "default": 7}]}, "help": "= Rock =\nA procedural rock.", "lock": true}
+```
+
+```json
+{"action": "info", "path": "/obj/geo1/rock"}
 ```
 
 

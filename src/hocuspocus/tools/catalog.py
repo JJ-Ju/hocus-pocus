@@ -11,7 +11,7 @@ profile lists which tool.
 
 Profiles (spec-2.0 §2; :mod:`hocuspocus.tools.profiles`): each spec names the profiles
 that list it in its ``profiles`` tuple, so a tool's surface is read in one file. The
-profiles nest, ``minimal`` (10) ⊂ ``core`` (18, the default) ⊂ ``full`` (21). The 1.4
+profiles nest, ``minimal`` (10) ⊂ ``core`` (19, the default; 2.1 adds ``hda``, D47) ⊂ ``full`` (21). The 1.4
 tools 2.0 replaced have no spec since 2.1; :mod:`hocuspocus.tools.migration` names each
 one's replacement.
 """

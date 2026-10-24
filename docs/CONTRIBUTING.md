@@ -27,7 +27,7 @@ src/hocuspocus/
     tools/                     #   one module per tool family, each registering with @tool
       registry.py _diag.py session.py hip.py code.py nodes.py network.py parms.py cook.py
       types.py geo.py visual.py state.py hda.py usd.py pdg.py events.py inspect.py
-      search.py edit.py look.py
+      search.py edit.py look.py spare.py (the spare parm and asset interface engine)
   bridge/                      # OUTSIDE Houdini; official mcp SDK
     __main__.py server.py client.py instances.py launch.py licence.py local_tools.py
     validate.py budget.py config.py instructions.py
@@ -94,7 +94,7 @@ macOS the path is `.venv/bin/...`.
      explanation.
    - `read_only` / `destructive` / `idempotent`, `profiles`, and `headless_ok`. `profiles`
      is the tuple of profiles that list the tool (spec-2.0 §2; `tools/profiles.py`): a
-     suffix of `("minimal", "core", "full")`, since the 2.0 profiles nest (10 / 18 / 21
+     suffix of `("minimal", "core", "full")`, since the 2.0 profiles nest (10 / 19 / 21
      tools; `core` is the default), so a new tool is usually `("full",)` or
      `("core", "full")`. Add one to `minimal` only when a small-context client cannot work
      without it, and update BIBLE §4.1 and `test_profiles` in the same change.
