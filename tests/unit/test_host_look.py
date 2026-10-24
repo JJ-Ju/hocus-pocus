@@ -189,21 +189,16 @@ def test_finish_capture_writes_output_as_png_or_jpeg(tmp_path):
     capture.parent.mkdir()
     Image.new("RGBA", (1600, 800), (255, 0, 0, 0)).save(capture)
     png = tmp_path / "out" / "deep" / "look.png"
-    result = finish_capture(
-        str(capture), (1600, 800), 1.0, {"backend_used": "flipbook"}, str(png), extra_key="output"
-    )
+    result = finish_capture(str(capture), (1600, 800), 1.0, {"backend_used": "flipbook"}, str(png))
     assert result["output"] == str(png) and "also_written" not in result
     assert result["image"]["png_base64"] and result["width"] == 1024  # inline: downscaled
     with Image.open(png) as im:
         assert im.size == (1600, 800) and im.mode == "RGB"  # file: rendered size, flat
         assert im.getpixel((0, 0)) == BACKGROUND
     jpg = tmp_path / "out" / "look.jpg"
-    result = finish_capture(str(capture), (1600, 800), 1.0, {}, str(jpg), extra_key="output")
+    result = finish_capture(str(capture), (1600, 800), 1.0, {}, str(jpg))
     with Image.open(jpg) as im:
         assert im.format == "JPEG" and im.size == (1600, 800)
-    # viewport_capture keeps its 1.4 key
-    legacy = finish_capture(str(capture), (1600, 800), 1.0, {}, str(tmp_path / "v.png"))
-    assert legacy["also_written"] == str(tmp_path / "v.png")
 
 
 def test_unwritable_output_is_invalid_argument(tmp_path):
