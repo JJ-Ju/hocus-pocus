@@ -1,12 +1,13 @@
 """``look`` (spec-2.0 §2.5): one tool for a picture of the scene, the backend chosen from a
 ``quality`` level.
 
-``{target?, quality: draft | lit | final, camera?, frame?, resolution?, fit?, source?}``
+``{target?, quality: draft | lit | final, camera?, frame?, resolution?, fit?, source?,
+output?}``
 resolves ``target`` into a kind (:mod:`hocuspocus.host.look.spec`), asks the policy
 (:func:`hocuspocus.host.look.select.plan`) for a chain of backends, renders along it
 (:mod:`hocuspocus.host.look.run`, the same code ``viewport_capture`` runs) and returns the
 image plus ``{backend_used, chain, quality, target, scene, context, camera_used, fit_used,
-frame, path, width, height, rendered, notes}``. ``on`` is the bridge's: it routes the
+frame, path, width, height, rendered, notes, output?}``. ``on`` is the bridge's: it routes the
 call to an instance and is ignored here.
 
 Registered like ``viewport_capture``: ``scene=False`` (a look leaves no nodes, undo step
@@ -53,7 +54,9 @@ def _finish(spec: LookSpec, used: str, plan: select.Plan, info: dict[str, Any]) 
     if notes:
         out["notes"] = notes
     size = cop_size(info) if used == "rop_image" else job.res
-    return finish_capture(job.out_file, size, job.frame, out, None)
+    # output (2.1): the flattened capture at its rendered size, also written there (PNG
+    # or JPEG); the image is still returned inline (BIBLE §8: never only a path).
+    return finish_capture(job.out_file, size, job.frame, out, job.extra_path, extra_key="output")
 
 
 @tool("look", scene=False, main_thread=False)

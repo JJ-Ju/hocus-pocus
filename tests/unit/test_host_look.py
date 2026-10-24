@@ -181,6 +181,71 @@ def test_look_arguments_are_checked_without_houdini():
         assert caught.value.code == "invalid_argument", bad
 
 
+def test_look_output_is_a_png_or_jpg_path():
+    """2.1 (review 26 P1 #3): look saves its image where output says."""
+    assert parse_look_args({}).path is None
+    for value in (" $HIP/shots/a.png ", "C:/x/b.JPG", "~/c.jpeg"):
+        spec = parse_look_args({"output": value})
+        assert spec.path == value.strip()
+        assert spec.parsed()["path"] == value.strip()  # what capture_targets checks
+    for bad in ("", "  ", 7, "a.exr", "a.png.txt", "folder/"):
+        with pytest.raises(ToolError) as caught:
+            parse_look_args({"output": bad})
+        assert caught.value.code == "invalid_argument", bad
+    with pytest.raises(ToolError) as caught:
+        parse_look_args({"output": "beauty.exr"})
+    assert ".png or .jpg" in caught.value.message
+    assert "render" in (caught.value.hint or "")
+
+
+def test_look_output_hint_leaves_out_render_where_the_profile_lacks_it(monkeypatch):
+    from hocuspocus.tools import migration
+
+    monkeypatch.setattr(migration, "current_profile", lambda: "minimal")
+    with pytest.raises(ToolError) as caught:
+        parse_look_args({"output": "beauty.exr"})
+    assert caught.value.hint is None
+
+
+def test_finish_capture_writes_output_as_png_or_jpeg(tmp_path):
+    """The flattened capture at its rendered size goes to output; the image stays inline."""
+    Image = pytest.importorskip("PIL.Image")
+    from hocuspocus.host.look.image import BACKGROUND, finish_capture
+
+    capture = tmp_path / "captures" / "capture_1.png"
+    capture.parent.mkdir()
+    Image.new("RGBA", (1600, 800), (255, 0, 0, 0)).save(capture)
+    png = tmp_path / "out" / "deep" / "look.png"
+    result = finish_capture(
+        str(capture), (1600, 800), 1.0, {"backend_used": "flipbook"}, str(png), extra_key="output"
+    )
+    assert result["output"] == str(png) and "also_written" not in result
+    assert result["image"]["png_base64"] and result["width"] == 1024  # inline: downscaled
+    with Image.open(png) as im:
+        assert im.size == (1600, 800) and im.mode == "RGB"  # file: rendered size, flat
+        assert im.getpixel((0, 0)) == BACKGROUND
+    jpg = tmp_path / "out" / "look.jpg"
+    result = finish_capture(str(capture), (1600, 800), 1.0, {}, str(jpg), extra_key="output")
+    with Image.open(jpg) as im:
+        assert im.format == "JPEG" and im.size == (1600, 800)
+    # viewport_capture keeps its 1.4 key
+    legacy = finish_capture(str(capture), (1600, 800), 1.0, {}, str(tmp_path / "v.png"))
+    assert legacy["also_written"] == str(tmp_path / "v.png")
+
+
+def test_unwritable_output_is_invalid_argument(tmp_path):
+    from hocuspocus.host.look.image import write_copy
+
+    capture = tmp_path / "c.png"
+    capture.write_bytes(b"not used")
+    blocker = tmp_path / "file"
+    blocker.write_text("")
+    with pytest.raises(ToolError) as caught:
+        write_copy(str(capture), str(blocker / "sub" / "look.png"))  # parent is a file
+    assert caught.value.code == "invalid_argument"
+    assert "Cannot write the image" in caught.value.message
+
+
 def test_viewport_capture_settings_set_on_visual_reach_the_backends(monkeypatch):
     """Tests and the docs set WARM_CAPTURES, _CHILD_SCRIPT, _stage_crashed and
     capture_with_karma on hocuspocus.host.tools.visual; the look modules own them now."""

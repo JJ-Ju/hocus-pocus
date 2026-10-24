@@ -25,6 +25,7 @@ from typing import Any, Protocol
 from ..tools import paths
 from ..tools.errors import ToolError
 from . import instances as registry
+from . import licence
 
 EXE = ".exe" if sys.platform == "win32" else ""
 DEFAULT_WAIT_S = 90.0
@@ -393,8 +394,12 @@ class Launcher:
         python_dir: Callable[[Mapping[str, str] | None], tuple[Path, str]] = host_python_dir,
         owned: bool = True,
         on_launch: LaunchHook | None = None,
+        gui_probe: licence.GuiProbe | None = licence.gui_signal,
     ) -> None:
         self.config_hfs = config_hfs
+        self.gui_probe = gui_probe
+        """Polled while a GUI launch waits: the licence dialog or an hkey child ends the
+        wait at once (:func:`licence.gui_signal`; ``None`` turns it off)."""
         self.on_launch = on_launch
         self.owned = owned
         """True for a bridge launch: the child is tagged with ``HOCUSPOCUS_LAUNCHED_BY`` and
@@ -530,11 +535,18 @@ class Launcher:
                 return LaunchResult(found, mode, spawned.argv, log_text, spawned.outlives)
             code = proc.poll()
             if code is not None:
-                raise ToolError(
-                    "houdini_offline",
-                    f"Houdini (pid {proc.pid}) exited with code {code} before HocusPocus registered.",
-                    hint=_failure_hint(mode, log_text),
-                    detail={"argv": list(spawned.argv), "log": log_text},
+                raise self._exit_error(spawned, code)
+            signal = self._probe(proc.pid) if mode == "gui" else None
+            if signal is not None:
+                raise licence.launch_error(
+                    pid=proc.pid,
+                    mode=mode,
+                    argv=list(spawned.argv),
+                    log=log_text,
+                    exit_code=proc.poll(),
+                    excerpt=licence.log_excerpt(licence.read_log_tail(log_text)),
+                    signal=signal,
+                    terminated=_terminate(proc),
                 )
             if self.clock() >= deadline:
                 raise ToolError(
@@ -546,16 +558,60 @@ class Launcher:
                 )
             self.sleep(POLL_INTERVAL_S)
 
+    def _probe(self, pid: int) -> licence.GuiSignal | None:
+        if self.gui_probe is None:
+            return None
+        try:
+            return self.gui_probe(pid)
+        except Exception:
+            return None
+
+    def _exit_error(self, spawned: Spawned, code: int) -> ToolError:
+        """The error for a Houdini that exited before registering: a licence failure when
+        its log says so or it exited with Houdini's licence code (3), else the generic one."""
+        proc, mode, log_text = spawned.proc, spawned.mode, spawned.log
+        excerpt = licence.log_excerpt(licence.read_log_tail(log_text))
+        if excerpt is not None or code == licence.EXIT_CODE:
+            return licence.launch_error(
+                pid=proc.pid,
+                mode=mode,
+                argv=list(spawned.argv),
+                log=log_text,
+                exit_code=code,
+                excerpt=excerpt,
+                signal=self._probe(proc.pid) if mode == "gui" else None,
+            )
+        return ToolError(
+            "houdini_offline",
+            f"Houdini (pid {proc.pid}) exited with code {code} before HocusPocus registered.",
+            hint=_failure_hint(mode, log_text),
+            detail={"argv": list(spawned.argv), "log": log_text, "exit_code": code},
+        )
+
     def launch(
         self, mode: str, hip: str | None = None, wait_s: float = DEFAULT_WAIT_S
     ) -> LaunchResult:
         return self.wait(self.spawn(mode, hip), wait_s)
 
 
+def _terminate(proc: Any) -> bool:
+    """Stop a Houdini that cannot get a licence (it would only sit on its dialog); the
+    License Administrator it opened stays up for the user to sign in. True if stopped."""
+    terminate = getattr(proc, "terminate", None)
+    if terminate is None:
+        return False
+    try:
+        terminate()
+    except Exception:
+        return False
+    return True
+
+
 def _failure_hint(mode: str, log_path: str | None) -> str:
     if mode == "gui":
         return (
-            "call houdini_status again in a little while; if it never appears, run "
+            "if Houdini asked for a licence, sign in (License Administrator, hkey) and launch "
+            "again; else call houdini_status in a little while, and if it never appears run "
             "`hocuspocus install-houdini` (the GUI needs the package to autostart the host) "
             "and `hocuspocus doctor`"
         )

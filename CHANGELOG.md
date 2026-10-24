@@ -4,7 +4,30 @@ This project uses [Semantic Versioning](https://semver.org/). The 0.9 compatibil
 policy does not apply to 1.0. 2.0 changes the tool surface; `compat_1x` keeps the 1.4
 one for the 2.0.x releases.
 
-## Unreleased
+## 2.1.0 (unreleased)
+
+### Added
+
+- `look {output}` saves the picture to a `.png` or `.jpg`/`.jpeg` file: the capture at
+  its rendered size, flattened onto grey, with `$HIP` and `~` expanded and parent folders
+  created. The path is checked against `approved_roots` before anything renders
+  (`path_not_allowed`), and the result names it as `output`. The image is still returned
+  inline (review 26 P1 #3).
+- `hocuspocus doctor` reports the licence state, parsed from `sesictrl diagnostic` (else
+  `hserver -l`) next to the Houdini install. It shows ok, info or a warning with the
+  sign-in hint, never a failure, and it now names a hython that could not get a licence.
+
+### Fixed
+
+- A launch without a licence now says so, and answers within seconds (review 26 P1 #1).
+  `houdini_connect {launch}` and `hocuspocus launch` recognise a licence line in the
+  launch log, exit code 3, or, for a GUI, the "Unable to Acquire a License" window or the
+  License Administrator (hkey) opening. They answer `houdini_offline` with
+  `retryable: false`, a message saying Houdini could not get a licence,
+  `detail: {reason: "licence", exit_code, log_excerpt, ...}`, and a hint to sign in with
+  hkey or `sesictrl login` and launch again. Before, a GUI launch waited the full
+  `wait_s` (90 s) and then hinted at `install-houdini`. A GUI Houdini stuck on that
+  dialog is stopped; the License Administrator stays open.
 
 ## 2.0.0 (2026-10-14)
 

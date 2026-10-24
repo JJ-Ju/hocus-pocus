@@ -187,11 +187,39 @@ def capture_targets(parsed: dict[str, Any], ctx: HostContext) -> tuple[float, An
     return frame, extra_path, out_file
 
 
+def write_copy(out_file: str, target: str) -> None:
+    """Copy the flattened capture to ``target``: the PNG as is, or re-encoded as JPEG for
+    a ``.jpg``/``.jpeg`` target (``look {output}``). Parent directories are created."""
+    try:
+        Path(target).parent.mkdir(parents=True, exist_ok=True)
+        if target.lower().endswith((".jpg", ".jpeg")):
+            from PIL import Image
+
+            with Image.open(out_file) as im:
+                im.convert("RGB").save(target, format="JPEG", quality=92)
+        else:
+            shutil.copyfile(out_file, target)
+    except OSError as exc:
+        raise ToolError(
+            "invalid_argument",
+            f"Cannot write the image to {target}: {exc.strerror or exc}.",
+            hint="Pass a writable file path.",
+            detail={"path": out_file},
+        ) from exc
+
+
 def finish_capture(
-    out_file: str, res: tuple[int, int], frame: float, info: dict[str, Any], extra_path: Any
+    out_file: str,
+    res: tuple[int, int],
+    frame: float,
+    info: dict[str, Any],
+    extra_path: Any,
+    *,
+    extra_key: str = "also_written",
 ) -> dict[str, Any]:
     """Flatten the capture onto the inline image's grey, encode it and copy it to
-    ``path``. No ``hou``."""
+    ``extra_path``, reported under ``extra_key`` (``viewport_capture``'s
+    ``also_written``, ``look``'s ``output``). No ``hou``."""
     flatten_png_in_place(out_file)
     image = encode_png(out_file, IMAGE_MAX_SIDE)
     result: dict[str, Any] = {
@@ -204,8 +232,7 @@ def finish_capture(
         **info,
     }
     if extra_path is not None:
-        Path(extra_path).parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(out_file, extra_path)
-        result["also_written"] = extra_path
+        write_copy(out_file, extra_path)
+        result[extra_key] = extra_path
     prune_captures(Path(out_file).parent)
     return result
