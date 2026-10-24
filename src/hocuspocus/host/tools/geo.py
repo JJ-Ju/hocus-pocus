@@ -310,7 +310,9 @@ def is_internal_attribute(name: str) -> bool:
     return name in INTERNAL_ATTRIBUTES or name.startswith(INTERNAL_PREFIXES)
 
 
-def _attributes(geo: Any, out: dict[str, Any], mode: str = "full") -> dict[str, list[Any]]:
+def _attributes(
+    geo: Any, out: dict[str, Any], mode: str = "full", full_strings: bool = False
+) -> dict[str, list[Any]]:
     """``geo_info``'s attributes per class, ``full`` rows or ``names`` only, without the
     solver internals (counted in ``out``)."""
     attributes: dict[str, list[Any]] = {}
@@ -350,16 +352,19 @@ def _attributes(geo: Any, out: dict[str, Any], mode: str = "full") -> dict[str, 
             value = geo.attribValue(attrib.name())
         except Exception as exc:  # pragma: no cover - defensive
             value = f"<unreadable: {exc}>"
-        entry["value"] = _detail_value(value)
+        entry["value"] = _detail_value(value, full_strings)
         detail.append(entry)
     attributes["detail"] = _capped(detail, out, "attributes.detail")
     return attributes
 
 
-def _detail_value(value: Any) -> Any:
+def _detail_value(value: Any, full_strings: bool = False) -> Any:
     """A detail attribute value for ``geo_info``: arrays and strings capped, and a dict
     whose JSON is longer than :data:`DETAIL_STRING_CAP` as ``{elided: <chars>, keys}``
-    (review 17 P1-7: a pyro ``volvis`` dict was half of every ``geo_info``)."""
+    (review 17 P1-7: a pyro ``volvis`` dict was half of every ``geo_info``); whole with
+    ``full_strings`` (``inspect what: geo``, 2.1, review 26 P1 #9)."""
+    if full_strings:
+        return jsonable(value)
     out = jsonable(value, array_cap=DETAIL_ARRAY_CAP, string_cap=DETAIL_STRING_CAP)
     if isinstance(out, dict):
         size = len(json.dumps(out, separators=(",", ":"), default=str))
@@ -492,7 +497,8 @@ def geo_info(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     out["bbox"] = _bbox(geo)
     prim_types = prim_type_counts(geo)
     out["prim_types"] = prim_types
-    out["attributes"] = _attributes(geo, out, mode)
+    full_strings = bool(args.get("full_strings", False))
+    out["attributes"] = _attributes(geo, out, mode, full_strings)
     out["groups"] = _groups(geo, out)
     intrinsics = _intrinsics(geo, prim_types)
     if intrinsics:
@@ -753,7 +759,8 @@ def geo_read(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
         if group:
             raise ToolError("invalid_argument", "'group' does not apply to class 'detail'.")
         out["columns"] = [a.name() for a in attribs]
-        out["rows"] = [[jsonable(geo.attribValue(a.name()), array_cap=256) for a in attribs]]
+        cap = None if args.get("full_strings") else 256
+        out["rows"] = [[jsonable(geo.attribValue(a.name()), array_cap=cap) for a in attribs]]
         out["total"] = 1
         return out
 

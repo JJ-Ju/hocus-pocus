@@ -1,4 +1,4 @@
-"""``inspect {what: "guide" | "tool"}`` (2.1, D51; review 26 P1 #10): the guide and one
+"""``inspect {what: "guide" | "tool"}`` (2.1, D54; review 26 P1 #10): the guide and one
 tool's reference through a tool, for clients that cannot read MCP resources, answered by
 the bridge with or without a Houdini; and hints that cite a resource name that route."""
 

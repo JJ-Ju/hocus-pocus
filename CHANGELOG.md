@@ -21,14 +21,15 @@ one for the 2.0.x releases, and 2.1 removes it.
   text of `hocuspocus://guide` and `hocuspocus://tools`, for clients without an MCP
   resource reader (Claude Code subagents). The bridge answers them itself, with or without
   a Houdini. The instructions name the route; hints that cite `hocuspocus://tools` now
-  name `inspect {what: "tool", target: "<tool>"}` first (review 26 P1 #10, D51).
-- `inspect {what: "node", full_strings: true}` returns long strings in node rows whole,
-  and `inspect {what: "parms"}` of a node takes `folder` (the parms of one folder,
+  name `inspect {what: "tool", target: "<tool>"}` first (review 26 P1 #10, D54).
+- `inspect {what: "node" | "geo", full_strings: true}` returns long strings whole: in
+  node rows, and in geo detail attribute values (strings, arrays and dicts, otherwise cut
+  at 200 characters or 16 items), and `inspect {what: "parms"}` of a node takes `folder` (the parms of one folder,
   defaults included) and `detail: "folders"` (the node's own parm folders, spare parms
   included). `full_strings` reads a 20 KB VEX snippet back in full; a result over the
   response budget comes back whole with `over_budget: true` (review 26 P1 #2, #9).
 - `cook {profile: true}` lists the input ancestors it did not profile in
-  `inactive: {count, paths}` (review 26 P1 #8, D50).
+  `inactive: {count, paths}` (review 26 P1 #8, D53).
 
 ### Changed
 
@@ -49,21 +50,21 @@ one for the 2.0.x releases, and 2.1 removes it.
 - CI: `.github/workflows/unit.yml` runs ruff and the unit tier on Linux, macOS and
   Windows for Python 3.11 to 3.13 (portability audit,
   `docs/redesign/review/27-portability.md`).
-- **`look` at a SOP shows that SOP alone** (review 26 P1 #3, D49), wherever it is:
+- **`look` at a SOP shows that SOP alone** (review 26 P1 #3, D52), wherever it is:
   inside a subnet or a locked asset, in a hidden object, outside `/obj`. The scene that
   renders gets a temporary object whose Object Merge reads the SOP in world space (with
   the owner's object material), and the ROP draws only that object, on the Flipbook and
   OpenGL ROPs (the kept headless child too) and Karma. No flag of the user's moves (2.0
   moved the display flag, which showed nothing inside a subnet), and a note says so.
   `source: viewer` shows the viewer as it is, with a note.
-- **`inspect` options are uniform** (review 26 P1 #9, D48): an option that only shapes the
+- **`inspect` options are uniform** (review 26 P1 #9, D51): an option that only shapes the
   answer (`include_defaults`, `recurse_locked`, `full_strings`, `detail`,
   `include_positions`, `wiring`) and that the `what` does not take is ignored with a note
   instead of `invalid_argument` (`recurse_locked` on `geo`, `include_defaults` with parm
   paths, `detail: "folders"` on a node read). An option that chooses what is read
   (`frame`, `paths`, `cursor`, `class`, ...) is still an error.
 - `cook {profile: true}` times what a normal cook of the target cooks (review 26 P1 #8,
-  D50): a target that needs cooking is cooked normally first, and Houdini's record of the
+  D53): a target that needs cooking is cooked normally first, and Houdini's record of the
   inputs that cook used decides the chain, so a Switch's other inputs and what feeds a
   bypassed or locked node are neither cooked nor timed. A for-each body stays in; a
   simulating chain or a failed cook profiles every ancestor, as before.

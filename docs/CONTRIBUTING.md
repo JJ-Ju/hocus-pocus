@@ -131,7 +131,7 @@ macOS the path is `.venv/bin/...`.
      hint literal that names a removed 1.4 tool. A hint that sends the agent to a tool's
      reference uses `reference_hint("<tool>")` from `host/tools/_common.py`
      (`inspect {what: "tool", target: "<tool>"} or hocuspocus://tools`), never the
-     resource alone: some clients cannot read resources (D51); `bad_arg`'s default hint
+     resource alone: some clients cannot read resources (D54); `bad_arg`'s default hint
      already names the running tool's.
    - Register with `scene=False` when the dispatcher's undo group, read-only refusal or
      dirty marking would be wrong for the tool: `performUndo` raises inside an undo

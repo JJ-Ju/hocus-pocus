@@ -167,7 +167,7 @@ def instructions_for() -> str:
 def guide_sections() -> list[tuple[str, str]]:
     """``(title, text)`` for every ``##`` and ``###`` heading of :func:`guide_text`: a
     section runs to the next heading of its level or above (``inspect {what: "guide",
-    target}``, 2.1, D51)."""
+    target}``, 2.1, D54)."""
     lines = guide_text().splitlines()
     heads = [
         (i, len(line) - len(line.lstrip("#")), line.lstrip("#").strip())

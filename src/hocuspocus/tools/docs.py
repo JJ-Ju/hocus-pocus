@@ -373,7 +373,7 @@ def render_tools_markdown(tools: Sequence[ToolSpec]) -> str:
 def tool_section_lines(spec: ToolSpec) -> list[str]:
     """One tool's section of ``docs/tools.md`` (heading, badges, description, notes,
     arguments, returns, examples), as lines: also what ``inspect {what: "tool", target}``
-    returns (2.1, D51)."""
+    returns (2.1, D54)."""
     out: list[str] = []
     out += [
         f"## {spec.name}",

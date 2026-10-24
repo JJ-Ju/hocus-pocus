@@ -571,7 +571,7 @@ LOCAL_TOOLS: dict[str, Callable[[Bridge, dict[str, Any]], dict[str, Any]]] = {
 }
 
 
-# -- inspect {what: guide | tool} (2.1, D51) -------------------------------------------
+# -- inspect {what: guide | tool} (2.1, D54) -------------------------------------------
 
 DOC_WHATS = ("guide", "tool")
 """``inspect`` reads the bridge answers itself, with or without a Houdini: the guide and

@@ -936,7 +936,7 @@ class Bridge:
                     }
                 return True, result, meta
             if name == "inspect" and args.get("what") in DOC_WHATS:
-                return True, inspect_docs(self, args), {}  # no Houdini needed (D51)
+                return True, inspect_docs(self, args), {}  # no Houdini needed (D54)
             return self.forward(name, args, request_id)
         except ToolError as exc:
             return False, exc.to_dict(), {}

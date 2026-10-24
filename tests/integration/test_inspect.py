@@ -368,7 +368,7 @@ def test_problems_compact(v2_client):
     new = v2_client.ok("inspect", {"what": "problems", "target": "/obj"})
     assert new["problems"] == [] and old["counts"] == {} and "counts" not in new
     assert "nodes_with_problems" not in new and new["total"] == 0
-    # 2.1 (D48): a detail a read does not take is ignored with a note, not an error.
+    # 2.1 (D51): a detail a read does not take is ignored with a note, not an error.
     noted = v2_client.ok("inspect", {"what": "problems", "detail": "folders"})
     assert "detail folders applies to" in noted["notes"][0]
     noted = v2_client.ok("inspect", {"what": "network", "target": "/obj", "detail": "full"})
@@ -453,7 +453,7 @@ def test_a_full_host_refuses_the_1x_reads_with_their_inspect_what(client):
     assert error["hint"].startswith("Use inspect what: node.")
 
 
-# -- uniform options (2.1, D48; review 26 P1 #9) -------------------------------------------
+# -- uniform options (2.1, D51; review 26 P1 #9) -------------------------------------------
 
 
 def test_options_that_only_shape_the_answer_are_ignored_with_a_note(client):
@@ -503,9 +503,28 @@ def test_full_strings_reads_a_long_snippet_back_whole(client):
     assert compact["nodes"][0]["parms"]["snippet"]["value"]["elided"] == len(snippet)
 
 
+def test_full_strings_reads_geo_detail_values_whole(client):
+    """Review 26 P1 #9 (error 11): inspect geo took no full_strings, and a long detail
+    string came back cut at 200 characters."""
+    geo = hou.node("/obj").createNode("geo", "geo1")
+    wrangle = geo.createNode("attribwrangle", "notes")
+    wrangle.parm("class").set(0)  # detail
+    long_text = "tier " * 300
+    wrangle.parm("snippet").set(
+        f's@build_notes = "{long_text}"; i[]@floors = array({", ".join(["1"] * 40)});'
+    )
+    cut = client.ok("inspect", {"what": "geo", "target": wrangle.path()})
+    value = cut["attributes"]["detail"]["build_notes"]["value"]
+    assert len(value) <= 201 and value.endswith("…"), value
+    whole = client.ok("inspect", {"what": "geo", "target": wrangle.path(), "full_strings": True})
+    assert whole["attributes"]["detail"]["build_notes"]["value"] == long_text
+    assert len(whole["attributes"]["detail"]["floors"]["value"]) == 40
+    assert "notes" not in whole
+
+
 def test_parms_of_a_node_by_folder(client):
     """detail folders lists a node's own parm folders (spare parms too), and folder reads
-    one of them, defaults included (2.1, D48)."""
+    one of them, defaults included (2.1, D51)."""
     geo = hou.node("/obj").createNode("geo", "geo1")
     null = geo.createNode("null", "CONTROLS")
     group = null.parmTemplateGroup()

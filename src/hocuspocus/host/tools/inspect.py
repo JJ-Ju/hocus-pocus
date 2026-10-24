@@ -43,7 +43,7 @@ WHATS: tuple[str, ...] = (
 bridge's (:data:`BRIDGE_WHATS`)."""
 
 BRIDGE_WHATS = frozenset({"guide", "tool"})
-"""``inspect`` reads the bridge answers itself, without a Houdini (2.1, D51): the guide
+"""``inspect`` reads the bridge answers itself, without a Houdini (2.1, D54): the guide
 and one tool's reference, for clients that cannot read MCP resources."""
 
 GEO_READ_OPTIONS = frozenset({"class", "attribs", "start", "count", "group", "stats", "cursor"})
@@ -68,7 +68,7 @@ OPTIONS: dict[str, frozenset[str]] = {
         {"depth", "include_defaults", "include_positions", "recurse_locked", "cursor"}
     ),
     "outline": frozenset({"depth", "recurse_locked", "cursor", "wiring", "detail"}),
-    "geo": frozenset({"frame", "attributes", "rows", "detail"}) | GEO_READ_OPTIONS,
+    "geo": frozenset({"frame", "attributes", "rows", "full_strings", "detail"}) | GEO_READ_OPTIONS,
     "image": frozenset({"frame"}),
     "stage": frozenset(
         {"prim", "depth", "include", "attribs", "summary", "time", "limit", "cursor"}
@@ -89,12 +89,12 @@ OPTIONS: dict[str, frozenset[str]] = {
     "jobs": frozenset({"job_id"}),
 }
 """The options each ``what`` takes: the arguments of its 1.4 tool (spec ``notes``), plus
-(2.1) ``full_strings`` for ``node`` and ``folder`` for ``parms``."""
+(2.1) ``full_strings`` for ``node`` and ``geo`` and ``folder`` for ``parms``."""
 
 LENIENT = frozenset(
     {"include_defaults", "recurse_locked", "full_strings", "detail", "include_positions", "wiring"}
 )
-"""Options that only shape an answer (D48): a ``what`` that does not take one ignores it
+"""Options that only shape an answer (D51): a ``what`` that does not take one ignores it
 with a note, since the read is the same without it. An option that chooses what is read
 (``frame``, ``paths``, ``cursor``, ``class``, ...) stays ``invalid_argument``: ignoring it
 would answer another question."""
@@ -167,7 +167,7 @@ def _example(what: str) -> str:
 
 
 def ignored_note(what: str, names: list[str]) -> str:
-    """The note for lenient options a ``what`` does not take (D48)."""
+    """The note for lenient options a ``what`` does not take (D51)."""
     why = [LENIENT_WHY[n] for n in names if n in LENIENT_WHY]
     verb = "does" if len(names) == 1 else "do"
     return (
@@ -179,7 +179,7 @@ def ignored_note(what: str, names: list[str]) -> str:
 
 def lenient_options(what: str, target: Any, options: dict[str, Any]) -> list[str]:
     """Drop the lenient options (:data:`LENIENT`) ``what`` does not take from ``options``,
-    and a ``detail`` value it does not take; returns the notes saying so (D48)."""
+    and a ``detail`` value it does not take; returns the notes saying so (D51)."""
     notes: list[str] = []
     allowed = set(OPTIONS[what])
     of_node = False
@@ -332,7 +332,7 @@ def _parms_args(target: Any, options: dict[str, Any]) -> dict[str, Any] | None:
 
 def _node_template_rows(node: Any, folder: Any = None) -> tuple[list[dict[str, Any]], list[str]]:
     """The rows and folders of ``node``'s own parm template group (spare parms included),
-    as ``inspect what: type`` lists a type's (2.1, D48)."""
+    as ``inspect what: type`` lists a type's (2.1, D51)."""
     from .types import parm_template_rows
 
     return parm_template_rows(node.parmTemplateGroup(), folder=folder)
@@ -359,7 +359,7 @@ def _folder_parms(node: Any, folder: Any) -> list[str]:
 
 def node_folders(node: Any) -> dict[str, Any]:
     """``inspect what: parms`` of a node with ``detail: folders``: ``{folders: [{folder,
-    parms}]}`` for the node's own parm interface, spare parms included (2.1, D48)."""
+    parms}]}`` for the node's own parm interface, spare parms included (2.1, D51)."""
     from .types import folder_counts
 
     rows, folders = _node_template_rows(node)
@@ -882,7 +882,7 @@ def inspect(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
 
 
 def _noted(result: dict[str, Any], notes: list[str]) -> dict[str, Any]:
-    """``result`` with the ignored-option ``notes`` first in its ``notes`` (D48); the etag
+    """``result`` with the ignored-option ``notes`` first in its ``notes`` (D51); the etag
     is the answer's, so an ignored option does not change it."""
     if notes:
         result["notes"] = [*notes, *(result.get("notes") or [])]
