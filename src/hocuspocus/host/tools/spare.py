@@ -283,15 +283,20 @@ def _set_attrs(template: Any, kind: str, spec: dict[str, Any], where: str, field
         if spec.get(key) is not None and not ranged:
             raise _bad(f"{where}: {key} is for float, int and vector parms.", field=field)
     if ranged:
-        if spec.get("min") is not None:
-            template.setMinValue(int(spec["min"]) if kind == "int" else float(spec["min"]))
-        if spec.get("max") is not None:
-            template.setMaxValue(int(spec["max"]) if kind == "int" else float(spec["max"]))
-        if template.minValue() > template.maxValue():
-            raise _bad(
-                f"{where}: min {template.minValue()} is above max {template.maxValue()}.",
-                field=field,
-            )
+        cast = int if kind == "int" else float
+        low, high = spec.get("min"), spec.get("max")
+        if low is not None and high is not None and low > high:
+            raise _bad(f"{where}: min {low} is above max {high}.", field=field)
+        width = template.maxValue() - template.minValue()
+        if low is not None:
+            template.setMinValue(cast(low))
+            if high is None and template.maxValue() < low:
+                # Only min given, above the default range: keep the range's width.
+                template.setMaxValue(cast(low + (width if width > 0 else 1)))
+        if high is not None:
+            template.setMaxValue(cast(high))
+            if low is None and template.minValue() > high:
+                template.setMinValue(cast(high - (width if width > 0 else 1)))
         if spec.get("min_strict") is not None:
             template.setMinIsStrict(spec["min_strict"])
         if spec.get("max_strict") is not None:

@@ -375,3 +375,24 @@ def test_spare_parms_refuse_bad_conditions_and_type_parms(client):
     )
     assert error["code"] == "parm_not_found"
     assert null.spareParms() == ()
+
+
+def test_spare_parms_min_alone_moves_the_soft_range(client):
+    null = hou.node("/obj").createNode("null", "c3")
+    spare = {"add": [{"name": "h", "type": "float", "default": 3.6, "min": 2, "min_strict": True}]}
+    client.ok("edit", {"ops": [{"op": "node", "path": null.path(), "spare_parms": spare}]})
+    template = null.parmTemplateGroup().find("h")
+    assert (template.minValue(), template.maxValue()) == (2.0, 3.0)
+    error = client.error(
+        "edit",
+        {
+            "ops": [
+                {
+                    "op": "node",
+                    "path": null.path(),
+                    "spare_parms": {"add": [{"name": "k", "type": "int", "min": 5, "max": 1}]},
+                }
+            ]
+        },
+    )
+    assert error["code"] == "invalid_argument" and "above max" in error["message"]
