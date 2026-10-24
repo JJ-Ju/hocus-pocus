@@ -15,9 +15,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-from ..profiles import COMPAT_1X, PROFILES, PROFILES_2X  # noqa: F401 - re-exported
+from ..profiles import PROFILES  # noqa: F401 - re-exported
 
-Profile = Literal["minimal", "core", "full", "compat_1x"]
+Profile = Literal["minimal", "core", "full"]
 
 HP_RPC_VERSION = 1
 """Host RPC contract version (the ``v1`` in ``/hp/v1/...``)."""
@@ -49,23 +49,14 @@ class ToolSpec:
     destructive: bool = False
     idempotent: bool = False
     profiles: tuple[Profile, ...] = ()
-    """The profiles that list this tool (spec-2.0 §2, §8; ``hocuspocus.tools.profiles``):
-    its 2.0 profiles, a suffix of ``("minimal", "core", "full")`` since they nest, plus
-    ``"compat_1x"`` for a 1.4 tool. A 1.4 tool that 2.0 removes is ``("compat_1x",)``
-    and names its replacement in ``hocuspocus.tools.migration``; a 2.0-only tool has no
-    ``compat_1x``. A unit test checks every spec against these rules."""
+    """The profiles that list this tool (spec-2.0 §2; ``hocuspocus.tools.profiles``): a
+    suffix of ``("minimal", "core", "full")``, since they nest. A unit test checks every
+    spec against this rule."""
     headless_ok: bool = True
     bridge_local: bool = False
     """True when the bridge answers this tool itself (``houdini_status``, ``houdini_connect``)."""
     examples: tuple[dict[str, Any], ...] = field(default_factory=tuple)
     """Example argument objects; rendered into docs/tools.md and validated by a unit test."""
-    v2_extra: dict[str, Any] = field(default_factory=dict)
-    """What the 2.0 profiles add to a 1.4 tool (spec-2.0 §2.1, §2.5): ``{"input": overlay,
-    "output": overlay}``, each a partial schema deep-merged into ``input_schema`` /
-    ``output_schema`` (dicts merge key by key, anything else replaces) by
-    ``catalog.for_profile`` for every 2.0 profile. ``compat_1x`` lists the spec without it,
-    so its ``tools/list`` bytes stay those of 1.4's ``full``; the argument's detail goes in
-    ``notes``. A 2.0-only tool never needs one."""
 
     def annotations(self) -> dict[str, Any]:
         """MCP ToolAnnotations as a plain dict."""
@@ -277,13 +268,8 @@ for a headless one; ``houdini_connect {role}`` changes it."""
 
 
 def _on() -> dict[str, Any]:
-    """``on`` (v2): the instance a ``cook``/``render``/``job``/``look`` call runs on."""
+    """``on`` (2.0): the instance a ``cook``/``render``/``job``/``look`` call runs on."""
     return {"type": ["integer", "string"], "description": "Instance to run on: pid, name or role."}
-
-
-def _v2_on() -> dict[str, Any]:
-    """The ``v2_extra`` of a tool that accepts ``on``."""
-    return {"input": {"properties": {"on": _on()}}}
 
 
 def _connected_block() -> dict[str, Any]:

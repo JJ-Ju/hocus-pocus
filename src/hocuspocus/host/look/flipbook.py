@@ -200,7 +200,7 @@ WARM_CRASH_NOTE = (
 def render_capture_child(
     snapshot: dict[str, Any], tmp_dir: str, frame: float, timeout_s: float
 ) -> dict[str, Any]:
-    """Render one viewport_capture snapshot (``snapshot["capture"]``) in a child hython.
+    """Render one look snapshot (``snapshot["capture"]``) in a child hython.
     A headless Flipbook capture goes to the kept :class:`WarmCapture`, started on first use
     and replaced when :func:`warm_key` changes or it died, idled or aged out. Anything else
     goes to a fresh :class:`ChildRender`: another ROP type, a capture while the kept child

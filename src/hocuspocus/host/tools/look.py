@@ -4,12 +4,12 @@
 ``{target?, quality: draft | lit | final, camera?, frame?, resolution?, fit?, source?}``
 resolves ``target`` into a kind (:mod:`hocuspocus.host.look.spec`), asks the policy
 (:func:`hocuspocus.host.look.select.plan`) for a chain of backends, renders along it
-(:mod:`hocuspocus.host.look.run`, the same code ``viewport_capture`` runs) and returns the
+(:mod:`hocuspocus.host.look.run`) and returns the
 image plus ``{backend_used, chain, quality, target, scene, context, camera_used, fit_used,
 frame, path, width, height, rendered, notes}``. ``on`` is the bridge's: it routes the
 call to an instance and is ignored here.
 
-Registered like ``viewport_capture``: ``scene=False`` (a look leaves no nodes, undo step
+Registered with ``scene=False`` (a look leaves no nodes, undo step
 or dirty flag; its temporary nodes are made outside undo) and ``main_thread=False``
 (headless, the child hython renders while the main thread stays free).
 """

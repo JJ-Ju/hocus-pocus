@@ -1285,7 +1285,6 @@ def _problems_budget(args: dict[str, Any]) -> float:
     return min(PROBLEMS_BUDGET_S, float(call_timeout(60.0) or 60.0) * 0.5)
 
 
-@tool("problems")
 def problems(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     root_path = args.get("root") or "/"
     include_warnings = bool(args.get("include_warnings", True))

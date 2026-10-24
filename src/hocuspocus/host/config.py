@@ -16,7 +16,8 @@ from dataclasses import dataclass, field, fields, replace
 from pathlib import Path
 from typing import Any
 
-from hocuspocus.tools.profiles import DEFAULT_PROFILE, PROFILES, normalize
+from hocuspocus.tools.profiles import DEFAULT_PROFILE, PROFILES
+from hocuspocus.tools.profiles import resolve as resolve_profile
 
 log = logging.getLogger("hocuspocus.host.config")
 
@@ -111,11 +112,14 @@ def _coerce(name: str, value: Any, *, from_env: bool) -> Any:
     raise ValueError(f"expected a string, got {value!r}")
 
 
-def _validate(name: str, value: Any) -> Any:
+def _validate(name: str, value: Any, source: str = "arguments") -> Any:
     if name == "profile":
-        profile = normalize(value)  # v2 reads as full (hocuspocus.tools.profiles)
+        # compat_1x and v2 (removed in 2.1) read as full with a warning (BIBLE D45).
+        profile, warning = resolve_profile(value)
         if profile is None:
             raise ValueError(f"must be one of {PROFILES}")
+        if warning:
+            log.warning("hocuspocus config (%s): %s", source, warning)
         return profile
     if name == "log_level":
         value = str(value).upper()
@@ -143,7 +147,7 @@ def _apply(
         if raw is None:
             continue
         try:
-            updates[key] = _validate(key, _coerce(key, raw, from_env=from_env))
+            updates[key] = _validate(key, _coerce(key, raw, from_env=from_env), source)
         except (TypeError, ValueError) as exc:
             log.warning("hocuspocus config: ignoring %s=%r from %s: %s", key, raw, source, exc)
     return replace(config, **updates) if updates else config

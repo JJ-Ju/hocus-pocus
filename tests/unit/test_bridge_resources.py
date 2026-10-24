@@ -343,7 +343,7 @@ def _run(fn, *args):
     return anyio.run(fn, *args)
 
 
-def test_v2_lists_templates_and_resources_and_sets_capabilities():
+def test_lists_templates_and_resources_and_sets_capabilities():
     bridge, _app, _client = make_bridge()
 
     async def main():
@@ -361,8 +361,11 @@ def test_v2_lists_templates_and_resources_and_sets_capabilities():
     assert "hocuspocus://guide" in listed
 
 
-def test_compat_1x_keeps_the_1x_resources():
+def test_a_removed_profile_serves_the_2x_resources():
+    """2.1 removed compat_1x and its 1.4 resources: the profile reads as full (BIBLE D45)
+    and the server lists the 2.0 templates, with subscriptions."""
     bridge, _app, _client = make_bridge(profile="compat_1x")
+    assert bridge.config.profile == "full"
 
     async def main():
         async with Client(build_server(bridge), mode="legacy") as client:
@@ -371,7 +374,9 @@ def test_compat_1x_keeps_the_1x_resources():
             return caps.subscribe, [t.uri_template for t in templates]
 
     subscribe, templates = _run(main)
-    assert not subscribe and "houdini://nodetype/{category}/{name}" in templates
+    assert subscribe is True
+    assert templates == [tpl for tpl, _n, _d in host_resources.TEMPLATES]
+    assert not any("nodetype" in t or "houdini://job/" in t for t in templates)
 
 
 @pytest.mark.parametrize("mode", ["legacy", "auto"])
@@ -440,13 +445,14 @@ def test_status_and_instances_are_served_by_the_bridge():
     assert again.contents == [] and again.meta["not_modified"] is True
 
 
-def test_v2_guide_and_tools_text():
-    from hocuspocus.bridge.instructions import GUIDE_MAX_BYTES
+def test_guide_and_tools_text():
+    from hocuspocus.bridge.instructions import GUIDE_MAX_BYTES, guide_text
 
-    guide = bridge_resources.v2_guide_text()
+    guide = guide_text()
     assert len(guide.encode("utf-8")) <= GUIDE_MAX_BYTES
     assert "If-None-Match" in guide and "houdini://nodetype" not in guide
-    tools = bridge_resources.v2_tools_text(TOOLS)
+    assert "compat_1x" not in guide and "network_describe" not in guide
+    tools = bridge_resources.tools_with_templates(TOOLS)
     for template, _name, _desc in host_resources.TEMPLATES:
         assert template in tools
     bridge, _app, _client = make_bridge()

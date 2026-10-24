@@ -31,7 +31,7 @@ from hocuspocus.tools.migration import hint_tool
 
 from ._common import arg_bool, dynamic_menu_note, int_arg, menu_is_dynamic
 from .parms import menu_label
-from .registry import HostContext, tool
+from .registry import HostContext
 
 # -- help archive -----------------------------------------------------------------
 
@@ -1196,7 +1196,6 @@ def _category_arg(args: dict[str, Any]) -> str | None:
     )
 
 
-@tool("node_type_search")
 def node_type_search(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     query = args.get("query")
     if not isinstance(query, str) or not query.strip():
@@ -1401,7 +1400,6 @@ def collapse_variants(
     return kept, variants
 
 
-@tool("node_type_info")
 def node_type_info(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     category = _category_arg(args)
     node_type = resolve_type(args.get("type"), category)

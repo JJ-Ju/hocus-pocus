@@ -100,36 +100,9 @@ def test_plan_notes_say_why_lit_used_karma_and_quality_is_ignored_for_a_cop():
     assert select.plan(_spec("cop", "draft"), HEADLESS).notes == ()
 
 
-# viewport_capture keeps its 1.4 policy: (kind, source, camera, env) -> chain
-CAPTURE_PLANS = [
-    ("obj", "auto", None, HEADLESS, ROPS_HEADLESS),
-    ("lop", "auto", None, HEADLESS, ROPS_HEADLESS),
-    ("obj", "flipbook_rop", None, HEADLESS, ROPS_HEADLESS),
-    ("obj", "opengl_rop", None, HEADLESS, ROPS_HEADLESS),
-    ("obj", "auto", None, GUI, ("viewer",)),  # 1.4: auto is the viewer in the GUI
-    ("obj", "auto", None, GUI_NO_VIEWER, ROPS_GUI),
-    ("obj", "auto", "/obj/cam1", GUI, ROPS_GUI),  # with a camera, the ROP
-    ("lop", "auto", None, GUI, ROPS_GUI),
-    ("obj", "flipbook_rop", None, GUI, ROPS_GUI),
-    ("obj", "viewer", None, GUI, ("viewer",)),
-]
-
-
-@pytest.mark.parametrize(("kind", "source", "camera", "env", "chain"), CAPTURE_PLANS)
-def test_viewport_capture_plan_is_1_4s(kind, source, camera, env, chain):
-    plan = select.capture_plan(_spec(kind, source=source, camera=camera), env)
-    assert plan.chain == chain
-    assert plan.samples is None and plan.rop_parms == {}
-
-
-@pytest.mark.parametrize(
-    ("kind", "env", "code"),
-    [("lop", GUI, "invalid_argument"), ("obj", GUI_NO_VIEWER, "invalid_value")],
-)
-def test_viewport_capture_viewer_refusals(kind, env, code):
-    with pytest.raises(ToolError) as caught:
-        select.capture_plan(_spec(kind, source="viewer"), env)
-    assert caught.value.code == code
+def test_viewport_captures_1_4_policy_is_gone():
+    """2.1 removed viewport_capture and its 1.4 chain policy with compat_1x."""
+    assert not hasattr(select, "capture_plan") and not hasattr(select, "capture_chain")
 
 
 @pytest.mark.parametrize(

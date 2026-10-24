@@ -27,7 +27,7 @@ from collections.abc import Iterator
 from typing import Any
 
 from hocuspocus.tools.errors import ToolError
-from hocuspocus.tools.migration import BARE, hint_tool, is_compat
+from hocuspocus.tools.migration import BARE, hint_tool
 
 from ._common import (
     arg_bool,
@@ -1560,7 +1560,6 @@ def _paths_arg(args: dict[str, Any]) -> list[str]:
     return paths
 
 
-@tool("parm_get")
 def parm_get(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     paths = _paths_arg(args)
     frame = _frame_arg(args.get("frame"))
@@ -1656,13 +1655,8 @@ def spare_parms_hint() -> str:
 
 def expression_hint() -> str:
     """How to pass an expression where a number was expected (``invalid_value``), as the
-    call's profile names it: the ``expression`` field of a ``set`` op on 2.0 (review 25
-    papercut 1), of a ``parm_set`` item on ``compat_1x``."""
-    if is_compat():
-        return (
-            "For an expression use the expression field in parm_set, or "
-            f"{EXPRESSION_SPELLINGS} as the value in node_create parms."
-        )
+    call's profile names it: the ``expression`` field of a ``set`` op (review 25 papercut
+    1)."""
     return (
         "For an expression pass the expression field of a set op ("
         f"{hint_tool('parm_set', path=BARE, expression=BARE)}), or {EXPRESSION_SPELLINGS} "

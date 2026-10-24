@@ -61,8 +61,7 @@ def connected_block(bridge: Bridge, inst: registry.Instance) -> dict[str, Any]:
     }
     if inst.name:
         block["name"] = inst.name
-    if bridge.v2:
-        block["role"] = bridge.role_of(inst)
+    block["role"] = bridge.role_of(inst)
     if inst.hip:
         block["hip"] = {"path": inst.hip}
     host_version = health.get("host_version") or health.get("version")
@@ -165,34 +164,33 @@ def houdini_status(bridge: Bridge, args: dict[str, Any]) -> dict[str, Any]:
     mismatch = version_warning((connected or {}).get("host_version"))
     if mismatch:
         warnings.append(mismatch)
+    if bridge.config.profile_warning:
+        # A removed profile name (compat_1x, v2) in the config, read as full (BIBLE D45).
+        warnings.append(bridge.config.profile_warning)
     status: dict[str, Any] = {
         "connected": connected,
         **({"lost": lost_block} if lost_block else {}),
         "instances": [_row(bridge, inst, inst.pid == chosen_pid) for inst in live],
         "bridge_version": __version__,
-        # compat_1x serves 1.4's full catalogue, whose schema names the 1.4 profiles only.
-        "profile": bridge.config.profile if bridge.v2 else "full",
-        **({} if bridge.v2 else {"compat_1x": True}),
+        "profile": bridge.config.profile,
     }
     # Host settings are only known while connected; omit rather than report null.
     for key in ("read_only", "allow_python"):
         if isinstance(settings.get(key), bool):
             status[key] = settings[key]
-    if bridge.v2:
-        # spec-2.0 §2.1: Houdinis the ledger remembers that are no longer running.
-        bridge._note_live(live)
-        live_pids = {inst.pid for inst in live}
-        recent = [row for row in bridge.ledger.recent() if row["pid"] not in live_pids]
-        if recent:
-            status["recent"] = recent
+    # spec-2.0 §2.1: Houdinis the ledger remembers that are no longer running.
+    bridge._note_live(live)
+    live_pids = {inst.pid for inst in live}
+    recent = [row for row in bridge.ledger.recent() if row["pid"] not in live_pids]
+    if recent:
+        status["recent"] = recent
     if not live:
         warnings.append(
             "No Houdini with HocusPocus is running; houdini_connect {launch: {mode}} starts one."
         )
     if warnings:
         status["warnings"] = warnings
-    if bridge.v2:
-        shape_status(status, detail=args.get("detail") is True)
+    shape_status(status, detail=args.get("detail") is True)
     return status
 
 
@@ -281,8 +279,7 @@ def _row(bridge: Bridge, inst: registry.Instance, selected: bool) -> dict[str, A
     """One ``instances[]`` row: the registry entry, ``selected``, and from ``/health`` the
     host's ``busy`` flag and ``jobs_running`` (review 19 papercut 4)."""
     row = dict(inst.public(), selected=selected)
-    if bridge.v2:
-        row["role"] = bridge.role_of(inst)
+    row["role"] = bridge.role_of(inst)
     try:
         health = bridge.client_for(inst).health(timeout_s=ROW_HEALTH_TIMEOUT_S)
     except ToolError as exc:

@@ -6,7 +6,7 @@ from ._helpers import ToolSpec, _b, _list, _obj, _out, _s, _t
 
 SPEC = ToolSpec(
     name="hip_merge",
-    profiles=("core", "full", "compat_1x"),
+    profiles=("core", "full"),
     description=(
         "Merge the nodes matching node_pattern from another hip file into the current scene. "
         "dry_run only reports collisions (no undo step, allowed read-only). Colliding nodes are"

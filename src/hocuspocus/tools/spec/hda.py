@@ -6,7 +6,7 @@ from ._helpers import ToolSpec, _b, _cursor, _enum, _i, _limit, _obj, _s
 
 SPEC = ToolSpec(
     name="hda",
-    profiles=("full", "compat_1x"),
+    profiles=("full",),
     description=(
         "Digital assets: create turns subnet path into an HDA; save updates the definition from"
         " path, spare parms included; unlock allows editing; match reverts to the definition "

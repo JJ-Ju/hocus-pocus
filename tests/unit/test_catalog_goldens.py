@@ -1,7 +1,7 @@
 """The advertised surface does not move (spec-2.0 §5.1): the serialised ``tools/list`` of
-every profile × ``result_content`` mode is byte-identical to its golden. The ``compat_1x``
-goldens are 1.4's ``full`` ones, unchanged since 1.4 (spec-2.0 §8: a 1.4 client sees the
-1.4 surface byte for byte); the 2.0 profiles' are from the M3 cut-over.
+every profile × ``result_content`` mode is byte-identical to its golden, recorded at the
+2.0 M3 cut-over. (2.1 removed ``compat_1x`` and its goldens, 1.4's ``full`` ones; folding
+the 2.0 overlays into the specs left these bytes unchanged.)
 
 A change to the catalogue that changes ``tools/list`` must update the goldens in the same
 commit and say why. Regenerate them with
@@ -18,7 +18,7 @@ import pytest
 
 REPO = Path(__file__).resolve().parents[2]
 GOLDENS = Path(__file__).resolve().parent / "goldens"
-PROFILES = ("minimal", "core", "full", "compat_1x")
+PROFILES = ("minimal", "core", "full")
 MODES = ("text", "both")
 
 pytestmark = pytest.mark.unit
@@ -52,6 +52,12 @@ def test_tools_list_matches_golden(profile: str, mode: str) -> None:
         f"tools/list ({profile}, {mode}) is {len(current):,} B, golden {len(golden):,} B"
     )
     assert current == golden, f"tools/list ({profile}, {mode}) changed bytes"
+
+
+def test_every_golden_is_a_profile() -> None:
+    """No golden is left for a profile that no longer exists."""
+    names = {path.name for path in GOLDENS.glob("tools_list.*.json")}
+    assert names == {golden_path(p, m).name for p in PROFILES for m in MODES}
 
 
 def _write() -> None:

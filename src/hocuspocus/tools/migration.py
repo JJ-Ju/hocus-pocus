@@ -1,15 +1,17 @@
-"""The 1.4 tools 2.0 removes from its profiles, and what replaces each (spec-2.0 §2.4, §8).
-Stdlib only. The one table both the host's refusal and the bridge's unknown-tool answer
-read, so a 1.4 name called on a 2.0 profile always names its 2.0 replacement.
+"""The 1.4 tools 2.0 replaced, and what replaces each (spec-2.0 §2.4, §8). Stdlib only.
 
-The removed tools stay implemented and are listed by ``compat_1x`` only (their specs'
-``profiles`` is ``("compat_1x",)``); a unit test checks this table names exactly those.
+2.0 served them in the ``compat_1x`` profile only; 2.1 removed that profile and their
+specs (BIBLE §13, D45). This table is kept as data: both the host's refusal and the
+bridge's unknown-tool answer read it, so a 1.4 name always answers ``invalid_argument``
+with its 2.0 replacement in ``hint`` (:func:`removed_error`). The read engines behind
+``inspect`` and ``search`` keep the 1.4 names as host functions; none is a tool.
 
 It is also the one mapping every error hint and message goes through when it names a tool
-(review 25 papercut 1): :func:`hint_tool` renders the call the *active* profile serves, so
-a ``core`` agent is sent to ``search {kind: "nodes", root}`` and a ``compat_1x`` script to
-``node_find {root}``. The host learns the call's profile from the request envelope and
-wraps the call in :func:`using_profile`; the bridge passes its own.
+(review 25 papercut 1): :func:`hint_tool` renders the 2.0 call for a 1.4 name (``node_find
+{root}`` is ``search {kind: "nodes", root}``) and leaves out a clause whose tool the call's
+profile does not serve (``cook`` on ``minimal``). The host learns the call's profile from
+the request envelope and wraps the call in :func:`using_profile`; the bridge passes its
+own.
 """
 
 from __future__ import annotations
@@ -21,7 +23,7 @@ from collections.abc import Iterator
 from typing import Any
 
 from .errors import ToolError
-from .profiles import COMPAT_1X, DEFAULT_PROFILE, normalize
+from .profiles import DEFAULT_PROFILE, normalize
 
 REPLACEMENTS: dict[str, str] = {
     "node_find": "search kind: nodes",
@@ -43,7 +45,8 @@ REPLACEMENTS: dict[str, str] = {
     "selection": "edit op: select to set it (houdini_python hou.selectedNodes() reads it)",
     "usd_stage": "inspect what: stage",
 }
-"""Removed 1.4 tool -> its 2.0 replacement, in 1.4 catalogue order."""
+"""Removed 1.4 tool -> its 2.0 replacement, in 1.4 catalogue order (BIBLE Appendix A,
+``docs/migration-2.0.md`` §1)."""
 
 
 def replacement(tool: str) -> str | None:
@@ -51,27 +54,26 @@ def replacement(tool: str) -> str | None:
     return REPLACEMENTS.get(tool)
 
 
+REMOVED_IN = "2.1"
+"""The release that removed the 1.4 tools, with the ``compat_1x`` profile."""
+
+
 def hint(tool: str, profile: str | None = None) -> str | None:
-    """The hint a 2.0 profile gives for a removed 1.4 tool, or ``None`` for any other name.
-    The ``selection`` note names ``houdini_python`` only where ``profile`` serves it
-    (``minimal`` does not)."""
+    """The hint for a removed 1.4 tool, or ``None`` for any other name. The ``selection``
+    note names ``houdini_python`` only where ``profile`` serves it (``minimal`` does not)."""
     use = REPLACEMENTS.get(tool)
     if use is None:
         return None
     if tool == "selection" and profile is not None and not served("houdini_python", profile):
         use = use.split(" (", 1)[0]
-    return (
-        f"In 2.0 use {use}. A 1.4 client script can keep calling {tool} with "
-        f'profile = "{COMPAT_1X}" in hocuspocus.toml (or HOCUSPOCUS_PROFILE={COMPAT_1X}) for '
-        "the 2.0.x releases."
-    )
+    return f"Use {use}. docs/migration-2.0.md maps every 1.4 call to its 2.0 form."
 
 
 def removed_error(tool: str, profile: str) -> ToolError:
-    """The ``invalid_argument`` a 2.0 profile answers a removed 1.4 tool with."""
+    """The ``invalid_argument`` a removed 1.4 tool answers with, on every profile."""
     return ToolError(
         "invalid_argument",
-        f"{tool} is a 1.4 tool that the 2.0 {profile} profile does not serve.",
+        f"{tool} is a 1.4 tool; HocusPocus {REMOVED_IN} removed it.",
         hint=hint(tool, profile),
         detail={"tool": tool, "replacement": REPLACEMENTS.get(tool), "profile": profile},
     )
@@ -102,9 +104,9 @@ HINT_FORMS: dict[str, tuple[str, dict[str, Any], dict[str, str]]] = {
     "parm_set": ("edit", {"op": "set"}, {}),
 }
 """1.4 tool -> ``(2.0 tool, fixed arguments, 1.4 argument -> 2.0 argument)``: the call a
-hint names on a 2.0 profile (:func:`hint_tool`). ``node_create`` and ``parm_set`` stay in
+hint names for it (:func:`hint_tool`). ``node_create`` and ``parm_set`` stay in
 every profile, but a hint about one op names the ``edit`` op it maps to, which is what an
-agent on a 2.0 profile writes. ``edit`` forms render as ``edit {ops: [{op: ..., ...}]}``."""
+agent writes. ``edit`` forms render as ``edit {ops: [{op: ..., ...}]}``."""
 
 BATCH_TOOLS = frozenset({"node_create", "parm_set", "node_edit", "node_connect"})
 """1.4 tools whose arguments are one item of ``items``: a hint renders ``{items: [...]}``."""
@@ -138,11 +140,6 @@ def using_profile(profile: Any) -> Iterator[str]:
         _PROFILE.reset(token)
 
 
-def is_compat(profile: str | None = None) -> bool:
-    """Whether ``profile`` (default: :func:`current_profile`) is ``compat_1x``."""
-    return (normalize(profile or current_profile()) or DEFAULT_PROFILE) == COMPAT_1X
-
-
 def served(tool: str, profile: str | None = None) -> bool:
     """Whether ``profile`` (default: :func:`current_profile`) lists ``tool``."""
     from .catalog import for_profile  # lazily: the host's config imports this module early
@@ -167,14 +164,13 @@ def _render(args: dict[str, Any]) -> str:
 def hint_tool(tool: str, profile: str | None = None, /, **args: Any) -> str | None:
     """The call a hint or message names for ``tool`` on ``profile`` (default: the current
     call's), with ``args`` in ``tool``'s own 1.4 argument names (:data:`BARE` renders a
-    bare key). On a 2.0 profile a 1.4 tool becomes its 2.0 form (:data:`HINT_FORMS`):
+    bare key). A 1.4 tool becomes its 2.0 form (:data:`HINT_FORMS`):
     ``hint_tool("node_find", "core", root="/obj")`` is ``search {kind: "nodes", root:
-    "/obj"}``; ``compat_1x`` keeps ``node_find {root: "/obj"}``. Without ``args`` a tool
-    renders as its bare name. ``None`` when the profile serves neither ``tool`` nor its
-    replacement (``cook`` on ``minimal``), so the caller leaves that clause out
-    (:func:`hint_join`)."""
+    "/obj"}``. Without ``args`` a tool renders as its bare name. ``None`` when the profile
+    serves neither ``tool`` nor its replacement (``cook`` on ``minimal``), so the caller
+    leaves that clause out (:func:`hint_join`)."""
     resolved = normalize(profile or current_profile()) or DEFAULT_PROFILE
-    form = HINT_FORMS.get(tool) if resolved != COMPAT_1X else None
+    form = HINT_FORMS.get(tool)
     if form is not None:
         name, fixed, renames = form
         if not served(name, resolved):

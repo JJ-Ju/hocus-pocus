@@ -215,13 +215,7 @@ def _catalog_schema(name: str) -> dict:
             {"path": "/obj/g/height", "value": 0.7},
             {"path": "/obj/g/height", "value": 0.7},
         ),
-        (
-            "node_connect",
-            {"from": "/obj/g/box1", "to": "/obj/g/merge1", "to_input": 0},
-            {"from": "/obj/g/box1", "to": "/obj/g/merge1", "to_input": 0},
-        ),
         ("node_create", {"parent": "/obj", "type": "geo"}, {"parent": "/obj", "type": "geo"}),
-        ("node_edit", {"path": "/obj/a", "name": "b"}, {"path": "/obj/a", "name": "b"}),
     ],
 )
 def test_flat_batch_item_gets_the_items_form_with_its_own_fields(tool, args, item):
@@ -250,7 +244,7 @@ def test_no_shape_hint_for_unrelated_mistakes():
 
     assert shape_hint({"bogus": 1}, _catalog_schema("parm_set")) is None
     assert shape_hint({"items": "x"}, _catalog_schema("parm_set")) is None
-    assert shape_hint({"paths": ["/obj"]}, _catalog_schema("node_info")) is None
+    assert shape_hint({"what": "node"}, _catalog_schema("inspect")) is None
 
 
 def test_bridge_error_for_a_flat_parm_set_shows_the_items_form():

@@ -1,7 +1,7 @@
-"""Resources with ETags and subscriptions for the ``v2`` profile (spec-2.0 §2.7).
+"""Resources with ETags and subscriptions (spec-2.0 §2.7; BIBLE §3.10).
 
-:func:`install` is the one hook ``bridge/server.py`` calls; for every other profile it
-does nothing and the 1.4 resource list stays as it is. In ``v2``:
+:func:`install` is the one hook ``bridge/server.py`` calls; it serves them on every
+profile:
 
 * ``resources/list`` lists the concrete resources (``houdini://status``, ``instances``,
   ``jobs``, ``outline``, ``problems``, ``events``, ``hocuspocus://guide``, ``tools``) and
@@ -44,7 +44,6 @@ from mcp.shared.exceptions import MCPError
 
 from ..host import resources as host_resources
 from ..tools.errors import ToolError
-from ..tools.profiles import is_2x
 from . import budget
 from . import instances as registry
 from .client import OFFLINE_HINT, REINSTALL_HINT, delivery_hint
@@ -84,19 +83,8 @@ RESOURCES: tuple[tuple[str, str, str, str], ...] = (
 )
 
 
-def enabled(bridge: Bridge) -> bool:
-    """The 2.0 resources are served on every 2.0 profile; ``compat_1x`` serves 1.4's."""
-    profile = getattr(bridge.config, "profile", None)
-    return isinstance(profile, str) and is_2x(profile)
-
-
-def v2_guide_text() -> str:
-    """The 2.0 guide, whose resources paragraph names these templates (the 2.0 profiles
-    serve it; ``compat_1x`` serves the 1.4 one from ``Bridge.read_resource``)."""
-    return guide_text()
-
-
-def v2_tools_text(tools: Any) -> str:
+def tools_with_templates(tools: Any) -> str:
+    """``hocuspocus://tools``: the tool reference of ``tools`` and the resource templates."""
     lines = ["", "## Resource templates", ""]
     lines += [f"- `{tpl}`: {desc}" for tpl, _name, desc in host_resources.TEMPLATES]
     lines += [f"- `{uri}`: {desc}" for uri, _name, _mime, desc in RESOURCES]
@@ -331,10 +319,10 @@ def _error(payload: dict[str, Any]) -> MCPError:
 
 
 def read(bridge: Bridge, uri: str, meta: Any = None) -> types.ReadResourceResult:
-    """``resources/read`` in ``v2``."""
+    """``resources/read``."""
     validator = if_none_match(meta)
     if uri in (GUIDE_URI, TOOLS_URI):
-        text = v2_guide_text() if uri == GUIDE_URI else v2_tools_text(bridge.tools)
+        text = guide_text() if uri == GUIDE_URI else tools_with_templates(bridge.tools)
         etag = f"bridge:{_digest(text)}"
         out = {"etag": etag, "cache_control": STATIC_CACHE}
         if host_resources.etag_matches(validator, etag):
@@ -571,11 +559,9 @@ class ResourceHub:
 # -- the hook --------------------------------------------------------------------------------
 
 
-def install(server: Any, bridge: Bridge) -> ResourceHub | None:
-    """Give a ``v2`` bridge's server the 2.0 resources (handlers, the poller in the
-    server's lifespan, ``listChanged``). Any other profile: nothing changes."""
-    if not enabled(bridge):
-        return None
+def install(server: Any, bridge: Bridge) -> ResourceHub:
+    """Give the bridge's server the resources (handlers, the poller in the server's
+    lifespan, ``listChanged``)."""
     hub = ResourceHub(bridge)
 
     async def on_list_resources(ctx: Any, params: Any) -> types.ListResourcesResult:
