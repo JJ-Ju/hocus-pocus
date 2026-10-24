@@ -216,4 +216,3 @@ LIT_VIEWPORT_NOTE = (
 )
 """Said when ``lit`` rendered a viewport ROP (review 26 P1 #5: with scene lights, lit
 switched to the Flipbook ROP and only ``backend_used`` said so)."""
-
