@@ -4,7 +4,24 @@ This project uses [Semantic Versioning](https://semver.org/). The 0.9 compatibil
 policy does not apply to 1.0. 2.0 changes the tool surface; `compat_1x` keeps the 1.4
 one for the 2.0.x releases.
 
-## Unreleased
+## 2.1.0 (unreleased)
+
+### Changed
+
+- **A modal `hou.ui` dialog no longer blocks a GUI Houdini** (parity G5, BIBLE §3.2,
+  D45). During a call in a GUI session the `display*`, `read*` and `select*` dialogs of
+  `hou.ui` are stubs that raise `ui_required` naming the call (`detail.refused`), so
+  `houdini_python` code, a pressed parm callback or a creation script that asks for one
+  fails at once and is rolled back, where 2.0 answered `houdini_busy` and every later call
+  waited until a person clicked. A hip load script's dialog is refused too, and `hip_open`
+  reports it in `warnings` (the file is loaded). Houdini's own `hou.ui` is back between
+  calls; headless nothing changes. The refusal is also a `SystemExit`, because Houdini
+  answers any other exception from a parm callback with a blocking error window of its
+  own. `ui_required`'s description says so.
+- `houdini_busy` for a call that never started names "a dialog open in Houdini" and asks
+  to have it closed if it keeps happening: measured, nothing HocusPocus sends runs while a
+  user's modal dialog is open. The guide recipe "GUI sessions: never open a dialog" says
+  both (8 bytes shorter).
 
 ## 2.0.0 (2026-10-14)
 
