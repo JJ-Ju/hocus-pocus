@@ -7,8 +7,6 @@ import time
 
 import pytest
 
-pytestmark = pytest.mark.compat_1x  # the 1.4 tools (conftest: compat_client)
-
 hou = pytest.importorskip("hou")
 
 
@@ -207,11 +205,11 @@ def test_info_evaluates_script_menus_on_a_probe(client):
 
 def test_info_marks_input_driven_menus_dynamic(client):
     """A SOP group menu lists the input's groups: empty on a probe with no input, so it
-    is marked dynamic with a note pointing at parm_get on a live node."""
+    is marked dynamic with a note pointing at inspect parms on a live node."""
     info = client.ok("node_type_info", {"type": "Sop/blast", "parms": "group", "detail": "full"})
     (row,) = info["parms"]
     assert row["menu"]["dynamic"] is True and row["menu"]["items"] == []
-    assert "parm_get" in row["menu"]["note"]
+    assert 'inspect {what: "parms", target, include: ["menu"]}' in row["menu"]["note"]
     static = client.ok(
         "node_type_info", {"type": "Sop/blast", "parms": "grouptype", "detail": "full"}
     )

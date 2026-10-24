@@ -1,8 +1,8 @@
 """``look`` (spec-2.0 §2.5; host/tools/look.py, host/look/): one picture tool whose
 backend follows ``quality``. Headless here: draft through the Flipbook ROP (the kept
 child), lit through it with the scene's lights or Karma without lights, final through
-Karma; a stage and a Cop node too. ``viewport_capture``'s own tests (test_visual,
-test_lops, test_cop) are the regression suite of the shared backends."""
+Karma; a stage and a Cop node too. The 1.4 viewport_capture tests, converted to look in
+2.1 (test_visual, test_lops, test_cop), are the regression suite of the backends."""
 
 from __future__ import annotations
 
@@ -228,7 +228,7 @@ def test_look_at_a_cop_node(v2_client):
 
 
 def test_a_full_host_refuses_viewport_capture_and_names_look(client):
-    """spec-2.0 §8: viewport_capture is compat_1x only; the 2.0 profiles name look."""
+    """2.1: viewport_capture, a removed 1.4 tool, names look."""
     error = client.error("viewport_capture", {})
     assert error["code"] == "invalid_argument" and "1.4 tool" in error["message"]
-    assert error["hint"].startswith("In 2.0 use look ")
+    assert error["hint"].startswith("Use look ")

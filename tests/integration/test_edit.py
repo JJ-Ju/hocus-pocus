@@ -84,15 +84,20 @@ def test_review_07_build_in_one_call_under_1_kb(v2_client):
     assert hou.node("/obj/terrain") is None
 
 
-def test_the_full_host_runs_edit_and_refuses_the_1x_tools_it_replaces(client, compat_client):
-    """spec-2.0 §8: the session host (full) runs edit for any client and answers a 1.4
-    mutation tool with the edit op that replaces it; a compat_1x call still runs it."""
+def test_the_host_runs_edit_and_refuses_the_1x_tools_it_replaces(client):
+    """2.1 (D46): the host runs edit and answers a removed 1.4 mutation tool, on every
+    profile and before looking at its arguments, with the edit op that replaces it."""
     client.ok("edit", {"ops": [{"op": "create", "parent": "/obj", "type": "geo"}], "dry_run": True})
-    error = client.error("node_delete", {"paths": ["/obj/nope"]})
-    assert error["code"] == "invalid_argument" and "edit op: delete" in error["hint"]
-    assert compat_client.error("node_delete", {"paths": ["/obj/nope"]})["code"] == (
-        "node_not_found"
-    )
+    for profile in (None, "minimal", "core", "full"):
+        client.profile = profile
+        error = client.error("node_delete", {"paths": ["/obj/nope"]})
+        assert error["code"] == "invalid_argument", (profile, error)
+        assert error["message"] == "node_delete is a 1.4 tool; HocusPocus 2.1 removed it."
+        assert error["hint"].startswith("Use edit op: delete."), error
+        assert error["detail"]["replacement"] == "edit op: delete"
+    client.profile = None
+    error = client.error("network_build", {"parent": "/obj", "data": {}})
+    assert error["code"] == "invalid_argument" and "edit op: build" in error["hint"]
 
 
 # -- every op type ----------------------------------------------------------------------
