@@ -24,7 +24,7 @@ SPEC = ToolSpec(
     profiles=("core", "full"),
     description=(
         "Cook nodes and report per node ok, errors, warnings, cook_time_ms. Cooking never "
-        "writes files (render does). profile force-cooks each input chain: chain (top 10), "
+        "writes files (render does). profile force-cooks the inputs a cook uses: chain (top 10), "
         "total_ms, attribution; for-each loop bodies show their cost over all iterations "
         "(loops). frame_range cooks frame by frame (sims advance); summary bbox adds bbox "
         "rows. Past wait_s returns job_id for job."
@@ -36,7 +36,12 @@ SPEC = ToolSpec(
         "frame_range is [start, end, step] and cannot be combined with profile or frame; the "
         "current frame is restored afterwards. Errors left from before a fix are rechecked "
         "unless the last cook took over 2 s (hint: force). With profile, results[].cook_time_ms"
-        " is the named node's profiled cook. attribution is per_node, or perf_monitor when a "
+        " is the named node's profiled cook. profile times what a normal cook of the node "
+        "cooks: a node that needs cooking is cooked normally first to learn which inputs it "
+        "uses, and the ones it does not use (a Switch's other inputs, the inputs of a bypassed "
+        "or locked node, and what only they feed) are not cooked and are listed in inactive "
+        "{count, paths (at most 10)}; a chain that simulates, or a cook that fails, profiles "
+        "every input ancestor (2.1). attribution is per_node, or perf_monitor when a "
         "block_end was cooked under Houdini's performance monitor: each loop body row then has "
         "in_loop, cooks, per_iteration_ms and cook_time_ms over all iterations, and loops lists"
         " {block_end, block_begin, iterations, total_ms}. loop-level means the monitor was "
@@ -81,6 +86,7 @@ SPEC = ToolSpec(
             "chain": _objs(),
             "attribution": _t("string"),
             "loops": _objs(),
+            "inactive": _t("object"),
             "total_ms": _t("number"),
             "frames": _objs(),
             "results": {

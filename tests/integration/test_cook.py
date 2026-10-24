@@ -268,6 +268,41 @@ def test_cook_profile_without_loops_says_per_node(client):
     assert result["results"][0]["cook_time_ms"] == row["cook_time_ms"]
 
 
+@pytest.mark.parametrize("warm", [False, True], ids=["dirty", "cooked"])
+def test_cook_profile_leaves_out_inputs_a_normal_cook_does_not_cook(client, warm):
+    """Review 26 P1 #8: a Switch's unselected input, and what feeds a bypassed node, are
+    not profiled (profiling force-cooked them, so "interiors off costs nothing" looked
+    false); ``inactive`` names them. Switching the input profiles the other branch."""
+    geo = _geo()
+    shell = geo.createNode("box", "shell")
+    interior = _slow_python_sop(geo, 0.2, "interior")
+    interior.setInput(0, geo.createNode("grid", "floor"))
+    switch = geo.createNode("switch", "interiors")
+    switch.setInput(0, shell)
+    switch.setInput(1, interior)
+    out = geo.createNode("null", "OUT")
+    out.setInput(0, switch)
+    if warm:
+        out.cook(force=True)
+    before = interior.cookCount()
+    result = client.ok("cook", {"paths": [out.path()], "profile": True})
+    paths = {row["path"] for row in result["chain"]}
+    assert paths == {shell.path(), switch.path(), out.path()}, result
+    assert result["chain_total"] == 3 and result["total_ms"] < 150, result
+    assert result["inactive"]["count"] == 2, result
+    assert set(result["inactive"]["paths"]) == {interior.path(), f"{geo.path()}/floor"}
+    assert interior.cookCount() == before  # never cooked by the profile
+    switch.parm("input").set(1)
+    result = client.ok("cook", {"paths": [out.path()], "profile": True})
+    assert interior.path() in {row["path"] for row in result["chain"]}
+    assert result["inactive"] == {"count": 1, "paths": [shell.path()]}
+    assert result["total_ms"] >= 190
+    switch.parm("input").set(0)
+    switch.bypass(True)  # a bypassed Switch passes input 0 through
+    result = client.ok("cook", {"paths": [out.path()], "profile": True})
+    assert interior.path() in result["inactive"]["paths"], result
+
+
 def test_cook_profile_and_frame_range_errors(client):
     box = _geo().createNode("box")
     path = box.path()
