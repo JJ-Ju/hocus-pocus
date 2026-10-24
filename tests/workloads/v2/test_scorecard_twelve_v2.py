@@ -1,4 +1,4 @@
-"""Review 21's scorecard twelve on the 2.0 tools (the 1.4 version: ``../test_scorecard_twelve.py``).
+"""Review 21's scorecard twelve on the 2.0 tools (1.4's budget: ``../budgets.json``).
 
 The same twelve tasks and outcomes. Builds are ``edit`` transactions (task 2's chain and
 its layout in one), the build's echo reports the cook (no separate ``cook``), reads are

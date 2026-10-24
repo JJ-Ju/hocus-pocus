@@ -1,4 +1,4 @@
-"""Review 20's FX cache on the 2.0 tools (the 1.4 version: ``../test_fx_cache.py``).
+"""Review 20's FX cache on the 2.0 tools.
 
 The same pyro plume, camera and light in one ``edit`` (``$id`` chains, the ``initialize``
 button pressed in its ``create``), cached for 24 frames by ``render`` on the
@@ -12,12 +12,13 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from wl2 import creates, load_1x, rows_by_path
+from wl2 import creates, rows_by_path
 
 pytestmark = pytest.mark.timeout(420)
 
-w1 = load_1x("test_fx_cache")
-GEO, FRAMES, MAX_CACHE_BYTES = w1.GEO, w1.FRAMES, w1.MAX_CACHE_BYTES
+GEO = "/obj/pyro"
+FRAMES = 24
+MAX_CACHE_BYTES = 300 * 1024 * 1024
 
 
 def test_fx_cache(workload):

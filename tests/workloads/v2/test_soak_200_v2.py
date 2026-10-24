@@ -1,4 +1,4 @@
-"""Review 22's soak on the 2.0 tools (the 1.4 version: ``../test_soak_200.py``).
+"""Review 22's soak on the 2.0 tools (its model: ``soak_model.py``).
 
 The same seeded script: the same 193 steps of work as the 1.4 soak, counted in 1.4 calls
 (``Soak.units``), so the random choices, the scheduled actions (a sample every 50, a save
@@ -29,11 +29,10 @@ from typing import Any
 from urllib.parse import quote, urlencode
 
 import pytest
-from wl2 import load_1x
+import soak_model as w1
 
 pytestmark = pytest.mark.timeout(420)
 
-w1 = load_1x("test_soak_200")
 SEED, TOTAL, FINAL_CALLS, READ_P95_MS = w1.SEED, w1.TOTAL, w1.FINAL_CALLS, w1.READ_P95_MS
 MAX_OBJECTS, MAX_NODES, CANARY = w1.MAX_OBJECTS, w1.MAX_NODES, w1.CANARY
 TYPE_INFO, TYPE_SEARCH, PYTHON = w1.TYPE_INFO, w1.TYPE_SEARCH, w1.PYTHON
@@ -526,7 +525,30 @@ MIX_WEIGHTS = [
     (Soak.problems, 1),
 ]
 MIX = [fn for fn, _ in MIX_WEIGHTS]
-assert [w for _, w in MIX_WEIGHTS] == [w for _, w in w1.MIX_WEIGHTS]  # the 1.4 mix
+# The 1.4 soak's mix weights, in its order (review 22).
+assert [w for _, w in MIX_WEIGHTS] == [
+    13,
+    6,
+    8,
+    6,
+    6,
+    7,
+    4,
+    7,
+    2,
+    5,
+    4,
+    4,
+    3,
+    3,
+    3,
+    3,
+    2,
+    2,
+    2,
+    1,
+    1,
+]
 
 
 def _p95(values: list[float]) -> float:

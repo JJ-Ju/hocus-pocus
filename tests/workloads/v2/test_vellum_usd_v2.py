@@ -1,4 +1,4 @@
-"""Review 24's Vellum cloth and USD round trip on the 2.0 tools (1.4: ``../test_vellum_usd.py``).
+"""Review 24's Vellum cloth and USD round trip on the 2.0 tools.
 
 The same cloth, cache, USD export, sublayer and Karma frame. Each build step is one
 ``edit`` with ``$id`` chains; the cache is one ``render`` call with a progress token that
@@ -12,12 +12,12 @@ import json
 from pathlib import Path
 
 import pytest
-from wl2 import creates, load_1x, node_problems
+from wl2 import creates, node_problems
 
 pytestmark = pytest.mark.timeout(420)
 
-w1 = load_1x("test_vellum_usd")
-GEO, FRAMES = w1.GEO, w1.FRAMES
+GEO = "/obj/cloth"
+FRAMES = 24
 
 
 def test_vellum_usd(workload):
