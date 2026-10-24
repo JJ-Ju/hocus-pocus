@@ -382,6 +382,9 @@ LOG = EventLog()
 class _Hooks:
     def __init__(self) -> None:
         self.installed = False
+        self.owner: Any = None
+        """Whoever :func:`install` wired the hooks for (the session's :class:`Host`); only
+        that owner's :func:`uninstall` removes them."""
         self.hip_busy = False
         self.muted = 0
         self.watched: dict[int, Any] = {}
@@ -805,8 +808,13 @@ def _on_hip_event(event_type: Any) -> None:
         log.debug("hip event callback failed", exc_info=True)
 
 
-def install(post: Any = None, executor: Any = None, on_other: Any = None) -> None:
+def install(
+    post: Any = None, executor: Any = None, on_other: Any = None, owner: Any = None
+) -> None:
     """Register the hip callback and the context-manager callbacks. Main thread; idempotent.
+
+    The hooks are process-wide: the first caller (``owner``, the host) owns them; while
+    they are installed a later call (a second in-process host) changes nothing.
 
     ``post(fn)`` queues ``fn`` for the main thread after the current work (the host's
     ``MainThreadExecutor.post``); without it, nodes the user creates are reported but
@@ -819,6 +827,7 @@ def install(post: Any = None, executor: Any = None, on_other: Any = None) -> Non
         return
     import hou
 
+    _HOOKS.owner = owner
     _HOOKS.post = post
     LOG.on_other = on_other
     if executor is not None and hasattr(executor, "work_wrapper"):
@@ -831,9 +840,14 @@ def install(post: Any = None, executor: Any = None, on_other: Any = None) -> Non
     _attach_managers()
 
 
-def uninstall() -> None:
-    """Remove every callback :func:`install` and :func:`watch_node` added. Never raises."""
+def uninstall(owner: Any = None) -> None:
+    """Remove every callback :func:`install` and :func:`watch_node` added. Never raises.
+
+    With ``owner``, only when that owner installed them: a second host stopping leaves the
+    session host's hooks alone. Without it, unconditionally."""
     if not _HOOKS.installed:
+        return
+    if owner is not None and owner is not _HOOKS.owner:
         return
     with contextlib.suppress(Exception):
         import hou
@@ -847,6 +861,7 @@ def uninstall() -> None:
     if _HOOKS.executor is not None:
         _HOOKS.executor.work_wrapper = None
         _HOOKS.executor = None
+    _HOOKS.owner = None
     _HOOKS.installed = False
 
 

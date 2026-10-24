@@ -200,6 +200,7 @@ class Host:
             self.executor.post,
             executor=self.executor,
             on_other=lambda _event: self.scene.mark_user_dirty("user_event"),
+            owner=self,
         )
         if self.ui:
             self._track_houdini_flag()
@@ -284,7 +285,7 @@ class Host:
             self._hip_callback_installed = False
             from .tools import events as tool_events
 
-            tool_events.uninstall()
+            tool_events.uninstall(owner=self)
         self.registry.remove()
         server = self.server
         if server is not None:
