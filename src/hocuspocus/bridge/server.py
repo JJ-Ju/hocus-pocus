@@ -310,7 +310,7 @@ class Bridge:
         ledger: Ledger | None = None,
     ) -> None:
         self.config = config or BridgeConfig.load()
-        # A removed name (compat_1x, v2) reads as full with a warning (BIBLE D45); an
+        # A removed name (compat_1x, v2) reads as full with a warning (BIBLE D46); an
         # unknown one as the default.
         resolved, warning = profiles.resolve(self.config.profile)
         profile = resolved or profiles.DEFAULT_PROFILE

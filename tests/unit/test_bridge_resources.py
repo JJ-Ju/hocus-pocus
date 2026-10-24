@@ -362,7 +362,7 @@ def test_lists_templates_and_resources_and_sets_capabilities():
 
 
 def test_a_removed_profile_serves_the_2x_resources():
-    """2.1 removed compat_1x and its 1.4 resources: the profile reads as full (BIBLE D45)
+    """2.1 removed compat_1x and its 1.4 resources: the profile reads as full (BIBLE D46)
     and the server lists the 2.0 templates, with subscriptions."""
     bridge, _app, _client = make_bridge(profile="compat_1x")
     assert bridge.config.profile == "full"

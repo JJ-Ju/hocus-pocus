@@ -52,7 +52,7 @@ INSTALL_STATE_FILE = "install.json"
 class BridgeConfig:
     profile: str = DEFAULT_PROFILE
     """``minimal``, ``core`` (the default) or ``full`` (:mod:`hocuspocus.tools.profiles`).
-    ``compat_1x`` and ``v2``, removed in 2.1, are read as ``full`` (BIBLE D45)."""
+    ``compat_1x`` and ``v2``, removed in 2.1, are read as ``full`` (BIBLE D46)."""
     max_response_bytes: int = DEFAULT_MAX_RESPONSE_BYTES
     default_timeout_s: float = DEFAULT_TIMEOUT_S
     hfs: str = ""
@@ -252,7 +252,7 @@ def find_config_file(
 
 def _profile(raw: Any) -> tuple[str, str]:
     """``(profile, warning)``: a removed name (``compat_1x``, ``v2``) is read as ``full``
-    with a warning (BIBLE D45), any other unknown one as the default."""
+    with a warning (BIBLE D46), any other unknown one as the default."""
     profile, warning = resolve_profile(raw)
     if profile is None:
         log.warning("profile=%r is not one of %s; using %r", raw, PROFILES, DEFAULT_PROFILE)

@@ -1,4 +1,4 @@
-"""The profiles (spec-2.0 §2, §7 M3; BIBLE §3.5, §3.7, §13, D45) everywhere a profile is
+"""The profiles (spec-2.0 §2, §7 M3; BIBLE §3.5, §3.7, §13, D46) everywhere a profile is
 read: the catalogue, the migration hints, the bridge's config, listing and refusals, and
 the host's config and enforcement. 2.1 removed ``compat_1x`` and the ``v2`` alias: a
 removed 1.4 tool answers with its replacement, and a removed profile name in the config
@@ -95,7 +95,7 @@ def test_every_removed_tool_has_a_migration_hint() -> None:
 
 
 def test_removed_profile_names_read_as_full_with_a_warning() -> None:
-    """BIBLE D45: compat_1x and v2 are not profiles any more; the config readers turn them
+    """BIBLE D46: compat_1x and v2 are not profiles any more; the config readers turn them
     into full and say why. Any other unknown name is no profile at all."""
     assert catalog.normalize(" Full ") == "full" and catalog.normalize("") == "core"
     for raw in ("compat_1x", " COMPAT_1X ", "v2", "V2"):

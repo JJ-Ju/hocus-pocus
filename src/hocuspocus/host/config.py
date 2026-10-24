@@ -114,7 +114,7 @@ def _coerce(name: str, value: Any, *, from_env: bool) -> Any:
 
 def _validate(name: str, value: Any, source: str = "arguments") -> Any:
     if name == "profile":
-        # compat_1x and v2 (removed in 2.1) read as full with a warning (BIBLE D45).
+        # compat_1x and v2 (removed in 2.1) read as full with a warning (BIBLE D46).
         profile, warning = resolve_profile(value)
         if profile is None:
             raise ValueError(f"must be one of {PROFILES}")

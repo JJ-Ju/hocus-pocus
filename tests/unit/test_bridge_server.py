@@ -796,7 +796,7 @@ def test_prompt_requires_arguments():
 @pytest.mark.parametrize("profile", ["minimal", "core", "full", "compat_1x", "v2"])
 def test_every_profile_gets_the_2x_texts_and_prompts(profile):
     """spec-2.0 §2.8: every profile gets the 2.0 instructions, guide and seven prompts; the
-    removed profile names (compat_1x, v2) read as full (BIBLE D45) and get them too. The 1.4
+    removed profile names (compat_1x, v2) read as full (BIBLE D46) and get them too. The 1.4
     texts went with compat_1x in 2.1."""
     from hocuspocus.bridge.instructions import GUIDE_MAX_BYTES, PROMPTS, guide_text
 

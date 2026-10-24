@@ -165,7 +165,7 @@ def houdini_status(bridge: Bridge, args: dict[str, Any]) -> dict[str, Any]:
     if mismatch:
         warnings.append(mismatch)
     if bridge.config.profile_warning:
-        # A removed profile name (compat_1x, v2) in the config, read as full (BIBLE D45).
+        # A removed profile name (compat_1x, v2) in the config, read as full (BIBLE D46).
         warnings.append(bridge.config.profile_warning)
     status: dict[str, Any] = {
         "connected": connected,

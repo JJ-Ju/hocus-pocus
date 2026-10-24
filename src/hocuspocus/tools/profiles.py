@@ -7,7 +7,7 @@ The profiles nest, smallest first: ``minimal`` (10 tools) ⊂ ``core`` (18, the 
 
 2.1 removed ``compat_1x`` (the 1.4 catalogue, served for 2.0.x) and ``v2`` (the M1-M2
 preview name of ``full``). Configured anyway, either is read as ``full`` with a warning
-(:data:`REMOVED`, :func:`removed_warning`; BIBLE D45): both processes resolve it the same
+(:data:`REMOVED`, :func:`removed_warning`; BIBLE D46): both processes resolve it the same
 way, so host and bridge still agree, and a removed 1.4 tool answers ``invalid_argument``
 with its 2.0 replacement (``tools/migration.py``).
 """
@@ -23,7 +23,7 @@ smallest first."""
 DEFAULT_PROFILE = "core"
 
 REMOVED: dict[str, str] = {"compat_1x": "full", "v2": "full"}
-"""Profile names 2.1 removed -> the profile they are read as, with a warning (BIBLE D45).
+"""Profile names 2.1 removed -> the profile they are read as, with a warning (BIBLE D46).
 ``compat_1x`` served 1.4's ``full`` catalogue and ``v2`` was read as ``full`` in 2.0.x, so
 ``full`` is the 2.0 profile closest to what each served."""
 

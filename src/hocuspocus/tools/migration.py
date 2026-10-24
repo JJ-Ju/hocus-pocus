@@ -1,7 +1,7 @@
 """The 1.4 tools 2.0 replaced, and what replaces each (spec-2.0 §2.4, §8). Stdlib only.
 
 2.0 served them in the ``compat_1x`` profile only; 2.1 removed that profile and their
-specs (BIBLE §13, D45). This table is kept as data: both the host's refusal and the
+specs (BIBLE §13, D46). This table is kept as data: both the host's refusal and the
 bridge's unknown-tool answer read it, so a 1.4 name always answers ``invalid_argument``
 with its 2.0 replacement in ``hint`` (:func:`removed_error`). The read engines behind
 ``inspect`` and ``search`` keep the 1.4 names as host functions; none is a tool.
