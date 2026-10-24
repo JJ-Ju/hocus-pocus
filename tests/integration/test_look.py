@@ -232,3 +232,80 @@ def test_a_full_host_refuses_viewport_capture_and_names_look(client):
     error = client.error("viewport_capture", {})
     assert error["code"] == "invalid_argument" and "1.4 tool" in error["message"]
     assert error["hint"].startswith("In 2.0 use look ")
+
+
+# -- output (2.1, review 26 P1 #3) -------------------------------------------------------
+
+
+def _fwd(path) -> str:
+    return os.path.abspath(str(path)).replace("\\", "/")
+
+
+def _cop_net():
+    net = hou.node("/img").createNode("copnet", "maps")
+    color = net.createNode("constant", "color")
+    color.parm("signature").set("f3")
+    color.parmTuple("f3").set((0.2, 0.5, 0.9))
+    color.setDisplayFlag(True)
+    return net
+
+
+def test_look_output_saves_the_image_and_still_returns_it(client, tmp_path):
+    net = _cop_net()
+    target = tmp_path / "evidence" / "maps.png"
+    result = client.ok("look", {"target": net.path(), "output": str(target)})
+    assert result["output"] == _fwd(target) and target.is_file()
+    assert result["image"]["png_base64"]  # still inline
+    with Image.open(target) as im:
+        assert im.format == "PNG" and im.mode == "RGB"
+        assert im.size == tuple(result["rendered"])  # the rendered size, not the inline one
+        r, g, b = im.getpixel((10, 10))
+        assert b > r
+    jpg = tmp_path / "evidence" / "maps.jpg"
+    result = client.ok("look", {"target": net.path(), "output": str(jpg)})
+    with Image.open(jpg) as im:
+        assert im.format == "JPEG"
+    assert result["output"] == _fwd(jpg)
+    target.write_bytes(b"old")
+    client.ok("look", {"target": net.path(), "output": str(target)})
+    assert target.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"  # an existing file is replaced
+
+
+def test_look_output_expands_variables(client, tmp_path):
+    net = _cop_net()
+    hou.putenv("HP_LOOK_OUT", str(tmp_path / "vars"))
+    try:
+        result = client.ok("look", {"target": net.path(), "output": "$HP_LOOK_OUT/a.png"})
+    finally:
+        hou.unsetenv("HP_LOOK_OUT")
+    assert result["output"] == _fwd(tmp_path / "vars" / "a.png")
+    assert (tmp_path / "vars" / "a.png").is_file()
+
+
+def test_look_output_respects_approved_roots(client, host, tmp_path):
+    net = _cop_net()
+    host.config.approved_roots = [str(tmp_path / "allowed")]
+    outside = tmp_path / "elsewhere" / "a.png"
+    error = client.error("look", {"target": net.path(), "output": str(outside)})
+    assert error["code"] == "path_not_allowed"
+    assert not outside.exists() and not outside.parent.exists()
+    inside = tmp_path / "allowed" / "a.png"
+    result = client.ok("look", {"target": net.path(), "output": str(inside)})
+    assert result["output"] == _fwd(inside) and inside.is_file()
+
+
+def test_look_output_must_be_png_or_jpg(client):
+    error = client.error("look", {"output": "beauty.exr"})
+    assert error["code"] == "invalid_argument" and "render" in error["hint"]
+
+
+@pytest.mark.slow
+def test_look_output_on_obj_draft(client, tmp_path):
+    """The Flipbook ROP path (headless: the kept child) writes output too."""
+    _obj_scene()
+    target = tmp_path / "toy.png"
+    result = client.ok("look", {"resolution": RES, "output": str(target)})
+    assert result["backend_used"] == "flipbook" and result["output"] == _fwd(target)
+    with Image.open(target) as im:
+        assert list(im.size) == RES
+    assert _contrast(result) > 40

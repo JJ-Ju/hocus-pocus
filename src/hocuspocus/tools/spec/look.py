@@ -42,7 +42,12 @@ SPEC = ToolSpec(
         "variables and hou.session; not the current take (a note says so), in-memory "
         "simulation caches (the child re-simulates to the frame) or variables set with "
         "hou.putenv. Karma and Cop images render the live scene in the host. image.attached "
-        "is true when the PNG went out as MCP image content."
+        "is true when the PNG went out as MCP image content. output (2.1) also writes the "
+        "image to that file, at its rendered size, flattened onto grey: PNG, or JPEG for "
+        ".jpg/.jpeg; $HIP and ~ expand, parent folders are made, an existing file is "
+        "replaced, and a path outside approved_roots is path_not_allowed before anything "
+        "renders. The result's output is the absolute path; the image is still returned "
+        "inline (path is the copy under the state dir, which keeps only the newest 50)."
     ),
     input_schema=_obj(
         {
@@ -55,6 +60,7 @@ SPEC = ToolSpec(
             ),
             "fit": _enum(("all", "selected", "none")),
             "source": _enum(("auto", "viewer"), "auto"),
+            "output": _s("Also save the image to this .png or .jpg file."),
             "on": _on(),
         }
     ),
@@ -75,6 +81,7 @@ SPEC = ToolSpec(
             "width": _t("integer"),
             "height": _t("integer"),
             "rendered": _list("integer"),
+            "output": _t("string"),
             "notes": _list(),
         },
         ("backend_used", "chain", "scene", "path", "width", "height"),
@@ -85,6 +92,6 @@ SPEC = ToolSpec(
     examples=(
         {},
         {"target": "/obj/geo1/scatter1", "quality": "lit", "resolution": [640, 480]},
-        {"target": "/out/karma1", "quality": "final", "frame": 24},
+        {"target": "/out/karma1", "quality": "final", "frame": 24, "output": "$HIP/f24.png"},
     ),
 )
