@@ -6,23 +6,20 @@ transaction tool (`edit`). Pictures become one tool (`look`). The default `core`
 lists 18 tools instead of 31. Scenes, the install commands, the configuration file, the
 error codes and the host protocol are unchanged.
 
-You have two ways to upgrade:
+**Move to the 2.0 names.** Use the table below. Agents pick them up from the server
+instructions and `hocuspocus://guide` without anything on your side. For the 2.0.x
+releases `profile = "compat_1x"` kept 1.4 scripts running unchanged; **2.1 removed it**
+(§8). A 1.4 tool name now answers `invalid_argument` with its 2.0 replacement in `hint`,
+so running a 1.4 script once lists what to change.
 
-- **Keep 1.4 scripts running as they are.** Set `profile = "compat_1x"` (below). The 1.4
-  catalogue, schemas and results come back unchanged, running on the 2.0 engines. This
-  profile is served for the 2.0.x releases only; **2.1 removes it**.
-- **Move to the 2.0 names.** Use the table below. Agents pick them up from the server
-  instructions and `hocuspocus://guide` without anything on your side.
-
-The design is in [`BIBLE.md`](BIBLE.md) (2.0) and its Appendix A (the 1.4 tools as
-`compat_1x` serves them); the full list of changes is in
-[`CHANGELOG.md`](../CHANGELOG.md).
+The design is in [`BIBLE.md`](BIBLE.md) (2.0, 2.1) and its Appendix A (the 1.4 contract);
+the full list of changes is in [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## 1. Every removed tool and its replacement
 
-These 18 tools are not in the 2.0 profiles (`minimal`, `core`, `full`). Called there, each
-answers `invalid_argument` with its replacement in `hint` and the `compat_1x` setting that
-keeps it. Every other 1.4 tool (`houdini_status`, `houdini_connect`, `hip_*`,
+These 18 tools are not in the 2.0 profiles (`minimal`, `core`, `full`). Called, each
+answers `invalid_argument` with its replacement in `hint` (2.1: on every profile; 2.0.x
+also named the `compat_1x` setting that kept it). Every other 1.4 tool (`houdini_status`, `houdini_connect`, `hip_*`,
 `node_create`, `parm_set`, `cook`, `render`, `houdini_python`, `job`, `undo`, `time`,
 `hda`, `pdg`, `events`) keeps its name and arguments.
 
@@ -94,32 +91,18 @@ Notes on the table:
 | `minimal` | 14 | `minimal` | 10: `houdini_status`, `houdini_connect`, `hip_open`, `hip_save`, `inspect`, `search`, `edit`, `node_create`, `parm_set`, `look` |
 | `core` (default) | 31 | `core` (default) | 18: `minimal` plus `hip_new`, `hip_merge`, `cook`, `render`, `houdini_python`, `job`, `undo`, `time` |
 | `full` | 35 | `full` | 21: `core` plus `hda`, `pdg`, `events` |
-| — | — | `compat_1x` | 35: the 1.4 `full` catalogue, unchanged |
+| — | — | `compat_1x` (2.0.x only) | 35: the 1.4 `full` catalogue, unchanged |
 
-`v2`, the preview profile of the 2.0 development branch, reads as `full` in 2.0.x.
-
-To keep 1.4 client scripts running unchanged, set the profile for **both** processes, the
-bridge and the host inside Houdini, then restart Houdini:
-
-```toml
-# $HOUDINI_USER_PREF_DIR/hocuspocus.toml (both processes read it)
-profile = "compat_1x"
-```
-
-or `HOCUSPOCUS_PROFILE=compat_1x` in the environment of the bridge and of Houdini (the
-environment wins over the file). For one client only:
-
-```bash
-claude mcp add -s user hocuspocus -e HOCUSPOCUS_PROFILE=compat_1x -- hocuspocus-mcp
-```
+In 2.0.x `profile = "compat_1x"` (or `HOCUSPOCUS_PROFILE=compat_1x`) served the 1.4
+catalogue, resources, prompts and instructions, and `v2`, the preview profile of the 2.0
+development branch, read as `full`. **2.1 removed both** (BIBLE D46). Either name left in
+`hocuspocus.toml` or the environment is read as `full` with a warning: the bridge and
+the host log it, and `houdini_status` shows it in `warnings`. Set `profile = "full"` (or
+`minimal`, `core`) to silence it.
 
 A host and a bridge on different profiles disagree about what exists: the host refuses a
 tool outside its own profile with `invalid_argument` naming the profile that serves it.
 `hocuspocus doctor` prints which `hocuspocus.toml` the bridge reads.
-
-`compat_1x` serves the 1.4 resources (`houdini://nodetype/...`, `houdini://job/{id}`,
-`.../parms`, `.../geo`), the four 1.4 prompts and the 1.4 instructions. It does not
-serve the 2.0 additions: `on`, `role`, resource ETags and subscriptions, or ledger job ids.
 
 Everything else in `hocuspocus.toml` is unchanged (`allow_python`, `read_only`,
 `approved_roots`, `max_response_bytes`, `default_timeout_s`, `job_threshold_s`, `hfs`,
@@ -145,7 +128,7 @@ unchanged resource answers with no contents and `_meta.not_modified: true`.
 
 - **Job ids are opaque.** On the 2.0 profiles a `job_id` is the bridge ledger's id, such
   as `j3f9a1c`, instead of 1.4's `<pid>-<id>`. Treat it as a string. `job` still accepts a
-  `<pid>-<id>` id in every profile, and `compat_1x` keeps returning them.
+  `<pid>-<id>` id in every profile (2.0.x's `compat_1x` returned them).
 - **Jobs survive a bridge restart.** The ledger (`<state_dir>/ledger.sqlite`) remembers
   every job and where it runs. After a restart, `job` with a ledger id still reaches its
   Houdini, and a finished job's stored result is returned with a note. A job is still
@@ -217,12 +200,16 @@ script that saved defensively before `hip_open` in the GUI no longer needs to.
 
 ## 8. What 2.1 removes
 
-- The `compat_1x` profile and with it the 18 tools of §1 and the 1.4 resources and
-  prompts.
-- The `v2` profile alias.
-- The OpenGL ROP backend of `look`, once Houdini 22.5 is the oldest supported version
-  (Houdini 22 deprecates the OpenGL ROP for the Flipbook ROP).
+**Done in 2.1** (BIBLE D46):
 
-Move scripts to the 2.0 names during 2.0.x. A 2.0 profile names each removed tool's
-replacement in the error `hint`, so running a 1.4 script once on `core` lists what to
-change.
+- The `compat_1x` profile and with it the 18 tools of §1, the 1.4 resources
+  (`houdini://node/{path}/parms`, `houdini://node/{path}/geo`,
+  `houdini://nodetype/{category}/{name}`, `houdini://job/{id}`), the four 1.4 prompts,
+  the 1.4 instructions and guide, and the 1.4 `tools/list` caps.
+- The `v2` profile alias.
+
+Each of the 18 names still answers `invalid_argument` with its replacement in `hint`, on
+every profile, and a removed profile name reads as `full` with a warning (§2).
+
+**Not yet:** the OpenGL ROP backend of `look` stays until Houdini 22.5 is the oldest
+supported version (Houdini 22 deprecates the OpenGL ROP for the Flipbook ROP).

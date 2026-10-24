@@ -4,7 +4,9 @@
 Houdini 22.0.466). Every row was found by reading the code (citations are `file:line` under
 `src/hocuspocus/` unless a path says otherwise); the rows marked *probed* were also checked in
 a scripted `houdinifx` session with an isolated pref dir. 2.0 M3 closed the gaps below as
-the Status column says (the matrix rows are updated to match). The GUI column is executed by
+the Status column says (the matrix rows are updated to match). 2.1 removed `compat_1x`
+(BIBLE D46): rows that named a 1.4 tool (`viewport_capture`, `selection`,
+`node_type_info`, `problems`, `usd_stage`) name its 2.0 form. The GUI column is executed by
 `tests/integration/test_parity_gui.py` (markers `slow` and `gui`, deselected unless `--rungui`):
 
 ```bash
@@ -96,18 +98,17 @@ was recorded).
 | Frame arguments (`parm_get`, `geo_read`, `usd_stage`, `cook {frame}`) | `hou.setFrame` and back inside one main-thread call (no idle tick in between, so the viewport does not draw the other frame); `geo_read` uses `geometryAtFrame` | same | same | `host/tools/parms.py:132-136`, `host/tools/cook.py:84-89`, `host/tools/usd.py:647-652`, `host/tools/geo.py:736` | — |
 | `cook {frame_range}` | per-frame main-thread steps between idle ticks: the playbar and viewport step visibly; the start frame is put back only when the user did not move the playbar during the job, with a note either way (G4) | invisible; always restored, no note | mode (G4 done) | `host/tools/cook.py` (`Playhead`, `_ranged`) | `test_cook_frame_range_leaves_a_scrubbed_playbar` |
 | `cook {profile}` | the stopped `hou.PerfMonProfile` stays in the Performance Monitor's list | nothing to see | mode | `host/tools/cook.py:187-199` | — |
-| `problems` | as headless; nodes the viewport cooked are not "never cooked" | same walk | same (G2) | `host/tools/_diag.py:154-160` | — |
+| `inspect {what: problems}` | as headless; nodes the viewport cooked are not "never cooked" | same walk | same (G2) | `host/tools/_diag.py:154-160` | — |
 
 ## Visual feedback
 
 | Tool / source | GUI | Headless | Row | Evidence | GUI test |
 |---|---|---|---|---|---|
-| `viewport_capture {source: viewer}`, `look {source: viewer}` | Scene Viewer flipbook of one frame, what the user sees (HUD, licence watermark, the viewer's network context with a note when it is not the captured scene's); `camera` or an explicit `fit` change the view only for the grab and the view and camera are restored | `ui_required` with the Flipbook alternative in `hint` (the only GUI-only argument values, G6) | mode | `host/tools/visual.py:1939-2004`, `visual.py:2247-2252` | `test_viewer_capture_fits_and_restores_the_view` |
-| `viewport_capture {source: auto}` | `/obj` without `camera`: the viewer, as it is (`fit_used: none` unless `fit` is passed); with a camera, a stage or a COP: the ROP source in-process | always the ROP source in a child; `fit` defaults to `all` | mode (same call, different picture; spec-2.0 §2.5 makes the viewer opt-in) | `host/tools/visual.py:2172-2181`, `visual.py:2012` | `test_viewer_capture_fits_and_restores_the_view`, `test_rop_capture_runs_in_process` |
-| `viewport_capture {source: flipbook_rop \| opengl_rop}` | in-process on the main thread (the UI waits, ~0.3 s): temporary camera and ROP created outside undo and `events`, rendered, deleted, selection restored; a ROP that writes no image hands over to the next; no Karma step (a crash would take Houdini down); Houdini's own flag may be set, `dirty` is not (G1) | snapshot + child hython off the main thread; a crashed child hands over to the next ROP and Karma (in the host) last | mode (G8 for the snapshot) | `host/tools/visual.py:1538-1567`, `visual.py:1638-1704`, `visual.py:2186-2239` | `test_rop_capture_runs_in_process` |
+| `look {source: viewer}` | Scene Viewer flipbook of one frame, what the user sees (HUD, licence watermark, the viewer's network context with a note when it is not the captured scene's); `camera` or an explicit `fit` change the view only for the grab and the view and camera are restored | `ui_required` with the Flipbook alternative in `hint` (the only GUI-only argument values, G6) | mode | `host/look/viewer.py`, `host/look/select.py` | `test_viewer_capture_fits_and_restores_the_view` |
+| `look` (`source: auto`; `draft`, `lit` with lights: the Flipbook ROP, then the OpenGL ROP) | in-process on the main thread (the UI waits, ~0.3 s): temporary camera and ROP created outside undo and `events`, rendered, deleted, selection restored; a ROP that writes no image hands over to the next; no Karma step (a crash would take Houdini down); Houdini's own flag may be set, `dirty` is not (G1) | snapshot + child hython off the main thread; a crashed child hands over to the next ROP and Karma (in the host) last | mode (G8 for the snapshot) | `host/look/flipbook.py`, `host/look/opengl.py`, `host/look/run.py` | `test_rop_capture_runs_in_process` |
 | Kept capture child (`WarmCapture`) | never started | first Flipbook capture starts it; ~0.35 s per later capture; replaced on script, hython or HDA library change, after 200 uses or 110 s idle | mode | `host/tools/visual.py:685-691`, `visual.py:2214-2234`; BIBLE §8 | `test_rop_capture_runs_in_process` (`_warm['child'] is None`) |
-| `viewport_capture {cop_path}` | temporary `rop_image` in the live COP network, in-process; `dirty` untouched (G1) | the same, in-process (COPs need no child) | same | `host/tools/visual.py:1059-1097`, `visual.py:2254-2257` | probe |
-| `viewport_capture {lop_path \| LOP camera}` | Flipbook ROP with a LOP source, in-process (`viewer` refused for a stage) | the same ROP in the child, OpenGL child single-threaded | mode | `host/tools/visual.py:2157-2164`; BIBLE §8 | — |
+| `look {target: <Cop node or COP network>}` | temporary `rop_image` in the live COP network, in-process; `dirty` untouched (G1) | the same, in-process (COPs need no child) | same | `host/look/cop.py` | probe |
+| `look {target: <LOP>}`, a LOP camera or camera prim | Flipbook ROP with a LOP source, in-process (`viewer` refused for a stage) | the same ROP in the child, OpenGL child single-threaded | mode | `host/look/spec.py`, `host/look/flipbook.py`; BIBLE §8 | — |
 | `frame` argument | the playbar stays where it was (viewer and ROP) | the child renders the frame; the host's frame is untouched | same | `host/tools/visual.py:1971`, `visual.py:2054-2064` | `test_time_moves_the_playbar_and_captures_do_not` |
 | `render` (Flipbook/OpenGL ROP) | in-process, frame by frame through the executor | snapshot + child hython | mode (G8) | `host/tools/visual.py:897-899`, `visual.py:3296` | — |
 | `render` (Karma, Mantra, writers, USD) | in-process; `output`/`camera` overrides set and restored outside undo may set Houdini's flag; `dirty` untouched (G1) | in-process; `dirty` untouched | same | `host/tools/visual.py:3491-3516`, `visual.py:3630-3634` | probe |
@@ -118,10 +119,10 @@ was recorded).
 |---|---|---|---|---|---|
 | `houdini_python` deadline | `sys.settrace` on the main thread stops Python code 1 s (≤ 10 %) before `timeout_s`; the UI is frozen while the code runs | same mechanism; nothing to freeze | same | `host/tools/code.py:93-118` | — |
 | `houdini_python` and `hou.ui` | `hou.ui` works; modal calls fail the call with `ui_required` (G5); `hdefereval` imports, and deferred code runs after the call, outside its undo group and outside `events`' agent window (it is the user's) | `hou.ui` raises; `hdefereval` refuses to import (`$HFS/houdini/python3.13libs/hdefereval.py:240-241`) | mode (G5: modal calls `ui_required`) | `host/tools/code.py:126-160` | `test_undo_history_interleaves_agent_and_user_steps`, `test_events_record_a_manual_rename` (manual edits via `hdefereval`), `test_agent_code_opening_a_dialog_gets_ui_required` |
-| `node_type_info` | probe instance (menus, inputs) in the live scene, outside undo and `events`: may flip Houdini's flag, `dirty` untouched (G1) | same probe; `dirty` untouched | same | `host/tools/types.py:842-899`, `types.py:1148`, `types.py:1455` | `test_reads_and_captures_leave_the_gui_hip_clean` |
+| `inspect {what: type}` | probe instance (menus, inputs) in the live scene, outside undo and `events`: may flip Houdini's flag, `dirty` untouched (G1) | same probe; `dirty` untouched | same | `host/tools/types.py:842-899`, `types.py:1148`, `types.py:1455` | `test_reads_and_captures_leave_the_gui_hip_clean` |
 | `undo` | history interleaves agent steps (`HocusPocus: …`) with the user's and Houdini's own (`Rename Node …`, parm changes); `undo` stops at the first non-HocusPocus step with `blocked_by` unless `include_user_steps` | only agent steps (and test-made ones) | mode | `host/tools/state.py:67-162` | `test_undo_history_interleaves_agent_and_user_steps` |
 | `time` | `hou.setFrame` moves the visible playbar and the viewport recooks displayed nodes; the session's first frame change says so in `notes` (G2); `range` sets the frame and playback range | `hou.setFrame` sets the evaluation time; nothing recooks until asked; no note | mode (G2 done) | `host/tools/state.py` (`time_`), `host/tools/session.py` (`viewport_note`) | `test_time_moves_the_playbar_and_captures_do_not`, `test_viewport_cooks_between_calls_and_says_so_once` |
-| `selection`, `edit {op: select}` | one undo step (Houdini records each change); the user's selection is read too; unpinned panes follow a selection in another network on the next idle tick, and the result names them in `context_changed` with a note (G3) | one undo step; only the agent's selection; no panes, no `context_changed` | mode (G3 done) | `host/tools/state.py` (`select_nodes`), `host/tx.py` (`_op_select`) | `test_selection_names_the_panes_it_moves` |
+| `edit {op: select}` | one undo step (Houdini records each change); the user's selection is read too; unpinned panes follow a selection in another network on the next idle tick, and the result names them in `context_changed` with a note (G3) | one undo step; only the agent's selection; no panes, no `context_changed` | mode (G3 done) | `host/tools/state.py` (`select_nodes`), `host/tx.py` (`_op_select`) | `test_selection_names_the_panes_it_moves` |
 | `job` | jobs step through the executor between idle ticks; the GUI stays responsive | jobs step through the pump | same | `host/tools/state.py:246-263`; BIBLE §7 | — |
 
 ## Full profile
@@ -131,7 +132,7 @@ was recorded).
 | `hda` | create, save, match, unlock, install, reload, list: same HOM calls in one undo group `HocusPocus: hda <action> <path>` that interleaves with user steps; `dirty` from Houdini | same | same | `host/tools/hda.py:397-436` | `test_hda_create_round_trip` |
 | `pdg` | non-blocking cook polled through the executor; `cook` refuses an untitled or dirty scene, dirtiness from the one dirty source (G1) | same | same | `host/tools/pdg.py:520-535` | — |
 | `events` | user edits arrive with `origin: other` (anything outside a HocusPocus call's main-thread work); user-created nodes under a manager are watched on the next idle tick | `other` only from code outside the executor; watched on the next queue item | mode | `host/tools/events.py:155-161`, `events.py:420-436`, `events.py:721-734` | `test_events_record_a_manual_rename` |
-| `usd_stage` | read-only | same | same | `host/tools/usd.py:647-652` | — |
+| `inspect {what: stage}` (all profiles) | read-only | same | same | `host/tools/usd.py:647-652` | — |
 
 ## Bridge resources and prompts
 
@@ -139,6 +140,6 @@ was recorded).
 |---|---|---|---|---|
 | Resources (`houdini://…`, `hocuspocus://…`) | the tool they map to | same | same | `bridge/server.py:839-907` |
 | Prompt `inspect_scene` | asks which Houdini to inspect, or pins "the GUI session", when several run | same text | same | `bridge/server.py:916-927` |
-| Prompt `build_sop_chain` | ends with `viewport_capture {fit: all}`: the viewer framed for the grab and restored | the same call frames through the ROP | mode (`auto` above) | `bridge/server.py:928-946` |
+| Prompt `build_sop_chain` | ends with `look` on the object: the Flipbook ROP in-process | the same ROP in the child | mode (G8) | `bridge/server.py:928-946` |
 | Prompt `debug_red_node` | — | — | same | `bridge/server.py:947-957` |
 | Prompt `turntable_preview` | branches on `houdini_status.ui`: "do not change the playbar range in a GUI session" (each capture takes `frame`) | may set the range | mode | `bridge/server.py:958-972` |

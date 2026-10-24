@@ -4,9 +4,10 @@
 This document is the design authority for 2.0 (branch `release/2.0`). It was rewritten at
 milestone M3 from [`redesign/spec-2.0.md`](redesign/spec-2.0.md), which planned the work.
 Rows and sentences marked (1.1) to (1.4) changed in that 1.x release and still hold in 2.0;
-(2.0) marks what 2.0 changed. The 2.0 contract decisions are D35 to D44 (§15). The 1.4
-tools that 2.0 serves only in the `compat_1x` profile are described in Appendix A;
-[`migration-2.0.md`](migration-2.0.md) maps each of them to its 2.0 replacement.
+(2.0) marks what 2.0 changed, (2.1) what 2.1 changed. The 2.0 contract decisions are D35
+to D44, the 2.1 ones D45 on (§15). The 1.4 tools that 2.0 served only in the `compat_1x`
+profile, which 2.1 removed with them (D46), are described in Appendix A as the 1.4
+contract; [`migration-2.0.md`](migration-2.0.md) maps each of them to its 2.0 replacement.
 **Status:** authoritative. When code and this document disagree, one of them is wrong
 and the disagreement is a bug to fix, not a fact to live with.
 
@@ -232,9 +233,9 @@ present, must name a loopback host; 403 otherwise (the `Host` check stops DNS re
 from reading `/health`). Request body cap 4 MB; idle connections time out after 60 s.
 The host runs only the tools of its own `profile` (§3.7). A tool another profile lists is
 refused with `invalid_argument` and a hint naming that profile (`profile = "full"` for
-`hda`, `pdg`, `events`). (2.0) A 1.4 tool that 2.0 removed is refused on a 2.0 profile
-with its replacement in the hint (`tools/migration.py`, the table of
-`docs/migration-2.0.md`) and the `profile = "compat_1x"` setting that keeps it.
+`hda`, `pdg`, `events`). (2.1) A 1.4 tool name is refused on every profile, before its
+arguments are looked at, with `invalid_argument` and its replacement in the hint
+(`tools/migration.py`, the table of `docs/migration-2.0.md`; D46).
 
 **Instance registry entry.** On start the host writes
 `<state_dir>/instances/<pid>.json`:
@@ -302,8 +303,7 @@ Responsibilities:
    result as `_instance: {pid, label, ui, warning}`. "Changes a scene" is every tool not
    `read_only` except the reading forms of the `scene=False` tools (`time` without
    arguments, `job` status/result/list, `undo history`, `hda list`, `pdg`
-   status/workitems; in `compat_1x` also `selection` without arguments and
-   `viewport_capture`) and `look`; an `edit` with `dry_run: true` changes nothing but is
+   status/workitems) and `look`; an `edit` with `dry_run: true` changes nothing but is
    routed as a change, so it validates against the scene it would change. Every result a
    host answered (ok or error, `houdini_status` and `houdini_connect` included) carries
    `_meta.instance: {pid, label, name?, role?}`. If none: `code: houdini_offline` with the
@@ -366,7 +366,7 @@ tool-result `_meta`. 1.4 (review 22 finding 2): `_meta.timing` is on every call,
 or error: `main_thread_ms` is the time the tool ran on Houdini's main thread and `queue_ms`
 the wait for the main thread before that, so latency drift can be split between the bridge,
 the queue and Houdini. For a tool that runs off the main thread (`render`, `cook`, `pdg`,
-`look`, `events`, `job`; `viewport_capture` in `compat_1x`), both are the sums over the main-thread steps run on the
+`look`, `events`, `job`), both are the sums over the main-thread steps run on the
 call's behalf: its own executor calls and the steps of jobs it started that finished while it
 waited (review 24 N5: a 1.9 s `cook {profile}` said `0`); a step finishing after the call
 returned is not counted. A call that ran no main-thread step reports
@@ -398,19 +398,18 @@ list it), `headless_ok` and `bridge_local`. `spec/__init__.py` loads them in its
 processes import: the host to map names to implementations and to refuse tools outside its
 profile, the bridge to register MCP tools. `tools/profiles.py` names the profiles and
 `tools/migration.py` the removed 1.4 tools and their replacements. Every `/hp/v1/call`
-carries the bridge's profile: a host runs the 1.4 tools for a `compat_1x` bridge whatever
-its own profile, and a 2.0 profile (bridge or host) answers a removed 1.4 tool with
-`invalid_argument` and the migration hint. From the same objects
+carries the bridge's profile, which the host's hints follow (§9); which tools run is the
+host's own profile. Bridge and host answer a removed 1.4 tool with `invalid_argument`
+and the migration hint (2.1, D46). From the same objects
 `hocuspocus docs tools` renders `docs/tools.md`, the bridge serves `hocuspocus://tools`, and
 `python -m hocuspocus.tools.docs --budget` measures every profile's `tools/list` and appends
 a dated row to `docs/redesign/budget.md`. Unit tests assert that `ORDER` names every module
 and nothing else, that every spec has an implementation, a description under the word cap,
 argument descriptions of at most 12 words and passing examples, that `docs/tools.md` is
-fresh, and the budget caps (§4.1). A 1.4 tool that gained 2.0 arguments (`on`, `role`) or
-result fields (`role`, `recent`) declares them as `v2_extra`, a partial input and output
-schema the 2.0 profiles deep-merge into its spec (dicts key by key, new keys last); the
-`compat_1x` listing leaves them out, so its `tools/list` bytes stay those of 1.4 (the
-goldens under `tests/unit/goldens/`).
+fresh, and the budget caps (§4.1); the `tools/list` bytes of each profile are goldens
+under `tests/unit/goldens/`. (2.1) The 2.0 arguments and result fields of the tools 1.4
+already had (`on`, `role`, `recent`) are in their schemas; 2.0 kept them in a separate
+`v2_extra` overlay so the `compat_1x` listing stayed 1.4's.
 
 ### 3.6 Lifecycle and multiple instances
 
@@ -479,13 +478,16 @@ approved_roots = []         # if non-empty, file paths for hip/hda/render must b
 max_response_bytes = 16384
 default_timeout_s = 30
 job_threshold_s = 10        # cook/render longer than this become jobs
-profile = "core"            # minimal | core | full | compat_1x (§4.1); the host refuses tools outside its profile
+profile = "core"            # minimal | core | full (§4.1); the host refuses tools outside its profile
 log_level = "INFO"
 hfs = ""                    # bridge: explicit Houdini install dir for launch
 result_content = "text"     # bridge: text | both | structured (§4.1)
 ```
 
-`profile` accepts `v2`, the M1–M2 preview of the 2.0 surface, as `full` for 2.0.x.
+(2.1, D46) `compat_1x` and `v2` (the M1–M2 preview alias) were removed. Either name, in
+the toml or in `HOCUSPOCUS_PROFILE`, is read as `full` with a warning: both processes log
+it and `houdini_status` repeats it in `warnings`; nothing refuses to start. Any other
+unknown name is ignored with a warning, as before, and the default (`core`) applies.
 
 `HOCUSPOCUS_WORK_DIR` (environment only) is where a Houdini that `houdini_connect {launch}`
 starts (`hocuspocus launch` uses its own cwd or `--work-dir`, §10.2), and so the `$HIP` and `$JOB` of its untitled scene; default the user's home
@@ -518,7 +520,7 @@ and never fails a call. `houdini://jobs` reads `ledger.jobs_snapshot()`.
 - **Job ids.** On the 2.0 profiles a result's `job_id` (and each `jobs[]` row's, and an
   error's `detail.job_id`/`detail.last_status.job_id`) is the ledger's opaque id, `j` and
   five hex digits (more on a collision). `job` accepts a ledger id or a host id
-  (`<pid>-<id>`) in every profile, and `compat_1x` keeps returning host ids. A ledger id
+  (`<pid>-<id>`) in every profile (2.0.x's `compat_1x` returned host ids). A ledger id
   the ledger does not have is `job_not_found`. After a bridge restart a ledger id still
   reaches its Houdini; when that Houdini has exited, `job status` is `instance_lost` with
   the ledger's last status, and `job result` of a finished job returns the stored result
@@ -529,11 +531,11 @@ and never fails a call. `houdini://jobs` reads `ledger.jobs_snapshot()`.
 ### 3.9 The transaction engine
 
 (2.0, spec-2.0 §2.4, principle 14, D35) `host/tx.py`. Every scene mutation is a `Plan` of
-`Op` steps. `edit` builds a plan from its `ops`; `node_create`, `parm_set` and the 1.4
-mutation tools of `compat_1x` (`node_connect`, `node_delete`, `node_edit`, `node_copy`,
-`node_layout`, `network_build`, `selection` set) build one from their 1.4 arguments and
-shape the result back into their 1.4 result, which is unchanged. So there is one undo
-policy, one rollback and one echo engine.
+`Op` steps. `edit` builds a plan from its `ops`; `node_create` and `parm_set` build one
+from their items and shape the result back into their own. So there is one undo policy,
+one rollback and one echo engine. (In 2.0.x the 1.4 mutation tools of `compat_1x`,
+`node_connect`, `node_delete`, `node_edit`, `node_copy`, `node_layout`, `network_build`
+and `selection`, built plans the same way; 2.1 removed them.)
 
 - **Ops:** `create`, `delete`, `connect`, `set`, `node` (rename, flags, color, comment,
   position, lock, spare parms, bypass), `copy`, `layout`, `build` (`hou.data` with
@@ -569,7 +571,8 @@ policy, one rollback and one echo engine.
 `network/{path}{?depth,format}`, `geo/{path}{?frame,class,attribs,start,count,stats}`,
 `image/{path}`, `stage/{lop}{?prim,include,time,summary}`,
 `type/{category}/{name}{?parms,folder,detail}`, `types{?q,category,limit,cursor}`,
-`problems{?root}` and `events{?since,limit}` (`compat_1x` keeps the 1.4 list, Appendix A).
+`problems{?root}` and `events{?since,limit}`. (2.1) The 1.4 resources `compat_1x` listed
+(Appendix A) were removed with it.
 
 - **One answer, two doors.** The host's `GET /hp/v2/resource?uri=` (`host/resources.py`)
   parses a URI into its `inspect` call (`types`: `search kind: types`; `status`: the host's
@@ -633,8 +636,8 @@ policy, one rollback and one echo engine.
   `tools/list` result in the two shapes a client can receive: the default
   `result_content = "text"` (names, descriptions, input schemas, annotations; no output
   schemas) and `both` (output schemas declared too). The 2.0 caps are on the `full`
-  profile: `text` ≤ 24,000 B, `both` ≤ 34,000 B. `compat_1x` keeps the 1.4 caps, `text` ≤
-  32,000 B and `both` ≤ 44,000 B (D30), and its bytes are the 1.4 goldens. The test prints
+  profile: `text` ≤ 24,000 B, `both` ≤ 34,000 B. 2.0.x's `compat_1x` kept the 1.4 caps,
+  `text` ≤ 32,000 B and `both` ≤ 44,000 B (D30); 2.1 removed them with it. The test prints
   every profile × mode, and `docs/redesign/budget.md` keeps the history (1.4.0:
   14.4/27.4/30.8 KB `text` for minimal/core/full; at the M3 cut-over the 2.0 profiles
   measured 14.8/20.3/22.8 KB `text` and 17.9/26.6/29.1 KB `both`, `compat_1x` 30.8/40.4 KB). Each description ≤ 60 words: what the
@@ -662,10 +665,10 @@ policy, one rollback and one echo engine.
   - `core` (18, the default): `minimal` plus `hip_new`, `hip_merge`, `cook`, `render`,
     `houdini_python`, `job`, `undo`, `time`.
   - `full` (21): `core` plus `hda`, `pdg`, `events`.
-  - `compat_1x` (35): the 1.4 `full` catalogue with 1.4 schemas and results, mapped onto
-    the 2.0 engines (Appendix A), for a 1.x client script. Served for the 2.0.x releases;
-    2.1 removes it (D39). It lists no 2.0 tool and none of the 2.0 extras (`on`, `role`,
-    resources, ledger job ids).
+  - (2.1, D46) `compat_1x` (35: the 1.4 `full` catalogue on the 2.0 engines, Appendix A),
+    served for the 2.0.x releases (D39), and the `v2` alias are removed; either name is
+    read as `full` with a warning (§3.7). A 1.4 tool name answers `invalid_argument` with
+    its 2.0 replacement in `hint` on every profile.
 - **Non-default only:** parm listings show parms where `isAtDefault()` is false unless
   `include_defaults: true`.
 - **Locked HDAs** are opaque by default: `search kind: nodes` and `inspect` `node`,
@@ -686,11 +689,10 @@ policy, one rollback and one echo engine.
   `parm_set`, `time`, `cook`, `job`, `look` `idempotentHint: true`; all `openWorldHint:
   false`. A tool whose only side effect is a cook, a temporary capture ROP or host-side
   job state is `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: true`.
-  `compat_1x` keeps the 1.4 annotations (Appendix A).
 - **`scene=False` registration.** By default the dispatcher wraps every tool that is not
   `read_only` in one undo group, refuses it in read-only mode and marks the scene dirty.
-  `undo`, `time`, `hda`, `cook`, `pdg`, `render`, `job` and `look` (and in `compat_1x`
-  `selection` and `viewport_capture`) register with `scene=False` and do that work
+  `undo`, `time`, `hda`, `cook`, `pdg`, `render`, `job` and `look` register with
+  `scene=False` and do that work
   themselves where it applies: `performUndo` raises inside an undo group; reads (`time`
   with no arguments, `hda list`) must not open a group or dirty the scene; cooks, work
   items, renders, looks and jobs are not hip state. Their annotations still say
@@ -703,7 +705,7 @@ policy, one rollback and one echo engine.
 
 | Tool | Args | Returns | Notes |
 |---|---|---|---|
-| `houdini_status` | — | `connected: {pid, port, houdini, ui, hip: {path, name, dirty, is_new}, time: {frame, fps, range}, env: {HIP, JOB, HIPNAME}, scene_generation, host_version, memory: {rss_mb, peak_mb}}`, `instances: [{pid, port, label, houdini, ui, hip, started, launched_by, name?, selected, busy, jobs_running, host_version}]`, `lost?: {pid, label}`, `bridge_version`, `profile`, `read_only`, `allow_python` | Works offline (`connected: null`). Read-only. 1.3 (review 19 papercuts 4, 9): `selected` marks the pinned instance or the one reads go to; `busy` and `jobs_running` come from each host's `/health` (busy: its main thread has been held, by a call or a waiting one, for at least 1 s); `name` is set with `houdini_connect {pid, name}` and stored in the registry entry, which the host keeps on rewrites; `lost` names a pinned Houdini that has exited (§3.6); `connected.memory` is the Houdini process's resident and peak memory in MB from the OS counters, no psutil (review 17 P2-9). An untitled scene's `hip` carries `note: "$HIP is the launch directory until you hip_save."` | (2.0) Rows and `connected` carry `role`; `recent` lists the dead instances the ledger remembers (§3.8); `connected.hip.dirty_source` says why the scene is dirty (§3.2). M4: defaults and empties are left out (`role` when it is the mode's default, editor for GUI and worker headless; `name` when unset; per row `selected: false`, `busy: false`, `jobs_running: 0`; `recent` when empty) and `connected.memory` unless `detail: true`, so two reads of an unchanged session are byte-identical and `houdini://status` (shaped the same; the host's resource route asks `houdini_status {detail: false}`) keeps its etag. Review 25 papercut 10: the hip path is printed once, as `connected.hip.path`; what only repeats it is left out (`hip.name`, its last segment; a `hip.recent` entry equal to it; `env.HIP` when it is the path's folder and `env.JOB` when it is that folder too; `env.HIPNAME`; an empty `env`; `hip` on the connected instance's `instances[]` row and on `recent[]` rows). `compat_1x` keeps the 1.4 fields. |
+| `houdini_status` | — | `connected: {pid, port, houdini, ui, hip: {path, name, dirty, is_new}, time: {frame, fps, range}, env: {HIP, JOB, HIPNAME}, scene_generation, host_version, memory: {rss_mb, peak_mb}}`, `instances: [{pid, port, label, houdini, ui, hip, started, launched_by, name?, selected, busy, jobs_running, host_version}]`, `lost?: {pid, label}`, `bridge_version`, `profile`, `read_only`, `allow_python` | Works offline (`connected: null`). Read-only. 1.3 (review 19 papercuts 4, 9): `selected` marks the pinned instance or the one reads go to; `busy` and `jobs_running` come from each host's `/health` (busy: its main thread has been held, by a call or a waiting one, for at least 1 s); `name` is set with `houdini_connect {pid, name}` and stored in the registry entry, which the host keeps on rewrites; `lost` names a pinned Houdini that has exited (§3.6); `connected.memory` is the Houdini process's resident and peak memory in MB from the OS counters, no psutil (review 17 P2-9). An untitled scene's `hip` carries `note: "$HIP is the launch directory until you hip_save."` | (2.0) Rows and `connected` carry `role`; `recent` lists the dead instances the ledger remembers (§3.8); `connected.hip.dirty_source` says why the scene is dirty (§3.2). M4: defaults and empties are left out (`role` when it is the mode's default, editor for GUI and worker headless; `name` when unset; per row `selected: false`, `busy: false`, `jobs_running: 0`; `recent` when empty) and `connected.memory` unless `detail: true`, so two reads of an unchanged session are byte-identical and `houdini://status` (shaped the same; the host's resource route asks `houdini_status {detail: false}`) keeps its etag. Review 25 papercut 10: the hip path is printed once, as `connected.hip.path`; what only repeats it is left out (`hip.name`, its last segment; a `hip.recent` entry equal to it; `env.HIP` when it is the path's folder and `env.JOB` when it is that folder too; `env.HIPNAME`; an empty `env`; `hip` on the connected instance's `instances[]` row and on `recent[]` rows). |
 | `houdini_connect` | `pid?`, `name?`, `launch?: {mode: gui\|headless, hip?, wait_s=90}`, `disconnect?: bool`, `quit?: bool`, `on_unsaved: fail\|save\|discard = fail` | the new `connected` block; `quit` returns `{quit, pid, exited, saved?}` | Launch uses `hfs` config or auto-detect. 2.0 (parity G7): an attach or launch compares the host's `host_version` (`/health`) with the bridge's and adds a `version_mismatch: ...` warning when they differ (a GUI Houdini runs the host its package points at; the hint names `install-houdini`); a different `hp` RPC version stays the `version_mismatch` error. Headless launches `hython -m hocuspocus.host`. Both modes start in `HOCUSPOCUS_WORK_DIR` (default home, §3.7); `hocuspocus launch` starts in its own cwd or `--work-dir` instead (§10.2). A launched Houdini usually ends with the bridge that launched it (`launched.outlives_server` says; §15, launch lifetime); to keep one across sessions, start it with `hocuspocus launch` (§10.2, 1.1) and attach by `pid`. `quit` (1.2) closes the selected Houdini (or `pid`) through `POST /hp/v1/quit` after the `on_unsaved` check and forgets its registry entry. 1.3: `pid` or `launch` pins (§3.6), `{}` unpins; `name` labels the Houdini given by `pid` or `launch` (moved from any other instance that had it), and `{name}` alone pins the one with that name; a pid or name that is not running is `houdini_offline` with `retryable: false` and the live `candidates` as `{pid, label, ui, hip}`. | (2.0) `role?: editor\|worker` sets the role of the Houdini given by `pid`, `name` or `launch`; `{role}` alone pins the least busy live Houdini with that role (§3.6). |
 
 ### 4.3 Hip file
@@ -759,7 +761,7 @@ and `outline` leaves out `format` and, per row, `name` when it is the path's las
 `problems` and `type` are compact by default (the Notes column: defaults and empties
 omitted) and take `detail: compact | full` (`type` also `folders`); `detail: full` restores
 the 1.4 shape with only the trims above (the integration tests compare it with the 1.4
-reads under `compat_1x`, whose own shapes never change). `etag` is §3.10's (the digest of the
+read engines, which 2.1 keeps as host functions behind `inspect`). `etag` is §3.10's (the digest of the
 canonical body), so an unchanged etag is an unchanged answer and the matching resource has
 the same etag. The bridge
 routes `what: events` and `what: jobs` as it routes `events` and `job` (pid-tagged
@@ -844,7 +846,7 @@ of `create` or `set` ops built from their 1.4 arguments, with their 1.4 results 
 | `parm_set` | `items: [{path, value?, expression?, language: hscript\|python = hscript, keyframe?: {frame?, value}, keyframes?: [...], channel_ref?: "/path/to/parm", ramp?: {basis, keys, values}, multiparm_count?: int, revert_to_default?: bool, press?: bool, animation: replace\|key\|keep = replace}]`, `frame?`, `partial = false` | Exactly one of the value-ish fields per item. Tuple path + list value sets all components; component path sets one. `animation: replace` deletes keyframes/expression first then `set()` (so the value sticks), except that a single `keyframe` only adds or replaces its own key; `key` sets a keyframe at `frame`; `keep` is plain `set()` (Houdini's own behaviour, which may add a key — reported). Menu values accept token or label (label resolved with a hint), string menus only the node builds included (1.3). `press` (1.3, review 17 P0-2 and P1-4) clicks a button or runs the callback script of any parm that has one (menus and toggles too, through `hou.Parm.pressButton`); with `value` it sets the value first. A pressed item returns `pressed` and `side_effects: {parm: [old, new]}` (menus as tokens, multiparms as counts) instead of `value`/`raw`/`is_default`; on a writer's save button (File Cache Save to Disk, a ROP SOP's Render) the output files over its frame range are checked afterwards and the item adds `outputs_summary`, or the call fails with `cook_failed` and `detail.missing`. A plain set of a menu or toggle with a callback carries a note that the callback did not run. Strings accept `$HIP`-style raw text unexpanded. Returns per item: `path, value, raw?, expression?, wrote_keyframe: bool, is_default` (`raw` and long strings as in `parm_get`, which has the only `full_strings`) (a tuple adds per-component `expressions` and the `keyed` component names) and the owning node's `errors/warnings` after a cheap cook. Type mismatch → `code: invalid_value` with the template type and range. Locked HDA → `code: locked` with hint to `node_edit lock:false` or `hda` tool. A locked tuple component computed by an expression (`resolutiony` under `res_mode: autoheight`) that already holds the requested value is skipped; otherwise `locked` names the component, its expression and current value, and the hint names the components to set instead (1.2, review 13). |
 
 The 1.4 hints that named a removed tool now name its op (`edit` `node` op with `lock:
-false` for a locked HDA; `node_edit` in `compat_1x`).
+false` for a locked HDA).
 
 ### 4.6 Execution: `cook`, `render`, `look`, `houdini_python`, `job`
 
@@ -864,13 +866,14 @@ false` for a locked HDA; `node_edit` in `compat_1x`).
 | `time` | `frame?`, `range?: [start, end]`, `fps?` | Omitting all fields reads. Sets with `hou.setFrame`, `hou.playbar.setFrameRange` (works headless), `hou.setFps`. 2.0 (parity G2, a mode): in a GUI session the Scene Viewer recooks the displayed nodes at the new frame on Houdini's next idle tick, outside the call (a displayed simulation steps there), and it cooks displayed nodes between calls, so `cook_state` can read `cooked` without a cook call; headless nothing cooks until asked. The first frame change and the first `node_info`/`inspect` `cook_state` of a GUI session each carry a note saying so (once per session; `hou.isUIAvailable()`). |
 | `hda` *(full profile)* | `action: create\|save\|unlock\|match\|install\|reload\|list`, plus action-specific fields (`path`, `library_path`, `name`, `label` or `description`, `version`, `min_inputs`, `max_inputs`; `promote_spare_parms = true` for `save`; `limit`/`cursor` for `list`) | Thin wrappers over `createDigitalAsset`, `definition().updateFromNode`, `allowEditingOfContents`, `matchCurrentDefinition`, `hou.hda.installFile/reloadFile/loadedFiles`. `save` also copies the instance's spare parms into the definition's parm template group (`promote_spare_parms = true`, 1.2). `list` shows long paths, not 8.3 short names; `inspect what: type`/`search kind: types` report the definition's version, its label as `description` when there is no help, and types as `Sop/ns::name` (1.2). |
 | `pdg` *(full)* | `action: cook\|status\|workitems\|cancel\|dirty`, `top_path`, `block = false`, `save = false`, `timeout_s = 30`, `attribs?`, `state?`, `limit`, `cursor` | `cookWorkItems(block=False)` as a job polled in short main-thread steps, with `progress`/`current`/`total` counting finished work items; `block` waits `min(timeout_s, job_threshold_s)` for the result, then returns `{job_id, state: "running"}` (§7); `status` from `getPDGNode()`; `workitems` paged with state and output files. A failed item carries `error` (its log's last error lines), `log_path` and `exit_code`; a cook result lists the first 5 `failures` of the graph (1.2). Out-of-process ROP TOPs load the saved hip, so `cook` refuses an untitled or dirty scene with `unsaved_changes`; `save: true` saves first (1.2). A cook whose items were cancelled ends `cancelled`, never `done`; `cancel` also cancels the job cooking the graph and returns the status after the cook stopped (1.2). `inspect what: node` on a TOP node adds `pdg_state: {cooked, failed, total}` (1.2). `workitems` takes `attribs: [names]` (per-item values) and a `state` filter, reports `cook_time_s`, and gives output files relative to one `output_root` (1.2). |
-| `events` *(full)* | `since = 0`, `limit` | Host-side ring buffer of hip events and node events (`ChildCreated`, `NameChanged`, `ParmTupleChanged` on nodes the agent touched, `BeingDeleted`) with a monotonic sequence. For "what did the user change since my last call". 1.2: every event has `origin: agent\|other` (1.4, review 23 papercut 9: or `houdini` for a parm Houdini wrote itself inside a call that set parms explicitly, such as a camera's `*Converted` parms, a light's guide scale, `labelparm*` or a callback's writes; only the parms `parm_set` or `node_create` set are `agent` then, and a call that sets none, such as `houdini_python`, keeps every write `agent`) (agent = inside a HocusPocus call: the host holds a call's events and publishes them when its main-thread work ends, none if it was rolled back, without nodes created and deleted within it, and without changes made while undo is disabled, such as `render`'s output-parm set and restore); nodes read with `inspect what: node` or listed by `what: network` (`node_info`, `network_describe` in `compat_1x`) are watched too; nested nodes created in one batch get their `ChildCreated`; `FlagChanged` names the flags; 1.3 (review 16 papercut 9): `ParmTupleChanged` on a multi-component tuple names the `components` whose value or keys changed instead of a `count` (a burst within 0.1 s is one event with their union) and lists in `keyed` those of them with keyframes now, from a per-tuple snapshot taken when the node is watched; spare parm edits are one `SpareParmsChanged`; `hda create/match/unlock` are one `hda_contents_rebuilt`; the `pdg` tool records `kind: "pdg"` events (`cook_start`, `work_item_failed`, `cook_done`); Houdini's save-time writes on TOP networks (1.3: and on `/stage`) are dropped; 1.3 (review 18 papercut 10): one ramp edit is one `ParmTupleChanged` on the ramp parm, not one per key parm. 1.3 (review 19 papercut 8): seq restarts in every Houdini, so the bridge returns `next_since` as `<pid>:<seq>` and takes it back as `since` (a bare seq still works); a cursor from another Houdini is read from the start with `reset: true` and a `note`. The host keeps plain integers. |
+| `events` *(full)* | `since = 0`, `limit` | Host-side ring buffer of hip events and node events (`ChildCreated`, `NameChanged`, `ParmTupleChanged` on nodes the agent touched, `BeingDeleted`) with a monotonic sequence. For "what did the user change since my last call". 1.2: every event has `origin: agent\|other` (1.4, review 23 papercut 9: or `houdini` for a parm Houdini wrote itself inside a call that set parms explicitly, such as a camera's `*Converted` parms, a light's guide scale, `labelparm*` or a callback's writes; only the parms `parm_set` or `node_create` set are `agent` then, and a call that sets none, such as `houdini_python`, keeps every write `agent`) (agent = inside a HocusPocus call: the host holds a call's events and publishes them when its main-thread work ends, none if it was rolled back, without nodes created and deleted within it, and without changes made while undo is disabled, such as `render`'s output-parm set and restore); nodes read with `inspect what: node` or listed by `what: network` are watched too; nested nodes created in one batch get their `ChildCreated`; `FlagChanged` names the flags; 1.3 (review 16 papercut 9): `ParmTupleChanged` on a multi-component tuple names the `components` whose value or keys changed instead of a `count` (a burst within 0.1 s is one event with their union) and lists in `keyed` those of them with keyframes now, from a per-tuple snapshot taken when the node is watched; spare parm edits are one `SpareParmsChanged`; `hda create/match/unlock` are one `hda_contents_rebuilt`; the `pdg` tool records `kind: "pdg"` events (`cook_start`, `work_item_failed`, `cook_done`); Houdini's save-time writes on TOP networks (1.3: and on `/stage`) are dropped; 1.3 (review 18 papercut 10): one ramp edit is one `ParmTupleChanged` on the ramp parm, not one per key parm. 1.3 (review 19 papercut 8): seq restarts in every Houdini, so the bridge returns `next_since` as `<pid>:<seq>` and takes it back as `since` (a bare seq still works); a cursor from another Houdini is read from the start with `reset: true` and a `note`. The host keeps plain integers. |
 
 Count (2.0): 2 session + 4 hip + 3 read and mutation (`inspect`, `search`, `edit`) + 2
 conveniences (`node_create`, `parm_set`) + 5 execution (`cook`, `render`, `look`,
 `houdini_python`, `job`) + 2 state (`undo`, `time`) = **18 in `core`**, plus 3 in `full`
-(`hda`, `pdg`, `events`) = 21. `minimal` is 10 of the core tools (§4.1). `compat_1x` lists
-the 35 tools of 1.4 (Appendix A). `usd_stage` and `selection` have no 2.0 tool of their own:
+(`hda`, `pdg`, `events`) = 21. `minimal` is 10 of the core tools (§4.1). 2.0.x's
+`compat_1x` listed the 35 tools of 1.4 (Appendix A; removed in 2.1, D46). `usd_stage` and
+`selection` have no 2.0 tool of their own:
 `inspect what: stage` and the `edit` `select` op replace them (a selection is read with
 `houdini_python`).
 
@@ -910,10 +913,10 @@ the 35 tools of 1.4 (Appendix A). `usd_stage` and `selection` have no 2.0 tool o
 | `two_houdinis` | `rop` | (2.0) Find or launch a `worker`, save in the `editor`, `hip_open` on the worker, pin the editor again, `render {on: "worker", wait_s: 0}`, follow the job by id whatever is pinned; `instance_lost` never switches. |
 | `lookdev_karma` | `path?` (a LOP) | (2.0) `inspect what: stage {summary: true}`, add a dome and a key light and MaterialX materials in one `edit` when missing, iterate with `look {quality: "lit"}`, finish with `look {quality: "final"}`, frames through a `usdrender_rop` job. |
 
-`compat_1x` keeps the four 1.4 prompts (Appendix A).
+(2.1) The four 1.4 prompts `compat_1x` served (Appendix A) were removed with it.
 
 **Server `instructions`** (≤ 400 words, shipped in `initialize`; the text lives in
-`bridge/instructions.py`, a unit test enforces the cap, and `compat_1x` gets the 1.4 text):
+`bridge/instructions.py`, and a unit test enforces the cap):
 
 > HocusPocus drives a live Houdini. Identity is Houdini paths. Start with
 > `houdini_status`; if nothing is connected, `houdini_connect` can launch Houdini (GUI
@@ -1059,8 +1062,8 @@ is `job_not_found`.
 Houdini that runs it, and `job` reaches that Houdini whatever is selected or pinned. On the
 2.0 profiles job ids are the ledger's opaque ids (`j` and five hex digits, §3.8) and `on`
 starts a cook or render on another Houdini (§3.6); the host's own id is `<pid>-<id>` (a bare
-`<id>` still finds a job of that process), which `compat_1x` returns and every profile
-accepts. When the job's Houdini has exited the answer is `instance_lost` with the last
+`<id>` still finds a job of that process), which every profile accepts (2.0.x's
+`compat_1x` returned it). When the job's Houdini has exited the answer is `instance_lost` with the last
 status in `detail.last_status`, also after a bridge restart. `job {action: list}` lists
 the selected Houdini's jobs (or `on`'s); `{action: list, all: true}` asks every live
 instance and adds `pid` to each row and `instances: [{pid, label, jobs, running}]`. A host
@@ -1147,8 +1150,8 @@ stage rendered multi-threaded in 5 of 5 fresh hythons), so its children keep eve
 ctx)`; `select.py` is the policy, `run.py` the orchestration (one main-thread step in the
 GUI; headless a short main-thread prepare, then the chain off the main thread), `child.py`
 the snapshot and child hython. `render` of a Flipbook or OpenGL ROP headless uses
-`child.ChildRender`; `compat_1x`'s `viewport_capture` runs the same backends with its 1.4
-policy (Appendix A). The settings named above stay settable on
+`child.ChildRender`. (2.0.x's `viewport_capture` ran the same backends with its 1.4
+policy, Appendix A; 2.1 removed it and that policy.) The settings named above stay settable on
 `hocuspocus.host.tools.visual`, which forwards them to the look module that owns them.
 What a headless snapshot carries is the contract in `host/look/base.py` and `look`'s notes:
 every node (`saveChildrenToFile` per manager, which also carries the definitions of
@@ -1174,8 +1177,8 @@ A `hint` or `message` that names a tool names one the call's profile serves (2.0
 25 papercut 1): every such text is built with `tools/migration.py` `hint_tool(name)`, which
 renders the 2.0 call on the 2.0 profiles (`search {kind: "nodes", root}`,
 `inspect {what: "type", target}`, `search {kind: "types", query}`,
-`inspect {what: "problems"}`, `look`, an `edit` `set` or `create` op) and keeps the 1.4
-name on `compat_1x`, and leaves out a clause whose tool the profile lacks (`cook` on
+`inspect {what: "problems"}`, `look`, an `edit` `set` or `create` op; 2.0.x kept the
+1.4 name on `compat_1x`), and leaves out a clause whose tool the profile lacks (`cook` on
 `minimal`). The host reads the profile from the request envelope (the bridge's), else its
 own. `tests/unit/test_hint_profiles.py` checks a fixture of errors in every profile.
 
@@ -1228,7 +1231,7 @@ src/hocuspocus/
   tools/                       # shared by host and bridge; stdlib only
     spec/                      # one module per tool exporting SPEC, and ORDER (§3.5)
     catalog.py                 # loads the specs; profile membership
-    profiles.py                # the profile names (minimal, core, full, compat_1x)
+    profiles.py                # the profile names (minimal, core, full); removed names read as full
     migration.py               # removed 1.4 tool -> its 2.0 replacement
     errors.py                  # error codes + ToolError
     docs.py                    # renders docs/tools.md and docs/redesign/budget.md; example validator
@@ -1342,14 +1345,14 @@ only it. `conftest.py` finds hython via
 
 | Tier | Runner | Scope | Budget |
 |---|---|---|---|
-| `tests/unit` | system Python | catalogue integrity (every spec has an impl, schema, annotations, ≤ 60-word description, ≤ 12-word argument descriptions, passing examples; `tools/list` within the §4.1 caps per profile and mode; `compat_1x` byte-identical to the 1.4 goldens), bridge instance selection, routing and ledger with a fake host, resources and etags, offline behaviour, error mapping, budget truncation, config parsing, the guide size, `cli` path resolution | < 10 s |
+| `tests/unit` | system Python | catalogue integrity (every spec has an impl, schema, annotations, ≤ 60-word description, ≤ 12-word argument descriptions, passing examples; `tools/list` within the §4.1 caps per profile and mode and byte-identical to its golden), bridge instance selection, routing and ledger with a fake host, resources and etags, offline behaviour, error mapping, budget truncation, config parsing, the guide size, `cli` path resolution | < 10 s |
 | `tests/integration` | `hython -m pytest` | in-process host: one `hou` session per run, `hipFile.clear()` per test, every tool exercised against real nodes; the idioms in §5 each have a test; the transaction engine, `inspect`/`search` byte identity with the 1.4 reads (`detail: full`) and their compact projections, the look backends | fast (default) < 90 s; `slow` about 3 min |
 | `tests/e2e` | system Python spawning hython | official `mcp` client → `hocuspocus-mcp` stdio → `hython -m hocuspocus.host` on an ephemeral port with an isolated `HOUDINI_USER_PREF_DIR` and a neutral cwd: a stdio round trip, review 06 tasks 2, 3, 4, 6 and 9 as one scripted scenario, a bridge launch that checks the work dir, two Houdinis | < 60 s |
 | `tests/workloads` (2.0) | system Python spawning hython (`--runworkloads`) | the evaluation workloads as scripts, each against its budget (below) | about 1 min; budget 12 min |
 | `tests/integration/test_parity_gui.py` (2.0, `gui`, `--rungui`) | system Python launching `houdinifx` with isolated prefs | the GUI column of the parity matrix (below) | about 30 s |
 | GUI (manual) | checklist | package loads in `houdinifx`, autostart, viewer look; run before a release and logged in `docs/redesign/progress.md` | — |
 
-**The workloads tier** (2.0, spec-2.0 §5.2, D42). `tests/workloads/` scripts the
+**The workloads tier** (2.0, spec-2.0 §5.2, D42). `tests/workloads/v2/` scripts the
 evaluations that measured 1.x: the city build (review 12), the scorecard twelve (review
 21), a 200-call soak (review 22), the FX cache (review 20) and the Vellum-to-USD round trip
 (review 24). One headless host and one official `mcp` client session to the stdio bridge
@@ -1358,7 +1361,9 @@ bytes, text bytes (the JSON the model reads; images counted apart), time and `is
 per workload the calls, text bytes, largest call, wall time and time to the first image.
 `tests/workloads/budgets.json` holds `calls`, `text_bytes`, `max_call_bytes` and `wall_s`
 per workload, recorded from 1.4 (city build 21 calls and 20.8 KB; scorecard twelve 49
-calls and 28.2 KB; soak 200 calls and 100.4 KB; FX cache 13 calls; Vellum USD 14 calls). A
+calls and 28.2 KB; soak 200 calls and 100.4 KB; FX cache 13 calls; Vellum USD 14 calls);
+2.1 removed the 1.4 workloads with `compat_1x` (D46) and keeps those numbers as the
+baseline. `tests/workloads/v2/budgets.json` holds the 2.0 budgets. A
 workload fails when any total is more than 15 % over its budget, or on any error it did not
 expect. A change that raises bytes or calls per workload says why in its commit (principle
 13) and records the new budget with `--update-budgets`. The tier runs on the Houdini
@@ -1387,7 +1392,7 @@ pref dir per run; clean interpreter exit. CI: GitHub Actions `windows-latest` an
 portability audit, review 27); a self-hosted Windows runner labelled
 `houdini` runs integration (the fast set, then `-m slow`) + e2e nightly, on manual dispatch and on PRs labelled
 `houdini` (`houdini.yml`). The workloads tier is a step of `houdini.yml`, and its measurements are
-uploaded as an artifact (`tests/workloads/last_run.json`).
+uploaded as an artifact (`tests/workloads/v2/last_run.json`).
 
 ---
 
@@ -1414,10 +1419,15 @@ integration test + regenerate docs and the budget report, release steps), `CHANG
 1. The default profiles (`minimal`, `core`, `full`) serve the 2.0 surface. The 18 1.4
    tools without a 2.0 profile (Appendix A) answer `invalid_argument` there, with the
    replacement in the hint (`tools/migration.py`).
-2. `profile = "compat_1x"` serves the 1.4 catalogue (35 tools, 1.4 schemas, results,
-   prompts, instructions and resources) on the 2.0 engines, so a 1.4 client script runs
-   unchanged (M3 exit). It is served for the 2.0.x releases; 2.1 removes it, together with
-   the `v2` profile alias and, once Houdini 22.5 is the floor, the OpenGL ROP backend.
+2. `profile = "compat_1x"` served the 1.4 catalogue (35 tools, 1.4 schemas, results,
+   prompts, instructions and resources) on the 2.0 engines for the 2.0.x releases, so a
+   1.4 client script ran unchanged (M3 exit). (2.1, D46) It is removed, together with the
+   `v2` profile alias, the 18 1.4 tools' specs and host tools, the 1.4 resources
+   (`houdini://node/{path}/parms`, `/geo`, `nodetype/{category}/{name}`, `job/{id}`), the
+   1.4 prompts, instructions and guide, and the 1.4 `tools/list` caps; either name in the
+   config reads as `full` with a warning (§3.7). The 1.4 read engines stay as the host
+   functions `inspect` and `search` run. The OpenGL ROP backend of `look` stays until
+   Houdini 22.5 is the floor.
 3. Job ids are opaque ledger ids on the 2.0 profiles; `<pid>-<id>` ids are still accepted
    everywhere. `events` cursors (`next_since`, `<pid>:<seq>`) are unchanged.
 4. The call protocol stays `hp/v1` (§3.4): a 1.4 bridge and a 2.0 host still talk.
@@ -1496,13 +1506,14 @@ bible (tag `v1.4.0`). D35 to D44 are the 2.0 decisions, D45 on the 2.1 ones.
 - **D36** (2.0) Reads are resources with ETags and subscriptions, and `inspect`/`search` return the same bytes for clients that never read resources (§3.10, §4.4). *Eleven read schemas cost `tools/list` bytes on every session; an etag lets a client skip unchanged reads.*
 - **D37** (2.0) A bridge ledger (SQLite) remembers instances with names and roles, jobs with opaque ids and launches across bridge restarts; the registry stays the authority on what is live (§3.8). *Jobs and exited Houdinis were forgotten on every bridge restart, and pid-tagged ids leaked the routing into the agent's vocabulary.*
 - **D38** (2.0) One picture tool, `look`, chooses the backend from `quality` (draft, lit, final) and `target`; `viewport_capture` stays only in `compat_1x` (§8). *Four capture sources behind one argument made the agent pick a renderer instead of asking a question.*
-- **D39** (2.0) `compat_1x` serves the 1.4 catalogue on the 2.0 engines for one minor release (2.0.x); 2.1 removes it (§13). *1.x client scripts keep running through the cut-over without keeping two engines.*
+- **D39** (2.0) `compat_1x` serves the 1.4 catalogue on the 2.0 engines for one minor release (2.0.x); 2.1 removes it (§13; done, D46). *1.x client scripts keep running through the cut-over without keeping two engines.*
 - **D40** (2.0) The default profile is `core` with 18 tools; `minimal` is 10 and `full` 21 (§4.1). *The 1.4 default listed 31 tools for the work the 2.0 core does with 18.*
 - **D41** (2.0) The catalogue is one spec module per tool; `docs/tools.md`, `hocuspocus://tools` and the budget report are generated from it (§3.5). *Hand-kept copies drifted; one object per tool makes the docs and the budget a build step.*
 - **D42** (2.0) The evaluation workloads are a test tier with recorded budgets, failing on a 15 % regression (§11). *Every review measured calls and bytes per task by hand once per release; a regression is now a red build.*
 - **D43** (2.0) GUI/headless behaviour is a documented matrix with a tested GUI column; a gap is resolved as same or as a documented mode (§11, `docs/parity.md`). *Differences such as a read dirtying the GUI hip were found by accident.*
-- **D44** (2.0) Budget policy: the 2.0 `full` profile's `tools/list` is capped at 24,000 B (`text`) and 34,000 B (`both`); `compat_1x` keeps the 1.4 caps of 32,000 B and 44,000 B (§4.1). *The 2.0 surface fits in less, and a cap set at the new size keeps it there; the 1.4 catalogue cannot shrink without breaking the scripts it exists for.*
+- **D44** (2.0) Budget policy: the 2.0 `full` profile's `tools/list` is capped at 24,000 B (`text`) and 34,000 B (`both`); `compat_1x` keeps the 1.4 caps of 32,000 B and 44,000 B (§4.1; 2.1 removed those with it, D46). *The 2.0 surface fits in less, and a cap set at the new size keeps it there; the 1.4 catalogue cannot shrink without breaking the scripts it exists for.*
 - **D45** (2.1) During a call in a GUI session the modal `hou.ui` dialogs are stubs that raise `ui_required`, and a call that reached one fails, rolled back, even when a callback swallowed the refusal; a load script's refusal is a warning on the loaded scene (§3.2, §9). *A dialog blocked Houdini's main thread until a person clicked, where the `houdini_python` deadline cannot fire, and every later call returned `houdini_busy`; headless the same code already failed. The refusal is a `SystemExit` as well because Houdini shows a blocking error window for any other exception from a parm callback.*
+- **D46** (2.1) The `compat_1x` profile and the `v2` alias are removed with the 18 1.4 tools, the 1.4 resources, prompts, instructions and caps (D39, §13). A 1.4 tool name answers `invalid_argument` with its 2.0 replacement in `hint` on every profile, from the migration table kept as data (`tools/migration.py`), in the bridge and in the host, before its arguments are read. `profile = "compat_1x"` or `"v2"` (toml or `HOCUSPOCUS_PROFILE`) is read as `full` with a warning, which both processes log and `houdini_status` returns in `warnings`; it is not refused (§3.7, §4.1). *Refusing would leave a client with a server that never starts and the reason in a log it does not read: the host's config already ignores a bad value with a warning because start-up must never raise into Houdini, and a bridge that exits on start shows only a dead server. `full` is the nearest profile to both names (`v2` already read as `full`; `compat_1x` was 1.4's `full`), so every 2.0 tool the old script could reach is there, and each 1.4 call it still makes is answered with the call to make instead.*
 
 ### Verified deviations (M5 reconciliation, 1.0; still true)
 
@@ -1511,14 +1522,14 @@ Facts found while implementing, now reflected above:
 - GUI autostart lives at `houdini/scripts/python/uiready.py` (§10.1).
 - `hasUnsavedChanges()` is always `True` in hython; the host tracks dirtiness headless (§3.2).
 - A second OpenGL ROP render in one hython segfaults, and so does a Flipbook ROP render after a Flipbook ROP that rendered was deleted; headless, both render in a child hython (§8).
-- `undo`, `time`, `selection`, `hda`, `cook`, `pdg`, `render`, `job`, `viewport_capture` register with `scene=False` (§4.1).
+- `undo`, `time`, `hda`, `cook`, `pdg`, `render`, `job`, `look` register with `scene=False` (§4.1); so did 1.4's `selection` and `viewport_capture`.
 - One `hocuspocus.toml` configures host and bridge; `HOCUSPOCUS_*` env wins (§3.7).
 - `setChildrenFromData` skips unknown types and parms silently, defaults `clear_content=True`, and puts inputs without `to_index` on input 0 (§5.16).
 - `hou.setFps` rescales the frame range unless told not to (§5.17).
 - (1.x) The surface was 35 tools, 31 in `core` (Appendix A, D4).
 - All cursors, including `geo_read.next_cursor`, are opaque strings (§4.1).
 - (2.0) No `/hp/v2/call` or `/hp/v2/jobs` route was needed: the call shape did not change and the bridge polls progress (§3.4, §7).
-- (2.0) The surface is 18 tools in `core`, 21 in `full`, 10 in `minimal`, and the 35 1.4 tools in `compat_1x` (§4.7, D40).
+- (2.0) The surface is 18 tools in `core`, 21 in `full`, 10 in `minimal`, and the 35 1.4 tools in `compat_1x` (§4.7, D40); 2.1 removed `compat_1x` (D46).
 
 ---
 
@@ -1539,15 +1550,17 @@ but 2.0 is qualified on Windows.
 
 ---
 
-## Appendix A. 1.x surface (`compat_1x`)
+## Appendix A. The 1.4 contract (1.x surface)
 
-The `compat_1x` profile (D39) serves the 1.4 `full` catalogue: 35 tools with their 1.4
-schemas, annotations and results, run on the 2.0 engines (the mutations as transaction
-plans, §3.9; `viewport_capture` on the look backends, §8). It is served for the 2.0.x
-releases and removed in 2.1. [`docs/migration-2.0.md`](migration-2.0.md) maps every tool
-below to its 2.0 replacement with a before/after example. This appendix keeps the 1.4
-contract of the tools 2.0 does not list, because the 2.0 tools reference it: `inspect`
-returns these reads' results byte for byte, and `edit`'s ops take these tools' fields.
+The reference for the 1.4 tools 2.0 does not list. In 2.0.x the `compat_1x` profile (D39)
+served the 1.4 `full` catalogue: 35 tools with their 1.4 schemas, annotations and
+results, run on the 2.0 engines (the mutations as transaction plans, §3.9;
+`viewport_capture` on the look backends, §8). 2.1 removed it (D46): each of these names
+now answers `invalid_argument` with its replacement in `hint`.
+[`docs/migration-2.0.md`](migration-2.0.md) maps every tool below to its 2.0 replacement
+with a before/after example. This appendix keeps the 1.4 contract because the 2.0 tools
+reference it: `inspect` with `detail: full` returns these reads' results (the 1.4 read
+engines are host functions behind it), and `edit`'s ops take these tools' fields.
 The 1.4 bible is at git tag `v1.4.0`.
 
 **Profiles (1.3/1.4).** `minimal ⊂ core ⊂ full`: `core` 31 tools, `full` 35 (adds `hda`,
@@ -1555,7 +1568,7 @@ The 1.4 bible is at git tag `v1.4.0`.
 `hip_open`, `hip_save`, `node_find`, `node_info`, `node_create`, `node_connect`,
 `parm_get`, `parm_set`, `cook`, `geo_info`, `viewport_capture`, `houdini_python`).
 `tools/list` at 1.4.0: 14.4/27.4/30.8 KB in `text` and 20.6/37.0/40.4 KB in `both`
-(minimal/core/full); `compat_1x` is 1.4's `full`. Annotations: `node_delete`, `hip_new`,
+(minimal/core/full); `compat_1x` was 1.4's `full`. Annotations: `node_delete`, `hip_new`,
 `hip_open`, `houdini_python` destructive; `parm_set`, `node_connect`, `node_edit`, `time`,
 `selection`, `cook`, `job`, `viewport_capture` idempotent. `scene=False`: `undo`, `time`,
 `selection`, `hda`, `cook`, `pdg`, `render`, `job`, `viewport_capture`. Job ids are the
@@ -1594,17 +1607,18 @@ is captured; `flipbook_rop` (alias `opengl_rop`, its 1.3 name) tries the Flipboo
 OpenGL ROP (each only where this Houdini has the type) and a temporary Karma CPU ROP in the
 host; headless a ROP whose render process crashes hands the frame to the next, in the GUI a
 ROP that writes no image does and there is no Karma step. `source_used` names the one that
-ran (`viewer`, `flipbook_rop`, `opengl_rop` or `karma`). In `compat_1x` it runs on the
-look backends with exactly this policy (`host/look/select.py` `capture_plan`).
+ran (`viewer`, `flipbook_rop`, `opengl_rop` or `karma`). In 2.0.x's `compat_1x` it ran
+on the look backends with exactly this policy (`capture_plan`, removed in 2.1).
 
 ### A.3 Resources, prompts and instructions (1.4)
 
-`compat_1x` lists the 1.4 resources: `houdini://status`, `houdini://outline`
+2.0.x's `compat_1x` listed the 1.4 resources (2.1 removed the ones 2.0 does not serve):
+`houdini://status`, `houdini://outline`
 (`network_describe {root: "/", format: "outline", depth: 2}`), `houdini://node/{path}`,
 `houdini://node/{path}/parms`, `houdini://node/{path}/geo`,
 `houdini://nodetype/{category}/{name}`, `houdini://job/{id}` (routed to the Houdini in the
 job id), `hocuspocus://guide` and `hocuspocus://tools`; no etags or subscriptions. Its
-prompts are the four 1.4 ones, `inspect_scene`, `build_sop_chain` (ends with
+prompts were the four 1.4 ones, `inspect_scene`, `build_sop_chain` (ends with
 `viewport_capture {"fit": "all"}`), `debug_red_node` and `turntable_preview`; its
-instructions and guide are the 1.4 texts (`INSTRUCTIONS_1X`, `RESOURCES_1X` and
-`RECIPES_1X` in `bridge/instructions.py`).
+instructions and guide were the 1.4 texts (`INSTRUCTIONS_1X`, `RESOURCES_1X` and
+`RECIPES_1X` in `bridge/instructions.py`, removed in 2.1).
