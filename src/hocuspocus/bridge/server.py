@@ -37,7 +37,7 @@ from .config import BridgeConfig
 from .instructions import PROMPT_DEFAULTS, PROMPTS, instructions_for
 from .launch import Launcher
 from .ledger import Ledger, is_ledger_id, looks_like_ledger_id
-from .local_tools import LOCAL_TOOLS
+from .local_tools import DOC_WHATS, LOCAL_TOOLS, inspect_docs
 from .validate import ARG_RENAMES, coerce_integers, rename_hint, shape_hint, validate
 
 EXIT_GRACE_S = 1.5
@@ -935,6 +935,8 @@ class Bridge:
                         "label": connected.get("label", ""),
                     }
                 return True, result, meta
+            if name == "inspect" and args.get("what") in DOC_WHATS:
+                return True, inspect_docs(self, args), {}  # no Houdini needed (D51)
             return self.forward(name, args, request_id)
         except ToolError as exc:
             return False, exc.to_dict(), {}

@@ -10,6 +10,8 @@ from collections.abc import Callable
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
+from ..tools import migration
+from ..tools.docs import tool_section
 from ..tools.errors import ToolError
 from ..version import __version__
 from . import instances as registry
@@ -567,3 +569,74 @@ LOCAL_TOOLS: dict[str, Callable[[Bridge, dict[str, Any]], dict[str, Any]]] = {
     "houdini_status": houdini_status,
     "houdini_connect": houdini_connect,
 }
+
+
+# -- inspect {what: guide | tool} (2.1, D51) -------------------------------------------
+
+DOC_WHATS = ("guide", "tool")
+"""``inspect`` reads the bridge answers itself, with or without a Houdini: the guide and
+one tool's reference, for clients that cannot read MCP resources (review 26 P1 #10)."""
+
+
+def _text_etag(text: str) -> str:
+    import hashlib
+
+    return "bridge:" + hashlib.blake2b(text.encode("utf-8"), digest_size=8).hexdigest()
+
+
+def inspect_docs(bridge: Bridge, args: dict[str, Any]) -> dict[str, Any]:
+    """``inspect {what: "guide", target?: topic}``: the guide, or the section a topic names
+    (``{etag, text}``, plus ``topics`` without a target); ``inspect {what: "tool", target:
+    name}``: that tool's reference, the text ``docs/tools.md`` and ``hocuspocus://tools``
+    have for it. Any other option is ``invalid_argument``."""
+    import difflib
+
+    from .instructions import guide_section, guide_sections, guide_text
+
+    what = args.get("what")
+    target = args.get("target")
+    extra = sorted(k for k in args if k not in ("what", "target"))
+    if extra:
+        raise ToolError(
+            "invalid_argument",
+            f"what: {what} takes only target; got {', '.join(extra)}.",
+            hint='inspect {what: "guide", target: "<topic>"} or {what: "tool", target: "<name>"}.',
+        )
+    if target is not None and (not isinstance(target, str) or not target.strip()):
+        raise ToolError("invalid_argument", "'target' must be a non-empty string.")
+    if what == "guide":
+        if target is None:
+            text = guide_text()
+            topics = [title for title, _ in guide_sections()]
+            return {"etag": _text_etag(text), "text": text, "topics": topics}
+        found = guide_section(target)
+        if found is None:
+            titles = [title for title, _ in guide_sections()]
+            raise ToolError(
+                "invalid_argument",
+                f"No guide topic {target!r}.",
+                hint="Pass one of candidates as target, or omit target for the whole guide.",
+                candidates=titles,
+            )
+        return {"etag": _text_etag(found[1]), "text": found[1]}
+    names = [spec.name for spec in bridge.tools]
+    if target is None:
+        raise ToolError(
+            "invalid_argument",
+            "what: tool needs target, a tool name.",
+            hint='inspect {what: "tool", target: "edit"}',
+            candidates=names,
+        )
+    spec = next((s for s in bridge.tools if s.name == target.strip()), None)
+    if spec is None:
+        replacement = migration.replacement(target.strip())
+        close = difflib.get_close_matches(target.strip(), names, n=3, cutoff=0.5)
+        raise ToolError(
+            "invalid_argument",
+            f"No tool {target!r} in this profile.",
+            hint=(f"1.4's {target.strip()} is {replacement} in 2.x." if replacement else None)
+            or "Pass a tool name from candidates.",
+            candidates=close or names,
+        )
+    text = tool_section(spec)
+    return {"etag": _text_etag(text), "text": text}

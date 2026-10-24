@@ -638,18 +638,21 @@ def _describe_tuple(
     return out
 
 
-def summarize_parm(parm_or_tuple: Any, *, frame: float | None = None) -> dict[str, Any]:
+def summarize_parm(
+    parm_or_tuple: Any, *, frame: float | None = None, full_strings: bool = False
+) -> dict[str, Any]:
     """Compact ``{name, value, raw?, expression?, language?, keyed?, locked?, menu_token?,
     is_default}`` for a ``hou.Parm`` or ``hou.ParmTuple``.
 
     A tuple gives lists for ``value``/``raw``, ``expressions: {component: {expression,
     language}}`` and ``keyed: [component names]``. ``raw`` is left out when it equals
-    ``value``; strings over 200 characters are ``{elided, head}``.
+    ``value``; strings over 200 characters are ``{elided, head}`` unless
+    ``full_strings`` (``inspect what: node``, 2.1).
     """
     target = _normalize(parm_or_tuple)
     if _is_tuple(target):
-        return _describe_tuple(target, frame=frame, include=None)
-    return _describe_parm(target, frame=frame, include=None)
+        return _describe_tuple(target, frame=frame, include=None, full_strings=full_strings)
+    return _describe_parm(target, frame=frame, include=None, full_strings=full_strings)
 
 
 # -- resolving --------------------------------------------------------------------

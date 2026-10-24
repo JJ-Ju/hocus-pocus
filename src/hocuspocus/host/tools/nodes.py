@@ -482,7 +482,9 @@ def _is_multiparm_block(template: Any) -> bool:
         return False
 
 
-def parm_rows(node: Any, include_defaults: bool) -> list[dict[str, Any]]:
+def parm_rows(
+    node: Any, include_defaults: bool, full_strings: bool = False
+) -> list[dict[str, Any]]:
     import hou
 
     from .parms import summarize_parm  # lazy: parms imports this module
@@ -503,7 +505,7 @@ def parm_rows(node: Any, include_defaults: bool) -> list[dict[str, Any]]:
                 continue
         except Exception:
             continue
-        rows.append(summarize_parm(parm_tuple))
+        rows.append(summarize_parm(parm_tuple, full_strings=full_strings))
     return rows
 
 
@@ -514,6 +516,7 @@ def node_block(
     include_defaults: bool = False,
     recurse_locked: bool = False,
     problems: dict[str, Any] | None = None,
+    full_strings: bool = False,
 ) -> dict[str, Any]:
     """The ``node_info`` block for one node (also returned by mutating node tools)."""
     sections = set(include)
@@ -530,7 +533,7 @@ def node_block(
     if "outputs" in sections:
         out["outputs"] = output_rows(node)
     if "parms" in sections:
-        out["parms"] = parm_rows(node, include_defaults)
+        out["parms"] = parm_rows(node, include_defaults, full_strings)
     if "errors" in sections or problems is not None:
         out.update(problems if problems is not None else collect_problems(node, cook=False))
     if _is_locked_hda(node) or inside_locked(node):
@@ -1147,6 +1150,7 @@ def node_info(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
             hint="Sections: " + ", ".join(NODE_INFO_SECTIONS) + ".",
         )
     include_defaults = arg_bool(args, "include_defaults", False)
+    full_strings = arg_bool(args, "full_strings", False)
     recurse_locked = arg_bool(args, "recurse_locked", False)
     nodes = []
     for path in paths:
@@ -1160,7 +1164,11 @@ def node_info(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
                 hint="Pass recurse_locked: true to read inside it.",
             )
         block = node_block(
-            node, include, include_defaults=include_defaults, recurse_locked=recurse_locked
+            node,
+            include,
+            include_defaults=include_defaults,
+            recurse_locked=recurse_locked,
+            full_strings=full_strings,
         )
         if node.type().category().name() == "Top":
             from .pdg import pdg_state  # lazy: TOP nodes only

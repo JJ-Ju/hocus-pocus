@@ -64,8 +64,9 @@ scene is cleared or loaded. Hip tools refuse to discard unsaved work unless told
 Houdini from `houdini_connect {launch}` usually closes with this server \
 (`launched.outlives_server` says): `hip_save` first, or attach by pid to one started with \
 `hocuspocus launch`. Spare parms: `edit` `node` op `spare_parms`. `houdini://outline` is \
-the scene as a compact tree, `hocuspocus://guide` has recipes, `hocuspocus://tools` the \
-full reference."""
+the scene as a compact tree. Recipes: `inspect {what: "guide", target?: topic}`; a tool's \
+reference: `inspect {what: "tool", target: name}` (also `hocuspocus://guide`, \
+`hocuspocus://tools`)."""
 
 RESOURCES = """## Resources
 
@@ -75,7 +76,6 @@ Each is the JSON of a tool call (`inspect`, `search`, `houdini_status`) with
 `jobs`, `problems`, `events`, and `node/`, `network/`, `geo/`, `image/`, `stage/`,
 `type/{category}/{name}`, `types{?q}`. Subscribing to `status`, `jobs`, `events` or
 `node/{path}` sends `notifications/resources/updated` when the etag changes.
-`hocuspocus://tools` is the large tool reference: read one tool's notes when surprised.
 
 """
 
@@ -162,6 +162,39 @@ GUIDE_HEADER = """\
 def instructions_for() -> str:
     """The server ``instructions`` (BIBLE §4.8)."""
     return INSTRUCTIONS
+
+
+def guide_sections() -> list[tuple[str, str]]:
+    """``(title, text)`` for every ``##`` and ``###`` heading of :func:`guide_text`: a
+    section runs to the next heading of its level or above (``inspect {what: "guide",
+    target}``, 2.1, D51)."""
+    lines = guide_text().splitlines()
+    heads = [
+        (i, len(line) - len(line.lstrip("#")), line.lstrip("#").strip())
+        for i, line in enumerate(lines)
+        if line.startswith(("## ", "### "))
+    ]
+    out = []
+    for n, (i, level, title) in enumerate(heads):
+        end = next((j for j, lv, _ in heads[n + 1 :] if lv <= level), len(lines))
+        out.append((title, "\n".join(lines[i:end]).strip() + "\n"))
+    return out
+
+
+def guide_section(topic: str) -> tuple[str, str] | None:
+    """The guide section a topic names: a title equal to it, else the first title that
+    contains it, else the first that has every word of it (any case); ``None`` if none."""
+    wanted = " ".join(topic.lower().split())
+    sections = guide_sections()
+    for match in (
+        lambda title: title == wanted,
+        lambda title: wanted in title,
+        lambda title: all(word in title for word in wanted.split()),
+    ):
+        for title, text in sections:
+            if match(title.lower()):
+                return title, text
+    return None
 
 
 def guide_text() -> str:
