@@ -34,9 +34,9 @@ from typing import Any
 
 import pytest
 
-# The 1.4 scenario's hython fixtures and recorder (tests/e2e is on sys.path under pytest's
+# The scenarios' hython fixtures and recorder (tests/e2e is on sys.path under pytest's
 # default import mode); headless_host and hython are fixtures, used by name below.
-from test_scenario_authoring import SRC, Recorder, headless_host, hython  # noqa: F401
+from scenario_host import SRC, Recorder, headless_host, hython  # noqa: F401
 
 pytestmark = pytest.mark.e2e
 
@@ -174,7 +174,8 @@ async def _scenario(check: Checker) -> None:
         ("viewport_capture", {}, "look"),
     ):
         refused = await check.mistake(name, args, "invalid_argument")
-        assert refused["hint"].startswith(f"In 2.0 use {use}"), refused
+        assert refused["hint"].startswith(f"Use {use}"), refused
+        assert "2.1 removed it" in refused["message"], refused
 
     # 6. 1.4 inspect arguments -------------------------------------------------------------------
     for wrong in ("path", "node_path"):
