@@ -132,7 +132,8 @@ anything. Output shortened; [`docs/tools.md`](docs/tools.md) has the real schema
 
 ## Tools
 
-There are 18 tools in the default `core` profile. `full` adds 3, and `minimal` lists 10
+There are 19 tools in the default `core` profile (2.1 adds `hda`). `full` adds 2, and
+`minimal` lists 10
 for clients with a small context. Each is documented in [`docs/tools.md`](docs/tools.md)
 (and the `hocuspocus://tools` resource), generated from one spec file per tool.
 
@@ -145,7 +146,8 @@ for clients with a small context. Each is documented in [`docs/tools.md`](docs/t
 | Cook, render, look | `cook` (incl. `profile` and `frame_range`), `render`, `look` (`quality`: draft, lit, final) |
 | Code and jobs | `houdini_python`, `job` |
 | State | `undo`, `time` |
-| `full` profile only | `hda`, `pdg`, `events` |
+| Digital assets | `hda` (create, save, unlock, match, install, uninstall, reload, list, info) |
+| `full` profile only | `pdg`, `events` |
 
 The bridge also serves resources and prompts, and `tools/list` works with no Houdini
 running:

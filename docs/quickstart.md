@@ -279,7 +279,7 @@ Nothing needs configuring for this guide. Two settings in
 win) matter most for scripts and other clients:
 
 ```toml
-profile = "full"            # also list and allow hda, pdg and events (default "core"; "minimal" lists 10 tools)
+profile = "full"            # also list and allow pdg and events (default "core"; "minimal" lists 10 tools)
 result_content = "both"     # also send structuredContent (default "text")
 ```
 
@@ -345,7 +345,7 @@ replacement (`inspect what: node` here); [`migration-2.0.md`](migration-2.0.md) 
 them all with before/after calls. The `compat_1x` profile that ran 1.4 scripts unchanged
 in 2.0.x is gone in 2.1.
 
-**`invalid_argument`: "hda is a full-profile tool, and this Houdini's host runs the core profile"**
+**`invalid_argument`: "pdg is a full-profile tool, and this Houdini's host runs the core profile"**
 
 The bridge lists the `full` tools but the host in Houdini still runs `core`. Put
 `profile = "full"` in `hocuspocus.toml`, which both read (or set `HOCUSPOCUS_PROFILE=full`
