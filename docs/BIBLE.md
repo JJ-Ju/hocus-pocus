@@ -1246,7 +1246,7 @@ docs/
   redesign/README.md  redesign/progress.md  redesign/spec-2.0.md  redesign/budget.md (generated)
   redesign/review/*.md  redesign/evidence/
 README.md  LICENSE  CHANGELOG.md
-.github/workflows/ci.yml  houdini.yml
+.github/workflows/ci.yml  unit.yml  houdini.yml
 ```
 
 The repo root is **not** on `HOUDINI_PATH`: hython puts `$HIP` (its cwd) on
@@ -1363,7 +1363,9 @@ session; the headless column is the integration tier (with
 Hygiene rules: never write into the repo at test time; never use port 37219; isolated
 pref dir per run; clean interpreter exit. CI: GitHub Actions `windows-latest` and
 `ubuntu-latest` run `ruff check`, `ruff format --check`, the unit tier and a
-`docs/tools.md` freshness check (`ci.yml`); a self-hosted Windows runner labelled
+`docs/tools.md` freshness check (`ci.yml`); (2.1) `ubuntu-latest`, `macos-latest` and
+`windows-latest` run ruff and the unit tier for Python 3.11 to 3.13 (`unit.yml`; the
+portability audit, review 27); a self-hosted Windows runner labelled
 `houdini` runs integration (the fast set, then `-m slow`) + e2e nightly, on manual dispatch and on PRs labelled
 `houdini` (`houdini.yml`). The workloads tier is a step of `houdini.yml`, and its measurements are
 uploaded as an artifact (`tests/workloads/last_run.json`).

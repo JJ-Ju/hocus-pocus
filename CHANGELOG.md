@@ -22,6 +22,20 @@ one for the 2.0.x releases.
   to have it closed if it keeps happening: measured, nothing HocusPocus sends runs while a
   user's modal dialog is open. The guide recipe "GUI sessions: never open a dialog" says
   both (8 bytes shorter).
+- CI: `.github/workflows/unit.yml` runs ruff and the unit tier on Linux, macOS and
+  Windows for Python 3.11 to 3.13 (portability audit,
+  `docs/redesign/review/27-portability.md`).
+
+### Fixed
+
+- Linux and macOS: a launched Houdini that exited or crashed stayed a zombie child of the
+  bridge and still counted as alive, so a call it dropped answered `delivery_unknown`
+  instead of `houdini_offline`, with no `instance_lost`. Zombies now count as dead.
+- Linux and macOS: a headless launch also accepts a host that registers under a child pid
+  of the `hython` wrapper script, if its registry entry names this bridge as its launcher.
+  Before, such a launch timed out.
+- The headless host shuts down cleanly on SIGHUP (a closing terminal) as on SIGTERM, and
+  removes its registry entry.
 
 ## 2.0.0 (2026-10-14)
 
