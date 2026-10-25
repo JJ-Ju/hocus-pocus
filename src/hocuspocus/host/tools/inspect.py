@@ -47,6 +47,8 @@ BRIDGE_WHATS = frozenset({"guide", "tool"})
 and one tool's reference, for clients that cannot read MCP resources."""
 
 GEO_READ_OPTIONS = frozenset({"class", "attribs", "start", "count", "group", "stats", "cursor"})
+GEO_GROUP_OPTIONS = frozenset({"group_by", "attribs", "group", "start", "count", "cursor"})
+"""``geo`` with ``group_by`` (2.1, D71): stats per value of an attribute."""
 
 OPTIONS: dict[str, frozenset[str]] = {
     "node": frozenset(
@@ -68,7 +70,9 @@ OPTIONS: dict[str, frozenset[str]] = {
         {"depth", "include_defaults", "include_positions", "recurse_locked", "cursor"}
     ),
     "outline": frozenset({"depth", "recurse_locked", "cursor", "wiring", "detail"}),
-    "geo": frozenset({"frame", "attributes", "rows", "full_strings", "detail"}) | GEO_READ_OPTIONS,
+    "geo": frozenset({"frame", "attributes", "rows", "full_strings", "detail"})
+    | GEO_READ_OPTIONS
+    | GEO_GROUP_OPTIONS,
     "image": frozenset({"frame"}),
     "stage": frozenset(
         {"prim", "depth", "include", "attribs", "summary", "time", "limit", "cursor"}
@@ -124,6 +128,7 @@ def _impl(name: str) -> Callable[[dict[str, Any], HostContext], Any]:
         "network_describe": network.network_describe,
         "geo_info": geo.geo_info,
         "geo_read": geo.geo_read,
+        "geo_groups": geo.geo_groups,
         "usd_stage": usd.usd_stage,
         "problems": cook.problems,
         "node_type_info": types.node_type_info,
@@ -247,18 +252,33 @@ def _check_args(what: str, target: Any, options: dict[str, Any]) -> None:
         )
     if what == "outline" and not isinstance(options.get("wiring", False), bool):
         raise bad_arg("'wiring' must be a boolean.")
-    if what == "geo":
+    if what == "geo" and options.get("group_by") is not None:
+        wrong = sorted(set(options) & {"attributes", "class", "stats"})
+        if options.get("rows"):
+            wrong.insert(0, "rows")
+        if wrong:
+            raise bad_arg(
+                f"{', '.join(wrong)} {'is' if len(wrong) == 1 else 'are'} not an option of "
+                "group_by.",
+                hint="group_by takes attribs (numeric, for min, max and mean per group), group "
+                "(the elements counted), frame, count and cursor.",
+            )
+    elif what == "geo":
         rows = options.get("rows", False)
         if not isinstance(rows, bool):
             raise bad_arg("'rows' must be a boolean.")
-        wrong = sorted(set(options) & (frozenset({"attributes"}) if rows else GEO_READ_OPTIONS))
+        # 2.1 (D76): the summary takes stats and attribs too (the stats of those attributes).
+        summary_only = GEO_READ_OPTIONS - {"stats", "attribs"}
+        wrong = sorted(set(options) & (frozenset({"attributes"}) if rows else summary_only))
         if wrong:
             mode = "rows: true" if rows else "the geo summary (without rows)"
             raise bad_arg(
                 f"{', '.join(wrong)} {'is' if len(wrong) == 1 else 'are'} not an option of {mode}.",
                 hint="rows: true reads values (class, attribs, start, count, group, stats, "
-                "cursor); without it the summary takes attributes.",
+                "cursor); without it the summary takes attributes, stats and attribs.",
             )
+        if options.get("stats") is not None and not isinstance(options["stats"], bool):
+            raise bad_arg("'stats' must be a boolean.")
 
 
 def _glob_match(text: str, pattern: str) -> bool:
@@ -831,7 +851,8 @@ def _scene_read(
     elif what == "geo":
         rows = options.get("rows", False)
         args = {"path": target, **{k: v for k, v in options.items() if k != "rows"}}
-        result = _impl("geo_read" if rows else "geo_info")(args, ctx)
+        engine = "geo_groups" if options.get("group_by") is not None else None
+        result = _impl(engine or ("geo_read" if rows else "geo_info"))(args, ctx)
     elif what == "image":
         _image_check(target)
         result = _impl("geo_info")({"path": target, **options}, ctx)

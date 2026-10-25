@@ -38,7 +38,12 @@ SPEC = ToolSpec(
         "parm (pyrosource initialize), and with value it sets the value first; a plain set "
         "of a menu or toggle with a callback notes that the callback did not run. A string "
         "menu only the node builds (a Copernicus signature) takes a token or label like any "
-        "menu. Ramp keys and values come back at 6 significant digits, without raw. "
+        "menu. A press still running after job_threshold_s (10 s) answers {job_id, state: "
+        "running, running: <parm path>, message} (2.1, D70); job {action: result} returns "
+        "this result when the callback ends, its error if the call failed (a callback "
+        "cannot be interrupted, so cancel leaves it running), and calls that need the main "
+        "thread meanwhile answer houdini_busy naming it, with detail.job_id. edit set and "
+        "create ops and node_create press the same way. Ramp keys and values come back at 6 significant digits, without raw. "
         "raw is left out when it equals value, and long strings are "
         "elided as in inspect parms. Tuples report per-component expressions and the keyed component"
         " names. Type mismatches fail with invalid_value naming the template type and range. "
@@ -104,9 +109,11 @@ SPEC = ToolSpec(
                     },
                     ("path", "wrote_keyframe"),
                 ),
-            }
+            },
+            # A press past job_threshold_s answers as a job instead (2.1, D70).
+            "job_id": _t("string"),
+            "state": _t("string"),
         },
-        ("results",),
     ),
     idempotent=True,
     examples=(

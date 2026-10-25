@@ -73,6 +73,22 @@ Each dropped field was a default, a null, or a copy of a field that stays.
   Commercial. The error names the corrected path.
 - **Karma `render` in a GUI session** waits for the image. 2.0 returned `done` with the
   outputs missing.
+- **A press can answer as a job** (D70). A pressed callback still running after
+  `job_threshold_s` returns `{job_id, state: "running", running}` from `edit`,
+  `parm_set` and `node_create`, without the rows; `job {action: result, job_id}`
+  returns them. A client that read `results` or `nodes` unconditionally should check
+  `state` first, as on `cook` and `render`. `parm_set`'s output schema no longer
+  requires `results`.
+- **`look` can answer as a job** (D75). Past `wait_s` (default 10 s, where 2.0 waited
+  the call's 30 s and then failed) `look` returns `{job_id, state: "running"}`;
+  pass `wait_s: 60` to keep a slow look synchronous. Its output schema no longer
+  requires the picture fields.
+- **Headless Karma `render`** runs in a child hython (D74): about 1.4 s more per call,
+  the scene cooks again there, and a take other than the root or a simulation held
+  only in memory is not carried (a note says so). The ROP in the scene is no longer
+  touched while it renders.
+- **Menu `candidates`** are ranked by similarity to the value and list a menu of up
+  to 50 items whole (D72); 2.0 gave the first 20 in menu order.
 
 ## 4. New, and worth adopting
 
@@ -89,6 +105,11 @@ Each dropped field was a default, a null, or a copy of a field that stays.
 - `edit` flags `material` (VOPs: what a Material Library LOP imports), `unload` and
   `export`; a MaterialX VOP's `signature` takes every signature its definition lists
   (D68).
-- `look {output}` saves the picture to a file.
+- `look {output}` saves the picture to a file, and `look {wait_s}` keeps a long look
+  as a job instead of failing.
+- `inspect {what: "geo", group_by: "surface", attribs: "Cd"}` answers per-value QA
+  questions (counts, triangles, area, bbox, attribute ranges) in one call (D71).
+- `hda {action: "version", path, version: "1.1", switch: "path"}` bumps an asset's
+  version without `houdini_python` (D73).
 - `inspect {what: "guide"}` and `inspect {what: "tool", target}` read the guide and a
   tool's reference without an MCP resource reader.

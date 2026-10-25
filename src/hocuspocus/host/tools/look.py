@@ -19,6 +19,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from hocuspocus.tools.errors import ToolError
+
 from ..dispatch import call_timeout
 from ..look import run, select
 from ..look.base import ROP_LABELS
@@ -81,10 +83,48 @@ def _finish(spec: LookSpec, used: str, plan: select.Plan, info: dict[str, Any]) 
     return finish_capture(job.out_file, size, job.frame, out, job.extra_path)
 
 
+LOOK_JOB_TIMEOUT_S = 3600.0
+"""How long a look may run as a job (2.1, D75): a final Karma look at 1024x768 took more
+than the 30 s a call waits (2.0-vs-2.1 comparison runs)."""
+
+
+def _wait_s(args: dict[str, Any], ctx: HostContext) -> float:
+    wait = args.get("wait_s")
+    if wait is None:
+        return float(ctx.config.job_threshold_s)
+    if isinstance(wait, bool) or not isinstance(wait, int | float) or wait < 0:
+        raise ToolError("invalid_argument", "'wait_s' must be a number >= 0.")
+    return float(wait)
+
+
 @tool("look", scene=False, main_thread=False)
 def look(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
+    """Runs as a job (2.1, D75): the call waits ``wait_s`` (default ``job_threshold_s``)
+    and returns the picture, or ``{job_id, state: "running"}`` whose ``job result`` is the
+    picture, as ``render`` does. A call on Houdini's main thread itself runs inline."""
     spec = parse_look_args(args)
-    timeout_s = float(call_timeout(None) or ctx.config.default_timeout_s)
-    return run.execute(
-        spec, ctx, timeout_s, resolve=resolve_target, choose=select.plan, finish=_finish
+    wait_s = _wait_s(args, ctx)
+
+    def picture(timeout_s: float) -> dict[str, Any]:
+        return run.execute(
+            spec, ctx, timeout_s, resolve=resolve_target, choose=select.plan, finish=_finish
+        )
+
+    if getattr(ctx, "jobs", None) is None or ctx.executor.on_main_thread():
+        return picture(float(call_timeout(None) or ctx.config.default_timeout_s))
+    job = ctx.jobs.start(
+        "look", lambda _job: picture(LOOK_JOB_TIMEOUT_S), label=spec.target or "the display"
     )
+    job.message = f"look {spec.quality}: rendering"
+    job.done_event.wait(wait_s)
+    if job.state == "done":
+        ctx.jobs.discard(job.id)
+        return job.result
+    if job.state in ("failed", "cancelled") and job.error:
+        ctx.jobs.discard(job.id)
+        raise ToolError.from_dict(job.error)
+    status = job.status()
+    status["hint"] = (
+        "Poll with job {action: 'status' | 'result', job_id}; the result is the picture."
+    )
+    return status

@@ -2,20 +2,37 @@
 
 from __future__ import annotations
 
-from ._helpers import ToolSpec, _arr, _enum, _frame, _image, _list, _obj, _on, _out, _s, _t
+from ._helpers import (
+    ToolSpec,
+    _arr,
+    _enum,
+    _frame,
+    _image,
+    _list,
+    _n,
+    _obj,
+    _on,
+    _out,
+    _s,
+    _t,
+)
 
 SPEC = ToolSpec(
     name="look",
     profiles=("minimal", "core", "full"),
     description=(
         "Look at the scene: a PNG (long side at most 1024). target: an object, SOP, LOP, Cop "
-        "node or ROP (default the display). quality draft is a Flipbook ROP (headless too), "
+        "node or ROP (default the display). quality draft is a Flipbook ROP, "
         "lit adds the scene's lights (Karma when there are none), final renders Karma. "
-        "Returns backend_used, chain, scene, context, camera_used, notes. Leaves no nodes, "
-        "undo step or dirty flag."
+        "Returns backend_used, chain, scene, camera_used, notes; past wait_s a "
+        "job_id for job. Leaves no nodes or undo step."
     ),
     notes=(
-        "The renderer is chosen by quality. target "
+        "The renderer is chosen by quality. A look runs as a job (2.1, D75): the call waits "
+        "wait_s (default the job threshold, 10 s) and returns the picture, or {job_id, "
+        "state: running, hint} when it takes longer (a final Karma look at 1024x768, a "
+        "slow first cook), and job {action: result, job_id} then returns the picture; "
+        "wait_s: 0 returns the job at once. A look may run up to an hour. target "
         "kinds: omitted, /obj unless it displays nothing and /stage has a display LOP (a note "
         "names a stage or COP network it did not show); an object frames it (fit_used "
         "target); a SOP frames it and shows it alone (2.1): the render draws only that SOP's "
@@ -76,6 +93,7 @@ SPEC = ToolSpec(
             "fit": _enum(("all", "selected", "none")),
             "source": _enum(("auto", "viewer"), "auto"),
             "output": _s("Also save the image to this .png or .jpg file."),
+            "wait_s": _n(None, minimum=0),
             "on": _on(),
         }
     ),
@@ -98,8 +116,10 @@ SPEC = ToolSpec(
             "rendered": _list("integer"),
             "output": _t("string"),
             "notes": _list(),
+            # Past wait_s the answer is the job (2.1, D75).
+            "job_id": _t("string"),
+            "state": _t("string"),
         },
-        ("backend_used", "chain", "scene", "path", "width", "height"),
     ),
     # In the GUI the ROP backends make a temporary camera and ROP
     # (deleted afterwards, outside undo) and Houdini may mark the hip modified.
