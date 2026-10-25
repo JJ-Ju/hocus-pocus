@@ -1421,8 +1421,9 @@ def _render_job(plan: dict[str, Any], ctx: HostContext, thumbnail: bool) -> Any:
             parms: dict[str, Any] = dict(plan.get("camera_parms") or {})
             if plan["output"] is not None:
                 parms[plan["parm"]] = plan["output"]
-            # "Block Until Render Complete" (Karma, USD Render, Mantra): off, a GUI session
-            # renders in the background and render() returns before any file exists.
+            # "Block Until Render Complete" (Karma; USD Render and Mantra have it too): off,
+            # a GUI session renders in the background and render() returns before any file
+            # exists.
             foreground = node.parm("soho_foreground")
             if foreground is not None and not foreground.eval():
                 parms["soho_foreground"] = 1

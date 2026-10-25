@@ -169,12 +169,13 @@ one for the 2.0.x releases, and 2.1 removes it.
   process that still runs out of time names `cook` and `quality: "final"` in its hint.
 - **Karma in a GUI session.** `look {quality: "lit" | "final"}` through Karma answered
   `cook_failed` "Karma did not produce an image: no output file" in every GUI Houdini (2.0
-  too), with or without a target, and `render` of a Karma, USD Render or Mantra ROP
-  returned `state: done` with every output `missing`. A GUI Houdini starts husk in the
+  too), with or without a target, and `render` of a Karma ROP returned `state: done`
+  with every output `missing`. A GUI Houdini starts husk in the
   background unless the ROP's Block Until Render Complete (`soho_foreground`) is on, so
   `render()` returned before the image existed; hython always waits, so headless looks
   passed. Look's temporary Karma ROP has it on, and `render` turns it on for the render
-  and restores it. GUI test `test_karma_looks_render_in_the_gui`.
+  and restores it, on any ROP that has the parm (USD Render and Mantra ROPs too; checked
+  in the GUI: a Mantra frame is written, a USD Render ROP's husk error is reported). GUI test `test_karma_looks_render_in_the_gui`.
 - **A GUI launch that cannot register says why** (D60). `houdini_connect {launch}` and
   `hocuspocus launch` waited the whole `wait_s` (240 s in the GUI tests) and said only that
   Houdini "may still be starting" when its host failed to start, `autostart = false` kept
