@@ -21,10 +21,19 @@ from typing import Any
 
 from ..dispatch import call_timeout
 from ..look import run, select
+from ..look.base import ROP_LABELS
 from ..look.cop import cop_size
-from ..look.image import finish_capture
-from ..look.spec import LookSpec, parse_look_args, resolve_target
+from ..look.image import finish_capture, image_size
+from ..look.spec import (
+    ISOLATED_NOTE,
+    VIEWER_SOP_NOTE,
+    LookSpec,
+    parse_look_args,
+    resolve_target,
+)
 from .registry import HostContext, tool
+
+LABELS = {**ROP_LABELS, "viewer": "Scene Viewer"}
 
 
 def _context(target: dict[str, Any]) -> str | None:
@@ -41,6 +50,21 @@ def _finish(spec: LookSpec, used: str, plan: select.Plan, info: dict[str, Any]) 
     job = spec.prepared
     assert job is not None
     notes = [*plan.notes, *info.pop("notes", [])]
+    if spec.kind == "sop" and used != "rop_image":
+        note = VIEWER_SOP_NOTE if used == "viewer" else ISOLATED_NOTE
+        notes.append(note.format(sop=spec.target))
+    if spec.quality == "lit" and used in ("flipbook", "opengl"):
+        notes.append(select.LIT_VIEWPORT_NOTE.format(rop=LABELS[used]))
+    size = cop_size(info) if used == "rop_image" else job.res
+    if used != "rop_image":
+        # Review 26 P1 #5: rendered is the image's real size; say when it is not the one asked.
+        actual = image_size(job.out_file)
+        if actual is not None and actual != tuple(job.res):
+            notes.append(
+                f"The {LABELS.get(used, used)} rendered {actual[0]}x{actual[1]}, not the "
+                f"{job.res[0]}x{job.res[1]} asked."
+            )
+            size = actual
     context = info.pop("context", None) or _context(job.target)
     out: dict[str, Any] = {
         "backend_used": used,
@@ -52,7 +76,6 @@ def _finish(spec: LookSpec, used: str, plan: select.Plan, info: dict[str, Any]) 
     }
     if notes:
         out["notes"] = notes
-    size = cop_size(info) if used == "rop_image" else job.res
     # output (2.1): the flattened capture at its rendered size, also written there (PNG
     # or JPEG); the image is still returned inline (BIBLE §8: never only a path).
     return finish_capture(job.out_file, size, job.frame, out, job.extra_path)

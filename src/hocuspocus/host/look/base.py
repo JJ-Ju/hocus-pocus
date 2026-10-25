@@ -19,7 +19,12 @@ because a second viewport render in one hython can crash it (BIBLE §8); the chi
   and the child renders their instances (``tests/integration/test_parity_headless.py``);
 * ``$HIP``, ``$HIPFILE``, ``$HIPNAME`` and ``$JOB``, the global hscript variables
   (``set -g``) and the ``hou.session`` source;
-* the fps, the playbar range and the frame (the look's ``frame`` is rendered).
+* the fps, the playbar range and the frame (the look's ``frame`` is rendered);
+* for a look at ``/obj`` (2.1, review 26 P2), the geometry the host cooked for each
+  displayed object's display SOP, or for the SOP a look isolates, written as
+  ``.bgeo.sc`` and drawn by a File SOP in the child's copy, so the child does not cook
+  those networks again (:func:`~.child.ship_geometry`); not for a locked object asset or a
+  SOP that failed to cook, and never for ``render`` of a user's ROP.
 
 It does not carry the current take (a note says so; the child renders the root take),
 in-memory simulation caches (the child re-cooks a DOP network up to the frame: slow, and

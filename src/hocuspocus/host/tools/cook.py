@@ -121,6 +121,52 @@ def dependency_order(node: Any) -> list[Any]:
     return [n for n in [*extra, *wired, node] if hasattr(n, "cook")]
 
 
+INACTIVE_LISTED = 10
+"""A profile's ``inactive.paths`` lists at most this many of the skipped nodes."""
+
+
+def cook_path(node: Any) -> tuple[list[Any], list[str]]:
+    """``(nodes to profile, inactive paths)``: the input ancestors of ``node`` that a
+    normal cook of it cooks, in dependency order and ending with ``node``, and the paths
+    of the other ancestors (a Switch's unselected inputs, what feeds a bypassed or locked
+    node; review 26 P1 #8: profiling them made "interiors off costs nothing" look false).
+
+    Houdini answers which inputs the last cook used
+    (``inputAncestors(only_used_inputs=True)``), so a dirty node is cooked normally first.
+    A chain that simulates is not pre-cooked (that cook would solve its frames and the
+    profile would time a cache read), nor is a cook that fails or uses nothing: then
+    every ancestor is profiled, as before 2.1. Main thread."""
+    import hou
+
+    every = dependency_order(node)
+    ancestors = every[:-1]
+    if not ancestors:
+        return every, []
+    try:
+        dirty = bool(node.needsToCook())
+    except Exception:
+        dirty = True
+    if dirty:
+        if any(_dop_networks(n) for n in every):
+            return every, []
+        with contextlib.suppress(hou.OperationFailed):
+            node.cook(force=False)
+    try:
+        used = node.inputAncestors(only_used_inputs=True)
+    except Exception:
+        used = ()
+    if not used:
+        return every, []
+    ids = {n.sessionId() for n in used}
+    for end in [n for n in used if _is_block_end(n)]:
+        # Houdini leaves a for-each body out of the used inputs; the block_end cooks it.
+        with contextlib.suppress(Exception):
+            ids.update(a.sessionId() for a in end.inputAncestors())
+    active = [n for n in ancestors if n.sessionId() in ids]
+    inactive = [n.path() for n in ancestors if n.sessionId() not in ids]
+    return [*active, node], inactive
+
+
 def _is_block_end(node: Any) -> bool:
     try:
         return node.type().name().split("::")[0] == "block_end"
@@ -655,25 +701,32 @@ def _plain(job: Any, paths: list[str], force: bool, frame: float | None) -> list
 def _profiled(
     job: Any, ctx: HostContext, paths: list[str], frame: float | None, timeout_s: float
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    """Force-cook every node's input chain in dependency order, one step per node."""
+    """Force-cook the part of every node's input chain that a normal cook of it cooks
+    (:func:`cook_path`), in dependency order, one step per node."""
     import hou
+
+    skipped: list[str] = []
 
     def chain_paths() -> list[str]:
         ordered: list[str] = []
         for path in paths:
-            for node in dependency_order(require_node(path)):
+            used, inactive = cook_path(require_node(path))
+            for node in used:
                 if node.path() not in ordered:
                     ordered.append(node.path())
+            skipped.extend(p for p in inactive if p not in skipped)
         return ordered
 
-    chain = job.run_main(chain_paths, timeout_s)
     previous = job.run_main(hou.frame, timeout_s)
-    steps = len(chain) + len(paths)
     rows: list[dict[str, Any]] = []
     results: list[dict[str, Any]] = []
     try:
         if frame is not None:
             job.run_main(lambda: hou.setFrame(frame), timeout_s)
+        # After the frame is set: which inputs a normal cook uses can depend on it.
+        chain = job.run_main(chain_paths, JOB_STEP_TIMEOUT_S)
+        skipped[:] = [p for p in skipped if p not in chain]  # used by another named node
+        steps = len(chain) + len(paths)
         for index, path in enumerate(chain):
             job.set_progress(index, steps, f"{index}/{steps} steps done, cooking {path}")
             rows.append(job.run_main(lambda p=path: _profile_step(p), JOB_STEP_TIMEOUT_S))
@@ -698,6 +751,10 @@ def _profiled(
             result["cook_time_ms"] = by_path[result["path"]]["cook_time_ms"]
     rows.sort(key=lambda r: r["cook_time_ms"], reverse=True)
     out = {"chain": rows[:10], "chain_total": len(rows), "total_ms": total_ms}
+    if skipped:
+        # Review 26 P1 #8: inputs a normal cook does not cook (a Switch's other inputs, a
+        # bypassed or locked node's) are not profiled; say which were left out.
+        out["inactive"] = {"count": len(skipped), "paths": skipped[:INACTIVE_LISTED]}
     out.update(extra)
     notes = [_sim_note(row) for row in rows if "simulation" in row]
     if notes:

@@ -162,6 +162,7 @@ class WarmCapture:
                 raise ToolError(
                     "internal",
                     f"The render process did not finish within {timeout_s:g}s and was killed.",
+                    hint=child_mod.capture_timeout_hint(),
                     hou_exception="render process timeout",
                     detail={"log": crash_summary(log[-4000:])},
                 )

@@ -31,28 +31,44 @@ from typing import Any
 
 from ..dispatch import _CALL, call_timeout, current_request_id
 from ..resources import content_etag
-from ._common import bad_arg, get_node
+from ._common import bad_arg, get_node, reference_hint
 from .registry import HostContext, tool
 from .types import COMPACT_HINT
 
 WHATS: tuple[str, ...] = (
     "node", "parms", "network", "outline", "geo", "image", "stage", "problems", "type",
-    "events", "jobs",
+    "events", "jobs", "guide", "tool",
 )  # fmt: skip
-"""``what`` values, in the order of spec-2.0 §2.3."""
+"""``what`` values, in the order of spec-2.0 §2.3; ``guide`` and ``tool`` (2.1) are the
+bridge's (:data:`BRIDGE_WHATS`)."""
+
+BRIDGE_WHATS = frozenset({"guide", "tool"})
+"""``inspect`` reads the bridge answers itself, without a Houdini (2.1, D54): the guide
+and one tool's reference, for clients that cannot read MCP resources."""
 
 GEO_READ_OPTIONS = frozenset({"class", "attribs", "start", "count", "group", "stats", "cursor"})
 
 OPTIONS: dict[str, frozenset[str]] = {
-    "node": frozenset({"paths", "include", "include_defaults", "recurse_locked", "detail"}),
+    "node": frozenset(
+        {"paths", "include", "include_defaults", "recurse_locked", "full_strings", "detail"}
+    ),
     "parms": frozenset(
-        {"paths", "frame", "include", "full_strings", "include_defaults", "parms", "detail"}
+        {
+            "paths",
+            "frame",
+            "include",
+            "full_strings",
+            "include_defaults",
+            "parms",
+            "folder",
+            "detail",
+        }
     ),
     "network": frozenset(
         {"depth", "include_defaults", "include_positions", "recurse_locked", "cursor"}
     ),
     "outline": frozenset({"depth", "recurse_locked", "cursor", "wiring", "detail"}),
-    "geo": frozenset({"frame", "attributes", "rows", "detail"}) | GEO_READ_OPTIONS,
+    "geo": frozenset({"frame", "attributes", "rows", "full_strings", "detail"}) | GEO_READ_OPTIONS,
     "image": frozenset({"frame"}),
     "stage": frozenset(
         {"prim", "depth", "include", "attribs", "summary", "time", "limit", "cursor"}
@@ -72,7 +88,22 @@ OPTIONS: dict[str, frozenset[str]] = {
     "events": frozenset({"since", "limit"}),
     "jobs": frozenset({"job_id"}),
 }
-"""The options each ``what`` takes: the arguments of its 1.4 tool (spec ``notes``)."""
+"""The options each ``what`` takes: the arguments of its 1.4 tool (spec ``notes``), plus
+(2.1) ``full_strings`` for ``node`` and ``geo`` and ``folder`` for ``parms``."""
+
+LENIENT = frozenset(
+    {"include_defaults", "recurse_locked", "full_strings", "detail", "include_positions", "wiring"}
+)
+"""Options that only shape an answer (D51): a ``what`` that does not take one ignores it
+with a note, since the read is the same without it. An option that chooses what is read
+(``frame``, ``paths``, ``cursor``, ``class``, ...) stays ``invalid_argument``: ignoring it
+would answer another question."""
+
+LENIENT_WHY = {
+    "recurse_locked": "it reads inside locked assets anyway",
+    "include_defaults": "it reads the parms named",
+}
+"""Why a lenient option changes nothing, per option, where that is not obvious."""
 
 TARGET_REQUIRED = frozenset({"network", "geo", "image", "stage", "type"})
 NO_TARGET = frozenset({"events", "jobs"})
@@ -108,12 +139,16 @@ def _on_main(ctx: HostContext, fn: Callable[[], Any]) -> Any:
     request_id = current_request_id()
 
     def work() -> Any:
-        saved = (getattr(_CALL, "timeout_s", None), getattr(_CALL, "request_id", None))
-        _CALL.timeout_s, _CALL.request_id = timeout_s, request_id
+        saved = (
+            getattr(_CALL, "timeout_s", None),
+            getattr(_CALL, "request_id", None),
+            getattr(_CALL, "tool", None),
+        )
+        _CALL.timeout_s, _CALL.request_id, _CALL.tool = timeout_s, request_id, "inspect"
         try:
             return fn()
         finally:
-            _CALL.timeout_s, _CALL.request_id = saved
+            _CALL.timeout_s, _CALL.request_id, _CALL.tool = saved
 
     return ctx.executor.run(work, timeout_s)
 
@@ -131,8 +166,44 @@ def _example(what: str) -> str:
     }.get(what, "/obj/geo1")
 
 
+def ignored_note(what: str, names: list[str]) -> str:
+    """The note for lenient options a ``what`` does not take (D51)."""
+    why = [LENIENT_WHY[n] for n in names if n in LENIENT_WHY]
+    verb = "does" if len(names) == 1 else "do"
+    return (
+        f"{', '.join(names)} {verb} not apply to what: {what}"
+        + (f" ({'; '.join(why)})" if why else "")
+        + "; ignored."
+    )
+
+
+def lenient_options(what: str, target: Any, options: dict[str, Any]) -> list[str]:
+    """Drop the lenient options (:data:`LENIENT`) ``what`` does not take from ``options``,
+    and a ``detail`` value it does not take; returns the notes saying so (D51)."""
+    notes: list[str] = []
+    allowed = set(OPTIONS[what])
+    of_node = False
+    if what == "parms":
+        import hou
+
+        of_node = isinstance(target, str) and target.startswith("/") and bool(hou.node(target))
+        if not of_node:
+            allowed.discard("include_defaults")  # parm paths are read whatever their value
+    dropped = sorted(k for k in options if k in LENIENT and k not in allowed)
+    if dropped:
+        for key in dropped:
+            options.pop(key)
+        notes.append(ignored_note(what, dropped))
+    if options.get("detail") == "folders" and not (what == "type" or of_node):
+        options.pop("detail")
+        notes.append(
+            f"detail folders applies to what: type and to parms of a node; read {what} compact."
+        )
+    return notes
+
+
 def _check_args(what: str, target: Any, options: dict[str, Any]) -> None:
-    allowed = OPTIONS[what]
+    allowed = OPTIONS[what] | LENIENT
     extra = sorted(set(options) - allowed)
     paths = options.get("paths")
     if "paths" in extra and what not in NO_TARGET and isinstance(paths, list) and paths:
@@ -146,8 +217,8 @@ def _check_args(what: str, target: Any, options: dict[str, Any]) -> None:
     if extra:
         raise bad_arg(
             f"what: {what} does not take {', '.join(extra)}.",
-            hint=f"{what} takes {', '.join(sorted(allowed)) or 'no options'} "
-            "(hocuspocus://tools, inspect notes).",
+            hint=f"{what} takes {', '.join(sorted(OPTIONS[what])) or 'no options'} (notes: "
+            f"{reference_hint('inspect')}).",
         )
     if what in NO_TARGET and target is not None:
         raise bad_arg(f"what: {what} takes no target.", hint="Leave target out.")
@@ -168,10 +239,11 @@ def _check_args(what: str, target: Any, options: dict[str, Any]) -> None:
             )
         if target is not None and options.get("paths") is not None:
             raise bad_arg("Pass target or paths, not both.")
-    if what != "type" and options.get("detail", "compact") not in DETAILS:
+    if what != "type" and options.get("detail", "compact") not in (*DETAILS, "folders"):
         raise bad_arg(
             f"what: {what} takes detail compact or full; got {options['detail']!r}.",
-            hint="detail: full returns the 1.4 shape; folders is for what: type.",
+            hint="detail: full returns the 1.4 shape; folders is for what: type and parms "
+            "of a node.",
         )
     if what == "outline" and not isinstance(options.get("wiring", False), bool):
         raise bad_arg("'wiring' must be a boolean.")
@@ -235,12 +307,13 @@ def _parms_args(target: Any, options: dict[str, Any]) -> dict[str, Any] | None:
     """``parm_get`` arguments (``None`` when a node has no parm to read)."""
     import hou
 
-    rest = {k: v for k, v in options.items() if k not in ("parms", "include_defaults", "paths")}
+    node_only = ("parms", "include_defaults", "paths", "folder")
+    rest = {k: v for k, v in options.items() if k not in node_only}
     node = hou.node(target) if isinstance(target, str) and target.startswith("/") else None
     if node is None:
-        if "parms" in options or "include_defaults" in options:
+        if "parms" in options or "folder" in options:
             raise bad_arg(
-                "parms and include_defaults apply when target is a node.",
+                "parms and folder apply when target is a node.",
                 hint="Pass the node's path as target, or parm paths without them.",
             )
         paths = options.get("paths") if target is None else [target]
@@ -249,7 +322,51 @@ def _parms_args(target: Any, options: dict[str, Any]) -> dict[str, Any] | None:
     if not isinstance(include_defaults, bool):
         raise bad_arg("'include_defaults' must be a boolean.")
     paths = _node_parm_paths(node, options.get("parms"), include_defaults)
+    if options.get("folder") is not None:
+        names = set(_folder_parms(node, options["folder"]))
+        if options.get("parms") is None:  # a folder lists its parms, defaults or not
+            paths = _node_parm_paths(node, None, True)
+        paths = [p for p in paths if p.rsplit("/", 1)[-1] in names]
     return {"paths": paths, **rest} if paths else None
+
+
+def _node_template_rows(node: Any, folder: Any = None) -> tuple[list[dict[str, Any]], list[str]]:
+    """The rows and folders of ``node``'s own parm template group (spare parms included),
+    as ``inspect what: type`` lists a type's (2.1, D51)."""
+    from .types import parm_template_rows
+
+    return parm_template_rows(node.parmTemplateGroup(), folder=folder)
+
+
+def _folder_parms(node: Any, folder: Any) -> list[str]:
+    """The parm names in ``folder`` of ``node`` (a label or ``A / B`` path, any case;
+    ``""`` or ``(no folder)`` the top level), or ``invalid_argument`` naming its folders."""
+    from .types import NO_FOLDER, folder_counts
+
+    if not isinstance(folder, str):
+        raise bad_arg("'folder' must be a string.")
+    wanted = "" if folder.strip().lower() in ("", NO_FOLDER) else folder
+    rows, _folders = _node_template_rows(node, wanted)
+    if not rows:
+        every, folders = _node_template_rows(node)
+        raise bad_arg(
+            f"No folder {folder!r} on {node.path()}.",
+            hint="Pass one folder from candidates, or a single segment of one.",
+            candidates=[row["folder"] for row in folder_counts(every, folders)],
+        )
+    return [row["name"] for row in rows]
+
+
+def node_folders(node: Any) -> dict[str, Any]:
+    """``inspect what: parms`` of a node with ``detail: folders``: ``{folders: [{folder,
+    parms}]}`` for the node's own parm interface, spare parms included (2.1, D51)."""
+    from .types import folder_counts
+
+    rows, folders = _node_template_rows(node)
+    return {
+        "folders": folder_counts(rows, folders),
+        "hint": "Pass folder with one of these to read its parms.",
+    }
 
 
 def _image_check(target: str) -> None:
@@ -699,6 +816,8 @@ def _scene_read(
     elif what == "parms":
         import hou
 
+        if shape_options.get("detail") == "folders":
+            return _with_etag(ctx, node_folders(get_node(target, field="target")))
         parm_args = _parms_args(target, options)
         result = {"parms": []} if parm_args is None else _impl("parm_get")(parm_args, ctx)
         if isinstance(target, str) and target.startswith("/") and hou.node(target) is not None:
@@ -722,7 +841,10 @@ def _scene_read(
         result = _impl("problems")(args, ctx)
     else:  # type
         result = _impl("node_type_info")({"type": target, **options}, ctx)
-    body = project(what, result, shape_options)
+    return _with_etag(ctx, project(what, result, shape_options))
+
+
+def _with_etag(ctx: HostContext, body: dict[str, Any]) -> dict[str, Any]:
     return {"etag": make_etag(ctx, body), **body}
 
 
@@ -736,13 +858,32 @@ def inspect(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
         )
     target = args.get("target")
     options = {k: v for k, v in args.items() if k not in ("what", "target")}
+    if what in BRIDGE_WHATS:
+        raise bad_arg(
+            f"what: {what} is answered by the bridge (hocuspocus-mcp), not by Houdini.",
+            hint="Call inspect through the MCP server.",
+        )
     _check_args(what, target, options)
-    if what == "events":
-        result = _impl("events")(options, ctx)
-    elif what == "jobs":
-        job_id = options.get("job_id")
-        call = {"action": "list"} if job_id is None else {"action": "status", "job_id": job_id}
-        result = _impl("job")(call, ctx)
-    else:
-        return _on_main(ctx, lambda: _scene_read(ctx, what, target, options))
-    return {"etag": make_etag(ctx, result), **result}
+    if what in NO_TARGET:
+        notes = lenient_options(what, target, options) if set(options) & LENIENT else []
+        if what == "events":
+            result = _impl("events")(options, ctx)
+        else:
+            job_id = options.get("job_id")
+            call = {"action": "list"} if job_id is None else {"action": "status", "job_id": job_id}
+            result = _impl("job")(call, ctx)
+        return _noted(_with_etag(ctx, result), notes)
+
+    def read() -> dict[str, Any]:
+        notes = lenient_options(what, target, options)
+        return _noted(_scene_read(ctx, what, target, options), notes)
+
+    return _on_main(ctx, read)
+
+
+def _noted(result: dict[str, Any], notes: list[str]) -> dict[str, Any]:
+    """``result`` with the ignored-option ``notes`` first in its ``notes`` (D51); the etag
+    is the answer's, so an ignored option does not change it."""
+    if notes:
+        result["notes"] = [*notes, *(result.get("notes") or [])]
+    return result

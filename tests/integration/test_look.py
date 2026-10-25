@@ -7,6 +7,7 @@ Karma; a stage and a Cop node too. The 1.4 viewport_capture tests, converted to 
 from __future__ import annotations
 
 import base64
+import contextlib
 import io
 import os
 import time
@@ -309,3 +310,164 @@ def test_look_output_on_obj_draft(client, tmp_path):
     with Image.open(target) as im:
         assert list(im.size) == RES
     assert _contrast(result) > 40
+
+
+# -- a SOP shown alone, and the size asked (2.1, review 26 P1 #3 and #5) ------------------
+
+
+def _changed(a: dict, b: dict) -> float:
+    """The share of pixels whose grey differs by more than 12 between two looks."""
+    from PIL import ImageChops
+
+    diff = ImageChops.difference(
+        _decode(a["image"]).convert("L"), _decode(b["image"]).convert("L")
+    ).point(lambda p: 255 if p > 12 else 0)
+    return diff.histogram()[255] / (diff.width * diff.height)
+
+
+def _nested_scene(library: str | None = None):
+    """/obj/tower: a subnet (a locked asset saved to ``library`` when given) whose output
+    merges a small box with a sphere far away; /obj/wall: a large box right behind the
+    small one, which fills the frame unless the look shows the small box alone. (A locked
+    asset whose definition is ``Embedded`` draws nothing in the headless child at all: its
+    snapshot carries no contents, a gap of the snapshot, not of a SOP look.)"""
+    geo = hou.node("/obj").createNode("geo", "tower")
+    sub = geo.createNode("subnet", "massing")
+    inner = sub.createNode("box", "inner_box")
+    inner.parmTuple("size").set((0.5, 0.5, 0.5))
+    far = sub.createNode("sphere", "far")
+    far.parmTuple("t").set((30, 0, 0))
+    merge = sub.createNode("merge", "both")
+    merge.setInput(0, inner)
+    merge.setInput(1, far)
+    out = sub.createNode("output", "output0")
+    out.setInput(0, merge)
+    sub.setDisplayFlag(True)
+    sub.setRenderFlag(True)
+    if library:
+        asset = sub.createDigitalAsset(
+            name="hp_look_test::massing::1.0", hda_file_name=library, description="Massing"
+        )
+        asset.matchCurrentDefinition()
+        assert asset.isLockedHDA()
+        sub = asset
+    wall = hou.node("/obj").createNode("geo", "wall")
+    box = wall.createNode("box", "big")
+    box.parmTuple("size").set((40, 40, 40))
+    box.parmTuple("t").set((0, 0, -25))
+    box.setDisplayFlag(True)
+    return geo, sub
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("lock", [False, True], ids=["subnet", "locked_asset"])
+def test_look_at_a_sop_inside_a_subnet_shows_it_alone(v2_client, work_dir, lock):
+    """Review 26 P1 #3: a SOP inside a subnet or a locked asset is shown alone (the wall
+    behind it and the subnet's other output are not drawn), through the kept child, and
+    the scene keeps no trace."""
+    from hocuspocus.host.tools import visual
+
+    library = (work_dir / "hp_look_massing.hda").as_posix() if lock else None
+    try:
+        _look_alone(v2_client, visual, *_nested_scene(library), lock)
+    finally:
+        if library:
+            hou.hipFile.clear(suppress_save_prompt=True)
+            with contextlib.suppress(hou.OperationFailed):
+                hou.hda.uninstallFile(library)
+
+
+def _look_alone(v2_client, visual, geo, sub, lock):
+    inner = f"{sub.path()}/inner_box"
+    wall = hou.node("/obj/wall")
+    before = _nodes()
+    undo_before = list(hou.undos.undoLabels())
+    flags = (geo.displayNode().path(), sub.node("inner_box").isDisplayFlagSet())
+    whole = v2_client.ok("look", {"target": geo.path(), "resolution": RES})
+    pid = visual._warm["child"].proc.pid
+    alone = v2_client.ok("look", {"target": inner, "resolution": RES})
+    assert alone["backend_used"] == "flipbook" and alone["fit_used"] == "target"
+    assert any("alone" in n for n in alone["notes"]), alone
+    assert visual._warm["child"].proc.pid == pid  # the warm child drew it
+    assert _contrast(alone) > 40
+    # The same framing (fit none reuses it) of the object: the wall behind is drawn.
+    with_wall = v2_client.ok("look", {"target": geo.path(), "fit": "none", "resolution": RES})
+    final = v2_client.ok("look", {"target": inner, "quality": "final", "resolution": RES})
+    assert final["backend_used"] == "karma"
+    assert _nodes() == before
+    assert list(hou.undos.undoLabels()) == undo_before
+    assert (geo.displayNode().path(), sub.node("inner_box").isDisplayFlagSet()) == flags
+    if lock:
+        assert sub.isLockedHDA()
+    # Alone means as if nothing else were in the scene: hide the wall and look again.
+    wall.setDisplayFlag(False)
+    bare = v2_client.ok("look", {"target": inner, "resolution": RES})
+    bare_final = v2_client.ok("look", {"target": inner, "quality": "final", "resolution": RES})
+    if os.environ.get("HP_LOOK_DUMP"):
+        shots = {"whole": whole, "alone": alone, "with_wall": with_wall, "bare": bare}
+        for name, shot in {**shots, "final": final, "bare_final": bare_final}.items():
+            _decode(shot["image"]).save(os.path.join(os.environ["HP_LOOK_DUMP"], f"{name}.png"))
+    assert _changed(alone, bare) < 0.01, _changed(alone, bare)
+    assert _changed(final, bare_final) < 0.03, _changed(final, bare_final)
+    assert _changed(alone, with_wall) > 0.05, _changed(alone, with_wall)
+
+
+@pytest.mark.slow
+def test_look_honours_the_resolution_and_names_the_backend(v2_client):
+    """Review 26 P1 #5: Karma renders the size asked (22.0's Karma ROP rendered 1280x720
+    whatever the override said), a look through a camera without resolution takes the
+    camera's aspect, and lit says which renderer drew the scene's lights."""
+    _obj_scene()
+    cam = hou.node("/obj").createNode("cam", "shot")
+    cam.parmTuple("t").set((0, 1, 12))
+    cam.parm("resx").set(1920)
+    cam.parm("resy").set(1080)
+    dark = v2_client.ok("look", {"quality": "lit", "camera": cam.path(), "resolution": RES})
+    assert dark["backend_used"] == "karma" and dark["rendered"] == RES
+    assert (dark["width"], dark["height"]) == tuple(RES)
+    assert any("1920x1080" in n for n in dark["notes"]), dark
+    camera_size = v2_client.ok("look", {"quality": "final", "camera": cam.path()})
+    assert camera_size["rendered"] == [1024, 576], camera_size
+    assert not any("asked" in n for n in camera_size.get("notes", []))
+    hou.node("/obj").createNode("hlight::2.0", "key").parmTuple("t").set((3, 4, 5))
+    lit = v2_client.ok("look", {"quality": "lit", "resolution": RES})
+    assert lit["backend_used"] == "flipbook" and lit["rendered"] == RES
+    assert any("Flipbook ROP" in n for n in lit["notes"]), lit
+
+
+@pytest.mark.slow
+def test_a_headless_look_draws_the_geometry_the_host_cooked(v2_client):
+    """Review 26 P2: the child hython recooked the displayed networks on every look (a
+    37 s LOD chain timed out every draft look at 30 s, the kept child too). The host now
+    ships the cooked geometry: a slow chain costs its cook once, in the host."""
+    from hocuspocus.host.tools import visual
+
+    geo = hou.node("/obj").createNode("geo", "slow")
+    sub = geo.createNode("subnet", "lods")
+    box = sub.createNode("box", "inner")
+    slow = sub.createNode("python", "pack")
+    slow.parm("python").set("import time\ntime.sleep(4)")
+    slow.setInput(0, box)
+    out = sub.createNode("output", "output0")
+    out.setInput(0, slow)
+    sub.setDisplayFlag(True)
+    sub.setRenderFlag(True)
+    sub.cook()  # the host has it, as after an edit or a cook
+    visual.close_warm_capture()
+    timings = []
+    for target in (None, None, f"{sub.path()}/pack"):
+        started = time.perf_counter()
+        result = v2_client.ok(
+            "look", {"target": target, "resolution": RES} if target else {"resolution": RES}
+        )
+        timings.append(time.perf_counter() - started)
+        assert result["backend_used"] == "flipbook" and _contrast(result) > 40, result
+    print(f"\nlooks at a 4 s chain: {', '.join(f'{t:.2f}s' for t in timings)}")
+    assert timings[1] < 2.0 and timings[2] < 2.0, timings  # never the 4 s cook again
+
+
+def test_a_look_timeout_names_what_to_do():
+    from hocuspocus.host.look.child import capture_timeout_hint
+
+    hint = capture_timeout_hint()
+    assert "cook {paths:" in hint and '"final"' in hint

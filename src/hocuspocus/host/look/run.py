@@ -73,10 +73,16 @@ def prepare(
             fit = "target"
         job.capture, job.info = _capture_spec(target, spec.res, fit, out_file, ctx.scene.generation)
         job.capture["rop_parms"].update(plan.rop_parms)
-        if target.get("display"):
-            job.capture["display"] = list(target["display"])
+        if target.get("isolate"):
+            job.capture["isolate"] = dict(target["isolate"])
         if not ctx.ui and CHILD_BACKENDS & set(plan.chain):
-            job.snapshot = child.snapshot_scene(tmp_dir)
+            # /obj: the child draws the geometry the host cooked (review 26 P2).
+            obj = target["scene"] == "obj"
+            job.snapshot = child.snapshot_scene(
+                tmp_dir,
+                frame=frame if obj else None,
+                isolate=job.capture.get("isolate") if obj else None,
+            )
     return job, plan
 
 

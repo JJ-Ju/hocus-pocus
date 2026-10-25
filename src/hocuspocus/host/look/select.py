@@ -208,3 +208,11 @@ def plan(spec: Any, env: Env) -> Plan:
             )
         return Plan(("karma",), samples=karma_mod.KARMA_SAMPLES)
     return Plan(chain, rop_parms=dict(LIT_ROP_PARMS) if spec.quality == "lit" else {})
+
+
+LIT_VIEWPORT_NOTE = (
+    "lit drew the scene's lights in the {rop} (high quality lighting with shadows); "
+    "quality final renders them in Karma."
+)
+"""Said when ``lit`` rendered a viewport ROP (review 26 P1 #5: with scene lights, lit
+switched to the Flipbook ROP and only ``backend_used`` said so)."""

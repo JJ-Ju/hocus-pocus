@@ -24,7 +24,7 @@ from typing import Any
 
 from hocuspocus.tools.budget import clip
 
-from ._common import CURSOR_HINT, bad_arg
+from ._common import CURSOR_HINT, bad_arg, reference_hint
 from .nodes import node_find
 from .registry import HostContext, tool
 from .types import node_type_search
@@ -268,7 +268,8 @@ def search(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     if extra:
         raise bad_arg(
             f"kind: {kind} does not take {', '.join(extra)}.",
-            hint=f"{kind} takes {', '.join(sorted(OPTIONS[kind]))} (hocuspocus://tools, search).",
+            hint=f"{kind} takes {', '.join(sorted(OPTIONS[kind]))} (notes: "
+            f"{reference_hint('search')}).",
         )
     full = _detail(options) == "full"
     options.pop("detail", None)

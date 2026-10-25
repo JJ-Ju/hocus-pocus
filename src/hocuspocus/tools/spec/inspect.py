@@ -6,7 +6,7 @@ from ._helpers import CATEGORIES, ToolSpec, _arr, _cursor, _enum, _i, _n, _obj, 
 
 WHATS = (
     "node", "parms", "network", "outline", "geo", "image", "stage", "problems", "type",
-    "events", "jobs",
+    "events", "jobs", "guide", "tool",
 )  # fmt: skip
 
 SPEC = ToolSpec(
@@ -15,25 +15,43 @@ SPEC = ToolSpec(
     description=(
         "Read the scene in one tool. what: node, parms, network, outline, geo (rows: true for "
         "values), image (Cop), stage (USD), problems, type, events or jobs; target is the "
-        "node, LOP, Cop or node type. Returns an etag and the matching 1.4 read (node_info, "
-        "parm_get, network_describe, geo_info/geo_read, usd_stage, problems, "
-        "node_type_info, events, job), compact: defaults and empties left out."
+        "node, LOP, Cop or node type. guide (target: topic) and tool (target: name) read the "
+        "docs, no Houdini needed. Returns an etag and the read, compact: defaults and "
+        "empties left out."
     ),
     notes=(
-        "Each what takes its 1.4 tool's arguments; any other option is invalid_argument "
-        "naming the ones it takes. The result is the 1.4 tool's, without what and target "
+        "Each what takes its 1.4 tool's arguments. An option that chooses what is read "
+        "(frame, paths, cursor, class, ...) and that the what does not take is "
+        "invalid_argument naming the ones it takes; an option that only shapes the answer "
+        "(include_defaults, recurse_locked, full_strings, detail, include_positions, wiring) "
+        "is ignored with a note instead (2.1, D51): geo, parms, image and stage read inside "
+        "locked assets anyway, and parm paths are read whatever their value. guide and tool "
+        "(2.1, D54) are answered by the MCP server itself, with or without a Houdini: guide "
+        "is the operating guide (hocuspocus://guide) as {etag, text, topics}, or with "
+        "target the section whose title matches it (copernicus, spare parm, two houdinis; "
+        "an unknown topic is invalid_argument with the titles as candidates); tool needs "
+        "target, a tool name, and returns that tool's reference as {etag, text}: "
+        "description, notes, arguments and examples, the text of docs/tools.md and "
+        "hocuspocus://tools. They take no other option. The result is the 1.4 tool's, without what and target "
         "(the caller knows them). node: node_info (target or paths; include, "
-        "include_defaults, recurse_locked, detail). parms: parm_get (a parm or tuple path as "
-        "target, or paths; frame, include, full_strings, detail); with a node as target it "
-        "reads the node's non-default parm tuples (all with include_defaults; those whose "
-        "name or label match the glob parms, a|b, when given; folders, separators and "
-        "buttons left out), and parms: [] when there are none. network: network_describe "
+        "include_defaults, recurse_locked, full_strings, detail). parms: parm_get (a parm or "
+        "tuple path as target, or paths; frame, include, full_strings, detail); with a node "
+        "as target it reads the node's non-default parm tuples (all with include_defaults; "
+        "those whose name or label match the glob parms, a|b, when given; those in folder, "
+        "a folder label or A / B path, when given; folders, separators and buttons left "
+        "out), and parms: [] when there are none; detail folders lists the node's own parm "
+        "folders, spare parms included, as {folders: [{folder, parms}]} (2.1). "
+        "full_strings returns strings over 200 characters whole instead of {elided, head}, "
+        "for node rows too (2.1), at any length: a result over the response budget comes "
+        "back whole with over_budget: true. network: network_describe "
         "format data (target is root; depth, include_defaults, include_positions, "
         "recurse_locked, cursor). outline: network_describe format outline (target default "
         "/; depth, recurse_locked, cursor, wiring, detail), without format; a row leaves out "
         "name when it is the path's last segment, errors at 0, and inputs unless wiring: "
-        "true. geo: geo_info (frame, attributes, detail), or with rows: true geo_read "
-        "(class, attribs, start, count, group, stats, cursor, frame). image: geo_info on a "
+        "true. geo: geo_info (frame, attributes, full_strings, detail), or with rows: true "
+        "geo_read (class, attribs, start, count, group, stats, cursor, frame, full_strings); "
+        "full_strings (2.1) gives detail attribute values whole (strings, arrays, dicts), "
+        "which are otherwise capped at 200 characters and 16 items (256 in rows). image: geo_info on a "
         "Cop node or COP network (frame); another node is invalid_argument. stage: usd_stage "
         "(target is lop_path; prim, depth, include, attribs, summary, time, limit, cursor). "
         "problems: problems (target is root, default /; include_warnings, cook_uncooked, "

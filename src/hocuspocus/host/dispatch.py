@@ -50,6 +50,12 @@ def call_timeout(default: float | None = None) -> float | None:
     return default if value is None else value
 
 
+def current_tool() -> str | None:
+    """The name of the tool the running call is answering, for hints that point at its
+    reference (``inspect {what: "tool", target}``, 2.1); set on the thread that runs it."""
+    return getattr(_CALL, "tool", None)
+
+
 def current_request_id() -> str | None:
     """The running call's ``request_id`` from the ``/hp/v1/call`` envelope, if any. Jobs
     started during the call are filed under it, so the bridge can follow their progress
@@ -419,6 +425,7 @@ class Dispatcher:
             ctx.extras["max_response_bytes"] = budget
             _CALL.timeout_s = timeout_s
             _CALL.request_id = request_id
+            _CALL.tool = impl.name
             began = time.perf_counter()
             try:
                 with migration.using_profile(profile):
@@ -426,6 +433,7 @@ class Dispatcher:
             finally:
                 _CALL.timeout_s = None
                 _CALL.request_id = None
+                _CALL.tool = None
                 if timing is not None:
                     timing["work_s"] = time.perf_counter() - began
 

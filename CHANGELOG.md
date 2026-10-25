@@ -38,6 +38,20 @@ one for the 2.0.x releases, and 2.1 removes it.
   `set`'s node with `parms`, `connect`'s `to`, `layout`'s and `build`'s `parent`, and
   `copy`'s, `select`'s and `delete`'s `paths`; a `node` op also takes `node`. The 1.4
   field names still work.
+- `inspect {what: "guide", target?: topic}` and `inspect {what: "tool", target: name}`
+  return the operating guide (or the section a topic names) and one tool's reference, the
+  text of `hocuspocus://guide` and `hocuspocus://tools`, for clients without an MCP
+  resource reader (Claude Code subagents). The bridge answers them itself, with or without
+  a Houdini. The instructions name the route; hints that cite `hocuspocus://tools` now
+  name `inspect {what: "tool", target: "<tool>"}` first (review 26 P1 #10, D54).
+- `inspect {what: "node" | "geo", full_strings: true}` returns long strings whole: in
+  node rows, and in geo detail attribute values (strings, arrays and dicts, otherwise cut
+  at 200 characters or 16 items), and `inspect {what: "parms"}` of a node takes `folder` (the parms of one folder,
+  defaults included) and `detail: "folders"` (the node's own parm folders, spare parms
+  included). `full_strings` reads a 20 KB VEX snippet back in full; a result over the
+  response budget comes back whole with `over_budget: true` (review 26 P1 #2, #9).
+- `cook {profile: true}` lists the input ancestors it did not profile in
+  `inactive: {count, paths}` (review 26 P1 #8, D53).
 
 ### Changed
 
@@ -69,6 +83,30 @@ one for the 2.0.x releases, and 2.1 removes it.
 - CI: `.github/workflows/unit.yml` runs ruff and the unit tier on Linux, macOS and
   Windows for Python 3.11 to 3.13 (portability audit,
   `docs/redesign/review/27-portability.md`).
+- **`look` at a SOP shows that SOP alone** (review 26 P1 #3, D52), wherever it is:
+  inside a subnet or a locked asset, in a hidden object, outside `/obj`. The scene that
+  renders gets a temporary object whose Object Merge reads the SOP in world space (with
+  the owner's object material), and the ROP draws only that object, on the Flipbook and
+  OpenGL ROPs (the kept headless child too) and Karma. No flag of the user's moves (2.0
+  moved the display flag, which showed nothing inside a subnet), and a note says so.
+  `source: viewer` shows the viewer as it is, with a note.
+- **`inspect` options are uniform** (review 26 P1 #9, D51): an option that only shapes the
+  answer (`include_defaults`, `recurse_locked`, `full_strings`, `detail`,
+  `include_positions`, `wiring`) and that the `what` does not take is ignored with a note
+  instead of `invalid_argument` (`recurse_locked` on `geo`, `include_defaults` with parm
+  paths, `detail: "folders"` on a node read). An option that chooses what is read
+  (`frame`, `paths`, `cursor`, `class`, ...) is still an error.
+- `cook {profile: true}` times what a normal cook of the target cooks (review 26 P1 #8,
+  D53): a target that needs cooking is cooked normally first, and Houdini's record of the
+  inputs that cook used decides the chain, so a Switch's other inputs and what feeds a
+  bypassed or locked node are neither cooked nor timed. A for-each body stays in; a
+  simulating chain or a failed cook profiles every ancestor, as before.
+- A `look` through an OBJ camera without `resolution` takes the camera's aspect at 1024 on
+  the long side (1920x1080 looks at 1024x576); an explicit `resolution` of another aspect
+  is honoured with a note. `look {quality: "lit"}` says in `notes` which renderer drew the
+  scene's lights (review 26 P1 #5).
+- `inspect`'s description no longer lists the 1.4 read names (tools/list: text -21 B on
+  `core` and `full`).
 
 ### Removed
 
@@ -116,6 +154,19 @@ one for the 2.0.x releases, and 2.1 removes it.
   Before, such a launch timed out.
 - The headless host shuts down cleanly on SIGHUP (a closing terminal) as on SIGTERM, and
   removes its registry entry.
+- `look {quality: "lit" | "final"}` through Karma rendered 1280x720 whatever
+  `resolution` asked (a 640x480 look came back 1024x576): 22.0's Karma ROP renders at its
+  own `resolutionx`/`resolutiony`, which the look now sets. `rendered` is the image's real
+  size, and a renderer that draws another size gets a note (review 26 P1 #5).
+- **A headless draft `look` no longer recooks the scene in its render process** (review
+  26 P2 friction 9). The child hython rebuilt the displayed networks from the snapshot
+  and cooked them on every look, the kept child too, so the dogfood tower's LOD lineup (a
+  37 s lightmap pack) timed out every draft look at 30 s and the agent fell back to Karma
+  `render`. The host now ships the geometry it has already cooked for what the look shows
+  (`.bgeo.sc` read by a File SOP in the child's copy). Measured on
+  `examples/neo_tower/work/neo_tower_p2.hiplc`: 44.2 s and 38.6 s per look before, 5.5 s
+  (child start) and 0.9 s after; a test's 4 s chain looks in 0.2 s once cooked. A render
+  process that still runs out of time names `cook` and `quality: "final"` in its hint.
 
 ## 2.0.0 (2026-10-14)
 

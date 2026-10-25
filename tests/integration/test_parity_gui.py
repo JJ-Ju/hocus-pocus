@@ -361,6 +361,39 @@ def test_rop_capture_runs_in_process(gui: GuiSession) -> None:
     assert left == []
 
 
+def test_look_at_a_sop_in_a_subnet_shows_it_alone_in_process(gui: GuiSession) -> None:
+    """D52 in the GUI: the temporary object that shows a SOP alone is made in the live
+    scene, outside undo, and deleted; the user's flags and view stay as they were, and
+    source viewer says it is not isolated. (Karma is not checked here: a GUI Karma look
+    answered cook_failed "no output file" in 2.1 testing, with or without a SOP target.)"""
+    client = gui.client
+    _scene(client)
+    client.ok(
+        "edit",
+        {
+            "ops": [
+                {"op": "create", "id": "sub", "parent": "/obj/box_geo", "type": "subnet"},
+                {"op": "create", "parent": "$sub", "type": "torus", "name": "ring"},
+            ]
+        },
+    )
+    before = client.view_state()
+    undo_before = client.python("result = list(hou.undos.undoLabels())")
+    alone = client.ok("look", {"target": "/obj/box_geo/subnet1/ring", "resolution": [320, 240]})
+    assert alone["backend_used"] in ("flipbook", "opengl") and alone["fit_used"] == "target"
+    assert any("alone" in n for n in alone["notes"]), alone
+    viewer = client.ok("look", {"target": "/obj/box_geo/subnet1/ring", "source": "viewer"})
+    assert any("as the user sees it" in n for n in viewer["notes"]), viewer
+    assert client.view_state() == before
+    assert client.python("result = list(hou.undos.undoLabels())") == undo_before
+    left = client.python(
+        "result = [n.path() for n in hou.node('/').allSubChildren() "
+        "if n.userData('hocuspocus:internal')]"
+    )
+    assert left == []
+    assert client.python("result = hou.node('/obj/box_geo').displayNode().name()") == "box1"
+
+
 def test_time_moves_the_playbar_and_captures_do_not(gui: GuiSession) -> None:
     client = gui.client
     _scene(client)
