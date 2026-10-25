@@ -272,6 +272,26 @@ def test_look_output_saves_the_image_and_still_returns_it(client, tmp_path):
     assert target.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"  # an existing file is replaced
 
 
+def test_look_jpeg_quality_sets_the_output_size(client, tmp_path):
+    """D86 (r21 friction 2): look {output: .jpg} had a fixed quality."""
+    net = hou.node("/img").createNode("copnet", "noisy")
+    noise = net.createNode("fractalnoise", "noise")
+    noise.setDisplayFlag(True)
+    sizes = {}
+    for quality in (10, 95):
+        jpg = tmp_path / f"q{quality}.jpg"
+        result = client.ok(
+            "look", {"target": net.path(), "output": str(jpg), "jpeg_quality": quality}
+        )
+        assert result["output_bytes"] == jpg.stat().st_size
+        sizes[quality] = result["output_bytes"]
+    assert sizes[10] * 2 < sizes[95], sizes
+    error = client.error(
+        "look", {"target": net.path(), "output": str(tmp_path / "a.png"), "jpeg_quality": 50}
+    )
+    assert error["code"] == "invalid_argument" and ".jpg" in error["message"]
+
+
 def test_look_output_expands_variables(client, tmp_path):
     net = _cop_net()
     hou.putenv("HP_LOOK_OUT", str(tmp_path / "vars"))

@@ -121,6 +121,9 @@ def test_parms_on_a_node_reads_its_non_default_tuples(v2_client):
     assert non_default["parms"] == {"size": [2.0, 1.0, 1.0]}, non_default
     globbed = v2_client.ok("inspect", {"what": "parms", "target": xform.path(), "parms": "t|r"})
     assert list(globbed["parms"]) == ["t", "r"]
+    # D85: commas separate alternatives too (r21 friction 8: "a,b,c" matched nothing).
+    commas = v2_client.ok("inspect", {"what": "parms", "target": xform.path(), "parms": "t, r"})
+    assert commas["parms"] == globbed["parms"]
     full = v2_client.ok(
         "inspect", {"what": "parms", "target": xform.path(), "parms": "t|r", "detail": "full"}
     )

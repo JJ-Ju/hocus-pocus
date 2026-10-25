@@ -88,7 +88,11 @@ async def _scenario(rec: Recorder, library_dir: str) -> None:
     info = await rec.ok("hda", {"action": "info", "path": subnet})
     assert info["type"] == "Sop/hpe2e::tower::1.0" and info["label"] == "E2E Tower", info
     assert "HelpText" in info["sections"], info
-    assert info["interface"] == {"parms": 3, "folders": ["Massing"]}, info
+    assert info["interface"] == {
+        "parms": 3,
+        "folders": ["Massing"],
+        "conditionals": {"core_width": {"disable_when": "{ interior == 0 }"}},  # D82
+    }, info
     assert info["instance"]["matches_definition"] is True, info
     gone = await rec.ok("hda", {"action": "uninstall", "library_path": library})
     assert subnet in gone["instances"], gone

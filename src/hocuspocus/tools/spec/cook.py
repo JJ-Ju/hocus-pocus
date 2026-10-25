@@ -30,7 +30,16 @@ SPEC = ToolSpec(
         "rows. Past wait_s returns job_id for job."
     ),
     notes=(
-        "cook_time_ms is the node's own cook; cached inputs are not recooked. Cooking a ROP or "
+        "cook_time_ms is the node's own cook; cached inputs are not recooked. force (2.1) "
+        "first presses a node's own reload button (File COP and SOP, Alembic, Sublayer and "
+        "other readers; a forced cook alone leaves a File COP's old image), and the row says "
+        'reloaded: true. force: "chain" (2.1) also force-cooks, inputs first and each once, '
+        "the input ancestors a normal cook of the node uses (as profile picks them), so a "
+        "result an input kept from before a change (a Material SOP cooked before its "
+        "material existed) is redone; each named node's row adds inputs_cooked, "
+        "inputs_reloaded and input_problems [{path, errors?, warnings?}] (at most 10, "
+        "input_problems_total). It does not combine with profile (which force-cooks the "
+        "chain already) or frame_range. Cooking a ROP or "
         "a File Cache writes nothing, and notes say how to write (render, or parm_set press "
         "on its execute button). "
         "frame_range is [start, end, step] and cannot be combined with profile or frame; the "
@@ -69,7 +78,11 @@ SPEC = ToolSpec(
     input_schema=_obj(
         {
             "paths": _paths(),
-            "force": _b(False),
+            "force": {
+                "type": ["boolean", "string"],
+                "enum": [False, True, "chain"],
+                "default": False,
+            },
             "frame": _frame(),
             "timeout_s": _n(None, minimum=1, default=30),
             "profile": _b(False),

@@ -22,6 +22,7 @@ from hocuspocus.tools.migration import BARE, hint_tool
 
 from ._common import int_arg, parse_offset
 from ._diag import a_or_an, collect_problems, refresh_stale, require_node
+from .readers import stale_file_notes
 from .registry import HostContext
 
 CLASSES = ("point", "prim", "vertex", "detail")
@@ -475,6 +476,9 @@ def _cop_info(path: Any, frame: Any) -> dict[str, Any] | None:
     errors = [str(e).strip() for e in target.errors() if str(e).strip()]
     if errors:
         out["errors"] = errors
+    stale = stale_file_notes(target, frame)  # D80: a File COP keeps an overwritten image
+    if stale:
+        out["notes"] = stale
     return out
 
 

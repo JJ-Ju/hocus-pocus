@@ -4,6 +4,7 @@ install a library, info, and the licence's library extension. No houdini_python.
 
 from __future__ import annotations
 
+import json
 import os
 
 import pytest
@@ -84,6 +85,40 @@ def test_create_with_interface_and_help_round_trips_through_the_file(client, tmp
     assert loaded.parmTemplateGroup().find("core_width").conditionals()
     assert "Tower" in loaded.sections()["HelpText"].contents()
     assert loaded.description() == "Tower"
+
+
+def test_reads_show_conditionals_and_the_asset_help(client, tmp_path):
+    """D82, D83 (r21 friction 5): no read showed disable_when / hide_when, so the agent
+    checked them with houdini_python, and inspect type said "No help found" for an asset
+    with a HelpText section."""
+    help_text = '= Tower =\n"""A test tower."""\n\n@parameters\n\nCore width:\n    The core.\n'
+    made, _library = _create(client, tmp_path, interface=INTERFACE, help=help_text)
+    path = made["path"]
+    info = client.ok("hda", {"action": "info", "path": path})
+    assert info["interface"]["conditionals"] == {
+        "core_width": {"disable_when": "{ interior == 0 }"}
+    }
+    full = client.ok(
+        "inspect", {"what": "parms", "target": path, "parms": "core_width,floors", "detail": "full"}
+    )
+    rows = {row["name"]: row for row in full["parms"]}
+    assert rows["core_width"]["disable_when"] == "{ interior == 0 }"
+    assert "disable_when" not in rows["floors"] and "hide_when" not in rows["floors"]
+    compact = client.ok("inspect", {"what": "parms", "target": path, "parms": "core_width"})
+    assert compact["parms"] == {"core_width": 12.0}  # compact leaves conditionals out
+    kind = client.ok(
+        "inspect",
+        {"what": "type", "target": "Sop/hptest::tower::1.0", "detail": "full",
+         "include_help": True, "parms": "core_width"},
+    )  # fmt: skip
+    (row,) = kind["parms"]
+    assert row["disable_when"] == "{ interior == 0 }"
+    assert "A test tower." in kind["help_text"] and "help_note" not in kind
+    assert kind["help_source"].endswith(":HelpText")
+    assert kind["description"] == "A test tower."
+    assert row.get("help") == "Width of the core."
+    plain = client.ok("inspect", {"what": "type", "target": "Sop/box", "parms": "size"})
+    assert "disable_when" not in json.dumps(plain)
 
 
 def test_save_changes_the_interface_versions_and_locks(client, tmp_path):

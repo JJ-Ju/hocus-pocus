@@ -7,6 +7,7 @@ from ._helpers import (
     _arr,
     _enum,
     _frame,
+    _i,
     _image,
     _list,
     _n,
@@ -43,7 +44,9 @@ SPEC = ToolSpec(
         "is not isolated; a LOP, a LOP network (its display LOP) or "
         "a ROP in a LOP network (the LOP it renders) is a stage (scene stage, lop_path); a "
         "Cop node or COP network (its display node) is its own image at its own resolution "
-        "(scene cop, layer; quality, resolution and fit do not apply); a ROP in /out looks "
+        "(scene cop, layer; quality, resolution and fit do not apply), with a note naming "
+        "any File COP it reads whose file changed on disk after the node loaded it (2.1; "
+        "cook force reloads it); a ROP in /out looks "
         "through its camera and lends final its samples. A camera or light as target is "
         "invalid_argument: pass it as camera (an OBJ camera, a LOP camera, or a camera prim "
         "on the stage). quality draft: the Flipbook ROP, then the OpenGL ROP, then (headless, "
@@ -74,9 +77,11 @@ SPEC = ToolSpec(
         "hou.putenv. Karma and Cop images render the live scene in the host. image.attached "
         "is true when the PNG went out as MCP image content. output (2.1) also writes the "
         "image to that file, at its rendered size, flattened onto grey: PNG, or JPEG for "
-        ".jpg/.jpeg; $HIP and ~ expand, parent folders are made, an existing file is "
+        ".jpg/.jpeg at jpeg_quality (2.1, 1-100, default 92; only with a .jpg output); "
+        "$HIP and ~ expand, parent folders are made, an existing file is "
         "replaced, and a path outside approved_roots is path_not_allowed before anything "
-        "renders. The result's output is the absolute path; the image is still returned "
+        "renders. The result's output is the absolute path and output_bytes its size; the "
+        "image is still returned "
         "inline (path is the copy under the state dir, which keeps only the newest 50)."
     ),
     input_schema=_obj(
@@ -91,6 +96,7 @@ SPEC = ToolSpec(
             "fit": _enum(("all", "selected", "none")),
             "source": _enum(("auto", "viewer"), "auto"),
             "output": _s("Also save the image to this .png or .jpg file."),
+            "jpeg_quality": _i(None, minimum=1, maximum=100),
             "wait_s": _n(None, minimum=0),
             "on": _on(),
         }
@@ -113,6 +119,7 @@ SPEC = ToolSpec(
             "height": _t("integer"),
             "rendered": _list("integer"),
             "output": _t("string"),
+            "output_bytes": _t("integer"),
             "notes": _list(),
             # Past wait_s the answer is the job (2.1, D75).
             "job_id": _t("string"),

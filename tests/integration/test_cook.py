@@ -413,6 +413,53 @@ def _kinds(result: dict) -> list[tuple[str, str]]:
     return [(row["kind"], row["path"]) for row in result["problems"]]
 
 
+LOOKS_FOR_LATER = """
+node = hou.pwd()
+found = hou.node("/obj/later") is not None
+node.geometry().addAttrib(hou.attribType.Global, "found", 0)
+node.geometry().setGlobalAttribValue("found", int(found))
+if not found:
+    node.addWarning('The node "/obj/later" was not found.')
+"""
+
+
+def test_force_chain_recooks_stale_inputs_and_problems_names_them(client):
+    """D81 (r21 friction 4): a Material SOP cooked before its materials existed kept its
+    "not found" result; cook {force} on the output does not recook its inputs. Houdini
+    sees no dependency here either (a Python SOP looks the node up)."""
+    geo = _geo()
+    probe = geo.createNode("python", "probe")
+    probe.parm("python").set(LOOKS_FOR_LATER)
+    out = geo.createNode("null", "OUT")
+    out.setInput(0, probe)
+    first = client.ok("cook", {"paths": [out.path()]})
+    assert first["results"][0]["ok"] is True
+    hou.node("/obj").createNode("geo", "later")
+    scan = client.ok("problems", {"root": geo.path()})
+    (row,) = [r for r in scan["problems"] if r["path"] == probe.path()]
+    assert row["kind"] == "warning" and "/obj/later exists now" in row["hint"], row
+    assert "force: true" in row["hint"]
+    forced = client.ok("cook", {"paths": [out.path()], "force": True})["results"][0]
+    assert out.geometry().attribValue("found") == 0  # the input kept its old result
+    assert 'force: "chain"' in forced.get("hint", ""), forced
+    chained = client.ok("cook", {"paths": [out.path()], "force": "chain"})
+    (result,) = chained["results"]
+    assert out.geometry().attribValue("found") == 1
+    assert result["inputs_cooked"] == 1 and "input_problems" not in result, result
+    assert "hint" not in result
+    rescan = client.ok("problems", {"root": geo.path()})
+    assert not [r for r in rescan["problems"] if r["path"] == probe.path()], rescan
+    # Inputs that still warn are listed on the named node's row.
+    probe.parm("python").set(LOOKS_FOR_LATER.replace("/obj/later", "/obj/never"))
+    noisy = client.ok("cook", {"paths": [out.path()], "force": "chain"})["results"][0]
+    assert noisy["input_problems"][0]["path"] == probe.path(), noisy
+    assert "/obj/never" in noisy["input_problems"][0]["warnings"][0]
+    for bad in ({"force": "inputs"}, {"force": "chain", "profile": True},
+                {"force": "chain", "frame_range": [1, 2]}):  # fmt: skip
+        error = client.error("cook", {"paths": [out.path()], **bad})
+        assert error["code"] == "invalid_argument", (bad, error)
+
+
 def test_problems_clean_scene(client):
     box = _geo().createNode("box")
     box.setDisplayFlag(True)

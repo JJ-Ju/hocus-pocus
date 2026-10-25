@@ -28,6 +28,7 @@ src/hocuspocus/
       registry.py _diag.py session.py hip.py code.py nodes.py network.py parms.py cook.py
       types.py geo.py visual.py state.py hda.py usd.py pdg.py events.py inspect.py
       search.py edit.py look.py spare.py (the spare parm and asset interface engine)
+      readers.py (2.1: file readers' reload button and stale-file notes, no tool)
   bridge/                      # OUTSIDE Houdini; official mcp SDK
     __main__.py server.py client.py instances.py launch.py licence.py startup.py local_tools.py
     validate.py budget.py config.py instructions.py

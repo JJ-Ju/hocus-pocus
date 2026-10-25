@@ -31,7 +31,7 @@ from typing import Any
 
 from ..dispatch import _CALL, call_timeout, current_request_id
 from ..resources import content_etag
-from ._common import bad_arg, get_node, reference_hint
+from ._common import bad_arg, get_node, glob_alternatives, reference_hint
 from .registry import HostContext, tool
 from .types import COMPACT_HINT
 
@@ -282,16 +282,12 @@ def _check_args(what: str, target: Any, options: dict[str, Any]) -> None:
 
 
 def _glob_match(text: str, pattern: str) -> bool:
-    return any(
-        fnmatch.fnmatchcase(text.lower(), alt.strip().lower())
-        for alt in pattern.split("|")
-        if alt.strip()
-    )
+    return any(fnmatch.fnmatchcase(text.lower(), alt.lower()) for alt in glob_alternatives(pattern))
 
 
 def _node_parm_paths(node: Any, pattern: Any, include_defaults: bool) -> list[str]:
     """The parm tuple paths of ``node`` that ``what: parms`` reads: those whose name or
-    label matches ``pattern`` (a glob, ``a|b``), else the non-default ones (all with
+    label matches ``pattern`` (a glob, ``a|b`` or ``a,b``), else the non-default ones (all with
     ``include_defaults``). Valueless templates (folders, separators, labels, buttons) are
     left out, as node_info leaves them out."""
     import hou
@@ -301,7 +297,7 @@ def _node_parm_paths(node: Any, pattern: Any, include_defaults: bool) -> list[st
     names = getattr(nodes, "_VALUELESS_TEMPLATES", ("Folder", "FolderSet", "Separator", "Label"))
     skip = {getattr(hou.parmTemplateType, n) for n in names if hasattr(hou.parmTemplateType, n)}
     is_block = getattr(nodes, "_is_multiparm_block", lambda template: False)
-    if pattern is not None and (not isinstance(pattern, str) or not pattern.strip()):
+    if pattern is not None and (not isinstance(pattern, str) or not glob_alternatives(pattern)):
         raise bad_arg("'parms' must be a non-empty glob such as *seed* or size|t.")
     paths = []
     for parm_tuple in node.parmTuples():
@@ -426,6 +422,9 @@ DETAILS = ("compact", "full")
 
 PROJECTED = frozenset({"node", "parms", "outline", "geo", "problems", "type"})
 
+CONDITIONALS = frozenset({"disable_when", "hide_when", "no_cook_when"})
+"""A parm template's conditionals, in ``parms`` rows with ``detail: full`` only."""
+
 PLAIN_PARM_TYPES = frozenset({"float", "int", "string", "toggle"})
 """Parm types a compact parm row leaves out: the JSON value already says them."""
 
@@ -471,6 +470,8 @@ def compact_parm(row: dict[str, Any]) -> Any:
     expressions = row.get("expressions")
     for key, item in row.items():
         if key in ("path", "name", "kind", "tuple", "component_names", "is_default"):
+            continue
+        if key in CONDITIONALS:  # detail: full says them (D82)
             continue
         if key == "type" and item in PLAIN_PARM_TYPES:
             continue

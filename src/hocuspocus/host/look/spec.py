@@ -100,6 +100,8 @@ class LookSpec:
     """``auto`` or ``viewer``."""
     path: Any = None
     """``output``: the file the picture is also saved to (:func:`parse_output`)."""
+    jpeg_quality: int | None = None
+    """The JPEG quality of a ``.jpg`` ``output`` (:func:`parse_jpeg_quality`)."""
     rop_samples: int | None = None
     """Samples per pixel of a ROP target (``final``)."""
     prepared: Prepared | None = None
@@ -128,7 +130,9 @@ def parse_look_args(args: dict[str, Any]) -> LookSpec:
     if camera is not None and (not isinstance(camera, str) or not camera.strip()):
         raise ToolError("invalid_argument", "'camera' must be a camera node or prim path.")
     output = parse_output(args.get("output"))
+    jpeg_quality = parse_jpeg_quality(args.get("jpeg_quality"), output)
     return LookSpec(
+        jpeg_quality=jpeg_quality,
         target=target.strip() if target else None,
         camera=camera,
         frame=parse_frame(args.get("frame")),
@@ -143,6 +147,24 @@ def parse_look_args(args: dict[str, Any]) -> LookSpec:
 
 
 OUTPUT_EXTS = (".png", ".jpg", ".jpeg")
+JPEG_EXTS = (".jpg", ".jpeg")
+
+
+def parse_jpeg_quality(value: Any, output: str | None) -> int | None:
+    """``look``'s ``jpeg_quality`` (2.1, D86): 1-100 for a ``.jpg``/``.jpeg`` ``output``
+    (default :data:`~.image.JPEG_QUALITY`); without such an output it is refused, since
+    it would change nothing."""
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 100:
+        raise ToolError("invalid_argument", "'jpeg_quality' must be an integer from 1 to 100.")
+    if output is None or not output.lower().endswith(JPEG_EXTS):
+        raise ToolError(
+            "invalid_argument",
+            "'jpeg_quality' applies to an output ending in .jpg or .jpeg.",
+            hint="Pass output: <file>.jpg with it, or leave it out.",
+        )
+    return value
 
 
 def parse_output(value: Any) -> str | None:

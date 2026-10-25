@@ -198,16 +198,22 @@ def capture_targets(parsed: dict[str, Any], ctx: HostContext) -> tuple[float, An
     return frame, extra_path, out_file
 
 
-def write_copy(out_file: str, target: str) -> None:
+JPEG_QUALITY = 92
+"""``look {output: .jpg}``'s quality when ``jpeg_quality`` is not given."""
+
+
+def write_copy(out_file: str, target: str, jpeg_quality: int | None = None) -> None:
     """Copy the flattened capture to ``target``: the PNG as is, or re-encoded as JPEG for
-    a ``.jpg``/``.jpeg`` target (``look {output}``). Parent directories are created."""
+    a ``.jpg``/``.jpeg`` target (``look {output}``) at ``jpeg_quality`` (2.1, D86; default
+    :data:`JPEG_QUALITY`). Parent directories are created."""
     try:
         Path(target).parent.mkdir(parents=True, exist_ok=True)
         if target.lower().endswith((".jpg", ".jpeg")):
             from PIL import Image
 
             with Image.open(out_file) as im:
-                im.convert("RGB").save(target, format="JPEG", quality=92)
+                quality = JPEG_QUALITY if jpeg_quality is None else int(jpeg_quality)
+                im.convert("RGB").save(target, format="JPEG", quality=quality)
         else:
             shutil.copyfile(out_file, target)
     except OSError as exc:
@@ -225,6 +231,7 @@ def finish_capture(
     frame: float,
     info: dict[str, Any],
     extra_path: Any,
+    jpeg_quality: int | None = None,
 ) -> dict[str, Any]:
     """Flatten the capture onto the inline image's grey, encode it and copy it to
     ``extra_path`` (``look``'s ``output``), reported as ``output``. No ``hou``."""
@@ -240,7 +247,9 @@ def finish_capture(
         **info,
     }
     if extra_path is not None:
-        write_copy(out_file, extra_path)
+        write_copy(out_file, extra_path, jpeg_quality)
         result["output"] = extra_path
+        with contextlib.suppress(OSError):
+            result["output_bytes"] = os.path.getsize(extra_path)
     prune_captures(Path(out_file).parent)
     return result

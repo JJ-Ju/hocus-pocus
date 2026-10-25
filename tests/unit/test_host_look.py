@@ -171,6 +171,23 @@ def test_look_output_is_a_png_or_jpg_path():
     assert "render" in (caught.value.hint or "")
 
 
+def test_jpeg_quality_needs_a_jpeg_output():
+    """D86: 1-100, and only with a .jpg/.jpeg output (anything else would change nothing)."""
+    assert parse_look_args({"output": "a.jpg"}).jpeg_quality is None
+    assert parse_look_args({"output": "a.JPEG", "jpeg_quality": 40}).jpeg_quality == 40
+    for args in (
+        {"output": "a.jpg", "jpeg_quality": 0},
+        {"output": "a.jpg", "jpeg_quality": 101},
+        {"output": "a.jpg", "jpeg_quality": 80.5},
+        {"output": "a.jpg", "jpeg_quality": True},
+        {"output": "a.png", "jpeg_quality": 80},
+        {"jpeg_quality": 80},
+    ):
+        with pytest.raises(ToolError) as caught:
+            parse_look_args(args)
+        assert caught.value.code == "invalid_argument", args
+
+
 def test_look_output_hint_leaves_out_render_where_the_profile_lacks_it(monkeypatch):
     from hocuspocus.tools import migration
 

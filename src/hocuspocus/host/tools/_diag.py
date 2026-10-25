@@ -11,6 +11,8 @@ import time
 from collections import OrderedDict
 from typing import Any
 
+from .readers import note_cooked
+
 SLOW_COOK_MS = 2000.0
 """A node whose last cook through HocusPocus took longer is never force-cooked implicitly."""
 
@@ -185,6 +187,7 @@ def collect_problems(node: Any, *, cook: bool = False, force: bool = False) -> d
         stale = _has_stale_errors(node)
         do_force = force or (stale and refreshable and not is_slow(node))
         elapsed, exc = timed_cook(node, do_force)
+        note_cooked(node)  # D80: what a File COP loaded, the first time it is seen
         if exc is None:
             out["cook_state"] = "cooked"
         else:
