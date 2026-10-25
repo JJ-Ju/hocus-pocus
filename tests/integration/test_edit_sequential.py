@@ -397,3 +397,27 @@ def test_mtlx_signature_menu_lists_the_definitions_signatures(client):
     )
     assert error["code"] == "invalid_value"
     assert {"vector3", "boolean", "default"} <= set(error["candidates"])
+
+
+def test_type_reference_lists_the_signatures_edit_validates_against(client):
+    """The type reference and edit's check read the signature menu from the same place, the
+    asset's definition: Houdini's own menu holds only default and the signatures in use."""
+    from hocuspocus.host.tools import parms
+
+    node = hou.node("/mat").createNode("mtlxgeompropvalue", "g")
+    tokens, _labels = parms.type_signatures(node.type())
+    assert {"vector3", "boolean", "color4", "default"} <= set(tokens)
+    assert len(tokens) > len(node.parm("signature").menuItems())  # the short menu
+    info = client.ok(
+        "inspect",
+        {"what": "type", "target": "Vop/mtlxgeompropvalue", "detail": "full", "parms": "signature"},
+    )
+    (row,) = info["parms"]
+    assert [item[0] for item in row["menu"]["items"]] == tokens[:20]
+    assert "dynamic" not in row["menu"]
+    # and every token it lists is one edit accepts
+    for token in tokens[:6]:
+        client.ok(
+            "edit", {"ops": [{"op": "set", "path": f"{node.path()}/signature", "value": token}]}
+        )
+        assert node.parm("signature").eval() == token

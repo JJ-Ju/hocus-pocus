@@ -289,6 +289,9 @@ one for the 2.0.x releases, and 2.1 removes it.
 - The File Cache output hint read "...then file to the path". It now says to set the file
   parm to the path wanted and shows the call: `Set the output with ... filemethod ...,
   then set the file parm to the path you want (... file ...); then render without output.`
+- `inspect {what: "type", detail: "full"}` lists a MaterialX VOP's `signature` menu from the
+  asset definition, as `edit` checks it (D68). It had listed Houdini's short menu
+  (`default` plus the signatures in use), so the reference and the validation disagreed.
 - Two slow integration tests no longer flake under load (tests only). The Vellum `cook
   profile` test took a fresh 12-frame solve past the 10 s job threshold on a busy machine,
   so the call answered a `job_id` instead of the profile; it now passes `wait_s` and
