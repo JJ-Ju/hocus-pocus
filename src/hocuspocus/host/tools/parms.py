@@ -892,15 +892,76 @@ def _check_range(parm: Any, kind: str, value: float) -> None:
         )
 
 
+MENU_ALL_ITEMS = 50
+"""A menu with at most this many items gives every token as ``candidates`` (2.1, D72:
+``subnetconnector``'s ``parmtype`` has 44, and the 20 listed missed the one meant)."""
+MENU_CANDIDATES = 20
+"""Tokens a larger menu gives, the nearest to the value first."""
+MENU_HINT_ITEMS = 10
+"""``token (label)`` pairs the hint shows, the nearest first."""
+_WORDS = re.compile(r"[^a-z0-9]+")
+
+
+def _similarity(value: str, text: str) -> float:
+    """How close ``text`` (a menu token or label) is to ``value``, 0..1: equal, a whole
+    word of it, a word's prefix, a substring, then the edit-distance ratio."""
+    text = text.lower().strip()
+    if not text or not value:
+        return 0.0
+    if text == value:
+        return 1.0
+    words = [w for w in _WORDS.split(text) if w]
+    if value in words:
+        return 0.95
+    if any(w.startswith(value) for w in words):
+        return 0.9
+    if value in text:
+        return 0.85
+    ratio = 0.8 * difflib.SequenceMatcher(None, value, text).ratio()
+    if len(text) >= 3 and text in value:  # "poly" in "polymsh": by how much it covers
+        return max(ratio, 0.6 + 0.2 * len(text) / len(value))
+    return ratio
+
+
+def rank_menu(value: Any, items: list[str], labels: list[str]) -> list[int]:
+    """Indices of ``items``, the nearest to ``value`` by token or label first (2.1, D72):
+    ``volume`` puts ``atmosphere`` (``Volume (shader)``) first. Ties keep menu order. No
+    ``hou``."""
+    wanted = str(value).lower().strip()
+
+    def score(i: int) -> float:
+        label = labels[i] if i < len(labels) else ""
+        return max(_similarity(wanted, items[i]), _similarity(wanted, label))
+
+    return sorted(range(len(items)), key=lambda i: (-score(i), i))
+
+
+def menu_choices(value: Any, items: list[str], labels: list[str]) -> tuple[list[str], str]:
+    """``(candidates, shown)`` for a value a menu does not hold: every token when the menu
+    has at most :data:`MENU_ALL_ITEMS`, else the :data:`MENU_CANDIDATES` nearest, ranked by
+    :func:`rank_menu` either way; ``shown`` the nearest ``token (label)`` pairs for the
+    hint, with the item count when it shows fewer. No ``hou``."""
+    order = rank_menu(value, items, labels) if isinstance(value, str) else list(range(len(items)))
+    keep = order if len(items) <= MENU_ALL_ITEMS else order[:MENU_CANDIDATES]
+    pairs = [
+        f"{items[i]} ({labels[i]})" if i < len(labels) and labels[i] != items[i] else items[i]
+        for i in keep[:MENU_HINT_ITEMS]
+    ]
+    shown = ", ".join(pairs)
+    if len(items) > len(pairs):
+        nearest = "nearest first" if isinstance(value, str) else "in menu order"
+        listed = "all" if len(keep) == len(items) else f"the {len(keep)} nearest"
+        shown += f" ({nearest}; {len(items)} items, candidates lists {listed})"
+    return [items[i] for i in keep], shown
+
+
 def _resolve_menu(parm: Any, kind: str, value: Any, notes: list[str]) -> tuple[str, int]:
     """Return ``(token, index)`` for a token, label or index on a strict menu."""
     try:
         items, labels = _read_menu(parm)
     except Exception as exc:
         raise _invalid(parm, kind, f"Cannot read the menu of {parm.path()}.") from exc
-    shown = ", ".join(
-        f"{t} ({labels[i]})" if i < len(labels) else t for i, t in enumerate(items[:20])
-    )
+    candidates, shown = menu_choices(value, items, labels)
     if isinstance(value, str):
         if value in items:
             return value, items.index(value)
@@ -919,7 +980,7 @@ def _resolve_menu(parm: Any, kind: str, value: Any, notes: list[str]) -> tuple[s
             kind,
             f"'{value}' is not a menu item of {parm.path()}.",
             hint=f"Use a token or label: {shown}",
-            candidates=items[:20],
+            candidates=candidates,
         )
     if _is_number(value) and float(value).is_integer():
         index = int(value)
@@ -931,7 +992,7 @@ def _resolve_menu(parm: Any, kind: str, value: Any, notes: list[str]) -> tuple[s
             kind,
             f"Menu index {index} is out of range for {parm.path()} ({len(items)} items).",
             hint=f"Use a token or label: {shown}",
-            candidates=items[:20],
+            candidates=candidates,
         )
     raise _invalid(
         parm,

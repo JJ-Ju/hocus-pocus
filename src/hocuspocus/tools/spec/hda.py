@@ -6,6 +6,7 @@ from ._helpers import ToolSpec, _b, _cursor, _enum, _i, _limit, _obj, _s
 
 ACTIONS = (
     "create", "save", "unlock", "match", "install", "uninstall", "reload", "list", "info",
+    "version",
 )  # fmt: skip
 
 SPEC = ToolSpec(
@@ -17,7 +18,8 @@ SPEC = ToolSpec(
         "Digital assets: create turns subnet path into an HDA; save writes path's contents "
         "and spare parms to its definition; unlock allows editing; match reverts and locks; "
         "install, uninstall and reload take library_path; list shows loaded libraries; info "
-        "describes one definition. interface edits parms as spare_parms does."
+        "describes one definition; version copies it as a new version. interface edits parms "
+        "as spare_parms does."
     ),
     notes=(
         "create takes name, label (or description), version, library_path and optional "
@@ -42,7 +44,21 @@ SPEC = ToolSpec(
         "licence's extension: .hda or .otl on Commercial, .hdalc or .otllc on Indie, .hdanc "
         "or .otlnc on Apprentice and Education; another is invalid_argument with the "
         "corrected path as candidate. inspect {what: type} and search {kind: types} report "
-        "the definition's version and, without help, its label as description."
+        "the definition's version and, without help, its label as description. "
+        "save with name (Category/type) instead of path (2.1) sets that definition's label, "
+        "version, min_inputs/max_inputs, help and interface without an instance and without "
+        "touching its contents (lock and promote_spare_parms need path); the result names "
+        "what changed. version (2.1) takes path (an instance) or name and version, the new "
+        "version component of the type name (hp::tower::1.0 with version 1.1 is "
+        "hp::tower::1.1; a name without one gains it): the definition, contents, interface "
+        "and sections, is copied to the new type name in its own library or library_path "
+        "(installed when not loaded), with label (default the old one) and the definition's "
+        "version field set; an existing type of that name is name_collision. The old "
+        "version stays, and creating the bare name (hp::tower) makes the newest. switch: "
+        "path moves the instance at path to the new version, all every instance of the old "
+        "type (none, the default, moves none); parm values are kept, a locked instance "
+        "takes the new definition's contents and an unlocked one keeps its edited contents "
+        "for an hda save. The result lists switched paths."
     ),
     input_schema=_obj(
         {
@@ -60,6 +76,7 @@ SPEC = ToolSpec(
             "interface": {"type": "object"},
             "help": _s(),
             "lock": {"type": "boolean"},
+            "switch": _enum(("none", "path", "all")),
             "limit": _limit(),
             "cursor": _cursor(),
         },
@@ -82,6 +99,6 @@ SPEC = ToolSpec(
             "help": "= Rock =\nA procedural rock.",
             "lock": True,
         },
-        {"action": "info", "path": "/obj/geo1/rock"},
+        {"action": "version", "path": "/obj/geo1/rock", "version": "1.1", "switch": "path"},
     ),
 )

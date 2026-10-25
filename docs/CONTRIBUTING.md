@@ -462,8 +462,12 @@ capture, remember that a later capture runs in that kept process, not in a fresh
 - If a kept child that had already rendered crashes, the capture is retried in a fresh
   child with a note, and kept children stay off for the rest of that host session.
 - `render` of a user's Flipbook or OpenGL ROP, the OpenGL step of the capture chain and a
-  capture while the kept child is busy always use a fresh child; the Karma step renders in
-  the host itself.
+  capture while the kept child is busy always use a fresh child; the Karma step of `look`
+  renders in the host itself.
+- Since 2.1 (BIBLE D74), headless `render` of a Karma or USD Render ROP also uses a fresh
+  child, so husk does not hold the main thread. To render them in the host again, set
+  `import hocuspocus.host.tools.visual as v; v.KARMA_IN_CHILD = False` in the host
+  process. A cancelled render kills the child's process tree (husk included).
 
 ## Release
 

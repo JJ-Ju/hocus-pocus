@@ -580,6 +580,36 @@ def _child_env(single_thread: bool = False) -> dict[str, str]:
     return env
 
 
+def child_process_kwargs() -> dict[str, Any]:
+    """``Popen`` options for a render child: no console window on Windows; on Linux and
+    macOS its own session, so :func:`kill_tree` can stop its process group."""
+    if sys.platform == "win32":
+        return {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
+    return {"start_new_session": True}
+
+
+def kill_tree(proc: subprocess.Popen[Any]) -> None:
+    """Kill ``proc`` and the processes it started (husk under a Karma ROP's hython):
+    ``taskkill /T`` on Windows, the process group elsewhere. Never raises."""
+    if sys.platform == "win32":
+        with contextlib.suppress(Exception):
+            subprocess.run(
+                ["taskkill", "/T", "/F", "/PID", str(proc.pid)],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=15,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+    else:
+        import signal
+
+        with contextlib.suppress(Exception):
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+    with contextlib.suppress(Exception):
+        proc.kill()
+
+
 class ChildRender:
     """One child hython rendering a snapshot. Off the main thread after :meth:`start`."""
 
@@ -616,13 +646,14 @@ class ChildRender:
                 stdin=subprocess.DEVNULL,
                 stdout=log,
                 stderr=subprocess.STDOUT,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                **child_process_kwargs(),
             )
 
     def kill(self) -> None:
+        """Stop the child and what it started: a Karma ROP's husk is the child's own child
+        (2.1, D74), and killing only hython would leave husk rendering."""
         if self.proc is not None and self.proc.poll() is None:
-            with contextlib.suppress(Exception):
-                self.proc.kill()
+            kill_tree(self.proc)
             with contextlib.suppress(Exception):
                 self.proc.wait(10)
 

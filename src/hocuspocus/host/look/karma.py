@@ -20,6 +20,7 @@ from typing import Any
 from hocuspocus.tools.errors import ToolError
 from hocuspocus.tools.migration import BARE, hint_tool
 
+from ..executor import mark_long_step
 from ..tools.hip import _norm
 from . import child
 from .base import Backend, Env, LookResult, failure, log_tail, mark_internal, on_main
@@ -143,6 +144,8 @@ def capture_with_karma(
     try:
         with hou.undos.disabler(), muted():
             rop = _karma_nodes(spec, res, out_file, logs, created, samples)
+            # Calls that wait behind it say what holds the main thread (2.1, D75).
+            mark_long_step(f"{label} render of a look ({res[0]}x{res[1]}, {samples} samples)")
             try:
                 rop.render(frame_range=(frame, frame), verbose=False)
             except hou.OperationFailed as exc:

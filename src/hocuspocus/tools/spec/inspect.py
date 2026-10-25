@@ -13,8 +13,8 @@ SPEC = ToolSpec(
     name="inspect",
     profiles=("minimal", "core", "full"),
     description=(
-        "Read the scene in one tool. what: node, parms, network, outline, geo (rows: true for "
-        "values), image (Cop), stage (USD), problems, type, events or jobs; target is the "
+        "Read the scene. what: node, parms, network, outline, geo (rows: true for "
+        "values; group_by: stats per value), image (Cop), stage (USD), problems, type, events or jobs; target is the "
         "node, LOP, Cop or node type. guide (target: topic) and tool (target: name) read the "
         "docs, no Houdini needed. Returns an etag and the read, compact: defaults and "
         "empties left out."
@@ -50,8 +50,21 @@ SPEC = ToolSpec(
         "name when it is the path's last segment, errors at 0, and inputs unless wiring: "
         "true. geo: the summary (frame, attributes, full_strings, detail), or with rows: true "
         "the rows (class, attribs, start, count, group, stats, cursor, frame, full_strings); "
+        "the summary also takes stats: true and attribs (2.1): stats per class as rows: true "
+        "gives them (min, max, mean; unique for strings) for the attributes attribs names, "
+        "else for every point, prim and vertex attribute up to 24; attribs is a list or one "
+        "string of names separated by commas or spaces, everywhere it is taken; "
         "full_strings (2.1) gives detail attribute values whole (strings, arrays, dicts), "
-        "which are otherwise capped at 200 characters and 16 items (256 in rows). image: the image read of a "
+        "which are otherwise capped at 200 characters and 16 items (256 in rows). geo with "
+        "group_by (2.1), a string or int prim attribute (surface, name, mat_id) or else a "
+        "point one, gives one row per value under columns, largest first: value, prims, "
+        "points, triangles (closed polygons, n-2 each), area, bbox_min, bbox_max (point "
+        "groups: value, points, bbox_min, bbox_max), then name.min, name.max and name.mean "
+        "for each numeric attribute in attribs (prim, point or vertex attributes of the "
+        "group's prims); group (a group name or pattern such as @mat_id==3) limits the "
+        "elements counted; frame, count (default 50) and cursor page the rows, total counts "
+        "the values, and a page over the response budget ends early with truncated: true and "
+        "next_cursor. rows, class, stats and attributes do not combine with it. image: the image read of a "
         "Cop node or COP network (frame); another node is invalid_argument. stage: the "
         "composed USD stage (target is the LOP; prim, depth, include, attribs, summary, time, limit, cursor). "
         "problems: the scan for errors (target is root, default /; include_warnings, cook_uncooked, "
@@ -120,6 +133,7 @@ SPEC = ToolSpec(
             "count": _i(None, minimum=1, maximum=10000),
             "group": _s(),
             "stats": {"type": "boolean"},
+            "group_by": _s(),
             "prim": _s(),
             "summary": {"type": "boolean"},
             "time": _n(),
