@@ -749,7 +749,7 @@ def _op_node(args: Any, opts: dict[str, Any], index: int, st: State) -> OpResult
         raise N.to_tool_error(exc, node=node, op="rename") from exc
     flags = plan["flags"]
     if flags:
-        before = N.node_flags(node)
+        before = N.flag_state(node, flags)
         rollback.keep_display(node.parent())
 
         def restore_flags(before: dict[str, bool] = before) -> None:

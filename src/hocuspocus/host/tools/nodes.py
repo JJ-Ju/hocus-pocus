@@ -49,7 +49,10 @@ NODE_INFO_SECTIONS = (
 )  # fmt: skip
 DEFAULT_INCLUDE = ("parms", "inputs", "errors", "flags")
 FLAG_NAMES = ("display", "render", "bypass", "template", "locked")
-SETTABLE_FLAGS = ("display", "render", "bypass", "template")
+SETTABLE_FLAGS = ("display", "render", "bypass", "template", "material", "unload", "export")
+"""Flags ``edit`` sets (2.1, D60 adds ``material`` on VOPs, which a Material Library LOP
+needs, ``unload`` on SOPs and CHOPs, ``export`` on CHOPs and COPs); a node without the
+setter refuses the flag with the ones it has."""
 NAME_RE = re.compile(r"^[A-Za-z0-9_.\-]+$")
 CHILDREN_LIST_LIMIT = 200
 
@@ -65,7 +68,18 @@ _FLAG_SETTERS = {
     "render": "setRenderFlag",
     "bypass": "bypass",
     "template": "setTemplateFlag",
+    "material": "setMaterialFlag",
+    "unload": "setUnloadFlag",
+    "export": "setExportFlag",
 }
+_SET_FLAG_GETTERS = {
+    **{k: v for k, v in _FLAG_GETTERS.items() if k != "locked"},
+    "material": "isMaterialFlagSet",
+    "unload": "isUnloadFlagSet",
+    "export": "isExportFlagSet",
+}
+"""The getter of every settable flag (rollback restores them); reads report
+:data:`FLAG_NAMES` only."""
 
 
 # -- generic helpers --------------------------------------------------------------
@@ -362,11 +376,24 @@ def check_flags(node: Any, flags: Any) -> None:
         if not isinstance(value, bool):
             raise bad_arg(f"Flag {name!r} must be a boolean.")
         if not callable(getattr(node, _FLAG_SETTERS[name], None)):
-            have = ", ".join(sorted(node_flags(node))) or "none"
+            have = ", ".join(
+                n for n in SETTABLE_FLAGS if callable(getattr(node, _FLAG_SETTERS[n], None))
+            )
             raise bad_arg(
                 f"{node.path()} ({node.type().category().name()}) has no {name} flag.",
-                hint=f"Flags on this node: {have}.",
+                hint=f"Flags this node takes: {have or 'none'}.",
             )
+
+
+def flag_state(node: Any, names: Iterable[str]) -> dict[str, bool]:
+    """The current value of each settable flag in ``names`` that ``node`` has."""
+    out: dict[str, bool] = {}
+    for name in names:
+        getter = getattr(node, _SET_FLAG_GETTERS.get(name, ""), None)
+        if callable(getter):
+            with contextlib.suppress(Exception):
+                out[name] = bool(getter())
+    return out
 
 
 def set_flags(node: Any, flags: Any) -> None:

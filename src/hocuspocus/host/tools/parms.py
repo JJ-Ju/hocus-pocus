@@ -414,9 +414,54 @@ def _hda_locked(parm: Any) -> bool:
 
 def _menu_items(parm: Any) -> tuple[list[str], list[str]] | None:
     try:
-        return list(parm.menuItems()), [menu_label(label) for label in parm.menuLabels()]
+        return _read_menu(parm)
     except Exception:
         return None
+
+
+def _read_menu(parm: Any) -> tuple[list[str], list[str]]:
+    """``(tokens, labels)`` of ``parm``'s menu: a VOP asset's signatures from its
+    definition (:func:`vop_signatures`), else what Houdini evaluates. Raises when the
+    menu cannot be read."""
+    signatures = vop_signatures(parm)
+    if signatures is not None:
+        return signatures
+    return list(parm.menuItems()), [menu_label(label) for label in parm.menuLabels()]
+
+
+_SIGNATURE_LINE = re.compile(r'^\s*signature\s+"((?:[^"\\]|\\.)*)"\s+(\S+)', re.MULTILINE)
+_SIGNATURES: dict[tuple[str, str, float], tuple[list[str], list[str]] | None] = {}
+
+
+def vop_signatures(parm: Any) -> tuple[list[str], list[str]] | None:
+    """``(tokens, labels)`` of an asset's ``signature`` parm as its definition's
+    DialogScript lists them (``signature "Color (FA)" color3FA { ... }``), or None for any
+    other parm. The menu Houdini evaluates on a MaterialX VOP holds only ``default`` and
+    the signatures already chosen on the node (review 26 P2 friction 7), and Houdini sets
+    any text silently, so the definition is the list to check a value against (D60)."""
+    try:
+        if parm.name() != "signature":
+            return None
+        node_type = parm.node().type()
+        definition = node_type.definition()
+        if definition is None:
+            return None
+        key = (
+            node_type.nameWithCategory(),
+            str(definition.libraryFilePath()),
+            float(definition.modificationTime()),
+        )
+    except Exception:
+        return None
+    if key not in _SIGNATURES:
+        found: tuple[list[str], list[str]] | None = None
+        with contextlib.suppress(Exception):
+            text = definition.sections()["DialogScript"].contents()
+            pairs = _SIGNATURE_LINE.findall(text)
+            if pairs:
+                found = [token for _label, token in pairs], [label for label, _ in pairs]
+        _SIGNATURES[key] = found
+    return _SIGNATURES[key]
 
 
 def _menu_dict(parm: Any, token: Any) -> dict[str, Any] | None:
@@ -840,8 +885,7 @@ def _check_range(parm: Any, kind: str, value: float) -> None:
 def _resolve_menu(parm: Any, kind: str, value: Any, notes: list[str]) -> tuple[str, int]:
     """Return ``(token, index)`` for a token, label or index on a strict menu."""
     try:
-        items = list(parm.menuItems())
-        labels = [menu_label(label) for label in parm.menuLabels()]
+        items, labels = _read_menu(parm)
     except Exception as exc:
         raise _invalid(parm, kind, f"Cannot read the menu of {parm.path()}.") from exc
     shown = ", ".join(
