@@ -16,6 +16,12 @@ Thin wrappers over HOM (verified on 22.0.466):
 * ``list``    — ``hou.hda.loadedFiles()``; with ``library_path``, that file's definitions.
 * ``info``    — one definition: library, version, sections, current or not, inputs, the
   interface's size, instances; for an instance (``path``) also its lock state.
+* ``version`` — ``definition.copyToHDAFile(library, new_name=..., new_menu_name=...)``
+  under the type name with the new version component (``hp::tower::1.0`` to
+  ``hp::tower::1.1``), installed when its library was not loaded, then ``setVersion``;
+  ``switch`` moves instances with ``changeNodeType`` (2.1, D73).
+* ``save`` with ``name`` instead of ``path`` sets a definition's label, version, input
+  counts, help and interface without an instance and without touching its contents.
 
 The catalogue schema cannot express per-action required fields, so they are validated
 here with ``invalid_argument`` hints. Library paths respect ``approved_roots``, and a
@@ -48,11 +54,12 @@ from .registry import HostContext, tool
 
 ACTIONS = (
     "create", "save", "unlock", "match", "install", "uninstall", "reload", "list", "info",
+    "version",
 )  # fmt: skip
 READS = frozenset(("list", "info"))
 REQUIRED: dict[str, tuple[str, ...]] = {
     "create": ("path", "name", "library_path"),
-    "save": ("path",),
+    "save": (),
     "unlock": ("path",),
     "match": ("path",),
     "install": ("library_path",),
@@ -60,11 +67,18 @@ REQUIRED: dict[str, tuple[str, ...]] = {
     "reload": ("library_path",),
     "list": (),
     "info": (),
+    "version": ("version",),
 }
+BY_PATH_OR_NAME = frozenset(("info", "save", "version"))
+"""Actions on one definition, named by an instance (``path``) or a type (``name``)."""
+SWITCH = ("none", "path", "all")
+"""``version``'s ``switch``: no instance, the instance ``path`` names, or every instance
+of the old type."""
 EXAMPLES = {
     "create": '{action: "create", path: "/obj/geo1/subnet1", name: "studio::rock::1.0", '
     'library_path: "$HIP/hda/rock.hda"}',
-    "save": '{action: "save", path: "/obj/geo1/rock1", lock: true}',
+    "save": '{action: "save", path: "/obj/geo1/rock1", lock: true} or {action: "save", name: '
+    '"Sop/studio::rock::1.0", label: "Rock"}',
     "unlock": '{action: "unlock", path: "/obj/geo1/rock1"}',
     "match": '{action: "match", path: "/obj/geo1/rock1"}',
     "install": '{action: "install", library_path: "$HIP/hda/rock.hda"}',
@@ -73,6 +87,7 @@ EXAMPLES = {
     "list": '{action: "list"} or {action: "list", library_path: "..."}',
     "info": '{action: "info", path: "/obj/geo1/rock1"} or {action: "info", name: '
     '"Sop/studio::rock::1.0"}',
+    "version": '{action: "version", path: "/obj/geo1/rock1", version: "1.1", switch: "path"}',
 }
 HDA_EXTENSIONS = (".hda", ".otl", ".hdanc", ".hdalc", ".otlnc", ".otllc")
 LICENCE_EXTENSIONS: dict[str, tuple[tuple[str, ...], str]] = {
@@ -100,13 +115,32 @@ def _require(args: dict[str, Any], action: str) -> None:
                 hint=f"Required for {action}: {', '.join(REQUIRED[action])}. "
                 f"Example: {EXAMPLES[action]}",
             )
-    if action == "info" and not any(
+    if action in BY_PATH_OR_NAME and not any(
         isinstance(args.get(k), str) and args[k].strip() for k in ("path", "name")
     ):
         raise bad_arg(
-            "hda action 'info' needs 'path' (an instance) or 'name' (a type).",
-            hint=f"Example: {EXAMPLES['info']}",
+            f"hda action {action!r} needs 'path' (an instance) or 'name' (a type).",
+            hint=f"Example: {EXAMPLES[action]}",
         )
+    by_name = action in BY_PATH_OR_NAME and not _has(args, "path")
+    if action == "save" and by_name:
+        for key in ("lock", "promote_spare_parms"):
+            if args.get(key) is not None:
+                raise bad_arg(
+                    f"{key} needs an instance: hda save with name sets the definition only.",
+                    hint=f"Pass path (an instance) to save its contents. {EXAMPLES['save']}",
+                )
+    switch = args.get("switch")
+    if switch is not None and action != "version":
+        raise bad_arg(f"switch is for hda version; {action} takes none.")
+    if action == "version":
+        if switch is not None and switch not in SWITCH:
+            raise bad_arg(f"switch must be one of {', '.join(SWITCH)}; got {switch!r}.")
+        if switch == "path" and by_name:
+            raise bad_arg(
+                "switch: path needs path, the instance to switch.",
+                hint='Pass path, or switch: "all" for every instance of the old type.',
+            )
     for key in ("min_inputs", "max_inputs"):
         value = args.get(key)
         if value is not None and (
@@ -128,6 +162,11 @@ def _require(args: dict[str, Any], action: str) -> None:
         raise bad_arg(f"interface is for hda create and save; {action} takes none.")
     if args.get("help") is not None and action not in ("create", "save"):
         raise bad_arg(f"help is for hda create and save; {action} takes none.")
+
+
+def _has(args: dict[str, Any], key: str) -> bool:
+    value = args.get(key)
+    return isinstance(value, str) and bool(value.strip())
 
 
 def _label(args: dict[str, Any]) -> str | None:
@@ -437,11 +476,223 @@ def _promote(node: Any, definition: Any, promote: Any, group: Any = None) -> lis
     return spares
 
 
+def _definition_library(definition: Any, ctx: HostContext) -> str | None:
+    """The definition's library as a checked path (``approved_roots``, the licence's
+    extension), or None for an embedded one."""
+    library = definition.libraryFilePath()
+    if library and library != "Embedded" and os.path.isabs(library):
+        library = resolve_path(library, field="library_path")
+        check_allowed(library, ctx)
+        check_licence_extension(library)
+        return library
+    return None
+
+
+def _inputs(args: dict[str, Any], definition: Any) -> tuple[int, int]:
+    min_inputs, max_inputs = args.get("min_inputs"), args.get("max_inputs")
+    low = definition.minNumInputs() if min_inputs is None else int(min_inputs)
+    high = definition.maxNumInputs() if max_inputs is None else int(max_inputs)
+    if low > high:
+        raise bad_arg(
+            f"min_inputs ({low}) is greater than max_inputs ({high}).",
+            hint="Pass min_inputs <= max_inputs.",
+        )
+    return low, high
+
+
+def _save_definition(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
+    """``save`` with ``name`` (2.1, D73): the definition's label, version, input counts,
+    help and interface, written to its library; no instance, its contents untouched."""
+    import hou
+
+    from . import spare
+
+    node_type = _type_by_name(args["name"])
+    definition = node_type.definition()
+    _definition_library(definition, ctx)
+    label = _label(args) or ""
+    low, high = _inputs(args, definition)
+    planned = None
+    if args.get("interface") is not None:
+        owner = f"{node_type.category().name()}/{node_type.name()}"
+        iface = spare.Interface.of_group(
+            definition.parmTemplateGroup(), owner=owner, field="interface"
+        )
+        planned = spare.plan(args["interface"], iface)
+    changed: list[str] = []
+    try:
+        if label:
+            definition.setDescription(label)
+            changed.append("label")
+        if args.get("version") is not None:
+            definition.setVersion(args["version"].strip())
+            changed.append("version")
+        if args.get("min_inputs") is not None or args.get("max_inputs") is not None:
+            definition.setMaxNumInputs(high)
+            definition.setMinNumInputs(low)
+            changed.append("inputs")
+        if planned is not None:
+            group = definition.parmTemplateGroup()
+            spare.apply_to_group(group, planned)
+            definition.setParmTemplateGroup(group)
+        helped = _set_help(definition, args.get("help"))
+        _write_library(definition)
+    except hou.Error as exc:
+        raise _hou_failure(exc, f"Saving the definition of {node_type.name()}") from exc
+    out: dict[str, Any] = {
+        "type": f"{node_type.category().name()}/{node_type.name()}",
+        **{k: v for k, v in _definition_row(definition).items() if k in ("label", "version")},
+        "library": long_path(definition.libraryFilePath()),
+        "saved": True,
+    }
+    if changed:
+        out["changed"] = changed
+    if planned is not None:
+        rows = {
+            key: [name for name, *_rest in planned[key]] if key != "remove" else list(planned[key])
+            for key in ("add", "change", "remove")
+        }
+        out["interface"] = {k: v for k, v in rows.items() if v}
+    if helped:
+        out["help"] = True
+    return out
+
+
+def versioned_name(node_type: Any, version: str) -> str:
+    """The type name of ``node_type`` with ``version`` as its version component
+    (``hp::tower::1.0`` to ``hp::tower::1.1``; ``hp::tower`` to ``hp::tower::1.1``)."""
+    import hou
+
+    scope, namespace, name, _old = node_type.nameComponents()
+    try:
+        return hou.hda.fullNodeTypeNameFromComponents(scope, namespace, name, version)
+    except Exception:  # pragma: no cover - present in every 22.0 build
+        return "::".join(p for p in (scope, namespace, name, version) if p)
+
+
+def _version(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
+    """``version`` (2.1, D73): copy a definition, its contents, interface and sections,
+    to the type name with a new version component, in its library or ``library_path``;
+    ``switch`` moves the instance at ``path`` (``"path"``) or every instance of the old
+    type (``"all"``) to it with ``changeNodeType``, keeping parm values; an unlocked
+    instance keeps its edited contents, unsaved, for an ``hda save``."""
+    import hou
+
+    node = None
+    if _has(args, "path"):
+        node, definition = _asset_node(args)
+        node_type = node.type()
+    else:
+        node_type = _type_by_name(args["name"])
+        definition = node_type.definition()
+    category = node_type.category()
+    version = args["version"].strip()
+    if not version:
+        raise bad_arg("'version' must be a version such as 1.1.")
+    new_name = versioned_name(node_type, version)
+    old_ref = f"{category.name()}/{node_type.name()}"
+    if new_name == node_type.name():
+        raise bad_arg(
+            f"{old_ref} already has version {version}.",
+            hint="Pass the new version, such as 1.1 or 2.0.",
+        )
+    existing = hou.nodeType(category, new_name)
+    if existing is not None:
+        where = existing.definition().libraryFilePath() if existing.definition() else None
+        raise ToolError(
+            "name_collision",
+            f"A {category.name()} node type named {new_name!r} already exists"
+            + (f" (from {long_path(where)})." if where else "."),
+            hint="Pick another version, or hda save with path or name to change that one.",
+        )
+    if _has(args, "library_path"):
+        library = _library(args, ctx)
+        check_licence_extension(library)
+    else:
+        library = _definition_library(definition, ctx)
+        if library is None:
+            raise bad_arg(
+                f"{old_ref} is embedded in the hip file; pass library_path for the new version.",
+                hint=f"Example: {EXAMPLES['version']} plus library_path.",
+            )
+    label = _label(args) or definition.description()
+    switch = args.get("switch") or "none"
+    targets: list[Any] = []
+    if switch == "path" and node is not None:
+        targets = [node]
+    elif switch == "all":
+        targets = sorted(node_type.instances(), key=lambda n: n.path())
+    for target in targets:
+        ensure_editable(target, "switch to the new version")
+    os.makedirs(os.path.dirname(library) or ".", exist_ok=True)
+    installed = False
+    try:
+        definition.copyToHDAFile(library, new_name=new_name, new_menu_name=label)
+        if not _is_loaded(library):
+            hou.hda.installFile(library)
+            installed = True
+        new_type = hou.nodeType(category, new_name)
+        if new_type is None:
+            hou.hda.reloadFile(library)
+            new_type = hou.nodeType(category, new_name)
+        if new_type is None or new_type.definition() is None:
+            raise ToolError(
+                "internal",
+                f"Copied {old_ref} to {library} as {new_name}, but Houdini did not load it.",
+                hint=f"hda install {{library_path: {library!r}}}, then hda info.",
+            )
+        new_definition = new_type.definition()
+        new_definition.setVersion(version)
+        new_definition.save(library)
+    except hou.Error as exc:
+        raise _hou_failure(exc, f"Copying {old_ref} to {new_name}") from exc
+    switched: list[str] = []
+    kept_edits: list[str] = []
+    try:
+        for target in targets:
+            unlocked = not target.isLockedHDA()
+            moved = target.changeNodeType(
+                new_name, keep_name=True, keep_parms=True, keep_network_contents=unlocked
+            )
+            switched.append(moved.path())
+            if unlocked:
+                kept_edits.append(moved.path())
+    except hou.Error as exc:
+        raise _hou_failure(exc, f"Switching instances to {new_name}") from exc
+    out: dict[str, Any] = {
+        "type": f"{category.name()}/{new_name}",
+        "from": old_ref,
+        "label": label,
+        "version": version,
+        "library": long_path(library),
+    }
+    if installed:
+        out["installed"] = True
+    if switched:
+        out["switched"] = switched
+        watch_nodes([n for n in (hou.node(p) for p in switched) if n is not None])
+    notes = [
+        f"{old_ref} stays in its library, and instances not switched keep it; creating "
+        f"{versioned_name(node_type, '')} without a version now makes the newest one."
+    ]
+    if kept_edits:
+        notes.append(
+            f"{', '.join(kept_edits)} {'is' if len(kept_edits) == 1 else 'are'} unlocked and "
+            "kept the edited contents, not saved to the new version yet: hda save writes them."
+        )
+    out["notes"] = notes
+    if node is not None and switch == "path":
+        out["path"] = switched[0] if switched else node.path()
+    return out
+
+
 def _save(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     import hou
 
     from . import spare
 
+    if not _has(args, "path"):
+        return _save_definition(args, ctx)
     node, definition = _asset_node(args)
     library = definition.libraryFilePath()
     if library and library != "Embedded" and os.path.isabs(library):
@@ -745,6 +996,7 @@ HANDLERS = {
     "reload": _install,
     "list": _list,
     "info": _info,
+    "version": _version,
 }
 
 
@@ -767,7 +1019,11 @@ def hda(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
         return handler(args, ctx)
     refuse_if_read_only(ctx, f"hda {action}")
     label = make_label(
-        "hda", {"undo_label": f"{action} {args.get('path') or args.get('library_path')}"}
+        "hda",
+        {
+            "undo_label": f"{action} "
+            f"{args.get('path') or args.get('name') or args.get('library_path')}"
+        },
     )
     # create, match, unlock and a locking save rebuild the asset's contents: one events
     # entry for the asset, not one per internal node (review 15 papercut 2).

@@ -2,7 +2,7 @@
 
 <!-- Generated from src/hocuspocus/tools/spec/ by `python -m hocuspocus.tools.docs`. Do not edit by hand. -->
 
-21 tools. The profiles nest: 10 in `minimal`, 19 in `core` (the default), 21 in `full`. Model-visible `tools/list` text: 20,880 bytes. See `docs/BIBLE.md` §4 for the design.
+21 tools. The profiles nest: 10 in `minimal`, 19 in `core` (the default), 21 in `full`. Model-visible `tools/list` text: 20,982 bytes. See `docs/BIBLE.md` §4 for the design.
 
 ## Contents
 
@@ -814,15 +814,15 @@ Jobs from render, cook or pdg: status (state, progress, message), result (the to
 
 `headless ok` · profiles `core`, `full`
 
-Digital assets: create turns subnet path into an HDA; save writes path's contents and spare parms to its definition; unlock allows editing; match reverts and locks; install, uninstall and reload take library_path; list shows loaded libraries; info describes one definition. interface edits parms as spare_parms does.
+Digital assets: create turns subnet path into an HDA; save writes path's contents and spare parms to its definition; unlock allows editing; match reverts and locks; install, uninstall and reload take library_path; list shows loaded libraries; info describes one definition; version copies it as a new version. interface edits parms as spare_parms does.
 
-**Notes.** create takes name, label (or description), version, library_path and optional min_inputs/max_inputs, and promotes the subnet's spare parms (2.1), so the definition has the interface at once. save copies the instance's spare parms into the asset's interface (promoted lists them; promote_spare_parms: false keeps them on the instance) and also takes label, version and min_inputs/max_inputs; lock: true locks the instance to the saved definition (matchCurrentDefinition) after saving. interface (create, save) is the asset's parm interface in the edit node op's spare_parms shape {add, change, remove}: on create it is added to the subnet first; on save it changes any parm of the definition, and the result lists interface {add, change, remove}. help (create, save) is the HelpText section (Houdini wiki markup; an empty string removes it). action uninstall takes library_path (a loaded library): instances stay and fall back to another loaded definition or the copy embedded in the hip, named per path in instances. info takes path (an instance) or name (Category/type, e.g. Sop/studio::rock::1.0) and returns type, label, version, library, is_current: false and current_library when another definition wins, other_libraries, inputs, sections (names), help_chars, interface {parms, folders}, instances (a count) and, for path, instance {hda_locked, matches_definition}. list is paged by limit and cursor; install of a loaded library says already_loaded. list and info only read. A library the asset is written to (create, save) must carry the licence's extension: .hda or .otl on Commercial, .hdalc or .otllc on Indie, .hdanc or .otlnc on Apprentice and Education; another is invalid_argument with the corrected path as candidate. inspect {what: type} and search {kind: types} report the definition's version and, without help, its label as description.
+**Notes.** create takes name, label (or description), version, library_path and optional min_inputs/max_inputs, and promotes the subnet's spare parms (2.1), so the definition has the interface at once. save copies the instance's spare parms into the asset's interface (promoted lists them; promote_spare_parms: false keeps them on the instance) and also takes label, version and min_inputs/max_inputs; lock: true locks the instance to the saved definition (matchCurrentDefinition) after saving. interface (create, save) is the asset's parm interface in the edit node op's spare_parms shape {add, change, remove}: on create it is added to the subnet first; on save it changes any parm of the definition, and the result lists interface {add, change, remove}. help (create, save) is the HelpText section (Houdini wiki markup; an empty string removes it). action uninstall takes library_path (a loaded library): instances stay and fall back to another loaded definition or the copy embedded in the hip, named per path in instances. info takes path (an instance) or name (Category/type, e.g. Sop/studio::rock::1.0) and returns type, label, version, library, is_current: false and current_library when another definition wins, other_libraries, inputs, sections (names), help_chars, interface {parms, folders}, instances (a count) and, for path, instance {hda_locked, matches_definition}. list is paged by limit and cursor; install of a loaded library says already_loaded. list and info only read. A library the asset is written to (create, save) must carry the licence's extension: .hda or .otl on Commercial, .hdalc or .otllc on Indie, .hdanc or .otlnc on Apprentice and Education; another is invalid_argument with the corrected path as candidate. inspect {what: type} and search {kind: types} report the definition's version and, without help, its label as description. save with name (Category/type) instead of path (2.1) sets that definition's label, version, min_inputs/max_inputs, help and interface without an instance and without touching its contents (lock and promote_spare_parms need path); the result names what changed. version (2.1) takes path (an instance) or name and version, the new version component of the type name (hp::tower::1.0 with version 1.1 is hp::tower::1.1; a name without one gains it): the definition, contents, interface and sections, is copied to the new type name in its own library or library_path (installed when not loaded), with label (default the old one) and the definition's version field set; an existing type of that name is name_collision. The old version stays, and creating the bare name (hp::tower) makes the newest. switch: path moves the instance at path to the new version, all every instance of the old type (none, the default, moves none); parm values are kept, a locked instance takes the new definition's contents and an unlocked one keeps its edited contents for an hda save. The result lists switched paths.
 
 ### Arguments
 
 | Name | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `action` | `create` \| `save` \| `unlock` \| `match` \| `install` \| `uninstall` \| `reload` \| `list` \| `info` | yes |  |  |
+| `action` | `create` \| `save` \| `unlock` \| `match` \| `install` \| `uninstall` \| `reload` \| `list` \| `info` \| `version` | yes |  |  |
 | `path` | string |  |  | Node path. |
 | `library_path` | string |  |  | .hda file. |
 | `name` | string |  |  | Type name. |
@@ -835,6 +835,7 @@ Digital assets: create turns subnet path into an HDA; save writes path's content
 | `interface` | object |  |  |  |
 | `help` | string |  |  |  |
 | `lock` | boolean |  |  |  |
+| `switch` | `none` \| `path` \| `all` |  |  |  |
 | `limit` | integer |  | `50` | min 1; max 1000 |
 | `cursor` | string |  |  | next_cursor from the previous page. |
 
@@ -849,7 +850,7 @@ Digital assets: create turns subnet path into an HDA; save writes path's content
 ```
 
 ```json
-{"action": "info", "path": "/obj/geo1/rock"}
+{"action": "version", "path": "/obj/geo1/rock", "version": "1.1", "switch": "path"}
 ```
 
 
