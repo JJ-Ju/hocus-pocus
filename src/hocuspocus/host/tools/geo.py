@@ -808,3 +808,284 @@ def geo_read(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
                 stat_rows[column.name] = result
         out["stats"] = stat_rows
     return out
+
+
+# -- geo groups (2.1, D71) -----------------------------------------------------------
+
+GROUPS_PAGE = 50
+"""Groups per page of ``inspect {what: "geo", group_by}`` unless ``count`` says."""
+GROUP_KEY_TYPES = ("string", "int")
+_TOPO_PT = "__hocuspocus_pt"
+_TOPO_PR = "__hocuspocus_pr"
+_TOPO_AREA = "__hocuspocus_area"
+_PROMOTE_CLASS = {"prim": 1, "point": 2, "vertex": 3}
+"""``attribpromote``'s ``inclass``/``outclass`` menu indices (detail is 0)."""
+
+
+def _verb(name: str) -> Any:
+    import hou
+
+    verb = hou.sopNodeTypeCategory().nodeVerb(name)
+    if verb is None:  # pragma: no cover - every 22.0 build has these verbs
+        raise ToolError("internal", f"The {name} SOP verb is not available in this Houdini.")
+    return verb
+
+
+def _topology(geo: Any) -> tuple[Any, Any, Any]:
+    """``(vertex_prim, vertex_point, prim_area)`` as numpy arrays, computed in C++ on a
+    copy of ``geo``: every point and prim numbered into an attribute, both promoted to
+    vertices (``attribpromote``), and each prim's area measured (``measure::2.0``). The
+    cooked geometry is never changed."""
+    import hou
+    import numpy as np
+
+    work = hou.Geometry()
+    work.merge(geo)
+    work.addAttrib(hou.attribType.Point, _TOPO_PT, 0)
+    work.addAttrib(hou.attribType.Prim, _TOPO_PR, 0)
+    work.setPointIntAttribValuesFromString(
+        _TOPO_PT, np.arange(class_count(geo, "point"), dtype=np.int32).tobytes()
+    )
+    work.setPrimIntAttribValuesFromString(
+        _TOPO_PR, np.arange(class_count(geo, "prim"), dtype=np.int32).tobytes()
+    )
+    for name, cls in ((_TOPO_PT, "point"), (_TOPO_PR, "prim")):
+        verb = _verb("attribpromote")
+        verb.setParms(
+            {
+                "inname": name,
+                "inclass": _PROMOTE_CLASS[cls],
+                "outclass": _PROMOTE_CLASS["vertex"],
+                "deletein": 0,
+            }
+        )
+        out = hou.Geometry()
+        verb.execute(out, [work])
+        work = out
+    measure = _verb("measure::2.0")
+    measure.setParms({"grouptype": 1, "measure": 1, "attribname": _TOPO_AREA})
+    measured = hou.Geometry()
+    measure.execute(measured, [work])
+    vprim = np.frombuffer(measured.vertexIntAttribValuesAsString(_TOPO_PR), dtype=np.int32)
+    vpoint = np.frombuffer(measured.vertexIntAttribValuesAsString(_TOPO_PT), dtype=np.int32)
+    area = np.frombuffer(
+        measured.primFloatAttribValuesAsString(_TOPO_AREA), dtype=np.float32
+    ).astype(np.float64)
+    return vprim, vpoint, area
+
+
+def _mask(geo: Any, cls: str, pattern: str, count: int) -> Any:
+    import numpy as np
+
+    mask = np.zeros(count, dtype=bool)
+    mask[group_members(geo, cls, pattern)] = True
+    return mask
+
+
+def _key_column(geo: Any, name: Any) -> tuple[str, Any]:
+    """The class and the attribute ``group_by`` names: a prim attribute first, then a
+    point one; a string or int of size 1."""
+    if not isinstance(name, str) or not name.strip():
+        raise ToolError("invalid_argument", "'group_by' must be an attribute name.")
+    name = name.strip()
+    for cls in ("prim", "point"):
+        attrib = next((a for a in _class_attribs(geo, cls) if a.name() == name), None)
+        if attrib is None:
+            continue
+        kind = attrib_type(attrib)
+        if kind not in GROUP_KEY_TYPES or attrib.size() != 1:
+            raise ToolError(
+                "invalid_argument",
+                f"group_by takes a string or int {cls} attribute of size 1; {name!r} is "
+                f"{kind}{attrib.size() if attrib.size() != 1 else ''}.",
+                hint="Pass it in attribs for its min, max and mean per group of another "
+                "attribute, or read it with rows: true and stats: true.",
+            )
+        return cls, attrib
+    elsewhere = [
+        cls
+        for cls in ("vertex", "detail")
+        if any(a.name() == name for a in _class_attribs(geo, cls))
+    ]
+    names = sorted({a.name() for cls in ("prim", "point") for a in _class_attribs(geo, cls)})
+    raise ToolError(
+        "invalid_argument",
+        f"No prim or point attribute named {name!r} to group by"
+        + (f" (it is {a_or_an(elsewhere[0])} attribute)." if elsewhere else "."),
+        hint="group_by takes a prim attribute (surface, name, mat_id) or a point one; "
+        "promote a vertex attribute first.",
+        candidates=difflib.get_close_matches(name, names, n=5, cutoff=0.3) or names[:10],
+    )
+
+
+def _stats_columns(geo: Any, cls: str, wanted: Any) -> list[_Column]:
+    """The numeric attributes ``attribs`` names for the group stats: of any class for prim
+    groups (a vertex attribute over the prims of each group), points for point groups."""
+    if wanted is None:
+        return []
+    if isinstance(wanted, str):
+        wanted = [wanted]
+    if not isinstance(wanted, list) or not all(isinstance(w, str) for w in wanted):
+        raise ToolError("invalid_argument", "'attribs' must be a list of attribute names.")
+    owners = ("prim", "point", "vertex") if cls == "prim" else ("point",)
+    picked: list[_Column] = []
+    for name in wanted:
+        column = None
+        for owner in owners:
+            attrib = next((a for a in _class_attribs(geo, owner) if a.name() == name), None)
+            if attrib is not None:
+                column = _Column(geo, owner, attrib)
+                break
+        if column is None:
+            names = sorted({a.name() for owner in owners for a in _class_attribs(geo, owner)})
+            raise ToolError(
+                "invalid_argument",
+                f"No {', '.join(owners)} attribute named {name!r} for the group stats.",
+                candidates=difflib.get_close_matches(name, names, n=5, cutoff=0.3) or names[:10],
+            )
+        if not column.numeric:
+            raise ToolError(
+                "invalid_argument",
+                f"attribs takes numeric attributes for the group stats; {name!r} is {column.type}.",
+                hint=f"group_by {name!r} counts the elements per value instead.",
+            )
+        picked.append(column)
+    return picked
+
+
+def _group_keys(column: _Column) -> tuple[list[Any], Any]:
+    """``(values, index)``: the distinct values of a key column and each element's index
+    into them."""
+    import numpy as np
+
+    values = column.values()
+    if column.type == "int":
+        keys, inverse = np.unique(values[:, 0], return_inverse=True)
+        return [int(k) for k in keys.tolist()], inverse
+    keys, inverse = np.unique(np.asarray(values, dtype=object), return_inverse=True)
+    return [str(k) for k in keys.tolist()], inverse
+
+
+def _reduce(keys: Any, values: Any, groups: int) -> dict[str, Any]:
+    """Per group ``min``, ``max`` and ``mean`` (arrays of shape (groups, size)) of
+    ``values`` (n, size) grouped by ``keys`` (n); a group without elements is NaN."""
+    import numpy as np
+
+    values = values.reshape(len(keys), -1)
+    size = values.shape[1]
+    lo = np.full((groups, size), np.nan)
+    hi = np.full((groups, size), np.nan)
+    mean = np.full((groups, size), np.nan)
+    if len(keys):
+        order = np.argsort(keys, kind="stable")
+        sorted_keys = keys[order]
+        block = values[order].astype(np.float64)
+        starts = np.flatnonzero(np.r_[True, sorted_keys[1:] != sorted_keys[:-1]])
+        present = sorted_keys[starts]
+        lo[present] = np.minimum.reduceat(block, starts, axis=0)
+        hi[present] = np.maximum.reduceat(block, starts, axis=0)
+        counts = np.diff(np.r_[starts, len(sorted_keys)])
+        mean[present] = np.add.reduceat(block, starts, axis=0) / counts[:, None]
+    return {"min": lo, "max": hi, "mean": mean}
+
+
+def _cell(row: Any) -> Any:
+    items = [None if math.isnan(v) else num(v) for v in row.tolist()]
+    return items[0] if len(items) == 1 else items
+
+
+def geo_groups(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
+    """``inspect {what: "geo", group_by}`` (2.1, D71): per value of a prim (or point)
+    attribute, the prim, point and triangle counts, the area and the bounding box, and
+    ``attribs``' min, max and mean (prim, point or vertex attributes of those prims), over
+    the elements of ``group`` when given. Rows under ``columns``, largest group first,
+    paged by ``count`` and ``cursor`` and cut at :data:`ROWS_BYTE_BUDGET`."""
+    import numpy as np
+
+    sop = resolve_sop(args.get("path"))
+    frame = args.get("frame")
+    geo = cooked_geometry(sop, frame)
+    cls, key_attrib = _key_column(geo, args.get("group_by"))
+    cursor = args.get("cursor")
+    start = parse_offset(cursor) if cursor not in (None, "") else int_arg(args, "start", 0, 0)
+    count = min(int_arg(args, "count", GROUPS_PAGE, 1), 10_000)
+    group = args.get("group")
+    if group is not None and (not isinstance(group, str) or not group.strip()):
+        raise ToolError("invalid_argument", "'group' must be a non-empty string.")
+    stats_cols = _stats_columns(geo, cls, args.get("attribs"))
+    out: dict[str, Any] = {"path": sop.path(), "group_by": key_attrib.name(), "class": cls}
+    if frame is not None:
+        out["frame"] = num(frame)
+    if group:
+        out["group"] = group.strip()
+
+    values, index = _group_keys(_Column(geo, cls, key_attrib))
+    n_groups = len(values)
+    n_elems = class_count(geo, cls)
+    selected = _mask(geo, cls, group.strip(), n_elems) if group else np.ones(n_elems, dtype=bool)
+    keys = np.where(selected, index, -1)
+    live = keys >= 0
+    positions = np.frombuffer(geo.pointFloatAttribValuesAsString("P"), dtype=np.float32)
+    positions = positions.reshape(-1, 3)
+    data: dict[str, Any] = {}
+    if cls == "prim":
+        vprim, vpoint, area = _topology(geo)
+        nverts = np.bincount(vprim, minlength=n_elems)
+        closed_poly = _mask(geo, "prim", "@intrinsic:typename==Poly", n_elems) & _mask(
+            geo, "prim", "@intrinsic:closed==1", n_elems
+        )
+        tris = np.where(closed_poly & (nverts >= 3), nverts - 2, 0)
+        size_of = np.bincount(keys[live], minlength=n_groups)
+        data["triangles"] = np.bincount(keys[live], weights=tris[live], minlength=n_groups)
+        data["area"] = np.bincount(keys[live], weights=area[live], minlength=n_groups)
+        vkeys = keys[vprim]
+        vlive = vkeys >= 0
+        n_points = max(1, class_count(geo, "point"))
+        pairs = np.unique(vkeys[vlive].astype(np.int64) * n_points + vpoint[vlive])
+        pair_keys, pair_points = pairs // n_points, pairs % n_points
+        data["points"] = np.bincount(pair_keys, minlength=n_groups)
+        box = _reduce(pair_keys, positions[pair_points], n_groups)
+        for col in stats_cols:
+            vals = col.values()
+            if col.cls == "prim":
+                data[col.name] = _reduce(keys[live], vals[live], n_groups)
+            elif col.cls == "point":
+                data[col.name] = _reduce(pair_keys, vals[pair_points], n_groups)
+            else:
+                data[col.name] = _reduce(vkeys[vlive], vals[vlive], n_groups)
+        columns = ["value", "prims", "points", "triangles", "area", "bbox_min", "bbox_max"]
+    else:
+        size_of = np.bincount(keys[live], minlength=n_groups)
+        box = _reduce(keys[live], positions[live], n_groups)
+        for col in stats_cols:
+            data[col.name] = _reduce(keys[live], col.values()[live], n_groups)
+        columns = ["value", "points", "bbox_min", "bbox_max"]
+    for col in stats_cols:
+        columns += [f"{col.name}.min", f"{col.name}.max", f"{col.name}.mean"]
+
+    present = [g for g in range(n_groups) if size_of[g] > 0]
+    present.sort(key=lambda g: (-int(size_of[g]), str(values[g])))
+    out["total"] = len(present)
+    rows: list[list[Any]] = []
+    used = 0
+    for g in present[start : start + count]:
+        row: list[Any] = [values[g], int(size_of[g])]
+        if cls == "prim":
+            row += [int(data["points"][g]), int(data["triangles"][g]), num(float(data["area"][g]))]
+        row += [_cell(box["min"][g]), _cell(box["max"][g])]
+        for col in stats_cols:
+            reduced = data[col.name]
+            row += [_cell(reduced["min"][g]), _cell(reduced["max"][g]), _cell(reduced["mean"][g])]
+        size = len(json.dumps(row, separators=(",", ":"), default=str))
+        if rows and used + size > ROWS_BYTE_BUDGET:
+            out["truncated"] = True
+            break
+        used += size + 1
+        rows.append(row)
+    out["columns"] = columns
+    out["rows"] = rows
+    if start:
+        out["start"] = start
+    if start + len(rows) < len(present):
+        out["next_cursor"] = str(start + len(rows))
+    return out
