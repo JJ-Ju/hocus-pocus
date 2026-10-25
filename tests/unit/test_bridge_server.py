@@ -775,7 +775,7 @@ def test_resources_over_mcp_client():
     uris = {t.uri_template for t in templates}
     assert "houdini://type/{category}/{name}{?parms,folder,detail}" in uris
     assert not any("nodetype" in uri or "houdini://job/" in uri for uri in uris)  # 1.4, gone
-    assert "HocusPocus drives a live Houdini" in guide.contents[0].text
+    assert "## Recipes" in guide.contents[0].text  # the instructions are initialize's (D65)
     assert json.loads(status.contents[0].text)["connected"] is None
     assert [p.name for p in prompts] == list(PROMPTS)
     assert "a torus" in prompt.messages[0].content.text

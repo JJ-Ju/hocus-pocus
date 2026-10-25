@@ -940,10 +940,11 @@ conveniences (`node_create`, `parm_set`) + 5 execution (`cook`, `render`, `look`
 - `houdini://type/{category}/{name}{?parms,folder,detail}`,
   `houdini://types{?q,category,limit,cursor}`: `inspect what: type`, `search kind: types`
 - `houdini://problems{?root}`, `houdini://events{?since,limit}` (subscribable)
-- `hocuspocus://guide` — the operating manual: the instructions below, the resources and
-  recipes (build and check with `edit`, two Houdinis with roles and `on`, Copernicus,
+- `hocuspocus://guide` — the operating manual: a pointer to the instructions below (2.1,
+  D65: they come with `initialize`; the guide topic `instructions` returns them), the
+  resources and recipes (build and check with `edit`, two Houdinis with roles and `on`, Copernicus,
   Flipbook frames, spare parms, no dialogs in a GUI session); at most 8 KB, the 2.0 guide
-  at most 6.5 KB (M4), unit tests enforce both (1.3, review 19 papercut 10: with the tool
+  at most 6.5 KB (M4) and the 2.1 one 4.5 KB (D65), unit tests enforce both (1.3, review 19 papercut 10: with the tool
   reference appended it was 52 KB); also `inspect {what: "guide", target?}` (2.1, D54)
 - `hocuspocus://tools` — the tool reference rendered from the spec files for the bridge's
   profile (the text of `docs/tools.md`, every tool's `notes` and examples, and the
@@ -1588,6 +1589,7 @@ bible (tag `v1.4.0`). D35 to D44 are the 2.0 decisions, D45 on the 2.1 ones.
 - **D52** (2.1) `look` at a SOP shows that SOP alone, through a temporary Object Merge object in the scene that renders, whatever network holds it (§4.6, §8). *Review 26 P1 #3: moving the display flag showed nothing for a SOP inside a subnet or a locked asset, so the agent built and re-pointed its own preview object (3 edits and many parm changes); an Object Merge reads any SOP and leaves the user's flags alone.*
 - **D53** (2.1) `cook profile` times what a normal cook of the node cooks, learned from Houdini's `inputAncestors(only_used_inputs=True)` after a normal cook, and lists the other ancestors in `inactive` (§4.6). *Review 26 P1 #8: force-cooking every ancestor timed a Switch's unselected interior branch, so "interiors off costs nothing" looked false and proving it took a non-forced cook and an `inspect`.*
 - **D54** (2.1) The guide and each tool's reference are also `inspect {what: "guide" | "tool"}`, answered by the bridge without a Houdini, and hints that cite `hocuspocus://tools` name that route first (§4.4, §4.8). *Review 26 P1 #10: Claude Code subagents have no resource reader, so the hints pointed at text the agent could not open; a `what` costs a few enum bytes where a new tool would cost a schema.*
+- **D65** (2.1) `hocuspocus://guide` (and `inspect {what: "guide"}`) no longer repeats the server instructions: its `## Instructions` section is two sentences pointing at `initialize` and at the guide topic `instructions`, which returns them whole; the guide cap drops from 6.5 KB to 4.5 KB (§4.8). *Stream C, the scorecard bytes margin (spec-2.0 §7): the 2.3 KB of instructions were a third of the 6.4 KB guide, the largest read of the scorecard, and every MCP client already holds them from `initialize` (a Claude Code subagent too); a client that drops them is one call from them. One guide read was kept rather than a topic index plus per-topic reads: an agent opening the guide wants the recipes, and an index would add a call per recipe to a workload whose calls may not grow.*
 
 ### Verified deviations (M5 reconciliation, 1.0; still true)
 

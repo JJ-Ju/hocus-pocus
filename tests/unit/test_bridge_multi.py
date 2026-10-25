@@ -571,13 +571,15 @@ def test_guide_is_instructions_and_recipes_under_8_kb():
     assert "opengl_rop" not in guide and 'type: "opengl"' not in guide
 
 
-def test_v2_guide_is_under_6_5_kb_and_warns_about_gui_dialogs():
-    """spec-2.0 §7 M4: the 2.0 guide fits 6.5 KB with every recipe, and carries the GUI
+def test_v2_guide_is_under_4_5_kb_and_warns_about_gui_dialogs():
+    """spec-2.0 §7 M4: the 2.0 guide fits 6.5 KB with every recipe; 2.1 (D65) 4.5 KB, since
+    it points at the instructions instead of repeating them. It carries the GUI
     modal-dialog paragraph (docs/parity.md G5)."""
-    from hocuspocus.bridge.instructions import GUIDE_2X_MAX_BYTES, guide_text
+    from hocuspocus.bridge.instructions import GUIDE_2X_MAX_BYTES, INSTRUCTIONS, guide_text
 
     guide = guide_text()
-    assert len(guide.encode("utf-8")) <= GUIDE_2X_MAX_BYTES == 6656
+    assert len(guide.encode("utf-8")) <= GUIDE_2X_MAX_BYTES == 4608
+    assert INSTRUCTIONS not in guide and 'target: "instructions"' in guide
     for heading in (
         "### Build, check and look",
         "### Two Houdinis",
