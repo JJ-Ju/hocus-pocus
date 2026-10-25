@@ -15,7 +15,7 @@ SPEC = ToolSpec(
         "undo step or dirty flag."
     ),
     notes=(
-        "Replaces viewport_capture (2.0): the same renderers, chosen by quality. target "
+        "The renderer is chosen by quality. target "
         "kinds: omitted, /obj unless it displays nothing and /stage has a display LOP (a note "
         "names a stage or COP network it did not show); an object frames it (fit_used "
         "target); a SOP frames it and shows it alone (2.1): the render draws only that SOP's "

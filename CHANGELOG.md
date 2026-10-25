@@ -242,6 +242,16 @@ one for the 2.0.x releases, and 2.1 removes it.
   a different case) and the hint `Use frames instead of frame_range.` followed by the
   tool's reference, `inspect {what: "tool", target: "render"} or hocuspocus://tools`.
   Nested keys carry their path (`launch.hipp`, `ops[0].paht`).
+- The reference no longer describes tools 2.1 removed (stream F). `search`'s notes (in
+  `hocuspocus://tools` and `inspect {what: "tool"}`) said each kind "takes its 1.4 tool's
+  arguments" and named `node_type_search` and `node_find`; they now list each kind's own
+  arguments and defaults. The same names left the notes of `edit`, `inspect`, `events`,
+  `pdg`, `look`, `node_create` and `parm_set`, and `tests/unit/test_hint_profiles.py` fails
+  on a removed tool's name in any spec text, the instructions, the guide or a prompt. The
+  `tools/list` text is unchanged.
+- The File Cache output hint read "...then file to the path". It now says to set the file
+  parm to the path wanted and shows the call: `Set the output with ... filemethod ...,
+  then set the file parm to the path you want (... file ...); then render without output.`
 
 ## 2.0.0 (2026-10-14)
 

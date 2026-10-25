@@ -35,7 +35,7 @@ SPEC = ToolSpec(
         "gets deprecated: true and a note with its reason or replacement (the note once per "
         "type per Houdini session). An input is "
         "{index or name, from, output (default 0)}. "
-        "layout good_position places new nodes. return full gives node_info blocks listing only"
+        "layout good_position places new nodes. return full gives node blocks, as inspect node does, listing only"
         " the parms the call set, with strings over 200 characters as {elided, head}; identical"
         " error lists after the first become errors_same_as. Each new node is cooked once to "
         "report its problems, and its row carries cook_ms (a first cook of an HDA such as "

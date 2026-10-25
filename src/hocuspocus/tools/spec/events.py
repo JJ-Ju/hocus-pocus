@@ -13,8 +13,8 @@ SPEC = ToolSpec(
         "origin (agent|houdini|other). Pass next_since back as since."
     ),
     notes=(
-        "Watched nodes: those HocusPocus created, edited, read with node_info or listed with"
-        " network_describe, and nodes created directly under /obj, /stage, /mat, /out and "
+        "Watched nodes: those HocusPocus created, edited, read with inspect node or listed with"
+        " inspect network, and nodes created directly under /obj, /stage, /mat, /out and "
         "/tasks. ParmTupleChanged has detail.parm and, on a multi-component tuple, "
         "components (those whose value or keys changed; a burst within 0.1 s is one event "
         "with their union) and keyed (those of them with keyframes now). FlagChanged has "

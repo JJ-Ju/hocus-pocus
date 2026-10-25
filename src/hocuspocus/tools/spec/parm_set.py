@@ -40,7 +40,7 @@ SPEC = ToolSpec(
         "menu only the node builds (a Copernicus signature) takes a token or label like any "
         "menu. Ramp keys and values come back at 6 significant digits, without raw. "
         "raw is left out when it equals value, and long strings are "
-        "elided as in parm_get. Tuples report per-component expressions and the keyed component"
+        "elided as in inspect parms. Tuples report per-component expressions and the keyed component"
         " names. Type mismatches fail with invalid_value naming the template type and range. "
         "On a LOP a USD attribute name (inputs:intensity) sets Houdini's encoded parm "
         "(xn__inputsintensity_i0a), here and in node_create parms; path is the resolved one."
