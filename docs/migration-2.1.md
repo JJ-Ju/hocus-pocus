@@ -89,6 +89,19 @@ Each dropped field was a default, a null, or a copy of a field that stays.
   touched while it renders.
 - **Menu `candidates`** are ranked by similarity to the value and list a menu of up
   to 50 items whole (D72); 2.0 gave the first 20 in menu order.
+- **`cook {force: true}` presses the node's Reload button** first when it has one, and the
+  row adds `reloaded: true` (D80). A forced cook of a File COP now reads the file again;
+  one of an Alembic or agent SOP clears its cache as the button does.
+- **`cook`'s `force` schema** is `false | true | "chain"` (D81); a client that builds
+  arguments from the schema should not assume a boolean.
+- **New keys in reads** a strict client may see: `disable_when` / `hide_when` in `inspect
+  parms` and `inspect type` rows with `detail: full`, `interface.conditionals` in `hda
+  info` (D82); `relationships` and `subsets` in `inspect stage` rows that list attributes
+  or bindings (D84); `hint` on `problems` rows (D81); `notes` on `inspect {what:
+  "image"}`; `output_bytes` with `look {output}` (D86). `help_source` of an asset is
+  `<library>:HelpText` rather than absent (D83).
+- **A comma in a `parms` or stage `attribs` glob** separates alternatives (D85); 2.0 read
+  it as part of one name and matched nothing.
 
 ## 4. New, and worth adopting
 
@@ -113,3 +126,5 @@ Each dropped field was a default, a null, or a copy of a field that stays.
   version without `houdini_python` (D73).
 - `inspect {what: "guide"}` and `inspect {what: "tool", target}` read the guide and a
   tool's reference without an MCP resource reader.
+- `cook {force: "chain"}` recooks a node's inputs as well (D81), and `look {output:
+  "x.jpg", jpeg_quality: 80}` sets the JPEG's size (D86).

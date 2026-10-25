@@ -77,6 +77,26 @@ one for the 2.0.x releases, and 2.1 removes it.
 - **`look {wait_s}`** (§4.6, D75): a look runs as a job; past `wait_s` (default
   `job_threshold_s`) the call returns `{job_id, state: "running"}` and `job result`
   returns the picture, so a long final Karma look no longer fails at 30 s.
+- **`cook {force: "chain"}`** (§4.6, D81; review 28 r21 friction 4) force-cooks the input
+  ancestors a normal cook of the node uses, inputs first and each once, then the node: a
+  result an input kept from before a change (a Material SOP cooked before its materials
+  existed) is redone. The row adds `inputs_cooked`, `inputs_reloaded` and
+  `input_problems`.
+- **`look {jpeg_quality}`** (§4.6, D86; friction 2): 1-100 for a `.jpg` `output`
+  (default 92), and the result's `output_bytes` gives the file's size. `render`'s notes
+  say how to get a JPEG of chosen size from a ROP (`look {target: <ROP>, quality:
+  final, output, jpeg_quality}`).
+- **Parm conditionals in reads** (§4.4, §4.7, D82; friction 5): `inspect parms` and
+  `inspect type` with `detail: full` give each parm's `disable_when` / `hide_when`, and
+  `hda info` adds `interface.conditionals`, so checking an asset's interface needs no
+  `houdini_python`.
+- **An asset's own help** (§4.4, D83): `inspect {what: "type", include_help: true}` reads
+  the definition's `HelpText` section when nodes.zip has no entry (`help_source:
+  "<library>:HelpText"`), with its summary as `description`.
+- **Material bindings on the stage** (§4.4, D84; friction 6): `inspect stage` rows that
+  list attributes also list authored relationships (`material:binding`) under the same
+  `attribs` glob, and rows with attributes or `bindings` list a mesh's GeomSubsets
+  (per-face materials) with the material each is bound to.
 
 ### Changed
 
@@ -97,6 +117,16 @@ one for the 2.0.x releases, and 2.1 removes it.
   (`volume` finds `atmosphere`, "Volume (shader)"); 2.0 listed the first 20.
 - **`attribs` takes a string** of names separated by commas or spaces (D76), as its schema
   always said.
+- **`cook {force: true}` reloads files** (§4.6, D80; friction 3): it presses the node's own
+  Reload button first (File COP and SOP, Alembic, Sublayer and the other readers), since a
+  forced cook kept a File COP's image after its file was overwritten; the row says
+  `reloaded: true`. `look` at a COP and `inspect {what: "image"}` note a File COP whose
+  file changed on disk after it loaded it.
+- **`problems` names messages that may be stale** (§4.4, D81): an error or warning naming a
+  node that exists now, on a node not cooked since, gets a `hint` with the cook that
+  rechecks it.
+- **Parm and attribute globs take commas** (§4.4, D85; friction 8): `parms: "size,t"` is
+  `size|t` in `inspect parms` and `inspect type`, and so is `attribs` on `inspect stage`.
 - The `houdini_busy` hint of a call that outlasted its wait names what the profile's tools
   take for long work (`wait_s` and a job on `cook`, `render` and `look`; `timeout_s` on
   `houdini_python`), where it said "raise timeout_s, or use a job" to every tool.
