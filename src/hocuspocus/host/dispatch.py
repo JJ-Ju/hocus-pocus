@@ -39,6 +39,18 @@ marking, reports ``undo_label: null``, and allows the call in read-only mode whe
 args had ``dry_run: true``. The key is always stripped from the result."""
 
 
+AFTER_KEY = "_after"
+"""A main-thread tool's result may carry ``"_after": fn``: once the main-thread work is
+over (its undo group closed, the scene marked dirty), the dispatcher pops it and returns
+``fn(result, remaining_s)``, called on the request's thread with the seconds left of the
+call's timeout. ``edit`` cooks its nodes this way, as a job the call waits on for a while
+(BIBLE D58): a long cook can then no longer make an applied edit's result time out. ``fn``
+must not raise; the key is always stripped."""
+
+AFTER_MARGIN_S = 2.0
+"""Seconds of the call's timeout kept back from an ``_after`` step for the response."""
+
+
 _CALL = threading.local()
 
 
@@ -63,10 +75,37 @@ def current_request_id() -> str | None:
     return getattr(_CALL, "request_id", None)
 
 
+def _off_main_thread(executor: Any) -> bool:
+    on_main = getattr(executor, "on_main_thread", None)
+    return bool(callable(on_main) and not on_main())
+
+
+def after_allowed() -> bool:
+    """Whether the running call may hand work to an :data:`AFTER_KEY` step that waits on
+    main-thread jobs: true when the call came from another thread than Houdini's main
+    one (an HTTP request), false for an inline call (a GUI shell, in-process tests) or
+    outside a call."""
+    return bool(getattr(_CALL, "after_ok", False))
+
+
 def _pop_changed(result: Any) -> bool | None:
     if isinstance(result, dict) and CHANGED_KEY in result:
         return bool(result.pop(CHANGED_KEY))
     return None
+
+
+def _run_after(after: Callable[..., Any], result: Any, remaining: float, ctx: Any) -> Any:
+    """:data:`AFTER_KEY`'s step. Its failure never fails a call whose work is done: the
+    result goes back as the main-thread work left it, with a note."""
+    try:
+        return after(result, remaining)
+    except Exception as exc:
+        ctx.logger.error("after-step failed: %s", exc, exc_info=exc)
+        if isinstance(result, dict):
+            result.setdefault("notes", []).append(
+                f"The call's work is done, but its follow-up step failed: {exc}"
+            )
+        return result
 
 
 def _read_only_error(tool: str) -> ToolError:
@@ -372,6 +411,8 @@ class Dispatcher:
                 request_id if isinstance(request_id, str) and request_id else None,
                 timing,
                 hint_profile(getattr(self.ctx.config, "profile", "full"), profile),
+                # An after-step can wait on main-thread jobs only off the main thread.
+                after_ok=_off_main_thread(getattr(self.ctx, "executor", None)),
             )
             timing["main"] = impl.main_thread
             sent = time.perf_counter()
@@ -387,9 +428,13 @@ class Dispatcher:
                         result = work()
                 finally:
                     timing["metered"] = meter.close()
+            after = result.pop(AFTER_KEY, None) if isinstance(result, dict) else None
             changed = _pop_changed(result)
             if read_only_dry_run and changed is not False:
                 raise _read_only_error(tool)
+            if callable(after):
+                remaining = effective - (time.perf_counter() - started) - AFTER_MARGIN_S
+                result = _run_after(after, result, max(0.0, remaining), self.ctx)
             if changed is False:
                 undo_label = None
             return ok_envelope(
@@ -416,6 +461,7 @@ class Dispatcher:
         request_id: str | None = None,
         timing: dict[str, Any] | None = None,
         profile: str = "full",
+        after_ok: bool = False,
     ) -> Callable[[], Any]:
         ctx = self.ctx
 
@@ -426,6 +472,7 @@ class Dispatcher:
             _CALL.timeout_s = timeout_s
             _CALL.request_id = request_id
             _CALL.tool = impl.name
+            _CALL.after_ok = after_ok
             began = time.perf_counter()
             try:
                 with migration.using_profile(profile):
@@ -434,6 +481,7 @@ class Dispatcher:
                 _CALL.timeout_s = None
                 _CALL.request_id = None
                 _CALL.tool = None
+                _CALL.after_ok = False
                 if timing is not None:
                     timing["work_s"] = time.perf_counter() - began
 

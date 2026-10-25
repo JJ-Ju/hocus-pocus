@@ -1,10 +1,12 @@
 """``edit`` 2.1 (review 26 P2): ops checked in order against what the earlier ops left
-(BIBLE D56), ``dry_run`` and the run agreeing, ``partial: "stop"`` (D57), a subnet's own inputs as wire sources (D59), the
+(BIBLE D56), ``dry_run`` and the run agreeing, ``partial: "stop"`` (D57), the echo's cook
+after the call's main-thread work (D58), a subnet's own inputs as wire sources (D59), the
 material, unload and export flags and MaterialX signature menus (D60)."""
 
 from __future__ import annotations
 
 import contextlib
+import time
 
 import pytest
 
@@ -201,6 +203,73 @@ def test_partial_stop_keeps_the_prefix_and_names_the_failure(client):
     assert [(f["item"], f["error"]["code"]) for f in result["failed"]] == [(2, "invalid_value")]
     assert result["ids"] == {"a": "/obj/g/box1", "b": "/obj/g/sphere1"}
     assert _children("/obj/g") == ["box1", "sphere1"]
+
+
+# -- the echo's cook (P2 friction 5) -------------------------------------------------------
+
+
+def test_errors_still_come_back_in_the_rows(client):
+    hou.node("/obj").createNode("geo", "g")
+    result = client.ok(
+        "edit",
+        {
+            "ops": [
+                {
+                    "op": "create",
+                    "parent": "/obj/g",
+                    "type": "attribwrangle",
+                    "name": "w",
+                    "parms": {"snippet": "@P.y = nosuchfunction();"},
+                }
+            ]
+        },
+    )
+    (row,) = result["nodes"]
+    assert row["errors"] and row.get("cook_state") == "error"
+    assert "job_id" not in result
+
+
+@pytest.mark.slow
+def test_a_long_cook_goes_on_as_a_job_and_the_edit_is_applied(client, host):
+    host.config.job_threshold_s, saved = 0.3, host.config.job_threshold_s
+    try:
+        hou.node("/obj").createNode("geo", "g")
+        envelope = client.call(
+            "edit",
+            {
+                "ops": [
+                    {"op": "create", "id": "box", "parent": "/obj/g", "type": "box"},
+                    {
+                        "op": "create",
+                        "id": "slow",
+                        "parent": "/obj/g",
+                        "type": "python",
+                        "inputs": [{"from": "$box"}],
+                        "parms": {"python": "import time\ntime.sleep(1.5)"},
+                    },
+                ]
+            },
+        )
+        assert envelope["ok"], envelope
+        result = envelope["result"]
+        # The host answered before the cook ended (in process the client's thread pumps
+        # Houdini's main thread, so it reads the answer only once the cook step is over).
+        assert envelope["_meta"]["elapsed_ms"] < 1400
+        rows = {row["path"]: row for row in result["nodes"]}
+        assert rows[result["ids"]["slow"]]["cook_state"] == "cooking"
+        assert result["state"] == "running" and result["job_id"]
+        assert hou.node(result["ids"]["slow"]) is not None  # applied
+        deadline = time.time() + 20
+        while True:
+            status = client.ok("job", {"action": "result", "job_id": result["job_id"]})
+            if status["state"] != "running" or time.time() > deadline:
+                break
+            time.sleep(0.1)
+        assert status["state"] == "done"
+        paths = [row["path"] for row in status["result"]["nodes"]]
+        assert result["ids"]["slow"] in paths
+    finally:
+        host.config.job_threshold_s = saved
 
 
 # -- a subnet's own inputs (P2 friction 6) -------------------------------------------------

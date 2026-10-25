@@ -32,6 +32,7 @@ result. So there is one undo policy, one rollback and one echo engine.
   (``path``, ``type``, and only the notable problems; each cooked once at the end) with the
   ops' results folded in and an ``ids`` map; ``return: ops`` adds one row per op;
   ``return: full`` gives the 1.4 full shapes (flags, parm rows with long strings elided).
+  ``edit`` cooks off the call's main-thread work (:func:`cook_targets`, D58).
 
 Pure Python apart from the op handlers, which import ``hou`` and the tool families lazily
 (the families import this module).
@@ -312,6 +313,8 @@ class Result:
     plan: Plan
     results: list[OpResult]
     state: State
+    rows: dict[int, dict[str, Any]] = field(default_factory=dict)
+    """Session id -> the node's row in the :func:`echo` (for :func:`patch_rows`)."""
 
     @property
     def failures(self) -> dict[int, dict[str, Any]]:
@@ -1666,7 +1669,38 @@ FOLDED_NODE_KEYS = ("old_path", "paired_with", "deprecated", "hda", "notes", "si
 """Op results that belong to one node and are folded into its ``summary`` row."""
 
 
-def echo(result: Result, mode: str) -> dict[str, Any]:
+COOKING: dict[str, Any] = {"errors": [], "warnings": [], "messages": [], "cook_state": "cooking"}
+"""The problems of a node whose echo cook still runs as a job (D58)."""
+
+PROBLEM_KEYS = frozenset(
+    ("errors", "warnings", "messages", "cook_state", "cook_ms", "hint", "errors_same_as",
+     "warnings_same_as")
+)  # fmt: skip
+"""The keys of a node row that its cook decides (:func:`patch_rows`)."""
+
+
+def cook_targets(result: Result) -> list[tuple[int, Any]]:
+    """``(session id, node)`` of every touched node the echo cooks: touched by an op that
+    cooks, in a category a mutation result cooks (``CHEAP_COOK_CATEGORIES``), in
+    first-touch order."""
+    from .tools._diag import CHEAP_COOK_CATEGORIES
+
+    out = []
+    for node, cook in result.touched():
+        if not cook:
+            continue
+        try:
+            category = node.type().category().name()
+        except Exception:
+            continue
+        if category in CHEAP_COOK_CATEGORIES:
+            sid = _session_id(node)
+            if sid is not None:
+                out.append((sid, node))
+    return out
+
+
+def echo(result: Result, mode: str, *, pending: Iterable[int] = ()) -> dict[str, Any]:
     """The ``edit`` result.
 
     ``summary``: ``nodes`` (one :func:`compact_row` per touched node, cooked once, with
@@ -1676,11 +1710,24 @@ def echo(result: Result, mode: str) -> dict[str, Any]:
     ``partial``: ``[{item, op, id?, error}]``), ``applied`` (``partial: "stop"`` after a
     failure: how many ops ran). ``ops`` is ``results`` (one row per op) plus the compact
     ``nodes``; ``full`` is the 1.4 full shapes (flags, messages, parm rows). Identical
-    error lists after the first become ``errors_same_as`` outside ``full``."""
+    error lists after the first become ``errors_same_as`` outside ``full``.
+
+    Nodes whose session id is in ``pending`` are not cooked here: their rows carry
+    ``cook_state: "cooking"`` until :func:`patch_rows` fills in their cook (``edit`` cooks
+    them after the call's main-thread work, D58); ``result.rows`` maps each session id to
+    its node row for that."""
     from .tools import nodes as N
 
+    waiting = set(pending)
+    result.rows = {}
+
+    def problems_of(node: Any, cook: bool) -> dict[str, Any]:
+        if _session_id(node) in waiting:
+            return dict(COOKING)
+        return node_problems(node, cook)
+
     if mode == "summary":
-        out = _summary_echo(result)
+        out = _summary_echo(result, problems_of, waiting)
     else:
         rows: list[dict[str, Any]] = []
         for res in result.results:
@@ -1694,8 +1741,10 @@ def echo(result: Result, mode: str) -> dict[str, Any]:
             rows.append(row)
         blocks: list[dict[str, Any]] = []
         for node, cook in result.touched():
-            blocks.append(node_block(node, node_problems(node, cook), mode))
-        if mode == "ops":
+            block = node_block(node, problems_of(node, cook), mode)
+            result.rows[_session_id(node)] = block
+            blocks.append(block)
+        if mode == "ops" and not waiting:
             N.collapse_problems(blocks)
         out = {"results": rows, "nodes": blocks}
         if result.failures:
@@ -1720,13 +1769,42 @@ def node_block(node: Any, problems: dict[str, Any], mode: str) -> dict[str, Any]
     return block
 
 
-def _summary_echo(result: Result) -> dict[str, Any]:
+def patch_rows(
+    out: dict[str, Any],
+    rows: dict[int, dict[str, Any]],
+    cooked: dict[int, Any],
+    *,
+    collapse: bool,
+) -> None:
+    """Put each cooked node's problems (``cooked``: session id -> its row as
+    :func:`node_block` builds it after the cook) into its row of ``out``, keeping the
+    row's other keys (the ops' folded results); with ``collapse`` (not ``full``) report
+    identical error lists once, which :func:`echo` left to this. Pure Python: it runs
+    off the main thread (D58)."""
+    from .tools import nodes as N
+
+    for sid, fresh in cooked.items():
+        row = rows.get(sid)
+        if row is None:
+            continue
+        rest = {k: v for k, v in row.items() if k not in fresh and k not in PROBLEM_KEYS}
+        row.clear()
+        row.update(fresh)
+        row.update(rest)
+    if collapse and isinstance(out.get("nodes"), list):
+        N.collapse_problems(out["nodes"])
+
+
+def _summary_echo(
+    result: Result, problems_of: Callable[[Any, bool], dict[str, Any]], waiting: set[int]
+) -> dict[str, Any]:
     from .tools import nodes as N
 
     blocks: dict[str, dict[str, Any]] = {}
     for node, cook in result.touched():
-        row = compact_row(node, node_problems(node, cook))
+        row = compact_row(node, problems_of(node, cook))
         blocks[row["path"]] = row
+        result.rows[_session_id(node)] = row
     out: dict[str, Any] = {}
     ids: dict[str, str] = {}
     failed: list[dict[str, Any]] = []
@@ -1742,7 +1820,8 @@ def _summary_echo(result: Result) -> dict[str, Any]:
             ids[res.op.id] = _current_path(res.node) or res.path  # after later renames
         _fold(res, result.state, blocks, out)
     rows = list(blocks.values())
-    N.collapse_problems(rows)
+    if not waiting:
+        N.collapse_problems(rows)  # else patch_rows does, once the cooks are in
     final: dict[str, Any] = {"nodes": rows}
     if ids:
         final["ids"] = ids
