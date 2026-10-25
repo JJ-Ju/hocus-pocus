@@ -52,6 +52,17 @@ one for the 2.0.x releases, and 2.1 removes it.
   response budget comes back whole with `over_budget: true` (review 26 P1 #2, #9).
 - `cook {profile: true}` lists the input ancestors it did not profile in
   `inactive: {count, paths}` (review 26 P1 #8, D53).
+- **`edit` `partial: "stop"`** (BIBLE §4.5, D57; review 26 P2 friction 2): the ops before
+  the first failing op are kept and none after it runs; the result adds `applied` (how
+  many ran) next to `failed`, so a bad value at op 50 of 70 costs a resend of the last 20
+  ops, not of the whole build. Atomic stays the default.
+- **A subnet's own inputs as wire sources** (§4.5, D59; P2 escape 3): inside a subnet,
+  `connect {from: <the subnet>, from_output: i}` (or a create input `{from: <the subnet>,
+  output: i}`) wires the subnet's input `i`. A VOP subnet, which has none, says to wire
+  its `subinput`.
+- **`edit` flags `material`, `unload` and `export`** (§4.5, D68; P2 escape 5): the VOP
+  material flag a Material Library LOP imports by, the SOP and CHOP unload flag, the CHOP
+  and COP export flag. A node without a flag names the ones it takes.
 
 ### Changed
 
@@ -69,17 +80,32 @@ one for the 2.0.x releases, and 2.1 removes it.
   to have it closed if it keeps happening: measured, nothing HocusPocus sends runs while a
   user's modal dialog is open. The guide recipe "GUI sessions: never open a dialog" says
   both (8 bytes shorter).
-- `edit` validation, and so `dry_run`, refuses what the run would (D49; friction 6): a
-  `set` value of the wrong type, range, menu or tuple size on an existing node, a `set`
-  inside a locked asset (`locked`, with the unlock call), a `patch` that does not match
-  and a missing or disallowed `value_file`, and malformed `spare_parms` on a node the
-  same call creates.
+- **`edit` checks each op by running it after the earlier ones** (§3.9, §4.5, D56;
+  review 26 P1 friction 6, P2 friction 1). The 2.0 validator simulated the scene before
+  anything ran, so an op that depended on an earlier one failed (unlock then create inside
+  an asset, a multiparm count then its instance parms, rename then reuse, a new node's
+  second output) and a dry run passed values the run refused. Now a failing op is
+  reverted and the ops after it still run in check mode (no `press` callback, no
+  selection change, a delete renames its node aside, `lock: true` held back), so the
+  error still lists every problem, and then the call is rolled back. `dry_run` is that
+  check from the first op, compensated, with no undo step, event or dirty flag: it and
+  the run agree, including the names Houdini gives (`transform1`, which 2.0 predicted as
+  `xform1`). A dry run of a 70-op build takes 26-36 ms (4 ms before); the run is
+  unchanged. A create's misspelt parm now hints the node's own parm (`Did you mean
+  size?`), since the node exists when it is checked.
+- **`edit` cooks after the change** (§4.5, D58; P2 friction 5). The touched nodes are
+  cooked as a job once the ops are applied and the undo step closed; the call waits for
+  it up to `job_threshold_s` (10 s). Rows carry their errors as before when the cooks
+  finish in time; otherwise the nodes still cooking say `cook_state: "cooking"` and the
+  result adds `job_id` (`job {action: result}` returns their rows), where 2.0 answered
+  `houdini_busy` at 30 s and dropped the applied edit's result. A 70-op build's
+  main-thread work went from 240 ms to about 35 ms.
 - `hda create` promotes the subnet's spare parms into the new definition at once, and
   `create`/`save` refuse a library whose extension does not match the licence (`.hdalc`
   on Indie, `.hdanc` on Apprentice and Education, `.hda`/`.otl` on Commercial) with the
   corrected path as the candidate; Houdini writes any extension it is given.
-- `tools/list` (`text`): `minimal` +67 B, `core` +1,371 B (the `hda` tool), `full`
-  +206 B.
+- `tools/list` (`text`): `minimal` +52 B, `core` +1,362 B (the `hda` tool), `full`
+  +197 B since 2.0 (of which +65 B on each profile is `edit`'s `partial` enum).
 - CI: `.github/workflows/unit.yml` runs ruff and the unit tier on Linux, macOS and
   Windows for Python 3.11 to 3.13 (portability audit,
   `docs/redesign/review/27-portability.md`).
@@ -169,6 +195,17 @@ one for the 2.0.x releases, and 2.1 removes it.
   accepted everywhere.
 
 ### Fixed
+
+- A MaterialX VOP's `signature` refused valid signatures (`color3FA` on `mtlxmultiply`)
+  and would have taken a typo: Houdini evaluates that menu as `default` plus the
+  signatures already used on the node and sets any text silently. The menu is now read
+  from the asset definition's signatures, for `edit`, `parm_set` and reads (D68; P2
+  escape 4).
+- Rolling back an `edit` restores an input that came from a subnet's indirect input, and
+  the flags it changed through their own getters.
+- An `edit` error about an op's node names the key the caller sent: `ops[0].path` for a
+  `create`, `connect`, `delete` or `layout` op given `path` (2.1 errors said `parent`,
+  `to` or `paths[0]`), `ops[0].node` for a `node` op given `node`.
 
 - A launch without a licence now says so, and answers within seconds (review 26 P1 #1).
   `houdini_connect {launch}` and `hocuspocus launch` recognise a licence line in the

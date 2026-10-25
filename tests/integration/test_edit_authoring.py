@@ -193,6 +193,29 @@ def test_path_names_the_node_of_every_op(client):
     assert bad["code"] == "invalid_argument" and "ops[0].path" in bad["message"]
 
 
+def test_errors_name_the_key_the_caller_sent(client):
+    """An op's path is read as its 1.4 field; an error about it names path (or node), not
+    parent, to, paths[0]."""
+    geo = hou.node("/obj").createNode("geo", "g")
+    geo.createNode("box", "box1")
+    cases = [
+        ({"op": "create", "path": "/obj/nope/box1", "type": "box"}, "path"),
+        ({"op": "create", "path": "/obj/g/box1", "type": "box"}, "path"),  # name collision
+        ({"op": "connect", "from": "/obj/g/box1", "path": "/obj/g/nope"}, "path"),
+        ({"op": "delete", "path": "/obj/g/nope"}, "path"),
+        ({"op": "set", "path": "/obj/g/nope", "parms": {"sizex": 1}}, "path"),
+        ({"op": "node", "node": "/obj/g/nope", "comment": "x"}, "node"),
+        ({"op": "layout", "path": "/obj/nope"}, "path"),
+        # the 1.4 spelling is named as it was sent
+        ({"op": "create", "parent": "/obj/nope", "type": "box"}, "parent"),
+        ({"op": "connect", "from": "/obj/g/box1", "to": "/obj/g/nope"}, "to"),
+    ]
+    for op, field in cases:
+        error = client.error("edit", {"ops": [op]})
+        assert error["detail"]["field"] == field, (op, error)
+        assert error["message"].startswith(f"ops[0].{field}: "), (op, error["message"])
+
+
 # -- dry_run refuses what the run would ------------------------------------------------------
 
 

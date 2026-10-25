@@ -536,3 +536,62 @@ def test_a_removed_tool_is_refused_whatever_profile_the_call_carries(stack, clie
     call = {"tool": "geo_info", **({"profile": client_profile} if client_profile else {})}
     _, body = _request(stack["server"], "POST", "/hp/v1/call", call)
     assert body["ok"] is False and "inspect what: geo" in body["error"]["hint"]
+
+
+class _OffMainExecutor(InlineExecutor):
+    """Runs work inline but reports the caller as off Houdini's main thread (a request)."""
+
+    def on_main_thread(self):
+        return False
+
+
+def _after_dispatcher(executor, groups):
+    from hocuspocus.host.dispatch import AFTER_KEY, after_allowed
+
+    seen = []
+
+    def later(args, ctx):
+        seen.append(("work", after_allowed()))
+
+        def after(result, remaining):
+            seen.append(("after", remaining > 0, list(groups)))
+            if args.get("boom"):
+                raise RuntimeError("cook step lost")
+            return {**result, "cooked": True}
+
+        return {"done": True, AFTER_KEY: after}
+
+    @contextlib.contextmanager
+    def fake_group(label):
+        groups.append(label)
+        yield
+        groups.append("closed")
+
+    ctx = HostContext(
+        config=HostConfig(),
+        executor=executor,
+        logger=logging.getLogger("test"),
+        scene=SceneState(generation=1),
+        jobs=CallJobManager(executor),
+        undo=UndoHistory(),
+    )
+    tool = HostTool("later", later, read_only=False)
+    return Dispatcher(ctx, {"later": tool}.get, undo_group=fake_group), seen
+
+
+def test_an_after_step_runs_once_the_main_thread_work_is_over():
+    """BIBLE D58: edit's cooks run after its undo group closed, on the request's thread."""
+    groups: list[str] = []
+    dispatcher, seen = _after_dispatcher(_OffMainExecutor(), groups)
+    envelope = dispatcher.call("later", {}, timeout_s=30)
+    assert envelope["ok"] and envelope["result"] == {"done": True, "dirty": True, "cooked": True}
+    assert seen == [("work", True), ("after", True, ["HocusPocus: later", "closed"])]
+    failed = dispatcher.call("later", {"boom": True}, timeout_s=30)
+    assert failed["ok"] and "cooked" not in failed["result"]  # the work stands
+    assert "cook step lost" in failed["result"]["notes"][0]
+
+
+def test_an_inline_call_may_not_wait_on_main_thread_jobs():
+    dispatcher, seen = _after_dispatcher(InlineExecutor(), [])
+    dispatcher.call("later", {}, timeout_s=30)
+    assert seen[0] == ("work", False)

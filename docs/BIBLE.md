@@ -564,23 +564,33 @@ and `selection`, built plans the same way; 2.1 removed them.)
   as `$id` (or `$id/child`, `$id/parm`) in its path fields, and the reference resolves to
   the path the op actually produced when the later op runs (after Houdini numbered or
   renamed it).
-- **Validation.** `validate` checks a plan without changing the scene, against the scene
-  as the earlier ops leave it: types resolve in the parent's category, parents exist and
-  are networks, parm and tuple names exist on the node or its type or are spare parms an
-  earlier op adds, inputs exist by index, name, `next` or `$id` in the same network, names
-  are free, locked assets are refused. It returns the plan with resolved paths
-  (`predicted: true` where Houdini will number the node) and every problem; an op that
-  depends on a failed op is not reported again. A dry run is that.
+- **Validation is the run** (2.1, D56). There is no separate validator: each op is
+  checked by running it against the scene the earlier ops left, so an op may depend on
+  anything an earlier one did (an unlock, a multiparm count, a rename, a new node's
+  outputs). For `edit` (`Plan.collect`) a failing op is reverted and the ops after it
+  still run, in *check mode* (`tx.checking()`): they change the scene but leave out what
+  compensation cannot take back (no `press` callback runs, the selection is not set, a
+  delete renames its node out of the way instead of destroying it, `lock: true` and a
+  build's `replace` keep the old contents); an op that names a failed op's `$id` is
+  skipped, so a root cause is reported once. Then the whole call is compensated and the
+  first problem is raised with every problem in `detail.problems`. `dry_run` (`tx.dry_run`)
+  is check mode from the first op, with undo disabled and events muted, compensated
+  whether it failed or not: it returns each op's resolved paths as the op left them
+  (`predicted: true` where Houdini numbered the node), so a dry run and the run agree by
+  construction on the same scene.
 - **Execution.** `execute` runs the plan on the main thread inside the one undo group the
   dispatcher opened. Houdini refuses `performUndo` inside an open group, so a failing op is
-  reverted by compensation (`Rollback`), newest first; with `partial` only that op's own
-  changes are reverted and the rest stand. `rolled_back` is what really happened: a delete
-  cannot be compensated, so after one the dispatcher undoes the whole group once it closes
-  and reports that outcome.
+  reverted by compensation (`Rollback`), newest first; with `partial: true` only that op's
+  own changes are reverted and the rest stand, with `partial: "stop"` (D57) the ops after
+  it do not run. `rolled_back` is what really happened: a delete cannot be compensated, so
+  after one the dispatcher undoes the whole group once it closes and reports that outcome.
 - **Echo.** By default one compact row per touched node (`path, type`, then only what is
   notable), each node cooked once after every op ran, with the ops' results folded in and
   an `ids` map; `return: ops` adds one row per op; `return: full` gives the 1.4 full
-  shapes (spec-2.0 §7 M4: the per-op rows repeated every created node's path).
+  shapes (spec-2.0 §7 M4: the per-op rows repeated every created node's path). `edit`
+  cooks after its main-thread work (D58): the dispatcher's after-step (`_after`) runs the
+  cooks as a job on the request's thread and waits up to `job_threshold_s`, so a long cook
+  never holds an applied edit's result past the call's timeout.
 
 ### 3.10 Resources
 
@@ -827,9 +837,9 @@ takes the fields of the 1.4 tool it replaces, with that tool's semantics (§4.5 
 |---|---|---|---|
 | `create` | `parent`, `type`, `name` (2.1: or `path`, the new node's path), `parms` (`{name: value \| {expression, language} \| item}`), `inputs: [{index \| name, from, output}]`, `flags`, `position`; per op `exact_type`, `cook` (false: no echo cook) and `layout` (`good_position` \| `none`) (a `node_create` item) | the created node | `paired_with` (a `block_end`), `deprecated`, `notes` (callbacks that did not run), `side_effects` (with `press`) |
 | `delete` | `paths` (or `path`), `keep_connections = true` (`node_delete`) | — | `deleted`, `reconnected` |
-| `connect` | `from` (`null` disconnects), `from_output = 0`, `to`, `to_input` (index, name or `next`) (a `node_connect` item) | the `to` node | `input`, `from` |
+| `connect` | `from` (`null` disconnects; 2.1: the `to` node's parent wires that subnet's own input `from_output`, D59), `from_output = 0`, `to`, `to_input` (index, name or `next`) (a `node_connect` item) | the `to` node | `input`, `from` |
 | `set` | one `parm_set` item (`path` plus `value`, `expression`, `keyframe(s)`, `channel_ref`, `ramp`, `multiparm_count`, `revert_to_default`, `press`, or (2.1) `patch` or `value_file`; `language`, `animation`, `frame`), or `{node, parms: {name: value \| item}}` (2.1: `path` for `node`) for several parms of one node | the node | `value` or `values`, `wrote_keyframe`, `pressed`, `side_effects`, `outputs_summary` (a writer's save button), `patched_lines`, `value_file` |
-| `node` | `path` (2.1: or `node`) plus `name`, `flags`, `bypass`, `color`, `comment`, `position`, `lock`, `spare_parms: {add, change, remove}` (a `node_edit` item; below) | the node | `old_path`, `spare_parms: {added, removed, changed?}` |
+| `node` | `path` (2.1: or `node`) plus `name`, `flags` (`display`, `render`, `bypass`, `template`; 2.1, D68: `material`, `unload`, `export`, as `create` takes), `bypass`, `color`, `comment`, `position`, `lock`, `spare_parms: {add, change, remove}` (a `node_edit` item; below) | the node | `old_path`, `spare_parms: {added, removed, changed?}` |
 | `copy` | `paths`, `to_parent`, `names`, `with_inputs = true`, `position_offset` (`node_copy`) | the copy, when there is one | `paths` |
 | `layout` | `parent`, `paths`, `mode: children \| good_position` (`node_layout`) | the parent | — |
 | `build` | `parent`, `data` (Houdini's `hou.data`, as `inspect what: network` returns it), `on_name_collision: error \| rename \| replace`, `layout = true`, `tag`, `press: {node: [parms]}` (`network_build`) | the parent | `created`, `pressed`, `side_effects` |
@@ -845,7 +855,8 @@ takes the fields of the 1.4 tool it replaces, with that tool's semantics (§4.5 
   new node's (`parent` plus `name`, `$id/name` allowed), `connect`'s is `to`, `layout`'s and
   `build`'s `parent`, `copy`'s, `select`'s and `delete`'s `paths: [path]`, and a `set` op's
   `path` with `parms` is its `node`; a `node` op also takes `node` for `path`. Both
-  spellings at once must agree, else `invalid_argument`. Errors name the 1.4 field.
+  spellings at once must agree, else `invalid_argument`. Errors name the key the caller
+  sent (`ops[0].path`, not the `parent` or `to` it was read as).
 - **Long strings** (2.1, D48; review 26 P1 friction 2). `set` takes `patch: [{find,
   replace, all?}]` (one object is a list of one) for a string parm: the edits apply in order
   to its text (`unexpandedString()`), each `find` must occur exactly once (`all: true`: at
@@ -876,22 +887,38 @@ takes the fields of the 1.4 tool it replaces, with that tool's semantics (§4.5 
   changed or removed (`invalid_argument` names the type's parm), on an asset any parm of
   the interface. Removes run first, then changes (each from the group as the removes left
   it), then adds in order. The result row's `spare_parms` adds `changed`.
-- **Validation and `dry_run`.** Before anything changes the whole plan is validated against
-  the scene as the earlier ops leave it (§3.9); 2.1 (D49) also checks what the run would
-  refuse: a `set`'s value on an existing node (type, range, menu, tuple size, a locked
-  component, `patch` matches, `value_file`), a `set` inside a locked asset (`locked`, the
-  hint naming the `node` op with `lock: false`, `allowEditingOfContents`), and `spare_parms`
-  on a node the plan creates (shapes, conditions, names against its type). A spare parm an
-  earlier op adds is checked when the op runs. Every problem is listed in
-  `detail.problems` of the first one's error, so one call reports every mistake. `dry_run`
-  returns that plan, `{dry_run, ops, plan: [{op, id?, path, ...}]}` with resolved paths and
-  `predicted: true` where Houdini will number the node, and changes nothing (`_changed:
-  false`: no undo step, no dirty flag, allowed in read-only mode).
+- **Validation and `dry_run`** (2.1, D56; review 26 P2 friction 1). Each op is checked by
+  running it against the scene the earlier ops left (§3.9), so what the run refuses is
+  what the check refuses: values (type, range, menu, tuple size, a locked component,
+  `patch`, `value_file`), a set or create inside a locked asset (`locked`, the hint naming
+  the `node` op with `lock: false`, `allowEditingOfContents`), `spare_parms`, wiring,
+  names. A failing op is reverted and the ops after it are still checked, in check mode,
+  so every problem is listed in `detail.problems` of the first one's error and one call
+  reports every mistake; then the call is rolled back. `dry_run` runs the whole plan in
+  check mode and compensates it: `{dry_run, ops, plan: [{op, id?, path, ...}]}` with each
+  op's resolved paths as it left them (`predicted: true` where Houdini numbered the node;
+  the run gives the same names on the same scene), changing nothing (`_changed: false`: no
+  undo step, no dirty flag, no event, allowed in read-only mode). In check mode a `press`
+  sets its value but runs no callback, `select` checks its paths only, a `delete` renames
+  the node aside (`<name>_hp_deleted`), `lock: true` is not applied and a build's
+  `replace` keeps the replaced nodes: a dry run cannot see what a callback or a relock
+  would do to the ops after it. In a GUI session Houdini's own modified flag can be set by
+  a dry run's temporary nodes, as by the other tools' temporary nodes; the host's dirty
+  flag is not (parity G1). Measured (70-op build, headless): `dry_run` 26-36 ms (4 ms for
+  the 2.0 static validator), the run 32-38 ms of main thread.
 - **Failure.** A failing op rolls the call back by compensation and raises the §4.1 batch
   error (`ops[i].<field>: ...`, `detail: {item, field, path, rolled_back}`); after a delete,
-  `rolled_back` is what undoing the whole group did. `partial` skips the up-front
-  validation, reverts only a failing op and keeps the rest; the result's `failed` lists
-  `{item, op, id?, error}` per failed op.
+  `rolled_back` is what undoing the whole group did. `partial: true` reverts only a failing
+  op and keeps the rest; the result's `failed` lists `{item, op, id?, error}` per failed
+  op. `partial: "stop"` (2.1, D57; friction 2) keeps the ops before the first failing op
+  and runs none after it: the result adds `applied` (how many ops ran) next to `failed`,
+  so the fix is a resend of `ops[applied:]` with their `$id`s replaced by the result's
+  `ids`.
+- **Subnet inputs** (2.1, D59; friction 6). A wire source (`connect`'s `from`, a `create`
+  input's `from`) that names the destination's parent wires that subnet's own input
+  (`hou.SubnetIndirectInput`) of index `from_output` (`output` on a create input); past
+  the subnet's inputs it is `invalid_input` at `from_output`, and a VOP subnet, which has
+  none, says to wire its `subinput` node.
 - **Result** (`return: summary | ops | full = summary`; 2.0 M4, review of the workload
   bytes). `summary`: `nodes`, one row per touched node, each cooked once after every op
   ran (nodes only a `node` op touched, and `cook: false` creates, are not cooked): `path`,
@@ -900,8 +927,13 @@ takes the fields of the 1.4 tool it replaces, with that tool's semantics (§4.5 
   1 ms, `hint`, and the ops' results for that node (`old_path`, `paired_with`,
   `deprecated`, `hda`, `notes`, `side_effects`); `ids` (`{id: path}`, the path after later
   renames) for every op id; `deleted`, `reconnected`, `selected` (`context_changed`),
-  `renamed`, `replaced` when an op did that. What the caller sent (set values, wiring,
-  spare parm names) is not echoed. `ops` adds `results`, one row per op (`op`, `id?`,
+  `renamed`, `replaced` when an op did that, `applied` with `partial: "stop"`. What the
+  caller sent (set values, wiring, spare parm names) is not echoed. The cooks run after
+  the change (2.1, D58; friction 5): as a job of main-thread steps that the call waits on
+  for up to `job_threshold_s` (10 s) within its timeout; rows of nodes still cooking then
+  say `cook_state: "cooking"` and the result adds `job_id`, `state: "running"` and a
+  `message`, and `job {action: result, job_id}` returns those rows. A call made on
+  Houdini's main thread itself (a GUI Python shell) cooks inline. `ops` adds `results`, one row per op (`op`, `id?`,
   `path` (final, after later renames) and what it did, the table's last column). `full`
   gives `results` with the 1.4 full rows (a create's `parms` lists only the parms the call
   set, strings over 200 characters as `{elided, head}`; a set's whole `parm_set` row) and
@@ -1093,6 +1125,20 @@ Verified in review 04 against 22.0.466; each is a test case.
     `createDigitalAsset` also leaves a subnet's spare parms on the new instance (the
     definition's group is empty) until `setParmTemplateGroup`; `ParmTemplateGroup.find`
     returns a copy, so a change is a `replace` (verified on 22.0.466).
+20. **A subnet's inputs inside it are `SubnetIndirectInput`s.** (2.1) A child wired from
+    the subnet's input `i` takes `setInput(n, subnet.indirectInputs()[i])`;
+    `inputConnections()[n].inputNode()` is then `None` and `inputItem()` is the indirect
+    input, so a restore must read `inputItem()`. A SOP subnet has 4, a VOP subnet none (it
+    has a `subinput` node). A SOP subnet's outputs (`outputNames()`) exist only once its
+    `output` nodes do, so a new subnet's second output is there only after the op that
+    makes its second `output` node (verified on 22.0.466).
+21. **A VOP asset's `signature` menu is not its signatures.** (2.1) On a MaterialX VOP
+    `parm("signature").menuItems()` is `("default",)` plus the signatures already chosen
+    on that node, and `set()` takes any text silently (the node keeps cooking the default).
+    The signatures are the definition's DialogScript `signature "<label>" <token> {...}`
+    lines; `shaderNameForSignature(token)` is empty for an unknown one. The VOP material
+    flag (`setMaterialFlag`) is what a Material Library LOP imports by; a subnet made in
+    `/mat` does not have it (verified on 22.0.466).
 
 
 ---
@@ -1613,17 +1659,22 @@ bible (tag `v1.4.0`). D35 to D44 are the 2.0 decisions, D45 on the 2.1 ones.
 - **D46** (2.1) The `compat_1x` profile and the `v2` alias are removed with the 18 1.4 tools, the 1.4 resources, prompts, instructions and caps (D39, §13). A 1.4 tool name answers `invalid_argument` with its 2.0 replacement in `hint` on every profile, from the migration table kept as data (`tools/migration.py`), in the bridge and in the host, before its arguments are read. `profile = "compat_1x"` or `"v2"` (toml or `HOCUSPOCUS_PROFILE`) is read as `full` with a warning, which both processes log and `houdini_status` returns in `warnings`; it is not refused (§3.7, §4.1). *Refusing would leave a client with a server that never starts and the reason in a log it does not read: the host's config already ignores a bad value with a warning because start-up must never raise into Houdini, and a bridge that exits on start shows only a dead server. `full` is the nearest profile to both names (`v2` already read as `full`; `compat_1x` was 1.4's `full`), so every 2.0 tool the old script could reach is there, and each 1.4 call it still makes is answered with the call to make instead.*
 - **D47** (2.1) The HDA lifecycle is the `hda` tool, now in `core` (19 tools), not `edit` ops: it gains `uninstall`, `info`, `interface` (the `spare_parms` shape on the asset's whole interface), `help`, `lock` on `save`, and the licence's library extension (§4.7, §5.19). *All six `houdini_python` escapes of the neo_tower dogfood (review 26 P1) were asset lifecycle, run on `core`, where `hda` was missing. The lifecycle mixes reads (`list`, `info`), Houdini's library state (`install`, `uninstall`, not hip state and not compensable in a transaction) and files on disk, while `edit` ops are compensated scene changes with a dry run; as `edit` ops it would also have needed a read path in `inspect` and fields every `edit` call pays for in `minimal` too. Moving the existing tool costs `core` 1,304 B of `tools/list` and `full` 139 B.*
 - **D48** (2.1) `edit`'s `set` patches a string parm's text with `patch: [{find, replace, all?}]`, each `find` matching exactly once (else `invalid_value` naming the nearest lines), and sets one from a file with `value_file` under `approved_roots` (§4.5). *In review 26 a one- or two-line VEX change cost resending 16 KB, 120 KB of the 150 KB the agent sent; an exact-match patch that refuses an ambiguous or missing `find` cannot silently edit the wrong line, and its candidates make the retry one call.*
-- **D49** (2.1) `path` names the node of every `edit` op next to the 1.4 field, and validation (so `dry_run`) checks what the run would refuse: set values on existing nodes, sets inside a locked asset, and spare parm shapes on created nodes (§4.5). *Review 26: `create` took `parent`, `node` `path` and `set` `node`, and one `set` with `path` failed; `dry_run` passed a malformed `spare_parms` and a `set` inside a locked asset that both then failed for real, so a dry run did not save the round trip it exists for.*
+- **D49** (2.1) `path` names the node of every `edit` op next to the 1.4 field, and validation (so `dry_run`; since D56 the run itself) checks what the run would refuse: set values on existing nodes, sets inside a locked asset, and spare parm shapes on created nodes (§4.5). *Review 26: `create` took `parent`, `node` `path` and `set` `node`, and one `set` with `path` failed; `dry_run` passed a malformed `spare_parms` and a `set` inside a locked asset that both then failed for real, so a dry run did not save the round trip it exists for.*
 - **D50** (2.1) `spare_parms` speaks Houdini's template fields: folder entries with a folder type, `disable_when`/`hide_when` (names checked), `join_next`, `tags`, `callback`, `hidden`, strict ranges, string menus, file, separator and label parms, `before`/`after`/nested-folder placement and `change` (§4.5). *The dogfood built its asset's interface (tabs, disable-when rules, new defaults) through `houdini_python` because `spare_parms` could not say it; the same shape is `hda`'s `interface`, so an asset interface needs no Python.*
 - **D51** (2.1) `inspect` options are uniform by kind: one that only shapes the answer (`include_defaults`, `recurse_locked`, `full_strings`, `detail`, `include_positions`, `wiring`) and that the `what` does not take is ignored with a note; one that chooses what is read stays `invalid_argument`. `node` and `geo` take `full_strings`, and parms of a node take `folder` and `detail: folders` (§4.4). *Review 26 P1 #9: seven of 25 `inspect` calls failed on option shape, each fixed on the next call; ignoring `recurse_locked` on `geo` cannot mislead (the read is the same), while ignoring `frame` on `node` would answer another question.*
 - **D52** (2.1) `look` at a SOP shows that SOP alone, through a temporary Object Merge object in the scene that renders, whatever network holds it (§4.6, §8). *Review 26 P1 #3: moving the display flag showed nothing for a SOP inside a subnet or a locked asset, so the agent built and re-pointed its own preview object (3 edits and many parm changes); an Object Merge reads any SOP and leaves the user's flags alone.*
 - **D53** (2.1) `cook profile` times what a normal cook of the node cooks, learned from Houdini's `inputAncestors(only_used_inputs=True)` after a normal cook, and lists the other ancestors in `inactive` (§4.6). *Review 26 P1 #8: force-cooking every ancestor timed a Switch's unselected interior branch, so "interiors off costs nothing" looked false and proving it took a non-forced cook and an `inspect`.*
 - **D54** (2.1) The guide and each tool's reference are also `inspect {what: "guide" | "tool"}`, answered by the bridge without a Houdini, and hints that cite `hocuspocus://tools` name that route first (§4.4, §4.8). *Review 26 P1 #10: Claude Code subagents have no resource reader, so the hints pointed at text the agent could not open; a `what` costs a few enum bytes where a new tool would cost a schema.*
+- **D56** (2.1) `edit` has no separate validator: each op is checked by running it against the scene the earlier ops left; a failing op is reverted and the ops after it still run in check mode (no `press` callback, no selection change, a delete renames its node aside, `lock: true` and a build's `replace` held back) so every problem is still reported at once, then the call is compensated; `dry_run` is check mode from the first op with undo off and events muted, compensated whether or not it failed (§3.9, §4.5). *The 2.0 validator simulated the scene, and review 26 P2 found op sequences it refused (unlock then create inside the asset, a multiparm count then its instance parms, rename then reuse, a new node's second output; two of them passed `dry_run` and then failed) and a value it passed that the run refused; every rule it learned was a second copy of what Houdini decides. A run cannot disagree with itself. The cost is a dry run that creates and removes the nodes (26-36 ms instead of 4 ms for a 70-op build), the parts of a call compensation cannot take back (a callback's effects, a relock's lost edits) left out of the check, and in a GUI session Houdini's own modified flag set by those temporary nodes, as by other tools' temporary nodes.*
+- **D57** (2.1) `edit`'s `partial` also takes `"stop"`: the ops before the first failing op stand, none after it runs, and the result says `applied: <n>` with the failure in `failed`; atomic stays the default (§4.5). *One bad menu token rolled back a 70-op, 13 KB build in review 26 P2 and the whole call was resent; `partial: true` would have built the rest of the graph around the hole. A kept prefix is a state the agent can reason about, and the fix is the tail of the same call. +65 B of `tools/list` per profile.*
+- **D58** (2.1) `edit` cooks the nodes it touched after its main-thread work: the dispatcher's after-step (`_after`) runs the cooks as a job on the request's thread and waits up to `job_threshold_s` within the call's timeout; rows still cooking say `cook_state: "cooking"` and the result adds `job_id`, whose result is those rows (§3.9, §4.5). *A 32 s UV Layout made three `edit` calls answer `houdini_busy` at 30 s with their results dropped (review 26 P2 friction 5), and `cook: false` on the create did not help because a node created downstream cooked it. A cook cannot be interrupted, and a budget checked between nodes cannot stop the one long node it starts; moving every cook off the main-thread work keeps the rows' errors (the tests, the guide and the workloads read them) and bounds the call: a 70-op build's main-thread work went from 240 ms to 32-38 ms, the call from 259 ms to 242-248 ms, and the workloads' calls and bytes are unchanged. `node_create` and `parm_set` keep their 1.4 inline cook.*
+- **D59** (2.1) Inside a subnet, a wire source that names the subnet itself wires the subnet's own input of index `from_output` (`hou.SubnetIndirectInput`) (§4.5, §5.20). *Review 26 P2 escape 3 wired an export asset's inputs through `houdini_python`: `connect` refused "in different networks" and had no spelling for them. The parent as source needs no new field and cannot mean anything else.*
 - **D60** (2.1) A GUI launch that cannot register says why within its wait: the host's autostart writes a startup record (`<state_dir>/startup/<pid>.json`: starting, failed, disabled), and the launcher reads it and the launched pid's window titles (§3.3 rule 7). A failed or disabled start ends the wait at once; a dialog ends it after 15 s only before Houdini's main window exists, where a licensed start shows nothing but its splash. *A 2.1 stream reported GUI launches that "never registered" and waited 240 s with the hint "may still be starting"; a host that failed to start, a package that never loaded and a startup dialog all looked the same. A record file needs no port and no `hou` on the bridge side, and the window rule cannot fire on a licensed start (measured: splash, then main window, then the registry entry).*
 - **D61** (2.1) A headless snapshot carries the hip's embedded asset definitions as a library file (`look/child.py` `embedded_library`), not through `saveChildrenToFile` (§8). *Measured on 22.0.466: the `.cpio` holds an embedded definition's `DialogScript` and a 61-byte `Contents` stub, so a locked object asset drew nothing headless (2.0 too; 2.1's shipped geometry hid it for a locked SOP asset, not for an object asset or one inside a locked object). `copyToHDAFile` leaves the definitions and the hip untouched, and keeping one file until a definition changes keeps the warm child's key.*
 - **D65** (2.1) `hocuspocus://guide` (and `inspect {what: "guide"}`) no longer repeats the server instructions: its `## Instructions` section is two sentences pointing at `initialize` and at the guide topic `instructions`, which returns them whole; the guide cap drops from 6.5 KB to 4.5 KB (§4.8). *Stream C, the scorecard bytes margin (spec-2.0 §7): the 2.3 KB of instructions were a third of the 6.4 KB guide, the largest read of the scorecard, and every MCP client already holds them from `initialize` (a Claude Code subagent too); a client that drops them is one call from them. One guide read was kept rather than a topic index plus per-topic reads: an agent opening the guide wants the recipes, and an index would add a call per recipe to a workload whose calls may not grow.*
 - **D66** (2.1) Session and hip results leave out what is the default, null or a repeat (§4.2, §4.3): `houdini_status` drops a null `dirty_source`, a false `is_new`, a playback range equal to the frame range, a `host_version` equal to the bridge's, the default settings, a null `launched_by`, `alive: false` on dead rows, recent hips past three (unless `detail`) and the connected row's copy of `connected`; `houdini_connect` shapes its `connected` block the same way, drops `launched.mode` and shortens `launched.note`; the hip tools drop `name` and a false `is_new`. *Stream C: after the guide, the session tools were the scorecard's next 5.5 KB (spec-2.0 §7), and each dropped field is either derivable from one that stays (`name` from `path`, `mode` from `ui`, the row from `connected`) or reported when it matters (a mismatched version is a warning, a non-default setting is shown). `houdini://instances` keeps whole rows because it has no `connected` to read them from.*
 - **D67** (2.1) A render result over 5 outputs drops `outputs_summary.first` and `last`: `outputs_sample` starts and ends with them (§4.6). A cancelled render's `partial.outputs_summary` and a writer's save button keep them, having no sample. *Stream C: the two paths were printed twice in every sequence render (fx_cache, vellum_usd), about 120 B each.*
+- **D68** (2.1) `edit` flags add `material` (VOPs), `unload` (SOPs, CHOPs) and `export` (CHOPs, COPs); a VOP asset's `signature` menu is read from its definition's DialogScript (§4.5, §5.21). *A Material Library LOP imports only material-flagged subnets and silently made an empty stage (review 26 P2 escape 5); the MaterialX signature menu evaluates to `default` plus the signatures already used, so valid tokens were refused and, since Houdini sets any text, a typo would have passed (escape 4). Reads keep the 1.4 flag set; the other VOP flags (debug, compress, detail) are display state.*
 
 ### Verified deviations (M5 reconciliation, 1.0; still true)
 

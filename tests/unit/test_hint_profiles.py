@@ -108,34 +108,37 @@ class _Parented:
         raise RuntimeError("no inputs here: the fallback hint")
 
 
-EDIT_MISTAKES = [
-    [{"op": "create", "parent": "/obj/geo1", "type": "mountian"}],  # bad type
-    [{"op": "create", "parent": "/obj/geo1", "type": "box", "parms": {"sise": 1}}],  # bad parm
-    [{"op": "create", "parent": "/obj/geo1", "type": "geo"}],  # wrong category
-    [{"op": "set", "path": "/obj/geo1/box1/sise", "value": 1}],  # bad parm on a node
-    [  # missing from
-        {"op": "create", "id": "x", "parent": "/obj/geo1", "type": "xform"},
-        {"op": "connect", "from": "/obj/geo1/nope", "to": "$x"},
-    ],
-    [{"op": "connect", "from": "/obj/geo1/box1", "to": "/obj/geo1/nopee"}],  # missing to
-    [  # bad input on a new node
-        {"op": "create", "id": "x", "parent": "/obj/geo1", "type": "xform"},
-        {"op": "connect", "from": "/obj/geo1/box1", "to": "$x", "to_input": 5},
-    ],
-    [{"op": "create", "parent": "/obj/nogeo", "type": "box"}],  # missing parent
-    [{"op": "build", "parent": "/obj/geo1", "data": {}}],  # empty build data
-]
+def _edit_errors(scene: FakeScene) -> list[ToolError]:
+    """The errors an ``edit`` op's run raises for the usual mistakes (BIBLE D56: the run is
+    the validation): a bad type, a bad parm, a missing wire end, a bad input, a missing
+    parent, a wire across networks or from a subnet input that does not exist."""
+    from hocuspocus.host import tx
+    from hocuspocus.host.tools import nodes, parms
+
+    geo = scene.nodes["/obj/geo1"]
+    box = scene.nodes["/obj/geo1/box1"]
+    out: list[ToolError] = [
+        nodes.type_not_found(geo, "mountian", scene.sop),
+        nodes.type_not_found(geo, "geo", scene.sop),  # wrong category
+        parms.parm_not_found(box, "sise"),
+    ]
+    for call in (
+        lambda: tx.wire_source("/obj/geo1/nope", box, "from"),
+        lambda: nodes.resolve_input_index(box, 5),
+        lambda: nodes.get_node("/obj/nogeo", field="parent"),
+        lambda: tx.wire_source("/obj", box, "from"),
+        lambda: tx.wire_output(geo, box, 7, "from_output"),
+    ):
+        with pytest.raises(ToolError) as info:
+            call()
+        out.append(info.value)
+    return out
 
 
 def _host_errors(scene: FakeScene) -> list[Any]:
-    from hocuspocus.host import tx
     from hocuspocus.host.tools import _common, _diag, geo, network, nodes, parms, state
 
-    out: list[Any] = []
-    for ops in EDIT_MISTAKES:
-        diag = tx.validate(tx.parse_ops(ops), ctx=None)
-        assert diag.problems, ops
-        out += diag.problems
+    out: list[Any] = _edit_errors(scene)
     out.append(_diag.missing_node_error("/obj/geo1/boxx"))
     out.append(_diag.missing_node_error("/obj/gone/boxx"))
     out.append(parms.expression_hint())
@@ -234,17 +237,10 @@ def test_every_hint_names_only_tools_the_profile_serves(profile, scene) -> None:
 
 def test_hints_name_the_2x_call_on_2x_profiles(scene) -> None:
     """The papercut's own examples, both ways."""
-    from hocuspocus.host import tx
-
-    def first(ops: list[dict[str, Any]]) -> ToolError:
-        return tx.validate(tx.parse_ops(ops), ctx=None).problems[0]
-
     with migration.using_profile("core"):
-        bad_type = first(EDIT_MISTAKES[0])
-        bad_parm = first(EDIT_MISTAKES[1])
-        missing = first(EDIT_MISTAKES[4])
+        bad_type, _category, bad_parm, missing, *_rest = _edit_errors(scene)
         assert 'search {kind: "types", query: "mountian"}' in bad_type.hint
-        assert 'inspect {what: "type", target: "Sop/box"}' in bad_parm.hint
+        assert 'inspect {what: "node", target: "/obj/geo1/box1"' in bad_parm.hint
         assert 'search {kind: "nodes", root: "/obj/geo1"}' in missing.hint
         assert (
             'edit {ops: [{op: "set", path, expression}]}'

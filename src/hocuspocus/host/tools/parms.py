@@ -414,9 +414,54 @@ def _hda_locked(parm: Any) -> bool:
 
 def _menu_items(parm: Any) -> tuple[list[str], list[str]] | None:
     try:
-        return list(parm.menuItems()), [menu_label(label) for label in parm.menuLabels()]
+        return _read_menu(parm)
     except Exception:
         return None
+
+
+def _read_menu(parm: Any) -> tuple[list[str], list[str]]:
+    """``(tokens, labels)`` of ``parm``'s menu: a VOP asset's signatures from its
+    definition (:func:`vop_signatures`), else what Houdini evaluates. Raises when the
+    menu cannot be read."""
+    signatures = vop_signatures(parm)
+    if signatures is not None:
+        return signatures
+    return list(parm.menuItems()), [menu_label(label) for label in parm.menuLabels()]
+
+
+_SIGNATURE_LINE = re.compile(r'^\s*signature\s+"((?:[^"\\]|\\.)*)"\s+(\S+)', re.MULTILINE)
+_SIGNATURES: dict[tuple[str, str, float], tuple[list[str], list[str]] | None] = {}
+
+
+def vop_signatures(parm: Any) -> tuple[list[str], list[str]] | None:
+    """``(tokens, labels)`` of an asset's ``signature`` parm as its definition's
+    DialogScript lists them (``signature "Color (FA)" color3FA { ... }``), or None for any
+    other parm. The menu Houdini evaluates on a MaterialX VOP holds only ``default`` and
+    the signatures already chosen on the node (review 26 P2 friction 7), and Houdini sets
+    any text silently, so the definition is the list to check a value against (D68)."""
+    try:
+        if parm.name() != "signature":
+            return None
+        node_type = parm.node().type()
+        definition = node_type.definition()
+        if definition is None:
+            return None
+        key = (
+            node_type.nameWithCategory(),
+            str(definition.libraryFilePath()),
+            float(definition.modificationTime()),
+        )
+    except Exception:
+        return None
+    if key not in _SIGNATURES:
+        found: tuple[list[str], list[str]] | None = None
+        with contextlib.suppress(Exception):
+            text = definition.sections()["DialogScript"].contents()
+            pairs = _SIGNATURE_LINE.findall(text)
+            if pairs:
+                found = [token for _label, token in pairs], [label for label, _ in pairs]
+        _SIGNATURES[key] = found
+    return _SIGNATURES[key]
 
 
 def _menu_dict(parm: Any, token: Any) -> dict[str, Any] | None:
@@ -840,8 +885,7 @@ def _check_range(parm: Any, kind: str, value: float) -> None:
 def _resolve_menu(parm: Any, kind: str, value: Any, notes: list[str]) -> tuple[str, int]:
     """Return ``(token, index)`` for a token, label or index on a strict menu."""
     try:
-        items = list(parm.menuItems())
-        labels = [menu_label(label) for label in parm.menuLabels()]
+        items, labels = _read_menu(parm)
     except Exception as exc:
         raise _invalid(parm, kind, f"Cannot read the menu of {parm.path()}.") from exc
     shown = ", ".join(
@@ -1125,6 +1169,19 @@ NO_CALLBACK = (
 )
 
 
+def _press(node: Any, parm: Any) -> dict[str, Any] | None:
+    """Press ``parm`` (run its callback), except in an ``edit`` check (a dry run, or the
+    ops after a failing one: BIBLE D56), where nothing that compensation cannot take back
+    may run; the checks before the press (a callback exists) have passed by then."""
+    from ..tx import checking
+
+    if checking():
+        return None
+    from .visual import press_button  # lazy: visual imports hou-heavy helpers
+
+    return press_button(node, parm)
+
+
 def _apply(
     node: Any,
     target: Any,
@@ -1222,9 +1279,7 @@ def _apply(
                     if _is_number(raw_value):
                         _note_override(parm, new, frame, notes)
             if press_after:
-                from .visual import press_button
-
-                pressed = press_button(node, parms[0])
+                pressed = _press(node, parms[0])
             elif len(parms) == 1 and skips_callback(parms[0]):
                 notes.append(callback_note.format(name=parms[0].name()))
         elif field in ("patch", "value_file"):
@@ -1347,9 +1402,7 @@ def _apply(
             kind = _kind(parm.parmTemplate())
             if kind != "button" and not has_callback(parm):
                 raise _invalid(parm, kind, NO_CALLBACK.format(path=path, kind=kind))
-            from .visual import press_button  # lazy: visual imports hou-heavy helpers
-
-            pressed = press_button(node, parm)  # verifies a save button's files (review 17)
+            pressed = _press(node, parm)  # verifies a save button's files (review 17)
             count_keys_as_written = False
     except ToolError:
         raise
@@ -1518,95 +1571,6 @@ def read_value_file(raw: Any, ctx: Any) -> tuple[str, str]:
         ) from exc
 
 
-def check_item(node: Any, target: Any, item: dict[str, Any], ctx: Any = None) -> None:
-    """What :func:`_apply` refuses, checked without changing anything (``edit``'s
-    validation and ``dry_run``; review 26 P1 friction 6): value types, ranges, menus and
-    tuple sizes, a locked component, ``patch`` matches and ``value_file``. Fields whose
-    checks need the change itself (``press``'s side effects, ``channel_ref`` cycles) are
-    checked when the op runs."""
-    path = _target_path(target)
-    parms = _components(target)
-    animation = item.get("animation") or "replace"
-    press_after = item.get("press") is True and item.get("value") is not None
-    present = [
-        f
-        for f in VALUE_FIELDS
-        if (item.get(f) is True if f in _FLAG_FIELDS else item.get(f) is not None)
-        and not (press_after and f == "press")
-    ]
-    if len(present) != 1:
-        return  # the shape check reports it
-    field = present[0]
-    if field == "value":
-        value = item["value"]
-        if _is_tuple(target):
-            kind = _kind(target.parmTemplate())
-            if not isinstance(value, list):
-                raise _invalid(
-                    parms[0],
-                    kind,
-                    f"{path} is a tuple of {len(parms)}; got a scalar.",
-                    hint=f"Pass a list of {len(parms)} values, or set one component "
-                    f"({'/'.join(p.name() for p in parms)}).",
-                )
-            if len(value) != len(parms):
-                raise _invalid(
-                    parms[0],
-                    kind,
-                    f"{path} has {len(parms)} components; got {len(value)} values.",
-                    hint=f"Components: {', '.join(p.name() for p in parms)}.",
-                )
-            values = value
-        else:
-            values = [value]
-        for parm, raw_value in zip(parms, values, strict=True):
-            new = _coerce(parm, raw_value, [], for_key=animation == "key")
-            if animation != "key" and _parm_locked(parm) and not _holds(parm, new):
-                raise locked_error(node, target)
-    elif field == "expression":
-        parm = _require_single(target, "expression", path)
-        expression = item["expression"]
-        if not isinstance(expression, str) or not expression.strip():
-            raise ToolError("invalid_argument", "expression must be a non-empty string.")
-        kind = _kind(parm.parmTemplate())
-        if kind in ("button", "ramp", "folder", "label", "multiparm", "data"):
-            raise _invalid(parm, kind, f"{path} ({kind}) cannot take an expression.")
-    elif field == "patch":
-        parm = string_target(target, field, path)
-        apply_patch(parm.unexpandedString(), item["patch"], path)
-    elif field == "value_file":
-        string_target(target, field, path)
-        read_value_file(item["value_file"], ctx)
-    elif field in ("keyframe", "keyframes"):
-        parm = _require_single(target, field, path)
-        raw_keys = item[field] if field == "keyframes" else [item[field]]
-        if not isinstance(raw_keys, list) or not raw_keys:
-            raise ToolError(
-                "invalid_argument", f"{field} must be a non-empty list of {{frame, value}}."
-            )
-        for key in raw_keys:
-            if not isinstance(key, dict) or "value" not in key:
-                raise ToolError("invalid_argument", "Each keyframe is {frame, value}.")
-            _coerce(parm, key["value"], [], for_key=True)
-    elif field == "ramp":
-        parm = _require_single(target, "ramp", path)
-        kind = _kind(parm.parmTemplate())
-        if kind != "ramp":
-            raise _invalid(parm, kind, f"{path} is not a ramp parm ({kind}).")
-    elif field == "multiparm_count":
-        parm = _require_single(target, "multiparm_count", path)
-        count = item["multiparm_count"]
-        if not _is_number(count) or not float(count).is_integer() or count < 0:
-            raise ToolError("invalid_argument", "multiparm_count must be an integer >= 0.")
-        if not parm.isMultiParmParent():
-            raise _invalid(parm, _kind(parm.parmTemplate()), f"{path} is not a multiparm.")
-    elif field == "press":
-        parm = _require_single(target, "press", path)
-        kind = _kind(parm.parmTemplate())
-        if kind != "button" and not has_callback(parm):
-            raise _invalid(parm, kind, NO_CALLBACK.format(path=path, kind=kind))
-
-
 def _snapshot(target: Any) -> Any:
     """Capture each component's keys, expression or value; returns a restore function.
 
@@ -1667,7 +1631,8 @@ def locked_error(node: Any, target: Any, exc: BaseException | None = None) -> To
         return ToolError(
             "locked",
             f"{path} is inside the locked HDA {asset}.",
-            hint=f"Call {hint_tool('node_edit', path=asset, lock=False)} to allow editing its "
+            hint=f"Call {hint_tool('node_edit', path=asset, lock=False)} "
+            "(allowEditingOfContents) to allow editing its "
             f"contents{' (or use the hda tool)' if hint_tool('hda') else ''}, then retry.",
             hou_exception=hou_exc,
         )
