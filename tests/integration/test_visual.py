@@ -813,7 +813,9 @@ def test_render_a_file_cache_refuses_an_output_override(client, work_dir):
     assert error["code"] == "invalid_argument"
     # Review 20 N4: the hint names the menu token a set takes, not an index.
     assert f'path: "{cache.path()}/filemethod", value: "explicit"' in error["hint"], error
-    assert "then file to the path" in error["hint"]
+    assert "then set the file parm to the path you want" in error["hint"]
+    assert f'path: "{cache.path()}/file"' in error["hint"], error
+    assert "file to the path" not in error["hint"]
     assert "explicit" in cache.parm("filemethod").menuItems()
 
 

@@ -1140,8 +1140,10 @@ def _writer_output_hint(owner: Any) -> str:
             explicit = "explicit"
     if explicit and file_parm is not None:
         method_set = hint_tool("parm_set", path=f"{owner.path()}/filemethod", value=explicit)
+        file_set = hint_tool("parm_set", path=file_parm.path(), value=BARE)
         return (
-            f"Set the output with {method_set}, then file to the path; then render without output."
+            f"Set the output with {method_set}, then set the file parm to the path you want "
+            f"({file_set}); then render without output."
         )
     return (
         f"Set the node's own output parm ({hint_tool('parm_set', path=BARE, value=BARE)}), "

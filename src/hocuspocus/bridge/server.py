@@ -38,7 +38,13 @@ from .instructions import PROMPT_DEFAULTS, PROMPTS, instructions_for
 from .launch import Launcher
 from .ledger import Ledger, is_ledger_id, looks_like_ledger_id
 from .local_tools import DOC_WHATS, LOCAL_TOOLS, inspect_docs
-from .validate import ARG_RENAMES, coerce_integers, rename_hint, shape_hint, validate
+from .validate import (
+    ARG_RENAMES,
+    coerce_integers,
+    rename_hint,
+    shape_hint,
+    validate_detailed,
+)
 
 EXIT_GRACE_S = 1.5
 """After a lost response, how long to watch for the Houdini process to exit."""
@@ -953,6 +959,21 @@ class Bridge:
                 {},
             )
 
+    def _argument_hint(self, name: str, unknown: list[tuple[str, list[str]]]) -> str:
+        """The hint for an argument problem: where ``name``'s reference is, led by what to do
+        about an unknown property (the closest valid one, else drop it)."""
+        route = migration.hint_tool("inspect", self.config.profile, what="tool", target=name)
+        where = f"{route} or hocuspocus://tools" if route else "hocuspocus://tools"
+        lead = ""
+        if unknown:
+            path, close = unknown[0]
+            lead = (
+                f"Use {close[0]} instead of {path}. "
+                if close
+                else f"{path} is not an argument of {name}; drop it. "
+            )
+        return f"{lead}Fix the listed arguments; {name}'s reference: {where}."
+
     def call_tool(
         self, name: str, arguments: dict[str, Any] | None, request_id: str | None = None
     ) -> types.CallToolResult:
@@ -973,18 +994,19 @@ class Bridge:
                 data["candidates"] = close
             raise MCPError(types.INVALID_PARAMS, message, data)
         args = dict(arguments or {})
-        violations = validate(args, spec.input_schema, ARG_RENAMES.get(name))
+        violations, unknown = validate_detailed(args, spec.input_schema, ARG_RENAMES.get(name))
         if violations:
             # Review 21 papercut 1: a flat item of a batch tool gets the corrected call;
             # review 25 papercut 2: so does a 1.4 argument name (inspect {path} -> target).
             wrapped = shape_hint(args, spec.input_schema) or rename_hint(
                 name, args, spec.input_schema
             )
+            candidates = list(dict.fromkeys(c for _path, close in unknown for c in close))[:3]
             error = ToolError(
                 "invalid_argument",
                 f"{len(violations)} argument problem(s) for {name}: " + "; ".join(violations[:5]),
-                hint=wrapped
-                or f"fix the listed arguments; {name}'s inputSchema in tools/list is authoritative",
+                hint=wrapped or self._argument_hint(name, unknown),
+                candidates=candidates,
                 detail={"violations": violations},
             )
             return make_result(self.config.result_content, name, error.to_dict(), is_error=True)

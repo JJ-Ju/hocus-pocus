@@ -30,7 +30,7 @@ from hocuspocus.tools.errors import ToolError
 from hocuspocus.tools.migration import hint_tool
 
 from ._common import arg_bool, dynamic_menu_note, int_arg, menu_is_dynamic
-from .parms import menu_label
+from .parms import menu_label, type_signatures
 from .registry import HostContext
 
 # -- help archive -----------------------------------------------------------------
@@ -1140,11 +1140,34 @@ def _maybe_node_menu(template: Any) -> bool:
         return False
 
 
+def apply_definition_menus(node_type: Any, rows: list[dict[str, Any]]) -> None:
+    """Give a ``signature`` row the signatures of the asset's definition, the list ``edit``
+    checks a value against (:func:`~.parms.type_signatures`). The menu on the template and
+    on an instance holds only ``default`` and the signatures already chosen (D68)."""
+    signatures = type_signatures(node_type)
+    if signatures is None:
+        return
+    tokens, labels = signatures
+    for row in rows:
+        if row.get("name") != "signature":
+            continue
+        menu: dict[str, Any] = {
+            "items": [
+                [tok, menu_label(labels[i]) if i < len(labels) else tok]
+                for i, tok in enumerate(tokens[:MENU_CAP])
+            ]
+        }
+        if len(tokens) > MENU_CAP:
+            menu["total"] = len(tokens)
+        row["menu"] = menu
+
+
 def evaluate_dynamic_menus(node_type: Any, rows: list[dict[str, Any]]) -> None:
     """Fill the ``menu`` of rows whose menu Houdini computes on an instance (a menu
     script such as ``pdg_cachemode``, or a SOP ``group`` menu; review 14 papercut 10) from
     one throwaway instance: ``{items, dynamic: true, total?}``, and ``default_token`` for a
     menu default. A menu that evaluates empty or fails keeps ``items: []`` with a ``note``."""
+    apply_definition_menus(node_type, rows)
     pending = [row for row in rows if (row.get("menu") or {}).get("dynamic")]
     if not pending:
         return

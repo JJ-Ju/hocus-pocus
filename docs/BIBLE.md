@@ -294,7 +294,10 @@ Responsibilities:
    deterministic **with no Houdini running**, and (2.0) the resources, resource templates,
    subscriptions and prompts of §3.10 and §4.8.
 2. **Validate arguments** against the catalogue's JSON Schema (SDK v2 does not), and
-   return schema failures as `isError` results with `code: invalid_argument`.
+   return schema failures as `isError` results with `code: invalid_argument`. An unknown
+   property (every input schema is closed, at every depth) is named with its path; the
+   closest valid key is a `candidate`, and the hint names the tool's reference,
+   `inspect {what: "tool", target: "<tool>"}` (2.1).
 3. **Resolve the target instance.** Order: explicitly connected instance (via
    `houdini_connect`; never another one in its place, §3.6) → the only live instance →
    with several live and none pinned (1.3, review 19 papercut 2), calls that change a

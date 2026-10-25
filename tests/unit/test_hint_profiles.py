@@ -315,3 +315,35 @@ def test_no_hint_literal_names_a_removed_tool() -> None:
             if words:
                 bad.append(f"{path.relative_to(SRC)}:{line}: {sorted(words)} in {text!r}")
     assert not bad, "route these through migration.hint_tool:\n" + "\n".join(bad)
+
+
+def test_no_tool_reference_text_names_a_removed_tool() -> None:
+    """The reference a model reads (description, notes, argument descriptions and examples
+    of every spec, which the tools resource and inspect tool render), the server
+    instructions, the guide and the prompts name 2.0 calls, never a 1.4 tool 2.1 removed
+    (2.1 stream F: search's notes still described node_find and node_type_search). Only the
+    migration table and the docs about migration do."""
+    import json
+
+    from hocuspocus.bridge import instructions
+
+    texts: dict[str, str] = {}
+    for spec in catalog.TOOLS:
+        texts[f"spec {spec.name}"] = "\n".join(
+            [
+                spec.description,
+                spec.notes or "",
+                json.dumps(spec.input_schema, ensure_ascii=False),
+                json.dumps(spec.examples, ensure_ascii=False),
+            ]
+        )
+    texts["instructions"] = instructions.INSTRUCTIONS + instructions.INSTRUCTIONS_POINTER
+    texts["guide"] = instructions.guide_text()
+    texts["prompts"] = json.dumps(instructions.PROMPTS, ensure_ascii=False)
+    removed = set(migration.REPLACEMENTS)
+    found = {
+        where: sorted(named_tools(text) & removed)
+        for where, text in texts.items()
+        if named_tools(text) & removed
+    }
+    assert found == {}

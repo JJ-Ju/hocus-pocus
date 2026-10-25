@@ -443,6 +443,16 @@ def vop_signatures(parm: Any) -> tuple[list[str], list[str]] | None:
         if parm.name() != "signature":
             return None
         node_type = parm.node().type()
+    except Exception:
+        return None
+    return type_signatures(node_type)
+
+
+def type_signatures(node_type: Any) -> tuple[list[str], list[str]] | None:
+    """:func:`vop_signatures` for a node type: what ``inspect {what: "type"}`` lists for the
+    ``signature`` menu, so the reference and the check of a value agree. None when the
+    type has no asset definition or its DialogScript lists no signature."""
+    try:
         definition = node_type.definition()
         if definition is None:
             return None

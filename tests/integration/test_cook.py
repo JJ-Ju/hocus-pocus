@@ -1079,7 +1079,19 @@ def test_cook_profile_on_vellum_tells_full_runs_current_frame_and_cache_reads(cl
     solver = _vellum_cloth()
 
     def profile(frame):
-        result = client.ok("cook", {"paths": [solver.path()], "profile": True, "frame": frame})
+        # A fresh 12-frame solve takes 2 s here and over 10 s on a loaded machine. 10 s is
+        # the job threshold, so the call then answered {job_id, state: running} and not the
+        # profile. An explicit wait_s is the caller's own threshold (timeout_s the cook's):
+        # the test says how long it is willing to wait.
+        args = {
+            "paths": [solver.path()],
+            "profile": True,
+            "frame": frame,
+            "wait_s": 120,
+            "timeout_s": 120,
+        }
+        result = client.ok("cook", args)
+        assert "job_id" not in result, result
         note = next(n for n in result["notes"] if n.startswith(solver.path()))
         return _sim_row(result, solver), note
 

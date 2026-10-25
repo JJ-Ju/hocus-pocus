@@ -269,6 +269,35 @@ one for the 2.0.x releases, and 2.1 removes it.
   definitions into one library file the child installs, rewritten only when a definition
   changes so the kept child stays warm. The GUI was not affected (it renders the live
   scene).
+- An unknown argument answers `invalid_argument` with the closest valid key (stream F).
+  The bridge already refused an unknown key (every input schema is closed, at every
+  depth, and `tests/unit/test_bridge_unknown_args.py` now pins that for the whole
+  catalogue), but the answer was "did you mean" only for a near spelling and the hint
+  did not say where the arguments are. `render {frame_range}` now answers
+  `frame_range: unknown property; did you mean frames?` with `candidates: ["frames"]`
+  (a key that shares a word with a valid one, `frame_range`, `rop`, is matched too, as is
+  a different case) and the hint `Use frames instead of frame_range.` followed by the
+  tool's reference, `inspect {what: "tool", target: "render"} or hocuspocus://tools`.
+  Nested keys carry their path (`launch.hipp`, `ops[0].paht`).
+- The reference no longer describes tools 2.1 removed (stream F). `search`'s notes (in
+  `hocuspocus://tools` and `inspect {what: "tool"}`) said each kind "takes its 1.4 tool's
+  arguments" and named `node_type_search` and `node_find`; they now list each kind's own
+  arguments and defaults. The same names left the notes of `edit`, `inspect`, `events`,
+  `pdg`, `look`, `node_create` and `parm_set`, and `tests/unit/test_hint_profiles.py` fails
+  on a removed tool's name in any spec text, the instructions, the guide or a prompt. The
+  `tools/list` text is unchanged.
+- The File Cache output hint read "...then file to the path". It now says to set the file
+  parm to the path wanted and shows the call: `Set the output with ... filemethod ...,
+  then set the file parm to the path you want (... file ...); then render without output.`
+- `inspect {what: "type", detail: "full"}` lists a MaterialX VOP's `signature` menu from the
+  asset definition, as `edit` checks it (D68). It had listed Houdini's short menu
+  (`default` plus the signatures in use), so the reference and the validation disagreed.
+- Two slow integration tests no longer flake under load (tests only). The Vellum `cook
+  profile` test took a fresh 12-frame solve past the 10 s job threshold on a busy machine,
+  so the call answered a `job_id` instead of the profile; it now passes `wait_s` and
+  `timeout_s`. The PDG cancel tests broke on the first cooking item and asserted that both
+  were cooking, but each out-of-process item is a process start, so the second was still
+  `scheduled`; they now wait for all items to cook, and the items sleep 60 s, not 8.
 
 ## 2.0.0 (2026-10-14)
 
