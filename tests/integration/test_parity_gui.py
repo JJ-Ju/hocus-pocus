@@ -364,8 +364,7 @@ def test_rop_capture_runs_in_process(gui: GuiSession) -> None:
 def test_look_at_a_sop_in_a_subnet_shows_it_alone_in_process(gui: GuiSession) -> None:
     """D52 in the GUI: the temporary object that shows a SOP alone is made in the live
     scene, outside undo, and deleted; the user's flags and view stay as they were, and
-    source viewer says it is not isolated. (Karma is not checked here: a GUI Karma look
-    answered cook_failed "no output file" in 2.1 testing, with or without a SOP target.)"""
+    source viewer says it is not isolated (Karma: ``test_karma_looks_render_in_the_gui``)."""
     client = gui.client
     _scene(client)
     client.ok(
@@ -392,6 +391,91 @@ def test_look_at_a_sop_in_a_subnet_shows_it_alone_in_process(gui: GuiSession) ->
     )
     assert left == []
     assert client.python("result = hou.node('/obj/box_geo').displayNode().name()") == "box1"
+
+
+def _contrast(result: dict[str, Any]) -> int:
+    import base64
+    import io
+
+    image_mod = pytest.importorskip("PIL.Image")
+    image = image_mod.open(io.BytesIO(base64.b64decode(result["image"]["png_base64"])))
+    lo, hi = image.convert("L").getextrema()
+    return hi - lo
+
+
+STAGE_SPHERE = """
+ball = hou.node('/stage').createNode('sphere', 'ball')
+ball.setDisplayFlag(True)
+"""
+
+
+def test_karma_looks_render_in_the_gui(gui: GuiSession) -> None:
+    """``look`` lit (no lights) and final render with a temporary Karma ROP in the GUI
+    process: of /obj, of a SOP alone and of a stage; and ``render`` of the user's Karma
+    ROP writes its frame. A GUI Houdini starts husk in the background unless the ROP's
+    Block Until Render Complete is on, so render() returned before the image existed:
+    every GUI Karma look answered cook_failed "no output file" in 2.0 and 2.1 (hython
+    always waits)."""
+    client = gui.client
+    _scene(client)
+    client.ok(
+        "edit",
+        {
+            "ops": [
+                {"op": "create", "id": "sub", "parent": "/obj/box_geo", "type": "subnet"},
+                {"op": "create", "parent": "$sub", "type": "torus", "name": "ring"},
+            ]
+        },
+    )
+    before = client.view_state()
+    res = [160, 120]
+    lit = client.ok("look", {"quality": "lit", "resolution": res})
+    assert lit["backend_used"] == "karma" and lit["samples"] == 2, lit
+    assert any("no lights" in n for n in lit["notes"]), lit
+    assert _contrast(lit) > 20
+    final = client.ok("look", {"quality": "final", "resolution": res})
+    assert final["backend_used"] == "karma" and final["samples"] == 32, final
+    assert _contrast(final) > 20
+    alone = client.ok(
+        "look", {"target": "/obj/box_geo/subnet1/ring", "quality": "final", "resolution": res}
+    )
+    assert alone["backend_used"] == "karma" and alone["fit_used"] == "target", alone
+    assert _contrast(alone) > 20
+    client.python(STAGE_SPHERE)
+    stage = client.ok("look", {"target": "/stage", "quality": "final", "resolution": res})
+    assert stage["backend_used"] == "karma" and stage["scene"] == "stage", stage
+    assert _contrast(stage) > 20
+    assert client.view_state() == before
+    left = client.python(
+        "result = [n.path() for n in hou.node('/').allSubChildren() "
+        "if n.userData('hocuspocus:internal')]"
+    )
+    assert left == []
+
+    # The user's own Karma ROP with Block Until Render Complete off (its default): render
+    # turns it on for the render and puts it back.
+    client.ok(
+        "edit",
+        {
+            "ops": [
+                {"op": "create", "id": "cam", "parent": "/obj", "type": "cam", "name": "shot"},
+                {"op": "set", "path": "$cam/t", "value": [0, 1, 6]},
+                {"op": "create", "id": "rop", "parent": "/out", "type": "karma", "name": "beauty"},
+                {"op": "set", "path": "$rop/camera", "value": "/obj/shot"},
+                {"op": "set", "path": "$rop/resolutionx", "value": 160},
+                {"op": "set", "path": "$rop/resolutiony", "value": 120},
+                {"op": "set", "path": "$rop/samplesperpixel", "value": 2},
+            ]
+        },
+    )
+    assert client.python("hou.parm('/out/beauty/soho_foreground').eval()") == 0
+    out = (gui.work_dir / "render" / "beauty.$F4.exr").as_posix()
+    rendered = client.ok(
+        "render", {"rop_path": "/out/beauty", "frames": [1, 1], "output": out, "wait_s": 60}
+    )
+    assert rendered["state"] == "done" and "missing" not in rendered, rendered
+    assert (gui.work_dir / "render" / "beauty.0001.exr").is_file()
+    assert client.python("hou.parm('/out/beauty/soho_foreground').eval()") == 0
 
 
 def test_time_moves_the_playbar_and_captures_do_not(gui: GuiSession) -> None:

@@ -167,6 +167,14 @@ one for the 2.0.x releases, and 2.1 removes it.
   `examples/neo_tower/work/neo_tower_p2.hiplc`: 44.2 s and 38.6 s per look before, 5.5 s
   (child start) and 0.9 s after; a test's 4 s chain looks in 0.2 s once cooked. A render
   process that still runs out of time names `cook` and `quality: "final"` in its hint.
+- **Karma in a GUI session.** `look {quality: "lit" | "final"}` through Karma answered
+  `cook_failed` "Karma did not produce an image: no output file" in every GUI Houdini (2.0
+  too), with or without a target, and `render` of a Karma, USD Render or Mantra ROP
+  returned `state: done` with every output `missing`. A GUI Houdini starts husk in the
+  background unless the ROP's Block Until Render Complete (`soho_foreground`) is on, so
+  `render()` returned before the image existed; hython always waits, so headless looks
+  passed. Look's temporary Karma ROP has it on, and `render` turns it on for the render
+  and restores it. GUI test `test_karma_looks_render_in_the_gui`.
 
 ## 2.0.0 (2026-10-14)
 
