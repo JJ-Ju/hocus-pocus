@@ -402,6 +402,9 @@ DETAILS = ("compact", "full")
 
 PROJECTED = frozenset({"node", "parms", "outline", "geo", "problems", "type"})
 
+CONDITIONALS = frozenset({"disable_when", "hide_when", "no_cook_when"})
+"""A parm template's conditionals, in ``parms`` rows with ``detail: full`` only."""
+
 PLAIN_PARM_TYPES = frozenset({"float", "int", "string", "toggle"})
 """Parm types a compact parm row leaves out: the JSON value already says them."""
 
@@ -447,6 +450,8 @@ def compact_parm(row: dict[str, Any]) -> Any:
     expressions = row.get("expressions")
     for key, item in row.items():
         if key in ("path", "name", "kind", "tuple", "component_names", "is_default"):
+            continue
+        if key in CONDITIONALS:  # detail: full says them (D82)
             continue
         if key == "type" and item in PLAIN_PARM_TYPES:
             continue

@@ -238,6 +238,22 @@ def menu_label(label: str) -> str:
     return ICON_MARKUP.sub("", label) if label.startswith("![") else label
 
 
+def template_conditionals(template: Any) -> dict[str, str]:
+    """A parm template's conditionals as the ``spare_parms`` fields name them
+    (``disable_when``, ``hide_when``; ``no_cook_when`` too): ``{"disable_when": "{ a == 0
+    }"}``, empty when it has none (2.1, D82: reads showed neither, r21 friction 5)."""
+    out: dict[str, str] = {}
+    try:
+        conditions = template.conditionals()
+    except Exception:
+        return out
+    for kind, text in conditions.items():
+        name = re.sub(r"(?<!^)(?=[A-Z])", "_", str(kind).rsplit(".", 1)[-1]).lower()
+        if text and str(text).strip():
+            out[name] = str(text).strip()
+    return dict(sorted(out.items()))
+
+
 def _range(template: Any, kind: str) -> dict[str, Any]:
     if kind not in ("float", "int"):
         return {}
@@ -608,6 +624,7 @@ def _describe_parm(
     if full:
         out["locked"] = locked
         out["hda_locked"] = _hda_locked(parm)
+        out.update(template_conditionals(template))
         if "keys" in include:
             out["keyframes"] = (
                 {"count": keys["count"], "first": keys["first"], "last": keys["last"]}
@@ -687,6 +704,7 @@ def _describe_tuple(
     if full:
         out["locked"] = locked
         out["hda_locked"] = _hda_locked(parms[0])
+        out.update(template_conditionals(template))
         if "keys" in include:
             out["keyframes"] = {
                 name: {"count": i["count"], "first": i["first"], "last": i["last"]}

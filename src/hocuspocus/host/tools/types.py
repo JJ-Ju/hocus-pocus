@@ -30,7 +30,7 @@ from hocuspocus.tools.errors import ToolError
 from hocuspocus.tools.migration import hint_tool
 
 from ._common import arg_bool, dynamic_menu_note, glob_alternatives, int_arg, menu_is_dynamic
-from .parms import menu_label, type_signatures
+from .parms import menu_label, template_conditionals, type_signatures
 from .registry import HostContext
 
 # -- help archive -----------------------------------------------------------------
@@ -393,6 +393,32 @@ def asset_fields(node_type: Any) -> dict[str, str]:
     except Exception:
         pass
     return out
+
+
+ASSET_HELP_SECTION = "HelpText"
+
+
+def asset_help(node_type: Any) -> tuple[str, str] | None:
+    """``(text, source)`` of a digital asset's own help, its definition's ``HelpText``
+    section (the wiki markup ``hda {help}`` writes), for a type nodes.zip does not document
+    (2.1, D83: r21 friction 5 read "No help found" for an asset with 3 KB of help)."""
+    try:
+        definition = node_type.definition()
+        section = definition.sections().get(ASSET_HELP_SECTION) if definition else None
+        text = section.contents() if section is not None else ""
+    except Exception:
+        return None
+    if not text or not text.strip():
+        return None
+    library = definition.libraryFilePath() or "Embedded"
+    return text, f"{library}:{ASSET_HELP_SECTION}"
+
+
+def _is_asset(node_type: Any) -> bool:
+    try:
+        return node_type.definition() is not None
+    except Exception:
+        return False
 
 
 def get_index() -> list[dict[str, Any]]:
@@ -1119,6 +1145,7 @@ def _template_row(
         row["help"] = _clip(" ".join(help_text.split()), PARM_HELP_CHARS)
     if template.isHidden():
         row["is_hidden"] = True
+    row.update(template_conditionals(template))
     if path:
         row["folder"] = " / ".join(path)
     return row
@@ -1449,6 +1476,11 @@ def node_type_info(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     order = node_type.namespaceOrder()
     entry = help_entry(cat_name, components)
     raw_help = _HELP.read(entry) if entry else None
+    help_source = f"nodes.zip:{entry}" if raw_help else None
+    if raw_help is None:
+        own = asset_help(node_type)
+        if own is not None:
+            raw_help, help_source = own
     header = parse_help_header(raw_help or "")
     asset = asset_fields(node_type) if not components[3] or not header["summary"] else {}
     result: dict[str, Any] = {
@@ -1544,8 +1576,12 @@ def node_type_info(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
             result["help_text"] = text
             if truncated:
                 result["help_truncated"] = True
-            result["help_source"] = f"nodes.zip:{entry}"
+            result["help_source"] = help_source
         else:
             result["help_text"] = None
-            result["help_note"] = "No help found for this type in $HFS/houdini/help/nodes.zip."
+            result["help_note"] = "No help found for this type in $HFS/houdini/help/nodes.zip" + (
+                ", and its asset definition has no HelpText section."
+                if _is_asset(node_type)
+                else "."
+            )
     return result

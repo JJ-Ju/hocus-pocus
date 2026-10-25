@@ -44,6 +44,7 @@ from ._common import (
 )
 from .hip import check_allowed, resolve_path
 from .nodes import ensure_editable, hda_block, watch_nodes
+from .parms import template_conditionals
 from .registry import HostContext, tool
 
 ACTIONS = (
@@ -89,6 +90,8 @@ name; ``hou.hda.defaultFileExtension()`` is the one Houdini picks."""
 HELP_SECTION = "HelpText"
 LIST_TYPES_LIMIT = 20
 SECTIONS_LIMIT = 40
+CONDITIONALS_LIMIT = 100
+"""``info`` lists at most this many parms' conditionals (``conditionals_total`` counts all)."""
 
 
 def _require(args: dict[str, Any], action: str) -> None:
@@ -723,6 +726,13 @@ def _info(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
             "parms": sum(1 for t in templates if t.type().name() != "Folder"),
             "folders": [t.label() for t in group.entries() if t.type().name() == "Folder"],
         }
+        # D82: the parms' disable_when / hide_when, which no read showed (r21 friction 5).
+        conditions = {t.name(): c for t in templates if (c := template_conditionals(t))}
+        if conditions:
+            names = list(conditions)[:CONDITIONALS_LIMIT]
+            out["interface"]["conditionals"] = {n: conditions[n] for n in names}
+            if len(conditions) > CONDITIONALS_LIMIT:
+                out["interface"]["conditionals_total"] = len(conditions)
     with contextlib.suppress(Exception):
         out["instances"] = len(node_type.instances())
     if node is not None:
