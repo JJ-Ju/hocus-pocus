@@ -4,6 +4,16 @@ This project uses [Semantic Versioning](https://semver.org/). The 0.9 compatibil
 policy does not apply to 1.0. 2.0 changes the tool surface; `compat_1x` kept the 1.4
 one for the 2.0.x releases, and 2.1 removes it.
 
+## Unreleased
+
+### Fixed
+
+- `edit` and `node_create`: a `create` input link took any key, so `from_output` (the
+  `connect` op's spelling) was dropped silently and the wire came from output 0. An input
+  link now takes `from_output` as another name for `output` (both at once must agree), and
+  an unknown key is `invalid_argument` naming it. Found by the procedural-assets dogfood
+  (review 30), where a collision branch was exported as the render mesh.
+
 ## 2.1.0 (2026-10-24)
 
 2.1 keeps the 2.0 contract and removes what 2.0 announced it would: the `compat_1x`
