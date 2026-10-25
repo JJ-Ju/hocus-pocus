@@ -11,18 +11,23 @@ result. So there is one undo policy, one rollback and one echo engine.
   ``build`` (``hou.data`` with ``press``) and ``select``. An op may carry an ``id``; a later
   op names its node as ``$id`` (or ``$id/child``, ``$id/parm``) in its path fields, and the
   reference resolves to the path the op actually produced when the later op runs.
-* :func:`validate` checks a plan without changing the scene (types resolve, parents exist
-  and hold the category, parms and tuples exist or are spare parms an earlier op adds,
-  inputs by index, name, ``"next"`` or ``$id``, names free, locked assets refused) and
-  returns :class:`Diagnostics`: the plan with resolved (and predicted) paths, and the
-  problems. A dry run is that.
 * :func:`execute` runs the plan on the main thread, inside the one undo group the
   dispatcher opened for the call (``HocusPocus: edit <n> ops`` for ``edit``). Houdini
   refuses ``performUndo`` inside an open group, so a failing op is reverted by
   compensation (:class:`Rollback`), newest first; with ``partial`` only that op's own
-  changes are reverted and the rest stand. ``rolled_back`` is what really happened:
-  a delete cannot be compensated, so ``edit`` then leaves the answer to the dispatcher,
-  which undoes the whole group after it closes (``host/undo.py``).
+  changes are reverted and the rest stand (``stop``: the ops after it do not run).
+  ``rolled_back`` is what really happened: a delete cannot be compensated, so ``edit``
+  then leaves the answer to the dispatcher, which undoes the whole group after it closes
+  (``host/undo.py``).
+* Validation is the run itself (BIBLE D56): every op is checked by running it against the
+  scene the earlier ops left. ``edit`` (``Plan.collect``) does not stop at a failing op: it
+  reverts that op, runs the rest in *check mode* (:func:`checking`: no ``press``
+  callbacks, no selection change, a delete renames the node out of the way, ``lock:
+  true`` and a build's ``replace`` keep the old contents) to report their problems too,
+  then compensates everything and raises the first problem with all of them in
+  ``detail.problems``. :func:`dry_run` is check mode from the first op, with undo off and
+  events muted, compensated whether or not it failed: a dry run and the run agree by
+  construction.
 * :func:`echo` is the ``edit`` result: by default one compact row per touched node
   (``path``, ``type``, and only the notable problems; each cooked once at the end) with the
   ops' results folded in and an ``ids`` map; ``return: ops`` adds one row per op;
@@ -172,7 +177,11 @@ class Rollback:
         self.add(fail)
 
     def destroy_later(self, node: Any) -> None:
-        self.add(lambda: node.destroy())
+        def destroy() -> None:
+            if _session_id(node) is not None:  # a later op may have deleted it already
+                node.destroy()
+
+        self.add(destroy)
 
     def keep_display(self, parent: Any) -> None:
         """Restore ``parent``'s display/render node (SOP-style networks) on rollback."""
@@ -231,6 +240,14 @@ class Plan:
     label: str = "items"
     """What a batch error calls the argument: ``items[i] (<path>)`` for the 1.4 tools,
     ``ops[i].<field>`` for ``edit`` (review 25 papercut 3)."""
+    collect: bool = False
+    """``edit`` (D56): a failing op does not end the run; it is reverted, the rest run in
+    check mode, and every problem is raised together after the whole plan is compensated."""
+    stop: bool = False
+    """``edit`` ``partial: "stop"`` (D57): keep the ops before the first failing op; the
+    ops after it do not run."""
+    dry_run: bool = False
+    """Check mode from the first op (:func:`dry_run`)."""
 
     @property
     def declared(self) -> set[str]:
@@ -253,6 +270,8 @@ class OpResult:
     extra: dict[str, Any] = field(default_factory=dict)
     data: Any = None
     error: dict[str, Any] | None = None
+    data_row: dict[str, Any] | None = None
+    """A dry run's row for the op (:func:`dry_run`), taken when the op ran."""
 
     @property
     def ok(self) -> bool:
@@ -271,6 +290,21 @@ class State:
     """Session id of a created ``block_end`` -> the ``block_begin`` it was paired with."""
     extras: dict[int, dict[str, Any]] = field(default_factory=dict)
     """Session id of a created node -> ``deprecated``, ``notes``, ``side_effects``."""
+    checking: bool = False
+    """Check mode (:func:`checking`): ops run for real but leave out what compensation
+    could not take back (callbacks, selection, deletes, ``lock: true``)."""
+    stopped: int | None = None
+    """``partial: "stop"``: the index of the op that failed; later ops do not run."""
+
+
+_ACTIVE: list[State] = []
+"""The states of the plans running now (innermost last): :func:`checking` reads it."""
+
+
+def checking() -> bool:
+    """Whether the op running now is in check mode (``dry_run``, or the ops after a failing
+    one in ``edit``): a ``press`` then sets the value but runs no callback."""
+    return bool(_ACTIVE) and _ACTIVE[-1].checking
 
 
 @dataclass
@@ -418,43 +452,164 @@ def path_of(kind: str, args: Any) -> Any:
 def execute(plan: Plan, ctx: Any) -> Result:
     """Run ``plan`` on the main thread (inside the call's undo group). Returns per-op
     results; a failing op rolls the plan back and raises the batch error, or with
-    ``partial`` rolls back that op only and records its error."""
+    ``partial`` rolls back that op only and records its error (``stop``: and runs no
+    later op). With ``collect`` (``edit``) the ops after a failing one still run, in
+    check mode, so the error lists every problem (:func:`combined_error`)."""
     from .tools.nodes import batch_error
 
-    state = State(ctx, plan)
+    state = State(ctx, plan, checking=plan.dry_run)
     declared = plan.declared
     results: list[OpResult] = []
-    for index, op in enumerate(plan.ops):
-        mark = state.rollback.mark()
-        args = op.args
-        try:
-            args = resolve_args(op.op, op.args, state.ids, declared, strict=plan.strict_refs)
-            res = HANDLERS[op.op](args, op.opts, index, state)
-            res.index, res.op, res.args = index, op, args
-            if op.id and res.path:
-                state.ids[op.id] = res.path
-        except Exception as exc:
-            if plan.tool_errors_only and not isinstance(exc, ToolError):
-                raise
-            if plan.raw_errors:
-                state.rollback.run()
-                raise
-            path = path_of(op.op, args)
-            where = {"label": plan.label, "op": {"op": op.op, **(args or {})}}
-            if not isinstance(args, dict):
-                where["op"] = {"op": op.op}
-            if not plan.partial:
-                ok = state.rollback.run()
-                if not ok and plan.defer_rollback:
-                    reported: Any = None  # the dispatcher's undo of the group decides
-                else:
-                    reported = ok
-                raise batch_error(index, path, exc, rolled_back=reported, **where) from exc
-            ok = state.rollback.run(mark)
-            error = batch_error(index, path, exc, rolled_back=ok, **where).to_dict()
-            res = OpResult(index, op, args, error=error)
-        results.append(res)
+    problems: list[ToolError] = []
+    failed: set[str] = set()
+    _ACTIVE.append(state)
+    try:
+        for index, op in enumerate(plan.ops):
+            if state.stopped is not None:
+                break
+            if plan.collect and _refs(op.op, op.args) & failed:
+                # Depends on an op that failed: its root cause is reported once.
+                if op.id:
+                    failed.add(op.id)
+                continue
+            mark = state.rollback.mark()
+            args = op.args
+            try:
+                args = resolve_args(op.op, op.args, state.ids, declared, strict=plan.strict_refs)
+                res = HANDLERS[op.op](args, op.opts, index, state)
+                res.index, res.op, res.args = index, op, args
+                if op.id and res.path:
+                    state.ids[op.id] = res.path
+                if plan.dry_run:
+                    res.data_row = _dry_row(res)  # the paths as this op left them
+            except Exception as exc:
+                if plan.tool_errors_only and not isinstance(exc, ToolError):
+                    raise
+                if plan.raw_errors:
+                    state.rollback.run()
+                    raise
+                if op.id:
+                    failed.add(op.id)
+                path = path_of(op.op, args)
+                where = {"label": plan.label, "op": {"op": op.op, **(args or {})}}
+                if not isinstance(args, dict):
+                    where["op"] = {"op": op.op}
+                if plan.partial or plan.stop:
+                    ok = state.rollback.run(mark)
+                    error = batch_error(index, path, exc, rolled_back=ok, **where).to_dict()
+                    results.append(OpResult(index, op, args, error=error))
+                    if plan.stop:
+                        state.stopped = index
+                    continue
+                if not plan.collect:
+                    ok = state.rollback.run()
+                    reported = None if not ok and plan.defer_rollback else ok
+                    raise batch_error(index, path, exc, rolled_back=reported, **where) from exc
+                # edit: revert this op and check the rest against what the others leave.
+                state.rollback.run(mark)
+                problems.append(batch_error(index, path, exc, rolled_back=True, **where))
+                state.checking = True
+                continue
+            results.append(res)
+        if problems:
+            ok = state.rollback.run()
+            reported = None if not ok and plan.defer_rollback else ok
+            for problem in problems:
+                problem.detail["rolled_back"] = reported
+            raise combined_error(problems)
+    finally:
+        _ACTIVE.remove(state)
     return Result(plan, results, state)
+
+
+def combined_error(problems: list[ToolError]) -> ToolError:
+    """The first problem, with ``(+n more problem(s))`` and ``detail.problems`` listing up
+    to 20 (``{item, code, message, hint?}``) when there are several."""
+    first = problems[0]
+    if len(problems) > 1:
+        listing = []
+        for error in problems[:20]:
+            row: dict[str, Any] = {
+                "item": error.detail.get("item"),
+                "code": error.code,
+                "message": error.message,
+            }
+            if error.hint:
+                row["hint"] = error.hint
+            listing.append(row)
+        first.message = f"{first.message} (+{len(problems) - 1} more problem(s))"
+        first.args = (first.message,)
+        first.detail = {**first.detail, "problems": listing}
+    return first
+
+
+def dry_run(plan: Plan, ctx: Any) -> list[dict[str, Any]]:
+    """Check ``plan`` by running it in check mode and compensating it, with undo off and
+    events muted, so nothing is left behind: no node, undo step, event or dirty flag
+    (D56). Returns one row per op with resolved paths (``predicted: true`` where Houdini
+    numbered a new node), or raises the first problem with all of them listed."""
+    import hou
+
+    from .tools.events import muted
+
+    plan.dry_run = True
+    plan.collect = True
+    with hou.undos.disabler(), muted():
+        result = execute(plan, ctx)  # compensated already when it raises
+        try:
+            rows = [res.data_row for res in result.results]
+        finally:
+            restored = result.state.rollback.run()
+    if not restored:
+        raise ToolError(
+            "internal",
+            "The dry run could not take back every change it made to check the ops.",
+            hint="Inspect the nodes the ops name before editing them.",
+        )
+    return rows
+
+
+def _dry_row(res: OpResult) -> dict[str, Any]:
+    """A dry run's row for one op: what the run did, by path (before the compensation)."""
+    kind, data, args = res.op.op, res.data, res.args if isinstance(res.args, dict) else {}
+    row: dict[str, Any] = {"op": kind}
+    if res.op.id:
+        row["id"] = res.op.id
+    if kind == "create":
+        row.update(path=res.node.path(), type=res.node.type().name())
+        if args.get("name") is None:
+            row["predicted"] = True  # Houdini numbered it
+        if res.extra.get("wires"):
+            row["inputs"] = res.extra["wires"]
+    elif kind == "connect":
+        row["to"] = res.node.path()
+        row["to_input"] = res.extra["input"]
+        row["from"] = res.extra["from"]
+        row["path"] = res.node.path()
+    elif kind == "set":
+        if isinstance(data, list):
+            row.update(path=res.node.path(), parms=list((args.get("parms") or {}).keys()))
+        else:
+            row["path"] = data.get("path") if isinstance(data, dict) else res.path
+    elif kind == "node":
+        row["path"] = res.node.path()
+        if "old_path" in res.extra:
+            row["old_path"] = res.extra["old_path"]
+    elif kind == "delete":
+        row["paths"] = data["deleted"]
+    elif kind == "copy":
+        row["paths"] = [c.path() for c in data["copies"]]
+        if len(row["paths"]) == 1:
+            row["path"] = row["paths"][0]
+    elif kind == "layout":
+        row["path"] = data["parent"].path()
+    elif kind == "build":
+        row.update(path=data["parent"].path(), nodes=[n.path() for n in data["top_nodes"]])
+        if data["renamed"]:
+            row["renamed"] = data["renamed"]
+    elif kind == "select":
+        row["paths"] = data["selected"]
+    return row
 
 
 def watch(nodes: Iterable[Any]) -> None:
@@ -478,22 +633,27 @@ def _op_create(args: Any, opts: dict[str, Any], index: int, st: State) -> OpResu
         raise N.bad_arg(f"items[{index}] must be an object.")
     rollback = st.rollback
     parent = N.get_node(args.get("parent"), field="parent")
-    N.ensure_can_hold_children(parent)
+    with located("parent"):
+        N.ensure_can_hold_children(parent)
     type_name = args.get("type")
     if not isinstance(type_name, str) or not type_name:
         raise N.bad_arg(f"items[{index}].type must be a non-empty string.")
     name = args.get("name")
     if name is not None:
-        N.check_name(name)
+        with located("name"):
+            N.check_name(name)
         existing = parent.node(name)
         if existing is not None:
             free = N.unique_name(parent, name)
-            raise ToolError(
-                "name_collision",
-                f"{existing.path()} already exists ({existing.type().name()}).",
-                hint=f"Pick another name (e.g. {free!r}), omit name to let Houdini number it, "
-                "or edit the existing node.",
-                candidates=[free],
+            raise at_field(
+                ToolError(
+                    "name_collision",
+                    f"{existing.path()} already exists.",
+                    hint=f"Pick another name (e.g. {free!r}), omit name to let Houdini number "
+                    "it, or edit the existing node.",
+                    candidates=[free],
+                ),
+                "name",
             )
     exact = N.arg_bool(opts, "exact_type", False)
     if opts.get("layout", "good_position") not in ("good_position", "none"):
@@ -534,21 +694,26 @@ def _op_create(args: Any, opts: dict[str, Any], index: int, st: State) -> OpResu
         plain = {k: v for k, v in parms.items() if not _is_press(v)}
         pressed = {k: v for k, v in parms.items() if _is_press(v)}
         _set_create_parms(node, plain, st)
-    for link_index, link in enumerate(args.get("inputs") or []):
+    inputs = args.get("inputs") or []
+    if not isinstance(inputs, list):
+        raise N.bad_arg(f"items[{index}].inputs must be a list.")
+    wires = []
+    for link_index, link in enumerate(inputs):
+        at = f"inputs[{link_index}]"
         if not isinstance(link, dict) or "from" not in link:
-            raise N.bad_arg(
-                f"items[{index}].inputs[{link_index}] must be {{index|name, from, output}}.",
-            )
+            raise N.bad_arg(f"items[{index}].{at} must be {{index|name, from, output}}.")
         if "index" in link and "name" in link:
-            raise N.bad_arg(
-                f"items[{index}].inputs[{link_index}]: pass index or name, not both.",
-            )
-        src = N.connect_source(link["from"], node, field="inputs.from")
+            raise N.bad_arg(f"items[{index}].{at}: pass index or name, not both.")
+        src = wire_source(link["from"], node, f"{at}.from")
         target = link.get("name") if "name" in link else link.get("index", link_index)
-        dest_index = N.resolve_input_index(node, target)
-        output = N.check_output_index(src, link.get("output", 0))
-        N.connect(node, dest_index, src, output, None)
-    N.set_flags(node, args.get("flags"))
+        with located(f"{at}.{'name' if 'name' in link else 'index'}"):
+            dest_index = N.resolve_input_index(node, target)
+        item, output = wire_output(src, node, link.get("output", 0), f"{at}.output")
+        with located(at):
+            N.connect(node, dest_index, item, output, None)
+        wires.append(src.path())
+    with located("flags"):
+        N.set_flags(node, args.get("flags"))
     if pressed:
         _set_create_parms(node, pressed, st)
     begin = N.pair_block_end(node, rollback)
@@ -561,7 +726,59 @@ def _op_create(args: Any, opts: dict[str, Any], index: int, st: State) -> OpResu
         with contextlib.suppress(Exception):
             node.moveToGoodPosition(move_inputs=False, move_outputs=False, move_unconnected=False)
     cook = N.arg_bool(opts, "cook", True)
-    return OpResult(index, Op("create", args), node=node, path=node.path(), nodes=[node], cook=cook)
+    return OpResult(
+        index,
+        Op("create", args),
+        node=node,
+        path=node.path(),
+        nodes=[node],
+        cook=cook,
+        extra={"wires": wires} if wires else {},
+    )
+
+
+def wire_source(value: Any, dest: Any, field: str) -> Any:
+    """The node ``value`` names as a wire into ``dest`` (absolute, or relative to
+    ``dest``'s network): a sibling. A missing one is ``node_not_found`` at ``field`` with
+    the network's nearest children as candidates (never ``dest``)."""
+    import hou
+
+    from .tools._diag import missing_node_error
+    from .tools.nodes import ABOUT_KEY, bad_arg
+
+    with located(field):
+        if not isinstance(value, str) or not value.strip():
+            raise bad_arg(f"'{field}' must be a node path.")
+        network = dest.parent()
+        text = value.strip()
+        src = hou.node(text) if text.startswith("/") else network.node(text)
+        if src is None:
+            full = text if text.startswith("/") else f"{network.path().rstrip('/')}/{text}"
+            error = missing_node_error(full.rstrip("/") or "/", exclude=dest)
+            error.detail = {ABOUT_KEY: full}  # a 1.4 batch error names the source, not dest
+            raise error
+        if src == dest:
+            raise ToolError(
+                "invalid_input",
+                f"{dest.path()} cannot be wired into itself.",
+                hint="Wire an upstream node into it instead.",
+            )
+        if src.parent() != network:
+            raise ToolError(
+                "invalid_input",
+                f"{src.path()} and {dest.path()} are in different networks.",
+                hint="Connect nodes that share a parent; use an object_merge SOP to bring "
+                "geometry across networks.",
+            )
+    return src
+
+
+def wire_output(src: Any, dest: Any, output: Any, field: str) -> tuple[Any, int]:
+    """``(item, output index)`` to wire into ``dest``: ``src`` and its checked output."""
+    from .tools import nodes as N
+
+    with located(field):
+        return src, N.check_output_index(src, output)
 
 
 def _is_press(spec: Any) -> bool:
@@ -615,7 +832,9 @@ def _op_set(args: Any, opts: dict[str, Any], index: int, st: State) -> OpResult:
         raise ToolError("invalid_argument", f"Unexpected item keys {sorted(unknown)}.")
     node, target = P.resolve_path(args.get("path"))
     st.rollback.add(_checked(P._snapshot(target)))  # never leave an item half-applied
-    row = P._apply(node, target, args, frame=frame, ctx=st.ctx)
+    text_field = next((f for f in ("patch", "value_file") if args.get(f) is not None), None)
+    with located(text_field) if text_field else contextlib.nullcontext():
+        row = P._apply(node, target, args, frame=frame, ctx=st.ctx)
     return OpResult(index, Op("set", args), node=node, path=node.path(), nodes=[node], data=row)
 
 
@@ -625,21 +844,27 @@ def _op_connect(args: Any, opts: dict[str, Any], index: int, st: State) -> OpRes
     if not isinstance(args, dict) or "to" not in args or "from" not in args:
         raise N.bad_arg(f"items[{index}] needs 'from' (path or null) and 'to'.")
     dest = N.get_node(args.get("to"), field="to")
-    N.ensure_editable(dest, "rewire")
+    with located("to"):
+        N.ensure_editable(dest, "rewire")
     src_path = args.get("from")
-    src = None if src_path is None else N.connect_source(src_path, dest)
-    index_or_next = N.resolve_input_index(dest, args.get("to_input", 0))
+    src = None if src_path is None else wire_source(src_path, dest, "from")
+    with located("to_input"):
+        index_or_next = N.resolve_input_index(dest, args.get("to_input", 0))
     if src is None:
         if index_or_next == "next":
-            raise N.bad_arg(
-                "to_input 'next' cannot disconnect.",
-                hint="Pass the input index or name to disconnect.",
+            raise at_field(
+                N.bad_arg(
+                    "to_input 'next' cannot disconnect.",
+                    hint="Pass the input index or name to disconnect.",
+                ),
+                "to_input",
             )
         used = N.connect(dest, index_or_next, None, 0, st.rollback)
         output = 0
     else:
-        output = N.check_output_index(src, args.get("from_output", 0))
-        used = N.connect(dest, index_or_next, src, output, st.rollback)
+        item, out_index = wire_output(src, dest, args.get("from_output", 0), "from_output")
+        used = N.connect(dest, index_or_next, item, out_index, st.rollback)
+        output = out_index
     names = list(dest.inputNames())
     extra = {
         "input": used,
@@ -716,7 +941,8 @@ def plan_node_edit(item: Any, index: int, node: Any = None) -> dict[str, Any]:
 
         # A locked asset's own instance takes spare parms (the wrangle "Create spare
         # parameters" button does that); nodes inside a locked asset were refused above.
-        spare_plan = plan_spare_parms(node, item["spare_parms"])
+        with located("spare_parms"):
+            spare_plan = plan_spare_parms(node, item["spare_parms"])
     return {
         "node": node,
         "lock": lock,
@@ -781,6 +1007,8 @@ def _op_node(args: Any, opts: dict[str, Any], index: int, st: State) -> OpResult
 
         spare = apply_spare_parms(node, plan["spare"], rollback)
     lock = plan["lock"]
+    if lock and st.checking:
+        lock = None  # matchCurrentDefinition() discards edits compensation cannot restore
     if lock is not None:
         was_locked = N._is_locked_hda(node)
         if lock and not was_locked:
@@ -842,34 +1070,42 @@ def _op_delete(args: Any, opts: dict[str, Any], index: int, st: State) -> OpResu
     deleted: list[str] = []
     reconnected: list[dict[str, Any]] = []
     touched: dict[str, Any] = {}
+    soft = st.checking
     for node in unique:
         path = node.path()
+        src = src_out = None
         if keep:
             source = next((c for c in node.inputConnections() if c.inputIndex() == 0), None)
             if source is not None and source.inputNode() is not None:
                 src, src_out = source.inputNode(), source.outputIndex()
-                for conn in node.outputConnections():
-                    dest = conn.outputNode()
-                    if dest is None:
-                        continue
-                    with _c.suppress(Exception):
-                        dest.setInput(conn.inputIndex(), src, src_out)
-                        reconnected.append(
-                            {"from": src.path(), "to": dest.path(), "input": conn.inputIndex()}
-                        )
-                        touched[dest.path()] = dest
+        for conn in list(node.outputConnections()):
+            dest = conn.outputNode()
+            if dest is None:
+                continue
+            slot, old = conn.inputIndex(), (node, conn.outputIndex())
+            if src is not None:
+                try:
+                    dest.setInput(slot, src, src_out)
+                except Exception:
+                    continue
+                reconnected.append({"from": src.path(), "to": dest.path(), "input": slot})
+                touched[dest.path()] = dest
+            elif soft or not keep:
+                # destroy() splices input 0 through to the outputs by itself; cut them first.
+                with _c.suppress(Exception):
+                    dest.setInput(slot, None)
+            else:
+                continue
+            if soft:
+                st.rollback.add(lambda d=dest, i=slot, o=old: d.setInput(i, o[0], o[1]))
+        if soft:
+            _set_aside(node, st.rollback)
         else:
-            # destroy() splices input 0 through to the outputs by itself; cut them first.
-            for conn in node.outputConnections():
-                dest = conn.outputNode()
-                if dest is not None:
-                    with _c.suppress(Exception):
-                        dest.setInput(conn.inputIndex(), None)
-        st.rollback.cannot_undo()
-        try:
-            node.destroy()
-        except Exception as exc:
-            raise N.to_tool_error(exc, node=node) from exc
+            st.rollback.cannot_undo()
+            try:
+                node.destroy()
+            except Exception as exc:
+                raise N.to_tool_error(exc, node=node) from exc
         deleted.append(path)
         touched.pop(path, None)
     alive = [n for p, n in touched.items() if p not in seen]
@@ -880,6 +1116,17 @@ def _op_delete(args: Any, opts: dict[str, Any], index: int, st: State) -> OpResu
         "any_reconnected": bool(reconnected),
     }
     return OpResult(index, Op("delete", args), nodes=alive, data=data)
+
+
+def _set_aside(node: Any, rollback: Rollback) -> None:
+    """Check mode's delete (D56): the node is renamed out of the way, so its path and
+    name are free and later ops see it gone; compensation renames it back. Houdini
+    updates expressions that name it either way."""
+    from .tools.nodes import unique_name
+
+    old_name = node.name()
+    node.setName(unique_name(node.parent(), f"{old_name}_hp_deleted"))
+    rollback.add(lambda: node.setName(old_name))
 
 
 def _op_copy(args: Any, opts: dict[str, Any], index: int, st: State) -> OpResult:
@@ -1065,7 +1312,11 @@ def _op_build(args: Any, opts: dict[str, Any], index: int, st: State) -> OpResul
             consumer = conn.outputNode()
             if consumer is None or consumer.parent() != parent or consumer.name() in data:
                 continue
-            consumer.setInput(conn.inputIndex(), new, conn.outputIndex())
+            slot, out_index = conn.inputIndex(), conn.outputIndex()
+            consumer.setInput(slot, new, out_index)
+            rollback.add(lambda c=consumer, i=slot, o=old, n=out_index: c.setInput(i, o, n))
+        if st.checking:
+            continue  # check mode keeps the old node, renamed aside, for compensation
         rollback.cannot_undo()
         old.destroy()
     if prep["layout"] and top_nodes:
@@ -1107,6 +1358,9 @@ def _op_select(args: Any, opts: dict[str, Any], index: int, st: State) -> OpResu
         node = N.get_node(path, field=f"paths[{i}]")
         if node not in nodes:
             nodes.append(node)
+    if st.checking:
+        # Selecting moves unpinned panes into the network (parity G3): not compensable.
+        return OpResult(index, Op("select", args), data={"selected": [n.path() for n in nodes]})
     before = list(hou.selectedNodes())
 
     def restore() -> None:
@@ -1142,13 +1396,38 @@ HANDLERS: dict[str, Callable[[Any, dict[str, Any], int, State], OpResult]] = {
 # -- edit plans ------------------------------------------------------------------------
 
 
-def parse_ops(ops: Any, *, partial: bool = False) -> Plan:
+PARTIAL_MODES = (False, True, "stop")
+"""``edit``'s ``partial``: false (a failing op rolls the call back, after every op was
+checked), true (each failing op reverts only itself) or ``"stop"`` (D57: the ops before
+the first failing op stay, the rest do not run)."""
+
+
+def partial_mode(args: dict[str, Any]) -> bool | str:
+    from .tools.nodes import bad_arg
+
+    value = args.get("partial", False)
+    if value is None:
+        return False
+    if value not in PARTIAL_MODES or (value in (0, 1) and not isinstance(value, bool)):
+        raise bad_arg("'partial' must be true, false or \"stop\".")
+    return value
+
+
+def parse_ops(ops: Any, *, partial: bool | str = False) -> Plan:
     """An ``edit`` plan from its ``ops``: kinds, ids and fields checked, nothing else."""
     from .tools.nodes import bad_arg, batch_error
 
     if not isinstance(ops, list) or not ops:
         raise bad_arg("'ops' must be a non-empty array of {op, ...} objects.")
-    plan = Plan([], partial=partial, strict_refs=True, defer_rollback=True, label="ops")
+    plan = Plan(
+        [],
+        partial=partial is True,
+        stop=partial == "stop",
+        collect=partial is False,
+        strict_refs=True,
+        defer_rollback=True,
+        label="ops",
+    )
     seen: set[str] = set()
     for index, raw in enumerate(ops):
         try:
@@ -1269,56 +1548,7 @@ def _canonical_path(kind: str, fields: dict[str, Any]) -> None:
     merge("path", target, value)
 
 
-# -- validate --------------------------------------------------------------------------
-
-SIM_PARM_CATEGORIES = frozenset({"Sop", "Cop", "Cop2", "Chop", "Dop", "Top", "Vop"})
-"""Categories whose type templates list every parm a new node has. Objects, ROPs and LOPs
-get spare parms from creation scripts (a geo object's render properties), so their parms
-are checked when the op runs, not in validation."""
-
-
-@dataclass
-class VNode:
-    """A node an earlier op of the plan creates (or copies, or builds)."""
-
-    path: str
-    type: Any
-    """Its ``hou.NodeType``, or None when validation cannot know it."""
-    spare: set[str] = field(default_factory=set)
-
-
-@dataclass
-class Diagnostics:
-    """What :func:`validate` found: ``rows`` (the plan with resolved paths) and
-    ``problems`` (batch errors, in op order)."""
-
-    rows: list[dict[str, Any]] = field(default_factory=list)
-    problems: list[ToolError] = field(default_factory=list)
-
-    @property
-    def ok(self) -> bool:
-        return not self.problems
-
-    def raise_if_any(self) -> None:
-        if not self.problems:
-            return
-        first = self.problems[0]
-        if len(self.problems) > 1:
-            listing = []
-            for error in self.problems[:20]:
-                row: dict[str, Any] = {
-                    "item": error.detail.get("item"),
-                    "code": error.code,
-                    "message": error.message,
-                }
-                if error.hint:
-                    row["hint"] = error.hint
-                listing.append(row)
-            first.message = f"{first.message} (+{len(self.problems) - 1} more problem(s))"
-            first.args = (first.message,)
-            first.detail = {**first.detail, "problems": listing}
-        raise first
-
+# -- field locations ---------------------------------------------------------------------
 
 FIELD_KEY = "_field"
 """``detail`` key a validator sets on an error to name the op field it is about; the batch
@@ -1342,199 +1572,6 @@ def located(field: str) -> Iterator[None]:
         raise at_field(exc, field) from None
 
 
-class _Skip(Exception):
-    """An op depends on an op that already failed validation: report the root cause only."""
-
-
-class Sim:
-    """The scene as the plan's earlier ops leave it, without changing anything: real
-    nodes (minus deleted and renamed ones) plus virtual nodes (:class:`VNode`)."""
-
-    def __init__(self, ctx: Any = None) -> None:
-        self.ctx = ctx
-        """The host context (``approved_roots`` for a ``value_file``)."""
-        self.virtual: dict[str, VNode] = {}
-        self.gone: set[str] = set()
-        """Real (``hou``) paths of nodes an earlier op deletes."""
-        self.moved: dict[str, str] = {}
-        """New path -> real path, for real nodes an earlier op renames."""
-        self.vacated: set[str] = set()
-        """Paths that named a renamed node before its rename."""
-        self.spare: dict[str, set[str]] = {}
-        """Real node path (as the plan names it) -> spare parm names an earlier op adds."""
-
-    @staticmethod
-    def _under(path: str, roots: Iterable[str]) -> bool:
-        return any(path == root or path.startswith(root.rstrip("/") + "/") for root in roots)
-
-    def _real_path(self, path: str) -> str:
-        for new, old in self.moved.items():
-            if path == new or path.startswith(new + "/"):
-                return old + path[len(new) :]
-        return path
-
-    def full(self, path: Any, field: str, relative_to: str | None = None) -> str:
-        from .tools.nodes import bad_arg
-
-        if not isinstance(path, str) or not path:
-            raise bad_arg(f"'{field}' must be a non-empty node path.")
-        if not path.startswith("/"):
-            if relative_to is None:
-                raise bad_arg(
-                    f"'{field}' must be an absolute node path like /obj/geo1; got {path!r}.",
-                    hint="Node paths start with '/'.",
-                )
-            return f"{relative_to.rstrip('/')}/{path}"
-        return path.rstrip("/") or "/"
-
-    def lookup(
-        self,
-        path: Any,
-        field: str,
-        relative_to: str | None = None,
-        exclude: Iterable[Any] = (),
-    ) -> tuple[str, Any]:
-        """``(path, VNode | hou.Node)`` for ``path`` as the plan has left it, or the one
-        ``node_not_found`` (:meth:`missing`), located at ``field``."""
-        import hou
-
-        try:
-            full = self.full(path, field, relative_to)
-        except ToolError as exc:
-            raise at_field(exc, field) from None
-        if full in self.virtual:
-            return full, self.virtual[full]
-        mapped = self._under(full, self.moved)
-        if not mapped and self._under(full, self.vacated):
-            raise self.missing(full, field, exclude)
-        real = self._real_path(full)
-        if self._under(real, self.gone):
-            raise self.missing(full, field, exclude)
-        node = hou.node(real)
-        if node is None:
-            raise self.missing(full, field, exclude)
-        return full, node
-
-    def exists(self, path: str) -> bool:
-        """Whether ``path`` names a node once the earlier ops ran."""
-        try:
-            self.lookup(path, "path")
-        except ToolError:
-            return False
-        return True
-
-    def missing(self, full: str, field: str, exclude: Iterable[Any] = ()) -> ToolError:
-        """``node_not_found`` for ``full`` at ``field`` (review 25 papercut 3): candidates
-        are the parent's children as the plan leaves them, nearest name first, never a
-        path in ``exclude`` (the other end of a wire), and the hint names the node search
-        on the parent, or on the nearest ancestor that exists."""
-        import difflib
-
-        from hocuspocus.tools.migration import hint_tool
-
-        parent_path, _, name = full.rstrip("/").rpartition("/")
-        parent_path = parent_path or "/"
-        skip = {p.rstrip("/") for p in exclude if isinstance(p, str)}
-        if self.exists(parent_path) or parent_path == "/":
-            base = parent_path.rstrip("/")
-            names = [n for n in sorted(self.children(parent_path)) if f"{base}/{n}" not in skip]
-            close = difflib.get_close_matches(name, names, n=5, cutoff=0.4)
-            candidates = [f"{base}/{n}" for n in close]
-            listing = f"{hint_tool('node_find', root=parent_path)} lists its children"
-            hint = (
-                f"Did you mean a candidate? {listing}."
-                if candidates
-                else f"{parent_path} has no similar child; {listing}."
-            )
-        else:
-            candidates = []
-            ancestor = parent_path
-            while ancestor not in ("", "/") and not self.exists(ancestor):
-                ancestor = ancestor.rpartition("/")[0]
-            root = ancestor or "/"
-            hint = (
-                f"The parent {parent_path} does not exist either; "
-                f"{hint_tool('node_find', root=root)} lists what does."
-            )
-        error = ToolError("node_not_found", f"No node at {full}.", hint=hint, candidates=candidates)
-        return at_field(error, field)
-
-    def children(self, parent_path: str) -> set[str]:
-        """Names taken in ``parent_path`` once the earlier ops ran."""
-        import hou
-
-        base = parent_path.rstrip("/")
-        names: set[str] = set()
-        real = None if parent_path in self.virtual else hou.node(self._real_path(parent_path))
-        if real is not None:
-            real_base = real.path().rstrip("/")
-            with contextlib.suppress(Exception):
-                for child in real.children():
-                    if self._under(f"{real_base}/{child.name()}", self.gone):
-                        continue
-                    if f"{base}/{child.name()}" in self.vacated:
-                        continue
-                    names.add(child.name())
-        for new, old in self.moved.items():
-            head, _, name = new.rpartition("/")
-            if head == base and not self._under(old, self.gone):
-                names.add(name)
-        for path in self.virtual:
-            head, _, name = path.rpartition("/")
-            if head == base:
-                names.add(name)
-        return names
-
-    def free_name(self, parent_path: str, base: str, taken: Iterable[str] = ()) -> str:
-        used = self.children(parent_path) | set(taken)
-        if base not in used:
-            return base
-        stem = base.rstrip("0123456789") or base
-        i = 1
-        while f"{stem}{i}" in used:
-            i += 1
-        return f"{stem}{i}"
-
-
-def validate(plan: Plan, ctx: Any) -> Diagnostics:
-    """Check every op of ``plan`` in order against the scene as the earlier ops leave it;
-    changes nothing. Ops that depend on an op that failed are not reported again."""
-    from .tools.nodes import batch_error
-
-    sim = Sim(ctx)
-    ids: dict[str, str] = {}
-    failed: set[str] = set()
-    declared = plan.declared
-    diag = Diagnostics()
-    for index, op in enumerate(plan.ops):
-        args = op.args
-        try:
-            refs = _refs(op.op, op.args)
-            if refs & failed:
-                raise _Skip
-            args = resolve_args(op.op, op.args, ids, declared, strict=plan.strict_refs)
-            row = VALIDATORS[op.op](args, op.opts, index, sim)
-        except _Skip:
-            if op.id:
-                failed.add(op.id)
-            continue
-        except Exception as exc:
-            if op.id:
-                failed.add(op.id)
-            shown = {"op": op.op, **(args if isinstance(args, dict) else {})}
-            diag.problems.append(
-                batch_error(
-                    index, path_of(op.op, args), exc, rolled_back=True, label=plan.label, op=shown
-                )
-            )
-            continue
-        row = {"op": op.op, **({"id": op.id} if op.id else {}), **row}
-        if op.id and row.get("path"):
-            ids[op.id] = row["path"]
-        diag.rows.append(row)
-    return diag
-
-
 def _refs(kind: str, args: Any) -> set[str]:
     """The ids ``args`` references in its path fields."""
     found: set[str] = set()
@@ -1554,688 +1591,6 @@ def _refs(kind: str, args: Any) -> set[str]:
             if isinstance(link, dict):
                 take(link.get("from"))
     return found
-
-
-def _category_of(target: Any) -> Any:
-    """The child category of a real network node or a :class:`VNode`."""
-    if isinstance(target, VNode):
-        return target.type.childTypeCategory() if target.type is not None else None
-    try:
-        return target.childTypeCategory()
-    except Exception:
-        return None
-
-
-def _type_of(target: Any) -> Any:
-    if isinstance(target, VNode):
-        return target.type
-    try:
-        return target.type()
-    except Exception:
-        return None
-
-
-class _PathShim:
-    """Enough of a node for ``type_not_found`` to name a parent that does not exist yet."""
-
-    def __init__(self, path: str) -> None:
-        self._path = path
-
-    def path(self) -> str:
-        return self._path
-
-
-def _resolve_type_virtual(path: str, category: Any, type_name: str, exact: bool) -> Any:
-    import hou
-
-    from .tools.nodes import type_not_found
-
-    node_type = None
-    with contextlib.suppress(Exception):
-        if exact:
-            node_type = hou.nodeType(category, type_name)
-        else:
-            node_type = hou.preferredNodeType(f"{category.name()}/{type_name}")
-            if node_type is None:
-                node_type = hou.nodeType(category, type_name)
-    if node_type is None:
-        raise type_not_found(_PathShim(path), type_name, category)
-    return node_type
-
-
-def _template_names(node_type: Any) -> tuple[set[str], list[re.Pattern[str]]]:
-    """Parm and component names a new node of ``node_type`` has, and multiparm patterns."""
-    names: set[str] = set()
-    patterns: list[re.Pattern[str]] = []
-    suffixes = {
-        "XYZW": "xyzw", "XYWH": "xywh", "UVW": "uvw", "RGBA": "rgba",
-    }  # fmt: skip
-
-    def add(template: Any) -> None:
-        try:
-            name = template.name()
-        except Exception:
-            return
-        children = []
-        with contextlib.suppress(Exception):
-            children = list(template.parmTemplates())
-        if "#" in name:
-            patterns.append(re.compile("^" + re.escape(name).replace("\\#", r"\d+") + r"\w*$"))
-        else:
-            names.add(name)
-        try:
-            size = int(template.numComponents())
-        except Exception:
-            size = 1
-        if size > 1:
-            scheme = str(getattr(template, "namingScheme", lambda: "")()).rsplit(".", 1)[-1]
-            letters = suffixes.get(scheme)
-            if letters:
-                names.update(name + letters[i] for i in range(min(size, len(letters))))
-            elif scheme == "MinMax":
-                names.update((name + "min", name + "max"))
-            elif scheme == "StartEnd":
-                names.update((name + "start", name + "end"))
-            elif scheme == "BeginEnd":
-                names.update((name + "begin", name + "end"))
-            else:
-                names.update(f"{name}{i + 1}" for i in range(size))
-        for child in children:
-            add(child)
-
-    with contextlib.suppress(Exception):
-        for template in node_type.parmTemplateGroup().entries():
-            add(template)
-    return names, patterns
-
-
-def type_parms_call(node_type: Any) -> str | None:
-    """The read that lists a type's parms and inputs, as the call's profile names it."""
-    from .tools.network import type_parms_call as call
-
-    return call(node_type)
-
-
-def _check_type_parm(node_type: Any, path: str, name: str, spare: set[str]) -> None:
-    """Refuse a parm a new node of ``node_type`` will not have (only for
-    :data:`SIM_PARM_CATEGORIES`; anything uncertain passes)."""
-    import difflib
-
-    if node_type is None or name in spare or ":" in name:
-        return
-    try:
-        category = node_type.category().name()
-    except Exception:
-        return
-    if category not in SIM_PARM_CATEGORIES:
-        return
-    names, patterns = _template_names(node_type)
-    if not names or name in names or any(p.match(name) for p in patterns):
-        return
-    raise ToolError(
-        "parm_not_found",
-        f"No parm or parm tuple '{name}' on {path} ({node_type.name()}).",
-        hint=f"{type_parms_call(node_type)} lists the type's parms.",
-        candidates=difflib.get_close_matches(name, sorted(names), n=5, cutoff=0.6),
-    )
-
-
-def _check_parm(sim: Sim, path: str, target: Any, name: str) -> None:
-    if isinstance(target, VNode):
-        _check_type_parm(target.type, path, name, target.spare)
-        return
-    if name in sim.spare.get(path, set()):
-        return
-    from .tools.parms import resolve_name
-
-    resolve_name(target, name)
-
-
-def _check_value_fields(item: dict[str, Any], path: Any) -> None:
-    """Exactly one value field per set item, as ``parm_set`` requires."""
-    from .tools import parms as P
-
-    press_after = item.get("press") is True and item.get("value") is not None
-    present = [
-        f
-        for f in P.VALUE_FIELDS
-        if (item.get(f) is True if f in P._FLAG_FIELDS else item.get(f) is not None)
-        and not (press_after and f == "press")
-    ]
-    if len(present) != 1:
-        got = ", ".join(present) if present else "none"
-        raise ToolError(
-            "invalid_argument",
-            f"Each item takes exactly one of {', '.join(P.VALUE_FIELDS)}; got {got} for {path}.",
-        )
-    if (item.get("animation") or "replace") not in P.ANIMATION_MODES:
-        raise ToolError(
-            "invalid_argument", f"animation must be one of {', '.join(P.ANIMATION_MODES)}."
-        )
-    if (item.get("language") or "hscript") not in P.LANGUAGES:
-        raise ToolError("invalid_argument", "language must be hscript or python.")
-
-
-def _v_create(args: Any, opts: dict[str, Any], index: int, sim: Sim) -> dict[str, Any]:
-    from .tools import nodes as N
-    from .tools.parms import _item_from_spec
-
-    if not isinstance(args, dict):
-        raise N.bad_arg(f"items[{index}] must be an object.")
-    parent_path, parent = sim.lookup(args.get("parent"), "parent")
-    with located("parent"):
-        if not isinstance(parent, VNode):
-            N.ensure_can_hold_children(parent)
-        category = _category_of(parent)
-        if category is None:
-            raise N.bad_arg(
-                f"{parent_path} is not a network and cannot contain nodes.",
-                hint="Pass a network such as /obj, a geo object or a subnet as parent.",
-            )
-    type_name = args.get("type")
-    if not isinstance(type_name, str) or not type_name:
-        raise N.bad_arg(f"items[{index}].type must be a non-empty string.")
-    exact = N.arg_bool(opts, "exact_type", False)
-    N.arg_bool(opts, "cook", True)
-    if opts.get("layout", "good_position") not in ("good_position", "none"):
-        raise N.bad_arg("'layout' must be 'good_position' or 'none'.")
-    with located("type"):
-        if isinstance(parent, VNode):
-            node_type = _resolve_type_virtual(parent_path, category, type_name, exact)
-        else:
-            node_type = N.resolve_type(parent, type_name, exact=exact)
-    name = args.get("name")
-    base = parent_path.rstrip("/")
-    if name is not None:
-        with located("name"):
-            N.check_name(name)
-        if name in sim.children(parent_path):
-            free = sim.free_name(parent_path, name)
-            raise at_field(
-                ToolError(
-                    "name_collision",
-                    f"{base}/{name} already exists.",
-                    hint=f"Pick another name (e.g. {free!r}), omit name to let Houdini number "
-                    "it, or edit the existing node.",
-                    candidates=[free],
-                ),
-                "name",
-            )
-        predicted = False
-    else:
-        core = node_type.nameComponents()[2] or node_type.name()
-        name = sim.free_name(parent_path, f"{core}1")
-        predicted = True
-    path = f"{base}/{name}"
-    vnode = VNode(path, node_type)
-    parms = args.get("parms")
-    if parms:
-        if not isinstance(parms, dict):
-            raise N.bad_arg(f"items[{index}].parms must be an object.")
-        for parm_name, spec in parms.items():
-            with located(f"parms.{parm_name}"):
-                _item_from_spec(parm_name, spec, "replace")
-                _check_type_parm(node_type, path, parm_name, set())
-    inputs = args.get("inputs") or []
-    if not isinstance(inputs, list):
-        raise N.bad_arg(f"items[{index}].inputs must be a list.")
-    wires = []
-    for link_index, link in enumerate(inputs):
-        if not isinstance(link, dict) or "from" not in link:
-            raise N.bad_arg(
-                f"items[{index}].inputs[{link_index}] must be {{index|name, from, output}}.",
-            )
-        if "index" in link and "name" in link:
-            raise N.bad_arg(f"items[{index}].inputs[{link_index}]: pass index or name, not both.")
-        target = link.get("name") if "name" in link else link.get("index", link_index)
-        at = f"inputs[{link_index}]"
-        src_path, src = _wire_source(sim, link["from"], path, parent_path, f"{at}.from")
-        with located(f"{at}.{'name' if 'name' in link else 'index'}"):
-            _check_input(vnode, path, target)
-        with located(f"{at}.output"):
-            _check_output(src, src_path, link.get("output", 0))
-        wires.append(src_path)
-    flags = args.get("flags")
-    if flags is not None:
-        _check_flag_shape(flags)
-    if args.get("position") is not None:
-        N.arg_xy(args["position"], f"items[{index}].position")
-    sim.virtual[path] = vnode
-    row: dict[str, Any] = {"path": path, "type": node_type.name()}
-    if predicted:
-        row["predicted"] = True
-    if wires:
-        row["inputs"] = wires
-    return row
-
-
-def _check_flag_shape(flags: Any) -> None:
-    from .tools.nodes import SETTABLE_FLAGS, bad_arg
-
-    if not isinstance(flags, dict):
-        raise bad_arg("'flags' must be an object of booleans.")
-    for name, value in flags.items():
-        if name not in SETTABLE_FLAGS:
-            raise bad_arg(
-                f"Unknown flag {name!r}.", hint=f"Settable flags: {', '.join(SETTABLE_FLAGS)}."
-            )
-        if not isinstance(value, bool):
-            raise bad_arg(f"Flag {name!r} must be a boolean.")
-
-
-def _wire_source(
-    sim: Sim, value: Any, dest_path: str, parent_path: str, field: str
-) -> tuple[str, Any]:
-    src_path, src = sim.lookup(value, field, relative_to=parent_path, exclude=(dest_path,))
-    if src_path.rpartition("/")[0] != parent_path.rstrip("/"):
-        raise at_field(
-            ToolError(
-                "invalid_input",
-                f"{src_path} and {dest_path} are in different networks.",
-                hint="Connect nodes that share a parent; use an object_merge SOP to bring "
-                "geometry across networks.",
-            ),
-            field,
-        )
-    if src_path == dest_path:
-        raise at_field(
-            ToolError(
-                "invalid_input",
-                f"{dest_path} cannot be wired into itself.",
-                hint="Wire an upstream node into it instead.",
-            ),
-            field,
-        )
-    return src_path, src
-
-
-def _check_input(dest: Any, dest_path: str, to_input: Any) -> Any:
-    """``to_input`` against a real node (as ``node_connect`` checks it) or a new node's
-    type (indices only; input names need the node)."""
-    from .tools import nodes as N
-
-    if not isinstance(dest, VNode):
-        return N.resolve_input_index(dest, to_input)
-    if to_input is None:
-        return 0
-    if isinstance(to_input, bool):
-        raise N.bad_arg("to_input must be an index, an input name or 'next'.")
-    if isinstance(to_input, str) and to_input.isdigit():
-        to_input = int(to_input)
-    if isinstance(to_input, int):
-        max_inputs = dest.type.maxNumInputs() if dest.type is not None else None
-        if to_input < 0 or (max_inputs is not None and to_input >= max(max_inputs, 0)):
-            raise ToolError(
-                "invalid_input",
-                f"{dest_path} has no input {to_input} (it takes {max_inputs}).",
-                hint=f"{type_parms_call(dest.type)} lists the type's inputs.",
-            )
-        return to_input
-    if isinstance(to_input, str):
-        return to_input  # "next" or an input name: checked when the op runs
-    raise N.bad_arg("to_input must be an index, an input name or 'next'.")
-
-
-def _check_output(src: Any, src_path: str, output: Any) -> None:
-    from .tools import nodes as N
-
-    if not isinstance(src, VNode):
-        N.check_output_index(src, output)
-        return
-    if output is None:
-        return
-    if not isinstance(output, int) or isinstance(output, bool) or output < 0:
-        raise N.bad_arg("Output index must be a non-negative integer.")
-    if src.type is None:
-        return
-    with contextlib.suppress(Exception):
-        count = int(src.type.maxNumOutputs())
-        if output >= max(count, 1):
-            raise ToolError(
-                "invalid_input",
-                f"{src_path} has no output {output} (it has {count}).",
-                hint=f"Valid outputs are 0..{max(count, 1) - 1}.",
-            )
-
-
-def _v_delete(args: Any, opts: dict[str, Any], index: int, sim: Sim) -> dict[str, Any]:
-    from .tools import nodes as N
-
-    if not isinstance(args, dict):
-        raise N.bad_arg(f"items[{index}] must be an object.")
-    N.arg_bool(args, "keep_connections", True)
-    paths = N.arg_list(args, "paths")
-    removed = []
-    for path in paths:
-        full, target = sim.lookup(path, "paths")
-        if isinstance(target, VNode):
-            for key in [p for p in sim.virtual if sim._under(p, [full])]:
-                del sim.virtual[key]
-        else:
-            if full == "/" or full.count("/") < 2:
-                raise N.bad_arg(
-                    f"Refusing to delete the manager {full}.",
-                    hint="Delete nodes inside it instead.",
-                )
-            N.ensure_editable(target, "delete")
-            sim.gone.add(target.path())
-        removed.append(full)
-    return {"paths": removed}
-
-
-def _v_connect(args: Any, opts: dict[str, Any], index: int, sim: Sim) -> dict[str, Any]:
-    from .tools import nodes as N
-
-    if not isinstance(args, dict) or "to" not in args or "from" not in args:
-        raise N.bad_arg(f"items[{index}] needs 'from' (path or null) and 'to'.")
-    source = args.get("from")
-    dest_path, dest = sim.lookup(args.get("to"), "to", exclude=(source,))
-    with located("to"):
-        if not isinstance(dest, VNode):
-            N.ensure_editable(dest, "rewire")
-    parent_path = dest_path.rpartition("/")[0] or "/"
-    with located("to_input"):
-        to_input = _check_input(dest, dest_path, args.get("to_input", 0))
-    row: dict[str, Any] = {"to": dest_path, "to_input": to_input}
-    if args.get("from") is None:
-        if to_input == "next":
-            raise N.bad_arg(
-                "to_input 'next' cannot disconnect.",
-                hint="Pass the input index or name to disconnect.",
-            )
-        row["from"] = None
-    else:
-        src_path, src = _wire_source(sim, args["from"], dest_path, parent_path, "from")
-        with located("from_output"):
-            _check_output(src, src_path, args.get("from_output", 0))
-        row["from"] = src_path
-    row["path"] = dest_path
-    return row
-
-
-def _v_set(args: Any, opts: dict[str, Any], index: int, sim: Sim) -> dict[str, Any]:
-    from .tools.parms import _item_from_spec
-
-    if not isinstance(args, dict):
-        raise ToolError("invalid_argument", f"items[{index}] must be an object.")
-    if "parms" in args or "node" in args:
-        node_path, node = sim.lookup(args.get("node"), "node")
-        parms = args.get("parms")
-        if not isinstance(parms, dict) or not parms:
-            raise ToolError("invalid_argument", "parms must be an object {name: value}.")
-        _check_editable(node, "node")
-        animation = args.get("animation") or "replace"
-        for name, spec in parms.items():
-            with located(f"parms.{name}"):
-                item = _item_from_spec(name, spec, animation)
-                _check_parm(sim, node_path, node, name)
-                _check_set_value(sim, node_path, node, name, item)
-        return {"path": node_path, "parms": list(parms)}
-    unknown = set(args) - SET_ITEM_FIELDS
-    if unknown:
-        raise ToolError("invalid_argument", f"Unexpected item keys {sorted(unknown)}.")
-    path = args.get("path")
-    if not isinstance(path, str) or not path.strip():
-        raise ToolError("invalid_argument", "Parm paths must be non-empty strings.")
-    text = path.strip().rstrip("/")
-    if not text.startswith("/") or text.count("/") < 2:
-        raise ToolError(
-            "invalid_argument",
-            f"{path!r} is not an absolute parm path.",
-            hint="Use <node path>/<parm name>, e.g. /obj/geo1/box1/size or /obj/geo1/box1/sizex.",
-        )
-    node_path, _, name = text.rpartition("/")
-    node_path, node = sim.lookup(node_path, "path")
-    _check_value_fields(args, text)
-    _check_editable(node, "path")
-    with located("path"):
-        _check_parm(sim, node_path, node, name)
-    _check_set_value(sim, node_path, node, name, args)
-    return {"path": f"{node_path}/{name}"}
-
-
-def _check_editable(node: Any, field: str) -> None:
-    """A set inside a locked asset fails when it runs; validation says so first (review
-    26 P1 friction 6: ``dry_run`` passed it)."""
-    if isinstance(node, VNode):
-        return
-    from .tools.nodes import ensure_editable
-
-    with located(field):
-        ensure_editable(node, "set parms on")
-
-
-def _check_set_value(sim: Sim, node_path: str, node: Any, name: str, item: dict[str, Any]) -> None:
-    """The value checks of the set itself (type, range, menu, tuple size, locked
-    component, patch, value_file) on an existing node; a spare parm an earlier op adds,
-    or a node the plan creates, is checked when the op runs."""
-    if isinstance(node, VNode) or name in sim.spare.get(node_path, set()):
-        return
-    from .tools import parms as P
-
-    target = P.resolve_name(node, name)
-    field = next((f for f in ("patch", "value_file") if item.get(f) is not None), "value")
-    with located(field if field != "value" or "value" in item else "path"):
-        P.check_item(node, target, item, sim.ctx)
-
-
-def _v_node(args: Any, opts: dict[str, Any], index: int, sim: Sim) -> dict[str, Any]:
-    from .tools import nodes as N
-
-    if not isinstance(args, dict):
-        raise N.bad_arg(f"items[{index}] must be an object.")
-    path, target = sim.lookup(args.get("path"), "path")
-    parent_path = path.rpartition("/")[0] or "/"
-    name = args.get("name")
-    from .tools import spare as S
-
-    spare_names = S.add_names(args.get("spare_parms"))
-    if isinstance(target, VNode):
-        if name is not None:
-            N.check_name(name)
-        flags = dict(args.get("flags") or {})
-        if args.get("bypass") is not None:
-            flags["bypass"] = args["bypass"]
-        _check_flag_shape(flags)
-        if args.get("color") is not None:
-            _check_color(args["color"])
-        if args.get("comment") is not None and not isinstance(args["comment"], str):
-            raise N.bad_arg("'comment' must be a string.")
-        if args.get("position") is not None:
-            N.arg_xy(args["position"], "position")
-        if args.get("lock") is not None:
-            raise N.bad_arg(
-                f"{path} is created by this call; lock applies to an existing digital asset.",
-                hint="Lock or unlock the asset in a later call.",
-            )
-        if args.get("spare_parms") is not None:
-            # The shapes, conditions and names, as the op checks them on the real node
-            # (review 26 P1 friction 6: dry_run accepted a malformed spec).
-            with located("spare_parms"):
-                spare_names = S.check_new_node(target.type, path, target.spare, args["spare_parms"])
-        target.spare |= spare_names
-    else:
-        plan_node_edit(args, index, node=target)
-        sim.spare.setdefault(path, set()).update(spare_names)
-    row: dict[str, Any] = {"path": path}
-    if name is not None and name != path.rpartition("/")[2]:
-        if name in sim.children(parent_path):
-            free = sim.free_name(parent_path, name)
-            raise ToolError(
-                "name_collision",
-                f"{parent_path.rstrip('/')}/{name} already exists.",
-                hint=f"Pick another name, e.g. {free!r}.",
-                candidates=[free],
-            )
-        new_path = f"{parent_path.rstrip('/')}/{name}"
-        if isinstance(target, VNode):
-            for key in [p for p in sim.virtual if p == path or p.startswith(path + "/")]:
-                vnode = sim.virtual.pop(key)
-                vnode.path = new_path + key[len(path) :]
-                sim.virtual[vnode.path] = vnode
-        else:
-            sim.moved[new_path] = target.path()
-            sim.vacated.add(path)
-            sim.spare[new_path] = sim.spare.pop(path, set())
-        row = {"path": new_path, "old_path": path}
-    return row
-
-
-def _v_copy(args: Any, opts: dict[str, Any], index: int, sim: Sim) -> dict[str, Any]:
-    from .tools import nodes as N
-
-    if not isinstance(args, dict):
-        raise N.bad_arg(f"items[{index}] must be an object.")
-    paths = N.arg_list(args, "paths")
-    dest_path, dest = sim.lookup(args.get("to_parent"), "to_parent")
-    if not isinstance(dest, VNode):
-        N.ensure_can_hold_children(dest, "copy nodes into")
-    category = _category_of(dest)
-    names = args.get("names") or []
-    if not isinstance(names, list) or len(names) > len(paths):
-        raise N.bad_arg("'names' must be a list no longer than 'paths'.")
-    for name in names:
-        N.check_name(name, "names")
-    if len(set(names)) != len(names):
-        raise N.bad_arg("'names' must not repeat.")
-    N.arg_bool(args, "with_inputs", True)
-    if args.get("position_offset") is not None:
-        N.arg_xy(args["position_offset"], "position_offset")
-    out: list[str] = []
-    taken: set[str] = set()
-    for i, path in enumerate(paths):
-        src_path, src = sim.lookup(path, "paths")
-        src_type = _type_of(src)
-        if category is not None and src_type is not None and src_type.category() != category:
-            raise N.bad_arg(
-                f"{src_path} is {N.a_or_an(src_type.category().name())} node; {dest_path} "
-                f"holds {category.name()} nodes.",
-                hint="Copy into a network of the same context.",
-            )
-        if i < len(names):
-            name = names[i]
-            if name in sim.children(dest_path):
-                free = sim.free_name(dest_path, name, names)
-                raise ToolError(
-                    "name_collision",
-                    f"{dest_path.rstrip('/')}/{name} already exists.",
-                    hint=f"Pick another name, e.g. {free!r}, or omit names to let Houdini "
-                    "number copies.",
-                    candidates=[free],
-                )
-        else:
-            name = sim.free_name(dest_path, src_path.rpartition("/")[2], taken)
-        taken.add(name)
-        copy_path = f"{dest_path.rstrip('/')}/{name}"
-        sim.virtual[copy_path] = VNode(copy_path, src_type)
-        out.append(copy_path)
-    row: dict[str, Any] = {"paths": out}
-    if len(out) == 1:
-        row["path"] = out[0]
-    return row
-
-
-def _v_layout(args: Any, opts: dict[str, Any], index: int, sim: Sim) -> dict[str, Any]:
-    from .tools import nodes as N
-
-    if not isinstance(args, dict):
-        raise N.bad_arg(f"items[{index}] must be an object.")
-    parent_path, parent = sim.lookup(args.get("parent"), "parent")
-    if not isinstance(parent, VNode):
-        N.ensure_can_hold_children(parent, "lay out")
-    if args.get("mode", "children") not in ("children", "good_position"):
-        raise N.bad_arg("'mode' must be 'children' or 'good_position'.")
-    for path in N.arg_list(args, "paths", required=False):
-        full, _node = sim.lookup(path, "paths", relative_to=parent_path)
-        if full.rpartition("/")[0] != parent_path.rstrip("/"):
-            raise N.bad_arg(
-                f"{full} is not a child of {parent_path}.", hint="paths must be children of parent."
-            )
-    return {"path": parent_path}
-
-
-def _v_build(args: Any, opts: dict[str, Any], index: int, sim: Sim) -> dict[str, Any]:
-    import json
-
-    import hou
-
-    from .tools import network as W
-    from .tools import nodes as N
-
-    if not isinstance(args, dict):
-        raise N.bad_arg(f"items[{index}] must be an object.")
-    parent_path, parent = sim.lookup(args.get("parent"), "parent")
-    if isinstance(parent, VNode):
-        category = _category_of(parent)
-        if category is None:
-            raise N.bad_arg(f"{parent_path} is not a network and cannot contain nodes.")
-        data = args.get("data")
-        if not isinstance(data, dict) or not data:
-            raise N.bad_arg(
-                "'data' must be a non-empty object of node name -> node data.",
-                hint=W.data_hint(),
-            )
-        data = json.loads(json.dumps(data))
-        problems = W._Problems()
-        plan_rows: list[dict[str, Any]] = []
-        W._validate_level(
-            data,
-            category=category,
-            container=None,
-            prefix=parent_path.rstrip("/") + "/",
-            problems=problems,
-            plan=plan_rows,
-            warnings=[],
-            existing_names=set(),
-        )
-        problems.raise_if_any()
-        renamed: dict[str, str] = {}
-    else:
-        prep = W.prepare_build(parent, args)
-        plan_rows, renamed = prep["plan"], prep["renamed"]
-    built = []
-    for entry in plan_rows:
-        path = entry["name"]
-        holder = sim.virtual.get(path.rpartition("/")[0])
-        category = None
-        if holder is not None:
-            category = _category_of(holder)
-        else:
-            real = hou.node(path.rpartition("/")[0] or "/")
-            category = _category_of(real) if real is not None else None
-        node_type = None
-        with contextlib.suppress(Exception):
-            node_type = hou.nodeType(category, entry["type"]) if category is not None else None
-        sim.virtual[path] = VNode(path, node_type)
-        built.append(path)
-    row: dict[str, Any] = {"path": parent_path, "nodes": built}
-    if renamed:
-        row["renamed"] = renamed
-    return row
-
-
-def _v_select(args: Any, opts: dict[str, Any], index: int, sim: Sim) -> dict[str, Any]:
-    from .tools import nodes as N
-
-    if not isinstance(args, dict):
-        raise N.bad_arg(f"items[{index}] must be an object.")
-    paths = args.get("paths")
-    if not isinstance(paths, list):
-        raise N.bad_arg("'paths' must be a list of node paths (an empty list clears).")
-    return {"paths": [sim.lookup(p, f"paths[{i}]")[0] for i, p in enumerate(paths)]}
-
-
-VALIDATORS: dict[str, Callable[[Any, dict[str, Any], int, Sim], dict[str, Any]]] = {
-    "create": _v_create,
-    "delete": _v_delete,
-    "connect": _v_connect,
-    "set": _v_set,
-    "node": _v_node,
-    "copy": _v_copy,
-    "layout": _v_layout,
-    "build": _v_build,
-    "select": _v_select,
-}
 
 
 # -- the edit echo ------------------------------------------------------------------------
@@ -2292,41 +1647,51 @@ def echo(result: Result, mode: str) -> dict[str, Any]:
     the ops' per-node results folded in: :data:`FOLDED_NODE_KEYS`), ``ids`` (``{id:
     path}`` for every op id), and what is not one node's: ``deleted``, ``reconnected``,
     ``selected`` (and ``context_changed``), ``renamed``, ``replaced``, ``failed`` (with
-    ``partial``: ``[{item, op, id?, error}]``). ``ops`` is ``results`` (one row per op) plus the compact ``nodes``;
-    ``full`` is the 1.4 full shapes (flags, messages, parm rows). Identical error lists
-    after the first become ``errors_same_as`` outside ``full``."""
+    ``partial``: ``[{item, op, id?, error}]``), ``applied`` (``partial: "stop"`` after a
+    failure: how many ops ran). ``ops`` is ``results`` (one row per op) plus the compact
+    ``nodes``; ``full`` is the 1.4 full shapes (flags, messages, parm rows). Identical
+    error lists after the first become ``errors_same_as`` outside ``full``."""
     from .tools import nodes as N
 
     if mode == "summary":
-        return _summary_echo(result)
-    rows: list[dict[str, Any]] = []
-    for res in result.results:
-        row: dict[str, Any] = {"op": res.op.op}
-        if res.op.id:
-            row["id"] = res.op.id
-        if res.error is not None:
-            row["error"] = res.error
-        else:
-            row.update(_op_row(res, mode, result.state))
-        rows.append(row)
-    blocks: list[dict[str, Any]] = []
-    for node, cook in result.touched():
-        problems = node_problems(node, cook)
+        out = _summary_echo(result)
+    else:
+        rows: list[dict[str, Any]] = []
+        for res in result.results:
+            row: dict[str, Any] = {"op": res.op.op}
+            if res.op.id:
+                row["id"] = res.op.id
+            if res.error is not None:
+                row["error"] = res.error
+            else:
+                row.update(_op_row(res, mode, result.state))
+            rows.append(row)
+        blocks: list[dict[str, Any]] = []
+        for node, cook in result.touched():
+            blocks.append(node_block(node, node_problems(node, cook), mode))
         if mode == "ops":
-            blocks.append(compact_row(node, problems))
-        else:
-            block = {"path": node.path(), "name": node.name(), "type": node.type().name()}
-            block["flags"] = N.node_flags(node)
-            block.update(problems)
-            if "cook_time_ms" in block:
-                block["cook_ms"] = block.pop("cook_time_ms")
-            blocks.append(block)
-    if mode == "ops":
-        N.collapse_problems(blocks)
-    out: dict[str, Any] = {"results": rows, "nodes": blocks}
-    if result.failures:
-        out["failed"] = len(result.failures)
+            N.collapse_problems(blocks)
+        out = {"results": rows, "nodes": blocks}
+        if result.failures:
+            out["failed"] = len(result.failures)
+    if result.state.stopped is not None:
+        out["applied"] = result.state.stopped
     return out
+
+
+def node_block(node: Any, problems: dict[str, Any], mode: str) -> dict[str, Any]:
+    """A touched node's row: :func:`compact_row` (``summary``, ``ops``) or the 1.4 full
+    block (``full``: name, flags, messages)."""
+    from .tools import nodes as N
+
+    if mode != "full":
+        return compact_row(node, problems)
+    block = {"path": node.path(), "name": node.name(), "type": node.type().name()}
+    block["flags"] = N.node_flags(node)
+    block.update(problems)
+    if "cook_time_ms" in block:
+        block["cook_ms"] = block.pop("cook_time_ms")
+    return block
 
 
 def _summary_echo(result: Result) -> dict[str, Any]:

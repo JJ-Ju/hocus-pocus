@@ -4,7 +4,6 @@ reporting, and plan validation against a fake ``hou`` scene."""
 
 from __future__ import annotations
 
-import sys
 import types
 from typing import Any
 
@@ -288,7 +287,68 @@ def test_a_reference_to_a_failed_op_fails_that_op_too(handlers):
     assert "has not produced a node" in result.failures[2]["message"]
 
 
-# -- validate against a fake hou scene ----------------------------------------------------
+def test_edit_checks_the_ops_after_a_failure_and_raises_every_problem(handlers):
+    """BIBLE D56: the run is the validation. A failing op is reverted, the ops after it
+    run in check mode against what the others leave, one that names the failed op is
+    skipped (its root cause is reported once), and the plan is compensated before every
+    problem is raised together."""
+    seen: list[bool] = []
+    original = tx.HANDLERS["set"]
+
+    def set_(args, opts, index, st):
+        seen.append(tx.checking())
+        return original(args, opts, index, st)
+
+    tx.HANDLERS["set"] = set_
+    plan = tx.parse_ops(
+        [
+            {"op": "create", "id": "a", "parent": "/obj", "name": "a"},
+            {"op": "set", "id": "s", "path": "$a/x", "value": "bad"},
+            {"op": "create", "parent": "$s", "name": "skipped"},
+            {"op": "set", "path": "$a/y", "value": 1},
+            {"op": "set", "path": "$a/z", "value": "bad"},
+        ]
+    )
+    with pytest.raises(ToolError) as info:
+        tx.execute(plan, ctx=None)
+    error = info.value
+    assert error.message == "ops[1].value: bad value. (+1 more problem(s))"
+    assert [p["item"] for p in error.detail["problems"]] == [1, 4]
+    assert error.detail["rolled_back"] is True
+    assert seen == [False, True, True]  # check mode after the first failure
+    assert handlers["nodes"] == set()
+    assert ("create", "/obj/a/skipped") not in handlers["log"] and not tx.checking()
+
+
+def test_partial_stop_keeps_the_ops_before_the_first_failure(handlers):
+    plan = tx.parse_ops(
+        [
+            {"op": "create", "id": "a", "parent": "/obj", "name": "a"},
+            {"op": "set", "path": "$a/x", "value": "bad"},
+            {"op": "create", "parent": "/obj", "name": "b"},
+        ],
+        partial="stop",
+    )
+    result = tx.execute(plan, ctx=None)
+    assert handlers["nodes"] == {"/obj/a"}
+    assert result.state.stopped == 1 and list(result.failures) == [1]
+    assert [r.index for r in result.done()] == [0]
+
+
+@pytest.mark.parametrize(
+    ("value", "mode"), [(None, False), (False, False), (True, True), ("stop", "stop")]
+)
+def test_partial_takes_true_false_or_stop(value, mode):
+    assert tx.partial_mode({"partial": value}) == mode
+
+
+@pytest.mark.parametrize("value", [1, 0, "yes", []])
+def test_partial_refuses_anything_else(value):
+    with pytest.raises(ToolError, match="partial"):
+        tx.partial_mode({"partial": value})
+
+
+# -- the fake hou scene the hint tests use --------------------------------------------------
 
 
 class FakeTemplate:
@@ -463,190 +523,3 @@ class FakeScene:
             lopNodeTypeCategory=lambda: None,
             text=types.SimpleNamespace(alphaNumeric=lambda s: "".join(c for c in s if c.isalnum())),
         )
-
-
-@pytest.fixture
-def scene(monkeypatch) -> FakeScene:
-    fake = FakeScene()
-    monkeypatch.setitem(sys.modules, "hou", fake.module())
-    # The value checks of a set (types, ranges, patch, value_file) and the spare parm
-    # templates need real parms and hou.ParmTemplate classes: the integration tier
-    # (test_edit.py) covers them; here only names, paths and ids are validated.
-    from hocuspocus.host.tools import spare
-
-    monkeypatch.setattr(tx, "_check_set_value", lambda *args: None)
-    monkeypatch.setattr(spare, "check_new_node", lambda _t, _p, _s, spec: spare.add_names(spec))
-    return fake
-
-
-def _validate(ops: list[dict[str, Any]]) -> tx.Diagnostics:
-    return tx.validate(tx.parse_ops(ops), ctx=None)
-
-
-def test_validate_resolves_ids_and_predicts_names(scene):
-    diag = _validate(
-        [
-            {"op": "create", "id": "box", "parent": "/obj/geo1", "type": "box"},
-            {"op": "create", "id": "x", "parent": "/obj/geo1", "type": "xform", "name": "lift"},
-            {"op": "connect", "from": "$box", "to": "$x"},
-            {"op": "set", "path": "$x/ty", "value": 1},
-            {"op": "create", "id": "g2", "parent": "/obj", "type": "geo"},
-            {"op": "create", "parent": "$g2", "type": "box", "parms": {"sizex": 2}},
-        ]
-    )
-    assert diag.ok, [p.message for p in diag.problems]
-    rows = diag.rows
-    assert rows[0] == {
-        "op": "create",
-        "id": "box",
-        "path": "/obj/geo1/box2",
-        "type": "box",
-        "predicted": True,
-    }
-    assert rows[1]["path"] == "/obj/geo1/lift" and "predicted" not in rows[1]
-    assert rows[2] == {
-        "op": "connect",
-        "to": "/obj/geo1/lift",
-        "to_input": 0,
-        "from": "/obj/geo1/box2",
-        "path": "/obj/geo1/lift",
-    }
-    assert rows[3]["path"] == "/obj/geo1/lift/ty"
-    assert rows[4]["path"] == "/obj/geo2"
-    assert rows[5]["path"] == "/obj/geo2/box1"  # inside a geo that does not exist yet
-
-
-def test_validate_reports_each_root_cause_once(scene):
-    diag = _validate(
-        [
-            {"op": "create", "parent": "/obj/geo1", "type": "box", "name": "box1"},
-            {"op": "create", "id": "m", "parent": "/obj/geo1", "type": "boxx"},
-            {"op": "set", "path": "$m/size", "value": [1, 1, 1]},  # skipped: depends on m
-            {"op": "create", "parent": "/obj/geo1", "type": "box", "parms": {"sise": 1}},
-            {"op": "create", "parent": "/obj/geo1", "type": "xform", "inputs": [{"from": "nope"}]},
-            {"op": "create", "parent": "/obj/geo1", "type": "box", "inputs": [{"from": "box1"}]},
-            {"op": "create", "parent": "/obj", "type": "box"},
-        ]
-    )
-    codes = [(p.detail["item"], p.code) for p in diag.problems]
-    assert codes == [
-        (0, "name_collision"),
-        (1, "node_type_not_found"),
-        (3, "parm_not_found"),
-        (4, "node_not_found"),
-        (5, "invalid_input"),
-        (6, "node_type_not_found"),
-    ]
-    assert diag.problems[1].candidates and diag.problems[1].candidates[0] == "box"
-    assert "size" in diag.problems[2].candidates
-    assert diag.problems[0].message == "ops[0].name: /obj/geo1/box1 already exists."
-    assert diag.problems[1].message.startswith("ops[1].type: No Sop node type 'boxx'")
-    assert diag.problems[2].message.startswith("ops[3].parms.sise: No parm")
-    assert diag.problems[3].message == "ops[4].inputs[0].from: No node at /obj/geo1/nope."
-    assert diag.problems[3].detail["field"] == "inputs[0].from"
-    with pytest.raises(ToolError) as info:
-        diag.raise_if_any()
-    assert info.value.code == "name_collision"
-    assert [p["item"] for p in info.value.detail["problems"]] == [0, 1, 3, 4, 5, 6]
-
-
-def test_missing_wire_ends_get_candidates_from_the_plan_never_the_other_end(scene):
-    """Review 25 papercut 3: a missing from/to/parent is located at its field; the
-    candidates are the parent's children as the plan leaves them (new nodes included), by
-    name distance, without the other end of the wire."""
-    diag = _validate(
-        [
-            {"op": "create", "id": "c", "parent": "/obj/geo1", "type": "xform", "name": "copy1"},
-            {"op": "connect", "from": "/obj/geo1/nope", "to": "$c"},
-            {"op": "create", "id": "l", "parent": "/obj/geo1", "type": "xform", "name": "lift"},
-            {"op": "connect", "from": "/obj/geo1/lfit", "to": "$c"},
-            {"op": "connect", "from": "$l", "to": "/obj/geo1/copy2"},
-            {"op": "create", "parent": "/obj/geo2/inner", "type": "box"},
-        ]
-    )
-    nope, lfit, copy2, parent = diag.problems
-    assert nope.message == "ops[1].from: No node at /obj/geo1/nope."
-    assert "/obj/geo1/copy1" not in nope.candidates  # the wire's other end
-    assert lfit.message == "ops[3].from: No node at /obj/geo1/lfit."
-    assert lfit.candidates[0] == "/obj/geo1/lift"  # a node an earlier op creates
-    assert copy2.message == "ops[4].to: No node at /obj/geo1/copy2."
-    assert copy2.candidates == ["/obj/geo1/copy1"] and copy2.detail["field"] == "to"
-    assert parent.message == "ops[5].parent: No node at /obj/geo2/inner."
-    assert "/obj/geo2 does not exist either" in parent.hint and parent.candidates == []
-
-
-def test_validate_follows_deletes_and_renames(scene):
-    diag = _validate(
-        [
-            {"op": "node", "path": "/obj/geo1/box1", "name": "src"},
-            {"op": "set", "path": "/obj/geo1/src/size", "value": [1, 2, 3]},
-            {"op": "create", "parent": "/obj/geo1", "type": "box", "name": "box1"},
-            {"op": "delete", "path": "/obj/geo1/box1"},
-            {"op": "create", "parent": "/obj/geo1", "type": "box", "name": "box1"},
-        ]
-    )
-    assert diag.ok, [p.message for p in diag.problems]
-    assert diag.rows[0] == {"op": "node", "path": "/obj/geo1/src", "old_path": "/obj/geo1/box1"}
-    stale = _validate(
-        [
-            {"op": "node", "path": "/obj/geo1/box1", "name": "src"},
-            {"op": "set", "path": "/obj/geo1/box1/size", "value": [1, 2, 3]},
-        ]
-    )
-    assert [p.code for p in stale.problems] == ["node_not_found"]
-
-
-def test_validate_wiring_rules(scene):
-    diag = _validate(
-        [
-            {"op": "create", "id": "g2", "parent": "/obj", "type": "geo"},
-            {"op": "create", "id": "b", "parent": "$g2", "type": "box"},
-            {"op": "connect", "from": "$b", "to": "/obj/geo1/box1"},  # box takes no input
-            {"op": "create", "id": "x", "parent": "/obj/geo1", "type": "xform"},
-            {"op": "connect", "from": "$b", "to": "$x"},  # another network
-            {"op": "connect", "from": None, "to": "$x", "to_input": "next"},
-            {"op": "create", "id": "m", "parent": "/obj/geo1", "type": "merge"},
-            {"op": "connect", "from": "/obj/geo1/box1", "to": "$m", "to_input": "next"},
-        ]
-    )
-    problems = [(p.detail["item"], p.code) for p in diag.problems]
-    assert problems == [(2, "invalid_input"), (4, "invalid_input"), (5, "invalid_argument")]
-    assert diag.rows[-1]["to_input"] == "next"
-
-
-def test_validate_counts_spare_parms_an_earlier_op_adds(scene):
-    spare = {"add": [{"name": "seed", "type": "int"}]}
-    diag = _validate(
-        [
-            {"op": "create", "id": "x", "parent": "/obj/geo1", "type": "xform"},
-            {"op": "set", "path": "$x/seed", "value": 1},
-            {"op": "node", "path": "$x", "spare_parms": spare},
-            {"op": "set", "node": "$x", "parms": {"seed": 1, "tx": 2, "scale": 3}},
-        ]
-    )
-    assert [(p.detail["item"], p.code) for p in diag.problems] == [(1, "parm_not_found")]
-
-
-def test_validate_leaves_object_parms_to_the_run(scene):
-    """Objects get spare parms from creation scripts: validation does not guess them."""
-    diag = _validate(
-        [{"op": "create", "parent": "/obj", "type": "geo", "parms": {"vm_rendersubd": 1}}]
-    )
-    assert diag.ok
-
-
-def test_validate_refuses_ops_on_missing_nodes_and_managers(scene):
-    diag = _validate(
-        [
-            {"op": "delete", "path": "/obj"},
-            {"op": "select", "paths": ["/obj/nope"]},
-            {"op": "layout", "parent": "/obj/geo1", "paths": ["/obj/geo1/box1", "/obj/geo1"]},
-            {"op": "copy", "paths": ["/obj/geo1/box1"], "to_parent": "/obj"},
-        ]
-    )
-    assert [(p.detail["item"], p.code) for p in diag.problems] == [
-        (0, "invalid_argument"),
-        (1, "node_not_found"),
-        (2, "invalid_argument"),
-        (3, "invalid_argument"),
-    ]

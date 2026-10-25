@@ -10,7 +10,6 @@ from ._helpers import (
     _i,
     _n,
     _obj,
-    _partial,
     _s,
 )
 
@@ -69,20 +68,25 @@ SPEC = ToolSpec(
         "target, the set or node op's node, the single copy, the layout or build parent. "
         "$id, or $id/child and $id/parm, works in the path fields (parent, path, paths, "
         "node, from, to, to_parent, channel_ref, inputs[].from), never in parm values, and "
-        "resolves to the path the op produced. Every op is validated before anything "
-        "changes (types, parents and their category, parm names, set values on existing "
-        "nodes (type, range, menu, tuple size, locked component, patch, value_file), "
-        "spare_parms shapes and conditions, inputs, free names, sets and changes inside a "
-        "locked asset: locked, the hint naming the unlock) against the scene as the earlier "
-        "ops leave it; dry_run returns that plan, "
-        "with predicted: true on a path Houdini will number. A failing op rolls the whole "
-        "call back; the error names the op field, ops[i].<field>: ... (ops[i] (path) when "
+        "resolves to the path the op produced. Each op is checked by running it against the "
+        "scene the earlier ops left (an unlock, a multiparm count, a rename, a new node's "
+        "outputs count for the ops after it). A failing op is reverted and the ops after it "
+        "still run in check mode (no press callback, no selection change, a delete or "
+        "lock: true held back), then the call is rolled back and the error lists every "
+        "problem in detail.problems. dry_run is that check from the first op, rolled back "
+        "with no undo step, event or dirty flag: its plan has each op's resolved paths, "
+        "predicted: true where Houdini numbered the node, and the run gives the same paths "
+        "on the same scene. "
+        "The error names the op field, ops[i].<field>: ... (ops[i] (path) when "
         "none applies; a missing from, to or parent lists the parent's nearest children as "
         "candidates), with detail.field and detail.rolled_back as performed (a "
         "delete cannot be compensated, so the dispatcher's undo of the step decides). With "
-        "partial, ops run without the up-front validation and a failing op reverts only "
-        "itself. Result (return summary): nodes, one row per touched node, each cooked once "
-        "after every op ran (node ops do not cook): path and type, plus errors and warnings "
+        "partial: true a failing op reverts only itself and the rest stand; with partial: "
+        "stop the ops before the first failing op stand, the rest do not run, and the "
+        "result adds applied (how many ops ran) and failed (resend ops[applied:] with ids "
+        "replaced by the result's ids). Result (return summary): nodes, one row per touched "
+        "node, each cooked once after every op ran (node ops and cook: false creates do not "
+        "cook; a cook downstream still cooks them): path and type, plus errors and warnings "
         "when not empty (a list repeated downstream becomes errors_same_as), cook_state "
         "when not cooked, cook_ms from 1 ms, and the ops' results for that node (old_path, "
         "paired_with, deprecated, hda, notes, side_effects); ids {id: path} for every op "
@@ -155,7 +159,12 @@ SPEC = ToolSpec(
             ),
             "dry_run": _b(False),
             "return": _enum(("summary", "ops", "full"), "summary"),
-            "partial": _partial(),
+            "partial": {
+                "type": ["boolean", "string"],
+                "enum": [False, True, "stop"],
+                "default": False,
+                "description": "Keep what worked; stop: the ops before a failure.",
+            },
         },
         ("ops",),
     ),

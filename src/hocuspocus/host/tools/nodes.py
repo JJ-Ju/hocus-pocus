@@ -860,12 +860,18 @@ def batch_error(
     return error
 
 
+_PARM_PREFIX = re.compile(r"^(parms\.[^\s:]+)(?: on /\S*)?: (.*)$", re.DOTALL)
+
+
 def _op_error(
     index: int, path: Any, error: ToolError, rolled_back: bool | None, op: dict[str, Any]
 ) -> ToolError:
     """:func:`batch_error` for an ``edit`` op."""
     field = _op_field(op, error)
     message = error.message
+    parm = _PARM_PREFIX.match(message)
+    if parm and field in (None, "parms"):  # set_parm_items' "parms.<name> on <node>: ..."
+        field, message = parm.group(1), parm.group(2)
     legacy = f"items[{index}]"
     if message.startswith(legacy):  # a validator's own "items[i].type must be ..."
         rest = message[len(legacy) :]
