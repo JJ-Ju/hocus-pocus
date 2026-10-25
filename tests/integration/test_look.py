@@ -433,3 +433,41 @@ def test_look_honours_the_resolution_and_names_the_backend(v2_client):
     lit = v2_client.ok("look", {"quality": "lit", "resolution": RES})
     assert lit["backend_used"] == "flipbook" and lit["rendered"] == RES
     assert any("Flipbook ROP" in n for n in lit["notes"]), lit
+
+
+@pytest.mark.slow
+def test_a_headless_look_draws_the_geometry_the_host_cooked(v2_client):
+    """Review 26 P2: the child hython recooked the displayed networks on every look (a
+    37 s LOD chain timed out every draft look at 30 s, the kept child too). The host now
+    ships the cooked geometry: a slow chain costs its cook once, in the host."""
+    from hocuspocus.host.tools import visual
+
+    geo = hou.node("/obj").createNode("geo", "slow")
+    sub = geo.createNode("subnet", "lods")
+    box = sub.createNode("box", "inner")
+    slow = sub.createNode("python", "pack")
+    slow.parm("python").set("import time\ntime.sleep(4)")
+    slow.setInput(0, box)
+    out = sub.createNode("output", "output0")
+    out.setInput(0, slow)
+    sub.setDisplayFlag(True)
+    sub.setRenderFlag(True)
+    sub.cook()  # the host has it, as after an edit or a cook
+    visual.close_warm_capture()
+    timings = []
+    for target in (None, None, f"{sub.path()}/pack"):
+        started = time.perf_counter()
+        result = v2_client.ok(
+            "look", {"target": target, "resolution": RES} if target else {"resolution": RES}
+        )
+        timings.append(time.perf_counter() - started)
+        assert result["backend_used"] == "flipbook" and _contrast(result) > 40, result
+    print(f"\nlooks at a 4 s chain: {', '.join(f'{t:.2f}s' for t in timings)}")
+    assert timings[1] < 2.0 and timings[2] < 2.0, timings  # never the 4 s cook again
+
+
+def test_a_look_timeout_names_what_to_do():
+    from hocuspocus.host.look.child import capture_timeout_hint
+
+    hint = capture_timeout_hint()
+    assert "cook {paths:" in hint and '"final"' in hint

@@ -76,7 +76,13 @@ def prepare(
         if target.get("isolate"):
             job.capture["isolate"] = dict(target["isolate"])
         if not ctx.ui and CHILD_BACKENDS & set(plan.chain):
-            job.snapshot = child.snapshot_scene(tmp_dir)
+            # /obj: the child draws the geometry the host cooked (review 26 P2).
+            obj = target["scene"] == "obj"
+            job.snapshot = child.snapshot_scene(
+                tmp_dir,
+                frame=frame if obj else None,
+                isolate=job.capture.get("isolate") if obj else None,
+            )
     return job, plan
 
 

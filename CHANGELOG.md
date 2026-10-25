@@ -158,6 +158,15 @@ one for the 2.0.x releases, and 2.1 removes it.
   `resolution` asked (a 640x480 look came back 1024x576): 22.0's Karma ROP renders at its
   own `resolutionx`/`resolutiony`, which the look now sets. `rendered` is the image's real
   size, and a renderer that draws another size gets a note (review 26 P1 #5).
+- **A headless draft `look` no longer recooks the scene in its render process** (review
+  26 P2 friction 9). The child hython rebuilt the displayed networks from the snapshot
+  and cooked them on every look, the kept child too, so the dogfood tower's LOD lineup (a
+  37 s lightmap pack) timed out every draft look at 30 s and the agent fell back to Karma
+  `render`. The host now ships the geometry it has already cooked for what the look shows
+  (`.bgeo.sc` read by a File SOP in the child's copy). Measured on
+  `examples/neo_tower/work/neo_tower_p2.hiplc`: 44.2 s and 38.6 s per look before, 5.5 s
+  (child start) and 0.9 s after; a test's 4 s chain looks in 0.2 s once cooked. A render
+  process that still runs out of time names `cook` and `quality: "final"` in its hint.
 
 ## 2.0.0 (2026-10-14)
 

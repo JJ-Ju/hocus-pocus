@@ -1220,7 +1220,7 @@ the snapshot and child hython. `render` of a Flipbook or OpenGL ROP headless use
 policy, Appendix A; 2.1 removed it and that policy.) The settings named above stay settable on
 `hocuspocus.host.tools.visual`, which forwards them to the look module that owns them.
 What a headless snapshot carries is the contract in `host/look/base.py` and `look`'s notes:
-every node (`saveChildrenToFile` per manager, which also carries the definitions of
+the cooked geometry of what a look at `/obj` shows (2.1, review 26 P2: each displayed object's display SOP, or the SOP a look isolates, as `.bgeo.sc` that the child reads with a File SOP instead of cooking the network again; a locked object asset and a SOP that fails to cook are cooked by the child as before; `render` of a user's ROP never ships geometry), every node (`saveChildrenToFile` per manager, which also carries the definitions of
 `Embedded` assets: the child renders them), the asset libraries outside `$HFS`,
 `$HIP`/`$JOB`, global variables and `hou.session`; not the current take (a note says so),
 in-memory simulation caches (the child re-simulates to the frame; a note names every DOP
