@@ -111,10 +111,12 @@ def _cook_after(
     tx.patch_rows(out, result.rows, cooked, collapse=mode != "full")
     if finished:
         ctx.jobs.discard(job.id)
-        if job.state != "done" and job.error:
-            out.setdefault("notes", []).append(
-                f"Cooking the nodes failed: {job.error.get('message')}"
-            )
+        if job.state != "done":
+            for sid, row in result.rows.items():
+                if sid not in cooked and row.get("cook_state") == "cooking":
+                    row["cook_state"] = "not_cooked"  # no job is left to finish it
+            message = (job.error or {}).get("message") or job.state
+            out.setdefault("notes", []).append(f"Cooking the nodes failed: {message}")
         return out
     pending = total - len(cooked)
     out["job_id"] = job.id
