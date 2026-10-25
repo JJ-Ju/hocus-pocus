@@ -84,7 +84,10 @@ def metering(meter: MainThreadMeter | None) -> Iterator[None]:
 
 
 class _Work:
-    __slots__ = ("fn", "done", "lock", "state", "result", "exc", "queued", "started", "finished")
+    __slots__ = (
+        "fn", "done", "lock", "state", "result", "exc", "queued", "started", "finished",
+        "long_step", "job_id",
+    )  # fmt: skip
 
     def __init__(self, fn: Callable[[], Any]) -> None:
         self.fn = fn
@@ -96,9 +99,82 @@ class _Work:
         self.state = "pending"  # pending | running | done | cancelled
         self.result: Any = None
         self.exc: BaseException | None = None
+        self.long_step: str | None = None
+        """What the callable said it is running that may outlast its caller's wait (a
+        press: the parm path), set from the main thread by :func:`mark_long_step`."""
+        self.job_id: str | None = None
+        """The job that follows this callable once its caller stopped waiting
+        (:class:`Pending`)."""
 
 
-def _busy(timeout_s: float, *, started: bool) -> ToolError:
+_EXECUTING = threading.local()
+"""The :class:`_Work` the main thread is executing now (``work``), for
+:func:`mark_long_step`."""
+
+
+def mark_long_step(label: str) -> None:
+    """Say, from the main thread, that the queued call running now has started a step
+    that cannot be split and may outlast its caller's wait: a pressed parm's callback (an
+    HDA's export button ran 3-4 min in review 26 P3). A caller that used
+    :meth:`MainThreadExecutor.run_adoptable` then gets a :class:`Pending` instead of
+    ``houdini_busy`` and follows the call as a job (BIBLE D70). No-op outside a queued
+    callable (an inline call on the main thread)."""
+    work = getattr(_EXECUTING, "work", None)
+    if work is not None:
+        work.long_step = label
+
+
+class Pending:
+    """A started main-thread call that marked a long step (:func:`mark_long_step`) and
+    outlasted its caller's wait: it still runs, and :meth:`outcome` returns its result
+    (or raises its exception) once it is done."""
+
+    def __init__(self, work: _Work) -> None:
+        self._work = work
+
+    @property
+    def long_step(self) -> str | None:
+        return self._work.long_step
+
+    @property
+    def job_id(self) -> str | None:
+        return self._work.job_id
+
+    @job_id.setter
+    def job_id(self, value: str | None) -> None:
+        self._work.job_id = value
+
+    def wait(self, timeout_s: float | None = None) -> bool:
+        return self._work.done.wait(timeout_s)
+
+    def outcome(self) -> Any:
+        self._work.done.wait()
+        if self._work.exc is not None:
+            raise self._work.exc
+        return self._work.result
+
+
+def _busy(timeout_s: float, *, started: bool, running: _Work | None = None) -> ToolError:
+    detail: dict[str, Any] = {"started": started, "timeout_s": timeout_s}
+    step = running.long_step if running is not None and not started else None
+    if step:
+        # The main thread is in a long step another call started (a press) that a job
+        # follows: say so, so the agent polls that job instead of retrying blindly.
+        detail["running"] = step
+        if running is not None and running.job_id:
+            detail["job_id"] = running.job_id
+        return ToolError(
+            "houdini_busy",
+            f"Houdini's main thread is busy running {step} for another call; this call was "
+            "not started.",
+            hint="Retry once it ends: the call had no effect"
+            + (
+                "; job {action: status, job_id} with detail.job_id says when it is done."
+                if detail.get("job_id")
+                else "."
+            ),
+            detail=detail,
+        )
     if started:
         message = (
             f"Houdini's main thread did not finish the call within {timeout_s:g}s. "
@@ -119,9 +195,7 @@ def _busy(timeout_s: float, *, started: bool) -> ToolError:
             "Retry shortly; the call had no effect. If it keeps happening, ask the user to "
             "close any dialog open in Houdini."
         )
-    return ToolError(
-        "houdini_busy", message, hint=hint, detail={"started": started, "timeout_s": timeout_s}
-    )
+    return ToolError("houdini_busy", message, hint=hint, detail=detail)
 
 
 class MainThreadExecutor:
@@ -146,6 +220,9 @@ class MainThreadExecutor:
         self._draining = False
         self._current_started: float | None = None
         """When the callable running on the main thread now started (``busy_s``)."""
+        self._current_work: _Work | None = None
+        """The callable running on the main thread now (its long step, for the
+        ``houdini_busy`` of a call that waited behind it)."""
         self.work_wrapper: Callable[[Callable[[], Any]], Any] | None = None
         """Runs each queued callable (``wrapper(fn)``) when set: the ``events`` hooks use it
         to tell HocusPocus's own scene changes from the user's."""
@@ -247,6 +324,19 @@ class MainThreadExecutor:
         """
         if self.on_main_thread():
             return fn()
+        return self._submit(fn, timeout_s, None)
+
+    def run_adoptable(self, fn: Callable[[], Any], timeout_s: float, adopt_after: float) -> Any:
+        """:meth:`run`, except that a started callable that marked a long step
+        (:func:`mark_long_step`) and is still running ``adopt_after`` seconds in, or at
+        ``timeout_s``, is returned as a :class:`Pending` instead of failing with
+        ``houdini_busy``: the dispatcher follows it as a job (BIBLE D70). Without a long
+        step the wait and the refusal are :meth:`run`'s."""
+        if self.on_main_thread():
+            return fn()
+        return self._submit(fn, timeout_s, max(0.0, min(adopt_after, timeout_s)))
+
+    def _submit(self, fn: Callable[[], Any], timeout_s: float, adopt_after: float | None) -> Any:
         if not self._running:
             raise ToolError(
                 "houdini_offline",
@@ -258,13 +348,24 @@ class MainThreadExecutor:
         work = _Work(functools.partial(contextvars.copy_context().run, fn))
         meter = current_meter()
         self._queue.put(work)
-        if not work.done.wait(timeout_s):
+        waits = [timeout_s] if adopt_after is None else [adopt_after, timeout_s - adopt_after]
+        finished = False
+        for wait in waits:
+            if work.done.wait(max(0.0, wait)):
+                finished = True
+                break
+            if adopt_after is not None:
+                with work.lock:
+                    adopt = work.state == "running" and work.long_step is not None
+                if adopt:
+                    return Pending(work)
+        if not finished:
             with work.lock:
                 state = work.state
                 if state == "pending":
                     work.state = "cancelled"
             if state != "done":
-                raise _busy(timeout_s, started=state != "pending")
+                raise _busy(timeout_s, started=state != "pending", running=self._current_work)
             # It finished between the wait timing out and the lock (review 10 section 1.5):
             # report its result, not "still running".
             work.done.wait()
@@ -325,6 +426,9 @@ class MainThreadExecutor:
         wrapper = self.work_wrapper
         guard = self.modal_guard
         self._current_started = work.started = time.monotonic()
+        self._current_work = work
+        previous = getattr(_EXECUTING, "work", None)
+        _EXECUTING.work = work
         try:
             with guard() if guard is not None else contextlib.nullcontext():
                 work.result = work.fn() if wrapper is None else wrapper(work.fn)
@@ -338,7 +442,9 @@ class MainThreadExecutor:
                 reraise = exc
         finally:
             work.finished = time.monotonic()
+            _EXECUTING.work = previous
             self._current_started = None
+            self._current_work = None
             with work.lock:
                 work.state = "done"
             work.done.set()

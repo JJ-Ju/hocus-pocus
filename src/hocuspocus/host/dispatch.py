@@ -20,7 +20,7 @@ from hocuspocus.tools.errors import ToolError
 from hocuspocus.tools.profiles import normalize
 
 from . import modal
-from .executor import MainThreadMeter, metering
+from .executor import MainThreadMeter, Pending, metering
 from .tools.registry import HostContext, HostTool
 from .undo import UndoGroupFactory, make_label
 
@@ -315,6 +315,63 @@ class Dispatcher:
                 return float(candidate)
         return float(self.ctx.config.default_timeout_s)
 
+    def _adopt_after(self, effective: float) -> float | None:
+        """How long a main-thread call waits before a long step it marked (a press,
+        :func:`~hocuspocus.host.executor.mark_long_step`) goes on as a job:
+        ``job_threshold_s`` within the call's timeout, as cook and render wait (BIBLE §7,
+        D70). ``None`` where no job can follow it (no job manager, an executor without
+        :meth:`run_adoptable`)."""
+        executor = getattr(self.ctx, "executor", None)
+        if getattr(self.ctx, "jobs", None) is None or not callable(
+            getattr(executor, "run_adoptable", None)
+        ):
+            return None
+        threshold = getattr(self.ctx.config, "job_threshold_s", None)
+        if not isinstance(threshold, int | float) or isinstance(threshold, bool):
+            return None
+        return max(0.0, min(float(threshold), effective))
+
+    def _follow(self, pending: Pending, tool: str, effective: float) -> dict[str, Any]:
+        """Turn a call that is still in a long step past its wait into a job (BIBLE D70):
+        the job waits for the main-thread work, runs what the dispatcher runs after it
+        (:data:`AFTER_KEY`), and its result is the call's result, or its error the call's
+        error. A press cannot be interrupted, so the job cannot be cancelled."""
+        ctx = self.ctx
+        step = pending.long_step or tool
+
+        def follow(job: Any) -> Any:
+            while not pending.wait(0.5):
+                job.progress(None, f"{tool}: running {pending.long_step or step}")
+            try:
+                result = pending.outcome()
+            except BaseException as exc:
+                if isinstance(exc, KeyboardInterrupt | SystemExit) and not isinstance(
+                    exc, ToolError
+                ):
+                    raise
+                raise tool_error_from_exception(exc) from exc
+            after = result.pop(AFTER_KEY, None) if isinstance(result, dict) else None
+            _pop_changed(result)
+            if callable(after):
+                result = _run_after(after, result, max(effective, AFTER_MARGIN_S), ctx)
+            return result
+
+        job = ctx.jobs.start(tool, follow, label=step, cancellable=False)
+        pending.job_id = job.id
+        job.message = job.message or f"{tool}: running {step}"
+        waited = getattr(ctx.config, "job_threshold_s", effective)
+        return {
+            "job_id": job.id,
+            "state": "running",
+            "running": step,
+            "message": (
+                f"{step} is still running after {min(float(waited), effective):g} s and goes "
+                "on as a job: job {action: result, job_id} returns this call's result when "
+                "it ends. It runs on Houdini's main thread, so other calls that need it "
+                "answer houdini_busy until then."
+            ),
+        }
+
     def response_budget(self, max_response_bytes: Any) -> int:
         if (
             isinstance(max_response_bytes, int)
@@ -417,10 +474,20 @@ class Dispatcher:
             timing["main"] = impl.main_thread
             sent = time.perf_counter()
             if impl.main_thread:
+                adopt_after = self._adopt_after(effective)
                 try:
-                    result = self.ctx.executor.run(work, effective)
+                    if adopt_after is None:
+                        result = self.ctx.executor.run(work, effective)
+                    else:
+                        result = self.ctx.executor.run_adoptable(work, effective, adopt_after)
                 finally:
                     timing["waited_s"] = time.perf_counter() - sent
+                if isinstance(result, Pending):
+                    timing.setdefault("work_s", timing["waited_s"])
+                    return ok_envelope(
+                        self._follow(result, impl.name, effective),
+                        make_meta(self.ctx, undo_label=undo_label, started=started, timing=timing),
+                    )
             else:
                 meter = MainThreadMeter()
                 try:

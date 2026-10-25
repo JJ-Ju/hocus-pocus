@@ -33,6 +33,7 @@ from typing import Any
 from hocuspocus.tools.errors import ToolError
 from hocuspocus.tools.migration import BARE, hint_join, hint_tool
 
+from ..executor import mark_long_step
 from ..look import child as _child
 from ..look import flipbook as _flipbook
 from ..look import karma as _karma
@@ -479,6 +480,9 @@ def press_button(node: Any, parm: Any) -> dict[str, Any]:
             expected = []
     before = _top_parm_values(node)
     started = time.time()
+    # A callback cannot be split or interrupted: past the call's wait it goes on as a job
+    # instead of answering houdini_busy (BIBLE D70, review 26 P3 friction 1).
+    mark_long_step(parm.path())
     parm.pressButton()
     out: dict[str, Any] = {"pressed": True}
     changes = changed_parms(before, _top_parm_values(node))
