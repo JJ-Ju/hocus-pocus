@@ -86,6 +86,23 @@ def test_parse_ops_splits_options_and_normalises_delete():
     assert delete.args == {"paths": ["/obj/x"]}
     assert set_op.opts == {"frame": 12.0} and "frame" not in set_op.args
     assert plan.declared == {"b"}
+    assert delete.sent_as == {"paths": "path"} and create.sent_as == {}
+
+
+def test_an_error_names_the_key_the_caller_sent():
+    (op,) = tx.parse_ops([{"op": "connect", "from": "/obj/a", "path": "/obj/b"}]).ops
+    error = ToolError(
+        "node_not_found",
+        "ops[0].to: No node at /obj/b.",
+        detail={"item": 0, "field": "to", "path": "/obj/b"},
+    )
+    tx.as_sent(error, op)
+    assert error.message == "ops[0].path: No node at /obj/b." and error.detail["field"] == "path"
+    (delete,) = tx.parse_ops([{"op": "delete", "path": "/obj/b"}]).ops
+    error = ToolError(
+        "node_not_found", "ops[0].paths[0]: x", detail={"item": 0, "field": "paths[0]"}
+    )
+    assert tx.as_sent(error, delete).message == "ops[0].path: x"
 
 
 @pytest.mark.parametrize(

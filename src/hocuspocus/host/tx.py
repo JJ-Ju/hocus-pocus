@@ -220,6 +220,9 @@ class Op:
     args: Any
     id: str | None = None
     opts: dict[str, Any] = field(default_factory=dict)
+    sent_as: dict[str, str] = field(default_factory=dict)
+    """Canonical field -> the key the caller wrote (``path`` read as ``parent``, ``to``...):
+    errors name the key that was sent (:func:`as_sent`)."""
 
 
 @dataclass
@@ -499,7 +502,9 @@ def execute(plan: Plan, ctx: Any) -> Result:
                     where["op"] = {"op": op.op}
                 if plan.partial or plan.stop:
                     ok = state.rollback.run(mark)
-                    error = batch_error(index, path, exc, rolled_back=ok, **where).to_dict()
+                    error = as_sent(
+                        batch_error(index, path, exc, rolled_back=ok, **where), op
+                    ).to_dict()
                     results.append(OpResult(index, op, args, error=error))
                     if plan.stop:
                         state.stopped = index
@@ -507,10 +512,14 @@ def execute(plan: Plan, ctx: Any) -> Result:
                 if not plan.collect:
                     ok = state.rollback.run()
                     reported = None if not ok and plan.defer_rollback else ok
-                    raise batch_error(index, path, exc, rolled_back=reported, **where) from exc
+                    raise as_sent(
+                        batch_error(index, path, exc, rolled_back=reported, **where), op
+                    ) from exc
                 # edit: revert this op and check the rest against what the others leave.
                 state.rollback.run(mark)
-                problems.append(batch_error(index, path, exc, rolled_back=True, **where))
+                problems.append(
+                    as_sent(batch_error(index, path, exc, rolled_back=True, **where), op)
+                )
                 state.checking = True
                 continue
             results.append(res)
@@ -1517,20 +1526,22 @@ def _parse_op(raw: Any, seen: set[str]) -> Op:
             ),
             sorted(unknown)[0],
         )
-    _canonical_path(kind, fields)
+    sent_as = _canonical_path(kind, fields)
     opts = {k: fields.pop(k) for k in OPTION_FIELDS.get(kind, ()) if k in fields}
     if kind == "set" and "frame" in opts:
         from .tools.parms import _frame_arg
 
         opts["frame"] = _frame_arg(opts["frame"])
-    return Op(kind, fields, op_id, opts)
+    return Op(kind, fields, op_id, opts, sent_as)
 
 
-def _canonical_path(kind: str, fields: dict[str, Any]) -> None:
+def _canonical_path(kind: str, fields: dict[str, Any]) -> dict[str, str]:
     """Read ``path`` (and a ``node`` op's ``node``) as the op's own node field, in place
     (:data:`PATH_ALIASES`). Both spellings at once is ``invalid_argument`` unless they
-    agree."""
+    agree. Returns ``{canonical field: key sent}`` for the fields only the alias gave."""
     from .tools.nodes import bad_arg
+
+    sent: dict[str, str] = {}
 
     def merge(alias: str, target: str, value: Any) -> None:
         if target in fields and fields[target] != value:
@@ -1541,17 +1552,19 @@ def _canonical_path(kind: str, fields: dict[str, Any]) -> None:
                 ),
                 alias,
             )
+        if target not in fields:
+            sent[target] = alias
         fields[target] = value
 
     if kind == "node" and "node" in fields:
         merge("node", "path", fields.pop("node"))
-        return
+        return sent
     if "path" not in fields:
-        return
+        return sent
     if kind == "set":
         if "parms" in fields:
             merge("path", "node", fields.pop("path"))
-        return
+        return sent
     if kind == "create":
         path = fields.pop("path")
         parent, _, name = (
@@ -1567,14 +1580,38 @@ def _canonical_path(kind: str, fields: dict[str, Any]) -> None:
             )
         merge("path", "parent", parent or "/")
         merge("path", "name", name)
-        return
+        return sent
     target = PATH_ALIASES.get(kind)
     if target is None:
-        return
+        return sent
     value = fields.pop("path")
     if target == "paths":
         value = [value]
     merge("path", target, value)
+    return sent
+
+
+def as_sent(error: ToolError, op: Op) -> ToolError:
+    """``error`` located at the key the caller wrote: ``ops[i].path`` where the op's
+    ``path`` was read as ``parent``, ``to`` or ``paths`` (and ``paths[0]`` as ``path``)."""
+    detail = error.detail if isinstance(error.detail, dict) else {}
+    located_at = detail.get("field")
+    if not op.sent_as or not isinstance(located_at, str):
+        return error
+    root = re.split(r"[.\[]", located_at, maxsplit=1)[0]
+    alias = op.sent_as.get(root)
+    if alias is None:
+        return error
+    rest = located_at[len(root) :]
+    if root == "paths" and rest.startswith("[0]"):
+        rest = rest[3:]  # the one path the caller sent
+    renamed = alias + rest
+    old_prefix = f"ops[{detail.get('item')}].{located_at}"
+    if error.message.startswith(old_prefix):
+        error.message = f"ops[{detail.get('item')}].{renamed}" + error.message[len(old_prefix) :]
+        error.args = (error.message,)
+    error.detail = {**detail, "field": renamed}
+    return error
 
 
 # -- field locations ---------------------------------------------------------------------

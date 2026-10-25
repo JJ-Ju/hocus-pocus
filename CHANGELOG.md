@@ -170,6 +170,9 @@ one for the 2.0.x releases, and 2.1 removes it.
   escape 4).
 - Rolling back an `edit` restores an input that came from a subnet's indirect input, and
   the flags it changed through their own getters.
+- An `edit` error about an op's node names the key the caller sent: `ops[0].path` for a
+  `create`, `connect`, `delete` or `layout` op given `path` (2.1 errors said `parent`,
+  `to` or `paths[0]`), `ops[0].node` for a `node` op given `node`.
 
 - A launch without a licence now says so, and answers within seconds (review 26 P1 #1).
   `houdini_connect {launch}` and `hocuspocus launch` recognise a licence line in the

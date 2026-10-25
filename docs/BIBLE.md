@@ -832,7 +832,8 @@ takes the fields of the 1.4 tool it replaces, with that tool's semantics (§4.5 
   new node's (`parent` plus `name`, `$id/name` allowed), `connect`'s is `to`, `layout`'s and
   `build`'s `parent`, `copy`'s, `select`'s and `delete`'s `paths: [path]`, and a `set` op's
   `path` with `parms` is its `node`; a `node` op also takes `node` for `path`. Both
-  spellings at once must agree, else `invalid_argument`. Errors name the 1.4 field.
+  spellings at once must agree, else `invalid_argument`. Errors name the key the caller
+  sent (`ops[0].path`, not the `parent` or `to` it was read as).
 - **Long strings** (2.1, D48; review 26 P1 friction 2). `set` takes `patch: [{find,
   replace, all?}]` (one object is a list of one) for a string parm: the edits apply in order
   to its text (`unexpandedString()`), each `find` must occur exactly once (`all: true`: at
