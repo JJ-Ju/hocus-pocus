@@ -232,6 +232,16 @@ one for the 2.0.x releases, and 2.1 removes it.
   definitions into one library file the child installs, rewritten only when a definition
   changes so the kept child stays warm. The GUI was not affected (it renders the live
   scene).
+- An unknown argument answers `invalid_argument` with the closest valid key (stream F).
+  The bridge already refused an unknown key (every input schema is closed, at every
+  depth, and `tests/unit/test_bridge_unknown_args.py` now pins that for the whole
+  catalogue), but the answer was "did you mean" only for a near spelling and the hint
+  did not say where the arguments are. `render {frame_range}` now answers
+  `frame_range: unknown property; did you mean frames?` with `candidates: ["frames"]`
+  (a key that shares a word with a valid one, `frame_range`, `rop`, is matched too, as is
+  a different case) and the hint `Use frames instead of frame_range.` followed by the
+  tool's reference, `inspect {what: "tool", target: "render"} or hocuspocus://tools`.
+  Nested keys carry their path (`launch.hipp`, `ops[0].paht`).
 
 ## 2.0.0 (2026-10-14)
 

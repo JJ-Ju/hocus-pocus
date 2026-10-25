@@ -40,6 +40,29 @@ property in this table is reported as the rename, before any edit-distance sugge
 :func:`rename_hint` shows the corrected call. ``paths`` given as one string is the same
 mistake (:func:`rename_hint`)."""
 
+
+def closest_keys(key: str, names: Any, n: int = 3) -> list[str]:
+    """The valid property names ``key`` was most likely meant to be: close spellings first
+    (edit distance, case ignored), then names that share a word with it, so ``frame_range``
+    finds ``frames`` (an edit-distance ratio of 0.59, just under the cutoff)."""
+    names = [name for name in names if isinstance(name, str)]
+    folded = {name.lower(): name for name in names}
+    wanted = key.lower().replace("-", "_")
+    if wanted in folded:
+        return [folded[wanted]]
+    close = difflib.get_close_matches(wanted, list(folded), n=n, cutoff=0.6)
+    if close:
+        return [folded[name] for name in close]
+    words = [w for w in wanted.split("_") if len(w) >= 3]
+    shared = [
+        name
+        for name in names
+        if len(name) >= 4
+        and any(w.startswith(name.lower()) or name.lower().startswith(w) for w in words)
+    ]
+    return shared[:n]
+
+
 _KNOWN_TYPES = frozenset({"object", "array", "string", "integer", "number", "boolean", "null"})
 
 
@@ -100,6 +123,8 @@ class _Validator:
         self.root = root
         self.renames = renames or {}
         self.errors: list[str] = []
+        # (path of an unknown property, the valid names closest to it), in order
+        self.unknown: list[tuple[str, list[str]]] = []
 
     def _resolve(self, schema: Any) -> dict[str, Any]:
         hops = 0
@@ -222,7 +247,8 @@ class _Validator:
                 self.check(item, props[key], child)
             elif additional is False:
                 renamed = self.renames.get(key) if not path else None
-                close = difflib.get_close_matches(key, list(props), n=3, cutoff=0.6)
+                close = [renamed] if renamed in props else closest_keys(key, props)
+                self.unknown.append((child, close))
                 if renamed in props:
                     self.errors.append(f"{child}: unknown property; 2.0 renamed it {renamed}")
                 elif close:
@@ -344,16 +370,24 @@ class _Coercer(_Validator):
         return value
 
 
+def validate_detailed(
+    value: Any, schema: dict[str, Any] | None, renames: dict[str, str] | None = None
+) -> tuple[list[str], list[tuple[str, list[str]]]]:
+    """:func:`validate` plus the unknown properties it found, ``(path, closest valid names)``
+    each, so the caller can answer with candidates (BIBLE §9)."""
+    if not schema:
+        return [], []
+    validator = _Validator(schema, renames)
+    validator.check(value, schema, "")
+    return validator.errors[:MAX_VIOLATIONS], validator.unknown[:MAX_VIOLATIONS]
+
+
 def validate(
     value: Any, schema: dict[str, Any] | None, renames: dict[str, str] | None = None
 ) -> list[str]:
     """Return human-readable violations (empty when ``value`` conforms to ``schema``).
     ``renames`` (a tool's :data:`ARG_RENAMES`) names the 2.0 argument for a 1.4 one."""
-    if not schema:
-        return []
-    validator = _Validator(schema, renames)
-    validator.check(value, schema, "")
-    return validator.errors[:MAX_VIOLATIONS]
+    return validate_detailed(value, schema, renames)[0]
 
 
 SHAPE_HINT_MAX_CHARS = 400

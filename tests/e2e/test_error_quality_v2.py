@@ -19,7 +19,11 @@ right call, the hint shows it and the test makes that call:
    ``<pid>-<id>`` about an unknown Houdini;
 8. and the rest of the task-9 set whose hints named tools: a cook error read through
    ``inspect geo``, a missing ``look`` camera, a ROP without its camera, ``hip_new`` on
-   an untitled scene (papercut 9).
+   an untitled scene (papercut 9);
+9. an argument the schema does not have (2.1 stream F): ``render {frame_range}`` is
+   ``invalid_argument`` naming the key, with ``frames`` as the candidate and a hint that
+   names ``inspect {what: "tool", target: "render"}``; the same nested (``houdini_connect``
+   ``launch``, ``edit`` ``ops[0]``).
 
 Never uses port 37219; hython runs from a neutral cwd with isolated state and pref dirs.
 """
@@ -221,6 +225,33 @@ async def _scenario(check: Checker) -> None:
     assert "look frames the scene without one" in rop["hint"]
     untitled = await check.mistake("hip_new", {}, "unsaved_changes")
     assert untitled["hint"].startswith("The scene is untitled: hip_save {path} saves it")
+
+    # 9. an argument the schema does not have (2.1 stream F) -------------------------------------
+    stray = await check.mistake(
+        "render", {"rop_path": "/out/gl", "frame_range": [1, 5]}, "invalid_argument"
+    )
+    assert "frame_range: unknown property; did you mean frames?" in stray["message"]
+    assert stray["candidates"] == ["frames"]
+    assert 'inspect {what: "tool", target: "render"}' in stray["hint"]
+    nested = await check.mistake(
+        "houdini_connect", {"launch": {"mode": "headless", "hipp": "a.hip"}}, "invalid_argument"
+    )
+    assert "launch.hipp: unknown property; did you mean hip?" in nested["message"]
+    assert nested["candidates"] == ["hip"]
+    in_op = await check.mistake(
+        "edit",
+        {"ops": [{"op": "set", "paht": f"{GEO}/box1/sizex", "value": 2}]},
+        "invalid_argument",
+    )
+    assert "ops[0].paht: unknown property" in in_op["message"]
+    assert in_op["candidates"][0] == "path"
+    assert 'inspect {what: "tool", target: "edit"}' in in_op["hint"]
+    # the same call with the right key passes validation: the ROP is asked (this one writes
+    # to MPlay, which a headless host cannot do), so the error is the host's, not the bridge's
+    again = await check.mistake(
+        "render", {"rop_path": "/out/gl", "frames": [1, 5]}, "invalid_value"
+    )
+    assert "unknown property" not in again["message"]
 
 
 def test_error_quality_v2(headless_host, tmp_path):  # noqa: F811 - the fixture above
