@@ -24,7 +24,7 @@ SPEC = ToolSpec(
         "Create nodes in one undo step. type resolves like createNode (box gets the current "
         "version; exact_type disables). Items may wire to earlier items; a block_end pairs with"
         " its block_begin (paired_with). Returns path, type and problems per node. "
-        "network_build suits whole graphs."
+        "edit suits whole graphs."
     ),
     notes=(
         "A parms value is a literal, {expression, language} (short form {expr, lang}), or any "

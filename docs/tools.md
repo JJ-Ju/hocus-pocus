@@ -2,7 +2,7 @@
 
 <!-- Generated from src/hocuspocus/tools/spec/ by `python -m hocuspocus.tools.docs`. Do not edit by hand. -->
 
-21 tools. The profiles nest: 10 in `minimal`, 19 in `core` (the default), 21 in `full`. Model-visible `tools/list` text: 20,824 bytes. See `docs/BIBLE.md` §4 for the design.
+21 tools. The profiles nest: 10 in `minimal`, 19 in `core` (the default), 21 in `full`. Model-visible `tools/list` text: 20,771 bytes. See `docs/BIBLE.md` §4 for the design.
 
 ## Contents
 
@@ -297,7 +297,7 @@ Read the scene in one tool. what: node, parms, network, outline, geo (rows: true
 
 `read-only` `headless ok` · profiles `minimal`, `core`, `full`
 
-Search node types or nodes. kind types: node_type_search (query is a name, label or keyword; 1.4 ranking, synonyms, current_only). kind nodes: node_find under root (query is a type glob; pattern, category, flags, has_errors). Returns the 1.4 tool's result with compact rows, paged by limit and cursor.
+Search node types or nodes. kind types: query is a name, label or keyword (ranked, synonyms; current_only hides older versions). kind nodes: under root, query a type glob; pattern, category, flags, has_errors filter. Compact rows, paged by limit and cursor.
 
 **Notes.** Each kind takes its 1.4 tool's arguments; any other is invalid_argument naming the ones it takes. Defaults are the 1.4 tool's (types: limit 20, current_only true; nodes: root /, limit 50). types: query is required; the result is node_type_search's {results, common?, total, hint?, notes?}, plus next_cursor when total counts more matches than this page (node_type_search itself has no paging; a types page reaches the first 1000 matches). nodes: query (optional) is node_find's type glob, pattern its name glob; the result is node_find's {root?, nodes, common?, total, next_cursor?}. Compact (detail: compact, the default; detail: full returns {kind, ...the 1.4 result} unchanged): what is default or empty is omitted and kind is not echoed. nodes: root is omitted when the call named it; a row is {path, type}, plus flags (the list of flags that are on) when any is on, has_errors only when true, child_count and input_count only when above 0; common: {category} holds the category most rows share, and a row in another category names its type as Category/type (Object/geo); next_cursor is the last row's path (cursor takes it, or node_find's after:<path>). types: a row is {name, label, description} with description capped at 80 characters, plus inputs as 'min-max' unless 1-1, deprecated and hidden only when true, other_versions only when non-empty, current and is_current_version: false for an older version; version is not given (a namespaced version is in the name); common hoists category, child_category and typical_parents when every row shares them, and typical_parents (where a type of that category goes) also when only some rows carry it.
 
@@ -418,7 +418,7 @@ Change the scene in one undo step. ops run in order, each {op, id?, ...}: create
 
 `headless ok` · profiles `minimal`, `core`, `full`
 
-Create nodes in one undo step. type resolves like createNode (box gets the current version; exact_type disables). Items may wire to earlier items; a block_end pairs with its block_begin (paired_with). Returns path, type and problems per node. network_build suits whole graphs.
+Create nodes in one undo step. type resolves like createNode (box gets the current version; exact_type disables). Items may wire to earlier items; a block_end pairs with its block_begin (paired_with). Returns path, type and problems per node. edit suits whole graphs.
 
 **Notes.** A parms value is a literal, {expression, language} (short form {expr, lang}), or any parm_set item without path. As in parm_set, a plain set of a menu or toggle with a callback script carries a note that the callback did not run; {value, press: true} runs it once the node's inputs are wired, and the row adds side_effects: {parm: [old, new]}. A type hou.NodeType.deprecated() reports (the OpenGL ROP in 22.0) gets deprecated: true and a note with its reason or replacement (the note once per type per Houdini session). An input is {index or name, from, output (default 0)}. layout good_position places new nodes. return full gives node_info blocks listing only the parms the call set, with strings over 200 characters as {elided, head}; identical error lists after the first become errors_same_as. Each new node is cooked once to report its problems, and its row carries cook_ms (a first cook of an HDA such as mountain can take 200 ms); cook: false skips that cook (cook_state: not_cooked), for batch builders that cook once at the end.
 
