@@ -130,3 +130,38 @@ def test_group_by_many_values_is_bounded(client):
     assert _size(result) < 16_000
     print(f"\ngroup_by on 159k prims, 2000 values: {elapsed:.2f} s, {_size(result)} B")
     assert elapsed < 1.5
+
+
+# -- argument shapes (2.1, D76; the 2.0-vs-2.1 comparison runs) ---------------------------
+
+
+def test_attribs_takes_one_string_of_names(client):
+    out = _tower()
+    listed = _inspect(client, out.path(), rows=True, attribs=["weight", "P"], count=2)
+    spaced = _inspect(client, out.path(), rows=True, attribs="weight, P", count=2)
+    assert spaced["columns"] == listed["columns"] == ["ptnum", "weight", "P"]
+    assert spaced["rows"] == listed["rows"]
+    grouped = _inspect(client, out.path(), group_by="surface", attribs="weight Cd")
+    assert grouped["columns"][-6:] == [
+        "weight.min", "weight.max", "weight.mean", "Cd.min", "Cd.max", "Cd.mean",
+    ]  # fmt: skip
+
+
+def test_the_summary_takes_stats(client):
+    out = _tower()
+    summary = _inspect(client, out.path(), stats=True)
+    assert summary["point_count"] == 17  # the summary is still the summary
+    stats = summary["stats"]
+    assert stats["point"]["weight"] == {
+        "min": -0.5,
+        "max": 2.0,
+        "mean": pytest.approx(18 / 17, abs=1e-5),
+    }
+    assert stats["prim"]["surface"]["unique"] == ["glass", "roof", "wall"]
+    assert stats["vertex"]["Cd"]["max"][0] == pytest.approx(3.9)
+    named = _inspect(client, out.path(), attribs="weight")
+    assert named["stats"] == {"point": {"weight": stats["point"]["weight"]}}
+    error = client.error("inspect", {"what": "geo", "target": out.path(), "attribs": "wieght"})
+    assert error["code"] == "invalid_argument" and "weight" in error["candidates"]
+    error = client.error("inspect", {"what": "geo", "target": out.path(), "class": "prim"})
+    assert "not an option of the geo summary" in error["message"]

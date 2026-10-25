@@ -505,9 +505,55 @@ def geo_info(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
         out["intrinsics"] = intrinsics
     with contextlib.suppress(Exception):
         out["memory_bytes"] = int(geo.intrinsicValue("memoryusage"))
+    if args.get("stats") or args.get("attribs") is not None:
+        out["stats"] = summary_stats(geo, args.get("attribs"))
     warnings = [str(w).strip() for w in sop.warnings() if str(w).strip()]
     if warnings:
         out["warnings"] = warnings
+    return out
+
+
+SUMMARY_STATS_CAP = 24
+"""Attributes the summary's ``stats`` covers when ``attribs`` names none."""
+
+
+def summary_stats(geo: Any, wanted: Any) -> dict[str, Any]:
+    """``geo_info``'s ``stats`` (2.1, D76): per class, the ``attribs`` named (any class
+    holding them; each class a name is found in) or every visible point, prim and vertex
+    attribute up to :data:`SUMMARY_STATS_CAP`, as ``rows: true, stats: true`` gives them
+    (min, max and mean of numbers, unique values of strings; arrays and dicts left out)."""
+    names = attrib_names(wanted)
+    out: dict[str, Any] = {}
+    seen: set[str] = set()
+    budget = SUMMARY_STATS_CAP
+    for cls in ("point", "prim", "vertex"):
+        for attrib in _class_attribs(geo, cls):
+            name = attrib.name()
+            if names is None and (is_internal_attribute(name) or budget <= 0):
+                continue
+            if names is not None and name not in names:
+                continue
+            seen.add(name)
+            result = _Column(geo, cls, attrib).stats(None)
+            if result is not None:
+                out.setdefault(cls, {})[name] = result
+                budget -= 1
+    missing = [n for n in names or () if n not in seen]
+    if missing:
+        detail = [a.name() for a in _class_attribs(geo, "detail")]
+        known = sorted(
+            {a.name() for c in ("point", "prim", "vertex") for a in _class_attribs(geo, c)}
+        )
+        raise ToolError(
+            "invalid_argument",
+            f"No point, prim or vertex attribute named {missing[0]!r} for stats"
+            + (
+                " (it is a detail attribute: the summary lists its value)."
+                if missing[0] in detail
+                else "."
+            ),
+            candidates=difflib.get_close_matches(missing[0], known, n=5, cutoff=0.3) or known[:10],
+        )
     return out
 
 
@@ -688,12 +734,26 @@ class _Column:
         return out
 
 
+def attrib_names(wanted: Any) -> list[str] | None:
+    """``attribs`` as a list of names: a list, or (2.1) one string of names separated by
+    commas or spaces (``"P, Cd"``), as the schema allows."""
+    if wanted is None:
+        return None
+    if isinstance(wanted, str):
+        wanted = [w for w in re.split(r"[,\s]+", wanted) if w]
+    if not isinstance(wanted, list) or not wanted or not all(isinstance(w, str) for w in wanted):
+        raise ToolError(
+            "invalid_argument",
+            "'attribs' must be attribute names: a list, or one string such as \"P, Cd\".",
+        )
+    return wanted
+
+
 def _resolve_attribs(geo: Any, cls: str, wanted: Any) -> list[Any]:
     available = _class_attribs(geo, cls)
+    wanted = attrib_names(wanted)
     if wanted is None:
         return available
-    if not isinstance(wanted, list) or not all(isinstance(w, str) for w in wanted):
-        raise ToolError("invalid_argument", "'attribs' must be a list of attribute names.")
     by_name = {a.name(): a for a in available}
     picked = []
     for name in wanted:
@@ -921,12 +981,9 @@ def _key_column(geo: Any, name: Any) -> tuple[str, Any]:
 def _stats_columns(geo: Any, cls: str, wanted: Any) -> list[_Column]:
     """The numeric attributes ``attribs`` names for the group stats: of any class for prim
     groups (a vertex attribute over the prims of each group), points for point groups."""
+    wanted = attrib_names(wanted)
     if wanted is None:
         return []
-    if isinstance(wanted, str):
-        wanted = [wanted]
-    if not isinstance(wanted, list) or not all(isinstance(w, str) for w in wanted):
-        raise ToolError("invalid_argument", "'attribs' must be a list of attribute names.")
     owners = ("prim", "point", "vertex") if cls == "prim" else ("point",)
     picked: list[_Column] = []
     for name in wanted:

@@ -267,14 +267,18 @@ def _check_args(what: str, target: Any, options: dict[str, Any]) -> None:
         rows = options.get("rows", False)
         if not isinstance(rows, bool):
             raise bad_arg("'rows' must be a boolean.")
-        wrong = sorted(set(options) & (frozenset({"attributes"}) if rows else GEO_READ_OPTIONS))
+        # 2.1 (D76): the summary takes stats and attribs too (the stats of those attributes).
+        summary_only = GEO_READ_OPTIONS - {"stats", "attribs"}
+        wrong = sorted(set(options) & (frozenset({"attributes"}) if rows else summary_only))
         if wrong:
             mode = "rows: true" if rows else "the geo summary (without rows)"
             raise bad_arg(
                 f"{', '.join(wrong)} {'is' if len(wrong) == 1 else 'are'} not an option of {mode}.",
                 hint="rows: true reads values (class, attribs, start, count, group, stats, "
-                "cursor); without it the summary takes attributes.",
+                "cursor); without it the summary takes attributes, stats and attribs.",
             )
+        if options.get("stats") is not None and not isinstance(options["stats"], bool):
+            raise bad_arg("'stats' must be a boolean.")
 
 
 def _glob_match(text: str, pattern: str) -> bool:
