@@ -95,6 +95,7 @@ def make_launcher(
     clock_step: float = 1.0,
     outlives: bool | None = None,
     gui_probe=None,
+    window_probe=None,
 ) -> Launcher:
     t = [0.0]
 
@@ -115,6 +116,7 @@ def make_launcher(
         clock=clock,
         environ={},
         gui_probe=gui_probe,
+        window_probe=window_probe,
         **extra,
     )
     launcher.test_clock = t

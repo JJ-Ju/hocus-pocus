@@ -201,15 +201,26 @@ def _package_json() -> str:
     )
 
 
-@pytest.fixture(scope="session")
-def gui(tmp_path_factory: pytest.TempPathFactory) -> Iterator[GuiSession]:
+@dataclass
+class Isolated:
+    """An isolated pref dir, state dir and work dir for one ``houdinifx`` launch."""
+
+    launcher: Any
+    state: Path
+    work: Path
+    prefs: Path
+    """The expanded pref dir (``houdini22.0``) Houdini reads."""
+
+
+def _isolated(base: Path, *, extra_env: dict[str, str] | None = None) -> Isolated:
+    """A launcher for ``houdinifx`` with its own prefs (the dev package JSON and a
+    ``profile = "full"`` toml), state and work dirs under ``base``."""
     from hocuspocus.bridge import instances as registry
     from hocuspocus.bridge.launch import Launcher, detect_hfs, gui_executable
 
     hfs = detect_hfs(None)
     if hfs is None or gui_executable(hfs) is None:
         pytest.skip("no Houdini 22 install with houdinifx found (set HOCUSPOCUS_HFS or HFS)")
-    base = tmp_path_factory.mktemp("hp-gui")
     state, work, prefs = base / "state", base / "work", base / "prefs"
     expanded = prefs / f"houdini{_houdini_version(hfs)}"
     (expanded / "packages").mkdir(parents=True)
@@ -217,12 +228,6 @@ def gui(tmp_path_factory: pytest.TempPathFactory) -> Iterator[GuiSession]:
     work.mkdir()
     (expanded / "packages" / "hocuspocus.json").write_text(_package_json(), encoding="utf-8")
     (expanded / "hocuspocus.toml").write_text('profile = "full"\n', encoding="utf-8")
-    # G5: a creation script and a load script that open a dialog, each only for the one
-    # node or hip file its test makes (Houdini reads the script paths at start-up).
-    (expanded / "scripts" / "obj").mkdir(parents=True)
-    (expanded / "scripts" / "obj" / "null_OnCreated.py").write_text(ON_CREATED, encoding="utf-8")
-    (expanded / "scripts" / "456.py").write_text(LOAD_SCRIPT, encoding="utf-8")
-
     env = {k: v for k, v in os.environ.items() if not k.startswith("HOCUSPOCUS_")}
     env.pop("PYTHONHOME", None)
     env.update(
@@ -231,20 +236,34 @@ def gui(tmp_path_factory: pytest.TempPathFactory) -> Iterator[GuiSession]:
         HOCUSPOCUS_WORK_DIR=str(work),
         HOUDINI_NO_START_PAGE_SPLASH="1",
         HOUDINI_ANONYMOUS_STATISTICS="0",
+        **(extra_env or {}),
     )
     instances_dir = state / "instances"
     launcher = Launcher(
         str(hfs), environ=env, owned=False, scan=lambda: registry.scan(instances_dir)
     )
-    spawned = launcher.spawn("gui", work_dir=work)
+    return Isolated(launcher, state, work, expanded)
+
+
+@pytest.fixture(scope="session")
+def gui(tmp_path_factory: pytest.TempPathFactory) -> Iterator[GuiSession]:
+    iso = _isolated(tmp_path_factory.mktemp("hp-gui"))
+    # G5: a creation script and a load script that open a dialog, each only for the one
+    # node or hip file its test makes (Houdini reads the script paths at start-up).
+    (iso.prefs / "scripts" / "obj").mkdir(parents=True)
+    (iso.prefs / "scripts" / "obj" / "null_OnCreated.py").write_text(ON_CREATED, encoding="utf-8")
+    (iso.prefs / "scripts" / "456.py").write_text(LOAD_SCRIPT, encoding="utf-8")
+    spawned = iso.launcher.spawn("gui", work_dir=iso.work)
     started = {spawned.proc.pid}
     session: GuiSession | None = None
     try:
-        launched = launcher.wait(spawned, LAUNCH_WAIT_S)
+        launched = iso.launcher.wait(spawned, LAUNCH_WAIT_S)
         inst = launched.instance
         started.add(inst.pid)
         assert inst.port != FORBIDDEN_PORT
-        session = GuiSession(GuiClient(inst.port, inst.token), inst, spawned.proc, state, work)
+        session = GuiSession(
+            GuiClient(inst.port, inst.token), inst, spawned.proc, iso.state, iso.work
+        )
         yield session
     finally:
         if session is not None and _pid_alive(session.instance.pid):
@@ -286,6 +305,72 @@ def _scene(client: GuiClient) -> None:
             ]
         },
     )
+
+
+# -- launches that cannot register (D60), before the session's Houdini starts ------------
+
+STARTUP_DIALOG = """\
+import hou
+hou.ui.displayMessage("HocusPocus D60 test: a startup dialog")
+"""
+
+
+def _launch_fails(iso: Isolated, wait_s: float) -> tuple[Any, float, Any]:
+    """Launch, expect the wait to fail, and kill the Houdini. ``(error, seconds, proc)``."""
+    from hocuspocus.tools.errors import ToolError
+
+    spawned = iso.launcher.spawn("gui", work_dir=iso.work)
+    started = time.monotonic()
+    try:
+        with pytest.raises(ToolError) as info:
+            iso.launcher.wait(spawned, wait_s)
+        return info.value, time.monotonic() - started, spawned.proc
+    finally:
+        _kill(spawned.proc.pid)
+
+
+def test_a_launch_stuck_on_a_startup_dialog_says_so(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> None:
+    """D60: a startup script's dialog holds Houdini before its UI is ready, so the host
+    never starts. The launch names the window soon after it appears, not at ``wait_s``."""
+    from hocuspocus.bridge import startup
+
+    iso = _isolated(tmp_path_factory.mktemp("hp-dialog"))
+    (iso.prefs / "scripts").mkdir()
+    (iso.prefs / "scripts" / "123.py").write_text(STARTUP_DIALOG, encoding="utf-8")
+    error, waited, _proc = _launch_fails(iso, LAUNCH_WAIT_S)
+    assert error.code == "houdini_offline" and error.retryable is False, error
+    assert error.detail["reason"] == "dialog", error.detail
+    assert error.detail["windows"] == ["Houdini"]
+    assert "waiting on a window titled 'Houdini'" in error.message
+    assert waited < startup.DIALOG_GRACE_S + 30, waited
+
+
+def test_a_launch_whose_host_fails_to_start_says_why(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> None:
+    """D60: a host that cannot start (here its configured port is taken) writes a
+    ``failed`` startup record, and the launch answers with its error at once."""
+    import socket
+
+    taken = socket.socket()
+    taken.bind(("127.0.0.1", 0))
+    taken.listen(1)
+    port = taken.getsockname()[1]
+    assert port != FORBIDDEN_PORT
+    try:
+        iso = _isolated(
+            tmp_path_factory.mktemp("hp-hostfail"), extra_env={"HOCUSPOCUS_PORT": str(port)}
+        )
+        error, waited, proc = _launch_fails(iso, LAUNCH_WAIT_S)
+    finally:
+        taken.close()
+    assert error.code == "houdini_offline" and error.retryable is False, error
+    assert error.detail["reason"] == "host_failed", error.detail
+    assert "its HocusPocus host failed to start" in error.message
+    assert error.detail["log"].endswith(f"host-{proc.pid}.log")
+    assert waited < 60, waited
 
 
 # -- the session -------------------------------------------------------------------------

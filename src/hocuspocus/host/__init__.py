@@ -10,8 +10,13 @@ Public API (all idempotent, none raises into Houdini)::
 
 from __future__ import annotations
 
+import contextlib
+import json
 import logging
+import os
 import threading
+import time
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -105,16 +110,56 @@ def status() -> dict[str, Any]:
     return host.status()
 
 
+def _startup_record(state_dir: str | None) -> Path:
+    from hocuspocus.tools import paths
+
+    return paths.startup_dir(Path(state_dir) if state_dir else None) / f"{os.getpid()}.json"
+
+
+def _write_startup(record: Path, phase: str, **fields: Any) -> None:
+    """Say how far this GUI host's start got (D60: a launch waiting for it reads this and
+    tells the agent why it never registered). Never raises."""
+    try:
+        from .registry import _write_private_atomic, prune_stale
+
+        prune_stale(record.parent)  # the records of Houdinis that have exited
+        data = {"pid": os.getpid(), "phase": phase, "time": time.time(), **fields}
+        _write_private_atomic(record, json.dumps(data, indent=1))
+    except Exception:
+        log.debug("cannot write the startup record %s", record, exc_info=True)
+
+
 def autostart() -> dict[str, Any]:
-    """GUI autostart entry point (``uiready.py``). Honours ``autostart = false``."""
+    """GUI autostart entry point (``uiready.py``). Honours ``autostart = false``.
+
+    Writes ``<state_dir>/startup/<pid>.json`` (D60): ``starting`` before the host starts,
+    ``failed`` (with the error and the host log) or ``disabled`` when it does not, and
+    deletes it once the host runs."""
+    record = _startup_record(None)
     try:
         from .config import load_config
 
         config = load_config()
+        record = _startup_record(config.state_dir)
         if not config.autostart:
             log.info("HocusPocus autostart disabled by configuration")
+            _write_startup(record, "disabled")
             return status()
-        return start(config)
-    except Exception:
+        _write_startup(record, "starting")
+        result = start(config)
+    except Exception as exc:
         log.exception("HocusPocus autostart failed")
+        _write_startup(record, "failed", error=f"{type(exc).__name__}: {exc}")
         return status()
+    if result.get("running"):
+        with contextlib.suppress(OSError):
+            record.unlink()
+    else:
+        log_path = record.parent.parent / "logs" / f"host-{os.getpid()}.log"
+        _write_startup(
+            record,
+            "failed",
+            error=result.get("error") or "the host did not start",
+            log=str(log_path),
+        )
+    return result

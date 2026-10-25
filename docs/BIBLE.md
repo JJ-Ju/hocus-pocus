@@ -335,6 +335,25 @@ Responsibilities:
    again. The hint says an agent cannot sign in, and it never names `install-houdini`. A
    GUI Houdini caught waiting on that dialog is stopped; the License Administrator stays
    open for the user. `hocuspocus launch` fails with the same message.
+   2.1 (D60): a GUI launch that cannot register says why. `hocuspocus.host.autostart`
+   writes `<state_dir>/startup/<pid>.json` (`phase: starting`, then `failed` with the
+   error and the host log, or `disabled` for `autostart = false`) and deletes it once the
+   host runs; `uiready.py` writes `failed` itself when `hocuspocus.host` cannot be
+   imported. During the wait the launcher reads the record of the pid it started and the
+   titles of that pid's visible windows (Windows; `bridge/startup.py`). A licensed
+   houdinifx 22.0.466 shows its splash (titled `houdinifx`) at about 2 s and its main
+   window (`<hip> - Houdini <edition> <version> - Py3.13`) at about 10 s, then registers.
+   `failed` and `disabled` end the wait at once (`detail.reason: "host_failed"` with
+   `error` and `log`, or `"autostart_disabled"`). Any other titled window that stays up
+   15 s before the main window has appeared is a dialog Houdini waits on, such as a
+   startup script's `hou.ui.displayMessage` (titled `Houdini`); it ends the wait with
+   `detail.reason: "dialog"` and `windows`. A dialog with the main window up is named only
+   when the wait runs out (a long hip load may show windows of its own). A wait that runs
+   out says what it saw: a host that began starting (`host_starting`, its log), a dialog,
+   or a main window with no autostart record (`no_autostart`: the package is not installed
+   for that pref dir, hint `install-houdini`). All are `houdini_offline` with
+   `retryable: false` except the plain timeout; the Houdini is left open (someone may
+   answer its dialog, and the host then registers by itself).
 8. **Budget responses.** Enforce `max_response_bytes` (default 16 KB) by truncating list
    payloads at item boundaries and setting `truncated: true` plus `next_cursor` when the
    host supplied one (§4.1). Images are exempt from the byte cap but downscaled by the host.
@@ -1254,7 +1273,7 @@ own. `tests/unit/test_hint_profiles.py` checks a fixture of errors in every prof
 Stable codes (the complete set; adding one is a design change):
 
 | code | when | retryable |
-| `houdini_offline` | no live instance; names the pid (and hip) the bridge was driving if it exited, and says its unsaved changes are lost; 2.1: a launch that could not get a licence (`detail.reason: "licence"`, §3.3 rule 7) | after connect (`retryable: false` when nothing is running, and for a licence failure until someone signs in) |
+| `houdini_offline` | no live instance; names the pid (and hip) the bridge was driving if it exited, and says its unsaved changes are lost; 2.1: a launch that could not get a licence (`detail.reason: "licence"`, §3.3 rule 7), and a GUI launch whose host failed to start, has autostart off or waits on a dialog (`detail.reason`: `host_failed`, `autostart_disabled`, `dialog`; at the deadline also `host_starting`, `no_autostart`; D60) | after connect (`retryable: false` when nothing is running, and for a licence failure until someone signs in) |
 | `ambiguous_instance` | several live instances, none pinned, and the call changes a scene (1.3, §3.3 rule 3); `candidates` as for `instance_lost`, `hint` names the `houdini_connect {"pid": …}` call for each | no; after `houdini_connect {pid}` |
 | `instance_lost` | the pinned Houdini exited (1.3), or the one an `on` or a job id names (2.0, §3.6, §3.8); names its pid and label, `candidates` are the live instances as `{pid, label, ui, hip}`; the bridge does not switch on its own (§3.6) | no; after an explicit `houdini_connect` |
 | `houdini_busy` | main-thread timeout | yes |
@@ -1304,7 +1323,7 @@ src/hocuspocus/
     migration.py               # removed 1.4 tool -> its 2.0 replacement
     errors.py                  # error codes + ToolError
     docs.py                    # renders docs/tools.md and docs/redesign/budget.md; example validator
-    paths.py                   # state dir (instances/, logs/, captures/, jobs/, ledger.sqlite)
+    paths.py                   # state dir (instances/, logs/, captures/, startup/, jobs/, ledger.sqlite)
     budget.py                  # the response truncator (host and bridge)
   host/                        # INSIDE Houdini. stdlib only. `import hou` lazily.
     __init__.py                # start(), stop(), status(), autostart()
@@ -1317,7 +1336,7 @@ src/hocuspocus/
            cook.py types.py geo.py visual.py state.py hda.py usd.py pdg.py events.py
            inspect.py search.py edit.py look.py
   bridge/                      # OUTSIDE Houdini. mcp SDK.
-    __main__.py server.py client.py instances.py launch.py licence.py local_tools.py
+    __main__.py server.py client.py instances.py launch.py licence.py startup.py local_tools.py
     validate.py budget.py config.py instructions.py
     ledger.py                  # the SQLite ledger (§3.8)
     routing.py                 # on and roles (§3.6)
@@ -1591,6 +1610,7 @@ bible (tag `v1.4.0`). D35 to D44 are the 2.0 decisions, D45 on the 2.1 ones.
 - **D52** (2.1) `look` at a SOP shows that SOP alone, through a temporary Object Merge object in the scene that renders, whatever network holds it (§4.6, §8). *Review 26 P1 #3: moving the display flag showed nothing for a SOP inside a subnet or a locked asset, so the agent built and re-pointed its own preview object (3 edits and many parm changes); an Object Merge reads any SOP and leaves the user's flags alone.*
 - **D53** (2.1) `cook profile` times what a normal cook of the node cooks, learned from Houdini's `inputAncestors(only_used_inputs=True)` after a normal cook, and lists the other ancestors in `inactive` (§4.6). *Review 26 P1 #8: force-cooking every ancestor timed a Switch's unselected interior branch, so "interiors off costs nothing" looked false and proving it took a non-forced cook and an `inspect`.*
 - **D54** (2.1) The guide and each tool's reference are also `inspect {what: "guide" | "tool"}`, answered by the bridge without a Houdini, and hints that cite `hocuspocus://tools` name that route first (§4.4, §4.8). *Review 26 P1 #10: Claude Code subagents have no resource reader, so the hints pointed at text the agent could not open; a `what` costs a few enum bytes where a new tool would cost a schema.*
+- **D60** (2.1) A GUI launch that cannot register says why within its wait: the host's autostart writes a startup record (`<state_dir>/startup/<pid>.json`: starting, failed, disabled), and the launcher reads it and the launched pid's window titles (§3.3 rule 7). A failed or disabled start ends the wait at once; a dialog ends it after 15 s only before Houdini's main window exists, where a licensed start shows nothing but its splash. *A 2.1 stream reported GUI launches that "never registered" and waited 240 s with the hint "may still be starting"; a host that failed to start, a package that never loaded and a startup dialog all looked the same. A record file needs no port and no `hou` on the bridge side, and the window rule cannot fire on a licensed start (measured: splash, then main window, then the registry entry).*
 
 ### Verified deviations (M5 reconciliation, 1.0; still true)
 

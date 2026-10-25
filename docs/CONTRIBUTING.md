@@ -16,7 +16,7 @@ src/hocuspocus/
     catalog.py                 #   the single source of truth for the tool surface
     errors.py                  #   error codes and ToolError
     docs.py                    #   renders docs/tools.md; tools/list size; example validator
-    paths.py                   #   state dir (instances/, logs/, captures/)
+    paths.py                   #   state dir (instances/, logs/, captures/, startup/)
     budget.py                  #   the response truncator (host and bridge)
   host/                        # INSIDE Houdini; stdlib only; imports hou lazily
     __init__.py                #   start(), stop(), status(), autostart()
@@ -29,7 +29,7 @@ src/hocuspocus/
       types.py geo.py visual.py state.py hda.py usd.py pdg.py events.py inspect.py
       search.py edit.py look.py spare.py (the spare parm and asset interface engine)
   bridge/                      # OUTSIDE Houdini; official mcp SDK
-    __main__.py server.py client.py instances.py launch.py licence.py local_tools.py
+    __main__.py server.py client.py instances.py launch.py licence.py startup.py local_tools.py
     validate.py budget.py config.py instructions.py
 houdini/                       # Houdini package payload (hpath); deliberately NOT the repo root
   hocuspocus.json.template     #   rendered to <prefs>/packages/hocuspocus.json
