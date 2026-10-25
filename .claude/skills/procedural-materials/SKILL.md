@@ -144,6 +144,25 @@ values are Unreal's measured figures.
    grayscale (`mono`), downsampled (`resample`), a Karma render on a plane and a sphere
    (`previewmaterial`, `geotype` sphere or shaderball), then on the asset.
 
+## Story on tiling kits: in the shader
+
+A tiling texture repeats wherever the kit repeats, so wear placed by the building itself
+(streaks below this ledge, grime at this base) cannot live in it. Keep the material in the
+tiling maps and put the story in the shader:
+- The generator writes per-face primvars it already knows. In the danchi test these were
+  `stop` (the height where water starts on that face), `slen` (streak length), `wexp`
+  (exposure) and a lit or occupied flag.
+- The shader builds each layer from world position and those primvars. For example, a
+  streak is a vertically stretched fractal × a fall-off below `stop` × exposure.
+- A low-frequency patch mask over every layer (a fractal at about 0.05–0.1 per metre,
+  through `smooth`) keeps whole stretches clean. Without it every ledge streaks the same,
+  which is the uniform-detail failure.
+- Link each layer's amount to an HDA parm, so weathering is a control and not baked in.
+
+For a unique piece that is unwrapped (not tiling), the same masks can be rasterised into
+UV space instead (`rasterizesetup` `space` uv, then `rasterizegeo`), which an engine needs
+when its shaders cannot read the primvars.
+
 ## Trim sheets, atlases, baking
 
 - **Trim sheet:** `tilepattern` with `useexpr` on and its row expression (`[row_offset]
@@ -175,6 +194,12 @@ Details, the Substance-to-Copernicus node map and per-material recipes are in
   `colorconversion` raw for normals and packed masks.
 - **8-bit height bands.** Use `size1` int16 for height and normal.
 - **Streak and distort direction ignored** unless `dirtype` is coord.
+- **Grunge masks saturate at their defaults.** `grunge_rust` and its kin cover large areas
+  at the default coverage: rust blotches on every door. Threshold them sparse and check
+  coverage with `statistics`: a painted steel door wants a few per cent of rust, not a
+  third.
+- **SOP `Cd` in MaterialX** arrives as the primvar `displayColor`; `geompropvalue "Cd"`
+  reads black in Karma.
 - **Tile-pattern shapes stretch with the cell.** Circles in non-square cells become ellipses;
   compensate with `hscale`/`vscale`.
 - **Multi-output nodes:** wire by output index or name (`tilepattern` `id` is output 1;

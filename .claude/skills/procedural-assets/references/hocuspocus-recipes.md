@@ -62,11 +62,20 @@ One `edit` call can build a whole stage. Later ops refer to earlier ones as `$id
     first (`vector p = point(0, "P", i);`);
   - `foreach` over an inline `array(...)` can be ambiguous; declare the typed array first;
   - there is `smooth()`, not `smoothstep()`;
+  - no `<<` or `>>` shift operators: index corners with `/` and `%`;
+  - vector literals hold constants only (`{1, 2, 3}`); with variables use `set(x, h, 1)`;
+  - define functions before any statement in the snippet;
   - a wrangle reads its input, not points it has just added: compute new positions instead of
     reading them back.
 - Keep shared helpers in one `lib.vfl` and prepend it to each piece's snippet when you
   assemble the file for `value_file` (a wrangle's `#include` only finds files on
   `HOUDINI_VEX_PATH`). One helper library across many small wrangles beats one huge wrangle.
+- **A build script is a fair choice for a big generator.** With dozens of wrangles, a
+  `build.py` run through `houdini_python` that creates the network and reads each snippet
+  from its `.vfl` file is reproducible and keeps the source diffable. Write the script with
+  the client's file tool, not a shell heredoc, whose quoting breaks on VEX. Iterate on one
+  wrangle with `edit` (`value_file`, `patch`) rather than rerunning the whole script. The
+  HDA stores the snippets, so the asset does not depend on the files.
 
 ## Kit pieces as separate networks
 
@@ -157,6 +166,11 @@ copies as instances. Then a piece can be looked at, LOD'd and varied alone.
   …), even though Houdini's menu lists only `default`.
 - Assign by attribute in SOPs (`shop_materialpath` per prim, or Material SOP groups), and
   check it landed: `inspect {what: "geo", target, group_by: "shop_materialpath"}`.
+- SOP `Cd` reaches USD as the primvar `displayColor`. A `geompropvalue` reading `"Cd"`
+  returns black in Karma; read `"displayColor"`.
+- Copy to Points' attribute-apply menus (`applyto1` …) take tokens (`prims`, `points`,
+  `verts`). Set by index, 1 is vertices: a `shop_materialpath` copied there assigns
+  nothing, and no warning says so.
 
 ## Textures in Copernicus
 
@@ -180,7 +194,9 @@ Check before planning around a node: `search {kind: "types", query: "<name>"}`. 
 (LOD Create, Impostor Baker, Trim Texture, Texel Density, Physical AO) is often not
 installed; core PolyReduce, Convex Decomposition, Copernicus and the Bake Geometry Textures
 COP are. The Font SOP's `file` parm takes a font *name*; Houdini ships "SideFX WenQuanYi Zen
-Hei" for Japanese and Chinese text.
+Hei" for Japanese and Chinese text. Its `lod` parm sets the curve sampling: 0.35 instead
+of 1.0 cut a building number from 11.4k to 4.2k triangles with no visible change at 10 m.
+`valign` takes the token `middle`.
 
 ## Traps seen in practice
 
@@ -191,3 +207,5 @@ Hei" for Japanese and Chinese text.
 - Karma final looks on big scenes take longer than 10 s; pass `wait_s` or poll the job.
 - `@ptnum`-based randomness reshuffles when topology changes; hash a stable `id`.
 - Judging only at 1,000–1,600 px hides small defects; add close-up and distance views.
+- Some faults show only in the exported file: a wire from the wrong output, LOD0 detail in
+  LOD1. Re-import every export and count triangles and named parts per LOD.

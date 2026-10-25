@@ -140,6 +140,9 @@ Take the piece players see most, such as the window bay's frame and panel, all t
   connector pieces, no seams catching light. **Detail** at bay scale: cables, pipes, signage,
   edge decals at corners, a prop cluster, and the bay's own wear story (streaks under its sill,
   grime at its base).
+- Props pass the same three-size-class rule as the pieces. Soft goods (laundry, futons,
+  awnings, tarps) need sag, folds and thickness; flat cards read as paper at any distance.
+  Keep prop colours as muted as the reference: candy colours look like a toy.
 - Light it as the final scenes will be lit. This bay is the quality bar for everything else.
 - **Gate:** a lit render of the bay at street distance next to reference, and a grayscale
   version for value structure. Write down what makes it good, and use it as the checklist for
@@ -151,6 +154,10 @@ Take the piece players see most, such as the window bay's frame and panel, all t
   floor, roof pieces, then hero pieces.
 - Make variants as material swaps, damage seeds and combinable states, not new geometry.
 - Each new piece passes the golden-piece gate on its own.
+- **Connective and unique geometry is a piece too.** End walls, plinths, roof slabs and
+  cores are generated once per building rather than instanced, so they are easy to leave as
+  plain boxes. They are often the largest surfaces in the hero views. Give each the
+  golden-piece pass: forms in three sizes, joints, fixings, its own wear story.
 - **Gate:** a kit sheet with every piece lit and laid out, each at the same quality.
 
 ### 6. Up the levels: facade, building, block
@@ -186,7 +193,11 @@ At each level run the three passes and review at that level's distance.
 
 - LOD0, then LOD1 (no interiors, no small greebles, damage above a size cutoff only), then
   LOD2 (a shell or impostor). Match value across LODs: render each from one camera and compare
-  brightness.
+  mean facade brightness, within about 3 %. A flat shell whose recesses are painted in is
+  lit by the sun where the real recess is in shadow; darken it until the numbers match.
+- Detail that belongs to LOD0 only (damage, props, small fixings) branches off after the LOD
+  split, so LOD1 is built from undamaged sources. Otherwise it leaks into the lower LODs
+  without notice.
 - Collision: convex hulls per volume, with thin masts kept separate, named `UCX_<mesh>_NN`.
 - Delivery: instances for kit pieces, FBX per LOD, USD with LOD variants and material
   bindings.

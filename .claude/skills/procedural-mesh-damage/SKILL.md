@@ -60,7 +60,10 @@ step ends with a check.
    density hierarchy and seam exclusion. Copy noisy cutter shapes onto them with Copy to Points,
    **`pack` off**, then `boolean` subtract (`booleanop` subtract, `usebinsidea` on to group the
    cut faces). Use angular cutters (a divided box plus noise) for concrete and painted metal,
-   rounder Worley spheres for stone. Cutter resolution sets the triangle count.
+   rounder Worley spheres for stone. Cutter resolution sets the triangle count. Run
+   `chip_points.vfl` on the pre-bevel shape, since a chamfer doubles the convex edges, and
+   use `damage_mask` to cap tall walls to the contact zone. *Check:* the chip count and
+   the triangles added, against the piece's budget.
 5. **Small nicks.** For the bake source only, or a piece that can afford it: SDF erosion along
    the edges with `edge_erosion.vfl` (VDB from Polygons, then a Volume Wrangle, then Convert VDB
    at adaptivity 0.1–0.3). Otherwise leave them to the normal map.
@@ -105,6 +108,16 @@ measured costs and failure modes of each:
 
 ## Traps
 
+- **Chamfers double the convex edges.** A chamfered or bevelled box has two convex edges
+  where the raw box had one, and a tall wall qualifies along its whole height. In the danchi
+  test, a 30 m end wall with a 4 cm chamfer gave 2,681 chips and 143k triangles. Find chip
+  points on the pre-bevel shape and subtract them from the bevelled one, and cap their height
+  to the contact zone on tall unique walls: 214 chips, 13k triangles.
+- **Damage too small to see is wasted triangles.** Size the large breaks to at least about
+  8 px at the judging distance, and check them in that view, not in a close crop. At 35 mm
+  and 1600 px wide, one pixel is about 6 mm at 10 m and 3 cm at 45 m.
+- **Damage leaks into LOD1.** Branch damage off after the LOD split, and build lower LODs
+  from undamaged sources. Re-import the export to check.
 - **Packed cutters are ignored.** Boolean with packed primitives in input 2 returns input 1
   unchanged with no error. Copy to Points `pack` = 0, or Unpack first.
 - **`vdbreshapesdf` amount is `voxeloffset`, in voxels.** With `useworldspaceunits` on, the
