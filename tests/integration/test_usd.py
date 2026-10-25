@@ -108,6 +108,57 @@ def test_xform_and_bindings(client):
     assert "material" not in rows["/materials"]
 
 
+PER_FACE = """
+from pxr import Sdf, UsdGeom, UsdShade
+stage = hou.pwd().editableStage()
+mesh = UsdGeom.Mesh.Define(stage, "/tower")
+mesh.CreatePointsAttr([(0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 1, 0), (2, 0, 0), (2, 1, 0)])
+mesh.CreateFaceVertexCountsAttr([4, 4])
+mesh.CreateFaceVertexIndicesAttr([0, 1, 2, 3, 1, 4, 5, 2])
+primvars = UsdGeom.PrimvarsAPI(mesh.GetPrim())
+primvars.CreatePrimvar("lit", Sdf.ValueTypeNames.FloatArray).Set([0.0, 1.0])
+armour = UsdShade.Material.Define(stage, "/materials/armour")
+glass = UsdShade.Material.Define(stage, "/materials/glass")
+UsdShade.MaterialBindingAPI.Apply(mesh.GetPrim()).Bind(armour)
+api = UsdShade.MaterialBindingAPI(mesh.GetPrim())
+subset = api.CreateMaterialBindSubset("glass", [1])
+UsdShade.MaterialBindingAPI.Apply(subset.GetPrim()).Bind(glass)
+"""
+
+
+def test_bindings_relationships_and_subsets(client):
+    """D84 (r21 friction 6): an attribs read listed primvars but neither material:binding
+    nor the GeomSubsets that carry per-face materials."""
+    lop = hou.node("/stage").createNode("pythonscript", "per_face")
+    lop.parm("python").set(PER_FACE)
+    read = client.ok(
+        "usd_stage", {"lop_path": lop.path(), "prim": "/tower", "attribs": "primvars:*,material:*"}
+    )
+    rows = {p["path"]: p for p in read["prims"]}
+    row = rows["/tower"]
+    assert [a["name"] for a in row["attributes"]] == ["primvars:lit"]
+    assert row["relationships"] == [{"name": "material:binding", "targets": ["/materials/armour"]}]
+    assert row["subsets"] == [
+        {"name": "glass", "faces": 1, "family": "materialBind", "material": "/materials/glass"}
+    ]
+    subset = rows["/tower/glass"]  # the subset's own row: its binding, no subsets of its own
+    assert subset["type"] == "GeomSubset" and "subsets" not in subset
+    assert subset["relationships"] == [
+        {"name": "material:binding", "targets": ["/materials/glass"]}
+    ]
+    only_primvars = client.ok(
+        "usd_stage", {"lop_path": lop.path(), "prim": "/tower", "attribs": "primvars:*"}
+    )["prims"][0]
+    assert "relationships" not in only_primvars and only_primvars["subsets"] == row["subsets"]
+    bound = client.ok(
+        "usd_stage", {"lop_path": lop.path(), "prim": "/tower", "include": ["bindings"]}
+    )["prims"][0]
+    assert bound["material"] == "/materials/armour" and bound["subsets"] == row["subsets"]
+    assert "attributes" not in bound and "relationships" not in bound
+    plain = client.ok("usd_stage", {"lop_path": lop.path(), "prim": "/tower"})["prims"][0]
+    assert "subsets" not in plain
+
+
 def test_identity_xform_is_compact(client):
     sphere = hou.node("/stage").createNode("sphere", "sphere1")
     result = client.ok(
