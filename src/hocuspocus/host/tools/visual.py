@@ -8,8 +8,10 @@ MCP image content) and are also written under ``<state_dir>/captures``.
 and ``rop_image``, the snapshot and child hython, framing and the chain policy; ``look``
 (``host/tools/look.py``) runs them. ``render`` of a Flipbook or OpenGL ROP renders
 headless in a fresh :class:`~hocuspocus.host.look.child.ChildRender` (the snapshot
-contract is in :mod:`hocuspocus.host.look.base`); every other ROP type renders in-process,
-frame by frame, through the main-thread executor. (2.1 removed ``viewport_capture``, the
+contract is in :mod:`hocuspocus.host.look.base`), and so (2.1, D74) does a Karma or USD
+Render ROP, so Houdini's main thread stays free while husk renders; every other ROP type,
+and every ROP in a GUI session, renders in-process, frame by frame, through the
+main-thread executor. (2.1 removed ``viewport_capture``, the
 1.4 capture tool that ran the same backends with its own policy.)
 
 The names the capture code had in 1.4 stay importable from here. The module-level
@@ -123,6 +125,16 @@ from .registry import HostContext, tool
 VIEWPORT_ROP_TYPES = frozenset(CAPTURE_ROPS)
 """ROP types whose headless renders go through a child hython (module docstring)."""
 
+KARMA_IN_CHILD = True
+"""Headless, a Karma or USD Render ROP renders in a child hython on a snapshot of the
+scene, so the host's main thread is free while husk renders (2.1, D74; review 26 P3
+friction 1). Measured on 22.0.466 (a 1280x720, 256-sample Karma frame): in the host 3.39 s
+of main thread for one frame and 10.82 s for three; in a child 0.011 s of main thread (the
+snapshot) and 4.80 s and 11.61 s of wall time. Set it to False in the host process to
+render them in-process again."""
+
+HUSK_LOG_PARMS = ("husk_log", "husk_stdout", "husk_stderr")
+
 _FORWARDED: dict[str, Any] = {
     "_CHILD_SCRIPT": _child,
     "_BUILD_CAPTURE": _child,
@@ -208,9 +220,33 @@ def rop_core_type(rop_node: Any) -> str:
     return rop_node.type().name().split("::")[0]
 
 
+def renders_through_husk(rop_node: Any) -> bool:
+    """A Karma ROP (``Driver/karma``) or a USD Render ROP: ``render()`` waits for husk."""
+    return rop_core_type(rop_node) == "karma" or is_usd_render_rop(rop_node)
+
+
 def needs_isolation(rop_node: Any, ctx: HostContext) -> bool:
-    """Headless Flipbook and OpenGL ROPs render in a child hython (module docstring)."""
-    return not ctx.ui and rop_core_type(rop_node) in VIEWPORT_ROP_TYPES
+    """Headless Flipbook and OpenGL ROPs, and (2.1, D74) Karma and USD Render ROPs, render
+    in a child hython (module docstring)."""
+    if ctx.ui:
+        return False
+    if rop_core_type(rop_node) in VIEWPORT_ROP_TYPES:
+        return True
+    return KARMA_IN_CHILD and renders_through_husk(rop_node)
+
+
+def husk_logs(node: Any, folder: Any) -> tuple[dict[str, Any], list[str]]:
+    """``(parms, logs)`` for a USD render ROP whose husk failure should carry the end of
+    its log (review 13): the ROP's own log files when it writes them, else parms that make
+    husk write ``out.log`` and ``err.log`` in ``folder()`` (a callable, called only then).
+    ``({}, [])`` for a ROP without husk log parms."""
+    if not all(node.parm(name) is not None for name in HUSK_LOG_PARMS):
+        return {}, []
+    if node.parm("husk_log").eval():
+        return {}, [node.parm(name).eval() for name in HUSK_LOG_PARMS[1:]]
+    where = folder()
+    out, err = (_norm(os.path.join(where, f)) for f in ("out.log", "err.log"))
+    return {"husk_log": 1, "husk_stdout": out, "husk_stderr": err}, [err, out]
 
 
 # -- Copernicus images (review 18) ----------------------------------------------------
@@ -1263,6 +1299,7 @@ def _prepare_render(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
         "note": note,
         "range_note": range_note,
         "isolate": needs_isolation(rop, ctx),
+        "husk": renders_through_husk(rop),
         "stage_source": rop.parm("opsource") is not None and rop.parm("opsource").eval() == 1,
         "hfs": hou.text.expandString("$HFS"),
         # A COP image needs no lights (review 18 papercut 7).
@@ -1369,12 +1406,28 @@ def _render_job(plan: dict[str, Any], ctx: HostContext, thumbnail: bool) -> Any:
 
     frame_list = plan["frame_list"]
 
+    def child_parms(tmp_dir: str, logs: list[str]) -> dict[str, Any]:
+        """Main thread: the parms the child sets on its copy of the ROP; for a ROP that
+        renders through husk, foreground rendering and husk logs to read on failure."""
+        parms = {plan["parm"]: plan["output"]} if plan["output"] is not None else {}
+        parms.update(plan.get("camera_parms") or {})
+        node = hou.node(plan["rop"])
+        if node is not None and plan.get("husk"):
+            foreground = node.parm("soho_foreground")
+            if foreground is not None and not foreground.eval():
+                parms["soho_foreground"] = 1
+            if plan.get("usd"):
+                extra, files = husk_logs(node, lambda: tmp_dir)
+                parms.update(extra)
+                logs.extend(files)
+        return parms
+
     def run_isolated(job: Any) -> dict[str, Any]:
         tmp_dir = tempfile.mkdtemp(prefix="hp-render-")
+        logs: list[str] = []
         try:
             snapshot = job.run_main(lambda: snapshot_scene(tmp_dir))
-            parms = {plan["parm"]: plan["output"]} if plan["output"] is not None else {}
-            parms.update(plan.get("camera_parms") or {})
+            parms = job.run_main(lambda: child_parms(tmp_dir, logs))
             child = ChildRender(
                 snapshot,
                 tmp_dir,
@@ -1409,7 +1462,12 @@ def _render_job(plan: dict[str, Any], ctx: HostContext, thumbnail: bool) -> Any:
                 warnings = error_lines(outcome.get("warnings") or [])
                 if warnings:
                     detail["warnings"] = warnings
-                raise ToolError("cook_failed", message, detail=detail or None)
+                hint = None
+                tail = log_tail(logs)
+                if tail:
+                    detail["log_tail"] = tail
+                    hint = "husk failed; detail.log_tail has the end of its log."
+                raise ToolError("cook_failed", message, hint=hint, detail=detail or None)
             job.progress(1.0, "done")
             result = _render_result(plan, thumbnail)
             if outcome.get("notes"):
@@ -1437,15 +1495,15 @@ def _render_job(plan: dict[str, Any], ctx: HostContext, thumbnail: bool) -> Any:
             foreground = node.parm("soho_foreground")
             if foreground is not None and not foreground.eval():
                 parms["soho_foreground"] = 1
-            names = ("husk_log", "husk_stdout", "husk_stderr")
-            if plan.get("usd") and all(node.parm(n) is not None for n in names):
-                if node.parm("husk_log").eval():
-                    logs.extend(node.parm(n).eval() for n in names[1:])
-                else:
+            if plan.get("usd"):
+
+                def folder() -> str:
                     log_dir.append(tempfile.mkdtemp(prefix="hp-husk-"))
-                    out, err = (_norm(os.path.join(log_dir[0], f)) for f in ("out.log", "err.log"))
-                    parms.update(husk_log=1, husk_stdout=out, husk_stderr=err)
-                    logs.extend((err, out))
+                    return log_dir[0]
+
+                extra, files = husk_logs(node, folder)
+                parms.update(extra)
+                logs.extend(files)
             return parms
 
         def apply_override() -> None:
