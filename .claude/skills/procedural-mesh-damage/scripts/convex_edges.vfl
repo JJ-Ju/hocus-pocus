@@ -1,0 +1,27 @@
+// convex_edges.vfl: Attribute Wrangle, Run Over: Detail. Input 0: the clean closed piece.
+// Replaces it with one polyline per convex edge, for distance masks (xyzdist from points or
+// voxels) and for placing edge decals. Unlike an edge-angle group, it tells convex from
+// concave edges.
+//
+// Spare parm: min_angle float, minimum dihedral angle in degrees, e.g. 30.
+
+float min_angle = chf("min_angle");
+int nprims_in = nprimitives(0);
+for (int he = 0; he < nvertices(0); he++) {
+    if (!hedge_isprimary(0, he)) continue;
+    int pa = hedge_prim(0, he);
+    int pb = hedge_prim(0, hedge_nextequiv(0, he));
+    if (pa == pb || pb < 0) continue;
+    vector na = prim_normal(0, pa, {0.5, 0.5, 0});
+    vector nb = prim_normal(0, pb, {0.5, 0.5, 0});
+    vector ca = prim(0, "P", pa);
+    vector cb = prim(0, "P", pb);
+    if (dot(na, cb - ca) >= 0) continue;
+    if (degrees(acos(clamp(dot(na, nb), -1.0, 1.0))) < min_angle) continue;
+    vector A = point(0, "P", hedge_srcpoint(0, he));
+    vector B = point(0, "P", hedge_dstpoint(0, he));
+    int a = addpoint(0, A);
+    int b = addpoint(0, B);
+    addprim(0, "polyline", a, b);
+}
+for (int pr = nprims_in - 1; pr >= 0; pr--) removeprim(0, pr, 1);

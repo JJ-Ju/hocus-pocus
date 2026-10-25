@@ -1,0 +1,84 @@
+// damage_validate.vfl: Attribute Wrangle, Run Over: Detail, on the damaged result.
+// Input 1 (optional): the clean piece before damage, to compare against.
+// Writes detail attributes an agent reads with
+//   inspect {what: "geo", target: <this node>, attributes: "full"}
+// and fails loudly instead of trusting a picture:
+//   i@open_edges, i@nonmanifold_edges   must be 0 for a closed solid
+//   i@triangles, i@triangles_before     triangles of the result and of input 1
+//   i@unchanged                         1 when the result has the same triangle count and
+//                                       bounding box as input 1: the damage did nothing
+//                                       (packed cutters, a mask of 0, an empty boolean)
+//   i@zero_uv_prims                     prims whose vertex uv are all (0,0): cut faces
+//                                       left unmapped by a Boolean
+//   f@bbox_shrink                       largest per-axis loss of bounding size (m)
+//
+//   i@seam_points_before, i@seam_points_after
+//                                       points lying on the seam faces (the bounding faces
+//                                       of input 1 on seam_axis) before and after; they
+//                                       must match for a piece that tiles with a clean
+//                                       neighbour. The VDB route re-meshes everything, so
+//                                       there only the seam profile, not the count, can
+//                                       be kept: keep the ends out of the VDB or check the
+//                                       profile against the neighbour.
+//   i@seam_changed                      1 when the two counts differ
+//
+// Spare parms: seam_axis vector (e.g. {1,0,0}), seam_tol float (on-face tolerance, e.g.
+// 1e-4).
+
+int open_e = 0, nonman = 0;
+for (int he = 0; he < nvertices(0); he++) {
+    if (!hedge_isprimary(0, he)) continue;
+    int c = hedge_equivcount(0, he);
+    if (c == 1) open_e++;
+    else if (c > 2) nonman++;
+}
+i@open_edges = open_e;
+i@nonmanifold_edges = nonman;
+
+int tris = 0;
+for (int p = 0; p < nprimitives(0); p++) tris += max(0, primvertexcount(0, p) - 2);
+i@triangles = tris;
+
+int zero_uv = 0;
+if (hasvertexattrib(0, "uv")) {
+    for (int p = 0; p < nprimitives(0); p++) {
+        int all_zero = 1;
+        int vtx[] = primvertices(0, p);
+        foreach (int v; vtx) {
+            vector uv = vertex(0, "uv", v);
+            if (abs(uv.x) > 1e-6 || abs(uv.y) > 1e-6) { all_zero = 0; break; }
+        }
+        zero_uv += all_zero;
+    }
+}
+i@zero_uv_prims = zero_uv;
+
+vector amin, amax, bmin, bmax;
+getbbox(0, amin, amax);
+if (npoints(1) > 0) {
+    getbbox(1, bmin, bmax);
+    int tris_b = 0;
+    for (int p = 0; p < nprimitives(1); p++) tris_b += max(0, primvertexcount(1, p) - 2);
+    i@triangles_before = tris_b;
+    vector shrink = (bmax - bmin) - (amax - amin);
+    f@bbox_shrink = max(shrink.x, max(shrink.y, shrink.z));
+    i@unchanged = (tris_b == tris && length(shrink) < 1e-6) ? 1 : 0;
+
+    vector seam_axis = chv("seam_axis");
+    float tol = chf("seam_tol");
+    int before = 0, after = 0;
+    for (int ax = 0; ax < 3; ax++) {
+        if (getcomp(seam_axis, ax) < 0.5) continue;
+        for (int pt = 0; pt < npoints(1); pt++) {
+            float c = getcomp(vector(point(1, "P", pt)), ax);
+            if (abs(c - getcomp(bmin, ax)) < tol || abs(c - getcomp(bmax, ax)) < tol) before++;
+        }
+        for (int pt = 0; pt < npoints(0); pt++) {
+            float c = getcomp(vector(point(0, "P", pt)), ax);
+            if (abs(c - getcomp(bmin, ax)) < tol || abs(c - getcomp(bmax, ax)) < tol) after++;
+        }
+    }
+    i@seam_points_before = before;
+    i@seam_points_after = after;
+    i@seam_changed = before != after;
+}

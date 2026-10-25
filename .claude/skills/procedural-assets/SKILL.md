@@ -1,236 +1,255 @@
 ---
 name: procedural-assets
-description: Build procedural generators and modular game assets in Houdini through the HocusPocus MCP tools the way AAA technical artists do — metrics and a layout plan first, greyboxed kit pieces stress-tested in place, then detail, instancing, trim-sheet surfacing, water-driven weathering, LODs, collision, export and a validated HDA. Use when asked to make a procedural building, city, prop or environment generator, a modular kit, a game-ready HDA tool, or to texture and weather a procedural asset.
+description: Build procedural generators and modular game assets in Houdini through the HocusPocus MCP tools the way AAA kit and technical artists do — a fixed metrics contract, a quick functional skeleton, then quality built recursively from the smallest pieces up (golden piece, golden bay, then floor, facade, building, block), each level taken through its own blockout, refine and detail pass and judged at its own viewing distance, with instancing, surfacing, damage, LODs, collision, export and a validated HDA. Use when asked to make a procedural building, city, prop or environment generator, a modular kit, or a game-ready HDA tool.
 ---
 
-# Procedural assets the way technical artists build them
+# Procedural assets the way kit and technical artists build them
 
-This skill is the working method for building a procedural generator or a modular game asset
-with HocusPocus. It distils how AAA environment and technical artists work: Bethesda's kit
-process, Epic's City Sample, Embark's THE FINALS buildings, Insomniac's trims and
-Manhattan, SideFX Labs. It adds the lessons from agents who built skyscraper generators with
-these tools.
+The working method for a procedural generator or a modular kit, built with HocusPocus. It
+distils how AAA environment and technical artists work (Bethesda's kits, Epic's City Sample,
+Embark's THE FINALS buildings, Insomniac's trims, SideFX Labs, visual targets and beauty
+corners) and what agents learned building skyscraper and housing-block generators with these
+tools.
 
-## The one idea to hold on to
+Two companion skills do the deep work at piece level:
+- **`procedural-mesh-damage`:** edge wear, chips, cracks and breaks in the geometry.
+- **`procedural-materials`:** detailed materials, trim sheets, atlases and textures.
 
-**Professionals do not detail modular pieces first and arrange them later.** They work
-coarse to fine:
+## The idea: quality is built recursively, from the smallest piece up
 
-1. Fix the **metrics**.
-2. Generate a **layout plan**.
-3. Prove the plan with **grey boxes**.
-4. Detail the **most-used pieces**.
-5. Surface and weather **last**.
+A building is a hierarchy of levels. A generator's quality is the quality of each level, and a
+level cannot be better than the pieces it is made of.
 
-Detailing first means scale and proportion problems surface after the expensive work. Every
-studio source treats that as the classic junior mistake.
+| Level | Example | Judged at |
+|---|---|---|
+| L1 piece | window frame, wall panel, sill, railing, AC unit | arm's length |
+| L2 module, bay | one window bay: panel + window + sill + trims + props | street level, 5–15 m |
+| L3 floor, facade | a facade face: bays, corners, bands, transitions | across the street, 30–60 m |
+| L4 building | massing, base, crown, silhouette | a block away, 100–300 m |
+| L5 block, city | many buildings, variation, skyline | skyline distance |
 
-Studios do spend real effort on module quality. They do it once the grid, footprints and
-pivots are locked and the pieces are proven in place.
+Every level gets the same three passes before you move up:
+
+1. **Blockout.** Proportion and arrangement with simple shapes.
+2. **Refine.** Forms, joins, transitions, the edge treatment.
+3. **Detail.** The breakup that belongs to that scale, then surface and review at that
+   level's distance.
+
+Start at L1 with the most-used piece and take it to final quality. Assemble finished pieces
+into one finished bay, and take the bay through its own three passes. Then go up a level.
+
+Two things come before that, and both are short:
+
+- **The contract.** Metrics, grid, pivots, openings and joins. These are what let pieces made
+  one at a time fit together. They are interfaces, not a reason to delay quality.
+- **A functional skeleton.** Boxes at every level, placed by the generator, to prove the
+  contract works. Keep it to an hour of work; it is a test, not a phase to polish.
+
+Studios work this way:
+- **Bethesda** finishes one piece completely before its variants.
+- **Teams build a beauty corner or visual target early**, a small fully finished section that
+  sets the bar.
+- **Every level gets its own breakup pass:** piece variants, bay dressing, facade rhythm,
+  building silhouette, block variety.
+
+The failure this avoids: detailing late and shallowly, so every level is "fine" and nothing is
+good.
 
 ## Workflow
 
-Work through the phases in order. Each ends with a **gate**: checks you run and look at
-before moving on. Save the hip at every gate.
+Each phase ends with a **gate**: checks you run and images you look at before moving on. Save
+the hip and the gate images at every gate.
 
-### 0. Brief and reference
+### 0. Brief, reference, de-risk
 
-- Write down the target in a README: the platform and camera, which sets texel density and
-  budgets; the style; and which parts the player enters.
-- Gather reference before building: real buildings or concept art for proportion and
-  silhouette, plus the signature features that make the style readable at a distance.
-- Decide what is a modelled interior and what is faked with interior mapping. Real interiors
-  are built only where the player goes.
-- De-risk the unknowns before building. Spend a few calls proving anything that would force
-  a redesign late:
-  - a node or toolset you plan to rely on is installed (`search {kind: "types"}`; SideFX
-    Labs often is not);
-  - text renders in the script the style needs;
-  - materials inside the asset reach the renderer;
-  - the export format keeps what the engine needs.
-- **Gate:** a README with the brief, budgets (triangles per LOD, texture memory) and 3–6
-  signature features per style, plus the de-risk results.
+- Write the brief in a README:
+  - platform and camera, which set texel density and budgets;
+  - the style;
+  - which parts the player enters;
+  - 3–6 signature features per style that make it readable at a distance.
+- Gather reference for every level: close-ups of real details (frames, joints, fixings, wear)
+  as well as whole buildings.
+- De-risk the unknowns that would force a redesign:
+  - nodes you plan to rely on are installed (`search {kind: "types"}`; SideFX Labs often is
+    not);
+  - text renders in the script you need;
+  - materials inside an asset reach the renderer;
+  - the export keeps what the engine needs.
+- **Gate:** README with brief, budgets (triangles per piece and per LOD, texture memory),
+  signature features, de-risk results.
 
-### 1. Metrics
+### 1. The contract
 
-- Work in metres on a coarse grid: 0.5 m minimum snap, 1 m preferred.
-- Fix these and write them in the README:
-  - floor-to-floor height;
-  - bay width;
-  - door and window openings;
-  - wall and slab thickness;
-  - one pivot convention for every piece;
-  - the piece names (`wall_mid_01`, `window_bay_01`, `corner_out_01`, …).
-- Never change these later without rebuilding everything placed on them.
-- **Gate:** a metrics table in the README. See [references/metrics-and-kits.md](references/metrics-and-kits.md).
+- Metres on a coarse grid: 0.5 m snap, 1 m preferred.
+- Fix and write down:
+  - floor-to-floor height, bay width, door and window openings, wall and slab thickness;
+  - one pivot convention, and the footprint each piece must stay inside;
+  - joins: how pieces meet (butt, overlap behind a trim, a connector piece) and which faces
+    are seams that must stay clean;
+  - piece names (`wall_mid_01`, `window_bay_01`, `corner_out_01`, …) and the level each piece
+    belongs to.
+- **Gate:** a metrics table and a piece list by level. See
+  [references/metrics-and-kits.md](references/metrics-and-kits.md).
 
-### 2. Plan (layout before geometry)
+### 2. Functional skeleton (short)
 
-- Decompose top-down: footprint, massing volumes or tiers, floors, facade faces, bays, a
-  role per bay.
-- Emit points that carry the plan: `role`, `name` (the piece), `floor`, `side`, `style`,
-  `variant`, an orientation frame, `scale` and a stable `id`.
-- Use split-grammar logic: fixed bays, floating fill so spans close exactly, corners placed
-  explicitly, ground and top floors as special cases.
-- Preview the plan as coloured points or boxes.
-- **Gate:** for the default and two extreme parameter sets, roles per floor are right, no
-  gaps, nothing outside the footprint. Measure with `inspect {what: "geo", group_by: "role"}`
-  and `look`. See [references/generator-architecture.md](references/generator-architecture.md).
+- The plan stage of the generator: footprint, then tiers, floors, facade faces, bays. Points
+  carry `role`, `name`, `floor`, `side`, `style`, `variant`, an orientation frame, `scale` and
+  a stable `id`. See [references/generator-architecture.md](references/generator-architecture.md).
+- Every L1 piece as a box at its exact footprint and pivot, placed by Copy to Points.
+- Stress-test the cases where kits break: odd widths, inner and outer corners, setbacks,
+  minimum and maximum floors, style transitions. Add fill pieces rather than patch pieces.
+- **Gate:** a contact sheet of the default and the extremes. Pieces meet with no gaps and no
+  overlaps, and roles per floor are right (`inspect geo group_by: "name"`). Then move on.
 
-### 3. Greybox kit and stress test
+### 3. Golden piece (L1, most-used piece, to final quality)
 
-- Make every piece as a box at its exact footprint and pivot. Place them with Copy to Points
-  from the plan.
-- Stress-test the cases where kits break:
-  - odd widths, inner and outer corners;
-  - setbacks, tall and short volumes;
-  - style transitions, minimum and maximum floors.
-- Add fill pieces (0.25, 0.5, 0.75 m) rather than patch pieces.
-- **Gate:** a contact sheet of 6–9 seeds and extremes as greyboxes. Check that silhouettes
-  differ and read as the style at play distance, before any detail exists. This is the
-  cheapest point to fix proportion.
+Take the piece players see most, such as the window bay's frame and panel, all the way:
 
-### 4. Detail the kit: utility first, hero last
+1. **Blockout:** its silhouette and proportion against reference.
+2. **Forms:** primary (the outline), secondary (frames, recesses, sills), tertiary (seams,
+   fixings, drip edges, bolts). Use at least three distinct size classes, and keep about 70%
+   of the surface quiet so the 30% detail reads.
+3. **Edges:** one strategy per kit, applied the same way everywhere:
+   - chamfers with weighted normals (mid-poly);
+   - a baked bevel from a high poly;
+   - trim strips with 45° normal bevels.
 
-- Detail in order: the most-used pieces (wall-mid, window bay), then corners and trims, then
-  variants, then hero pieces.
-- Each piece is its own small network, viewable alone. Do not write one monolithic generator
-  wrangle.
-- Edges catch light. Use one- or two-segment chamfers with weighted normals (mid-poly), or
-  plan for 45° bevels in the trim normal map.
-- Keep each piece inside its footprint. No nearly coplanar overlaps.
-- Generate connective geometry directly: slabs, wall infill, roof planes, cores.
-- **Gate:** each piece looked at alone, plus a close-up of a facade corner. Triangles per role
-  against the budget (`group_by`).
+   Bevel width is a fixed world size per kit, for example 1 cm, and should be visible at the
+   piece's judging distance.
+4. **Damage and wear:** where the piece really gets hit. Use the `procedural-mesh-damage`
+   skill: geometry for silhouette breaks, the bake for small nicks, seams kept clean, seeded
+   per instance.
+5. **UVs and texture:** trim-sheet rows or tiling at the target texel density. Make its
+   materials with the `procedural-materials` skill.
+6. **Review in context:** next to its neighbours in the skeleton, lit, at arm's length and at
+   bay distance. Not alone in a void.
 
-### 5. Variation system
-
-- Choose from curated options, not raw noise. Pick a style, then a variant within it, with
-  weights.
-- Keep neighbours coherent: one window style per facade or floor, and coupled rules (a
-  balcony implies a door).
-- Hash randomness from the stable `id` plus a per-layer seed (silhouette, facade, detail,
-  material), never from `@ptnum`.
-- Put most variety in the detail and material layer: material swaps, damage variants, decals,
-  greebles.
-- Expose style presets and a few seeds. Keep the parameter surface small.
-- **Gate:** a 9-up variation sheet. Would a player tell these apart at distance? Watch for
-  "10,000 bowls of oatmeal": technically unique, perceptually identical.
-
-### 6. Surfacing
-
-- Set the target first: ORM packing, normal Y convention for the engine, texel density.
-- UVs:
-  - strips (cornices, sills, mullions, bands, frames) into trim-sheet rows of power-of-two
-    height;
-  - large walls and slabs with world-scale tiling UVs;
-  - a second, non-overlapping UV set for lightmaps where the engine needs it.
-- Author the trim sheet, tiling materials and atlases (decals, windows, signs) procedurally in
-  Copernicus. Keep albedo within 30–240 sRGB and metallic near binary.
-- Detail from large to small: macro value and hue shifts first, because they are all that
-  survives at distance; then meso, then micro.
 - **Gate:**
-  - a checker render to prove density and orientation;
-  - a lit render at play distance and a grayscale version, to prove the value structure;
-  - a close-up.
+  - a close-up that would pass in a portfolio crop;
+  - triangle count against budget;
+  - the piece validated: closed, UVs complete, seams unchanged.
 
-  See [references/surfacing.md](references/surfacing.md).
+  If it does not hold up at arm's length, nothing above it will.
 
-### 7. Weathering from geometry
+### 4. Golden bay (L2, the beauty corner)
 
-- Weather where water and people put it, not with uniform noise. Compute attributes in SOPs:
-  - `up` facing, for deposits;
-  - ledge and sill emitters, then streaks down the wall below them and at mullions;
-  - height above ground, for the splash band;
-  - AO and concave corners, for dirt;
-  - sun exposure, for bleaching;
-  - metal fixtures, for rust bleed.
-- Mask = geometric mask × noise breakup, then levels. Cap each layer around 60% coverage.
-- Bake mesh-intrinsic maps (normal, AO, curvature, edge, thickness) with the Bake Geometry
-  Textures COP.
-- Keep placement-dependent masks as vertex colour or per-instance data, because shared trims
-  cannot carry them.
-- **Gate:** the facade at play distance shows streaks under sills, a darker base and cleaner
-  upper corners. A close-up shows nothing repeating obviously.
+- Bring the other pieces of one bay to the golden piece's standard: panel, window, sill,
+  trims, railing, the bay's props.
+- **Blockout** the bay arrangement. **Refine** the joins: overlaps tucked behind trims,
+  connector pieces, no seams catching light. **Detail** at bay scale: cables, pipes, signage,
+  edge decals at corners, a prop cluster, and the bay's own wear story (streaks under its sill,
+  grime at its base).
+- Light it as the final scenes will be lit. This bay is the quality bar for everything else.
+- **Gate:** a lit render of the bay at street distance next to reference, and a grayscale
+  version for value structure. Write down what makes it good, and use it as the checklist for
+  every other bay.
 
-### 8. Game outputs
+### 5. Build-out (the rest of the kit)
 
-- **LODs:** LOD0, then LOD1 without interiors and small greebles, then LOD2 as a shell or
-  impostor. Re-apply weighted normals per LOD. Match albedo and value between LODs: render
-  each LOD from the same camera and compare brightness.
-- **Collision:** a convex hull per volume, thin masts kept out of the main hull, named
-  `UCX_<mesh>_NN`.
-- **Night windows:** interior mapping or an emissive atlas, with whole floors or zones lit
-  together and an occupancy parameter.
-- **Delivery:** instances for kit pieces (packed primitives). Export FBX per LOD and USD with
-  LOD variants and material bindings.
-- **Gate:** re-import each export into a fresh scene and render it with only its textures.
-  Check triangle counts, UV sets, material slots and collision names. See
+- Take the remaining L1 pieces to the golden standard, most-used first: corners, ends, ground
+  floor, roof pieces, then hero pieces.
+- Make variants as material swaps, damage seeds and combinable states, not new geometry.
+- Each new piece passes the golden-piece gate on its own.
+- **Gate:** a kit sheet with every piece lit and laid out, each at the same quality.
+
+### 6. Up the levels: facade, building, block
+
+At each level run the three passes and review at that level's distance.
+
+- **L3 floor and facade:**
+  - *Blockout:* the facade rules, i.e. bay rhythm, floating fill, ground and top floors.
+  - *Refine:* corners, bands, setback transitions, style transitions.
+  - *Detail at facade scale:* macro value and hue variation per bay or floor; weathering
+    placed by the facade's geometry (streaks below ledges, darker base, washed corners);
+    decals; per-flat variation such as curtains, lit windows and AC units.
+
+  Review across the street.
+- **L4 building:**
+  - *Blockout:* massing and tiers.
+  - *Refine:* base, crown, roofline, silhouette features.
+  - *Detail:* rooftop clutter, signage, landmarks.
+
+  Review from a block away, and squint: the silhouette alone should name the style.
+- **L5 block and city:**
+  - *Blockout:* placement and height zones.
+  - *Refine:* variety across buildings (curated styles, weighted variants, two-level choice).
+  - *Detail:* street-level dressing if in scope.
+
+  Review a 9-up variation sheet at skyline distance. Watch for "10,000 bowls of oatmeal":
+  outputs that are technically unique but look the same.
+- Randomness hashes the stable `id` plus a per-level seed, never `@ptnum`.
+- **Gate per level:** the level reads correctly at its distance, compared with the golden bay
+  for quality and with reference for style.
+
+### 7. Game outputs
+
+- LOD0, then LOD1 (no interiors, no small greebles, damage above a size cutoff only), then
+  LOD2 (a shell or impostor). Match value across LODs: render each from one camera and compare
+  brightness.
+- Collision: convex hulls per volume, with thin masts kept separate, named `UCX_<mesh>_NN`.
+- Delivery: instances for kit pieces, FBX per LOD, USD with LOD variants and material
+  bindings.
+- **Gate:** re-import into a fresh scene and render with only its own textures. Check
+  triangle counts, UV sets, material slots and collision names. See
   [references/game-output.md](references/game-output.md).
 
-### 9. Package the tool
+### 8. Package
 
-- One HDA per job, plus a thin top-level asset holding the shared parameters. Name it
-  `namespace::name::1.0`.
-- The interface: a few high-level controls, presets and seeds in tab folders, with
-  conditions that disable irrelevant parms, and help text.
-- Bump the version when output changes in a way that would surprise existing scenes.
-- Provide override inputs that survive regeneration, such as volumes or masks where rules
-  change, and hand-placed pieces re-applied after generation.
-- **Gate:** a fresh instance from the saved library cooks without errors. A toggled-off branch
-  costs nothing (`cook {profile: true}` lists it as `inactive`). The README lists parms,
-  attributes, budgets and limits.
+- One HDA per job, plus a thin top-level asset with the shared parameters.
+- Name: `namespace::name::1.0`.
+- Interface: a few high-level controls, style presets and seeds in tab folders, with
+  conditions and help.
+- Bump the version when output changes.
+- Provide override inputs that survive regeneration.
+- **Gate:** a fresh instance from the saved library cooks with no errors, toggled-off branches
+  cost nothing, and the README lists parms, attributes, budgets and limits.
 
-### 10. Final review
+### 9. Final review
 
-- Re-run the 9-up sheet with final materials.
-- Make a hero shot, a play-distance shot, a close-up, a night shot if relevant, and an
-  interior or cut-away if interiors exist. Look at every image yourself.
-- Write an honest assessment: what meets the bar, what is placeholder, what a human artist
-  should still do.
+- A close-up of the golden bay, a street view, a building view, the 9-up sheet, night if
+  windows matter, and a cut-away if interiors exist. Look at every image.
+- An honest assessment by level: which levels meet the bar, which are placeholder, and what a
+  human artist should still do.
 
 ## Rules
 
-- **Coarse to fine, always.** No detailing before the plan and greybox gates pass.
-- **Plan, then instance.** Points with attributes are the interchange format, and pieces are
-  placed by Copy to Points. Generate connective geometry outright.
-- **Small single-purpose stages.** Edit one stage without re-cooking or rewriting the others.
-- **Determinism.** The same seed and parms give the same result. Randomness hashes a stable
-  `id`.
-- **Designed variation.** Curated styles and weighted variants; variety lives mostly in
-  detail and materials.
-- **Water-driven weathering**, macro value first, grayscale check before colour.
-- **Measure, do not assume.** Budgets per role, cost of toggles, texel density, LOD value
-  match.
-- **Look often.** A cheap draft `look` after every structural change. Final renders at the
-  gates, saved to files at once, read back and judged.
-- **Test night and glass early** when windows matter: opaque glass hides interiors and lit
-  rooms, and it only shows at night.
+- **Contract first, then quality from the bottom up.** Pieces made one at a time fit because
+  the contract fixed how they meet.
+- **Every level gets blockout, refine and detail**, and is judged at its own distance before
+  the next level starts.
+- **The golden bay is the bar.** Every other bay and level is compared with it.
+- **Plan, then instance.** Points with attributes are the plan, and pieces are placed by Copy
+  to Points. Generate only the connective geometry outright.
+- **Small single-purpose stages.** Each piece is its own network; no monolithic generator
+  wrangle.
+- **Determinism and designed variation.** Seeded by stable ids; curated styles and weighted
+  variants; most variety in materials, damage and dressing.
+- **Measure, do not assume.** Triangles per piece and per level, validation numbers, texel
+  density, LOD value match.
+- **Look often and in context.** A draft `look` after each structural change. Final renders
+  at the gates, saved to files at once, read back and judged against reference.
+- **Test night and glass early** when windows matter.
 
 ## Using HocusPocus for this
 
 [references/hocuspocus-recipes.md](references/hocuspocus-recipes.md) has the concrete calls:
-- building whole stages in one `edit` with `$id`, `dry_run` and `partial: "stop"`;
+- whole stages in one `edit` with `$id`, `dry_run` and `partial: "stop"`;
 - long VEX through `value_file` and `patch`;
-- spare parms with folders and conditions;
-- `hda` create, save, version and info;
+- spare parms with folders and conditions, and `hda` create, save, version and info;
 - `look` at a SOP alone, and final evidence with `output`, `jpeg_quality` and `wait_s`;
-- per-role QA with `inspect geo group_by`;
-- `cook profile` and `force: "chain"`;
-- MaterialX materials with the `material` flag;
-- Karma lighting and glass for checks and evidence;
-- what is usually installed, and the VEX and Copy to Points traps;
-- the traps earlier agents hit.
+- per-role QA with `inspect geo group_by`, and `cook profile` and `force: "chain"`;
+- MaterialX materials with the `material` flag, and Karma lighting and glass;
+- what is usually installed, plus the VEX and Copy to Points traps.
 
-When an argument shape is uncertain, read `inspect {what: "tool", target: "<tool>"}` rather
-than guessing.
+When an argument shape is uncertain, read `inspect {what: "tool", target: "<tool>"}`.
 
 ## Reference files
 
 | File | Read it for |
 |---|---|
-| [references/metrics-and-kits.md](references/metrics-and-kits.md) | Order of work, grid and metrics, piece taxonomy, pivots, repetition, edges, texel density, interiors, common mistakes |
-| [references/generator-architecture.md](references/generator-architecture.md) | Top-down decomposition, plan-then-instance, grammars vs kits vs WFC, HDA structure, seeds, overrides, performance, validation |
-| [references/surfacing.md](references/surfacing.md) | PBR targets, trims and tiling, macro/meso/micro, layer order, weathering physics, baking in Copernicus, windows, stylised anime looks |
-| [references/game-output.md](references/game-output.md) | Instances, LODs, impostors, collision naming, lightmap UVs, engine attributes, export and proof |
-| [references/hocuspocus-recipes.md](references/hocuspocus-recipes.md) | The tool calls for each phase and the traps |
+| [references/metrics-and-kits.md](references/metrics-and-kits.md) | Contract, grid, taxonomy, pivots, joins, repetition, edges, texel density, beauty corners, quality targets, mistakes |
+| [references/generator-architecture.md](references/generator-architecture.md) | Decomposition, plan-then-instance, grammars vs kits vs WFC, HDA structure, seeds, overrides, performance, validation |
+| [references/surfacing.md](references/surfacing.md) | Asset-level surfacing strategy: trims vs tiling, macro value, where weathering goes, windows, stylised looks |
+| [references/game-output.md](references/game-output.md) | Instances, LODs, impostors, collision naming, lightmap UVs, engine attributes, export |
+| [references/hocuspocus-recipes.md](references/hocuspocus-recipes.md) | Tool calls for each phase, and the traps |

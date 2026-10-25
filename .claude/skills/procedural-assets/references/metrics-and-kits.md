@@ -4,29 +4,49 @@ How AAA environment teams design the pieces a building generator places. Sources
 at the end; where a number is community practice rather than a studio's published figure, it
 says so.
 
-## The order of work is layout first, detail last
+## The order of work: contract, skeleton, then quality from the smallest piece up
 
-No studio source recommends detailing modular pieces first and arranging them later. That is
-the classic junior mistake: scale and proportion problems surface after the expensive work
-is done, and finished pieces have to be rebuilt.
+What studios describe:
 
-What studios describe instead:
+- **Bethesda (Skyrim, Fallout 4)** runs kits through phases:
+  - concept;
+  - proof: placeholder pieces with no mesh detail, to test proportions, footprints and naming;
+  - graybox: "functional but ugly" pieces so designers can lay out levels;
+  - build-out: finish one piece completely, then make its variants;
+  - polish.
 
-- **Bethesda (Skyrim, Fallout 4)** runs kits through phases: concept, proof (placeholder
-  pieces with no mesh detail, to test proportions, footprints and naming), graybox
-  ("functional but ugly" versions of the most-used pieces so designers can lay out levels),
-  build-out (finish one piece completely, then make its variants), polish. Priority is
-  utility pieces, then variants, then showpiece decor.
-- **Rockstar (GTA V)** spent most of a year on a blocked-in map before buildings were made.
-- **Insomniac (Spider-Man)** started from a designer greybox of Manhattan; swinging
-  distances set building spacing and heights.
-- **CD Projekt (Night City)**: references, then big shapes per district; for quest spaces,
-  greybox, draft lighting, final environment, dressing, decals, polish.
-- **Epic City Sample**: city outline, roads, zones, lots, building volumes, and only then a
-  shape grammar dresses each volume with kit pieces.
+  Footprints, pivots and transition metrics are locked early, because changing them later
+  breaks every layout built on them.
+- **Visual targets and beauty corners:** a small section taken to final quality early, with
+  every layer stacked (kit pieces, materials, decals, props, lighting), to set the bar and
+  expose cost. Medal of Honor: Airborne called it a visual target; 11 bit studios built a
+  beauty corner for The Alters DLC before the modular kit existed.
+- **Each level gets its own breakup:** piece variants (Fallout 4's combinable wall damage),
+  bay dressing (Sumo Digital's pre-built window and door assemblies), kit mixing and off-grid
+  joins at building scale, clutter and decals at scene scale.
+- **Procedural generators** (Embark's THE FINALS, Epic's City Sample) place artist-quality
+  modules. The generator's output is only as good as the modules.
 
-Change pivots, footprints and metrics early or never. Bethesda had to fix hundreds of placed
-instances by hand after one pivot moved.
+The synthesis this skill uses:
+
+1. **Contract first, briefly.** Metrics, pivots, footprints and joins are interfaces between
+   levels.
+2. **A functional skeleton.** Boxes at every level, to prove the contract. It is a test, not
+   a phase.
+3. **Quality bottom-up.** One golden piece, then a golden bay (the beauty corner), then the
+   rest of the kit to that standard. Then each level up gets its own blockout, refine and
+   detail pass, judged at its own distance.
+
+**Quality targets:**
+- At least three distinct size classes of form (primary, secondary, tertiary).
+- About 70% quiet surface to 30% detail; the point is contrast, not the exact ratio.
+- One bevel width per kit in world units (for example 1 cm). At 512 px/m that is about
+  5 texels, at 1024 px/m about 10.
+- A feature must cover several pixels at its farthest important distance, or it moves to the
+  normal map or texture.
+- Per-piece triangles vary widely. About 2,000 per modular piece was a last-gen guideline;
+  current kits average around 1,500 per mesh with LODs; mid-poly hero props reach about 50k.
+  Measure against your own budget table.
 
 ## Metrics: fix the grid before modelling anything
 
@@ -109,7 +129,8 @@ nobody planned it.
 
 ## Mistakes seniors avoid
 
-1. Detailing before a blockout is in place and lit.
+1. Detailing before the contract and skeleton exist, or detailing only shallowly and late so no
+   level ever reaches quality.
 2. Sub-kit sizes that are not multiples of each other, tiny snaps, overhanging footprints.
 3. Changing pivots or metrics late.
 4. Testing only ideal arrangements.
@@ -135,3 +156,9 @@ nobody planned it.
 - Interior mapping: https://80.lv/articles/interior-mapping-rendering-real-rooms-without-geometry
 - Metric snaps and fill pieces (community): https://polycount.com/discussion/238299/building-modular-interiors-question
 - Texel density tiers (community): https://www.strayspark.studio/blog/texture-resolution-guide-games-512-1k-2k-4k
+- Visual target, Medal of Honor: Airborne: https://www.slideshare.net/slideshow/moh-airborne-adprocess/33254852
+- Beauty corner, The Alters DLC: https://80.lv/articles/terraforming-the-alters-last-variable-with-blender-zbrush-ue5
+- Breaking down repetition (Sumo Digital): https://80.lv/articles/breaking-down-repetition-in-epic-3d-spaces/
+- Sci-fi modular environment (Starbreeze): https://80.lv/articles/making-a-high-quality-sci-fi-modular-environment
+- Level Design Book, modular kits and environment art: https://book.leveldesignbook.com/process/blockout/metrics/modular and https://book.leveldesignbook.com/process/env-art
+- Neil Blevins, primary, secondary and tertiary shapes: https://steveyang.readthedocs.io/Modeling/123/
