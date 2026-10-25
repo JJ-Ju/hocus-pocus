@@ -13,6 +13,7 @@ from hocuspocus.tools.errors import ToolError
 from hocuspocus.tools.migration import hint_tool
 
 from ..tools.geo import num
+from ..tools.readers import stale_file_notes
 from ..tools.registry import HostContext
 from .base import INTERNAL_KEY, Backend, Env, LookResult, failure, mark_internal, on_main
 
@@ -123,6 +124,8 @@ def render_cop(
             hint=f"{hint_tool('geo_info', path=node.path())} reads it; capture an image node "
             "instead.",
         )
+    # D80: a File COP keeps the image it loaded after its file is overwritten.
+    stale = stale_file_notes(node, frame)
     errors: list[str] = []
     with hou.undos.disabler(), muted():
         rop = node.parent().createNode("rop_image", "__hocuspocus_capture__")
@@ -155,7 +158,7 @@ def render_cop(
     }
     if "other_outputs" in layer:
         info["layer"]["other_outputs"] = [o["name"] for o in layer["other_outputs"]]
-    notes = []
+    notes = list(stale)
     if resolution_given:
         notes.append("resolution is ignored with cop_path: the image is the COP's own size.")
     if notes:

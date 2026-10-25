@@ -58,6 +58,63 @@ def test_look_at_a_cop_node_returns_the_image_and_leaves_nothing(client, copnet)
     assert not [e for e in events if e["path"].startswith(copnet.path())], events
 
 
+def _write_png(path, rgb, size=8) -> None:
+    """A tiny opaque RGB PNG (stdlib only)."""
+    import struct
+    import zlib
+
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        body = kind + data
+        return struct.pack(">I", len(data)) + body + struct.pack(">I", zlib.crc32(body))
+
+    raw = b"".join(b"\x00" + bytes(rgb) * size for _ in range(size))
+    header = struct.pack(">IIBBBBB", size, size, 8, 2, 0, 0, 0)
+    data = b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header) + chunk(b"IDAT", zlib.compress(raw))
+    with open(path, "wb") as f:
+        f.write(data + chunk(b"IEND", b""))
+
+
+def _red(node) -> float:
+    return round(node.layer(0).computeAverage(0), 3)
+
+
+def test_forced_cook_reloads_a_file_cop_and_look_notes_a_stale_one(client, work_dir):
+    """D80 (r21 friction 3): after its PNG was overwritten at the same path, a File COP
+    served the old image through cook {force: true} and three look {output} calls."""
+    png = _fwd(work_dir / "plate.png")
+    _write_png(png, (255, 0, 0))
+    net = hou.node("/img").createNode("copnet", "plates")
+    reader = net.createNode("file", "plate")
+    reader.parm("filename").set(png)
+    reader.parm("addaovs").pressButton()
+    first = client.ok("cook", {"paths": [reader.path()]})
+    assert "reloaded" not in first["results"][0] and _red(reader) == 1.0
+    _write_png(png, (0, 0, 255))
+    later = time.time() + 5
+    os.utime(png, (later, later))  # newer than the load, without sleeping
+    reader.cook(force=True)
+    assert _red(reader) == 1.0  # Houdini's forced cook keeps the old image ...
+    forced = client.ok("cook", {"paths": [reader.path()], "force": True})["results"][0]
+    assert forced["reloaded"] is True and _red(reader) == 0.0  # ... cook presses Reload
+    _write_png(png, (255, 0, 0))
+    later += 5
+    os.utime(png, (later, later))
+    stale = client.ok("look", {"target": reader.path()})
+    (note,) = [n for n in stale.get("notes", []) if "older copy" in n]
+    assert reader.path() in note and png in note and "force: true" in note, note
+    reloaded = client.ok("cook", {"paths": [reader.path()], "force": True})["results"][0]
+    assert reloaded["reloaded"] is True and _red(reader) == 1.0
+    fresh = client.ok("look", {"target": reader.path()})
+    assert not [n for n in fresh.get("notes", []) if "older copy" in n], fresh
+    # A node downstream of the reader is noted too.
+    blur = net.createNode("blur", "soft")
+    blur.setInput(0, reader)
+    later += 5
+    os.utime(png, (later, later))
+    downstream = client.ok("look", {"target": blur.path()})
+    assert any(reader.path() in n for n in downstream.get("notes", [])), downstream
+
+
 def test_look_cop_errors_point_at_the_cop_target(client, copnet):
     """A Cop node passed as the camera, or with a camera, names target."""
     comp = f"{copnet.path()}/comp"

@@ -30,7 +30,10 @@ SPEC = ToolSpec(
         "rows. Past wait_s returns job_id for job."
     ),
     notes=(
-        "cook_time_ms is the node's own cook; cached inputs are not recooked. Cooking a ROP or "
+        "cook_time_ms is the node's own cook; cached inputs are not recooked. force (2.1) "
+        "first presses a node's own reload button (File COP and SOP, Alembic, Sublayer and "
+        "other readers; a forced cook alone leaves a File COP's old image), and the row says "
+        "reloaded: true. Cooking a ROP or "
         "a File Cache writes nothing, and notes say how to write (render, or parm_set press "
         "on its execute button). "
         "frame_range is [start, end, step] and cannot be combined with profile or frame; the "

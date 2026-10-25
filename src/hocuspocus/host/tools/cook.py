@@ -32,6 +32,7 @@ from ._diag import (
     timed_cook,
     upstream_first,
 )
+from .readers import press_reload
 from .registry import HostContext, tool
 
 JOB_STEP_TIMEOUT_S = 24 * 3600.0
@@ -84,12 +85,16 @@ def cook_node(path: str, *, force: bool, frame: float | None) -> dict[str, Any]:
     if switch:
         hou.setFrame(frame)
     try:
+        # D80: a forced cook does not reload a File COP's image; its own button does.
+        reloaded = force and press_reload(node)
         report = collect_problems(node, cook=True, force=force)
     finally:
         if switch:
             hou.setFrame(previous)
     row: dict[str, Any] = {"path": node.path(), "ok": not report["errors"]}
     row.update(report)
+    if reloaded:
+        row["reloaded"] = True
     if report["cook_state"] == "error":
         row["ok"] = False
     if force and "hint" not in row and report.get("cook_time_ms", 1.0) < 1.0 and _has_inputs(node):
