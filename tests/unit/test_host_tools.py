@@ -422,6 +422,7 @@ def test_render_outputs_listing_samples_long_sequences():
     assert "outputs" not in many
     assert many["outputs_sample"] == [paths[0], paths[1], paths[38], paths[39]]
     assert many["outputs_summary"]["count"] == 40
+    assert not {"first", "last"} & set(many["outputs_summary"])  # the sample's ends (D67)
     assert many["outputs_summary"]["missing_count"] == 8
     assert many["missing"] == paths[40:]
     none = outputs_listing([], paths)

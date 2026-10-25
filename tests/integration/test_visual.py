@@ -549,8 +549,7 @@ def test_render_over_five_outputs_returns_a_summary(client, work_dir):
     assert "outputs" not in result and "hint" not in result
     summary = result["outputs_summary"]
     assert summary["count"] == 8 and summary["missing_count"] == 0
-    assert summary["first"] == _fwd(work_dir / "s.0001.bgeo.sc")
-    assert summary["last"] == _fwd(work_dir / "s.0008.bgeo.sc")
+    assert "first" not in summary and "last" not in summary  # the sample's ends (2.1, D67)
     assert summary["pattern"] == _fwd(work_dir / "s.####.bgeo.sc")
     assert result["outputs_sample"] == [_fwd(work_dir / f"s.{i:04d}.bgeo.sc") for i in (1, 2, 7, 8)]
     assert all(isinstance(f, int) for f in result["frames"]), result["frames"]
