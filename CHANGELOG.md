@@ -191,6 +191,14 @@ one for the 2.0.x releases, and 2.1 removes it.
   that never registered (13 launches in a row through the fixture, `hocuspocus launch`,
   hard kills and two at once all registered in 10-21 s); the next one says which case it
   is.
+- **A locked asset defined in the hip file draws in a headless look** (D61). The snapshot
+  the render process loads (`saveChildrenToFile`) holds only a stub of an `Embedded`
+  definition, without its contents, so a locked instance had no nodes inside and the
+  headless look drew nothing (2.0 too; 2.1's shipped geometry hid it for a locked SOP
+  asset, not for an object-level asset). The host now copies the hip's embedded
+  definitions into one library file the child installs, rewritten only when a definition
+  changes so the kept child stays warm. The GUI was not affected (it renders the live
+  scene).
 
 ## 2.0.0 (2026-10-14)
 

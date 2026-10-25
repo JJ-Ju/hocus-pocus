@@ -354,6 +354,56 @@ def ship_geometry(
     return shipped, list(shipped)
 
 
+_embedded_lib: dict[str, Any] = {"signature": None, "path": None, "dir": None}
+"""The library file :func:`embedded_library` last wrote, and what it holds."""
+
+
+def embedded_library() -> str | None:
+    """The definitions embedded in the hip file (library ``Embedded``), copied into one
+    library file for the child to install, or ``None`` when there are none (D61).
+
+    ``saveChildrenToFile`` writes an embedded definition as a stub (its ``DialogScript``
+    and a 61-byte ``Contents``, measured on 22.0.466), so a locked instance loaded from
+    the snapshot has no nodes inside and drew nothing. The file is rewritten only when a
+    definition changed (by type and modification time), so its path and mtime stay the same
+    across looks and the kept capture child stays warm (:func:`flipbook.warm_key`). The
+    hip file and the definitions are untouched. Main thread."""
+    import tempfile
+
+    import hou
+
+    try:
+        # Only the definitions the scene uses (one a library file overrides stays there).
+        definitions = [d for d in hou.hda.definitionsInFile("Embedded") if d.isCurrent()]
+    except hou.OperationFailed:
+        definitions = []
+    if not definitions:
+        return None
+
+    def stamp(d: Any) -> tuple[Any, ...]:
+        # The modification time has a one-second grain; the sections' sizes catch a second
+        # save within it.
+        sizes = tuple(sorted((name, s.size()) for name, s in d.sections().items()))
+        return (d.nodeTypeCategory().name(), d.nodeTypeName(), d.modificationTime(), sizes)
+
+    signature = tuple(sorted(stamp(d) for d in definitions))
+    cached = _embedded_lib["path"]
+    if signature == _embedded_lib["signature"] and cached and os.path.isfile(cached):
+        return cached
+    folder = _embedded_lib["dir"]
+    if not folder or not os.path.isdir(folder):
+        folder = _embedded_lib["dir"] = tempfile.mkdtemp(prefix="hp-embedded-")
+    # A new name per change: a kept child that installed the old file is replaced (the
+    # warm key holds the path), and Houdini never re-reads a file it has open.
+    path = _norm(
+        os.path.join(folder, f"embedded{len(os.listdir(folder))}{hou.hda.defaultFileExtension()}")
+    )
+    for definition in definitions:
+        definition.copyToHDAFile(path)
+    _embedded_lib.update(signature=signature, path=path)
+    return path
+
+
 def snapshot_scene(
     tmp_dir: str, *, frame: float | None = None, isolate: dict[str, Any] | None = None
 ) -> dict[str, Any]:
@@ -379,6 +429,17 @@ def snapshot_scene(
         if os.path.normcase(os.path.abspath(lib)).startswith(hfs):
             continue
         hdas.append(lib)
+    notes = []
+    try:
+        embedded = embedded_library()
+    except Exception as exc:  # the stubs still load: unlocked instances draw as before
+        embedded = None
+        notes.append(
+            "Assets whose definitions are embedded in the hip file could not be copied for "
+            f"the render process ({type(exc).__name__}: {exc}); locked ones may draw empty."
+        )
+    if embedded:
+        hdas.append(embedded)  # after the libraries, before the snapshot loads its stubs
     start, end = hou.playbar.frameRange()
     hscript_vars = []
     for line in hou.hscript("set -s")[0].splitlines():
@@ -389,7 +450,6 @@ def snapshot_scene(
     cooked: list[str] = []
     if frame is not None:
         geometry, cooked = ship_geometry(tmp_dir, frame, isolate)
-    notes = []
     with contextlib.suppress(Exception):
         if hou.takes.currentTake() != hou.takes.rootTake():
             notes.append(

@@ -15,8 +15,10 @@ because a second viewport render in one hython can crash it (BIBLE §8); the chi
   with ``saveChildrenToFile``: parms, keys, expressions, flags, locked SOP data, and the
   contents of unlocked assets; no hip save, no event side effects;
 * the asset libraries loaded from outside ``$HFS`` (the file names; the child installs
-  them); ``Embedded`` definitions are not in that list, but the ``.cpio`` carries them
-  and the child renders their instances (``tests/integration/test_parity_headless.py``);
+  them), and the definitions embedded in the hip file (library ``Embedded``) copied into
+  one library file (2.1, D61, :func:`~.child.embedded_library`): the ``.cpio`` carries
+  only a stub of each (no contents), so a locked instance drew nothing
+  (``tests/integration/test_parity_headless.py``);
 * ``$HIP``, ``$HIPFILE``, ``$HIPNAME`` and ``$JOB``, the global hscript variables
   (``set -g``) and the ``hou.session`` source;
 * the fps, the playbar range and the frame (the look's ``frame`` is rendered);

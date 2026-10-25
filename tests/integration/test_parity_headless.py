@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import base64
 import io
+import os
 
 import pytest
 
@@ -79,3 +80,50 @@ def test_an_embedded_asset_renders_in_the_child(v2_client):
     empty = v2_client.ok("look", {"camera": camera, "resolution": RES})
     # A 1.5-unit sphere at 6 units covers well over a tenth of a 160x120 picture.
     assert _changed_pixels(shown, empty) > 2000, _changed_pixels(shown, empty)
+
+
+def _locked_object_asset(name: str, scale: float):
+    """An object-level asset (a subnet holding a sphere's object) defined in the hip file
+    and locked: nothing outside the definition says what is inside it."""
+    subnet = hou.node("/obj").createNode("subnet", "rock_obj")
+    inner = subnet.createNode("geo", "inner")
+    sphere = inner.createNode("sphere", "ball")
+    sphere.parm("scale").set(scale)
+    asset = subnet.createDigitalAsset(name=name, hda_file_name="Embedded", description="Rock")
+    asset.matchCurrentDefinition()
+    assert asset.isLockedHDA() and asset.type().definition().libraryFilePath() == "Embedded"
+    return asset
+
+
+def test_a_locked_embedded_asset_renders_in_the_child(v2_client):
+    """D61: ``saveChildrenToFile`` writes an embedded definition as a stub (no contents),
+    so a locked instance drew nothing in the render process. The snapshot now carries the
+    hip's embedded definitions as a library file: the asset draws, a second look keeps the
+    warm child (same file), and a changed definition is drawn as changed."""
+    from hocuspocus.host.look import child
+    from hocuspocus.host.tools import visual
+
+    asset = _locked_object_asset("hp_parity::locked_rock::1.0", 1.5)
+    camera = _camera()
+    asset.setDisplayFlag(False)
+    empty = v2_client.ok("look", {"camera": camera, "resolution": RES})
+    asset.setDisplayFlag(True)
+    shown = v2_client.ok("look", {"camera": camera, "resolution": RES})
+    assert shown["backend_used"] == "flipbook", shown
+    assert _changed_pixels(shown, empty) > 2000, _changed_pixels(shown, empty)
+    library = child._embedded_lib["path"]
+    assert library and os.path.isfile(library)
+    pid = visual._warm["child"].proc.pid
+    again = v2_client.ok("look", {"camera": camera, "resolution": RES})
+    assert visual._warm["child"].proc.pid == pid and child._embedded_lib["path"] == library
+    assert _changed_pixels(shown, again) < 50
+
+    # The user changes the asset: a smaller sphere, saved into the definition.
+    asset.allowEditingOfContents()
+    hou.node(f"{asset.path()}/inner/ball").parm("scale").set(0.4)
+    asset.type().definition().updateFromNode(asset)
+    asset.matchCurrentDefinition()
+    smaller = v2_client.ok("look", {"camera": camera, "resolution": RES})
+    assert child._embedded_lib["path"] != library
+    assert _changed_pixels(shown, smaller) > 2000, _changed_pixels(shown, smaller)
+    assert _changed_pixels(smaller, empty) > 200, _changed_pixels(smaller, empty)

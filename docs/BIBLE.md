@@ -1242,8 +1242,12 @@ the snapshot and child hython. `render` of a Flipbook or OpenGL ROP headless use
 policy, Appendix A; 2.1 removed it and that policy.) The settings named above stay settable on
 `hocuspocus.host.tools.visual`, which forwards them to the look module that owns them.
 What a headless snapshot carries is the contract in `host/look/base.py` and `look`'s notes:
-the cooked geometry of what a look at `/obj` shows (2.1, review 26 P2: each displayed object's display SOP, or the SOP a look isolates, as `.bgeo.sc` that the child reads with a File SOP instead of cooking the network again; a locked object asset and a SOP that fails to cook are cooked by the child as before; `render` of a user's ROP never ships geometry), every node (`saveChildrenToFile` per manager, which also carries the definitions of
-`Embedded` assets: the child renders them), the asset libraries outside `$HFS`,
+the cooked geometry of what a look at `/obj` shows (2.1, review 26 P2: each displayed object's display SOP, or the SOP a look isolates, as `.bgeo.sc` that the child reads with a File SOP instead of cooking the network again; a locked object asset and a SOP that fails to cook are cooked by the child as before; `render` of a user's ROP never ships geometry), every node (`saveChildrenToFile` per manager), the asset libraries outside `$HFS` and
+(2.1, D61) the hip's `Embedded` definitions, copied into one library file the child
+installs (`saveChildrenToFile` writes an embedded definition as a stub, its
+`DialogScript` and a 61-byte `Contents`, so a locked instance had no nodes inside and drew
+nothing; the file is rewritten only when a definition changes, so the kept child stays
+warm),
 `$HIP`/`$JOB`, global variables and `hou.session`; not the current take (a note says so),
 in-memory simulation caches (the child re-simulates to the frame; a note names every DOP
 network that stands past its start frame) or variables set with `hou.putenv` (parity G8). The temporary nodes a GUI look makes set only Houdini's own flag,
@@ -1611,6 +1615,7 @@ bible (tag `v1.4.0`). D35 to D44 are the 2.0 decisions, D45 on the 2.1 ones.
 - **D53** (2.1) `cook profile` times what a normal cook of the node cooks, learned from Houdini's `inputAncestors(only_used_inputs=True)` after a normal cook, and lists the other ancestors in `inactive` (§4.6). *Review 26 P1 #8: force-cooking every ancestor timed a Switch's unselected interior branch, so "interiors off costs nothing" looked false and proving it took a non-forced cook and an `inspect`.*
 - **D54** (2.1) The guide and each tool's reference are also `inspect {what: "guide" | "tool"}`, answered by the bridge without a Houdini, and hints that cite `hocuspocus://tools` name that route first (§4.4, §4.8). *Review 26 P1 #10: Claude Code subagents have no resource reader, so the hints pointed at text the agent could not open; a `what` costs a few enum bytes where a new tool would cost a schema.*
 - **D60** (2.1) A GUI launch that cannot register says why within its wait: the host's autostart writes a startup record (`<state_dir>/startup/<pid>.json`: starting, failed, disabled), and the launcher reads it and the launched pid's window titles (§3.3 rule 7). A failed or disabled start ends the wait at once; a dialog ends it after 15 s only before Houdini's main window exists, where a licensed start shows nothing but its splash. *A 2.1 stream reported GUI launches that "never registered" and waited 240 s with the hint "may still be starting"; a host that failed to start, a package that never loaded and a startup dialog all looked the same. A record file needs no port and no `hou` on the bridge side, and the window rule cannot fire on a licensed start (measured: splash, then main window, then the registry entry).*
+- **D61** (2.1) A headless snapshot carries the hip's embedded asset definitions as a library file (`look/child.py` `embedded_library`), not through `saveChildrenToFile` (§8). *Measured on 22.0.466: the `.cpio` holds an embedded definition's `DialogScript` and a 61-byte `Contents` stub, so a locked object asset drew nothing headless (2.0 too; 2.1's shipped geometry hid it for a locked SOP asset, not for an object asset or one inside a locked object). `copyToHDAFile` leaves the definitions and the hip untouched, and keeping one file until a definition changes keeps the warm child's key.*
 
 ### Verified deviations (M5 reconciliation, 1.0; still true)
 
