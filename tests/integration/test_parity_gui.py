@@ -514,20 +514,30 @@ def test_karma_looks_render_in_the_gui(gui: GuiSession) -> None:
     )
     before = client.view_state()
     res = [160, 120]
-    lit = client.ok("look", {"quality": "lit", "resolution": res})
+    # wait_s: a GUI Karma look past job_threshold_s (10 s) answers as a job (D75); the
+    # first one in a busy session can take that long.
+    lit = client.ok("look", {"quality": "lit", "resolution": res, "wait_s": 60})
     assert lit["backend_used"] == "karma" and lit["samples"] == 2, lit
     assert any("no lights" in n for n in lit["notes"]), lit
     assert _contrast(lit) > 20
-    final = client.ok("look", {"quality": "final", "resolution": res})
+    final = client.ok("look", {"quality": "final", "resolution": res, "wait_s": 60})
     assert final["backend_used"] == "karma" and final["samples"] == 32, final
     assert _contrast(final) > 20
     alone = client.ok(
-        "look", {"target": "/obj/box_geo/subnet1/ring", "quality": "final", "resolution": res}
+        "look",
+        {
+            "target": "/obj/box_geo/subnet1/ring",
+            "quality": "final",
+            "resolution": res,
+            "wait_s": 60,
+        },
     )
     assert alone["backend_used"] == "karma" and alone["fit_used"] == "target", alone
     assert _contrast(alone) > 20
     client.python(STAGE_SPHERE)
-    stage = client.ok("look", {"target": "/stage", "quality": "final", "resolution": res})
+    stage = client.ok(
+        "look", {"target": "/stage", "quality": "final", "resolution": res, "wait_s": 60}
+    )
     assert stage["backend_used"] == "karma" and stage["scene"] == "stage", stage
     assert _contrast(stage) > 20
     assert client.view_state() == before
