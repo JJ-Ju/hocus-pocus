@@ -16,7 +16,7 @@ src/hocuspocus/
     catalog.py                 #   the single source of truth for the tool surface
     errors.py                  #   error codes and ToolError
     docs.py                    #   renders docs/tools.md; tools/list size; example validator
-    paths.py                   #   state dir (instances/, logs/, captures/)
+    paths.py                   #   state dir (instances/, logs/, captures/, startup/)
     budget.py                  #   the response truncator (host and bridge)
   host/                        # INSIDE Houdini; stdlib only; imports hou lazily
     __init__.py                #   start(), stop(), status(), autostart()
@@ -29,7 +29,7 @@ src/hocuspocus/
       types.py geo.py visual.py state.py hda.py usd.py pdg.py events.py inspect.py
       search.py edit.py look.py spare.py (the spare parm and asset interface engine)
   bridge/                      # OUTSIDE Houdini; official mcp SDK
-    __main__.py server.py client.py instances.py launch.py licence.py local_tools.py
+    __main__.py server.py client.py instances.py launch.py licence.py startup.py local_tools.py
     validate.py budget.py config.py instructions.py
 houdini/                       # Houdini package payload (hpath); deliberately NOT the repo root
   hocuspocus.json.template     #   rendered to <prefs>/packages/hocuspocus.json
@@ -212,7 +212,7 @@ or into your real Houdini preferences, and they never use port 37219.
 | `tests/unit` | system Python | `.venv/Scripts/python -m pytest tests/unit -q` | about 10 s |
 | `tests/integration` (fast, the default) | hython | see below | < 90 s |
 | `tests/integration` (`slow`) | hython | the same command with `-m slow` (or `--runslow` for both) | about 3 min |
-| `tests/integration/test_parity_gui.py` (`gui`, the GUI column of [`parity.md`](parity.md)) | system Python launching `houdinifx` (isolated prefs; a window opens and closes) | `.venv/Scripts/python -m pytest tests/integration/test_parity_gui.py --rungui -q` | about 30 s |
+| `tests/integration/test_parity_gui.py` (`gui`, the GUI column of [`parity.md`](parity.md)) | system Python launching `houdinifx` (isolated prefs; three windows open and close, one at a time) | `.venv/Scripts/python -m pytest tests/integration/test_parity_gui.py --rungui -q` | about 3 min |
 | `tests/e2e` | system Python spawning hython | `.venv/Scripts/python -m pytest tests/e2e -q` | < 60 s |
 
 When no hython can be found, the `houdini` and `e2e` tests skip. hython is found through

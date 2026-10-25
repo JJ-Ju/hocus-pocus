@@ -200,6 +200,38 @@ one for the 2.0.x releases, and 2.1 removes it.
   `examples/neo_tower/work/neo_tower_p2.hiplc`: 44.2 s and 38.6 s per look before, 5.5 s
   (child start) and 0.9 s after; a test's 4 s chain looks in 0.2 s once cooked. A render
   process that still runs out of time names `cook` and `quality: "final"` in its hint.
+- **Karma in a GUI session.** `look {quality: "lit" | "final"}` through Karma answered
+  `cook_failed` "Karma did not produce an image: no output file" in every GUI Houdini (2.0
+  too), with or without a target, and `render` of a Karma ROP returned `state: done`
+  with every output `missing`. A GUI Houdini starts husk in the
+  background unless the ROP's Block Until Render Complete (`soho_foreground`) is on, so
+  `render()` returned before the image existed; hython always waits, so headless looks
+  passed. Look's temporary Karma ROP has it on, and `render` turns it on for the render
+  and restores it, on any ROP that has the parm (USD Render and Mantra ROPs too; checked
+  in the GUI: a Mantra frame is written, a USD Render ROP's husk error is reported). GUI test `test_karma_looks_render_in_the_gui`.
+- **A GUI launch that cannot register says why** (D60). `houdini_connect {launch}` and
+  `hocuspocus launch` waited the whole `wait_s` (240 s in the GUI tests) and said only that
+  Houdini "may still be starting" when its host failed to start, `autostart = false` kept
+  it off, the package never loaded, or a startup dialog held Houdini. The host's
+  autostart now writes `<state_dir>/startup/<pid>.json` (`uiready.py` too when
+  `hocuspocus.host` cannot be imported), and the launcher reads it and the launched
+  Houdini's window titles: a failed or disabled start answers at once with the error and
+  the host log (`detail.reason: "host_failed"` or `"autostart_disabled"`), a dialog
+  shown before the main window answers 15 s later (`"dialog"`, with its title), and a wait
+  that runs out names what it saw (`"host_starting"`, `"dialog"`, `"no_autostart"` with
+  the `install-houdini` hint). A licensed start shows only its splash and main window, so
+  nothing fires on it. Not reproduced here: the stream D2b report of two launches in a row
+  that never registered (13 launches in a row through the fixture, `hocuspocus launch`,
+  hard kills and two at once all registered in 10-21 s); the next one says which case it
+  is.
+- **A locked asset defined in the hip file draws in a headless look** (D61). The snapshot
+  the render process loads (`saveChildrenToFile`) holds only a stub of an `Embedded`
+  definition, without its contents, so a locked instance had no nodes inside and the
+  headless look drew nothing (2.0 too; 2.1's shipped geometry hid it for a locked SOP
+  asset, not for an object-level asset). The host now copies the hip's embedded
+  definitions into one library file the child installs, rewritten only when a definition
+  changes so the kept child stays warm. The GUI was not affected (it renders the live
+  scene).
 
 ## 2.0.0 (2026-10-14)
 

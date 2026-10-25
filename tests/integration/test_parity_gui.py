@@ -201,15 +201,26 @@ def _package_json() -> str:
     )
 
 
-@pytest.fixture(scope="session")
-def gui(tmp_path_factory: pytest.TempPathFactory) -> Iterator[GuiSession]:
+@dataclass
+class Isolated:
+    """An isolated pref dir, state dir and work dir for one ``houdinifx`` launch."""
+
+    launcher: Any
+    state: Path
+    work: Path
+    prefs: Path
+    """The expanded pref dir (``houdini22.0``) Houdini reads."""
+
+
+def _isolated(base: Path, *, extra_env: dict[str, str] | None = None) -> Isolated:
+    """A launcher for ``houdinifx`` with its own prefs (the dev package JSON and a
+    ``profile = "full"`` toml), state and work dirs under ``base``."""
     from hocuspocus.bridge import instances as registry
     from hocuspocus.bridge.launch import Launcher, detect_hfs, gui_executable
 
     hfs = detect_hfs(None)
     if hfs is None or gui_executable(hfs) is None:
         pytest.skip("no Houdini 22 install with houdinifx found (set HOCUSPOCUS_HFS or HFS)")
-    base = tmp_path_factory.mktemp("hp-gui")
     state, work, prefs = base / "state", base / "work", base / "prefs"
     expanded = prefs / f"houdini{_houdini_version(hfs)}"
     (expanded / "packages").mkdir(parents=True)
@@ -217,12 +228,6 @@ def gui(tmp_path_factory: pytest.TempPathFactory) -> Iterator[GuiSession]:
     work.mkdir()
     (expanded / "packages" / "hocuspocus.json").write_text(_package_json(), encoding="utf-8")
     (expanded / "hocuspocus.toml").write_text('profile = "full"\n', encoding="utf-8")
-    # G5: a creation script and a load script that open a dialog, each only for the one
-    # node or hip file its test makes (Houdini reads the script paths at start-up).
-    (expanded / "scripts" / "obj").mkdir(parents=True)
-    (expanded / "scripts" / "obj" / "null_OnCreated.py").write_text(ON_CREATED, encoding="utf-8")
-    (expanded / "scripts" / "456.py").write_text(LOAD_SCRIPT, encoding="utf-8")
-
     env = {k: v for k, v in os.environ.items() if not k.startswith("HOCUSPOCUS_")}
     env.pop("PYTHONHOME", None)
     env.update(
@@ -231,20 +236,34 @@ def gui(tmp_path_factory: pytest.TempPathFactory) -> Iterator[GuiSession]:
         HOCUSPOCUS_WORK_DIR=str(work),
         HOUDINI_NO_START_PAGE_SPLASH="1",
         HOUDINI_ANONYMOUS_STATISTICS="0",
+        **(extra_env or {}),
     )
     instances_dir = state / "instances"
     launcher = Launcher(
         str(hfs), environ=env, owned=False, scan=lambda: registry.scan(instances_dir)
     )
-    spawned = launcher.spawn("gui", work_dir=work)
+    return Isolated(launcher, state, work, expanded)
+
+
+@pytest.fixture(scope="session")
+def gui(tmp_path_factory: pytest.TempPathFactory) -> Iterator[GuiSession]:
+    iso = _isolated(tmp_path_factory.mktemp("hp-gui"))
+    # G5: a creation script and a load script that open a dialog, each only for the one
+    # node or hip file its test makes (Houdini reads the script paths at start-up).
+    (iso.prefs / "scripts" / "obj").mkdir(parents=True)
+    (iso.prefs / "scripts" / "obj" / "null_OnCreated.py").write_text(ON_CREATED, encoding="utf-8")
+    (iso.prefs / "scripts" / "456.py").write_text(LOAD_SCRIPT, encoding="utf-8")
+    spawned = iso.launcher.spawn("gui", work_dir=iso.work)
     started = {spawned.proc.pid}
     session: GuiSession | None = None
     try:
-        launched = launcher.wait(spawned, LAUNCH_WAIT_S)
+        launched = iso.launcher.wait(spawned, LAUNCH_WAIT_S)
         inst = launched.instance
         started.add(inst.pid)
         assert inst.port != FORBIDDEN_PORT
-        session = GuiSession(GuiClient(inst.port, inst.token), inst, spawned.proc, state, work)
+        session = GuiSession(
+            GuiClient(inst.port, inst.token), inst, spawned.proc, iso.state, iso.work
+        )
         yield session
     finally:
         if session is not None and _pid_alive(session.instance.pid):
@@ -286,6 +305,72 @@ def _scene(client: GuiClient) -> None:
             ]
         },
     )
+
+
+# -- launches that cannot register (D60), before the session's Houdini starts ------------
+
+STARTUP_DIALOG = """\
+import hou
+hou.ui.displayMessage("HocusPocus D60 test: a startup dialog")
+"""
+
+
+def _launch_fails(iso: Isolated, wait_s: float) -> tuple[Any, float, Any]:
+    """Launch, expect the wait to fail, and kill the Houdini. ``(error, seconds, proc)``."""
+    from hocuspocus.tools.errors import ToolError
+
+    spawned = iso.launcher.spawn("gui", work_dir=iso.work)
+    started = time.monotonic()
+    try:
+        with pytest.raises(ToolError) as info:
+            iso.launcher.wait(spawned, wait_s)
+        return info.value, time.monotonic() - started, spawned.proc
+    finally:
+        _kill(spawned.proc.pid)
+
+
+def test_a_launch_stuck_on_a_startup_dialog_says_so(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> None:
+    """D60: a startup script's dialog holds Houdini before its UI is ready, so the host
+    never starts. The launch names the window soon after it appears, not at ``wait_s``."""
+    from hocuspocus.bridge import startup
+
+    iso = _isolated(tmp_path_factory.mktemp("hp-dialog"))
+    (iso.prefs / "scripts").mkdir()
+    (iso.prefs / "scripts" / "123.py").write_text(STARTUP_DIALOG, encoding="utf-8")
+    error, waited, _proc = _launch_fails(iso, LAUNCH_WAIT_S)
+    assert error.code == "houdini_offline" and error.retryable is False, error
+    assert error.detail["reason"] == "dialog", error.detail
+    assert error.detail["windows"] == ["Houdini"]
+    assert "waiting on a window titled 'Houdini'" in error.message
+    assert waited < startup.DIALOG_GRACE_S + 30, waited
+
+
+def test_a_launch_whose_host_fails_to_start_says_why(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> None:
+    """D60: a host that cannot start (here its configured port is taken) writes a
+    ``failed`` startup record, and the launch answers with its error at once."""
+    import socket
+
+    taken = socket.socket()
+    taken.bind(("127.0.0.1", 0))
+    taken.listen(1)
+    port = taken.getsockname()[1]
+    assert port != FORBIDDEN_PORT
+    try:
+        iso = _isolated(
+            tmp_path_factory.mktemp("hp-hostfail"), extra_env={"HOCUSPOCUS_PORT": str(port)}
+        )
+        error, waited, proc = _launch_fails(iso, LAUNCH_WAIT_S)
+    finally:
+        taken.close()
+    assert error.code == "houdini_offline" and error.retryable is False, error
+    assert error.detail["reason"] == "host_failed", error.detail
+    assert "its HocusPocus host failed to start" in error.message
+    assert error.detail["log"].endswith(f"host-{proc.pid}.log")
+    assert waited < 60, waited
 
 
 # -- the session -------------------------------------------------------------------------
@@ -364,8 +449,7 @@ def test_rop_capture_runs_in_process(gui: GuiSession) -> None:
 def test_look_at_a_sop_in_a_subnet_shows_it_alone_in_process(gui: GuiSession) -> None:
     """D52 in the GUI: the temporary object that shows a SOP alone is made in the live
     scene, outside undo, and deleted; the user's flags and view stay as they were, and
-    source viewer says it is not isolated. (Karma is not checked here: a GUI Karma look
-    answered cook_failed "no output file" in 2.1 testing, with or without a SOP target.)"""
+    source viewer says it is not isolated (Karma: ``test_karma_looks_render_in_the_gui``)."""
     client = gui.client
     _scene(client)
     client.ok(
@@ -392,6 +476,91 @@ def test_look_at_a_sop_in_a_subnet_shows_it_alone_in_process(gui: GuiSession) ->
     )
     assert left == []
     assert client.python("result = hou.node('/obj/box_geo').displayNode().name()") == "box1"
+
+
+def _contrast(result: dict[str, Any]) -> int:
+    import base64
+    import io
+
+    image_mod = pytest.importorskip("PIL.Image")
+    image = image_mod.open(io.BytesIO(base64.b64decode(result["image"]["png_base64"])))
+    lo, hi = image.convert("L").getextrema()
+    return hi - lo
+
+
+STAGE_SPHERE = """
+ball = hou.node('/stage').createNode('sphere', 'ball')
+ball.setDisplayFlag(True)
+"""
+
+
+def test_karma_looks_render_in_the_gui(gui: GuiSession) -> None:
+    """``look`` lit (no lights) and final render with a temporary Karma ROP in the GUI
+    process: of /obj, of a SOP alone and of a stage; and ``render`` of the user's Karma
+    ROP writes its frame. A GUI Houdini starts husk in the background unless the ROP's
+    Block Until Render Complete is on, so render() returned before the image existed:
+    every GUI Karma look answered cook_failed "no output file" in 2.0 and 2.1 (hython
+    always waits)."""
+    client = gui.client
+    _scene(client)
+    client.ok(
+        "edit",
+        {
+            "ops": [
+                {"op": "create", "id": "sub", "parent": "/obj/box_geo", "type": "subnet"},
+                {"op": "create", "parent": "$sub", "type": "torus", "name": "ring"},
+            ]
+        },
+    )
+    before = client.view_state()
+    res = [160, 120]
+    lit = client.ok("look", {"quality": "lit", "resolution": res})
+    assert lit["backend_used"] == "karma" and lit["samples"] == 2, lit
+    assert any("no lights" in n for n in lit["notes"]), lit
+    assert _contrast(lit) > 20
+    final = client.ok("look", {"quality": "final", "resolution": res})
+    assert final["backend_used"] == "karma" and final["samples"] == 32, final
+    assert _contrast(final) > 20
+    alone = client.ok(
+        "look", {"target": "/obj/box_geo/subnet1/ring", "quality": "final", "resolution": res}
+    )
+    assert alone["backend_used"] == "karma" and alone["fit_used"] == "target", alone
+    assert _contrast(alone) > 20
+    client.python(STAGE_SPHERE)
+    stage = client.ok("look", {"target": "/stage", "quality": "final", "resolution": res})
+    assert stage["backend_used"] == "karma" and stage["scene"] == "stage", stage
+    assert _contrast(stage) > 20
+    assert client.view_state() == before
+    left = client.python(
+        "result = [n.path() for n in hou.node('/').allSubChildren() "
+        "if n.userData('hocuspocus:internal')]"
+    )
+    assert left == []
+
+    # The user's own Karma ROP with Block Until Render Complete off (its default): render
+    # turns it on for the render and puts it back.
+    client.ok(
+        "edit",
+        {
+            "ops": [
+                {"op": "create", "id": "cam", "parent": "/obj", "type": "cam", "name": "shot"},
+                {"op": "set", "path": "$cam/t", "value": [0, 1, 6]},
+                {"op": "create", "id": "rop", "parent": "/out", "type": "karma", "name": "beauty"},
+                {"op": "set", "path": "$rop/camera", "value": "/obj/shot"},
+                {"op": "set", "path": "$rop/resolutionx", "value": 160},
+                {"op": "set", "path": "$rop/resolutiony", "value": 120},
+                {"op": "set", "path": "$rop/samplesperpixel", "value": 2},
+            ]
+        },
+    )
+    assert client.python("hou.parm('/out/beauty/soho_foreground').eval()") == 0
+    out = (gui.work_dir / "render" / "beauty.$F4.exr").as_posix()
+    rendered = client.ok(
+        "render", {"rop_path": "/out/beauty", "frames": [1, 1], "output": out, "wait_s": 60}
+    )
+    assert rendered["state"] == "done" and "missing" not in rendered, rendered
+    assert (gui.work_dir / "render" / "beauty.0001.exr").is_file()
+    assert client.python("hou.parm('/out/beauty/soho_foreground').eval()") == 0
 
 
 def test_time_moves_the_playbar_and_captures_do_not(gui: GuiSession) -> None:
