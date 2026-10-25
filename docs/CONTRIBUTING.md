@@ -146,8 +146,11 @@ macOS the path is `.venv/bin/...`.
    - A tool that changes the scene builds a `tx.Plan` of ops and runs it with
      `tx.execute` (`host/tx.py`, spec-2.0 principle 14), then shapes the per-op
      results; it does not write its own batch loop or compensation. `edit` and the
-     1.4 mutation tools do this. A new kind of change is a new op: a handler and a
-     validator in `tx.py`, its fields in `OP_FIELDS`, and the `edit` spec's notes.
+     1.4 mutation tools do this. A new kind of change is a new op: a handler in
+     `tx.py`, its fields in `OP_FIELDS`, and the `edit` spec's notes. The handler is
+     also the op's validation (BIBLE D56): it registers compensation for every change it
+     makes, and under `tx.checking()` (a dry run, or the ops after a failing one) it
+     leaves out what compensation cannot take back (a callback, a destroy, a relock).
    - Tools that create or change nodes call `watch_nodes(...)` from `nodes.py` after
      their own changes, so `events` reports later edits to those nodes.
    - A new module must also be added to `TOOL_MODULES` in `host/tools/registry.py`.
