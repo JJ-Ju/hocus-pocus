@@ -107,6 +107,39 @@ one for the 2.0.x releases, and 2.1 removes it.
   scene's lights (review 26 P1 #5).
 - `inspect`'s description no longer lists the 1.4 read names (tools/list: text -21 B on
   `core` and `full`).
+- **Fewer bytes per session** (plan-2.1 stream C; the scorecard's 20 % bytes target, missed
+  by 2.0, is met). Nothing an agent reads is lost: each dropped field is the default, null,
+  or derivable from one that stays.
+  - `hocuspocus://guide` and `inspect {what: "guide"}` point at the server instructions
+    instead of repeating them (they come with `initialize`; the guide topic
+    `instructions` returns them): 6,380 → 4,335 B, capped at 4.5 KB (D65).
+  - `houdini_status` and `houdini://status` leave out a null `hip.dirty_source`, a false
+    `hip.is_new`, a `time.playback_range` equal to `range`, a `host_version` equal to
+    `bridge_version` (a different one is still a `version_mismatch` warning),
+    `read_only: false`, `allow_python: true`, `launched_by: null`, `alive` on `recent[]`
+    rows, `hip.recent` past the newest 3 (all with `detail: true`), and on the connected
+    instance's `instances[]` row the `port`, `label`, `houdini`, `started`, `generation`
+    and `host_version` that `connected` gives; `houdini://instances` keeps whole rows
+    (D66).
+  - `houdini_connect` shapes its `connected` block the same way (no `memory`: that is
+    `houdini_status {detail: true}`), and `launched` has no `mode` (`connected.ui` says
+    it) and a two-sentence `note` (D66).
+  - `hip_new`, `hip_open` and `hip_save` no longer return `name` (the path's last
+    segment) and give `is_new` only when true (D66).
+  - A render over 5 outputs leaves `outputs_summary.first` and `last` to the ends of
+    `outputs_sample` (D67).
+  - `search`'s and `node_create`'s descriptions stop naming 1.4 tools (tools/list text
+    -53 B on every profile; `full` 23,157 B text, 29,444 B both).
+
+  Measured by the workloads tier (larger of two runs; calls unchanged):
+
+  | Workload | Calls | Text bytes 1.4 | 2.1 start | 2.1 | Cut vs 1.4 (target) |
+  |---|---:|---:|---:|---:|---:|
+  | `city_build` | 15 | 20,804 | 13,975 | 13,692 | 34 % (20 %) |
+  | `fx_cache` | 11 | 9,084 | 6,638 | 6,306 | 31 % (15 %) |
+  | `scorecard_twelve` | 48 | 28,204 | 22,939 | 19,497 | 31 % (20 %) |
+  | `soak_200` | 177 | 100,362 | 67,788 | 65,752 | 34 % (20 %) |
+  | `vellum_usd` | 11 | 8,292 | 6,048 | 5,950 | 28 % (15 %) |
 
 ### Removed
 
