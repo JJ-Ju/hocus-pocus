@@ -201,15 +201,15 @@ def handle_unsaved(on_unsaved: Any, ctx: HostContext, action: str) -> bool:
 
 
 def _scene_result(ctx: HostContext) -> dict[str, Any]:
+    """The scene after a hip call: ``path``, ``dirty``, ``is_new`` only when true, and
+    ``scene_generation``. No ``name``: it is the path's last segment (2.1, D66)."""
     import hou
 
-    return {
-        "path": hou.hipFile.path(),
-        "name": hou.hipFile.basename(),
-        "dirty": scene_dirty(ctx),
-        "is_new": bool(hou.hipFile.isNewFile()),
-        "scene_generation": ctx.scene.generation,
-    }
+    out: dict[str, Any] = {"path": hou.hipFile.path(), "dirty": scene_dirty(ctx)}
+    if hou.hipFile.isNewFile():
+        out["is_new"] = True
+    out["scene_generation"] = ctx.scene.generation
+    return out
 
 
 def _bool_arg(args: dict[str, Any], key: str, default: bool) -> bool:

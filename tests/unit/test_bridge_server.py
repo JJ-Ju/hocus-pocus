@@ -559,7 +559,8 @@ def test_status_merges_registry_health_and_host():
     assert conn["pid"] == 4242 and conn["port"] == 51000 and conn["label"] == "hython"
     assert conn["hip"]["dirty"] is True and conn["time"]["fps"] == 24
     assert conn["scene_generation"] == 5
-    assert status["read_only"] is False and status["allow_python"] is True
+    # The default settings (read_only false, allow_python true) are left out (2.1, D66).
+    assert "read_only" not in status and "allow_python" not in status
     assert status["instances"][0]["selected"] is True
     assert "token" not in json.dumps(status)
     assert status["bridge_version"] and status["profile"] == "core"
@@ -597,6 +598,58 @@ def test_status_prints_the_hip_path_once():
     )
     conn = structured(bridge.call_tool("houdini_status", {}))["connected"]
     assert conn["hip"] == {"path": path} and conn["env"] == {"HIP": "C:/w", "JOB": "D:/j"}
+
+
+def test_status_leaves_out_nulls_repeats_and_default_settings():
+    """2.1 (D66, the scorecard bytes margin): dirty_source null, is_new false, a playback
+    range equal to the frame range, a host_version equal to the bridge's, read_only
+    false, allow_python true, launched_by null and what the connected row repeats are left
+    out; houdini://instances keeps the whole row; detail: true has every recent hip."""
+    from hocuspocus.bridge import resources as bridge_resources
+    from hocuspocus.version import __version__
+
+    bridge, client, _ = make_bridge()
+    recent = [f"C:/work/r{i}.hip" for i in range(5)]
+    host = {
+        "pid": 4242,
+        "hip": {"path": "C:/work/a.hip", "dirty": False, "dirty_source": None,
+                "is_new": False, "recent": recent},
+        "time": {"frame": 1, "fps": 24, "range": [1, 240], "playback_range": [1, 240]},
+        "scene_generation": 3,
+        "host_version": __version__,
+        "read_only": False,
+        "allow_python": True,
+    }  # fmt: skip
+    client.replies["houdini_status"] = (True, host, {})
+    status = structured(bridge.call_tool("houdini_status", {}))
+    conn = status["connected"]
+    assert conn["hip"] == {"path": "C:/work/a.hip", "dirty": False, "recent": recent[:3]}
+    assert conn["time"] == {"frame": 1, "fps": 24, "range": [1, 240]}
+    assert "host_version" not in conn and conn["port"] == 51000 and conn["label"] == "hython"
+    assert "read_only" not in status and "allow_python" not in status
+    (row,) = status["instances"]
+    assert row["selected"] is True and row["pid"] == conn["pid"] and "ui" in row
+    assert not {"port", "label", "houdini", "started", "generation", "launched_by"} & set(row)
+    whole = json.loads(bridge_resources.read(bridge, "houdini://instances").contents[0].text)
+    assert {"port", "label", "started"} <= set(whole["instances"][0])
+    fresh = {"path": "C:/work/a.hip", "dirty": False, "recent": recent}  # shaping edits in place
+    client.replies["houdini_status"] = (True, {**host, "hip": fresh}, {})
+    _ok, detailed, _meta = bridge.invoke("houdini_status", {"detail": True})  # not in FAKE_TOOLS
+    assert detailed["connected"]["hip"]["recent"] == recent
+    # What is not the default stays.
+    client.replies["houdini_status"] = (
+        True,
+        {**host, "hip": {"path": "C:/work/a.hip", "dirty": True, "dirty_source": "tracked",
+                         "is_new": True},
+         "time": {"frame": 1, "fps": 24, "range": [1, 240], "playback_range": [1, 48]},
+         "read_only": True, "allow_python": False},
+        {},
+    )  # fmt: skip
+    status = structured(bridge.call_tool("houdini_status", {}))
+    hip, clock = status["connected"]["hip"], status["connected"]["time"]
+    assert hip["dirty_source"] == "tracked" and hip["is_new"] is True
+    assert clock["playback_range"] == [1, 48]
+    assert status["read_only"] is True and status["allow_python"] is False
 
 
 def test_server_info_only_in_the_handshake():

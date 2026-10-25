@@ -414,12 +414,14 @@ def test_houdini_connect_launch_path(tmp_path):
     out = json.loads(result.content[0].text)
     assert result.is_error is False, out
     assert out["connected"]["pid"] == 9001
-    assert out["launched"]["mode"] == "headless" and out["launched"]["pid"] == 9001
+    # 2.1 (D66): no launched.mode, connected.ui says it.
+    assert "mode" not in out["launched"] and out["launched"]["pid"] == 9001
     assert bridge.preferred_pid == 9001
     assert len(harness.spawned) == 1
     launched = out["launched"]
     assert (
-        launched["outlives_server"] is False and "closes when the server exits" in launched["note"]
+        launched["outlives_server"] is False
+        and "Closes when this MCP server exits" in launched["note"]
     )
 
 
