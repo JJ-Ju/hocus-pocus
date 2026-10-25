@@ -19,6 +19,8 @@ SPEC = ToolSpec(
         "(automatic selection). name labels the Houdini given by pid or launch, shown in "
         "houdini_status and in _meta.instance; {name} alone pins the Houdini with that name. "
         "A pid that is not running is houdini_offline with the live candidates. "
+        "An attach or launch returns connected, shaped as houdini_status's (memory only "
+        "there, with detail: true); a launch adds launched {pid, outlives_server, note, log}. "
         "launch waits up to wait_s seconds for the new host to register. A launched Houdini "
         "starts in HOCUSPOCUS_WORK_DIR (default: the home directory), which is the untitled "
         "scene's $HIP and $JOB. quit closes the selected Houdini (or pid) through its host: "

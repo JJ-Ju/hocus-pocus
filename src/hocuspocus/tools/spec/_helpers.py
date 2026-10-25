@@ -283,7 +283,6 @@ def _connected_block() -> dict[str, Any]:
             "hip": _out(
                 {
                     "path": _t("string"),
-                    "name": _t("string"),
                     "dirty": _t("boolean"),
                     "is_new": _t("boolean"),
                     "recent": _list(),

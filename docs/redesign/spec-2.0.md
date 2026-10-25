@@ -211,6 +211,21 @@ guide resource read in task 10 (6.5 KB, 28 % of the workload) and the session to
 (`houdini_status`, `houdini_connect`, `hip_new`: 5.5 KB), which "read shapes" did not
 touch.
 
+**2.1 note (stream C, plan-2.1 §3).** The bytes target is met. The guide no longer repeats
+the server instructions (BIBLE D65; 6,380 → 4,335 B), the session and hip results leave
+out defaults, nulls and repeats (D66), and a sequence render's summary leaves its first
+and last paths to the sample (D67). Measured with the workloads tier (the larger of two
+runs; calls unchanged), against the start of 2.1 (`release/2.1` at `95acc87`, after
+`compat_1x` was removed):
+
+| Workload | Text bytes 1.4 → 2.1 start → 2.1 | Cut vs 1.4 (target) |
+|---|---:|---:|
+| `city_build` | 20,804 → 13,975 → 13,692 | 34 % (20 %) |
+| `fx_cache` | 9,084 → 6,638 → 6,306 | 31 % (15 %) |
+| `scorecard_twelve` | 28,204 → 22,939 → 19,497 | 31 % (20 %) |
+| `soak_200` | 100,362 → 67,788 → 65,752 | 34 % (20 %) |
+| `vellum_usd` | 8,292 → 6,048 → 5,950 | 28 % (15 %) |
+
 **Why the calls targets differ.** The reviews predicted a 25 % cut in calls for the city,
 scorecard and soak workloads, but only the builds can collapse calls: `city_build`, `fx_cache` and
 `vellum_usd` chain node creation, edits and polls that `edit` transactions, `$id` chains and

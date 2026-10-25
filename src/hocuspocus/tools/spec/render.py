@@ -29,7 +29,9 @@ SPEC = ToolSpec(
     ),
     notes=(
         "Above 5 outputs the result, inline or from job result, has outputs_summary and "
-        "outputs_sample (the first 2 and last 2) instead of outputs; missing lists up to 20 "
+        "outputs_sample (the first 2 and last 2) instead of outputs; the summary is {count, "
+        "pattern, missing_count}, its first and last being the sample's ends (2.1, D67), while a "
+        "cancelled job's partial summary also names first and last; missing lists up to 20 "
         "paths. Every "
         "expected output is checked against approved_roots. look is the quick picture."
         " Headless, a Flipbook or OpenGL ROP renders in a short-lived child hython (a few "

@@ -273,10 +273,11 @@ def fetch(bridge: Bridge, uri: str, validator: str | None = None) -> dict[str, A
     error, meta}``. Raises ``ToolError`` for a URI it cannot parse."""
     route = host_resources.parse(uri)
     if route.kind in ("status", "instances"):
-        from .local_tools import LOCAL_TOOLS
+        from .local_tools import houdini_status
 
         with bridge._lock:
-            status = LOCAL_TOOLS["houdini_status"](bridge, {})
+            # houdini://instances has no connected block to repeat its row (D66).
+            status = houdini_status(bridge, {}, whole_rows=route.kind == "instances")
         body = status
         if route.kind == "instances":
             body = {k: status[k] for k in ("instances", "recent", "warnings") if k in status}

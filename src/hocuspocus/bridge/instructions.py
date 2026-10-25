@@ -35,9 +35,10 @@ GUIDE_MAX_BYTES = 8192
 """``hocuspocus://guide`` is instructions and recipes only (review 19 papercut 10: with the
 tool reference appended it was 52 KB); the reference is ``hocuspocus://tools``."""
 
-GUIDE_2X_MAX_BYTES = 6656
-"""The 2.0 guide's own cap, 6.5 KB (spec-2.0 §7 M4: the scorecard reads it once, and at
-7.7 KB it outgrew 1.4's 7.3 KB guide)."""
+GUIDE_2X_MAX_BYTES = 4608
+"""The 2.x guide's own cap, 4.5 KB (2.1, D65: without the instructions it repeated; 2.0's
+was 6.5 KB, spec-2.0 §7 M4: the scorecard reads it once, and at 7.7 KB it outgrew 1.4's
+7.3 KB guide)."""
 
 INSTRUCTIONS = """\
 HocusPocus drives a live Houdini; identity is Houdini paths. Start with `houdini_status`; \
@@ -82,6 +83,8 @@ Each is the JSON of a tool call (`inspect`, `search`, `houdini_status`) with
 RECIPES = """## Recipes
 
 ### Build, check and look in three calls
+
+One `edit`:
 
 ```json
 {"ops": [{"op": "create", "id": "geo", "parent": "/obj", "type": "geo", "name": "terrain"},
@@ -158,17 +161,32 @@ GUIDE_HEADER = """\
 
 """
 
+INSTRUCTIONS_POINTER = """\
+The server instructions came with `initialize` and are not repeated here; \
+`inspect {what: "guide", target: "instructions"}` returns them. A tool's reference: \
+`inspect {what: "tool", target: name}` or `hocuspocus://tools`.
+
+"""
+"""What :func:`guide_text` has in place of :data:`INSTRUCTIONS` (2.1, D65): every client
+already holds them, and at 2.3 KB they were a third of the guide."""
+
 
 def instructions_for() -> str:
     """The server ``instructions`` (BIBLE §4.8)."""
     return INSTRUCTIONS
 
 
+def manual_text() -> str:
+    """The whole manual: :func:`guide_text` with :data:`INSTRUCTIONS` in its
+    ``## Instructions`` section, which is what :func:`guide_sections` splits."""
+    return "".join([GUIDE_HEADER, INSTRUCTIONS, "\n\n", RESOURCES, RECIPES])
+
+
 def guide_sections() -> list[tuple[str, str]]:
-    """``(title, text)`` for every ``##`` and ``###`` heading of :func:`guide_text`: a
+    """``(title, text)`` for every ``##`` and ``###`` heading of :func:`manual_text`: a
     section runs to the next heading of its level or above (``inspect {what: "guide",
-    target}``, 2.1, D54)."""
-    lines = guide_text().splitlines()
+    target}``, 2.1, D54; the ``Instructions`` topic is the server instructions, D65)."""
+    lines = manual_text().splitlines()
     heads = [
         (i, len(line) - len(line.lstrip("#")), line.lstrip("#").strip())
         for i, line in enumerate(lines)
@@ -198,9 +216,10 @@ def guide_section(topic: str) -> tuple[str, str] | None:
 
 
 def guide_text() -> str:
-    """The operating manual: instructions, resources and recipes (BIBLE §4.8). The per-tool
-    reference is :func:`tools_text` (``hocuspocus://tools``)."""
-    return "".join([GUIDE_HEADER, INSTRUCTIONS, "\n\n", RESOURCES, RECIPES])
+    """The operating manual (``hocuspocus://guide``, ``inspect {what: "guide"}``): a pointer
+    to the server instructions, the resources and the recipes (BIBLE §4.8, D65). The
+    per-tool reference is :func:`tools_text` (``hocuspocus://tools``)."""
+    return "".join([GUIDE_HEADER, INSTRUCTIONS_POINTER, RESOURCES, RECIPES])
 
 
 # -- prompts (spec-2.0 §2.8) -------------------------------------------------------------

@@ -231,7 +231,9 @@ def test_bridge_launch_starts_in_the_work_dir(hython, tmp_path):
         # and agree, so there is no version_mismatch warning.
         from hocuspocus.version import __version__
 
-        assert connected["host_version"] == row["host_version"] == __version__
+        # Equal to the bridge's, host_version is left out of both (2.1, D66).
+        assert "host_version" not in connected and "host_version" not in row
+        assert _json(status)["bridge_version"] == __version__
         assert not any("version_mismatch" in w for w in _json(launched).get("warnings", []))
         assert not {"HIP", "JOB"} & set(connected.get("env", {})), connected  # = hip dir
         assert connected["hip"]["path"] == f"{work.as_posix()}/untitled.hip"

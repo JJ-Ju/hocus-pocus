@@ -29,15 +29,12 @@ QUIT_WAIT_S = 15.0
 """How long houdini_connect {quit} waits for the Houdini process to end."""
 
 DIES_WITH_SERVER_NOTE = (
-    "This Houdini shares this MCP server's job object and closes when the server exits "
-    "(the client ends both together): save with hip_save before the session ends. To keep "
-    "Houdini alive across sessions, start it with `hocuspocus launch` and attach with "
-    "houdini_connect {pid}."
+    "Closes when this MCP server exits: hip_save before the session ends. One started with "
+    "`hocuspocus launch` and attached by houdini_connect {pid} outlives it."
 )
 OUTLIVES_NOTE = (
-    "This Houdini is detached from this MCP server and should keep running after it exits, "
-    "unless the client kills the whole process tree; save with hip_save before the session "
-    "ends. A later session can attach to it with houdini_connect {pid}."
+    "Keeps running after this MCP server exits (unless the client kills the process tree): "
+    "hip_save before the session ends; a later session attaches with houdini_connect {pid}."
 )
 
 # Fields the host's own ``houdini_status`` answer may contribute to the connected block.
@@ -146,7 +143,11 @@ def _select_verified(
     return live, registry.select(live, bridge.preferred_pid), None
 
 
-def houdini_status(bridge: Bridge, args: dict[str, Any]) -> dict[str, Any]:
+def houdini_status(
+    bridge: Bridge, args: dict[str, Any], *, whole_rows: bool = False
+) -> dict[str, Any]:
+    """``houdini_status``; ``whole_rows`` keeps the connected instance's ``instances[]``
+    row whole, for ``houdini://instances`` (:func:`shape_status`)."""
     warnings: list[str] = []
     connected: dict[str, Any] | None = None
     chosen_pid: int | None = None
@@ -161,7 +162,8 @@ def houdini_status(bridge: Bridge, args: dict[str, Any]) -> dict[str, Any]:
         if sel.lost_pid is not None:
             lost = bridge.lost_error(live)
             lost_block = {"pid": sel.lost_pid, "label": lost.detail["label"]}
-            warnings.append(f"{lost.message} {lost.hint[0].upper()}{lost.hint[1:]}.")
+            # The hint starts with a tool name: not capitalised (review 25 papercut 10).
+            warnings.append(f"{lost.message} {lost.hint}.")
     settings = _split_settings(connected)
     mismatch = version_warning((connected or {}).get("host_version"))
     if mismatch:
@@ -192,7 +194,7 @@ def houdini_status(bridge: Bridge, args: dict[str, Any]) -> dict[str, Any]:
         )
     if warnings:
         status["warnings"] = warnings
-    shape_status(status, detail=args.get("detail") is True)
+    shape_status(status, detail=args.get("detail") is True, whole_rows=whole_rows)
     return status
 
 
@@ -200,32 +202,100 @@ def _default_role(row: dict[str, Any]) -> str:
     return "editor" if row.get("ui") else "worker"
 
 
-def shape_status(status: dict[str, Any], *, detail: bool = False) -> dict[str, Any]:
-    """The 2.0 ``houdini_status`` (and ``houdini://status``) shape, in place: what is the
-    default or empty is left out (spec-2.0 §7 M4). ``connected.memory`` only with
-    ``detail``; per ``connected``, ``instances[]`` and ``recent[]`` row ``role`` when it is
-    the mode's default (editor for a GUI Houdini, worker headless) and ``name`` when null;
-    per instance ``selected: false``, ``busy: false`` and ``jobs_running: 0``. Without
-    ``memory`` two reads of an unchanged session are byte-identical, so the resource's
-    etag holds."""
-    connected = status.get("connected")
-    rows = [connected] if isinstance(connected, dict) else []
-    rows += [r for r in status.get("instances") or () if isinstance(r, dict)]
-    rows += [r for r in status.get("recent") or () if isinstance(r, dict)]
-    if isinstance(connected, dict) and not detail:
+RECENT_HIPS = 3
+"""``connected.hip.recent`` without ``detail``: the newest few (the host keeps 10)."""
+
+_ROW_DEFAULTS = (
+    ("selected", False), ("busy", False), ("jobs_running", 0), ("launched_by", None),
+)  # fmt: skip
+"""``instances[]`` keys left out at these values."""
+
+_CONNECTED_REPEATS = ("port", "label", "houdini", "started", "host_version")
+"""What the connected instance's ``instances[]`` row leaves to ``connected``; it keeps
+``pid``, ``ui``, ``name`` and ``role`` (what ``on`` and routing read) and its health."""
+
+_SETTING_DEFAULTS = (("read_only", False), ("allow_python", True))
+"""Bridge settings ``houdini_status`` reports only when they are not the default (2.1)."""
+
+
+def shape_connected(connected: dict[str, Any], *, detail: bool = False) -> dict[str, Any]:
+    """The ``connected`` block of ``houdini_status`` and ``houdini_connect``, in place: what
+    is the default, null or a repeat is left out (spec-2.0 §7 M4; 2.1, D66). ``memory``
+    and every ``hip.recent`` entry past :data:`RECENT_HIPS` only with ``detail``;
+    ``hip.dirty_source`` when null, ``hip.is_new`` when false, ``time.playback_range``
+    when it equals ``range``, ``host_version`` when it is the bridge's (a different one is
+    a ``version_mismatch`` warning), ``role`` when it is the mode's default and ``name``
+    when null; then the hip path once (:func:`_hip_once`)."""
+    if not detail:
         connected.pop("memory", None)
-    for row in rows:
-        if row.get("role") == _default_role(row):
-            del row["role"]
-        if "name" in row and row["name"] is None:
-            del row["name"]
+    hip = connected.get("hip")
+    if isinstance(hip, dict):
+        if "dirty_source" in hip and hip["dirty_source"] is None:
+            del hip["dirty_source"]
+        if hip.get("is_new") is False:
+            del hip["is_new"]
+        if not detail and isinstance(hip.get("recent"), list):
+            hip["recent"] = hip["recent"][:RECENT_HIPS]
+    clock = connected.get("time")
+    if isinstance(clock, dict) and clock.get("playback_range") == clock.get("range"):
+        clock.pop("playback_range", None)
+    if connected.get("host_version") == __version__:
+        del connected["host_version"]
+    _drop_row_defaults(connected)
+    _hip_once({"connected": connected})
+    return connected
+
+
+def _drop_row_defaults(row: dict[str, Any]) -> None:
+    if row.get("role") == _default_role(row):
+        del row["role"]
+    if "name" in row and row["name"] is None:
+        del row["name"]
+
+
+def shape_status(
+    status: dict[str, Any], *, detail: bool = False, whole_rows: bool = False
+) -> dict[str, Any]:
+    """The ``houdini_status`` (and ``houdini://status``) shape, in place: what is the
+    default, empty or a repeat is left out (spec-2.0 §7 M4; 2.1, D66). ``connected`` as
+    :func:`shape_connected`; per ``instances[]`` and ``recent[]`` row ``role`` when it is
+    the mode's default (editor for a GUI Houdini, worker headless) and ``name`` when null;
+    per instance ``selected: false``, ``busy: false``, ``jobs_running: 0``, ``launched_by:
+    null`` and ``host_version`` when it is the bridge's; on the connected instance's row
+    the :data:`_CONNECTED_REPEATS` ``connected`` already gives and ``generation`` (it is
+    ``connected.scene_generation``), unless ``whole_rows`` (``houdini://instances``, which
+    has no ``connected``); ``alive: false`` on ``recent[]`` rows (they are the dead ones);
+    ``read_only: false`` and ``allow_python: true``. Without ``memory`` two reads of an
+    unchanged session are byte-identical, so the resource's etag holds."""
+    connected = status.get("connected")
+    if isinstance(connected, dict):
+        shape_connected(connected, detail=detail)
     for row in status.get("instances") or ():
+        if not isinstance(row, dict):
+            continue
+        _drop_row_defaults(row)
+        for key, default in _ROW_DEFAULTS:
+            if key in row and row[key] == default:
+                del row[key]
+        if row.get("host_version") == __version__:
+            del row["host_version"]
+        if whole_rows or not isinstance(connected, dict) or row.get("pid") != connected.get("pid"):
+            continue
+        if "scene_generation" in connected:  # the live value, the row's is the registry's
+            row.pop("generation", None)
+        for key in _CONNECTED_REPEATS:
+            if key in row and key in connected and connected[key] == row[key]:
+                del row[key]
+    for row in status.get("recent") or ():
         if isinstance(row, dict):
-            for key, default in (("selected", False), ("busy", False), ("jobs_running", 0)):
-                if key in row and row[key] == default:
-                    del row[key]
+            _drop_row_defaults(row)
+            if row.get("alive") is False:
+                del row["alive"]
     if not status.get("recent"):
         status.pop("recent", None)
+    for key, default in _SETTING_DEFAULTS:
+        if key in status and status[key] == default:
+            del status[key]
     _hip_once(status)
     return status
 
@@ -352,6 +422,8 @@ def houdini_connect(bridge: Bridge, args: dict[str, Any]) -> dict[str, Any]:
         mismatch = version_warning(block.get("host_version"))
         if mismatch:
             out.setdefault("warnings", []).append(mismatch)
+        # houdini_status's cuts (2.1, D66); memory is houdini_status {detail: true}'s.
+        shape_connected(block)
     return out
 
 
@@ -419,8 +491,8 @@ def _connect(bridge: Bridge, args: dict[str, Any]) -> dict[str, Any]:
         bridge.last_target = instance
         bridge.detached = False
         _split_settings(block)
+        # The mode is connected.ui (2.1, D66).
         launched: dict[str, Any] = {
-            "mode": result.mode,
             "pid": result.instance.pid,
             "outlives_server": result.outlives_server,
             "note": OUTLIVES_NOTE if result.outlives_server else DIES_WITH_SERVER_NOTE,

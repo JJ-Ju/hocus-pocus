@@ -12,6 +12,11 @@ SPEC = ToolSpec(
         "increment saves to the next version number in the file name; backup keeps a backup "
         "copy. Returns the real saved path, dirty after save, and bytes."
     ),
+    notes=(
+        "The result is {path, dirty, scene_generation, bytes, backup_path?}, as hip_new's and "
+        "hip_open's carry path, dirty and scene_generation (is_new: true for an untitled "
+        "scene); none repeats the file name, the path's last segment (2.1)."
+    ),
     input_schema=_obj(
         {
             "path": _s("Save-as target."),
