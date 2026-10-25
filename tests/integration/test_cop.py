@@ -102,6 +102,8 @@ def test_forced_cook_reloads_a_file_cop_and_look_notes_a_stale_one(client, work_
     stale = client.ok("look", {"target": reader.path()})
     (note,) = [n for n in stale.get("notes", []) if "older copy" in n]
     assert reader.path() in note and png in note and "force: true" in note, note
+    image = client.ok("inspect", {"what": "image", "target": reader.path()})
+    assert any("older copy" in n for n in image.get("notes", [])), image
     reloaded = client.ok("cook", {"paths": [reader.path()], "force": True})["results"][0]
     assert reloaded["reloaded"] is True and _red(reader) == 1.0
     fresh = client.ok("look", {"target": reader.path()})
