@@ -581,3 +581,399 @@ What worked well:
 
 The tool asks from P2 are friction items 1, 2, 5, 6, 7 and 8. Items 3 and 4 are in flight
 in D2a.
+
+## P3: silhouette, materials, lookdev, evidence
+
+### Outcome
+
+P3 started from the committed P2 files and worked through the lead's four critiques:
+
+1. The silhouettes read as generic office towers.
+2. The materials are clean paint.
+3. LOD2 pops brighter than LOD1 at dusk.
+4. The crown collision box encloses the mast.
+
+**Silhouette (generator `hp::neo_tower::1.1`).** `neo_tower.hdalc` now holds 1.0
+(unchanged) and 1.1. 1.1 adds a Silhouette folder with 20 parms, a style preset menu and
+an Apply Preset button. The menu callback applies one of four presets: `tokyo3_spire`, `tokyo3_block`,
+`neotokyo_slab` and `neotokyo_stack`.
+
+- **Tokyo-3 vocabulary:**
+  - full-height armour fins with raked caps;
+  - telescoping sleeve rings where each tier rises out of the one below;
+  - armour shutters closing up to 45 % of the windows;
+  - heavy crown hardware: sensor stacks, pods, a radar dish, lattice masts and a
+    crenellated cap ring;
+  - NERV-style markings: floor, block and sleeve numbers, warning plates, and 4.5:1
+    vertical stencils on the fins.
+- **Neo-Tokyo vocabulary:**
+  - an attached service tower with sky bridges;
+  - stacked and offset blocks, and cantilevered blocks on struts, each with real facades
+    (`facade_annex`);
+  - giant billboards on standoffs with floodlights;
+  - rooftop clutter: water tanks on stilts, lattice aerials, AC banks, searchlights and
+    aircraft warning lights.
+
+**Why 1.1.** P3 is not a silent change for 1.0 consumers:
+
+- output 2 gains volume prims (`kind` fin, sleeve, annex);
+- the tower gains the surface `decal` (`mat_id` 36) and the attributes `decal_id`,
+  `fixture` and `aim`;
+- even the defaults add fins, sleeves and markings.
+
+So 1.0 stays in the library and old scenes load unchanged. Interiors and the P2 contract
+are untouched: tier outlines have `kind` "" and keep every P2 attribute.
+
+**Why the export asset stays at 1.0.** Its outputs, parm names and material slot names did
+not change. P3 added parms with defaults, fixed two defects and added content, and existing
+scenes should get those.
+
+**Materials (export asset).**
+
+- *Rain streaks.* A `grime_mask` node ray-casts upward from every exterior point and
+  writes a streak mask below sills, ledges, visors, bands, sleeves and canopies, fading
+  over `grime_length` (2.6 m). It runs before the LOD split, so LOD0 and LOD1 match. The
+  generator's spandrels are split at the sill ends so the mask has an edge to follow.
+- *Grime layer.* A new Copernicus `T_grime_Mask` holds R streak pattern, G chips and
+  B blotches. Eight materials gained a MaterialX grime layer from it: albedo darkening,
+  roughness rise, and edge wear broken up by chips.
+- *Per-piece tone.* Each cladding and armour piece gets its own tone, multiplied into
+  `Cd.r` with the AO.
+- *Decals.* A 34-cell decal atlas is drawn procedurally in Copernicus: 16 Font nodes with
+  a Japanese system font, plus plates, stripes and emblems. It is written as
+  `T_decals_*` with an opacity map and bound through a new `M_decals` (UV mode 4,
+  `decal_id`).
+- *New parms:* `grime_streaks`, `grime_dirt`, `grime_darken`, `grime_length`,
+  `tone_variation` and `lod2_tone`.
+
+**LOD2 pop fixed.** It was measured as the masked mean luminance of the same framing at
+dusk, with PIL on the local render.
+
+- Before: Tokyo-3 LOD2 was +15 % over LOD1 (0.313 against 0.272), Neo-Tokyo +12 %.
+- Three changes fixed it:
+  - the shell's vertex tone `lod2_tone` = 0.68, standing in for recess shadowing;
+  - the `lod2` atlas gained 35 % armour shutters and sill grime;
+  - Neo-Tokyo far-facade emission × 0.58.
+- After:
+  - Tokyo-3: LOD0 0.261, LOD1 0.267, LOD2 0.270 (+1.1 %);
+  - Neo-Tokyo: LOD1 0.224, LOD2 0.232 (+3.7 %).
+
+**Crown collision fixed.** On the `tokyo3_spire` preset there are now 7 hulls (324
+triangles):
+
+- one per tier, widened to include the fins and sleeves;
+- a crown body hull from 216.2 to 233.6 m;
+- a separate slim mast hull, 4.7 × 3.2 m, up to 245.8 m.
+
+P2 had one box around the whole crown, mast included. Thin aerials get no collision.
+Annex volumes get their own prisms.
+
+Triangle counts (export asset):
+
+| Tower (preset, seed) | Interiors | LOD0 | LOD1 | LOD2 | Collision |
+|---|---|---|---|---|---|
+| Tokyo-3 spire (`tokyo3_spire`, 1) | on | 510,948 | 92,405 | 2,434 | 324 (7 hulls) |
+| Neo-Tokyo slab (`neotokyo_slab`, 2) | on | 788,804 | 94,592 | 3,824 | 96 |
+| `tokyo3_block`, 3 | off | 333,122 | 88,715 | 4,454 | not measured |
+| `neotokyo_stack`, 5 | off | 539,794 | 122,620 | 3,154 | not measured |
+| 1.1 defaults, 1 | on | 378,814 | 65,267 | 3,766 | 204 (5 hulls) |
+
+The 1.1 defaults cost +4.2 % LOD0 triangles over P2's 363,434.
+
+**Exports re-run** with the final locked assets, in `examples/neo_tower/export/`
+(gitignored):
+
+- 59 textures (58 maps and the checker);
+- `SM_neo_tower_LOD0.fbx` (17.6 MB, the `tokyo3_spire` build, with the UCX hulls);
+- `SM_neo_tower_LOD1.fbx` (5.0 MB), `SM_neo_tower_LOD2.fbx` and
+  `SM_neo_tower_collision.fbx`;
+- `SM_neo_tower.usd` (78 MB).
+
+P3 attributes leaked into the FBX at first (`kind`, `piece`, `streak`, the annex frame).
+The clean nodes now strip them, and the collision output keeps only `name`.
+
+**Load and save checks.** A fresh `hp::neo_tower::1.1` from the saved library applied the
+`neotokyo_slab` preset (width 66, service tower, 2 billboards) and cooked with no errors or
+warnings. Both build instances are locked and match their definitions.
+
+Evidence in `docs/redesign/evidence/neo-tower/`. All are Karma renders through `render`
+(OIDN denoiser), 1600 to 1910 px wide, and every JPG is under 400 KB. The
+night image has a soft bloom added locally with PIL. The sheets were assembled locally.
+
+| File | What it shows |
+|---|---|
+| `p3_00_overview.jpg` | contact sheet of p3_01 to p3_10 |
+| `p3_01_tokyo3_dusk.jpg` | Tokyo-3 at dusk: the hero `tokyo3_spire` and a `tokyo3_block` over a low city of lots, sun glow, height fog |
+| `p3_02_neotokyo_night.jpg` | Neo-Tokyo at night: slabs and stacks, searchlights from the `fixture` spots, giant billboards, lit window zones, fog, wet ground |
+| `p3_03_variation_block.jpg` | 9 towers from the 4 presets plus a custom one, with different seeds and footprints, labelled |
+| `p3_04_interior_cutaway.jpg` | cut-away at floor 6: core, corridors, offices, partitions |
+| `p3_05_hero_three_angles.jpg` | the hero spire at 0°, 120° and 240° |
+| `p3_06_engine_check_fbx_lod0.jpg` | `SM_neo_tower_LOD0.fbx` re-imported with a File SOP, UCX hulls blasted, materials bound by slot name, flat engine-style key and ambient light |
+| `p3_07_materials_closeup.jpg` | the base of the spire: streaks under sills, edge chips, per-panel tone, stencils and hazard band |
+| `p3_08_lod_match_dusk.jpg` | Tokyo-3 LOD0, LOD1 and LOD2, and Neo-Tokyo LOD1 and LOD2, at dusk with their measured luminance |
+| `p3_09_collision_crown_fix.jpg` | the 7 UCX hulls of the spire, and a close-up of the crown body hull and the slim mast hull |
+| `p3_10_decal_grime_textures.jpg` | the decal atlas, a normal map, `T_grime_Mask` and the recalibrated LOD2 atlas |
+
+Wall time: P3 ran from 00:02 to about 01:55 UTC (about 113 min). Of that, about 19 min
+was inside `render` (Karma evidence and tests, texture and FBX ROPs) and about 4 min was
+blocked by `export_all` presses.
+
+### Call tally (P3)
+
+These counts come from the session transcript and include the final save and quit.
+
+| Tool | Calls | Errors | Notes |
+|---|---|---|---|
+| edit | 83 | 10 | node builds, MaterialX grime layers in 8 materials, 16 Font nodes, lights, ROPs |
+| render | 83 | 0 | Karma evidence and tests, texture ROPs (frames 1–14), FBX re-runs |
+| inspect | 50 | 8 | option-shape errors, each fixed on the next call |
+| parm_set | 45 | 2 | both were `houdini_busy` from `export_all`, which finished |
+| houdini_python | 37 | 0 | see below |
+| job | 7 | 0 | |
+| cook | 4 | 0 | |
+| hip_save | 5 | 0 | |
+| houdini_status | 2 | 0 | |
+| houdini_connect | 3 | 0 | launch headless, pin pid 1672, quit. The GUI Houdini (pid 48868) was never touched |
+| look | 1 | 1 | Flipbook draft timed out at 30 s on the 0.5 M-triangle spire |
+| search | 1 | 0 | |
+| **total** | **321** | **21** | |
+
+Text bytes, measured from the transcript: **138 KB sent** and **277 KB of text
+received**, plus 9 render thumbnails and 56 local images that I read to judge renders and
+sheets.
+
+What the bytes were:
+
+- **Sent:**
+  - `edit`: 78 KB (MaterialX and Copernicus graphs, lights and ROPs; the long VEX went
+    through files, below).
+  - `houdini_python`: 24 KB.
+  - `parm_set`: 15 KB.
+  - `render`: 12 KB.
+- **Received:**
+  - `inspect`: 130 KB. The largest replies were Karma ROP parms with the 8 KB tonemap
+    junk, `full_strings` reads, and type lookups.
+  - `parm_set`: 48 KB.
+  - `edit`: 40 KB.
+- **VEX through files.** About 70 KB of VEX (volumes 12 KB, silhouette 27 KB,
+  collision, LOD2 shell, finish, grime mask, gen_grime, gen_decals, two skies) never went
+  through a tool argument. I kept each snippet in a local file and loaded it with a
+  2-line `houdini_python` reload (`parm.set(open(file).read())`). That emulates
+  `value_file`, which the 2.0.0 bridge lacks. Without it, the silhouette snippet alone
+  (7 revisions) would have cost about 190 KB.
+
+### houdini_python uses (37)
+
+| Group | Count | Calls | Why no tool fits (2.0.0 bridge) |
+|---|---|---|---|
+| HDA lifecycle | 7 | create the 1.1 definition (copyToHDAFile, changeNodeType, Silhouette folder inserted after Crown, PythonModule presets); add the Apply Preset button; export grime parms and defaults; save ×3; final save and relock | no `hda` tool. The interface needed `insertAfter` of a folder, a menu callback, disable-when rules and changes to definition defaults |
+| `value_file` emulation | 9 | load or reload long snippets from local files (volumes, silhouette, facade_annex, texture wrangles, skies) | `edit set` takes the snippet inline only |
+| String patches | 5 | `gen_lod2` (shutters, grime, Neo-Tokyo emission ×2), facade spandrel split, collision fin and sleeve hulls | no `patch` op. A one-line change would otherwise resend a 3 to 27 KB snippet |
+| Reads the tools refuse or cut off | 6 | children wiring of both assets (`inspect network` takes no `wiring`); the PythonModule section; material subnet contents; texture switch wiring; `subnetconnector parmtype` menu ×2 | `network` has no wiring; no HDA section reader; the candidate list was cut at 20 items, so `atmosphere` was missing |
+| Geometry and QA analysis | 10 | sky-bridge bbox; streak statistics ×3 (through the bevel, on the spandrels); fixture list with world transforms for the light rig; collision hull report; QA reports; fresh-instance preset test; default budget; `export_dir` raw value | `inspect geo` cannot group stats by an attribute (bbox per `name`), filter a vertex attribute by a prim group, or read several targets |
+
+The five string patches and nine snippet reloads (14 in all) fall to stream D2a's `edit
+patch` and `value_file` once the bridge is 2.1. The `hda` tool covers the seven HDA
+lifecycle uses if it handles version bumps (copy to a new type name, then
+changeNodeType) and inserting a folder at a position. The ten analysis calls are a real
+gap.
+
+### Errors and whether the hint led to the fix
+
+| # | Call | Error | Hint useful? |
+|---|---|---|---|
+| 1 | inspect network `cook_uncooked` | invalid_argument | yes, listed the valid options |
+| 2 | inspect parms `paths` + `include_defaults` | invalid_argument | yes (same as P1 #7) |
+| 3 | inspect network `wiring` | invalid_argument | yes, but wiring is what I needed; escape |
+| 4 | inspect parms `.../gen_signs/snippet` | parm_not_found | **yes**: "Did you mean vexsnippet?" |
+| 5 | edit copy with `to_parent` missing in op 1 | invalid_argument | yes, named the field; the generic `hocuspocus://tools` pointer is unreachable here |
+| 6 | look draft on the spire | internal, render timeout 30 s | no hint; Karma `render` worked (P2 #28 again) |
+| 7 | edit mtlxadd created in the same call, then connected | "has no input 0 (it takes 0)" | **wrong**: mtlxadd has 2 inputs. Validation before the node exists (P2 #29). Split calls |
+| 8 | edit connect with relative names | invalid_argument (+18 problems) | **yes**: all 19 problems in one error, fixed in one resend |
+| 9 | edit: create the 1.1 tower and wire `from_output: 1` | "has no output 1 (it has 1)" | **wrong**: the type has 2 outputs. Same up-front validation |
+| 10 | edit copy, then delete children of the copy | node_not_found | misleading: the children exist once the copy runs. Split calls |
+| 11 | edit subnetconnector `parmtype: volume` | invalid_value | partly: listed 20 candidates, cut off before `atmosphere`; escape |
+| 12 | edit volume `uniformsamples: nonuniform` | invalid_value | **yes**: candidates, `size` |
+| 13 | inspect parms `paths: ["/obj/sky", ...]` | "No parm 'sky' on /obj" | no: it read a node path as a parm path (P2 #3 again) |
+| 14 | inspect geo with `paths` | invalid_argument | yes, one per target |
+| 15 | inspect geo `Cd` as prim | invalid_argument | **yes**: "'Cd' is a vertex attribute" |
+| 16 | inspect geo vertex `Cd` in prim group | invalid_argument | the message is clear, but no way round it; escape |
+| 17 | edit copy ×4 while a Karma render ran | houdini_busy, not started | yes: retry after the render |
+| 18 | edit `$prev` | invalid_argument | **yes**: "An $id names an earlier op ..." |
+| 19 | edit `set` on a button | invalid_value | **yes**: "Use press: true" |
+| 20–21 | parm_set press `export_all` | houdini_busy (30 s), still running | yes: inspect before repeating. I waited on the file timestamps |
+
+Other problems that were not error results:
+
+- VEX problems surfaced in edit rows: two compile errors with line and column (an
+  ambiguous `prim()` inside `append()`, and a string comparison of `prim()`), plus two
+  semantic surprises found by looking (`nprimitives` does not count new prims, and
+  `point(geoself())` does not see new points).
+- `$id` is not substituted inside parm values (`lookatpath: "$tg"`).
+- `inspect parms full_strings` printed a channel-referenced snippet twice.
+- An `edit` summary lists every touched node even with `summary`.
+
+The hints were good whenever they named candidates or the corrective call (8 times). They
+misled in the same places as in P2: up-front validation (3 errors) and truncated or
+script-generated menus (1).
+
+### Friction, ranked, with proposed tool changes
+
+1. **High: a Karma render or long button press blocks the main thread.**
+   - Every `render` ran synchronously in the session's Houdini: 83 renders, about 19 min.
+   - Edits sent during a render came back `houdini_busy`.
+   - Each `export_all` press (3 to 4 min) returned `houdini_busy` twice. Its result was
+     discarded, and I watched file timestamps to know when it ended.
+   - *Proposal:*
+     - run Karma ROPs out of process (husk on a saved USD or hip snapshot) so the scene
+       stays editable;
+     - make `parm_set press` return a `job_id` past `wait_s`, like `cook` and `render`.
+2. **High: no file-backed values or patch op in 2.0.0.** Fourteen escapes. About 70 KB of
+   VEX went through local files plus a reload, and five 1-line fixes were Python string
+   replaces. D2a's `edit patch` and `value_file` close this. *Proposal:* also let
+   `value_file` watch the file (re-set on change) for a VEX edit loop.
+3. **High: `edit` still validates ops against the scene before the call.**
+   - It rejected connections to a node created in the same call (wrong input and output
+     counts, #7 and #9).
+   - It rejected edits inside a copy made in the same call (#10).
+   - Same as P2 friction 1. *Proposal:* as P2, validate against a simulated state; for a
+     created node take inputs and outputs from its type.
+4. **Medium: no geometry analytics.** QA questions needed Python:
+   - "how long are the streaks on spandrels";
+   - "where are the spot fixtures in world space";
+   - "what is the bbox of each collision hull".
+   - *Proposal:* `inspect geo {group_by: "name", stats: ["bbox", "count"], where:
+     "surface == 'decal'"}`, and vertex attributes filtered by a prim group (promote
+     internally).
+5. **Medium: the HDA lifecycle needs version bumps.** 1.0 to 1.1 took copyToHDAFile under
+   a new name, an install and changeNodeType. Then came a folder inserted at a position,
+   a PythonModule, changed defaults on the definition, and a save with relock. *Proposal:*
+   `hda {action: "version", node, new_version, keep_old: true}`, plus interface ops that
+   take `after: "<folder>"` and `default` changes.
+6. **Medium: `look` is unusable on production geometry.** The Flipbook timed out at 30 s on
+   0.5 M triangles (P2 #9 again), so every visual check was a Karma render plus a local
+   Read. *Proposal:* `look` with a bounding-box or LOD proxy, or a raised timeout with
+   progress.
+7. **Medium: menu candidates are cut off at 20.** `subnetconnector parmtype` has more than
+   40 items, and the right one (`atmosphere`) was not shown. *Proposal:* rank candidates
+   by similarity to the rejected value (`volume` against `atmosphere`, by label "Volume
+   Shader"), or list all of them for an invalid_value.
+8. **Low: image analysis and sheets are local.** Luminance matching for the LOD2 fix,
+   contact sheets, bloom and JPG size limits were all done in PIL. *Proposal:* `inspect
+   image` on a rendered file with region or mask stats, and `render {output, format:
+   "jpg", max_kb}`.
+9. **Low: output noise.**
+   - Karma ROP parms (8 KB of tonemap ramps, P2 #10).
+   - `full_strings` repeats channel-referenced values.
+   - The edit summary lists every node.
+   - `inspect network` rejects `wiring` and `cook_uncooked` while `node` accepts them.
+10. **Low: `$id` is not substituted inside string parm values.** Light rigs wanted
+    `lookatpath: "$target"`. *Proposal:* substitute a whole-value `$id` in string parms,
+    or accept `{"node": "$id"}` as a value.
+
+What worked well:
+
+- `render` again: Karma `/obj` ROPs with camera, object and light lists, Copernicus
+  `rop_image` frame ranges (14 texture frames per map), FBX ROPs and USD. It always
+  restored overrides.
+- `edit` `copy`: copying a `color3FA` multiply node avoided the mtlx signature escape from
+  P2, which put the grime layer into 8 materials with no Python.
+- `edit` built 16 Font nodes with Japanese text and expressions in one call.
+- The error that listed all 19 problems at once (#8) was fixed in one resend.
+- `parm_set press: true` ran the HDA's Python buttons.
+- The "Use press: true" and "'Cd' is a vertex attribute" hints.
+- Pinning: the GUI Houdini (48868) stayed untouched for the whole phase.
+
+### Capability verdicts
+
+| Area | Verdict | Notes |
+|---|---|---|
+| Silhouette volumes, fins, sleeves, annexes, bridges, billboards, clutter | native | VEX through `edit`. The long snippets were loaded from files by escape (value_file gap) |
+| Style presets (menu callback, PythonModule) | escape hatch | HDA interface and section editing |
+| HDA versioning 1.0 → 1.1, save, relock | escape hatch | |
+| Rain-streak mask (ray cast), per-piece tone | native | |
+| Procedural decal and grime textures in Copernicus | native | Font nodes, wrangles, Switch frames, `rop_image` |
+| MaterialX grime layer, decal material with opacity | native | the `copy` trick avoided P2's signature escape |
+| LOD2 calibration | native, plus local measurement | luminance measured in PIL |
+| Collision crown fix | native | the hull report needed Python |
+| Lookdev (latlong sky from Copernicus, fog volumes, spot rig from fixtures, OIDN) | native | the fixture positions were read by escape |
+| Variation block and cut-away | native | |
+| FBX engine check | native | File SOP, blast, material bind by slot name |
+| Evidence and contact sheets | native render, local sheets | |
+| Export re-run | native, blocking | `export_all` press, `houdini_busy` |
+
+## Overall assessment
+
+**Can these tools produce a AAA procedural skyscraper generator?** They can produce the
+generator and the pipeline. They have not, in three phases, produced AAA-quality output,
+and the gap is mostly the agent's, not the tools'.
+
+The asset pair now has:
+
+- a fast design asset with four art-directed presets and 20 silhouette parms on top of
+  the P1 massing, facade and interior system;
+- an export asset with three LODs, convex collision, trim-sheet, atlas and tiling UVs,
+  59 procedural textures, 15 MaterialX materials with grime and decal layers, and FBX
+  and USD outputs;
+- a stated contract and polygon budgets.
+
+Every step from an empty scene to an engine-ready FBX went through the HocusPocus tools.
+The 37 Python escapes were HDA lifecycle, string transport and analysis, never modelling.
+A team could put this generator in a pipeline as it stands.
+
+**Tool-limited** (each cost time; none blocked a result):
+
+- the main thread blocks during renders and presses (about 19 min of renders plus the
+  export presses);
+- no file-backed values or patches in 2.0.0 (14 escapes, about 70 KB of VEX moved around
+  the tool);
+- up-front `edit` validation (4 split calls);
+- no geometry or image analytics (10 Python reads, local PIL);
+- `look` timeouts on real geometry.
+
+The 2.1 streams already in flight (`hda`, `edit patch`, `value_file`, validation fixes)
+cover 21 of the 37 escapes.
+
+**Agent-limited** (what decides whether the result is AAA):
+
+- *All geometry is hand-written VEX*: about 60 KB in P1 and 70 KB in P3, plus P2's
+  texture and SOP wrangles. Quality is
+  bounded by spatial reasoning in text. The 1.1 additions are boxes, prisms and lofts.
+  Annex volumes are rectangles on every footprint, bridges run straight, and the clutter
+  is placed by rule. A human artist's kitbash pieces would read richer.
+- *Visual judgement at 1600 px.* I judged every image by eye, but I cannot see
+  sub-centimetre z-fighting, mip bleed or normal-map seams. The grime ended up subtle
+  because I raised it only until it read in close-ups (`p3_07`). From far away the
+  towers still look clean.
+- *Composition and lighting.* The dusk and night images read as the art direction (armoured
+  Tokyo-3 spires against a sunset; Neo-Tokyo slabs with searchlights and billboards).
+  But a lighting artist would push contrast, atmospheric depth and focal hierarchy
+  further.
+- *Silhouette.* The fins, sleeves and crown hardware make Tokyo-3 read as armoured rather
+  than office. The Neo-Tokyo slab and stack read as dense megablocks. The variation block
+  (`p3_03`) still shows the family resemblance of a single generator: all towers are
+  extrusions of one footprint shape per tower.
+
+**What remains before shipping quality:**
+
+1. **An LOD2 impostor bake** of LOD1 (`karmatexturebaker`), so the window pattern matches
+   as well as the brightness. Then HLOD and Nanite-style settings for city blocks.
+2. **Interior mapping for LOD0 windows** (a parallax cubemap atlas), so the P1 interiors
+   show from outside without the full geometry.
+3. **LOD0 cost.** The presets reach 0.33 to 0.79 M triangles. Interiors are on demand, but
+   the facade alone is 0.3 M or more on big towers. Instanced module kits (packed
+   primitives exported as instances) would cut memory a lot.
+4. **Lightmap or AO bakes into `uv2`**, and a texture budget. 59 maps at 2K are about
+   1 GB as uncompressed RGBA8, or about 0.3 GB with block compression and mips.
+   Engine-ready packing needs channel packing, BC formats and streaming groups.
+5. **A real engine import.** The "engine check" here is a flat-lit Houdini render of the
+   re-imported FBX. An Unreal or Unity import, with collision, material slot and LOD-group
+   checks, is the real test.
+6. **Richer massing grammar:** tier shapes that change per tier, non-box annexes,
+   curved bridges, and crown and clutter kits. Plus a human art-direction pass on the
+   presets.
+7. **Decals that wrap corners** (projected decals in the engine, rather than baked quads),
+   and grime strong enough to read from a distance.
+
+The tools are ready for this work. The next gains come from the 2.1 tool fixes for the
+agent's iteration speed, and from human art direction for the last mile.
