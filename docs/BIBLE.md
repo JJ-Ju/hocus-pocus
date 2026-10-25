@@ -1441,7 +1441,7 @@ only it. `conftest.py` finds hython via
 | `tests/integration` | `hython -m pytest` | in-process host: one `hou` session per run, `hipFile.clear()` per test, every tool exercised against real nodes; the idioms in §5 each have a test; the transaction engine, `inspect`/`search` byte identity with the 1.4 reads (`detail: full`) and their compact projections, the look backends | fast (default) < 90 s; `slow` about 3 min |
 | `tests/e2e` | system Python spawning hython | official `mcp` client → `hocuspocus-mcp` stdio → `hython -m hocuspocus.host` on an ephemeral port with an isolated `HOUDINI_USER_PREF_DIR` and a neutral cwd: a stdio round trip, review 06 tasks 2, 3, 4, 6 and 9 as one scripted scenario, a bridge launch that checks the work dir, two Houdinis | < 60 s |
 | `tests/workloads` (2.0) | system Python spawning hython (`--runworkloads`) | the evaluation workloads as scripts, each against its budget (below) | about 1 min; budget 12 min |
-| `tests/integration/test_parity_gui.py` (2.0, `gui`, `--rungui`) | system Python launching `houdinifx` with isolated prefs | the GUI column of the parity matrix (below) | about 30 s |
+| `tests/integration/test_parity_gui.py` (2.0, `gui`, `--rungui`) | system Python launching `houdinifx` with isolated prefs | the GUI column of the parity matrix (below) | about 3 min (2.1) |
 | GUI (manual) | checklist | package loads in `houdinifx`, autostart, viewer look; run before a release and logged in `docs/redesign/progress.md` | — |
 
 **The workloads tier** (2.0, spec-2.0 §5.2, D42). `tests/workloads/v2/` scripts the

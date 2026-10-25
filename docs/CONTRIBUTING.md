@@ -212,7 +212,7 @@ or into your real Houdini preferences, and they never use port 37219.
 | `tests/unit` | system Python | `.venv/Scripts/python -m pytest tests/unit -q` | about 10 s |
 | `tests/integration` (fast, the default) | hython | see below | < 90 s |
 | `tests/integration` (`slow`) | hython | the same command with `-m slow` (or `--runslow` for both) | about 3 min |
-| `tests/integration/test_parity_gui.py` (`gui`, the GUI column of [`parity.md`](parity.md)) | system Python launching `houdinifx` (isolated prefs; a window opens and closes) | `.venv/Scripts/python -m pytest tests/integration/test_parity_gui.py --rungui -q` | about 30 s |
+| `tests/integration/test_parity_gui.py` (`gui`, the GUI column of [`parity.md`](parity.md)) | system Python launching `houdinifx` (isolated prefs; three windows open and close, one at a time) | `.venv/Scripts/python -m pytest tests/integration/test_parity_gui.py --rungui -q` | about 3 min |
 | `tests/e2e` | system Python spawning hython | `.venv/Scripts/python -m pytest tests/e2e -q` | < 60 s |
 
 When no hython can be found, the `houdini` and `e2e` tests skip. hython is found through

@@ -16,8 +16,10 @@ the Status column says (the matrix rows are updated to match). 2.1 removed `comp
 It runs in the dev venv's Python (no hython), launches `houdinifx` through
 `bridge/launch.py` with an isolated `HOUDINI_USER_PREF_DIR` (the dev package JSON and a
 `profile = "full"` toml), an isolated `HOCUSPOCUS_STATE_DIR` and port 0, drives the host over
-`POST /hp/v1/call`, and closes Houdini with `houdini_connect {quit}`. About 30 s on the 1.4
-release machine. The headless column is the ordinary integration tier.
+`POST /hp/v1/call`, and closes Houdini with `houdini_connect {quit}`. Two short launches
+before it (a startup dialog and a host that cannot start, D60) open and close a window
+each. 24 tests in about 3 minutes on the 2.1 machine (Windows 11, 22.0.466 Indie). The
+headless column is the ordinary integration tier.
 
 Legend:
 
