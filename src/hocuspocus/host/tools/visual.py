@@ -1,24 +1,24 @@
-"""Visual feedback: ``viewport_capture`` and ``render``. See docs/BIBLE.md §4.7 and §8.
+"""Visual feedback: ``render``. See docs/BIBLE.md §4.6 and §8.
 
 Images go back as ``{"image": {"png_base64", "mime_type"}}`` (the bridge turns that into
 MCP image content) and are also written under ``<state_dir>/captures``.
 
 **The capture and render backends live in** :mod:`hocuspocus.host.look` (2.0, spec-2.0
 §4): the viewer grab, the Flipbook ROP with its kept headless child, the OpenGL ROP, Karma
-and ``rop_image``, the snapshot and child hython, framing and the chain policy.
-``viewport_capture`` runs them through :func:`hocuspocus.host.look.run.execute` with its
-1.4 policy (:func:`~hocuspocus.host.look.select.capture_plan`), so its results, notes and
-``source_used`` are those of 1.4; ``look`` (``host/tools/look.py``) runs the same backends
-with the 2.0 policy. ``render`` of a Flipbook or OpenGL ROP renders headless in a fresh
-:class:`~hocuspocus.host.look.child.ChildRender` (the snapshot contract is in
-:mod:`hocuspocus.host.look.base`); every other ROP type renders in-process, frame by
-frame, through the main-thread executor.
+and ``rop_image``, the snapshot and child hython, framing and the chain policy; ``look``
+(``host/tools/look.py``) runs them. ``render`` of a Flipbook or OpenGL ROP renders
+headless in a fresh :class:`~hocuspocus.host.look.child.ChildRender` (the snapshot
+contract is in :mod:`hocuspocus.host.look.base`), and so (2.1, D74) does a Karma or USD
+Render ROP, so Houdini's main thread stays free while husk renders; every other ROP type,
+and every ROP in a GUI session, renders in-process, frame by frame, through the
+main-thread executor. (2.1 removed ``viewport_capture``, the
+1.4 capture tool that ran the same backends with its own policy.)
 
-The 1.4 names stay importable from here. The module-level settings and stand-ins that
-tests and the docs set on this module (``WARM_CAPTURES``, ``_CHILD_SCRIPT``,
-``_stage_crashed``, ``capture_with_karma``, ...) are forwarded to the look module that
-owns them (:data:`_FORWARDED`), so setting ``visual.WARM_CAPTURES = False`` still turns
-the kept child off.
+The names the capture code had in 1.4 stay importable from here. The module-level
+settings and stand-ins that tests and the docs set on this module (``WARM_CAPTURES``,
+``_CHILD_SCRIPT``, ``_stage_crashed``, ``capture_with_karma``, ...) are forwarded to the
+look module that owns them (:data:`_FORWARDED`), so setting ``visual.WARM_CAPTURES =
+False`` still turns the kept child off.
 """
 
 from __future__ import annotations
@@ -33,18 +33,16 @@ import types
 from typing import Any
 
 from hocuspocus.tools.errors import ToolError
-from hocuspocus.tools.migration import BARE, hint_join, hint_tool, is_compat
+from hocuspocus.tools.migration import BARE, hint_join, hint_tool
 
-from ..dispatch import call_timeout
+from ..executor import mark_long_step
 from ..look import child as _child
 from ..look import flipbook as _flipbook
 from ..look import karma as _karma
-from ..look import run as _run
 from ..look import select as _select
 from ..look.base import (  # noqa: F401  (1.4 names, re-exported)
     INTERNAL_KEY,
     ROP_LABELS,
-    ROP_SOURCE_USED,
     TEMPORARY_CAMERA,
     error_lines,
     failure,
@@ -67,7 +65,6 @@ from ..look.child import (  # noqa: F401
 from ..look.cop import (  # noqa: F401
     CHANNEL_NAMES,
     NON_IMAGE_OUTPUTS,
-    capture_cop,
     cop_display,
     cop_image_node,
     image_summary,
@@ -92,7 +89,6 @@ from ..look.framing import (  # noqa: F401
     _is_obj_camera,
     _last_framing,
     _obj_camera,
-    _resolve_capture,
     _usd_source_lop,
     _world_bbox,
     capture_target,
@@ -113,27 +109,31 @@ from ..look.image import (  # noqa: F401
     prune_captures,
 )
 from ..look.image import capture_targets as _capture_targets  # noqa: F401
-from ..look.image import finish_capture as _finish_capture
 from ..look.karma import KARMA_SAMPLES, karma_after_crash, karma_note  # noqa: F401
 from ..look.select import (  # noqa: F401
     CAPTURE_ROPS,
     available_capture_rops,
-    capture_chain,
     fallback_note,
     run_capture_chain,
 )
-from ..look.spec import FITS, LookSpec
-from ..look.spec import parse_resolution as _resolution
 from ..look.viewer import _capture_viewer, _scene_viewer, _viewer_context_note  # noqa: F401
 from ._diag import require_node
 from .geo import frame_num
 from .hip import _norm, check_allowed, resolve_path
 from .registry import HostContext, tool
 
-SOURCES = ("auto", "viewer", "flipbook_rop", "opengl_rop")
-"""``opengl_rop`` is the 1.3 name of ``flipbook_rop``: both run the viewport ROP chain."""
 VIEWPORT_ROP_TYPES = frozenset(CAPTURE_ROPS)
 """ROP types whose headless renders go through a child hython (module docstring)."""
+
+KARMA_IN_CHILD = True
+"""Headless, a Karma or USD Render ROP renders in a child hython on a snapshot of the
+scene, so the host's main thread is free while husk renders (2.1, D74; review 26 P3
+friction 1). Measured on 22.0.466 (a 1280x720, 256-sample Karma frame): in the host 3.39 s
+of main thread for one frame and 10.82 s for three; in a child 0.011 s of main thread (the
+snapshot) and 4.80 s and 11.61 s of wall time. Set it to False in the host process to
+render them in-process again."""
+
+HUSK_LOG_PARMS = ("husk_log", "husk_stdout", "husk_stderr")
 
 _FORWARDED: dict[str, Any] = {
     "_CHILD_SCRIPT": _child,
@@ -220,9 +220,33 @@ def rop_core_type(rop_node: Any) -> str:
     return rop_node.type().name().split("::")[0]
 
 
+def renders_through_husk(rop_node: Any) -> bool:
+    """A Karma ROP (``Driver/karma``) or a USD Render ROP: ``render()`` waits for husk."""
+    return rop_core_type(rop_node) == "karma" or is_usd_render_rop(rop_node)
+
+
 def needs_isolation(rop_node: Any, ctx: HostContext) -> bool:
-    """Headless Flipbook and OpenGL ROPs render in a child hython (module docstring)."""
-    return not ctx.ui and rop_core_type(rop_node) in VIEWPORT_ROP_TYPES
+    """Headless Flipbook and OpenGL ROPs, and (2.1, D74) Karma and USD Render ROPs, render
+    in a child hython (module docstring)."""
+    if ctx.ui:
+        return False
+    if rop_core_type(rop_node) in VIEWPORT_ROP_TYPES:
+        return True
+    return KARMA_IN_CHILD and renders_through_husk(rop_node)
+
+
+def husk_logs(node: Any, folder: Any) -> tuple[dict[str, Any], list[str]]:
+    """``(parms, logs)`` for a USD render ROP whose husk failure should carry the end of
+    its log (review 13): the ROP's own log files when it writes them, else parms that make
+    husk write ``out.log`` and ``err.log`` in ``folder()`` (a callable, called only then).
+    ``({}, [])`` for a ROP without husk log parms."""
+    if not all(node.parm(name) is not None for name in HUSK_LOG_PARMS):
+        return {}, []
+    if node.parm("husk_log").eval():
+        return {}, [node.parm(name).eval() for name in HUSK_LOG_PARMS[1:]]
+    where = folder()
+    out, err = (_norm(os.path.join(where, f)) for f in ("out.log", "err.log"))
+    return {"husk_log": 1, "husk_stdout": out, "husk_stderr": err}, [err, out]
 
 
 # -- Copernicus images (review 18) ----------------------------------------------------
@@ -243,124 +267,13 @@ def cop_rop_candidates(node: Any) -> list[str]:
 
 
 def cop_hint(node: Any) -> str:
-    """Where a COP node's pixels come from: a look at the node (``look {target}``,
-    ``viewport_capture {cop_path}`` on ``compat_1x``), a rop_image for files (review 18
-    papercuts 1 and 2)."""
+    """Where a COP node's pixels come from: a look at the node (``look {target}``), a
+    rop_image for files (review 18 papercuts 1 and 2)."""
     net = node if is_cop_network(node) else node.parent()
     where = net.path() if net is not None else "the COP network"
     return (
-        f"{hint_tool('viewport_capture', cop_path=node.path())} returns the image; to write "
+        f"{hint_tool('look', target=node.path())} returns the image; to write "
         f"files, render a Cop rop_image inside {where} (coppath = the node)."
-    )
-
-
-# -- viewport_capture ---------------------------------------------------------------
-
-
-def _capture_args(args: dict[str, Any]) -> dict[str, Any]:
-    """Validate viewport_capture's arguments without touching ``hou``."""
-    source = args.get("source", "auto") or "auto"
-    if source not in SOURCES:
-        raise ToolError("invalid_argument", f"'source' must be one of {', '.join(SOURCES)}.")
-    fit = args.get("fit", "all") or "all"
-    if fit not in FITS:
-        raise ToolError("invalid_argument", f"'fit' must be one of {', '.join(FITS)}.")
-    res = _resolution(args.get("resolution"))
-    frame = args.get("frame")
-    if frame is not None and (isinstance(frame, bool) or not isinstance(frame, int | float)):
-        raise ToolError("invalid_argument", "'frame' must be a number.")
-    extra_path = args.get("path")
-    if extra_path is not None and (
-        not isinstance(extra_path, str) or not extra_path.strip().lower().endswith(".png")
-    ):
-        raise ToolError(
-            "invalid_argument",
-            "'path' must be a .png file: the capture is always a PNG.",
-            hint="Use a path ending in .png, or render with a ROP for other formats.",
-        )
-    lop_path = args.get("lop_path")
-    if lop_path is not None and (not isinstance(lop_path, str) or not lop_path.strip()):
-        raise ToolError("invalid_argument", "'lop_path' must be a LOP node path.")
-    cop_path = args.get("cop_path")
-    if cop_path is not None and (
-        args.get("camera") is not None or lop_path is not None or source == "viewer"
-    ):
-        raise ToolError(
-            "invalid_argument",
-            "cop_path captures a COP image; it cannot be combined with camera, lop_path or "
-            "source viewer.",
-        )
-    return {
-        "cop_path": cop_path,
-        "resolution_given": args.get("resolution") is not None,
-        "source": source,
-        "fit": fit,
-        "fit_given": args.get("fit") is not None,
-        "res": res,
-        "frame": frame,
-        "camera": args.get("camera"),
-        "lop_path": lop_path,
-        "path": extra_path,
-    }
-
-
-def _capture_spec_of(parsed: dict[str, Any]) -> LookSpec:
-    """``viewport_capture``'s parsed arguments as a :class:`~hocuspocus.host.look.spec.
-    LookSpec` (its 1.4 ``source`` values kept)."""
-    return LookSpec(
-        tool="viewport_capture",
-        camera=parsed["camera"],
-        lop_path=parsed["lop_path"],
-        frame=parsed["frame"],
-        res=parsed["res"],
-        resolution_given=parsed["resolution_given"],
-        fit=parsed["fit"],
-        fit_given=parsed["fit_given"],
-        source=parsed["source"],
-        path=parsed["path"],
-    )
-
-
-def _resolve_viewport(spec: LookSpec) -> dict[str, Any]:
-    """The 1.4 capture target (camera, lop_path, the display). Main thread."""
-    return _resolve_capture({"camera": spec.camera, "lop_path": spec.lop_path, "frame": spec.frame})
-
-
-def _finish_viewport(spec: LookSpec, used: str, plan: Any, info: dict[str, Any]) -> dict[str, Any]:
-    """The 1.4 result: ``source_used`` names the backend. No ``hou``."""
-    notes = info.pop("notes", None)
-    info["source_used"] = _run.source_used(used)
-    if notes:
-        info["notes"] = notes
-    job = spec.prepared
-    assert job is not None
-    return _finish_capture(job.out_file, job.res, job.frame, info, job.extra_path)
-
-
-@tool("viewport_capture", scene=False, main_thread=False)
-def viewport_capture(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
-    """Off the main thread so a headless capture does not hold it while the child hython
-    renders; the GUI path runs as one main-thread call, as before (:mod:`~hocuspocus.host.
-    look.run`)."""
-    parsed = _capture_args(args)
-    if parsed["source"] == "viewer" and not ctx.ui:
-        raise ToolError(
-            "ui_required",
-            "source 'viewer' captures the GUI Scene Viewer, and this Houdini is headless.",
-            hint="Use source 'flipbook_rop' (or 'auto'), which renders headless.",
-        )
-    timeout_s = float(call_timeout(None) or ctx.config.default_timeout_s)
-    if parsed["cop_path"] is not None:
-        if ctx.executor.on_main_thread():
-            return capture_cop(ctx, parsed)
-        return ctx.executor.run(lambda: capture_cop(ctx, parsed), timeout_s)
-    return _run.execute(
-        _capture_spec_of(parsed),
-        ctx,
-        timeout_s,
-        resolve=_resolve_viewport,
-        choose=_select.capture_plan,
-        finish=_finish_viewport,
     )
 
 
@@ -603,6 +516,9 @@ def press_button(node: Any, parm: Any) -> dict[str, Any]:
             expected = []
     before = _top_parm_values(node)
     started = time.time()
+    # A callback cannot be split or interrupted: past the call's wait it goes on as a job
+    # instead of answering houdini_busy (BIBLE D70, review 26 P3 friction 1).
+    mark_long_step(parm.path())
     parm.pressButton()
     out: dict[str, Any] = {"pressed": True}
     changes = changed_parms(before, _top_parm_values(node))
@@ -1110,10 +1026,7 @@ def _check_camera_source(rop: Any, name: str, override: str) -> None:
 
 
 def _set_call(node: str, parm: str, value: str) -> str:
-    """The parm change a hint asks for: an ``edit`` ``set`` op on 2.0, the 1.4 shorthand
-    ``parm_set <node> <parm>: "<value>"`` on ``compat_1x``."""
-    if is_compat():
-        return f'parm_set {node} {parm}: "{value}"'
+    """The parm change a hint asks for: an ``edit`` ``set`` op."""
     return hint_tool("parm_set", path=f"{node}/{parm}", value=value) or ""
 
 
@@ -1157,7 +1070,7 @@ def rop_camera(rop: Any, override: Any) -> dict[str, str]:
         else hint_join(
             f"Create a camera ({hint_tool('node_create', parent='/obj', type='cam')}) and set "
             "the ROP's camera parm, or pass camera;",
-            hint_tool("viewport_capture"),
+            hint_tool("look"),
             "frames the scene without one.",
         )
     )
@@ -1266,14 +1179,11 @@ def _writer_output_hint(owner: Any) -> str:
         if method is not None and "explicit" in method.menuItems():
             explicit = "explicit"
     if explicit and file_parm is not None:
-        if is_compat():
-            return (
-                f'Set the output with parm_set on {owner.path()} (filemethod: "{explicit}", '
-                "then file: the path), then render without output."
-            )
         method_set = hint_tool("parm_set", path=f"{owner.path()}/filemethod", value=explicit)
+        file_set = hint_tool("parm_set", path=file_parm.path(), value=BARE)
         return (
-            f"Set the output with {method_set}, then file to the path; then render without output."
+            f"Set the output with {method_set}, then set the file parm to the path you want "
+            f"({file_set}); then render without output."
         )
     return (
         f"Set the node's own output parm ({hint_tool('parm_set', path=BARE, value=BARE)}), "
@@ -1389,6 +1299,7 @@ def _prepare_render(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
         "note": note,
         "range_note": range_note,
         "isolate": needs_isolation(rop, ctx),
+        "husk": renders_through_husk(rop),
         "stage_source": rop.parm("opsource") is not None and rop.parm("opsource").eval() == 1,
         "hfs": hou.text.expandString("$HFS"),
         # A COP image needs no lights (review 18 papercut 7).
@@ -1400,10 +1311,14 @@ def outputs_listing(outputs: list[str], missing: list[str]) -> dict[str, Any]:
     """``outputs`` when there are at most :data:`INLINE_OUTPUTS`, else ``outputs_summary``
     plus ``outputs_sample`` (the first and last :data:`OUTPUTS_SAMPLE_ENDS`); ``missing``
     up to :data:`MISSING_LISTED`. A 48-frame render's ``job result`` was 8 KB of paths
-    (review 20 N5). No ``hou``."""
+    (review 20 N5). The summary has no ``first`` and ``last`` here: the sample starts and
+    ends with them (2.1, D67). No ``hou``."""
     out: dict[str, Any] = {}
     if len(outputs) > INLINE_OUTPUTS:
-        out["outputs_summary"] = outputs_summary(outputs, missing)
+        summary = outputs_summary(outputs, missing)
+        summary.pop("first", None)
+        summary.pop("last", None)
+        out["outputs_summary"] = summary
         out["outputs_sample"] = outputs[:OUTPUTS_SAMPLE_ENDS] + outputs[-OUTPUTS_SAMPLE_ENDS:]
     else:
         out["outputs"] = outputs
@@ -1491,12 +1406,28 @@ def _render_job(plan: dict[str, Any], ctx: HostContext, thumbnail: bool) -> Any:
 
     frame_list = plan["frame_list"]
 
+    def child_parms(tmp_dir: str, logs: list[str]) -> dict[str, Any]:
+        """Main thread: the parms the child sets on its copy of the ROP; for a ROP that
+        renders through husk, foreground rendering and husk logs to read on failure."""
+        parms = {plan["parm"]: plan["output"]} if plan["output"] is not None else {}
+        parms.update(plan.get("camera_parms") or {})
+        node = hou.node(plan["rop"])
+        if node is not None and plan.get("husk"):
+            foreground = node.parm("soho_foreground")
+            if foreground is not None and not foreground.eval():
+                parms["soho_foreground"] = 1
+            if plan.get("usd"):
+                extra, files = husk_logs(node, lambda: tmp_dir)
+                parms.update(extra)
+                logs.extend(files)
+        return parms
+
     def run_isolated(job: Any) -> dict[str, Any]:
         tmp_dir = tempfile.mkdtemp(prefix="hp-render-")
+        logs: list[str] = []
         try:
             snapshot = job.run_main(lambda: snapshot_scene(tmp_dir))
-            parms = {plan["parm"]: plan["output"]} if plan["output"] is not None else {}
-            parms.update(plan.get("camera_parms") or {})
+            parms = job.run_main(lambda: child_parms(tmp_dir, logs))
             child = ChildRender(
                 snapshot,
                 tmp_dir,
@@ -1531,7 +1462,12 @@ def _render_job(plan: dict[str, Any], ctx: HostContext, thumbnail: bool) -> Any:
                 warnings = error_lines(outcome.get("warnings") or [])
                 if warnings:
                     detail["warnings"] = warnings
-                raise ToolError("cook_failed", message, detail=detail or None)
+                hint = None
+                tail = log_tail(logs)
+                if tail:
+                    detail["log_tail"] = tail
+                    hint = "husk failed; detail.log_tail has the end of its log."
+                raise ToolError("cook_failed", message, hint=hint, detail=detail or None)
             job.progress(1.0, "done")
             result = _render_result(plan, thumbnail)
             if outcome.get("notes"):
@@ -1553,15 +1489,21 @@ def _render_job(plan: dict[str, Any], ctx: HostContext, thumbnail: bool) -> Any:
             parms: dict[str, Any] = dict(plan.get("camera_parms") or {})
             if plan["output"] is not None:
                 parms[plan["parm"]] = plan["output"]
-            names = ("husk_log", "husk_stdout", "husk_stderr")
-            if plan.get("usd") and all(node.parm(n) is not None for n in names):
-                if node.parm("husk_log").eval():
-                    logs.extend(node.parm(n).eval() for n in names[1:])
-                else:
+            # "Block Until Render Complete" (Karma; USD Render and Mantra have it too): off,
+            # a GUI session renders in the background and render() returns before any file
+            # exists.
+            foreground = node.parm("soho_foreground")
+            if foreground is not None and not foreground.eval():
+                parms["soho_foreground"] = 1
+            if plan.get("usd"):
+
+                def folder() -> str:
                     log_dir.append(tempfile.mkdtemp(prefix="hp-husk-"))
-                    out, err = (_norm(os.path.join(log_dir[0], f)) for f in ("out.log", "err.log"))
-                    parms.update(husk_log=1, husk_stdout=out, husk_stderr=err)
-                    logs.extend((err, out))
+                    return log_dir[0]
+
+                extra, files = husk_logs(node, folder)
+                parms.update(extra)
+                logs.extend(files)
             return parms
 
         def apply_override() -> None:
@@ -1595,6 +1537,7 @@ def _render_job(plan: dict[str, Any], ctx: HostContext, thumbnail: bool) -> Any:
             node = hou.node(plan["rop"])
             if node is None:
                 return [f"{plan['rop']} was deleted during the render."]
+            mark_long_step(f"the render of {plan['rop']} (frame {frame_num(frame)})")
             errors: list[str] = []
             try:
                 node.render(frame_range=(frame, frame), verbose=False)
@@ -1614,6 +1557,7 @@ def _render_job(plan: dict[str, Any], ctx: HostContext, thumbnail: bool) -> Any:
                     with contextlib.suppress(Exception):
                         on_frame()
 
+            mark_long_step(f"the render of {plan['rop']}")
             errors: list[str] = []
             hooked = False
             with contextlib.suppress(Exception):

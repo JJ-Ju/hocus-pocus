@@ -53,7 +53,8 @@ def pid_alive(pid: int) -> bool:
     """True when a process with ``pid`` exists. Never signals or terminates anything.
 
     Windows: ``OpenProcess`` + ``GetExitCodeProcess`` (``os.kill`` there would *terminate*
-    the process). POSIX: ``os.kill(pid, 0)``. A process that exited with code 259
+    the process). POSIX: ``os.kill(pid, 0)``, and a zombie (exited, not yet reaped by its
+    parent) counts as dead (:func:`_is_zombie`). A process that exited with code 259
     (``STILL_ACTIVE``) is indistinguishable from a live one; that is acceptable here.
     """
     if not isinstance(pid, int) or pid <= 0:
@@ -68,7 +69,42 @@ def pid_alive(pid: int) -> bool:
         return True
     except OSError:
         return False
-    return True
+    return not _is_zombie(pid)
+
+
+def _is_zombie(pid: int) -> bool:
+    """True when ``pid`` has exited but its parent has not reaped it, which
+    ``kill(pid, 0)`` cannot tell from a live process. A Houdini the bridge launched and
+    never waited for stays a zombie child of the bridge after it exits or crashes (POSIX
+    only; Windows has no zombies), so without this the bridge took it for alive:
+    ``delivery_unknown`` instead of ``houdini_offline``, no ``instance_lost``.
+
+    Our own child: ``waitid(..., WNOWAIT)`` (Linux; macOS from Python 3.13), which leaves
+    it for ``Popen`` to reap. Anyone's: the state letter in ``/proc/<pid>/stat`` (Linux).
+    """
+    waitid = getattr(os, "waitid", None)
+    flags = getattr(os, "WEXITED", 0) | getattr(os, "WNOHANG", 0) | getattr(os, "WNOWAIT", 0)
+    if waitid is not None and hasattr(os, "P_PID") and flags:
+        try:
+            if waitid(os.P_PID, pid, flags) is not None:
+                return True  # our child, exited, left unreaped
+        except (ChildProcessError, OSError):
+            pass  # not our child
+    state = _proc_state(pid)
+    return state == "Z"
+
+
+def _proc_state(pid: int) -> str | None:
+    """The state letter of ``/proc/<pid>/stat`` (``R``, ``S``, ``Z``...), or None where
+    there is no ``/proc`` (macOS) or no such process."""
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text(encoding="ascii", errors="replace")
+    except OSError:
+        return None
+    # "pid (comm) state ...": comm may hold spaces and parentheses; the state follows
+    # the last ")".
+    fields = stat.rsplit(")", 1)[-1].split()
+    return fields[0] if fields else None
 
 
 def _pid_alive_windows(pid: int) -> bool:

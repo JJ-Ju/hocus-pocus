@@ -8,7 +8,8 @@ are the same.
 This is HocusPocus 2.0: the agent changes the scene with `edit` (every change of a task in
 one call and one undo step), reads it with `inspect` and `search`, and sees it with `look`.
 Coming from 1.4? The install is the same; [`migration-2.0.md`](migration-2.0.md) maps the
-old tool names, and `profile = "compat_1x"` keeps 1.4 scripts running for 2.0.x.
+old tool names (2.1 removed `profile = "compat_1x"`, which kept 1.4 scripts running for
+2.0.x).
 
 You need:
 
@@ -31,7 +32,7 @@ you get two commands on your `PATH`: `hocuspocus` and `hocuspocus-mcp`.
 
 ```text
 $ hocuspocus version
-hocuspocus 2.0.0 (hp/v1, mcp 2.3.x, Python 3.12.x)
+hocuspocus 2.1.0 (hp/v1, mcp 2.3.x, Python 3.12.x)
 ```
 
 ## 2. Install the Houdini package (1 minute)
@@ -39,8 +40,8 @@ hocuspocus 2.0.0 (hp/v1, mcp 2.3.x, Python 3.12.x)
 ```text
 $ hocuspocus install-houdini
 Houdini pref dir: C:\Users\you\Documents\houdini22.0 (from hython (C:\Program Files\Side Effects Software\Houdini 22.0.466), default location)
-copied hocuspocus 2.0.0 to C:\Users\you\Documents\houdini22.0\hocuspocus\2.0.0\python\hocuspocus
-copied the Houdini payload to C:\Users\you\Documents\houdini22.0\hocuspocus\2.0.0\houdini
+copied hocuspocus 2.1.0 to C:\Users\you\Documents\houdini22.0\hocuspocus\2.1.0\python\hocuspocus
+copied the Houdini payload to C:\Users\you\Documents\houdini22.0\hocuspocus\2.1.0\houdini
 wrote C:\Users\you\Documents\houdini22.0\packages\hocuspocus.json (template: ...\houdini\hocuspocus.json.template)
 recorded the pref dirs in C:\Users\you\AppData\Local\HocusPocus\install.json (the bridge reads hocuspocus.toml from there)
 Restart Houdini to load HocusPocus.
@@ -91,13 +92,13 @@ the UI is up, the host starts by itself. Then run:
 
 ```text
 $ hocuspocus doctor
-hocuspocus 2.0.0 (bridge, hp/v1)
+hocuspocus 2.1.0 (bridge, hp/v1)
 [ok]   Houdini install: C:\Program Files\Side Effects Software\Houdini 22.0.466
 [ok]   Houdini version: 22.0.466
-[ok]   pref dir: C:\Users\you\Documents\houdini22.0 (from hython (...), default location): package JSON -> C:\Users\you\Documents\houdini22.0\hocuspocus\2.0.0\python (2.0.0)
+[ok]   pref dir: C:\Users\you\Documents\houdini22.0 (from hython (...), default location): package JSON -> C:\Users\you\Documents\houdini22.0\hocuspocus\2.1.0\python (2.1.0)
 [ok]   hocuspocus.toml: none (defaults)
-[ok]   package JSON: C:\Users\you\Documents\houdini22.0\packages\hocuspocus.json -> C:\Users\you\Documents\houdini22.0\hocuspocus\2.0.0\python
-[ok]   host/bridge version: 2.0.0
+[ok]   package JSON: C:\Users\you\Documents\houdini22.0\packages\hocuspocus.json -> C:\Users\you\Documents\houdini22.0\hocuspocus\2.1.0\python
+[ok]   host/bridge version: 2.1.0
 [ok]   instance /health: pid 18244 port 52311 GUI (untitled) Houdini 22.0.466
 
 Register with Claude Code:
@@ -278,7 +279,7 @@ Nothing needs configuring for this guide. Two settings in
 win) matter most for scripts and other clients:
 
 ```toml
-profile = "full"            # also list and allow hda, pdg and events (default "core"; "minimal" lists 10 tools; "compat_1x" the 1.4 tools)
+profile = "full"            # also list and allow pdg and events (default "core"; "minimal" lists 10 tools)
 result_content = "both"     # also send structuredContent (default "text")
 ```
 
@@ -287,8 +288,8 @@ result_content = "both"     # also send structuredContent (default "text")
   `minimal` lists 10 tools (`houdini_status`, `houdini_connect`, `hip_open`, `hip_save`,
   `inspect`, `search`, `edit`, `node_create`, `parm_set` and `look`) for clients with a
   small context; the argument detail they leave out is in `hocuspocus://tools`.
-  `compat_1x` serves the 35 tools of 1.4 unchanged, for scripts written against 1.4,
-  during the 2.0.x releases.
+  `compat_1x` and `v2`, removed in 2.1, read as `full` with a warning in
+  `houdini_status`.
 - `result_content` decides where a result's JSON goes. The default `text` sends it once,
   in the text block, which is what Claude Code shows the model. Use `both` for a client
   that reads `structuredContent` or `outputSchema`, or `structured` for structured data
@@ -337,14 +338,14 @@ Several Houdinis are running and none is pinned (`ambiguous_instance`), or the p
 has exited (`instance_lost`). The error lists the live instances as `candidates`. Pin one
 with `houdini_connect {"pid": N}`; `houdini_connect {}` goes back to automatic selection.
 
-**`invalid_argument`: "node_info is a 1.4 tool that the 2.0 core profile does not serve"**
+**`invalid_argument`: "node_info is a 1.4 tool; HocusPocus 2.1 removed it."**
 
 A script or prompt written for 1.4 called a tool that 2.0 replaced. The `hint` names the
-replacement (`inspect {"what": "node"}` here); [`migration-2.0.md`](migration-2.0.md) lists
-them all. To run the script unchanged, set `profile = "compat_1x"` in `hocuspocus.toml`
-(both the bridge and Houdini read it) and restart Houdini.
+replacement (`inspect what: node` here); [`migration-2.0.md`](migration-2.0.md) lists
+them all with before/after calls. The `compat_1x` profile that ran 1.4 scripts unchanged
+in 2.0.x is gone in 2.1.
 
-**`invalid_argument`: "hda is a full-profile tool, and this Houdini's host runs the core profile"**
+**`invalid_argument`: "pdg is a full-profile tool, and this Houdini's host runs the core profile"**
 
 The bridge lists the `full` tools but the host in Houdini still runs `core`. Put
 `profile = "full"` in `hocuspocus.toml`, which both read (or set `HOCUSPOCUS_PROFILE=full`

@@ -1,0 +1,17 @@
+Hostname:	HOSTNAME	[Microsoft Windows 11 Pro x64]
+Uptime:		5 days, 13:33:40	[Started: Mon Oct 19 04:20:32 2026]
+License Server:	https://www.sidefx.com/license/sesinetd
+Connected To:	https://www.sidefx.com/license/sesinetd
+Server Version:	sesinetd22.0.10917
+Version:	Houdini22.0.466
+ReadAccess (Ipv4):	
+WriteAccess (Ipv4):	
+ReadAccess (Ipv6):	
+WriteAccess (Ipv6):	
+Using Http: Yes
+Enabled IPv6: false
+Used Licenses: None
+
+    38,770 of 63,092 MB available
+    CPU Usage:17% load
+

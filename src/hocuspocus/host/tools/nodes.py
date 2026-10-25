@@ -49,7 +49,10 @@ NODE_INFO_SECTIONS = (
 )  # fmt: skip
 DEFAULT_INCLUDE = ("parms", "inputs", "errors", "flags")
 FLAG_NAMES = ("display", "render", "bypass", "template", "locked")
-SETTABLE_FLAGS = ("display", "render", "bypass", "template")
+SETTABLE_FLAGS = ("display", "render", "bypass", "template", "material", "unload", "export")
+"""Flags ``edit`` sets (2.1, D68 adds ``material`` on VOPs, which a Material Library LOP
+needs, ``unload`` on SOPs and CHOPs, ``export`` on CHOPs and COPs); a node without the
+setter refuses the flag with the ones it has."""
 NAME_RE = re.compile(r"^[A-Za-z0-9_.\-]+$")
 CHILDREN_LIST_LIMIT = 200
 
@@ -65,7 +68,18 @@ _FLAG_SETTERS = {
     "render": "setRenderFlag",
     "bypass": "bypass",
     "template": "setTemplateFlag",
+    "material": "setMaterialFlag",
+    "unload": "setUnloadFlag",
+    "export": "setExportFlag",
 }
+_SET_FLAG_GETTERS = {
+    **{k: v for k, v in _FLAG_GETTERS.items() if k != "locked"},
+    "material": "isMaterialFlagSet",
+    "unload": "isUnloadFlagSet",
+    "export": "isExportFlagSet",
+}
+"""The getter of every settable flag (rollback restores them); reads report
+:data:`FLAG_NAMES` only."""
 
 
 # -- generic helpers --------------------------------------------------------------
@@ -362,11 +376,24 @@ def check_flags(node: Any, flags: Any) -> None:
         if not isinstance(value, bool):
             raise bad_arg(f"Flag {name!r} must be a boolean.")
         if not callable(getattr(node, _FLAG_SETTERS[name], None)):
-            have = ", ".join(sorted(node_flags(node))) or "none"
+            have = ", ".join(
+                n for n in SETTABLE_FLAGS if callable(getattr(node, _FLAG_SETTERS[n], None))
+            )
             raise bad_arg(
                 f"{node.path()} ({node.type().category().name()}) has no {name} flag.",
-                hint=f"Flags on this node: {have}.",
+                hint=f"Flags this node takes: {have or 'none'}.",
             )
+
+
+def flag_state(node: Any, names: Iterable[str]) -> dict[str, bool]:
+    """The current value of each settable flag in ``names`` that ``node`` has."""
+    out: dict[str, bool] = {}
+    for name in names:
+        getter = getattr(node, _SET_FLAG_GETTERS.get(name, ""), None)
+        if callable(getter):
+            with contextlib.suppress(Exception):
+                out[name] = bool(getter())
+    return out
 
 
 def set_flags(node: Any, flags: Any) -> None:
@@ -482,7 +509,9 @@ def _is_multiparm_block(template: Any) -> bool:
         return False
 
 
-def parm_rows(node: Any, include_defaults: bool) -> list[dict[str, Any]]:
+def parm_rows(
+    node: Any, include_defaults: bool, full_strings: bool = False
+) -> list[dict[str, Any]]:
     import hou
 
     from .parms import summarize_parm  # lazy: parms imports this module
@@ -503,7 +532,7 @@ def parm_rows(node: Any, include_defaults: bool) -> list[dict[str, Any]]:
                 continue
         except Exception:
             continue
-        rows.append(summarize_parm(parm_tuple))
+        rows.append(summarize_parm(parm_tuple, full_strings=full_strings))
     return rows
 
 
@@ -514,6 +543,7 @@ def node_block(
     include_defaults: bool = False,
     recurse_locked: bool = False,
     problems: dict[str, Any] | None = None,
+    full_strings: bool = False,
 ) -> dict[str, Any]:
     """The ``node_info`` block for one node (also returned by mutating node tools)."""
     sections = set(include)
@@ -530,7 +560,7 @@ def node_block(
     if "outputs" in sections:
         out["outputs"] = output_rows(node)
     if "parms" in sections:
-        out["parms"] = parm_rows(node, include_defaults)
+        out["parms"] = parm_rows(node, include_defaults, full_strings)
     if "errors" in sections or problems is not None:
         out.update(problems if problems is not None else collect_problems(node, cook=False))
     if _is_locked_hda(node) or inside_locked(node):
@@ -561,16 +591,6 @@ def node_block(
             out["userdata"] = {
                 k: v for k, v in node.userDataDict().items() if not k.startswith("___")
             }
-    return out
-
-
-def mutation_block(node: Any, *, cook: bool = True, **extra: Any) -> dict[str, Any]:
-    """Compact per-node block for mutation results: path, type, flags, problems. Without
-    ``cook`` the problems are read as they are (``cook_state`` from ``needsToCook()``)."""
-    out: dict[str, Any] = {"path": node.path(), "name": node.name(), "type": node.type().name()}
-    out.update(extra)
-    out["flags"] = node_flags(node)
-    out.update(cheap_cook_problems(node) if cook else collect_problems(node, cook=False))
     return out
 
 
@@ -840,12 +860,18 @@ def batch_error(
     return error
 
 
+_PARM_PREFIX = re.compile(r"^(parms\.[^\s:]+)(?: on /\S*)?: (.*)$", re.DOTALL)
+
+
 def _op_error(
     index: int, path: Any, error: ToolError, rolled_back: bool | None, op: dict[str, Any]
 ) -> ToolError:
     """:func:`batch_error` for an ``edit`` op."""
     field = _op_field(op, error)
     message = error.message
+    parm = _PARM_PREFIX.match(message)
+    if parm and field in (None, "parms"):  # set_parm_items' "parms.<name> on <node>: ..."
+        field, message = parm.group(1), parm.group(2)
     legacy = f"items[{index}]"
     if message.startswith(legacy):  # a validator's own "items[i].type must be ..."
         rest = message[len(legacy) :]
@@ -960,7 +986,9 @@ def check_output_index(src: Any, output: Any) -> int:
 
 
 def connect(dest: Any, index: int | str, src: Any, output: int, rollback: Rollback | None) -> int:
-    """Wire ``src``:``output`` into ``dest`` at ``index`` (or the next free input)."""
+    """Wire ``src``:``output`` into ``dest`` at ``index`` (or the next free input). ``src``
+    may be a subnet's indirect input (``hou.SubnetIndirectInput``, D59), whose network is
+    the subnet ``dest`` sits in."""
     import hou
 
     if src is not None and src.parent() != dest.parent():
@@ -969,7 +997,7 @@ def connect(dest: Any, index: int | str, src: Any, output: int, rollback: Rollba
             f"{src.path()} and {dest.path()} are in different networks.",
             hint="Connect nodes that share a parent; use an object_merge SOP to bring geometry across networks.",
         )
-    previous = {c.inputIndex(): (c.inputNode(), c.outputIndex()) for c in dest.inputConnections()}
+    previous = {c.inputIndex(): _input_source(c) for c in dest.inputConnections()}
     try:
         if index == "next":
             if src is None:
@@ -997,6 +1025,15 @@ def connect(dest: Any, index: int | str, src: Any, output: int, rollback: Rollba
         else:
             rollback.add(lambda: dest.setInput(used, old[0], old[1]))
     return used
+
+
+def _input_source(conn: Any) -> tuple[Any, int]:
+    """``(item, output index)`` feeding a connection: a node, or a subnet's indirect
+    input (``inputNode()`` is None for those)."""
+    try:
+        return conn.inputItem(), conn.inputItemOutputIndex()
+    except Exception:
+        return conn.inputNode(), conn.outputIndex()
 
 
 # -- tools ------------------------------------------------------------------------
@@ -1060,7 +1097,6 @@ def _locked_root_error(root: Any) -> ToolError:
     )
 
 
-@tool("node_find")
 def node_find(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     from hocuspocus.tools.catalog import CATEGORIES
 
@@ -1146,7 +1182,6 @@ def node_find(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     return result
 
 
-@tool("node_info")
 def node_info(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     paths = arg_list(args, "paths")
     include = args.get("include")
@@ -1159,6 +1194,7 @@ def node_info(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
             hint="Sections: " + ", ".join(NODE_INFO_SECTIONS) + ".",
         )
     include_defaults = arg_bool(args, "include_defaults", False)
+    full_strings = arg_bool(args, "full_strings", False)
     recurse_locked = arg_bool(args, "recurse_locked", False)
     nodes = []
     for path in paths:
@@ -1172,7 +1208,11 @@ def node_info(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
                 hint="Pass recurse_locked: true to read inside it.",
             )
         block = node_block(
-            node, include, include_defaults=include_defaults, recurse_locked=recurse_locked
+            node,
+            include,
+            include_defaults=include_defaults,
+            recurse_locked=recurse_locked,
+            full_strings=full_strings,
         )
         if node.type().category().name() == "Top":
             from .pdg import pdg_state  # lazy: TOP nodes only
@@ -1303,9 +1343,10 @@ def pair_block_end(node: Any, rollback: Rollback) -> Any:
     return begin
 
 
-# -- the 1.4 mutation tools: plan builders over the transaction engine (host/tx.py) ------
-# Each builds a tx.Plan from its 1.4 arguments and shapes tx.execute's per-op results
-# into its 1.4 result (spec-2.0 principle 14: one undo policy, one rollback, one engine).
+# -- node_create: a plan builder over the transaction engine (host/tx.py) ---------------
+# It builds a tx.Plan from its 1.4 arguments and shapes tx.execute's per-op results into
+# its 1.4 result (spec-2.0 principle 14: one undo policy, one rollback, one engine). The
+# other 1.4 mutation tools were removed in 2.1; edit runs their ops.
 
 
 @tool("node_create")
@@ -1354,55 +1395,6 @@ def node_create(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     return out
 
 
-@tool("node_delete")
-def node_delete(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
-    plan = tx.Plan([tx.Op("delete", args)], raw_errors=True)
-    data = tx.execute(plan, ctx).results[0].data
-    result: dict[str, Any] = {"deleted": data["deleted"]}
-    if data["any_reconnected"]:
-        result["reconnected"] = data["reconnected"]
-        result["nodes"] = [mutation_block(n) for n in data["alive"]]
-    return result
-
-
-@tool("node_edit")
-def node_edit(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
-    items = arg_list(args, "items")
-    partial = arg_bool(args, "partial", False)
-    result = tx.execute(tx.Plan([tx.Op("node", item) for item in items], partial=partial), ctx)
-    results = []
-    for res in result.results:
-        if res.error is not None:
-            results.append({"error": res.error})
-            continue
-        node = res.node
-        # Review 22 finding 3: a rename recooked a mountain HDA (~200 ms). An edit reports
-        # problems as they are; only cook and creates cook.
-        block = mutation_block(node, cook=False, **res.extra)
-        block["comment"] = node.comment()
-        block["position"] = _round(node.position())
-        block["color"] = _round(node.color().rgb())
-        results.append(block)
-    watch_nodes(res.node for res in result.done())
-    out: dict[str, Any] = {"results": results}
-    if result.failures:
-        out["failed"] = len(result.failures)
-    return out
-
-
-@tool("node_copy")
-def node_copy(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
-    mode = return_mode(args)
-    data = tx.execute(tx.Plan([tx.Op("copy", args)], raw_errors=True), ctx).results[0].data
-    sources, copies = data["sources"], data["copies"]
-    block = summary_block if mode == "summary" else mutation_block
-    results = [block(copy, source=src.path()) for src, copy in zip(sources, copies, strict=False)]
-    if mode == "summary":
-        collapse_problems(results)
-    watch_nodes(copies)
-    return {"paths": [c.path() for c in copies], "results": results}
-
-
 def _connect_source(src_path: Any, dest: Any, field: str = "from") -> Any:
     """The ``from`` node of a wiring item. A missing one is reported by its own path, with
     near misses from its parent (never ``dest``) and a ``node_find`` hint on that parent
@@ -1429,40 +1421,3 @@ def _connect_source(src_path: Any, dest: Any, field: str = "from") -> Any:
 
 connect_source = _connect_source
 """The wiring-source lookup under the name the transaction engine (``host/tx.py``) uses."""
-
-
-@tool("node_connect")
-def node_connect(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
-    items = arg_list(args, "items")
-    partial = arg_bool(args, "partial", False)
-    result = tx.execute(tx.Plan([tx.Op("connect", item) for item in items], partial=partial), ctx)
-    results = []
-    for res in result.results:
-        if res.error is not None:
-            results.append({"error": res.error})
-            continue
-        block = mutation_block(res.node, **res.extra)
-        block["to"] = block["path"]
-        results.append(block)
-    watch_nodes(res.node for res in result.done())
-    out: dict[str, Any] = {"results": results}
-    if result.failures:
-        out["failed"] = len(result.failures)
-    return out
-
-
-@tool("node_layout")
-def node_layout(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
-    data = tx.execute(tx.Plan([tx.Op("layout", args)], raw_errors=True), ctx).results[0].data
-    parent, moved = data["parent"], data["moved"]
-    rows = [{"path": n.path(), "position": _round(n.position())} for n in moved]
-    chunk = rows[:CHILDREN_LIST_LIMIT]
-    out: dict[str, Any] = {
-        "parent": parent.path(),
-        "mode": data["mode"],
-        "nodes": chunk,
-        "count": len(rows),
-    }
-    if len(rows) > len(chunk):
-        out["truncated"] = True
-    return out

@@ -29,9 +29,9 @@ from hocuspocus.tools.catalog import CATEGORIES
 from hocuspocus.tools.errors import ToolError
 from hocuspocus.tools.migration import hint_tool
 
-from ._common import arg_bool, dynamic_menu_note, int_arg, menu_is_dynamic
-from .parms import menu_label
-from .registry import HostContext, tool
+from ._common import arg_bool, dynamic_menu_note, glob_alternatives, int_arg, menu_is_dynamic
+from .parms import menu_label, template_conditionals, type_signatures
+from .registry import HostContext
 
 # -- help archive -----------------------------------------------------------------
 
@@ -393,6 +393,32 @@ def asset_fields(node_type: Any) -> dict[str, str]:
     except Exception:
         pass
     return out
+
+
+ASSET_HELP_SECTION = "HelpText"
+
+
+def asset_help(node_type: Any) -> tuple[str, str] | None:
+    """``(text, source)`` of a digital asset's own help, its definition's ``HelpText``
+    section (the wiki markup ``hda {help}`` writes), for a type nodes.zip does not document
+    (2.1, D83: r21 friction 5 read "No help found" for an asset with 3 KB of help)."""
+    try:
+        definition = node_type.definition()
+        section = definition.sections().get(ASSET_HELP_SECTION) if definition else None
+        text = section.contents() if section is not None else ""
+    except Exception:
+        return None
+    if not text or not text.strip():
+        return None
+    library = definition.libraryFilePath() or "Embedded"
+    return text, f"{library}:{ASSET_HELP_SECTION}"
+
+
+def _is_asset(node_type: Any) -> bool:
+    try:
+        return node_type.definition() is not None
+    except Exception:
+        return False
 
 
 def get_index() -> list[dict[str, Any]]:
@@ -1119,6 +1145,7 @@ def _template_row(
         row["help"] = _clip(" ".join(help_text.split()), PARM_HELP_CHARS)
     if template.isHidden():
         row["is_hidden"] = True
+    row.update(template_conditionals(template))
     if path:
         row["folder"] = " / ".join(path)
     return row
@@ -1140,11 +1167,34 @@ def _maybe_node_menu(template: Any) -> bool:
         return False
 
 
+def apply_definition_menus(node_type: Any, rows: list[dict[str, Any]]) -> None:
+    """Give a ``signature`` row the signatures of the asset's definition, the list ``edit``
+    checks a value against (:func:`~.parms.type_signatures`). The menu on the template and
+    on an instance holds only ``default`` and the signatures already chosen (D68)."""
+    signatures = type_signatures(node_type)
+    if signatures is None:
+        return
+    tokens, labels = signatures
+    for row in rows:
+        if row.get("name") != "signature":
+            continue
+        menu: dict[str, Any] = {
+            "items": [
+                [tok, menu_label(labels[i]) if i < len(labels) else tok]
+                for i, tok in enumerate(tokens[:MENU_CAP])
+            ]
+        }
+        if len(tokens) > MENU_CAP:
+            menu["total"] = len(tokens)
+        row["menu"] = menu
+
+
 def evaluate_dynamic_menus(node_type: Any, rows: list[dict[str, Any]]) -> None:
     """Fill the ``menu`` of rows whose menu Houdini computes on an instance (a menu
     script such as ``pdg_cachemode``, or a SOP ``group`` menu; review 14 papercut 10) from
     one throwaway instance: ``{items, dynamic: true, total?}``, and ``default_token`` for a
     menu default. A menu that evaluates empty or fails keeps ``items: []`` with a ``note``."""
+    apply_definition_menus(node_type, rows)
     pending = [row for row in rows if (row.get("menu") or {}).get("dynamic")]
     if not pending:
         return
@@ -1196,7 +1246,6 @@ def _category_arg(args: dict[str, Any]) -> str | None:
     )
 
 
-@tool("node_type_search")
 def node_type_search(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     query = args.get("query")
     if not isinstance(query, str) or not query.strip():
@@ -1244,8 +1293,8 @@ def _variants_note(variants: dict[str, int], rows: list[dict[str, Any]]) -> str:
 
 def filter_parms(rows: list[dict[str, Any]], pattern: str) -> list[dict[str, Any]]:
     """Rows whose name or label matches the glob ``pattern`` (case-insensitive); a
-    pattern without wildcards matches the whole name or label, and ``a|b`` matches
-    either glob (review 12 papercut 2).
+    pattern without wildcards matches the whole name or label, and ``a|b`` (2.1, D85: or
+    ``a,b``) matches either glob (review 12 papercut 2).
 
     Review 23 papercut 7: ``*pin*`` also matched eight ``*damping*`` parms. Rows where a
     wildcard pattern's text starts a word of the label or name (``Pin Type``, ``pin_group``)
@@ -1255,7 +1304,7 @@ def filter_parms(rows: list[dict[str, Any]], pattern: str) -> list[dict[str, Any
     the other alternatives are (``*pin*|group`` listed ``group`` as a substring match)."""
     import fnmatch
 
-    pats = [p.strip().lower() for p in pattern.split("|") if p.strip()]
+    pats = [p.lower() for p in glob_alternatives(pattern)]
 
     def matches(row: dict[str, Any], pat: str) -> bool:
         return fnmatch.fnmatchcase(row["name"].lower(), pat) or fnmatch.fnmatchcase(
@@ -1401,7 +1450,6 @@ def collapse_variants(
     return kept, variants
 
 
-@tool("node_type_info")
 def node_type_info(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     category = _category_arg(args)
     node_type = resolve_type(args.get("type"), category)
@@ -1417,7 +1465,7 @@ def node_type_info(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
         folder = ""  # the top-level parms, listed by detail: folders as "(no folder)"
     parm_glob = args.get("parms")
     if parm_glob is not None and (
-        not isinstance(parm_glob, str) or not parm_glob.replace("|", "").strip()
+        not isinstance(parm_glob, str) or not glob_alternatives(parm_glob)
     ):
         raise ToolError(
             "invalid_argument", "'parms' must be a non-empty glob such as *seed* or dist|inset."
@@ -1428,6 +1476,11 @@ def node_type_info(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     order = node_type.namespaceOrder()
     entry = help_entry(cat_name, components)
     raw_help = _HELP.read(entry) if entry else None
+    help_source = f"nodes.zip:{entry}" if raw_help else None
+    if raw_help is None:
+        own = asset_help(node_type)
+        if own is not None:
+            raw_help, help_source = own
     header = parse_help_header(raw_help or "")
     asset = asset_fields(node_type) if not components[3] or not header["summary"] else {}
     result: dict[str, Any] = {
@@ -1523,8 +1576,12 @@ def node_type_info(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
             result["help_text"] = text
             if truncated:
                 result["help_truncated"] = True
-            result["help_source"] = f"nodes.zip:{entry}"
+            result["help_source"] = help_source
         else:
             result["help_text"] = None
-            result["help_note"] = "No help found for this type in $HFS/houdini/help/nodes.zip."
+            result["help_note"] = "No help found for this type in $HFS/houdini/help/nodes.zip" + (
+                ", and its asset definition has no HelpText section."
+                if _is_asset(node_type)
+                else "."
+            )
     return result

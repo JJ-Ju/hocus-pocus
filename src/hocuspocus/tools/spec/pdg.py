@@ -6,7 +6,7 @@ from ._helpers import ToolSpec, _arr, _b, _cursor, _enum, _limit, _n, _obj, _s
 
 SPEC = ToolSpec(
     name="pdg",
-    profiles=("full", "compat_1x"),
+    profiles=("full",),
     description=(
         "Drive a TOP node: cook its work items as a job (block waits up to timeout_s, capped at"
         " the job threshold), status, workitems (paged; failed items say why), cancel, dirty."
@@ -23,8 +23,8 @@ SPEC = ToolSpec(
         "the whole graph (the target and its upstream TOPs), with nodes: {name: "
         "'finished/total'}; a cook whose items were cancelled ends cancelled, never done. "
         "cancel also cancels the job cooking that graph and returns the status after the cook"
-        " stopped, with cancelled: true and jobs_cancelled. node_info on a TOP node adds "
-        "pdg_state: {cooked, failed, total}; problems lists TOP nodes with failed items. "
+        " stopped, with cancelled: true and jobs_cancelled. inspect node on a TOP node adds "
+        "pdg_state: {cooked, failed, total}; inspect problems lists TOP nodes with failed items. "
         "workitems rows: id, index, state, output_files (relative to output_root, given once "
         "per page), cook_time_s, name only when it is not <node>_<id>, node for a network; "
         "attribs: [names] adds each item's attribute values (unknown names left out); state "

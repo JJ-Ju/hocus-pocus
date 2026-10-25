@@ -27,7 +27,10 @@ ERROR_CODES: dict[str, str] = {
     "unsaved_changes": "The scene has unsaved changes and consent was not given.",
     "file_not_found": "The file path does not exist.",
     "path_not_allowed": "The path is outside the configured approved roots.",
-    "ui_required": "This argument value (source: viewer) needs a GUI Houdini session.",
+    "ui_required": (
+        "A GUI-only argument value (source: viewer) on a headless Houdini, or a modal "
+        "hou.ui dialog refused during a call in a GUI session."
+    ),
     "python_disabled": "houdini_python is disabled by configuration.",
     "read_only": "The host is in read-only mode.",
     "job_not_found": "No job with that id (jobs do not survive a Houdini restart).",

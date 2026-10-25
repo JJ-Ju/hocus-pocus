@@ -93,7 +93,7 @@ FAKE_TOOLS = (
         dict(OBJ, properties={"path": {"type": "string"}}, required=["path"]),
         read_only=True,
     ),
-    ToolSpec("usd_stage", "USD.", dict(OBJ, properties={}), profiles=("compat_1x",)),
+    ToolSpec("usd_stage", "USD.", dict(OBJ, properties={}), profiles=("full",)),
 )
 
 
@@ -236,20 +236,7 @@ def test_instructions_cover_launch_lifetime_and_guide_recipes():
     guide = guide_text()
     assert guide.index("## Instructions") < guide.index("## Resources") < guide.index("## Recipes")
     assert '"spare_parms": {"add": [' in guide
-    assert 'network_describe {root: "/", format: "outline", depth: 2}' in guide
-
-
-def test_outline_resource_reads_network_describe_outline():
-    from hocuspocus.bridge.server import OUTLINE_ARGS
-
-    bridge, client, _ = make_bridge()
-    assert OUTLINE_ARGS == {"root": "/", "format": "outline", "depth": 2}
-    assert bridge.route_resource("houdini://outline") == ("network_describe", OUTLINE_ARGS)
-    assert "houdini://outline" in [str(r.uri) for r in bridge.list_resources()]
-    client.replies["network_describe"] = (True, {"nodes": [{"path": "/obj"}]}, {})
-    result = bridge.read_resource("houdini://outline")
-    assert json.loads(result.contents[0].text) == {"nodes": [{"path": "/obj"}]}
-    assert client.calls[-1][:2] == ("network_describe", OUTLINE_ARGS)
+    assert "houdini://outline{?root,depth}" in guide and "network_describe" not in guide
 
 
 def test_instructions_under_400_words():
@@ -572,7 +559,8 @@ def test_status_merges_registry_health_and_host():
     assert conn["pid"] == 4242 and conn["port"] == 51000 and conn["label"] == "hython"
     assert conn["hip"]["dirty"] is True and conn["time"]["fps"] == 24
     assert conn["scene_generation"] == 5
-    assert status["read_only"] is False and status["allow_python"] is True
+    # The default settings (read_only false, allow_python true) are left out (2.1, D66).
+    assert "read_only" not in status and "allow_python" not in status
     assert status["instances"][0]["selected"] is True
     assert "token" not in json.dumps(status)
     assert status["bridge_version"] and status["profile"] == "core"
@@ -612,16 +600,56 @@ def test_status_prints_the_hip_path_once():
     assert conn["hip"] == {"path": path} and conn["env"] == {"HIP": "C:/w", "JOB": "D:/j"}
 
 
-def test_compat_status_keeps_the_14_hip_fields():
-    bridge, client, _ = make_bridge(config=BridgeConfig(profile="compat_1x"))
+def test_status_leaves_out_nulls_repeats_and_default_settings():
+    """2.1 (D66, the scorecard bytes margin): dirty_source null, is_new false, a playback
+    range equal to the frame range, a host_version equal to the bridge's, read_only
+    false, allow_python true, launched_by null and what the connected row repeats are left
+    out; houdini://instances keeps the whole row; detail: true has every recent hip."""
+    from hocuspocus.bridge import resources as bridge_resources
+    from hocuspocus.version import __version__
+
+    bridge, client, _ = make_bridge()
+    recent = [f"C:/work/r{i}.hip" for i in range(5)]
+    host = {
+        "pid": 4242,
+        "hip": {"path": "C:/work/a.hip", "dirty": False, "dirty_source": None,
+                "is_new": False, "recent": recent},
+        "time": {"frame": 1, "fps": 24, "range": [1, 240], "playback_range": [1, 240]},
+        "scene_generation": 3,
+        "host_version": __version__,
+        "read_only": False,
+        "allow_python": True,
+    }  # fmt: skip
+    client.replies["houdini_status"] = (True, host, {})
+    status = structured(bridge.call_tool("houdini_status", {}))
+    conn = status["connected"]
+    assert conn["hip"] == {"path": "C:/work/a.hip", "dirty": False, "recent": recent[:3]}
+    assert conn["time"] == {"frame": 1, "fps": 24, "range": [1, 240]}
+    assert "host_version" not in conn and conn["port"] == 51000 and conn["label"] == "hython"
+    assert "read_only" not in status and "allow_python" not in status
+    (row,) = status["instances"]
+    assert row["selected"] is True and row["pid"] == conn["pid"] and "ui" in row
+    assert not {"port", "label", "houdini", "started", "generation", "launched_by"} & set(row)
+    whole = json.loads(bridge_resources.read(bridge, "houdini://instances").contents[0].text)
+    assert {"port", "label", "started"} <= set(whole["instances"][0])
+    fresh = {"path": "C:/work/a.hip", "dirty": False, "recent": recent}  # shaping edits in place
+    client.replies["houdini_status"] = (True, {**host, "hip": fresh}, {})
+    _ok, detailed, _meta = bridge.invoke("houdini_status", {"detail": True})  # not in FAKE_TOOLS
+    assert detailed["connected"]["hip"]["recent"] == recent
+    # What is not the default stays.
     client.replies["houdini_status"] = (
         True,
-        {"pid": 4242, "hip": {"path": "C:/work/a.hip", "name": "a.hip"}, "env": {"HIP": "C:/work"}},
+        {**host, "hip": {"path": "C:/work/a.hip", "dirty": True, "dirty_source": "tracked",
+                         "is_new": True},
+         "time": {"frame": 1, "fps": 24, "range": [1, 240], "playback_range": [1, 48]},
+         "read_only": True, "allow_python": False},
         {},
-    )
+    )  # fmt: skip
     status = structured(bridge.call_tool("houdini_status", {}))
-    assert status["connected"]["hip"]["name"] == "a.hip"
-    assert status["connected"]["env"] == {"HIP": "C:/work"}
+    hip, clock = status["connected"]["hip"], status["connected"]["time"]
+    assert hip["dirty_source"] == "tracked" and hip["is_new"] is True
+    assert clock["playback_range"] == [1, 48]
+    assert status["read_only"] is True and status["allow_python"] is False
 
 
 def test_server_info_only_in_the_handshake():
@@ -770,52 +798,9 @@ def test_pinned_instance_exit_never_falls_back_to_new_one():
 # -- resources and prompts -------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    ("uri", "tool", "args"),
-    [
-        ("houdini://node//obj/geo1", "node_info", {"paths": ["/obj/geo1"]}),
-        (
-            "houdini://node/obj/geo1/parms",
-            "node_info",
-            {"paths": ["/obj/geo1"], "include": ["parms"]},
-        ),
-        ("houdini://node/%2Fobj%2Fgeo1%2Fbox1/geo", "geo_info", {"path": "/obj/geo1/box1"}),
-        (
-            "houdini://nodetype/Sop/scatter",
-            "node_type_info",
-            {"type": "Sop/scatter", "detail": "full"},
-        ),
-        ("houdini://job/abc123", "job", {"action": "status", "job_id": "abc123"}),
-        ("houdini://status", "houdini_status", {}),
-        (
-            "houdini://outline",
-            "network_describe",
-            {"root": "/", "format": "outline", "depth": 2},
-        ),
-    ],
-)
-def test_resource_routing(uri, tool, args):
-    bridge, _c, _l = make_bridge()
-    assert bridge.route_resource(uri) == (tool, args)
-
-
-def test_read_resource_forwards_and_errors():
-    from mcp.shared.exceptions import MCPError
-
-    bridge, client, _ = make_bridge()
-    client.replies["geo_info"] = (True, {"point_count": 8}, {})
-    res = bridge.read_resource("houdini://node/obj/geo1/geo")
-    assert json.loads(res.contents[0].text) == {"point_count": 8}
-    client.replies["geo_info"] = (False, {"code": "node_not_found", "message": "nope"}, {})
-    with pytest.raises(MCPError):
-        bridge.read_resource("houdini://node/obj/missing/geo")
-    with pytest.raises(MCPError):
-        bridge.read_resource("houdini://bogus")
-
-
 def test_resources_over_mcp_client():
-    # The 1.4 resources; every 2.0 profile serves the 2.0 ones (test_bridge_resources.py).
-    bridge, _c, _l = make_bridge(instances=(), config=BridgeConfig(profile="compat_1x"))
+    # The 2.0 resources (test_bridge_resources.py has their etags and subscriptions).
+    bridge, _c, _l = make_bridge(instances=())
 
     async def run():
         async with Client(build_server(bridge)) as client:
@@ -828,21 +813,24 @@ def test_resources_over_mcp_client():
             return resources, templates, guide, status, prompts, prompt
 
     resources, templates, guide, status, prompts, prompt = anyio.run(run)
+    from hocuspocus.bridge.instructions import PROMPTS
+
     assert {str(r.uri) for r in resources} == {
         "houdini://status",
+        "houdini://instances",
+        "houdini://jobs",
         "houdini://outline",
+        "houdini://problems",
+        "houdini://events",
         "hocuspocus://guide",
         "hocuspocus://tools",
     }
-    assert "houdini://nodetype/{category}/{name}" in {t.uri_template for t in templates}
-    assert "HocusPocus drives a live Houdini" in guide.contents[0].text
+    uris = {t.uri_template for t in templates}
+    assert "houdini://type/{category}/{name}{?parms,folder,detail}" in uris
+    assert not any("nodetype" in uri or "houdini://job/" in uri for uri in uris)  # 1.4, gone
+    assert "## Recipes" in guide.contents[0].text  # the instructions are initialize's (D65)
     assert json.loads(status.contents[0].text)["connected"] is None
-    assert [p.name for p in prompts] == [
-        "inspect_scene",
-        "build_sop_chain",
-        "debug_red_node",
-        "turntable_preview",
-    ]
+    assert [p.name for p in prompts] == list(PROMPTS)
     assert "a torus" in prompt.messages[0].content.text
 
 
@@ -852,33 +840,20 @@ def test_prompt_requires_arguments():
     from hocuspocus.bridge.instructions import PROMPTS
 
     assert [p.name for p in list_prompts()] == list(PROMPTS) and len(PROMPTS) == 7
-    assert [p.name for p in list_prompts("core")] == list(PROMPTS)
-    assert len(list_prompts("compat_1x")) == 4  # the 1.4 prompts
-    for profile in (None, "compat_1x"):
-        with pytest.raises(MCPError):
-            get_prompt("debug_red_node", {}, profile)
-        assert "/obj" in get_prompt("inspect_scene", None, profile).messages[0].content.text
-    assert "inspect" in get_prompt("inspect_scene", None).messages[0].content.text
-    assert (
-        "network_describe"
-        in get_prompt("inspect_scene", None, "compat_1x").messages[0].content.text
-    )
+    with pytest.raises(MCPError):
+        get_prompt("debug_red_node", {})
+    text = get_prompt("inspect_scene", None).messages[0].content.text
+    assert "/obj" in text and "inspect" in text and "network_describe" not in text
 
 
-@pytest.mark.parametrize("profile", ["core", "compat_1x"])
-def test_instructions_guide_and_prompts_follow_the_profile(profile):
-    """spec-2.0 §2.8, §8: the 2.0 profiles get the 2.0 texts and the seven prompts,
-    compat_1x the 1.4 texts and the four 1.4 prompts; each guide stays within its cap."""
-    from hocuspocus.bridge.instructions import (
-        GUIDE_MAX_BYTES,
-        INSTRUCTIONS_1X,
-        PROMPTS,
-        guide_text,
-    )
-    from hocuspocus.bridge.server import PROMPTS_1X
+@pytest.mark.parametrize("profile", ["minimal", "core", "full", "compat_1x", "v2"])
+def test_every_profile_gets_the_2x_texts_and_prompts(profile):
+    """spec-2.0 §2.8: every profile gets the 2.0 instructions, guide and seven prompts; the
+    removed profile names (compat_1x, v2) read as full (BIBLE D46) and get them too. The 1.4
+    texts went with compat_1x in 2.1."""
+    from hocuspocus.bridge.instructions import GUIDE_MAX_BYTES, PROMPTS, guide_text
 
     bridge, _c, _l = make_bridge(instances=(), config=BridgeConfig(profile=profile))
-    compat = profile == "compat_1x"
 
     async def run():
         async with Client(build_server(bridge)) as client:
@@ -887,10 +862,9 @@ def test_instructions_guide_and_prompts_follow_the_profile(profile):
             return client.instructions, guide.contents[0].text, prompts
 
     instructions, guide, prompts = anyio.run(run)
-    assert instructions == (INSTRUCTIONS_1X if compat else INSTRUCTIONS)
-    assert guide == guide_text(profile) and len(guide.encode("utf-8")) <= GUIDE_MAX_BYTES
-    assert guide != guide_text("core" if compat else "compat_1x")
-    assert [p.name for p in prompts] == list(PROMPTS_1X if compat else PROMPTS)
+    assert instructions == INSTRUCTIONS
+    assert guide == guide_text() and len(guide.encode("utf-8")) <= GUIDE_MAX_BYTES
+    assert [p.name for p in prompts] == list(PROMPTS)
 
 
 # -- progress notifications (BIBLE §7) ----------------------------------------------------
@@ -1038,7 +1012,7 @@ def test_result_content_both_duplicates_and_declares_output_schemas():
     by_name = {tool.name: tool for tool in real.list_tools()}
     with_schema = [spec.name for spec in real.tools if spec.output_schema is not None]
     assert with_schema and all(by_name[name].output_schema for name in with_schema)
-    listed = catalog.v2_spec(catalog.get(with_schema[0]))  # core lists the 2.0 overlay
+    listed = catalog.get(with_schema[0])
     assert listed.output_schema == by_name[with_schema[0]].output_schema
 
 

@@ -33,7 +33,8 @@ from typing import Any
 
 from ..host.config import CONFIG_FILE_NAME, read_config_file
 from ..tools import paths
-from ..tools.profiles import ALIASES, DEFAULT_PROFILE, PROFILES, normalize
+from ..tools.profiles import DEFAULT_PROFILE, PROFILES
+from ..tools.profiles import resolve as resolve_profile
 
 log = logging.getLogger(__name__)
 
@@ -50,8 +51,8 @@ INSTALL_STATE_FILE = "install.json"
 @dataclass(frozen=True, slots=True)
 class BridgeConfig:
     profile: str = DEFAULT_PROFILE
-    """``minimal``, ``core`` (the default), ``full`` or ``compat_1x``
-    (:mod:`hocuspocus.tools.profiles`); ``v2`` is read as ``full``."""
+    """``minimal``, ``core`` (the default) or ``full`` (:mod:`hocuspocus.tools.profiles`).
+    ``compat_1x`` and ``v2``, removed in 2.1, are read as ``full`` (BIBLE D46)."""
     max_response_bytes: int = DEFAULT_MAX_RESPONSE_BYTES
     default_timeout_s: float = DEFAULT_TIMEOUT_S
     hfs: str = ""
@@ -62,6 +63,10 @@ class BridgeConfig:
     a one-line summary in the text block)."""
     config_file: str = ""
     """The ``hocuspocus.toml`` that was read, or empty when none was found."""
+    profile_warning: str = ""
+    """Why ``profile`` is not what the configuration said: a removed profile name
+    (``compat_1x``, ``v2``) read as ``full``. ``houdini_status`` repeats it in
+    ``warnings``."""
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str] | None = None) -> BridgeConfig:
@@ -90,8 +95,9 @@ class BridgeConfig:
             raw = env.get(f"HOCUSPOCUS_{key.upper()}", "").strip()
             if raw:
                 values[key] = raw
+        profile, profile_warning = _profile(values.get("profile"))
         return cls(
-            profile=_profile(values.get("profile")),
+            profile=profile,
             max_response_bytes=_positive(
                 values, "max_response_bytes", DEFAULT_MAX_RESPONSE_BYTES, int
             ),
@@ -99,6 +105,7 @@ class BridgeConfig:
             hfs=str(values.get("hfs") or "").strip(),
             result_content=_choice(values.get("result_content"), "result_content", RESULT_CONTENT),
             config_file=config_file,
+            profile_warning=profile_warning,
         )
 
 
@@ -243,14 +250,16 @@ def find_config_file(
 # -- value parsing ----------------------------------------------------------------------
 
 
-def _profile(raw: Any) -> str:
-    profile = normalize(raw)
+def _profile(raw: Any) -> tuple[str, str]:
+    """``(profile, warning)``: a removed name (``compat_1x``, ``v2``) is read as ``full``
+    with a warning (BIBLE D46), any other unknown one as the default."""
+    profile, warning = resolve_profile(raw)
     if profile is None:
         log.warning("profile=%r is not one of %s; using %r", raw, PROFILES, DEFAULT_PROFILE)
-        return DEFAULT_PROFILE
-    if str(raw).strip().lower() in ALIASES:
-        log.info("profile=%r is read as %r (the alias is kept for 2.0.x)", raw, profile)
-    return profile
+        return DEFAULT_PROFILE, ""
+    if warning:
+        log.warning("%s", warning)
+    return profile, warning or ""
 
 
 def _choice(raw: Any, key: str, choices: tuple[str, ...]) -> str:

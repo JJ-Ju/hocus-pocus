@@ -7,8 +7,6 @@ import time
 
 import pytest
 
-pytestmark = pytest.mark.compat_1x  # the 1.4 tools (conftest: compat_client)
-
 hou = pytest.importorskip("hou")
 
 
@@ -539,7 +537,7 @@ def test_geo_info_missing_node_hint_matches_cook(client):
         geo = client.error("geo_info", {"path": path})
         cook = client.error("cook", {"paths": [path]})
         assert geo["code"] == cook["code"] == "node_not_found"
-        assert geo["hint"] == cook["hint"] and "node_find" in geo["hint"]
+        assert geo["hint"] == cook["hint"] and 'search {kind: "nodes"' in geo["hint"]
 
 
 def test_geo_info_names_mode_and_internal_attributes(client):
@@ -552,7 +550,8 @@ def test_geo_info_names_mode_and_internal_attributes(client):
     full = client.ok("geo_info", {"path": wrangle.path()})
     names = [a["name"] for a in full["attributes"]["point"]]
     assert "keepme" in names and "pprevious" not in names and "__scratch" not in names
-    assert full["internal_attribute_count"] == 2 and "geo_read" in full["notes"][0]
+    assert full["internal_attribute_count"] == 2
+    assert 'inspect {what: "geo", rows: true' in full["notes"][0]
     short = client.ok("geo_info", {"path": wrangle.path(), "attributes": "names"})
     assert short["attributes"]["point"] == names
     assert len(json.dumps(short)) < len(json.dumps(full))

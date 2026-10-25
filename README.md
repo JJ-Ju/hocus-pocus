@@ -26,10 +26,10 @@ resource with an ETag, and `look` picks the renderer from a `quality` level inst
 asking the agent to choose one. A bridge ledger remembers Houdinis, their roles and jobs
 across restarts, so `cook`, `render` and `look` run on a headless worker with
 `on: "worker"` while the GUI stays pinned. The default profile has 18 tools instead of
-31, and its `tools/list` is about 20 KB instead of 27 KB. 1.4 client scripts keep working
-for the 2.0.x releases with `profile = "compat_1x"`, and
+31, and its `tools/list` is about 20 KB instead of 27 KB.
 [`docs/migration-2.0.md`](docs/migration-2.0.md) maps every removed tool to its
-replacement.
+replacement (2.0.x's `compat_1x` profile, which kept 1.4 scripts running, is removed in
+2.1).
 
 ## What it can do
 
@@ -132,7 +132,8 @@ anything. Output shortened; [`docs/tools.md`](docs/tools.md) has the real schema
 
 ## Tools
 
-There are 18 tools in the default `core` profile. `full` adds 3, and `minimal` lists 10
+There are 19 tools in the default `core` profile (2.1 adds `hda`). `full` adds 2, and
+`minimal` lists 10
 for clients with a small context. Each is documented in [`docs/tools.md`](docs/tools.md)
 (and the `hocuspocus://tools` resource), generated from one spec file per tool.
 
@@ -145,7 +146,8 @@ for clients with a small context. Each is documented in [`docs/tools.md`](docs/t
 | Cook, render, look | `cook` (incl. `profile` and `frame_range`), `render`, `look` (`quality`: draft, lit, final) |
 | Code and jobs | `houdini_python`, `job` |
 | State | `undo`, `time` |
-| `full` profile only | `hda`, `pdg`, `events` |
+| Digital assets | `hda` (create, save, unlock, match, install, uninstall, reload, list, info) |
+| `full` profile only | `pdg`, `events` |
 
 The bridge also serves resources and prompts, and `tools/list` works with no Houdini
 running:
@@ -165,8 +167,9 @@ grabs the GUI Scene Viewer as you see it. To write a cache, `render` the File Ca
 (`cook` never writes files): it runs as a job you can poll and cancel.
 
 **Upgrading from 1.4.** `node_info`, `viewport_capture` and the other per-noun tools are
-not in the 2.0 profiles; called there, each names its replacement. `profile = "compat_1x"`
-serves the 1.4 catalogue for 2.0.x (2.1 removes it): [`docs/migration-2.0.md`](docs/migration-2.0.md).
+gone; called, each answers `invalid_argument` naming its replacement. 2.1 removed
+`profile = "compat_1x"`, which served them for 2.0.x; left in a config it reads as `full`
+with a warning: [`docs/migration-2.0.md`](docs/migration-2.0.md).
 
 ## Headless use and launching
 
@@ -237,7 +240,7 @@ approved_roots = []         # host: if non-empty, hip/hda/render paths must be u
 max_response_bytes = 16384  # both: response budget
 default_timeout_s = 30      # both: per-call timeout
 job_threshold_s = 10        # host: cooks longer than this become jobs
-profile = "core"            # both: "minimal" (10 tools), "core" (18), "full" (21: adds hda, pdg, events), "compat_1x" (the 1.4 tools)
+profile = "core"            # both: "minimal" (10 tools), "core" (18), "full" (21: adds hda, pdg, events)
 hfs = ""                    # bridge: Houdini install used by houdini_connect launch
 result_content = "text"     # bridge: text | both | structured (where result JSON goes)
 log_level = "INFO"          # host
@@ -250,7 +253,7 @@ Houdini's environment as well as the client's, and restart Houdini.
 
 | Bridge variable | Default | Meaning |
 |---|---|---|
-| `HOCUSPOCUS_PROFILE` | `core` | `minimal` lists 10 tools; `full` also lists `hda`, `pdg`, `events`; `compat_1x` the 35 tools of 1.4 |
+| `HOCUSPOCUS_PROFILE` | `core` | `minimal` lists 10 tools; `full` also lists `hda`, `pdg`, `events` |
 | `HOCUSPOCUS_MAX_RESPONSE_BYTES` | `16384` | response budget; lists are truncated with `truncated: true` |
 | `HOCUSPOCUS_DEFAULT_TIMEOUT_S` | `30` | per-call timeout sent to the host |
 | `HOCUSPOCUS_HFS` | auto | Houdini install used by `houdini_connect` launch |
@@ -282,9 +285,10 @@ already has a shell on your machine.
 ## Status and versioning
 
 1.0 was merged to `master` on 2026-10-12 (tag `v1.0.0`), and 1.1 to 1.4 followed (tags
-`v1.1.0` to `v1.4.0`). 2.0 is the current release (tag `v2.0.0`); its contract changes are
-under **Unreleased (2.0.0)** in [`CHANGELOG.md`](CHANGELOG.md), with the upgrade notes in
-[`docs/migration-2.0.md`](docs/migration-2.0.md). HocusPocus is not on PyPI yet. It is
+`v1.1.0` to `v1.4.0`), then 2.0 (tag `v2.0.0`). 2.1 is the current release (tag `v2.1.0`):
+[`CHANGELOG.md`](CHANGELOG.md) lists its changes and
+[`docs/migration-2.1.md`](docs/migration-2.1.md) what a 2.0 client can notice
+([`docs/migration-2.0.md`](docs/migration-2.0.md) covers 1.x). HocusPocus is not on PyPI yet. It is
 qualified on Windows with Houdini 22.0.466; the code is not Windows-only, but Linux and
 macOS are untested. GUI/headless differences: [`docs/parity.md`](docs/parity.md).
 

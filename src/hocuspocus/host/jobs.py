@@ -87,7 +87,9 @@ class JobContext:
 
 
 class Job:
-    def __init__(self, tool: str, label: str = "", prefix: str = "") -> None:
+    def __init__(
+        self, tool: str, label: str = "", prefix: str = "", *, cancellable: bool = True
+    ) -> None:
         token = uuid.uuid4().hex[:12]
         self.id = f"{prefix}-{token}" if prefix else token
         self.tool = tool
@@ -104,6 +106,9 @@ class Job:
         self.result: Any = None
         self.error: dict[str, Any] | None = None
         self.cancel_event = threading.Event()
+        self.cancellable = cancellable
+        """False for a job that follows one main-thread call that cannot be interrupted
+        (a long press, BIBLE D70): ``cancel`` then leaves it running, with a note."""
         self.thread: threading.Thread | None = None
         self.done_event = threading.Event()
         self._lock = threading.Lock()
@@ -174,8 +179,15 @@ class JobManager:
         self._jobs: OrderedDict[str, Job] = OrderedDict()
         self._lock = threading.Lock()
 
-    def start(self, tool: str, fn: Callable[[JobContext], Any], *, label: str = "") -> Job:
-        job = Job(tool, label, self._prefix)
+    def start(
+        self,
+        tool: str,
+        fn: Callable[[JobContext], Any],
+        *,
+        label: str = "",
+        cancellable: bool = True,
+    ) -> Job:
+        job = Job(tool, label, self._prefix, cancellable=cancellable)
         ctx = JobContext(job, self._executor, self._default_timeout_s)
         # The starting call's main-thread meter: steps finished while it waits count
         # toward its _meta.timing (review 24 N5).
@@ -268,6 +280,15 @@ class JobManager:
         this call cancelled it; a job that had already finished is left alone, with a
         note (review 20: a cancel that arrived too late returned a plain ``done``)."""
         job = self.get(job_id)
+        if job.state == "running" and not job.cancellable:
+            data = job.status()
+            data["cancelled"] = False
+            data["notes"] = [
+                f"Job {job.id} follows one call on Houdini's main thread ({job.label or job.tool}) "
+                "that cannot be interrupted; it goes on until that call returns, and job "
+                "{action: result} then returns its result."
+            ]
+            return data
         if job.state == "running":
             job.cancel_event.set()
             job.message = "cancellation requested"

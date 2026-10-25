@@ -5,8 +5,8 @@ Runs in the dev venv's Python, not in hython::
     .venv/Scripts/python -m pytest tests/integration/test_parity_gui.py --rungui -q
 
 One session fixture launches ``houdinifx`` through :mod:`hocuspocus.bridge.launch` with an
-isolated ``HOUDINI_USER_PREF_DIR`` (the dev package JSON and a ``profile = "compat_1x"`` toml
-in it: the rows call the 1.4 tools, and a compat_1x host runs the 2.0 ones too), an
+isolated ``HOUDINI_USER_PREF_DIR`` (the dev package JSON and a ``profile = "full"`` toml
+in it; the rows the 1.4 tools had call their 2.0 forms since 2.1), an
 isolated ``HOCUSPOCUS_STATE_DIR`` and an ephemeral port, waits for the registry entry
 and drives the host over ``POST /hp/v1/call`` with the bridge's own
 :class:`~hocuspocus.bridge.client.HostClient`. The tests assert the ``mode`` rows of the
@@ -40,6 +40,16 @@ pytestmark = [pytest.mark.slow, pytest.mark.gui]
 REPO = Path(__file__).resolve().parents[2]
 DEV_PACKAGE = Path.home() / "houdini22.0" / "packages" / "hocuspocus.json"
 """The dev package ``install-houdini --dev`` writes; copied into the isolated prefs."""
+ON_CREATED = """\
+node = kwargs["node"]
+if node.name().startswith("dialog_made"):
+    hou.ui.displayMessage("HocusPocus G5 test: a creation script dialog")
+"""
+LOAD_SCRIPT = """\
+import hou
+if hou.hipFile.basename().startswith("dialog_456"):
+    hou.ui.displayMessage("HocusPocus G5 test: a load script dialog")
+"""
 LAUNCH_WAIT_S = 240.0
 CALL_TIMEOUT_S = 60.0
 FORBIDDEN_PORT = 37219
@@ -191,23 +201,33 @@ def _package_json() -> str:
     )
 
 
-@pytest.fixture(scope="session")
-def gui(tmp_path_factory: pytest.TempPathFactory) -> Iterator[GuiSession]:
+@dataclass
+class Isolated:
+    """An isolated pref dir, state dir and work dir for one ``houdinifx`` launch."""
+
+    launcher: Any
+    state: Path
+    work: Path
+    prefs: Path
+    """The expanded pref dir (``houdini22.0``) Houdini reads."""
+
+
+def _isolated(base: Path, *, extra_env: dict[str, str] | None = None) -> Isolated:
+    """A launcher for ``houdinifx`` with its own prefs (the dev package JSON and a
+    ``profile = "full"`` toml), state and work dirs under ``base``."""
     from hocuspocus.bridge import instances as registry
     from hocuspocus.bridge.launch import Launcher, detect_hfs, gui_executable
 
     hfs = detect_hfs(None)
     if hfs is None or gui_executable(hfs) is None:
         pytest.skip("no Houdini 22 install with houdinifx found (set HOCUSPOCUS_HFS or HFS)")
-    base = tmp_path_factory.mktemp("hp-gui")
     state, work, prefs = base / "state", base / "work", base / "prefs"
     expanded = prefs / f"houdini{_houdini_version(hfs)}"
     (expanded / "packages").mkdir(parents=True)
     state.mkdir()
     work.mkdir()
     (expanded / "packages" / "hocuspocus.json").write_text(_package_json(), encoding="utf-8")
-    (expanded / "hocuspocus.toml").write_text('profile = "compat_1x"\n', encoding="utf-8")
-
+    (expanded / "hocuspocus.toml").write_text('profile = "full"\n', encoding="utf-8")
     env = {k: v for k, v in os.environ.items() if not k.startswith("HOCUSPOCUS_")}
     env.pop("PYTHONHOME", None)
     env.update(
@@ -216,20 +236,34 @@ def gui(tmp_path_factory: pytest.TempPathFactory) -> Iterator[GuiSession]:
         HOCUSPOCUS_WORK_DIR=str(work),
         HOUDINI_NO_START_PAGE_SPLASH="1",
         HOUDINI_ANONYMOUS_STATISTICS="0",
+        **(extra_env or {}),
     )
     instances_dir = state / "instances"
     launcher = Launcher(
         str(hfs), environ=env, owned=False, scan=lambda: registry.scan(instances_dir)
     )
-    spawned = launcher.spawn("gui", work_dir=work)
+    return Isolated(launcher, state, work, expanded)
+
+
+@pytest.fixture(scope="session")
+def gui(tmp_path_factory: pytest.TempPathFactory) -> Iterator[GuiSession]:
+    iso = _isolated(tmp_path_factory.mktemp("hp-gui"))
+    # G5: a creation script and a load script that open a dialog, each only for the one
+    # node or hip file its test makes (Houdini reads the script paths at start-up).
+    (iso.prefs / "scripts" / "obj").mkdir(parents=True)
+    (iso.prefs / "scripts" / "obj" / "null_OnCreated.py").write_text(ON_CREATED, encoding="utf-8")
+    (iso.prefs / "scripts" / "456.py").write_text(LOAD_SCRIPT, encoding="utf-8")
+    spawned = iso.launcher.spawn("gui", work_dir=iso.work)
     started = {spawned.proc.pid}
     session: GuiSession | None = None
     try:
-        launched = launcher.wait(spawned, LAUNCH_WAIT_S)
+        launched = iso.launcher.wait(spawned, LAUNCH_WAIT_S)
         inst = launched.instance
         started.add(inst.pid)
         assert inst.port != FORBIDDEN_PORT
-        session = GuiSession(GuiClient(inst.port, inst.token), inst, spawned.proc, state, work)
+        session = GuiSession(
+            GuiClient(inst.port, inst.token), inst, spawned.proc, iso.state, iso.work
+        )
         yield session
     finally:
         if session is not None and _pid_alive(session.instance.pid):
@@ -273,6 +307,72 @@ def _scene(client: GuiClient) -> None:
     )
 
 
+# -- launches that cannot register (D60), before the session's Houdini starts ------------
+
+STARTUP_DIALOG = """\
+import hou
+hou.ui.displayMessage("HocusPocus D60 test: a startup dialog")
+"""
+
+
+def _launch_fails(iso: Isolated, wait_s: float) -> tuple[Any, float, Any]:
+    """Launch, expect the wait to fail, and kill the Houdini. ``(error, seconds, proc)``."""
+    from hocuspocus.tools.errors import ToolError
+
+    spawned = iso.launcher.spawn("gui", work_dir=iso.work)
+    started = time.monotonic()
+    try:
+        with pytest.raises(ToolError) as info:
+            iso.launcher.wait(spawned, wait_s)
+        return info.value, time.monotonic() - started, spawned.proc
+    finally:
+        _kill(spawned.proc.pid)
+
+
+def test_a_launch_stuck_on_a_startup_dialog_says_so(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> None:
+    """D60: a startup script's dialog holds Houdini before its UI is ready, so the host
+    never starts. The launch names the window soon after it appears, not at ``wait_s``."""
+    from hocuspocus.bridge import startup
+
+    iso = _isolated(tmp_path_factory.mktemp("hp-dialog"))
+    (iso.prefs / "scripts").mkdir()
+    (iso.prefs / "scripts" / "123.py").write_text(STARTUP_DIALOG, encoding="utf-8")
+    error, waited, _proc = _launch_fails(iso, LAUNCH_WAIT_S)
+    assert error.code == "houdini_offline" and error.retryable is False, error
+    assert error.detail["reason"] == "dialog", error.detail
+    assert error.detail["windows"] == ["Houdini"]
+    assert "waiting on a window titled 'Houdini'" in error.message
+    assert waited < startup.DIALOG_GRACE_S + 30, waited
+
+
+def test_a_launch_whose_host_fails_to_start_says_why(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> None:
+    """D60: a host that cannot start (here its configured port is taken) writes a
+    ``failed`` startup record, and the launch answers with its error at once."""
+    import socket
+
+    taken = socket.socket()
+    taken.bind(("127.0.0.1", 0))
+    taken.listen(1)
+    port = taken.getsockname()[1]
+    assert port != FORBIDDEN_PORT
+    try:
+        iso = _isolated(
+            tmp_path_factory.mktemp("hp-hostfail"), extra_env={"HOCUSPOCUS_PORT": str(port)}
+        )
+        error, waited, proc = _launch_fails(iso, LAUNCH_WAIT_S)
+    finally:
+        taken.close()
+    assert error.code == "houdini_offline" and error.retryable is False, error
+    assert error.detail["reason"] == "host_failed", error.detail
+    assert "its HocusPocus host failed to start" in error.message
+    assert error.detail["log"].endswith(f"host-{proc.pid}.log")
+    assert waited < 60, waited
+
+
 # -- the session -------------------------------------------------------------------------
 
 
@@ -296,18 +396,16 @@ def test_viewer_capture_fits_and_restores_the_view(gui: GuiSession) -> None:
     before = client.view_state()
     assert before["camera"] is None  # the free perspective view
 
-    # auto in the GUI, /obj, no camera: the Scene Viewer as it is (parity: mode).
-    as_is = client.ok("viewport_capture", {"resolution": [320, 240]})
-    assert as_is["source_used"] == "viewer"
+    # source viewer in the GUI, /obj, no camera: the Scene Viewer as it is (parity: mode).
+    as_is = client.ok("look", {"source": "viewer", "resolution": [320, 240]})
+    assert as_is["backend_used"] == "viewer"
     assert as_is["fit_used"] == "none"
     assert as_is["image"]["png_base64"]
     assert client.view_state() == before
 
     # An explicit fit frames the free view for the grab only.
-    fitted = client.ok(
-        "viewport_capture", {"source": "viewer", "fit": "all", "resolution": [320, 240]}
-    )
-    assert fitted["source_used"] == "viewer"
+    fitted = client.ok("look", {"source": "viewer", "fit": "all", "resolution": [320, 240]})
+    assert fitted["backend_used"] == "viewer"
     assert fitted["fit_used"] == "all"
     assert fitted["image"]["png_base64"] != as_is["image"]["png_base64"]
     assert client.view_state() == before
@@ -316,25 +414,23 @@ def test_viewer_capture_fits_and_restores_the_view(gui: GuiSession) -> None:
     client.ok("node_create", {"items": [{"parent": "/obj", "type": "cam", "name": "cam1"}]})
     client.ok("parm_set", {"items": [{"path": "/obj/cam1/t", "value": [0, 1, 6]}]})
     through = client.ok(
-        "viewport_capture", {"source": "viewer", "camera": "/obj/cam1", "resolution": [320, 240]}
+        "look", {"source": "viewer", "camera": "/obj/cam1", "resolution": [320, 240]}
     )
     assert through["camera_used"] == "/obj/cam1"
     assert client.view_state() == before
 
 
 def test_rop_capture_runs_in_process(gui: GuiSession) -> None:
-    """auto with a camera renders a temporary viewport ROP in the GUI process: no kept
+    """look auto renders a temporary viewport ROP in the GUI process: no kept
     child hython (headless only), and the user's view is untouched."""
     client = gui.client
     _scene(client)
     client.ok("node_create", {"items": [{"parent": "/obj", "type": "cam", "name": "cam1"}]})
     before = client.view_state()
-    shot = client.ok("viewport_capture", {"camera": "/obj/cam1", "resolution": [320, 240]})
-    assert shot["source_used"] in ("flipbook_rop", "opengl_rop")
+    shot = client.ok("look", {"camera": "/obj/cam1", "resolution": [320, 240]})
+    assert shot["backend_used"] in ("flipbook", "opengl")
     assert shot["camera_used"] == "/obj/cam1"
-    framed = client.ok(
-        "viewport_capture", {"source": "flipbook_rop", "fit": "all", "resolution": [320, 240]}
-    )
+    framed = client.ok("look", {"fit": "all", "resolution": [320, 240]})
     assert framed["fit_used"] == "all"
     assert framed["camera_used"] == "temporary"
     assert client.view_state() == before
@@ -350,6 +446,133 @@ def test_rop_capture_runs_in_process(gui: GuiSession) -> None:
     assert left == []
 
 
+def test_look_at_a_sop_in_a_subnet_shows_it_alone_in_process(gui: GuiSession) -> None:
+    """D52 in the GUI: the temporary object that shows a SOP alone is made in the live
+    scene, outside undo, and deleted; the user's flags and view stay as they were, and
+    source viewer says it is not isolated (Karma: ``test_karma_looks_render_in_the_gui``)."""
+    client = gui.client
+    _scene(client)
+    client.ok(
+        "edit",
+        {
+            "ops": [
+                {"op": "create", "id": "sub", "parent": "/obj/box_geo", "type": "subnet"},
+                {"op": "create", "parent": "$sub", "type": "torus", "name": "ring"},
+            ]
+        },
+    )
+    before = client.view_state()
+    undo_before = client.python("result = list(hou.undos.undoLabels())")
+    alone = client.ok("look", {"target": "/obj/box_geo/subnet1/ring", "resolution": [320, 240]})
+    assert alone["backend_used"] in ("flipbook", "opengl") and alone["fit_used"] == "target"
+    assert any("alone" in n for n in alone["notes"]), alone
+    viewer = client.ok("look", {"target": "/obj/box_geo/subnet1/ring", "source": "viewer"})
+    assert any("as the user sees it" in n for n in viewer["notes"]), viewer
+    assert client.view_state() == before
+    assert client.python("result = list(hou.undos.undoLabels())") == undo_before
+    left = client.python(
+        "result = [n.path() for n in hou.node('/').allSubChildren() "
+        "if n.userData('hocuspocus:internal')]"
+    )
+    assert left == []
+    assert client.python("result = hou.node('/obj/box_geo').displayNode().name()") == "box1"
+
+
+def _contrast(result: dict[str, Any]) -> int:
+    import base64
+    import io
+
+    image_mod = pytest.importorskip("PIL.Image")
+    image = image_mod.open(io.BytesIO(base64.b64decode(result["image"]["png_base64"])))
+    lo, hi = image.convert("L").getextrema()
+    return hi - lo
+
+
+STAGE_SPHERE = """
+ball = hou.node('/stage').createNode('sphere', 'ball')
+ball.setDisplayFlag(True)
+"""
+
+
+def test_karma_looks_render_in_the_gui(gui: GuiSession) -> None:
+    """``look`` lit (no lights) and final render with a temporary Karma ROP in the GUI
+    process: of /obj, of a SOP alone and of a stage; and ``render`` of the user's Karma
+    ROP writes its frame. A GUI Houdini starts husk in the background unless the ROP's
+    Block Until Render Complete is on, so render() returned before the image existed:
+    every GUI Karma look answered cook_failed "no output file" in 2.0 and 2.1 (hython
+    always waits)."""
+    client = gui.client
+    _scene(client)
+    client.ok(
+        "edit",
+        {
+            "ops": [
+                {"op": "create", "id": "sub", "parent": "/obj/box_geo", "type": "subnet"},
+                {"op": "create", "parent": "$sub", "type": "torus", "name": "ring"},
+            ]
+        },
+    )
+    before = client.view_state()
+    res = [160, 120]
+    # wait_s: a GUI Karma look past job_threshold_s (10 s) answers as a job (D75); the
+    # first one in a busy session can take that long.
+    lit = client.ok("look", {"quality": "lit", "resolution": res, "wait_s": 60})
+    assert lit["backend_used"] == "karma" and lit["samples"] == 2, lit
+    assert any("no lights" in n for n in lit["notes"]), lit
+    assert _contrast(lit) > 20
+    final = client.ok("look", {"quality": "final", "resolution": res, "wait_s": 60})
+    assert final["backend_used"] == "karma" and final["samples"] == 32, final
+    assert _contrast(final) > 20
+    alone = client.ok(
+        "look",
+        {
+            "target": "/obj/box_geo/subnet1/ring",
+            "quality": "final",
+            "resolution": res,
+            "wait_s": 60,
+        },
+    )
+    assert alone["backend_used"] == "karma" and alone["fit_used"] == "target", alone
+    assert _contrast(alone) > 20
+    client.python(STAGE_SPHERE)
+    stage = client.ok(
+        "look", {"target": "/stage", "quality": "final", "resolution": res, "wait_s": 60}
+    )
+    assert stage["backend_used"] == "karma" and stage["scene"] == "stage", stage
+    assert _contrast(stage) > 20
+    assert client.view_state() == before
+    left = client.python(
+        "result = [n.path() for n in hou.node('/').allSubChildren() "
+        "if n.userData('hocuspocus:internal')]"
+    )
+    assert left == []
+
+    # The user's own Karma ROP with Block Until Render Complete off (its default): render
+    # turns it on for the render and puts it back.
+    client.ok(
+        "edit",
+        {
+            "ops": [
+                {"op": "create", "id": "cam", "parent": "/obj", "type": "cam", "name": "shot"},
+                {"op": "set", "path": "$cam/t", "value": [0, 1, 6]},
+                {"op": "create", "id": "rop", "parent": "/out", "type": "karma", "name": "beauty"},
+                {"op": "set", "path": "$rop/camera", "value": "/obj/shot"},
+                {"op": "set", "path": "$rop/resolutionx", "value": 160},
+                {"op": "set", "path": "$rop/resolutiony", "value": 120},
+                {"op": "set", "path": "$rop/samplesperpixel", "value": 2},
+            ]
+        },
+    )
+    assert client.python("hou.parm('/out/beauty/soho_foreground').eval()") == 0
+    out = (gui.work_dir / "render" / "beauty.$F4.exr").as_posix()
+    rendered = client.ok(
+        "render", {"rop_path": "/out/beauty", "frames": [1, 1], "output": out, "wait_s": 60}
+    )
+    assert rendered["state"] == "done" and "missing" not in rendered, rendered
+    assert (gui.work_dir / "render" / "beauty.0001.exr").is_file()
+    assert client.python("hou.parm('/out/beauty/soho_foreground').eval()") == 0
+
+
 def test_time_moves_the_playbar_and_captures_do_not(gui: GuiSession) -> None:
     client = gui.client
     _scene(client)
@@ -358,15 +581,16 @@ def test_time_moves_the_playbar_and_captures_do_not(gui: GuiSession) -> None:
     assert moved["range"] == [1, 48]
     assert client.python("hou.frame()") == 12
     assert client.python("list(hou.playbar.playbackRange())") == [1, 48]
-    for source in ("viewer", "flipbook_rop"):
-        client.ok("viewport_capture", {"source": source, "frame": 5, "resolution": [160, 120]})
+    for source in ("viewer", "auto"):
+        client.ok("look", {"source": source, "frame": 5, "resolution": [160, 120]})
         assert client.python("hou.frame()") == 12, source
     assert client.ok("time")["frame"] == 12
 
 
 def test_viewport_cooks_between_calls_and_says_so_once(gui: GuiSession) -> None:
     """G2 (a mode): the GUI viewport cooks displayed nodes between calls. ``time`` says
-    so with its first frame change and ``node_info`` with its first ``cook_state``, once
+    so with its first frame change and ``inspect`` (what: node) with its first
+    ``cook_state``, once
     per session each."""
     client = gui.client
     _scene(client)
@@ -392,16 +616,19 @@ def test_viewport_cooks_between_calls_and_says_so_once(gui: GuiSession) -> None:
     )
 
     def cooked_by_viewport() -> bool:
-        info = client.ok("node_info", {"paths": ["/obj/box_geo/uncooked"]})
+        info = client.ok("inspect", UNCOOKED)
         return info["nodes"][0]["cook_state"] == "cooked"
 
     assert _wait_for(cooked_by_viewport), "the viewport never cooked the displayed node"
     client.python(
         "import hocuspocus.host.tools.session as s\ns._VIEWPORT_NOTED.discard('cook_state')"
     )
-    noted = client.ok("node_info", {"paths": ["/obj/box_geo/uncooked"]})
+    noted = client.ok("inspect", UNCOOKED)
     assert "cook_state can read cooked" in noted["notes"][0]
-    assert "notes" not in client.ok("node_info", {"paths": ["/obj/box_geo/uncooked"]})
+    assert "notes" not in client.ok("inspect", UNCOOKED)
+
+
+UNCOOKED = {"what": "node", "paths": ["/obj/box_geo/uncooked"], "detail": "full"}
 
 
 SCRUB_DURING_COOK = """
@@ -512,7 +739,8 @@ def test_hda_create_round_trip(gui: GuiSession) -> None:
             ]
         },
     )
-    library = (gui.work_dir / "otls" / "hp_gui_rock.hda").as_posix()
+    ext = client.python("hou.hda.defaultFileExtension()")  # the licence's (D47)
+    library = (gui.work_dir / "otls" / f"hp_gui_rock{ext}").as_posix()
     made = client.ok(
         "hda",
         {
@@ -550,8 +778,8 @@ def test_reads_and_captures_leave_the_gui_hip_clean(gui: GuiSession) -> None:
     _scene(client)
     client.ok("hip_save", {"path": (gui.work_dir / "g1_reads.hip").as_posix()})
     assert _dirty(client) == {"dirty": False, "dirty_source": None}
-    client.ok("node_type_info", {"type": "Sop/copytopoints", "detail": "full"})
-    client.ok("viewport_capture", {"source": "flipbook_rop", "resolution": [160, 120]})
+    client.ok("inspect", {"what": "type", "target": "Sop/copytopoints", "detail": "full"})
+    client.ok("look", {"resolution": [160, 120]})
     status = client.ok("houdini_status")["hip"]
     assert (status["dirty"], status["dirty_source"]) == (False, None)
     assert isinstance(status["houdini_flag"], bool)  # a diagnostic only
@@ -589,7 +817,7 @@ def test_user_edits_dirty_the_gui_hip(gui: GuiSession) -> None:
 def test_selection_names_the_panes_it_moves(gui: GuiSession) -> None:
     """G3: selecting a SOP takes the unpinned Scene Viewer and Network Editor into its
     network on the next idle tick. Putting them back would change the selection (Houdini
-    couples the two), so ``selection`` and ``edit {op: select}`` keep the selection and
+    couples the two), so ``edit {op: select}`` keeps the selection and
     name the panes in ``context_changed``; a selection in the panes' own network moves
     nothing and says nothing."""
     client = gui.client
@@ -599,13 +827,13 @@ def test_selection_names_the_panes_it_moves(gui: GuiSession) -> None:
     assert before and set(before.values()) == {"/obj"}
 
     # The object is in /obj, where the panes are: nothing moves.
-    same = client.ok("selection", {"paths": ["/obj/box_geo"]})
-    assert same == {"selected": ["/obj/box_geo"]}
+    same = client.ok("edit", {"ops": [{"op": "select", "paths": ["/obj/box_geo"]}]})
+    assert same["selected"] == ["/obj/box_geo"] and "context_changed" not in same
     time.sleep(1.0)  # several idle ticks: a follow would have happened by now
     assert client.python(PANES) == before
 
     moving = {f"{name} (/obj/box_geo)" for name in before}
-    chosen = client.ok("selection", {"paths": ["/obj/box_geo/box1"]})
+    chosen = client.ok("edit", {"ops": [{"op": "select", "paths": ["/obj/box_geo/box1"]}]})
     assert chosen["selected"] == ["/obj/box_geo/box1"]
     assert set(chosen["context_changed"]) == moving
     assert chosen["notes"]
@@ -621,6 +849,323 @@ def test_selection_names_the_panes_it_moves(gui: GuiSession) -> None:
     assert set(client.python(PANES).values()) == {"/obj/box_geo"}
     assert client.python("[n.path() for n in hou.selectedNodes()]") == ["/obj/box_geo/box1"]
     client.python(PANES_TO_OBJ)
+
+
+def test_edit_cooks_after_the_call_in_the_gui(gui: GuiSession) -> None:
+    """BIBLE D56, D58 in the GUI: a dry run leaves the hip clean, the selection and the
+    panes where they were; a real edit's cook runs as event-loop job steps after the call
+    and its rows still carry the node's errors."""
+    client = gui.client
+    _scene(client)
+    client.python(PANES_TO_OBJ)
+    panes = client.python(PANES)
+    selected = client.python("[n.path() for n in hou.selectedNodes()]")
+    client.ok("hip_save", {"path": (gui.work_dir / "d58.hip").as_posix()})
+    dry = client.ok(
+        "edit",
+        {
+            "ops": [
+                {"op": "create", "parent": "/obj/box_geo", "type": "sphere", "name": "s"},
+                {"op": "select", "paths": ["/obj/box_geo/s"]},
+            ],
+            "dry_run": True,
+        },
+    )
+    assert [row["op"] for row in dry["plan"]] == ["create", "select"]
+    time.sleep(1.0)  # several idle ticks: a pane follow would have happened by now
+    assert _dirty(client) == {"dirty": False, "dirty_source": None}  # before any python
+    assert client.python("[c.name() for c in hou.node('/obj/box_geo').children()]") == ["box1"]
+    assert client.python(PANES) == panes
+    assert client.python("[n.path() for n in hou.selectedNodes()]") == selected
+    result = client.ok(
+        "edit",
+        {
+            "ops": [
+                {
+                    "op": "create",
+                    "parent": "/obj/box_geo",
+                    "type": "attribwrangle",
+                    "name": "w",
+                    "inputs": [{"from": "box1"}],
+                    "parms": {"snippet": "@P.y += nosuchfunction();"},
+                }
+            ]
+        },
+    )
+    (row,) = [r for r in result["nodes"] if r["path"] == "/obj/box_geo/w"]
+    assert row["errors"] and row.get("cook_state") == "error"
+    assert "job_id" not in result
+    client.ok("hip_new", {"on_unsaved": "discard"})
+
+
+STUB_PROBE = """
+import hdefereval
+import hocuspocus.host.modal as _m
+def _probe():
+    _m._gui_probe = getattr(hou.ui.displayMessage, "_hocuspocus_stub", False)
+hdefereval.executeDeferred(_probe)
+"""
+
+
+def _stubs_outside_calls(client: GuiClient) -> Any:
+    """Whether ``hou.ui.displayMessage`` is the HocusPocus stub when the user's own code
+    runs (an idle tick after the call, outside the executor): it must not be."""
+    client.python("import hocuspocus.host.modal as m\nm.__dict__.pop('_gui_probe', None)")
+    client.python(STUB_PROBE)
+    probe = "import hocuspocus.host.modal as m\nresult = getattr(m, '_gui_probe', None)"
+    _wait_for(lambda: client.python(probe) is not None, timeout_s=10.0)
+    return client.python(probe)
+
+
+def test_agent_code_opening_a_dialog_gets_ui_required(gui: GuiSession) -> None:
+    """G5: a modal ``hou.ui`` call in ``houdini_python`` fails at once with
+    ``ui_required`` instead of blocking the GUI until someone clicks; Houdini stays
+    responsive and the user's own ``hou.ui`` is untouched between calls."""
+    client = gui.client
+    _scene(client)
+    started = time.monotonic()
+    refused = client.error(
+        "houdini_python",
+        {"code": "print('before')\nhou.ui.displayMessage('HocusPocus G5: never shown')"},
+        timeout_s=20.0,
+    )
+    assert time.monotonic() - started < 10.0
+    assert refused["code"] == "ui_required"
+    assert "hou.ui.displayMessage()" in refused["message"]
+    assert "block Houdini's main thread until a person answers" in refused["message"]
+    assert refused["detail"]["refused"] == ["displayMessage"]
+    assert refused["detail"]["stdout"] == "before\n"
+    assert "rolled_back" in refused["detail"]
+    for code, name in (
+        ("hou.ui.selectFile()", "selectFile"),
+        ("hou.ui.readInput('name?')", "readInput"),
+        ("hou.ui.selectNode()", "selectNode"),
+        ("hou.ui.displayConfirmation('sure?')", "displayConfirmation"),
+    ):
+        error = client.error("houdini_python", {"code": code}, timeout_s=20.0)
+        assert error["code"] == "ui_required", (code, error)
+        assert error["detail"]["refused"] == [name]
+    # Responsive: the next call runs at once, and a non-modal hou.ui call still works.
+    assert client.python("1 + 1") == 2
+    client.python("hou.ui.setStatusMessage('HocusPocus G5 test')")
+    # Inside a call the stub is in place; outside, Houdini's own function is back.
+    assert client.python("getattr(hou.ui.displayMessage, '_hocuspocus_stub', False)") is True
+    assert _stubs_outside_calls(client) is False
+
+
+DIALOG_BUTTON = """
+node = hou.node('/obj').createNode('null', 'dialog_button')
+group = node.parmTemplateGroup()
+group.append(hou.ButtonParmTemplate(
+    'ask', 'Ask',
+    script_callback="kwargs['node'].parm('tx').set(5); hou.ui.displayMessage('pressed'); "
+    "kwargs['node'].parm('ty').set(7)",
+    script_callback_language=hou.scriptLanguage.Python))
+node.setParmTemplateGroup(group)
+"""
+
+
+def test_a_pressed_callback_that_opens_a_dialog_gets_ui_required(gui: GuiSession) -> None:
+    """G5: a button callback that opens a dialog, pressed through ``parm_set {press}``
+    or an ``edit`` set op, fails with ``ui_required`` (Houdini catches the stub's
+    exception inside the callback, the dispatcher still sees it) and is rolled back."""
+    client = gui.client
+    _scene(client)
+    client.python(DIALOG_BUTTON)
+    started = time.monotonic()
+    refused = client.error(
+        "parm_set", {"items": [{"path": "/obj/dialog_button/ask", "press": True}]}, timeout_s=20.0
+    )
+    assert time.monotonic() - started < 10.0
+    assert refused["code"] == "ui_required", refused
+    assert "hou.ui.displayMessage()" in refused["message"]
+    assert refused["message"].startswith("parm_set reached")
+    assert refused["detail"]["refused"] == ["displayMessage"]
+    assert refused["detail"]["rolled_back"] is True
+    # The callback's change before the dialog was undone; the one after never ran.
+    assert client.python("hou.parm('/obj/dialog_button/tx').eval()") == 0.0
+    assert client.python("hou.parm('/obj/dialog_button/ty').eval()") == 0.0
+
+    edited = client.error(
+        "edit",
+        {"ops": [{"op": "set", "path": "/obj/dialog_button/ask", "press": True}]},
+        timeout_s=20.0,
+    )
+    assert edited["code"] == "ui_required", edited
+    assert client.python("hou.parm('/obj/dialog_button/tx').eval()") == 0.0
+    assert client.python("1 + 1") == 2
+    assert _stubs_outside_calls(client) is False
+
+
+def test_creation_and_load_scripts_that_open_a_dialog(gui: GuiSession) -> None:
+    """G5: a creation script's dialog fails the call that made the node (rolled back); a
+    hip load script's dialog leaves the file loaded, and the load says so in
+    ``warnings``. Neither blocks Houdini."""
+    client = gui.client
+    _scene(client)
+    refused = client.error(
+        "node_create", {"items": [{"parent": "/obj", "type": "null", "name": "dialog_made"}]}
+    )
+    assert refused["code"] == "ui_required", refused
+    assert refused["detail"]["refused"] == ["displayMessage"]
+    assert refused["detail"]["rolled_back"] is True
+    assert client.python("hou.node('/obj/dialog_made') is None") is True
+    assert client.python("1 + 1") == 2
+
+    # An Indie or Apprentice licence saves as .hiplc: open the file it wrote.
+    hip = client.ok("hip_save", {"path": (gui.work_dir / "dialog_456.hip").as_posix()})["path"]
+    loaded = client.ok("hip_open", {"path": hip, "on_unsaved": "discard"})
+    assert any("hou.ui.displayMessage()" in w for w in loaded["warnings"]), loaded
+    assert client.python("hou.hipFile.basename()").startswith("dialog_456")
+    assert client.python("hou.node('/obj/box_geo') is not None") is True
+    assert client.python("1 + 1") == 2
+    client.ok("hip_new", {"on_unsaved": "discard"})
+
+
+def _close_native_dialogs(pid: int) -> int:
+    """Close the dialogs of Houdini ``pid`` that Qt's ``activeModalWidget`` cannot see
+    (Houdini's own message windows, titled "Houdini"), as a person clicking their close
+    box would. Windows only; returns how many it closed."""
+    if sys.platform != "win32":  # pragma: no cover - the GUI runner is Windows today
+        return 0
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.windll.user32
+    proto = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    closed = []
+
+    def visit(hwnd: Any, _param: Any) -> bool:
+        owner = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(owner))
+        if owner.value == pid and user32.IsWindowVisible(hwnd):
+            length = user32.GetWindowTextLengthW(hwnd)
+            title = ctypes.create_unicode_buffer(length + 1)
+            user32.GetWindowTextW(hwnd, title, length + 1)
+            if title.value == "Houdini":
+                user32.PostMessageW(hwnd, 0x0010, 0, 0)  # WM_CLOSE
+                closed.append(hwnd)
+        return True
+
+    user32.EnumWindows(proto(visit), 0)
+    return len(closed)
+
+
+USER_DIALOG = """
+import json, time
+import hdefereval
+from PySide6 import QtCore, QtWidgets
+_marker = {marker!r}
+def _log(event):
+    with open(_marker, "a", encoding="utf-8") as f:
+        f.write(json.dumps({{"event": event, "t": time.time()}}) + "\\n")
+_tries = [0]
+_done = [False]
+def _close():
+    if _done[0]:  # closed already: never touch a later test's dialog
+        return
+    _tries[0] += 1
+    w = QtWidgets.QApplication.activeModalWidget()
+    if w is None:
+        w = next((t for t in QtWidgets.QApplication.topLevelWidgets()
+                  if t.isVisible() and t.isModal()), None)
+    if w is None:
+        _log("no_modal_widget")
+        if _tries[0] < 40:
+            QtCore.QTimer.singleShot(250, _close)
+        return
+    _log("closing " + type(w).__name__)
+    if hasattr(w, "done"):
+        w.done(0)
+    else:
+        w.close()
+def _open():
+    QtCore.QTimer.singleShot({close_ms}, _close)
+    _log("opened")
+    if {kind!r} == "hou_ui":
+        hou.ui.displayMessage("HocusPocus G5 test: a user dialog, closed by a timer")
+    else:
+        box = QtWidgets.QMessageBox(hou.qt.mainWindow())
+        box.setText("HocusPocus G5 test: a user Qt dialog, closed by a timer")
+        box.exec()
+    _done[0] = True
+    _log("closed")
+if {source!r} == "qt_event":
+    hdefereval.executeDeferred(lambda: QtCore.QTimer.singleShot(0, _open))
+else:
+    hdefereval.executeDeferred(_open)
+"""
+
+DIALOG_OPEN_MS = 8000
+PROBE_TIMEOUT_S = 3.0
+
+
+def _events(marker: Path) -> list[str]:
+    try:
+        lines = marker.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+    return [json.loads(line)["event"] for line in lines if line.strip()]
+
+
+def _measure_user_dialog(gui: GuiSession, kind: str, source: str) -> dict[str, Any]:
+    """Open a user's modal dialog outside any call (``kind``: ``hou_ui`` or ``qt``; from
+    ``source``: a Qt event like a shelf click, or an event-loop callback like
+    ``hdefereval``), closed by a timer after :data:`DIALOG_OPEN_MS`, and send a call while
+    it is open. Returns what that call saw."""
+    client = gui.client
+    marker = gui.work_dir / f"user_dialog_{kind}_{source}.jsonl"
+    client.python(
+        USER_DIALOG.format(
+            marker=marker.as_posix(), close_ms=DIALOG_OPEN_MS, kind=kind, source=source
+        )
+    )
+    assert _wait_for(lambda: "opened" in _events(marker), timeout_s=20.0), _events(marker)
+    sent = time.monotonic()
+    ok, result, _meta = client.call(
+        "houdini_python", {"code": "result = 'pumped'"}, timeout_s=PROBE_TIMEOUT_S
+    )
+    answered_s = round(time.monotonic() - sent, 2)
+    still_open = "closed" not in _events(marker)
+    closed = _wait_for(lambda: "closed" in _events(marker), timeout_s=DIALOG_OPEN_MS / 1000 + 5)
+    native = 0
+    if not closed:  # a Houdini message window, which Qt's timer cannot find
+        native = _close_native_dialogs(gui.instance.pid)
+        closed = _wait_for(lambda: "closed" in _events(marker), timeout_s=20.0)
+    assert closed, f"neither the timer nor WM_CLOSE closed the user's dialog: {_events(marker)}"
+    # Houdini is free again once the dialog is gone.
+    assert client.python("1 + 1") == 2
+    return {
+        "ok": ok,
+        "code": None if ok else result.get("code"),
+        "started": None if ok else (result.get("detail") or {}).get("started"),
+        "answered_s": answered_s,
+        "while_open": still_open,
+        "closer": [e for e in _events(marker) if e.startswith("closing")]
+        + (["WM_CLOSE"] if native else []),
+    }
+
+
+@pytest.mark.parametrize("source", ["qt_event", "event_loop_callback"])
+@pytest.mark.parametrize("kind", ["qt", "hou_ui"])
+def test_executor_while_a_user_dialog_is_open(gui: GuiSession, kind: str, source: str) -> None:
+    """G5, measured on 22.0.466: the executor's pump (a ``hou.ui`` event-loop callback)
+    does not run while the user has a modal dialog open, whether it is a ``hou.ui``
+    dialog (Houdini's own window) or a Qt ``exec()``, and whether it was opened from a Qt
+    event (a shelf click) or an event-loop callback (``hdefereval``); Qt timers do run.
+    A call sent meanwhile never starts and answers ``houdini_busy`` with
+    ``started: false`` after its timeout, then Houdini is free once the dialog closes."""
+    _scene(gui.client)
+    seen = _measure_user_dialog(gui, kind, source)
+    print(f"G5 user dialog {kind} from {source}: {seen}")
+    assert seen["while_open"], seen  # the probe call ran while the dialog was open
+    assert seen["closer"], seen
+    assert seen["ok"] is False, seen
+    assert seen["code"] == "houdini_busy", seen
+    assert seen["started"] is False, seen
+    assert seen["answered_s"] >= PROBE_TIMEOUT_S - 0.5, seen
+    # hou.ui dialogs are Houdini windows Qt cannot see; a Qt dialog closes from its timer.
+    assert seen["closer"] == (["WM_CLOSE"] if kind == "hou_ui" else ["closing QMessageBox"])
 
 
 def test_quit_closes_the_gui(gui: GuiSession) -> None:

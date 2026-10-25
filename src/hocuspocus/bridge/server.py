@@ -20,7 +20,6 @@ import uuid
 from collections import OrderedDict
 from collections.abc import Callable, Sequence
 from typing import Any
-from urllib.parse import unquote
 
 import anyio
 import mcp_types as types
@@ -35,16 +34,20 @@ from . import budget, routing
 from . import instances as registry
 from .client import OFFLINE_HINT, REINSTALL_HINT, HostClient
 from .config import BridgeConfig
-from .instructions import PROMPT_DEFAULTS, PROMPTS, guide_text, instructions_for, tools_text
+from .instructions import PROMPT_DEFAULTS, PROMPTS, instructions_for
 from .launch import Launcher
 from .ledger import Ledger, is_ledger_id, looks_like_ledger_id
-from .local_tools import LOCAL_TOOLS
-from .validate import ARG_RENAMES, coerce_integers, rename_hint, shape_hint, validate
+from .local_tools import DOC_WHATS, LOCAL_TOOLS, inspect_docs
+from .validate import (
+    ARG_RENAMES,
+    coerce_integers,
+    rename_hint,
+    shape_hint,
+    validate_detailed,
+)
 
 EXIT_GRACE_S = 1.5
 """After a lost response, how long to watch for the Houdini process to exit."""
-OUTLINE_ARGS = {"root": "/", "format": "outline", "depth": 2}
-"""What ``houdini://outline`` reads (review 11 B11)."""
 MAX_STALE_ENTRIES = 5
 """How many stale registry entries one call may delete before giving up."""
 LOAD_HEALTH_TIMEOUT_S = 2.0
@@ -94,7 +97,7 @@ def launcher_exited_error(record: dict[str, Any]) -> ToolError:
 READ_ACTIONS: dict[str, frozenset[str]] = {
     "job": frozenset({"status", "result", "list"}),
     "undo": frozenset({"history"}),
-    "hda": frozenset({"list"}),
+    "hda": frozenset({"list", "info"}),
     "pdg": frozenset({"status", "workitems"}),
 }
 """Actions of ``scene=False`` tools that only read (BIBLE §4.1)."""
@@ -110,9 +113,8 @@ def mutates(spec: ToolSpec, args: dict[str, Any]) -> bool:
 
     With several live instances and none pinned these calls refuse with
     ``ambiguous_instance`` (review 19 papercut 2); reads go to the preferred instance.
-    ``viewport_capture`` and ``look`` count as reads: they leave no nodes, undo step or
-    dirty flag."""
-    if spec.read_only or spec.bridge_local or spec.name in ("viewport_capture", "look"):
+    ``look`` counts as a read: it leaves no nodes, undo step or dirty flag."""
+    if spec.read_only or spec.bridge_local or spec.name == "look":
         return False
     if spec.name in READ_ACTIONS:
         return args.get("action") not in READ_ACTIONS[spec.name]
@@ -313,9 +315,16 @@ class Bridge:
         ledger: Ledger | None = None,
     ) -> None:
         self.config = config or BridgeConfig.load()
-        profile = profiles.normalize(self.config.profile) or profiles.DEFAULT_PROFILE
-        if profile != self.config.profile:  # an alias (v2) or an unknown name
-            self.config = dataclasses.replace(self.config, profile=profile)
+        # A removed name (compat_1x, v2) reads as full with a warning (BIBLE D46); an
+        # unknown one as the default.
+        resolved, warning = profiles.resolve(self.config.profile)
+        profile = resolved or profiles.DEFAULT_PROFILE
+        if profile != self.config.profile:
+            self.config = dataclasses.replace(
+                self.config,
+                profile=profile,
+                profile_warning=self.config.profile_warning or warning or "",
+            )
         self.tools: tuple[ToolSpec, ...] = (
             tuple(tools) if tools is not None else catalog.for_profile(profile)
         )
@@ -373,12 +382,6 @@ class Bridge:
                 self._ledger.observe(live, reconcile=True)
         return self._ledger
 
-    @property
-    def v2(self) -> bool:
-        """Whether this bridge serves a 2.0 profile (roles, ``on``, ledger job ids,
-        resources); ``compat_1x`` serves the 1.4 surface."""
-        return profiles.is_2x(self.config.profile)
-
     def role_of(self, inst: registry.Instance) -> str:
         """``inst``'s role: as ``houdini_connect {role}`` set it, else editor for a GUI
         Houdini and worker for a headless one (spec-2.0 §3)."""
@@ -393,10 +396,9 @@ class Bridge:
         return int(health.get("jobs_running") or 0), bool(health.get("busy"))
 
     def instance_meta(self, inst: registry.Instance) -> dict[str, Any]:
-        """``_meta.instance``; the v2 profile adds the instance's ``role``."""
+        """``_meta.instance``, with the instance's ``role`` (spec-2.0 §3)."""
         meta = instance_meta(inst)
-        if self.v2:
-            meta["role"] = self.role_of(inst)
+        meta["role"] = self.role_of(inst)
         return meta
 
     def _note_live(self, live: list[registry.Instance]) -> None:
@@ -441,7 +443,7 @@ class Bridge:
     def client_for(self, inst: registry.Instance) -> HostClient:
         client = self.client_factory(inst.port, inst.token)
         if isinstance(client, HostClient):
-            # The host runs the 1.4 tools for a compat_1x bridge whatever its own profile.
+            # The host names this profile's tools in its hints (BIBLE §9).
             client.profile = self.config.profile
         return client
 
@@ -748,9 +750,9 @@ class Bridge:
     def forward(
         self, name: str, args: dict[str, Any], request_id: str | None = None
     ) -> tuple[bool, dict[str, Any], dict[str, Any]]:
-        """Send a call to its Houdini: :meth:`_forward`, plus ``on`` (v2: ``cook``,
-        ``render``, ``job``, ``look``) and ledger job ids both ways (a ledger id is
-        accepted in every profile; v2 results carry ledger ids instead of host ids)."""
+        """Send a call to its Houdini: :meth:`_forward`, plus ``on`` (``cook``,
+        ``render``, ``job``, ``look``) and ledger job ids both ways (``job`` accepts a
+        ledger id or a host id; results carry ledger ids instead of host ids)."""
         on = None
         if "on" in args and name in routing.ROUTABLE:
             on = routing.parse_on(args["on"])
@@ -765,7 +767,7 @@ class Bridge:
                 if kept is not None:
                     ok, payload, meta = True, kept, {}
                     return ok, self._present_jobs(payload), meta
-            if self.v2 and isinstance(host_id, str):
+            if isinstance(host_id, str):
                 ledger_id = asked_as or self.ledger.ledger_id(host_id)
                 if ledger_id:
                     exc.message = exc.message.replace(host_id, ledger_id)
@@ -775,9 +777,7 @@ class Bridge:
         return ok, self._present_jobs(payload), meta
 
     def _present_jobs(self, payload: dict[str, Any]) -> dict[str, Any]:
-        """v2: the agent sees ledger job ids (opaque; the bridge knows the instance)."""
-        if not self.v2:
-            return payload
+        """The agent sees ledger job ids (opaque; the bridge knows the instance)."""
         return routing.rewrite_job_ids(payload, self.ledger.ledger_id)
 
     def _forward(
@@ -941,6 +941,8 @@ class Bridge:
                         "label": connected.get("label", ""),
                     }
                 return True, result, meta
+            if name == "inspect" and args.get("what") in DOC_WHATS:
+                return True, inspect_docs(self, args), {}  # no Houdini needed (D54)
             return self.forward(name, args, request_id)
         except ToolError as exc:
             return False, exc.to_dict(), {}
@@ -957,14 +959,29 @@ class Bridge:
                 {},
             )
 
+    def _argument_hint(self, name: str, unknown: list[tuple[str, list[str]]]) -> str:
+        """The hint for an argument problem: where ``name``'s reference is, led by what to do
+        about an unknown property (the closest valid one, else drop it)."""
+        route = migration.hint_tool("inspect", self.config.profile, what="tool", target=name)
+        where = f"{route} or hocuspocus://tools" if route else "hocuspocus://tools"
+        lead = ""
+        if unknown:
+            path, close = unknown[0]
+            lead = (
+                f"Use {close[0]} instead of {path}. "
+                if close
+                else f"{path} is not an argument of {name}; drop it. "
+            )
+        return f"{lead}Fix the listed arguments; {name}'s reference: {where}."
+
     def call_tool(
         self, name: str, arguments: dict[str, Any] | None, request_id: str | None = None
     ) -> types.CallToolResult:
         """Validate, dispatch and shape one ``tools/call``. Unknown tools raise ``MCPError``.
         ``request_id`` names the host call, so progress can be polled while it runs."""
         spec = self._by_name.get(name)
-        if spec is None and self.v2 and migration.replacement(name):
-            # A 1.4 name on a 2.0 profile: say what replaces it (spec-2.0 §8).
+        if spec is None and migration.replacement(name):
+            # A 1.4 tool name (removed in 2.1): say what replaces it (BIBLE §13).
             error = migration.removed_error(name, self.config.profile)
             return make_result(self.config.result_content, name, error.to_dict(), is_error=True)
         if spec is None:
@@ -977,18 +994,19 @@ class Bridge:
                 data["candidates"] = close
             raise MCPError(types.INVALID_PARAMS, message, data)
         args = dict(arguments or {})
-        violations = validate(args, spec.input_schema, ARG_RENAMES.get(name))
+        violations, unknown = validate_detailed(args, spec.input_schema, ARG_RENAMES.get(name))
         if violations:
             # Review 21 papercut 1: a flat item of a batch tool gets the corrected call;
             # review 25 papercut 2: so does a 1.4 argument name (inspect {path} -> target).
             wrapped = shape_hint(args, spec.input_schema) or rename_hint(
                 name, args, spec.input_schema
             )
+            candidates = list(dict.fromkeys(c for _path, close in unknown for c in close))[:3]
             error = ToolError(
                 "invalid_argument",
                 f"{len(violations)} argument problem(s) for {name}: " + "; ".join(violations[:5]),
-                hint=wrapped
-                or f"fix the listed arguments; {name}'s inputSchema in tools/list is authoritative",
+                hint=wrapped or self._argument_hint(name, unknown),
+                candidates=candidates,
                 detail={"violations": violations},
             )
             return make_result(self.config.result_content, name, error.to_dict(), is_error=True)
@@ -1021,231 +1039,29 @@ class Bridge:
             meta[budget.TRUNCATION_META_KEY] = cuts
         return make_result(mode, tool, result, is_error=False, meta=meta, images=images)
 
-    # -- resources -----------------------------------------------------------------------
-
-    RESOURCES: tuple[tuple[str, str, str, str], ...] = (
-        (
-            "houdini://status",
-            "status",
-            "application/json",
-            "Connected Houdini, hip file, frame and instances.",
-        ),
-        (
-            "houdini://outline",
-            "outline",
-            "application/json",
-            "The whole scene as a compact tree, two levels deep: each node's path, type, "
-            "children count, display node and errors (network_describe format outline).",
-        ),
-        (
-            "hocuspocus://guide",
-            "guide",
-            "text/markdown",
-            "The HocusPocus operating manual: instructions and recipes (several Houdinis, "
-            "Copernicus, spare parms).",
-        ),
-        (
-            "hocuspocus://tools",
-            "tools",
-            "text/markdown",
-            "The tool reference: every tool's arguments, notes and examples (large).",
-        ),
-    )
-    TEMPLATES: tuple[tuple[str, str, str], ...] = (
-        (
-            "houdini://node/{path}",
-            "node",
-            "A node's info: type, flags, inputs, non-default parms, errors.",
-        ),
-        ("houdini://node/{path}/parms", "node_parms", "A node's non-default parameters."),
-        (
-            "houdini://node/{path}/geo",
-            "node_geo",
-            "Geometry summary of a SOP (or an OBJ's display SOP).",
-        ),
-        (
-            "houdini://nodetype/{category}/{name}",
-            "nodetype",
-            "A node type's inputs and parameters.",
-        ),
-        ("houdini://job/{id}", "job", "Status of a long-running job (render, cook, PDG)."),
-    )
-
-    def route_resource(self, uri: str) -> tuple[str, dict[str, Any]] | None:
-        """Map a resource URI to ``(tool, args)``; ``None`` for the static guide/unknown."""
-        if uri == "houdini://status":
-            return "houdini_status", {}
-        if uri == "houdini://outline":
-            return "network_describe", dict(OUTLINE_ARGS)
-        if m := re.fullmatch(r"houdini://node/(.+)/parms", uri):
-            return "node_info", {"paths": [_node_path(m.group(1))], "include": ["parms"]}
-        if m := re.fullmatch(r"houdini://node/(.+)/geo", uri):
-            return "geo_info", {"path": _node_path(m.group(1))}
-        if m := re.fullmatch(r"houdini://node/(.+)", uri):
-            return "node_info", {"paths": [_node_path(m.group(1))]}
-        if m := re.fullmatch(r"houdini://nodetype/([^/]+)/(.+)", uri):
-            return "node_type_info", {
-                "type": f"{unquote(m.group(1))}/{unquote(m.group(2))}",
-                "detail": "full",
-            }
-        if m := re.fullmatch(r"houdini://job/(.+)", uri):
-            return "job", {"action": "status", "job_id": unquote(m.group(1))}
-        return None
-
-    def read_resource(self, uri: str) -> types.ReadResourceResult:
-        if uri in ("hocuspocus://guide", "hocuspocus://tools"):
-            text = (
-                guide_text(self.config.profile)
-                if uri == "hocuspocus://guide"
-                else tools_text(self.tools)
-            )
-            return types.ReadResourceResult(
-                contents=[types.TextResourceContents(uri=uri, text=text, mime_type="text/markdown")]
-            )
-        route = self.route_resource(uri)
-        if route is None:
-            raise MCPError(types.INVALID_PARAMS, f"Unknown resource: {uri}", {"uri": uri})
-        name, args = route
-        if name == "houdini_status":
-            ok, payload, _ = True, LOCAL_TOOLS["houdini_status"](self, {}), {}
-        else:
-            ok, payload, _ = self.invoke(name, args)
-        if not ok:
-            code = (
-                types.INTERNAL_ERROR
-                if payload.get("code") in _TRANSPORT_CODES
-                else types.INVALID_PARAMS
-            )
-            message = f"{payload.get('code')}: {payload.get('message')}"
-            if payload.get("hint"):
-                message += f" ({payload['hint']})"
-            raise MCPError(code, message, payload)
-        result, _images = budget.extract_images(payload)
-        result, _cuts = budget.apply_budget(result, self.config.max_response_bytes)
-        return types.ReadResourceResult(
-            contents=[
-                types.TextResourceContents(
-                    uri=uri, text=budget.dumps(result), mime_type="application/json"
-                )
-            ]
-        )
-
-    def list_resources(self) -> list[types.Resource]:
-        return [
-            types.Resource(uri=uri, name=name, mime_type=mime, description=desc)
-            for uri, name, mime, desc in self.RESOURCES
-        ]
-
-    def list_resource_templates(self) -> list[types.ResourceTemplate]:
-        return [
-            types.ResourceTemplate(
-                uri_template=tpl, name=name, mime_type="application/json", description=desc
-            )
-            for tpl, name, desc in self.TEMPLATES
-        ]
-
-
-def _node_path(raw: str) -> str:
-    return "/" + unquote(raw).lstrip("/")
-
 
 # -- prompts -----------------------------------------------------------------------------
 
-PROMPTS_1X: dict[str, tuple[str, list[tuple[str, str, bool]], str]] = {
-    "inspect_scene": (
-        "Summarise the open Houdini scene: hip file, networks, problems.",
-        [("root", "Network to start from (default /obj)", False)],
-        "Inspect the Houdini scene under {root}. Call houdini_status first (hip file, frame, "
-        "instance). If it warns that several Houdinis are running and none is pinned, ask the "
-        "user which one to inspect, or pin the GUI session with houdini_connect {{pid}}, before "
-        "going on. Read the resource houdini://outline (or call network_describe {{root: "
-        '"{root}", format: "outline"}}) for the tree, then problems on {root}. Describe one '
-        "network in more detail only when the summary needs it. Summarise: what each top-level "
-        "network builds, the display/render nodes, and any errors or warnings with the node "
-        "path and the likely cause. Do not modify anything.",
-    ),
-    "build_sop_chain": (
-        "Build a SOP network from a plain-language description, then verify it.",
-        [
-            (
-                "description",
-                "What to build, e.g. 'a box scattered with 500 points copied spheres'",
-                True,
-            ),
-            ("parent", "Parent network (default: create /obj/<name> geo)", False),
-        ],
-        "Build this in Houdini: {description}. Parent network: {parent}. Plan the SOP chain "
-        "first, then create it with one node_create call (items with parms and inputs; set the "
-        "display flag on the last node), or network_build for larger graphs. Use "
-        "node_type_search when unsure of a type name. node_create already reports each "
-        "node's errors and cook state: fix any errors it shows (cook only nodes it reports "
-        "not_cooked), check geo_info on the display node (counts, bbox), and finish with "
-        'viewport_capture {{"fit": "all"}} so the new geometry is framed. Report the final node '
-        "paths.",
-    ),
-    "debug_red_node": (
-        "Find out why a node has errors and fix it.",
-        [("path", "Node path, e.g. /obj/geo1/attribwrangle1", True)],
-        "The node {path} shows errors. Call node_info on it (include errors, parms, inputs). "
-        "Read the error text, inspect upstream inputs and any expressions or file paths "
-        "involved (problems on its parent when the cause may lie upstream), and explain the "
-        "root cause. Propose the smallest fix; apply it with parm_set/node_connect only if it "
-        "is unambiguous: the result re-cooks the node, so its errors confirm the fix. In a "
-        "wrangle, ch() of a parm that does not exist is 0 without an error: add the parms it "
-        "reads with node_edit spare_parms and set them.",
-    ),
-    "turntable_preview": (
-        "Set up a turntable camera around an object and capture preview frames.",
-        [
-            ("path", "Object or SOP to orbit, e.g. /obj/geo1", True),
-            ("frames", "Frame count for a full turn (default 48)", False),
-        ],
-        "Create a turntable preview of {path} over {frames} frames. Check houdini_status (ui: "
-        "GUI or headless) and the resource houdini://outline: if {path}'s display flag is off, "
-        "turn it on with node_edit (flags: {{display: true}}) and say so. Other displayed "
-        "objects can hide it: turn their display flags off for the captures and back on "
-        "afterwards, or tell the user which objects block the view. Read geo_info on {path} "
-        "for its bounding box, then create a null at the bbox centre with ry keyed 0→360 over "
-        "frames 1–{frames} and a camera parented to it, framed to the bbox, with resx/resy set "
-        "(e.g. 1280×720). Do not change the playbar range in a GUI session: each capture takes "
-        "frame. Capture viewport_capture {{camera, frame, resolution: [resx, resy]}} at the "
-        "first frame and at a quarter turn, and show both images.",
-    ),
-}
-"""The 1.4 prompts, in the 1.4 tools' words: ``compat_1x`` serves them (spec-2.0 §8); the
-2.0 profiles serve :data:`hocuspocus.bridge.instructions.PROMPTS` (spec-2.0 §2.8)."""
-PROMPT_DEFAULTS_1X = {"root": "/obj", "parent": "a new geo node under /obj", "frames": "48"}
 
-
-def _prompts(
-    profile: str | None,
-) -> tuple[dict[str, tuple[str, list[tuple[str, str, bool]], str]], dict[str, str]]:
-    """The prompt table and defaults for ``profile`` (``None``: a 2.0 profile)."""
-    if profile is not None and not profiles.is_2x(profile):
-        return PROMPTS_1X, PROMPT_DEFAULTS_1X
-    return PROMPTS, PROMPT_DEFAULTS
-
-
-def list_prompts(profile: str | None = None) -> list[types.Prompt]:
-    table, _defaults = _prompts(profile)
+def list_prompts() -> list[types.Prompt]:
+    """The prompts (spec-2.0 §2.8; :data:`hocuspocus.bridge.instructions.PROMPTS`)."""
     return [
         types.Prompt(
             name=name,
             description=desc,
             arguments=[types.PromptArgument(name=a, description=d, required=r) for a, d, r in args],
         )
-        for name, (desc, args, _tpl) in table.items()
+        for name, (desc, args, _tpl) in PROMPTS.items()
     ]
 
 
-def get_prompt(
-    name: str, arguments: dict[str, str] | None, profile: str | None = None
-) -> types.GetPromptResult:
-    table, defaults = _prompts(profile)
-    if name not in table:
-        raise MCPError(types.INVALID_PARAMS, f"Unknown prompt: {name}", {"prompts": sorted(table)})
-    desc, spec, template = table[name]
-    values = dict(defaults)
+def get_prompt(name: str, arguments: dict[str, str] | None) -> types.GetPromptResult:
+    if name not in PROMPTS:
+        raise MCPError(
+            types.INVALID_PARAMS, f"Unknown prompt: {name}", {"prompts": sorted(PROMPTS)}
+        )
+    desc, spec, template = PROMPTS[name]
+    values = dict(PROMPT_DEFAULTS)
     values.update({k: v for k, v in (arguments or {}).items() if v})
     # Defaults fill optional arguments only: a required one must come from the caller.
     given = {k for k, v in (arguments or {}).items() if v}
@@ -1387,28 +1203,13 @@ def build_server(bridge: Bridge | None = None) -> Server[Any]:
             return await anyio.to_thread.run_sync(bridge.call_tool, params.name, params.arguments)
         return await _call_with_progress(bridge, ctx, params)
 
-    async def on_list_resources(ctx: Any, params: Any) -> types.ListResourcesResult:
-        return types.ListResourcesResult(resources=bridge.list_resources())
-
-    async def on_list_resource_templates(
-        ctx: Any, params: Any
-    ) -> types.ListResourceTemplatesResult:
-        return types.ListResourceTemplatesResult(
-            resource_templates=bridge.list_resource_templates()
-        )
-
-    async def on_read_resource(
-        ctx: Any, params: types.ReadResourceRequestParams
-    ) -> types.ReadResourceResult:
-        return await anyio.to_thread.run_sync(bridge.read_resource, str(params.uri))
-
     async def on_list_prompts(ctx: Any, params: Any) -> types.ListPromptsResult:
-        return types.ListPromptsResult(prompts=list_prompts(bridge.config.profile))
+        return types.ListPromptsResult(prompts=list_prompts())
 
     async def on_get_prompt(
         ctx: Any, params: types.GetPromptRequestParams
     ) -> types.GetPromptResult:
-        return get_prompt(params.name, params.arguments, bridge.config.profile)
+        return get_prompt(params.name, params.arguments)
 
     def tool_schema(name: str) -> dict[str, Any] | None:
         spec = bridge._by_name.get(name)
@@ -1419,13 +1220,10 @@ def build_server(bridge: Bridge | None = None) -> Server[Any]:
         version=__version__,
         title="HocusPocus",
         description="Drive a live SideFX Houdini session.",
-        instructions=instructions_for(bridge.config.profile),
+        instructions=instructions_for(),
         get_tool_input_schema=tool_schema,
         on_list_tools=on_list_tools,
         on_call_tool=on_call_tool,
-        on_list_resources=on_list_resources,
-        on_list_resource_templates=on_list_resource_templates,
-        on_read_resource=on_read_resource,
         on_list_prompts=on_list_prompts,
         on_get_prompt=on_get_prompt,
     )
@@ -1433,7 +1231,7 @@ def build_server(bridge: Bridge | None = None) -> Server[Any]:
     server.middleware.append(server_info_once)
     from .resources import install as install_resources
 
-    install_resources(server, bridge)  # profile v2: resources with etags and subscriptions
+    install_resources(server, bridge)  # resources with etags and subscriptions (§3.10)
     return server
 
 

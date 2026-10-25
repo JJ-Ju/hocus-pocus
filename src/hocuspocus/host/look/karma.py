@@ -4,9 +4,8 @@ For a stage it is a ``karmarendersettings`` LOP and a ``usdrender_rop`` after th
 LOP; for ``/obj`` a ``/out`` ``karma`` ROP. Karma has no second-render crash and husk is
 its own process, so it renders in-process, GUI and headless alike, on the live scene (no
 snapshot). Every node it makes is deleted afterwards, outside undo and events, and the
-selection is put back. ``viewport_capture`` runs it only when the viewport ROP children
-crashed (:data:`KARMA_SAMPLES` samples per pixel); ``look`` also runs it for ``quality:
-lit`` without lights (:data:`LIT_SAMPLES`) and for ``quality: final`` (the target ROP's
+selection is put back. ``look`` runs it when the viewport ROP children crashed
+headless (:data:`KARMA_SAMPLES` samples per pixel), for ``quality: lit`` without lights (:data:`LIT_SAMPLES`) and for ``quality: final`` (the target ROP's
 samples, else :data:`FINAL_SAMPLES`).
 """
 
@@ -21,10 +20,10 @@ from typing import Any
 from hocuspocus.tools.errors import ToolError
 from hocuspocus.tools.migration import BARE, hint_tool
 
+from ..executor import mark_long_step
 from ..tools.hip import _norm
 from . import child
 from .base import Backend, Env, LookResult, failure, log_tail, mark_internal, on_main
-from .framing import temporary_display
 
 KARMA_SAMPLES = 2
 """Pixel samples of the Karma fallback: a quick look, not a final frame."""
@@ -51,6 +50,7 @@ def _karma_nodes(
     namespace: dict[str, Any] = {}
     exec(child._BUILD_CAPTURE, namespace)
     try:
+        isolated = namespace["isolate_target"](hou, spec, created)  # a look at a SOP
         lop, camera = namespace["capture_camera"](hou, spec, created)
         values: dict[str, Any]
         if lop is not None:
@@ -88,13 +88,25 @@ def _karma_nodes(
                 "camera": camera,
                 "engine": "cpu",
                 "samplesperpixel": samples,
+                # 22.0's Karma ROP renders at resolutionx/y (1280x720 by default) whatever
+                # the camera or the override parms say (review 26 P1 #5: a 640x480 look came
+                # back 1024x576); the override parms are kept for builds that read them.
+                "resolutionx": res[0],
+                "resolutiony": res[1],
                 "override_camerares": 1,
                 "res_fraction": "specific",
                 "res_overridex": res[0],
                 "res_overridey": res[1],
                 "picture": out_file,
             }
+            if isolated:
+                values["candobjects"] = isolated
+                values["objects"] = ""
         values["trange"] = 0
+        # "Block Until Render Complete": in a GUI session the ROP otherwise starts husk in
+        # the background and render() returns at once, before the image exists (hython
+        # always waits); the look then answered "no output file" in every GUI (2.0, 2.1).
+        values["soho_foreground"] = 1
         for name, value in values.items():
             parm = rop.parm(name)
             if parm is not None:
@@ -118,7 +130,7 @@ def capture_with_karma(
     the fallback when the viewport ROP children crashed, and ``look``'s lit and final
     renderer. Karma has no second-render crash, so its ROP renders in-process (husk is its
     own process). Deletes every node it made, outside undo and events, and puts the
-    selection (and a look's display flag) back. Raises ``cook_failed`` with the end of the
+    selection back. Raises ``cook_failed`` with the end of the
     husk log. Main thread."""
     import hou
 
@@ -130,8 +142,10 @@ def capture_with_karma(
     created: list[Any] = []
     errors: list[str] = []
     try:
-        with temporary_display(spec), hou.undos.disabler(), muted():
+        with hou.undos.disabler(), muted():
             rop = _karma_nodes(spec, res, out_file, logs, created, samples)
+            # Calls that wait behind it say what holds the main thread (2.1, D75).
+            mark_long_step(f"{label} render of a look ({res[0]}x{res[1]}, {samples} samples)")
             try:
                 rop.render(frame_range=(frame, frame), verbose=False)
             except hou.OperationFailed as exc:

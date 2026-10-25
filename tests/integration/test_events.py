@@ -10,8 +10,6 @@ hou = pytest.importorskip("hou")
 
 from hocuspocus.host.tools import events as ev  # noqa: E402
 
-pytestmark = pytest.mark.compat_1x  # the 1.4 tools (conftest: compat_client)
-
 
 def _since() -> int:
     return ev.LOG.last_seq
@@ -162,12 +160,12 @@ def test_agent_created_nodes(client):
     events = _read(client, since)
     assert ("ChildCreated", "/obj/terrain") in _kinds(events)
     since = _since()
-    client.ok("node_edit", {"items": [{"path": "/obj/terrain", "name": "land"}]})
+    client.ok("edit", {"ops": [{"op": "node", "path": "/obj/terrain", "name": "land"}]})
     assert ("NameChanged", "/obj/land") in _kinds(_read(client, since))
 
 
 def test_agent_touched_nodes_are_watched(client):
-    """node_create/network_build/node_copy watch what they make (bible §4.7), so later
+    """node_create and edit (create, build, copy) watch what they make (bible §4.7), so later
     changes to nested nodes, which no context-manager callback sees, are reported."""
     client.ok("node_create", {"items": [{"parent": "/obj", "type": "geo", "name": "g"}]})
     client.ok("node_create", {"items": [{"parent": "/obj/g", "type": "box", "name": "b"}]})
@@ -178,10 +176,22 @@ def test_agent_touched_nodes_are_watched(client):
     assert events[0]["detail"]["parm"] == "size"
 
     client.ok(
-        "network_build",
-        {"parent": "/obj/g", "data": {"s": {"type": "sphere"}}, "layout": False},
+        "edit",
+        {
+            "ops": [
+                {
+                    "op": "build",
+                    "parent": "/obj/g",
+                    "data": {"s": {"type": "sphere"}},
+                    "layout": False,
+                }
+            ]
+        },
     )
-    client.ok("node_copy", {"paths": ["/obj/g/b"], "to_parent": "/obj/g", "names": ["b2"]})
+    client.ok(
+        "edit",
+        {"ops": [{"op": "copy", "paths": ["/obj/g/b"], "to_parent": "/obj/g", "names": ["b2"]}]},
+    )
     since = _since()
     hou.parm("/obj/g/s/radx").set(3)
     hou.parm("/obj/g/b2/sizex").set(4)
@@ -303,10 +313,11 @@ def test_spare_parm_edit_is_one_spare_parms_changed(client):
     client.ok("node_create", {"items": [{"parent": "/obj", "type": "null", "name": "CONTROLS"}]})
     since = _since()
     client.ok(
-        "node_edit",
+        "edit",
         {
-            "items": [
+            "ops": [
                 {
+                    "op": "node",
                     "path": "/obj/CONTROLS",
                     "spare_parms": {"add": [{"name": "seed", "type": "int", "default": 1}]},
                 }
@@ -374,7 +385,7 @@ def test_hda_rebuild_is_one_event(client, work_dir):
         },
     )
     since = _since()
-    library = (work_dir / "rock.hda").as_posix()
+    library = (work_dir / f"rock{hou.hda.defaultFileExtension()}").as_posix()
     client.ok(
         "hda",
         {

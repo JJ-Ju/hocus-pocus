@@ -1,12 +1,13 @@
-"""State tools: ``undo``, ``time``, ``selection`` and ``job``. See docs/BIBLE.md §4.7, §7.
+"""State tools: ``undo``, ``time`` and ``job``, and the selection helpers the ``edit``
+``select`` op uses. See docs/BIBLE.md §4.7, §7.
 
-All four register with ``scene=False`` so the dispatcher opens no undo group, does not
+All three register with ``scene=False`` so the dispatcher opens no undo group, does not
 mark the scene dirty and does not apply the blanket read-only refusal; each tool decides
 those itself, because the dispatcher's per-call treatment is wrong for them:
 
 * ``undo`` must call ``hou.undos.performUndo()``, which Houdini refuses inside an open
   undo group ("Cannot undo within an undo group", verified on 22.0.466).
-* ``time`` and ``selection`` read when called without arguments; an undo group, an
+* ``time`` reads when called without arguments; an undo group, an
   undo-history entry and a dirty flag for a read would be noise. ``hou.setFrame``,
   ``hou.playbar.setFrameRange`` and ``hou.setFps`` are not undoable at all (a group around
   them records nothing).
@@ -24,8 +25,8 @@ from typing import Any
 
 from hocuspocus.tools.errors import ToolError
 
-from ..undo import LABEL_PREFIX, hou_undo_group, make_label
-from ._common import bad_arg, get_node, hou_exception_text, hou_message, number, refuse_if_read_only
+from ..undo import LABEL_PREFIX
+from ._common import bad_arg, hou_exception_text, hou_message, number, refuse_if_read_only
 from .registry import HostContext, tool
 from .session import scene_dirty, time_block, viewport_note
 
@@ -241,7 +242,7 @@ def select_nodes(nodes: list[Any]) -> list[str]:
 
     In the GUI, selecting makes the last node current, and on the next idle tick every
     unpinned Scene Viewer and Network Editor follows it into its network (the next
-    viewer ``look``/``viewport_capture`` then shows that network with the rest
+    viewer ``look`` then shows that network with the rest
     ghosted). Putting a pane back is not possible without losing the selection: Houdini
     couples them, and ``setPwd`` selects a node of the pane's network instead (verified
     on 22.0.466, the Scene Viewer alone too). So the selection wins and the result names
@@ -277,35 +278,9 @@ def context_changed_note() -> str:
     return (
         "Houdini takes the Scene Viewer and Network Editor listed in context_changed into "
         "the selection's network on its next idle tick (putting them back would change the "
-        f"selection). {hint_tool('viewport_capture', source='viewer')} then shows that "
+        f"selection). {hint_tool('look', source='viewer')} then shows that "
         "network; the default sources are not affected."
     )
-
-
-@tool("selection", scene=False)
-def selection(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
-    import hou
-
-    paths = args.get("paths")
-    if paths is None:
-        return {"selected": [n.path() for n in hou.selectedNodes()]}
-    if not isinstance(paths, list):
-        raise bad_arg("'paths' must be a list of node paths (an empty list clears).")
-    nodes: list[Any] = []
-    for index, path in enumerate(paths):
-        node = get_node(path, field=f"paths[{index}]")
-        if node not in nodes:
-            nodes.append(node)
-    label = make_label("selection", {"paths": paths} if paths else {"undo_label": "clear"})
-    # Houdini records each selection change as an undo entry; make the call one step.
-    with hou_undo_group(label):
-        moved = select_nodes(nodes)
-    ctx.undo.record(label, "selection")
-    out: dict[str, Any] = {"selected": [n.path() for n in hou.selectedNodes()]}
-    if moved:
-        out["context_changed"] = moved
-        out["notes"] = [context_changed_note()]
-    return out
 
 
 # -- job --------------------------------------------------------------------------------

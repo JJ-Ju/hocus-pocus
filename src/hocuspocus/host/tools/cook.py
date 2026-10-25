@@ -32,6 +32,7 @@ from ._diag import (
     timed_cook,
     upstream_first,
 )
+from .readers import press_reload
 from .registry import HostContext, tool
 
 JOB_STEP_TIMEOUT_S = 24 * 3600.0
@@ -67,8 +68,12 @@ def _paths_arg(args: dict[str, Any]) -> list[str]:
 
 WARM_CACHE_HINT = (
     "cook_time_ms is this node's own cook; its inputs were already cooked and are not "
-    "included. Use profile: true to time the whole input chain."
+    "included and were not recooked. Use profile: true to time the whole input chain, or "
+    'force: "chain" to recook it.'
 )
+
+INPUT_PROBLEMS_LISTED = 10
+"""``force: "chain"`` lists at most this many inputs with errors or warnings per node."""
 
 SUMMARIES = ("none", "bbox")
 MAX_FRAMES = 10000
@@ -84,12 +89,16 @@ def cook_node(path: str, *, force: bool, frame: float | None) -> dict[str, Any]:
     if switch:
         hou.setFrame(frame)
     try:
+        # D80: a forced cook does not reload a File COP's image; its own button does.
+        reloaded = force and press_reload(node)
         report = collect_problems(node, cook=True, force=force)
     finally:
         if switch:
             hou.setFrame(previous)
     row: dict[str, Any] = {"path": node.path(), "ok": not report["errors"]}
     row.update(report)
+    if reloaded:
+        row["reloaded"] = True
     if report["cook_state"] == "error":
         row["ok"] = False
     if force and "hint" not in row and report.get("cook_time_ms", 1.0) < 1.0 and _has_inputs(node):
@@ -119,6 +128,52 @@ def dependency_order(node: Any) -> list[Any]:
         ancestors = []
     extra = [a for a in reversed(ancestors) if a.sessionId() not in seen]
     return [n for n in [*extra, *wired, node] if hasattr(n, "cook")]
+
+
+INACTIVE_LISTED = 10
+"""A profile's ``inactive.paths`` lists at most this many of the skipped nodes."""
+
+
+def cook_path(node: Any) -> tuple[list[Any], list[str]]:
+    """``(nodes to profile, inactive paths)``: the input ancestors of ``node`` that a
+    normal cook of it cooks, in dependency order and ending with ``node``, and the paths
+    of the other ancestors (a Switch's unselected inputs, what feeds a bypassed or locked
+    node; review 26 P1 #8: profiling them made "interiors off costs nothing" look false).
+
+    Houdini answers which inputs the last cook used
+    (``inputAncestors(only_used_inputs=True)``), so a dirty node is cooked normally first.
+    A chain that simulates is not pre-cooked (that cook would solve its frames and the
+    profile would time a cache read), nor is a cook that fails or uses nothing: then
+    every ancestor is profiled, as before 2.1. Main thread."""
+    import hou
+
+    every = dependency_order(node)
+    ancestors = every[:-1]
+    if not ancestors:
+        return every, []
+    try:
+        dirty = bool(node.needsToCook())
+    except Exception:
+        dirty = True
+    if dirty:
+        if any(_dop_networks(n) for n in every):
+            return every, []
+        with contextlib.suppress(hou.OperationFailed):
+            node.cook(force=False)
+    try:
+        used = node.inputAncestors(only_used_inputs=True)
+    except Exception:
+        used = ()
+    if not used:
+        return every, []
+    ids = {n.sessionId() for n in used}
+    for end in [n for n in used if _is_block_end(n)]:
+        # Houdini leaves a for-each body out of the used inputs; the block_end cooks it.
+        with contextlib.suppress(Exception):
+            ids.update(a.sessionId() for a in end.inputAncestors())
+    active = [n for n in ancestors if n.sessionId() in ids]
+    inactive = [n.path() for n in ancestors if n.sessionId() not in ids]
+    return [*active, node], inactive
 
 
 def _is_block_end(node: Any) -> bool:
@@ -652,28 +707,103 @@ def _plain(job: Any, paths: list[str], force: bool, frame: float | None) -> list
     return results
 
 
+def _chain_inputs(path: str, frame: float | None) -> list[str]:
+    """The input ancestors a normal cook of ``path`` uses, in dependency order (D53's
+    :func:`cook_path`), at ``frame``. Main thread."""
+    import hou
+
+    node = require_node(path)
+    previous = hou.frame()
+    switch = frame is not None and frame != previous
+    if switch:
+        hou.setFrame(frame)
+    try:
+        nodes, _inactive = cook_path(node)
+    finally:
+        if switch:
+            hou.setFrame(previous)
+    return [n.path() for n in nodes[:-1]]
+
+
+def _chained(job: Any, paths: list[str], frame: float | None) -> list[dict[str, Any]]:
+    """``force: "chain"`` (2.1, D81): force-cook each node's used input chain, inputs
+    first (each pressing its reload button, D80), one main-thread step per node, then the
+    node itself. Each node's row adds ``inputs_cooked``, ``inputs_reloaded`` and the inputs
+    that still report errors or warnings in ``input_problems``. An input shared by two
+    named nodes is cooked once."""
+    results: list[dict[str, Any]] = []
+    done: set[str] = set()
+    for index, path in enumerate(paths):
+        job.set_progress(index, len(paths), f"cooking the inputs of {path}")
+        try:
+            inputs = job.run_main(lambda p=path: _chain_inputs(p, frame), JOB_STEP_TIMEOUT_S)
+            cooked, reloaded, problems = 0, [], []
+            for source in inputs:
+                if source in done:
+                    continue
+                row = job.run_main(
+                    lambda p=source: cook_node(p, force=True, frame=frame), JOB_STEP_TIMEOUT_S
+                )
+                done.add(source)
+                cooked += 1
+                if row.get("reloaded"):
+                    reloaded.append(source)
+                issues = {k: row[k] for k in ("errors", "warnings") if row.get(k)}
+                if issues:
+                    problems.append({"path": source, **issues})
+            row = job.run_main(
+                lambda p=path: cook_node(p, force=True, frame=frame), JOB_STEP_TIMEOUT_S
+            )
+        except ToolError as exc:
+            if exc.code != "cancelled":
+                raise
+            from .visual import cancelled_with_partial
+
+            done_text = f"{len(results)} of {len(paths)} nodes"
+            raise cancelled_with_partial(job, {"results": results}, done_text) from exc
+        done.add(row["path"])
+        row.pop("hint", None)  # the warm-cache hint: its inputs were just recooked
+        row["inputs_cooked"] = cooked
+        if reloaded:
+            row["inputs_reloaded"] = reloaded[:INPUT_PROBLEMS_LISTED]
+        if problems:
+            row["input_problems"] = problems[:INPUT_PROBLEMS_LISTED]
+            if len(problems) > INPUT_PROBLEMS_LISTED:
+                row["input_problems_total"] = len(problems)
+        results.append(row)
+    job.set_progress(len(paths), len(paths), "done")
+    return results
+
+
 def _profiled(
     job: Any, ctx: HostContext, paths: list[str], frame: float | None, timeout_s: float
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    """Force-cook every node's input chain in dependency order, one step per node."""
+    """Force-cook the part of every node's input chain that a normal cook of it cooks
+    (:func:`cook_path`), in dependency order, one step per node."""
     import hou
+
+    skipped: list[str] = []
 
     def chain_paths() -> list[str]:
         ordered: list[str] = []
         for path in paths:
-            for node in dependency_order(require_node(path)):
+            used, inactive = cook_path(require_node(path))
+            for node in used:
                 if node.path() not in ordered:
                     ordered.append(node.path())
+            skipped.extend(p for p in inactive if p not in skipped)
         return ordered
 
-    chain = job.run_main(chain_paths, timeout_s)
     previous = job.run_main(hou.frame, timeout_s)
-    steps = len(chain) + len(paths)
     rows: list[dict[str, Any]] = []
     results: list[dict[str, Any]] = []
     try:
         if frame is not None:
             job.run_main(lambda: hou.setFrame(frame), timeout_s)
+        # After the frame is set: which inputs a normal cook uses can depend on it.
+        chain = job.run_main(chain_paths, JOB_STEP_TIMEOUT_S)
+        skipped[:] = [p for p in skipped if p not in chain]  # used by another named node
+        steps = len(chain) + len(paths)
         for index, path in enumerate(chain):
             job.set_progress(index, steps, f"{index}/{steps} steps done, cooking {path}")
             rows.append(job.run_main(lambda p=path: _profile_step(p), JOB_STEP_TIMEOUT_S))
@@ -698,6 +828,10 @@ def _profiled(
             result["cook_time_ms"] = by_path[result["path"]]["cook_time_ms"]
     rows.sort(key=lambda r: r["cook_time_ms"], reverse=True)
     out = {"chain": rows[:10], "chain_total": len(rows), "total_ms": total_ms}
+    if skipped:
+        # Review 26 P1 #8: inputs a normal cook does not cook (a Switch's other inputs, a
+        # bypassed or locked node's) are not profiled; say which were left out.
+        out["inactive"] = {"count": len(skipped), "paths": skipped[:INACTIVE_LISTED]}
     out.update(extra)
     notes = [_sim_note(row) for row in rows if "simulation" in row]
     if notes:
@@ -881,7 +1015,16 @@ def writer_notes(paths: list[str]) -> list[str]:
 @tool("cook", main_thread=False, scene=False)
 def cook(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     paths = _paths_arg(args)
-    force = bool(args.get("force", False))
+    force_arg = args.get("force", False)
+    if force_arg is None:
+        force_arg = False
+    if not (isinstance(force_arg, bool) or force_arg == "chain"):
+        raise bad_arg(
+            f"'force' must be true, false or \"chain\" (got {force_arg!r}).",
+            hint='force: true recooks the named nodes; "chain" recooks their inputs too.',
+        )
+    chain = force_arg == "chain"
+    force = bool(force_arg)
     frame = _number(args, "frame", None)
     timeout_s = _number(args, "timeout_s", 30.0, positive=True)
     wait_arg = _number(args, "wait_s", None)
@@ -898,6 +1041,11 @@ def cook(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
             "'frame_range' cannot be combined with 'profile' or 'frame'.",
             hint="Profile at one frame, or cook a range without profile.",
         )
+    if chain and (frames is not None or profile):
+        raise bad_arg(
+            "force: \"chain\" cannot be combined with 'frame_range' or 'profile'.",
+            hint="profile already force-cooks the input chain; cook a range with force: true.",
+        )
 
     notes: list[str] = []
 
@@ -912,6 +1060,8 @@ def cook(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
             results, extra = _ranged(job, ctx, resolved, frames, force, summary, timeout_s)
         elif profile:
             results, extra = _profiled(job, ctx, resolved, frame, timeout_s)
+        elif chain:
+            results = _chained(job, resolved, frame)
         else:
             results = _plain(job, resolved, force, frame)
         out: dict[str, Any] = {"ok": all(r["ok"] for r in results), "results": results}
@@ -1183,6 +1333,38 @@ def _unconnected_inputs(node: Any) -> list[dict[str, Any]]:
     return rows
 
 
+_NODE_PATH_RE = re.compile(r"(?<![\w:./$`-])(/[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*)")
+"""An absolute node path in a message (``/mat/mt_glass``); not a drive path's tail."""
+
+
+def _now_exists(node: Any, text: str) -> str | None:
+    """A hint when an error or warning names a node that exists now (2.1, D81): the
+    message predates it (a Material SOP cooked before its material existed, r21 friction
+    4), and the node has not cooked since. None otherwise."""
+    import hou
+
+    try:
+        if node.needsToCook():
+            return None
+    except Exception:
+        return None
+    found = []
+    for path in _NODE_PATH_RE.findall(text):
+        path = path.rstrip(".")
+        if path in found or path == node.path() or node.path().startswith(path + "/"):
+            continue  # the node itself or a network around it says nothing
+        with contextlib.suppress(Exception):
+            if hou.node(path) is not None:
+                found.append(path)
+    if not found:
+        return None
+    recheck = hint_tool("cook", paths=[node.path()], force=True)
+    names = ", ".join(found[:3])
+    verb = "exists" if len(found) == 1 else "exist"
+    tail = f"; {recheck} rechecks it" if recheck else ""
+    return f"{names} {verb} now: this message may predate it{tail}."
+
+
 _RECHECK_CATEGORIES = REFRESH_CATEGORIES | {"Object"}
 """An object's errors and warnings mirror its display SOP's, so it is rechecked too."""
 
@@ -1207,10 +1389,12 @@ def node_problems(
         should_cook = False
     report = collect_problems(node, cook=should_cook)
     for text in report["errors"]:
-        rows.append(_row(node, "error", f"{node.path()}: {text}"))
+        rows.append(_row(node, "error", f"{node.path()}: {text}", hint=_now_exists(node, text)))
     if include_warnings:
         for text in report["warnings"]:
-            rows.append(_row(node, "warning", f"{node.path()}: {text}"))
+            rows.append(
+                _row(node, "warning", f"{node.path()}: {text}", hint=_now_exists(node, text))
+            )
     try:
         # Parms inside a locked asset are the asset's own (often non-default, often
         # referencing parents the asset expects); scanning them is slow and noisy.
@@ -1285,7 +1469,6 @@ def _problems_budget(args: dict[str, Any]) -> float:
     return min(PROBLEMS_BUDGET_S, float(call_timeout(60.0) or 60.0) * 0.5)
 
 
-@tool("problems")
 def problems(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     root_path = args.get("root") or "/"
     include_warnings = bool(args.get("include_warnings", True))

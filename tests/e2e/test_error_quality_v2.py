@@ -19,7 +19,11 @@ right call, the hint shows it and the test makes that call:
    ``<pid>-<id>`` about an unknown Houdini;
 8. and the rest of the task-9 set whose hints named tools: a cook error read through
    ``inspect geo``, a missing ``look`` camera, a ROP without its camera, ``hip_new`` on
-   an untitled scene (papercut 9).
+   an untitled scene (papercut 9);
+9. an argument the schema does not have (2.1 stream F): ``render {frame_range}`` is
+   ``invalid_argument`` naming the key, with ``frames`` as the candidate and a hint that
+   names ``inspect {what: "tool", target: "render"}``; the same nested (``houdini_connect``
+   ``launch``, ``edit`` ``ops[0]``).
 
 Never uses port 37219; hython runs from a neutral cwd with isolated state and pref dirs.
 """
@@ -34,9 +38,9 @@ from typing import Any
 
 import pytest
 
-# The 1.4 scenario's hython fixtures and recorder (tests/e2e is on sys.path under pytest's
+# The scenarios' hython fixtures and recorder (tests/e2e is on sys.path under pytest's
 # default import mode); headless_host and hython are fixtures, used by name below.
-from test_scenario_authoring import SRC, Recorder, headless_host, hython  # noqa: F401
+from scenario_host import SRC, Recorder, headless_host, hython  # noqa: F401
 
 pytestmark = pytest.mark.e2e
 
@@ -127,7 +131,8 @@ async def _scenario(check: Checker) -> None:
     )
     assert at_create["message"].startswith("ops[0].parms.sizee: ")
     assert "size" in at_create["candidates"]
-    assert 'inspect {what: "type", target: "Sop/box"}' in at_create["hint"]
+    # 2.1 (D56): the op runs to check it, so the hint is about the new node itself.
+    assert "Did you mean size? It is a tuple" in at_create["hint"]
     on_node = await check.mistake(
         "edit", {"ops": [{"op": "set", "path": f"{GEO}/box1/sizee", "value": 3}]}, "parm_not_found"
     )
@@ -174,7 +179,8 @@ async def _scenario(check: Checker) -> None:
         ("viewport_capture", {}, "look"),
     ):
         refused = await check.mistake(name, args, "invalid_argument")
-        assert refused["hint"].startswith(f"In 2.0 use {use}"), refused
+        assert refused["hint"].startswith(f"Use {use}"), refused
+        assert "2.1 removed it" in refused["message"], refused
 
     # 6. 1.4 inspect arguments -------------------------------------------------------------------
     for wrong in ("path", "node_path"):
@@ -217,9 +223,36 @@ async def _scenario(check: Checker) -> None:
         "render", {"rop_path": "/out/gl", "output": "$HIP/render/gl.$F4.png"}, "node_not_found"
     )
     assert 'edit {ops: [{op: "create", parent: "/obj", type: "cam"}]}' in rop["hint"]
-    assert "look {}" in rop["hint"]
+    assert "look frames the scene without one" in rop["hint"]
     untitled = await check.mistake("hip_new", {}, "unsaved_changes")
     assert untitled["hint"].startswith("The scene is untitled: hip_save {path} saves it")
+
+    # 9. an argument the schema does not have (2.1 stream F) -------------------------------------
+    stray = await check.mistake(
+        "render", {"rop_path": "/out/gl", "frame_range": [1, 5]}, "invalid_argument"
+    )
+    assert "frame_range: unknown property; did you mean frames?" in stray["message"]
+    assert stray["candidates"] == ["frames"]
+    assert 'inspect {what: "tool", target: "render"}' in stray["hint"]
+    nested = await check.mistake(
+        "houdini_connect", {"launch": {"mode": "headless", "hipp": "a.hip"}}, "invalid_argument"
+    )
+    assert "launch.hipp: unknown property; did you mean hip?" in nested["message"]
+    assert nested["candidates"] == ["hip"]
+    in_op = await check.mistake(
+        "edit",
+        {"ops": [{"op": "set", "paht": f"{GEO}/box1/sizex", "value": 2}]},
+        "invalid_argument",
+    )
+    assert "ops[0].paht: unknown property" in in_op["message"]
+    assert in_op["candidates"][0] == "path"
+    assert 'inspect {what: "tool", target: "edit"}' in in_op["hint"]
+    # the same call with the right key passes validation: the ROP is asked (this one writes
+    # to MPlay, which a headless host cannot do), so the error is the host's, not the bridge's
+    again = await check.mistake(
+        "render", {"rop_path": "/out/gl", "frames": [1, 5]}, "invalid_value"
+    )
+    assert "unknown property" not in again["message"]
 
 
 def test_error_quality_v2(headless_host, tmp_path):  # noqa: F811 - the fixture above
@@ -270,5 +303,5 @@ def test_error_quality_v2(headless_host, tmp_path):  # noqa: F811 - the fixture 
     if failures:
         raise AssertionError(f"{failures[0]}\nmistakes so far:\n{report}") from failures[0]
     print(f"\n[error_quality_v2] {len(check.errors)} mistakes, every hint core-only\n{report}")
-    assert len(check.listed) == 18 and "node_find" not in check.listed  # core
+    assert len(check.listed) == 19 and "node_find" not in check.listed  # core
     assert len(check.errors) >= 20

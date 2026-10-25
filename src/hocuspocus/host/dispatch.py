@@ -15,11 +15,12 @@ from collections.abc import Callable, Mapping
 from typing import Any
 
 from hocuspocus.tools import migration
-from hocuspocus.tools.catalog import ToolSpec, host_accepts, profile_of
+from hocuspocus.tools.catalog import ToolSpec, in_profile, profile_of
 from hocuspocus.tools.errors import ToolError
-from hocuspocus.tools.profiles import COMPAT_1X, normalize
+from hocuspocus.tools.profiles import normalize
 
-from .executor import MainThreadMeter, metering
+from . import modal
+from .executor import MainThreadMeter, Pending, metering
 from .tools.registry import HostContext, HostTool
 from .undo import UndoGroupFactory, make_label
 
@@ -38,6 +39,18 @@ marking, reports ``undo_label: null``, and allows the call in read-only mode whe
 args had ``dry_run: true``. The key is always stripped from the result."""
 
 
+AFTER_KEY = "_after"
+"""A main-thread tool's result may carry ``"_after": fn``: once the main-thread work is
+over (its undo group closed, the scene marked dirty), the dispatcher pops it and returns
+``fn(result, remaining_s)``, called on the request's thread with the seconds left of the
+call's timeout. ``edit`` cooks its nodes this way, as a job the call waits on for a while
+(BIBLE D58): a long cook can then no longer make an applied edit's result time out. ``fn``
+must not raise; the key is always stripped."""
+
+AFTER_MARGIN_S = 2.0
+"""Seconds of the call's timeout kept back from an ``_after`` step for the response."""
+
+
 _CALL = threading.local()
 
 
@@ -49,6 +62,12 @@ def call_timeout(default: float | None = None) -> float | None:
     return default if value is None else value
 
 
+def current_tool() -> str | None:
+    """The name of the tool the running call is answering, for hints that point at its
+    reference (``inspect {what: "tool", target}``, 2.1); set on the thread that runs it."""
+    return getattr(_CALL, "tool", None)
+
+
 def current_request_id() -> str | None:
     """The running call's ``request_id`` from the ``/hp/v1/call`` envelope, if any. Jobs
     started during the call are filed under it, so the bridge can follow their progress
@@ -56,10 +75,37 @@ def current_request_id() -> str | None:
     return getattr(_CALL, "request_id", None)
 
 
+def _off_main_thread(executor: Any) -> bool:
+    on_main = getattr(executor, "on_main_thread", None)
+    return bool(callable(on_main) and not on_main())
+
+
+def after_allowed() -> bool:
+    """Whether the running call may hand work to an :data:`AFTER_KEY` step that waits on
+    main-thread jobs: true when the call came from another thread than Houdini's main
+    one (an HTTP request), false for an inline call (a GUI shell, in-process tests) or
+    outside a call."""
+    return bool(getattr(_CALL, "after_ok", False))
+
+
 def _pop_changed(result: Any) -> bool | None:
     if isinstance(result, dict) and CHANGED_KEY in result:
         return bool(result.pop(CHANGED_KEY))
     return None
+
+
+def _run_after(after: Callable[..., Any], result: Any, remaining: float, ctx: Any) -> Any:
+    """:data:`AFTER_KEY`'s step. Its failure never fails a call whose work is done: the
+    result goes back as the main-thread work left it, with a note."""
+    try:
+        return after(result, remaining)
+    except Exception as exc:
+        ctx.logger.error("after-step failed: %s", exc, exc_info=exc)
+        if isinstance(result, dict):
+            result.setdefault("notes", []).append(
+                f"The call's work is done, but its follow-up step failed: {exc}"
+            )
+        return result
 
 
 def _read_only_error(tool: str) -> ToolError:
@@ -197,20 +243,14 @@ def hint_profile(host_profile: Any, client_profile: Any = None) -> str:
     return normalize(host_profile) or "core"
 
 
-def profile_error(
-    spec: ToolSpec, host_profile: str, client_profile: Any = None
-) -> ToolError | None:
+def profile_error(spec: ToolSpec, host_profile: str) -> ToolError | None:
     """Why a host on ``host_profile`` refuses ``spec``, or ``None`` when it runs it
-    (spec-2.0 §2, §8; BIBLE §3.5). A call from a ``compat_1x`` bridge (``client_profile``)
-    runs as ``compat_1x``: every 1.4 tool and every 2.0 one. A 1.4 tool that 2.0 removed is
-    refused by the 2.0 profiles with its replacement (:mod:`hocuspocus.tools.migration`);
-    a 2.0 tool outside the host's profile names the profile that lists it."""
-    compat = isinstance(client_profile, str) and normalize(client_profile) == COMPAT_1X
-    effective = COMPAT_1X if compat else (normalize(host_profile) or "core")
-    if host_accepts(spec, effective):
+    (spec-2.0 §2; BIBLE §3.2, §3.5): a tool outside the host's profile names the profile
+    that lists it. (A removed 1.4 tool has no spec; :meth:`Dispatcher._call` answers it
+    from :mod:`hocuspocus.tools.migration` before looking anything up.)"""
+    effective = normalize(host_profile) or "core"
+    if in_profile(spec, effective):
         return None
-    if migration.replacement(spec.name):
-        return migration.removed_error(spec.name, effective)
     needed = profile_of(spec)
     # full is the largest 2.0 profile; for the others "full" also lists the tool.
     wider = "" if needed == "full" else ' (or "full")'
@@ -221,6 +261,32 @@ def profile_error(
         hint=f'Set profile = "{needed}"{wider} in hocuspocus.toml (host and bridge read it) '
         f"or HOCUSPOCUS_PROFILE={needed} in Houdini's environment, and restart Houdini.",
     )
+
+
+def run_refusing_dialogs(impl: HostTool, args: dict[str, Any], ctx: HostContext) -> Any:
+    """Run the tool, failing it with ``ui_required`` when it reached a modal ``hou.ui``
+    stub (GUI only, docs/parity.md G5, :mod:`hocuspocus.host.modal`), also when the stub's
+    exception was swallowed (a parm callback, a creation script) or turned into another
+    error (``houdini_python``'s ``python_exception``). Raised here, inside the call's undo
+    group, so the call rolls back. A call that loaded or cleared the scene (a hip load
+    script) succeeds with a warning instead: the file is loaded."""
+    with modal.collecting() as refused:
+        generation = ctx.scene.generation
+        try:
+            result = impl.fn(args, ctx)
+        except Exception as exc:
+            if refused:
+                raise modal.refused_error(impl.name, refused, exc, mutating=impl.mutating) from exc
+            raise
+        if not refused:
+            return result
+        if ctx.scene.generation != generation and isinstance(result, dict):
+            warnings = result.get("warnings")
+            if not isinstance(warnings, list):
+                warnings = result["warnings"] = []
+            warnings.append(modal.load_warning(refused))
+            return result
+        raise modal.refused_error(impl.name, refused, None, mutating=impl.mutating)
 
 
 class Dispatcher:
@@ -249,6 +315,63 @@ class Dispatcher:
                 return float(candidate)
         return float(self.ctx.config.default_timeout_s)
 
+    def _adopt_after(self, effective: float) -> float | None:
+        """How long a main-thread call waits before a long step it marked (a press,
+        :func:`~hocuspocus.host.executor.mark_long_step`) goes on as a job:
+        ``job_threshold_s`` within the call's timeout, as cook and render wait (BIBLE §7,
+        D70). ``None`` where no job can follow it (no job manager, an executor without
+        :meth:`run_adoptable`)."""
+        executor = getattr(self.ctx, "executor", None)
+        if getattr(self.ctx, "jobs", None) is None or not callable(
+            getattr(executor, "run_adoptable", None)
+        ):
+            return None
+        threshold = getattr(self.ctx.config, "job_threshold_s", None)
+        if not isinstance(threshold, int | float) or isinstance(threshold, bool):
+            return None
+        return max(0.0, min(float(threshold), effective))
+
+    def _follow(self, pending: Pending, tool: str, effective: float) -> dict[str, Any]:
+        """Turn a call that is still in a long step past its wait into a job (BIBLE D70):
+        the job waits for the main-thread work, runs what the dispatcher runs after it
+        (:data:`AFTER_KEY`), and its result is the call's result, or its error the call's
+        error. A press cannot be interrupted, so the job cannot be cancelled."""
+        ctx = self.ctx
+        step = pending.long_step or tool
+
+        def follow(job: Any) -> Any:
+            while not pending.wait(0.5):
+                job.progress(None, f"{tool}: running {pending.long_step or step}")
+            try:
+                result = pending.outcome()
+            except BaseException as exc:
+                if isinstance(exc, KeyboardInterrupt | SystemExit) and not isinstance(
+                    exc, ToolError
+                ):
+                    raise
+                raise tool_error_from_exception(exc) from exc
+            after = result.pop(AFTER_KEY, None) if isinstance(result, dict) else None
+            _pop_changed(result)
+            if callable(after):
+                result = _run_after(after, result, max(effective, AFTER_MARGIN_S), ctx)
+            return result
+
+        job = ctx.jobs.start(tool, follow, label=step, cancellable=False)
+        pending.job_id = job.id
+        job.message = job.message or f"{tool}: running {step}"
+        waited = getattr(ctx.config, "job_threshold_s", effective)
+        return {
+            "job_id": job.id,
+            "state": "running",
+            "running": step,
+            "message": (
+                f"{step} is still running after {min(float(waited), effective):g} s and goes "
+                "on as a job: job {action: result, job_id} returns this call's result when "
+                "it ends. It runs on Houdini's main thread, so other calls that need it "
+                "answer houdini_busy until then."
+            ),
+        }
+
     def response_budget(self, max_response_bytes: Any) -> int:
         if (
             isinstance(max_response_bytes, int)
@@ -271,9 +394,10 @@ class Dispatcher:
         value when absent) is exposed to the tool as ``ctx.extras["max_response_bytes"]``
         so paged tools can cap rows to the client's budget. ``request_id`` (also from the
         envelope) is what :func:`current_request_id` returns while the tool runs.
-        ``profile`` (also from the envelope) is the bridge's: ``compat_1x`` runs the 1.4
-        tools whatever the host's own profile (:func:`profile_error`). Every call writes
-        one line to the host log (:func:`log_call`)."""
+        ``profile`` (also from the envelope) is the bridge's: hints and messages name the
+        tools it serves (:func:`hint_profile`); which tools run is the host's own profile
+        (:func:`profile_error`). Every call writes one line to the host log
+        (:func:`log_call`)."""
         envelope = self._call(tool, args, timeout_s, max_response_bytes, request_id, profile)
         log_call(self.ctx.logger, tool, envelope)
         return envelope
@@ -299,6 +423,11 @@ class Dispatcher:
                 args = {}
             if not isinstance(args, dict):
                 raise ToolError("invalid_argument", "Request field 'args' must be an object.")
+            if migration.replacement(tool):
+                # A 1.4 tool 2.1 removed (with compat_1x): name its replacement (BIBLE §3.2).
+                raise migration.removed_error(
+                    tool, hint_profile(getattr(self.ctx.config, "profile", "full"), profile)
+                )
             impl = self.lookup(tool)
             if impl is None:
                 if self.known_tool(tool):
@@ -314,11 +443,11 @@ class Dispatcher:
                 )
             spec = impl.spec
             if spec is not None:
-                refused = profile_error(spec, getattr(self.ctx.config, "profile", "full"), profile)
+                refused = profile_error(spec, getattr(self.ctx.config, "profile", "full"))
                 if refused is not None:
                     raise refused
-            # No whole tool is GUI-only (docs/parity.md G6): the GUI-only argument values
-            # (look and viewport_capture source: viewer) answer ui_required themselves.
+            # No whole tool is GUI-only (docs/parity.md G6): the GUI-only argument value
+            # (look source: viewer) answers ui_required itself.
             mutating = impl.mutating
             # A dry run may proceed in read-only mode, without an undo group, provided the
             # tool then reports ``_changed: false`` (checked below).
@@ -339,14 +468,26 @@ class Dispatcher:
                 request_id if isinstance(request_id, str) and request_id else None,
                 timing,
                 hint_profile(getattr(self.ctx.config, "profile", "full"), profile),
+                # An after-step can wait on main-thread jobs only off the main thread.
+                after_ok=_off_main_thread(getattr(self.ctx, "executor", None)),
             )
             timing["main"] = impl.main_thread
             sent = time.perf_counter()
             if impl.main_thread:
+                adopt_after = self._adopt_after(effective)
                 try:
-                    result = self.ctx.executor.run(work, effective)
+                    if adopt_after is None:
+                        result = self.ctx.executor.run(work, effective)
+                    else:
+                        result = self.ctx.executor.run_adoptable(work, effective, adopt_after)
                 finally:
                     timing["waited_s"] = time.perf_counter() - sent
+                if isinstance(result, Pending):
+                    timing.setdefault("work_s", timing["waited_s"])
+                    return ok_envelope(
+                        self._follow(result, impl.name, effective),
+                        make_meta(self.ctx, undo_label=undo_label, started=started, timing=timing),
+                    )
             else:
                 meter = MainThreadMeter()
                 try:
@@ -354,9 +495,13 @@ class Dispatcher:
                         result = work()
                 finally:
                     timing["metered"] = meter.close()
+            after = result.pop(AFTER_KEY, None) if isinstance(result, dict) else None
             changed = _pop_changed(result)
             if read_only_dry_run and changed is not False:
                 raise _read_only_error(tool)
+            if callable(after):
+                remaining = effective - (time.perf_counter() - started) - AFTER_MARGIN_S
+                result = _run_after(after, result, max(0.0, remaining), self.ctx)
             if changed is False:
                 undo_label = None
             return ok_envelope(
@@ -364,7 +509,7 @@ class Dispatcher:
                 make_meta(self.ctx, undo_label=undo_label, started=started, timing=timing),
             )
         except BaseException as exc:
-            if isinstance(exc, KeyboardInterrupt | SystemExit):
+            if isinstance(exc, KeyboardInterrupt | SystemExit) and not isinstance(exc, ToolError):
                 raise
             error = tool_error_from_exception(exc)
             if error.code == "internal":
@@ -383,6 +528,7 @@ class Dispatcher:
         request_id: str | None = None,
         timing: dict[str, Any] | None = None,
         profile: str = "full",
+        after_ok: bool = False,
     ) -> Callable[[], Any]:
         ctx = self.ctx
 
@@ -392,6 +538,8 @@ class Dispatcher:
             ctx.extras["max_response_bytes"] = budget
             _CALL.timeout_s = timeout_s
             _CALL.request_id = request_id
+            _CALL.tool = impl.name
+            _CALL.after_ok = after_ok
             began = time.perf_counter()
             try:
                 with migration.using_profile(profile):
@@ -399,18 +547,20 @@ class Dispatcher:
             finally:
                 _CALL.timeout_s = None
                 _CALL.request_id = None
+                _CALL.tool = None
+                _CALL.after_ok = False
                 if timing is not None:
                     timing["work_s"] = time.perf_counter() - began
 
         def run_tool() -> Any:
             if undo_label is None:
-                return impl.fn(args, ctx)
+                return run_refusing_dialogs(impl, args, ctx)
             clean_events = ctx.scene.clean_events
             ctx.extras[ROLLED_BACK_KEY] = None
             outcome = None
             try:
                 with self.undo_group(undo_label) as outcome:
-                    result = impl.fn(args, ctx)
+                    result = run_refusing_dialogs(impl, args, ctx)
             except ToolError as exc:
                 _report_rollback(exc, outcome, ctx)
                 _note_rolled_back(outcome, ctx)

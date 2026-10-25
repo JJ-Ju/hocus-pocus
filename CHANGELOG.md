@@ -1,10 +1,393 @@
 # Changelog
 
 This project uses [Semantic Versioning](https://semver.org/). The 0.9 compatibility
-policy does not apply to 1.0. 2.0 changes the tool surface; `compat_1x` keeps the 1.4
-one for the 2.0.x releases.
+policy does not apply to 1.0. 2.0 changes the tool surface; `compat_1x` kept the 1.4
+one for the 2.0.x releases, and 2.1 removes it.
 
-## Unreleased
+## 2.1.0 (2026-10-24)
+
+2.1 keeps the 2.0 contract and removes what 2.0 announced it would: the `compat_1x`
+profile, the `v2` alias and the 18 1.4 tools. Its evaluation was a dogfood: an agent built
+a game-ready procedural skyscraper generator (`examples/neo_tower/`, review 26) through the
+MCP tools, and each phase's friction became a fix stream. A fresh session then ran the same
+compact generator brief on 2.0.0 and on 2.1 (review 28): `houdini_python` escapes fell from
+7 to 1, errors fixed in one step from the hint rose from 7 of 9 to 10 of 11, and calls to
+the client's own shell and file tools fell from 34 to 9. The scorecard's bytes target that
+2.0 missed is met (31 % under 1.4 against 20 %). Upgrade notes:
+[`docs/migration-2.1.md`](docs/migration-2.1.md). Design decisions: D45 to D86 in
+`docs/BIBLE.md`.
+
+### Added
+
+- `look {output}` saves the picture to a `.png` or `.jpg`/`.jpeg` file: the capture at
+  its rendered size, flattened onto grey, with `$HIP` and `~` expanded and parent folders
+  created. The path is checked against `approved_roots` before anything renders
+  (`path_not_allowed`), and the result names it as `output`. The image is still returned
+  inline (review 26 P1 #3).
+- `hocuspocus doctor` reports the licence state, parsed from `sesictrl diagnostic` (else
+  `hserver -l`) next to the Houdini install. It shows ok, info or a warning with the
+  sign-in hint, never a failure, and it now names a hython that could not get a licence.
+- **HDA lifecycle without Python** (BIBLE §4.7, D47; review 26 P1 friction 1). `hda` is
+  in the default `core` profile (19 tools) and gains `uninstall` (instances stay, each
+  named with the definition it fell back to), `info` (library, version, sections, current
+  or not, inputs, interface, instances, the instance's lock state), `interface` on
+  `create` and `save` (the `spare_parms` shape, on `save` applied to any parm of the
+  definition), `help` (the `HelpText` section), `lock: true` on `save` (relock after
+  saving) and `label`, `version` and input counts on `save`. `list` and `info` only read.
+- **Long string parms** (§4.5, D48; friction 2). An `edit` `set` takes `patch: [{find,
+  replace, all?}]` to change a snippet in place (each `find` must occur exactly once; a
+  miss is `invalid_value` naming the nearest lines) and `value_file` to set a string parm
+  from a UTF-8 file (`approved_roots` apply). The result row says `patched_lines` or
+  `value_file`.
+- **Spare parm interface fields** (§4.5, D50; friction 7). `spare_parms` adds folder
+  entries with `folder_type` (tabs, collapsible, simple, radio), nested `folder` lists,
+  `before`/`after` placement, `disable_when`/`hide_when` (the parms they name are
+  checked), `join_next`, `tags`, `callback`, `hidden`, `min_strict`/`max_strict`, string
+  menus, `file`, `separator` and `label` types, and `change` entries that edit an
+  existing spare parm in place.
+- `path` names the node of every `edit` op (D49; friction 6): `create`'s new node, a
+  `set`'s node with `parms`, `connect`'s `to`, `layout`'s and `build`'s `parent`, and
+  `copy`'s, `select`'s and `delete`'s `paths`; a `node` op also takes `node`. The 1.4
+  field names still work.
+- `inspect {what: "guide", target?: topic}` and `inspect {what: "tool", target: name}`
+  return the operating guide (or the section a topic names) and one tool's reference, the
+  text of `hocuspocus://guide` and `hocuspocus://tools`, for clients without an MCP
+  resource reader (Claude Code subagents). The bridge answers them itself, with or without
+  a Houdini. The instructions name the route; hints that cite `hocuspocus://tools` now
+  name `inspect {what: "tool", target: "<tool>"}` first (review 26 P1 #10, D54).
+- `inspect {what: "node" | "geo", full_strings: true}` returns long strings whole: in
+  node rows, and in geo detail attribute values (strings, arrays and dicts, otherwise cut
+  at 200 characters or 16 items), and `inspect {what: "parms"}` of a node takes `folder` (the parms of one folder,
+  defaults included) and `detail: "folders"` (the node's own parm folders, spare parms
+  included). `full_strings` reads a 20 KB VEX snippet back in full; a result over the
+  response budget comes back whole with `over_budget: true` (review 26 P1 #2, #9).
+- `cook {profile: true}` lists the input ancestors it did not profile in
+  `inactive: {count, paths}` (review 26 P1 #8, D53).
+- **`edit` `partial: "stop"`** (BIBLE §4.5, D57; review 26 P2 friction 2): the ops before
+  the first failing op are kept and none after it runs; the result adds `applied` (how
+  many ran) next to `failed`, so a bad value at op 50 of 70 costs a resend of the last 20
+  ops, not of the whole build. Atomic stays the default.
+- **A subnet's own inputs as wire sources** (§4.5, D59; P2 escape 3): inside a subnet,
+  `connect {from: <the subnet>, from_output: i}` (or a create input `{from: <the subnet>,
+  output: i}`) wires the subnet's input `i`. A VOP subnet, which has none, says to wire
+  its `subinput`.
+- **`edit` flags `material`, `unload` and `export`** (§4.5, D68; P2 escape 5): the VOP
+  material flag a Material Library LOP imports by, the SOP and CHOP unload flag, the CHOP
+  and COP export flag. A node without a flag names the ones it takes.
+
+- **`inspect {what: "geo", group_by}`** (BIBLE §4.4, D71; review 26 P3 friction 4): one
+  row per value of a string or int prim (else point) attribute, with prims, points,
+  triangles, area and bounding box, plus min, max and mean of each numeric attribute in
+  `attribs` (prim, point or vertex attributes of the group's prims), over `group`, largest
+  group first and paged. The summary also takes `stats: true` and `attribs` (D76).
+- **`hda {action: "version"}`** (§4.7, D73; P3 friction 5) copies a definition to the type
+  name with a new version component (`hp::tower::1.0` to `hp::tower::1.1`), in its library
+  or another, and `switch: "path" | "all"` moves instances to it, keeping parm values.
+  `hda save` with `name` instead of `path` sets a definition's label, version, input
+  counts, help and interface without an instance.
+- **`look {wait_s}`** (§4.6, D75): a look runs as a job; past `wait_s` (default
+  `job_threshold_s`) the call returns `{job_id, state: "running"}` and `job result`
+  returns the picture, so a long final Karma look no longer fails at 30 s.
+- **`cook {force: "chain"}`** (§4.6, D81; review 28 r21 friction 4) force-cooks the input
+  ancestors a normal cook of the node uses, inputs first and each once, then the node: a
+  result an input kept from before a change (a Material SOP cooked before its materials
+  existed) is redone. The row adds `inputs_cooked`, `inputs_reloaded` and
+  `input_problems`.
+- **`look {jpeg_quality}`** (§4.6, D86; friction 2): 1-100 for a `.jpg` `output`
+  (default 92), and the result's `output_bytes` gives the file's size. `render`'s notes
+  say how to get a JPEG of chosen size from a ROP (`look {target: <ROP>, quality:
+  final, output, jpeg_quality}`).
+- **Parm conditionals in reads** (§4.4, §4.7, D82; friction 5): `inspect parms` and
+  `inspect type` with `detail: full` give each parm's `disable_when` / `hide_when`, and
+  `hda info` adds `interface.conditionals`, so checking an asset's interface needs no
+  `houdini_python`.
+- **An asset's own help** (§4.4, D83): `inspect {what: "type", include_help: true}` reads
+  the definition's `HelpText` section when nodes.zip has no entry (`help_source:
+  "<library>:HelpText"`), with its summary as `description`.
+- **Material bindings on the stage** (§4.4, D84; friction 6): `inspect stage` rows that
+  list attributes also list authored relationships (`material:binding`) under the same
+  `attribs` glob, and rows with attributes or `bindings` list a mesh's GeomSubsets
+  (per-face materials) with the material each is bound to.
+
+### Changed
+
+- **A long press answers as a job** (§4.5, D70; review 26 P3 friction 1). A pressed
+  callback still running after `job_threshold_s` (10 s) returns `{job_id, state:
+  "running", running: <parm path>}` instead of `houdini_busy` with its result discarded;
+  `job result` returns the call's result when the callback ends. This holds for `edit`
+  `set` and `create` ops, `build` presses, `parm_set` and `node_create`. A call waiting
+  behind it answers `houdini_busy` naming the press and its job. Short presses answer as
+  before.
+- **Headless Karma renders leave the main thread free** (§4.6, §8, D74; P3 friction 1).
+  `render` of a Karma or USD Render ROP renders in a child hython on a snapshot, as
+  Flipbook and OpenGL ROPs did, so other calls run while husk renders (measured: 0.011 s
+  of main thread instead of 3.39 s for a 1280x720 frame, at 1.4 s more wall time). A
+  cancel kills husk too. GUI sessions render in Houdini as before.
+- **Menu candidates are ranked** (§4.5, D72; P3 #11). A value a menu does not hold lists
+  every token when the menu has at most 50 items, else the 20 nearest, by token or label
+  (`volume` finds `atmosphere`, "Volume (shader)"); 2.0 listed the first 20.
+- **`attribs` takes a string** of names separated by commas or spaces (D76), as its schema
+  always said.
+- **`cook {force: true}` reloads files** (§4.6, D80; friction 3): it presses the node's own
+  Reload button first (File COP and SOP, Alembic, Sublayer and the other readers), since a
+  forced cook kept a File COP's image after its file was overwritten; the row says
+  `reloaded: true`. `look` at a COP and `inspect {what: "image"}` note a File COP whose
+  file changed on disk after it loaded it.
+- **`problems` names messages that may be stale** (§4.4, D81): an error or warning naming a
+  node that exists now, on a node not cooked since, gets a `hint` with the cook that
+  rechecks it.
+- **Parm and attribute globs take commas** (§4.4, D85; friction 8): `parms: "size,t"` is
+  `size|t` in `inspect parms` and `inspect type`, and so is `attribs` on `inspect stage`.
+- The `houdini_busy` hint of a call that outlasted its wait names what the profile's tools
+  take for long work (`wait_s` and a job on `cook`, `render` and `look`; `timeout_s` on
+  `houdini_python`), where it said "raise timeout_s, or use a job" to every tool.
+- **A modal `hou.ui` dialog no longer blocks a GUI Houdini** (parity G5, BIBLE §3.2,
+  D45). During a call in a GUI session the `display*`, `read*` and `select*` dialogs of
+  `hou.ui` are stubs that raise `ui_required` naming the call (`detail.refused`), so
+  `houdini_python` code, a pressed parm callback or a creation script that asks for one
+  fails at once and is rolled back, where 2.0 answered `houdini_busy` and every later call
+  waited until a person clicked. A hip load script's dialog is refused too, and `hip_open`
+  reports it in `warnings` (the file is loaded). Houdini's own `hou.ui` is back between
+  calls; headless nothing changes. The refusal is also a `SystemExit`, because Houdini
+  answers any other exception from a parm callback with a blocking error window of its
+  own. `ui_required`'s description says so.
+- `houdini_busy` for a call that never started names "a dialog open in Houdini" and asks
+  to have it closed if it keeps happening: measured, nothing HocusPocus sends runs while a
+  user's modal dialog is open. The guide recipe "GUI sessions: never open a dialog" says
+  both (8 bytes shorter).
+- **`edit` checks each op by running it after the earlier ones** (§3.9, §4.5, D56;
+  review 26 P1 friction 6, P2 friction 1). The 2.0 validator simulated the scene before
+  anything ran, so an op that depended on an earlier one failed (unlock then create inside
+  an asset, a multiparm count then its instance parms, rename then reuse, a new node's
+  second output) and a dry run passed values the run refused. Now a failing op is
+  reverted and the ops after it still run in check mode (no `press` callback, no
+  selection change, a delete renames its node aside, `lock: true` held back), so the
+  error still lists every problem, and then the call is rolled back. `dry_run` is that
+  check from the first op, compensated, with no undo step, event or dirty flag: it and
+  the run agree, including the names Houdini gives (`transform1`, which 2.0 predicted as
+  `xform1`). A dry run of a 70-op build takes 26-36 ms (4 ms before); the run is
+  unchanged. A create's misspelt parm now hints the node's own parm (`Did you mean
+  size?`), since the node exists when it is checked.
+- **`edit` cooks after the change** (§4.5, D58; P2 friction 5). The touched nodes are
+  cooked as a job once the ops are applied and the undo step closed; the call waits for
+  it up to `job_threshold_s` (10 s). Rows carry their errors as before when the cooks
+  finish in time; otherwise the nodes still cooking say `cook_state: "cooking"` and the
+  result adds `job_id` (`job {action: result}` returns their rows), where 2.0 answered
+  `houdini_busy` at 30 s and dropped the applied edit's result. A 70-op build's
+  main-thread work went from 240 ms to about 35 ms.
+- `hda create` promotes the subnet's spare parms into the new definition at once, and
+  `create`/`save` refuse a library whose extension does not match the licence (`.hdalc`
+  on Indie, `.hdanc` on Apprentice and Education, `.hda`/`.otl` on Commercial) with the
+  corrected path as the candidate; Houdini writes any extension it is given.
+- `tools/list` (`text`): `minimal` +52 B, `core` +1,362 B (the `hda` tool), `full`
+  +197 B since 2.0 (of which +65 B on each profile is `edit`'s `partial` enum).
+- CI: `.github/workflows/unit.yml` runs ruff and the unit tier on Linux, macOS and
+  Windows for Python 3.11 to 3.13 (portability audit,
+  `docs/redesign/review/27-portability.md`).
+- **`look` at a SOP shows that SOP alone** (review 26 P1 #3, D52), wherever it is:
+  inside a subnet or a locked asset, in a hidden object, outside `/obj`. The scene that
+  renders gets a temporary object whose Object Merge reads the SOP in world space (with
+  the owner's object material), and the ROP draws only that object, on the Flipbook and
+  OpenGL ROPs (the kept headless child too) and Karma. No flag of the user's moves (2.0
+  moved the display flag, which showed nothing inside a subnet), and a note says so.
+  `source: viewer` shows the viewer as it is, with a note.
+- **`inspect` options are uniform** (review 26 P1 #9, D51): an option that only shapes the
+  answer (`include_defaults`, `recurse_locked`, `full_strings`, `detail`,
+  `include_positions`, `wiring`) and that the `what` does not take is ignored with a note
+  instead of `invalid_argument` (`recurse_locked` on `geo`, `include_defaults` with parm
+  paths, `detail: "folders"` on a node read). An option that chooses what is read
+  (`frame`, `paths`, `cursor`, `class`, ...) is still an error.
+- `cook {profile: true}` times what a normal cook of the target cooks (review 26 P1 #8,
+  D53): a target that needs cooking is cooked normally first, and Houdini's record of the
+  inputs that cook used decides the chain, so a Switch's other inputs and what feeds a
+  bypassed or locked node are neither cooked nor timed. A for-each body stays in; a
+  simulating chain or a failed cook profiles every ancestor, as before.
+- A `look` through an OBJ camera without `resolution` takes the camera's aspect at 1024 on
+  the long side (1920x1080 looks at 1024x576); an explicit `resolution` of another aspect
+  is honoured with a note. `look {quality: "lit"}` says in `notes` which renderer drew the
+  scene's lights (review 26 P1 #5).
+- `inspect`'s description no longer lists the 1.4 read names (tools/list: text -21 B on
+  `core` and `full`).
+- **Fewer bytes per session** (plan-2.1 stream C; the scorecard's 20 % bytes target, missed
+  by 2.0, is met). Nothing an agent reads is lost: each dropped field is the default, null,
+  or derivable from one that stays.
+  - `hocuspocus://guide` and `inspect {what: "guide"}` point at the server instructions
+    instead of repeating them (they come with `initialize`; the guide topic
+    `instructions` returns them): 6,380 → 4,335 B, capped at 4.5 KB (D65).
+  - `houdini_status` and `houdini://status` leave out a null `hip.dirty_source`, a false
+    `hip.is_new`, a `time.playback_range` equal to `range`, a `host_version` equal to
+    `bridge_version` (a different one is still a `version_mismatch` warning),
+    `read_only: false`, `allow_python: true`, `launched_by: null`, `alive` on `recent[]`
+    rows, `hip.recent` past the newest 3 (all with `detail: true`), and on the connected
+    instance's `instances[]` row the `port`, `label`, `houdini`, `started`, `generation`
+    and `host_version` that `connected` gives; `houdini://instances` keeps whole rows
+    (D66).
+  - `houdini_connect` shapes its `connected` block the same way (no `memory`: that is
+    `houdini_status {detail: true}`), and `launched` has no `mode` (`connected.ui` says
+    it) and a two-sentence `note` (D66).
+  - `hip_new`, `hip_open` and `hip_save` no longer return `name` (the path's last
+    segment) and give `is_new` only when true (D66).
+  - A render over 5 outputs leaves `outputs_summary.first` and `last` to the ends of
+    `outputs_sample` (D67).
+  - `search`'s and `node_create`'s descriptions stop naming 1.4 tools (tools/list text
+    -53 B on every profile; `full` 23,157 B text, 29,444 B both).
+
+  Measured by the workloads tier (larger of two runs at the end of stream C; calls
+  unchanged). The last column is the release run, after streams D3 to D5, whose job
+  answers and notes added a little back:
+
+  | Workload | Calls | Text bytes 1.4 | 2.1 start | After stream C | Cut vs 1.4 (target) | 2.1.0 release |
+  |---|---:|---:|---:|---:|---:|---:|
+  | `city_build` | 15 | 20,804 | 13,975 | 13,692 | 34 % (20 %) | 13,603 (35 %) |
+  | `fx_cache` | 11 | 9,084 | 6,638 | 6,306 | 31 % (15 %) | 6,304 (31 %) |
+  | `scorecard_twelve` | 48 | 28,204 | 22,939 | 19,497 | 31 % (20 %) | 19,497 (31 %) |
+  | `soak_200` | 177 | 100,362 | 67,788 | 65,752 | 34 % (20 %) | 66,257 (34 %) |
+  | `vellum_usd` | 11 | 8,292 | 6,048 | 5,950 | 28 % (15 %) | 6,260 (25 %) |
+
+### Removed
+
+- **The `compat_1x` profile and the `v2` alias** (BIBLE D46, `docs/migration-2.0.md` §8).
+  With them go the 18 1.4 tools only `compat_1x` listed (`node_find`, `node_info`,
+  `node_delete`, `node_edit`, `node_copy`, `node_connect`, `node_layout`,
+  `network_describe`, `network_build`, `parm_get`, `problems`, `geo_info`, `geo_read`,
+  `viewport_capture`, `node_type_search`, `node_type_info`, `selection`, `usd_stage`):
+  their specs, and their host implementations where no 2.0 tool uses them (the read
+  engines behind `inspect` and `search` stay as host functions). Also removed: the 1.4
+  resources (`houdini://node/{path}/parms`, `houdini://node/{path}/geo`,
+  `houdini://nodetype/{category}/{name}`, `houdini://job/{id}`), the four 1.4 prompts, the
+  1.4 instructions and guide, the `compat_1x` goldens and its `tools/list` caps (32,000 B
+  `text`, 44,000 B `both`; the 2.0 caps are unchanged), `viewport_capture`'s 1.4 source
+  names (`flipbook_rop`, `opengl_rop`) and its extra `path`, and the 1.4 workloads tier
+  (`--workloads 1x`; its budgets stay in `tests/workloads/budgets.json` as the baseline
+  the 2.0 tier is compared with). The OpenGL ROP backend of `look` stays.
+- A 1.4 tool name still answers `invalid_argument`, now on every profile and before its
+  arguments are read, with its 2.0 replacement in `hint` and `detail: {tool,
+  replacement, profile}` (the migration table is kept as data). `profile = "compat_1x"`
+  or `"v2"` in `hocuspocus.toml` or `HOCUSPOCUS_PROFILE` is read as `full` with a
+  warning, logged by the bridge and the host and returned in `houdini_status.warnings`;
+  nothing refuses to start.
+- Since the selection is set only through `edit` now, read-only mode refuses setting it
+  (`read_only`; a `dry_run` still validates). 1.4's `selection` tool was allowed there.
+- `job` results always carry ledger ids (`j` + hex); a host id `<pid>-<id>` is still
+  accepted everywhere.
+
+### Fixed
+
+- The bridge's budget trim of a paged read works for the 2.x tools (BIBLE §4.1, D69). Its
+  cursor table was keyed by the 1.4 names `node_find` and `network_describe`, so a
+  `search {kind: "nodes"}` or `inspect {what: "network" | "outline"}` page still over
+  `max_response_bytes` came back whole with `over_budget: true` instead of cut with a
+  cursor to resume from, and `inspect {what: "events"}` and `search {kind: "types"}` fell
+  through to a cursor the host does not take. The cursor is now chosen by the tool and its
+  arguments and written in the form the host took: the last path for `search` nodes (bare,
+  or `after:<path>` with `detail: "full"`), `after:<name>` for `outline` and `network`
+  (whose `data` is a dict keyed by node name), `t:<offset>` for `search` types and
+  `<pid>:<seq>` for `inspect` events. A trimmed `network` or `outline` page reports the
+  `node_count` of what it keeps. An `inspect` of a node, parms, a type or a job, which have
+  no cursor, is no longer cut with an integer one: it comes back whole with
+  `over_budget: true`.
+- A MaterialX VOP's `signature` refused valid signatures (`color3FA` on `mtlxmultiply`)
+  and would have taken a typo: Houdini evaluates that menu as `default` plus the
+  signatures already used on the node and sets any text silently. The menu is now read
+  from the asset definition's signatures, for `edit`, `parm_set` and reads (D68; P2
+  escape 4).
+- Rolling back an `edit` restores an input that came from a subnet's indirect input, and
+  the flags it changed through their own getters.
+- An `edit` error about an op's node names the key the caller sent: `ops[0].path` for a
+  `create`, `connect`, `delete` or `layout` op given `path` (2.1 errors said `parent`,
+  `to` or `paths[0]`), `ops[0].node` for a `node` op given `node`.
+
+- A launch without a licence now says so, and answers within seconds (review 26 P1 #1).
+  `houdini_connect {launch}` and `hocuspocus launch` recognise a licence line in the
+  launch log, exit code 3, or, for a GUI, the "Unable to Acquire a License" window or the
+  License Administrator (hkey) opening. They answer `houdini_offline` with
+  `retryable: false`, a message saying Houdini could not get a licence,
+  `detail: {reason: "licence", exit_code, log_excerpt, ...}`, and a hint to sign in with
+  hkey or `sesictrl login` and launch again. Before, a GUI launch waited the full
+  `wait_s` (90 s) and then hinted at `install-houdini`. A GUI Houdini stuck on that
+  dialog is stopped; the License Administrator stays open.
+- Linux and macOS: a launched Houdini that exited or crashed stayed a zombie child of the
+  bridge and still counted as alive, so a call it dropped answered `delivery_unknown`
+  instead of `houdini_offline`, with no `instance_lost`. Zombies now count as dead.
+- Linux and macOS: a headless launch also accepts a host that registers under a child pid
+  of the `hython` wrapper script, if its registry entry names this bridge as its launcher.
+  Before, such a launch timed out.
+- The headless host shuts down cleanly on SIGHUP (a closing terminal) as on SIGTERM, and
+  removes its registry entry.
+- `look {quality: "lit" | "final"}` through Karma rendered 1280x720 whatever
+  `resolution` asked (a 640x480 look came back 1024x576): 22.0's Karma ROP renders at its
+  own `resolutionx`/`resolutiony`, which the look now sets. `rendered` is the image's real
+  size, and a renderer that draws another size gets a note (review 26 P1 #5).
+- **A headless draft `look` no longer recooks the scene in its render process** (review
+  26 P2 friction 9). The child hython rebuilt the displayed networks from the snapshot
+  and cooked them on every look, the kept child too, so the dogfood tower's LOD lineup (a
+  37 s lightmap pack) timed out every draft look at 30 s and the agent fell back to Karma
+  `render`. The host now ships the geometry it has already cooked for what the look shows
+  (`.bgeo.sc` read by a File SOP in the child's copy). Measured on
+  `examples/neo_tower/work/neo_tower_p2.hiplc`: 44.2 s and 38.6 s per look before, 5.5 s
+  (child start) and 0.9 s after; a test's 4 s chain looks in 0.2 s once cooked. A render
+  process that still runs out of time names `cook` and `quality: "final"` in its hint.
+- **Karma in a GUI session.** `look {quality: "lit" | "final"}` through Karma answered
+  `cook_failed` "Karma did not produce an image: no output file" in every GUI Houdini (2.0
+  too), with or without a target, and `render` of a Karma ROP returned `state: done`
+  with every output `missing`. A GUI Houdini starts husk in the
+  background unless the ROP's Block Until Render Complete (`soho_foreground`) is on, so
+  `render()` returned before the image existed; hython always waits, so headless looks
+  passed. Look's temporary Karma ROP has it on, and `render` turns it on for the render
+  and restores it, on any ROP that has the parm (USD Render and Mantra ROPs too; checked
+  in the GUI: a Mantra frame is written, a USD Render ROP's husk error is reported). GUI test `test_karma_looks_render_in_the_gui`.
+- **A GUI launch that cannot register says why** (D60). `houdini_connect {launch}` and
+  `hocuspocus launch` waited the whole `wait_s` (240 s in the GUI tests) and said only that
+  Houdini "may still be starting" when its host failed to start, `autostart = false` kept
+  it off, the package never loaded, or a startup dialog held Houdini. The host's
+  autostart now writes `<state_dir>/startup/<pid>.json` (`uiready.py` too when
+  `hocuspocus.host` cannot be imported), and the launcher reads it and the launched
+  Houdini's window titles: a failed or disabled start answers at once with the error and
+  the host log (`detail.reason: "host_failed"` or `"autostart_disabled"`), a dialog
+  shown before the main window answers 15 s later (`"dialog"`, with its title), and a wait
+  that runs out names what it saw (`"host_starting"`, `"dialog"`, `"no_autostart"` with
+  the `install-houdini` hint). A licensed start shows only its splash and main window, so
+  nothing fires on it. Not reproduced here: the stream D2b report of two launches in a row
+  that never registered (13 launches in a row through the fixture, `hocuspocus launch`,
+  hard kills and two at once all registered in 10-21 s); the next one says which case it
+  is.
+- **A locked asset defined in the hip file draws in a headless look** (D61). The snapshot
+  the render process loads (`saveChildrenToFile`) holds only a stub of an `Embedded`
+  definition, without its contents, so a locked instance had no nodes inside and the
+  headless look drew nothing (2.0 too; 2.1's shipped geometry hid it for a locked SOP
+  asset, not for an object-level asset). The host now copies the hip's embedded
+  definitions into one library file the child installs, rewritten only when a definition
+  changes so the kept child stays warm. The GUI was not affected (it renders the live
+  scene).
+- An unknown argument answers `invalid_argument` with the closest valid key (stream F).
+  The bridge already refused an unknown key (every input schema is closed, at every
+  depth, and `tests/unit/test_bridge_unknown_args.py` now pins that for the whole
+  catalogue), but the answer was "did you mean" only for a near spelling and the hint
+  did not say where the arguments are. `render {frame_range}` now answers
+  `frame_range: unknown property; did you mean frames?` with `candidates: ["frames"]`
+  (a key that shares a word with a valid one, `frame_range`, `rop`, is matched too, as is
+  a different case) and the hint `Use frames instead of frame_range.` followed by the
+  tool's reference, `inspect {what: "tool", target: "render"} or hocuspocus://tools`.
+  Nested keys carry their path (`launch.hipp`, `ops[0].paht`).
+- The reference no longer describes tools 2.1 removed (stream F). `search`'s notes (in
+  `hocuspocus://tools` and `inspect {what: "tool"}`) said each kind "takes its 1.4 tool's
+  arguments" and named `node_type_search` and `node_find`; they now list each kind's own
+  arguments and defaults. The same names left the notes of `edit`, `inspect`, `events`,
+  `pdg`, `look`, `node_create` and `parm_set`, and `tests/unit/test_hint_profiles.py` fails
+  on a removed tool's name in any spec text, the instructions, the guide or a prompt. The
+  `tools/list` text is unchanged.
+- The File Cache output hint read "...then file to the path". It now says to set the file
+  parm to the path wanted and shows the call: `Set the output with ... filemethod ...,
+  then set the file parm to the path you want (... file ...); then render without output.`
+- `inspect {what: "type", detail: "full"}` lists a MaterialX VOP's `signature` menu from the
+  asset definition, as `edit` checks it (D68). It had listed Houdini's short menu
+  (`default` plus the signatures in use), so the reference and the validation disagreed.
+- Two slow integration tests no longer flake under load (tests only). The Vellum `cook
+  profile` test took a fresh 12-frame solve past the 10 s job threshold on a busy machine,
+  so the call answered a `job_id` instead of the profile; it now passes `wait_s` and
+  `timeout_s`. The PDG cancel tests broke on the first cooking item and asserted that both
+  were cooking, but each out-of-process item is a process start, so the second was still
+  `scheduled`; they now wait for all items to cook, and the items sleep 60 s, not 8.
 
 ## 2.0.0 (2026-10-14)
 

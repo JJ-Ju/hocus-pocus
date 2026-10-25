@@ -89,30 +89,51 @@ def capture_camera(hou, capture, created):
     return None, camera
 
 
-def show_target(hou, capture):
-    # look at a SOP that is not displayed: move its network's display and render flags to
-    # it in the scene that renders. Returns [(display, render)] paths of the nodes that
-    # had them, for an in-process caller to put back.
-    moved = []
-    for path in capture.get("display") or ():
-        node = hou.node(path)
-        if node is None:
-            continue
-        parent = node.parent()
-        display, render = parent.displayNode(), parent.renderNode()
-        moved.append((display.path() if display else None, render.path() if render else None))
-        node.setDisplayFlag(True)
-        node.setRenderFlag(True)
-    return moved
+def isolate_target(hou, capture, created):
+    # look at a SOP: its geometry alone (review 26 P1 #3). A temporary object merges it in
+    # world space (an Object Merge reads a SOP anywhere: inside a subnet or a locked
+    # asset, outside /obj) and the ROP draws only that object. Returns its path, or None.
+    target = capture.get("isolate")
+    if not target:
+        return None
+    obj = hou.node("/obj").createNode("geo")
+    created.append(obj)
+    obj.setName("hocuspocus_look_target", unique_name=True)
+    for child in obj.children():
+        child.destroy()
+    if target.get("file"):
+        # Headless: the geometry the host already cooked, in its object's space.
+        merge = obj.createNode("file", "target")
+        merge.parm("file").set(target["file"])
+        obj.setWorldTransform(hou.Matrix4(target["xform"]))
+    else:
+        merge = obj.createNode("object_merge", "target")
+        merge.parm("objpath1").set(target["sop"])
+        merge.parm("xformtype").set(1)  # into this object: the source object's transform
+    merge.setDisplayFlag(True)
+    merge.setRenderFlag(True)
+    material = target.get("material")
+    if material and obj.parm("shop_materialpath") is not None:
+        obj.parm("shop_materialpath").set(material)
+    return obj.path()
+
+
+def show_only(rop, isolated):
+    # The viewport ROP draws every object, or only the isolated one.
+    parm = rop.parm("vobjects")
+    if parm is not None:
+        parm.set(isolated or "*")
 
 
 def build_capture(hou, capture, created):
-    # viewport_capture's camera and viewport ROP (rop_type: flipbook or opengl, the same
+    # The capture's camera and viewport ROP (rop_type: flipbook or opengl, the same
     # parms). Every node made is appended to created.
+    isolated = isolate_target(hou, capture, created)
     rop = hou.node("/out").createNode(capture.get("rop_type") or "flipbook")
     created.append(rop)
     for name, value in capture["rop_parms"].items():
         rop.parm(name).set(value)
+    show_only(rop, isolated)
     lop, camera = capture_camera(hou, capture, created)
     if lop is not None:
         # A stage: the ROP reads the LOP through the camera prim.
@@ -159,6 +180,19 @@ def load_scene(hou, spec, notes):
             node.loadChildrenFromFile(path, ignore_load_warnings=True)
     hou.playbar.setFrameRange(spec["range"][0], spec["range"][1])
     hou.setFrame(spec["frame"])
+    for obj_path, path in (spec.get("geometry") or {}).items():
+        # A look: draw the geometry the host already cooked instead of cooking it again
+        # (review 26 P2: a 37 s lightmap pack was recooked by every look, which timed out).
+        obj = hou.node(obj_path)
+        if obj is None:
+            continue
+        try:
+            sop = obj.createNode("file", "hocuspocus_cooked")
+            sop.parm("file").set(path)
+            sop.setDisplayFlag(True)
+            sop.setRenderFlag(True)
+        except Exception as exc:
+            notes.append("%s was cooked again in the render process (%s)" % (obj_path, exc))
 
 
 def clear_scene(hou, keep):
@@ -178,6 +212,7 @@ def reuse_capture(hou, capture, rop):
     # The kept ROP looks through the new capture's camera (built in the new scene).
     for name, value in capture["rop_parms"].items():
         rop.parm(name).set(value)
+    show_only(rop, isolate_target(hou, capture, []))
     lop, camera = capture_camera(hou, capture, [])
     if lop is not None:
         rop.parm("opsource").set(1)
@@ -195,8 +230,6 @@ def render(hou, spec, kept):
         clear_scene(hou, set(rop.path() for rop in kept.values()))
     load_scene(hou, spec, notes)
     capture = spec.get("capture")
-    if capture:
-        show_target(hou, capture)
     if capture:
         rop_type = capture.get("rop_type") or "flipbook"
         if rop_type in kept:
@@ -270,8 +303,114 @@ main()
 )
 
 
-def snapshot_scene(tmp_dir: str) -> dict[str, Any]:
-    """Write the live scene's nodes to ``tmp_dir`` without touching the hip file. Main thread."""
+SHIP_EXT = ".bgeo.sc"
+
+
+def ship_geometry(
+    tmp_dir: str, frame: float, isolate: dict[str, Any] | None = None
+) -> tuple[dict[str, str], list[str]]:
+    """For a look: write the cooked geometry the picture shows to ``tmp_dir``, so the
+    child draws it instead of cooking the networks again (review 26 P2: a tower whose
+    LOD chain took 37 s to cook timed out every headless draft look at 30 s, the kept
+    child too, since each capture loads a fresh snapshot). With ``isolate`` (a look at a
+    SOP), only that SOP, recorded in ``isolate`` (``file``, and its object's world
+    transform as ``xform``); else every displayed object's display SOP, returned as
+    ``{object path: file}``. A SOP that fails to cook, or an object that is a locked asset
+    (nothing can be created inside it), is left to the child to cook. Returns the shipped
+    objects and their paths' prefixes for the simulation note. Main thread."""
+    import hou
+
+    from .framing import _displayed_objects, _owning_obj
+
+    def write(sop: Any, name: str) -> str | None:
+        try:
+            geo = sop.geometry() if frame == hou.frame() else sop.geometryAtFrame(frame)
+            if geo is None:
+                return None
+            path = os.path.join(tmp_dir, f"{name}{SHIP_EXT}")
+            geo.saveToFile(path)
+            return _norm(path)
+        except Exception:
+            return None
+
+    shipped: dict[str, str] = {}
+    if isolate:
+        sop = hou.node(isolate["sop"])
+        owner = _owning_obj(sop) if sop is not None else None
+        path = write(sop, "isolate") if sop is not None else None
+        if path:
+            xform = owner.worldTransform() if owner is not None else hou.hmath.identityTransform()
+            isolate["file"], isolate["xform"] = path, list(xform.asTuple())
+            if owner is not None:
+                shipped[owner.path()] = path
+        return {}, list(shipped)
+    for index, (obj, sop) in enumerate(_displayed_objects()):
+        with contextlib.suppress(Exception):
+            if obj.isLockedHDA():
+                continue
+        path = write(sop, f"shown{index}")
+        if path:
+            shipped[obj.path()] = path
+    return shipped, list(shipped)
+
+
+_embedded_lib: dict[str, Any] = {"signature": None, "path": None, "dir": None}
+"""The library file :func:`embedded_library` last wrote, and what it holds."""
+
+
+def embedded_library() -> str | None:
+    """The definitions embedded in the hip file (library ``Embedded``), copied into one
+    library file for the child to install, or ``None`` when there are none (D61).
+
+    ``saveChildrenToFile`` writes an embedded definition as a stub (its ``DialogScript``
+    and a 61-byte ``Contents``, measured on 22.0.466), so a locked instance loaded from
+    the snapshot has no nodes inside and drew nothing. The file is rewritten only when a
+    definition changed (by type and modification time), so its path and mtime stay the same
+    across looks and the kept capture child stays warm (:func:`flipbook.warm_key`). The
+    hip file and the definitions are untouched. Main thread."""
+    import tempfile
+
+    import hou
+
+    try:
+        # Only the definitions the scene uses (one a library file overrides stays there).
+        definitions = [d for d in hou.hda.definitionsInFile("Embedded") if d.isCurrent()]
+    except hou.OperationFailed:
+        definitions = []
+    if not definitions:
+        return None
+
+    def stamp(d: Any) -> tuple[Any, ...]:
+        # The modification time has a one-second grain; the sections' sizes catch a second
+        # save within it.
+        sizes = tuple(sorted((name, s.size()) for name, s in d.sections().items()))
+        return (d.nodeTypeCategory().name(), d.nodeTypeName(), d.modificationTime(), sizes)
+
+    signature = tuple(sorted(stamp(d) for d in definitions))
+    cached = _embedded_lib["path"]
+    if signature == _embedded_lib["signature"] and cached and os.path.isfile(cached):
+        return cached
+    folder = _embedded_lib["dir"]
+    if not folder or not os.path.isdir(folder):
+        folder = _embedded_lib["dir"] = tempfile.mkdtemp(prefix="hp-embedded-")
+    # A new name per change: a kept child that installed the old file is replaced (the
+    # warm key holds the path), and Houdini never re-reads a file it has open.
+    path = _norm(
+        os.path.join(folder, f"embedded{len(os.listdir(folder))}{hou.hda.defaultFileExtension()}")
+    )
+    for definition in definitions:
+        definition.copyToHDAFile(path)
+    _embedded_lib.update(signature=signature, path=path)
+    return path
+
+
+def snapshot_scene(
+    tmp_dir: str, *, frame: float | None = None, isolate: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """Write the live scene's nodes to ``tmp_dir`` without touching the hip file. Main
+    thread. With ``frame`` (a look at ``/obj``), the cooked geometry it shows goes too
+    (:func:`ship_geometry`); ``render`` of a user's ROP never ships geometry (it renders
+    frame ranges)."""
     import hou
 
     files: dict[str, str] = {}
@@ -290,13 +429,27 @@ def snapshot_scene(tmp_dir: str) -> dict[str, Any]:
         if os.path.normcase(os.path.abspath(lib)).startswith(hfs):
             continue
         hdas.append(lib)
+    notes = []
+    try:
+        embedded = embedded_library()
+    except Exception as exc:  # the stubs still load: unlocked instances draw as before
+        embedded = None
+        notes.append(
+            "Assets whose definitions are embedded in the hip file could not be copied for "
+            f"the render process ({type(exc).__name__}: {exc}); locked ones may draw empty."
+        )
+    if embedded:
+        hdas.append(embedded)  # after the libraries, before the snapshot loads its stubs
     start, end = hou.playbar.frameRange()
     hscript_vars = []
     for line in hou.hscript("set -s")[0].splitlines():
         parts = line.split()
         if len(parts) >= 3 and parts[:2] == ["set", "-g"] and parts[2] not in NOT_CARRIED_VARS:
             hscript_vars.append(line)
-    notes = []
+    geometry: dict[str, str] = {}
+    cooked: list[str] = []
+    if frame is not None:
+        geometry, cooked = ship_geometry(tmp_dir, frame, isolate)
     with contextlib.suppress(Exception):
         if hou.takes.currentTake() != hou.takes.rootTake():
             notes.append(
@@ -304,11 +457,17 @@ def snapshot_scene(tmp_dir: str) -> dict[str, Any]:
                 f"{hou.takes.currentTake().name()!r} is not carried."
             )
     with contextlib.suppress(Exception):
-        note = simulation_cache_note(cached_simulations())
+        sims = [  # a simulation inside an object whose geometry went along is not re-run
+            s
+            for s in cached_simulations()
+            if not any(s["path"].startswith(f"{o}/") for o in cooked)
+        ]
+        note = simulation_cache_note(sims)
         if note:
             notes.append(note)
     return {
         "files": files,
+        "geometry": geometry,
         "hdas": hdas,
         "env": {k: hou.getenv(k) or "" for k in ("HIP", "HIPFILE", "HIPNAME", "JOB")},
         "hscript_vars": hscript_vars,
@@ -421,6 +580,36 @@ def _child_env(single_thread: bool = False) -> dict[str, str]:
     return env
 
 
+def child_process_kwargs() -> dict[str, Any]:
+    """``Popen`` options for a render child: no console window on Windows; on Linux and
+    macOS its own session, so :func:`kill_tree` can stop its process group."""
+    if sys.platform == "win32":
+        return {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
+    return {"start_new_session": True}
+
+
+def kill_tree(proc: subprocess.Popen[Any]) -> None:
+    """Kill ``proc`` and the processes it started (husk under a Karma ROP's hython):
+    ``taskkill /T`` on Windows, the process group elsewhere. Never raises."""
+    if sys.platform == "win32":
+        with contextlib.suppress(Exception):
+            subprocess.run(
+                ["taskkill", "/T", "/F", "/PID", str(proc.pid)],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=15,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+    else:
+        import signal
+
+        with contextlib.suppress(Exception):
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+    with contextlib.suppress(Exception):
+        proc.kill()
+
+
 class ChildRender:
     """One child hython rendering a snapshot. Off the main thread after :meth:`start`."""
 
@@ -457,13 +646,14 @@ class ChildRender:
                 stdin=subprocess.DEVNULL,
                 stdout=log,
                 stderr=subprocess.STDOUT,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                **child_process_kwargs(),
             )
 
     def kill(self) -> None:
+        """Stop the child and what it started: a Karma ROP's husk is the child's own child
+        (2.1, D74), and killing only hython would leave husk rendering."""
         if self.proc is not None and self.proc.poll() is None:
-            with contextlib.suppress(Exception):
-                self.proc.kill()
+            kill_tree(self.proc)
             with contextlib.suppress(Exception):
                 self.proc.wait(10)
 
@@ -481,6 +671,7 @@ class ChildRender:
                 raise ToolError(
                     "internal",
                     f"The render process did not finish within {timeout_s:g}s and was killed.",
+                    hint=capture_timeout_hint() if self.spec.get("capture") else None,
                     hou_exception="render process timeout",
                     detail={"log": crash_summary(self._log_tail())},
                 )
@@ -504,6 +695,21 @@ class ChildRender:
         except OSError:
             return ""
         return utf8_tail(data[-limit:])
+
+
+def capture_timeout_hint() -> str:
+    """The hint of a look whose render process ran out of time (review 26 P2: a timeout
+    came with no hint). The child draws the geometry the host cooked, so what it still
+    cooks is a stage, an object the snapshot could not ship, or a simulation."""
+    from hocuspocus.tools.migration import hint_tool
+
+    cook = hint_tool("cook", paths=["<display node>"])
+    return (
+        "The headless render process cooks what the host had not: "
+        + (f"{cook} first, then look again; or " if cook else "")
+        + 'look with quality "lit" or "final" (Karma renders the live scene in this '
+        "Houdini)."
+    )
 
 
 def child_crashed(exc: ToolError) -> bool:

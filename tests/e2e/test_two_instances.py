@@ -35,7 +35,7 @@ def _env(tmp_path: Path, hython: Path) -> dict[str, str]:
             "PYTHONPATH": str(SRC),
             "HOCUSPOCUS_STATE_DIR": str(tmp_path / "state"),
             "HOCUSPOCUS_HFS": str(hython.parent.parent),
-            "HOCUSPOCUS_PROFILE": "compat_1x",  # node_find, a 1.4 tool
+            "HOCUSPOCUS_PROFILE": "full",  # events
             # Houdini ignores HOUDINI_USER_PREF_DIR without the __HVER__ token.
             "HOUDINI_USER_PREF_DIR": (tmp_path / "prefs" / "houdini__HVER__").as_posix(),
             "PYTHONDONTWRITEBYTECODE": "1",
@@ -106,6 +106,7 @@ def test_two_headless_instances_pin_route_and_lose(hython, tmp_path):
     from mcp import Client
     from mcp.client.stdio import StdioServerParameters
 
+    from hocuspocus.bridge.ledger import is_ledger_id
     from hocuspocus.host.registry import pid_alive
 
     env = _env(tmp_path, hython)
@@ -130,7 +131,7 @@ def test_two_headless_instances_pin_route_and_lose(hython, tmp_path):
                 out["status"] = await call("houdini_status", {})
                 box = {"items": [{"parent": "/obj", "type": "geo", "name": "g"}]}
                 out["ambiguous"] = await call("node_create", box)
-                out["read"] = await call("node_find", {"root": "/obj"})
+                out["read"] = await call("search", {"kind": "nodes", "root": "/obj"})
 
                 # Pin and name the first worker; build something to cook there.
                 out["pin1"] = await call("houdini_connect", {"pid": first, "name": "one"})
@@ -160,11 +161,11 @@ def test_two_headless_instances_pin_route_and_lose(hython, tmp_path):
                     if not pid_alive(second):
                         break
                     await anyio.sleep(0.1)
-                out["lost"] = await call("node_find", {"root": "/obj"})
+                out["lost"] = await call("search", {"kind": "nodes", "root": "/obj"})
                 out["lost_status"] = await call("houdini_status", {})
                 out["lost_job"] = await call("job", {"action": "status", "job_id": job2})
                 out["repin"] = await call("houdini_connect", {"name": "one"})
-                out["after"] = await call("node_find", {"root": "/obj"})
+                out["after"] = await call("search", {"kind": "nodes", "root": "/obj"})
                 await call("job", {"action": "cancel", "job_id": job_id})
             return out
 
@@ -173,9 +174,10 @@ def test_two_headless_instances_pin_route_and_lose(hython, tmp_path):
         status = _json(out["status"])
         rows = {row["pid"]: row for row in status["instances"]}
         assert set(rows) == {first, second}
-        assert rows[second]["selected"] is True and rows[first]["selected"] is False  # newest
-        assert all(isinstance(row["busy"], bool) for row in rows.values())
-        assert all(row["jobs_running"] == 0 for row in rows.values())
+        # The 2.0 shape leaves out selected: false, busy: false and jobs_running: 0.
+        assert rows[second]["selected"] is True and "selected" not in rows[first]  # newest
+        assert all(isinstance(row.get("busy", False), bool) for row in rows.values())
+        assert all(row.get("jobs_running", 0) == 0 for row in rows.values())
         assert any("ambiguous_instance" in w for w in status["warnings"])
 
         ambiguous = out["ambiguous"]
@@ -189,7 +191,7 @@ def test_two_headless_instances_pin_route_and_lose(hython, tmp_path):
 
         assert _json(out["pin1"])["connected"]["name"] == "one"
         job1 = _json(out["job1"])
-        assert job1["job_id"].startswith(f"{first}-"), job1
+        assert is_ledger_id(job1["job_id"]), job1  # the bridge ledger's id (spec-2.0 §3)
         assert _json(out["events1"])["next_since"].startswith(f"{first}:")
 
         routed = out["routed"]

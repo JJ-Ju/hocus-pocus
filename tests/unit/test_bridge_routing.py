@@ -142,17 +142,14 @@ def _props(spec) -> dict[str, Any]:
     return spec.input_schema.get("properties") or {}
 
 
-def test_on_and_role_are_listed_by_the_2x_profiles_only():
+def test_on_and_role_are_listed_where_the_spec_says():
     v2 = {spec.name: spec for spec in catalog.for_profile("full")}
-    for profile in ("compat_1x",):
-        for spec in catalog.for_profile(profile):
-            assert "on" not in _props(spec) and "role" not in _props(spec), (profile, spec.name)
     for name in ("cook", "render", "job"):
         assert _props(v2[name])["on"] == {
             "type": ["integer", "string"],
             "description": "Instance to run on: pid, name or role.",
         }
-        assert list(_props(v2[name]))[-1] == "on"  # 1.x keys keep their order
+        assert list(_props(v2[name]))[-1] == "on"  # after the 1.4 keys, as in 2.0
     assert _props(v2["houdini_connect"])["role"]["enum"] == ["editor", "worker"]
     out = v2["houdini_status"].output_schema["properties"]
     assert out["instances"]["items"]["properties"]["role"]["enum"] == ["editor", "worker"]
@@ -161,21 +158,18 @@ def test_on_and_role_are_listed_by_the_2x_profiles_only():
         assert "on" in _props(v2[name]) and " on " in f" {v2[name].notes} ", name
 
 
-def test_overlay_arguments_follow_the_catalogue_rules():
+def test_on_and_role_follow_the_catalogue_rules():
+    """The 2.0 arguments of the 1.4 tools (on, role; folded into their specs in 2.1, when
+    compat_1x and its v2_extra overlays went) are described in notes like any other."""
     for spec in catalog.for_profile("full"):
-        added = (spec.v2_extra.get("input") or {}).get("properties") or {}
-        for name, schema in added.items():
-            words = len(str(schema.get("description", "")).split())
+        props = _props(spec)
+        for name in ("on", "role"):
+            if name not in props:
+                continue
+            words = len(str(props[name].get("description", "")).split())
             assert words <= ARGUMENT_DESCRIPTION_MAX_WORDS, (spec.name, name)
             assert name in spec.notes or f"{{{name}}}" in spec.notes, (spec.name, name)
         assert spec.input_schema.get("additionalProperties") is False, spec.name
-
-
-def test_merge_keeps_the_base_untouched():
-    base = catalog.get("cook")
-    merged = catalog.v2_spec(base)
-    assert "on" in merged.input_schema["properties"] and "on" not in base.input_schema["properties"]
-    assert catalog.v2_spec(catalog.get("hip_save")) is catalog.get("hip_save")
 
 
 # -- the bridge -------------------------------------------------------------------------------
@@ -283,16 +277,15 @@ def test_on_a_remembered_dead_instance_is_instance_lost():
     assert error["code"] == "houdini_offline"
 
 
-def test_compat_1x_has_no_on_and_keeps_host_job_ids():
-    bridge, _hosts, _live = make(W1, profile="compat_1x")
-    error = data(bridge.call_tool("render", {"rop_path": "/out/geo", "on": "worker"}))
-    assert error["code"] == "invalid_argument"
-    result = data(bridge.call_tool("render", {"rop_path": "/out/geo"}))
-    assert result["job_id"].startswith(f"{W1.pid}-")
-    ledger_id = bridge.ledger.ledger_id(result["job_id"])
-    status = data(bridge.call_tool("job", {"action": "status", "job_id": ledger_id}))
-    assert status["job_id"] == result["job_id"]  # a ledger id is accepted everywhere
-    assert "role" not in bridge.call_tool("node_info", {"paths": ["/"]}).meta["instance"]
+def test_a_host_job_id_is_still_accepted():
+    """``job`` takes the host's ``<pid>-<id>`` too (what compat_1x returned until 2.1); the
+    answer carries the ledger id."""
+    bridge, _hosts, _live = make(W1)
+    job_id = data(bridge.call_tool("render", {"rop_path": "/out/geo"}))["job_id"]
+    host_id = bridge.ledger.to_host(job_id)[1]
+    assert host_id.startswith(f"{W1.pid}-")
+    status = data(bridge.call_tool("job", {"action": "status", "job_id": host_id}))
+    assert status["job_id"] == job_id
 
 
 def test_unknown_ledger_id_is_job_not_found():
@@ -346,7 +339,8 @@ def test_connect_by_role_pins_the_least_busy_worker():
     bridge, hosts, _live = make(GUI, W1, W2)
     hosts[W1.port].load = {"jobs_running": 2, "busy": False}
     out = bridge.call_tool("houdini_connect", {"role": "worker"})
-    assert data(out)["connected"]["pid"] == W2.pid and data(out)["connected"]["role"] == "worker"
+    # The default role (worker, headless) is left out of connected too (2.1, D66).
+    assert data(out)["connected"]["pid"] == W2.pid and "role" not in data(out)["connected"]
     assert bridge.preferred_pid == W2.pid
     assert data(bridge.call_tool("houdini_connect", {"role": "editor"}))["connected"]["pid"] == (
         GUI.pid
@@ -376,7 +370,7 @@ def test_connect_sets_roles_that_status_reports():
     assert named["connected"]["pid"] == W2.pid and named["connected"]["role"] == "editor"
 
 
-def test_recent_lists_quit_and_dead_instances_outside_compat_1x_only(tmp_path):
+def test_recent_lists_quit_and_dead_instances(tmp_path):
     ledger = Ledger.at(tmp_path / "state")
     bridge, _hosts, live = make(GUI, W1, W2, ledger=ledger)
     bridge.call_tool("houdini_connect", {"pid": W1.pid})
@@ -388,18 +382,13 @@ def test_recent_lists_quit_and_dead_instances_outside_compat_1x_only(tmp_path):
     recent = {row["pid"]: row for row in status["recent"]}
     assert set(recent) == {W1.pid, W2.pid}
     assert recent[W1.pid]["hip"] == "C:/work/w1.hip" and "role" not in recent[W1.pid]  # worker
-    assert recent[W2.pid]["name"] == "farm" and recent[W2.pid]["alive"] is False
+    assert recent[W2.pid]["name"] == "farm" and "alive" not in recent[W2.pid]  # all dead (D66)
     assert [row["pid"] for row in status["instances"]] == [GUI.pid]
-    full, _h, _l = make(GUI, profile="compat_1x", ledger=ledger)
-    status = data(full.call_tool("houdini_status", {}))
-    assert "recent" not in status and "role" not in status["instances"][0]
-    assert "role" not in (status["connected"] or {})
 
 
-def test_status_leaves_out_defaults_and_memory_outside_compat_1x():
+def test_status_leaves_out_defaults_and_memory():
     """2.0 M4: houdini_status leaves out default roles, selected: false, busy: false,
-    jobs_running: 0, an unset name and connected.memory (unless detail: true); compat_1x
-    keeps the 1.4 shape."""
+    jobs_running: 0, an unset name and connected.memory (unless detail: true)."""
     bridge, hosts, _live = make(GUI, W1)
     hosts[W1.port].load = {"jobs_running": 2, "busy": True}
     bridge.call_tool("houdini_connect", {"pid": GUI.pid})
@@ -413,6 +402,3 @@ def test_status_leaves_out_defaults_and_memory_outside_compat_1x():
     assert "memory" not in status["connected"] and "role" not in status["connected"]
     detailed = data(bridge.call_tool("houdini_status", {"detail": True}))
     assert detailed["connected"]["memory"] == {"rss_mb": 1.0}
-    full, _h, _l = make(GUI, W1, profile="compat_1x")
-    old = data(full.call_tool("houdini_status", {}))
-    assert {row["selected"] for row in old["instances"]} == {True, False}

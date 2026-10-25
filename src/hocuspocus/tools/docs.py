@@ -29,9 +29,7 @@ from collections.abc import Iterable, Sequence
 from pathlib import Path
 from typing import Any
 
-from hocuspocus.tools.catalog import TOOLS, ToolSpec, get, profile_of, v2_spec
-from hocuspocus.tools.migration import REPLACEMENTS
-from hocuspocus.tools.profiles import COMPAT_1X
+from hocuspocus.tools.catalog import TOOLS, ToolSpec, profile_of
 
 __all__ = [
     "SchemaError",
@@ -339,48 +337,23 @@ def _badges(spec: ToolSpec) -> str:
     return " ".join(f"`{badge}`" for badge in badges)
 
 
-V2_MARK = "*(not in compat_1x)*"
-"""Marks an argument or result key a 1.4 tool gains in the 2.0 profiles (``v2_extra``), which
-``compat_1x`` does not list."""
-
-
-def _v2_names(spec: ToolSpec, part: str) -> set[str]:
-    """Top-level names ``spec.v2_extra[part]`` adds to the 1.x spec of that name (not the
-    ones it only changes, such as ``houdini_status``'s ``profile`` enum)."""
-    added = set(((spec.v2_extra or {}).get(part) or {}).get("properties") or {})
-    base = get(spec.name) or spec
-    schema = base.input_schema if part == "input" else (base.output_schema or {})
-    return added - set(schema.get("properties") or {})
-
-
 def _profiles_line(spec: ToolSpec) -> str:
-    """The profiles that list ``spec`` and, for a removed 1.4 tool, its replacement."""
-    line = "profiles " + ", ".join(f"`{name}`" for name in spec.profiles)
-    if spec.name in REPLACEMENTS:
-        line += f" · 2.0: {REPLACEMENTS[spec.name]}"
-    return line
+    """The profiles that list ``spec``."""
+    return "profiles " + ", ".join(f"`{name}`" for name in spec.profiles)
 
 
 def render_tools_markdown(tools: Sequence[ToolSpec]) -> str:
     """Render the full ``docs/tools.md`` text (LF line endings, trailing newline)."""
     counts = {p: sum(1 for spec in tools if p in spec.profiles) for p in ("minimal", "core")}
     full = sum(1 for spec in tools if "full" in spec.profiles)
-    compat = sum(1 for spec in tools if COMPAT_1X in spec.profiles)
-    compat_only = sum(1 for spec in tools if profile_of(spec) == COMPAT_1X)
-    compat_part = (
-        f" `compat_1x` lists the {compat} 1.4 tools with their 1.4 schemas, {compat_only} of "
-        "them only there (each names its 2.0 replacement)."
-        if compat
-        else ""
-    )
     out: list[str] = [
         "# HocusPocus tools",
         "",
         "<!-- Generated from src/hocuspocus/tools/spec/ by `python -m hocuspocus.tools.docs`."
         " Do not edit by hand. -->",
         "",
-        f"{len(tools)} tools. The 2.0 profiles nest: {counts['minimal']} in `minimal`, "
-        f"{counts['core']} in `core` (the default), {full} in `full`.{compat_part} "
+        f"{len(tools)} tools. The profiles nest: {counts['minimal']} in `minimal`, "
+        f"{counts['core']} in `core` (the default), {full} in `full`. "
         f"Model-visible `tools/list` text: {tools_list_text_size(tools):,} bytes. "
         "See `docs/BIBLE.md` §4 for the design.",
         "",
@@ -388,53 +361,54 @@ def render_tools_markdown(tools: Sequence[ToolSpec]) -> str:
         "",
     ]
     for spec in tools:
-        suffix = {
-            "full": " *(full)*",
-            "minimal": " *(minimal)*",
-            COMPAT_1X: " *(compat_1x)*",
-        }.get(profile_of(spec), "")
+        suffix = {"full": " *(full)*", "minimal": " *(minimal)*"}.get(profile_of(spec), "")
         out.append(f"- [`{spec.name}`](#{spec.name}){suffix}")
     for spec in tools:
-        out += [
-            "",
-            f"## {spec.name}",
-            "",
-            f"{_badges(spec)} · {_profiles_line(spec)}",
-            "",
-            spec.description,
-            "",
-        ]
-        if spec.notes:
-            out += [f"**Notes.** {spec.notes}", ""]
-        # A 1.x tool's v2_extra arguments (spec-2.0 §7 M2) are listed, marked as v2 only.
-        full_spec = v2_spec(spec)
-        v2_args = {f"`{name}`" for name in _v2_names(spec, "input")}
-        rows = [
-            (*row[:4], f"{row[4]} {V2_MARK}".strip()) if row[0] in v2_args else row
-            for row in _argument_rows(full_spec.input_schema)
-        ]
-        out += ["### Arguments", ""]
-        if rows:
-            out += ["| Name | Type | Required | Default | Description |", "|---|---|---|---|---|"]
-            out += ["| " + " | ".join(_cell(c) for c in row) + " |" for row in rows]
-        else:
-            out.append("None.")
-        out.append("")
-        if full_spec.output_schema:
-            v2_keys = _v2_names(spec, "output")
-            out += ["### Returns", ""]
-            out += [
-                f"{line} {V2_MARK}" if line.split("`")[1] in v2_keys else line
-                for line in _returns_lines(full_spec.output_schema)
-            ]
-            out.append("")
-        if spec.examples:
-            out += ["### Examples", ""]
-            for example in spec.examples:
-                out += ["```json", json.dumps(example, ensure_ascii=False), "```", ""]
+        out += ["", *tool_section_lines(spec), ""]
     while out and out[-1] == "":
         out.pop()
     return "\n".join(out) + "\n"
+
+
+def tool_section_lines(spec: ToolSpec) -> list[str]:
+    """One tool's section of ``docs/tools.md`` (heading, badges, description, notes,
+    arguments, returns, examples), as lines: also what ``inspect {what: "tool", target}``
+    returns (2.1, D54)."""
+    out: list[str] = []
+    out += [
+        f"## {spec.name}",
+        "",
+        f"{_badges(spec)} · {_profiles_line(spec)}",
+        "",
+        spec.description,
+        "",
+    ]
+    if spec.notes:
+        out += [f"**Notes.** {spec.notes}", ""]
+    rows = _argument_rows(spec.input_schema)
+    out += ["### Arguments", ""]
+    if rows:
+        out += ["| Name | Type | Required | Default | Description |", "|---|---|---|---|---|"]
+        out += ["| " + " | ".join(_cell(c) for c in row) + " |" for row in rows]
+    else:
+        out.append("None.")
+    out.append("")
+    if spec.output_schema:
+        out += ["### Returns", ""]
+        out += _returns_lines(spec.output_schema)
+        out.append("")
+    if spec.examples:
+        out += ["### Examples", ""]
+        for example in spec.examples:
+            out += ["```json", json.dumps(example, ensure_ascii=False), "```", ""]
+    while out and out[-1] == "":
+        out.pop()
+    return out
+
+
+def tool_section(spec: ToolSpec) -> str:
+    """:func:`tool_section_lines` as text with a trailing newline."""
+    return "\n".join(tool_section_lines(spec)) + "\n"
 
 
 def tools_reference(tools: Sequence[ToolSpec] | None = None) -> str:
@@ -461,22 +435,21 @@ def default_output_path() -> Path:
 # Budget report (docs/redesign/budget.md)
 # ---------------------------------------------------------------------------
 
-BUDGET_PROFILES: tuple[str, ...] = ("minimal", "core", "full", COMPAT_1X)
+BUDGET_PROFILES: tuple[str, ...] = ("minimal", "core", "full")
 BUDGET_MODES: tuple[str, ...] = ("text", "both")
 TOOLS_LIST_CAPS: dict[str, int] = {"text": 24_000, "both": 34_000}
-"""spec-2.0 §7 M3 caps on the 2.0 ``full`` profile's serialised ``tools/list`` per
-``result_content`` mode; ``test_tools_list_budget`` enforces them."""
-COMPAT_TOOLS_LIST_CAPS: dict[str, int] = {"text": 32_000, "both": 44_000}
-"""BIBLE §4.1 (1.4) caps, kept by ``compat_1x`` (1.4's ``full`` catalogue)."""
+"""spec-2.0 §7 M3 caps on the ``full`` profile's serialised ``tools/list`` per
+``result_content`` mode (D44); ``test_tools_list_budget`` enforces them."""
 BUDGET_TOP = 10
 BUDGET_COLUMNS: tuple[str, ...] = tuple(f"{p} {m}" for m in BUDGET_MODES for p in BUDGET_PROFILES)
-"""What one run measures, ``"<profile> <mode>"``: the four profiles in ``text``, then in
+"""What one run measures, ``"<profile> <mode>"``: the three profiles in ``text``, then in
 ``both``."""
 HISTORY_COLUMNS: tuple[str, ...] = tuple(
-    f"{p} {m}" for m in BUDGET_MODES for p in ("minimal", "core", "full", "v2", COMPAT_1X)
+    f"{p} {m}" for m in BUDGET_MODES for p in ("minimal", "core", "full", "v2", "compat_1x")
 )
-"""The history table's columns: :data:`BUDGET_COLUMNS` plus ``v2``, the M1-M2 preview
-profile measured before the 2.0 cut-over (rows show ``—`` where a profile did not exist)."""
+"""The history table's columns: :data:`BUDGET_COLUMNS` plus the profiles earlier rows
+measured, ``v2`` (the M1-M2 preview) and ``compat_1x`` (1.4's ``full``, 2.0.x; both removed
+in 2.1). Rows show ``—`` where a profile did not exist."""
 LEGACY_BUDGET_COLUMNS: tuple[str, ...] = tuple(
     f"{p} {m}" for m in BUDGET_MODES for p in ("minimal", "core", "full")
 )
@@ -578,14 +551,13 @@ def render_budget_markdown(history: Sequence[dict[str, Any]], measured: dict[str
         "Bytes of the serialised `tools/list` result the bridge sends (compact JSON, as the "
         "MCP SDK writes it), per profile and `result_content` mode (BIBLE §4.1, spec-2.0 "
         "§5.1). `text` is what clients see by default (no output schemas); `both` declares "
-        f"them. Caps on the 2.0 `full` profile (spec-2.0 §7 M3): `text` ≤ "
-        f"{TOOLS_LIST_CAPS['text']:,} B, `both` ≤ {TOOLS_LIST_CAPS['both']:,} B; `compat_1x` "
-        f"(1.4's `full` catalogue) keeps the 1.4 caps, `text` ≤ "
-        f"{COMPAT_TOOLS_LIST_CAPS['text']:,} B, `both` ≤ {COMPAT_TOOLS_LIST_CAPS['both']:,} B. "
+        f"them. Caps on the `full` profile (spec-2.0 §7 M3, BIBLE D44): `text` ≤ "
+        f"{TOOLS_LIST_CAPS['text']:,} B, `both` ≤ {TOOLS_LIST_CAPS['both']:,} B. "
         "Rows before the 2.0 cut-over measure the 1.4 profiles under `minimal`, `core` and "
         "`full`, and `v2` (1.4's full plus the 2.0 tools, spec-2.0 §7 M1-M2); from the "
-        "cut-over those three are the 2.0 profiles and 1.4's full is `compat_1x`. `—` marks "
-        "a profile that did not exist. A change that raises a number says why in its commit.",
+        "cut-over those three are the 2.0 profiles and 1.4's full is `compat_1x`, which 2.1 "
+        "removed with `v2`. `—` marks a profile that did not exist. A change that raises a "
+        "number says why in its commit.",
         "",
         _HISTORY_HEADING,
         "",

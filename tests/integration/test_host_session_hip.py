@@ -84,9 +84,9 @@ def test_hip_save_as_returns_real_path_and_clean_state(client, work_dir):
     assert client.ok("houdini_status")["hip"]["dirty"] is True
     result = client.ok("hip_save", {"path": _fwd(target)})
     assert result["path"] == _fwd(target)
-    assert result["name"] == "shot.hip"
+    assert "name" not in result  # the path's last segment (2.1, D66)
     assert result["dirty"] is False
-    assert result["is_new"] is False
+    assert "is_new" not in result  # only when true (2.1, D66)
     assert result["bytes"] == target.stat().st_size > 0
     status = client.ok("houdini_status")["hip"]
     assert status["path"] == _fwd(target)

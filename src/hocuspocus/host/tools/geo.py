@@ -22,7 +22,8 @@ from hocuspocus.tools.migration import BARE, hint_tool
 
 from ._common import int_arg, parse_offset
 from ._diag import a_or_an, collect_problems, refresh_stale, require_node
-from .registry import HostContext, tool
+from .readers import stale_file_notes
+from .registry import HostContext
 
 CLASSES = ("point", "prim", "vertex", "detail")
 LIST_CAP = 60
@@ -310,7 +311,9 @@ def is_internal_attribute(name: str) -> bool:
     return name in INTERNAL_ATTRIBUTES or name.startswith(INTERNAL_PREFIXES)
 
 
-def _attributes(geo: Any, out: dict[str, Any], mode: str = "full") -> dict[str, list[Any]]:
+def _attributes(
+    geo: Any, out: dict[str, Any], mode: str = "full", full_strings: bool = False
+) -> dict[str, list[Any]]:
     """``geo_info``'s attributes per class, ``full`` rows or ``names`` only, without the
     solver internals (counted in ``out``)."""
     attributes: dict[str, list[Any]] = {}
@@ -350,16 +353,19 @@ def _attributes(geo: Any, out: dict[str, Any], mode: str = "full") -> dict[str, 
             value = geo.attribValue(attrib.name())
         except Exception as exc:  # pragma: no cover - defensive
             value = f"<unreadable: {exc}>"
-        entry["value"] = _detail_value(value)
+        entry["value"] = _detail_value(value, full_strings)
         detail.append(entry)
     attributes["detail"] = _capped(detail, out, "attributes.detail")
     return attributes
 
 
-def _detail_value(value: Any) -> Any:
+def _detail_value(value: Any, full_strings: bool = False) -> Any:
     """A detail attribute value for ``geo_info``: arrays and strings capped, and a dict
     whose JSON is longer than :data:`DETAIL_STRING_CAP` as ``{elided: <chars>, keys}``
-    (review 17 P1-7: a pyro ``volvis`` dict was half of every ``geo_info``)."""
+    (review 17 P1-7: a pyro ``volvis`` dict was half of every ``geo_info``); whole with
+    ``full_strings`` (``inspect what: geo``, 2.1, review 26 P1 #9)."""
+    if full_strings:
+        return jsonable(value)
     out = jsonable(value, array_cap=DETAIL_ARRAY_CAP, string_cap=DETAIL_STRING_CAP)
     if isinstance(out, dict):
         size = len(json.dumps(out, separators=(",", ":"), default=str))
@@ -470,10 +476,12 @@ def _cop_info(path: Any, frame: Any) -> dict[str, Any] | None:
     errors = [str(e).strip() for e in target.errors() if str(e).strip()]
     if errors:
         out["errors"] = errors
+    stale = stale_file_notes(target, frame)  # D80: a File COP keeps an overwritten image
+    if stale:
+        out["notes"] = stale
     return out
 
 
-@tool("geo_info")
 def geo_info(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     frame = args.get("frame")
     image = _cop_info(args.get("path"), frame)
@@ -493,16 +501,63 @@ def geo_info(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     out["bbox"] = _bbox(geo)
     prim_types = prim_type_counts(geo)
     out["prim_types"] = prim_types
-    out["attributes"] = _attributes(geo, out, mode)
+    full_strings = bool(args.get("full_strings", False))
+    out["attributes"] = _attributes(geo, out, mode, full_strings)
     out["groups"] = _groups(geo, out)
     intrinsics = _intrinsics(geo, prim_types)
     if intrinsics:
         out["intrinsics"] = intrinsics
     with contextlib.suppress(Exception):
         out["memory_bytes"] = int(geo.intrinsicValue("memoryusage"))
+    if args.get("stats") or args.get("attribs") is not None:
+        out["stats"] = summary_stats(geo, args.get("attribs"))
     warnings = [str(w).strip() for w in sop.warnings() if str(w).strip()]
     if warnings:
         out["warnings"] = warnings
+    return out
+
+
+SUMMARY_STATS_CAP = 24
+"""Attributes the summary's ``stats`` covers when ``attribs`` names none."""
+
+
+def summary_stats(geo: Any, wanted: Any) -> dict[str, Any]:
+    """``geo_info``'s ``stats`` (2.1, D76): per class, the ``attribs`` named (any class
+    holding them; each class a name is found in) or every visible point, prim and vertex
+    attribute up to :data:`SUMMARY_STATS_CAP`, as ``rows: true, stats: true`` gives them
+    (min, max and mean of numbers, unique values of strings; arrays and dicts left out)."""
+    names = attrib_names(wanted)
+    out: dict[str, Any] = {}
+    seen: set[str] = set()
+    budget = SUMMARY_STATS_CAP
+    for cls in ("point", "prim", "vertex"):
+        for attrib in _class_attribs(geo, cls):
+            name = attrib.name()
+            if names is None and (is_internal_attribute(name) or budget <= 0):
+                continue
+            if names is not None and name not in names:
+                continue
+            seen.add(name)
+            result = _Column(geo, cls, attrib).stats(None)
+            if result is not None:
+                out.setdefault(cls, {})[name] = result
+                budget -= 1
+    missing = [n for n in names or () if n not in seen]
+    if missing:
+        detail = [a.name() for a in _class_attribs(geo, "detail")]
+        known = sorted(
+            {a.name() for c in ("point", "prim", "vertex") for a in _class_attribs(geo, c)}
+        )
+        raise ToolError(
+            "invalid_argument",
+            f"No point, prim or vertex attribute named {missing[0]!r} for stats"
+            + (
+                " (it is a detail attribute: the summary lists its value)."
+                if missing[0] in detail
+                else "."
+            ),
+            candidates=difflib.get_close_matches(missing[0], known, n=5, cutoff=0.3) or known[:10],
+        )
     return out
 
 
@@ -683,12 +738,26 @@ class _Column:
         return out
 
 
+def attrib_names(wanted: Any) -> list[str] | None:
+    """``attribs`` as a list of names: a list, or (2.1) one string of names separated by
+    commas or spaces (``"P, Cd"``), as the schema allows."""
+    if wanted is None:
+        return None
+    if isinstance(wanted, str):
+        wanted = [w for w in re.split(r"[,\s]+", wanted) if w]
+    if not isinstance(wanted, list) or not wanted or not all(isinstance(w, str) for w in wanted):
+        raise ToolError(
+            "invalid_argument",
+            "'attribs' must be attribute names: a list, or one string such as \"P, Cd\".",
+        )
+    return wanted
+
+
 def _resolve_attribs(geo: Any, cls: str, wanted: Any) -> list[Any]:
     available = _class_attribs(geo, cls)
+    wanted = attrib_names(wanted)
     if wanted is None:
         return available
-    if not isinstance(wanted, list) or not all(isinstance(w, str) for w in wanted):
-        raise ToolError("invalid_argument", "'attribs' must be a list of attribute names.")
     by_name = {a.name(): a for a in available}
     picked = []
     for name in wanted:
@@ -720,7 +789,6 @@ BULK_SHARE = 4
 per-element reads); smaller pages read only their own rows."""
 
 
-@tool("geo_read")
 def geo_read(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     import numpy as np
 
@@ -755,7 +823,8 @@ def geo_read(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
         if group:
             raise ToolError("invalid_argument", "'group' does not apply to class 'detail'.")
         out["columns"] = [a.name() for a in attribs]
-        out["rows"] = [[jsonable(geo.attribValue(a.name()), array_cap=256) for a in attribs]]
+        cap = None if args.get("full_strings") else 256
+        out["rows"] = [[jsonable(geo.attribValue(a.name()), array_cap=cap) for a in attribs]]
         out["total"] = 1
         return out
 
@@ -802,4 +871,282 @@ def geo_read(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
             if result is not None:
                 stat_rows[column.name] = result
         out["stats"] = stat_rows
+    return out
+
+
+# -- geo groups (2.1, D71) -----------------------------------------------------------
+
+GROUPS_PAGE = 50
+"""Groups per page of ``inspect {what: "geo", group_by}`` unless ``count`` says."""
+GROUP_KEY_TYPES = ("string", "int")
+_TOPO_PT = "__hocuspocus_pt"
+_TOPO_PR = "__hocuspocus_pr"
+_TOPO_AREA = "__hocuspocus_area"
+_PROMOTE_CLASS = {"prim": 1, "point": 2, "vertex": 3}
+"""``attribpromote``'s ``inclass``/``outclass`` menu indices (detail is 0)."""
+
+
+def _verb(name: str) -> Any:
+    import hou
+
+    verb = hou.sopNodeTypeCategory().nodeVerb(name)
+    if verb is None:  # pragma: no cover - every 22.0 build has these verbs
+        raise ToolError("internal", f"The {name} SOP verb is not available in this Houdini.")
+    return verb
+
+
+def _topology(geo: Any) -> tuple[Any, Any, Any]:
+    """``(vertex_prim, vertex_point, prim_area)`` as numpy arrays, computed in C++ on a
+    copy of ``geo``: every point and prim numbered into an attribute, both promoted to
+    vertices (``attribpromote``), and each prim's area measured (``measure::2.0``). The
+    cooked geometry is never changed."""
+    import hou
+    import numpy as np
+
+    work = hou.Geometry()
+    work.merge(geo)
+    work.addAttrib(hou.attribType.Point, _TOPO_PT, 0)
+    work.addAttrib(hou.attribType.Prim, _TOPO_PR, 0)
+    work.setPointIntAttribValuesFromString(
+        _TOPO_PT, np.arange(class_count(geo, "point"), dtype=np.int32).tobytes()
+    )
+    work.setPrimIntAttribValuesFromString(
+        _TOPO_PR, np.arange(class_count(geo, "prim"), dtype=np.int32).tobytes()
+    )
+    for name, cls in ((_TOPO_PT, "point"), (_TOPO_PR, "prim")):
+        verb = _verb("attribpromote")
+        verb.setParms(
+            {
+                "inname": name,
+                "inclass": _PROMOTE_CLASS[cls],
+                "outclass": _PROMOTE_CLASS["vertex"],
+                "deletein": 0,
+            }
+        )
+        out = hou.Geometry()
+        verb.execute(out, [work])
+        work = out
+    measure = _verb("measure::2.0")
+    measure.setParms({"grouptype": 1, "measure": 1, "attribname": _TOPO_AREA})
+    measured = hou.Geometry()
+    measure.execute(measured, [work])
+    vprim = np.frombuffer(measured.vertexIntAttribValuesAsString(_TOPO_PR), dtype=np.int32)
+    vpoint = np.frombuffer(measured.vertexIntAttribValuesAsString(_TOPO_PT), dtype=np.int32)
+    area = np.frombuffer(
+        measured.primFloatAttribValuesAsString(_TOPO_AREA), dtype=np.float32
+    ).astype(np.float64)
+    return vprim, vpoint, area
+
+
+def _mask(geo: Any, cls: str, pattern: str, count: int) -> Any:
+    import numpy as np
+
+    mask = np.zeros(count, dtype=bool)
+    mask[group_members(geo, cls, pattern)] = True
+    return mask
+
+
+def _key_column(geo: Any, name: Any) -> tuple[str, Any]:
+    """The class and the attribute ``group_by`` names: a prim attribute first, then a
+    point one; a string or int of size 1."""
+    if not isinstance(name, str) or not name.strip():
+        raise ToolError("invalid_argument", "'group_by' must be an attribute name.")
+    name = name.strip()
+    for cls in ("prim", "point"):
+        attrib = next((a for a in _class_attribs(geo, cls) if a.name() == name), None)
+        if attrib is None:
+            continue
+        kind = attrib_type(attrib)
+        if kind not in GROUP_KEY_TYPES or attrib.size() != 1:
+            raise ToolError(
+                "invalid_argument",
+                f"group_by takes a string or int {cls} attribute of size 1; {name!r} is "
+                f"{kind}{attrib.size() if attrib.size() != 1 else ''}.",
+                hint="Pass it in attribs for its min, max and mean per group of another "
+                "attribute, or read it with rows: true and stats: true.",
+            )
+        return cls, attrib
+    elsewhere = [
+        cls
+        for cls in ("vertex", "detail")
+        if any(a.name() == name for a in _class_attribs(geo, cls))
+    ]
+    names = sorted({a.name() for cls in ("prim", "point") for a in _class_attribs(geo, cls)})
+    raise ToolError(
+        "invalid_argument",
+        f"No prim or point attribute named {name!r} to group by"
+        + (f" (it is {a_or_an(elsewhere[0])} attribute)." if elsewhere else "."),
+        hint="group_by takes a prim attribute (surface, name, mat_id) or a point one; "
+        "promote a vertex attribute first.",
+        candidates=difflib.get_close_matches(name, names, n=5, cutoff=0.3) or names[:10],
+    )
+
+
+def _stats_columns(geo: Any, cls: str, wanted: Any) -> list[_Column]:
+    """The numeric attributes ``attribs`` names for the group stats: of any class for prim
+    groups (a vertex attribute over the prims of each group), points for point groups."""
+    wanted = attrib_names(wanted)
+    if wanted is None:
+        return []
+    owners = ("prim", "point", "vertex") if cls == "prim" else ("point",)
+    picked: list[_Column] = []
+    for name in wanted:
+        column = None
+        for owner in owners:
+            attrib = next((a for a in _class_attribs(geo, owner) if a.name() == name), None)
+            if attrib is not None:
+                column = _Column(geo, owner, attrib)
+                break
+        if column is None:
+            names = sorted({a.name() for owner in owners for a in _class_attribs(geo, owner)})
+            raise ToolError(
+                "invalid_argument",
+                f"No {', '.join(owners)} attribute named {name!r} for the group stats.",
+                candidates=difflib.get_close_matches(name, names, n=5, cutoff=0.3) or names[:10],
+            )
+        if not column.numeric:
+            raise ToolError(
+                "invalid_argument",
+                f"attribs takes numeric attributes for the group stats; {name!r} is {column.type}.",
+                hint=f"group_by {name!r} counts the elements per value instead.",
+            )
+        picked.append(column)
+    return picked
+
+
+def _group_keys(column: _Column) -> tuple[list[Any], Any]:
+    """``(values, index)``: the distinct values of a key column and each element's index
+    into them."""
+    import numpy as np
+
+    values = column.values()
+    if column.type == "int":
+        keys, inverse = np.unique(values[:, 0], return_inverse=True)
+        return [int(k) for k in keys.tolist()], inverse
+    keys, inverse = np.unique(np.asarray(values, dtype=object), return_inverse=True)
+    return [str(k) for k in keys.tolist()], inverse
+
+
+def _reduce(keys: Any, values: Any, groups: int) -> dict[str, Any]:
+    """Per group ``min``, ``max`` and ``mean`` (arrays of shape (groups, size)) of
+    ``values`` (n, size) grouped by ``keys`` (n); a group without elements is NaN."""
+    import numpy as np
+
+    values = values.reshape(len(keys), -1)
+    size = values.shape[1]
+    lo = np.full((groups, size), np.nan)
+    hi = np.full((groups, size), np.nan)
+    mean = np.full((groups, size), np.nan)
+    if len(keys):
+        order = np.argsort(keys, kind="stable")
+        sorted_keys = keys[order]
+        block = values[order].astype(np.float64)
+        starts = np.flatnonzero(np.r_[True, sorted_keys[1:] != sorted_keys[:-1]])
+        present = sorted_keys[starts]
+        lo[present] = np.minimum.reduceat(block, starts, axis=0)
+        hi[present] = np.maximum.reduceat(block, starts, axis=0)
+        counts = np.diff(np.r_[starts, len(sorted_keys)])
+        mean[present] = np.add.reduceat(block, starts, axis=0) / counts[:, None]
+    return {"min": lo, "max": hi, "mean": mean}
+
+
+def _cell(row: Any) -> Any:
+    items = [None if math.isnan(v) else num(v) for v in row.tolist()]
+    return items[0] if len(items) == 1 else items
+
+
+def geo_groups(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
+    """``inspect {what: "geo", group_by}`` (2.1, D71): per value of a prim (or point)
+    attribute, the prim, point and triangle counts, the area and the bounding box, and
+    ``attribs``' min, max and mean (prim, point or vertex attributes of those prims), over
+    the elements of ``group`` when given. Rows under ``columns``, largest group first,
+    paged by ``count`` and ``cursor`` and cut at :data:`ROWS_BYTE_BUDGET`."""
+    import numpy as np
+
+    sop = resolve_sop(args.get("path"))
+    frame = args.get("frame")
+    geo = cooked_geometry(sop, frame)
+    cls, key_attrib = _key_column(geo, args.get("group_by"))
+    cursor = args.get("cursor")
+    start = parse_offset(cursor) if cursor not in (None, "") else int_arg(args, "start", 0, 0)
+    count = min(int_arg(args, "count", GROUPS_PAGE, 1), 10_000)
+    group = args.get("group")
+    if group is not None and (not isinstance(group, str) or not group.strip()):
+        raise ToolError("invalid_argument", "'group' must be a non-empty string.")
+    stats_cols = _stats_columns(geo, cls, args.get("attribs"))
+    out: dict[str, Any] = {"path": sop.path(), "group_by": key_attrib.name(), "class": cls}
+    if frame is not None:
+        out["frame"] = num(frame)
+    if group:
+        out["group"] = group.strip()
+
+    values, index = _group_keys(_Column(geo, cls, key_attrib))
+    n_groups = len(values)
+    n_elems = class_count(geo, cls)
+    selected = _mask(geo, cls, group.strip(), n_elems) if group else np.ones(n_elems, dtype=bool)
+    keys = np.where(selected, index, -1)
+    live = keys >= 0
+    positions = np.frombuffer(geo.pointFloatAttribValuesAsString("P"), dtype=np.float32)
+    positions = positions.reshape(-1, 3)
+    data: dict[str, Any] = {}
+    if cls == "prim":
+        vprim, vpoint, area = _topology(geo)
+        nverts = np.bincount(vprim, minlength=n_elems)
+        closed_poly = _mask(geo, "prim", "@intrinsic:typename==Poly", n_elems) & _mask(
+            geo, "prim", "@intrinsic:closed==1", n_elems
+        )
+        tris = np.where(closed_poly & (nverts >= 3), nverts - 2, 0)
+        size_of = np.bincount(keys[live], minlength=n_groups)
+        data["triangles"] = np.bincount(keys[live], weights=tris[live], minlength=n_groups)
+        data["area"] = np.bincount(keys[live], weights=area[live], minlength=n_groups)
+        vkeys = keys[vprim]
+        vlive = vkeys >= 0
+        n_points = max(1, class_count(geo, "point"))
+        pairs = np.unique(vkeys[vlive].astype(np.int64) * n_points + vpoint[vlive])
+        pair_keys, pair_points = pairs // n_points, pairs % n_points
+        data["points"] = np.bincount(pair_keys, minlength=n_groups)
+        box = _reduce(pair_keys, positions[pair_points], n_groups)
+        for col in stats_cols:
+            vals = col.values()
+            if col.cls == "prim":
+                data[col.name] = _reduce(keys[live], vals[live], n_groups)
+            elif col.cls == "point":
+                data[col.name] = _reduce(pair_keys, vals[pair_points], n_groups)
+            else:
+                data[col.name] = _reduce(vkeys[vlive], vals[vlive], n_groups)
+        columns = ["value", "prims", "points", "triangles", "area", "bbox_min", "bbox_max"]
+    else:
+        size_of = np.bincount(keys[live], minlength=n_groups)
+        box = _reduce(keys[live], positions[live], n_groups)
+        for col in stats_cols:
+            data[col.name] = _reduce(keys[live], col.values()[live], n_groups)
+        columns = ["value", "points", "bbox_min", "bbox_max"]
+    for col in stats_cols:
+        columns += [f"{col.name}.min", f"{col.name}.max", f"{col.name}.mean"]
+
+    present = [g for g in range(n_groups) if size_of[g] > 0]
+    present.sort(key=lambda g: (-int(size_of[g]), str(values[g])))
+    out["total"] = len(present)
+    rows: list[list[Any]] = []
+    used = 0
+    for g in present[start : start + count]:
+        row: list[Any] = [values[g], int(size_of[g])]
+        if cls == "prim":
+            row += [int(data["points"][g]), int(data["triangles"][g]), num(float(data["area"][g]))]
+        row += [_cell(box["min"][g]), _cell(box["max"][g])]
+        for col in stats_cols:
+            reduced = data[col.name]
+            row += [_cell(reduced["min"][g]), _cell(reduced["max"][g]), _cell(reduced["mean"][g])]
+        size = len(json.dumps(row, separators=(",", ":"), default=str))
+        if rows and used + size > ROWS_BYTE_BUDGET:
+            out["truncated"] = True
+            break
+        used += size + 1
+        rows.append(row)
+    out["columns"] = columns
+    out["rows"] = rows
+    if start:
+        out["start"] = start
+    if start + len(rows) < len(present):
+        out["next_cursor"] = str(start + len(rows))
     return out

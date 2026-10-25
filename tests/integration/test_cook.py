@@ -6,8 +6,6 @@ import time
 
 import pytest
 
-pytestmark = pytest.mark.compat_1x  # the 1.4 tools (conftest: compat_client)
-
 hou = pytest.importorskip("hou")
 
 
@@ -15,9 +13,13 @@ def _geo(name: str = "geo1"):
     return hou.node("/obj").createNode("geo", name)
 
 
-def _slow_python_sop(parent, seconds: float, name: str = "slow"):
+def _slow_python_sop(parent, seconds: float, name: str = "slow", time_dependent: bool = False):
+    """A Python SOP that sleeps ``seconds`` per cook. Not time dependent, a frame range
+    cooks it once and reuses the result; ``time_dependent`` (it reads ``hou.frame()``)
+    makes every frame sleep."""
     node = parent.createNode("python", name)
-    node.parm("python").set(f"import time\ntime.sleep({seconds})")
+    frame = "hou.frame()\n" if time_dependent else ""
+    node.parm("python").set(f"import time\n{frame}time.sleep({seconds})")
     return node
 
 
@@ -266,6 +268,41 @@ def test_cook_profile_without_loops_says_per_node(client):
     assert result["results"][0]["cook_time_ms"] == row["cook_time_ms"]
 
 
+@pytest.mark.parametrize("warm", [False, True], ids=["dirty", "cooked"])
+def test_cook_profile_leaves_out_inputs_a_normal_cook_does_not_cook(client, warm):
+    """Review 26 P1 #8: a Switch's unselected input, and what feeds a bypassed node, are
+    not profiled (profiling force-cooked them, so "interiors off costs nothing" looked
+    false); ``inactive`` names them. Switching the input profiles the other branch."""
+    geo = _geo()
+    shell = geo.createNode("box", "shell")
+    interior = _slow_python_sop(geo, 0.2, "interior")
+    interior.setInput(0, geo.createNode("grid", "floor"))
+    switch = geo.createNode("switch", "interiors")
+    switch.setInput(0, shell)
+    switch.setInput(1, interior)
+    out = geo.createNode("null", "OUT")
+    out.setInput(0, switch)
+    if warm:
+        out.cook(force=True)
+    before = interior.cookCount()
+    result = client.ok("cook", {"paths": [out.path()], "profile": True})
+    paths = {row["path"] for row in result["chain"]}
+    assert paths == {shell.path(), switch.path(), out.path()}, result
+    assert result["chain_total"] == 3 and result["total_ms"] < 150, result
+    assert result["inactive"]["count"] == 2, result
+    assert set(result["inactive"]["paths"]) == {interior.path(), f"{geo.path()}/floor"}
+    assert interior.cookCount() == before  # never cooked by the profile
+    switch.parm("input").set(1)
+    result = client.ok("cook", {"paths": [out.path()], "profile": True})
+    assert interior.path() in {row["path"] for row in result["chain"]}
+    assert result["inactive"] == {"count": 1, "paths": [shell.path()]}
+    assert result["total_ms"] >= 190
+    switch.parm("input").set(0)
+    switch.bypass(True)  # a bypassed Switch passes input 0 through
+    result = client.ok("cook", {"paths": [out.path()], "profile": True})
+    assert interior.path() in result["inactive"]["paths"], result
+
+
 def test_cook_profile_and_frame_range_errors(client):
     box = _geo().createNode("box")
     path = box.path()
@@ -374,6 +411,53 @@ def test_cook_frame_range_as_a_job_reports_frame_progress(client):
 
 def _kinds(result: dict) -> list[tuple[str, str]]:
     return [(row["kind"], row["path"]) for row in result["problems"]]
+
+
+LOOKS_FOR_LATER = """
+node = hou.pwd()
+found = hou.node("/obj/later") is not None
+node.geometry().addAttrib(hou.attribType.Global, "found", 0)
+node.geometry().setGlobalAttribValue("found", int(found))
+if not found:
+    node.addWarning('The node "/obj/later" was not found.')
+"""
+
+
+def test_force_chain_recooks_stale_inputs_and_problems_names_them(client):
+    """D81 (r21 friction 4): a Material SOP cooked before its materials existed kept its
+    "not found" result; cook {force} on the output does not recook its inputs. Houdini
+    sees no dependency here either (a Python SOP looks the node up)."""
+    geo = _geo()
+    probe = geo.createNode("python", "probe")
+    probe.parm("python").set(LOOKS_FOR_LATER)
+    out = geo.createNode("null", "OUT")
+    out.setInput(0, probe)
+    first = client.ok("cook", {"paths": [out.path()]})
+    assert first["results"][0]["ok"] is True
+    hou.node("/obj").createNode("geo", "later")
+    scan = client.ok("problems", {"root": geo.path()})
+    (row,) = [r for r in scan["problems"] if r["path"] == probe.path()]
+    assert row["kind"] == "warning" and "/obj/later exists now" in row["hint"], row
+    assert "force: true" in row["hint"]
+    forced = client.ok("cook", {"paths": [out.path()], "force": True})["results"][0]
+    assert out.geometry().attribValue("found") == 0  # the input kept its old result
+    assert 'force: "chain"' in forced.get("hint", ""), forced
+    chained = client.ok("cook", {"paths": [out.path()], "force": "chain"})
+    (result,) = chained["results"]
+    assert out.geometry().attribValue("found") == 1
+    assert result["inputs_cooked"] == 1 and "input_problems" not in result, result
+    assert "hint" not in result
+    rescan = client.ok("problems", {"root": geo.path()})
+    assert not [r for r in rescan["problems"] if r["path"] == probe.path()], rescan
+    # Inputs that still warn are listed on the named node's row.
+    probe.parm("python").set(LOOKS_FOR_LATER.replace("/obj/later", "/obj/never"))
+    noisy = client.ok("cook", {"paths": [out.path()], "force": "chain"})["results"][0]
+    assert noisy["input_problems"][0]["path"] == probe.path(), noisy
+    assert "/obj/never" in noisy["input_problems"][0]["warnings"][0]
+    for bad in ({"force": "inputs"}, {"force": "chain", "profile": True},
+                {"force": "chain", "frame_range": [1, 2]}):  # fmt: skip
+        error = client.error("cook", {"paths": [out.path()], **bad})
+        assert error["code"] == "invalid_argument", (bad, error)
 
 
 def test_problems_clean_scene(client):
@@ -891,7 +975,7 @@ def test_cook_wait_s_zero_returns_a_job_at_once(client):
 def test_cook_cancelled_frame_range_keeps_the_frames_cooked(client):
     geo = _geo()
     box = geo.createNode("box")
-    slow = _slow_python_sop(geo, 0.05)
+    slow = _slow_python_sop(geo, 0.05, time_dependent=True)
     slow.setInput(0, box)
     hou.setFrame(7)
     result = client.ok(
@@ -1042,7 +1126,19 @@ def test_cook_profile_on_vellum_tells_full_runs_current_frame_and_cache_reads(cl
     solver = _vellum_cloth()
 
     def profile(frame):
-        result = client.ok("cook", {"paths": [solver.path()], "profile": True, "frame": frame})
+        # A fresh 12-frame solve takes 2 s here and over 10 s on a loaded machine. 10 s is
+        # the job threshold, so the call then answered {job_id, state: running} and not the
+        # profile. An explicit wait_s is the caller's own threshold (timeout_s the cook's):
+        # the test says how long it is willing to wait.
+        args = {
+            "paths": [solver.path()],
+            "profile": True,
+            "frame": frame,
+            "wait_s": 120,
+            "timeout_s": 120,
+        }
+        result = client.ok("cook", args)
+        assert "job_id" not in result, result
         note = next(n for n in result["notes"] if n.startswith(solver.path()))
         return _sim_row(result, solver), note
 

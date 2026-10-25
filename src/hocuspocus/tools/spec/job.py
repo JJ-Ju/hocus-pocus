@@ -2,17 +2,17 @@
 
 from __future__ import annotations
 
-from ._helpers import _JOB_STATES, ToolSpec, _b, _enum, _obj, _objs, _out, _s, _t, _v2_on
+from ._helpers import _JOB_STATES, ToolSpec, _b, _enum, _obj, _objs, _on, _out, _s, _t
 
 SPEC = ToolSpec(
     name="job",
-    profiles=("core", "full", "compat_1x"),
+    profiles=("core", "full"),
     description=(
         "Jobs from render, cook or pdg: status (state, progress, message), result (the "
         "tool's result once done), cancel, list."
     ),
     notes=(
-        "Job ids are <pid>-<id>: the bridge sends a job call to the Houdini that started the "
+        "The bridge sends a job call to the Houdini that started the "
         "job, whichever is selected; if that Houdini has exited the answer is instance_lost "
         "with the last status the bridge saw (detail.last_status). A bare id means the "
         "selected Houdini. list shows the selected Houdini's jobs; all: true lists every "
@@ -23,9 +23,8 @@ SPEC = ToolSpec(
         "done, as current does. cancel adds cancelled: true, or cancelled: false and a note "
         "when the job had already finished. A cancelled job's result is the cancelled error, "
         "whose detail holds the last status (state cancelled). "
-        "Not in compat_1x (spec-2.0 §2.5, §3): job ids are opaque ledger ids such as j7f3a9; the "
-        "bridge ledger maps each to its Houdini and job, and job accepts either form (any "
-        "profile). Jobs are kept in the ledger across bridge restarts: job status after a "
+        "Job ids are opaque ledger ids such as j7f3a9 (spec-2.0 §2.5, §3): the bridge ledger "
+        "maps each to its Houdini and job; job also accepts the host's <pid>-<id> form. Jobs are kept in the ledger across bridge restarts: job status after a "
         "restart answers from the live Houdini, and for one that has exited instance_lost "
         "carries the last status the ledger saw; job result of a finished job whose Houdini "
         "has exited returns the result the ledger kept, if it fetched one before (results "
@@ -37,6 +36,7 @@ SPEC = ToolSpec(
             "action": _enum(("status", "result", "cancel", "list")),
             "job_id": _s("Required except for list."),
             "all": _b(False),
+            "on": _on(),
         },
         ("action",),
     ),
@@ -55,7 +55,6 @@ SPEC = ToolSpec(
     ),
     # Reads and cancel only touch host-side jobs; repeating any action is harmless.
     idempotent=True,
-    v2_extra=_v2_on(),
     examples=(
         {"action": "status", "job_id": "61900-9c3e6f7ca53e"},
         {"action": "list", "all": True},

@@ -9,8 +9,8 @@ Two checks:
   call. Every ``message``, ``hint`` and note is scanned for ``\\b[a-z_]+\\b`` candidates
   that are tool names; none may be outside the profile's listing (from the catalogue).
 * **Static.** No string literal in a hint or message of ``host/`` or ``bridge/`` names a
-  1.4 tool 2.0 removed: such a name only reaches a hint through
-  :func:`~hocuspocus.tools.migration.hint_tool`, which renders it for the profile.
+  1.4 tool 2.0 replaced (2.1 removed them): such a name only reaches a hint through
+  :func:`~hocuspocus.tools.migration.hint_tool`, which renders its 2.0 call.
 
 A snake_case candidate (``node_find``) always counts as naming a tool. A one-word tool name
 is also an English word (cook, look, render, search, time, undo, job, events, problems), so
@@ -37,8 +37,10 @@ from hocuspocus.tools.errors import ToolError
 
 pytestmark = pytest.mark.unit
 
-PROFILES = ("minimal", "core", "full", "compat_1x")
-TOOL_NAMES = frozenset(spec.name for spec in catalog.TOOLS)
+PROFILES = ("minimal", "core", "full")
+TOOL_NAMES = frozenset(spec.name for spec in catalog.TOOLS) | frozenset(migration.REPLACEMENTS)
+"""The tools a text can name: the catalogue's and the removed 1.4 ones (no profile serves
+those, so a text that names one fails the check)."""
 SRC = Path(__file__).resolve().parents[2] / "src" / "hocuspocus"
 
 
@@ -106,34 +108,37 @@ class _Parented:
         raise RuntimeError("no inputs here: the fallback hint")
 
 
-EDIT_MISTAKES = [
-    [{"op": "create", "parent": "/obj/geo1", "type": "mountian"}],  # bad type
-    [{"op": "create", "parent": "/obj/geo1", "type": "box", "parms": {"sise": 1}}],  # bad parm
-    [{"op": "create", "parent": "/obj/geo1", "type": "geo"}],  # wrong category
-    [{"op": "set", "path": "/obj/geo1/box1/sise", "value": 1}],  # bad parm on a node
-    [  # missing from
-        {"op": "create", "id": "x", "parent": "/obj/geo1", "type": "xform"},
-        {"op": "connect", "from": "/obj/geo1/nope", "to": "$x"},
-    ],
-    [{"op": "connect", "from": "/obj/geo1/box1", "to": "/obj/geo1/nopee"}],  # missing to
-    [  # bad input on a new node
-        {"op": "create", "id": "x", "parent": "/obj/geo1", "type": "xform"},
-        {"op": "connect", "from": "/obj/geo1/box1", "to": "$x", "to_input": 5},
-    ],
-    [{"op": "create", "parent": "/obj/nogeo", "type": "box"}],  # missing parent
-    [{"op": "build", "parent": "/obj/geo1", "data": {}}],  # empty build data
-]
+def _edit_errors(scene: FakeScene) -> list[ToolError]:
+    """The errors an ``edit`` op's run raises for the usual mistakes (BIBLE D56: the run is
+    the validation): a bad type, a bad parm, a missing wire end, a bad input, a missing
+    parent, a wire across networks or from a subnet input that does not exist."""
+    from hocuspocus.host import tx
+    from hocuspocus.host.tools import nodes, parms
+
+    geo = scene.nodes["/obj/geo1"]
+    box = scene.nodes["/obj/geo1/box1"]
+    out: list[ToolError] = [
+        nodes.type_not_found(geo, "mountian", scene.sop),
+        nodes.type_not_found(geo, "geo", scene.sop),  # wrong category
+        parms.parm_not_found(box, "sise"),
+    ]
+    for call in (
+        lambda: tx.wire_source("/obj/geo1/nope", box, "from"),
+        lambda: nodes.resolve_input_index(box, 5),
+        lambda: nodes.get_node("/obj/nogeo", field="parent"),
+        lambda: tx.wire_source("/obj", box, "from"),
+        lambda: tx.wire_output(geo, box, 7, "from_output"),
+    ):
+        with pytest.raises(ToolError) as info:
+            call()
+        out.append(info.value)
+    return out
 
 
 def _host_errors(scene: FakeScene) -> list[Any]:
-    from hocuspocus.host import tx
     from hocuspocus.host.tools import _common, _diag, geo, network, nodes, parms, state
 
-    out: list[Any] = []
-    for ops in EDIT_MISTAKES:
-        diag = tx.validate(tx.parse_ops(ops), ctx=None)
-        assert diag.problems, ops
-        out += diag.problems
+    out: list[Any] = _edit_errors(scene)
     out.append(_diag.missing_node_error("/obj/geo1/boxx"))
     out.append(_diag.missing_node_error("/obj/gone/boxx"))
     out.append(parms.expression_hint())
@@ -168,13 +173,12 @@ def _bridge_errors(profile: str) -> list[Any]:
     ]
     if profile != "minimal":
         calls.append(("job", {"action": "status", "job_id": "jzzzz"}))  # the ledger's form
-    if profile != "compat_1x":
-        calls += [
-            ("inspect", {"what": "node", "path": "/obj/geo1"}),
-            ("inspect", {"what": "node", "bogus_frame": 1}),
-            ("edit", {"op": "set", "path": "/obj/a/t", "value": 1}),
-            ("search", {"query": "box"}),
-        ]
+    calls += [
+        ("inspect", {"what": "node", "path": "/obj/geo1"}),
+        ("inspect", {"what": "node", "bogus_frame": 1}),
+        ("edit", {"op": "set", "path": "/obj/a/t", "value": 1}),
+        ("search", {"query": "box"}),
+    ]
     for name, args in calls:
         result = bridge.call_tool(name, args)
         assert result.is_error, (name, args)
@@ -191,9 +195,16 @@ def _payload(result: Any) -> dict[str, Any]:
 
 
 def _refusals(profile: str) -> list[tuple[str, Any]]:
-    if profile == "compat_1x":
-        return []
-    return [(tool, migration.removed_error(tool, profile)) for tool in migration.REPLACEMENTS]
+    """Every removed 1.4 tool's refusal, as the host builds it and as the bridge answers it."""
+    from hocuspocus.bridge.config import BridgeConfig
+    from hocuspocus.bridge.server import Bridge
+
+    bridge = Bridge(BridgeConfig(profile=profile), scan=lambda: [])
+    out: list[tuple[str, Any]] = []
+    for tool in migration.REPLACEMENTS:
+        out.append((tool, migration.removed_error(tool, profile)))
+        out.append((tool, _payload(bridge.call_tool(tool, {}))))
+    return out
 
 
 @pytest.fixture
@@ -226,46 +237,35 @@ def test_every_hint_names_only_tools_the_profile_serves(profile, scene) -> None:
 
 def test_hints_name_the_2x_call_on_2x_profiles(scene) -> None:
     """The papercut's own examples, both ways."""
-    from hocuspocus.host import tx
-
-    def first(ops: list[dict[str, Any]]) -> ToolError:
-        return tx.validate(tx.parse_ops(ops), ctx=None).problems[0]
-
     with migration.using_profile("core"):
-        bad_type = first(EDIT_MISTAKES[0])
-        bad_parm = first(EDIT_MISTAKES[1])
-        missing = first(EDIT_MISTAKES[4])
+        bad_type, _category, bad_parm, missing, *_rest = _edit_errors(scene)
         assert 'search {kind: "types", query: "mountian"}' in bad_type.hint
-        assert 'inspect {what: "type", target: "Sop/box"}' in bad_parm.hint
+        assert 'inspect {what: "node", target: "/obj/geo1/box1"' in bad_parm.hint
         assert 'search {kind: "nodes", root: "/obj/geo1"}' in missing.hint
         assert (
             'edit {ops: [{op: "set", path, expression}]}'
             in __import__("hocuspocus.host.tools.parms", fromlist=["x"]).expression_hint()
         )
-    with migration.using_profile("compat_1x"):
-        assert 'node_type_search {query: "mountian"}' in first(EDIT_MISTAKES[0]).hint
-        assert 'node_find {root: "/obj/geo1"}' in first(EDIT_MISTAKES[4]).hint
 
 
 def test_hint_tool_renders_each_profile() -> None:
     h = migration.hint_tool
     assert h("node_find", "core", root="/obj") == 'search {kind: "nodes", root: "/obj"}'
-    assert h("node_find", "compat_1x", root="/obj") == 'node_find {root: "/obj"}'
     assert h("node_info", "full", paths=["/obj/a"]) == 'inspect {what: "node", target: "/obj/a"}'
     assert h("viewport_capture", "minimal") == "look {}"
     assert h("problems", "core") == 'inspect {what: "problems"}'
-    assert h("problems", "compat_1x") == "problems"
     assert h("parm_set", "core", path=migration.BARE) == 'edit {ops: [{op: "set", path}]}'
-    assert h("parm_set", "compat_1x", path=migration.BARE) == "parm_set {items: [{path}]}"
     assert h("cook", "minimal") is None and h("cook", "core", paths=["/a"]) == (
         'cook {paths: ["/a"]}'
     )
-    assert h("hda", "core") is None and h("hda", "full") == "hda"
+    assert h("hda", "minimal") is None and h("hda", "core") == "hda"  # 2.1: D47
     assert migration.current_profile() == "full"
-    with migration.using_profile("v2") as resolved:
-        assert resolved == "full" and migration.current_profile() == "full"
-    with migration.using_profile("compat_1x"):
-        assert migration.is_compat() and h("node_type_info") == "node_type_info"
+    with migration.using_profile("minimal") as resolved:
+        assert resolved == "minimal" and h("node_type_info") == 'inspect {what: "type"}'
+    # A removed profile name never reaches here resolved (the config reads it as full);
+    # as an unknown name it is the default.
+    with migration.using_profile("compat_1x") as resolved:
+        assert resolved == "core" and h("node_find") == 'search {kind: "nodes"}'
 
 
 # -- the static guard -------------------------------------------------------------------------
@@ -315,3 +315,35 @@ def test_no_hint_literal_names_a_removed_tool() -> None:
             if words:
                 bad.append(f"{path.relative_to(SRC)}:{line}: {sorted(words)} in {text!r}")
     assert not bad, "route these through migration.hint_tool:\n" + "\n".join(bad)
+
+
+def test_no_tool_reference_text_names_a_removed_tool() -> None:
+    """The reference a model reads (description, notes, argument descriptions and examples
+    of every spec, which the tools resource and inspect tool render), the server
+    instructions, the guide and the prompts name 2.0 calls, never a 1.4 tool 2.1 removed
+    (2.1 stream F: search's notes still described node_find and node_type_search). Only the
+    migration table and the docs about migration do."""
+    import json
+
+    from hocuspocus.bridge import instructions
+
+    texts: dict[str, str] = {}
+    for spec in catalog.TOOLS:
+        texts[f"spec {spec.name}"] = "\n".join(
+            [
+                spec.description,
+                spec.notes or "",
+                json.dumps(spec.input_schema, ensure_ascii=False),
+                json.dumps(spec.examples, ensure_ascii=False),
+            ]
+        )
+    texts["instructions"] = instructions.INSTRUCTIONS + instructions.INSTRUCTIONS_POINTER
+    texts["guide"] = instructions.guide_text()
+    texts["prompts"] = json.dumps(instructions.PROMPTS, ensure_ascii=False)
+    removed = set(migration.REPLACEMENTS)
+    found = {
+        where: sorted(named_tools(text) & removed)
+        for where, text in texts.items()
+        if named_tools(text) & removed
+    }
+    assert found == {}

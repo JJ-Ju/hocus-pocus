@@ -121,6 +121,9 @@ def test_parms_on_a_node_reads_its_non_default_tuples(v2_client):
     assert non_default["parms"] == {"size": [2.0, 1.0, 1.0]}, non_default
     globbed = v2_client.ok("inspect", {"what": "parms", "target": xform.path(), "parms": "t|r"})
     assert list(globbed["parms"]) == ["t", "r"]
+    # D85: commas separate alternatives too (r21 friction 8: "a,b,c" matched nothing).
+    commas = v2_client.ok("inspect", {"what": "parms", "target": xform.path(), "parms": "t, r"})
+    assert commas["parms"] == globbed["parms"]
     full = v2_client.ok(
         "inspect", {"what": "parms", "target": xform.path(), "parms": "t|r", "detail": "full"}
     )
@@ -368,10 +371,13 @@ def test_problems_compact(v2_client):
     new = v2_client.ok("inspect", {"what": "problems", "target": "/obj"})
     assert new["problems"] == [] and old["counts"] == {} and "counts" not in new
     assert "nodes_with_problems" not in new and new["total"] == 0
-    error = v2_client.error("inspect", {"what": "problems", "detail": "folders"})
+    # 2.1 (D51): a detail a read does not take is ignored with a note, not an error.
+    noted = v2_client.ok("inspect", {"what": "problems", "detail": "folders"})
+    assert "detail folders applies to" in noted["notes"][0]
+    noted = v2_client.ok("inspect", {"what": "network", "target": "/obj", "detail": "full"})
+    assert noted["notes"][0] == "detail does not apply to what: network; ignored."
+    error = v2_client.error("inspect", {"what": "problems", "detail": "verbose"})
     assert error["code"] == "invalid_argument" and "detail" in error["message"]
-    error = v2_client.error("inspect", {"what": "network", "target": "/obj", "detail": "full"})
-    assert error["code"] == "invalid_argument" and "does not take detail" in error["message"]
 
 
 # -- etag ---------------------------------------------------------------------------------
@@ -443,8 +449,96 @@ def test_inspect_errors_name_the_options(v2_client):
 
 
 def test_a_full_host_refuses_the_1x_reads_with_their_inspect_what(client):
-    """spec-2.0 §8: node_info on a 2.0 profile names inspect what: node."""
+    """2.1: node_info, a removed 1.4 tool, names inspect what: node."""
     assert "nodes" in client.ok("inspect", {"what": "outline"})
-    error = client.error("node_info", {"paths": ["/obj"]})
+    error = client.error("node_info", {"paths": ["/obj"]}, wire=True)
     assert error["code"] == "invalid_argument" and "1.4 tool" in error["message"]
-    assert error["hint"].startswith("In 2.0 use inspect what: node.")
+    assert error["hint"].startswith("Use inspect what: node.")
+
+
+# -- uniform options (2.1, D51; review 26 P1 #9) -------------------------------------------
+
+
+def test_options_that_only_shape_the_answer_are_ignored_with_a_note(client):
+    """recurse_locked on geo, include_defaults with parm paths, detail folders on a node
+    read: ignored with a note, and the answer (and its etag) is the plain read's."""
+    _net, box, xform = _geo()
+    plain = client.ok("inspect", {"what": "geo", "target": xform.path()})
+    noted = client.ok("inspect", {"what": "geo", "target": xform.path(), "recurse_locked": True})
+    assert noted["etag"] == plain["etag"]
+    assert noted["notes"][0].startswith("recurse_locked does not apply to what: geo")
+    assert "inside locked assets anyway" in noted["notes"][0]
+    parm = f"{box.path()}/size"
+    noted = client.ok("inspect", {"what": "parms", "target": parm, "include_defaults": True})
+    assert parm in noted["parms"] and "include_defaults" in noted["notes"][0]
+    noted = client.ok("inspect", {"what": "node", "target": box.path(), "detail": "folders"})
+    assert noted["nodes"] and "detail folders applies to" in noted["notes"][0]
+    noted = client.ok("inspect", {"what": "events", "full_strings": True, "limit": 1})
+    assert "full_strings does not apply to what: events" in noted["notes"][0]
+    # An option that picks what is read stays an error: ignoring it would answer another
+    # question (a frame, a page, a class).
+    error = client.error("inspect", {"what": "node", "target": box.path(), "frame": 24})
+    assert error["code"] == "invalid_argument" and "does not take frame" in error["message"]
+    assert 'inspect {what: "tool", target: "inspect"}' in error["hint"]
+
+
+def test_full_strings_reads_a_long_snippet_back_whole(client):
+    """Review 26 P1 #2/#9: a 20 KB VEX snippet reads back in full, from parms and from
+    node rows, over the response budget too."""
+    geo = hou.node("/obj").createNode("geo", "geo1")
+    wrangle = geo.createNode("attribwrangle", "facade")
+    snippet = "\n".join(f"float v{i} = {i} * 0.5; // line {i:05d}" for i in range(700))
+    assert len(snippet) > 20000
+    wrangle.parm("snippet").set(snippet)
+    parm = f"{wrangle.path()}/snippet"
+    elided = client.ok("inspect", {"what": "parms", "target": parm})["parms"][parm]
+    assert elided["value"]["elided"] == len(snippet)
+    whole = client.ok("inspect", {"what": "parms", "target": parm, "full_strings": True})
+    assert whole["parms"][parm] == snippet
+    by_node = client.ok(
+        "inspect",
+        {"what": "parms", "target": wrangle.path(), "parms": "snippet", "full_strings": True},
+    )
+    assert by_node["parms"]["snippet"] == snippet
+    node = client.ok("inspect", {"what": "node", "target": wrangle.path(), "full_strings": True})
+    assert node["nodes"][0]["parms"]["snippet"] == snippet
+    compact = client.ok("inspect", {"what": "node", "target": wrangle.path()})
+    assert compact["nodes"][0]["parms"]["snippet"]["value"]["elided"] == len(snippet)
+
+
+def test_full_strings_reads_geo_detail_values_whole(client):
+    """Review 26 P1 #9 (error 11): inspect geo took no full_strings, and a long detail
+    string came back cut at 200 characters."""
+    geo = hou.node("/obj").createNode("geo", "geo1")
+    wrangle = geo.createNode("attribwrangle", "notes")
+    wrangle.parm("class").set(0)  # detail
+    long_text = "tier " * 300
+    wrangle.parm("snippet").set(
+        f's@build_notes = "{long_text}"; i[]@floors = array({", ".join(["1"] * 40)});'
+    )
+    cut = client.ok("inspect", {"what": "geo", "target": wrangle.path()})
+    value = cut["attributes"]["detail"]["build_notes"]["value"]
+    assert len(value) <= 201 and value.endswith("…"), value
+    whole = client.ok("inspect", {"what": "geo", "target": wrangle.path(), "full_strings": True})
+    assert whole["attributes"]["detail"]["build_notes"]["value"] == long_text
+    assert len(whole["attributes"]["detail"]["floors"]["value"]) == 40
+    assert "notes" not in whole
+
+
+def test_parms_of_a_node_by_folder(client):
+    """detail folders lists a node's own parm folders (spare parms too), and folder reads
+    one of them, defaults included (2.1, D51)."""
+    geo = hou.node("/obj").createNode("geo", "geo1")
+    null = geo.createNode("null", "CONTROLS")
+    group = null.parmTemplateGroup()
+    folder = hou.FolderParmTemplate("massing", "Massing")
+    folder.addParmTemplate(hou.IntParmTemplate("floors", "Floors", 1, default_value=(36,)))
+    folder.addParmTemplate(hou.FloatParmTemplate("floor_height", "Floor Height", 1))
+    group.append(folder)
+    null.setParmTemplateGroup(group)
+    folders = client.ok("inspect", {"what": "parms", "target": null.path(), "detail": "folders"})
+    assert {"folder": "Massing", "parms": 2} in folders["folders"], folders
+    massing = client.ok("inspect", {"what": "parms", "target": null.path(), "folder": "massing"})
+    assert massing["parms"] == {"floors": 36, "floor_height": 0.0}, massing
+    error = client.error("inspect", {"what": "parms", "target": null.path(), "folder": "roof"})
+    assert error["code"] == "invalid_argument" and "Massing" in error["candidates"]

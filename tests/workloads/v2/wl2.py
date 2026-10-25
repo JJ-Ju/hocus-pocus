@@ -1,32 +1,14 @@
 """Helpers shared by the 2.0 workloads (not a test module).
 
-The v2 workloads reuse the 1.4 workloads' scene content (VEX snippets, item builders, the
-soak's model) so both tiers measure the same work; :func:`load_1x` loads a 1.4 workload
-module by path under its own name, since both tiers' test modules live outside packages.
+The scene content the 1.4 workloads shared with these (the city's VEX and builders, the
+soak's model) is in ``city_scene.py`` and ``soak_model.py``, so the 2.0 totals still
+measure the work the 1.4 budgets in ``tests/workloads/budgets.json`` measured.
 """
 
 from __future__ import annotations
 
-import importlib.util
 import re
-import sys
-from pathlib import Path
 from typing import Any
-
-TIER_1X = Path(__file__).resolve().parents[1]
-
-
-def load_1x(stem: str) -> Any:
-    """The 1.4 workload module ``tests/workloads/<stem>.py``."""
-    name = f"hp_workloads_1x_{stem}"
-    if name in sys.modules:
-        return sys.modules[name]
-    spec = importlib.util.spec_from_file_location(name, TIER_1X / f"{stem}.py")
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[name] = module
-    spec.loader.exec_module(module)
-    return module
 
 
 def ident(path: str) -> str:

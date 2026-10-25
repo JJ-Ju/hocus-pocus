@@ -12,11 +12,10 @@ from typing import Any
 from hocuspocus.tools.errors import ToolError
 from hocuspocus.tools.migration import hint_tool
 
-from ..tools._diag import a_or_an, require_node
 from ..tools.geo import num
+from ..tools.readers import stale_file_notes
 from ..tools.registry import HostContext
 from .base import INTERNAL_KEY, Backend, Env, LookResult, failure, mark_internal, on_main
-from .image import capture_targets, finish_capture
 
 CHANNEL_NAMES = {1: ("mono",), 2: ("u", "v"), 3: ("r", "g", "b"), 4: ("r", "g", "b", "a")}
 NON_IMAGE_OUTPUTS = ("Geometry", "VDB")
@@ -107,31 +106,6 @@ def image_summary(node: Any, frame: float | None = None, *, stats: bool = True) 
     return out
 
 
-def _cop_target(path: Any) -> Any:
-    """The Cop node ``cop_path`` names (a COP network means its display node). Main
-    thread."""
-    if not isinstance(path, str) or not path.strip():
-        raise ToolError("invalid_argument", "'cop_path' must be a Cop node path.")
-    node = require_node(path, field="cop_path")
-    target = cop_image_node(node)
-    if target is not None:
-        return target
-    if is_cop_network(node):
-        raise ToolError(
-            "invalid_argument",
-            f"{node.path()} has no display node to capture.",
-            hint="Pass a Cop node inside it, or set a display flag.",
-            candidates=[c.path() for c in node.children()][:10],
-        )
-    raise ToolError(
-        "invalid_argument",
-        f"{node.path()} is {a_or_an(node.type().category().name())} node, not a Cop "
-        "(Copernicus) node.",
-        hint="Pass a node inside a COP network, such as /img/comp1/blend1; camera or "
-        "lop_path capture /obj and stages.",
-    )
-
-
 def render_cop(
     ctx: HostContext, node: Any, frame: float, out_file: str, *, resolution_given: bool = False
 ) -> dict[str, Any]:
@@ -150,6 +124,8 @@ def render_cop(
             hint=f"{hint_tool('geo_info', path=node.path())} reads it; capture an image node "
             "instead.",
         )
+    # D80: a File COP keeps the image it loaded after its file is overwritten.
+    stale = stale_file_notes(node, frame)
     errors: list[str] = []
     with hou.undos.disabler(), muted():
         rop = node.parent().createNode("rop_image", "__hocuspocus_capture__")
@@ -178,12 +154,11 @@ def render_cop(
     info: dict[str, Any] = {
         "scene": "cop",
         "cop_path": node.path(),
-        "source_used": "rop_image",
         "layer": {k: layer[k] for k in ("layer_type", "resolution", "data_window") if k in layer},
     }
     if "other_outputs" in layer:
         info["layer"]["other_outputs"] = [o["name"] for o in layer["other_outputs"]]
-    notes = []
+    notes = list(stale)
     if resolution_given:
         notes.append("resolution is ignored with cop_path: the image is the COP's own size.")
     if notes:
@@ -197,17 +172,6 @@ def cop_size(info: dict[str, Any]) -> tuple[int, int]:
     return int(resolution[0]), int(resolution[1])
 
 
-def capture_cop(ctx: HostContext, parsed: dict[str, Any]) -> dict[str, Any]:
-    """``viewport_capture {cop_path}``: :func:`render_cop` to a PNG under the captures dir,
-    returned like any capture. Main thread."""
-    node = _cop_target(parsed["cop_path"])
-    frame, extra_path, out_file = capture_targets(parsed, ctx)
-    info = render_cop(
-        ctx, node, frame, out_file, resolution_given=bool(parsed.get("resolution_given"))
-    )
-    return finish_capture(out_file, cop_size(info), frame, info, extra_path)
-
-
 def _cop_networks() -> list[str]:
     """COP networks under /img, with their display nodes, for the capture note."""
     import hou
@@ -219,23 +183,6 @@ def _cop_networks() -> list[str]:
             display = cop_display(net)
             found.append(net.path() + (f" (display {display.path()})" if display else ""))
     return found[:3]
-
-
-def _refuse_cop_as(field: str, value: Any) -> None:
-    """A Cop node passed as camera or lop_path: say cop_path (review 18 papercut 1)."""
-    import hou
-
-    if not isinstance(value, str) or not value.startswith("/"):
-        return
-    node = hou.node(value)
-    if node is not None and (is_cop_node(node) or is_cop_network(node)):
-        what = "network" if is_cop_network(node) else "node"
-        raise ToolError(
-            "invalid_argument",
-            f"{node.path()} is a Copernicus {what}, not a "
-            f"{'camera' if field == 'camera' else 'LOP'}.",
-            hint=f"Pass cop_path {node.path()} to capture its image.",
-        )
 
 
 class RopImageBackend(Backend):
@@ -258,7 +205,6 @@ class RopImageBackend(Backend):
 
         info = on_main(ctx, run, job.remaining())
         notes = info.pop("notes", [])
-        info.pop("source_used", None)
         return LookResult(info=info, notes=notes)
 
 

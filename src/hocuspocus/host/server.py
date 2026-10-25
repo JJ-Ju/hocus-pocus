@@ -265,7 +265,7 @@ class _Handler(BaseHTTPRequestHandler):
         if isinstance(body.get("request_id"), str):
             budget["request_id"] = body["request_id"]
         if isinstance(body.get("profile"), str):
-            # The bridge's profile: compat_1x runs the 1.4 tools here (spec-2.0 §8).
+            # The bridge's profile: hints name the tools it serves (BIBLE §9).
             budget["profile"] = body["profile"]
         envelope = self.server.app.call(
             body.get("tool"), body.get("args"), body.get("timeout_s"), **budget

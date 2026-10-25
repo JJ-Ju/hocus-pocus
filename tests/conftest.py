@@ -9,10 +9,9 @@
   ``-m slow`` runs only them (BIBLE §11).
 * Keeps the ``workload`` tier (``tests/workloads``, spec-2.0 §5.2: minutes of scripted
   evaluation workloads against one headless host) out of every run unless
-  ``--runworkloads`` is given or a ``-m`` expression names ``workload``. It has two
-  tiers, the 1.4 workloads (``tests/workloads/test_*.py``, ``1x``) and the same five on
-  the 2.0 tools (``tests/workloads/v2``, ``v2``); ``--workloads v2|1x|all`` (default
-  ``all``) selects.
+  ``--runworkloads`` is given or a ``-m`` expression names ``workload``. Its one tier is
+  the five workloads on the 2.0 tools (``tests/workloads/v2``); 2.1 removed the 1.4 tier
+  (``--workloads 1x``) with ``compat_1x`` and kept its budgets as numbers.
 """
 
 from __future__ import annotations
@@ -86,9 +85,10 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     )
     parser.addoption(
         "--workloads",
-        choices=("all", "v2", "1x"),
+        choices=("all", "v2"),
         default="all",
-        help="workloads: the tier to run, v2 (tests/workloads/v2), 1x (the 1.4 workloads) or all",
+        help="workloads: the tier to run; v2 (tests/workloads/v2) is the only one since 2.1 "
+        "removed the 1.4 tier, so all and v2 are the same",
     )
     parser.addoption(
         "--update-budgets",
@@ -120,14 +120,6 @@ def _wants_workloads(config: pytest.Config) -> bool:
     return bool(config.getoption("--runworkloads")) or "workload" in (config.option.markexpr or "")
 
 
-def _workload_tier(item: pytest.Item) -> str | None:
-    """``v2``, ``1x`` or (not a workload) ``None``."""
-    parts = Path(str(item.fspath)).parts
-    if "workloads" not in parts:
-        return None
-    return "v2" if "v2" in parts[parts.index("workloads") :] else "1x"
-
-
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
     for item in items:
         if "workloads" in Path(str(item.fspath)).parts:
@@ -137,12 +129,6 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
         if heavy:
             config.hook.pytest_deselected(items=heavy)
             items[:] = [item for item in items if "workload" not in item.keywords]
-    tier = config.getoption("--workloads")
-    if tier != "all":
-        other = [item for item in items if _workload_tier(item) not in (None, tier)]
-        if other:
-            config.hook.pytest_deselected(items=other)
-            items[:] = [item for item in items if item not in other]
     if not _wants_slow(config):
         slow = [item for item in items if "slow" in item.keywords]
         if slow:

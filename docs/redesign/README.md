@@ -31,6 +31,10 @@ user documentation is [`README.md`](../../README.md), [`docs/quickstart.md`](../
 | [`review/21-scorecard-1.3.md`](review/21-scorecard-1.3.md) | Friction scorecard re-run: the twelve review 07 tasks, 122 round trips, scored 4/5/5/5/5/5 | 1.3.0 at `32450ef` (`release/1.4`), headless hython | 2026-10-13 | 1.3.0 evaluation record; its papercuts were fixed in 1.4 |
 | [`review/22-soak-1.3.md`](review/22-soak-1.3.md) | Soak test: 616 calls on one session (plus a 614-call pilot) against one headless host; latency drift, memory, leaks | 1.3.0 at `32450ef` (`release/1.4`), headless hython | 2026-10-13 | 1.3.0 evaluation record; its findings were fixed in 1.4 |
 | [`review/23-vellum-usd-eval.md`](review/23-vellum-usd-eval.md) | Workload evaluation: a Vellum cloth cached, exported to USD, re-imported with `sublayer` and rendered with Karma | 1.3.0 at `32450ef` (`release/1.4`), headless hython | 2026-10-13 | 1.3.0 evaluation record; its papercuts were fixed in 1.4 |
+| [`review/27-portability.md`](review/27-portability.md) | Linux and macOS portability audit: paths, pref dirs, install locations, process launch, signals, lifetime, registry, ledger, permissions; findings table and what qualification still needs | `release/2.1` at `b6a5b53` plus stream B, static read and unit tests with a faked `sys.platform` (no Linux or macOS Houdini) | 2026-10-24 | 2.1 audit record; three findings fixed in 2.1 |
+| [`review/25-scorecard-2.0.md`](review/25-scorecard-2.0.md) | Friction scorecard on 2.0: the twelve review 07 tasks on the `core` profile | 2.0 release candidate, headless hython | 2026-10-14 | 2.0 evaluation record |
+| [`review/26-neo-tower-dogfood.md`](review/26-neo-tower-dogfood.md) | Dogfood: a game-ready procedural skyscraper generator (`hp::neo_tower`) built through the MCP tools in three phases (massing, facade and interiors; UVs, textures, LODs, collision and export; silhouettes, grime and lookdev), with call tallies, escapes, friction and an overall assessment | 2.0.0 bridge on `release/2.1`, headless hython, Indie | 2026-10-24 | 2.1 evaluation record; its friction drove streams D1 to D5 |
+| [`review/28-mini-tower-2.0-vs-2.1.md`](review/28-mini-tower-2.0-vs-2.1.md) | The same compact skyscraper-generator brief run by two fresh sessions, one on 2.0.0 and one on 2.1; escapes 7 to 1 | 2.0.0 and `release/2.1` at `c350194`, headless hython, Indie | 2026-10-24 | 2.1 re-run record (plan-2.1 stream D exit) |
 
 Reports 10 to 12 are the post-merge code review, the ergonomics review and the 1.1 city
 rebuild; `plan-1.1.md` and `CHANGELOG.md` 1.1.0 cite them. Reports 13 to 15 are the 1.2
@@ -45,6 +49,10 @@ Reports 21 to 23 are the 1.4 evaluations (`plan-1.4.md` phase 1); each describes
 Report 24 is the Vellum and USD re-run on 1.4 (`CHANGELOG.md` 1.4.0 cites its N-numbered
 findings). Reports 07 to 24 are also the evidence for 2.0: `spec-2.0.md` §0 summarises what
 they measured, and five of them are scripted as the workloads tier (`tests/workloads/`).
+Report 25 is the 2.0 scorecard (`CHANGELOG.md` 2.0.0). Reports 26 to 28 are the 2.1
+evaluations (`plan-2.1.md`): the neo_tower dogfood, the portability audit and the same
+generator brief run on 2.0.0 and on 2.1; `CHANGELOG.md` 2.1.0 lists what was fixed.
+Their images are in `evidence/neo-tower/` and `evidence/mini-tower/`.
 
 ## Other files
 
@@ -59,7 +67,7 @@ they measured, and five of them are scripted as the workloads tier (`tests/workl
 - [`progress.md`](progress.md): one line per milestone event of the redesign, M0 to the
   merge and after, through the 1.1 to 1.4 releases and the 2.0 milestones.
 - [`plan-1.1.md`](plan-1.1.md), [`plan-1.2.md`](plan-1.2.md), [`plan-1.3.md`](plan-1.3.md),
-  [`plan-1.4.md`](plan-1.4.md): the release plans.
+  [`plan-1.4.md`](plan-1.4.md), [`plan-2.1.md`](plan-2.1.md): the release plans.
 - [`evidence/city-destruction/`](evidence/city-destruction/): captures and renders from
   reviews 08 and 09. Each report's evidence table says how each image was made.
   `01`–`03` are from review 08 (building, city overview, street); `10`–`21` are from

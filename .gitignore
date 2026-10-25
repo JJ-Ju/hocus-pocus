@@ -8,3 +8,8 @@ build/
 *.egg-info/
 .hocuspocus/
 .eval*/
+
+# neo_tower dogfood: build scenes, exports, caches and HDA backups are not committed
+examples/neo_tower/work/
+examples/neo_tower/export/
+examples/neo_tower/backup/

@@ -6,7 +6,7 @@ from ._helpers import ToolSpec, _obj, _on_unsaved, _out, _t
 
 SPEC = ToolSpec(
     name="hip_new",
-    profiles=("core", "full", "compat_1x"),
+    profiles=("core", "full"),
     description=(
         "Clear to a new untitled scene; bumps scene_generation. on_unsaved protects unsaved "
         "work: fail returns unsaved_changes, save saves first (an untitled scene needs hip_save"
@@ -17,7 +17,6 @@ SPEC = ToolSpec(
     output_schema=_out(
         {
             "path": _t("string"),
-            "name": _t("string"),
             "dirty": _t("boolean"),
             "is_new": _t("boolean"),
             "saved_first": _t("boolean"),

@@ -1,5 +1,5 @@
 """Running a look: resolve and plan on the main thread, render along the chain, write
-the PNG. Shared by ``look`` and ``viewport_capture`` (which keeps its 1.4 results).
+the PNG, for ``look`` (``host/tools/look.py``).
 
 Threads, as in 1.4: in a GUI session the whole call is one main-thread step (the
 backends render in-process). Headless, :func:`prepare` is one short main-thread step
@@ -19,7 +19,7 @@ from typing import Any
 from hocuspocus.tools.errors import ToolError
 
 from . import select
-from .base import ROP_SOURCE_USED, Env, LookResult, add_notes, on_main
+from .base import Env, LookResult, add_notes, on_main
 from .spec import LookSpec, Prepared
 
 CHILD_BACKENDS = frozenset({"flipbook", "opengl"})
@@ -55,7 +55,7 @@ def prepare(
     target = resolve(spec)
     if spec.kind is None:
         spec.kind = "lop" if target["scene"] == "stage" else "obj"
-    plan = choose(spec, gather_env(ctx, lights=spec.tool == "look" and spec.quality == "lit"))
+    plan = choose(spec, gather_env(ctx, lights=spec.quality == "lit"))
     frame, extra_path, out_file = capture_targets(spec.parsed(), ctx)
     job = Prepared(
         target=target,
@@ -69,14 +69,20 @@ def prepare(
     )
     if plan.chain[0] not in ("viewer", "rop_image"):
         fit = spec.fit
-        if spec.tool == "look" and not spec.fit_given and target.get("focus"):
+        if not spec.fit_given and target.get("focus"):
             fit = "target"
         job.capture, job.info = _capture_spec(target, spec.res, fit, out_file, ctx.scene.generation)
         job.capture["rop_parms"].update(plan.rop_parms)
-        if target.get("display"):
-            job.capture["display"] = list(target["display"])
+        if target.get("isolate"):
+            job.capture["isolate"] = dict(target["isolate"])
         if not ctx.ui and CHILD_BACKENDS & set(plan.chain):
-            job.snapshot = child.snapshot_scene(tmp_dir)
+            # /obj: the child draws the geometry the host cooked (review 26 P2).
+            obj = target["scene"] == "obj"
+            job.snapshot = child.snapshot_scene(
+                tmp_dir,
+                frame=frame if obj else None,
+                isolate=job.capture.get("isolate") if obj else None,
+            )
     return job, plan
 
 
@@ -85,7 +91,7 @@ def run_chain(
 ) -> tuple[str, LookResult, list[str]]:
     """Render along ``chain``: ``(backend used, its result, chain notes)``."""
     table = select.backends()
-    if chain[0] in ("viewer", "rop_image") or (spec.tool == "look" and len(chain) == 1):
+    if chain[0] in ("viewer", "rop_image") or len(chain) == 1:
         return chain[0], table[chain[0]].render(spec, ctx), []
     if not ctx.ui:
         results: dict[str, LookResult] = {}
@@ -100,7 +106,7 @@ def run_chain(
         used, _, notes = select.run_capture_chain(
             list(chain),
             stage=spec.kind == "lop",
-            source=spec.source if spec.tool == "viewport_capture" else "auto",
+            source="auto",
             render_rop=render_rop,
             render_karma=render_karma,
         )
@@ -158,8 +164,3 @@ def execute(
     info.pop("notes", None)
     add_notes(info, *job.info.get("notes", []), *result.info.get("notes", []), *notes)
     return finish(spec, used, plan, info)
-
-
-def source_used(used: str) -> str:
-    """``viewport_capture``'s ``source_used`` for a backend."""
-    return ROP_SOURCE_USED.get(used, used)

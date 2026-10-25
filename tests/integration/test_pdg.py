@@ -9,7 +9,7 @@ import pytest
 hou = pytest.importorskip("hou")
 
 # Every test here builds and most cook a TOP graph: the slow tier (BIBLE §11).
-pytestmark = [pytest.mark.slow, pytest.mark.compat_1x]  # the 1.4 tools (conftest)
+pytestmark = pytest.mark.slow
 
 FAIL_SECOND = (
     "if work_item.index == 1:\n"
@@ -18,9 +18,12 @@ FAIL_SECOND = (
 )
 
 
-SLEEP = "import time\ntime.sleep(8)\n"
+SLEEP = "import time\ntime.sleep(60)\n"
 """Out-of-process items that sleep: cancelling kills them (in-process Python cannot be
-interrupted, so an in-process cook runs its started items to completion)."""
+interrupted, so an in-process cook runs its started items to completion). The sleep is far
+longer than any test needs: each out-of-process item is a process start, so on a loaded
+machine the second item can begin seconds after the first, and a short sleep let the first
+one finish before the test cancelled."""
 
 
 def _graph(script: str = FAIL_SECOND, count: int = 3, cook_type: int = 1):
@@ -58,6 +61,20 @@ def _wait_job(client, job_id: str, timeout: float = 60.0) -> dict:
             return status
         client.host.executor.pump_once(0.05)
     raise AssertionError(f"job {job_id} did not finish in {timeout}s")
+
+
+def _wait_cooking(client, script, count: int = 2, timeout: float = 60.0) -> dict:
+    """Wait until all ``count`` items are cooking, not just one: each out-of-process item
+    is a process start, so on a loaded machine the second is still ``scheduled`` when the
+    first begins cooking."""
+    deadline = time.monotonic() + timeout
+    status: dict = {}
+    while time.monotonic() < deadline:
+        status = client.ok("pdg", {"action": "status", "top_path": script.path()})
+        if status["states"].get("cooking") == count:
+            return status
+        client.host.executor.pump_once(0.05)
+    raise AssertionError(f"{count} items were not all cooking after {timeout}s: {status}")
 
 
 def test_cook_blocking_generator(client):
@@ -178,7 +195,7 @@ def test_cook_block_never_holds_the_main_thread_past_the_timeout(client, where):
     assert envelope["ok"] is True, envelope
     result = envelope["result"]
     assert result["state"] == "running" and result["job_id"], result
-    # The main thread is free right away (a blocking cookWorkItems would hold it ~8 s).
+    # The main thread is free right away (a blocking cookWorkItems would hold it for the whole sleep).
     assert client.ok("pdg", {"action": "status", "top_path": script.path()})["path"]
     assert time.monotonic() - started < 4
     client.ok("job", {"action": "cancel", "job_id": result["job_id"]})
@@ -359,12 +376,7 @@ def test_dirty(client):
 def test_cancel_running_cook(client):
     _, _, script = _graph(SLEEP, count=2, cook_type=2)
     started = client.ok("pdg", {"action": "cook", "top_path": script.path()})
-    deadline = time.monotonic() + 10
-    while time.monotonic() < deadline:
-        status = client.ok("pdg", {"action": "status", "top_path": script.path()})
-        if status["states"].get("cooking"):
-            break
-        client.host.executor.pump_once(0.05)
+    status = _wait_cooking(client, script)
     assert status["cooking"] is True and status["states"] == {"cooking": 2}
     # Review 14 papercut 4: pdg cancel cancels the owning job and returns the state after.
     cancelled = client.ok("pdg", {"action": "cancel", "top_path": script.path()})
@@ -382,13 +394,7 @@ def test_cancel_inside_the_graph_never_reads_as_done(client):
     """A cook whose items were cancelled outside HocusPocus ends cancelled, not done."""
     _, _, script = _graph(SLEEP, count=2, cook_type=2)
     started = client.ok("pdg", {"action": "cook", "top_path": script.path()})
-    deadline = time.monotonic() + 10
-    while time.monotonic() < deadline:
-        if client.ok("pdg", {"action": "status", "top_path": script.path()})["states"].get(
-            "cooking"
-        ):
-            break
-        client.host.executor.pump_once(0.05)
+    _wait_cooking(client, script)
     script.cancelCook()  # e.g. the user pressed the cancel button
     final = _wait_job(client, started["job_id"], timeout=30)
     assert final["state"] == "cancelled", final
@@ -400,13 +406,7 @@ def test_cancel_inside_the_graph_never_reads_as_done(client):
 def test_cancel_via_job(client):
     _, _, script = _graph(SLEEP, count=2, cook_type=2)
     started = client.ok("pdg", {"action": "cook", "top_path": script.path()})
-    deadline = time.monotonic() + 10
-    while time.monotonic() < deadline:
-        if client.ok("pdg", {"action": "status", "top_path": script.path()})["states"].get(
-            "cooking"
-        ):
-            break
-        client.host.executor.pump_once(0.05)
+    _wait_cooking(client, script)
     client.ok("job", {"action": "cancel", "job_id": started["job_id"]})
     final = _wait_job(client, started["job_id"], timeout=30)
     assert final["state"] == "cancelled"

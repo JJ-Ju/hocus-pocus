@@ -3,31 +3,31 @@
   "workloads": {
     "city_build": {
       "calls": 15,
-      "text_bytes": 13916,
+      "text_bytes": 13692,
       "max_call_bytes": 2818,
-      "wall_s": 5.5
+      "wall_s": 5.9
     },
     "fx_cache": {
       "calls": 11,
-      "text_bytes": 7114,
+      "text_bytes": 6306,
       "max_call_bytes": 1345,
-      "wall_s": 3.1
+      "wall_s": 3.3
     },
     "scorecard_twelve": {
       "calls": 48,
-      "text_bytes": 23250,
-      "max_call_bytes": 6469,
-      "wall_s": 9.2
+      "text_bytes": 19497,
+      "max_call_bytes": 4335,
+      "wall_s": 9.3
     },
     "soak_200": {
       "calls": 177,
-      "text_bytes": 68867,
+      "text_bytes": 65752,
       "max_call_bytes": 3087,
-      "wall_s": 23.9
+      "wall_s": 26.5
     },
     "vellum_usd": {
       "calls": 11,
-      "text_bytes": 6063,
+      "text_bytes": 5950,
       "max_call_bytes": 1648,
       "wall_s": 21.1
     }

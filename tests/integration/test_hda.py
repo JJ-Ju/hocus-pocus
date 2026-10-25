@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import pytest
 
-pytestmark = pytest.mark.compat_1x  # the 1.4 tools (conftest: compat_client)
-
 hou = pytest.importorskip("hou")
+
+# The library extension this licence writes (D47: .hdalc on Indie, .hda on Commercial).
+EXT = hou.hda.defaultFileExtension()
 
 
 def _subnet(name: str = "rock"):
@@ -19,7 +20,7 @@ def _subnet(name: str = "rock"):
 def _create(client, tmp_path, name: str, **extra):
     sub = _subnet()
     library = (
-        tmp_path / "otls" / f"{name.split('::')[-2] if '::' in name else name}.hda"
+        tmp_path / "otls" / f"{name.split('::')[-2] if '::' in name else name}{EXT}"
     ).as_posix()
     args = {"action": "create", "path": sub.path(), "name": name, "library_path": library}
     args.update(extra)
@@ -36,7 +37,7 @@ def test_create_save_match_unlock(client, tmp_path):
     assert result["label"] == "Rock"
     assert result["hda_locked"] is False and "locked" not in result
     assert result["undo_label"].startswith("HocusPocus: hda create")
-    assert (tmp_path / "otls" / "rock.hda").is_file()
+    assert (tmp_path / "otls" / f"rock{EXT}").is_file()
     node = hou.node(path)
     assert node.type().definition() is not None
 
@@ -76,10 +77,11 @@ def test_save_promotes_spare_parms(client, tmp_path):
     result, _ = _create(client, tmp_path, "hptest::meteors::1.0")
     path = result["path"]
     client.ok(
-        "node_edit",
+        "edit",
         {
-            "items": [
+            "ops": [
                 {
+                    "op": "node",
                     "path": path,
                     "spare_parms": {
                         "add": [{"name": "speed_scale", "type": "float", "default": 1}]
@@ -132,7 +134,7 @@ def test_create_inputs_and_description(client, tmp_path):
             "action": "create",
             "path": hou.node("/obj/geo1").createNode("subnet", "other").path(),
             "name": "hptest::bad::1.0",
-            "library_path": (tmp_path / "bad.hda").as_posix(),
+            "library_path": (tmp_path / f"bad{EXT}").as_posix(),
             "min_inputs": 3,
             "max_inputs": 1,
         },
@@ -144,7 +146,7 @@ def test_create_inputs_and_description(client, tmp_path):
             "action": "create",
             "path": hou.node("/obj/geo1").createNode("subnet", "third").path(),
             "name": "hptest::bad2::1.0",
-            "library_path": (tmp_path / "bad2.hda").as_posix(),
+            "library_path": (tmp_path / f"bad2{EXT}").as_posix(),
             "label": "A",
             "description": "B",
         },
@@ -161,7 +163,7 @@ def test_create_name_collision(client, tmp_path):
             "action": "create",
             "path": other.path(),
             "name": "hptest::dup::1.0",
-            "library_path": (tmp_path / "dup2.hda").as_posix(),
+            "library_path": (tmp_path / f"dup2{EXT}").as_posix(),
         },
     )
     assert error["code"] == "name_collision"
@@ -190,7 +192,7 @@ def test_create_rejects_non_subnet(client, tmp_path):
             "action": "create",
             "path": box.path(),
             "name": "hptest::boxasset",
-            "library_path": (tmp_path / "b.hda").as_posix(),
+            "library_path": (tmp_path / f"b{EXT}").as_posix(),
         },
     )
     assert error["code"] == "invalid_argument"
@@ -214,7 +216,7 @@ def test_approved_roots(client, host, tmp_path):
             "action": "create",
             "path": sub.path(),
             "name": "hptest::outside",
-            "library_path": (tmp_path / "elsewhere" / "x.hda").as_posix(),
+            "library_path": (tmp_path / "elsewhere" / f"x{EXT}").as_posix(),
         },
     )
     assert error["code"] == "path_not_allowed"
@@ -257,7 +259,7 @@ def test_install_reload_list(client, tmp_path):
 
 def test_install_missing_file(client, tmp_path):
     error = client.error(
-        "hda", {"action": "install", "library_path": (tmp_path / "no.hda").as_posix()}
+        "hda", {"action": "install", "library_path": (tmp_path / f"no{EXT}").as_posix()}
     )
     assert error["code"] == "file_not_found"
     error = client.error(

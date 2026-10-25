@@ -2,7 +2,7 @@
 
 Starts the HTTP listener on a daemon thread, prints one JSON line
 ``{"pid", "port", "token_file"}`` to stdout, then pumps the main-thread executor until
-SIGINT/SIGTERM or ``POST /hp/v1/shutdown``, and exits normally (never ``os._exit``:
+SIGINT/SIGTERM (SIGHUP on POSIX, SIGBREAK on Windows) or ``POST /hp/v1/shutdown``, and exits normally (never ``os._exit``:
 it segfaults hython in PDG teardown). Run it from a neutral working directory: hython
 puts its cwd on ``HOUDINI_PATH``.
 
@@ -21,6 +21,24 @@ import os
 import signal
 import sys
 from typing import Any
+
+SHUTDOWN_SIGNALS = ("SIGINT", "SIGTERM", "SIGHUP", "SIGBREAK")
+"""Signals that stop the host cleanly (registry entry removed, scene left as is). SIGHUP:
+a terminal closing on Linux or macOS would otherwise end hython with no cleanup; SIGBREAK:
+Ctrl+Break on Windows. Each is installed where the platform has it."""
+
+
+def install_signal_handlers(on_signal: Any) -> list[str]:
+    """Install ``on_signal`` for every :data:`SHUTDOWN_SIGNALS` this platform has; returns
+    the names installed."""
+    installed = []
+    for name in SHUTDOWN_SIGNALS:
+        sig = getattr(signal, name, None)
+        if sig is not None:
+            with contextlib.suppress(OSError, ValueError):
+                signal.signal(sig, on_signal)
+                installed.append(name)
+    return installed
 
 
 def _parse(argv: list[str] | None) -> argparse.Namespace:
@@ -112,11 +130,7 @@ def main(argv: list[str] | None = None) -> int:
     def _on_signal(signum: int, frame: Any) -> None:
         host.shutdown_event.set()
 
-    for name in ("SIGINT", "SIGTERM", "SIGBREAK"):
-        sig = getattr(signal, name, None)
-        if sig is not None:
-            with contextlib.suppress(OSError, ValueError):
-                signal.signal(sig, _on_signal)
+    install_signal_handlers(_on_signal)
 
     print(
         json.dumps({"pid": info["pid"], "port": info["port"], "token_file": info["token_file"]}),

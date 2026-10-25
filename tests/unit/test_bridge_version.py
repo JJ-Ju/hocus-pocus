@@ -10,7 +10,7 @@ from typing import Any
 
 import pytest
 
-from hocuspocus.bridge import local_tools
+from hocuspocus.bridge import local_tools, resources
 from hocuspocus.bridge.config import BridgeConfig
 from hocuspocus.bridge.instances import Instance
 from hocuspocus.bridge.launch import LaunchResult
@@ -101,7 +101,8 @@ def test_connect_warns_on_an_older_host(args) -> None:
 @pytest.mark.parametrize("args", [{"pid": GUI.pid}, {"launch": {"mode": "gui"}}])
 def test_connect_is_quiet_on_a_matching_host(args) -> None:
     out = _out(_bridge(Host(__version__)).call_tool("houdini_connect", args))
-    assert out["connected"]["host_version"] == __version__
+    # A host_version equal to the bridge's is left out (2.1, D66).
+    assert "host_version" not in out["connected"]
     assert not any("version_mismatch" in w for w in out.get("warnings", []))
 
 
@@ -114,8 +115,15 @@ def test_another_hp_is_an_error_not_a_warning() -> None:
 
 def test_status_rows_carry_host_version_and_warn() -> None:
     status = _out(_bridge(Host(OLD)).call_tool("houdini_status", {}))
-    assert status["instances"][0]["host_version"] == OLD
+    # The connected row leaves host_version to connected (2.1, D66) ...
+    assert status["connected"]["host_version"] == OLD
+    assert "host_version" not in status["instances"][0]
     assert any(w.startswith("version_mismatch:") for w in status["warnings"])
+    whole = _bridge(Host(OLD))
+    rows = json.loads(resources.read(whole, "houdini://instances").contents[0].text)
+    assert rows["instances"][0]["host_version"] == OLD  # ... houdini://instances keeps it
     matched = _out(_bridge(Host(__version__)).call_tool("houdini_status", {}))
-    assert matched["instances"][0]["host_version"] == __version__
+    # ... and one equal to the bridge's is left out everywhere.
+    assert "host_version" not in matched["connected"]
+    assert "host_version" not in matched["instances"][0]
     assert not any("version_mismatch" in w for w in matched.get("warnings", []))

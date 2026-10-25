@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import pytest
 
-pytestmark = pytest.mark.compat_1x  # the 1.4 tools (conftest: compat_client)
-
 hou = pytest.importorskip("hou")
 
 
@@ -412,7 +410,7 @@ def test_locked_hda_internal_parm_is_refused(client, scene, work_dir):
     assert asset.isLockedHDA()
     err = client.error("parm_set", {"items": [{"path": f"{asset.path()}/inner/sizex", "value": 3}]})
     assert err["code"] == "locked"
-    assert "node_edit" in err["hint"] and asset.path() in err["hint"]
+    assert f'edit {{ops: [{{op: "node", path: "{asset.path()}", lock: false}}]}}' in err["hint"]
     assert "PermissionError" in err["hou_exception"]
     assert asset.node("inner").parm("sizex").eval() == 1.0
     got = _get(client, f"{asset.path()}/inner/sizex")

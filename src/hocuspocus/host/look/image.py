@@ -174,6 +174,17 @@ def encode_png(
             shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
+def image_size(path: str) -> tuple[int, int] | None:
+    """The pixel size of the image file at ``path``, or None when PIL cannot read it."""
+    try:
+        from PIL import Image
+
+        with Image.open(path) as im:
+            return int(im.size[0]), int(im.size[1])
+    except Exception:
+        return None
+
+
 def capture_targets(parsed: dict[str, Any], ctx: HostContext) -> tuple[float, Any, str]:
     """Frame, checked extra path and capture file for one capture. Main thread."""
     import hou
@@ -187,11 +198,43 @@ def capture_targets(parsed: dict[str, Any], ctx: HostContext) -> tuple[float, An
     return frame, extra_path, out_file
 
 
+JPEG_QUALITY = 92
+"""``look {output: .jpg}``'s quality when ``jpeg_quality`` is not given."""
+
+
+def write_copy(out_file: str, target: str, jpeg_quality: int | None = None) -> None:
+    """Copy the flattened capture to ``target``: the PNG as is, or re-encoded as JPEG for
+    a ``.jpg``/``.jpeg`` target (``look {output}``) at ``jpeg_quality`` (2.1, D86; default
+    :data:`JPEG_QUALITY`). Parent directories are created."""
+    try:
+        Path(target).parent.mkdir(parents=True, exist_ok=True)
+        if target.lower().endswith((".jpg", ".jpeg")):
+            from PIL import Image
+
+            with Image.open(out_file) as im:
+                quality = JPEG_QUALITY if jpeg_quality is None else int(jpeg_quality)
+                im.convert("RGB").save(target, format="JPEG", quality=quality)
+        else:
+            shutil.copyfile(out_file, target)
+    except OSError as exc:
+        raise ToolError(
+            "invalid_argument",
+            f"Cannot write the image to {target}: {exc.strerror or exc}.",
+            hint="Pass a writable file path.",
+            detail={"path": out_file},
+        ) from exc
+
+
 def finish_capture(
-    out_file: str, res: tuple[int, int], frame: float, info: dict[str, Any], extra_path: Any
+    out_file: str,
+    res: tuple[int, int],
+    frame: float,
+    info: dict[str, Any],
+    extra_path: Any,
+    jpeg_quality: int | None = None,
 ) -> dict[str, Any]:
     """Flatten the capture onto the inline image's grey, encode it and copy it to
-    ``path``. No ``hou``."""
+    ``extra_path`` (``look``'s ``output``), reported as ``output``. No ``hou``."""
     flatten_png_in_place(out_file)
     image = encode_png(out_file, IMAGE_MAX_SIDE)
     result: dict[str, Any] = {
@@ -204,8 +247,9 @@ def finish_capture(
         **info,
     }
     if extra_path is not None:
-        Path(extra_path).parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(out_file, extra_path)
-        result["also_written"] = extra_path
+        write_copy(out_file, extra_path, jpeg_quality)
+        result["output"] = extra_path
+        with contextlib.suppress(OSError):
+            result["output_bytes"] = os.path.getsize(extra_path)
     prune_captures(Path(out_file).parent)
     return result

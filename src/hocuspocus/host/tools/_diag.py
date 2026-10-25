@@ -11,6 +11,8 @@ import time
 from collections import OrderedDict
 from typing import Any
 
+from .readers import note_cooked
+
 SLOW_COOK_MS = 2000.0
 """A node whose last cook through HocusPocus took longer is never force-cooked implicitly."""
 
@@ -185,6 +187,7 @@ def collect_problems(node: Any, *, cook: bool = False, force: bool = False) -> d
         stale = _has_stale_errors(node)
         do_force = force or (stale and refreshable and not is_slow(node))
         elapsed, exc = timed_cook(node, do_force)
+        note_cooked(node)  # D80: what a File COP loaded, the first time it is seen
         if exc is None:
             out["cook_state"] = "cooked"
         else:
@@ -242,8 +245,8 @@ def missing_node_error(path: str, *, message: str | None = None, exclude: Any = 
     """The one ``node_not_found`` for ``path`` (review 21 papercut 4): ``candidates`` are
     near-miss children of the missing node's parent (never ``exclude``, such as the node
     being wired), and the hint names the node search on that parent (``search {kind:
-    "nodes", root}``, ``node_find`` on ``compat_1x``), or on the nearest ancestor that
-    exists when the parent is missing too."""
+    "nodes", root}``), or on the nearest ancestor that exists when the parent is missing
+    too."""
     import difflib
 
     import hou

@@ -22,12 +22,13 @@ from __future__ import annotations
 import contextlib
 import difflib
 import math
+import os
 import re
 from collections.abc import Iterator
 from typing import Any
 
 from hocuspocus.tools.errors import ToolError
-from hocuspocus.tools.migration import BARE, hint_tool, is_compat
+from hocuspocus.tools.migration import BARE, hint_tool
 
 from ._common import (
     arg_bool,
@@ -52,12 +53,17 @@ VALUE_FIELDS = (
     "multiparm_count",
     "revert_to_default",
     "press",
+    "patch",
+    "value_file",
 )
 ITEM_KEYS = frozenset((*VALUE_FIELDS, "path", "language", "animation"))
 _FLAG_FIELDS = ("revert_to_default", "press")
 """Value fields that act only when ``true``; ``false``, ``0`` or null mean "not given"."""
 ANIMATION_MODES = ("replace", "key", "keep")
 LANGUAGES = ("hscript", "python")
+VALUE_FILE_MAX_BYTES = 8 * 1024 * 1024
+"""The largest ``value_file`` a set reads (a VEX or Python snippet is kilobytes)."""
+PATCH_KEYS = frozenset(("find", "replace", "all"))
 MENU_ITEMS_LIMIT = 50
 MULTIPARM_INSTANCES_LIMIT = 20
 CANDIDATES_LIMIT = 8
@@ -230,6 +236,22 @@ ICON_MARKUP = re.compile(r"^!\[[^\]]*\]\s*")
 def menu_label(label: str) -> str:
     """A menu label without its leading icon markup (review 18 papercut 9)."""
     return ICON_MARKUP.sub("", label) if label.startswith("![") else label
+
+
+def template_conditionals(template: Any) -> dict[str, str]:
+    """A parm template's conditionals as the ``spare_parms`` fields name them
+    (``disable_when``, ``hide_when``; ``no_cook_when`` too): ``{"disable_when": "{ a == 0
+    }"}``, empty when it has none (2.1, D82: reads showed neither, r21 friction 5)."""
+    out: dict[str, str] = {}
+    try:
+        conditions = template.conditionals()
+    except Exception:
+        return out
+    for kind, text in conditions.items():
+        name = re.sub(r"(?<!^)(?=[A-Z])", "_", str(kind).rsplit(".", 1)[-1]).lower()
+        if text and str(text).strip():
+            out[name] = str(text).strip()
+    return dict(sorted(out.items()))
 
 
 def _range(template: Any, kind: str) -> dict[str, Any]:
@@ -408,9 +430,64 @@ def _hda_locked(parm: Any) -> bool:
 
 def _menu_items(parm: Any) -> tuple[list[str], list[str]] | None:
     try:
-        return list(parm.menuItems()), [menu_label(label) for label in parm.menuLabels()]
+        return _read_menu(parm)
     except Exception:
         return None
+
+
+def _read_menu(parm: Any) -> tuple[list[str], list[str]]:
+    """``(tokens, labels)`` of ``parm``'s menu: a VOP asset's signatures from its
+    definition (:func:`vop_signatures`), else what Houdini evaluates. Raises when the
+    menu cannot be read."""
+    signatures = vop_signatures(parm)
+    if signatures is not None:
+        return signatures
+    return list(parm.menuItems()), [menu_label(label) for label in parm.menuLabels()]
+
+
+_SIGNATURE_LINE = re.compile(r'^\s*signature\s+"((?:[^"\\]|\\.)*)"\s+(\S+)', re.MULTILINE)
+_SIGNATURES: dict[tuple[str, str, float], tuple[list[str], list[str]] | None] = {}
+
+
+def vop_signatures(parm: Any) -> tuple[list[str], list[str]] | None:
+    """``(tokens, labels)`` of an asset's ``signature`` parm as its definition's
+    DialogScript lists them (``signature "Color (FA)" color3FA { ... }``), or None for any
+    other parm. The menu Houdini evaluates on a MaterialX VOP holds only ``default`` and
+    the signatures already chosen on the node (review 26 P2 friction 7), and Houdini sets
+    any text silently, so the definition is the list to check a value against (D68)."""
+    try:
+        if parm.name() != "signature":
+            return None
+        node_type = parm.node().type()
+    except Exception:
+        return None
+    return type_signatures(node_type)
+
+
+def type_signatures(node_type: Any) -> tuple[list[str], list[str]] | None:
+    """:func:`vop_signatures` for a node type: what ``inspect {what: "type"}`` lists for the
+    ``signature`` menu, so the reference and the check of a value agree. None when the
+    type has no asset definition or its DialogScript lists no signature."""
+    try:
+        definition = node_type.definition()
+        if definition is None:
+            return None
+        key = (
+            node_type.nameWithCategory(),
+            str(definition.libraryFilePath()),
+            float(definition.modificationTime()),
+        )
+    except Exception:
+        return None
+    if key not in _SIGNATURES:
+        found: tuple[list[str], list[str]] | None = None
+        with contextlib.suppress(Exception):
+            text = definition.sections()["DialogScript"].contents()
+            pairs = _SIGNATURE_LINE.findall(text)
+            if pairs:
+                found = [token for _label, token in pairs], [label for label, _ in pairs]
+        _SIGNATURES[key] = found
+    return _SIGNATURES[key]
 
 
 def _menu_dict(parm: Any, token: Any) -> dict[str, Any] | None:
@@ -547,6 +624,7 @@ def _describe_parm(
     if full:
         out["locked"] = locked
         out["hda_locked"] = _hda_locked(parm)
+        out.update(template_conditionals(template))
         if "keys" in include:
             out["keyframes"] = (
                 {"count": keys["count"], "first": keys["first"], "last": keys["last"]}
@@ -626,6 +704,7 @@ def _describe_tuple(
     if full:
         out["locked"] = locked
         out["hda_locked"] = _hda_locked(parms[0])
+        out.update(template_conditionals(template))
         if "keys" in include:
             out["keyframes"] = {
                 name: {"count": i["count"], "first": i["first"], "last": i["last"]}
@@ -638,18 +717,21 @@ def _describe_tuple(
     return out
 
 
-def summarize_parm(parm_or_tuple: Any, *, frame: float | None = None) -> dict[str, Any]:
+def summarize_parm(
+    parm_or_tuple: Any, *, frame: float | None = None, full_strings: bool = False
+) -> dict[str, Any]:
     """Compact ``{name, value, raw?, expression?, language?, keyed?, locked?, menu_token?,
     is_default}`` for a ``hou.Parm`` or ``hou.ParmTuple``.
 
     A tuple gives lists for ``value``/``raw``, ``expressions: {component: {expression,
     language}}`` and ``keyed: [component names]``. ``raw`` is left out when it equals
-    ``value``; strings over 200 characters are ``{elided, head}``.
+    ``value``; strings over 200 characters are ``{elided, head}`` unless
+    ``full_strings`` (``inspect what: node``, 2.1).
     """
     target = _normalize(parm_or_tuple)
     if _is_tuple(target):
-        return _describe_tuple(target, frame=frame, include=None)
-    return _describe_parm(target, frame=frame, include=None)
+        return _describe_tuple(target, frame=frame, include=None, full_strings=full_strings)
+    return _describe_parm(target, frame=frame, include=None, full_strings=full_strings)
 
 
 # -- resolving --------------------------------------------------------------------
@@ -828,16 +910,76 @@ def _check_range(parm: Any, kind: str, value: float) -> None:
         )
 
 
+MENU_ALL_ITEMS = 50
+"""A menu with at most this many items gives every token as ``candidates`` (2.1, D72:
+``subnetconnector``'s ``parmtype`` has 44, and the 20 listed missed the one meant)."""
+MENU_CANDIDATES = 20
+"""Tokens a larger menu gives, the nearest to the value first."""
+MENU_HINT_ITEMS = 10
+"""``token (label)`` pairs the hint shows, the nearest first."""
+_WORDS = re.compile(r"[^a-z0-9]+")
+
+
+def _similarity(value: str, text: str) -> float:
+    """How close ``text`` (a menu token or label) is to ``value``, 0..1: equal, a whole
+    word of it, a word's prefix, a substring, then the edit-distance ratio."""
+    text = text.lower().strip()
+    if not text or not value:
+        return 0.0
+    if text == value:
+        return 1.0
+    words = [w for w in _WORDS.split(text) if w]
+    if value in words:
+        return 0.95
+    if any(w.startswith(value) for w in words):
+        return 0.9
+    if value in text:
+        return 0.85
+    ratio = 0.8 * difflib.SequenceMatcher(None, value, text).ratio()
+    if len(text) >= 3 and text in value:  # "poly" in "polymsh": by how much it covers
+        return max(ratio, 0.6 + 0.2 * len(text) / len(value))
+    return ratio
+
+
+def rank_menu(value: Any, items: list[str], labels: list[str]) -> list[int]:
+    """Indices of ``items``, the nearest to ``value`` by token or label first (2.1, D72):
+    ``volume`` puts ``atmosphere`` (``Volume (shader)``) first. Ties keep menu order. No
+    ``hou``."""
+    wanted = str(value).lower().strip()
+
+    def score(i: int) -> float:
+        label = labels[i] if i < len(labels) else ""
+        return max(_similarity(wanted, items[i]), _similarity(wanted, label))
+
+    return sorted(range(len(items)), key=lambda i: (-score(i), i))
+
+
+def menu_choices(value: Any, items: list[str], labels: list[str]) -> tuple[list[str], str]:
+    """``(candidates, shown)`` for a value a menu does not hold: every token when the menu
+    has at most :data:`MENU_ALL_ITEMS`, else the :data:`MENU_CANDIDATES` nearest, ranked by
+    :func:`rank_menu` either way; ``shown`` the nearest ``token (label)`` pairs for the
+    hint, with the item count when it shows fewer. No ``hou``."""
+    order = rank_menu(value, items, labels) if isinstance(value, str) else list(range(len(items)))
+    keep = order if len(items) <= MENU_ALL_ITEMS else order[:MENU_CANDIDATES]
+    pairs = [
+        f"{items[i]} ({labels[i]})" if i < len(labels) and labels[i] != items[i] else items[i]
+        for i in keep[:MENU_HINT_ITEMS]
+    ]
+    shown = ", ".join(pairs)
+    if len(items) > len(pairs):
+        nearest = "nearest first" if isinstance(value, str) else "in menu order"
+        listed = "all" if len(keep) == len(items) else f"the {len(keep)} nearest"
+        shown += f" ({nearest}; {len(items)} items, candidates lists {listed})"
+    return [items[i] for i in keep], shown
+
+
 def _resolve_menu(parm: Any, kind: str, value: Any, notes: list[str]) -> tuple[str, int]:
     """Return ``(token, index)`` for a token, label or index on a strict menu."""
     try:
-        items = list(parm.menuItems())
-        labels = [menu_label(label) for label in parm.menuLabels()]
+        items, labels = _read_menu(parm)
     except Exception as exc:
         raise _invalid(parm, kind, f"Cannot read the menu of {parm.path()}.") from exc
-    shown = ", ".join(
-        f"{t} ({labels[i]})" if i < len(labels) else t for i, t in enumerate(items[:20])
-    )
+    candidates, shown = menu_choices(value, items, labels)
     if isinstance(value, str):
         if value in items:
             return value, items.index(value)
@@ -856,7 +998,7 @@ def _resolve_menu(parm: Any, kind: str, value: Any, notes: list[str]) -> tuple[s
             kind,
             f"'{value}' is not a menu item of {parm.path()}.",
             hint=f"Use a token or label: {shown}",
-            candidates=items[:20],
+            candidates=candidates,
         )
     if _is_number(value) and float(value).is_integer():
         index = int(value)
@@ -868,7 +1010,7 @@ def _resolve_menu(parm: Any, kind: str, value: Any, notes: list[str]) -> tuple[s
             kind,
             f"Menu index {index} is out of range for {parm.path()} ({len(items)} items).",
             hint=f"Use a token or label: {shown}",
-            candidates=items[:20],
+            candidates=candidates,
         )
     raise _invalid(
         parm,
@@ -1116,6 +1258,19 @@ NO_CALLBACK = (
 )
 
 
+def _press(node: Any, parm: Any) -> dict[str, Any] | None:
+    """Press ``parm`` (run its callback), except in an ``edit`` check (a dry run, or the
+    ops after a failing one: BIBLE D56), where nothing that compensation cannot take back
+    may run; the checks before the press (a callback exists) have passed by then."""
+    from ..tx import checking
+
+    if checking():
+        return None
+    from .visual import press_button  # lazy: visual imports hou-heavy helpers
+
+    return press_button(node, parm)
+
+
 def _apply(
     node: Any,
     target: Any,
@@ -1123,9 +1278,11 @@ def _apply(
     *,
     frame: float | None,
     callback_note: str = CALLBACK_NOTE,
+    ctx: Any = None,
 ) -> dict[str, Any]:
     """Apply one ``parm_set`` item. Returns the item result (without node problems).
-    ``callback_note`` is the note for a plain set of a callback menu or toggle."""
+    ``callback_note`` is the note for a plain set of a callback menu or toggle; ``ctx``
+    (the host context) checks a ``value_file`` against ``approved_roots``."""
     import hou
 
     from .events import note_explicit  # lazy: events imports nodes, which imports this
@@ -1161,6 +1318,7 @@ def _apply(
     key_frame = frame if frame is not None else hou.frame()
     count_keys_as_written = True
     pressed: dict[str, Any] | None = None
+    text_from: dict[str, Any] = {}
     if press_after:
         single = _require_single(target, "press", path)
         if not has_callback(single):
@@ -1210,11 +1368,19 @@ def _apply(
                     if _is_number(raw_value):
                         _note_override(parm, new, frame, notes)
             if press_after:
-                from .visual import press_button
-
-                pressed = press_button(node, parms[0])
+                pressed = _press(node, parms[0])
             elif len(parms) == 1 and skips_callback(parms[0]):
                 notes.append(callback_note.format(name=parms[0].name()))
+        elif field in ("patch", "value_file"):
+            parm = string_target(target, field, path)
+            if field == "patch":
+                text, lines = apply_patch(parm.unexpandedString(), item["patch"], path)
+                text_from = {"patched_lines": lines}
+            else:
+                source, text = read_value_file(item["value_file"], ctx)
+                text_from = {"value_file": source}
+            parm.set(text)
+            count_keys_as_written = False
         elif field == "expression":
             parm = _require_single(target, "expression", path)
             expression = item["expression"]
@@ -1325,9 +1491,7 @@ def _apply(
             kind = _kind(parm.parmTemplate())
             if kind != "button" and not has_callback(parm):
                 raise _invalid(parm, kind, NO_CALLBACK.format(path=path, kind=kind))
-            from .visual import press_button  # lazy: visual imports hou-heavy helpers
-
-            pressed = press_button(node, parm)  # verifies a save button's files (review 17)
+            pressed = _press(node, parm)  # verifies a save button's files (review 17)
             count_keys_as_written = False
     except ToolError:
         raise
@@ -1350,10 +1514,150 @@ def _apply(
             for key in ("value", "raw", "is_default"):  # a button has no value (review 17)
                 result.pop(key, None)
         result.update(pressed)
+    result.update(text_from)
     result["wrote_keyframe"] = wrote
     if notes:
         result["notes"] = notes
     return result
+
+
+# -- long strings: patch and value_file (review 26 P1 friction 2) --------------------------
+
+
+def string_target(target: Any, field: str, path: str) -> Any:
+    """The single string parm ``patch`` or ``value_file`` writes, holding plain text."""
+    parm = _require_single(target, field, path)
+    kind = _kind(parm.parmTemplate())
+    if kind != "string":
+        raise _invalid(parm, kind, f"{path} is a {kind} parm; {field} writes string parms.")
+    if parm.keyframes():
+        raise _invalid(
+            parm,
+            kind,
+            f"{path} has keyframes or an expression; {field} edits plain text.",
+            hint="Replace it with value (animation: replace) first.",
+        )
+    return parm
+
+
+def patch_edits(spec: Any) -> list[dict[str, Any]]:
+    """``patch`` as a list of ``{find, replace, all?}``; one object is a list of one."""
+    edits = [spec] if isinstance(spec, dict) else spec
+    if not isinstance(edits, list) or not edits:
+        raise ToolError(
+            "invalid_argument",
+            "patch is {find, replace} or a list of them.",
+            hint="Each find must occur exactly once (all: true replaces every occurrence); "
+            "edits apply in order.",
+        )
+    for i, edit in enumerate(edits):
+        where = f"patch[{i}]" if isinstance(spec, list) else "patch"
+        if not isinstance(edit, dict) or set(edit) - PATCH_KEYS or "find" not in edit:
+            raise ToolError(
+                "invalid_argument", f"{where} is {{find, replace, all?}}; got {edit!r:.120}."
+            )
+        if not isinstance(edit["find"], str) or not edit["find"]:
+            raise ToolError("invalid_argument", f"{where}.find must be non-empty text.")
+        if not isinstance(edit.get("replace", ""), str):
+            raise ToolError("invalid_argument", f"{where}.replace must be text.")
+        if not isinstance(edit.get("all", False), bool):
+            raise ToolError("invalid_argument", f"{where}.all is true or false.")
+    return edits
+
+
+def _line_of(text: str, offset: int) -> int:
+    return text.count("\n", 0, offset) + 1
+
+
+def _clip_line(line: str, limit: int = 120) -> str:
+    line = line.strip()
+    return line if len(line) <= limit else line[: limit - 3] + "..."
+
+
+def apply_patch(text: str, spec: Any, path: str) -> tuple[str, list[int]]:
+    """``text`` with every edit of ``patch`` applied in order, and the line each edit
+    starts on. A ``find`` that does not occur exactly once (or at all, with ``all``) is
+    ``invalid_value`` naming the nearest lines as candidates, and nothing is written."""
+    edits = patch_edits(spec)
+    lines: list[int] = []
+    for i, edit in enumerate(edits):
+        where = f"patch[{i}]" if isinstance(spec, list) else "patch"
+        find, replace = edit["find"], edit.get("replace", "")
+        count = text.count(find)
+        if count == 1 or (count > 1 and edit.get("all")):
+            lines.append(_line_of(text, text.index(find)))
+            text = (
+                text.replace(find, replace) if edit.get("all") else text.replace(find, replace, 1)
+            )
+            continue
+        raise _patch_mismatch(text, find, count, where, path)
+    return text, lines
+
+
+def _patch_mismatch(text: str, find: str, count: int, where: str, path: str) -> ToolError:
+    if count > 1:
+        starts, at = [], text.find(find)
+        while at >= 0 and len(starts) < 10:
+            starts.append(_line_of(text, at))
+            at = text.find(find, at + 1)
+        return ToolError(
+            "invalid_value",
+            f"{where}.find occurs {count} times in {path} (lines "
+            f"{', '.join(map(str, starts))}{', ...' if count > len(starts) else ''}).",
+            hint="Add surrounding text so find occurs once, or pass all: true to replace "
+            "every occurrence.",
+            detail={"occurrences": count, "lines": starts},
+        )
+    rows = text.split("\n")
+    first = next((ln.strip() for ln in find.split("\n") if ln.strip()), find.strip())
+    stripped = [ln.strip() for ln in rows]
+    close = difflib.get_close_matches(first, stripped, n=3, cutoff=0.5)
+    candidates = []
+    for line in close:
+        number = stripped.index(line) + 1
+        candidates.append(f"line {number}: {_clip_line(rows[number - 1])}")
+    squash = re.compile(r"\s+")
+    hint = (
+        "find matches when whitespace is ignored: copy the text exactly (tabs, spaces, line ends)."
+        if squash.sub(" ", find).strip() in squash.sub(" ", text)
+        else "find must be the parm's current text, exactly; read it with full_strings."
+    )
+    return ToolError(
+        "invalid_value",
+        f"{where}.find does not occur in {path} ({len(text)} characters, {len(rows)} lines).",
+        hint=hint,
+        candidates=candidates,
+    )
+
+
+def read_value_file(raw: Any, ctx: Any) -> tuple[str, str]:
+    """``(path, text)`` of a ``value_file``: ``$HIP`` and ``~`` expanded, checked against
+    ``approved_roots``, read as UTF-8 text (universal newlines)."""
+    from .hip import check_allowed
+    from .hip import resolve_path as resolve_file
+
+    path = resolve_file(raw, field="value_file")
+    if ctx is not None:
+        check_allowed(path, ctx)
+    if not os.path.isfile(path):
+        raise ToolError(
+            "file_not_found",
+            f"No file at {path} (value_file).",
+            hint="value_file is a text file on the machine Houdini runs on; $HIP and ~ expand.",
+        )
+    size = os.path.getsize(path)
+    if size > VALUE_FILE_MAX_BYTES:
+        raise ToolError(
+            "invalid_value",
+            f"{path} is {size} bytes; value_file reads at most {VALUE_FILE_MAX_BYTES}.",
+        )
+    try:
+        with open(path, encoding="utf-8") as handle:
+            return path, handle.read()
+    except UnicodeDecodeError as exc:
+        raise ToolError(
+            "invalid_value", f"{path} is not UTF-8 text ({exc.reason} at byte {exc.start})."
+        ) from exc
 
 
 def _snapshot(target: Any) -> Any:
@@ -1416,7 +1720,8 @@ def locked_error(node: Any, target: Any, exc: BaseException | None = None) -> To
         return ToolError(
             "locked",
             f"{path} is inside the locked HDA {asset}.",
-            hint=f"Call {hint_tool('node_edit', path=asset, lock=False)} to allow editing its "
+            hint=f"Call {hint_tool('node_edit', path=asset, lock=False)} "
+            "(allowEditingOfContents) to allow editing its "
             f"contents{' (or use the hda tool)' if hint_tool('hda') else ''}, then retry.",
             hou_exception=hou_exc,
         )
@@ -1523,7 +1828,6 @@ def set_parm_items(
     parm's keys, expression or value are snapshotted before it is set and restored when
     the call fails; ``frame`` is ``parm_set``'s.
     """
-    del ctx  # part of the shared signature; nothing here needs host state
     if not isinstance(parms, dict):
         raise ToolError("invalid_argument", "parms must be an object {name: value}.")
     results: list[dict[str, Any]] = []
@@ -1535,7 +1839,9 @@ def set_parm_items(
                 from ..tx import _checked
 
                 rollback.add(_checked(_snapshot(target)))
-            results.append(_apply(node, target, item, frame=frame, callback_note=callback_note))
+            results.append(
+                _apply(node, target, item, frame=frame, callback_note=callback_note, ctx=ctx)
+            )
         except ToolError as exc:
             if exc.message.startswith(f"parms.{name}:"):
                 raise
@@ -1560,7 +1866,6 @@ def _paths_arg(args: dict[str, Any]) -> list[str]:
     return paths
 
 
-@tool("parm_get")
 def parm_get(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     paths = _paths_arg(args)
     frame = _frame_arg(args.get("frame"))
@@ -1626,27 +1931,7 @@ def parm_set(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     return out
 
 
-# -- spare parms (node_edit spare_parms; review 11 B9) -----------------------------------
-
-SPARE_TYPES = ("float", "int", "string", "toggle", "menu", "button", "vector", "color")
-SPARE_KEYS = frozenset(
-    (
-        "name", "type", "label", "default", "size", "min", "max", "menu_items", "value_type",
-        "folder", "help",
-    )
-)  # fmt: skip
-MENU_VALUE_TYPES = ("string", "int")
-"""``value_type`` of a spare ``menu`` (review 12 papercut 3). ``string`` (default) is a
-``hou.MenuParmTemplate``: ``chs()`` gives the token and ``ch()`` the item index. ``int`` is a
-``hou.IntParmTemplate`` with the menu: ``ch()``/``chi()`` give the item index and
-``parm_get`` reports the index as the value (``chs()`` gives the index as text, not the
-token). Verified on 22.0.466."""
-_PARM_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-SPARE_HINT = (
-    "spare_parms is {add: [{name, type: " + "|".join(SPARE_TYPES) + ", label?, default?, "
-    "size?, min?, max?, menu_items?: [{token, label}], value_type?: string|int (menus), "
-    "folder?, help?}], remove: [names]}."
-)
+# -- hints (the spare parm engine is spare.py) -------------------------------------------
 
 
 def spare_parms_hint() -> str:
@@ -1656,13 +1941,8 @@ def spare_parms_hint() -> str:
 
 def expression_hint() -> str:
     """How to pass an expression where a number was expected (``invalid_value``), as the
-    call's profile names it: the ``expression`` field of a ``set`` op on 2.0 (review 25
-    papercut 1), of a ``parm_set`` item on ``compat_1x``."""
-    if is_compat():
-        return (
-            "For an expression use the expression field in parm_set, or "
-            f"{EXPRESSION_SPELLINGS} as the value in node_create parms."
-        )
+    call's profile names it: the ``expression`` field of a ``set`` op (review 25 papercut
+    1)."""
     return (
         "For an expression pass the expression field of a set op ("
         f"{hint_tool('parm_set', path=BARE, expression=BARE)}), or {EXPRESSION_SPELLINGS} "
@@ -1672,287 +1952,3 @@ def expression_hint() -> str:
 
 """Appended to ``parm_not_found`` on nodes that hold controls (null, subnet, geo)."""
 CONTROL_NODE_TYPES = frozenset(("null", "subnet", "geo"))
-
-
-def _spare_bad(message: str) -> ToolError:
-    return ToolError("invalid_argument", message, hint=SPARE_HINT)
-
-
-def _spare_values(default: Any, kind: str, size: int, where: str) -> tuple[Any, ...]:
-    """Default values of a float/int/string/vector/color spare parm, one per component."""
-    if default is None:
-        fill: Any = 1.0 if kind == "color" else "" if kind == "string" else 0
-        values = [fill] * size
-    else:
-        values = default if isinstance(default, list) else [default]
-        if len(values) == 1 and size > 1:
-            values = values * size
-    if len(values) != size:
-        raise ToolError(
-            "invalid_value", f"{where}: default has {len(values)} values; size is {size}."
-        )
-    if kind == "string":
-        if not all(isinstance(v, str) for v in values):
-            raise ToolError("invalid_value", f"{where}: a string default must be text.")
-        return tuple(values)
-    if not all(_is_number(v) for v in values):
-        raise ToolError("invalid_value", f"{where}: a {kind} default must be numbers.")
-    if kind == "int":
-        if not all(float(v).is_integer() for v in values):
-            raise ToolError("invalid_value", f"{where}: an int default must be whole numbers.")
-        return tuple(int(v) for v in values)
-    return tuple(float(v) for v in values)
-
-
-def _spare_default(spec: dict[str, Any], kind: str, size: int, where: str) -> Any:
-    default = spec.get("default")
-    if kind == "button":
-        if default is not None:
-            raise _spare_bad(f"{where}: a button takes no default.")
-        return None
-    if kind == "toggle":
-        if default is not None and not isinstance(default, bool):
-            raise ToolError("invalid_value", f"{where}: a toggle default is true or false.")
-        return bool(default)
-    if kind == "menu":
-        return _spare_menu_default(default, [i["token"] for i in spec["menu_items"]], where)
-    return _spare_values(default, kind, size, where)
-
-
-def _spare_menu_default(default: Any, tokens: list[str], where: str) -> int:
-    """The item index a menu default names: a token, or a number. A whole number is the
-    index; one that is no index but equals a token's text (``-1`` for token ``"-1"``) is
-    that token."""
-    if default is None:
-        return 0
-    if isinstance(default, str) and default in tokens:
-        return tokens.index(default)
-    if _is_number(default) and float(default).is_integer():
-        if 0 <= default < len(tokens):
-            return int(default)
-        if str(int(default)) in tokens:
-            return tokens.index(str(int(default)))
-    raise ToolError(
-        "invalid_value",
-        f"{where}: default {default!r} is neither a menu token nor an item index.",
-        hint=f"Tokens: {', '.join(tokens)}; or an index from 0 to {len(tokens) - 1}.",
-    )
-
-
-def _spare_template(spec: Any, where: str) -> tuple[str, Any, str | None]:
-    """Validate one ``add`` entry; return ``(name, hou.ParmTemplate, folder label)``."""
-    import hou
-
-    if not isinstance(spec, dict):
-        raise _spare_bad(f"{where} must be an object.")
-    unknown = set(spec) - SPARE_KEYS
-    if unknown:
-        raise _spare_bad(f"{where}: unexpected keys {sorted(unknown)}.")
-    name = spec.get("name")
-    if not isinstance(name, str) or not _PARM_NAME.match(name):
-        raise _spare_bad(f"{where}: {name!r} is not a parm name (letters, digits and _).")
-    kind = spec.get("type")
-    if kind not in SPARE_TYPES:
-        raise _spare_bad(f"{where}: type must be one of {', '.join(SPARE_TYPES)}; got {kind!r}.")
-    label = spec.get("label", name)
-    folder = spec.get("folder")
-    help_text = spec.get("help")
-    for key, value in (("label", label), ("folder", folder), ("help", help_text)):
-        if value is not None and not isinstance(value, str):
-            raise _spare_bad(f"{where}: {key} must be a string.")
-    size = spec.get("size", 3 if kind in ("vector", "color") else 1)
-    if isinstance(size, bool) or not isinstance(size, int) or not 1 <= size <= 4:
-        raise _spare_bad(f"{where}: size must be an integer from 1 to 4.")
-    if size != 1 and kind in ("toggle", "menu", "button"):
-        raise _spare_bad(f"{where}: a {kind} has size 1.")
-    low, high = spec.get("min"), spec.get("max")
-    for key, value in (("min", low), ("max", high)):
-        if value is not None and (kind not in ("float", "int", "vector") or not _is_number(value)):
-            raise _spare_bad(f"{where}: {key} is a number, for float, int and vector parms.")
-    if low is not None and high is not None and low > high:
-        raise _spare_bad(f"{where}: min {low} is above max {high}.")
-    items = spec.get("menu_items")
-    if kind == "menu":
-        if (
-            not isinstance(items, list)
-            or not items
-            or not all(isinstance(i, dict) and isinstance(i.get("token"), str) for i in items)
-        ):
-            raise _spare_bad(f"{where}: a menu needs menu_items: [{{token, label}}, ...].")
-    elif items is not None:
-        raise _spare_bad(f"{where}: menu_items is for type menu.")
-    value_type = spec.get("value_type", "string")
-    if kind != "menu" and "value_type" in spec:
-        raise _spare_bad(f"{where}: value_type is for type menu.")
-    if value_type not in MENU_VALUE_TYPES:
-        raise _spare_bad(f"{where}: value_type must be string or int; got {value_type!r}.")
-    default = _spare_default(spec, kind, size, where)
-    if kind in ("float", "vector", "color"):
-        extra: dict[str, Any] = {}
-        if kind == "vector":
-            extra["naming_scheme"] = hou.parmNamingScheme.XYZW
-        elif kind == "color":
-            extra["naming_scheme"] = hou.parmNamingScheme.RGBA
-            extra["look"] = hou.parmLook.ColorSquare
-        template = hou.FloatParmTemplate(
-            name,
-            label,
-            size,
-            default_value=default,
-            min=0.0 if low is None else float(low),
-            max=(10.0 if kind == "vector" else 1.0) if high is None else float(high),
-            **extra,
-        )
-    elif kind == "int":
-        template = hou.IntParmTemplate(
-            name,
-            label,
-            size,
-            default_value=default,
-            min=0 if low is None else int(low),
-            max=10 if high is None else int(high),
-        )
-    elif kind == "string":
-        template = hou.StringParmTemplate(name, label, size, default_value=default)
-    elif kind == "toggle":
-        template = hou.ToggleParmTemplate(name, label, default_value=default)
-    elif kind == "menu" and value_type == "int":
-        template = hou.IntParmTemplate(
-            name,
-            label,
-            1,
-            default_value=(default,),
-            menu_items=tuple(i["token"] for i in items),
-            menu_labels=tuple(str(i.get("label") or i["token"]) for i in items),
-        )
-    elif kind == "menu":
-        template = hou.MenuParmTemplate(
-            name,
-            label,
-            tuple(i["token"] for i in items),
-            menu_labels=tuple(str(i.get("label") or i["token"]) for i in items),
-            default_value=default,
-        )
-    else:
-        template = hou.ButtonParmTemplate(name, label)
-    if help_text:
-        template.setHelp(help_text)
-    return name, template, folder
-
-
-def plan_spare_parms(node: Any, spec: Any) -> dict[str, Any]:
-    """Validate ``node_edit``'s ``spare_parms`` against ``node`` without changing it."""
-    if not isinstance(spec, dict) or not spec or set(spec) - {"add", "remove"}:
-        raise _spare_bad("spare_parms must be an object with add and/or remove.")
-    adds = spec.get("add") or []
-    removes = spec.get("remove") or []
-    if not isinstance(adds, list) or not isinstance(removes, list):
-        raise _spare_bad("spare_parms add and remove must be lists.")
-    if not all(isinstance(n, str) and n for n in removes):
-        raise _spare_bad("spare_parms.remove lists parm names.")
-    remove_tuples: list[Any] = []
-    for name in removes:
-        target = node.parm(name) or node.parmTuple(name)
-        if target is None:
-            raise parm_not_found(node, name)
-        ptuple = target.tuple() if isinstance(target, _parm_class()) else target
-        if not ptuple.isSpare():
-            raise _spare_bad(
-                f"{node.path()}/{ptuple.name()} belongs to the {node.type().name()} type; only "
-                "spare parms can be removed."
-            )
-        if all(t.name() != ptuple.name() for t in remove_tuples):
-            remove_tuples.append(ptuple)
-    removing = {t.name() for t in remove_tuples} | {p.name() for t in remove_tuples for p in t}
-    templates = []
-    seen: set[str] = set()
-    for i, entry in enumerate(adds):
-        name, template, folder = _spare_template(entry, f"spare_parms.add[{i}]")
-        if name in seen:
-            raise _spare_bad(f"spare_parms.add[{i}]: {name!r} is added twice.")
-        seen.add(name)
-        if (node.parm(name) or node.parmTuple(name)) is not None and name not in removing:
-            raise ToolError(
-                "name_collision",
-                f"{node.path()} already has a parm {name!r}.",
-                hint="Pick another name, or remove that spare parm in the same call.",
-            )
-        templates.append((name, template, folder))
-    return {"add": templates, "remove": remove_tuples}
-
-
-def _parm_class() -> Any:
-    import hou
-
-    return hou.Parm
-
-
-def apply_spare_parms(node: Any, plan: dict[str, Any], rollback: Any) -> dict[str, Any]:
-    """Apply a :func:`plan_spare_parms` plan with ``setParmTemplateGroup``. On rollback the
-    old template group comes back, and so do the removed parms' values."""
-    import hou
-
-    before = node.parmTemplateGroup()
-    saved = []
-    for ptuple in plan["remove"]:
-        for parm in ptuple:
-            with contextlib.suppress(Exception):
-                keys = tuple(parm.keyframes())
-                saved.append((parm.name(), keys, None if keys else _plain_value(parm)))
-
-    def restore() -> None:
-        node.setParmTemplateGroup(before)
-        for name, keys, value in saved:
-            parm = node.parm(name)
-            if parm is not None and keys:
-                parm.setKeyframes(keys)
-            elif parm is not None and value is not None:
-                parm.set(value)
-
-    group = node.parmTemplateGroup()
-    removed = []
-    for ptuple in plan["remove"]:
-        group.remove(ptuple.name())
-        removed.append(f"{node.path()}/{ptuple.name()}")
-    for _name, template, folder in plan["add"]:
-        if folder:
-            if group.findFolder(folder) is None:
-                group.append(hou.FolderParmTemplate(_folder_name(folder), folder))
-            group.appendToFolder(folder, template)
-        else:
-            group.append(template)
-    try:
-        node.setParmTemplateGroup(group)
-    except hou.PermissionError as exc:
-        raise ToolError(
-            "locked",
-            f"Cannot change the parms of {node.path()}: {hou_message(exc)}",
-            hint=f"Unlock the asset with "
-            f"{hint_tool('node_edit', path=node.path(), lock=False)} first.",
-            hou_exception=hou_exception_text(exc),
-        ) from exc
-    except hou.Error as exc:
-        raise ToolError(
-            "invalid_argument",
-            f"Houdini refused the spare parms on {node.path()}: {hou_message(exc)}",
-            hint=SPARE_HINT,
-            hou_exception=hou_exception_text(exc),
-        ) from exc
-    rollback.add(restore)
-    return {"added": [f"{node.path()}/{name}" for name, _t, _f in plan["add"]], "removed": removed}
-
-
-def _plain_value(parm: Any) -> Any:
-    kind = _kind(parm.parmTemplate())
-    if kind in ("button", "folder", "label", "data"):
-        return None
-    if kind == "string":
-        return parm.unexpandedString()
-    if kind == "ramp":
-        return parm.evalAsRamp()
-    return parm.eval()
-
-
-def _folder_name(label: str) -> str:
-    stem = re.sub(r"[^A-Za-z0-9_]", "_", label).strip("_").lower() or "folder"
-    return f"hp_{stem}"

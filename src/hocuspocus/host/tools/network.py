@@ -1,9 +1,9 @@
-"""Network tools: ``network_describe`` and ``network_build`` over Houdini's ``hou.data`` format.
+"""Networks in Houdini's ``hou.data`` format: the read and the build.
 
-See docs/BIBLE.md §4.4, §5.10 and decision D6. ``network_describe`` returns
-``childrenAsData(...)`` trimmed for agents; ``network_build`` validates the same shape
-(:func:`prepare_build`) and applies it with ``setChildrenFromData`` as one ``build`` op of
-the transaction engine (``host/tx.py``).
+See docs/BIBLE.md §4.4, §5.10 and decision D6. :func:`network_describe` (the 1.4 tool's
+engine, run by ``inspect what: network`` and ``what: outline``) returns
+``childrenAsData(...)`` trimmed for agents; the ``edit`` ``build`` op validates the same
+shape (:func:`prepare_build`) and applies it with ``setChildrenFromData`` (``host/tx.py``).
 
 Verified against 22.0.466 (and why validation is ours, not Houdini's):
 
@@ -31,15 +31,12 @@ from typing import Any
 from hocuspocus.tools.errors import ToolError
 from hocuspocus.tools.migration import BARE, hint_tool
 
-from .. import tx
 from . import nodes as N
-from .registry import HostContext, tool
+from .registry import HostContext
 
 SPECIAL_TYPES = frozenset({"StickyNote", "NetworkDot", "NetworkBox", "SubnetIndirectInput"})
 ON_COLLISION = ("error", "rename", "replace")
 TAG_KEY = "hocuspocus:tag"
-CHANGED_KEY = "_changed"
-"""Result marker the dispatcher reads (``host/dispatch.py``): False means nothing changed."""
 MAX_PROBLEMS = 20
 
 
@@ -55,8 +52,7 @@ def data_hint() -> str:
 
 
 def type_parms_call(node_type: Any) -> str | None:
-    """The read that lists ``node_type``'s parms (``inspect {what: "type", target}`` on
-    2.0, ``node_type_info {type}`` on ``compat_1x``)."""
+    """The read that lists ``node_type``'s parms (``inspect {what: "type", target}``)."""
     try:
         name = f"{node_type.category().name()}/{node_type.name()}"
     except Exception:
@@ -376,7 +372,6 @@ def _outline(
     return result
 
 
-@tool("network_describe")
 def network_describe(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     root = N.get_node(args.get("root"), field="root")
     fmt = args.get("format", "data") or "data"
@@ -1062,49 +1057,3 @@ def prepare_build(parent: Any, args: dict[str, Any]) -> dict[str, Any]:
         "mode": mode,
         "tag": tag,
     }
-
-
-@tool("network_build")
-def network_build(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
-    parent = N.get_node(args.get("parent"), field="parent")
-    prep = prepare_build(parent, args)
-    if prep["dry_run"]:
-        out: dict[str, Any] = {
-            "parent": parent.path(),
-            "dry_run": True,
-            "plan": prep["plan"],
-            "node_count": len(prep["plan"]),
-        }
-        if prep["renamed"]:
-            out["renamed"] = prep["renamed"]
-        if prep["replaced"]:
-            out["replaces"] = [f"{parent.path().rstrip('/')}/{n}" for n in prep["replaced"]]
-        if prep["warnings"]:
-            out["warnings"] = prep["warnings"]
-        out[CHANGED_KEY] = False  # a dry run changes nothing: no undo step, no dirty
-        return out
-    plan = tx.Plan([tx.Op("build", args, opts={"prep": prep})], raw_errors=True)
-    data = tx.execute(plan, ctx).results[0].data
-    mode = prep["mode"]
-    top_nodes = data["top_nodes"]
-    N.watch_nodes(data["made"])
-    base = parent.path().rstrip("/")
-    result: dict[str, Any] = {
-        "parent": parent.path(),
-        "dry_run": False,
-        "created": [n.path() for n in top_nodes],
-        "created_count": len(data["made"]),
-        "nodes": [
-            N.summary_block(n) if mode == "summary" else N.mutation_block(n) for n in top_nodes
-        ],
-    }
-    if mode == "summary":
-        N.collapse_problems(result["nodes"])
-    if data["renamed"]:
-        result["renamed"] = {f"{base}/{k}": f"{base}/{v}" for k, v in data["renamed"].items()}
-    if data["replaced"]:
-        result["replaced"] = [f"{base}/{n}" for n in data["replaced"]]
-    for key in ("warnings", "pressed", "side_effects", "notes"):
-        if data[key]:
-            result[key] = data[key]
-    return result

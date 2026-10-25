@@ -32,9 +32,9 @@ from typing import Any
 from hocuspocus.tools.errors import ToolError
 from hocuspocus.tools.migration import hint_tool
 
-from ._common import DEFAULT_LIMIT, bad_arg, get_node, page
+from ._common import DEFAULT_LIMIT, bad_arg, get_node, glob_alternatives, page
 from ._diag import a_or_an, collect_problems
-from .registry import HostContext, tool
+from .registry import HostContext
 
 INCLUDE = ("attributes", "xform", "bindings", "layers")
 HIDDEN_PRIMS = frozenset({"/HoudiniLayerInfo"})
@@ -49,6 +49,10 @@ COUNT_CAP = 100_000
 """``total`` and ``summary`` stop counting here and say ``total_capped``."""
 STRING_CAP = 200
 LAYER_CAP = 50
+TARGET_CAP = 8
+"""Targets listed per relationship before ``targets_total`` is set."""
+SUBSET_CAP = 16
+"""GeomSubsets listed per prim before ``subsets_total`` is set."""
 _IDENTITY = ((1.0, 0.0, 0.0, 0.0), (0.0, 1.0, 0.0, 0.0), (0.0, 0.0, 1.0, 0.0), (0.0, 0.0, 0.0, 1.0))
 
 
@@ -68,11 +72,11 @@ def _attribs(args: dict[str, Any]) -> list[str] | None:
     value = args.get("attribs")
     if value is None:
         return None
-    if not isinstance(value, str) or not value.replace("|", "").strip():
+    if not isinstance(value, str) or not glob_alternatives(value):
         raise bad_arg(
             "'attribs' must be a non-empty glob such as inputs:* or focalLength|xformOp*."
         )
-    return [part.strip() for part in value.split("|") if part.strip()]
+    return glob_alternatives(value)
 
 
 MAX_DEPTH = 16
@@ -365,6 +369,61 @@ def _attributes(
     return rows, len(attrs) > ATTR_CAP
 
 
+def _relationships(prim: Any, patterns: list[str] | None = None) -> list[dict[str, Any]]:
+    """Authored relationships (``material:binding``, ``proxyPrim``, a light's
+    ``light:filters``) as ``{name, targets}``, filtered like the attributes (2.1, D84: an
+    ``attribs`` read showed primvars and never the bindings, r21 friction 6)."""
+    rows = []
+    for rel in prim.GetRelationships():
+        name = rel.GetName()
+        if not rel.HasAuthoredTargets():
+            continue
+        if patterns is not None and not any(fnmatch.fnmatchcase(name, p) for p in patterns):
+            continue
+        targets = [str(t) for t in rel.GetTargets()]
+        row: dict[str, Any] = {"name": name, "targets": targets[:TARGET_CAP]}
+        if len(targets) > TARGET_CAP:
+            row["targets_total"] = len(targets)
+        rows.append(row)
+        if len(rows) >= ATTR_CAP:
+            break
+    return rows
+
+
+def _subsets(prim: Any, time: Any) -> tuple[list[dict[str, Any]], int]:
+    """A geometry prim's GeomSubsets (per-face materials, face groups) as ``{name, faces,
+    family?, element_type?, material?}``, ``material`` the one each subset is bound to
+    (2.1, D84), and how many it has in all."""
+    from pxr import UsdGeom, UsdShade
+
+    imageable = UsdGeom.Imageable(prim)
+    if not imageable:
+        return [], 0
+    try:
+        subsets = UsdGeom.Subset.GetAllGeomSubsets(imageable)
+    except Exception:
+        return [], 0
+    rows = []
+    for subset in subsets[:SUBSET_CAP]:
+        row: dict[str, Any] = {"name": subset.GetPrim().GetName()}
+        with contextlib.suppress(Exception):
+            row["faces"] = len(subset.GetIndicesAttr().Get(time) or ())
+        with contextlib.suppress(Exception):
+            family = subset.GetFamilyNameAttr().Get()
+            if family:
+                row["family"] = str(family)
+        with contextlib.suppress(Exception):
+            element = subset.GetElementTypeAttr().Get()
+            if element and element != "face":
+                row["element_type"] = str(element)
+        with contextlib.suppress(Exception):
+            material, _rel = UsdShade.MaterialBindingAPI(subset.GetPrim()).ComputeBoundMaterial()
+            if material:
+                row["material"] = str(material.GetPath())
+        rows.append(row)
+    return rows, len(subsets)
+
+
 def _xform(prim: Any, time: Any, cache: Any) -> dict[str, Any] | None:
     from pxr import UsdGeom
 
@@ -410,6 +469,9 @@ def prim_row(
         row["attributes"], truncated = _attributes(prim, time, attribs)
         if truncated:
             row["attributes_truncated"] = True
+        relationships = _relationships(prim, attribs)
+        if relationships:
+            row["relationships"] = relationships
     if "xform" in include:
         xform = _xform(prim, time, cache)
         if xform is not None:
@@ -418,6 +480,12 @@ def prim_row(
         material = _binding(prim)
         if material:
             row["material"] = material
+    if include & {"attributes", "bindings"} and prim.GetTypeName() != "GeomSubset":
+        subsets, total = _subsets(prim, time)
+        if subsets:
+            row["subsets"] = subsets
+            if total > len(subsets):
+                row["subsets_total"] = total
     return row
 
 
@@ -653,7 +721,6 @@ def _at_frame(frame: float | None) -> Iterator[None]:
             hou.setFrame(previous)
 
 
-@tool("usd_stage")
 def usd_stage(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
     import hou
     from pxr import Usd, UsdGeom

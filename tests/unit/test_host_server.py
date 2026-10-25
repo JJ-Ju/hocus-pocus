@@ -505,39 +505,93 @@ def test_a_minimal_host_refuses_tools_outside_minimal(stack):
 
 
 @pytest.mark.parametrize("profile", ["minimal", "core", "full"])
-def test_a_2x_host_refuses_a_removed_1x_tool_with_its_replacement(stack, profile):
-    """spec-2.0 §8: a 1.4 tool 2.0 removed names its 2.0 replacement on every 2.0 profile."""
+def test_a_host_refuses_a_removed_1x_tool_with_its_replacement(stack, profile):
+    """BIBLE §3.2, §13: a 1.4 tool 2.1 removed answers invalid_argument naming its 2.0
+    replacement on every profile, from the migration table, before any lookup (the fake
+    registry here still has geo_read and geo_info, as a stale host might)."""
     dispatcher, ctx = stack["dispatcher"], stack["ctx"]
     ctx.config.profile = profile
     error = dispatcher.call("geo_read", {})["error"]
     assert error["code"] == "invalid_argument"
-    assert error["message"] == (
-        f"geo_read is a 1.4 tool that the 2.0 {profile} profile does not serve."
-    )
-    assert error["hint"].startswith("In 2.0 use inspect what: geo with rows: true.")
-    assert 'profile = "compat_1x"' in error["hint"]
-    assert error["detail"]["replacement"] == "inspect what: geo with rows: true"
+    assert error["message"] == "geo_read is a 1.4 tool; HocusPocus 2.1 removed it."
+    assert error["hint"].startswith("Use inspect what: geo with rows: true.")
+    assert "docs/migration-2.0.md" in error["hint"] and "compat_1x" not in error["hint"]
+    assert error["detail"] == {
+        "tool": "geo_read",
+        "replacement": "inspect what: geo with rows: true",
+        "profile": profile,
+    }
 
 
-@pytest.mark.parametrize("profile", ["minimal", "core", "full"])
-def test_a_compat_1x_bridge_runs_the_1x_tools_on_any_host(stack, profile):
-    """spec-2.0 §8: the bridge sends its profile; a compat_1x call runs every 1.4 tool (and
-    the 2.0 ones) whatever the host's own profile, over HTTP as in process."""
+@pytest.mark.parametrize("client_profile", [None, "full", "compat_1x"])
+def test_a_removed_tool_is_refused_whatever_profile_the_call_carries(stack, client_profile):
+    """2.1: the envelope's profile no longer widens what a host runs (a 2.0.x compat_1x
+    bridge's calls are refused like any other), over HTTP as in process."""
     dispatcher, ctx = stack["dispatcher"], stack["ctx"]
-    ctx.config.profile = profile
-    for tool in ("geo_read", "pdg", "inspect"):
-        assert dispatcher.call(tool, {}, profile="compat_1x")["ok"] is True, tool
-    assert dispatcher.call("geo_read", {}, profile="full")["ok"] is False  # only compat widens
-    _, body = _request(
-        stack["server"], "POST", "/hp/v1/call", {"tool": "geo_info", "profile": "compat_1x"}
-    )
-    assert body["ok"] is True, body
-    _, body = _request(stack["server"], "POST", "/hp/v1/call", {"tool": "geo_info"})
+    ctx.config.profile = "full"
+    for tool in ("geo_read", "geo_info"):
+        envelope = dispatcher.call(tool, {}, profile=client_profile)
+        assert envelope["ok"] is False and envelope["error"]["code"] == "invalid_argument"
+    assert dispatcher.call("pdg", {}, profile=client_profile)["ok"] is True
+    call = {"tool": "geo_info", **({"profile": client_profile} if client_profile else {})}
+    _, body = _request(stack["server"], "POST", "/hp/v1/call", call)
     assert body["ok"] is False and "inspect what: geo" in body["error"]["hint"]
 
 
-def test_a_compat_1x_host_runs_every_tool(stack):
-    dispatcher, ctx = stack["dispatcher"], stack["ctx"]
-    ctx.config.profile = "compat_1x"
-    for tool in ("geo_read", "pdg", "inspect", "time"):
-        assert dispatcher.call(tool, {})["ok"] is True, tool
+class _OffMainExecutor(InlineExecutor):
+    """Runs work inline but reports the caller as off Houdini's main thread (a request)."""
+
+    def on_main_thread(self):
+        return False
+
+
+def _after_dispatcher(executor, groups):
+    from hocuspocus.host.dispatch import AFTER_KEY, after_allowed
+
+    seen = []
+
+    def later(args, ctx):
+        seen.append(("work", after_allowed()))
+
+        def after(result, remaining):
+            seen.append(("after", remaining > 0, list(groups)))
+            if args.get("boom"):
+                raise RuntimeError("cook step lost")
+            return {**result, "cooked": True}
+
+        return {"done": True, AFTER_KEY: after}
+
+    @contextlib.contextmanager
+    def fake_group(label):
+        groups.append(label)
+        yield
+        groups.append("closed")
+
+    ctx = HostContext(
+        config=HostConfig(),
+        executor=executor,
+        logger=logging.getLogger("test"),
+        scene=SceneState(generation=1),
+        jobs=CallJobManager(executor),
+        undo=UndoHistory(),
+    )
+    tool = HostTool("later", later, read_only=False)
+    return Dispatcher(ctx, {"later": tool}.get, undo_group=fake_group), seen
+
+
+def test_an_after_step_runs_once_the_main_thread_work_is_over():
+    """BIBLE D58: edit's cooks run after its undo group closed, on the request's thread."""
+    groups: list[str] = []
+    dispatcher, seen = _after_dispatcher(_OffMainExecutor(), groups)
+    envelope = dispatcher.call("later", {}, timeout_s=30)
+    assert envelope["ok"] and envelope["result"] == {"done": True, "dirty": True, "cooked": True}
+    assert seen == [("work", True), ("after", True, ["HocusPocus: later", "closed"])]
+    failed = dispatcher.call("later", {"boom": True}, timeout_s=30)
+    assert failed["ok"] and "cooked" not in failed["result"]  # the work stands
+    assert "cook step lost" in failed["result"]["notes"][0]
+
+
+def test_an_inline_call_may_not_wait_on_main_thread_jobs():
+    dispatcher, seen = _after_dispatcher(InlineExecutor(), [])
+    dispatcher.call("later", {}, timeout_s=30)
+    assert seen[0] == ("work", False)
