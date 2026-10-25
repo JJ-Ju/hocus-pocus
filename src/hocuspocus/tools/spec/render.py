@@ -28,6 +28,10 @@ SPEC = ToolSpec(
         "outputs, a thumbnail and notes; else job_id to poll with job."
     ),
     notes=(
+        "A ROP writes images with its own format options, and a Karma ROP has no JPEG "
+        "quality parm; for a JPEG of a chosen size, look {target: <the ROP>, quality: "
+        "final, output: <file>.jpg, jpeg_quality} renders through the ROP's camera and "
+        "samples (2.1, D86). "
         "Above 5 outputs the result, inline or from job result, has outputs_summary and "
         "outputs_sample (the first 2 and last 2) instead of outputs; the summary is {count, "
         "pattern, missing_count}, its first and last being the sample's ends (2.1, D67), while a "

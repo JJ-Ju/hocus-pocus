@@ -80,7 +80,9 @@ def _finish(spec: LookSpec, used: str, plan: select.Plan, info: dict[str, Any]) 
         out["notes"] = notes
     # output (2.1): the flattened capture at its rendered size, also written there (PNG
     # or JPEG); the image is still returned inline (BIBLE §8: never only a path).
-    return finish_capture(job.out_file, size, job.frame, out, job.extra_path)
+    return finish_capture(
+        job.out_file, size, job.frame, out, job.extra_path, jpeg_quality=spec.jpeg_quality
+    )
 
 
 LOOK_JOB_TIMEOUT_S = 3600.0
