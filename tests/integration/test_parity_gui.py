@@ -841,6 +841,53 @@ def test_selection_names_the_panes_it_moves(gui: GuiSession) -> None:
     client.python(PANES_TO_OBJ)
 
 
+def test_edit_cooks_after_the_call_in_the_gui(gui: GuiSession) -> None:
+    """BIBLE D56, D58 in the GUI: a dry run leaves the hip clean, the selection and the
+    panes where they were; a real edit's cook runs as event-loop job steps after the call
+    and its rows still carry the node's errors."""
+    client = gui.client
+    _scene(client)
+    client.python(PANES_TO_OBJ)
+    panes = client.python(PANES)
+    selected = client.python("[n.path() for n in hou.selectedNodes()]")
+    client.ok("hip_save", {"path": (gui.work_dir / "d58.hip").as_posix()})
+    dry = client.ok(
+        "edit",
+        {
+            "ops": [
+                {"op": "create", "parent": "/obj/box_geo", "type": "sphere", "name": "s"},
+                {"op": "select", "paths": ["/obj/box_geo/s"]},
+            ],
+            "dry_run": True,
+        },
+    )
+    assert [row["op"] for row in dry["plan"]] == ["create", "select"]
+    time.sleep(1.0)  # several idle ticks: a pane follow would have happened by now
+    assert _dirty(client) == {"dirty": False, "dirty_source": None}  # before any python
+    assert client.python("[c.name() for c in hou.node('/obj/box_geo').children()]") == ["box1"]
+    assert client.python(PANES) == panes
+    assert client.python("[n.path() for n in hou.selectedNodes()]") == selected
+    result = client.ok(
+        "edit",
+        {
+            "ops": [
+                {
+                    "op": "create",
+                    "parent": "/obj/box_geo",
+                    "type": "attribwrangle",
+                    "name": "w",
+                    "inputs": [{"from": "box1"}],
+                    "parms": {"snippet": "@P.y += nosuchfunction();"},
+                }
+            ]
+        },
+    )
+    (row,) = [r for r in result["nodes"] if r["path"] == "/obj/box_geo/w"]
+    assert row["errors"] and row.get("cook_state") == "error"
+    assert "job_id" not in result
+    client.ok("hip_new", {"on_unsaved": "discard"})
+
+
 STUB_PROBE = """
 import hdefereval
 import hocuspocus.host.modal as _m

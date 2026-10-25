@@ -2,7 +2,7 @@
 
 2.1 keeps the 2.0 tool contract. Most clients need no change. This page lists what a 2.0
 client script or prompt can notice, in the order it is most likely to matter. The full
-list is in `CHANGELOG.md` under 2.1.0, and the reasons are decisions D45 to D67 in
+list is in `CHANGELOG.md` under 2.1.0, and the reasons are decisions D45 to D68 in
 `docs/BIBLE.md`.
 
 ## 1. Removed: `compat_1x`, the `v2` alias and the 1.4 tools
@@ -53,8 +53,21 @@ Each dropped field was a default, a null, or a copy of a field that stays.
   skipped is in `inactive` (D53).
 - **`inspect` options** that only shape the answer are ignored with a note when a `what`
   does not take them, where 2.0 answered `invalid_argument` (D51).
-- **`edit` validation** and `dry_run` refuse what the run would: wrong value types,
-  menus and ranges, sets inside a locked asset, a `patch` that does not match (D49).
+- **`edit` checks each op by running it** after the earlier ones (D56). An op may now
+  depend on what an earlier op of the same call did (an unlock, a multiparm count, a
+  rename, a new node's outputs), and `dry_run` refuses exactly what the run would: it runs
+  the ops in check mode and takes them back, so its `plan` paths are the names Houdini
+  really gives (`transform1`, where 2.0 predicted `xform1`). A dry run of a large build
+  now takes tens of milliseconds instead of a few, and in a GUI session it may set
+  Houdini's own modified flag (not `dirty`). In a dry run and after a failing op a
+  `press` runs no callback, so a callback's effects are not checked.
+- **`edit` errors name the key the caller sent** (`ops[0].path` for an op given `path`).
+  A misspelt parm on a create hints the new node's own parm (`Did you mean size?`).
+- **`edit` cooks after the change** (D58). Rows still carry the errors of each touched
+  node, but a cook that outlasts `job_threshold_s` (10 s) no longer holds the call: its
+  rows say `cook_state: "cooking"` and the result adds `job_id`, `state: "running"` and a
+  `message`; `job {action: result, job_id}` returns those rows. A client that read
+  `state` only on `cook` and `render` results should read it on `edit` too.
 - **`hda create` and `save`** refuse a library whose extension does not match the
   licence: `.hdalc` on Indie, `.hdanc` on Apprentice and Education, `.hda` on
   Commercial. The error names the corrected path.
@@ -68,6 +81,14 @@ Each dropped field was a default, a null, or a copy of a field that stays.
 - `edit` `set` takes `patch: [{find, replace}]` and `value_file` for long VEX and Python
   parms. `inspect {full_strings: true}` reads them back whole.
 - `path` names the node of every `edit` op. The 2.0 keys still work.
+- `edit {partial: "stop"}` keeps the ops before the first failure and runs none after it;
+  the result says `applied` (D57). Resend `ops[applied:]` with their `$id`s replaced by
+  the result's `ids`.
+- Inside a subnet, `connect {from: <the subnet>, from_output: i}` wires the subnet's own
+  input `i` (D59).
+- `edit` flags `material` (VOPs: what a Material Library LOP imports), `unload` and
+  `export`; a MaterialX VOP's `signature` takes every signature its definition lists
+  (D68).
 - `look {output}` saves the picture to a file.
 - `inspect {what: "guide"}` and `inspect {what: "tool", target}` read the guide and a
   tool's reference without an MCP resource reader.

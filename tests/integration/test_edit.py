@@ -241,13 +241,14 @@ def test_dry_run_changes_nothing_and_returns_resolved_paths(v2_client, host):
         "type": "box",
         "predicted": True,
     }
-    assert plan[1]["path"] == "/obj/terrain/xform1"
-    assert plan[2]["from"] == "/obj/terrain/box2" and plan[2]["to"] == "/obj/terrain/xform1"
-    assert plan[3]["path"] == "/obj/terrain/xform1/ty"
+    # The name Houdini really gives (D56: the 2.0 validator predicted xform1).
+    assert plan[1]["path"] == "/obj/terrain/transform1"
+    assert plan[2]["from"] == "/obj/terrain/box2" and plan[2]["to"] == "/obj/terrain/transform1"
+    assert plan[3]["path"] == "/obj/terrain/transform1/ty"
     assert plan[4] == {
         "op": "node",
         "path": "/obj/terrain/lift",
-        "old_path": "/obj/terrain/xform1",
+        "old_path": "/obj/terrain/transform1",
     }
     assert plan[5]["path"] == "/obj/terrain/lift/tx"
     assert [c.name() for c in hou.node("/obj/terrain").children()] == ["box1"]

@@ -49,7 +49,10 @@ NODE_INFO_SECTIONS = (
 )  # fmt: skip
 DEFAULT_INCLUDE = ("parms", "inputs", "errors", "flags")
 FLAG_NAMES = ("display", "render", "bypass", "template", "locked")
-SETTABLE_FLAGS = ("display", "render", "bypass", "template")
+SETTABLE_FLAGS = ("display", "render", "bypass", "template", "material", "unload", "export")
+"""Flags ``edit`` sets (2.1, D68 adds ``material`` on VOPs, which a Material Library LOP
+needs, ``unload`` on SOPs and CHOPs, ``export`` on CHOPs and COPs); a node without the
+setter refuses the flag with the ones it has."""
 NAME_RE = re.compile(r"^[A-Za-z0-9_.\-]+$")
 CHILDREN_LIST_LIMIT = 200
 
@@ -65,7 +68,18 @@ _FLAG_SETTERS = {
     "render": "setRenderFlag",
     "bypass": "bypass",
     "template": "setTemplateFlag",
+    "material": "setMaterialFlag",
+    "unload": "setUnloadFlag",
+    "export": "setExportFlag",
 }
+_SET_FLAG_GETTERS = {
+    **{k: v for k, v in _FLAG_GETTERS.items() if k != "locked"},
+    "material": "isMaterialFlagSet",
+    "unload": "isUnloadFlagSet",
+    "export": "isExportFlagSet",
+}
+"""The getter of every settable flag (rollback restores them); reads report
+:data:`FLAG_NAMES` only."""
 
 
 # -- generic helpers --------------------------------------------------------------
@@ -362,11 +376,24 @@ def check_flags(node: Any, flags: Any) -> None:
         if not isinstance(value, bool):
             raise bad_arg(f"Flag {name!r} must be a boolean.")
         if not callable(getattr(node, _FLAG_SETTERS[name], None)):
-            have = ", ".join(sorted(node_flags(node))) or "none"
+            have = ", ".join(
+                n for n in SETTABLE_FLAGS if callable(getattr(node, _FLAG_SETTERS[n], None))
+            )
             raise bad_arg(
                 f"{node.path()} ({node.type().category().name()}) has no {name} flag.",
-                hint=f"Flags on this node: {have}.",
+                hint=f"Flags this node takes: {have or 'none'}.",
             )
+
+
+def flag_state(node: Any, names: Iterable[str]) -> dict[str, bool]:
+    """The current value of each settable flag in ``names`` that ``node`` has."""
+    out: dict[str, bool] = {}
+    for name in names:
+        getter = getattr(node, _SET_FLAG_GETTERS.get(name, ""), None)
+        if callable(getter):
+            with contextlib.suppress(Exception):
+                out[name] = bool(getter())
+    return out
 
 
 def set_flags(node: Any, flags: Any) -> None:
@@ -833,12 +860,18 @@ def batch_error(
     return error
 
 
+_PARM_PREFIX = re.compile(r"^(parms\.[^\s:]+)(?: on /\S*)?: (.*)$", re.DOTALL)
+
+
 def _op_error(
     index: int, path: Any, error: ToolError, rolled_back: bool | None, op: dict[str, Any]
 ) -> ToolError:
     """:func:`batch_error` for an ``edit`` op."""
     field = _op_field(op, error)
     message = error.message
+    parm = _PARM_PREFIX.match(message)
+    if parm and field in (None, "parms"):  # set_parm_items' "parms.<name> on <node>: ..."
+        field, message = parm.group(1), parm.group(2)
     legacy = f"items[{index}]"
     if message.startswith(legacy):  # a validator's own "items[i].type must be ..."
         rest = message[len(legacy) :]
@@ -953,7 +986,9 @@ def check_output_index(src: Any, output: Any) -> int:
 
 
 def connect(dest: Any, index: int | str, src: Any, output: int, rollback: Rollback | None) -> int:
-    """Wire ``src``:``output`` into ``dest`` at ``index`` (or the next free input)."""
+    """Wire ``src``:``output`` into ``dest`` at ``index`` (or the next free input). ``src``
+    may be a subnet's indirect input (``hou.SubnetIndirectInput``, D59), whose network is
+    the subnet ``dest`` sits in."""
     import hou
 
     if src is not None and src.parent() != dest.parent():
@@ -962,7 +997,7 @@ def connect(dest: Any, index: int | str, src: Any, output: int, rollback: Rollba
             f"{src.path()} and {dest.path()} are in different networks.",
             hint="Connect nodes that share a parent; use an object_merge SOP to bring geometry across networks.",
         )
-    previous = {c.inputIndex(): (c.inputNode(), c.outputIndex()) for c in dest.inputConnections()}
+    previous = {c.inputIndex(): _input_source(c) for c in dest.inputConnections()}
     try:
         if index == "next":
             if src is None:
@@ -990,6 +1025,15 @@ def connect(dest: Any, index: int | str, src: Any, output: int, rollback: Rollba
         else:
             rollback.add(lambda: dest.setInput(used, old[0], old[1]))
     return used
+
+
+def _input_source(conn: Any) -> tuple[Any, int]:
+    """``(item, output index)`` feeding a connection: a node, or a subnet's indirect
+    input (``inputNode()`` is None for those)."""
+    try:
+        return conn.inputItem(), conn.inputItemOutputIndex()
+    except Exception:
+        return conn.inputNode(), conn.outputIndex()
 
 
 # -- tools ------------------------------------------------------------------------

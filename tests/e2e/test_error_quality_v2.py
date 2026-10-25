@@ -131,7 +131,8 @@ async def _scenario(check: Checker) -> None:
     )
     assert at_create["message"].startswith("ops[0].parms.sizee: ")
     assert "size" in at_create["candidates"]
-    assert 'inspect {what: "type", target: "Sop/box"}' in at_create["hint"]
+    # 2.1 (D56): the op runs to check it, so the hint is about the new node itself.
+    assert "Did you mean size? It is a tuple" in at_create["hint"]
     on_node = await check.mistake(
         "edit", {"ops": [{"op": "set", "path": f"{GEO}/box1/sizee", "value": 3}]}, "parm_not_found"
     )
