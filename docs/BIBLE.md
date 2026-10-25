@@ -1,7 +1,7 @@
 # HocusPocus Design Bible
 
-**Version:** 2.0 design, 2026-10-14; the 1.4 bible is at git tag `v1.4.0`.
-This document is the design authority for 2.0 (branch `release/2.0`). It was rewritten at
+**Version:** 2.1 design, 2026-10-24; the 2.0 bible is at git tag `v2.0.0` and the 1.4
+bible at `v1.4.0`. This document is the design authority for 2.x. It was rewritten for 2.0 at
 milestone M3 from [`redesign/spec-2.0.md`](redesign/spec-2.0.md), which planned the work.
 Rows and sentences marked (1.1) to (1.4) changed in that 1.x release and still hold in 2.0;
 (2.0) marks what 2.0 changed, (2.1) what 2.1 changed. The 2.0 contract decisions are D35

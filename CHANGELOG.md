@@ -4,7 +4,18 @@ This project uses [Semantic Versioning](https://semver.org/). The 0.9 compatibil
 policy does not apply to 1.0. 2.0 changes the tool surface; `compat_1x` kept the 1.4
 one for the 2.0.x releases, and 2.1 removes it.
 
-## 2.1.0 (unreleased)
+## 2.1.0 (2026-10-24)
+
+2.1 keeps the 2.0 contract and removes what 2.0 announced it would: the `compat_1x`
+profile, the `v2` alias and the 18 1.4 tools. Its evaluation was a dogfood: an agent built
+a game-ready procedural skyscraper generator (`examples/neo_tower/`, review 26) through the
+MCP tools, and each phase's friction became a fix stream. A fresh session then ran the same
+compact generator brief on 2.0.0 and on 2.1 (review 28): `houdini_python` escapes fell from
+7 to 1, errors fixed in one step from the hint rose from 7 of 9 to 10 of 11, and calls to
+the client's own shell and file tools fell from 34 to 9. The scorecard's bytes target that
+2.0 missed is met (31 % under 1.4 against 20 %). Upgrade notes:
+[`docs/migration-2.1.md`](docs/migration-2.1.md). Design decisions: D45 to D86 in
+`docs/BIBLE.md`.
 
 ### Added
 
@@ -221,15 +232,17 @@ one for the 2.0.x releases, and 2.1 removes it.
   - `search`'s and `node_create`'s descriptions stop naming 1.4 tools (tools/list text
     -53 B on every profile; `full` 23,157 B text, 29,444 B both).
 
-  Measured by the workloads tier (larger of two runs; calls unchanged):
+  Measured by the workloads tier (larger of two runs at the end of stream C; calls
+  unchanged). The last column is the release run, after streams D3 to D5, whose job
+  answers and notes added a little back:
 
-  | Workload | Calls | Text bytes 1.4 | 2.1 start | 2.1 | Cut vs 1.4 (target) |
-  |---|---:|---:|---:|---:|---:|
-  | `city_build` | 15 | 20,804 | 13,975 | 13,692 | 34 % (20 %) |
-  | `fx_cache` | 11 | 9,084 | 6,638 | 6,306 | 31 % (15 %) |
-  | `scorecard_twelve` | 48 | 28,204 | 22,939 | 19,497 | 31 % (20 %) |
-  | `soak_200` | 177 | 100,362 | 67,788 | 65,752 | 34 % (20 %) |
-  | `vellum_usd` | 11 | 8,292 | 6,048 | 5,950 | 28 % (15 %) |
+  | Workload | Calls | Text bytes 1.4 | 2.1 start | After stream C | Cut vs 1.4 (target) | 2.1.0 release |
+  |---|---:|---:|---:|---:|---:|---:|
+  | `city_build` | 15 | 20,804 | 13,975 | 13,692 | 34 % (20 %) | 13,603 (35 %) |
+  | `fx_cache` | 11 | 9,084 | 6,638 | 6,306 | 31 % (15 %) | 6,304 (31 %) |
+  | `scorecard_twelve` | 48 | 28,204 | 22,939 | 19,497 | 31 % (20 %) | 19,497 (31 %) |
+  | `soak_200` | 177 | 100,362 | 67,788 | 65,752 | 34 % (20 %) | 66,257 (34 %) |
+  | `vellum_usd` | 11 | 8,292 | 6,048 | 5,950 | 28 % (15 %) | 6,260 (25 %) |
 
 ### Removed
 

@@ -66,3 +66,13 @@ Houdini tiers as not run.
 2.1.0 ships when streams A–D meet their exits, the dogfood re-run is written up, all tiers
 are green on Windows, and CHANGELOG, migration notes and the bible's decision log carry
 the changes.
+
+## 5. Outcome
+
+Shipped as 2.1.0 on 2026-10-24. Streams A to D met their exits (D ran as D1 to D5, one
+per dogfood phase and one per re-run finding), and two streams were added on the way: E
+verified the GUI tier and fixed Karma in GUI sessions and embedded assets in the look
+child; F cleaned up argument errors, 1.4 names in notes and flaky slow tests. The dogfood
+is review 26 and the re-run review 28. Still open, recorded for 2.2 in the bible: a Karma
+`look` (not `render`) in a child process, Karma renders in GUI sessions out of process,
+and Linux and macOS qualification on real Houdini installs.

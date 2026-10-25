@@ -2,7 +2,7 @@
 
 2.1 keeps the 2.0 tool contract. Most clients need no change. This page lists what a 2.0
 client script or prompt can notice, in the order it is most likely to matter. The full
-list is in `CHANGELOG.md` under 2.1.0, and the reasons are decisions D45 to D68 in
+list is in `CHANGELOG.md` under 2.1.0, and the reasons are decisions D45 to D86 in
 `docs/BIBLE.md`.
 
 ## 1. Removed: `compat_1x`, the `v2` alias and the 1.4 tools
