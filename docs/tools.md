@@ -466,7 +466,7 @@ Create nodes in one undo step. type resolves like createNode (box gets the curre
 
 Set parms in one undo step. Each item takes one of value, expression, keyframe(s), channel_ref, ramp, multiparm_count, revert_to_default, press. Tuple paths take lists, component paths scalars; menus take token or label. animation replace clears keys and expressions first; key keys at frame; keep is plain set. Returns value, raw, wrote_keyframe, node errors.
 
-**Notes.** With animation replace a single keyframe only adds or replaces its own key. press clicks a button parm and returns pressed and side_effects ({parm: [old, new]} it changed); on a writer's save button (File Cache Save to Disk, a ROP SOP's Render) the output files over its frame range are checked afterwards: outputs_summary, or cook_failed with detail.missing. press also runs the callback script of a non-button parm (pyrosource initialize), and with value it sets the value first; a plain set of a menu or toggle with a callback notes that the callback did not run. A string menu only the node builds (a Copernicus signature) takes a token or label like any menu. Ramp keys and values come back at 6 significant digits, without raw. raw is left out when it equals value, and long strings are elided as in inspect parms. Tuples report per-component expressions and the keyed component names. Type mismatches fail with invalid_value naming the template type and range. On a LOP a USD attribute name (inputs:intensity) sets Houdini's encoded parm (xn__inputsintensity_i0a), here and in node_create parms; path is the resolved one.
+**Notes.** With animation replace a single keyframe only adds or replaces its own key. press clicks a button parm and returns pressed and side_effects ({parm: [old, new]} it changed); on a writer's save button (File Cache Save to Disk, a ROP SOP's Render) the output files over its frame range are checked afterwards: outputs_summary, or cook_failed with detail.missing. press also runs the callback script of a non-button parm (pyrosource initialize), and with value it sets the value first; a plain set of a menu or toggle with a callback notes that the callback did not run. A string menu only the node builds (a Copernicus signature) takes a token or label like any menu. A press still running after job_threshold_s (10 s) answers {job_id, state: running, running: <parm path>, message} (2.1, D70); job {action: result} returns this result when the callback ends, its error if the call failed (a callback cannot be interrupted, so cancel leaves it running), and calls that need the main thread meanwhile answer houdini_busy naming it, with detail.job_id. edit set and create ops and node_create press the same way. Ramp keys and values come back at 6 significant digits, without raw. raw is left out when it equals value, and long strings are elided as in inspect parms. Tuples report per-component expressions and the keyed component names. Type mismatches fail with invalid_value naming the template type and range. On a LOP a USD attribute name (inputs:intensity) sets Houdini's encoded parm (xn__inputsintensity_i0a), here and in node_create parms; path is the resolved one.
 
 ### Arguments
 
@@ -497,7 +497,9 @@ Set parms in one undo step. Each item takes one of value, expression, keyframe(s
 
 ### Returns
 
-- `results` (array<object>): `path`, `value`, `raw`, `expression`, `language`, `expressions`, `keyed`, `wrote_keyframe`, `is_default`, `errors`, `warnings` — always present
+- `results` (array<object>): `path`, `value`, `raw`, `expression`, `language`, `expressions`, `keyed`, `wrote_keyframe`, `is_default`, `errors`, `warnings`
+- `job_id` (string)
+- `state` (string)
 
 ### Examples
 
