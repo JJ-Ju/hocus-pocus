@@ -385,6 +385,11 @@ def test_attribs_glob_filters_attributes(client):
     assert all(n.startswith("focal") or n == "xformOpOrder" for n in names)
     order = {a["name"]: a for a in cam["attributes"]}["xformOpOrder"]["value"]
     assert isinstance(order, list)  # shown in full
+    commas = client.ok(
+        "usd_stage",
+        {"lop_path": out.path(), "prim": "/cameras/cam", "attribs": "focal*, xformOpOrder"},
+    )
+    assert {a["name"] for a in commas["prims"][0]["attributes"]} == names
     bad = client.error("usd_stage", {"lop_path": out.path(), "attribs": ""})
     assert bad["code"] == "invalid_argument"
 

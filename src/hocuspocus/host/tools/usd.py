@@ -32,7 +32,7 @@ from typing import Any
 from hocuspocus.tools.errors import ToolError
 from hocuspocus.tools.migration import hint_tool
 
-from ._common import DEFAULT_LIMIT, bad_arg, get_node, page
+from ._common import DEFAULT_LIMIT, bad_arg, get_node, glob_alternatives, page
 from ._diag import a_or_an, collect_problems
 from .registry import HostContext
 
@@ -68,11 +68,11 @@ def _attribs(args: dict[str, Any]) -> list[str] | None:
     value = args.get("attribs")
     if value is None:
         return None
-    if not isinstance(value, str) or not value.replace("|", "").strip():
+    if not isinstance(value, str) or not glob_alternatives(value):
         raise bad_arg(
             "'attribs' must be a non-empty glob such as inputs:* or focalLength|xformOp*."
         )
-    return [part.strip() for part in value.split("|") if part.strip()]
+    return glob_alternatives(value)
 
 
 MAX_DEPTH = 16

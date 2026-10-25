@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import re
 from typing import Any
 
 from hocuspocus.tools.errors import ToolError, read_only_error
@@ -27,6 +28,7 @@ __all__ = [
     "compact_size",
     "elide_string",
     "get_node",
+    "glob_alternatives",
     "hou_exception_text",
     "hou_message",
     "int_arg",
@@ -154,6 +156,16 @@ def int_arg(
     if high is not None and value > high:
         raise bad_arg(f"'{key}' must be at most {high}.")
     return value
+
+
+GLOB_SEPARATORS = re.compile(r"[|,]")
+"""What separates the alternatives of a parm or attribute glob: ``|``, and since 2.1 (D85)
+``,`` too, which no Houdini parm name or USD property name can contain."""
+
+
+def glob_alternatives(pattern: str) -> list[str]:
+    """The non-empty, stripped alternatives of a glob such as ``size|t`` or ``size, t``."""
+    return [part.strip() for part in GLOB_SEPARATORS.split(pattern) if part.strip()]
 
 
 def number(value: Any, field: str) -> float:

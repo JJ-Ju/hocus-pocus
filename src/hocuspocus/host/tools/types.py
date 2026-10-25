@@ -29,7 +29,7 @@ from hocuspocus.tools.catalog import CATEGORIES
 from hocuspocus.tools.errors import ToolError
 from hocuspocus.tools.migration import hint_tool
 
-from ._common import arg_bool, dynamic_menu_note, int_arg, menu_is_dynamic
+from ._common import arg_bool, dynamic_menu_note, glob_alternatives, int_arg, menu_is_dynamic
 from .parms import menu_label, type_signatures
 from .registry import HostContext
 
@@ -1266,8 +1266,8 @@ def _variants_note(variants: dict[str, int], rows: list[dict[str, Any]]) -> str:
 
 def filter_parms(rows: list[dict[str, Any]], pattern: str) -> list[dict[str, Any]]:
     """Rows whose name or label matches the glob ``pattern`` (case-insensitive); a
-    pattern without wildcards matches the whole name or label, and ``a|b`` matches
-    either glob (review 12 papercut 2).
+    pattern without wildcards matches the whole name or label, and ``a|b`` (2.1, D85: or
+    ``a,b``) matches either glob (review 12 papercut 2).
 
     Review 23 papercut 7: ``*pin*`` also matched eight ``*damping*`` parms. Rows where a
     wildcard pattern's text starts a word of the label or name (``Pin Type``, ``pin_group``)
@@ -1277,7 +1277,7 @@ def filter_parms(rows: list[dict[str, Any]], pattern: str) -> list[dict[str, Any
     the other alternatives are (``*pin*|group`` listed ``group`` as a substring match)."""
     import fnmatch
 
-    pats = [p.strip().lower() for p in pattern.split("|") if p.strip()]
+    pats = [p.lower() for p in glob_alternatives(pattern)]
 
     def matches(row: dict[str, Any], pat: str) -> bool:
         return fnmatch.fnmatchcase(row["name"].lower(), pat) or fnmatch.fnmatchcase(
@@ -1438,7 +1438,7 @@ def node_type_info(args: dict[str, Any], ctx: HostContext) -> dict[str, Any]:
         folder = ""  # the top-level parms, listed by detail: folders as "(no folder)"
     parm_glob = args.get("parms")
     if parm_glob is not None and (
-        not isinstance(parm_glob, str) or not parm_glob.replace("|", "").strip()
+        not isinstance(parm_glob, str) or not glob_alternatives(parm_glob)
     ):
         raise ToolError(
             "invalid_argument", "'parms' must be a non-empty glob such as *seed* or dist|inset."

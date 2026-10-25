@@ -428,15 +428,18 @@ def test_info_top_level_folder_and_parm_alternatives(client):
     pair = client.ok("node_type_info", {"type": "Sop/polyextrude", "parms": "dist|inset"})
     rows = [row[0] for rows in pair["parms"].values() for row in rows]
     assert sorted(rows) == ["dist", "inset"]
+    commas = client.ok("node_type_info", {"type": "Sop/polyextrude", "parms": "dist,inset"})
+    assert commas["parms"] == pair["parms"]
     both = client.ok(
         "node_type_info", {"type": "Sop/polyextrude", "folder": "", "parms": "Dist | *inset*"}
     )
     assert {row[0] for row in both["parms"]["(no folder)"]} >= {"dist", "inset"}
     error = client.error("node_type_info", {"type": "Sop/polyextrude", "folder": "Nope"})
     assert error["code"] == "invalid_argument" and error["candidates"] == names
-    assert client.error("node_type_info", {"type": "Sop/box", "parms": "|"})["code"] == (
-        "invalid_argument"
-    )
+    for empty in ("|", " , "):
+        assert client.error("node_type_info", {"type": "Sop/box", "parms": empty})["code"] == (
+            "invalid_argument"
+        )
 
 
 def test_search_rows_drop_constant_fields(client):
