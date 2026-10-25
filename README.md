@@ -44,6 +44,11 @@ two Houdinis ([19](docs/redesign/review/19-two-instances-and-prompts-eval.md)), 
 ([21](docs/redesign/review/21-scorecard-1.3.md)), a 1,230-call soak ([22](docs/redesign/review/22-soak-1.3.md))
 and Vellum through USD to Karma ([23](docs/redesign/review/23-vellum-usd-eval.md)). Five are
 now the workloads test tier, which fails a change that makes an agent pay more than 1.4.
+In 2.1 an agent built a game-ready skyscraper generator ([26](docs/redesign/review/26-neo-tower-dogfood.md),
+[`examples/neo_tower`](examples/neo_tower/README.md)). The
+[`procedural-assets`](.claude/skills/procedural-assets/SKILL.md) skill teaches agents the
+coarse-to-fine method technical artists use for such generators; Claude Code loads it in this
+repository ([29](docs/redesign/review/29-procedural-assets-skill.md)).
 
 ![City overview captured with viewport_capture](docs/redesign/evidence/city-destruction/02_city_overview.png)
 
