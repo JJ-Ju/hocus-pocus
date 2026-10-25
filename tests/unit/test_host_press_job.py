@@ -203,3 +203,19 @@ def test_a_followed_press_cannot_be_cancelled(executor):
     answer = ctx.jobs.cancel(result["job_id"])
     assert answer["cancelled"] is False and "cannot be interrupted" in answer["notes"][0]
     assert _finish(executor, ctx, result["job_id"])["state"] == "done"
+
+
+def test_the_long_work_hint_names_what_each_profile_takes():
+    """2.1 (D75): the started-call hint said "raise timeout_s, or use a job" to look, which
+    took neither; it now names the tools the profile serves and what each takes."""
+    from hocuspocus.host.executor import long_work_hint
+    from hocuspocus.tools.migration import using_profile
+
+    with using_profile("core"):
+        core = long_work_hint()
+    with using_profile("minimal"):
+        minimal = long_work_hint()
+    assert core.startswith("Inspect the scene before repeating a mutation.")
+    assert "cook, render and look run long work as a job (wait_s" in core
+    assert "houdini_python takes timeout_s" in core
+    assert "cook" not in minimal and "look runs long work as a job" in minimal

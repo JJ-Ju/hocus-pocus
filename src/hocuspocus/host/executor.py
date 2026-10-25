@@ -154,6 +154,24 @@ class Pending:
         return self._work.result
 
 
+def long_work_hint() -> str:
+    """The hint of a started call that outlasted its wait: inspect first, and the
+    arguments that give long work more time, named for the tools this profile serves
+    (2.1: it said "raise timeout_s, or use a job" to look, which takes neither)."""
+    from hocuspocus.tools.migration import hint_tool
+
+    jobs = [name for name in ("cook", "render", "look") if hint_tool(name)]
+    parts = ["Inspect the scene before repeating a mutation."]
+    if jobs:
+        parts.append(f"{', '.join(jobs[:-1])} and {jobs[-1]}" if len(jobs) > 1 else jobs[0])
+        parts[-1] += f" {'run' if len(jobs) > 1 else 'runs'} long work as a job"
+        parts[-1] += " (wait_s; then job {action: result})"
+        parts[-1] += "; houdini_python takes timeout_s." if hint_tool("houdini_python") else "."
+    elif hint_tool("houdini_python"):
+        parts.append("houdini_python takes timeout_s.")
+    return " ".join(parts)
+
+
 def _busy(timeout_s: float, *, started: bool, running: _Work | None = None) -> ToolError:
     detail: dict[str, Any] = {"started": started, "timeout_s": timeout_s}
     step = running.long_step if running is not None and not started else None
@@ -180,10 +198,7 @@ def _busy(timeout_s: float, *, started: bool, running: _Work | None = None) -> T
             f"Houdini's main thread did not finish the call within {timeout_s:g}s. "
             "The call is still running; its result will be discarded."
         )
-        hint = (
-            "Inspect the scene before repeating a mutation. Raise timeout_s for long "
-            "operations, or use a job."
-        )
+        hint = long_work_hint()
     else:
         message = (
             f"Houdini's main thread was busy for {timeout_s:g}s (a dialog open in "

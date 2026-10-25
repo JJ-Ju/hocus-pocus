@@ -2,7 +2,7 @@
 
 <!-- Generated from src/hocuspocus/tools/spec/ by `python -m hocuspocus.tools.docs`. Do not edit by hand. -->
 
-21 tools. The profiles nest: 10 in `minimal`, 19 in `core` (the default), 21 in `full`. Model-visible `tools/list` text: 20,982 bytes. See `docs/BIBLE.md` §4 for the design.
+21 tools. The profiles nest: 10 in `minimal`, 19 in `core` (the default), 21 in `full`. Model-visible `tools/list` text: 21,015 bytes. See `docs/BIBLE.md` §4 for the design.
 
 ## Contents
 
@@ -614,9 +614,9 @@ Render any ROP (Karma, Flipbook, USD, ...) or writer SOP (File Cache, rop_geomet
 
 `idempotent` `headless ok` · profiles `minimal`, `core`, `full`
 
-Look at the scene: a PNG (long side at most 1024). target: an object, SOP, LOP, Cop node or ROP (default the display). quality draft is a Flipbook ROP (headless too), lit adds the scene's lights (Karma when there are none), final renders Karma. Returns backend_used, chain, scene, context, camera_used, notes. Leaves no nodes, undo step or dirty flag.
+Look at the scene: a PNG (long side at most 1024). target: an object, SOP, LOP, Cop node or ROP (default the display). quality draft is a Flipbook ROP, lit adds the scene's lights (Karma when there are none), final renders Karma. Returns backend_used, chain, scene, camera_used, notes; past wait_s a job_id for job. Leaves no nodes or undo step.
 
-**Notes.** The renderer is chosen by quality. target kinds: omitted, /obj unless it displays nothing and /stage has a display LOP (a note names a stage or COP network it did not show); an object frames it (fit_used target); a SOP frames it and shows it alone (2.1): the render draws only that SOP's geometry, in its object's world space, wherever it is (inside a subnet or a locked asset, in a hidden object, outside /obj), through a temporary object in the scene that renders (headless the child's copy) with an Object Merge of it; no flag of yours moves, the object's own material is kept, a note says so, and source viewer is not isolated; a LOP, a LOP network (its display LOP) or a ROP in a LOP network (the LOP it renders) is a stage (scene stage, lop_path); a Cop node or COP network (its display node) is its own image at its own resolution (scene cop, layer; quality, resolution and fit do not apply); a ROP in /out looks through its camera and lends final its samples. A camera or light as target is invalid_argument: pass it as camera (an OBJ camera, a LOP camera, or a camera prim on the stage). quality draft: the Flipbook ROP, then the OpenGL ROP, then (headless, after a render process crash) a Karma CPU ROP at 2 samples. lit: the same with full lighting and shadows when the scene has lights, else Karma at 2 samples with its default light (a note says so). final: Karma at the target ROP's samples per pixel, else 32 (samples in the result); seconds, not a draft. source viewer (GUI only, draft only, never a stage or COP) grabs the Scene Viewer as the user sees it (context is the viewer's network; the view is put back); headless it is ui_required. chain is the planned order of backends; backend_used the one that drew; notes say why an earlier one did not, and which renderer lit used. resolution is honoured on every backend (Karma too; 2.1) and rendered is the image's real size (a note if a renderer drew another); without resolution, a look through an OBJ camera (camera, or a ROP target's) takes the camera's aspect at 1024 on the long side, and an explicit resolution of another aspect gets a note. fit: all, selected or none (reuse the last automatic framing); without camera an automatic camera frames the target, else everything (camera_used temporary). on picks the Houdini (pid, instance name or role); the bridge routes it, as for cook and render. Headless, the Flipbook and OpenGL ROPs render a snapshot of the scene in a child hython, kept warm between looks (about 0.3 s after a 3 s first start), with the geometry the host already cooked for what the look shows (2.1: the child draws it instead of cooking the networks again, so a slow chain costs its cook once, in the host; that first cook can take longer than the call, and a render process that runs out of time names cook and Karma in its hint). The snapshot has every node, the asset libraries outside $HFS, $HIP/$JOB, global variables and hou.session; not the current take (a note says so), in-memory simulation caches (the child re-simulates to the frame) or variables set with hou.putenv. Karma and Cop images render the live scene in the host. image.attached is true when the PNG went out as MCP image content. output (2.1) also writes the image to that file, at its rendered size, flattened onto grey: PNG, or JPEG for .jpg/.jpeg; $HIP and ~ expand, parent folders are made, an existing file is replaced, and a path outside approved_roots is path_not_allowed before anything renders. The result's output is the absolute path; the image is still returned inline (path is the copy under the state dir, which keeps only the newest 50).
+**Notes.** The renderer is chosen by quality. A look runs as a job (2.1, D75): the call waits wait_s (default the job threshold, 10 s) and returns the picture, or {job_id, state: running, hint} when it takes longer (a final Karma look at 1024x768, a slow first cook), and job {action: result, job_id} then returns the picture; wait_s: 0 returns the job at once. A look may run up to an hour. target kinds: omitted, /obj unless it displays nothing and /stage has a display LOP (a note names a stage or COP network it did not show); an object frames it (fit_used target); a SOP frames it and shows it alone (2.1): the render draws only that SOP's geometry, in its object's world space, wherever it is (inside a subnet or a locked asset, in a hidden object, outside /obj), through a temporary object in the scene that renders (headless the child's copy) with an Object Merge of it; no flag of yours moves, the object's own material is kept, a note says so, and source viewer is not isolated; a LOP, a LOP network (its display LOP) or a ROP in a LOP network (the LOP it renders) is a stage (scene stage, lop_path); a Cop node or COP network (its display node) is its own image at its own resolution (scene cop, layer; quality, resolution and fit do not apply); a ROP in /out looks through its camera and lends final its samples. A camera or light as target is invalid_argument: pass it as camera (an OBJ camera, a LOP camera, or a camera prim on the stage). quality draft: the Flipbook ROP, then the OpenGL ROP, then (headless, after a render process crash) a Karma CPU ROP at 2 samples. lit: the same with full lighting and shadows when the scene has lights, else Karma at 2 samples with its default light (a note says so). final: Karma at the target ROP's samples per pixel, else 32 (samples in the result); seconds, not a draft. source viewer (GUI only, draft only, never a stage or COP) grabs the Scene Viewer as the user sees it (context is the viewer's network; the view is put back); headless it is ui_required. chain is the planned order of backends; backend_used the one that drew; notes say why an earlier one did not, and which renderer lit used. resolution is honoured on every backend (Karma too; 2.1) and rendered is the image's real size (a note if a renderer drew another); without resolution, a look through an OBJ camera (camera, or a ROP target's) takes the camera's aspect at 1024 on the long side, and an explicit resolution of another aspect gets a note. fit: all, selected or none (reuse the last automatic framing); without camera an automatic camera frames the target, else everything (camera_used temporary). on picks the Houdini (pid, instance name or role); the bridge routes it, as for cook and render. Headless, the Flipbook and OpenGL ROPs render a snapshot of the scene in a child hython, kept warm between looks (about 0.3 s after a 3 s first start), with the geometry the host already cooked for what the look shows (2.1: the child draws it instead of cooking the networks again, so a slow chain costs its cook once, in the host; that first cook can take longer than the call, and a render process that runs out of time names cook and Karma in its hint). The snapshot has every node, the asset libraries outside $HFS, $HIP/$JOB, global variables and hou.session; not the current take (a note says so), in-memory simulation caches (the child re-simulates to the frame) or variables set with hou.putenv. Karma and Cop images render the live scene in the host. image.attached is true when the PNG went out as MCP image content. output (2.1) also writes the image to that file, at its rendered size, flattened onto grey: PNG, or JPEG for .jpg/.jpeg; $HIP and ~ expand, parent folders are made, an existing file is replaced, and a path outside approved_roots is path_not_allowed before anything renders. The result's output is the absolute path; the image is still returned inline (path is the copy under the state dir, which keeps only the newest 50).
 
 ### Arguments
 
@@ -630,27 +630,30 @@ Look at the scene: a PNG (long side at most 1024). target: an object, SOP, LOP, 
 | `fit` | `all` \| `selected` \| `none` |  |  |  |
 | `source` | `auto` \| `viewer` |  | `"auto"` |  |
 | `output` | string |  |  | Also save the image to this .png or .jpg file. |
+| `wait_s` | number |  |  | min 0 |
 | `on` | integer \| string |  |  | Instance to run on: pid, name or role. |
 
 ### Returns
 
 - `image` (object): `mime_type`, `width`, `height`, `attached`
-- `backend_used` (string) — always present
-- `chain` (array<string>) — always present
+- `backend_used` (string)
+- `chain` (array<string>)
 - `quality` (string)
 - `target` (string | null)
-- `scene` (string) — always present
+- `scene` (string)
 - `context` (string)
 - `camera_used` (string)
 - `fit_used` (string)
 - `samples` (integer)
 - `frame` (number)
-- `path` (string) — always present
-- `width` (integer) — always present
-- `height` (integer) — always present
+- `path` (string)
+- `width` (integer)
+- `height` (integer)
 - `rendered` (array<integer>)
 - `output` (string)
 - `notes` (array<string>)
+- `job_id` (string)
+- `state` (string)
 
 ### Examples
 

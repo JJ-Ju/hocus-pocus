@@ -1537,6 +1537,7 @@ def _render_job(plan: dict[str, Any], ctx: HostContext, thumbnail: bool) -> Any:
             node = hou.node(plan["rop"])
             if node is None:
                 return [f"{plan['rop']} was deleted during the render."]
+            mark_long_step(f"the render of {plan['rop']} (frame {frame_num(frame)})")
             errors: list[str] = []
             try:
                 node.render(frame_range=(frame, frame), verbose=False)
@@ -1556,6 +1557,7 @@ def _render_job(plan: dict[str, Any], ctx: HostContext, thumbnail: bool) -> Any:
                     with contextlib.suppress(Exception):
                         on_frame()
 
+            mark_long_step(f"the render of {plan['rop']}")
             errors: list[str] = []
             hooked = False
             with contextlib.suppress(Exception):
