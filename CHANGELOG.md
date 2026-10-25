@@ -64,8 +64,42 @@ one for the 2.0.x releases, and 2.1 removes it.
   material flag a Material Library LOP imports by, the SOP and CHOP unload flag, the CHOP
   and COP export flag. A node without a flag names the ones it takes.
 
+- **`inspect {what: "geo", group_by}`** (BIBLE §4.4, D71; review 26 P3 friction 4): one
+  row per value of a string or int prim (else point) attribute, with prims, points,
+  triangles, area and bounding box, plus min, max and mean of each numeric attribute in
+  `attribs` (prim, point or vertex attributes of the group's prims), over `group`, largest
+  group first and paged. The summary also takes `stats: true` and `attribs` (D76).
+- **`hda {action: "version"}`** (§4.7, D73; P3 friction 5) copies a definition to the type
+  name with a new version component (`hp::tower::1.0` to `hp::tower::1.1`), in its library
+  or another, and `switch: "path" | "all"` moves instances to it, keeping parm values.
+  `hda save` with `name` instead of `path` sets a definition's label, version, input
+  counts, help and interface without an instance.
+- **`look {wait_s}`** (§4.6, D75): a look runs as a job; past `wait_s` (default
+  `job_threshold_s`) the call returns `{job_id, state: "running"}` and `job result`
+  returns the picture, so a long final Karma look no longer fails at 30 s.
+
 ### Changed
 
+- **A long press answers as a job** (§4.5, D70; review 26 P3 friction 1). A pressed
+  callback still running after `job_threshold_s` (10 s) returns `{job_id, state:
+  "running", running: <parm path>}` instead of `houdini_busy` with its result discarded;
+  `job result` returns the call's result when the callback ends. This holds for `edit`
+  `set` and `create` ops, `build` presses, `parm_set` and `node_create`. A call waiting
+  behind it answers `houdini_busy` naming the press and its job. Short presses answer as
+  before.
+- **Headless Karma renders leave the main thread free** (§4.6, §8, D74; P3 friction 1).
+  `render` of a Karma or USD Render ROP renders in a child hython on a snapshot, as
+  Flipbook and OpenGL ROPs did, so other calls run while husk renders (measured: 0.011 s
+  of main thread instead of 3.39 s for a 1280x720 frame, at 1.4 s more wall time). A
+  cancel kills husk too. GUI sessions render in Houdini as before.
+- **Menu candidates are ranked** (§4.5, D72; P3 #11). A value a menu does not hold lists
+  every token when the menu has at most 50 items, else the 20 nearest, by token or label
+  (`volume` finds `atmosphere`, "Volume (shader)"); 2.0 listed the first 20.
+- **`attribs` takes a string** of names separated by commas or spaces (D76), as its schema
+  always said.
+- The `houdini_busy` hint of a call that outlasted its wait names what the profile's tools
+  take for long work (`wait_s` and a job on `cook`, `render` and `look`; `timeout_s` on
+  `houdini_python`), where it said "raise timeout_s, or use a job" to every tool.
 - **A modal `hou.ui` dialog no longer blocks a GUI Houdini** (parity G5, BIBLE §3.2,
   D45). During a call in a GUI session the `display*`, `read*` and `select*` dialogs of
   `hou.ui` are stubs that raise `ui_required` naming the call (`detail.refused`), so
