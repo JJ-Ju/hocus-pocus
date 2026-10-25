@@ -45,6 +45,12 @@ def logs_dir() -> Path:
     return state_dir() / "logs"
 
 
+def startup_dir(state: Path | None = None) -> Path:
+    """GUI host startup records, ``<pid>.json``, under ``state`` (default the state dir):
+    D60, ``hocuspocus.host.autostart`` writes them and ``bridge/startup.py`` reads them."""
+    return (state_dir() if state is None else Path(state)) / "startup"
+
+
 def captures_dir() -> Path:
     return state_dir() / "captures"
 

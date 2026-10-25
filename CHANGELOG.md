@@ -60,7 +60,7 @@ one for the 2.0.x releases, and 2.1 removes it.
   `connect {from: <the subnet>, from_output: i}` (or a create input `{from: <the subnet>,
   output: i}`) wires the subnet's input `i`. A VOP subnet, which has none, says to wire
   its `subinput`.
-- **`edit` flags `material`, `unload` and `export`** (§4.5, D60; P2 escape 5): the VOP
+- **`edit` flags `material`, `unload` and `export`** (§4.5, D68; P2 escape 5): the VOP
   material flag a Material Library LOP imports by, the SOP and CHOP unload flag, the CHOP
   and COP export flag. A node without a flag names the ones it takes.
 
@@ -104,8 +104,8 @@ one for the 2.0.x releases, and 2.1 removes it.
   `create`/`save` refuse a library whose extension does not match the licence (`.hdalc`
   on Indie, `.hdanc` on Apprentice and Education, `.hda`/`.otl` on Commercial) with the
   corrected path as the candidate; Houdini writes any extension it is given.
-- `tools/list` (`text`): `minimal` +105 B, `core` +1,415 B (the `hda` tool), `full`
-  +250 B (of which +65 B on each profile is `edit`'s `partial` enum).
+- `tools/list` (`text`): `minimal` +52 B, `core` +1,362 B (the `hda` tool), `full`
+  +197 B since 2.0 (of which +65 B on each profile is `edit`'s `partial` enum).
 - CI: `.github/workflows/unit.yml` runs ruff and the unit tier on Linux, macOS and
   Windows for Python 3.11 to 3.13 (portability audit,
   `docs/redesign/review/27-portability.md`).
@@ -133,6 +133,39 @@ one for the 2.0.x releases, and 2.1 removes it.
   scene's lights (review 26 P1 #5).
 - `inspect`'s description no longer lists the 1.4 read names (tools/list: text -21 B on
   `core` and `full`).
+- **Fewer bytes per session** (plan-2.1 stream C; the scorecard's 20 % bytes target, missed
+  by 2.0, is met). Nothing an agent reads is lost: each dropped field is the default, null,
+  or derivable from one that stays.
+  - `hocuspocus://guide` and `inspect {what: "guide"}` point at the server instructions
+    instead of repeating them (they come with `initialize`; the guide topic
+    `instructions` returns them): 6,380 → 4,335 B, capped at 4.5 KB (D65).
+  - `houdini_status` and `houdini://status` leave out a null `hip.dirty_source`, a false
+    `hip.is_new`, a `time.playback_range` equal to `range`, a `host_version` equal to
+    `bridge_version` (a different one is still a `version_mismatch` warning),
+    `read_only: false`, `allow_python: true`, `launched_by: null`, `alive` on `recent[]`
+    rows, `hip.recent` past the newest 3 (all with `detail: true`), and on the connected
+    instance's `instances[]` row the `port`, `label`, `houdini`, `started`, `generation`
+    and `host_version` that `connected` gives; `houdini://instances` keeps whole rows
+    (D66).
+  - `houdini_connect` shapes its `connected` block the same way (no `memory`: that is
+    `houdini_status {detail: true}`), and `launched` has no `mode` (`connected.ui` says
+    it) and a two-sentence `note` (D66).
+  - `hip_new`, `hip_open` and `hip_save` no longer return `name` (the path's last
+    segment) and give `is_new` only when true (D66).
+  - A render over 5 outputs leaves `outputs_summary.first` and `last` to the ends of
+    `outputs_sample` (D67).
+  - `search`'s and `node_create`'s descriptions stop naming 1.4 tools (tools/list text
+    -53 B on every profile; `full` 23,157 B text, 29,444 B both).
+
+  Measured by the workloads tier (larger of two runs; calls unchanged):
+
+  | Workload | Calls | Text bytes 1.4 | 2.1 start | 2.1 | Cut vs 1.4 (target) |
+  |---|---:|---:|---:|---:|---:|
+  | `city_build` | 15 | 20,804 | 13,975 | 13,692 | 34 % (20 %) |
+  | `fx_cache` | 11 | 9,084 | 6,638 | 6,306 | 31 % (15 %) |
+  | `scorecard_twelve` | 48 | 28,204 | 22,939 | 19,497 | 31 % (20 %) |
+  | `soak_200` | 177 | 100,362 | 67,788 | 65,752 | 34 % (20 %) |
+  | `vellum_usd` | 11 | 8,292 | 6,048 | 5,950 | 28 % (15 %) |
 
 ### Removed
 
@@ -166,7 +199,7 @@ one for the 2.0.x releases, and 2.1 removes it.
 - A MaterialX VOP's `signature` refused valid signatures (`color3FA` on `mtlxmultiply`)
   and would have taken a typo: Houdini evaluates that menu as `default` plus the
   signatures already used on the node and sets any text silently. The menu is now read
-  from the asset definition's signatures, for `edit`, `parm_set` and reads (D60; P2
+  from the asset definition's signatures, for `edit`, `parm_set` and reads (D68; P2
   escape 4).
 - Rolling back an `edit` restores an input that came from a subnet's indirect input, and
   the flags it changed through their own getters.
@@ -204,6 +237,38 @@ one for the 2.0.x releases, and 2.1 removes it.
   `examples/neo_tower/work/neo_tower_p2.hiplc`: 44.2 s and 38.6 s per look before, 5.5 s
   (child start) and 0.9 s after; a test's 4 s chain looks in 0.2 s once cooked. A render
   process that still runs out of time names `cook` and `quality: "final"` in its hint.
+- **Karma in a GUI session.** `look {quality: "lit" | "final"}` through Karma answered
+  `cook_failed` "Karma did not produce an image: no output file" in every GUI Houdini (2.0
+  too), with or without a target, and `render` of a Karma ROP returned `state: done`
+  with every output `missing`. A GUI Houdini starts husk in the
+  background unless the ROP's Block Until Render Complete (`soho_foreground`) is on, so
+  `render()` returned before the image existed; hython always waits, so headless looks
+  passed. Look's temporary Karma ROP has it on, and `render` turns it on for the render
+  and restores it, on any ROP that has the parm (USD Render and Mantra ROPs too; checked
+  in the GUI: a Mantra frame is written, a USD Render ROP's husk error is reported). GUI test `test_karma_looks_render_in_the_gui`.
+- **A GUI launch that cannot register says why** (D60). `houdini_connect {launch}` and
+  `hocuspocus launch` waited the whole `wait_s` (240 s in the GUI tests) and said only that
+  Houdini "may still be starting" when its host failed to start, `autostart = false` kept
+  it off, the package never loaded, or a startup dialog held Houdini. The host's
+  autostart now writes `<state_dir>/startup/<pid>.json` (`uiready.py` too when
+  `hocuspocus.host` cannot be imported), and the launcher reads it and the launched
+  Houdini's window titles: a failed or disabled start answers at once with the error and
+  the host log (`detail.reason: "host_failed"` or `"autostart_disabled"`), a dialog
+  shown before the main window answers 15 s later (`"dialog"`, with its title), and a wait
+  that runs out names what it saw (`"host_starting"`, `"dialog"`, `"no_autostart"` with
+  the `install-houdini` hint). A licensed start shows only its splash and main window, so
+  nothing fires on it. Not reproduced here: the stream D2b report of two launches in a row
+  that never registered (13 launches in a row through the fixture, `hocuspocus launch`,
+  hard kills and two at once all registered in 10-21 s); the next one says which case it
+  is.
+- **A locked asset defined in the hip file draws in a headless look** (D61). The snapshot
+  the render process loads (`saveChildrenToFile`) holds only a stub of an `Embedded`
+  definition, without its contents, so a locked instance had no nodes inside and the
+  headless look drew nothing (2.0 too; 2.1's shipped geometry hid it for a locked SOP
+  asset, not for an object-level asset). The host now copies the hip's embedded
+  definitions into one library file the child installs, rewritten only when a definition
+  changes so the kept child stays warm. The GUI was not affected (it renders the live
+  scene).
 
 ## 2.0.0 (2026-10-14)
 

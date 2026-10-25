@@ -1,7 +1,7 @@
 """``edit`` 2.1 (review 26 P2): ops checked in order against what the earlier ops left
 (BIBLE D56), ``dry_run`` and the run agreeing, ``partial: "stop"`` (D57), the echo's cook
 after the call's main-thread work (D58), a subnet's own inputs as wire sources (D59), the
-material, unload and export flags and MaterialX signature menus (D60)."""
+material, unload and export flags and MaterialX signature menus (D68)."""
 
 from __future__ import annotations
 

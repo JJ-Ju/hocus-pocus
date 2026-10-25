@@ -8,10 +8,10 @@ SPEC = ToolSpec(
     name="search",
     profiles=("minimal", "core", "full"),
     description=(
-        "Search node types or nodes. kind types: node_type_search (query is a name, label "
-        "or keyword; 1.4 ranking, synonyms, current_only). kind nodes: node_find under root "
-        "(query is a type glob; pattern, category, flags, has_errors). Returns the 1.4 "
-        "tool's result with compact rows, paged by limit and cursor."
+        "Search node types or nodes. kind types: query is a name, label or keyword (ranked, "
+        "synonyms; current_only hides older versions). kind nodes: under root, query a type "
+        "glob; pattern, category, flags, has_errors filter. Compact rows, paged by limit and "
+        "cursor."
     ),
     notes=(
         "Each kind takes its 1.4 tool's arguments; any other is invalid_argument naming "

@@ -50,7 +50,7 @@ NODE_INFO_SECTIONS = (
 DEFAULT_INCLUDE = ("parms", "inputs", "errors", "flags")
 FLAG_NAMES = ("display", "render", "bypass", "template", "locked")
 SETTABLE_FLAGS = ("display", "render", "bypass", "template", "material", "unload", "export")
-"""Flags ``edit`` sets (2.1, D60 adds ``material`` on VOPs, which a Material Library LOP
+"""Flags ``edit`` sets (2.1, D68 adds ``material`` on VOPs, which a Material Library LOP
 needs, ``unload`` on SOPs and CHOPs, ``export`` on CHOPs and COPs); a node without the
 setter refuses the flag with the ones it has."""
 NAME_RE = re.compile(r"^[A-Za-z0-9_.\-]+$")

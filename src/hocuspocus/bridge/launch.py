@@ -25,7 +25,7 @@ from typing import Any, Protocol
 from ..tools import paths
 from ..tools.errors import ToolError
 from . import instances as registry
-from . import licence
+from . import licence, startup
 
 EXE = ".exe" if sys.platform == "win32" else ""
 DEFAULT_WAIT_S = 90.0
@@ -395,11 +395,19 @@ class Launcher:
         owned: bool = True,
         on_launch: LaunchHook | None = None,
         gui_probe: licence.GuiProbe | None = licence.gui_signal,
+        window_probe: startup.WindowProbe | None = startup.gui_windows,
+        startup_dir: Path | None = None,
     ) -> None:
         self.config_hfs = config_hfs
         self.gui_probe = gui_probe
         """Polled while a GUI launch waits: the licence dialog or an hkey child ends the
         wait at once (:func:`licence.gui_signal`; ``None`` turns it off)."""
+        self.window_probe = window_probe
+        """The launched pid's window titles while a GUI launch waits (D60: a startup dialog
+        ends the wait; :func:`startup.gui_windows`; ``None`` turns it off)."""
+        self._startup_dir = startup_dir
+        """Where GUI hosts write their startup records (D60); default
+        ``<HOCUSPOCUS_STATE_DIR of the launch environment, else the state dir>/startup``."""
         self.on_launch = on_launch
         self.owned = owned
         """True for a bridge launch: the child is tagged with ``HOCUSPOCUS_LAUNCHED_BY`` and
@@ -416,6 +424,14 @@ class Launcher:
 
     def _env(self) -> dict[str, str]:
         return dict(os.environ if self.environ is None else self.environ)
+
+    def startup_records(self) -> Path:
+        """The directory the launched GUI host writes its startup record to: the state
+        dir of the environment Houdini gets."""
+        if self._startup_dir is not None:
+            return self._startup_dir
+        override = self._env().get("HOCUSPOCUS_STATE_DIR")
+        return paths.startup_dir(Path(override) if override else None)
 
     @property
     def launches(self) -> registry.LaunchLog:
@@ -519,6 +535,17 @@ class Launcher:
         """Poll the registry until the spawned Houdini's host registers."""
         proc, mode, log_text = spawned.proc, spawned.mode, spawned.log
         deadline = self.clock() + max(0.0, float(wait_s))
+        watch = (
+            startup.StartupWatch(
+                pid=proc.pid,
+                exe_stem=Path(spawned.argv[0]).stem,
+                directory=self.startup_records(),
+                probe=self.window_probe,
+                clock=self.clock,
+            )
+            if mode == "gui"
+            else None
+        )
         while True:
             live = self.scan()
             found = next((inst for inst in live if inst.pid == proc.pid), None)
@@ -561,14 +588,29 @@ class Launcher:
                     signal=signal,
                     terminated=_terminate(proc),
                 )
+            if watch is not None:
+                stuck = watch.poll(list(spawned.argv))
+                if stuck is not None:
+                    raise stuck
             if self.clock() >= deadline:
-                raise ToolError(
-                    "houdini_offline",
-                    f"Started Houdini (pid {proc.pid}) but its HocusPocus host did not register within "
-                    f"{wait_s:g}s. It may still be starting (licence check, large hip).",
-                    hint=_failure_hint(mode, log_text),
-                    detail={"pid": proc.pid, "argv": list(spawned.argv), "log": log_text},
+                message = (
+                    f"Started Houdini (pid {proc.pid}) but its HocusPocus host did not "
+                    f"register within {wait_s:g}s."
                 )
+                hint = _failure_hint(mode, log_text)
+                detail: dict[str, Any] = {
+                    "pid": proc.pid,
+                    "argv": list(spawned.argv),
+                    "log": log_text,
+                }
+                if watch is not None:
+                    said, said_hint, seen = watch.reason()
+                    message += f" {said}"
+                    hint = said_hint or hint
+                    detail.update(seen)
+                else:
+                    message += " It may still be starting (licence check, large hip)."
+                raise ToolError("houdini_offline", message, hint=hint, detail=detail)
             self.sleep(POLL_INTERVAL_S)
 
     def _probe(self, pid: int) -> licence.GuiSignal | None:

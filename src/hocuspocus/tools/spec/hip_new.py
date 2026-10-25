@@ -17,7 +17,6 @@ SPEC = ToolSpec(
     output_schema=_out(
         {
             "path": _t("string"),
-            "name": _t("string"),
             "dirty": _t("boolean"),
             "is_new": _t("boolean"),
             "saved_first": _t("boolean"),

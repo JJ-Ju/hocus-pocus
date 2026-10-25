@@ -102,6 +102,10 @@ def _karma_nodes(
                 values["candobjects"] = isolated
                 values["objects"] = ""
         values["trange"] = 0
+        # "Block Until Render Complete": in a GUI session the ROP otherwise starts husk in
+        # the background and render() returns at once, before the image exists (hython
+        # always waits); the look then answered "no output file" in every GUI (2.0, 2.1).
+        values["soho_foreground"] = 1
         for name, value in values.items():
             parm = rop.parm(name)
             if parm is not None:

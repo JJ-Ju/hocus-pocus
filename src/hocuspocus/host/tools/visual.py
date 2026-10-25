@@ -1268,10 +1268,14 @@ def outputs_listing(outputs: list[str], missing: list[str]) -> dict[str, Any]:
     """``outputs`` when there are at most :data:`INLINE_OUTPUTS`, else ``outputs_summary``
     plus ``outputs_sample`` (the first and last :data:`OUTPUTS_SAMPLE_ENDS`); ``missing``
     up to :data:`MISSING_LISTED`. A 48-frame render's ``job result`` was 8 KB of paths
-    (review 20 N5). No ``hou``."""
+    (review 20 N5). The summary has no ``first`` and ``last`` here: the sample starts and
+    ends with them (2.1, D67). No ``hou``."""
     out: dict[str, Any] = {}
     if len(outputs) > INLINE_OUTPUTS:
-        out["outputs_summary"] = outputs_summary(outputs, missing)
+        summary = outputs_summary(outputs, missing)
+        summary.pop("first", None)
+        summary.pop("last", None)
+        out["outputs_summary"] = summary
         out["outputs_sample"] = outputs[:OUTPUTS_SAMPLE_ENDS] + outputs[-OUTPUTS_SAMPLE_ENDS:]
     else:
         out["outputs"] = outputs
@@ -1421,6 +1425,12 @@ def _render_job(plan: dict[str, Any], ctx: HostContext, thumbnail: bool) -> Any:
             parms: dict[str, Any] = dict(plan.get("camera_parms") or {})
             if plan["output"] is not None:
                 parms[plan["parm"]] = plan["output"]
+            # "Block Until Render Complete" (Karma; USD Render and Mantra have it too): off,
+            # a GUI session renders in the background and render() returns before any file
+            # exists.
+            foreground = node.parm("soho_foreground")
+            if foreground is not None and not foreground.eval():
+                parms["soho_foreground"] = 1
             names = ("husk_log", "husk_stdout", "husk_stderr")
             if plan.get("usd") and all(node.parm(n) is not None for n in names):
                 if node.parm("husk_log").eval():

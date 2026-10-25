@@ -339,7 +339,8 @@ def test_connect_by_role_pins_the_least_busy_worker():
     bridge, hosts, _live = make(GUI, W1, W2)
     hosts[W1.port].load = {"jobs_running": 2, "busy": False}
     out = bridge.call_tool("houdini_connect", {"role": "worker"})
-    assert data(out)["connected"]["pid"] == W2.pid and data(out)["connected"]["role"] == "worker"
+    # The default role (worker, headless) is left out of connected too (2.1, D66).
+    assert data(out)["connected"]["pid"] == W2.pid and "role" not in data(out)["connected"]
     assert bridge.preferred_pid == W2.pid
     assert data(bridge.call_tool("houdini_connect", {"role": "editor"}))["connected"]["pid"] == (
         GUI.pid
@@ -381,7 +382,7 @@ def test_recent_lists_quit_and_dead_instances(tmp_path):
     recent = {row["pid"]: row for row in status["recent"]}
     assert set(recent) == {W1.pid, W2.pid}
     assert recent[W1.pid]["hip"] == "C:/work/w1.hip" and "role" not in recent[W1.pid]  # worker
-    assert recent[W2.pid]["name"] == "farm" and recent[W2.pid]["alive"] is False
+    assert recent[W2.pid]["name"] == "farm" and "alive" not in recent[W2.pid]  # all dead (D66)
     assert [row["pid"] for row in status["instances"]] == [GUI.pid]
 
 

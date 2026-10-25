@@ -72,6 +72,19 @@ def test_docs_reads_take_no_other_option():
     assert not ok and out["code"] == "invalid_argument" and "detail" in out["message"]
 
 
+def test_guide_points_at_the_instructions_and_its_topic_has_them():
+    """2.1 (D65): the guide does not repeat the server instructions; its ``instructions``
+    topic is them, for a client that dropped them."""
+    from hocuspocus.bridge.instructions import INSTRUCTIONS
+
+    ok, out = call(offline(), {"what": "guide"})
+    assert ok and INSTRUCTIONS not in out["text"] and "Instructions" in out["topics"]
+    assert 'inspect {what: "guide", target: "instructions"}' in out["text"]
+    ok, out = call(offline(), {"what": "guide", "target": "instructions"})
+    assert ok and out["text"].startswith("## Instructions") and INSTRUCTIONS in out["text"]
+    assert "## Resources" not in out["text"]
+
+
 def test_instructions_name_the_tool_route_to_the_docs():
     from hocuspocus.bridge.instructions import INSTRUCTIONS
 

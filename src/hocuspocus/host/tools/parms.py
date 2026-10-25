@@ -438,7 +438,7 @@ def vop_signatures(parm: Any) -> tuple[list[str], list[str]] | None:
     DialogScript lists them (``signature "Color (FA)" color3FA { ... }``), or None for any
     other parm. The menu Houdini evaluates on a MaterialX VOP holds only ``default`` and
     the signatures already chosen on the node (review 26 P2 friction 7), and Houdini sets
-    any text silently, so the definition is the list to check a value against (D60)."""
+    any text silently, so the definition is the list to check a value against (D68)."""
     try:
         if parm.name() != "signature":
             return None
