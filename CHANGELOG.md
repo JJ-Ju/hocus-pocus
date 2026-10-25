@@ -196,6 +196,19 @@ one for the 2.0.x releases, and 2.1 removes it.
 
 ### Fixed
 
+- The bridge's budget trim of a paged read works for the 2.x tools (BIBLE §4.1, D69). Its
+  cursor table was keyed by the 1.4 names `node_find` and `network_describe`, so a
+  `search {kind: "nodes"}` or `inspect {what: "network" | "outline"}` page still over
+  `max_response_bytes` came back whole with `over_budget: true` instead of cut with a
+  cursor to resume from, and `inspect {what: "events"}` and `search {kind: "types"}` fell
+  through to a cursor the host does not take. The cursor is now chosen by the tool and its
+  arguments and written in the form the host took: the last path for `search` nodes (bare,
+  or `after:<path>` with `detail: "full"`), `after:<name>` for `outline` and `network`
+  (whose `data` is a dict keyed by node name), `t:<offset>` for `search` types and
+  `<pid>:<seq>` for `inspect` events. A trimmed `network` or `outline` page reports the
+  `node_count` of what it keeps. An `inspect` of a node, parms, a type or a job, which have
+  no cursor, is no longer cut with an integer one: it comes back whole with
+  `over_budget: true`.
 - A MaterialX VOP's `signature` refused valid signatures (`color3FA` on `mtlxmultiply`)
   and would have taken a typo: Houdini evaluates that menu as `default` plus the
   signatures already used on the node and sets any text silently. The menu is now read
