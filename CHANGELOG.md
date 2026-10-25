@@ -252,6 +252,12 @@ one for the 2.0.x releases, and 2.1 removes it.
 - The File Cache output hint read "...then file to the path". It now says to set the file
   parm to the path wanted and shows the call: `Set the output with ... filemethod ...,
   then set the file parm to the path you want (... file ...); then render without output.`
+- Two slow integration tests no longer flake under load (tests only). The Vellum `cook
+  profile` test took a fresh 12-frame solve past the 10 s job threshold on a busy machine,
+  so the call answered a `job_id` instead of the profile; it now passes `wait_s` and
+  `timeout_s`. The PDG cancel tests broke on the first cooking item and asserted that both
+  were cooking, but each out-of-process item is a process start, so the second was still
+  `scheduled`; they now wait for all items to cook, and the items sleep 60 s, not 8.
 
 ## 2.0.0 (2026-10-14)
 
