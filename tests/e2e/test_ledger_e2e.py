@@ -182,7 +182,7 @@ def test_ledger_roles_on_and_a_bridge_restart(hython, tmp_path):
         recent = {row["pid"]: row for row in status2.get("recent", [])}
         assert worker in recent, status2
         assert "role" not in recent[worker] and recent[worker]["name"] == "w"  # worker
-        assert recent[worker]["alive"] is False
+        assert "alive" not in recent[worker]  # every recent row is dead (2.1, D66)
 
         lost = _json(two["lost_job"])
         assert two["lost_job"].is_error and lost["code"] == "instance_lost", lost
