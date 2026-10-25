@@ -1,6 +1,6 @@
 """``edit`` 2.1 (review 26 P2): ops checked in order against what the earlier ops left
-(BIBLE D56), ``dry_run`` and the run agreeing, ``partial: "stop"`` (D57), the material,
-unload and export flags and MaterialX signature menus (D60)."""
+(BIBLE D56), ``dry_run`` and the run agreeing, ``partial: "stop"`` (D57), a subnet's own inputs as wire sources (D59), the
+material, unload and export flags and MaterialX signature menus (D60)."""
 
 from __future__ import annotations
 
@@ -201,6 +201,73 @@ def test_partial_stop_keeps_the_prefix_and_names_the_failure(client):
     assert [(f["item"], f["error"]["code"]) for f in result["failed"]] == [(2, "invalid_value")]
     assert result["ids"] == {"a": "/obj/g/box1", "b": "/obj/g/sphere1"}
     assert _children("/obj/g") == ["box1", "sphere1"]
+
+
+# -- a subnet's own inputs (P2 friction 6) -------------------------------------------------
+
+
+def test_wire_from_a_subnets_own_inputs(client):
+    geo = hou.node("/obj").createNode("geo", "g")
+    result = client.ok(
+        "edit",
+        {
+            "ops": [
+                {"op": "create", "id": "sub", "parent": "/obj/g", "type": "subnet"},
+                {
+                    "op": "create",
+                    "id": "x",
+                    "parent": "$sub",
+                    "type": "xform",
+                    "inputs": [{"from": "$sub", "output": 1}],
+                },
+                {"op": "create", "id": "m", "parent": "$sub", "type": "merge"},
+                {"op": "connect", "from": "$sub", "to": "$m", "to_input": "next"},
+                {"op": "connect", "from": ".", "from_output": 2, "to": "$m", "to_input": "next"},
+            ]
+        },
+    )
+    sub = hou.node(result["ids"]["sub"])
+    x, m = hou.node(result["ids"]["x"]), hou.node(result["ids"]["m"])
+    assert x.inputConnections()[0].inputItem() == sub.indirectInputs()[1]
+    assert [c.inputItem() for c in m.inputConnections()] == [
+        sub.indirectInputs()[0],
+        sub.indirectInputs()[2],
+    ]
+    error = client.error(
+        "edit", {"ops": [{"op": "connect", "from": sub.path(), "from_output": 9, "to": x.path()}]}
+    )
+    assert error["code"] == "invalid_input" and error["message"].startswith("ops[0].from_output: ")
+    # Compensation puts an indirect input back.
+    client.error(
+        "edit",
+        {
+            "ops": [
+                {"op": "connect", "from": None, "to": x.path()},
+                {"op": "set", "path": f"{x.path()}/tx", "value": "x"},
+            ]
+        },
+    )
+    assert x.inputConnections()[0].inputItem() == sub.indirectInputs()[1]
+    assert geo.node("subnet1") is not None
+
+
+def test_a_vop_subnet_has_no_inputs_to_wire_from(client):
+    vsub = hou.node("/mat").createNode("subnet", "m")
+    error = client.error(
+        "edit",
+        {
+            "ops": [
+                {
+                    "op": "create",
+                    "parent": vsub.path(),
+                    "type": "mtlxmultiply",
+                    "inputs": [{"from": vsub.path()}],
+                }
+            ]
+        },
+    )
+    assert error["code"] == "invalid_input"
+    assert "subinput" in error["hint"]
 
 
 # -- flags and signature menus (P2 friction 7 and 8) ---------------------------------------

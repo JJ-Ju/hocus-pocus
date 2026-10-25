@@ -739,8 +739,9 @@ def _op_create(args: Any, opts: dict[str, Any], index: int, st: State) -> OpResu
 
 def wire_source(value: Any, dest: Any, field: str) -> Any:
     """The node ``value`` names as a wire into ``dest`` (absolute, or relative to
-    ``dest``'s network): a sibling. A missing one is ``node_not_found`` at ``field`` with
-    the network's nearest children as candidates (never ``dest``)."""
+    ``dest``'s network): a sibling, or ``dest``'s parent, whose own inputs feed its
+    children (a subnet's indirect inputs, D59). A missing one is ``node_not_found`` at
+    ``field`` with the network's nearest children as candidates (never ``dest``)."""
     import hou
 
     from .tools._diag import missing_node_error
@@ -763,22 +764,46 @@ def wire_source(value: Any, dest: Any, field: str) -> Any:
                 f"{dest.path()} cannot be wired into itself.",
                 hint="Wire an upstream node into it instead.",
             )
-        if src.parent() != network:
+        if src != network and src.parent() != network:
             raise ToolError(
                 "invalid_input",
                 f"{src.path()} and {dest.path()} are in different networks.",
-                hint="Connect nodes that share a parent; use an object_merge SOP to bring "
-                "geometry across networks.",
+                hint="Connect nodes that share a parent; inside a subnet, from: <the subnet> "
+                "with an output index wires its input of that index. An object_merge SOP "
+                "brings geometry across networks.",
             )
     return src
 
 
 def wire_output(src: Any, dest: Any, output: Any, field: str) -> tuple[Any, int]:
-    """``(item, output index)`` to wire into ``dest``: ``src`` and its checked output."""
+    """``(item, output index)`` to wire into ``dest``: ``src`` and its checked output, or,
+    when ``src`` is ``dest``'s parent, that subnet's indirect input ``output`` (D59)."""
     from .tools import nodes as N
 
     with located(field):
-        return src, N.check_output_index(src, output)
+        if src != dest.parent():
+            return src, N.check_output_index(src, output)
+        if output is None:
+            output = 0
+        if not isinstance(output, int) or isinstance(output, bool) or output < 0:
+            raise N.bad_arg("Output index must be a non-negative integer.")
+        try:
+            inputs = list(src.indirectInputs())
+        except Exception:
+            inputs = []
+        if output >= len(inputs):
+            hint = (
+                f"Inside {src.path()}, its inputs 0..{len(inputs) - 1} are wire sources."
+                if inputs
+                else f"{src.path()} has no inputs to wire from inside it; wire from its "
+                "input node instead (a VOP subnet's subinput)."
+            )
+            raise ToolError(
+                "invalid_input",
+                f"{src.path()} has no input {output} to wire from inside it.",
+                hint=hint,
+            )
+        return inputs[output], 0
 
 
 def _is_press(spec: Any) -> bool:
@@ -864,7 +889,8 @@ def _op_connect(args: Any, opts: dict[str, Any], index: int, st: State) -> OpRes
     else:
         item, out_index = wire_output(src, dest, args.get("from_output", 0), "from_output")
         used = N.connect(dest, index_or_next, item, out_index, st.rollback)
-        output = out_index
+        # From the parent: from_output named the subnet input that feeds the wire.
+        output = (args.get("from_output") or 0) if src == dest.parent() else out_index
     names = list(dest.inputNames())
     extra = {
         "input": used,

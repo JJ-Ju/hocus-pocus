@@ -986,7 +986,9 @@ def check_output_index(src: Any, output: Any) -> int:
 
 
 def connect(dest: Any, index: int | str, src: Any, output: int, rollback: Rollback | None) -> int:
-    """Wire ``src``:``output`` into ``dest`` at ``index`` (or the next free input)."""
+    """Wire ``src``:``output`` into ``dest`` at ``index`` (or the next free input). ``src``
+    may be a subnet's indirect input (``hou.SubnetIndirectInput``, D59), whose network is
+    the subnet ``dest`` sits in."""
     import hou
 
     if src is not None and src.parent() != dest.parent():
@@ -995,7 +997,7 @@ def connect(dest: Any, index: int | str, src: Any, output: int, rollback: Rollba
             f"{src.path()} and {dest.path()} are in different networks.",
             hint="Connect nodes that share a parent; use an object_merge SOP to bring geometry across networks.",
         )
-    previous = {c.inputIndex(): (c.inputNode(), c.outputIndex()) for c in dest.inputConnections()}
+    previous = {c.inputIndex(): _input_source(c) for c in dest.inputConnections()}
     try:
         if index == "next":
             if src is None:
@@ -1023,6 +1025,15 @@ def connect(dest: Any, index: int | str, src: Any, output: int, rollback: Rollba
         else:
             rollback.add(lambda: dest.setInput(used, old[0], old[1]))
     return used
+
+
+def _input_source(conn: Any) -> tuple[Any, int]:
+    """``(item, output index)`` feeding a connection: a node, or a subnet's indirect
+    input (``inputNode()`` is None for those)."""
+    try:
+        return conn.inputItem(), conn.inputItemOutputIndex()
+    except Exception:
+        return conn.inputNode(), conn.outputIndex()
 
 
 # -- tools ------------------------------------------------------------------------
