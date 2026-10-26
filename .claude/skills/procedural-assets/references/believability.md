@@ -167,6 +167,9 @@ Keep snapping intact:
   shots; verticals kept straight with a level camera.
 - **Atmosphere.** Distance shifts toward the sky colour behind it: bluer at mid distance, paler
   far away. Use an atmosphere or height fog, not one fog colour.
+- **Context props meet the same bar.** In the round-3 test, trees made of faceted blobs and
+  hedges made of boxes undid a good street view. Use proper trees (a trunk, branching, leaf
+  clusters with gaps, real silhouettes), or keep them out of frame.
 - **What fakes it.** A high viewpoint with blur or shallow depth of field reads as a miniature, as
   does an aerial over a bare plane. Saturation boosts, heavy bloom and spotless ground all give it
   away too.

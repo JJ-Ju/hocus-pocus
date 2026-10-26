@@ -1,0 +1,78 @@
+// streak_mask.vfl: Attribute Wrangle, Run Over: Points, on a dense render copy (or a UV
+// raster copy) of the damaged piece. Trails every streak source (streak_sources.vfl) down
+// its face. Full strength at the source and darkest in its first 10-30 cm, the opacity
+// fading exponentially; the profile fans out at the source's angle (10-20 deg at edge
+// ends, a few degrees for the fine fringe), so the head is the width of the notch or lip
+// and the faint tail is wider while its visible core thins out. The path meanders more
+// the further it runs. Under every top edge without a drip: a 5-15 cm dark band.
+//
+// Input 0: dense copy with point v@N (plain point normals), optional f@cut.
+// Input 1: source points (v@N, f@w, f@len, f@str, f@fan, i@stype) and detail
+//          v[]@top_A, v[]@top_B, v[]@top_N.
+// Writes f@streak (0-1, union of streaks and band), f@streak_band, i@streak_n (streaks
+// touching the point).
+//
+// Spare parms:
+//   fade       float  exponential fade rate over the length, e.g. 3
+//   meander    float  lateral wander at the tail (m), e.g. 0.012
+//   plane_tol  float  max distance from the source's face plane (m), e.g. 0.05
+//   band_h0, band_h1  float  band height range under a top edge (m), e.g. 0.05, 0.15
+//   band_str   float  band strength, e.g. 0.5
+//   seed       int
+
+vector P = @P;
+vector N = normalize(v@N);
+float acc = 1.0;
+int cnt = 0;
+float fade = chf("fade"), mea = chf("meander"), ptol = chf("plane_tol");
+int seed = chi("seed");
+float band = 0;
+if (abs(N.y) < 0.6) {
+    for (int s = 0; s < npoints(1); s++) {
+        vector Ns = point(1, "N", s);
+        if (dot(N, Ns) < 0.85) continue;
+        vector Ps = point(1, "P", s);
+        float L = point(1, "len", s);
+        float dh = Ps.y - P.y;
+        if (dh < -0.006 || dh > L) continue;
+        vector d = P - Ps;
+        if (abs(dot(d, Ns)) > ptol) continue;
+        float w = point(1, "w", s);
+        float fan = tan(radians(float(point(1, "fan", s))));
+        float wd = w + fan * max(dh, 0.0);
+        vector th = normalize(cross(Ns, {0, 1, 0}));
+        float x0 = dot(d, th);
+        if (abs(x0) > 3.0 * wd + mea * 2.0) continue;
+        float t = clamp(dh / max(L, 1e-4), 0.0, 1.0);
+        float x = x0 + mea * 2.0 * (noise(set(dot(Ps, th) * 13.1 + seed, P.y * 4.0, s * 0.37)) - 0.5)
+                  * sqrt(t);
+        // a fanning streak spreads the same dirt over a wider strip: lighter per area
+        float spread = w / wd;
+        float v = point(1, "str", s) * exp(-fade * t) * (1.0 - smooth(0.8, 1.0, t))
+                * exp(-x * x / (wd * wd)) * lerp(1.0, spread, 0.6) * smooth(-0.006, 0.004, dh);
+        if (v > 0.02) cnt++;
+        acc *= 1.0 - clamp(v, 0.0, 1.0) * 0.85;
+    }
+    // dark band right under a top edge that has no drip
+    vector tA[] = detail(1, "top_A"), tB[] = detail(1, "top_B"), tN[] = detail(1, "top_N");
+    for (int i = 0; i < len(tA); i++) {
+        if (dot(N, tN[i]) < 0.85) continue;
+        vector T = normalize(tB[i] - tA[i]);
+        float u = dot(P - tA[i], T);
+        float Le = distance(tA[i], tB[i]);
+        if (u < 0 || u > Le) continue;
+        if (abs(dot(P - tA[i], tN[i])) > ptol) continue;
+        float below = tA[i].y - P.y;
+        if (below < -0.004) continue;
+        float bh = lerp(chf("band_h0"), chf("band_h1"),
+                        smooth(0.3, 0.7, noise(set(u * 3.0 + i * 7.1, seed, 0.5))));
+        // the band's lower edge is ragged at the fringe scale
+        bh *= fit(noise(set(u * 11.0 + i, seed, 2.5)), 0.3, 0.7, 0.75, 1.2)
+            * fit(noise(set(u * 37.0 + i, seed, 4.5)), 0.3, 0.7, 0.9, 1.1);
+        band = max(band, (1.0 - smooth(0.45 * bh, bh, below)) * smooth(-0.004, 0.002, below));
+    }
+    band *= chf("band_str");
+}
+f@streak_band = band;
+f@streak = 1.0 - acc * (1.0 - band);
+i@streak_n = cnt;

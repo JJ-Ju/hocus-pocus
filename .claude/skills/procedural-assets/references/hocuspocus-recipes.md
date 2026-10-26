@@ -173,6 +173,11 @@ copies as instances. Then a piece can be looked at, LOD'd and varied alone.
   …), even though Houdini's menu lists only `default`.
 - Assign by attribute in SOPs (`shop_materialpath` per prim, or Material SOP groups), and
   check it landed: `inspect {what: "geo", target, group_by: "shop_materialpath"}`.
+- Packed instances lose a material assigned inside the packed piece; they keep one only when
+  `shop_materialpath` is on the packed prim itself. Output unpacked geometry by default, and
+  offer packed instances as an engine option with the material on the packed prim.
+- MaterialX input parms carry their signature in the name (`in2_vector3`), so setting `in2`
+  by script fails with `InvalidSize`. Read the names with `inspect {what: "parms"}`.
 - SOP `Cd` reaches USD as the primvar `displayColor`. A `geompropvalue` reading `"Cd"`
   returns black in Karma; read `"displayColor"`.
 - Copy to Points' attribute-apply menus (`applyto1` …) take tokens (`prims`, `points`,

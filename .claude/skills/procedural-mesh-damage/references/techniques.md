@@ -89,6 +89,29 @@ was cut. Check that `binsidea` is not empty.
 - **Timings:** mask 8–39 ms; chip points 4–18 ms; Boolean 30–100 ms; SDF route 0.15–0.63 s;
   rasterising 5 layers to UV at 1K, 0.14–1.1 s.
 
+**Edge-centred breaks, streaks and micro fields (`chip_points_edge.vfl` and the r4
+scripts).** Same two pieces; "flank runs" are stretches where both faces are scooped 8 mm deep
+4–7 cm from the edge while the arris stands.
+
+| | Block, clustered (r3) | Block, edge-centred | Wall, clustered (r3) | Wall, edge-centred |
+|---|---|---|---|---|
+| Flank runs, default seed | 0 | 0 | 5 | 0 |
+| Seeds 1–10 with flank runs | 1 | 0 | 9 | 0 |
+| Edge share of cut area | 0.96 | 0.95 | 0.99 | 0.97 |
+| Largest face feature, diameter / depth | 9.8 / 4.0 cm | 2.1 / 0.4 cm | 6.0 / 2.4 cm | 2.4 / 0.35 cm |
+| Largest face feature ÷ largest edge break | 0.31 | 0.07 | 0.14 | 0.08 |
+| Triangles, base → damaged | 6,328 → 7,854 | → 10,618 | 22,936 → 28,248 | → 34,834 |
+
+- **Validation:** every seed was closed, with 0 non-manifold edges and seams unchanged.
+- **Cost:** the edge route adds about 2.8× the triangles, mostly from run bites and pits. For
+  LODs, drop the run bites and pits under 5 mm, or bake them.
+- **Streaks:** 7 of 11 qualifying chips on the block and 24 of 36 on the wall got a streak below
+  them. The dense render copy was 225k and 714k triangles (2 s and 11 s).
+- **Micro layer** (coefficient of variation of variance in 20 cm windows; local-std 90th/10th
+  percentile spread; kurtosis):
+  - block: 0.035 → 1.03; 1.19 → 3.48; 2.80 → 6.87;
+  - wall: 0.031 → 1.14; 1.19 → 3.46; 2.83 → 7.58.
+
 ## Recipes
 
 - **Chipped edges:** clustered chip cutters for hard materials (a cluster mask, then clustered

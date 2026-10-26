@@ -156,8 +156,8 @@ across the whole facade, with only the streaks placed. Fixes, in order of effect
    fixtures (longer under bigger projections). An old wall shows both dark streaks and pale
    washed ones, plus a jagged rain-shadow dirt line, and a damp splash band at the base.
 2. **Cluster, with a background.** About 80 % of each notable layer sits on 15–25 % of the
-   area, at a cluster scale at least as large as the frame; every layer keeps 10–20 % of its
-   strength elsewhere. Multiply cause × large clusters × medium × small, then threshold. Check
+   area, at a cluster scale at least as large as the frame. Every layer keeps 10–20 % of its
+   strength elsewhere. This holds at the micro scale as much as the macro (item 10). Multiply cause × large clusters × medium × small, then threshold. Check
    it with statistics: about 70–80 % of the facade within ±3 % of the base value.
 3. **One cause field for every layer.** Damp, streak, roughness, algae, rust and peeling read
    the same source.
@@ -169,6 +169,20 @@ across the whole facade, with only the streaks placed. Fixes, in order of effect
    grey multiply.
 7. **No visible repeat.** Hex-tile the tiling maps (`mtlxhextiledimage`,
    `mtlxhextilednormalmap`, COP `hextile`), and add a per-bay tint from an id primvar.
+8. **Edges first, streaks from sources.** Weather and wear concentrate at arrises and corners.
+   Every streak starts at a feature: a sill end, the low point of a top edge, a top with no
+   drip, a fixing, the lower lip of a chip. It is full strength at the source, widens and
+   fades. Painted steel fails where water sits: rail tops, junctions, post bases, door
+   bottoms. See [references/weather-and-use.md](references/weather-and-use.md).
+9. **Touch and traffic.** Touch points sit at code heights and wear as bands and strips (a
+   door's latch edge, a rail's top, one or two lift buttons). Floors wear in lanes from the
+   entrances. One or two hot points take most of each layer.
+10. **The micro scale clusters too.** Fine grain is Gaussian noise times an amplitude field
+    from the causes. It is denser at the top of each pour, sharper at fresh breaks, and
+    flattened and dirt-filled where worn. Use clustered scatter with power-law sizes for
+    discrete features, and check the 90th/10th percentile spread of local contrast (target
+    3–6). See [references/micro-noise.md](references/micro-noise.md) for the per-surface
+    catalogue.
 
 ## Story on tiling kits: in the shader
 

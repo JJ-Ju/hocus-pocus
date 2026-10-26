@@ -72,6 +72,15 @@ story".
   In a generator, make the causes a stage of the plan. For each facade, write points carrying
   a cause type, a radius and a strength, seeded from the building. Damage, materials (as
   primvars) and dressing all read those points.
+- **Causes come from the environment and from use.**
+  - **Environment:** edges take the most weather. Horizontal tops collect water and dirt and
+    shed streaks from their low points and ends. Windward vertical edges are washed, and
+    sheltered undersides keep crust.
+  - **Use:** each piece carries `interaction` points at code heights (grip, push, press,
+    slot, foot, strike). The building carries a `traffic` field from paths between
+    entrances, cores and units. Touch and strike wear cluster at the few busiest points.
+
+  See weather-and-use.md in `procedural-materials` and causes.md in `procedural-mesh-damage`.
 - **Plain thresholded noise is not clustering.** It has the same density everywhere. Use
   sparse hotspot points with falloff, a mask at least as large as the frame, or a random
   subset of elements.
@@ -96,6 +105,12 @@ the hip and the gate images at every gate.
   - 3–6 signature features per style that make it readable at a distance.
 - Gather reference for every level: close-ups of real details (frames, joints, fixings, wear)
   as well as whole buildings.
+- **Study the photographs; don't just collect them.** Look at 20 or more per subject, using a
+  browser tool if one is available, and count what recurs. For example: where streaks start in
+  17 of 17 photos, how often a break takes one face or both, how much denser the pores are at
+  the top of a pour. Write the counts in the README as rules. Text research says what can
+  happen; photographs say how often and where. Later, compare renders with these photos side by
+  side, and list the mismatches ranked by how much they give the CG away.
 - De-risk the unknowns that would force a redesign:
   - nodes you plan to rely on are installed (`search {kind: "types"}`; SideFX Labs often is
     not);

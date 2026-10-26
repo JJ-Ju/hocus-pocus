@@ -18,24 +18,39 @@ run there on a test piece.
 1. **Damage follows cause.** Chips concentrate on convex edges and corners, more near the
    ground and at contact heights (0.3–1.2 m), on corners people and vehicles pass, and on top
    edges exposed to weather. Thin parts break first. Sheltered and concave areas stay clean.
-2. **Cluster, don't sprinkle (80/20).** About 80 % of the notable damage sits on 20–30 % of
+   Use and industry have their own strike zones (door feet, rack uprights below 0.3 m, aisle
+   corners), listed in [references/causes.md](references/causes.md).
+2. **Edges take the damage; faces dissipate it.** The force needed to chip rises linearly
+   with distance from the edge, so the blow that takes a chip off an arris only makes a
+   small crater on a face.
+   - **One impact makes one asymmetric scar that removes the arris.** The struck face keeps
+     a small bite; the shell runs across the adjacent face and feathers out.
+   - **Never two large removals on opposite faces of one edge.** Both faces lose material
+     only at a corner, as one wedge.
+   - **Faces get only small, shallow pits,** at most 0.3× the nearby edge damage, densest
+     beside damaged edges.
+   - **Edges also wear round** along their whole length (5–25 mm on old concrete), and the
+     breaks sit inside that rounding.
+3. **Cluster, don't sprinkle (80/20).** About 80 % of the notable damage sits on 20–30 % of
    the edge length, in a few hotspots chosen by cause. Each hotspot has one dominant break,
    satellite chips around it, and a halo of worn, rounder arris. Between hotspots the edges
    stay crisp with sparse small nicks, about one per metre: aged, never pristine. Hotspot
    sizes follow a power law, one big and many small. Across a kit, a share of instances
-   (30–50 %) gets background wear only.
-3. **One mask drives every layer.** The same hotspots set chip density and size, bevel
+   (30–50 %) gets background wear only. In photographs, most hotspots are runs of overlapping
+   small bites (20–60 cm of 0.5–3 cm bites), and only a few are one large shell break.
+4. **One mask drives every layer.** The same hotspots set chip density and size, bevel
    width, edge wear in the shader, grime, streaks and rust, so a cause shows all its effects
-   in one place. Layers from independent noises read as procedural.
-4. **Silhouette in geometry, the rest in the bake.** A break larger than a few centimetres at
+   in one place. Layers from independent noises read as procedural. A chip is an edge too:
+   its lowest rim point is where a streak starts.
+5. **Silhouette in geometry, the rest in the bake.** A break larger than a few centimetres at
    play distance, or one that changes the outline, is real geometry. Smaller nicks, pitting and
    fine cracks go to a normal map baked from a damaged high-poly copy, or to edge decals.
-5. **Modular pieces stay tileable.** No damage within a margin of a face that meets a
+6. **Modular pieces stay tileable.** No damage within a margin of a face that meets a
    neighbour, unless the damage is generated once and mirrored onto both sides. Check that the
    seam profile is unchanged.
-6. **Every instance different.** Damage is seeded per instance, or chosen from a few baked
+7. **Every instance different.** Damage is seeded per instance, or chosen from a few baked
    variants, so repeated pieces never show identical chips.
-7. **Validate numbers, not pictures.** The worst failures here are silent: a boolean with
+8. **Validate numbers, not pictures.** The worst failures here are silent: a boolean with
    packed cutters returns the input unchanged, and a world-space SDF erode can delete the
    mesh. Check counts after every damage stage.
 
@@ -74,26 +89,50 @@ step ends with a check.
    `rbdmaterialfracture` with `materialtype` concrete), choose the pieces where the mask
    peaks, and boolean-subtract **only those pieces from the reference**. Never delete pieces
    and fuse the rest: shared interior walls become thousands of non-manifold edges.
-4. **Medium chips.** Run `chip_points_clustered.vfl` on the low-poly pre-bevel piece (a
-   chamfer doubles the convex edges), with the mask carrier in input 1.
-   - The mask sets each chip's keep probability, size, stretch along the edge and bite depth.
-   - Every hotspot of strength 0.6 or more also gets one anchor break at its nearest edge;
-     the chips around it become its satellites.
-   - Seam exclusion counts each cutter's reach.
+4. **Edge breaks.** Run `chip_points_edge.vfl` on the low-poly pre-bevel piece (a chamfer
+   doubles the convex edges), with the mask carrier in input 1. It writes one point per
+   cutter, oriented along the edge: x along the edge, y across the shell face, z into the
+   material, scaled by `v@scale`.
+   - **Every cutter is centred on the edge line** (within 0.2–0.5 of the chip depth *d*), so
+     the arris is always removed.
+   - **The scar is asymmetric.** The struck face keeps a bite about *d* wide; the shell runs
+     2–3 *d* across the other face and 2.5–3.5 *d* along the edge. The struck face comes from
+     the cause: on top edges the shell goes on the vertical face; on vertical edges it comes
+     from `impact_dir`.
+   - **A cutter that overlaps an earlier large one takes the same shell face**, so two large
+     removals never sit opposite each other.
+   - **Each hotspot becomes one of three things:**
+     - a run (most hotspots): 20–60 cm of overlapping power-law bites, 0.5–3 cm each;
+     - a shell break: one 10–30 cm break plus a smaller cut at one end;
+     - a corner wedge, only at a vertex.
+   - **Edges are weighted by exposure:** top 1.0, windward vertical 0.8, other vertical 0.5,
+     bottom 0.3 (0.9 in the contact band). Within 25 cm of a corner, breaks are 1.7× larger
+     and 2.5× denser.
+   - **Faces get only shallow pits.** Their density falls as exp(−distance / 0.15 m) from the
+     nearest edge, and they get smaller further out.
 
-   Copy cutters onto the points with Copy to Points, **`pack` off**, with the `variant`
-   attribute choosing among 3–4 cutter shapes. Then `boolean` subtract (`booleanop`
-   subtract, `usebinsidea` on to group the cut faces).
-   - **Concrete:** the convex hull (`shrinkwrap::2.0`) of about 16 random points on a
-     flattened ellipsoid. The flat facets read as broken concrete. Break up the anchors with
-     noise or a second, smaller cut, or large breaks read as carved pyramids.
-   - **Stone:** rounder Worley spheres.
+   Build 8 cutter variants of about unit radius:
+   - **0–3, breaks:** a 40-point hull, remeshed, then shaped by `cutter_shape.vfl`, which
+     feathers or hinges the far end and makes one end thicker;
+   - **4–5, nicks:** 18-point hulls;
+   - **6–7, pits:** 14-point hulls.
 
-   Cutter resolution sets the triangle count. `chip_points.vfl` is the even-spread version,
-   for background nicks only.
+   Copy them with Copy to Points, **`pack` off**, with piece attribute `variant`. Then
+   `boolean` subtract (`usebinsidea` on, group `cut`).
 
-   *Check:* chips per metre inside the hotspots are at least 5× those outside (the test gave
-   7.7–17×), and the triangles added fit the piece's budget.
+   *Check:* `damage_measure.vfl` with these inputs:
+   - input 0: the damaged piece, with prim `island` from Connectivity on the `cut` group;
+   - input 1: the clean bevelled piece;
+   - input 2: the pre-bevel piece.
+
+   It must report all three of:
+   - `flank_runs` = 0;
+   - `edge_area_share` of 0.9 or more;
+   - `face_to_edge` of 0.3 or less.
+
+   (`chip_points_clustered.vfl` is the earlier version, which pushed cutters in along the edge
+   bisector. That missed the arris and left two scoops flanking an intact edge on 9 of 10
+   wall seeds. `chip_points.vfl` spreads chips evenly; use it for background nicks only.)
 5. **Varying edge width.** Keep the kit's constant chamfer as the default and widen it around
    hotspots:
    - set a point attribute `bevel_scale` = lerp(0.1, 1, `damage_halo`^1.2), reset to the
@@ -101,8 +140,8 @@ step ends with a check.
    - `polybevel::3.0` with `useoffsetscale` `byattrib` (`pointscaleattr`);
    - **`divide`, then the Boolean.**
 
-   Edges stay crisp in clean stretches and worn round around breaks, for about 20 % more
-   triangles. Add edge wear in the shader from `damage_halo` (lighter, rougher, a noisy band
+   On old concrete, also round the whole arris (5–25 mm). Edges stay crisp in clean stretches
+   and worn round around breaks, for about 20 % more triangles. Add edge wear in the shader from `damage_halo` (lighter, rougher, a noisy band
    along the arris). It costs no triangles and gives the best abrasion read in colour.
 6. **Small nicks.** Leave them to the normal map unless this is a bake source or a hero
    piece that can afford 2.5–3× the triangles. Then use SDF erosion along the edges, masked by
@@ -128,18 +167,46 @@ step ends with a check.
    `vattribseamweight` to keep UV seams), triangulate with `divide`, count triangles. Bake
    small damage from the dense copy into the game mesh's normal and AO maps (see the
    `procedural-materials` skill).
-10. **Correlated layers.** Promote `damage_hot`, `damage_halo` and the layer amounts to
+10. **Streaks and micro fields.** On a dense render copy (`remesh` at about 1 cm, sharp
+    edges kept hard):
+    - **`streak_sources.vfl`** finds where streaks start, with the damaged piece and its
+      `cut`/`island` prims in input 0, the pre-bevel piece in input 1 and the mask carrier in
+      input 2:
+      - top edges without a drip, in clustered runs, with 20–30 % of the sources dominant;
+      - both ends of every top edge;
+      - the lower lip of every chip over about 1 cm on a vertical face.
+
+      Each source's length is k·√(catchment). Set `drip` 1 where the edge has a drip groove.
+    - **`streak_mask.vfl`** draws them down each face as `f@streak`. A streak is full
+      strength at the source and fans out at the source's angle, fading as exp(−3t) and
+      meandering further down. Top edges with no drip also get a dark band 5–15 cm deep.
+      Remap the mask with smoothstep(0, 0.5) before darkening, or it reads too faint.
+    - **`micro_fields.vfl`** writes three primvars for the shader or Copernicus:
+      - `micro_env`, the grain amplitude: floor + cluster²;
+      - `micro_pd`, pore density, highest at the tops of pour lifts, along form joints and in
+        clusters;
+      - `micro_w`, worn or filled character.
+
+      Multiply the micro noise by them. *Check:* an unlit, straight-on render of the micro
+      layer, measured in 20 cm windows: a coefficient of variation of window variance of
+      0.6 or more, a 90th/10th percentile spread of local std of 3–6, kurtosis 5–20. The test
+      went from 0.03 to 1.1, from 1.2 to 3.5, and from 2.8 to 7.6.
+
+    Fields on the low-poly game mesh smear; for an engine, rasterise them to UV (step 11).
+11. **Correlated layers.** Promote `damage_hot`, `damage_halo` and the layer amounts to
    primvars for the shader, or rasterise them to UV with Copernicus (`rasterizesetup` `space`
    uv, then `rasterizegeo`, geometry in input 1). The shader reads them for edge wear, grime in
    and around the chips, a streak below strong hotspots, and rust below the largest break.
    Keep grime breakup large and soft on big flat faces, or it reads as blotches.
-11. **Variation and LODs.** Expose `seed` on the HDA and drive every random source from it plus
+12. **Variation and LODs.** Expose `seed` on the HDA and drive every random source from it plus
    the instance `id`. For LODs, regenerate with a size cutoff (drop chips under a threshold)
    rather than reducing a dense mesh, and keep silhouette breaks to the last LOD that shows
    them.
 
 ## Techniques by damage type
 
+See [references/causes.md](references/causes.md) for why and where edges break (fracture
+mechanics, what photographs show, exposure weights, use and industrial strike zones), and
 See [references/techniques.md](references/techniques.md) for the verified node and parm names,
 measured costs and failure modes of each:
 
@@ -157,6 +224,20 @@ measured costs and failure modes of each:
 
 ## Traps
 
+- **Cutters pushed in along the edge bisector miss the arris.** Pushed or flattened along the
+  bisector, a cutter reaches both faces but not the edge, leaving two divots flanking an intact
+  arris: one impact never does that. Centre cutters on the edge line. `damage_measure.vfl`'s
+  `flank_runs` finds the pattern.
+- **Smooth cutters read as scoops.** Low-frequency displacement on a big cutter gives a soft
+  rounded hollow. Broken concrete is angular and grainy: raise the fine noise, add a few
+  clip planes, and give the cut faces exposed aggregate.
+- **Cap the shell's length, not only its depth.** A depth cap alone let 45–50 cm shells reach
+  1:6. Cap the final length after stretching.
+- **Count cut islands as edge damage by distance too.** On round bevels the normal angle misses
+  some edge breaks. An island that comes within about 1.2 cm of an edge line is edge damage.
+- **A file named `dbg.py` next to a hython script shadows Houdini's `dbg` module.** Karma's
+  MaterialX translator then fails (`theTranslators not defined`), the render writes nothing, and
+  an old PNG stays in place.
 - **Even spacing reads as CG.** Chips spread evenly along every convex edge, even with a
   height bias, came out only 1.6–2.5× denser in the contact zone than elsewhere; the
   clustered version gave 7.7–17×. Even spacing and an identical bevel highlight on every
