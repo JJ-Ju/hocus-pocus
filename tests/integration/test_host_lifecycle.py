@@ -86,6 +86,30 @@ def test_second_host_writes_and_removes_its_entry(tmp_path):
     second.stop()  # idempotent
 
 
+def test_second_host_stop_keeps_session_event_hooks(client, tmp_path):
+    """The events hooks are process-wide and belong to the host that installed them: a
+    second in-process host starting and stopping must leave the session host's hooks (and
+    its watched nodes) in place, so later hou-side edits are still recorded."""
+    from hocuspocus.host.config import HostConfig
+    from hocuspocus.host.runtime import Host
+    from hocuspocus.host.tools import events as ev
+
+    geo = hou.node("/obj").createNode("geo", "watched_geo")
+    assert ev.watch_node(geo)
+
+    second = Host(HostConfig(state_dir=str(tmp_path / "state2"), label="second"))
+    second.start()
+    second.stop()
+    second.stop()  # idempotent
+
+    since = ev.LOG.last_seq
+    geo.parm("tx").set(2.5)  # outside HocusPocus
+    events = client.ok("events", {"since": since})["events"]
+    assert [(e["kind"], e["path"], e["origin"]) for e in events] == [
+        ("ParmTupleChanged", "/obj/watched_geo", "other")
+    ]
+
+
 def test_start_is_idempotent(host):
     import hocuspocus.host as hp
 
