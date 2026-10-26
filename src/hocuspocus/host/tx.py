@@ -716,11 +716,24 @@ def _op_create(args: Any, opts: dict[str, Any], index: int, st: State) -> OpResu
             raise N.bad_arg(f"items[{index}].{at} must be {{index|name, from, output}}.")
         if "index" in link and "name" in link:
             raise N.bad_arg(f"items[{index}].{at}: pass index or name, not both.")
+        # Review 30: a from_output key (connect's spelling) was dropped silently and the
+        # wire took output 0, so unknown keys are refused and from_output is an alias.
+        unknown = sorted(set(link) - _LINK_KEYS)
+        if unknown:
+            raise N.bad_arg(
+                f"items[{index}].{at} has unknown key(s) {', '.join(unknown)}.",
+                hint="An input link takes index or name, from, and output (or from_output).",
+            )
+        out_key = "output"
+        if "from_output" in link:
+            if "output" in link and link["output"] != link["from_output"]:
+                raise N.bad_arg(f"items[{index}].{at}: output and from_output disagree; pass one.")
+            out_key = "from_output"
         src = wire_source(link["from"], node, f"{at}.from")
         target = link.get("name") if "name" in link else link.get("index", link_index)
         with located(f"{at}.{'name' if 'name' in link else 'index'}"):
             dest_index = N.resolve_input_index(node, target)
-        item, output = wire_output(src, node, link.get("output", 0), f"{at}.output")
+        item, output = wire_output(src, node, link.get(out_key, 0), f"{at}.{out_key}")
         with located(at):
             N.connect(node, dest_index, item, output, None)
         wires.append(src.path())
@@ -747,6 +760,9 @@ def _op_create(args: Any, opts: dict[str, Any], index: int, st: State) -> OpResu
         cook=cook,
         extra={"wires": wires} if wires else {},
     )
+
+
+_LINK_KEYS = frozenset({"index", "name", "from", "output", "from_output"})
 
 
 def wire_source(value: Any, dest: Any, field: str) -> Any:

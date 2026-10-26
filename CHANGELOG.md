@@ -13,6 +13,11 @@ one for the 2.0.x releases, and 2.1 removes it.
   leaves them alone for any other host. `hocuspocus.host.start()` is a singleton, so this
   only bit code that builds a `Host` directly, such as the integration tier's lifecycle
   tests, after which later `events` reads in the same session missed user edits.
+- `edit` and `node_create`: a `create` input link took any key, so `from_output` (the
+  `connect` op's spelling) was dropped silently and the wire came from output 0. An input
+  link now takes `from_output` as another name for `output` (both at once must agree), and
+  an unknown key is `invalid_argument` naming it. Found by the procedural-assets dogfood
+  (review 30), where a collision branch was exported as the render mesh.
 
 ## 2.1.0 (2026-10-24)
 

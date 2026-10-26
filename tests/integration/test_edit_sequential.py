@@ -421,3 +421,57 @@ def test_type_reference_lists_the_signatures_edit_validates_against(client):
             "edit", {"ops": [{"op": "set", "path": f"{node.path()}/signature", "value": token}]}
         )
         assert node.parm("signature").eval() == token
+
+
+# -- a create input's output key (review 30) -----------------------------------------------
+
+
+def test_create_input_takes_from_output_and_refuses_unknown_keys(client):
+    hou.node("/obj").createNode("geo", "g2")
+    result = client.ok(
+        "edit",
+        {
+            "ops": [
+                {"op": "create", "id": "split", "parent": "/obj/g2", "type": "split"},
+                {
+                    "op": "create",
+                    "id": "b",
+                    "parent": "/obj/g2",
+                    "type": "null",
+                    "inputs": [{"index": 0, "from": "$split", "from_output": 1}],
+                },
+            ]
+        },
+    )
+    b = hou.node(result["ids"]["b"])
+    assert b.inputConnections()[0].outputIndex() == 1
+    error = client.error(
+        "edit",
+        {
+            "ops": [
+                {
+                    "op": "create",
+                    "parent": "/obj/g2",
+                    "type": "null",
+                    "inputs": [{"index": 0, "from": result["ids"]["split"], "out": 1}],
+                }
+            ]
+        },
+    )
+    assert error["code"] == "invalid_argument" and "out" in error["message"]
+    error = client.error(
+        "edit",
+        {
+            "ops": [
+                {
+                    "op": "create",
+                    "parent": "/obj/g2",
+                    "type": "null",
+                    "inputs": [
+                        {"index": 0, "from": result["ids"]["split"], "output": 0, "from_output": 1}
+                    ],
+                }
+            ]
+        },
+    )
+    assert error["code"] == "invalid_argument" and "disagree" in error["message"]

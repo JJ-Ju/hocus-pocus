@@ -27,7 +27,7 @@ SPEC = ToolSpec(
     ),
     notes=(
         "Each op takes the fields listed for it. create: parent, type, name, "
-        "parms, inputs [{index or name, from, output}], flags, position, and per op "
+        "parms, inputs [{index or name, from, output (or from_output)}], flags, position, and per op "
         "exact_type, cook (false skips the echo's cook) and layout (good_position | none). "
         "delete: paths (or path), keep_connections. connect: "
         "from (null disconnects), from_output, to, to_input (index, name or next). "
