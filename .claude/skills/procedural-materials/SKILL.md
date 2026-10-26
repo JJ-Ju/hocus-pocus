@@ -144,6 +144,32 @@ values are Unreal's measured figures.
    grayscale (`mono`), downsampled (`resample`), a Karma render on a plane and a sphere
    (`previewmaterial`, `geotype` sphere or shaderball), then on the asset.
 
+## What makes it read as real
+
+The test renders that looked most CG had one albedo value, one roughness and one texture
+across the whole facade, with only the streaks placed. Fixes, in order of effect (numbers in
+[references/realism.md](references/realism.md)):
+
+1. **Weather by the physics of water.** Rain first cleans, then soils. Corners and top floors
+   are washed paler, and the middle and lower floors dirtier. Streams recur at the same
+   spots: the ends of sills, window-base corners, where horizontal meets vertical, below
+   fixtures (longer under bigger projections). An old wall shows both dark streaks and pale
+   washed ones, plus a jagged rain-shadow dirt line, and a damp splash band at the base.
+2. **Cluster, with a background.** About 80 % of each notable layer sits on 15–25 % of the
+   area, at a cluster scale at least as large as the frame; every layer keeps 10–20 % of its
+   strength elsewhere. Multiply cause × large clusters × medium × small, then threshold. Check
+   it with statistics: about 70–80 % of the facade within ±3 % of the base value.
+3. **One cause field for every layer.** Damp, streak, roughness, algae, rust and peeling read
+   the same source.
+4. **Roughness from causes.** Damp is darker and smoother; dust on top faces is rougher;
+   hand contact is polished; a repaint patch differs mostly in sheen.
+5. **Albedo variation at three scales:** macro 5–30 m ±6–12 % value, meso per bay ±3–6 %,
+   micro ±2–4 %. Fade the sunny side.
+6. **Dirt is a colour.** Lerp toward soot brown, green-black biofilm or rust orange, never a
+   grey multiply.
+7. **No visible repeat.** Hex-tile the tiling maps (`mtlxhextiledimage`,
+   `mtlxhextilednormalmap`, COP `hextile`), and add a per-bay tint from an id primvar.
+
 ## Story on tiling kits: in the shader
 
 A tiling texture repeats wherever the kit repeats, so wear placed by the building itself
@@ -158,6 +184,9 @@ tiling maps and put the story in the shader:
   through `smooth`) keeps whole stretches clean. Without it every ledge streaks the same,
   which is the uniform-detail failure.
 - Link each layer's amount to an HDA parm, so weathering is a control and not baked in.
+- Read the generator's cause points too. Damage hotspots (`damage_hot`, `damage_halo` from
+  the `procedural-mesh-damage` cluster mask) and facade stories (a leak, a neglected flat) as
+  primvars let edge wear, grime, streaks and rust sit where the chips and the cause are.
 
 For a unique piece that is unwrapped (not tiling), the same masks can be rasterised into
 UV space instead (`rasterizesetup` `space` uv, then `rasterizegeo`), which an engine needs

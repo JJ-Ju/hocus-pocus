@@ -1,0 +1,185 @@
+// chip_points_clustered.vfl: Attribute Wrangle, Run Over: Detail. A clustered version of
+// chip_points.vfl: the damage mask sets density, size, elongation and bite, so hotspots get
+// big chips that overlap and merge into breaks, and the background gets sparse small nicks.
+//
+// Input 0: the clean closed piece, PRE-bevel (a chamfer doubles the convex edges).
+// Input 1: optional mask carrier with f@damage_mask on its points (cluster_mask.vfl run on a
+//          dense copy of the piece). The mask is sampled at each chip with xyzdist/primuv,
+//          so input 0 can be low-poly. Without input 1, f@damage_mask on input 0's points is
+//          interpolated along each edge; without either, the mask is 1 everywhere.
+// Output: one point per chip with pscale, v@scale, orient, i@variant, f@damage_mask, and
+//          i@break (1 = a merged break piece). Copy noisy cutters onto them (Copy to Points,
+//          pack OFF, piece attribute "variant" if you give several cutter variants),
+//          then Boolean subtract from the clean (bevelled) piece.
+//
+// Spare parms:
+//   spacing      float  candidate spacing at mask 1 (m), e.g. 0.05
+//   min_angle    float  minimum dihedral angle (deg), e.g. 30
+//   keep_gamma   float  keep = mask^keep_gamma; ~1.5 makes the background sparse, e.g. 1.6
+//   size_min, size_max float  chip radius range (m), e.g. 0.012, 0.09
+//   size_bias    float  power on the size random at mask 0 (many small), e.g. 4
+//   size_bias_hot float power on the size random at mask 1 (more large), e.g. 1.2
+//   size_floor   float  size multiplier at mask 0 (background nicks are small), e.g. 0.35
+//   elong        float  max stretch along the edge at mask 1 (1 = none), e.g. 2.5
+//   break_thresh float  mask above which chips are aligned and stretched into breaks, e.g. 0.6
+//   inset        float  push the cutter centre into the piece by inset * pscale, e.g. 0.3
+//   inset_hot    float  inset at mask 1 (deeper bites in hotspots), e.g. 0.55
+//   keep_low, keep_high float  optional extra height bias (1, 1 = off)
+//   seam_axis    vector axes whose bounding faces are tiling seams, e.g. {1,0,0}
+//   seam_margin  float  clear distance between any cutter and a seam face (m), e.g. 0.03
+//   n_variants   int    number of cutter variants (writes i@variant 0..n-1), e.g. 4
+//   anchor_s_min float  hotspots at least this strong get one big "anchor" break at the
+//                       nearest convex edge; the chips around it are its satellites, e.g. 0.6
+//   anchor_size  float  anchor radius = anchor_size * hotspot r * strength, e.g. 0.3
+//   anchor_max   float  cap on the anchor radius (m), e.g. 0.16
+//   anchor_elong float  anchor stretch along the edge, e.g. 1.8
+// Anchors read the hotspot list (detail v[]@hs_P, f[]@hs_r, f[]@hs_s) that cluster_mask.vfl
+// writes, from input 1 if wired, else input 0.
+//   seed         int    per-instance seed
+
+float spacing   = max(chf("spacing"), 0.005);
+float min_angle = chf("min_angle");
+float kgamma    = chf("keep_gamma");
+float smin      = chf("size_min");
+float smax      = chf("size_max");
+float sbias0    = chf("size_bias");
+float sbias1    = chf("size_bias_hot");
+float sfloor    = chf("size_floor");
+float elong     = max(chf("elong"), 1.0);
+float bthresh   = chf("break_thresh");
+float inset0    = chf("inset");
+float inset1    = chf("inset_hot");
+float keep_low  = chf("keep_low");
+float keep_high = chf("keep_high");
+vector seam_axis = chv("seam_axis");
+float seam_m    = chf("seam_margin");
+int nvar        = max(chi("n_variants"), 1);
+int seed        = chi("seed");
+
+vector bmin, bmax;
+getbbox(0, bmin, bmax);
+int carrier = npoints(1) > 0 && haspointattrib(1, "damage_mask");
+int has_mask = haspointattrib(0, "damage_mask");
+
+for (int he = 0; he < nvertices(0); he++) {
+    if (!hedge_isprimary(0, he)) continue;
+    int pa = hedge_prim(0, he);
+    int pb = hedge_prim(0, hedge_nextequiv(0, he));
+    if (pa == pb || pb < 0) continue;
+    vector na = prim_normal(0, pa, {0.5, 0.5, 0});
+    vector nb = prim_normal(0, pb, {0.5, 0.5, 0});
+    vector ca = prim(0, "P", pa);
+    vector cb = prim(0, "P", pb);
+    float ang = degrees(acos(clamp(dot(na, nb), -1.0, 1.0)));
+    if (dot(na, cb - ca) >= 0 || ang < min_angle) continue;
+    int p0 = hedge_srcpoint(0, he);
+    int p1 = hedge_dstpoint(0, he);
+    vector A = point(0, "P", p0);
+    vector B = point(0, "P", p1);
+    vector T = normalize(B - A);
+    vector out_dir = normalize(na + nb);
+    // stochastic rounding keeps the density right on short (subdivided) edges
+    float fn = length(B - A) / spacing;
+    int n = int(fn + rand(set(he, seed, 5)));
+    for (int i = 0; i < n; i++) {
+        vector4 key = set(he, i, seed, 0);
+        float u = (i + rand(key + {0, 0, 0, 7})) / max(fn, 1e-6);
+        if (u > 1.0) continue;
+        vector P = lerp(A, B, u);
+        float m = 1.0;
+        if (carrier) {
+            int hp; vector huv;
+            xyzdist(1, P, hp, huv);
+            m = primuv(1, "damage_mask", hp, huv);
+        } else if (has_mask) {
+            m = lerp(float(point(0, "damage_mask", p0)), float(point(0, "damage_mask", p1)), u);
+        }
+        m = clamp(m, 0.0, 1.0);
+        float keep = pow(m, kgamma) * fit(P.y, bmin.y, bmax.y, keep_low, keep_high);
+        if (rand(key) > keep) continue;
+        float sb = lerp(sbias0, sbias1, m);
+        float s = fit01(pow(rand(key + {0, 0, 0, 3}), sb), smin, smax);
+        s *= lerp(sfloor, 1.0, m);
+        s = max(s, smin);
+        float hotness = smooth(bthresh - 0.1, bthresh + 0.1, m);
+        // orientation: random tumble for nicks, edge-aligned with a small tumble in breaks
+        vector axis = normalize(vector(rand(key + {0, 0, 0, 13})) - 0.5);
+        float tumble = lerp(180.0, 25.0, hotness) * (2.0 * rand(key + {0, 0, 0, 11}) - 1.0);
+        vector4 qr = quaternion(radians(tumble), axis);
+        vector Y = normalize(out_dir - T * dot(out_dir, T));
+        matrix3 F = set(T, Y, cross(T, Y));
+        vector4 qf = quaternion(F);
+        vector4 q = qmultiply(qf, qr);
+        float st = lerp(1.0, lerp(1.0, elong, rand(key + {0, 0, 0, 17})), hotness);
+        // seam exclusion counts the cutter's reach (radius x stretch), not just its centre:
+        // a 10 cm break stretched 2.5x crosses a 6 cm margin
+        int near_seam = 0;
+        for (int ax = 0; ax < 3; ax++) {
+            if (getcomp(seam_axis, ax) < 0.5) continue;
+            float lo = getcomp(P, ax) - getcomp(bmin, ax);
+            float hi = getcomp(bmax, ax) - getcomp(P, ax);
+            if (min(lo, hi) < seam_m + s * st) near_seam = 1;
+        }
+        if (near_seam) continue;
+        float ins = lerp(inset0, inset1, m);
+        int pt = addpoint(0, P - out_dir * ins * s);
+        setpointattrib(0, "pscale", pt, s);
+        setpointattrib(0, "scale", pt, set(st, 1.0, 1.0));
+        setpointattrib(0, "orient", pt, q);
+        setpointattrib(0, "variant", pt, int(rand(key + {0, 0, 0, 19}) * nvar) % nvar);
+        setpointattrib(0, "damage_mask", pt, m);
+        setpointattrib(0, "break", pt, hotness > 0.5);
+    }
+}
+// ---- anchor breaks: one big piece knocked off per strong hotspot ----------------------
+int hsrc = npoints(1) > 0 ? 1 : 0;
+vector hsP[] = detail(hsrc, "hs_P");
+float hsR[] = detail(hsrc, "hs_r");
+float hsS[] = detail(hsrc, "hs_s");
+float a_smin = chf("anchor_s_min"), a_size = chf("anchor_size");
+float a_max = chf("anchor_max"), a_el = chf("anchor_elong");
+for (int h = 0; h < len(hsP); h++) {
+    if (hsS[h] < a_smin) continue;
+    // nearest convex edge of input 0
+    float best = 1e9; vector bP = 0, bT = 0, bO = 0;
+    for (int he = 0; he < nvertices(0); he++) {
+        if (!hedge_isprimary(0, he)) continue;
+        int pa = hedge_prim(0, he);
+        int pb = hedge_prim(0, hedge_nextequiv(0, he));
+        if (pa == pb || pb < 0) continue;
+        vector na = prim_normal(0, pa, {0.5, 0.5, 0});
+        vector nb = prim_normal(0, pb, {0.5, 0.5, 0});
+        vector ca = prim(0, "P", pa), cb = prim(0, "P", pb);
+        if (dot(na, cb - ca) >= 0) continue;
+        if (degrees(acos(clamp(dot(na, nb), -1.0, 1.0))) < min_angle) continue;
+        vector A = point(0, "P", hedge_srcpoint(0, he)), B = point(0, "P", hedge_dstpoint(0, he));
+        vector AB = B - A;
+        float t = clamp(dot(hsP[h] - A, AB) / max(dot(AB, AB), 1e-9), 0.0, 1.0);
+        vector C = A + AB * t;
+        float d = distance(C, hsP[h]);
+        if (d < best) { best = d; bP = C; bT = normalize(AB); bO = normalize(na + nb); }
+    }
+    if (best > hsR[h]) continue;                       // a face hotspot: no edge to break
+    float s = min(a_size * hsR[h] * hsS[h], a_max);
+    float st = lerp(1.0, a_el, rand(set(h, seed, 61)));
+    int near_seam = 0;
+    for (int ax = 0; ax < 3; ax++) {
+        if (getcomp(seam_axis, ax) < 0.5) continue;
+        float lo = getcomp(bP, ax) - getcomp(bmin, ax);
+        float hi = getcomp(bmax, ax) - getcomp(bP, ax);
+        if (min(lo, hi) < seam_m + s * st) near_seam = 1;
+    }
+    if (near_seam) continue;
+    vector Y = normalize(bO - bT * dot(bO, bT));
+    matrix3 F = set(bT, Y, cross(bT, Y));
+    vector axis = normalize(vector(rand(set(h, seed, 67))) - 0.5);
+    vector4 q = qmultiply(quaternion(F), quaternion(radians(30.0 * (2 * rand(set(h, seed, 71)) - 1)), axis));
+    int pt = addpoint(0, bP - bO * inset1 * s);
+    setpointattrib(0, "pscale", pt, s);
+    setpointattrib(0, "scale", pt, set(st, 1.0, 1.0));
+    setpointattrib(0, "orient", pt, q);
+    setpointattrib(0, "variant", pt, int(rand(set(h, seed, 73)) * nvar) % nvar);
+    setpointattrib(0, "damage_mask", pt, 1.0);
+    setpointattrib(0, "break", pt, 2);
+}
+for (int pr = nprimitives(0) - 1; pr >= 0; pr--) removeprim(0, pr, 1);

@@ -161,7 +161,14 @@ copies as instances. Then a piece can be looked at, LOD'd and varied alone.
 - Make a material as a VOP subnet in `/mat` with the `material` flag set
   (`{"op": "node", "path": "/mat/m_panel", "flags": {"material": true}}`) containing an
   `mtlxstandard_surface` wired to a `subnetconnector` named `surface`. Without the flag a
-  Material Library LOP imports nothing.
+  Material Library LOP imports nothing. If it still imports nothing, build the material with
+  `voptoolutils._setupMtlXBuilderSubnet` inside the library (matnet `.`) and turn on
+  `fillmaterials`. A plain subnet with a `subnetconnector` failed there once; the cause was not
+  isolated.
+- Stage traps for close-ups:
+  - A camera's default `clippingRange` near plane is 1 m, which clips close-ups; lower it.
+  - A SOP Import LOP's `primpath` did not place the mesh; it landed at `/<pathprefix>/mesh_0`,
+    so set `pathprefix`.
 - MaterialX `signature` parms accept every signature the node defines (`color3`, `float`,
   …), even though Houdini's menu lists only `default`.
 - Assign by attribute in SOPs (`shop_materialpath` per prim, or Material SOP groups), and

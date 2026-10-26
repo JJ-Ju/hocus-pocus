@@ -55,6 +55,33 @@ Studios work this way:
 The failure this avoids: detailing late and shallowly, so every level is "fine" and nothing is
 good.
 
+## Distributing detail: clusters with a background
+
+Real detail is caused, and causes are local. Put about 80 % of each notable detail on about
+20 % of the surface: wear, damage, dirt, clutter, retrofits. Keep a low background of the same
+layer everywhere else, so nothing is pristine. Even spreading is the most common reason
+generated assets read as CG; reviewers call it "applied uniformly", "noise everywhere" or "no
+story".
+
+- **Clusters at every level:** 0–2 on a piece, with many instances getting none; 1–3 on a
+  bay, one of them dominant; 3–7 "stories" on a facade; and a bias by orientation for the
+  building.
+- **One cause field drives every layer.** Hotspots carry a cause type (impact, leak, rust,
+  neglect), and chips, stains, streaks, damp, rust and dirt all read the same field at their
+  own radius. Independent noises per layer read as procedural even when each looks right.
+  In a generator, make the causes a stage of the plan. For each facade, write points carrying
+  a cause type, a radius and a strength, seeded from the building. Damage, materials (as
+  primvars) and dressing all read those points.
+- **Plain thresholded noise is not clustering.** It has the same density everywhere. Use
+  sparse hotspot points with falloff, a mask at least as large as the frame, or a random
+  subset of elements.
+- **Measure it.** Show the cause field as colour at the level's distance; it should be a
+  handful of blobs, not speckle. Check the share of the layer inside the hotspots.
+
+[references/believability.md](references/believability.md) has the numbers, and the rest of
+what makes an asset read as real: imperfection that keeps snapping, layers of history,
+clutter personas, interiors, and presentation.
+
 ## Workflow
 
 Each phase ends with a **gate**: checks you run and images you look at before moving on. Save
@@ -116,13 +143,19 @@ Take the piece players see most, such as the window bay's frame and panel, all t
    - trim strips with 45° normal bevels.
 
    Bevel width is a fixed world size per kit, for example 1 cm, and should be visible at the
-   piece's judging distance.
-4. **Damage and wear:** where the piece really gets hit. Use the `procedural-mesh-damage`
-   skill: geometry for silhouette breaks, the bake for small nicks, seams kept clean, seeded
-   per instance.
-5. **UVs and texture:** trim-sheet rows or tiling at the target texel density. Make its
+   piece's judging distance. A constant bevel is the convention. Its sameness is broken
+   by what the edge carries: wear in runs along the edge, about half to two thirds of each
+   edge clean, and a roughness difference where the edge is worn.
+4. **Damage and wear:** where the piece really gets hit, clustered (above). Use the
+   `procedural-mesh-damage` skill: geometry for silhouette breaks, the bake for small nicks,
+   seams kept clean, seeded per instance, and a share of instances left with background wear
+   only.
+5. **Imperfection:** the real tolerances, exaggerated a little: lippage, sag, a tilted pane,
+   a door out of square, a bulge in thin sheet metal. Apply it in world space after assembly,
+   or fade it to zero at the piece's seams, so snapping survives (see believability.md §2).
+6. **UVs and texture:** trim-sheet rows or tiling at the target texel density. Make its
    materials with the `procedural-materials` skill.
-6. **Review in context:** next to its neighbours in the skeleton, lit, at arm's length and at
+7. **Review in context:** next to its neighbours in the skeleton, lit, at arm's length and at
    bay distance. Not alone in a void.
 
 - **Gate:**
@@ -143,6 +176,10 @@ Take the piece players see most, such as the window bay's frame and panel, all t
 - Props pass the same three-size-class rule as the pieces. Soft goods (laundry, futons,
   awnings, tarps) need sag, folds and thickness; flat cards read as paper at any distance.
   Keep prop colours as muted as the reference: candy colours look like a toy.
+- Drive a unit's props, curtains, fixtures and states from one persona per unit (tidy, family,
+  gardener, elderly, vacant), not from independent draws. Interiors behind glass get layers
+  (curtain, lace, a furniture shape, a back wall 3–4 m deep); dark by day is right, empty is
+  wrong.
 - Light it as the final scenes will be lit. This bay is the quality bar for everything else.
 - **Gate:** a lit render of the bay at street distance next to reference, and a grayscale
   version for value structure. Write down what makes it good, and use it as the checklist for
@@ -170,6 +207,11 @@ At each level run the three passes and review at that level's distance.
   - *Detail at facade scale:* macro value and hue variation per bay or floor; weathering
     placed by the facade's geometry (streaks below ledges, darker base, washed corners);
     decals; per-flat variation such as curtains, lit windows and AC units.
+  - *History:* 3–4 timeline events that each leave geometry or material. For example: the
+    build, a repaint with mismatched patches, retrofits in 2–3 generations (AC units, ducts,
+    dishes, replaced sashes, an added lift), and decay.
+  - *Stories:* 3–7 notable clusters per facade, from the shared cause field. Check that
+    the clustering survives at this distance, not only up close.
 
   Review across the street.
 - **L4 building:**
@@ -220,6 +262,13 @@ At each level run the three passes and review at that level's distance.
 
 - A close-up of the golden bay, a street view, a building view, the 9-up sheet, night if
   windows matter, and a cut-away if interiors exist. Look at every image.
+- Present it the way a photographer would, or the render gives it away:
+  - ground context (paving, kerbs, planting, poles and wires, bikes, people for scale);
+  - a sun 15–35° high, raking the facade;
+  - eye-height cameras at 24–35 mm with straight verticals;
+  - atmospheric perspective.
+
+  An aerial over a bare plane reads as a miniature.
 - An honest assessment by level: which levels meet the bar, which are placeholder, and what a
   human artist should still do.
 
@@ -236,6 +285,8 @@ At each level run the three passes and review at that level's distance.
   wrangle.
 - **Determinism and designed variation.** Seeded by stable ids; curated styles and weighted
   variants; most variety in materials, damage and dressing.
+- **Clustered, caused detail.** About 80 % of each notable detail on about 20 % of the
+  surface, over a low background; one cause field for every layer.
 - **Measure, do not assume.** Triangles per piece and per level, validation numbers, texel
   density, LOD value match.
 - **Look often and in context.** A draft `look` after each structural change. Final renders
@@ -261,6 +312,7 @@ When an argument shape is uncertain, read `inspect {what: "tool", target: "<tool
 |---|---|
 | [references/metrics-and-kits.md](references/metrics-and-kits.md) | Contract, grid, taxonomy, pivots, joins, repetition, edges, texel density, beauty corners, quality targets, mistakes |
 | [references/generator-architecture.md](references/generator-architecture.md) | Decomposition, plan-then-instance, grammars vs kits vs WFC, HDA structure, seeds, overrides, performance, validation |
+| [references/believability.md](references/believability.md) | Clusters with a background (80/20) and the cause field, imperfection that keeps snapping, layers of history, clutter personas and soft goods, interiors, presentation, critiques |
 | [references/surfacing.md](references/surfacing.md) | Asset-level surfacing strategy: trims vs tiling, macro value, where weathering goes, windows, stylised looks |
 | [references/game-output.md](references/game-output.md) | Instances, LODs, impostors, collision naming, lightmap UVs, engine attributes, export |
 | [references/hocuspocus-recipes.md](references/hocuspocus-recipes.md) | Tool calls for each phase, and the traps |

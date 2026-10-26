@@ -16,7 +16,9 @@ Times are wall clock after a forced cook. SideFX Labs is not installed on the te
 | SDF to mesh | `convertvdb` | `conversion` (`poly`), `adaptivity`, `isovalue`, `computenormals` |
 | Fracture | `rbdmaterialfracture` (4.0) | `materialtype` (`concrete`, `glass`, `wood`, `metal`, `custom`), `concrete_enablechipping`, `concrete_chippingdepth`, `concrete_cornerratio`, `concrete_edgedetail`, `concrete_edgenoiseheight`, `concrete_detailsize`, `concrete_fracturelevel`, `randomseed`; groups `inside`, `outside`, `concrete_chips` |
 | Other fracture | `voronoifracture` (3.0), `booleanfracture`, `rbdinteriordetail` (`detailsize`, `noiseamp`), `edgefracture`, `vdbfracture` | |
-| Bevel | `polybevel` (3.0) | `offset`, `filletshape` (`chamfer`, `round`, `solid`, `crease`), `divisions`, `ignoreflatedges` |
+| Bevel | `polybevel` (3.0) | `offset`, `filletshape` (`chamfer`, `round`, `solid`, `crease`), `divisions`, `ignoreflatedges`, `grouptype` `edges`; varying width: `useoffsetscale` (`unscaled`, `byattrib`) with `pointscaleattr` (default `pscale`), per point only |
+| Hull cutters | `shrinkwrap` (2.0) | convex hull of scattered points: faceted, broken-concrete cutters |
+| Masks to UV | `rasterizesetup` (`space` uv) → `rasterizegeo` | geometry in input 1 (input 0 is `camera_ref`); multiparm `attributes`, `name#`, `outtype#`; COP `sopimport` `usesoppath`, `soppath` |
 | Masks | `measure` (2.0) | `measure` = `curvature`, `curvaturetype` (`mean`, `gaussian`, `principal`, `curvedness`), `attribname` (set it) |
 | | `maskbyfeature` | direction and AO masks (`enableao`, `aosamples`); writes point `mask` |
 | | `distancefromgeometry` | `distmetric`, `rad`, `outattrib`, `outmask` |
@@ -67,9 +69,31 @@ was cut. Check that `binsidea` is not empty.
 
 **Dents.** Radial bowls along −N on a 60 × 60 grid: 0.02 s. The panel needs enough rows.
 
+**Clustered damage (`cluster_mask.vfl`, `chip_points_clustered.vfl`).** Two pieces: a 2 × 1 ×
+0.3 m block whose x ends are seams, and a unique 2.4 × 3 × 2 m wall corner. Edge samples every
+1 cm; "hot" means `damage_hot` ≥ 0.3; sweep figures are over seeds 1–10.
+
+| | Block | Wall corner |
+|---|---|---|
+| Edge length holding 80 % of `damage_hot` | 23 % (17–27 %) | 18 % (14–22 %) |
+| Even chips: count; per m in / out of hotspots | 58; 7.8 / 3.1 | 239; 11.5 / 7.1 |
+| Clustered chips: count; per m in / out | 48; 11.9 / 0.71 (17×), 85 % inside | 130; 14.1 / 1.8 (7.7×), 67 % inside |
+| Clustered chip radius in / out | 3.9 / 2.2 cm | 4.4 / 1.9 cm |
+| Triangles added: even / clustered / + varied bevel / SDF erosion | +2,160 / +1,254 / +1,526 / +10,810 | +9,298 / +3,606 / +5,312 / +32,578 |
+
+- **Validation:** 0 open and 0 non-manifold edges on every seed for the even, clustered and
+  varied-bevel routes, once `divide` precedes the Boolean on the varied bevel. Seams were
+  unchanged except on the SDF route.
+- **Cost:** the varied-bevel base itself adds 1,152 triangles on the block and 2,064 on the
+  wall, over the constant chamfer.
+- **Timings:** mask 8–39 ms; chip points 4–18 ms; Boolean 30–100 ms; SDF route 0.15–0.63 s;
+  rasterising 5 layers to UV at 1K, 0.14–1.1 s.
+
 ## Recipes
 
-- **Chipped edges:** chip cutters for hard materials; erosion for soft wear on a bake source.
+- **Chipped edges:** clustered chip cutters for hard materials (a cluster mask, then clustered
+  chip points), a varied bevel and shader edge wear from the same mask; erosion for soft wear
+  on a bake source.
   Push cutter centres into the piece (`inset`) so chips bite instead of grazing.
 - **Spalling:** erosion with the mask from a face-region or painted attribute instead of edge
   distance; Worley F2−F1 gives flat-floored flakes. Or subtract large flat noisy discs parallel
