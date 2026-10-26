@@ -170,6 +170,10 @@ Keep snapping intact:
 - **Context props meet the same bar.** In the round-3 test, trees made of faceted blobs and
   hedges made of boxes undid a good street view. Use proper trees (a trunk, branching, leaf
   clusters with gaps, real silhouettes), or keep them out of frame.
+- **Value and saturation.** Pale paint under a strong sun pushes walls toward a saturated cream
+  that reads like a toy, as in the review-31 round-4 renders. Keep paint albedo within the
+  realism.md table, check that the sunlit wall does not clip, and compare its hue and saturation
+  with a reference photograph, not only its brightness.
 - **What fakes it.** A high viewpoint with blur or shallow depth of field reads as a miniature, as
   does an aerial over a bare plane. Saturation boosts, heavy bloom and spotless ground all give it
   away too.

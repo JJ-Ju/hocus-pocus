@@ -13,6 +13,11 @@ should show primer or bare concrete in the material.
 Every node and parameter name here was checked in Houdini 22.0.466. The VEX in `scripts/` was
 run there on a test piece.
 
+**Read [references/causes.md](references/causes.md) before placing any damage.** It covers why
+edges break and faces only pit, what photographs of real breaks show, edge exposure weights,
+and the strike zones of people and industry. Then use the scripts in workflow order: start
+from `cluster_mask.vfl` and `chip_points_edge.vfl`, not the older chip scripts.
+
 ## Principles
 
 1. **Damage follows cause.** Chips concentrate on convex edges and corners, more near the

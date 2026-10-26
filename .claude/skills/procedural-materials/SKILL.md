@@ -10,6 +10,16 @@ networks) and used in MaterialX materials rendered by Karma or exported to an en
 node and parameter name here was checked in Houdini 22.0.466. The graphs in `scripts/` cook
 headless and write correct files.
 
+**Read before authoring:**
+- [references/realism.md](references/realism.md) for variation, weathering physics and
+  clustering;
+- [references/weather-and-use.md](references/weather-and-use.md) for where water, wind, sun,
+  people and industry act;
+- [references/micro-noise.md](references/micro-noise.md) for non-uniform grain, with patterns
+  by surface.
+
+This file only summarises them.
+
 Companion skills:
 - **`procedural-assets`:** where materials sit in a kit or generator, and trims versus tiling
   per piece.

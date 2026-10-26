@@ -15,6 +15,18 @@ Two companion skills do the deep work at piece level:
 - **`procedural-mesh-damage`:** edge wear, chips, cracks and breaks in the geometry.
 - **`procedural-materials`:** detailed materials, trim sheets, atlases and textures.
 
+**Load both companion skills with the Skill tool, and read these files before the phase that
+needs them.** Most of the realism guidance lives in their references, not in their SKILL.md
+files. In the review-31 test, an agent that read only the SKILL.md files skipped the mesh
+damage and repeated the uniform streak fringe the references warn against.
+
+| Before | Read |
+|---|---|
+| Phase 0, brief | `references/believability.md` (this skill) |
+| Phase 3, golden piece: damage | `procedural-mesh-damage/SKILL.md`, its `references/causes.md`, and its scripts (`cluster_mask`, `chip_points_edge`, `cutter_shape`, `damage_measure`) |
+| Phase 3, golden piece: materials | `procedural-materials/references/realism.md` and `micro-noise.md` |
+| Phase 4, golden bay; Phase 6, facade | `procedural-materials/references/weather-and-use.md`, plus the streak scripts (`streak_sources`, `streak_mask`, `micro_fields`) in `procedural-mesh-damage` |
+
 ## The idea: quality is built recursively, from the smallest piece up
 
 A building is a hierarchy of levels. A generator's quality is the quality of each level, and a

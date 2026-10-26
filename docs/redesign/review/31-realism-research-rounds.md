@@ -126,4 +126,50 @@ the wall chip starts as a hard-edged strip. Both are written into the skill as t
     `streak_mask`, `micro_fields`, `damage_measure`;
   - a fix to `chip_points.vfl`'s seam margin.
 
-The round-4 run on the same brief is in progress. Its results will be added here.
+## Round-4 run (danchi v4)
+
+184 min, $43, 225 HocusPocus calls (5 errors), 70 `houdini_python`, 85 looks. Log:
+`31-logs-danchi-v4.md`.
+
+**What improved:**
+- **Context props.** Trees have trunks, branching and leaf clusters with gaps, a direct result
+  of the new context-props rule.
+- **Presentation.** The street camera is level with a lens shift, so verticals stay straight, and
+  the scene has poles, wires, a fence and a second block.
+- **Weathering is measured as clustered.** 20 % of the facade area holds 45 % of the streak
+  weight (73 % after the shader's cause gate) and 54 % of the grime.
+- **Feature streaks on the gable.** Streaks start at exhaust hoods, drain spouts, rail post bases
+  and stair sills.
+- **Exports.** Weathering is baked into vertex colour, alpha and a second UV set, so it survives
+  the FBX round trip.
+
+**What did not:**
+- **No mesh damage.** The agent loaded only `procedural-assets` with the Skill tool, read the
+  other two SKILL.md files, and never opened `causes.md`, `weather-and-use.md`, `micro-noise.md` or
+  the new damage scripts. The round-4 research mostly did not reach it.
+- **Streaks.** Under the copings they still read as a repeated stencil of dark drips.
+- **Colour.** The walls are a saturated, over-bright cream. The surfaces read less realistic than
+  in v3, even though presentation and context improved.
+
+![hero](../evidence/danchi-v4/01_hero_street.jpg)
+![bay](../evidence/danchi-v4/02_golden_bay_close.jpg)
+![corridor](../evidence/danchi-v4/04_corridor_bay_close.jpg)
+![gable](../evidence/danchi-v4/05_gable_number.jpg)
+![variation](../evidence/danchi-v4/07_variation_9up.jpg)
+![cause field](../evidence/danchi-v4/12_cause_field.jpg)
+
+**Skill fixes from this run:**
+- `procedural-assets` now says to load both companion skills, and lists which reference to read
+  before each phase.
+- The two companion SKILL.md files point to their references as required reading.
+- Believability gains a value and saturation check for pale paint under a strong sun.
+
+## Next
+
+A round-5 run would test whether the reading checklist gets the edge-damage scripts, the
+streak sources and the micro fields into a generator. Two known weaknesses remain:
+- large breaks still read as smooth scoops;
+- chip streaks start as hard-edged strips.
+
+The cost per run has risen from 88 to 184 minutes. A narrower test, of one golden bay with the
+damage and weathering pipeline, would cost less than a whole generator.
