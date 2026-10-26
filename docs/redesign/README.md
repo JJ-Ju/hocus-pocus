@@ -35,6 +35,7 @@ user documentation is [`README.md`](../../README.md), [`docs/quickstart.md`](../
 | [`review/25-scorecard-2.0.md`](review/25-scorecard-2.0.md) | Friction scorecard on 2.0: the twelve review 07 tasks on the `core` profile | 2.0 release candidate, headless hython | 2026-10-14 | 2.0 evaluation record |
 | [`review/26-neo-tower-dogfood.md`](review/26-neo-tower-dogfood.md) | Dogfood: a game-ready procedural skyscraper generator (`hp::neo_tower`) built through the MCP tools in three phases (massing, facade and interiors; UVs, textures, LODs, collision and export; silhouettes, grime and lookdev), with call tallies, escapes, friction and an overall assessment | 2.0.0 bridge on `release/2.1`, headless hython, Indie | 2026-10-24 | 2.1 evaluation record; its friction drove streams D1 to D5 |
 | [`review/28-mini-tower-2.0-vs-2.1.md`](review/28-mini-tower-2.0-vs-2.1.md) | The same compact skyscraper-generator brief run by two fresh sessions, one on 2.0.0 and one on 2.1; escapes 7 to 1 | 2.0.0 and `release/2.1` at `c350194`, headless hython, Indie | 2026-10-24 | 2.1 re-run record (plan-2.1 stream D exit) |
+| [`review/29-procedural-assets-skill.md`](review/29-procedural-assets-skill.md) | The `procedural-assets` skill (`.claude/skills/`), tested by a fresh session building a danchi generator; what the test changed in the skill and four HocusPocus findings for 2.2 | 2.1.0, headless hython, Indie | 2026-10-25 | skill evaluation record |
 
 Reports 10 to 12 are the post-merge code review, the ergonomics review and the 1.1 city
 rebuild; `plan-1.1.md` and `CHANGELOG.md` 1.1.0 cite them. Reports 13 to 15 are the 1.2
@@ -52,7 +53,8 @@ they measured, and five of them are scripted as the workloads tier (`tests/workl
 Report 25 is the 2.0 scorecard (`CHANGELOG.md` 2.0.0). Reports 26 to 28 are the 2.1
 evaluations (`plan-2.1.md`): the neo_tower dogfood, the portability audit and the same
 generator brief run on 2.0.0 and on 2.1; `CHANGELOG.md` 2.1.0 lists what was fixed.
-Their images are in `evidence/neo-tower/` and `evidence/mini-tower/`.
+Their images are in `evidence/neo-tower/` and `evidence/mini-tower/`. Report 29 tests the
+`procedural-assets` skill; its images are in `evidence/danchi/`.
 
 ## Other files
 

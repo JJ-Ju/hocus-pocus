@@ -1,0 +1,84 @@
+// chip_points.vfl: Attribute Wrangle, Run Over: Detail. Input 0: the clean (bevelled or not)
+// closed piece. Writes one point per chip along convex edges, with pscale and orient, and
+// deletes the input's primitives so only the chip points remain. Copy noisy cutter shapes
+// onto these points (Copy to Points, pack OFF), then Boolean subtract from the clean piece.
+//
+// Spare parms (create them on the wrangle):
+//   spacing      float  average distance between chip candidates (m), e.g. 0.08
+//   min_angle    float  minimum dihedral angle in degrees for an edge to count, e.g. 30
+//   size_min     float  smallest chip radius (m), e.g. 0.02
+//   size_max     float  largest chip radius (m), e.g. 0.12
+//   size_bias    float  power on the size random; >1 gives many small, few large, e.g. 4
+//   keep_low     float  keep probability at the bottom of the piece, e.g. 0.9
+//   keep_high    float  keep probability at the top of the piece, e.g. 0.35
+//   inset        float  push the cutter centre into the piece by inset * pscale, e.g. 0.3
+//   seam_axis    vector axes whose bounding faces are tiling seams, e.g. {1,0,0} for x ends
+//   seam_margin  float  no chips within this distance of a seam face (m), e.g. 0.06
+//   seed         int    per-instance seed
+//
+// Optional point attribute on input 0: f@damage_mask (0-1). If present, it scales the
+// keep probability, so painted or computed masks (contact zones, exposure) drive density.
+
+float spacing   = chf("spacing");
+float min_angle = chf("min_angle");
+float smin      = chf("size_min");
+float smax      = chf("size_max");
+float sbias     = chf("size_bias");
+float keep_low  = chf("keep_low");
+float keep_high = chf("keep_high");
+float inset     = chf("inset");
+vector seam_axis = chv("seam_axis");
+float seam_m    = chf("seam_margin");
+int seed        = chi("seed");
+
+vector bmin, bmax;
+getbbox(0, bmin, bmax);
+int has_mask = haspointattrib(0, "damage_mask");
+
+for (int he = 0; he < nvertices(0); he++) {
+    if (!hedge_isprimary(0, he)) continue;
+    int pa = hedge_prim(0, he);
+    int pb = hedge_prim(0, hedge_nextequiv(0, he));
+    if (pa == pb || pb < 0) continue;                       // boundary edge
+    vector na = prim_normal(0, pa, {0.5, 0.5, 0});
+    vector nb = prim_normal(0, pb, {0.5, 0.5, 0});
+    vector ca = prim(0, "P", pa);
+    vector cb = prim(0, "P", pb);
+    float ang = degrees(acos(clamp(dot(na, nb), -1.0, 1.0)));
+    if (dot(na, cb - ca) >= 0 || ang < min_angle) continue; // concave or too flat
+    int p0 = hedge_srcpoint(0, he);
+    int p1 = hedge_dstpoint(0, he);
+    vector A = point(0, "P", p0);
+    vector B = point(0, "P", p1);
+    vector out_dir = normalize(na + nb);
+    int n = max(1, int(length(B - A) / spacing));
+    for (int i = 0; i < n; i++) {
+        vector4 key = set(he, i, seed, 0);
+        float u = (i + rand(key + {0, 0, 0, 7})) / n;
+        vector P = lerp(A, B, u);
+        // seam exclusion: distance to each bounding face on the seam axes
+        int near_seam = 0;
+        for (int ax = 0; ax < 3; ax++) {
+            if (getcomp(seam_axis, ax) < 0.5) continue;
+            float lo = getcomp(P, ax) - getcomp(bmin, ax);
+            float hi = getcomp(bmax, ax) - getcomp(P, ax);
+            if (min(lo, hi) < seam_m) near_seam = 1;
+        }
+        if (near_seam) continue;
+        // density: height bias inside the piece, times an optional mask
+        float keep = fit(P.y, bmin.y, bmax.y, keep_low, keep_high);
+        if (has_mask) {
+            float m0 = point(0, "damage_mask", p0);
+            float m1 = point(0, "damage_mask", p1);
+            keep *= lerp(m0, m1, u);
+        }
+        if (rand(key) > keep) continue;
+        float s = fit01(pow(rand(key + {0, 0, 0, 3}), sbias), smin, smax);
+        int pt = addpoint(0, P - out_dir * inset * s);
+        setpointattrib(0, "pscale", pt, s);
+        vector axis = normalize(vector(rand(key + {0, 0, 0, 13})) - 0.5);
+        vector4 q = quaternion(radians(360.0 * rand(key + {0, 0, 0, 11})), axis);
+        setpointattrib(0, "orient", pt, q);
+    }
+}
+for (int pr = nprimitives(0) - 1; pr >= 0; pr--) removeprim(0, pr, 1);

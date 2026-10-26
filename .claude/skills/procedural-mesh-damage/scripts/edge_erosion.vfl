@@ -1,0 +1,39 @@
+// edge_erosion.vfl: Volume Wrangle on a VDB SDF named "surface" (from VDB from Polygons,
+// interior band >= 10 voxels). Input 1: convex edge polylines (convex_edges.vfl). Erodes
+// chunky, chipped wear into the edges only, more near the ground, none at tiling seams.
+// Convert back with Convert VDB (conversion: poly, adaptivity 0.1-0.3), then transfer uv,
+// N and Cd from the clean piece with Attribute Transfer: the VDB route drops every attribute.
+//
+// Spare parms:
+//   edge_width  float  width of the eroded band from the edge (m), e.g. 0.06
+//   depth       float  maximum erosion depth (m), e.g. 0.05
+//   freq        float  noise frequency (1/m), e.g. 12
+//   low_boost   float  wear at the bottom relative to the top (1 = even), e.g. 2
+//   seam_axis   vector axes whose bounding faces are seams, e.g. {1,0,0}
+//   seam_margin float  clean distance at seams (m), e.g. 0.04
+//   seed        int
+//
+// Positive @surface is outside the solid, so adding to it removes material.
+
+float d = xyzdist(1, @P);
+float mask = 1.0 - smooth(0.0, chf("edge_width"), d);
+
+vector bmin, bmax;
+getbbox(1, bmin, bmax);
+mask *= fit(@P.y, bmin.y, bmax.y, chf("low_boost"), 1.0) / max(chf("low_boost"), 1.0);
+
+vector seam_axis = chv("seam_axis");
+float seam_m = chf("seam_margin");
+for (int ax = 0; ax < 3; ax++) {
+    if (getcomp(seam_axis, ax) < 0.5) continue;
+    float lo = getcomp(@P, ax) - getcomp(bmin, ax);
+    float hi = getcomp(bmax, ax) - getcomp(@P, ax);
+    mask *= smooth(0.0, seam_m, min(lo, hi));
+}
+
+float f1, f2;
+int wseed;                                   // wnoise needs an int variable here
+wnoise(@P * chf("freq") + chi("seed"), wseed, f1, f2);
+float chunky = clamp(fit(f2 - f1, 0.0, 0.6, 1.0, 0.0), 0.0, 1.0);
+float nicks = noise(@P * chf("freq") * 4.0 + chi("seed"));
+@surface += mask * chf("depth") * (pow(chunky, 2.0) + 0.3 * nicks);
