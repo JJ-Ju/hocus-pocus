@@ -45,10 +45,15 @@ two Houdinis ([19](docs/redesign/review/19-two-instances-and-prompts-eval.md)), 
 and Vellum through USD to Karma ([23](docs/redesign/review/23-vellum-usd-eval.md)). Five are
 now the workloads test tier, which fails a change that makes an agent pay more than 1.4.
 In 2.1 an agent built a game-ready skyscraper generator ([26](docs/redesign/review/26-neo-tower-dogfood.md),
-[`examples/neo_tower`](examples/neo_tower/README.md)). The
-[`procedural-assets`](.claude/skills/procedural-assets/SKILL.md) skill teaches agents the
-coarse-to-fine method technical artists use for such generators; Claude Code loads it in this
-repository ([29](docs/redesign/review/29-procedural-assets-skill.md)).
+[`examples/neo_tower`](examples/neo_tower/README.md)). Three skills teach agents how
+technical artists build such assets, and Claude Code loads them in this repository:
+[`procedural-assets`](.claude/skills/procedural-assets/SKILL.md) (modular kits and
+generators, quality built from the smallest piece up),
+[`procedural-mesh-damage`](.claude/skills/procedural-mesh-damage/SKILL.md) and
+[`procedural-materials`](.claude/skills/procedural-materials/SKILL.md) (Copernicus texture
+sets). Reviews [29](docs/redesign/review/29-procedural-assets-skill.md) and
+[30](docs/redesign/review/30-recursive-kits-and-surface-skills.md) test them on a danchi
+generator.
 
 ![City overview captured with viewport_capture](docs/redesign/evidence/city-destruction/02_city_overview.png)
 
