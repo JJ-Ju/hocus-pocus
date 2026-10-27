@@ -180,6 +180,9 @@ copies as instances. Then a piece can be looked at, LOD'd and varied alone.
   by script fails with `InvalidSize`. Read the names with `inspect {what: "parms"}`.
 - SOP `Cd` reaches USD as the primvar `displayColor`. A `geompropvalue` reading `"Cd"`
   returns black in Karma; read `"displayColor"`.
+- `hou.Parm.set` on a menu parm takes the item's index; some menus (`filletshape`, `grouptype`)
+  refuse a string token there. `parm_set` and `edit` accept tokens, and their error notes say
+  which form a menu takes.
 - Copy to Points' attribute-apply menus (`applyto1` …) take tokens (`prims`, `points`,
   `verts`). Set by index, 1 is vertices: a `shop_materialpath` copied there assigns
   nothing, and no warning says so.

@@ -16,7 +16,10 @@ run there on a test piece.
 **Read [references/causes.md](references/causes.md) before placing any damage.** It covers why
 edges break and faces only pit, what photographs of real breaks show, edge exposure weights,
 and the strike zones of people and industry. Then use the scripts in workflow order: start
-from `cluster_mask.vfl` and `chip_points_edge.vfl`, not the older chip scripts.
+from `cluster_mask.vfl` and `chip_points_edge.vfl`, not the older chip scripts. Where the
+result depends on transport, history or interaction (run-off that carries dirt down, rust that
+feeds on itself, trails that bundle), [references/wear-simulation.md](references/wear-simulation.md)
+says when a simulation beats the rules and how to run one. Its recipes are not yet tested.
 
 ## Principles
 
@@ -229,6 +232,15 @@ measured costs and failure modes of each:
 
 ## Traps
 
+- **Sub-centimetre bites are invisible at bay distance and expensive.** The round-5 run's first
+  pass made about 750 cutters and 15–20k triangles per 6 m coping, mostly bites under 1 cm (one
+  pixel is about 6 mm at 10 m). Raise the size floor for the judging distance, thin the background
+  chips, then `polyreduce`: 2.4–3.5k triangles per damaged coping.
+- **The kit's smooth normal pass turns chips into bulges.** It rounds the concave cut faces, so
+  the chips render as grey bumps. Give damaged pieces their own normals (cusp about 25°), and
+  keep them out of the kit-wide normal pass.
+- **Node parm names that differ from the UI:** `polyreduce` `hardfeatureedges` is an edge-group
+  string, not a toggle; Connectivity's parms are `connecttype` and `primincgroup`.
 - **Cutters pushed in along the edge bisector miss the arris.** Pushed or flattened along the
   bisector, a cutter reaches both faces but not the edge, leaving two divots flanking an intact
   arris: one impact never does that. Centre cutters on the edge line. `damage_measure.vfl`'s

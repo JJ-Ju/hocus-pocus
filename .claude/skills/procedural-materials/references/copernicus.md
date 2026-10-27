@@ -47,7 +47,7 @@ SideFX ships this mapping in its help ("Copernicus for Substance Designer users"
 - `fractalnoise`: `noisetype` (torus, perlin, worleyA, worleyB, white, alligator, sparse),
   `elementsize`, `oct`, `rough`, `amp`, `center`.
 - `worleynoise` (outputs dist1, dist2, border, center, id; `elementsize`, `jitter`),
-  `cellularnoise` (`gap`, `bevel`), `crystalnoise`, `bubblenoise` (`droop`), `phasornoise`,
+  `cellularnoise` (`smoothedge`; it has no gap or bevel parms in 22.0.466), `crystalnoise`, `bubblenoise` (`droop`), `phasornoise`,
   `curlnoise`.
 
 **Grunge** (each has `elementsize`, `seed`, `dotiled`): `grunge_leakingstreaks`,

@@ -16,7 +16,9 @@ headless and write correct files.
 - [references/weather-and-use.md](references/weather-and-use.md) for where water, wind, sun,
   people and industry act;
 - [references/micro-noise.md](references/micro-noise.md) for non-uniform grain, with patterns
-  by surface.
+  by surface;
+- [references/layering.md](references/layering.md) for height blending, the stack order,
+  normal blending, packing, and what to bake versus layer in the shader.
 
 This file only summarises them.
 

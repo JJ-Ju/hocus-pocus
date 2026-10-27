@@ -24,8 +24,9 @@ damage and repeated the uniform streak fringe the references warn against.
 |---|---|
 | Phase 0, brief | `references/believability.md` (this skill) |
 | Phase 3, golden piece: damage | `procedural-mesh-damage/SKILL.md`, its `references/causes.md`, and its scripts (`cluster_mask`, `chip_points_edge`, `cutter_shape`, `damage_measure`) |
-| Phase 3, golden piece: materials | `procedural-materials/references/realism.md` and `micro-noise.md` |
+| Phase 3, golden piece: materials | `procedural-materials/references/realism.md`, `micro-noise.md` and `layering.md` |
 | Phase 4, golden bay; Phase 6, facade | `procedural-materials/references/weather-and-use.md`, plus the streak scripts (`streak_sources`, `streak_mask`, `micro_fields`) in `procedural-mesh-damage` |
+| Unique or hero pieces whose wear depends on flow or history | `procedural-mesh-damage/references/wear-simulation.md` (recipes not yet tested) |
 
 ## The idea: quality is built recursively, from the smallest piece up
 
