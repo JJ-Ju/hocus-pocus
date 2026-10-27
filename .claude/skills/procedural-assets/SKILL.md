@@ -22,7 +22,7 @@ damage and repeated the uniform streak fringe the references warn against.
 
 | Before | Read |
 |---|---|
-| Phase 0, brief | `references/believability.md` (this skill) |
+| Phase 0, brief | `references/believability.md` and `references/art-direction.md` (this skill) |
 | Phase 3, golden piece: damage | `procedural-mesh-damage/SKILL.md`, its `references/causes.md`, and its scripts (`cluster_mask`, `chip_points_edge`, `cutter_shape`, `damage_measure`) |
 | Phase 3, golden piece: materials | `procedural-materials/references/realism.md`, `micro-noise.md` and `layering.md` |
 | Phase 4, golden bay; Phase 6, facade | `procedural-materials/references/weather-and-use.md`, plus the streak scripts (`streak_sources`, `streak_mask`, `micro_fields`) in `procedural-mesh-damage` |
@@ -319,6 +319,12 @@ At each level run the three passes and review at that level's distance.
   density, LOD value match.
 - **Look often and in context.** A draft `look` after each structural change. Final renders
   at the gates, saved to files at once, read back and judged against reference.
+- **Critique the picture, not only the parts.** At every lit or final look run
+  `scripts/frame_critique.py` for value range, value grouping, squint, saturation budget and
+  camera. At each level gate run the full set, plus `--pair` against the previous gate at the
+  same camera, then the A/B questions in `references/critique_questions.md`. Fix the fails
+  first. The baseline is realistic; a painterly profile is optional. See
+  `references/art-direction.md`.
 - **Test night and glass early** when windows matter.
 
 ## Using HocusPocus for this
@@ -340,6 +346,7 @@ When an argument shape is uncertain, read `inspect {what: "tool", target: "<tool
 |---|---|
 | [references/metrics-and-kits.md](references/metrics-and-kits.md) | Contract, grid, taxonomy, pivots, joins, repetition, edges, texel density, beauty corners, quality targets, mistakes |
 | [references/generator-architecture.md](references/generator-architecture.md) | Decomposition, plan-then-instance, grammars vs kits vs WFC, HDA structure, seeds, overrides, performance, validation |
+| [references/art-direction.md](references/art-direction.md) | Picture-level judgement: value structure, saturation budget, composition, detail budget, read at distance, seed spread; running `scripts/frame_critique.py` at each gate; failures and fixes |
 | [references/believability.md](references/believability.md) | Clusters with a background (80/20) and the cause field, imperfection that keeps snapping, layers of history, clutter personas and soft goods, interiors, presentation, critiques |
 | [references/surfacing.md](references/surfacing.md) | Asset-level surfacing strategy: trims vs tiling, macro value, where weathering goes, windows, stylised looks |
 | [references/game-output.md](references/game-output.md) | Instances, LODs, impostors, collision naming, lightmap UVs, engine attributes, export |

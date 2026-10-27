@@ -101,3 +101,42 @@ Proposed by the meta research and not yet started; each needs the user's go-ahea
   passes only if it flags v4's cream walls and ranks v3 above v4.
 - **B:** 20–30 A/B picks from the user on existing renders, keeping only the checks that agree.
 - **C:** anime-background stylisation in Karma and Copernicus.
+
+## Round A: picture-level self-critique
+
+`procedural-assets/scripts/frame_critique.py` (numpy and PIL only) runs independent checks on a
+render, against realistic targets:
+- value range and clipping;
+- 3- and 5-value grouping;
+- squint and spectral slope;
+- saturation budget, using Japanese facade base-colour limits;
+- palette;
+- depth separation;
+- detail density (80/20 at picture level);
+- repetition;
+- streak fringe share;
+- micro uniformity;
+- saliency;
+- camera;
+- a match against reference photos.
+
+It also runs A/B pairs, and `references/art-direction.md` and `critique_questions.md` go with
+it. It was run on 25 frames from v1–v5; the results are in `docs/redesign/research/rA-critique-results.md`.
+
+| Acceptance check | Result |
+|---|---|
+| v4 cream walls flagged, v5 concrete not | pass: v4 is 47 % clipped with walls at L\* 99 and 34 % pale over-tint; v5 walls at L\* 42–57 |
+| v4 bay fringe worse than v5 sourced streaks | pass with a wall mask: fringe share v4 0.71, v3 0.73, v5 0.34 (photos about 0.35); info only without a mask |
+| Aerial sheet over a bare plane reads as a miniature | pass: v5 09 fails the camera test; the v5 street view passes |
+| Uniform vs clustered micro grain separate | pass: p90/p10 1.77 vs 4.05 on renders |
+
+Weak tests, which round B must calibrate or demote:
+- **saliency** warns on 20 of 25 frames;
+- **palette** calls every frame analogous;
+- **depth** is heuristic without a depth AOV;
+- **repetition** fails regular straight-on facades;
+- **squint and spectral slope** warn on the v5 street view, which was judged the most
+  photographic.
+
+![bay](../evidence/critique/sheet_bay_v4_vs_v5.jpg)
+![street](../evidence/critique/sheet_street_v4_vs_v5.jpg)
