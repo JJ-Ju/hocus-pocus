@@ -166,6 +166,33 @@ From photographs of railings, doors and shutters on Japanese apartment blocks an
   - each spot drives a rust bloom, a blister halo 1.5–2× its size, and a run;
   - peeling is crisp-edged flakes over a lighter older layer, never a soft gradient.
 
+## Urban grime and the light substrate
+
+City air darkens every exposed surface over the years: soot, tyre and brake dust, diesel
+particulates. The material underneath stays light. Concrete and render are pale grey-beige
+when freshly broken, and paint and primer are lighter than their grimy top surface. So where
+wear removes the grime, the edge reads lighter than the face:
+- **Chipped and worn arrises:** a broken edge or rounded corner shows clean substrate, about
+  +10–25 % value over the weathered face *(est.)*. On fresh breaks it is cooler, without the
+  warm soot cast. Drive it from the damage mask (`damage_hot`, `damage_halo`) so it sits
+  exactly on the chips.
+- **Rubbed edges** at touch heights (door jambs, rail ends, corridor corners) go pale and
+  slightly polished.
+- **Rain-washed edges** on the windward side and at the top are paler too (Wind above). Rain
+  shadows under projections stay dark.
+
+This light-under-dark structure is what concept art and environment paintings exaggerate,
+often painted as a light line along a worn edge. In a realistic render it has to come from
+the material, not from an outline. A highlight from the light itself belongs to the shader
+(bevel normals, edge roughness), never to the albedo.
+
+**Use more colour, in small amounts.** Grime is not grey: it is warm brown-black soot, green-
+black biofilm, rust orange, efflorescence white. A realistic frame keeps large surfaces low
+in chroma (`art-direction.md`). It still carries many small hue accents: weathered paint in
+two or three slightly different repaint tones, rust, signage, plants, laundry, blue tarps,
+coloured doors, mailboxes. After round C the user asked for this wear, and more use of colour,
+to be worked into the realistic baseline (review 34).
+
 ## Gravity and accumulation
 
 - **Dust** = N.y² × occlusion × (1 − washed). It peaks in inside corners and at the backs of

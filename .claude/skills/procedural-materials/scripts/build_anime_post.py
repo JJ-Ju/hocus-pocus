@@ -14,8 +14,8 @@ Two input modes:
 Run with hython (Houdini 22.0.466), from a directory that holds no .py files:
   hython build_anime_post.py --beauty in.jpg --out out.jpg [--preset summer_day]
   hython build_anime_post.py --aov-exr cam_aov.exr --out out.jpg --preset summer_day
-         [--strength 1.0] [--horizon 0.35] [--before before.jpg] [--save-hip graph.hiplc]
-         [--no-haze] [--no-sky] [--no-lines] [--set sky_zenith=0.2,0.4,0.8 ...]
+         [--strength 0.4] [--horizon 0.35] [--before before.jpg] [--save-hip graph.hiplc]
+         [--no-haze] [--no-sky] [--lines] [--set sky_zenith=0.2,0.4,0.8 ...]
   --horizon is the horizon height in the frame (0 bottom, 1 top); --strength mixes back to
   the original (0 = the realistic render, 0.4 = mostly realistic, 1 = the full profile).
 Images are written by rop_image with its default OCIO conversion (linear in, sRGB JPG out).
@@ -296,7 +296,7 @@ def build(g, args, P):
     hl = g.mk("blend", [hl, skym], "highlight_not_sky", mode="subtract")
     hl = g.mk("clamp", [hl], "highlight_clamp")
     hl = g.mk("function", [hl], "highlight_amt", func="math", func_math="abs", scale=P["line_amt"])
-    if not args.no_lines:
+    if args.lines:
         lc_ = g.const(P["line"], rgb, "line_colour")
         painted = g.mk("blend", [painted, lc_, hl], "edge_highlight", mode="screen")
         dk = g.mk("function", [ed], "dark_line_amt", func="math", func_math="abs",
@@ -396,7 +396,8 @@ def main(argv=None):
     ap.add_argument("--out", required=True)
     ap.add_argument("--before")
     ap.add_argument("--preset", default="summer_day", choices=sorted(PRESETS))
-    ap.add_argument("--strength", type=float, default=1.0)
+    # 0.4 is the user's pick (review 34): 1.0 reads as a filter, not a painting
+    ap.add_argument("--strength", type=float, default=0.4)
     ap.add_argument("--key", type=float, default=None,
                     help="lit level: irradiance (aov) or linear luminance (image) of a sunlit wall")
     ap.add_argument("--horizon", type=float, default=0.35, help="horizon height, 0 bottom 1 top")
@@ -418,7 +419,8 @@ def main(argv=None):
     ap.add_argument("--sky-l", type=float, default=0.12)
     ap.add_argument("--no-haze", action="store_true")
     ap.add_argument("--no-sky", action="store_true")
-    ap.add_argument("--no-lines", action="store_true")
+    # off by default: the user read the edge lines as CG outlines, not paint (review 34)
+    ap.add_argument("--lines", action="store_true")
     ap.add_argument("--save-hip")
     ap.add_argument("--set", action="append", help="override a preset value, key=v or key=r,g,b")
     a = ap.parse_args(argv)

@@ -193,7 +193,11 @@ across the whole facade, with only the streaks placed. Fixes, in order of effect
    Every streak starts at a feature: a sill end, the low point of a top edge, a top with no
    drip, a fixing, the lower lip of a chip. It is full strength at the source, widens and
    fades. Painted steel fails where water sits: rail tops, junctions, post bases, door
-   bottoms. See [references/weather-and-use.md](references/weather-and-use.md).
+   bottoms. Worn and chipped edges read **lighter** than the face around them: the break
+   exposes clean concrete or primer, while the face carries soot and grime. That is how
+   environment concept art reads edges. Light catching an edge comes from the shader and the
+   bevel, never baked into the albedo. See
+   [references/weather-and-use.md](references/weather-and-use.md).
 9. **Touch and traffic.** Touch points sit at code heights and wear as bands and strips (a
    door's latch edge, a rail's top, one or two lift buttons). Floors wear in lanes from the
    entrances. One or two hot points take most of each layer.

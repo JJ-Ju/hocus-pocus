@@ -28,8 +28,17 @@ The post is a presentation layer for offline renders. A game export takes only t
 switches; an engine needs its own post or toon shading for the rest [I].
 
 **Strength.** 0 is the realistic render, 0.4 is "mostly realistic" (painted sky and coloured
-shadows show through), and 1 is the full profile (`styleC/07_strength_0_04_1.jpg`). Ask the
-user which one is the option they want before tuning further.
+shadows show through), and 1 is the full profile (`styleC/07_strength_0_04_1.jpg`). The user
+picked **0.4**, now the default (review 34): 1.0 read as a filter, and its edge lines were so
+distracting that nothing else in the frame registered. 0.4 is "still not quite the painterly
+anime background style". The missing part is a mild brush-stroke impression and very slight
+hue shifts in surface space (materials and textures), not more post. That is round D.
+
+**Edge lines are off by default** (`--lines` turns them on). The user read them as CG
+outlines. The light edges in background paintings and environment concept art are mostly
+worn and chipped arrises showing light substrate under grime. That belongs in the realistic
+material (`weather-and-use.md`, "Urban grime and the light substrate"). A highlight from the
+light belongs in the shader.
 
 ## 2. Lookdev switches
 
@@ -73,7 +82,7 @@ Run it with hython from a directory that holds no `.py` files:
 ```
 hython render_aov.py <scene.hip> cam_hero,cam_facade <out_dir> 32      # Karma AOVs, multi-part EXR
 hython build_anime_post.py --aov-exr <cam>_aov.exr --out after.jpg --horizon 0.12 \
-       [--preset summer_day|winter_overcast|dusk] [--strength 1] [--save-hip post.hiplc]
+       [--preset summer_day|winter_overcast|dusk] [--strength 0.4] [--lines] [--save-hip post.hiplc]
 hython build_anime_post.py --beauty render.jpg --out after.jpg --horizon 0.26   # image mode
 ```
 
@@ -152,9 +161,9 @@ round B did for the realistic profile. `docs/redesign/evidence/styleC/painterly_
 the first standalone version of the same measurements.
 
 **A/B questions for the user** (show both orders; record the answers like round B):
-1. Strength 0.4 or 1.0: which is the option you want? (`07`)
+1. Strength 0.4 or 1.0? **Answered: 0.4** (review 34).
 2. Pale or deep sky? (`08`)
-3. Do the thin light lines on slab edges read as painted, or as a CG outline? (`01`, `02`)
+3. Edge lines painted or CG? **Answered: CG; now off by default** (review 34).
 4. Blue-violet shadows (summer) or neutral (winter)? (`06`)
 5. Is the haze on the far blocks right, too much, or Kobayashi-clear? (`01`)
 6. Hard-edged stain levels (aov mode) or soft stains (image mode)? (`02` against `05`)
