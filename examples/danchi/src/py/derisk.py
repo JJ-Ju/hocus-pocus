@@ -1,4 +1,4 @@
-exec(open("C:/Users/jujun/AppData/Local/Temp/claude/C--Users-jujun-DEV-hocus-pocus/d956ad22-ff1d-47a8-a6c1-b1930b7bee4a/scratchpad/sk6-out/work/py/hlib.py").read())
+exec(open((globals().get("DANCHI") or hou.text.expandString("$HIP/..")) + "/src/py/hlib.py", encoding="utf-8").read())
 
 obj = hou.node("/obj")
 old = obj.node("derisk")

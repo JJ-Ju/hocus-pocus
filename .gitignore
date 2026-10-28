@@ -17,4 +17,19 @@ examples/neo_tower/backup/
 examples/danchi/work/
 examples/danchi/export/
 examples/danchi/backup/
-examples/danchi/tex/
+# the textures the asset's materials read are committed, so the asset works from a fresh checkout
+# (round 7); Karma's .rat caches and the intermediate height/curvature/AO maps stay out
+examples/danchi/tex/*
+!examples/danchi/tex/weather_atlas.png
+!examples/danchi/tex/weather_atlas.json
+!examples/danchi/tex/macro_var.png
+!examples/danchi/tex/spray_ao.png
+!examples/danchi/tex/spray_normal.png
+!examples/danchi/tex/concrete_basecolor.png
+!examples/danchi/tex/concrete_normal.png
+!examples/danchi/tex/concrete_roughness.png
+!examples/danchi/tex/streak_atlas.png
+!examples/danchi/tex/sky.png
+# showcase render frames (PNG, ~1-2 MB each) and per-image critique output; the JPGs, sheets,
+# manifest.json and critique.json beside them are the deliverable
+examples/danchi/showcase/raw/

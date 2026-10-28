@@ -1,9 +1,20 @@
 # Shared helpers for the danchi build scripts (run inside Houdini via houdini_python).
+#
+# Paths are relative to the repository. Each script finds this file through the global DANCHI
+# (the examples/danchi folder), or, if DANCHI is not set, through $HIP/.. (a hip saved in
+# examples/danchi/work). Run a script as:
+#   DANCHI = "<checkout>/examples/danchi"; exec(open(DANCHI + "/src/py/build.py").read())
+import os
 import hou
 import voptoolutils
 
-OUT = "C:/Users/jujun/AppData/Local/Temp/claude/C--Users-jujun-DEV-hocus-pocus/d956ad22-ff1d-47a8-a6c1-b1930b7bee4a/scratchpad/sk6-out"
-VEX = OUT + "/work/vex"
+ROOT = os.path.normpath(globals().get("DANCHI") or hou.text.expandString("$HIP/..")).replace("\\", "/")
+VEX = ROOT + "/src/vex"          # wrangle sources (*.vfl)
+PY = ROOT + "/src/py"            # build scripts
+TEXDIR = ROOT + "/tex"           # generated textures (the asset's default Texture Folder)
+REPO = os.path.normpath(ROOT + "/../..").replace("\\", "/")
+SKILLS = REPO + "/.claude/skills"   # skill scripts reused by the build (cop_lib, damage VEX)
+OUT = ROOT                       # round-6 name, kept for older snippets
 
 
 def vex(name, lib=True):

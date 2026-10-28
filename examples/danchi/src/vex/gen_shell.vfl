@@ -21,14 +21,26 @@ float ov = eave ? 0.45 : 0.0;                       // eave overhang
 float rtop = eave ? ytop + 0.05 : ytop + 0.1;        // roof surface
 float gtop = eave ? ytop - 0.18 : ytop + 0.1 + ROOF_PARA;
 
-// plinth and gables (lower 1.4 m of each gable separate: an accent base band on some blocks)
-boxm(0, set(x0, 0, zc), set(x1, PLINTH, zb), "paint_ext", "base");
+// plinth and gables (lower 1.4 m of each gable separate: an accent base band on some blocks).
+// Round 7: gridded so the baked vertex colour (soot, wash, splash, patches) has vertices: plinth
+// columns of 1.5 m; gable columns of 1 m from the corridor line, rows on the floor lines.
+int cnt;
+float px_[] = spaced(x0, x1, 1.5);
+float py_[] = array(0.0, PLINTH);
+float pz_[] = array(zc, zb);
+gridbox(0, px_, py_, pz_, "paint_ext", "base", 4, cnt);                 // no bottom
+float gz_[] = lines(zc, zb, zc, 1.0);
+float gyb_[] = array(0.0, 0.7, 1.4);
+float gyw_[] = lines(1.4, gtop, PLINTH, H);
 int ends[] = array(0, 1);
 foreach (int e; ends) {
     float gx0 = e == 0 ? x0 - 0.2 : x1, gx1 = gx0 + 0.2;
-    boxm(0, set(gx0, 0, zc), set(gx1, 1.4, zb), "paint_ext", "base_band");
-    int g = boxm(0, set(gx0, 1.4, zc), set(gx1, gtop, zb), "paint_ext", "wall");
-    for (int f = 0; f < 6; f++) setprimattrib(0, "gable", g + f, e + 1);
+    float gx_[] = array(gx0, gx1);
+    int inner = e == 0 ? 2 : 1;                                  // the face against the building
+    int gb = gridbox(0, gx_, gyb_, gz_, "paint_ext", "base_band", inner + 4 + 8, cnt);
+    for (int f = 0; f < cnt; f++) setprimattrib(0, "gable", gb + f, e + 1);
+    int g = gridbox(0, gx_, gyw_, gz_, "paint_ext", "wall", inner + 4, cnt);
+    for (int f = 0; f < cnt; f++) setprimattrib(0, "gable", g + f, e + 1);
     // panel joints: shallow vertical reveals at the thirds (4 of 18 gables)
     if (hr(seed, 501, 1) < 0.4) {
         for (int k = 1; k < 3; k++) {
@@ -59,7 +71,11 @@ for (int k = 0; k < len(bt); k++) {
     if (bt[k] == 0) continue;
     float cx0 = bx[k] - bw[k] * 0.5, cx1 = bx[k] + bw[k] * 0.5;
     float ph = rtop + 2.8;
-    int t = boxm(0, set(cx0, 0, zc - TOWER_D), set(cx1, ph, zc), "paint_ext", "tower");
+    float tx_[] = spaced(cx0, cx1, 1.0);
+    float ty_[] = lines(0.0, ph, PLINTH, H);
+    float tz_[] = spaced(zc - TOWER_D, zc, 1.3);
+    int t = gridbox(0, tx_, ty_, tz_, "paint_ext", "tower", 4 + 32, cnt);   // no bottom, none against the corridor
+    for (int f = 0; f < cnt; f++) setprimattrib(0, "tower", t + f, 1);
     // vertical strip of landing windows on the stair tower's front (half levels)
     for (int f = 0; f < floors; f++) {
         float wy = PLINTH + f * H + H * 0.5 + 0.35;

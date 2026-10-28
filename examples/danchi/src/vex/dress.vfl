@@ -46,11 +46,14 @@ if (s@role == "bal_bay") {
     emit(P, q, {0, 0, 0}, "bal_wall", base_id + k++, 0, f, b, sd, un, pe, cn, "wall");
     emit(P, q, set((dx0 + dx1) * 0.5, 0, 0), sprintf("sash_door_s%d", st), base_id + k++, st, f, b, sd, un, pe, cn, "glass");
     emit(P, q, set((wx0 + wx1) * 0.5, 0.9, 0), sprintf("bal_window_s%d", stw), base_id + k++, stw, f, b, sd, un, pe, cn, "glass");
-    // balcony front: damage variant per bay; 40 % of bays keep the clean variant
+    // balcony front: damage variant per bay. Round 7: the damaged share follows Weathering >
+    // Edge Damage (amount x 1.1, at most 85 %; amount 0 = every front clean). The neglected
+    // columns of flats get damaged first.
     int v = 0;
-    if (ndmg > 0) {
-        float r = hr(i@id, 31, seed);
-        v = r < 0.4 ? 0 : 1 + int(floor(hr(i@id, 32, seed) * (ndmg - 0.001)));
+    float dshare = clamp(detail(0, "w_dmg") * 1.1, 0, 0.85);
+    if (ndmg > 0 && dshare > 0) {
+        float r = hr(i@id, 31, seed) * (1.25 - 0.5 * clamp(cn, 0, 1));
+        v = r < dshare ? 1 + int(floor(hr(i@id, 32, seed) * (ndmg - 0.001))) : 0;
     }
     emit(P, q, {0, 0, 0}, sprintf("bal_front_v%d", v), base_id + k++, v, f, b, sd, un, pe, cn, "front");
     emit(P, q, {0, 0, 0}, "bal_hw", base_id + k++, 0, f, b, sd, un, pe, cn, "hw");
