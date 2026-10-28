@@ -1,0 +1,116 @@
+{
+ "camera": {
+  "agree": 0,
+  "disagree": 1,
+  "tie": 22,
+  "rate": 0.0,
+  "against": [
+   "seeds-2"
+  ]
+ },
+ "depth_separation": {
+  "agree": 0,
+  "disagree": 0,
+  "tie": 23,
+  "rate": null,
+  "against": []
+ },
+ "detail_density": {
+  "agree": 9,
+  "disagree": 3,
+  "tie": 11,
+  "rate": 0.75,
+  "against": [
+   "close-4",
+   "corr-3",
+   "facade-1"
+  ]
+ },
+ "micro_uniformity": {
+  "agree": 1,
+  "disagree": 0,
+  "tie": 22,
+  "rate": 1.0,
+  "against": []
+ },
+ "palette": {
+  "agree": 0,
+  "disagree": 0,
+  "tie": 23,
+  "rate": null,
+  "against": []
+ },
+ "reference_match": {
+  "agree": 0,
+  "disagree": 0,
+  "tie": 23,
+  "rate": null,
+  "against": []
+ },
+ "repetition": {
+  "agree": 0,
+  "disagree": 0,
+  "tie": 23,
+  "rate": null,
+  "against": []
+ },
+ "saliency": {
+  "agree": 0,
+  "disagree": 0,
+  "tie": 23,
+  "rate": null,
+  "against": []
+ },
+ "saturation_budget": {
+  "agree": 13,
+  "disagree": 5,
+  "tie": 5,
+  "rate": 0.7222222222222222,
+  "against": [
+   "bay-1",
+   "bay-3",
+   "close-4",
+   "end-1",
+   "facade-1"
+  ]
+ },
+ "spectral_slope": {
+  "agree": 0,
+  "disagree": 0,
+  "tie": 23,
+  "rate": null,
+  "against": []
+ },
+ "squint": {
+  "agree": 0,
+  "disagree": 0,
+  "tie": 23,
+  "rate": null,
+  "against": []
+ },
+ "streak_evenness": {
+  "agree": 0,
+  "disagree": 0,
+  "tie": 23,
+  "rate": null,
+  "against": []
+ },
+ "value_grouping": {
+  "agree": 0,
+  "disagree": 0,
+  "tie": 23,
+  "rate": null,
+  "against": []
+ },
+ "value_range": {
+  "agree": 13,
+  "disagree": 3,
+  "tie": 7,
+  "rate": 0.8125,
+  "against": [
+   "end-1",
+   "street-4",
+   "street-5"
+  ]
+ }
+}

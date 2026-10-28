@@ -46,6 +46,11 @@ says when a simulation beats the rules and how to run one. Its recipes are not y
    sizes follow a power law, one big and many small. Across a kit, a share of instances
    (30–50 %) gets background wear only. In photographs, most hotspots are runs of overlapping
    small bites (20–60 cm of 0.5–3 cm bites), and only a few are one large shell break.
+   - **Damage fits the building's age and story.** A fairly new or well-kept building gets
+     small edge chips and rounding, not a large isolated chunk. A big break needs a cause the
+     viewer can read (a strike zone, rebar rust on an old slab), and smaller damage radiating
+     out from it, getting smaller and sparser with distance. One big chunk on otherwise clean
+     edges reads as a mistake (the user, on the v5 parapet).
 4. **One mask drives every layer.** The same hotspots set chip density and size, bevel
    width, edge wear in the shader, grime, streaks and rust, so a cause shows all its effects
    in one place. Layers from independent noises read as procedural. A chip is an edge too:

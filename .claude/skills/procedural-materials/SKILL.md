@@ -162,11 +162,15 @@ The test renders that looked most CG had one albedo value, one roughness and one
 across the whole facade, with only the streaks placed. Fixes, in order of effect (numbers in
 [references/realism.md](references/realism.md)):
 
-1. **Weather by the physics of water.** Rain first cleans, then soils. Corners and top floors
-   are washed paler, and the middle and lower floors dirtier. Streams recur at the same
-   spots: the ends of sills, window-base corners, where horizontal meets vertical, below
-   fixtures (longer under bigger projections). An old wall shows both dark streaks and pale
-   washed ones, plus a jagged rain-shadow dirt line, and a damp splash band at the base.
+1. **Weather by the physics of water.** Rain first cleans, then soils. The top floors get the
+   most rain: open faces there wash paler, and the streaks under top-floor and parapet
+   features are the longest and strongest. Lower floors carry more sheltered grime. Inside
+   corners collect water and dirt. Streams recur at the same spots: the ends of sills,
+   window-base corners, where horizontal meets vertical, below fixtures (longer under bigger
+   projections). An old wall shows both dark streaks and pale washed ones, plus a jagged
+   rain-shadow dirt line, and a damp splash band at the base. Vary every streak's spacing,
+   length, width, intensity and colour, and build large stains from layered opacities
+   ("Streak variety" in [references/weather-and-use.md](references/weather-and-use.md)).
 2. **Cluster, with a background.** About 80 % of each notable layer sits on 15–25 % of the
    area, at a cluster scale at least as large as the frame. Every layer keeps 10–20 % of its
    strength elsewhere. This holds at the micro scale as much as the macro (item 10). Multiply cause × large clusters × medium × small, then threshold. Check
@@ -176,7 +180,8 @@ across the whole facade, with only the streaks placed. Fixes, in order of effect
 4. **Roughness from causes.** Damp is darker and smoother; dust on top faces is rougher;
    hand contact is polished; a repaint patch differs mostly in sheen.
 5. **Albedo variation at three scales:** macro 5–30 m ±6–12 % value, meso per bay ±3–6 %,
-   micro ±2–4 %. Fade the sunny side.
+   micro ±2–4 %. Fade the sunny side. "Clean" is not flat: a fresh wall still has roller laps,
+   batch shifts and dust. Concrete is never one value either.
 6. **Dirt is a colour.** Lerp toward soot brown, green-black biofilm or rust orange, never a
    grey multiply.
 7. **No visible repeat.** Hex-tile the tiling maps (`mtlxhextiledimage`,

@@ -69,6 +69,38 @@ arrises and corners. A chip or recess is an edge too, and inherits every rule be
   - draw lengths from a power law: a median of 0.3–0.5 m with a 5 % tail of 2–3 m;
   - use a fringe only on a horizontal top with no drip;
   - vary strength per column of openings, not per bay.
+- **Streak variety** (the user's round-B picks, review 33). Every round so far failed here,
+  even with sourced streaks. Vary each of these independently, per source:
+  - **Spacing.** Real sources are irregular, so streaks under a long edge never sit at even
+    intervals. Jitter the low points along the edge, merge neighbours closer than 5–10 cm, and
+    leave gaps of 0.5–2 m with nothing at all.
+  - **Length.** Most streaks are short or partial. Some stop a quarter or half of the way to the
+    next ledge, and a few reach the ground. Use the power law above, and also end streaks at the
+    next sill, band or joint, where the water is caught or spreads out.
+  - **Width and shape.** Not all long and narrow. Where water collects (the end of a sag, an
+    inside corner, under a wide sill) the streak is wide: 15–60 cm, a soft fan or a curtain.
+    Narrow 1–3 cm runs come from a notch or a fixing.
+  - **Intensity and colour.** A few dark, most faint. Hue shifts by cause: soot brown-grey,
+    green-black where damp stays, rust orange under steel, pale where washed.
+  - **Build-up.** A large stain is never one flat shape. Build it from 3–6 overlapping streaks
+    at different opacities (10–60 %), with lighter gaps between runs and a darker core where
+    the runs overlap. A single uniform dark sheet reads as paint, as in the v4 bay.
+  - **No mid-wall starts.** A streak that begins in the middle of a plain 90° wall reads as a
+    mistake. Start it at a feature, a joint or a chip, or let it fade in from a ledge above.
+  - **Not over-clustered.** 80/20 does not mean every streak in one patch. The v4 gable
+    clustered its streaks so tightly that the rest of the wall looked unweathered. Keep a
+    background of faint short streaks across all exposed tops.
+- **Height on the facade.** The top floors and the parapet get the most driven rain, so more
+  water runs through every source up there: the top-floor and parapet streaks are the longest
+  and strongest, and the band under the parapet is the darkest. Open faces on the top floors
+  are also washed paler, so the contrast between streak and wall is highest there. Lower floors
+  get less rain and more sheltered, unwashed grime. The user: "rain would gather mostly at the
+  top floors and a little less at the bottom". Scale streak strength and length by about
+  1.5–2× from the ground floor to the top floor *(est.)*.
+- **Inside corners collect.** Water, debris and dust gather where two walls meet, where a
+  balcony wall meets the slab, and at the inner corners of parapets. Give them more of every
+  layer: a wider streak down the corner, dirt in the corner line, damp and growth at the
+  bottom. This is the one place on a facade where water gathers rather than sheds.
 - **Frost** needs more than 75–80 % saturation, so it scales and rounds the outer top edges of
   copings, sills, parapets and steps, where water sits.
 - **Base:** rising damp ends at a salt tide mark 0.5–1.5 m up (typically about 1 m), with salt
@@ -98,6 +130,11 @@ arrises and corners. A chip or recess is an edge too, and inherits every rule be
 
 - **UV fades horizontal faces fastest** and edges about 1.2× faster than the face *(est.)*. Wood
   greys only 0.05–0.5 mm deep.
+- **Fading and colour drift in paint.** Sun-facing walls lose chroma and gain value (chalking),
+  so the south and west faces of one building differ slightly from the north. A repainted
+  patch shows as a hue or sheen shift. Even a clean, recently painted wall is never one flat
+  colour: roller laps, panel-to-panel batch shifts and dust give it a soft variation of
+  ±2–4 % value at 0.3–3 m. The user called the v5 walls "too flat" for lacking this.
 - **Paint fails by element.** From NPS Preservation Brief 10:
   - eaves peel;
   - sills and balusters crack and alligator;

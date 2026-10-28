@@ -47,20 +47,28 @@ except Exception:  # pragma: no cover
 
 ANALYSIS_W = 1024
 GRID_W = 256
-VERSION = "0.1 (round A)"
+VERSION = "0.2 (round B)"
 
 # --------------------------------------------------------------------------------------------
 # Thresholds. Every number has an origin string. [S] sourced, [I] inference / starting point,
-# [A] set or checked against round-A acceptance judgments (not ground truth).
+# [A] set or checked against round-A acceptance judgments (not ground truth), [B] moved to
+# where the user's 24 round-B A/B picks on v1-v5 renders stop objecting (review 33; in-sample,
+# one viewer, so treat as a starting point for the next calibration, not a law).
 # --------------------------------------------------------------------------------------------
 BASE_T = {
-    "clip_hi_warn": (0.005, "[I] photographic practice: only speculars and the sun may clip"),
-    "clip_hi_fail": (0.02, "[I] same; 2 % of the frame clipped is visible as blown paint"),
+    "clip_hi_warn": (0.25, "[B] photographic practice clips only speculars and the sun (<0.5 %), "
+                           "but the user preferred v2/v3 frames clipped 11-21 %; v4 at 38-47 % "
+                           "lost"),
+    "clip_hi_fail": (0.35, "[B] v4 bay/corridor (38-47 % clipped) lost every pair"),
     "crush_warn": (0.02, "[I] crushed blacks beyond 2 % hide shadow detail"),
     "span_warn": (50.0, "[I] p1-p99 L* span under 50 reads flat/foggy for a sunlit exterior"),
-    "surf_L_warn": (90.0, "realism.md: white masonry paint albedo <= 0.8; 0.8 under a correctly "
-                          "exposed sun (18 % card -> 0.18) renders ~L* 92"),
-    "surf_L_fail": (94.4, "realism.md: paint never above 240 sRGB = L* 94.4"),
+    "surf_L_warn": (96.0, "[B] realism.md puts white paint in sun at ~L* 92 and never above "
+                          "L* 94.4, but the user's preferred v2/v3 walls sit at L* 89-96"),
+    "surf_L_fail": (98.5, "[B] v4 walls at L* 99-100 (clipped cream) lost 6 of 7 pairs"),
+    "surf_L_low_warn": (60.0, "[B] v5 walls at L* 42-57 under a dim key read as 'an old video "
+                              "game' / 'mid-2000s game' to the user (bay-3, bay-5, close-3); "
+                              "sunlit facade walls in v2/v3 sit at L* 89-96. Shaded close-ups "
+                              "(v2 corridor, L* 41) are an exception the test cannot see"),
     "notan_dom_pass": (1.5, "[S] 2:1 unequal-shapes rule (r5 T2) relaxed to 1.5 for photographs [I]"),
     "notan_dom_fail": (1.15, "[S] r5 T2: equal thirds = muddy; 1.15 ~ equal [I]"),
     "notan_eta_pass": (0.80, "[I] Otsu separability of the 3-value thumbnail"),
@@ -81,11 +89,14 @@ BASE_T = {
                         "V=L*/10, chroma=C*/6 [I]. Sources: toshiseibi.metro.tokyo.lg.jp/kenchiku/"
                         "keikan/keikaku21.pdf, city.toshima.lg.jp/documents/16762/"
                         "sikisaikizyun.pdf, city.arakawa.tokyo.jp/documents/3209/sikisai64_1.pdf"),
-    "paint_fail_ratio": (1.5, "[I] 1.5x the base-colour limit allows for the Munsell approximation"),
-    "pale_over_warn": (0.04, "[I] share of the frame that is pale (L* >= 85), unclipped and over "
-                             "the V>=8.5 base-colour chroma limit"),
-    "pale_over_fail": (0.10, "[I] a tenth of the frame in over-saturated pale paint = toy look "
-                             "(believability 6)"),
+    "paint_fail_ratio": (2.5, "[B] the user preferred v2 walls at 1.6-2.3x the base-colour limit "
+                              "and never objected to colour; v1 at 2.9-3.0x lost. Over 1.0x "
+                              "still warns (Tokyo standard)"),
+    "pale_over_warn": (0.10, "[B] share of the frame that is pale (L* >= 85), unclipped and over "
+                             "the V>=8.5 base-colour chroma limit; was 0.04 [I]"),
+    "pale_over_fail": (0.45, "[B] was 0.10 (toy look, believability 6), but the user preferred "
+                             "v2 frames at 29-37 % and v4 lost at 26-39 % for its streaks, not "
+                             "its tint; above every round-B frame"),
     "harmony_warn": (0.75, "[I] share of chroma-weighted hue mass inside the best Matsuda template"),
     "ref_dE_warn": (15.0, "[I] palette distance; dE 10-20 is 'a different colour' in practice"),
     "ref_dE_fail": (25.0, "[I]"),
@@ -113,6 +124,9 @@ BASE_T = {
     "micro_p9010_pass": (3.0, "[S] r4-noise 2: target p90/p10 3-6"),
     "micro_kurt_lo": (4.0, "[S] r4-noise 6: fail if kurtosis < 4"),
     "micro_cv_pass": (0.4, "[S] r4-noise 2: CV 0.4-0.8"),
+    "micro_amp_warn": (1.0, "[B] mean local std of the pixel-scale band, L*; the v5 parapet "
+                            "close-up (0.71) was called flat, 'lacks mid and micro details'; "
+                            "preferred close-ups sit at 1.9-9.9"),
     "sal_compete_warn": (3, "[I] r5 T8: competing peaks >= 75 % of the top peak"),
     "sal_compete_fail": (5, "[I]"),
     "sal_focus_warn": (0.10, "[I] saliency mass in the top 5 % of the frame; uniform = 0.05, "
@@ -692,6 +706,10 @@ def t_value_range(fr, T):
         elif s50 > T["surf_L_warn"][0]:
             st = worst(st, "warn"); why.append("brightest large surface median L* %.0f is "
                                                "brighter than white paint in sun" % s50)
+        elif s50 < T["surf_L_low_warn"][0]:
+            st = worst(st, "warn"); why.append("brightest large surface median L* %.0f: the key "
+                                               "light is dim and the frame reads dull, like an "
+                                               "old game render (fine for a shaded close-up)" % s50)
     if span < T["span_warn"][0]:
         st = worst(st, "warn"); why.append("low dynamic range (p1-p99 span %.0f)" % span)
     if crush > T["crush_warn"][0]:
@@ -701,15 +719,16 @@ def t_value_range(fr, T):
     bad = band_badness(s50 if s50 is not None else 0, None, T["surf_L_warn"][0], 4.0) + \
         band_badness(clip, None, T["clip_hi_warn"][0], 0.01)
     return result("value_range", st, s50 if s50 is not None else p[2],
-                  "surface L* <= %.0f (warn) / %.1f (fail); clipped < %.1f %%" %
-                  (T["surf_L_warn"][0], T["surf_L_fail"][0], T["clip_hi_warn"][0] * 100),
+                  "surface L* %.0f-%.0f (warn) / <= %.1f (fail); clipped < %.0f %%" %
+                  (T["surf_L_low_warn"][0], T["surf_L_warn"][0], T["surf_L_fail"][0],
+                   T["clip_hi_warn"][0] * 100),
                   "; ".join(why),
                   {"L_p1": p[0], "L_p5": p[1], "L_p50": p[2], "L_p95": p[3], "L_p99": p[4],
                    "L_mean": float(L.mean()), "L_std": float(L.std()), "span_p1_p99": span,
                    "clipped_share": clip, "crushed_share": crush, "surface": key,
                    "surface_L50": s50, "surface_L95": s95},
                   {k: T[k][1] for k in ("clip_hi_warn", "surf_L_warn", "surf_L_fail",
-                                        "span_warn")}, bad, "r5 T1")
+                                        "surf_L_low_warn", "span_warn")}, bad, "r5 T1")
 
 
 def notan_maps(fr):
@@ -1456,6 +1475,11 @@ def t_micro(fr, T):
     else:
         why.append("grain is clustered (p90/p10 %.2f, CV %.2f, kurtosis %.1f)" %
                    (s["p90_p10"], s["cv_local_std"], s["kurtosis"]))
+    s["amp_flat"] = s["mean_local_std"] < T["micro_amp_warn"][0]
+    if s["amp_flat"]:
+        st = worst(st, "warn")
+        why.append("but there is almost no grain (mean local std %.2f L*): the surface reads "
+                   "flat; even clean paint and concrete need subtle variance" % s["mean_local_std"])
     s["surface"] = key
     s["surface_clipped_share"] = share_clip
     if share_clip > 0.3:
@@ -1465,7 +1489,7 @@ def t_micro(fr, T):
     return result("micro_uniformity", st, s["p90_p10"], "p90/p10 3-6, CV 0.4-0.8, kurtosis "
                   "5-20 (fail p90/p10 < 2 or kurt < 4)", "; ".join(why), s,
                   {k: T[k][1] for k in ("micro_p9010_lo", "micro_p9010_pass", "micro_kurt_lo",
-                                        "micro_cv_pass")},
+                                        "micro_cv_pass", "micro_amp_warn")},
                   band_badness(s["p90_p10"], T["micro_p9010_pass"][0], None, 0.5), "r4-noise")
 
 
@@ -1772,6 +1796,40 @@ def t_reference(fr, T, refs):
 # --------------------------------------------------------------------------------------------
 # Runner
 # --------------------------------------------------------------------------------------------
+# Tests whose pass/warn/fail agreed with the user's round-B picks no better than a coin
+# (review 33). They still run and explain themselves, but report "info" so an agent does not
+# chase them; the raw verdict is kept in metrics["raw_status"]. Round-B agreement in brackets.
+CALIBRATED_INFO = {
+    "value_grouping": "[B] 44 % agreement",
+    "squint": "[B] 40 %",
+    "spectral_slope": "[B] 38 %",
+    "palette": "[B] no decisive pairs; every frame reads analogous",
+    "depth_separation": "[B] 25 %; heuristic without a depth AOV",
+    "repetition": "[B] 50 %; fails regular straight-on facades",
+    "saliency": "[B] 44 %",
+    "camera": "[B] 25 % on tilt and pitch; the bare-plane and void-backdrop checks stay "
+              "binding (the user: 'doesn't look believable standing in an empty plane')",
+    "micro_uniformity": "[B] 42 % on renders, where distance and geometry mix into the grain "
+                        "band; the 'too flat' amplitude floor stays binding, and on a "
+                        "--input-kind variance_map the whole test does",
+}
+
+
+def calibrate(t):
+    reason = CALIBRATED_INFO.get(t["test"])
+    if reason is None or t["status"] in ("pass", "na", "info"):
+        return t
+    m = t["metrics"]
+    if t["test"] == "camera" and (m.get("void_backdrop") or "bare plane" in t["explain"]):
+        return t
+    if t["test"] == "micro_uniformity" and (m.get("amp_flat") or "amp_flat" not in m):
+        return t
+    m["raw_status"] = t["status"]
+    t["status"] = "info"
+    t["explain"] += " (info only: %s)" % reason
+    return t
+
+
 def critique(fr, profile="realistic", refs=None, fov=54.4):
     T = thresholds(profile)
     tests = []
@@ -1790,6 +1848,8 @@ def critique(fr, profile="realistic", refs=None, fov=54.4):
     tests.append(t_saliency(fr, T))
     tests.append(cam)
     tests.append(t_reference(fr, T, refs))
+    if profile == "realistic":
+        tests = [calibrate(t) for t in tests]
     summ = {"fail": [t["test"] for t in tests if t["status"] == "fail"],
             "warn": [t["test"] for t in tests if t["status"] == "warn"],
             "pass": [t["test"] for t in tests if t["status"] == "pass"],
@@ -2094,8 +2154,9 @@ def pair_table(ra, rb):
         a, b = ra["tests"][name], rb["tests"].get(name)
         if b is None:
             continue
-        ka = (status_rank(a["status"]), a["badness"] or 0)
-        kb = (status_rank(b["status"]), b["badness"] or 0)
+        # info tests compare on their raw verdict, shown in brackets as advisory
+        ka = (status_rank(a["metrics"].get("raw_status", a["status"])), a["badness"] or 0)
+        kb = (status_rank(b["metrics"].get("raw_status", b["status"])), b["badness"] or 0)
         if a["status"] in ("na",) or b["status"] in ("na",):
             better = "-"
         elif ka < kb:
@@ -2104,6 +2165,8 @@ def pair_table(ra, rb):
             better = "B"
         else:
             better = "="
+        if better in ("A", "B") and "info" in (a["status"], b["status"]):
+            better = "(%s)" % better
         rows.append({"test": name, "A_status": a["status"], "A_value": a["value"],
                      "B_status": b["status"], "B_value": b["value"], "better": better,
                      "target": a["target"]})

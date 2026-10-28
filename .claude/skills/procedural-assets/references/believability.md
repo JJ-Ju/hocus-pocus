@@ -25,6 +25,15 @@ background of the same layer, 10–30 % of the hotspot strength, so nothing is p
   | Facade | 3–7 "stories": ground floor, a corner, below a failed gutter, one or two neglected flats, a repainted bay |
   | Building | biased by orientation: weather side and base dirtier, sheltered side cleaner |
 
+- **At every scale, and balanced against physics.** 80/20 holds separately at macro (stain
+  fields and facade stories, 5–30 m), mid (streak groups, patches and chip runs, 0.3–3 m) and
+  micro (grain and pitting) scales. Each scale needs its own clusters and its own background,
+  or the frame has detail at one scale only. Two limits:
+  - **Physics wins where it is strong.** Rain reaches every exposed top, so streaking keeps a
+    faint background across the whole facade, heavier on the top floors, even where the
+    notable streaks cluster. Clustering it all into one patch (the v4 gable) reads as wrong.
+  - **Art direction picks the hotspots** inside what physics allows: which flat leaks, which
+    corner took the blows, where the eye should go.
 - **Inside a cluster:** one primary mark carries about half the weight, then 3–8 secondary
   marks at 0.3–0.5× its size, then a sprinkle. Sizes follow a power law
   (`r = rmin·(rmax/rmin)^(u^k)`, k = 2–4). Falloff is soft and noise-warped, never a disc.
@@ -99,6 +108,10 @@ Keep snapping intact:
   - recessed sealant joints of 10–20 mm, in a different material;
   - rail base plates with bolts;
   - expansion joints every 30–60 m.
+- **Damage matches the age and the story.** Decide the building's age and upkeep first, and
+  size the damage to it. A fairly new or well-kept block has small chips and soft rounding,
+  with no large isolated chunk. Larger damage needs a readable cause and radiates out from it:
+  the worst break at the centre, smaller and sparser marks around it.
 - **Detail octaves.** Each size class is about 3–5× smaller than the one above: building
   30–100 m, bay 3–6 m, element 0.5–1.5 m, fixing 2–10 cm. A jump of more than 10×, such as a
   bare 30 m end wall carrying only a number, reads as CG. Give it a 1–3 m class: panel joints,
@@ -154,6 +167,20 @@ Keep snapping intact:
 
 ## 6. Presentation: the render must not give it away
 
+- **Lighting and lookdev decide the first read.** In round B the user preferred the v2 and v3
+  renders over v5 every time, though v5 had the better damage pipeline. v5's dim key, with
+  walls at L\* 42–57 and flat grey ambient, read as "an old video game" and "a mid-2000s game".
+  The preferred v3 renders used a distant sun 28° up and 40° off the facade normal, on the
+  camera's side, with a textured sky dome visible to camera (sun 0.85, sky 0.35; the sunlit
+  parapet measured 0.55 linear for an albedo of 0.76). The camera-facing walls were sunlit at
+  L\* 85–96. v5 put the sun at 30° up but raking across the facade *away* from the camera, so
+  every camera-facing wall sat in half-light. Light the face the camera sees, set the lighting
+  up at the golden bay, and keep it for every later gate so asset changes are judged under the
+  same light. Check the result with `frame_critique.py`: `value_range` warns below L\* 60.
+- **Composition and context.** An empty road between two buildings is not believable either
+  (the user, street-1 and street-2). The v3 hero street was "the best overall so far" because
+  it framed a street with depth and things in it. Every hero shot needs a foreground, a
+  subject and a background, and signs of people.
 - **Ground context.** A building on an empty plane is the largest single tell. Add:
   - patched asphalt with painted lines, kerbs and gutters;
   - planting and gravel at the base, a damp splash band of 0.3–1 m, moss on the north side;
@@ -170,10 +197,17 @@ Keep snapping intact:
 - **Context props meet the same bar.** In the round-3 test, trees made of faceted blobs and
   hedges made of boxes undid a good street view. Use proper trees (a trunk, branching, leaf
   clusters with gaps, real silhouettes), or keep them out of frame.
-- **Value and saturation.** Pale paint under a strong sun pushes walls toward a saturated cream
-  that reads like a toy, as in the review-31 round-4 renders. Keep paint albedo within the
-  realism.md table, check that the sunlit wall does not clip, and compare its hue and saturation
-  with a reference photograph, not only its brightness.
+- **Value and saturation.** Keep paint albedo within the realism.md table, keep the sunlit wall
+  from clipping to flat white, and compare its hue and saturation with a reference photograph,
+  not only its brightness. Round B corrected an earlier claim here: the user never objected to
+  the pale cream of v2–v4. v4 lost for its uniform, intense streaks and pristine balcony faces,
+  and its walls at L\* 99–100 had lost all texture to clipping. Bright is fine; blown out and
+  dim are not.
+- **Show variation in two formats, for two jobs.** To compare sizes and heights across seeds,
+  line the buildings up on shared ground at true scale, at eye height or a low oblique. To pick
+  favourite variants, use a grid of independent shots with the same camera and lighting in
+  each. A 3×3 of mixed-size buildings in separate tiles hides their real scale, and looks like
+  "a collage from an asset bundle".
 - **What fakes it.** A high viewpoint with blur or shallow depth of field reads as a miniature, as
   does an aerial over a bare plane. Saturation boosts, heavy bloom and spotless ground all give it
   away too.
@@ -190,6 +224,10 @@ Keep snapping intact:
 | "Dead windows" | empty boxes, identical reflections | §5 layers, pane tilt, sash states |
 | "Noisy" | detail everywhere | §1 clusters and quiet bays |
 | "Scale unclear" | no human-scale objects | §6 people, bikes, poles, trees |
+| "Streaks too uniform" | even spacing, all long and narrow, one intensity and colour | `weather-and-use.md` streak variety: jittered sources, partial lengths, wide streaks where water collects, layered opacity |
+| "Looks like an old game" | sun raking away from the camera; walls in half-light at L\* 40–60 | §6 lighting: sun on the camera's side of the facade, visible sky dome; `frame_critique` value_range low warn |
+| "Isolated big damage" | one large break on clean edges | §3 damage matches age; radiate smaller damage from the centre |
+| "Too flat" | one albedo and no grain on clean paint or concrete | subtle base variation at 0.3–3 m plus grain; `micro_uniformity` amplitude floor |
 
 ## Sources
 

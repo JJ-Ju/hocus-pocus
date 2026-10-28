@@ -4,7 +4,8 @@ The checks are in `../scripts/frame_critique.py` (numpy and PIL only), and the A
 in `critique_questions.md`.
 Baseline: **realistic**, meaning photographic or nearly so. A painterly or anime look is an
 optional profile (`--profile painterly`) and needs its own art bible and reference stills.
-All thresholds are starting points. Round B calibrates them on the user's own A/B picks.
+Thresholds were calibrated in round B on 24 of the user's own A/B picks (§5). They fit one
+viewer's taste on danchi v1–v5 renders, in sample, so treat them as the current best guess.
 
 ## 1. Principles
 
@@ -15,9 +16,13 @@ shapes and never breaks them up. In sunlit exteriors:
 - shadows keep detail;
 - the sky and the wall stay separate values.
 
-Pale paint in strong sun is the usual failure. Real white paint has an albedo of 0.65–0.8,
-never above 240 sRGB (`realism.md`). At a correct sunny exposure it renders near L\* 85–92,
-not at 99 with clipped channels.
+Real white paint has an albedo of 0.65–0.8, never above 240 sRGB (`realism.md`). Both ends
+fail:
+- **Blown out.** Walls at L\* 99–100 with clipped channels lose all their texture (v4).
+- **Dim.** Camera-facing walls in half-light at L\* 40–60 read as "an old video game" (v5).
+
+The user preferred sunlit walls at L\* 85–96 (v2, v3), with some clipping on the brightest
+paint accepted. Light the face the camera sees (`believability.md` 6).
 
 **Colour and saturation budget.** In a photograph, large surfaces are low in chroma. Japanese
 landscape plans make this a rule for facade base colours, in Munsell chroma:
@@ -71,8 +76,11 @@ python <skill>/scripts/frame_critique.py sheet9.jpg --grid 3x3 --grid-trim 0.12 
 python <skill>/scripts/frame_critique.py r.jpg --mask ids.json --depth depth.png --ref photo1.jpg photo2.jpg
 ```
 
-- **Every `look` at lit or final quality:** run `value_range`, `value_grouping`, `squint`,
-  `saturation_budget` and `camera`. They take milliseconds.
+- **Every `look` at lit or final quality:** run the script. It takes a second or two. Act on
+  the binding tests (`value_range`, `saturation_budget`, `detail_density`, the bare-plane and
+  void-backdrop part of `camera`, the amplitude floor of `micro_uniformity`, and
+  `streak_evenness` with a mask). The others report `info` (§5); read their explanations, but
+  do not chase them.
 - **Level gates (golden piece, bay, facade, building, block):** run the full set, plus
   `--pair` against the previous gate's render at the same camera. Pass a wall mask, made
   from a Karma ID or matte AOV converted to PNG, so that `streak_evenness` and
@@ -84,14 +92,16 @@ python <skill>/scripts/frame_critique.py r.jpg --mask ids.json --depth depth.png
 - **Last:** the A/B question pass in `critique_questions.md`, with the numbers attached, in
   both orders.
 
-Each test reports a value, a target, pass/warn/fail and a one-line reason. There is no total
-score. Fix fails first, then warns that the VLM pass agrees with.
+Each test reports a value, a target, pass/warn/fail/info and a one-line reason. There is no
+total score. Fix fails first, then warns that the VLM pass agrees with. No test measures streak
+variety, damage that fits the story, or composition; those need the A/B questions and your
+own eye against `believability.md` 7.
 
 ## 3. Failures and usual fixes
 
 | Test | Failure means | Usual fix |
 |---|---|---|
-| `value_range` | clipped or over-white wall; crushed shadows; flat range | lower paint albedo into the `realism.md` table; lower exposure; add fill or sky light for shadows |
+| `value_range` | blown-out wall; dim camera-facing walls (warn below L\* 60); crushed shadows; flat range | lower paint albedo into the `realism.md` table or lower exposure; for dim walls, bring the sun round to the camera's side and add a visible sky dome |
 | `value_grouping`, `squint` | no dominant value; confetti; structure only in small detail | group lights and darks with lighting and material value; quiet the busy zone; bring big shapes forward |
 | `saturation_budget` | a large surface above the base-colour chroma limit; pale over-tint; accents over 5–10 % | desaturate the base paint toward grey-beige; bleach the sunny side; limit accents to the story spots |
 | `palette` | scattered hues; off the reference | move props and paint onto one hue template; fit to reference photos |
@@ -99,7 +109,7 @@ score. Fix fails first, then warns that the VLM pass agrees with.
 | `detail_density` | detail everywhere; no rest area; or an empty frame | cluster detail at causes; leave quiet bays; add context where empty |
 | `repetition` | near-copies at one shift (clone stamping) | per-instance variation; hex tiling; break up the prop set |
 | `streak_evenness` | streaks hang from every top edge (fringe); darkening repeats per bay | spawn streaks from sources (sill ends, fixings, drip-less tops) with power-law strength; vary by column of openings |
-| `micro_uniformity` | stationary grain | amplitude envelope from cause masks; switch the grain's character in worn zones |
+| `micro_uniformity` | no grain at all (binding); stationary grain (info on renders, binding on variance maps) | subtle base variation and grain on clean paint and concrete; amplitude envelope from cause masks; switch the grain's character in worn zones |
 | `saliency` | several competing peaks; top peak on a small bright artefact | dim or remove the distractor; put the strongest contrast at the subject |
 | `camera` | leaning verticals; elevated view over a bare plane; void backdrop | level camera with shift; eye height; ground context; a horizon |
 | `reference_match` | value or chroma histograms far from the reference photos | match exposure and palette to the references |
@@ -126,17 +136,36 @@ Weak spots:
 
 ## 5. Round B calibration
 
-1. **Picks.** The user makes 20–30 A/B picks on existing renders (danchi v1–v5 views at the
-   same camera, plus a few real photos as anchors), and says why in a word or two.
-2. **Agreement.** For each test, measure agreement with the picks: the share of pairs where
-   the better-scored image is the one the user chose. Measure the same for the VLM rubric,
-   run in both orders.
-3. **Keep or drop.** Keep tests above about 70 % agreement. Re-fit their thresholds to the
-   user's boundary, where the pass/fail line should split the pairs. Drop or demote to info
-   any test near 50 %.
-4. **Reference set.** Collect 20–40 photos of danchi and Japanese streets, with the user's
+The user made 24 A/B picks on danchi v1–v5 renders, with notes (review 33). For each test,
+agreement is the share of decisive pairs where the better status belonged to the user's pick.
+
+| Test | Round A | Round B | Now |
+|---|---:|---:|---|
+| `value_range` | 67 % | 81 % (13–3) | binding: two-sided, L\* 60–96 warn, 98.5 fail; clipping warn 25 %, fail 35 % |
+| `detail_density` | 75 % | 75 % (9–3) | binding, unchanged |
+| `saturation_budget` | 67 % | 72 % (13–5) | binding: warn over 1.0× the base-colour limit; fail over 2.5×; pale over-tint fail 45 % |
+| `micro_uniformity` | 42 % | 1–0 | the "too flat" floor is binding; stationarity is info on renders |
+| `camera` | 25 % | 0–1 | info, except the bare-plane and void-backdrop checks |
+| `value_grouping`, `squint`, `spectral_slope`, `saliency`, `repetition`, `depth_separation` | 25–50 % | — | info |
+| `palette`, `reference_match`, `streak_evenness` | no decisive pairs | — | unchanged; streaks need a mask, the reference test needs photos |
+
+Overall, scoring each frame as 2 × fails + warns, the critique picks the user's choice in 17
+of 21 decisive pairs, up from 12 of 22 in round A. That is measured on the same picks it
+was fitted to, so it overstates how well it will generalise.
+
+What the numbers cannot see, from the user's notes:
+- streak spacing, length, width and intensity variety, and layered build-up;
+- damage that fits the age of the building;
+- composition and context: an empty road, a building on a bare plane;
+- whether the seed sheet shows true relative scale.
+
+Four of the five saturation disagreements are v2 (warn) chosen over v3 or v5 (pass). The user
+never commented on colour, so the base-colour standard stays a warn, as realism guidance the
+picks neither confirm nor reject.
+
+Next calibration:
+1. **Reference set.** Collect 20–40 photos of danchi and Japanese streets, with the user's
    permission to download, as `--ref` targets for `reference_match` and `palette`.
-5. **Record the changes.** Write the new thresholds, with `[B]` origins, into `BASE_T`.
-   Keep the round-A values in the history so a later change can be traced.
-6. **Painterly profile.** Calibrate it the same way on stills of the target style before
+2. **Hold-out picks.** Re-check on a new set of picks from a later round, not the ones above.
+3. **Painterly profile.** Calibrate it the same way on stills of the target style before
    it is used.
