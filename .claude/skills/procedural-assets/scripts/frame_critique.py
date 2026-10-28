@@ -155,6 +155,19 @@ PAINTERLY_OVERRIDES = {
     "detail_a80_pass": (0.40, "[I] painterly: stronger focus expected"),
     "cam_tilt_warn": (4.0, "[I] painterly: dramatic perspective allowed"),
     "cam_tilt_fail": (12.0, "[I] painterly"),
+    # round C (stylisation-anime.md 5); [C] = measured on our own before/after renders only
+    # [C] ranges re-measured with this implementation on round-C uncaptioned outputs (v3 hero and
+    # facade, before vs summer/dusk/winter presets, aov and image modes)
+    "pt_shadow_b": (-2.0, "[S] Yasuda, Blue Protocol (rC research): shadows painted blue-violet; "
+                          "[C] darkest-quartile b* realistic +3.8, stylised -2.2..-12.5; the "
+                          "overcast winter key stays +2.5 and should warn only if not overcast"),
+    "pt_black_floor": (12.0, "[S/2] Akira backgrounds avoided pure black; [C] L* p1 realistic "
+                             "6.9-9.0, stylised 14.9-35.2"),
+    "pt_value_peaks": (0.58, "[C] share of non-sky pixels within +-4 L* of the 3 strongest "
+                             "L* peaks: realistic 0.48-0.50, stylised 0.61-0.76 (0.42 at "
+                             "strength 0.4, which is meant to read mostly realistic)"),
+    "pt_grain_ceiling": (7.0, "[C] painted surfaces carry less pixel grain: mean local std "
+                              "realistic 8.6-9.7, stylised 4.7-6.9 L*"),
 }
 
 
@@ -162,6 +175,7 @@ def thresholds(profile):
     t = dict(BASE_T)
     if profile == "painterly":
         t.update(PAINTERLY_OVERRIDES)
+    t["profile"] = profile
     return t
 
 
@@ -1475,6 +1489,10 @@ def t_micro(fr, T):
     else:
         why.append("grain is clustered (p90/p10 %.2f, CV %.2f, kurtosis %.1f)" %
                    (s["p90_p10"], s["cv_local_std"], s["kurtosis"]))
+    if T.get("profile") == "painterly" and s["mean_local_std"] > T["pt_grain_ceiling"][0]:
+        st = worst(st, "warn")
+        why.append("photographic grain on a painted look (mean local std %.1f L*)" %
+                   s["mean_local_std"])
     s["amp_flat"] = s["mean_local_std"] < T["micro_amp_warn"][0]
     if s["amp_flat"]:
         st = worst(st, "warn")
@@ -1793,6 +1811,42 @@ def t_reference(fr, T, refs):
                   band_badness(agg["emd_C"], None, T["ref_emd_C_warn"][0], 3), "r5 T7")
 
 
+def t_painted_key(fr, T):
+    """Painterly profile only: coloured shadows, no black, values in a few painted peaks."""
+    ns = ~fr.sky
+    if ns.mean() < 0.05:
+        return result("painted_key", "na", None, "", "no non-sky area", {}, {}, 0, "rC")
+    L, b = fr.L[ns], fr.lab[..., 2][ns]
+    q25 = np.percentile(L, 25)
+    shadow_b = float(b[L <= q25].mean())
+    floor = float(np.percentile(L, 1))
+    hist, _ = np.histogram(L, bins=100, range=(0, 100))
+    hs = np.convolve(hist, np.ones(3) / 3, "same")
+    peaks = sorted([i for i in range(1, 99) if hs[i] >= hs[i - 1] and hs[i] >= hs[i + 1]],
+                   key=lambda i: -hs[i])[:3]
+    near = np.zeros(100, bool)
+    for pk in peaks:
+        near[max(0, pk - 4):pk + 5] = True
+    peak3 = float(hist[near].sum() / max(hist.sum(), 1))
+    st, why = "pass", []
+    if shadow_b > T["pt_shadow_b"][0]:
+        st = "warn"; why.append("shadows are not cool (darkest-quartile b* %+.1f); paint them "
+                                "blue-violet unless the key is overcast" % shadow_b)
+    if floor < T["pt_black_floor"][0]:
+        st = "warn"; why.append("near-black darks (L* p1 %.0f); painted backgrounds lift the "
+                                "darkest value" % floor)
+    if peak3 < T["pt_value_peaks"][0]:
+        st = "warn"; why.append("values spread smoothly (%.0f %% in the 3 main peaks); paint "
+                                "them into a few flat shapes" % (peak3 * 100))
+    if not why:
+        why.append("cool shadows, lifted darks, values grouped into painted peaks")
+    return result("painted_key", st, peak3, "shadow b* <= %.0f; L* p1 >= %.0f; 3-peak share >= "
+                  "%.2f" % (T["pt_shadow_b"][0], T["pt_black_floor"][0], T["pt_value_peaks"][0]),
+                  "; ".join(why), {"shadow_b": shadow_b, "L_p1": floor, "peak3_share": peak3},
+                  {k: T[k][1] for k in ("pt_shadow_b", "pt_black_floor", "pt_value_peaks")},
+                  band_badness(peak3, T["pt_value_peaks"][0], None, 0.05), "rC")
+
+
 # --------------------------------------------------------------------------------------------
 # Runner
 # --------------------------------------------------------------------------------------------
@@ -1815,14 +1869,23 @@ CALIBRATED_INFO = {
 }
 
 
-def calibrate(t):
+# The painterly profile keeps value grouping binding: a designed image should have one dominant
+# value (2:1 rule), and in round C it caught a deep painted sky that broke the grouping.
+# Its micro test is info except the grain ceiling, and spectral slope stays info.
+PAINTERLY_BINDING = {"value_grouping"}
+
+
+def calibrate(t, profile="realistic"):
     reason = CALIBRATED_INFO.get(t["test"])
+    if profile == "painterly" and t["test"] in PAINTERLY_BINDING:
+        return t
     if reason is None or t["status"] in ("pass", "na", "info"):
         return t
     m = t["metrics"]
     if t["test"] == "camera" and (m.get("void_backdrop") or "bare plane" in t["explain"]):
         return t
-    if t["test"] == "micro_uniformity" and (m.get("amp_flat") or "amp_flat" not in m):
+    if t["test"] == "micro_uniformity" and (m.get("amp_flat") or "amp_flat" not in m or
+                                            "painted look" in t["explain"]):
         return t
     m["raw_status"] = t["status"]
     t["status"] = "info"
@@ -1848,8 +1911,9 @@ def critique(fr, profile="realistic", refs=None, fov=54.4):
     tests.append(t_saliency(fr, T))
     tests.append(cam)
     tests.append(t_reference(fr, T, refs))
-    if profile == "realistic":
-        tests = [calibrate(t) for t in tests]
+    if profile == "painterly":
+        tests.append(t_painted_key(fr, T))
+    tests = [calibrate(t, profile) for t in tests]
     summ = {"fail": [t["test"] for t in tests if t["status"] == "fail"],
             "warn": [t["test"] for t in tests if t["status"] == "warn"],
             "pass": [t["test"] for t in tests if t["status"] == "pass"],

@@ -320,11 +320,12 @@ At each level run the three passes and review at that level's distance.
 - **Look often and in context.** A draft `look` after each structural change. Final renders
   at the gates, saved to files at once, read back and judged against reference.
 - **Critique the picture, not only the parts.** At every lit or final look run
-  `scripts/frame_critique.py` for value range, value grouping, squint, saturation budget and
-  camera. At each level gate run the full set, plus `--pair` against the previous gate at the
+  `scripts/frame_critique.py`; act on its binding tests, and treat `info` results as
+  notes. At each level gate run the full set, plus `--pair` against the previous gate at the
   same camera, then the A/B questions in `references/critique_questions.md`. Fix the fails
-  first. The baseline is realistic; a painterly profile is optional. See
-  `references/art-direction.md`.
+  first. The baseline is realistic; a painterly profile is optional, built as a switchable
+  layer (`procedural-materials/references/stylisation-anime.md`) and judged with
+  `--profile painterly`. See `references/art-direction.md`.
 - **Test night and glass early** when windows matter.
 
 ## Using HocusPocus for this

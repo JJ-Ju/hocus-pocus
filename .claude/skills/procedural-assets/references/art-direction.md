@@ -3,7 +3,9 @@
 The checks are in `../scripts/frame_critique.py` (numpy and PIL only), and the A/B question list is
 in `critique_questions.md`.
 Baseline: **realistic**, meaning photographic or nearly so. A painterly or anime look is an
-optional profile (`--profile painterly`) and needs its own art bible and reference stills.
+optional profile (`--profile painterly`), built as a switchable layer
+(`procedural-materials/references/stylisation-anime.md`, round C); its thresholds are not yet
+calibrated on the user's picks.
 Thresholds were calibrated in round B on 24 of the user's own A/B picks (§5). They fit one
 viewer's taste on danchi v1–v5 renders, in sample, so treat them as the current best guess.
 

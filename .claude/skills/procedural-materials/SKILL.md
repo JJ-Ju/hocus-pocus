@@ -20,7 +20,10 @@ headless and write correct files.
 - [references/layering.md](references/layering.md) for height blending, the stack order,
   normal blending, packing, and what to bake versus layer in the shader.
 
-This file only summarises them.
+This file only summarises them. Only when the brief asks for a painted or anime-background look,
+also read [references/stylisation-anime.md](references/stylisation-anime.md): an optional
+profile switched on over the realistic material, with a Copernicus post in
+`scripts/build_anime_post.py`.
 
 Companion skills:
 - **`procedural-assets`:** where materials sit in a kit or generator, and trims versus tiling
