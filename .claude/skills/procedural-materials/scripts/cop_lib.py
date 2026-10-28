@@ -153,7 +153,9 @@ def build_concrete_panels(parent="/img", name="concrete", res=2048, out_dir=None
     w(height, 0, h4)
     nrm, ao, curv = _derived(cn, height, relief_m, tile_m)
 
-    leak = mk(cn, "streakblur", "tie_leaks", dirtype="coord", dir=(0.0, -1.0), length=0.08)
+    # bias 1: one-sided; at the default 0 the leaks smear upward too
+    leak = mk(cn, "streakblur", "tie_leaks", dirtype="coord", dir=(0.0, -1.0), bias=1.0,
+              length=0.08)
     w(leak, 0, ties)
     gleak = mk(cn, "grunge_leakingstreaks", "leak_grunge", elementsize=0.4)
     stain = mk(cn, "blend", "stain", mode="max", mask=0.6)

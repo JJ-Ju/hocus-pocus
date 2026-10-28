@@ -18,7 +18,9 @@ headless and write correct files.
 - [references/micro-noise.md](references/micro-noise.md) for non-uniform grain, with patterns
   by surface;
 - [references/layering.md](references/layering.md) for height blending, the stack order,
-  normal blending, packing, and what to bake versus layer in the shader.
+  normal blending, packing, and what to bake versus layer in the shader;
+- [references/concrete.md](references/concrete.md) for concrete, bare or under a coat: the
+  finish per element, the formwork module, the layer stack, recipes and the engine path.
 
 This file only summarises them. Only when the brief asks for a painted or anime-background look,
 also read [references/stylisation-anime.md](references/stylisation-anime.md): an optional
@@ -137,7 +139,8 @@ values are Unreal's measured figures.
    - Composites: `blend` with a mask.
 6. **Story layer.**
    - Downward streaks: `streakblur` and `distort` with **`dirtype` = coord and `dir` = (0, −1)**
-     (the default angle mode ignores `dir`).
+     (the default angle mode ignores `dir`). `streakblur` also needs **`bias` 1**: at the
+     default 0 it smears up as well as down.
    - Grunge set: `grunge_leakingstreaks`, `grunge_drips`, `grunge_rust`,
      `grunge_rustysurface`, `grunge_moisture`, `grunge_moldspots`, `grunge_wipetrails`.
    - Slope blur (eroded edges): `slopedir` into `distort`'s `dir` input (`streak` min).
@@ -260,15 +263,25 @@ Details, the Substance-to-Copernicus node map and per-material recipes are in
 - **RGB data written sRGB.** `rop_image` encodes RGB layers to sRGB by default. Set
   `colorconversion` raw for normals and packed masks.
 - **8-bit height bands.** Use `size1` int16 for height and normal.
-- **Streak and distort direction ignored** unless `dirtype` is coord.
+- **Streak and distort direction ignored** unless `dirtype` is coord; `streakblur` is
+  centred (both ways) unless `bias` is 1.
+- **`fractalnoise` stretch and spread.** `elementscale` does nothing unless
+  `elementsizetype` is 1 (Per-Component Controls). The noise around 0.5 has a std of only
+  about 0.076 (p1–p99 0.31–0.70), so a factor written as if it filled 0–1 gives about a
+  quarter of the intended variation. Scale by the measured spread, or `equalize` first, and
+  measure the result per band.
+- **RGBA data masks.** `rop_image`'s default PNG alpha mode (token premult) divides RGB by
+  A; write data with the token unpremult (label "Raw"). Karma's `mtlximage` multiplies RGB
+  by A when it reads an RGBA PNG, so keep data masks RGB or one per file.
 - **Grunge masks saturate at their defaults.** `grunge_rust` and its kin cover large areas
   at the default coverage: rust blotches on every door. Threshold them sparse and check
   coverage with `statistics`: a painted steel door wants a few per cent of rust, not a
   third.
 - **SOP `Cd` in MaterialX** arrives as the primvar `displayColor`; `geompropvalue "Cd"`
   reads black in Karma.
-- **Tile-pattern shapes stretch with the cell.** Circles in non-square cells become ellipses;
-  compensate with `hscale`/`vscale`.
+- **Tile-pattern circles stay round** in non-square cells at the default `useaspectratio` 0,
+  sized to the smaller side; `useaspectratio` 1 stretches them. Outside a shape the `id` is
+  invalid, and `randommono` gives all those pixels one shared value unless `zeroinvalid` is 1.
 - **Multi-output nodes:** wire by output index or name (`tilepattern` `id` is output 1;
   `shapescatter` `result`). `hextile` takes the texture in its `textotile` input, not input 0.
 - **First cooks are slow** because they include OpenCL compilation (grunge nodes up to about
