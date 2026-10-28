@@ -1,0 +1,33 @@
+// cutter_shape.vfl: Attribute Wrangle, Run Over: Points. Shapes one break-cutter variant for
+// chip_points_edge.vfl, which expects unit-radius cutters with x along the edge, y across the
+// shell face (y > 0 = the far end of the shell) and z into the material.
+//
+// Build each variant as: a detail wrangle adding about 40 points on the unit sphere
+// (sample_direction_uniform, radius 0.82-1), then Shrinkwrap (shrinkwrap::2.0, a convex
+// hull), then Remesh (remesh::2.0, targetsize 0.22), then this wrangle, then a prim wrangle
+// setting i@variant. chip_points_edge.vfl uses variants 0-3 for breaks, 4-5 for nicks
+// (18-point hulls, not remeshed) and 6-7 for pits (14-point hulls).
+//
+// Tested in review 31. Known weakness: the low-frequency lumps below make large breaks read
+// as smooth scoops; broken concrete is angular. Raise `fine` and add 2-3 random clip planes
+// (Clip SOP) before this step for big breaks.
+//
+// Spare parms:
+//   k        int    variant number 0-3 (varies the noise and the shape)
+//   lumps    float  low-frequency displacement, e.g. 0.10
+//   fine     float  facet-scale displacement, e.g. 0.04 (0.08+ reads more broken)
+//   hinge    int    1 = the far end stops in a small step (one variant in four); 0 feathers
+
+int k = chi("k");
+vector p = @P;
+vector nn = normalize(p);
+float disp = chf("lumps") * (noise(p * 2.1 + k * 7.3) - 0.5) * 2.0
+           + chf("fine") * (noise(p * 5.7 + k * 3.1 + 1) - 0.5) * 2.0;
+p += nn * disp;
+// the far end of the shell feathers out, or ends in a small hinge step
+float s = chi("hinge") ? 1.0 - 0.45 * smooth(0.62, 0.72, p.y)
+                       : 1.0 - 0.5 * smooth(0.1, 1.0, p.y);
+// thickest at the point of impact: one end along the edge is deeper
+s *= 1.0 + ((k % 2 == 0) ? 0.25 : -0.25) * p.x;
+p.z *= max(s, 0.2);
+@P = p;

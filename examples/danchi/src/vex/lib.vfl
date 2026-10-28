@@ -1,0 +1,247 @@
+// lib.vfl — shared helpers for the danchi generator. Prepended to each wrangle.
+// Randomness: always hash a stable id + a layer number + the building seed (never @ptnum).
+
+float hr(int id; int layer; int seed)
+{
+    vector s = set(float(id) * 0.7071 + 0.5, float(layer) * 1.618 + 0.25, float(seed) * 3.14159 + 0.75);
+    float r = rand(s);
+    return r;
+}
+
+float hrange(int id; int layer; int seed; float lo; float hi)
+{
+    float r = hr(id, layer, seed);
+    return lo + (hi - lo) * r;
+}
+
+// power-law size in [rmin, rmax], k = 2..4 gives many small, few large
+float hpow(int id; int layer; int seed; float rmin; float rmax; float k)
+{
+    float u = hr(id, layer, seed);
+    return rmin * pow(rmax / rmin, pow(u, k));
+}
+
+// quaternion for a rotation about +Y by deg degrees
+vector4 qy(float deg)
+{
+    vector4 q = quaternion(radians(deg), {0, 1, 0});
+    return q;
+}
+
+// add a piece point with the standard attributes
+int add_piece(int geo; vector p; vector4 q; string name; int id; int variant)
+{
+    int pt = addpoint(geo, p);
+    setpointattrib(geo, "orient", pt, q);
+    setpointattrib(geo, "name", pt, name);
+    setpointattrib(geo, "id", pt, id);
+    setpointattrib(geo, "variant", pt, variant);
+    return pt;
+}
+
+// closed axis-aligned box from mn to mx; returns the first prim number
+int addbox(int geo; vector mn; vector mx; string name)
+{
+    int p[];
+    for (int i = 0; i < 8; i++) {
+        vector c = set((i % 2) ? mx.x : mn.x, ((i / 2) % 2) ? mx.y : mn.y, (i / 4) ? mx.z : mn.z);
+        append(p, addpoint(geo, c));
+    }
+    int F[] = array(0, 2, 6, 4,  1, 5, 7, 3,  0, 4, 5, 1,  2, 3, 7, 6,  0, 1, 3, 2,  4, 6, 7, 5);  // clockwise = outward in Houdini
+    int first = -1;
+    for (int f = 0; f < 6; f++) {
+        int pr = addprim(geo, "poly", p[F[f * 4]], p[F[f * 4 + 1]], p[F[f * 4 + 2]], p[F[f * 4 + 3]]);
+        setprimattrib(geo, "name", pr, name);
+        if (first < 0) first = pr;
+    }
+    return first;
+}
+
+// box with material and colour key on all 6 faces
+int boxm(int geo; vector mn; vector mx; string mat; string key)
+{
+    int pr = addbox(geo, mn, mx, "");
+    for (int f = 0; f < 6; f++) {
+        setprimattrib(geo, "mat", pr + f, mat);
+        setprimattrib(geo, "cdkey", pr + f, key);
+    }
+    return pr;
+}
+
+// box with an explicit colour (cdkey "own")
+int boxc(int geo; vector mn; vector mx; string mat; vector cd)
+{
+    int pr = boxm(geo, mn, mx, mat, "own");
+    for (int f = 0; f < 6; f++) setprimattrib(geo, "Cd", pr + f, cd);
+    return pr;
+}
+
+// closed cylinder from a to b, radius r, n sides
+int cylm(int geo; vector a; vector b; float r; int n; string mat; string key)
+{
+    vector ax = normalize(b - a);
+    vector up = abs(ax.y) < 0.9 ? set(0, 1, 0) : set(1, 0, 0);
+    vector u = normalize(cross(ax, up));
+    vector v = cross(u, ax);
+    int ra[], rb[];
+    for (int i = 0; i < n; i++) {
+        float t = 2 * PI * i / n;
+        vector o = (u * cos(t) + v * sin(t)) * r;
+        append(ra, addpoint(geo, a + o));
+        append(rb, addpoint(geo, b + o));
+    }
+    int first = -1;
+    for (int i = 0; i < n; i++) {
+        int j = (i + 1) % n;
+        int pr = addprim(geo, "poly", ra[i], rb[i], rb[j], ra[j]);
+        setprimattrib(geo, "mat", pr, mat);
+        setprimattrib(geo, "cdkey", pr, key);
+        if (first < 0) first = pr;
+    }
+    int ca[], cb[];
+    for (int i = 0; i < n; i++) { append(ca, ra[i]); append(cb, rb[n - 1 - i]); }
+    int p1 = addprim(geo, "poly", ca);
+    int p2 = addprim(geo, "poly", cb);
+    setprimattrib(geo, "mat", p1, mat); setprimattrib(geo, "cdkey", p1, key);
+    setprimattrib(geo, "mat", p2, mat); setprimattrib(geo, "cdkey", p2, key);
+    return first;
+}
+
+// a single quad (for cards: curtains, decals); corners in order, facing by winding
+int quadm(int geo; vector a; vector b; vector c; vector d; string mat; string key)
+{
+    int pr = addprim(geo, "poly", addpoint(geo, a), addpoint(geo, b), addpoint(geo, c), addpoint(geo, d));
+    setprimattrib(geo, "mat", pr, mat);
+    setprimattrib(geo, "cdkey", pr, key);
+    return pr;
+}
+
+// width of the open steel-rail section at the left of each balcony (reference: 13 of 15 photos
+// alternate solid concrete panels with white vertical-bar rails)
+float rail_w(float W) { return rint(W * 0.4 * 10) / 10.0; }
+
+// opening layout of a balcony bay (shared by the wall piece and the dress)
+void bal_openings(float W; export float dx0; export float dx1; export float wx0; export float wx1)
+{
+    float dw = min(3.4, W - 2.6);
+    dx0 = -W * 0.5 + 0.35; dx1 = dx0 + dw;
+    float ww = min(1.6, W - dw - 1.25);
+    wx1 = W * 0.5 - 0.45; wx0 = wx1 - ww;
+}
+
+// contract constants (also documented in README.md)
+#define D_DEPTH 8.4
+#define BAL_D 1.2
+#define COR_W 1.4
+#define PLINTH 0.45
+#define SLAB_T 0.18
+#define PARA_H 1.1
+#define WALL_T 0.18
+#define ROOF_PARA 0.6
+#define TOWER_D 2.6
+
+// ---- round 7: gridded boxes (vertex colour needs vertices) --------------------------------
+// lattice point (i, j, k) of a gridded box, created on first use; pid holds -1 for "not yet"
+int gpt(int geo; int pid[]; float xs[]; float ys[]; float zs[]; int i; int j; int k)
+{
+    int sx = len(xs), sy = len(ys);
+    int idx = i + sx * (j + sy * k);
+    if (pid[idx] < 0) pid[idx] = addpoint(geo, set(xs[i], ys[j], zs[k]));
+    return pid[idx];
+}
+
+int gquad(int geo; int a; int b; int c; int d; string mat; string key)
+{
+    int pr = addprim(geo, "poly", a, b, c, d);
+    setprimattrib(geo, "mat", pr, mat);
+    setprimattrib(geo, "cdkey", pr, key);
+    return pr;
+}
+
+// box whose faces are grids at the given coordinates (sorted; first = min, last = max).
+// Shared points, outward winding as addbox. skip leaves out hidden faces: 1 -X, 2 +X, 4 -Y,
+// 8 +Y, 16 -Z, 32 +Z (add them). Returns the first prim; count gets the prim count.
+int gridbox(int geo; float xs[]; float ys[]; float zs[]; string mat; string key; int skip; int count)
+{
+    int nx = len(xs) - 1, ny = len(ys) - 1, nz = len(zs) - 1;
+    int pid[];
+    resize(pid, len(xs) * len(ys) * len(zs));
+    for (int q = 0; q < len(pid); q++) pid[q] = -1;
+    int first = -1, n = 0, pr;
+    for (int j = 0; j < ny; j++) for (int k = 0; k < nz; k++) {
+        if (!(skip & 1)) { pr = gquad(geo, gpt(geo, pid, xs, ys, zs, 0, j, k), gpt(geo, pid, xs, ys, zs, 0, j + 1, k), gpt(geo, pid, xs, ys, zs, 0, j + 1, k + 1), gpt(geo, pid, xs, ys, zs, 0, j, k + 1), mat, key); if (first < 0) first = pr; n++; }
+        if (!(skip & 2)) { pr = gquad(geo, gpt(geo, pid, xs, ys, zs, nx, j, k), gpt(geo, pid, xs, ys, zs, nx, j, k + 1), gpt(geo, pid, xs, ys, zs, nx, j + 1, k + 1), gpt(geo, pid, xs, ys, zs, nx, j + 1, k), mat, key); if (first < 0) first = pr; n++; }
+    }
+    for (int i = 0; i < nx; i++) for (int k = 0; k < nz; k++) {
+        if (!(skip & 4)) { pr = gquad(geo, gpt(geo, pid, xs, ys, zs, i, 0, k), gpt(geo, pid, xs, ys, zs, i, 0, k + 1), gpt(geo, pid, xs, ys, zs, i + 1, 0, k + 1), gpt(geo, pid, xs, ys, zs, i + 1, 0, k), mat, key); if (first < 0) first = pr; n++; }
+        if (!(skip & 8)) { pr = gquad(geo, gpt(geo, pid, xs, ys, zs, i, ny, k), gpt(geo, pid, xs, ys, zs, i + 1, ny, k), gpt(geo, pid, xs, ys, zs, i + 1, ny, k + 1), gpt(geo, pid, xs, ys, zs, i, ny, k + 1), mat, key); if (first < 0) first = pr; n++; }
+    }
+    for (int i = 0; i < nx; i++) for (int j = 0; j < ny; j++) {
+        if (!(skip & 16)) { pr = gquad(geo, gpt(geo, pid, xs, ys, zs, i, j, 0), gpt(geo, pid, xs, ys, zs, i + 1, j, 0), gpt(geo, pid, xs, ys, zs, i + 1, j + 1, 0), gpt(geo, pid, xs, ys, zs, i, j + 1, 0), mat, key); if (first < 0) first = pr; n++; }
+        if (!(skip & 32)) { pr = gquad(geo, gpt(geo, pid, xs, ys, zs, i, j, nz), gpt(geo, pid, xs, ys, zs, i, j + 1, nz), gpt(geo, pid, xs, ys, zs, i + 1, j + 1, nz), gpt(geo, pid, xs, ys, zs, i + 1, j, nz), mat, key); if (first < 0) first = pr; n++; }
+    }
+    count = n;
+    return first;
+}
+
+// evenly spaced coordinates from a to b, cells at most `step` long
+function float[] spaced(float a; float b; float step)
+{
+    int n = max(1, int(ceil((b - a) / step - 1e-4)));
+    float r[];
+    for (int i = 0; i <= n; i++) append(r, lerp(a, b, float(i) / n));
+    return r;
+}
+
+// coordinates at a, b and every multiple of `step` from `origin` strictly between them
+function float[] lines(float a; float b; float origin; float step)
+{
+    float r[];
+    append(r, a);
+    float t = origin + ceil((a - origin) / step + 1e-4) * step;
+    while (t < b - 0.05) { if (t > a + 0.05) append(r, t); t += step; }
+    append(r, b);
+    return r;
+}
+
+// the paint scheme's wall colour (assign.vfl has the same table; decals use it for washed and
+// worn-edge tones, which are the wall paint lifted toward the clean substrate)
+vector scheme_wall(int seed; string style_in)
+{
+    string style = style_in;
+    if (style == "seed") {
+        float r = hr(seed, 41, 3);
+        style = r < 0.42 ? "white" : r < 0.66 ? "light_grey" : r < 0.80 ? "cream" : r < 0.90 ? "beige_brown" : "pink";
+    }
+    vector wall = {0.70, 0.69, 0.66};
+    if (style == "light_grey") wall = {0.56, 0.56, 0.55};
+    if (style == "cream") wall = {0.67, 0.63, 0.54};
+    if (style == "beige_brown") wall = {0.57, 0.51, 0.43};
+    if (style == "pink") wall = {0.67, 0.58, 0.54};
+    return wall;
+}
+
+// field strength of the cause hotspots at p on one side (typ -1 = any type)
+float cause_at(vector p; int side; int typ; vector cP[]; float cR[]; float cS[]; int cT[]; int cSide[])
+{
+    float a = 0;
+    for (int i = 0; i < len(cP); i++) {
+        if (cSide[i] != side || (typ >= 0 && cT[i] != typ)) continue;
+        float d = length(p - cP[i]) / cR[i];
+        a = max(a, cS[i] * smooth(1.0, 0.25, d));
+    }
+    return a;
+}
+
+// type of the strongest cause at p (-1 none)
+int cause_type(vector p; int side; vector cP[]; float cR[]; float cS[]; int cT[]; int cSide[])
+{
+    float best = 0.05;
+    int t = -1;
+    for (int i = 0; i < len(cP); i++) {
+        if (cSide[i] != side) continue;
+        float a = cS[i] * smooth(1.0, 0.25, length(p - cP[i]) / cR[i]);
+        if (a > best) { best = a; t = cT[i]; }
+    }
+    return t;
+}

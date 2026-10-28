@@ -1,0 +1,19 @@
+// collision.vfl — detail wrangle, input 1 = plan, input 2 = shell. Convex boxes per volume,
+// named UCX_danchi_NN (Unreal FBX convention): the slab body to the balcony and corridor lines,
+// each core tower with its penthouse, the tank. Thin masts (antennas) get no hull.
+float L = detail(1, "L"), x0 = detail(1, "x0"), ytop = detail(1, "ytop");
+int eave = detail(2, "eave");
+float bx[] = detail(1, "bay_x");
+float bw[] = detail(1, "bay_w");
+int bt[] = detail(1, "bay_t");
+float zb = D_DEPTH * 0.5 + BAL_D, zc = -(D_DEPTH * 0.5 + COR_W);
+int n = 0;
+addbox(0, set(x0 - 0.2, 0, zc), set(x0 + L + 0.2, ytop + (eave ? 0.05 : 0.74), zb), sprintf("UCX_danchi_%02d", n++));
+for (int k = 0; k < len(bt); k++) {
+    if (bt[k] == 0) continue;
+    float cx0 = bx[k] - bw[k] * 0.5, cx1 = bx[k] + bw[k] * 0.5;
+    addbox(0, set(cx0, 0, zc - TOWER_D), set(cx1, ytop + 3.0, zc), sprintf("UCX_danchi_%02d", n++));
+    addbox(0, set(cx0, ytop, zc), set(cx1, ytop + 3.0, -0.5), sprintf("UCX_danchi_%02d", n++));
+}
+vector tp = detail(2, "tank_P");
+if (length(tp) > 0) addbox(0, tp + set(-1.6, 0, -1.1), tp + set(1.6, 3.5, 1.1), sprintf("UCX_danchi_%02d", n++));

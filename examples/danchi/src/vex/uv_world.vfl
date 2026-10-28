@@ -1,0 +1,11 @@
+// uv_world.vfl — vertex wrangle: world-space box UVs in metres (continuous across modules),
+// for the tiling materials. Decals keep their own atlas UVs.
+string m = prim(0, "mat", @primnum);
+if (m != "decal" && m != "glass" && m != "room") {
+    vector n = prim_normal(0, @primnum, {0.5, 0.5, 0});
+    vector p = point(0, "P", @ptnum);
+    vector a = abs(n);
+    if (a.y >= a.x && a.y >= a.z) v@uv = set(p.x, p.z, 0);
+    else if (a.x >= a.z) v@uv = set(p.z * sign(n.x), p.y, 0);
+    else v@uv = set(-p.x * sign(n.z), p.y, 0);
+}

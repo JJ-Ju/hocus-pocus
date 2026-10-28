@@ -1,0 +1,17 @@
+// number_points.vfl — detail wrangle, input 1 = shell (plan detail attributes carried).
+// Two points, one per gable, facing out: the number sits in the top-floor band (11 of 13
+// reference gables), centred or offset toward one edge (about half each).
+int seed = chi("../../seed");
+float x0 = detail(1, "x0"), L = detail(1, "L"), ytop = detail(1, "ytop"), H = detail(1, "H");
+int eave = detail(2, "eave");
+float zb = D_DEPTH * 0.5 + BAL_D, zc = -(D_DEPTH * 0.5 + COR_W);
+float y = ytop - H * (eave ? 0.62 : 0.5);
+float zc_ = (zb + zc) * 0.5;
+float off = hr(seed, 960, 7) < 0.5 ? 0.0 : (zb - zc) * 0.28 * (hr(seed, 961, 7) < 0.5 ? -1 : 1);
+for (int e = 0; e < 2; e++) {
+    float x = e == 0 ? x0 - 0.2 - 0.004 : x0 + L + 0.2 + 0.004;
+    // the same offset reads toward the same side from outside on both ends
+    float z = zc_ + (e == 0 ? off : -off);
+    int pt = addpoint(0, set(x, y, z));
+    setpointattrib(0, "orient", pt, qy(e == 0 ? -90 : 90));
+}

@@ -1,0 +1,119 @@
+{
+ "New": {
+  "file": "showcase/preset_facade_new.jpg",
+  "crop": [
+   448,
+   335,
+   522,
+   705
+  ]
+ },
+ "Well kept": {
+  "file": "showcase/preset_facade_well_kept.jpg",
+  "crop": [
+   448,
+   335,
+   522,
+   705
+  ]
+ },
+ "Typical": {
+  "file": "showcase/preset_facade_typical.jpg",
+  "crop": [
+   448,
+   335,
+   522,
+   705
+  ]
+ },
+ "Neglected": {
+  "file": "showcase/preset_facade_neglected.jpg",
+  "crop": [
+   448,
+   335,
+   522,
+   705
+  ]
+ },
+ "age 10, upkeep 0.9": {
+  "file": "showcase/grid_age10_upkeep090.jpg",
+  "crop": [
+   448,
+   335,
+   522,
+   705
+  ]
+ },
+ "age 10, upkeep 0.5": {
+  "file": "showcase/grid_age10_upkeep050.jpg",
+  "crop": [
+   448,
+   335,
+   522,
+   705
+  ]
+ },
+ "age 10, upkeep 0.1": {
+  "file": "showcase/grid_age10_upkeep010.jpg",
+  "crop": [
+   448,
+   335,
+   522,
+   705
+  ]
+ },
+ "age 35, upkeep 0.9": {
+  "file": "showcase/grid_age35_upkeep090.jpg",
+  "crop": [
+   448,
+   335,
+   522,
+   705
+  ]
+ },
+ "age 35, upkeep 0.5": {
+  "file": "showcase/grid_age35_upkeep050.jpg",
+  "crop": [
+   448,
+   335,
+   522,
+   705
+  ]
+ },
+ "age 35, upkeep 0.1": {
+  "file": "showcase/grid_age35_upkeep010.jpg",
+  "crop": [
+   448,
+   335,
+   522,
+   705
+  ]
+ },
+ "age 60, upkeep 0.9": {
+  "file": "showcase/grid_age60_upkeep090.jpg",
+  "crop": [
+   448,
+   335,
+   522,
+   705
+  ]
+ },
+ "age 60, upkeep 0.5": {
+  "file": "showcase/grid_age60_upkeep050.jpg",
+  "crop": [
+   448,
+   335,
+   522,
+   705
+  ]
+ },
+ "age 60, upkeep 0.1": {
+  "file": "showcase/grid_age60_upkeep010.jpg",
+  "crop": [
+   448,
+   335,
+   522,
+   705
+  ]
+ }
+}

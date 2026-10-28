@@ -1,0 +1,246 @@
+// cluster_mask.vfl: Attribute Wrangle, Run Over: Detail.
+// Clustered (80/20) damage mask: a few hotspots chosen by cause, sizes from a power law,
+// soft-unioned, broken up by noise, over a low non-zero background.
+//
+// Input 0: the geometry whose points receive the mask (the piece, a dense render copy,
+//          resampled edge curves for measuring...). Any density; denser = sharper mask.
+// Input 1: the clean reference piece (closed, pre-bevel) that hotspot centres are chosen on.
+//          If nothing is wired, input 0 is used. Hotspots depend only on input 1 and the
+//          parms, so the same node settings give the SAME hotspots on every input 0:
+//          run it on the game mesh, the render copy and the measuring curves alike.
+//
+// Writes on input 0:
+//   f@damage_mask  0-1, background + hotspots (feed chip_points, bevel scale, shaders)
+//   f@damage_hot   0-1, hotspots only, no background (for "notable damage" layers)
+//   f@damage_halo  0-1, the same hotspots at halo x radius, smooth, no breakup: where
+//                  edges are worn round around the breaks (bevel width, edge wear)
+//   detail v[]@hs_P, f[]@hs_r, f[]@hs_s   hotspot centres, radii, strengths (largest first)
+//   detail f@convex_length                 convex edge length of the reference (m)
+//
+// Spare parms:
+//   hotspots       int    number of hotspots; 0 = use hotspots_per_m, e.g. 0
+//   hotspots_per_m float  hotspots per metre of convex edge, e.g. 0.35
+//   r_min, r_max   float  hotspot radius range (m), e.g. 0.08, 0.45
+//   size_bias      float  power on the size quantile; >1 = few big, many small, e.g. 2.5
+//   s_min          float  strength of the weakest hotspot, e.g. 0.45 (the biggest gets 1)
+//   separation     float  min centre distance as a fraction of (r_i + r_j) / 2, e.g. 0.9
+//   core           float  flat-topped part of each falloff, fraction of r, e.g. 0.25
+//   warp           float  domain warp of the falloff, fraction of r, e.g. 0.35
+//   breakup        float  0-1 how much noise eats into hotspots, e.g. 0.5
+//   breakup_freq   float  breakup noise frequency (1/m), e.g. 7
+//   background     float  mean mask level away from hotspots, e.g. 0.12
+//   ground_y       float  ground height (m), e.g. 0
+//   ground_boost   float  extra cause weight at the ground, e.g. 2
+//   contact_lo, contact_hi float  contact band (m above ground), e.g. 0.3, 1.2
+//   contact_boost  float  extra cause weight inside the band, e.g. 2
+//   high_fade      float  cause weight multiplier well above the band (0-1), e.g. 0.15
+//   top_boost      float  extra weight on upward-facing (weather-exposed) edges, e.g. 0.5
+//   corner_boost   float  extra weight near corners (3+ convex edges), e.g. 3
+//   corner_radius  float  corner influence (m), e.g. 0.25
+//   face_weight    float  weight of flat-face candidates vs edges (spalls, stains), e.g. 0.1
+//   min_angle      float  minimum dihedral angle (deg) for a convex edge, e.g. 30
+//   cand_spacing   float  candidate spacing along convex edges (m), e.g 0.05
+//   seam_axis      vector axes whose bounding faces are tiling seams, e.g. {1,0,0}
+//   seam_margin    float  mask fades to 0 within this distance of a seam (m), e.g. 0.06
+//   halo           float  radius multiplier for f@damage_halo, the wider "battered arris"
+//                         zone around each hotspot (drives bevel/wear width), e.g. 1.8
+//   seed           int    per-instance seed
+//
+// Optional point attribute on input 1: f@damage_cause (0-1+), multiplies the cause weight
+// (paint where a door swings, where a vehicle turns).
+
+function float seam_fade(vector P; vector bmin; vector bmax; vector seam_axis; float seam_m) {
+    float f = 1.0;
+    for (int ax = 0; ax < 3; ax++) {
+        if (getcomp(seam_axis, ax) < 0.5) continue;
+        float lo = getcomp(P, ax) - getcomp(bmin, ax);
+        float hi = getcomp(bmax, ax) - getcomp(P, ax);
+        f *= smooth(0.0, max(seam_m, 1e-6), min(lo, hi));
+    }
+    return f;
+}
+
+function float cause_w(vector P; vector outd; float gy; float c0; float c1; vector corners[];
+                       vector bmin; vector bmax; vector seam_axis; float seam_m) {
+    float h = P.y - gy;
+    float w = 1.0 + chf("ground_boost") * exp(-max(h, 0.0) / 0.15);
+    float band = smooth(c0 - 0.1, c0 + 0.1, h) * (1.0 - smooth(c1 - 0.15, c1 + 0.15, h));
+    w += chf("contact_boost") * band;
+    // well above the contact band, weather and knocks are rarer
+    w *= lerp(1.0, chf("high_fade"), smooth(c1 + 0.15, c1 + 1.2, h));
+    w *= 1.0 + chf("top_boost") * max(outd.y, 0.0);
+    float dc = 1e9;
+    foreach (vector c; corners) dc = min(dc, distance(P, c));
+    w *= 1.0 + chf("corner_boost") * (1.0 - smooth(0.0, max(chf("corner_radius"), 1e-4), dc));
+    w *= seam_fade(P, bmin, bmax, seam_axis, seam_m);
+    return max(w, 0.0);
+}
+
+int ref = npoints(1) > 0 ? 1 : 0;
+int seed = chi("seed");
+float min_angle = chf("min_angle");
+float cand_sp = max(chf("cand_spacing"), 0.005);
+float gy = chf("ground_y");
+vector seam_axis = chv("seam_axis");
+float seam_m = chf("seam_margin");
+
+vector bmin, bmax;
+getbbox(ref, bmin, bmax);
+
+
+// ---- convex edges of the reference, and corners ------------------------------------
+vector eA[], eB[], eOut[];
+int ptdirs_pt[];
+vector ptdirs_d[];
+float conv_len = 0;
+for (int he = 0; he < nvertices(ref); he++) {
+    if (!hedge_isprimary(ref, he)) continue;
+    int pa = hedge_prim(ref, he);
+    int pb = hedge_prim(ref, hedge_nextequiv(ref, he));
+    if (pa == pb || pb < 0) continue;
+    vector na = prim_normal(ref, pa, {0.5, 0.5, 0});
+    vector nb = prim_normal(ref, pb, {0.5, 0.5, 0});
+    vector ca = prim(ref, "P", pa);
+    vector cb = prim(ref, "P", pb);
+    if (dot(na, cb - ca) >= 0) continue;
+    if (degrees(acos(clamp(dot(na, nb), -1.0, 1.0))) < min_angle) continue;
+    int p0 = hedge_srcpoint(ref, he), p1 = hedge_dstpoint(ref, he);
+    vector A = point(ref, "P", p0), B = point(ref, "P", p1);
+    push(eA, A); push(eB, B); push(eOut, normalize(na + nb));
+    conv_len += length(B - A);
+    vector d = normalize(B - A);
+    push(ptdirs_pt, p0); push(ptdirs_d, d);
+    push(ptdirs_pt, p1); push(ptdirs_d, d);
+}
+// a corner: a point where two convex edges meet at an angle (not collinear)
+vector corners[];
+int seen[];
+resize(seen, npoints(ref));
+for (int i = 0; i < len(ptdirs_pt); i++) {
+    int p = ptdirs_pt[i];
+    if (seen[p]) continue;
+    for (int j = i + 1; j < len(ptdirs_pt); j++) {
+        if (ptdirs_pt[j] != p) continue;
+        if (abs(dot(ptdirs_d[i], ptdirs_d[j])) < 0.7) {
+            seen[p] = 1;
+            push(corners, vector(point(ref, "P", p)));
+            break;
+        }
+    }
+}
+
+// ---- candidates with a cause weight ------------------------------------------------
+float c0 = chf("contact_lo"), c1 = chf("contact_hi");
+int has_cause = haspointattrib(ref, "damage_cause");
+
+
+vector cP[];
+float cW[];
+for (int e = 0; e < len(eA); e++) {
+    int n = max(1, int(length(eB[e] - eA[e]) / cand_sp));
+    for (int i = 0; i < n; i++) {
+        vector P = lerp(eA[e], eB[e], (i + 0.5) / n);
+        float w = cause_w(P, eOut[e], gy, c0, c1, corners, bmin, bmax, seam_axis, seam_m);
+        if (has_cause) {
+            int hp; vector huv;
+            xyzdist(ref, P, hp, huv);
+            w *= primuv(ref, "damage_cause", hp, huv);
+        }
+        w *= length(eB[e] - eA[e]) / n;     // weight per metre, not per edge
+        push(cP, P); push(cW, w);
+    }
+}
+// flat-face candidates (spalls, stains away from edges), area weighted
+float fw = chf("face_weight");
+if (fw > 0) {
+    float area_tot = 0;
+    for (int p = 0; p < nprimitives(ref); p++) area_tot += primintrinsic(ref, "measuredarea", p);
+    int nf = int(area_tot / (cand_sp * cand_sp * 16));   // a coarser grid than the edges
+    nf = clamp(nf, 0, 20000);
+    float cum[];
+    float acc = 0;
+    for (int p = 0; p < nprimitives(ref); p++) {
+        acc += primintrinsic(ref, "measuredarea", p);
+        push(cum, acc);
+    }
+    for (int i = 0; i < nf; i++) {
+        float r = rand(set(i, seed, 17)) * acc;
+        int lo = 0, hi = len(cum) - 1;
+        while (lo < hi) { int mid = (lo + hi) / 2; if (cum[mid] < r) lo = mid + 1; else hi = mid; }
+        vector uv = set(rand(set(i, seed, 19)), rand(set(i, seed, 23)), 0);
+        vector P = primuv(ref, "P", lo, uv);
+        vector N = prim_normal(ref, lo, uv);
+        float w = fw * cause_w(P, N, gy, c0, c1, corners, bmin, bmax, seam_axis, seam_m);
+        w *= area_tot / max(nf, 1) / cand_sp;           // comparable to edge weight per metre
+        push(cP, P); push(cW, w);
+    }
+}
+
+// ---- choose hotspots: weighted, largest first, separated ---------------------------
+int N = chi("hotspots");
+if (N <= 0) N = max(1, int(rint(chf("hotspots_per_m") * conv_len)));
+float wcum[];
+float wacc = 0;
+foreach (float w; cW) { wacc += w; push(wcum, wacc); }
+
+float rmin = chf("r_min"), rmax = chf("r_max");
+float sbias = chf("size_bias"), smin = chf("s_min"), sep = chf("separation");
+vector hsP[];
+float hsR[], hsS[];
+if (wacc > 0) {
+    for (int i = 0; i < N; i++) {
+        // stratified power-law quantile: exactly one near r_max, many near r_min
+        float q = 1.0 - (i + rand(set(i, seed, 31))) / N;
+        float r = rmin * pow(rmax / max(rmin, 1e-4), pow(q, sbias));
+        float s = lerp(smin, 1.0, pow(q, 0.7)) * fit01(rand(set(i, seed, 37)), 0.85, 1.0);
+        if (i == 0) s = 1.0;
+        vector best = 0;
+        for (int t = 0; t < 40; t++) {
+            float x = rand(set(i, t, seed, 41)) * wacc;
+            int lo = 0, hi = len(wcum) - 1;
+            while (lo < hi) { int mid = (lo + hi) / 2; if (wcum[mid] < x) lo = mid + 1; else hi = mid; }
+            vector c = cP[lo];
+            int ok = 1;
+            for (int j = 0; j < len(hsP); j++)
+                if (distance(c, hsP[j]) < sep * 0.5 * (r + hsR[j])) { ok = 0; break; }
+            best = c;
+            if (ok) break;
+        }
+        push(hsP, best); push(hsR, r); push(hsS, s);
+    }
+}
+setdetailattrib(0, "hs_P", hsP);
+setdetailattrib(0, "hs_r", hsR);
+setdetailattrib(0, "hs_s", hsS);
+setdetailattrib(0, "convex_length", conv_len);
+
+// ---- evaluate on the points of input 0 ---------------------------------------------
+float core = chf("core"), warp = chf("warp"), brk = chf("breakup");
+float bfreq = chf("breakup_freq"), bg = chf("background");
+vector off = vector(rand(set(seed, 3, 5))) * 100.0;
+for (int pt = 0; pt < npoints(0); pt++) {
+    vector P = point(0, "P", pt);
+    vector wv = (vector(noise(P * bfreq * 0.5 + off)) - 0.5) * 2.0;
+    float keep_clean = 1.0, halo_clean = 1.0;
+    float halo = max(chf("halo"), 1.0);
+    for (int i = 0; i < len(hsP); i++) {
+        vector Pw = P + wv * warp * hsR[i];
+        float d = distance(Pw, hsP[i]) / hsR[i];
+        float f = 1.0 - smooth(core, 1.0, d);
+        keep_clean *= 1.0 - hsS[i] * f;
+        halo_clean *= 1.0 - hsS[i] * (1.0 - smooth(0.0, halo, d));
+    }
+    float hot = 1.0 - keep_clean;
+    // breakup: two octaves, so hotspots are patchy inside, never a clean disc
+    float b = 0.65 * noise(P * bfreq + off) + 0.35 * noise(P * bfreq * 2.7 + off + 7.0);
+    b = smooth(0.25, 0.65, b);
+    hot *= lerp(1.0, b, brk);
+    float bgn = noise(P * bfreq * 0.35 + off + 13.0);
+    float bgv = bg * fit(bgn, 0.3, 0.7, 0.3, 1.7);
+    float sf = seam_fade(P, bmin, bmax, seam_axis, seam_m);
+    hot *= sf;
+    float m = clamp(1.0 - (1.0 - bgv * sf) * (1.0 - hot), 0.0, 1.0);
+    setpointattrib(0, "damage_mask", pt, m);
+    setpointattrib(0, "damage_hot", pt, hot);
+    setpointattrib(0, "damage_halo", pt, (1.0 - halo_clean) * sf);
+}

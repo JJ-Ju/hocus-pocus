@@ -1,0 +1,677 @@
+{
+ "description": "Freely licensed Wikimedia Commons photos of 1960s-90s Japanese danchi and similar mid-rise concrete housing, used as --ref targets for frame_critique.py (reference_match, palette). Images are not stored in git; run fetch_refs.py to download them.",
+ "source": "Wikimedia Commons; downloaded 2026-10-27 as the 1920 px standard thumbnail the Commons API returns for iiurlwidth=1600 (Commons serves only standard thumbnail widths; 1600px- URLs return HTTP 400). Smaller originals are served as-is.",
+ "categories": {
+  "bay": "bay or balcony close-up (5-15 m)",
+  "facade": "facade across the street (30-60 m)",
+  "street": "street level at eye height with context",
+  "estate": "estate or several blocks",
+  "end": "end wall or gable",
+  "weathering": "weathering close-up (streaks, chipped edges, rust)"
+ },
+ "photos": [
+  {
+   "file": "bay_01_apartment_balconies_laundry.jpg",
+   "category": "bay",
+   "commons_page": "https://commons.wikimedia.org/wiki/File:%E9%9B%86%E5%90%88%E4%BD%8F%E5%AE%85_(239028878).jpg",
+   "download_url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/9/94/%E9%9B%86%E5%90%88%E4%BD%8F%E5%AE%85_%28239028878%29.jpg/1920px-%E9%9B%86%E5%90%88%E4%BD%8F%E5%AE%85_%28239028878%29.jpg",
+   "author": "troykelly from Brisbane, Australia",
+   "licence": "CC BY 2.0",
+   "licence_url": "https://creativecommons.org/licenses/by/2.0",
+   "description": "Balcony faces of a mid-rise concrete apartment block with laundry, AC units and dishes, about 10 m, overcast (2006)",
+   "commons_title": "File:集合住宅 (239028878).jpg",
+   "original_size": [
+    3072,
+    2048
+   ],
+   "sha256": "eaeed550c62e31cd2904d6fcd14ed8b3cdadc7f46a4cb1cbb672cf1607e697b5",
+   "bytes": 544020
+  },
+  {
+   "file": "bay_02_toei_umegaoka_balcony.jpg",
+   "category": "bay",
+   "commons_page": "https://commons.wikimedia.org/wiki/File:%E9%83%BD%E5%96%B6%E6%A2%85%E3%83%B6%E4%B8%981%E4%B8%81%E7%9B%AE%E4%BD%8F%E5%AE%85_%E8%B1%AA%E5%BE%B3%E5%AF%BA_Goutokuji_(55530356553).jpg",
+   "download_url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/b/b0/%E9%83%BD%E5%96%B6%E6%A2%85%E3%83%B6%E4%B8%981%E4%B8%81%E7%9B%AE%E4%BD%8F%E5%AE%85_%E8%B1%AA%E5%BE%B3%E5%AF%BA_Goutokuji_%2855530356553%29.jpg/1920px-%E9%83%BD%E5%96%B6%E6%A2%85%E3%83%B6%E4%B8%981%E4%B8%81%E7%9B%AE%E4%BD%8F%E5%AE%85_%E8%B1%AA%E5%BE%B3%E5%AF%BA_Goutokuji_%2855530356553%29.jpg",
+   "author": "nagi usano",
+   "licence": "CC BY 4.0",
+   "licence_url": "https://creativecommons.org/licenses/by/4.0",
+   "description": "One balcony bay of a Toei (Tokyo metropolitan) housing block at about 5 m: rail, soffit, door, umbrella",
+   "commons_title": "File:都営梅ヶ丘1丁目住宅 豪徳寺 Goutokuji (55530356553).jpg",
+   "original_size": [
+    2912,
+    1936
+   ],
+   "sha256": "145b1a8a2730884290a8d77866c9df9f6669fb371931e3ad966f6dbc38dd0350",
+   "bytes": 461428
+  },
+  {
+   "file": "bay_03_sapporo_balconies.jpg",
+   "category": "bay",
+   "commons_page": "https://commons.wikimedia.org/wiki/File:Balconies_of_a_Sapporo_apartment_building.jpg",
+   "download_url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/8/82/Balconies_of_a_Sapporo_apartment_building.jpg/1920px-Balconies_of_a_Sapporo_apartment_building.jpg",
+   "author": "Sgroey",
+   "licence": "CC BY-SA 4.0",
+   "licence_url": "https://creativecommons.org/licenses/by-sa/4.0",
+   "description": "Straight-on balcony grid of a Sapporo apartment slab, laundry and AC units, about 15 m",
+   "commons_title": "File:Balconies of a Sapporo apartment building.jpg",
+   "original_size": [
+    2815,
+    2112
+   ],
+   "sha256": "7321136f7de0058774cefe88fe761118b9e30f08db4fcae20d73fed1b57bab18",
+   "bytes": 480213
+  },
+  {
+   "file": "bay_04_tsurukawa_balconies_oblique.jpg",
+   "category": "bay",
+   "commons_page": "https://commons.wikimedia.org/wiki/File:Tsurukawa2chome15gaiku.jpg",
+   "download_url": "https://upload.wikimedia.org/wikipedia/commons/a/ab/Tsurukawa2chome15gaiku.jpg",
+   "author": "Taitaiyaki",
+   "licence": "CC BY-SA 4.0",
+   "licence_url": "https://creativecommons.org/licenses/by-sa/4.0",
+   "description": "Oblique run of balconies along a Tsurukawa danchi block above a planted strip, sunlit, about 10 m",
+   "commons_title": "File:Tsurukawa2chome15gaiku.jpg",
+   "original_size": [
+    1908,
+    1297
+   ],
+   "sha256": "360402131045ac2633ed5cce72d29d42c69cce5844e40cffbae2dfdc2400d1cd",
+   "bytes": 720186
+  },
+  {
+   "file": "bay_05_danchi_balcony_grid.jpg",
+   "category": "bay",
+   "commons_page": "https://commons.wikimedia.org/wiki/File:%E5%9B%A3%E5%9C%B0_(4550066665).jpg",
+   "download_url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/d/d9/%E5%9B%A3%E5%9C%B0_%284550066665%29.jpg/1920px-%E5%9B%A3%E5%9C%B0_%284550066665%29.jpg",
+   "author": "mxmstryo",
+   "licence": "CC BY 2.0",
+   "licence_url": "https://creativecommons.org/licenses/by/2.0",
+   "description": "Balcony grid of a danchi slab behind grass, sunny spring day, about 20 m",
+   "commons_title": "File:団地 (4550066665).jpg",
+   "original_size": [
+    3577,
+    2385
+   ],
+   "sha256": "ee04ef145473e4963ffd258df72b40d7de5357cc9670e59a405ac9544c71e391",
+   "bytes": 925624
+  },
+  {
+   "file": "bay_06_nishi_nagahori_balconies.jpg",
+   "category": "bay",
+   "commons_page": "https://commons.wikimedia.org/wiki/File:%E7%B7%91%E5%8C%96_(10902999933).jpg",
+   "download_url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/7/7b/%E7%B7%91%E5%8C%96_%2810902999933%29.jpg/1920px-%E7%B7%91%E5%8C%96_%2810902999933%29.jpg",
+   "author": "hiromitsu morimoto",
+   "licence": "CC BY-SA 2.0",
+   "licence_url": "https://creativecommons.org/licenses/by-sa/2.0",
+   "description": "Balconies of Nishi-Nagahori Apartment (Osaka) with a self-seeded tree and patched panels, about 15 m",
+   "commons_title": "File:緑化 (10902999933).jpg",
+   "original_size": [
+    4928,
+    3264
+   ],
+   "sha256": "2d1c3710b62190dfed5ff6150449769c799e3fe15764cd81f97d96913d074f7e",
+   "bytes": 696309
+  },
+  {
+   "file": "facade_01_akabanedai_facade.jpg",
+   "category": "facade",
+   "commons_page": "https://commons.wikimedia.org/wiki/File:Akabanedai_Danchi_2018-7.jpg",
+   "download_url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/9/98/Akabanedai_Danchi_2018-7.jpg/1920px-Akabanedai_Danchi_2018-7.jpg",
+   "author": "Suikotei",
+   "licence": "CC BY-SA 4.0",
+   "licence_url": "https://creativecommons.org/licenses/by-sa/4.0",
+   "description": "Akabanedai Danchi five-storey block across a road behind pollarded trees, overcast",
+   "commons_title": "File:Akabanedai Danchi 2018-7.jpg",
+   "original_size": [
+    3112,
+    2334
+   ],
+   "sha256": "7fa41d506ed6941514e75f4ab88217e4c15b72de72c21d06d93628ef8274d2d8",
+   "bytes": 557352
+  },
+  {
+   "file": "facade_02_todaso_facade.jpg",
+   "category": "facade",
+   "commons_page": "https://commons.wikimedia.org/wiki/File:Todaso_20200926-05.jpg",
+   "download_url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/0/02/Todaso_20200926-05.jpg/1920px-Todaso_20200926-05.jpg",
+   "author": "円周率３パーセント",
+   "licence": "CC BY-SA 4.0",
+   "licence_url": "https://creativecommons.org/licenses/by-sa/4.0",
+   "description": "Nagoya municipal Todaso block across a car park, overcast, about 40 m",
+   "commons_title": "File:Todaso 20200926-05.jpg",
+   "original_size": [
+    4898,
+    3265
+   ],
+   "sha256": "07070fadbea786ef6e157f6a3b45b09659ee740f51418def8186e99dce2191c6",
+   "bytes": 532535
+  },
+  {
+   "file": "facade_03_kurume_nishi_facade.jpg",
+   "category": "facade",
+   "commons_page": "https://commons.wikimedia.org/wiki/File:%E6%9D%B1%E4%B9%85%E7%95%99%E7%B1%B3%E5%B8%82%E4%B8%8B%E9%87%8C_%E4%B9%85%E7%95%99%E7%B1%B3%E8%A5%BF%E5%9B%A3%E5%9C%B0_20260218.jpg",
+   "download_url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/b/ba/%E6%9D%B1%E4%B9%85%E7%95%99%E7%B1%B3%E5%B8%82%E4%B8%8B%E9%87%8C_%E4%B9%85%E7%95%99%E7%B1%B3%E8%A5%BF%E5%9B%A3%E5%9C%B0_20260218.jpg/1920px-%E6%9D%B1%E4%B9%85%E7%95%99%E7%B1%B3%E5%B8%82%E4%B8%8B%E9%87%8C_%E4%B9%85%E7%95%99%E7%B1%B3%E8%A5%BF%E5%9B%A3%E5%9C%B0_20260218.jpg",
+   "author": "Mikagekawase",
+   "licence": "CC BY 4.0",
+   "licence_url": "https://creativecommons.org/licenses/by/4.0",
+   "description": "Kurume-Nishi Danchi (Higashikurume) blocks across a street with a large bare tree, sunny winter",
+   "commons_title": "File:東久留米市下里 久留米西団地 20260218.jpg",
+   "original_size": [
+    4624,
+    3472
+   ],
+   "sha256": "ecc24b55e56c69c6e0a6f37518745f6810c5871810a493ac629507b299b44b4c",
+   "bytes": 866255
+  },
+  {
+   "file": "facade_04_musashioka_facade.jpg",
+   "category": "facade",
+   "commons_page": "https://commons.wikimedia.org/wiki/File:%E6%AD%A6%E8%94%B5%E5%B2%A1%E3%82%A2%E3%83%91%E3%83%BC%E3%83%88_-_panoramio.jpg",
+   "download_url": "https://upload.wikimedia.org/wikipedia/commons/0/0a/%E6%AD%A6%E8%94%B5%E5%B2%A1%E3%82%A2%E3%83%91%E3%83%BC%E3%83%88_-_panoramio.jpg",
+   "author": "hasano_jp",
+   "licence": "CC BY 3.0",
+   "licence_url": "https://creativecommons.org/licenses/by/3.0",
+   "description": "Musashioka Apartments (Machida): block 6, an eleven-storey slab, across a road behind a fence and shrubs, sunny",
+   "commons_title": "File:武蔵岡アパート - panoramio.jpg",
+   "original_size": [
+    1600,
+    1200
+   ],
+   "sha256": "07bd24887c3aa765f27cefd5baa4e7de0d54ecef571a4cadf1c405b74986da03",
+   "bytes": 540739
+  },
+  {
+   "file": "facade_05_soshigaya_29_30_facade.jpg",
+   "category": "facade",
+   "commons_page": "https://commons.wikimedia.org/wiki/File:Soshigaya_housing_comprex_2025-01-25_29,30.jpg",
+   "download_url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/7/76/Soshigaya_housing_comprex_2025-01-25_29%2C30.jpg/1920px-Soshigaya_housing_comprex_2025-01-25_29%2C30.jpg",
+   "author": "Merakami",
+   "licence": "CC BY-SA 4.0",
+   "licence_url": "https://creativecommons.org/licenses/by-sa/4.0",
+   "description": "Soshigaya housing blocks 29 and 30 across a fenced lot, overcast winter (2025)",
+   "commons_title": "File:Soshigaya housing comprex 2025-01-25 29,30.jpg",
+   "original_size": [
+    4608,
+    3456
+   ],
+   "sha256": "71204332f630be94cebc0195675eb0df4fad2eb06b47855ff4cf016e4ae876fb",
+   "bytes": 750005
+  },
+  {
+   "file": "facade_06_nakatai_facade.jpg",
+   "category": "facade",
+   "commons_page": "https://commons.wikimedia.org/wiki/File:%E5%B8%82%E5%96%B6%E4%BD%8F%E5%AE%85_%E3%82%B5%E3%83%B3%E3%82%B3%E3%83%BC%E3%83%9D%E3%83%A9%E3%82%B9%E3%81%AA%E3%81%8B%E3%81%9F%E3%81%84_-_panoramio.jpg",
+   "download_url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/9/9e/%E5%B8%82%E5%96%B6%E4%BD%8F%E5%AE%85_%E3%82%B5%E3%83%B3%E3%82%B3%E3%83%BC%E3%83%9D%E3%83%A9%E3%82%B9%E3%81%AA%E3%81%8B%E3%81%9F%E3%81%84_-_panoramio.jpg/1920px-%E5%B8%82%E5%96%B6%E4%BD%8F%E5%AE%85_%E3%82%B5%E3%83%B3%E3%82%B3%E3%83%BC%E3%83%9D%E3%83%A9%E3%82%B9%E3%81%AA%E3%81%8B%E3%81%9F%E3%81%84_-_panoramio.jpg",
+   "author": "ho03",
+   "licence": "CC BY-SA 3.0",
+   "licence_url": "https://creativecommons.org/licenses/by-sa/3.0",
+   "description": "Municipal housing Sun Coporas Nakatai slab across a road and parking, sunny",
+   "commons_title": "File:市営住宅 サンコーポラスなかたい - panoramio.jpg",
+   "original_size": [
+    2560,
+    1920
+   ],
+   "sha256": "aee022b5679fc9253a94598557644f0220f1a5b826c073e0a11938406584f2c3",
+   "bytes": 895607
+  },
+  {
+   "file": "facade_07_blue_white_green_slab.jpg",
+   "category": "facade",
+   "commons_page": "https://commons.wikimedia.org/wiki/File:%E9%9D%92_%E7%99%BD_%E7%B7%91_(54551110341).jpg",
+   "download_url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/a/aa/%E9%9D%92_%E7%99%BD_%E7%B7%91_%2854551110341%29.jpg/1920px-%E9%9D%92_%E7%99%BD_%E7%B7%91_%2854551110341%29.jpg",
+   "author": "keiichiro shikano from Tokyo, Japan",
+   "licence": "CC BY 2.0",
+   "licence_url": "https://creativecommons.org/licenses/by/2.0",
+   "description": "White danchi slab across a lawn with a round tree under a deep blue sky, about 40 m",
+   "commons_title": "File:青 白 緑 (54551110341).jpg",
+   "original_size": [
+    4096,
+    2304
+   ],
+   "sha256": "f8d61e4662731a99a2d8643a60993c4fab0fc34207b18bd3f2f2ded7fd276595",
+   "bytes": 614033
+  },
+  {
+   "file": "street_01_chiryu_street.jpg",
+   "category": "street",
+   "commons_page": "https://commons.wikimedia.org/wiki/File:Chiryu_Danchi_ac_(2).jpg",
+   "download_url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/2/27/Chiryu_Danchi_ac_%282%29.jpg/1920px-Chiryu_Danchi_ac_%282%29.jpg",
+   "author": "Asturio Cantabrio",
+   "licence": "CC BY-SA 4.0",
+   "licence_url": "https://creativecommons.org/licenses/by-sa/4.0",
+   "description": "Chiryu Danchi (Aichi) internal road between blocks at eye height, sunny",
+   "commons_title": "File:Chiryu Danchi ac (2).jpg",
+   "original_size": [
+    5863,
+    3899
+   ],
+   "sha256": "376bebb3e01ebb7ff8704c58ee5deab501be1996733fc8a22442081311108a0f",
+   "bytes": 542273
+  },
+  {
+   "file": "street_02_kanasugidai_street.jpg",
+   "category": "street",
+   "commons_page": "https://commons.wikimedia.org/wiki/File:Kanasugidai-complex.jpg",
+   "download_url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/4/47/Kanasugidai-complex.jpg/1920px-Kanasugidai-complex.jpg",
+   "author": "ゆりのき橋",
+   "licence": "CC BY 3.0",
+   "licence_url": "https://creativecommons.org/licenses/by/3.0",
+   "description": "Kanasugidai Danchi (Funabashi) approach road with blocks on both sides, bus shelter, overcast",
+   "commons_title": "File:Kanasugidai-complex.jpg",
+   "original_size": [
+    4000,
+    3000
+   ],
+   "sha256": "b0e2b564c0138cbef60bdf2fb3b7053c2dddbb55166d5e1540fc216d2a5cb080",
+   "bytes": 699624
+  },
+  {
+   "file": "street_03_naka_ajima_street.jpg",
+   "category": "street",
+   "commons_page": "https://commons.wikimedia.org/wiki/File:Nagoya-city_Naka-ajima_Development_20130913.JPG",
+   "download_url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/b/b2/Nagoya-city_Naka-ajima_Development_20130913.JPG/1920px-Nagoya-city_Naka-ajima_Development_20130913.JPG",
+   "author": "円周率３パーセント",
+   "licence": "CC BY-SA 3.0",
+   "licence_url": "https://creativecommons.org/licenses/by-sa/3.0",
+   "description": "Naka-ajima So (Nagoya) corner block seen from the crossing, overcast",
+   "commons_title": "File:Nagoya-city Naka-ajima Development 20130913.JPG",
+   "original_size": [
+    4288,
+    3216
+   ],
+   "sha256": "1b805c07f7610fd86d72ea76ccff4f4f20669579768493e8b89cf592f29582b8",
+   "bytes": 588255
+  },
+  {
+   "file": "street_04_soshigaya_22_street.jpg",
+   "category": "street",
+   "commons_page": "https://commons.wikimedia.org/wiki/File:Soshigaya_housing_comprex_2025-01-25_Lt6.jpg",
+   "download_url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/5/58/Soshigaya_housing_comprex_2025-01-25_Lt6.jpg/1920px-Soshigaya_housing_comprex_2025-01-25_Lt6.jpg",
+   "author": "Latenscurtis",
+   "licence": "CC0",
+   "licence_url": "http://creativecommons.org/publicdomain/zero/1.0/deed.en",
+   "description": "Soshigaya housing block 22 seen from the street with large zelkova trees, winter",
+   "commons_title": "File:Soshigaya housing comprex 2025-01-25 Lt6.jpg",
+   "original_size": [
+    4032,
+    3024
+   ],
+   "sha256": "59316e2854e884c97eb72602742b4bd8fd6e887b7dbe979900cf3eab6683dbc3",
+   "bytes": 831404
+  },
+  {
+   "file": "street_05_sukematsu_street.jpg",
+   "category": "street",
+   "commons_page": "https://commons.wikimedia.org/wiki/File:Sukematsu-Danchi-of-Izumiotsu-City001.JPG",
+   "download_url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/9/94/Sukematsu-Danchi-of-Izumiotsu-City001.JPG/1920px-Sukematsu-Danchi-of-Izumiotsu-City001.JPG",
+   "author": "阪神強いな",
+   "licence": "CC BY-SA 3.0",
+   "licence_url": "http://creativecommons.org/licenses/by-sa/3.0/",
+   "description": "Sukematsu Danchi (Izumiotsu) blocks along a street with crossing and a passing car",
+   "commons_title": "File:Sukematsu-Danchi-of-Izumiotsu-City001.JPG",
+   "original_size": [
+    2304,
+    1728
+   ],
+   "sha256": "bebe18c30156f58577b27c2df3a490dac93f73d7af71ecc8868c55b25506214b",
+   "bytes": 571675
+  },
+  {
+   "file": "street_06_todaso_street.jpg",
+   "category": "street",
+   "commons_page": "https://commons.wikimedia.org/wiki/File:Todaso_20200926-12.jpg",
+   "download_url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/c/c2/Todaso_20200926-12.jpg/1920px-Todaso_20200926-12.jpg",
+   "author": "円周率３パーセント",
+   "licence": "CC BY-SA 4.0",
+   "licence_url": "https://creativecommons.org/licenses/by-sa/4.0",
+   "description": "Todaso (Nagoya) internal street between end walls and slabs, eye height, overcast",
+   "commons_title": "File:Todaso 20200926-12.jpg",
+   "original_size": [
+    4898,
+    3265
+   ],
+   "sha256": "6862fd0838e86b5b396ef2d754cfaa625d2c055540661811bd99ea11b3ca3239",
+   "bytes": 573775
+  },
+  {
+   "file": "street_07_kuwabukuro_street.jpg",
+   "category": "street",
+   "commons_page": "https://commons.wikimedia.org/wiki/File:%E6%A1%91%E8%A2%8B%E5%9B%A3%E5%9C%B05%EF%BD%9E9%E5%8F%B7%E6%A3%9F.jpg",
+   "download_url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/b/b6/%E6%A1%91%E8%A2%8B%E5%9B%A3%E5%9C%B05%EF%BD%9E9%E5%8F%B7%E6%A3%9F.jpg/1920px-%E6%A1%91%E8%A2%8B%E5%9B%A3%E5%9C%B05%EF%BD%9E9%E5%8F%B7%E6%A3%9F.jpg",
+   "author": "阿部の野望",
+   "licence": "CC BY-SA 4.0",
+   "licence_url": "https://creativecommons.org/licenses/by-sa/4.0",
+   "description": "Kuwabukuro Danchi blocks 5-9 and park from the street, low sun, bare trees",
+   "commons_title": "File:桑袋団地5～9号棟.jpg",
+   "original_size": [
+    4000,
+    3000
+   ],
+   "sha256": "824a9474d16e99f9ccc706a10ebdf5fdfa8a2e0d721578c4e7de2983ac5b8736",
+   "bytes": 860934
+  },
+  {
+   "file": "estate_01_chiryu_estate.jpg",
+   "category": "estate",
+   "commons_page": "https://commons.wikimedia.org/wiki/File:Chiryu_Danchi_ac_(1).jpg",
+   "download_url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/b/bb/Chiryu_Danchi_ac_%281%29.jpg/1920px-Chiryu_Danchi_ac_%281%29.jpg",
+   "author": "Asturio Cantabrio",
+   "licence": "CC BY-SA 4.0",
+   "licence_url": "https://creativecommons.org/licenses/by-sa/4.0",
+   "description": "Row of Chiryu Danchi blocks in sun, end wall numbered, cars and embankment in front",
+   "commons_title": "File:Chiryu Danchi ac (1).jpg",
+   "original_size": [
+    6016,
+    4000
+   ],
+   "sha256": "78383f849fb4cfe709adbbbbd8231c6c07256d4388f0acfa962a3ea76966e887",
+   "bytes": 540919
+  },
+  {
+   "file": "estate_02_fukuhama_estate.jpg",
+   "category": "estate",
+   "commons_page": "https://commons.wikimedia.org/wiki/File:Fukuoka_City_Municipal_Housing_Fukuhama_the_building_number_7_and_8_Fukuhama_2-ch%C5%8Dme_Ch%C5%AB%C5%8D-ku_Fukuoka_20230829.jpg",
+   "download_url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/7/7c/Fukuoka_City_Municipal_Housing_Fukuhama_the_building_number_7_and_8_Fukuhama_2-ch%C5%8Dme_Ch%C5%AB%C5%8D-ku_Fukuoka_20230829.jpg/1920px-Fukuoka_City_Municipal_Housing_Fukuhama_the_building_number_7_and_8_Fukuhama_2-ch%C5%8Dme_Ch%C5%AB%C5%8D-ku_Fukuoka_20230829.jpg",
+   "author": "Hirho",
+   "licence": "CC BY-SA 4.0",
+   "licence_url": "https://creativecommons.org/licenses/by-sa/4.0",
+   "description": "Fukuoka municipal housing Fukuhama blocks 7 and 8 across a canal, sunny",
+   "commons_title": "File:Fukuoka City Municipal Housing Fukuhama the building number 7 and 8 Fukuhama 2-chōme Chūō-ku Fukuoka 20230829.jpg",
+   "original_size": [
+    4000,
+    1680
+   ],
+   "sha256": "5bc0f592832a2d590d9ebc1917decfec0b3a16faabe4bf6cd3dfd9e0637338f5",
+   "bytes": 507895
+  },
+  {
+   "file": "estate_03_nakaajima_estate.jpg",
+   "category": "estate",
+   "commons_page": "https://commons.wikimedia.org/wiki/File:Nagoya_City_Nakaajima_So_20181221-01.jpg",
+   "download_url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/f/f3/Nagoya_City_Nakaajima_So_20181221-01.jpg/1920px-Nagoya_City_Nakaajima_So_20181221-01.jpg",
+   "author": "円周率３パーセント",
+   "licence": "CC BY-SA 4.0",
+   "licence_url": "https://creativecommons.org/licenses/by-sa/4.0",
+   "description": "Nagoya Nakaajimaso long slabs above a river embankment, winter sun",
+   "commons_title": "File:Nagoya City Nakaajima So 20181221-01.jpg",
+   "original_size": [
+    5333,
+    3000
+   ],
+   "sha256": "b1b9a2b69a7a01419cd62a6bb3833f6787419a94fa189fba4a18f0db121b63e1",
+   "bytes": 670583
+  },
+  {
+   "file": "estate_04_nishikasuga_estate.jpg",
+   "category": "estate",
+   "commons_page": "https://commons.wikimedia.org/wiki/File:Nishikasuga_danchi_north.jpg",
+   "download_url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/7/76/Nishikasuga_danchi_north.jpg/1920px-Nishikasuga_danchi_north.jpg",
+   "author": "Romas",
+   "licence": "Public domain (PD-self: released by the author)",
+   "licence_url": "https://commons.wikimedia.org/wiki/Template:PD-self",
+   "description": "Nishikasuga Danchi blocks seen across a rice field, overcast",
+   "commons_title": "File:Nishikasuga danchi north.jpg",
+   "original_size": [
+    2048,
+    1536
+   ],
+   "sha256": "2f868f109feb6b784e3f4979a14a352f2a1d418f647d503b16dbce9181290c1b",
+   "bytes": 539917
+  },
+  {
+   "file": "estate_05_todaso_estate.jpg",
+   "category": "estate",
+   "commons_page": "https://commons.wikimedia.org/wiki/File:Todaso_20200926-14.jpg",
+   "download_url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/4/42/Todaso_20200926-14.jpg/1920px-Todaso_20200926-14.jpg",
+   "author": "円周率３パーセント",
+   "licence": "CC BY-SA 4.0",
+   "licence_url": "https://creativecommons.org/licenses/by-sa/4.0",
+   "description": "Several Todaso blocks around a lawn with playground equipment, overcast",
+   "commons_title": "File:Todaso 20200926-14.jpg",
+   "original_size": [
+    4898,
+    3265
+   ],
+   "sha256": "8015c75a166fb266aa13e76cea48f10769d70fc7c4bfdf41b9bb5c4cc111140d",
+   "bytes": 459713
+  },
+  {
+   "file": "estate_06_inazawa_estate.jpg",
+   "category": "estate",
+   "commons_page": "https://commons.wikimedia.org/wiki/File:%E6%84%9B%E7%9F%A5%E7%9C%8C%E7%A8%B2%E6%B2%A2%E5%B8%82_%E5%B8%82%E5%96%B6%E4%BD%8F%E5%AE%85_20240706.jpg",
+   "download_url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/a/a8/%E6%84%9B%E7%9F%A5%E7%9C%8C%E7%A8%B2%E6%B2%A2%E5%B8%82_%E5%B8%82%E5%96%B6%E4%BD%8F%E5%AE%85_20240706.jpg/1920px-%E6%84%9B%E7%9F%A5%E7%9C%8C%E7%A8%B2%E6%B2%A2%E5%B8%82_%E5%B8%82%E5%96%B6%E4%BD%8F%E5%AE%85_20240706.jpg",
+   "author": "円周率３パーセント",
+   "licence": "CC BY-SA 4.0",
+   "licence_url": "https://creativecommons.org/licenses/by-sa/4.0",
+   "description": "Inazawa (Aichi) municipal housing blocks behind a rice field, summer sun, about 150 m",
+   "commons_title": "File:愛知県稲沢市 市営住宅 20240706.jpg",
+   "original_size": [
+    5472,
+    3648
+   ],
+   "sha256": "e46f2558907de1cb3035ed75375bebc9285e2d856d1dbb323cc1168abd9987c1",
+   "bytes": 409106
+  },
+  {
+   "file": "end_01_akabanedai_34_end.jpg",
+   "category": "end",
+   "commons_page": "https://commons.wikimedia.org/wiki/File:Akabanedai_Danchi_2018-6.jpg",
+   "download_url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/f/f1/Akabanedai_Danchi_2018-6.jpg/1920px-Akabanedai_Danchi_2018-6.jpg",
+   "author": "Suikotei",
+   "licence": "CC BY-SA 4.0",
+   "licence_url": "https://creativecommons.org/licenses/by-sa/4.0",
+   "description": "End wall of Akabanedai Danchi block 34 with painted number and chimney stack, overcast",
+   "commons_title": "File:Akabanedai Danchi 2018-6.jpg",
+   "original_size": [
+    3264,
+    2448
+   ],
+   "sha256": "7c77859a718a8a6a6e80285451fa241894028d195bf375c536cc9e8c65e2ba40",
+   "bytes": 633183
+  },
+  {
+   "file": "end_02_soshigaya_22_end.jpg",
+   "category": "end",
+   "commons_page": "https://commons.wikimedia.org/wiki/File:Soshigaya_housing_comprex_2025-01-25_22.jpg",
+   "download_url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/6/6e/Soshigaya_housing_comprex_2025-01-25_22.jpg/1920px-Soshigaya_housing_comprex_2025-01-25_22.jpg",
+   "author": "Merakami",
+   "licence": "CC BY-SA 4.0",
+   "licence_url": "https://creativecommons.org/licenses/by-sa/4.0",
+   "description": "Gable of Soshigaya block 22 with painted number and stair entrance, overcast winter",
+   "commons_title": "File:Soshigaya housing comprex 2025-01-25 22.jpg",
+   "original_size": [
+    4608,
+    3456
+   ],
+   "sha256": "8de221876730da36ffc0de6f28fa5acb185b278fb0660a768e60a8776a6f0310",
+   "bytes": 707689
+  },
+  {
+   "file": "end_03_nagasawa_2-2_end.jpg",
+   "category": "end",
+   "commons_page": "https://commons.wikimedia.org/wiki/File:Shonan_GreenHeights_Nagasawa.jpg",
+   "download_url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/c/c0/Shonan_GreenHeights_Nagasawa.jpg/1920px-Shonan_GreenHeights_Nagasawa.jpg",
+   "author": "東京団地鉄道",
+   "licence": "CC BY-SA 4.0",
+   "licence_url": "https://creativecommons.org/licenses/by-sa/4.0",
+   "description": "Gable of block 2-2, Shonan Nagasawa Green Heights (Yokosuka), cloudy",
+   "commons_title": "File:Shonan GreenHeights Nagasawa.jpg",
+   "original_size": [
+    3008,
+    2000
+   ],
+   "sha256": "c54a181c55e54ba23da27c2865e1597cc74df2cdc0030d075039a039c14848a6",
+   "bytes": 557349
+  },
+  {
+   "file": "end_04_naruko_end_a.jpg",
+   "category": "end",
+   "commons_page": "https://commons.wikimedia.org/wiki/File:Naruko_Danchi_20151103-06.jpg",
+   "download_url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/a/ad/Naruko_Danchi_20151103-06.jpg/1920px-Naruko_Danchi_20151103-06.jpg",
+   "author": "円周率３パーセント",
+   "licence": "CC BY-SA 4.0",
+   "licence_url": "https://creativecommons.org/licenses/by-sa/4.0",
+   "description": "Naruko Danchi (Nagoya) five-storey block, end wall and corner, sunny autumn",
+   "commons_title": "File:Naruko Danchi 20151103-06.jpg",
+   "original_size": [
+    4898,
+    3265
+   ],
+   "sha256": "6ffb8028645b681905a41cfcfdac0516a251c2b22ed1b46a256359b43b39e622",
+   "bytes": 379424
+  },
+  {
+   "file": "end_05_naruko_end_b.jpg",
+   "category": "end",
+   "commons_page": "https://commons.wikimedia.org/wiki/File:Naruko_Danchi_20151103-07.jpg",
+   "download_url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/a/a9/Naruko_Danchi_20151103-07.jpg/1920px-Naruko_Danchi_20151103-07.jpg",
+   "author": "円周率３パーセント",
+   "licence": "CC BY-SA 4.0",
+   "licence_url": "https://creativecommons.org/licenses/by-sa/4.0",
+   "description": "Naruko Danchi block end wall with painted number, deep blue sky",
+   "commons_title": "File:Naruko Danchi 20151103-07.jpg",
+   "original_size": [
+    4898,
+    3265
+   ],
+   "sha256": "df07e3ce8ef581810b682f051688e7a5d057bddaa8669a4e19f9667fa2b874fd",
+   "bytes": 344616
+  },
+  {
+   "file": "end_06_kita_ward_end.jpg",
+   "category": "end",
+   "commons_page": "https://commons.wikimedia.org/wiki/File:Kita_20190121-08.jpg",
+   "download_url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/f/fc/Kita_20190121-08.jpg/1920px-Kita_20190121-08.jpg",
+   "author": "円周率３パーセント",
+   "licence": "CC BY-SA 4.0",
+   "licence_url": "https://creativecommons.org/licenses/by-sa/4.0",
+   "description": "Nagoya Kita ward municipal block: gable and access-gallery side from the street",
+   "commons_title": "File:Kita 20190121-08.jpg",
+   "original_size": [
+    5333,
+    3000
+   ],
+   "sha256": "37f51386155febad25a675bb14a20aab1c1a4f21e77fba3cf0861c5c8ef04df3",
+   "bytes": 487681
+  },
+  {
+   "file": "weathering_01_ogikubo_stained_facade.jpg",
+   "category": "weathering",
+   "commons_page": "https://commons.wikimedia.org/wiki/File:Ogikubo_danchi.jpg",
+   "download_url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/9/9e/Ogikubo_danchi.jpg/1920px-Ogikubo_danchi.jpg",
+   "author": "おむこさん志望",
+   "licence": "CC BY 3.0",
+   "licence_url": "https://creativecommons.org/licenses/by/3.0",
+   "description": "Ogikubo Danchi facade with heavy grey water staining and streaks below every window",
+   "commons_title": "File:Ogikubo danchi.jpg",
+   "original_size": [
+    2816,
+    2112
+   ],
+   "sha256": "56f7c0a7e122ae0dc3abcb1e0f28e140b9ac6a3efda339b22651f1840fc16b20",
+   "bytes": 513742
+  },
+  {
+   "file": "weathering_02_saginomiya_stained_end.jpg",
+   "category": "weathering",
+   "commons_page": "https://commons.wikimedia.org/wiki/File:%E9%B7%BA%E3%81%AE%E5%AE%AE%E3%82%A2%E3%83%91%E3%83%BC%E3%83%88_(4487991389).jpg",
+   "download_url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/d/de/%E9%B7%BA%E3%81%AE%E5%AE%AE%E3%82%A2%E3%83%91%E3%83%BC%E3%83%88_%284487991389%29.jpg/1920px-%E9%B7%BA%E3%81%AE%E5%AE%AE%E3%82%A2%E3%83%91%E3%83%BC%E3%83%88_%284487991389%29.jpg",
+   "author": "yamamoto yousuke from Tokyo, japan",
+   "licence": "CC BY-SA 2.0",
+   "licence_url": "https://creativecommons.org/licenses/by-sa/2.0",
+   "description": "Saginomiya Apartments end wall and balconies: streaked, patched render and stained concrete",
+   "commons_title": "File:鷺の宮アパート (4487991389).jpg",
+   "original_size": [
+    3648,
+    2736
+   ],
+   "sha256": "48f07ee5a4ace2964157ad735d0b9b6036b161c7b9f51084b1bf576f45ece564",
+   "bytes": 670369
+  },
+  {
+   "file": "weathering_03_tsukida_entrance.jpg",
+   "category": "weathering",
+   "commons_page": "https://commons.wikimedia.org/wiki/File:Tsukida_Kodan_Jutaku_200_Yubin.JPG",
+   "download_url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/9/91/Tsukida_Kodan_Jutaku_200_Yubin.JPG/1920px-Tsukida_Kodan_Jutaku_200_Yubin.JPG",
+   "author": "Nissy-KITAQ",
+   "licence": "CC BY-SA 4.0",
+   "licence_url": "https://creativecommons.org/licenses/by-sa/4.0",
+   "description": "Tsukida UR danchi stair entrance: peeling paint, stains, worn concrete and mailboxes",
+   "commons_title": "File:Tsukida Kodan Jutaku 200 Yubin.JPG",
+   "original_size": [
+    2048,
+    1536
+   ],
+   "sha256": "0e4b56a3bee24a0d1f6231bd36c1bfc1bef1f51e211f37ec6246be979773be86",
+   "bytes": 359428
+  },
+  {
+   "file": "weathering_04_rust_streaks_concrete.jpg",
+   "category": "weathering",
+   "commons_page": "https://commons.wikimedia.org/wiki/File:Moscow,_rust_on_Novospassky_Bridge_June_2022_05.jpg",
+   "download_url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/3/36/Moscow%2C_rust_on_Novospassky_Bridge_June_2022_05.jpg/1920px-Moscow%2C_rust_on_Novospassky_Bridge_June_2022_05.jpg",
+   "author": "Retired electrician",
+   "licence": "CC0",
+   "licence_url": "http://creativecommons.org/publicdomain/zero/1.0/deed.en",
+   "description": "Rust streaks running down concrete blocks below steel fixings (Moscow bridge, non-Japanese)",
+   "commons_title": "File:Moscow, rust on Novospassky Bridge June 2022 05.jpg",
+   "original_size": [
+    4989,
+    3326
+   ],
+   "sha256": "d5e56269a6a2100c7d8b8c3a9d762adb7f07069e45384cad77d1f00e23f8ec8d",
+   "bytes": 1405804
+  },
+  {
+   "file": "weathering_05_rust_streaks_window.jpg",
+   "category": "weathering",
+   "commons_page": "https://commons.wikimedia.org/wiki/File:Siemianowice_ZHP_okno_i_rdza_2025.jpg",
+   "download_url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/7/71/Siemianowice_ZHP_okno_i_rdza_2025.jpg/1920px-Siemianowice_ZHP_okno_i_rdza_2025.jpg",
+   "author": "Adrian Tync",
+   "licence": "CC BY-SA 4.0",
+   "licence_url": "https://creativecommons.org/licenses/by-sa/4.0",
+   "description": "Rust streaks below a barred glass-block window on a painted wall (Poland, non-Japanese)",
+   "commons_title": "File:Siemianowice ZHP okno i rdza 2025.jpg",
+   "original_size": [
+    4488,
+    2992
+   ],
+   "sha256": "15e58caf479a4b5c55898b6f2d9c1b77288572e8e954756a68d6e65bb90d82d6",
+   "bytes": 687483
+  },
+  {
+   "file": "weathering_06_soshigaya_28_stairs.jpg",
+   "category": "weathering",
+   "commons_page": "https://commons.wikimedia.org/wiki/File:Soshigaya_housing_comprex_2025-01-25_Lt12.jpg",
+   "download_url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/1/15/Soshigaya_housing_comprex_2025-01-25_Lt12.jpg/1920px-Soshigaya_housing_comprex_2025-01-25_Lt12.jpg",
+   "author": "Latenscurtis",
+   "licence": "CC0",
+   "licence_url": "http://creativecommons.org/publicdomain/zero/1.0/deed.en",
+   "description": "Soshigaya block 28 external stairs and balconies: rusted rails, stained slabs, chipped edges",
+   "commons_title": "File:Soshigaya housing comprex 2025-01-25 Lt12.jpg",
+   "original_size": [
+    4032,
+    3024
+   ],
+   "sha256": "b2b447508832e73985d26334f5d3a118ab1a642d47d33ee2f25a90aab0e9aa3e",
+   "bytes": 1080649
+  },
+  {
+   "file": "weathering_07_saginomiya_wall_close.jpg",
+   "category": "weathering",
+   "commons_page": "https://commons.wikimedia.org/wiki/File:%E9%B7%BA%E3%81%AE%E5%AE%AE%E3%82%A2%E3%83%91%E3%83%BC%E3%83%88_(4487994261).jpg",
+   "download_url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/0/03/%E9%B7%BA%E3%81%AE%E5%AE%AE%E3%82%A2%E3%83%91%E3%83%BC%E3%83%88_%284487994261%29.jpg/1920px-%E9%B7%BA%E3%81%AE%E5%AE%AE%E3%82%A2%E3%83%91%E3%83%BC%E3%83%88_%284487994261%29.jpg",
+   "author": "yamamoto yousuke",
+   "licence": "CC BY-SA 2.0",
+   "licence_url": "https://creativecommons.org/licenses/by-sa/2.0",
+   "description": "Close view of Saginomiya Apartments wall: streaked render, rusty window grilles and stack",
+   "commons_title": "File:鷺の宮アパート (4487994261).jpg",
+   "original_size": [
+    3648,
+    2736
+   ],
+   "sha256": "e2e3502476ee8ddbcd7ec0046dfdfe409caa10e1752a32a399a3c9f4c05537c7",
+   "bytes": 553830
+  }
+ ]
+}

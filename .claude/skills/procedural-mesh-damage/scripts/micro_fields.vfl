@@ -1,0 +1,70 @@
+// micro_fields.vfl: Attribute Wrangle, Run Over: Points, on the dense render copy (or a
+// UV raster copy). The CAUSE fields that make the fine grain non-stationary. The shader
+// (or Copernicus) multiplies its stationary micro noise by these, so pores, stipple and
+// grain cluster where they physically do instead of sitting evenly everywhere.
+//
+// Reads (when present): f@edged (distance to the convex edges, m), f@damage_hot,
+// f@damage_halo, f@grime, f@wear_t, f@cut, f@streak, v@N.
+// Writes:
+//   f@micro_env  grain amplitude, floor + (1 - floor) * cluster^2 (a Gaussian scale
+//                mixture: heavy-tailed, high near edges and damage, low where dirty)
+//   f@micro_pd   pore / bug-hole density 0-1: tops of pour lifts, just above lift joints,
+//                along vertical form joints, near form corners (edges), in Thomas-like
+//                clusters, with a 10 % floor
+//   f@micro_w    worn / filled character 0-1: peaks clamped to plateaus, pores filled
+//                (grime, abraded arris, washed zones)
+//
+// Spare parms:
+//   lift_h     float  pour lift height (m), e.g. 1.0 (0 = no lifts)
+//   joint_sp   float  vertical formwork joint spacing (m), e.g. 1.2 (0 = none)
+//   ground_y   float
+//   floor      float  envelope floor, e.g. 0.15
+//   seed       int
+
+vector P = @P;
+vector N = normalize(v@N);
+int seed = chi("seed");
+vector off = vector(rand(set(seed, 5, 1))) * 60.0;
+float lift_h = chf("lift_h"), jsp = chf("joint_sp");
+float y = P.y - chf("ground_y");
+float edged = haspointattrib(0, "edged") ? f@edged : 1.0;
+float hot = haspointattrib(0, "damage_hot") ? f@damage_hot : 0.0;
+float grime = haspointattrib(0, "grime") ? f@grime : 0.0;
+float wear_t = haspointattrib(0, "wear_t") ? f@wear_t : 10.0;
+float cut = haspointattrib(0, "cut") ? f@cut : 0.0;
+
+// pour lifts: air rises during vibration, so bug holes collect in the top 0.3-0.6 m of a
+// lift; a cold joint at the lift line carries a band of holes just above it
+float lift_top = 0, lift_joint = 0;
+if (lift_h > 0) {
+    // cold joints are horizontal but slightly wavy
+    float yw = y + 0.04 * (noise(set(P.x * 1.3, 0.0, P.z * 1.3) + off) - 0.5) * 2.0;
+    float yl = yw - lift_h * floor(yw / lift_h);
+    lift_top = smooth(lift_h - 0.55, lift_h - 0.08, yl) * (1.0 - smooth(lift_h - 0.04, lift_h, yl));
+    lift_joint = exp(-max(yl, 0.0) / 0.05) * (y > 0.05);
+}
+// vertical form joints and form corners (the arrises)
+float joint = 0;
+if (jsp > 0 && abs(N.y) < 0.6) {
+    vector th = normalize(cross(N, {0, 1, 0}));
+    float h = dot(P, th) + 0.37 * jsp;
+    float jd = abs(h / jsp - rint(h / jsp)) * jsp;
+    joint = exp(-jd / 0.04);
+}
+float edge_p = exp(-edged / 0.06);
+// clusters: a Thomas-process stand-in, parents ~ meso noise blobs, offspring radius ~5-10 cm
+float meso = smooth(0.42, 0.66, noise(P * 1.7 + off));
+float cl2 = smooth(0.48, 0.72, noise(P * 7.0 + off * 1.3));
+float cause = clamp(0.6 * lift_top + 0.45 * lift_joint + 0.45 * joint + 0.5 * edge_p
+                    + 0.35 * hot, 0.0, 1.0);
+f@micro_pd = clamp(0.1 + 0.9 * cause * (0.3 + 0.7 * cl2) * (0.45 + 0.55 * meso), 0.0, 1.0);
+
+// grain amplitude: crisp and contrasty at edges and in damage, patchy between, soft and
+// filled where grime sits
+float wear = 1.0 - smooth(0.55, 1.0, wear_t);
+float cl = clamp(0.55 * meso + 0.5 * edge_p + 0.5 * hot + 0.25 * lift_top + 0.6 * cut, 0.0, 1.0);
+float fl = chf("floor");
+float env = fl + (1.0 - fl) * cl * cl;
+env *= lerp(1.0, 0.4, clamp(grime * 1.4, 0.0, 1.0));
+f@micro_env = env;
+f@micro_w = clamp(1.3 * grime + 0.8 * wear + 0.3 * (1.0 - meso) * (N.y > 0.6), 0.0, 1.0);
