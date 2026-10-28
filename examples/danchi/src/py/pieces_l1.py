@@ -1,5 +1,5 @@
 # pieces_l1.py — LOD1 stand-ins for the heavy kit pieces (same pivots and footprints).
-exec(open("C:/Users/jujun/AppData/Local/Temp/claude/C--Users-jujun-DEV-hocus-pocus/d956ad22-ff1d-47a8-a6c1-b1930b7bee4a/scratchpad/sk6-out/work/py/pieces.py").read().replace("ERRS = main()", "ERRS = {}"))
+exec(open((globals().get("DANCHI") or hou.text.expandString("$HIP/..")) + "/src/py/pieces.py", encoding="utf-8").read().replace("ERRS = main()", "ERRS = {}"))
 L1 = {}
 L1["bal_front_l1"] = r'''
 float sa = -W * 0.5 + rail_w(W);

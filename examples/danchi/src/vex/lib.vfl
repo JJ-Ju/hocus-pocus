@@ -139,3 +139,109 @@ void bal_openings(float W; export float dx0; export float dx1; export float wx0;
 #define WALL_T 0.18
 #define ROOF_PARA 0.6
 #define TOWER_D 2.6
+
+// ---- round 7: gridded boxes (vertex colour needs vertices) --------------------------------
+// lattice point (i, j, k) of a gridded box, created on first use; pid holds -1 for "not yet"
+int gpt(int geo; int pid[]; float xs[]; float ys[]; float zs[]; int i; int j; int k)
+{
+    int sx = len(xs), sy = len(ys);
+    int idx = i + sx * (j + sy * k);
+    if (pid[idx] < 0) pid[idx] = addpoint(geo, set(xs[i], ys[j], zs[k]));
+    return pid[idx];
+}
+
+int gquad(int geo; int a; int b; int c; int d; string mat; string key)
+{
+    int pr = addprim(geo, "poly", a, b, c, d);
+    setprimattrib(geo, "mat", pr, mat);
+    setprimattrib(geo, "cdkey", pr, key);
+    return pr;
+}
+
+// box whose faces are grids at the given coordinates (sorted; first = min, last = max).
+// Shared points, outward winding as addbox. skip leaves out hidden faces: 1 -X, 2 +X, 4 -Y,
+// 8 +Y, 16 -Z, 32 +Z (add them). Returns the first prim; count gets the prim count.
+int gridbox(int geo; float xs[]; float ys[]; float zs[]; string mat; string key; int skip; int count)
+{
+    int nx = len(xs) - 1, ny = len(ys) - 1, nz = len(zs) - 1;
+    int pid[];
+    resize(pid, len(xs) * len(ys) * len(zs));
+    for (int q = 0; q < len(pid); q++) pid[q] = -1;
+    int first = -1, n = 0, pr;
+    for (int j = 0; j < ny; j++) for (int k = 0; k < nz; k++) {
+        if (!(skip & 1)) { pr = gquad(geo, gpt(geo, pid, xs, ys, zs, 0, j, k), gpt(geo, pid, xs, ys, zs, 0, j + 1, k), gpt(geo, pid, xs, ys, zs, 0, j + 1, k + 1), gpt(geo, pid, xs, ys, zs, 0, j, k + 1), mat, key); if (first < 0) first = pr; n++; }
+        if (!(skip & 2)) { pr = gquad(geo, gpt(geo, pid, xs, ys, zs, nx, j, k), gpt(geo, pid, xs, ys, zs, nx, j, k + 1), gpt(geo, pid, xs, ys, zs, nx, j + 1, k + 1), gpt(geo, pid, xs, ys, zs, nx, j + 1, k), mat, key); if (first < 0) first = pr; n++; }
+    }
+    for (int i = 0; i < nx; i++) for (int k = 0; k < nz; k++) {
+        if (!(skip & 4)) { pr = gquad(geo, gpt(geo, pid, xs, ys, zs, i, 0, k), gpt(geo, pid, xs, ys, zs, i, 0, k + 1), gpt(geo, pid, xs, ys, zs, i + 1, 0, k + 1), gpt(geo, pid, xs, ys, zs, i + 1, 0, k), mat, key); if (first < 0) first = pr; n++; }
+        if (!(skip & 8)) { pr = gquad(geo, gpt(geo, pid, xs, ys, zs, i, ny, k), gpt(geo, pid, xs, ys, zs, i + 1, ny, k), gpt(geo, pid, xs, ys, zs, i + 1, ny, k + 1), gpt(geo, pid, xs, ys, zs, i, ny, k + 1), mat, key); if (first < 0) first = pr; n++; }
+    }
+    for (int i = 0; i < nx; i++) for (int j = 0; j < ny; j++) {
+        if (!(skip & 16)) { pr = gquad(geo, gpt(geo, pid, xs, ys, zs, i, j, 0), gpt(geo, pid, xs, ys, zs, i + 1, j, 0), gpt(geo, pid, xs, ys, zs, i + 1, j + 1, 0), gpt(geo, pid, xs, ys, zs, i, j + 1, 0), mat, key); if (first < 0) first = pr; n++; }
+        if (!(skip & 32)) { pr = gquad(geo, gpt(geo, pid, xs, ys, zs, i, j, nz), gpt(geo, pid, xs, ys, zs, i, j + 1, nz), gpt(geo, pid, xs, ys, zs, i + 1, j + 1, nz), gpt(geo, pid, xs, ys, zs, i + 1, j, nz), mat, key); if (first < 0) first = pr; n++; }
+    }
+    count = n;
+    return first;
+}
+
+// evenly spaced coordinates from a to b, cells at most `step` long
+function float[] spaced(float a; float b; float step)
+{
+    int n = max(1, int(ceil((b - a) / step - 1e-4)));
+    float r[];
+    for (int i = 0; i <= n; i++) append(r, lerp(a, b, float(i) / n));
+    return r;
+}
+
+// coordinates at a, b and every multiple of `step` from `origin` strictly between them
+function float[] lines(float a; float b; float origin; float step)
+{
+    float r[];
+    append(r, a);
+    float t = origin + ceil((a - origin) / step + 1e-4) * step;
+    while (t < b - 0.05) { if (t > a + 0.05) append(r, t); t += step; }
+    append(r, b);
+    return r;
+}
+
+// the paint scheme's wall colour (assign.vfl has the same table; decals use it for washed and
+// worn-edge tones, which are the wall paint lifted toward the clean substrate)
+vector scheme_wall(int seed; string style_in)
+{
+    string style = style_in;
+    if (style == "seed") {
+        float r = hr(seed, 41, 3);
+        style = r < 0.42 ? "white" : r < 0.66 ? "light_grey" : r < 0.80 ? "cream" : r < 0.90 ? "beige_brown" : "pink";
+    }
+    vector wall = {0.70, 0.69, 0.66};
+    if (style == "light_grey") wall = {0.56, 0.56, 0.55};
+    if (style == "cream") wall = {0.67, 0.63, 0.54};
+    if (style == "beige_brown") wall = {0.57, 0.51, 0.43};
+    if (style == "pink") wall = {0.67, 0.58, 0.54};
+    return wall;
+}
+
+// field strength of the cause hotspots at p on one side (typ -1 = any type)
+float cause_at(vector p; int side; int typ; vector cP[]; float cR[]; float cS[]; int cT[]; int cSide[])
+{
+    float a = 0;
+    for (int i = 0; i < len(cP); i++) {
+        if (cSide[i] != side || (typ >= 0 && cT[i] != typ)) continue;
+        float d = length(p - cP[i]) / cR[i];
+        a = max(a, cS[i] * smooth(1.0, 0.25, d));
+    }
+    return a;
+}
+
+// type of the strongest cause at p (-1 none)
+int cause_type(vector p; int side; vector cP[]; float cR[]; float cS[]; int cT[]; int cSide[])
+{
+    float best = 0.05;
+    int t = -1;
+    for (int i = 0; i < len(cP); i++) {
+        if (cSide[i] != side) continue;
+        float a = cS[i] * smooth(1.0, 0.25, length(p - cP[i]) / cR[i]);
+        if (a > best) { best = a; t = cT[i]; }
+    }
+    return t;
+}

@@ -108,26 +108,36 @@ else {
     else if (key == "leaf") cd = lerp({0.04, 0.10, 0.03}, {0.12, 0.20, 0.06}, r1);
 }
 
-// per-bay meso tint (±3 %) and repaint patches on painted surfaces
-if ((key == "wall" || key == "soffit" || key == "slabedge") && s@role != "") {
+// per-bay meso tint (±3 %) and repaint patches on painted surfaces. Round 7: the patches come
+// from weather_params (input 1 = causes, which carries them): rectangles of bays x floors on the
+// long faces, of 1 m columns x floors on the gables. Patch prims get `fresh` (the bake keeps them
+// cleaner) and a tone shift scaled by the patch contrast.
+i@fresh = 0;
+if ((key == "wall" || key == "soffit" || key == "slabedge" || key == "base_band" || key == "fascia") && (s@role != "" || i@gable > 0)) {
     int b = i@bay, f = i@floor, sd = i@side;
-    float t = 1.0 + 0.06 * (hr(b * 7 + sd, 51, seed) - 0.5) + 0.03 * (hr(f * 131 + b * 7 + sd, 52, seed) - 0.5);
-    cd *= t;
-    // patches: 1-3 rectangles of bays x floors per facade, value off by 2-5 %
-    int np_ = chi("../../patches");
-    float bxs[] = detail(1, "bay_x");
-    int nb = len(bxs);
-    int fl = detail(1, "floors");
-    for (int k = 0; k < np_; k++) {
-        int pid = sd * 10 + k;
-        int b0 = int(floor(hr(pid, 61, seed) * nb));
-        int b1 = b0 + int(floor(hr(pid, 62, seed) * 2.5));
-        int f0 = int(floor(hr(pid, 63, seed) * fl));
-        int f1 = f0 + int(floor(hr(pid, 64, seed) * 3.5));
-        if (b >= b0 && b <= b1 && f >= f0 && f <= f1 && s@role != "") {
-            float sh = (hr(pid, 65, seed) < 0.5 ? -1 : 1) * hrange(pid, 66, seed, 0.02, 0.05);
-            cd *= 1.0 + sh;
+    if (s@role != "") {
+        float t = 1.0 + 0.06 * (hr(b * 7 + sd, 51, seed) - 0.5) + 0.03 * (hr(f * 131 + b * 7 + sd, 52, seed) - 0.5);
+        cd *= t;
+    }
+    int ps[] = detail(1, "p_side");
+    int pb0[] = detail(1, "p_b0"), pb1[] = detail(1, "p_b1"), pf0[] = detail(1, "p_f0"), pf1[] = detail(1, "p_f1");
+    float psh[] = detail(1, "p_shade");
+    float pcon = detail(1, "w_pcon");
+    vector pc = primuv(0, "P", @primnum, {0.5, 0.5, 0});
+    float H_ = detail(1, "H");
+    float zc_ = -(D_DEPTH * 0.5 + COR_W);
+    for (int k = 0; k < len(ps); k++) {
+        int inside = 0;
+        if (s@role != "") inside = ps[k] == sd && b >= pb0[k] && b <= pb1[k] && f >= pf0[k] && f <= pf1[k];
+        else {
+            int col = int(floor(pc.z - zc_));
+            int fl_ = int(floor((pc.y - PLINTH) / H_));
+            inside = ps[k] == i@gable + 1 && col >= pb0[k] && col <= pb1[k] && fl_ >= pf0[k] && fl_ < pf1[k];
+        }
+        if (inside) {
+            cd *= 1.0 + psh[k] * pcon;
             f@rough = 0.78;     // most of the mismatch is sheen
+            i@fresh = 1;
         }
     }
 }

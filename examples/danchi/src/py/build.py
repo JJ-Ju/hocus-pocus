@@ -1,6 +1,6 @@
 # build.py — creates /obj/danchi (the asset subnet): interface, plan, dress, kit, placement,
 # generated shell. Re-runnable: rebuilds the network from the .vfl files.
-exec(open("C:/Users/jujun/AppData/Local/Temp/claude/C--Users-jujun-DEV-hocus-pocus/d956ad22-ff1d-47a8-a6c1-b1930b7bee4a/scratchpad/sk6-out/work/py/hlib.py").read())
+exec(open((globals().get("DANCHI") or hou.text.expandString("$HIP/..")) + "/src/py/hlib.py", encoding="utf-8").read())
 
 TOP = "/obj/danchi"
 
@@ -50,24 +50,18 @@ def interface(sub):
         I("bldg_no", "Building Number", 1, (0,), min=0, max=99,
           help="Number painted on the end walls. 0 picks one from the seed."),
         T("bldg_suffix", "Add 号棟", default_value=False),
-        R("age", "Years Since Repaint", 1, (12.0,), min=0, max=25,
-          help="Scales weathering: streak strength and length, grime, rust."),
     ])
     F("f_dress", "Dressing", [
         T("props", "Balcony Props", default_value=True, help="Laundry, futons, plants, AC units, by flat persona."),
         T("interiors", "Interior Cards", default_value=True, help="Curtains and a room behind the balcony glass."),
-        T("damage", "Edge Damage", default_value=True, help="Chipped balcony slab edges (4 baked variants, 40 % of bays clean)."),
+        T("damage", "Edge Damage Geometry", default_value=True, help="Balcony fronts use the damaged variants (Weathering > Edge Damage). Off: all fronts clean."),
         R("ac_share", "AC Unit Share", 1, (0.7,), min=0, max=1),
         T("retrofit_lift", "Retrofit Lift Tower", default_value=False,
           help="An added steel-and-glass lift tower (UR retrofit) at the west end of the corridor side."),
     ])
-    F("f_weather", "Weathering", [
-        T("decals", "Streak and Stain Decals", default_value=True),
-        R("weather", "Weathering Amount", 1, (1.0,), min=0, max=2),
-        I("patches", "Repaint Patches per Facade", 1, (2,), min=0, max=4),
-        S("tex_dir", "Texture Folder", 1, ("$HIP/../tex",), string_type=hou.stringParmType.FileReference,
-          file_type=hou.fileType.Directory),
-    ])
+    # round 7: the Weathering tab (preset, history, site, detail overrides) lives in interface.py
+    exec(open(PY + "/interface.py", encoding="utf-8").read(), globals())
+    g.append(weather_folder())
     F("f_out", "Output", [
         M("lod", "LOD", ("0", "1", "2", "all"), ("LOD0 (full)", "LOD1 (no props, simplified)", "LOD2 (shell)", "All (groups lod0/lod1/lod2)"), default_value=0),
         T("collision", "Collision Hulls (UCX_)", default_value=True),
@@ -222,3 +216,9 @@ def build():
 
 
 build()
+# round 7: weather_params, the new decals, the vertex-colour bake and the damage expressions
+# (needs the real kit pieces: run pieces.py, pieces_l1.py and piece_bal_front.py first, then
+# materials.py, then this script again)
+if hou.node(TOP + "/build/kit_bal_front/cluster_v1") is not None:
+    exec(open(PY + "/weather_upgrade.py", encoding="utf-8").read(), globals())
+    upgrade(TOP)

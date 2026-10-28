@@ -1,8 +1,9 @@
 # tex_build.py — tiling material maps in Copernicus (cop_lib helpers from the
-# procedural-materials skill) and the decal atlas + sky with numpy. Writes into sk6-out/tex.
-exec(open("C:/Users/jujun/DEV/hp-r6/.claude/skills/procedural-materials/scripts/cop_lib.py").read())
+# procedural-materials skill) and the decal atlas + sky with numpy. Writes into examples/danchi/tex.
+exec(open((globals().get("DANCHI") or hou.text.expandString("$HIP/..")) + "/src/py/hlib.py", encoding="utf-8").read())
+exec(open(SKILLS + "/procedural-materials/scripts/cop_lib.py", encoding="utf-8").read())
 import numpy as np
-OUTDIR = "C:/Users/jujun/AppData/Local/Temp/claude/C--Users-jujun-DEV-hocus-pocus/d956ad22-ff1d-47a8-a6c1-b1930b7bee4a/scratchpad/sk6-out/tex"
+OUTDIR = TEXDIR
 
 
 def build_spray_tile(res=1024, tile_m=2.0):
@@ -123,11 +124,13 @@ def streak_atlas(path, cw=256, ch=1024, seed=7):
 
 
 def sky_latlong(path, w=1024, h=512):
-    """Lat-long sky: pale warm haze at the horizon to a clear blue zenith, sRGB PNG."""
+    """Lat-long sky: pale haze at the horizon to a soft blue zenith, sRGB PNG. Round 7: zenith
+    desaturated from (0.36, 0.55, 0.85) to match the reference photos (hazy pale blue, L* 75-85
+    at the top of the frame in facade_01/04 and street_*)."""
     v = np.linspace(0, 1, h)[:, None]          # 0 top (zenith) .. 1 bottom (nadir)
     elev = (0.5 - v) * np.pi                    # radians, + above horizon
     t = np.clip(np.sin(np.clip(elev, 0, None)), 0, 1) ** 0.45
-    horizon = np.array([0.80, 0.84, 0.88]); zenith = np.array([0.36, 0.55, 0.85])
+    horizon = np.array([0.84, 0.86, 0.88]); zenith = np.array([0.56, 0.66, 0.80])
     ground = np.array([0.42, 0.40, 0.37])
     col = horizon[None, None, :] * (1 - t[..., None]) + zenith[None, None, :] * t[..., None]
     col = np.where((elev < 0)[..., None], ground[None, None, :] * (0.85 + 0.15 * np.exp(elev * 6))[..., None]
@@ -138,14 +141,29 @@ def sky_latlong(path, w=1024, h=512):
     return path
 
 
+def weather_maps():
+    """Round 7: the weathering decal atlas and the macro-variation map (weather_atlas.py)."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("weather_atlas", PY + "/weather_atlas.py")
+    wa = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(wa)
+    return wa.build_all(OUTDIR)
+
+
 def main():
     out = {}
     out["spray"] = build_spray_tile()
     out["concrete"] = build_concrete()
-    out["atlas"] = streak_atlas(OUTDIR + "/streak_atlas.png")
+    out["atlas"] = streak_atlas(OUTDIR + "/streak_atlas.png")     # round 6, kept for 1.0
+    out["weather"] = weather_maps()
     out["sky"] = sky_latlong(OUTDIR + "/sky.png")
     return out
 
 
-RESULT = {"atlas": streak_atlas(OUTDIR + "/streak_atlas.png")} if globals().get("ATLAS_ONLY") else main()
+if globals().get("ATLAS_ONLY"):
+    RESULT = {"atlas": streak_atlas(OUTDIR + "/streak_atlas.png"), "weather": weather_maps()}
+elif globals().get("SKY_ONLY"):
+    RESULT = {"sky": sky_latlong(OUTDIR + "/sky.png")}
+else:
+    RESULT = main()
 print(RESULT)

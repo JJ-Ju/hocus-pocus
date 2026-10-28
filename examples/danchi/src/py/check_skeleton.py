@@ -11,9 +11,15 @@ def check(sub_path="/obj/danchi"):
     # collect x intervals of facade wall pieces per floor and side
     spans = collections.defaultdict(list)
     counts = collections.Counter()
+    # count piece instances (distinct bay and side per name and floor), not prims: the round-6
+    # version divided prim counts by 6, which only held for the proxy boxes of the skeleton phase
+    seen = set()
     for pr in geo.prims():
         nm = pr.attribValue(name_a)
-        counts[(nm, pr.attribValue(floor_a))] += 1
+        key = (nm, pr.attribValue(floor_a), pr.attribValue("bay"), pr.attribValue("side"))
+        if key not in seen:
+            seen.add(key)
+            counts[(nm, pr.attribValue(floor_a))] += 1
     # bbox per piece instance: group by (name, floor, bay, side)
     inst = collections.defaultdict(lambda: [1e9, -1e9])
     for pr in geo.prims():
@@ -39,9 +45,9 @@ def check(sub_path="/obj/danchi"):
                 problems.append(f"floor {f}: {'gap' if a2 > c1 else 'overlap'} {c1:.3f}->{a2:.3f}")
     # corridor side: cor_wall per floor plus core bays (core walls are balcony-side only)
     for f in range(floors):
-        if counts[("bal_wall", f)] // 6 != units or counts[("cor_wall", f)] // 6 != units:
-            problems.append(f"floor {f}: bal_wall {counts[('bal_wall', f)]//6} cor_wall {counts[('cor_wall', f)]//6} != {units}")
-        nc = (counts[("core_wall_3", f)] + counts[("core_wall_55", f)]) // 6
+        if counts[("bal_wall", f)] != units or counts[("cor_wall", f)] != units:
+            problems.append(f"floor {f}: bal_wall {counts[('bal_wall', f)]} cor_wall {counts[('cor_wall', f)]} != {units}")
+        nc = counts[("core_wall_3", f)] + counts[("core_wall_55", f)]
         if nc != ncores:
             problems.append(f"floor {f}: cores {nc} != {ncores}")
     return {"floors": floors, "units": units, "ncores": ncores, "L": round(L, 3),

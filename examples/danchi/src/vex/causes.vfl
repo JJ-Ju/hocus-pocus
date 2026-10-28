@@ -1,8 +1,9 @@
 // causes.vfl — detail wrangle on the plan. The building's "stories": a few cause hotspots per
 // facade that every weathering layer reads (decal density and strength, point grime).
 // Types: 0 leak (stain + streaks + damp), 1 rust (rail and fixing rust), 2 neglect (a dirty
-// column of flats), 3 impact (scuffs and chips near the ground at a corner).
-int seed = chi("../../seed");
+// column of flats), 3 impact (scuffs and chips near the ground at a corner). Input 0 is
+// weather_params (the plan plus the w_* weathering values).
+int seed = detail(0, "w_seed");     // round 7: the weathering seed (building seed folded in)
 float L = detail(0, "L"), x0 = detail(0, "x0"), ytop = detail(0, "ytop"), H = detail(0, "H");
 int floors = detail(0, "floors");
 float bx[] = detail(0, "bay_x");
@@ -29,7 +30,8 @@ for (int side = 0; side < 4; side++) {
         } else {
             float gx = side == 2 ? x0 - 0.2 : x0 + L + 0.2;
             float gz = lerp(zc, zb, r2);
-            float y = t == 3 ? 0.8 : lerp(ytop * 0.4, ytop, r3);
+            // gable stories start where water enters: the top edge and the upper floors
+            float y = t == 3 ? 0.8 : lerp(ytop * 0.75, ytop, r3);
             p = set(gx, y, gz);
             rad = hrange(id, 606, seed, 2.0, 5.0);
         }

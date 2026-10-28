@@ -1,8 +1,8 @@
 # piece_bal_front.py — the golden piece: balcony slab + parapet, clean (v0) and damaged (v1-v4).
-exec(open("C:/Users/jujun/AppData/Local/Temp/claude/C--Users-jujun-DEV-hocus-pocus/d956ad22-ff1d-47a8-a6c1-b1930b7bee4a/scratchpad/sk6-out/work/py/hlib.py").read())
+exec(open((globals().get("DANCHI") or hou.text.expandString("$HIP/..")) + "/src/py/hlib.py", encoding="utf-8").read())
 import vexpressionmenu
 
-SKILL = "C:/Users/jujun/DEV/hp-r6/.claude/skills/procedural-mesh-damage/scripts"
+SKILL = SKILLS + "/procedural-mesh-damage/scripts"
 geo = hou.node("/obj/danchi/build")
 
 TAG = r'''

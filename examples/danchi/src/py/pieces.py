@@ -1,7 +1,7 @@
 # pieces.py — every kit piece except the golden bal_front, each its own SOP subnet
 # (kit_<piece>) with one detail wrangle (VEX below, lib.vfl prepended), a name SOP per variant
 # and an output. Pivot: bay bottom-centre on the outer wall plane, +Z out (README contract).
-exec(open("C:/Users/jujun/AppData/Local/Temp/claude/C--Users-jujun-DEV-hocus-pocus/d956ad22-ff1d-47a8-a6c1-b1930b7bee4a/scratchpad/sk6-out/work/py/hlib.py").read())
+exec(open((globals().get("DANCHI") or hou.text.expandString("$HIP/..")) + "/src/py/hlib.py", encoding="utf-8").read())
 import vexpressionmenu
 
 GEO = hou.node("/obj/danchi/build")
@@ -436,7 +436,7 @@ def bal_cor_front():
     pr = wrangle(sn, "profile", vex("bal_front_profile", lib=False), cls="detail")
     vexpressionmenu.createSpareParmsFromChCalls(pr, "snippet")
     pr.setParms({"chamfer": 0.012, "joint": 0.01, "depth": 1.4, "ptop": 1.1})
-    tag = wrangle(sn, "tag", open(f"{OUT}/work/py/piece_bal_front.py", encoding="utf-8").read().split("TAG = r'''")[1].split("'''")[0], [pr], cls="prim")
+    tag = wrangle(sn, "tag", open(f"{PY}/piece_bal_front.py", encoding="utf-8").read().split("TAG = r'''")[1].split("'''")[0], [pr], cls="prim")
     nrm = node(sn, "normal", "normal", [tag])
     nrm.parm("cuspangle").set(25)
     n = node(sn, "name", "name", [nrm])
@@ -454,7 +454,7 @@ def bal_open():
     pr = wrangle(sn, "profile", vex("bal_front_profile", lib=False), cls="detail")
     vexpressionmenu.createSpareParmsFromChCalls(pr, "snippet")
     pr.setParms({"chamfer": 0.012, "joint": 0.01, "depth": 1.2, "ptop": 0.1, "rail_part": 1})
-    tag = wrangle(sn, "tag", open(f"{OUT}/work/py/piece_bal_front.py", encoding="utf-8").read().split("TAG = r'''")[1].split("'''")[0], [pr], cls="prim")
+    tag = wrangle(sn, "tag", open(f"{PY}/piece_bal_front.py", encoding="utf-8").read().split("TAG = r'''")[1].split("'''")[0], [pr], cls="prim")
     lib = open(f"{VEX}/lib.vfl", encoding="utf-8").read()
     bal = wrangle(sn, "balustrade", lib + chr(10) + HDR + SRC["balustrade"], cls="detail")
     g = bal.parmTemplateGroup(); g.append(hou.IntParmTemplate("variant", "Variant", 1, (0,))); bal.setParmTemplateGroup(g)
