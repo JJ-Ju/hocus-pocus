@@ -1,0 +1,12 @@
+{
+  "at": "2026-10-28T03:10:42.260Z",
+  "choice": "same",
+  "label": "same",
+  "note": "About the same I'd say, at least from what I can tell on this chooser UI. Keep in mind these are ultimately destined for a game engine like unreal engine or godot, so having the stains be a render pass in post-processing won't work for our needs.",
+  "options": [
+    "hard",
+    "soft"
+  ],
+  "pair": "c-stains",
+  "tag": "facade · stain treatment"
+}

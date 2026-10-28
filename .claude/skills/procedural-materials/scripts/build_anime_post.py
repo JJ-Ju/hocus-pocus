@@ -45,11 +45,11 @@ PRESETS = {
         # thresholds as fractions of the lit level; 3 values per material [S Gurney 3 values];
         # v3 hero street measured: lit 1.15-1.24, sky-lit shadow ~0.25, occluded 0.07-0.12
         t_deep=0.12, t_shadow=0.55,
-        # pale cerulean: a deep zenith (0.10, 0.25, 0.62) put the sky in the mid-value group and
-        # dropped notan dominance to 1.07 on the v3 hero street; this one gives 1.67 (round C)
-        sky_zenith=(0.24, 0.44, 0.80), sky_mid=(0.46, 0.62, 0.86), sky_horizon=(0.74, 0.80, 0.86),
+        # deep zenith: the user preferred it over pale cerulean (0.24, 0.44, 0.80) (review 34),
+        # though it drops notan dominance from 1.67 to 1.07 on the v3 hero street (round C)
+        sky_zenith=(0.10, 0.25, 0.62), sky_mid=(0.46, 0.62, 0.86), sky_horizon=(0.74, 0.80, 0.86),
         cloud_lit=(0.92, 0.92, 0.90), cloud_shade=(0.52, 0.58, 0.72), cloud_cover=0.25,
-        haze=(0.62, 0.70, 0.80), haze_near=40.0, haze_far=650.0, haze_max=0.40,
+        haze=(0.62, 0.70, 0.80), haze_near=40.0, haze_far=650.0, haze_max=0.50,
         line=(1.0, 0.96, 0.86), line_amt=0.55, dark_line_amt=0.25,
         sat=1.10, lift=(0.010, 0.012, 0.024), diffusion=0.07,
         stroke_amt=0.035, wash_amt=0.045, flatten=0.85),
@@ -60,7 +60,7 @@ PRESETS = {
         sky_zenith=(0.48, 0.52, 0.55), sky_mid=(0.58, 0.61, 0.62), sky_horizon=(0.70, 0.71, 0.70),
         # overcast: one low-contrast cloud sheet, close to the gradient, or it reads as stains
         cloud_lit=(0.63, 0.65, 0.66), cloud_shade=(0.55, 0.58, 0.60), cloud_cover=0.45,
-        haze=(0.66, 0.68, 0.67), haze_near=25.0, haze_far=380.0, haze_max=0.65,
+        haze=(0.66, 0.68, 0.67), haze_near=25.0, haze_far=380.0, haze_max=0.75,
         line=(0.92, 0.92, 0.88), line_amt=0.25, dark_line_amt=0.20,
         sat=0.78, lift=(0.020, 0.022, 0.024), diffusion=0.05,
         stroke_amt=0.030, wash_amt=0.040, flatten=0.80),
@@ -71,7 +71,7 @@ PRESETS = {
         t_deep=0.12, t_shadow=0.55,
         sky_zenith=(0.08, 0.09, 0.30), sky_mid=(0.46, 0.27, 0.42), sky_horizon=(1.00, 0.58, 0.32),
         cloud_lit=(1.00, 0.58, 0.42), cloud_shade=(0.30, 0.24, 0.42), cloud_cover=0.38,
-        haze=(0.85, 0.55, 0.45), haze_near=40.0, haze_far=600.0, haze_max=0.50,
+        haze=(0.85, 0.55, 0.45), haze_near=40.0, haze_far=600.0, haze_max=0.62,
         line=(1.0, 0.80, 0.55), line_amt=0.60, dark_line_amt=0.25,
         sat=1.05, lift=(0.014, 0.010, 0.030), diffusion=0.10,
         stroke_amt=0.035, wash_amt=0.045, flatten=0.85),
@@ -395,7 +395,9 @@ def main(argv=None):
     ap.add_argument("--aov-exr")
     ap.add_argument("--out", required=True)
     ap.add_argument("--before")
-    ap.add_argument("--preset", default="summer_day", choices=sorted(PRESETS))
+    # dusk is the showcase key: the user picked it on both cameras for warm light against cold
+    # blue shadows and its sky gradient (review 34); haze_max raised ~25 % in all presets
+    ap.add_argument("--preset", default="dusk", choices=sorted(PRESETS))
     # 0.4 is the user's pick (review 34): 1.0 reads as a filter, not a painting
     ap.add_argument("--strength", type=float, default=0.4)
     ap.add_argument("--key", type=float, default=None,

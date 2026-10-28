@@ -24,8 +24,18 @@ recipe step that was not run in round C.
 | Lighting key | sun angle, colour and strength; sky-dome tint; night emissives | the LOP light rig | `style_key` (summer_day, winter_overcast, dusk, night†) | the realistic rig |
 | Post | bands, colour key, sky, lines, texture, haze, grade | Copernicus, after the render | `style_post` toggle, `style_strength` | off |
 
-The post is a presentation layer for offline renders. A game export takes only the lookdev
-switches; an engine needs its own post or toon shading for the rest [I].
+**The target is a game engine** (Unreal or Godot), so the user's rule is that the look must
+not depend on a render pass in post (review 34). The Copernicus post is a look target and a
+way to make offline stills. It does not ship. What ships is:
+- baked textures (albedo, normal, ORM, masks);
+- vertex colours and UV-set data;
+- standard PBR inputs;
+- small runtime shader functions, written once in MaterialX and once as an Unreal material
+  and a Godot shader.
+
+Stains, brush texture and hue drift belong in surface space (round D). A light-key preset is a
+lighting rig and a sky material in the engine. Colour grading and distance haze can use the
+engine's own fog and post-process volume, set up to match the presets here.
 
 **Strength.** 0 is the realistic render, 0.4 is "mostly realistic" (painted sky and coloured
 shadows show through), and 1 is the full profile (`styleC/07_strength_0_04_1.jpg`). The user
@@ -164,6 +174,16 @@ the first standalone version of the same measurements.
 1. Strength 0.4 or 1.0? **Answered: 0.4** (review 34).
 2. Pale or deep sky? (`08`)
 3. Edge lines painted or CG? **Answered: CG; now off by default** (review 34).
+
+Round-C picks (review 34; the page is the "Danchi Style Picks" artifact):
+
+| Question | Pick | Note |
+|---|---|---|
+| Realistic vs painted 0.4 (hero, facade) | painted 0.4, both | — |
+| Sky | deep zenith (now the summer default) | it lowers notan dominance to 1.07, so for painterly frames that check is info only |
+| Light key (hero, facade) | dusk, both (now the default preset) | "the contrast works here, with the blue/cold white point shadows and warm light"; the sky gradient showcases the style |
+| Haze | with haze, "could even be a little stronger" | `haze_max` raised about 25 % in every preset |
+| Stains, hard vs soft | the same | "a render pass in post-processing won't work for our needs": an engine target |
 4. Blue-violet shadows (summer) or neutral (winter)? (`06`)
 5. Is the haze on the far blocks right, too much, or Kobayashi-clear? (`01`)
 6. Hard-edged stain levels (aov mode) or soft stains (image mode)? (`02` against `05`)

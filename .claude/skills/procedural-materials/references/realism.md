@@ -124,6 +124,12 @@ A facade base sits around 0.80–0.92, moved ±0.05–0.2 by those causes.
 | Zinc, metal | 0.81–0.86 |
 | Aluminium, metal | about 0.92 |
 
+The 240 sRGB ceiling (L\* 94.4) describes albedo, the colour of the paint under a linear,
+correctly exposed light. It does not describe a photographic JPEG. A camera's tone curve and the
+photographer's exposure put white paint in direct sun at L\* 96–97 in real danchi photos
+(`docs/redesign/research/rR-reference-photos.md`). Keep the albedo in this table. Judge a render's
+brightness with `frame_critique.py` (`surf_L_warn` 97.5, fail 98.5).
+
 Aged galvanised steel is a dull grey that reads partly dielectric, roughness 0.5–0.7 *(est.)*.
 
 For reference photographs: overcast or occluded light, nothing clipped, a ColorChecker in frame
