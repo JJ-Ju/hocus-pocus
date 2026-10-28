@@ -12,6 +12,10 @@ Usage
   python frame_critique.py image.jpg [--profile realistic|painterly] [--mask regions.json]
          [--depth depth.png] [--ref ref1.jpg ...] [--json out.json] [--sheet out.jpg]
          [--crop x0,y0,x1,y1] [--fov 54.4] [--grid 3x3 --grid-trim 0.12]
+         [--view close|corridor|street|wide|sheet]
+  --view picks view-dependent thresholds (default wide; --grid implies sheet). Pass --ref photos
+  of the same view: docs/redesign/evidence/refs/ (fetch_refs.py) has bay, facade, street,
+  estate, end and weathering sets.
   python frame_critique.py --pair a.jpg b.jpg [--json out.json] [--sheet out.jpg]
 
 Mask file (all coordinates are in the cropped image; values <= 1 are read as fractions):
@@ -47,28 +51,38 @@ except Exception:  # pragma: no cover
 
 ANALYSIS_W = 1024
 GRID_W = 256
-VERSION = "0.2 (round B)"
+VERSION = "0.3 (round R)"
 
 # --------------------------------------------------------------------------------------------
 # Thresholds. Every number has an origin string. [S] sourced, [I] inference / starting point,
 # [A] set or checked against round-A acceptance judgments (not ground truth), [B] moved to
 # where the user's 24 round-B A/B picks on v1-v5 renders stop objecting (review 33; in-sample,
-# one viewer, so treat as a starting point for the next calibration, not a law).
+# one viewer, so treat as a starting point for the next calibration, not a law). [R] checked
+# against 39 freely licensed Wikimedia Commons photos of 1960s-90s danchi (rR-reference-photos.md;
+# docs/redesign/evidence/refs/manifest.json): a threshold that rejects ordinary photographs of the
+# subject is wrong for realism. Photos are JPEGs at the photographer's exposure, 6-7 per view.
 # --------------------------------------------------------------------------------------------
 BASE_T = {
     "clip_hi_warn": (0.25, "[B] photographic practice clips only speculars and the sun (<0.5 %), "
                            "but the user preferred v2/v3 frames clipped 11-21 %; v4 at 38-47 % "
                            "lost"),
-    "clip_hi_fail": (0.35, "[B] v4 bay/corridor (38-47 % clipped) lost every pair"),
-    "crush_warn": (0.02, "[I] crushed blacks beyond 2 % hide shadow detail"),
+    "clip_hi_fail": (0.35, "[B] v4 bay/corridor (38-47 % clipped) lost every pair; [R] measured "
+                           "on non-sky pixels: real walls clip 0-29 % (a sunlit white slab), "
+                           "clipped overcast sky (up to 34 % of a frame) no longer counts"),
+    "crush_warn": (0.05, "[R] sunny photos crush 2.0-4.6 % (dark foliage, doorways, backlit "
+                         "trees); was 0.02 [I]. Costs one round-B pair (seeds-1)"),
     "span_warn": (50.0, "[I] p1-p99 L* span under 50 reads flat/foggy for a sunlit exterior"),
-    "surf_L_warn": (96.0, "[B] realism.md puts white paint in sun at ~L* 92 and never above "
-                          "L* 94.4, but the user's preferred v2/v3 walls sit at L* 89-96"),
-    "surf_L_fail": (98.5, "[B] v4 walls at L* 99-100 (clipped cream) lost 6 of 7 pairs"),
-    "surf_L_low_warn": (60.0, "[B] v5 walls at L* 42-57 under a dim key read as 'an old video "
-                              "game' / 'mid-2000s game' to the user (bay-3, bay-5, close-3); "
-                              "sunlit facade walls in v2/v3 sit at L* 89-96. Shaded close-ups "
-                              "(v2 corridor, L* 41) are an exception the test cannot see"),
+    "surf_L_warn": (97.5, "[R] white paint in direct sun photographs at L* 96.1-97.0 (3 of 39 "
+                          "photos; camera tone curve and exposure, not albedo: realism.md's "
+                          "L* 94.4 ceiling is albedo under linear exposure); [B] preferred v2/v3 "
+                          "walls "
+                          "sit at L* 89-96; was 96"),
+    "surf_L_fail": (98.5, "[B] v4 walls at L* 99-100 (clipped cream) lost 6 of 7 pairs; [R] no "
+                          "real wall crop exceeds L* 97.0"),
+    "surf_L_low_warn": (50.0, "[R] street/facade/estate/end views (wide, street, sheet): overcast "
+                              "and shaded-side photos put the brightest wall at L* 43-60, so 60 "
+                              "flagged 8 of 39 photos; 50 keeps v5's street, end-wall and seed "
+                              "frames (L* 45-47) warned. Close views use 60 (VIEW_OVERRIDES)"),
     "notan_dom_pass": (1.5, "[S] 2:1 unequal-shapes rule (r5 T2) relaxed to 1.5 for photographs [I]"),
     "notan_dom_fail": (1.15, "[S] r5 T2: equal thirds = muddy; 1.15 ~ equal [I]"),
     "notan_eta_pass": (0.80, "[I] Otsu separability of the 3-value thumbnail"),
@@ -91,19 +105,26 @@ BASE_T = {
                         "sikisaikizyun.pdf, city.arakawa.tokyo.jp/documents/3209/sikisai64_1.pdf"),
     "paint_fail_ratio": (2.5, "[B] the user preferred v2 walls at 1.6-2.3x the base-colour limit "
                               "and never objected to colour; v1 at 2.9-3.0x lost. Over 1.0x "
-                              "still warns (Tokyo standard)"),
+                              "still warns (Tokyo standard). [R] real danchi photos measure "
+                              "0-0.8x (median 0.33x; wall crops up to 1.04x), so on photo "
+                              "evidence alone ~1.5x would be a fail; kept at 2.5x until hold-out "
+                              "picks"),
     "pale_over_warn": (0.10, "[B] share of the frame that is pale (L* >= 85), unclipped and over "
                              "the V>=8.5 base-colour chroma limit; was 0.04 [I]"),
     "pale_over_fail": (0.45, "[B] was 0.10 (toy look, believability 6), but the user preferred "
                              "v2 frames at 29-37 % and v4 lost at 26-39 % for its streaks, not "
                              "its tint; above every round-B frame"),
     "harmony_warn": (0.75, "[I] share of chroma-weighted hue mass inside the best Matsuda template"),
-    "ref_dE_warn": (15.0, "[I] palette distance; dE 10-20 is 'a different colour' in practice"),
-    "ref_dE_fail": (25.0, "[I]"),
+    "ref_dE_warn": (17.0, "[R] palette distance of each photo to the other photos of its view: "
+                          "median 11.8, p90 16.2, max 23.2; renders 9.9-17.9, so the distance "
+                          "does not separate renders from photos (palette stays info); was 15"),
+    "ref_dE_fail": (25.0, "[R] above every photo (max 23.2)"),
     "detail_a80_pass": (0.45, "[I] picture-level 80/20: believability 1 asks 70-85 % of detail in "
                               "15-25 % of a surface; a whole frame is allowed 45 %"),
     "detail_a80_fail": (0.62, "[I] uniform detail needs ~70-80 % of the frame for 80 % of energy"),
-    "detail_rest_warn": (0.30, "[I] r5 T9: >= 30 % rest windows"),
+    "detail_rest_warn": (0.30, "[I] r5 T9: >= 30 % rest windows. [R] wide views: facade photos "
+                               "0.37-0.53 for 80 %, rest 0.21-0.43; estate 0.27-0.42; end "
+                               "0.34-0.46 (close and street views: VIEW_OVERRIDES)"),
     "detail_empty_warn": (0.80, "[I] r5 T9 opposite failure: an empty frame"),
     "streak_period_warn": (0.25, "[S] r5 T10 autocorrelation method on the darkening profile along "
                                  "each wall band; max of 1-D noise over 110 lags ~ 0.1, so 0.25 "
@@ -121,12 +142,15 @@ BASE_T = {
                           "the strongest autocorrelation shift (r5 T10 method [S])"),
     "repeat_fail": (0.35, "[I]"),
     "micro_p9010_lo": (2.0, "[S] r4-noise 6: fail if p90/p10 < 2"),
-    "micro_p9010_pass": (3.0, "[S] r4-noise 2: target p90/p10 3-6"),
+    "micro_p9010_pass": (3.0, "[S] r4-noise 2: p90/p10 at least 3 on clean paint; [R] real "
+                              "walls run 3-30 (median 12.5, a few uniform aggregate close-ups "
+                              "1.5-2.4), so there is no upper bound"),
     "micro_kurt_lo": (4.0, "[S] r4-noise 6: fail if kurtosis < 4"),
     "micro_cv_pass": (0.4, "[S] r4-noise 2: CV 0.4-0.8"),
     "micro_amp_warn": (1.0, "[B] mean local std of the pixel-scale band, L*; the v5 parapet "
                             "close-up (0.71) was called flat, 'lacks mid and micro details'; "
-                            "preferred close-ups sit at 1.9-9.9"),
+                            "preferred close-ups sit at 1.9-9.9; [R] the smoothest real wall "
+                            "(a sunlit gable) is 1.14"),
     "sal_compete_warn": (3, "[I] r5 T8: competing peaks >= 75 % of the top peak"),
     "sal_compete_fail": (5, "[I]"),
     "sal_focus_warn": (0.10, "[I] saliency mass in the top 5 % of the frame; uniform = 0.05, "
@@ -138,10 +162,12 @@ BASE_T = {
                                   "over 12 deg is an elevated view [I]"),
     "cam_bare_ground": (0.6, "[S] believability 6: aerial over a bare plane reads as a miniature; "
                              "60 % rest windows below the horizon = bare [I]"),
-    "ref_emd_L_warn": (8.0, "[I] L* histogram EMD vs reference"),
-    "ref_emd_L_fail": (15.0, "[I]"),
-    "ref_emd_C_warn": (5.0, "[I] C* histogram EMD vs reference"),
-    "ref_emd_C_fail": (10.0, "[I]"),
+    "ref_emd_L_warn": (13.0, "[R] L* histogram EMD vs reference photos of the same view; each "
+                             "photo against the others of its view: median 10.5, p90 13.9, max "
+                             "19.1 (8 made every photo warn); round-B picks 11-4 in sample"),
+    "ref_emd_L_fail": (20.0, "[R] above every photo (max 19.1)"),
+    "ref_emd_C_warn": (10.0, "[R] C* histogram EMD; photos median 7.0, p90 10.6"),
+    "ref_emd_C_fail": (15.0, "[R] photos max 21.1 (one blue-sky facade); 2 of 39 fail"),
     "seed_collapse_dE": (3.0, "[I] surface colours of all seeds within dE 3 = one look (r5 T11)"),
 }
 
@@ -171,11 +197,48 @@ PAINTERLY_OVERRIDES = {
 }
 
 
-def thresholds(profile):
+# View-dependent thresholds (round R). BASE_T is the 'wide' view (facade across the street, estate,
+# end wall), so an unnamed view keeps the wide numbers. 'close' = bay, balcony, close-up and
+# weathering shots (5-15 m); 'corridor' = close, but reference_match stays info until corridor-side
+# reference photos exist; 'street' = eye height with context; 'sheet' = seed contact sheet
+# (implied by --grid; reference_match is info, a contact sheet is not a photograph).
+VIEWS = ("close", "corridor", "street", "wide", "sheet")
+_CLOSE = {
+    "surf_L_low_warn": (60.0, "[B] v5 walls at L* 42-57 under a dim key read as 'an old video "
+                              "game' / 'mid-2000s game' to the user (bay-3, bay-5, close-3); "
+                              "[R] every bay photo's brightest wall is L* 74 or more. Shaded "
+                              "close-ups (v2 corridor, L* 41) are an exception the test cannot "
+                              "see"),
+    "detail_a80_pass": (0.60, "[R] bay photos need 0.34-0.65 of the frame for 80 % of the detail "
+                              "(median 0.55), weathering 0.35-0.73: a facade at 10 m fills the "
+                              "frame with real detail; was 0.45"),
+    "detail_a80_fail": (0.70, "[R] above all but one uniform aggregate close-up"),
+    "detail_rest_warn": (0.12, "[R] bay photos rest 0.06-0.47 (median 0.19), weathering 0-0.39"),
+}
+VIEW_OVERRIDES = {
+    "close": _CLOSE,
+    "corridor": _CLOSE,
+    "street": {
+        "detail_a80_pass": (0.55, "[R] eye-height street photos 0.42-0.57 (median 0.48); was "
+                                  "0.45"),
+        "detail_a80_fail": (0.65, "[R] above every street photo"),
+        "detail_rest_warn": (0.20, "[R] street photos rest 0.15-0.36 (median 0.25)"),
+    },
+    "wide": {},
+    "sheet": {},
+}
+# views where reference_match reports info instead of a verdict
+REF_INFO_VIEWS = {"corridor": "no corridor-side reference photos yet",
+                  "sheet": "a seed contact sheet is not a photograph"}
+
+
+def thresholds(profile, view="wide"):
     t = dict(BASE_T)
     if profile == "painterly":
         t.update(PAINTERLY_OVERRIDES)
+    t.update(VIEW_OVERRIDES.get(view or "wide", {}))
     t["profile"] = profile
+    t["view"] = view or "wide"
     return t
 
 
@@ -515,16 +578,31 @@ class Frame:
         colour = ((h >= 170) & (h <= 300) & (C >= 3)) | (C < 6)
         cand = smooth & colour
         lab, n = label(cand)
-        if n == 0:
-            return np.zeros_like(cand)
-        top = np.unique(lab[0][lab[0] > 0])
-        sky = np.isin(lab, top)
-        # keep only regions that are a real sky: wide along the top row and >= 3 % of frame
-        keep = np.zeros_like(sky)
-        for t in top:
-            r = lab == t
-            if r[0].mean() >= 0.15 and r.mean() >= 0.03:
-                keep |= r
+        keep = np.zeros_like(cand)
+        if n:
+            top = np.unique(lab[0][lab[0] > 0])
+            # keep only regions that are a real sky: wide along the top row and >= 3 % of frame
+            for t in top:
+                r = lab == t
+                if r[0].mean() >= 0.15 and r.mean() >= 0.03:
+                    keep |= r
+        # [R] overcast or hazy white sky: wires and branches break the smooth region, so also
+        # take clipped or near-white, low-chroma, untextured regions connected to the top edge.
+        # Walls are kept out by texture (local std) and by having most of the region in the
+        # upper part of the frame. Checked on 39 photos and 32 renders (rR-reference-photos.md).
+        white_g = resize_f(self.white.astype(np.float32), self.gw, self.gh) > 0.5
+        sd2 = np.sqrt(np.maximum(gblur(L * L, 2.0) - gblur(L, 2.0) ** 2, 0))
+        bright = (white_g | ((L >= 92) & (C < 5))) & (sd2 < 2.5)
+        lab2, n2 = label(bright)
+        if n2:
+            ys = np.arange(self.gh)[:, None] / max(self.gh - 1, 1)
+            for t in np.unique(lab2[0][lab2[0] > 0]):
+                r = lab2 == t
+                if (r[0].mean() >= 0.10 and r.mean() >= 0.03 and
+                        float((ys * r).sum() / r.sum()) <= 0.35):
+                    keep |= r
+        if not keep.any():
+            return keep
         # fill small holes (wires, antennae) inside the sky
         if keep.any():
             ref = self.lab_g[keep].mean(0)
@@ -659,8 +737,11 @@ def segment_surfaces(fr, k=6):
         ys = np.nonzero(m)[0]
         vegetation = (100 <= hm <= 170) and C50 > 6 and L50 < 70
         bluish = (180 <= hm <= 300) and C50 > 6
+        # [R] backstop for a white sky the sky mask missed: mostly clipped, high in the frame
+        # and along the top edge (6 of 39 photos; no render surface matches)
+        sky_like = clip_share >= 0.4 and ys.mean() / fr.gh <= 0.4 and m[0].mean() >= 0.10
         judged = (m.mean() >= 0.06 and largest >= 0.02 and L50_all >= 40 and not vegetation
-                  and not bluish)
+                  and not bluish and not sky_like)
         V = L50 / 10.0
         mchroma = C50 / 6.0
         lim = munsell_limit(hm, V)
@@ -674,7 +755,8 @@ def segment_surfaces(fr, k=6):
             "rgb": "#%02x%02x%02x" % tuple(lab_to_rgb(np.array([[L50, px[:, 1].mean(),
                                                                  px[:, 2].mean()]]))[0]),
             "note": "vegetation?" if vegetation else ("blue (sky/glass?)" if bluish else
-                                                       ("dark (<V4)" if L50 < 40 else "")),
+                                                       ("white sky?" if sky_like else
+                                                        ("dark (<V4)" if L50 < 40 else ""))),
         })
     clusters.sort(key=lambda c: -c["share"])
     return {"labels": labels, "clusters": clusters}
@@ -693,7 +775,10 @@ def t_value_range(fr, T):
     L = fr.L
     p = np.percentile(L, [1, 5, 50, 95, 99])
     mx = fr.native.max(-1)
-    clip = float((mx >= 250).mean())
+    clip_frame = float((mx >= 250).mean())
+    # [R] clipped sky is normal in a photograph; judge clipping on the non-sky part of the frame
+    ns_n = ~resize_mask(fr.sky, fr.W0, fr.H0)
+    clip = float((mx[ns_n] >= 250).mean()) if ns_n.mean() >= 0.05 else clip_frame
     crush = float((mx <= 5).mean())
     span = float(p[4] - p[0])
     m, key = fr.surface_mask()
@@ -710,9 +795,9 @@ def t_value_range(fr, T):
     st = "pass"
     why = []
     if clip > T["clip_hi_fail"][0]:
-        st = worst(st, "fail"); why.append("%.1f %% of pixels clipped white" % (clip * 100))
+        st = worst(st, "fail"); why.append("%.1f %% of non-sky pixels clipped white" % (clip * 100))
     elif clip > T["clip_hi_warn"][0]:
-        st = worst(st, "warn"); why.append("%.1f %% clipped" % (clip * 100))
+        st = worst(st, "warn"); why.append("%.1f %% of non-sky pixels clipped" % (clip * 100))
     if s50 is not None:
         if s50 > T["surf_L_fail"][0]:
             st = worst(st, "fail"); why.append("brightest large surface median L* %.0f is above "
@@ -733,16 +818,19 @@ def t_value_range(fr, T):
     bad = band_badness(s50 if s50 is not None else 0, None, T["surf_L_warn"][0], 4.0) + \
         band_badness(clip, None, T["clip_hi_warn"][0], 0.01)
     return result("value_range", st, s50 if s50 is not None else p[2],
-                  "surface L* %.0f-%.0f (warn) / <= %.1f (fail); clipped < %.0f %%" %
+                  "surface L* %.0f-%.1f (warn) / <= %.1f (fail); non-sky clipped < %.0f %%; "
+                  "crushed < %.0f %% (view %s)" %
                   (T["surf_L_low_warn"][0], T["surf_L_warn"][0], T["surf_L_fail"][0],
-                   T["clip_hi_warn"][0] * 100),
+                   T["clip_hi_warn"][0] * 100, T["crush_warn"][0] * 100, T["view"]),
                   "; ".join(why),
                   {"L_p1": p[0], "L_p5": p[1], "L_p50": p[2], "L_p95": p[3], "L_p99": p[4],
                    "L_mean": float(L.mean()), "L_std": float(L.std()), "span_p1_p99": span,
-                   "clipped_share": clip, "crushed_share": crush, "surface": key,
+                   "clipped_share": clip, "clipped_share_frame": clip_frame, "crushed_share": crush,
+                   "surface": key,
                    "surface_L50": s50, "surface_L95": s95},
-                  {k: T[k][1] for k in ("clip_hi_warn", "surf_L_warn", "surf_L_fail",
-                                        "surf_L_low_warn", "span_warn")}, bad, "r5 T1")
+                  {k: T[k][1] for k in ("clip_hi_warn", "clip_hi_fail", "crush_warn",
+                                        "surf_L_warn", "surf_L_fail", "surf_L_low_warn",
+                                        "span_warn")}, bad, "r5 T1")
 
 
 def notan_maps(fr):
@@ -884,7 +972,28 @@ def t_saturation(fr, T):
     C, h = fr.C[ns], fr.h[ns]
     if C.size == 0:
         C, h = fr.C.ravel(), fr.h.ravel()
-    hi_share = float((C > T["chroma_hi"][0]).mean())
+    hi_raw = float((C > T["chroma_hi"][0]).mean())
+    # [R] accents are paint, signs, laundry and rust: leave vegetation (by hue, any lightness;
+    # sunlit lawns and rice fields reach C* 40+) and blue sky connected to the top edge (missed
+    # by the sky mask; deep blue or pale blue behind wires) out of the accent count and out of
+    # the pale over-tint. Shares stay over non-sky pixels.
+    veg = (fr.h >= 90) & (fr.h <= 170)
+    bl_g = (fr.h_g >= 190) & (fr.h_g <= 300) & (fr.C_g > 3) & (fr.lab_g[..., 0] >= 40)
+    bl_c = gblur(bl_g.astype(np.float32), 1.0) > 0.3  # bridge wires and antennae
+    blue_top_g = np.zeros_like(bl_g)
+    lab_b, nb = label(bl_c)
+    if nb:
+        # a blue region is sky if it runs along the top edge or touches the detected sky
+        sky_edge = dilate(resize_mask(fr.sky, fr.gw, fr.gh), 1)
+        seeds = (set(np.unique(lab_b[0][lab_b[0] > 0])) |
+                 set(np.unique(lab_b[sky_edge & (lab_b > 0)])))
+        for t in seeds:
+            r = lab_b == t
+            if r[0].mean() >= 0.05 or (r & sky_edge).sum() >= 4:
+                blue_top_g |= r & bl_g
+    blue_top = resize_mask(blue_top_g, fr.W, fr.H)
+    acc = ns & ~veg & ~blue_top
+    hi_share = float(((fr.C > T["chroma_hi"][0]) & acc).sum() / max(ns.sum(), 1))
     c25 = float((C > 25).mean())
     w = np.clip(C - 8, 0, None)
     if w.sum() > 0:
@@ -894,7 +1003,7 @@ def t_saturation(fr, T):
         hm, hue_spread = float("nan"), 0.0
     fr.maps["chroma"] = fr.C
     lim_px = munsell_limit(fr.h, fr.L / 10.0)
-    pale = (~fr.sky) & (fr.L >= 85) & ~dilate(fr.white, 1)
+    pale = (~fr.sky) & (fr.L >= 85) & ~dilate(fr.white, 1) & ~blue_top
     over = pale & (fr.C / 6.0 > lim_px)
     pale_share = float(over.mean())
     fr.maps["pale_over"] = over
@@ -939,9 +1048,13 @@ def t_saturation(fr, T):
         st = worst(st, "warn"); why.append("%.0f %% of the frame is over-tinted pale paint" %
                                            (pale_share * 100))
     if hi_share > T["chroma_share_fail"][0]:
-        st = worst(st, "fail"); why.append("%.0f %% of the frame is high-chroma" % (hi_share * 100))
+        st = worst(st, "fail")
+        why.append("%.0f %% of the frame is high-chroma accent (vegetation and blue sky "
+                   "excluded)" % (hi_share * 100))
     elif hi_share > T["chroma_share_warn"][0]:
-        st = worst(st, "warn"); why.append("%.0f %% of the frame is high-chroma" % (hi_share * 100))
+        st = worst(st, "warn")
+        why.append("%.0f %% of the frame is high-chroma accent (vegetation and blue sky "
+                   "excluded)" % (hi_share * 100))
     if not judged:
         why.append("no large surface found to judge (pass a wall mask)")
     if not why:
@@ -955,7 +1068,9 @@ def t_saturation(fr, T):
     return result("saturation_budget", st, worst_ratio,
                   "surface chroma <= 1.0x base-colour limit; C*>%.0f share <= %.0f %%" %
                   (T["chroma_hi"][0], T["chroma_share_warn"][0] * 100), "; ".join(why),
-                  {"high_chroma_share": hi_share, "chroma25_share": c25,
+                  {"high_chroma_share": hi_share, "high_chroma_share_raw": hi_raw,
+                   "vegetation_share": float((veg & ns).mean()),
+                   "blue_top_share": float((blue_top & ns).mean()), "chroma25_share": c25,
                    "pale_oversat_share": pale_share,
                    "mean_C_nonsky": float(C.mean()), "p95_C_nonsky": float(np.percentile(C, 95)),
                    "hue_mean": hm, "hue_spread_deg": hue_spread, "surfaces": surf,
@@ -1155,8 +1270,9 @@ def t_detail(fr, T):
     if not why:
         why.append("80 %% of the detail sits in %.0f %% of the frame, %.0f %% rest area" %
                    (a80 * 100, rest * 100))
-    return result("detail_density", st, a80, "area for 80 %% <= %.2f; rest >= %.2f" %
-                  (T["detail_a80_pass"][0], T["detail_rest_warn"][0]), "; ".join(why),
+    return result("detail_density", st, a80, "area for 80 %% <= %.2f (fail > %.2f); rest >= %.2f "
+                  "(view %s)" % (T["detail_a80_pass"][0], T["detail_a80_fail"][0],
+                                 T["detail_rest_warn"][0], T["view"]), "; ".join(why),
                   {"area_for_80pct": a80, "gini": gi, "rest_share": rest,
                    "mean_grad_L_per_px512": float(E.mean())},
                   {k: T[k][1] for k in ("detail_a80_pass", "detail_a80_fail", "detail_rest_warn",
@@ -1436,7 +1552,7 @@ def t_micro_map(fr, T):
     why = ("micro amplitude map is %s (p90/p10 %.2f, CoV %.2f)" %
            ({"fail": "flat: stationary grain", "warn": "only mildly varied",
              "pass": "clustered"}[st], r, cv))
-    return result("micro_uniformity", st, r, "p90/p10 3-6, CV 0.4-0.8 (map mode)", why,
+    return result("micro_uniformity", st, r, "p90/p10 >= 3, CV >= 0.4 (map mode)", why,
                   {"surface": key, "mode": "variance_map", "p90_p10": r, "cv_local_std": cv},
                   {k: T[k][1] for k in ("micro_p9010_lo", "micro_p9010_pass", "micro_cv_pass")},
                   band_badness(r, T["micro_p9010_pass"][0], None, 0.5), "r4-noise 6")
@@ -1484,7 +1600,8 @@ def t_micro(fr, T):
                    "everywhere, reads as sandpaper" % (s["p90_p10"], s["kurtosis"]))
     elif s["p90_p10"] < T["micro_p9010_pass"][0] or s["cv_local_std"] < T["micro_cv_pass"][0]:
         st = "warn"
-        why.append("grain varies a little (p90/p10 %.2f, CV %.2f); target 3-6 and 0.4-0.8" %
+        why.append("grain varies a little (p90/p10 %.2f, CV %.2f); want p90/p10 >= 3 (real walls "
+                   "3-30) and CV >= 0.4" %
                    (s["p90_p10"], s["cv_local_std"]))
     else:
         why.append("grain is clustered (p90/p10 %.2f, CV %.2f, kurtosis %.1f)" %
@@ -1504,8 +1621,8 @@ def t_micro(fr, T):
         why.append("%.0f %% of this surface is clipped, so its grain is gone there" %
                    (share_clip * 100))
     s["note"] = "pixel-scale band; geometry at distance also counts as 'grain'"
-    return result("micro_uniformity", st, s["p90_p10"], "p90/p10 3-6, CV 0.4-0.8, kurtosis "
-                  "5-20 (fail p90/p10 < 2 or kurt < 4)", "; ".join(why), s,
+    return result("micro_uniformity", st, s["p90_p10"], "p90/p10 >= 3 (photos 3-30), CV >= 0.4, "
+                  "kurtosis 5-20 (fail p90/p10 < 2 or kurt < 4)", "; ".join(why), s,
                   {k: T[k][1] for k in ("micro_p9010_lo", "micro_p9010_pass", "micro_kurt_lo",
                                         "micro_cv_pass", "micro_amp_warn")},
                   band_badness(s["p90_p10"], T["micro_p9010_pass"][0], None, 0.5), "r4-noise")
@@ -1869,14 +1986,16 @@ CALIBRATED_INFO = {
 }
 
 
-# The painterly profile keeps value grouping binding: a designed image should have one dominant
-# value (2:1 rule), and in round C it caught a deep painted sky that broke the grouping.
-# Its micro test is info except the grain ceiling, and spectral slope stays info.
-PAINTERLY_BINDING = {"value_grouping"}
+# Value grouping was binding for the painterly profile in round C (the 2:1 rule; it flagged a
+# deep painted sky), but the user then picked that deep sky over the pale one (review 34), so
+# it reports info here too. Its micro test is info except the grain ceiling.
+PAINTERLY_BINDING = set()
 
 
-def calibrate(t, profile="realistic"):
+def calibrate(t, profile="realistic", view="wide"):
     reason = CALIBRATED_INFO.get(t["test"])
+    if t["test"] == "reference_match" and view in REF_INFO_VIEWS:
+        reason = "[R] view %s: %s" % (view, REF_INFO_VIEWS[view])
     if profile == "painterly" and t["test"] in PAINTERLY_BINDING:
         return t
     if reason is None or t["status"] in ("pass", "na", "info"):
@@ -1893,8 +2012,9 @@ def calibrate(t, profile="realistic"):
     return t
 
 
-def critique(fr, profile="realistic", refs=None, fov=54.4):
-    T = thresholds(profile)
+def critique(fr, profile="realistic", refs=None, fov=54.4, view="wide"):
+    view = view or "wide"
+    T = thresholds(profile, view)
     tests = []
     tests.append(t_value_range(fr, T))
     tests.append(t_value_grouping(fr, T))
@@ -1913,20 +2033,20 @@ def critique(fr, profile="realistic", refs=None, fov=54.4):
     tests.append(t_reference(fr, T, refs))
     if profile == "painterly":
         tests.append(t_painted_key(fr, T))
-    tests = [calibrate(t, profile) for t in tests]
+    tests = [calibrate(t, profile, view) for t in tests]
     summ = {"fail": [t["test"] for t in tests if t["status"] == "fail"],
             "warn": [t["test"] for t in tests if t["status"] == "warn"],
             "pass": [t["test"] for t in tests if t["status"] == "pass"],
             "na": [t["test"] for t in tests if t["status"] in ("na", "info")]}
     seg = [{k: (R(v) if not isinstance(v, str) else v) for k, v in c.items()}
            for c in fr.seg["clusters"]]
-    return {"image": fr.path or fr.name, "name": fr.name, "profile": profile,
+    return {"image": fr.path or fr.name, "name": fr.name, "profile": profile, "view": view,
             "size": [fr.W0, fr.H0], "tool_version": VERSION, "scipy": HAVE_SCIPY,
             "sky_share": R(float(fr.sky.mean())), "surfaces": seg,
             "tests": {t["test"]: t for t in tests}, "summary": summ}
 
 
-def seed_spread(img_path, grid, trim, crop, profile, fov):
+def seed_spread(img_path, grid, trim, crop, profile, fov, view="sheet"):
     """Split a variation sheet into tiles and measure the spread between seeds (r5 T11)."""
     im = Image.open(img_path).convert("RGB")
     if crop:
@@ -1938,7 +2058,7 @@ def seed_spread(img_path, grid, trim, crop, profile, fov):
         for i in range(c):
             t = im.crop((i * tw, j * th, (i + 1) * tw, (j + 1) * th - int(th * trim)))
             fr = Frame(img=t, name="tile%d%d" % (j, i))
-            res = critique(fr, profile, None, fov)
+            res = critique(fr, profile, None, fov, view)
             judged = [s for s in fr.seg["clusters"] if s["judged"]]
             main = max(judged, key=lambda s: s["share"]) if judged else None
             row = {"tile": fr.name,
@@ -1973,7 +2093,7 @@ def seed_spread(img_path, grid, trim, crop, profile, fov):
         if len(v):
             spread[key + "_cov"] = float(v.std() / max(abs(v.mean()), 1e-9))
             spread[key + "_range"] = "%.2f..%.2f" % (v.min(), v.max())
-    T = thresholds(profile)
+    T = thresholds(profile, view)
     collapsed = spread.get("surface_dE_max", 99) < T["seed_collapse_dE"][0]
     fails = {}
     for t in tiles:
@@ -2201,8 +2321,8 @@ def fmt(v):
 
 
 def print_report(res, out=sys.stdout):
-    out.write("\n== %s  (%dx%d, profile %s)\n" % (res["name"], res["size"][0], res["size"][1],
-                                                  res["profile"]))
+    out.write("\n== %s  (%dx%d, profile %s, view %s)\n" % (
+        res["name"], res["size"][0], res["size"][1], res["profile"], res.get("view", "wide")))
     for name, t in res["tests"].items():
         out.write("[%-4s] %-18s value=%-8s target: %s\n        %s\n" % (
             t["status"].upper(), name, fmt(t["value"]), t["target"], t["explain"]))
@@ -2261,17 +2381,25 @@ def main(argv=None):
     ap.add_argument("--crop", help="x0,y0,x1,y1 (pixels or fractions), e.g. to drop captions")
     ap.add_argument("--crop-b")
     ap.add_argument("--fov", type=float, default=54.4, help="horizontal FOV (35 mm = 54.4)")
-    ap.add_argument("--grid", help="RxC: treat the image as a seed contact sheet (seed spread)")
+    ap.add_argument("--grid", help="RxC: treat the image as a seed contact sheet (seed spread); "
+                                   "implies --view sheet")
+    ap.add_argument("--view", choices=VIEWS, default=None,
+                    help="what the frame shows, for view-dependent thresholds: close (bay, "
+                         "balcony, close-up, weathering, 5-15 m), corridor (close, reference_match "
+                         "info), street (eye height with context), wide (facade across the street, "
+                         "estate, end wall; the default), sheet (seed contact sheet)")
     ap.add_argument("--input-kind", default="render", choices=["render", "variance_map"],
                     help="variance_map: the image is a local-variance visualisation")
     ap.add_argument("--grid-trim", type=float, default=0.0,
                     help="fraction of each tile's bottom to drop (labels)")
     a = ap.parse_args(argv)
+    view = a.view or ("sheet" if a.grid else "wide")
     refs = [Frame(p) for p in a.ref] if a.ref else None
     if a.pair:
         fa = Frame(a.pair[0], crop=a.crop, masks_path=a.mask)
         fb = Frame(a.pair[1], crop=a.crop_b, masks_path=a.mask_b)
-        ra, rb = critique(fa, a.profile, refs, a.fov), critique(fb, a.profile, refs, a.fov)
+        ra, rb = (critique(fa, a.profile, refs, a.fov, view),
+                  critique(fb, a.profile, refs, a.fov, view))
         rows = pair_table(ra, rb)
         print_report(ra)
         print_report(rb)
@@ -2280,14 +2408,14 @@ def main(argv=None):
         if a.sheet:
             make_sheet([(fa, ra), (fb, rb)], a.sheet, "A/B: %s vs %s" % (fa.name, fb.name))
     elif a.grid:
-        out = seed_spread(a.image, a.grid, a.grid_trim, a.crop, a.profile, a.fov)
+        out = seed_spread(a.image, a.grid, a.grid_trim, a.crop, a.profile, a.fov, view)
         print(json.dumps({k: out[k] for k in ("status", "explain", "spread")}, indent=1))
     else:
         if not a.image:
             ap.error("image required")
         fr = Frame(a.image, crop=a.crop, masks_path=a.mask, depth_path=a.depth,
                    kind=a.input_kind)
-        out = critique(fr, a.profile, refs, a.fov)
+        out = critique(fr, a.profile, refs, a.fov, view)
         print_report(out)
         if a.sheet:
             make_sheet([(fr, out)], a.sheet, fr.name)

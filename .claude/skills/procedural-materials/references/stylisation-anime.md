@@ -144,8 +144,9 @@ realistic render of the same camera. On top of the realistic tests, the profile:
 - **changes thresholds** (`PAINTERLY_OVERRIDES`): accent chroma warn and fail at 0.15 and 0.25,
   the facade base-colour standard off, `notan_dom_pass` 2.0, slope −1.9 to −0.7,
   `detail_a80_pass` 0.40, and camera tilt warn and fail at 4° and 12°;
-- **keeps value grouping binding.** A designed image needs one dominant value. In round C
-  this check caught a deep painted sky, which dropped dominance from 2.57 to 1.07;
+- **reports value grouping as info.** In round C it flagged a deep painted sky, which dropped
+  dominance from 2.57 to 1.07. The user then picked that deep sky (review 34), so the 2:1
+  rule did not match their eye here;
 - **reports these as info,** as the realistic profile does: saliency, repetition, palette,
   depth, squint, spectral slope (−1.03 → −1.13 only), camera apart from the bare-plane
   check, and the stationarity half of `micro_uniformity`;

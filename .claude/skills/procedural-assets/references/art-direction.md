@@ -6,8 +6,10 @@ Baseline: **realistic**, meaning photographic or nearly so. A painterly or anime
 optional profile (`--profile painterly`), built as a switchable layer
 (`procedural-materials/references/stylisation-anime.md`, round C); its thresholds are not yet
 calibrated on the user's picks.
-Thresholds were calibrated in round B on 24 of the user's own A/B picks (§5). They fit one
-viewer's taste on danchi v1–v5 renders, in sample, so treat them as the current best guess.
+Thresholds were calibrated in round B on 24 of the user's own A/B picks (§5). In round R they
+were checked against 39 real danchi photos, and moved where they rejected real photographs. They
+fit one viewer's taste on danchi v1–v5 renders, in sample, so treat them as the current best
+guess.
 
 ## 1. Principles
 
@@ -72,17 +74,38 @@ Judge variation on eye-height street views, not only on aerial seed sheets.
 ## 2. Running the critique at each gate
 
 ```
-python <skill>/scripts/frame_critique.py render.jpg --sheet render_diag.jpg --json render.json
-python <skill>/scripts/frame_critique.py --pair old.jpg new.jpg --sheet ab.jpg --json ab.json
-python <skill>/scripts/frame_critique.py sheet9.jpg --grid 3x3 --grid-trim 0.12     # seed spread
-python <skill>/scripts/frame_critique.py r.jpg --mask ids.json --depth depth.png --ref photo1.jpg photo2.jpg
+python <skill>/scripts/frame_critique.py render.jpg --view close --sheet render_diag.jpg --json render.json
+python <skill>/scripts/frame_critique.py --pair old.jpg new.jpg --view street --sheet ab.jpg --json ab.json
+python <skill>/scripts/frame_critique.py sheet9.jpg --grid 3x3 --grid-trim 0.12     # seed spread; implies --view sheet
+python <skill>/scripts/frame_critique.py r.jpg --view wide --mask ids.json --depth depth.png --ref refs/img/facade_*.jpg
 ```
 
-- **Every `look` at lit or final quality:** run the script. It takes a second or two. Act on
-  the binding tests (`value_range`, `saturation_budget`, `detail_density`, the bare-plane and
-  void-backdrop part of `camera`, the amplitude floor of `micro_uniformity`, and
-  `streak_evenness` with a mask). The others report `info` (§5); read their explanations, but
-  do not chase them.
+**Name the view.** Some thresholds depend on what the frame shows (§5, round R). Pass
+`--view` with one of these:
+
+| `--view` | Shows | Reference photos (`--ref`) |
+|---|---|---|
+| `close` | a bay, balcony, golden piece or weathering close-up, 5–15 m | `bay_*`, plus `weathering_*` for damage close-ups |
+| `corridor` | the access-gallery side, close; like `close`, but `reference_match` stays info until there are corridor-side photos | `bay_*` (advisory) |
+| `street` | eye height with ground and context | `street_*` |
+| `wide` (default) | a facade across the street, an estate or several blocks, an end wall | `facade_*`, `estate_*` or `end_*` |
+| `sheet` | a seed contact sheet; `reference_match` is info | none |
+
+**Reference photos.** `docs/redesign/evidence/refs/` lists 39 freely licensed danchi photos in
+`manifest.json`, with credits in `README.md`. The images are not in git. Fetch them once with
+`python docs/redesign/evidence/refs/fetch_refs.py`; they go into `refs/img/`, which git ignores.
+Pass the photos of the matching view with `--ref`. File names start with the category. Run
+Python with `-I` when it reads downloaded files.
+
+- **Every `look` at lit or final quality:** run the script with `--view`. It takes a second or
+  two. Act on the binding tests:
+  - `value_range`, `saturation_budget` and `detail_density`;
+  - the bare-plane and void-backdrop part of `camera`;
+  - the amplitude floor of `micro_uniformity`;
+  - `streak_evenness` with a mask;
+  - `reference_match` with `--ref`, except on `corridor` and `sheet` views.
+
+  The others report `info` (§5). Read their explanations, but do not chase them.
 - **Level gates (golden piece, bay, facade, building, block):** run the full set, plus
   `--pair` against the previous gate's render at the same camera. Pass a wall mask, made
   from a Karma ID or matte AOV converted to PNG, so that `streak_evenness` and
@@ -103,7 +126,7 @@ own eye against `believability.md` 7.
 
 | Test | Failure means | Usual fix |
 |---|---|---|
-| `value_range` | blown-out wall; dim camera-facing walls (warn below L\* 60); crushed shadows; flat range | lower paint albedo into the `realism.md` table or lower exposure; for dim walls, bring the sun round to the camera's side and add a visible sky dome |
+| `value_range` | blown-out wall (warn over L\* 97.5, fail over 98.5); dim camera-facing walls (warn below L\* 60 on `close` views, 50 on others); crushed shadows (over 5 %); flat range | lower paint albedo into the `realism.md` table or lower exposure; for dim walls, bring the sun round to the camera's side and add a visible sky dome |
 | `value_grouping`, `squint` | no dominant value; confetti; structure only in small detail | group lights and darks with lighting and material value; quiet the busy zone; bring big shapes forward |
 | `saturation_budget` | a large surface above the base-colour chroma limit; pale over-tint; accents over 5–10 % | desaturate the base paint toward grey-beige; bleach the sunny side; limit accents to the story spots |
 | `palette` | scattered hues; off the reference | move props and paint onto one hue template; fit to reference photos |
@@ -114,7 +137,7 @@ own eye against `believability.md` 7.
 | `micro_uniformity` | no grain at all (binding); stationary grain (info on renders, binding on variance maps) | subtle base variation and grain on clean paint and concrete; amplitude envelope from cause masks; switch the grain's character in worn zones |
 | `saliency` | several competing peaks; top peak on a small bright artefact | dim or remove the distractor; put the strongest contrast at the subject |
 | `camera` | leaning verticals; elevated view over a bare plane; void backdrop | level camera with shift; eye height; ground context; a horizon |
-| `reference_match` | value or chroma histograms far from the reference photos | match exposure and palette to the references |
+| `reference_match` | value or chroma histograms far from the reference photos of the same view | match exposure and palette to the references; usually the key light (v4 blown, v5 dim) |
 
 ## 4. Round A status
 
@@ -143,13 +166,13 @@ agreement is the share of decisive pairs where the better status belonged to the
 
 | Test | Round A | Round B | Now |
 |---|---:|---:|---|
-| `value_range` | 67 % | 81 % (13–3) | binding: two-sided, L\* 60–96 warn, 98.5 fail; clipping warn 25 %, fail 35 % |
-| `detail_density` | 75 % | 75 % (9–3) | binding, unchanged |
+| `value_range` | 67 % | 81 % (13–3) | binding: two-sided, L\* 60–96 warn, 98.5 fail; clipping warn 25 %, fail 35 % (round R: 50/60 by view, 97.5, non-sky clipping) |
+| `detail_density` | 75 % | 75 % (9–3) | binding; by view since round R |
 | `saturation_budget` | 67 % | 72 % (13–5) | binding: warn over 1.0× the base-colour limit; fail over 2.5×; pale over-tint fail 45 % |
 | `micro_uniformity` | 42 % | 1–0 | the "too flat" floor is binding; stationarity is info on renders |
 | `camera` | 25 % | 0–1 | info, except the bare-plane and void-backdrop checks |
 | `value_grouping`, `squint`, `spectral_slope`, `saliency`, `repetition`, `depth_separation` | 25–50 % | — | info |
-| `palette`, `reference_match`, `streak_evenness` | no decisive pairs | — | unchanged; streaks need a mask, the reference test needs photos |
+| `palette`, `reference_match`, `streak_evenness` | no decisive pairs | — | streaks need a mask; round R: `reference_match` binding with photos, `palette` info |
 
 Overall, scoring each frame as 2 × fails + warns, the critique picks the user's choice in 17
 of 21 decisive pairs, up from 12 of 22 in round A. That is measured on the same picks it
@@ -165,9 +188,49 @@ Four of the five saturation disagreements are v2 (warn) chosen over v3 or v5 (pa
 never commented on colour, so the base-colour standard stays a warn, as realism guidance the
 picks neither confirm nor reject.
 
+### Round R: reference photos
+
+Round R ran the critique on 39 freely licensed danchi photos from Wikimedia Commons
+(`docs/redesign/research/rR-reference-photos.md`). Before the changes, 30 of the 39 warned or
+failed at least one binding test. A threshold that rejects real photographs of the subject is
+wrong for realism, so the thresholds moved to fit the photos. The photos also became the `--ref`
+set. Origins marked `[R]` in `BASE_T` and `VIEW_OVERRIDES` give each photo range.
+
+| Change | Why (photos) |
+|---|---|
+| Sky: white, clipped or near-white regions on the top edge count as sky; a mostly clipped cluster high on the top edge is never the judged wall | in 6 photos an overcast sky was judged as a wall at L\* 96–100 |
+| Clipped share on non-sky pixels | clipped sky reached 34 % of a frame |
+| `surf_L_warn` 96 → 97.5 (fail stays 98.5) | white paint in sun photographs at L\* 96–97 |
+| Low-light warn: 60 on `close` and `corridor`, 50 on other views | overcast and shaded-side views sit at L\* 43–60; all bay photos are at 74 or more |
+| `crush_warn` 2 % → 5 % | sunny photos crush 2–4.6 % |
+| Accent and pale over-tint shares leave out vegetation (by hue) and blue sky on the top edge or next to the sky | lawns, rice fields and missed sky caused every photo saturation fail |
+| `detail_density` by view: `close` 0.60 / 0.70 / rest 0.12; `street` 0.55 / 0.65 / 0.20; `wide` and `sheet` unchanged | real bay and weathering frames need 55 % of the frame for 80 % of the detail |
+| `ref_emd_L` 8/15 → 13/20, `ref_emd_C` 5/10 → 10/15; `reference_match` binding except on `corridor` and `sheet` | at the old numbers every photo warned against its own category |
+| `ref_dE` warn 15 → 17 (palette stays info) | photos against their own view: dE median 11.8, max 23.2 |
+| `paint_fail_ratio` kept at 2.5× | photos measure 0–1.04×; a fail at 1.5× waits for hold-out picks |
+
+After the changes, 13 of the 39 photos warn and 1 fails: a uniform aggregate close-up on
+`detail_density`. The remaining warns are 8 on `detail_density`, mostly facade and end views at
+0.46–0.53 against the unchanged 0.45 wide limit, and 4 overcast or wrong-cluster frames on low
+light. No render surface or sky mask changed.
+
+Agreement with the round-B picks, from `agree.py`, which passes `--view` per pick group and
+`--ref` photos of the matching category:
+
+| Test | Round B | Round R |
+|---|---:|---:|
+| `value_range` | 13–3 | 12–4 (the 5 % crush limit loses seeds-2) |
+| `detail_density` | 9–3 | 3–1 (close-view limits; the bay "agreement" was within photo spread) |
+| `saturation_budget` | 13–5 | 13–5 |
+| `reference_match` | no photos | **10–1** (12 ties; corridor and sheet report info) |
+| `palette` | — | 0–0 (info); distance ranking agrees 10–13, below chance |
+| Overall, 2 × fails + warns | 17–4 | **17–2** with refs, 16–3 without |
+
+All of this is still in-sample: the same 23 decisive picks, one viewer.
+
 Next calibration:
-1. **Reference set.** Collect 20–40 photos of danchi and Japanese streets, with the user's
-   permission to download, as `--ref` targets for `reference_match` and `palette`.
+1. **Reference gaps.** Add corridor-side (access gallery) photos, Japanese rust-streak close-ups and
+   photos in direct sun on the camera side. Then make `reference_match` binding on corridor views.
 2. **Hold-out picks.** Re-check on a new set of picks from a later round, not the ones above.
 3. **Painterly profile.** Calibrate it the same way on stills of the target style before
    it is used.
