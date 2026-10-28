@@ -278,6 +278,15 @@ At each level run the three passes and review at that level's distance.
 ### 8. Package
 
 - One HDA per job, plus a thin top-level asset with the shared parameters.
+- **One generator per architectural family.** A slab danchi or mid-rise apartment generator
+  and a skyscraper or cyberpunk tower generator share kit conventions and metrics, but they
+  are separate HDAs. Each one specialises in its own typology, massing rules and dressing.
+  Don't grow one asset into a do-everything building tool.
+- **Weathering is an interface, not a bake-in.** Expose macro controls (age in years, upkeep,
+  urban grime, exposure direction, seed) that drive every wear layer: edge damage, edge wear,
+  streaks, stain fields, grime, rust, repaint patches, growth. Give each layer an "auto"
+  value with an override, and add presets (new, well kept, typical, neglected). Show them at
+  several values: a preset strip and per-control sweeps at fixed cameras.
 - Name: `namespace::name::1.0`.
 - Interface: a few high-level controls, style presets and seeds in tab folders, with
   conditions and help.
