@@ -1,0 +1,20 @@
+// grime.vfl — point wrangle on the assembled building; input 1 = plan with causes.
+// Point grime for the wall shader: a low background, the dark line along slab edges and
+// soffits (edge_grime from the front pieces; 5 of 29 reference photos), the darker corridor
+// back wall, and the cause hotspots (one cause field for every layer).
+float amt = ch("../../weather") * fit(ch("../../age"), 0, 25, 0.35, 1.25);
+vector cP[] = detail(1, "cause_P");
+float cR[] = detail(1, "cause_r");
+float cS[] = detail(1, "cause_s");
+int cT[] = detail(1, "cause_t");
+float g = 0.04;
+g += f@edge_grime * 0.9;
+if (@P.z < -D_DEPTH * 0.5 + 0.01 && @P.z > -D_DEPTH * 0.5 - 0.25) g += 0.12;
+float c = 0;
+for (int i = 0; i < len(cP); i++) {
+    if (cT[i] == 3 && @P.y > 2.0) continue;      // impact causes act near the ground only
+    float d = length(@P - cP[i]) / cR[i];
+    c = max(c, cS[i] * smooth(1.0, 0.2, d));
+}
+g += 0.45 * c;
+f@grime = clamp(g * amt, 0, 1);

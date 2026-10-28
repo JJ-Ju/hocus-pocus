@@ -1,0 +1,9 @@
+// lod1_filter.vfl — point wrangle on the dressed piece points. LOD1 is built from undamaged
+// sources: no props, no interiors (a dark card behind the glass instead), clean fronts.
+string nm = s@name;
+if (s@role == "prop") removepoint(0, @ptnum);
+else if (startswith(nm, "room_p")) s@name = "room_card";
+else if (startswith(nm, "bal_front_v")) s@name = "bal_front_l1";
+else if (startswith(nm, "sash_door_s")) s@name = "sash_l1";
+else if (startswith(nm, "bal_window_s")) s@name = "window_l1";
+else if (nm == "cor_front" || nm == "bal_open" || nm == "bal_hw" || nm == "kitchen_win" || nm == "meter_door" || nm == "cor_hw") s@name = nm + "_l1";

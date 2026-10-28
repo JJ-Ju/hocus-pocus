@@ -1,0 +1,177 @@
+// decals.vfl — detail wrangle, input 1 = plan with causes. Streak and stain mesh decals at
+// their sources, 3 mm off the surface, mapped to one cell of tex/streak_atlas.png:
+// 0 narrow run, 1 fan, 2 curtain, 3 fringe+band, 4 rust run, 5 layered stain, 6 short drip,
+// 7 washed band. Every streak starts at a feature (sources from weather-and-use.md and the
+// reference study): rail-post bases and parapet joints on the balcony fronts, the drip-less
+// corridor parapet tops, the eave/parapet edge of the gables, the tower landing windows.
+// Strength = background + cause hotspots (80/20), x1.5 on the top floors, x age; lengths
+// from a power law, clipped to the face they run on.
+
+function float cause_at(vector p; int side; int typ; vector cP[]; float cR[]; float cS[]; int cT[]; int cSide[])
+{
+    float a = 0;
+    for (int i = 0; i < len(cP); i++) {
+        if (cSide[i] != side || (typ >= 0 && cT[i] != typ)) continue;
+        float d = length(p - cP[i]) / cR[i];
+        a = max(a, cS[i] * smooth(1.0, 0.25, d));
+    }
+    return a;
+}
+
+// one decal: top centre p (the source), surface normal n, visible width vw, length l
+function void decal(vector p; vector n; float vw; float l; int cell; float strength; vector col;
+                    float rough; float FILL[]; int side)
+{
+    vector up = {0, 1, 0};
+    vector r = normalize(cross(-n, up));
+    // tuned at the bay view so runs read at 8-15 m (parameters are read-only: copy them)
+    float vw2 = vw * 1.6;
+    float st2 = 0.15 + 1.6 * strength;
+    float w = vw2 / FILL[cell];
+    vector o = p + n * 0.003;
+    vector tl = o - r * w * 0.5, tr = o + r * w * 0.5;
+    vector br = tr - up * l, bl = tl - up * l;
+    int a = addpoint(0, tl), b = addpoint(0, tr), c = addpoint(0, br), d = addpoint(0, bl);
+    int pr = addprim(0, "poly", a, b, c, d);
+    float u0 = (cell + 0.02) / 8.0, u1 = (cell + 0.98) / 8.0;
+    // prim-relative vertex numbers: primvertex() cannot see a prim made in this wrangle
+    setvertexattrib(0, "uv", pr, 0, set(u0, 1, 0));
+    setvertexattrib(0, "uv", pr, 1, set(u1, 1, 0));
+    setvertexattrib(0, "uv", pr, 2, set(u1, 0.02, 0));
+    setvertexattrib(0, "uv", pr, 3, set(u0, 0.02, 0));
+    setprimattrib(0, "mat", pr, "decal");
+    setprimattrib(0, "cdkey", pr, "own");
+    setprimattrib(0, "Cd", pr, col);
+    setprimattrib(0, "dstr", pr, clamp(st2, 0, 0.95));
+    setprimattrib(0, "rough", pr, rough);
+    setprimattrib(0, "dcell", pr, cell);
+    setprimattrib(0, "side", pr, side);
+    setprimattrib(0, "decal", pr, 1);
+}
+
+float FILL[] = array(0.12, 0.45, 0.9, 0.95, 0.15, 0.7, 0.15, 0.8);
+addvertexattrib(0, "uv", {0, 0, 0});
+addprimattrib(0, "dstr", 0.0);
+addprimattrib(0, "dcell", 0);
+addprimattrib(0, "decal", 0);
+int seed = chi("../../seed");
+float amt = ch("../../weather") * fit(ch("../../age"), 0, 25, 0.35, 1.25);
+float W = detail(1, "W"), H = detail(1, "H"), x0 = detail(1, "x0"), L = detail(1, "L"), ytop = detail(1, "ytop");
+int floors = detail(1, "floors");
+float bx[] = detail(1, "bay_x");
+float bw[] = detail(1, "bay_w");
+int bt[] = detail(1, "bay_t");
+vector cP[] = detail(1, "cause_P");
+float cR[] = detail(1, "cause_r");
+float cS[] = detail(1, "cause_s");
+int cT[] = detail(1, "cause_t");
+int cSide[] = detail(1, "cause_side");
+float zb = D_DEPTH * 0.5 + BAL_D, zc = -(D_DEPTH * 0.5 + COR_W);
+vector soot = {0.10, 0.09, 0.075}, damp = {0.07, 0.085, 0.06}, rust = {0.30, 0.13, 0.05}, washed = {0.80, 0.79, 0.76};
+int eave = detail(2, "eave");
+int did = 0;
+
+if (amt > 0.01) {
+    for (int k = 0; k < len(bt); k++) {
+        if (bt[k] != 0) continue;
+        float xa = bx[k] - bw[k] * 0.5, xb = bx[k] + bw[k] * 0.5;
+        float sa = xa + rail_w(W);
+        for (int f = 0; f < floors; f++) {
+            float yf = PLINTH + f * H;
+            float topk = 1.0 + 0.6 * smooth(floors * 0.5, floors - 1.0, f);    // top floors get more rain
+            // ---- balcony side: rail-post rust, parapet joint runs, leak stains
+            {
+                vector n = {0, 0, 1};
+                int np = max(2, int(floor((xb - sa - 0.5) / 1.6)) + 1);
+                for (int i = 0; i < np; i++) {
+                    did++;
+                    float px = sa + 0.3 + i * (xb - sa - 0.6) / (np - 1);
+                    vector src = set(px, yf + 0.94, zb);
+                    float c = cause_at(src, 0, 1, cP, cR, cS, cT, cSide);
+                    float pr = (0.06 + 0.7 * c) * amt * topk;
+                    if (hr(did, 701, seed) < pr) {
+                        float l = min(hpow(did, 702, seed, 0.3, 1.08, 1.5), 1.08);
+                        decal(src, n, hrange(did, 703, seed, 0.015, 0.035), l, 4, (0.25 + 0.5 * c) * hrange(did, 704, seed, 0.5, 1.0), rust, 0.85, FILL, 0);
+                    }
+                }
+                // runs at the V-joints of the solid parapet (water finds the joint)
+                float joints[] = array(sa, xb);
+                foreach (float jx; joints) {
+                    did++;
+                    vector src = set(jx, yf + 0.95, zb);
+                    float c = cause_at(src, 0, -1, cP, cR, cS, cT, cSide);
+                    if (hr(did, 711, seed) < (0.18 + 0.6 * c) * amt * topk) {
+                        float l = min(hpow(did, 712, seed, 0.35, 1.08, 1.4), 1.08);
+                        int cell = hr(did, 713, seed) < 0.6 ? 0 : 6;
+                        decal(src, n, hrange(did, 714, seed, 0.02, 0.05), l, cell, (0.2 + 0.5 * c) * hrange(did, 715, seed, 0.4, 1.0) * topk, soot, 0.9, FILL, 0);
+                    }
+                }
+                // faint short drips along the parapet top (background, irregular spacing)
+                float x = sa + hrange(did, 721, seed, 0.1, 0.8);
+                while (x < xb - 0.1) {
+                    did++;
+                    vector src = set(x, yf + 0.95, zb);
+                    float c = cause_at(src, 0, -1, cP, cR, cS, cT, cSide);
+                    if (hr(did, 722, seed) < (0.12 + c) * amt) {
+                        float l = min(hpow(did, 723, seed, 0.08, 0.9, 3.0), 1.08);
+                        decal(src, n, hrange(did, 724, seed, 0.01, 0.03), l, hr(did, 725, seed) < 0.5 ? 6 : 0,
+                              (0.08 + 0.35 * c) * topk * hrange(did, 726, seed, 0.5, 1.0), soot, 0.9, FILL, 0);
+                    }
+                    x += hpow(did, 727, seed, 0.15, 1.8, 1.5);
+                }
+                // a leak story: a layered stain on this front, with a damp colour
+                float cl = cause_at(set(bx[k], yf + 0.5, zb), 0, 0, cP, cR, cS, cT, cSide);
+                if (cl > 0.25 && hr(did++, 731, seed) < 0.8) {
+                    float sx = hrange(did, 732, seed, sa + 0.4, xb - 0.6);
+                    decal(set(sx, yf + 0.95, zb), n, hrange(did, 733, seed, 0.3, 0.8), 1.08, 5, (0.25 + 0.5 * cl) * amt, lerp(soot, damp, 0.6), 0.75, FILL, 0);
+                }
+            }
+            // ---- corridor side: fringe under the drip-less parapet top, rust at fixings
+            {
+                vector n = {0, 0, -1};
+                float x = xa + hrange(did, 741, seed, 0.0, 0.6);
+                while (x < xb - 0.3) {
+                    did++;
+                    float seg = hpow(did, 742, seed, 0.4, 2.2, 1.5);
+                    vector src = set(x + seg * 0.5, yf + 1.1, zc);
+                    float c = cause_at(src, 1, -1, cP, cR, cS, cT, cSide);
+                    if (hr(did, 743, seed) < (0.35 + c) * amt) {
+                        float l = min(hpow(did, 744, seed, 0.25, 1.25, 1.6), 1.24);
+                        decal(src, n, min(seg, xb - x - 0.05), l, 3, (0.12 + 0.45 * c) * topk * hrange(did, 745, seed, 0.6, 1.0) * amt, soot, 0.9, FILL, 1);
+                    }
+                    x += seg + hpow(did, 746, seed, 0.1, 1.5, 1.2);
+                }
+                did++;
+                if (hr(did, 751, seed) < (0.1 + 0.6 * cause_at(set(bx[k], yf, zc), 1, 1, cP, cR, cS, cT, cSide)) * amt)
+                    decal(set(hrange(did, 752, seed, xa + 0.3, xb - 0.3), yf + 0.2, zc), n, 0.03, hrange(did, 753, seed, 0.2, 0.34), 4, 0.5, rust, 0.85, FILL, 1);
+            }
+        }
+    }
+    // ---- gables: streaks from the top edge, a washed band at one corner, mould under the eave
+    int ends[] = array(0, 1);
+    foreach (int e; ends) {
+        float gx = e == 0 ? x0 - 0.2 : x0 + L + 0.2;
+        vector n = e == 0 ? set(-1, 0, 0) : set(1, 0, 0);
+        float gtop = eave ? ytop - 0.18 : ytop + 0.1 + ROOF_PARA;
+        float z = zc + hrange(did, 761, seed, 0.1, 0.6);
+        while (z < zb - 0.2) {
+            did++;
+            vector src = set(gx, gtop, z);
+            float c = cause_at(src, 2 + e, -1, cP, cR, cS, cT, cSide);
+            if (hr(did, 762, seed) < (0.3 + c) * amt) {
+                int cell = eave ? (hr(did, 763, seed) < 0.6 ? 0 : 2) : (hr(did, 763, seed) < 0.5 ? 3 : 0);
+                float l = min(hpow(did, 764, seed, 0.4, gtop * 0.7, 2.2), gtop - 0.3);
+                float vw = cell == 2 ? hrange(did, 765, seed, 0.3, 0.9) : cell == 3 ? hrange(did, 765, seed, 0.6, 1.6) : hrange(did, 765, seed, 0.03, 0.08);
+                decal(src, n, vw, l, cell, (0.15 + 0.45 * c) * amt * hrange(did, 766, seed, 0.5, 1.0), soot, 0.9, FILL, 2 + e);
+            }
+            z += hpow(did, 767, seed, 0.3, 2.5, 1.4);
+        }
+        // washed (pale) band down the windward corner on older paint
+        if (ch("../../age") > 10) decal(set(gx, gtop, e == 0 ? zb - 0.35 : zc + 0.35), n, 0.5, gtop * 0.8, 7, 0.25 * amt, washed, 0.8, FILL, 2 + e);
+        // mould under the overhang where a neglect cause sits on this gable
+        for (int i = 0; i < len(cP); i++) {
+            if (cSide[i] != 2 + e || cT[i] != 2) continue;
+            decal(set(gx, gtop - 0.05, cP[i].z), n, cR[i] * 0.5, min(cR[i], gtop * 0.5), 5, 0.4 * cS[i] * amt, damp, 0.75, FILL, 2 + e);
+        }
+    }
+}

@@ -13,3 +13,8 @@ build/
 examples/neo_tower/work/
 examples/neo_tower/export/
 examples/neo_tower/backup/
+# danchi generator: build scenes, exports, generated textures and HDA backups are not committed
+examples/danchi/work/
+examples/danchi/export/
+examples/danchi/backup/
+examples/danchi/tex/

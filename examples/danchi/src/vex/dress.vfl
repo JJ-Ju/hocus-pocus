@@ -1,0 +1,103 @@
+// dress.vfl — point wrangle over the plan points. Each bay point emits its piece points
+// (name, orient, id, attributes); the bay point itself is removed.
+function vector wpos(vector P; vector4 q; vector l) { return P + qrotate(q, l); }
+
+// emit one piece at local position l
+function int emit(vector P; vector4 q; vector l; string name; int pid; int variant;
+                  int floor_; int bay; int side; int unit; int persona; float coln; string role)
+{
+    int pt = addpoint(0, P + qrotate(q, l));
+    setpointattrib(0, "orient", pt, q);
+    setpointattrib(0, "name", pt, name);
+    setpointattrib(0, "id", pt, pid);
+    setpointattrib(0, "variant", pt, variant);
+    setpointattrib(0, "floor", pt, floor_);
+    setpointattrib(0, "bay", pt, bay);
+    setpointattrib(0, "side", pt, side);
+    setpointattrib(0, "unit", pt, unit);
+    setpointattrib(0, "persona", pt, persona);
+    setpointattrib(0, "colneglect", pt, coln);
+    setpointattrib(0, "role", pt, role);
+    return pt;
+}
+
+int seed = chi("../../seed");
+int props = chi("../../props");
+int interiors = chi("../../interiors");
+int ndmg = chi("../../damage") ? 4 : 0;
+float W = @bw;
+int base_id = i@id * 100;
+int k = 0;
+
+vector4 q = p@orient;
+vector P = @P;
+int f = i@floor, b = i@bay, sd = i@side, un = i@unit, pe = i@persona;
+float cn = f@colneglect;
+
+int hero = int(floor(hr(sd, 77, seed) * 997)) % max(1, chi("../../units"));
+float acs = ch("../../ac_share");
+if (s@role == "bal_bay") {
+    float dx0, dx1, wx0, wx1; bal_openings(W, dx0, dx1, wx0, wx1);
+    int ukey = un;
+    // sash state per flat: 60 % closed, 30 % part open, 10 % open; vacant flats closed
+    float rs = hr(ukey, 81, seed);
+    int st = pe == 4 ? 0 : (rs < 0.6 ? 0 : (rs < 0.9 ? 1 : 2));
+    int stw = hr(ukey, 82, seed) < 0.8 ? 0 : 1;
+    emit(P, q, {0, 0, 0}, "bal_wall", base_id + k++, 0, f, b, sd, un, pe, cn, "wall");
+    emit(P, q, set((dx0 + dx1) * 0.5, 0, 0), sprintf("sash_door_s%d", st), base_id + k++, st, f, b, sd, un, pe, cn, "glass");
+    emit(P, q, set((wx0 + wx1) * 0.5, 0.9, 0), sprintf("bal_window_s%d", stw), base_id + k++, stw, f, b, sd, un, pe, cn, "glass");
+    // balcony front: damage variant per bay; 40 % of bays keep the clean variant
+    int v = 0;
+    if (ndmg > 0) {
+        float r = hr(i@id, 31, seed);
+        v = r < 0.4 ? 0 : 1 + int(floor(hr(i@id, 32, seed) * (ndmg - 0.001)));
+    }
+    emit(P, q, {0, 0, 0}, sprintf("bal_front_v%d", v), base_id + k++, v, f, b, sd, un, pe, cn, "front");
+    emit(P, q, {0, 0, 0}, "bal_hw", base_id + k++, 0, f, b, sd, un, pe, cn, "hw");
+    emit(P, q, {0, 0, 0}, "bal_open", base_id + k++, 0, f, b, sd, un, pe, cn, "front");
+    if (i@next_t == 0) emit(P, q, set(W * 0.5, 0, 0), "partition", base_id + k++, 0, f, b, sd, un, pe, cn, "partition");
+    else emit(P, q, set(W * 0.5, 0, 0), "bal_fin", base_id + k++, 0, f, b, sd, un, pe, cn, "fin");
+    if (i@prev_t != 0) emit(P, q, set(-W * 0.5, 0, 0), "bal_fin", base_id + k++, 1, f, b, sd, un, pe, cn, "fin");
+    if (interiors) emit(P, q, {0, 0, 0}, sprintf("room_p%d", pe), base_id + k++, pe, f, b, sd, un, pe, cn, "room");
+    if (props) {
+        int ishero = (i@ucol == hero && f == min(3, chi("../../floors") - 1));
+        // AC: share of flats, 3 generations; 30 % hung on the wall above the window
+        if (pe != 4 && (hr(ukey, 71, seed) < acs || ishero)) {
+            float rg = hr(ukey, 72, seed);
+            int g = rg < 0.3 ? 0 : (rg < 0.75 ? 1 : 2);
+            if (hr(ukey, 73, seed) < 0.3)
+                emit(P, q, set((wx0 + wx1) * 0.5, 2.03, 0.0), sprintf("ac_g%d", g), base_id + k++, g, f, b, sd, un, pe, cn, "prop");
+            else
+                emit(P, q, set(W * 0.5 - 0.75, 0, 0.03), sprintf("ac_g%d", g), base_id + k++, g, f, b, sd, un, pe, cn, "prop");
+        }
+        // laundry by persona
+        float pl[] = array(0.4, 0.8, 0.45, 0.5, 0.0);
+        if (hr(ukey, 74, seed) < pl[pe] || ishero) {
+            int lv = int(floor(hr(ukey, 75, seed) * 3.999));
+            if (pe == 1) lv = max(lv, 2);
+            emit(P, q, {0, 0, 0}, sprintf("laundry_v%d", lv), base_id + k++, lv, f, b, sd, un, pe, cn, "prop");
+        }
+        // futon over the rail: elderly and family flats, sunny day
+        if ((pe == 3 || pe == 1) && hr(ukey, 76, seed) < 0.22 || ishero) {
+            float fx = hrange(ukey, 78, seed, -W * 0.5 + 0.8, W * 0.5 - 1.6);
+            emit(P, q, set(fx, 0, 0), "futon", base_id + k++, 0, f, b, sd, un, pe, cn, "prop");
+        }
+        if (pe == 2 || (pe != 4 && hr(ukey, 79, seed) < 0.12) || ishero)
+            emit(P, q, {0, 0, 0}, "plants", base_id + k++, 0, f, b, sd, un, pe, cn, "prop");
+    }
+}
+else if (s@role == "cor_bay") {
+    emit(P, q, {0, 0, 0}, "cor_wall", base_id + k++, 0, f, b, sd, un, pe, cn, "wall");
+    emit(P, q, set(-W * 0.5 + 0.75, 0, 0), "steel_door", base_id + k++, 0, f, b, sd, un, pe, cn, "door");
+    emit(P, q, set(-W * 0.5 + 1.75, 0.1, 0), "meter_door", base_id + k++, 0, f, b, sd, un, pe, cn, "door");
+    emit(P, q, set(W * 0.5 - 1.3, 1.0, 0), "kitchen_win", base_id + k++, 0, f, b, sd, un, pe, cn, "glass");
+    emit(P, q, {0, 0, 0}, "cor_front", base_id + k++, 0, f, b, sd, un, pe, cn, "front");
+    emit(P, q, {0, 0, 0}, "cor_hw", base_id + k++, 0, f, b, sd, un, pe, cn, "hw");
+}
+else if (s@role == "core_bal") {
+    emit(P, q, {0, 0, 0}, W > 4 ? "core_wall_55" : "core_wall_3", base_id + k++, 0, f, b, sd, un, pe, cn, "wall");
+}
+else if (s@role == "core_cor") {
+    emit(P, q, {0, 0, 0}, W > 4 ? "cor_landing_55" : "cor_landing_3", base_id + k++, 0, f, b, sd, un, pe, cn, "front");
+}
+removepoint(0, @ptnum);

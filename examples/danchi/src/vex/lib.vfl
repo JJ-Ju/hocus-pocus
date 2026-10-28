@@ -1,0 +1,141 @@
+// lib.vfl — shared helpers for the danchi generator. Prepended to each wrangle.
+// Randomness: always hash a stable id + a layer number + the building seed (never @ptnum).
+
+float hr(int id; int layer; int seed)
+{
+    vector s = set(float(id) * 0.7071 + 0.5, float(layer) * 1.618 + 0.25, float(seed) * 3.14159 + 0.75);
+    float r = rand(s);
+    return r;
+}
+
+float hrange(int id; int layer; int seed; float lo; float hi)
+{
+    float r = hr(id, layer, seed);
+    return lo + (hi - lo) * r;
+}
+
+// power-law size in [rmin, rmax], k = 2..4 gives many small, few large
+float hpow(int id; int layer; int seed; float rmin; float rmax; float k)
+{
+    float u = hr(id, layer, seed);
+    return rmin * pow(rmax / rmin, pow(u, k));
+}
+
+// quaternion for a rotation about +Y by deg degrees
+vector4 qy(float deg)
+{
+    vector4 q = quaternion(radians(deg), {0, 1, 0});
+    return q;
+}
+
+// add a piece point with the standard attributes
+int add_piece(int geo; vector p; vector4 q; string name; int id; int variant)
+{
+    int pt = addpoint(geo, p);
+    setpointattrib(geo, "orient", pt, q);
+    setpointattrib(geo, "name", pt, name);
+    setpointattrib(geo, "id", pt, id);
+    setpointattrib(geo, "variant", pt, variant);
+    return pt;
+}
+
+// closed axis-aligned box from mn to mx; returns the first prim number
+int addbox(int geo; vector mn; vector mx; string name)
+{
+    int p[];
+    for (int i = 0; i < 8; i++) {
+        vector c = set((i % 2) ? mx.x : mn.x, ((i / 2) % 2) ? mx.y : mn.y, (i / 4) ? mx.z : mn.z);
+        append(p, addpoint(geo, c));
+    }
+    int F[] = array(0, 2, 6, 4,  1, 5, 7, 3,  0, 4, 5, 1,  2, 3, 7, 6,  0, 1, 3, 2,  4, 6, 7, 5);  // clockwise = outward in Houdini
+    int first = -1;
+    for (int f = 0; f < 6; f++) {
+        int pr = addprim(geo, "poly", p[F[f * 4]], p[F[f * 4 + 1]], p[F[f * 4 + 2]], p[F[f * 4 + 3]]);
+        setprimattrib(geo, "name", pr, name);
+        if (first < 0) first = pr;
+    }
+    return first;
+}
+
+// box with material and colour key on all 6 faces
+int boxm(int geo; vector mn; vector mx; string mat; string key)
+{
+    int pr = addbox(geo, mn, mx, "");
+    for (int f = 0; f < 6; f++) {
+        setprimattrib(geo, "mat", pr + f, mat);
+        setprimattrib(geo, "cdkey", pr + f, key);
+    }
+    return pr;
+}
+
+// box with an explicit colour (cdkey "own")
+int boxc(int geo; vector mn; vector mx; string mat; vector cd)
+{
+    int pr = boxm(geo, mn, mx, mat, "own");
+    for (int f = 0; f < 6; f++) setprimattrib(geo, "Cd", pr + f, cd);
+    return pr;
+}
+
+// closed cylinder from a to b, radius r, n sides
+int cylm(int geo; vector a; vector b; float r; int n; string mat; string key)
+{
+    vector ax = normalize(b - a);
+    vector up = abs(ax.y) < 0.9 ? set(0, 1, 0) : set(1, 0, 0);
+    vector u = normalize(cross(ax, up));
+    vector v = cross(u, ax);
+    int ra[], rb[];
+    for (int i = 0; i < n; i++) {
+        float t = 2 * PI * i / n;
+        vector o = (u * cos(t) + v * sin(t)) * r;
+        append(ra, addpoint(geo, a + o));
+        append(rb, addpoint(geo, b + o));
+    }
+    int first = -1;
+    for (int i = 0; i < n; i++) {
+        int j = (i + 1) % n;
+        int pr = addprim(geo, "poly", ra[i], rb[i], rb[j], ra[j]);
+        setprimattrib(geo, "mat", pr, mat);
+        setprimattrib(geo, "cdkey", pr, key);
+        if (first < 0) first = pr;
+    }
+    int ca[], cb[];
+    for (int i = 0; i < n; i++) { append(ca, ra[i]); append(cb, rb[n - 1 - i]); }
+    int p1 = addprim(geo, "poly", ca);
+    int p2 = addprim(geo, "poly", cb);
+    setprimattrib(geo, "mat", p1, mat); setprimattrib(geo, "cdkey", p1, key);
+    setprimattrib(geo, "mat", p2, mat); setprimattrib(geo, "cdkey", p2, key);
+    return first;
+}
+
+// a single quad (for cards: curtains, decals); corners in order, facing by winding
+int quadm(int geo; vector a; vector b; vector c; vector d; string mat; string key)
+{
+    int pr = addprim(geo, "poly", addpoint(geo, a), addpoint(geo, b), addpoint(geo, c), addpoint(geo, d));
+    setprimattrib(geo, "mat", pr, mat);
+    setprimattrib(geo, "cdkey", pr, key);
+    return pr;
+}
+
+// width of the open steel-rail section at the left of each balcony (reference: 13 of 15 photos
+// alternate solid concrete panels with white vertical-bar rails)
+float rail_w(float W) { return rint(W * 0.4 * 10) / 10.0; }
+
+// opening layout of a balcony bay (shared by the wall piece and the dress)
+void bal_openings(float W; export float dx0; export float dx1; export float wx0; export float wx1)
+{
+    float dw = min(3.4, W - 2.6);
+    dx0 = -W * 0.5 + 0.35; dx1 = dx0 + dw;
+    float ww = min(1.6, W - dw - 1.25);
+    wx1 = W * 0.5 - 0.45; wx0 = wx1 - ww;
+}
+
+// contract constants (also documented in README.md)
+#define D_DEPTH 8.4
+#define BAL_D 1.2
+#define COR_W 1.4
+#define PLINTH 0.45
+#define SLAB_T 0.18
+#define PARA_H 1.1
+#define WALL_T 0.18
+#define ROOF_PARA 0.6
+#define TOWER_D 2.6

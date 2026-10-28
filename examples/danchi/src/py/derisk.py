@@ -1,0 +1,61 @@
+exec(open("C:/Users/jujun/AppData/Local/Temp/claude/C--Users-jujun-DEV-hocus-pocus/d956ad22-ff1d-47a8-a6c1-b1930b7bee4a/scratchpad/sk6-out/work/py/hlib.py").read())
+
+obj = hou.node("/obj")
+old = obj.node("derisk")
+if old:
+    old.destroy()
+sub = obj.createNode("subnet", "derisk")
+g = sub.createNode("geo", "g")
+mats = sub.createNode("matnet", "mats")
+
+# materials: wall (primvar-tinted), decal (opacity cut-out), text
+wall, ws = mtlx_material(mats, "wall")
+cd = mx(wall, "mtlxgeompropvalue", "cd", parms={"geomprop": "displayColor"}, sig="color3")
+link(ws, "base_color", cd)
+ws.parm("specular_roughness").set(0.85)
+
+dec, ds = mtlx_material(mats, "decal")
+pos = mx(dec, "mtlxposition", "pos")
+noi = mx(dec, "mtlxfractal3d", "noi", sig="float", inputs={"position": pos}, parms={"octaves": 4})
+op = mx(dec, "mtlxsmoothstep", "op", sig="float", inputs={"in": noi}, parms={"low": 0.0, "high": 0.15})
+link(ds, "opacity", op) if ds.inputIndex("opacity") >= 0 else None
+ds.parmTuple("base_color").set((0.08, 0.06, 0.05))
+
+txt, ts = mtlx_material(mats, "text")
+ts.parmTuple("base_color").set((0.05, 0.12, 0.35))
+
+box = node(g, "box", "box", parms={"sizex": 4, "sizey": 3, "sizez": 2})
+box.parmTuple("t").set((0, 1.5, 0))
+w1 = wrangle(g, "wall_attr", 's@shop_materialpath = "../mats/wall"; v@Cd = {0.70, 0.66, 0.58};', [box], cls="prim")
+grid = node(g, "grid", "decal", parms={"sizex": 1.0, "sizey": 2.0, "rows": 2, "cols": 2})
+grid.parm("orient").set(0)
+grid.parmTuple("t").set((-1, 1.5, 1.005))
+w2 = wrangle(g, "decal_attr", 's@shop_materialpath = "../mats/decal";', [grid], cls="prim")
+font = node(g, "font", "num", parms={"text": "3号棟 12", "file": "SideFX WenQuanYi Zen Hei", "fontsize": 0.6, "lod": 0.35})
+font.parmTuple("t").set((0.9, 2.0, 1.004))
+w3 = wrangle(g, "text_attr", 's@shop_materialpath = "../mats/text";', [font], cls="prim")
+mg = node(g, "merge", "merge", [w1, w2, w3])
+outn = node(g, "null", "OUT", [mg])
+outn.setDisplayFlag(True)
+outn.setRenderFlag(True)
+
+for n in ("sun", "sky", "cam_test", "ground_test"):
+    if obj.node(n):
+        obj.node(n).destroy()
+sun = obj.createNode("hlight::2.0", "sun")
+sun.parm("light_type").set("distant")
+sun.parmTuple("r").set((-28, 40, 0))
+sun.parm("light_intensity").set(1.0)
+sky = obj.createNode("envlight", "sky")
+sky.parm("light_intensity").set(0.4)
+cam = obj.createNode("cam", "cam_test")
+cam.parmTuple("t").set((2.5, 1.6, 7.5))
+cam.parmTuple("r").set((0, 15, 0))
+cam.parm("resx").set(1280)
+cam.parm("resy").set(720)
+gr = obj.createNode("geo", "ground_test")
+gg = gr.createNode("grid")
+gg.parmTuple("size").set((40, 40))
+print([p.name() for p in sky.parms() if "contrib" in p.name() or "primary" in p.name()][:20])
+print([p.name() for p in ds.parms() if "opac" in p.name()])
+print(ds.inputNames()[:60])
