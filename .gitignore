@@ -30,6 +30,11 @@ examples/danchi/tex/*
 !examples/danchi/tex/concrete_roughness.png
 !examples/danchi/tex/streak_atlas.png
 !examples/danchi/tex/sky.png
+# the round-E coat set the weathering's material terms and close-ups read (13 MB)
+!examples/danchi/tex/round_e/
+# weathering: the captured facade planes (about 0.4 GB each) and builds are regenerated, not committed
+examples/danchi/weathering/data/
+examples/danchi/weathering/builds/
 # showcase render frames (PNG, ~1-2 MB each) and per-image critique output; the JPGs, sheets,
 # manifest.json and critique.json beside them are the deliverable
 examples/danchi/showcase/raw/
