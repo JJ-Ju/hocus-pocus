@@ -84,8 +84,9 @@ def flat_walls(plane):
 def joints(plane):
     """Joint grooves on the flat walls: horizontal at each floor row, vertical about every 3 m
     (spaced evenly across each flat element, at least 0.6 m from its sides). Returns
-    (hmask, vmask, points): points are (row, col) every 0.5 m along the horizontal joints, the
-    sources and anchors the weathering layers read."""
+    (hmask, vmask, points): points are (row, col) along the horizontal joints, 0.25-0.75 m apart
+    (jittered: a fixed 0.5 m step printed a lattice into the streaks, round G G6), the sources and
+    anchors the weathering layers read."""
     ppm = plane["ppm"]
     H, W = plane["mask"].shape
     fw = plane.get("_flat")
@@ -113,12 +114,20 @@ def joints(plane):
             col = (lab[:, x:x + wpx] == i)
             vm[:, x:x + wpx] |= col
     pts = []
-    step = int(0.5 * ppm)
     for r in rows:
         r0 = int(r)
         xs = np.flatnonzero(hm[r0])
-        for x in xs[::step]:
-            pts.append((r0 + wpx, int(x)))       # just below the groove: water leaves it here
+        if xs.size == 0:
+            continue
+        rr = nz.rng("jpts", plane.get("name"), r0)
+        x = xs[0] + rr.uniform(0.0, 0.5) * ppm
+        on = np.zeros(W, bool)
+        on[xs] = True
+        while x <= xs[-1]:
+            xi = int(x)
+            if on[xi]:
+                pts.append((r0 + wpx, xi))       # just below the groove: water leaves it here
+            x += rr.uniform(0.25, 0.75) * ppm
     return hm, vm, pts
 
 
@@ -150,4 +159,21 @@ def joint_dirt(hm, vm, ppm):
         d = np.where(hm[y], 0.0, d + 1.0)
         lip[y] = np.exp(-d / dec)
     lip[hm] = 0.0
+    # where the joints cross, water from both meets and pauses (G5): +0.45 within 2 cm, 0 at 8 cm
+    vd = vm.copy()
+    for s in (1, 2):
+        vd[:, s:] |= vm[:, :-s]
+        vd[:, :-s] |= vm[:, s:]
+    xm = hm & vd
+    if xm.any():
+        ys, xs = np.nonzero(xm)
+        r = max(1, int(round(0.08 * ppm)))
+        near = np.full(hm.shape, np.inf, F32)
+        for dy in range(-r, r + 1):
+            for dx in range(-r, r + 1):
+                yy, xx = ys + dy, xs + dx
+                ok = (yy >= 0) & (yy < H) & (xx >= 0) & (xx < hm.shape[1])
+                near[yy[ok], xx[ok]] = np.minimum(near[yy[ok], xx[ok]], np.float32(np.hypot(dy, dx) / ppm))
+        f = np.clip((0.08 - near) / 0.06, 0.0, 1.0)
+        g = g + np.where(hm | vm, 0.45 * f, 0.0).astype(F32)
     return g + 0.5 * lip

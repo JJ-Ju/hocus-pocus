@@ -28,6 +28,12 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import weather_measure as wm  # noqa: E402
+import gate_g as gg  # noqa: E402
+import gate_m as gm  # noqa: E402
+import gate_c as gc  # noqa: E402
+import gate_p as gp  # noqa: E402
+import gate_k as gk  # noqa: E402
+import gate_n as gn  # noqa: E402
 
 CLASSES = {0: "none", 1: "paint", 2: "coping", 3: "soffit", 4: "concrete", 5: "plinth", 6: "glass",
            7: "metal", 8: "prop", 9: "decal"}
@@ -111,6 +117,10 @@ def local_img(p):
         wall = np.isfinite(p["D"])
         if "cls" in p:
             wall &= np.isin(p["cls"], PAINTED)
+        if "edge" in p:                    # arris rows are measured by the edge rules (N), not as wall
+            wall &= ~np.asarray(p["edge"]).astype(bool)
+        if "L_wear" in p:                  # and the edge layer's chips
+            wall &= ~(np.abs(np.nan_to_num(p["L_wear"].astype(np.float32))) > 1e-4)
         # the weathering's own local contrast: base paint tones (element to element) do not count
         Y = 1.0 - np.nan_to_num(p["D"].astype(np.float64))
         c["img"], c["ppm"] = wm.local_contrast_D(Y, wall, p["ppm"])
@@ -496,11 +506,15 @@ def rule_F3(cfg, planes, R):
     for p in planes.values():
         if not p.get("exposed", True) or p.get("kind") not in ("wall", "gable", "front"):
             continue
-        hp = wm.height_profile(p["D"].astype(np.float64), p["ppm"], p.get("ground_row"), p.get("top_row"))
+        Dd = p["D"].astype(np.float64)
+        for k in ("L_damage", "L_cracks", "L_crack_repair", "L_wear"):   # the dirt gradient, not structure
+            if k in p:
+                Dd = Dd - np.nan_to_num(p[k].astype(np.float64))
+        hp = wm.height_profile(Dd, p["ppm"], p.get("ground_row"), p.get("top_row"))
         if not hp or hp["base1m"] is None:
             continue
         r = hp["base1m"] / max(hp["mean"], 1e-6)
-        good = r >= 1.30
+        good = r >= (1.30 if cfg["E"] >= 13 else 1.15)
         ok &= good
         out[p["name"]] = round(r, 2)
     return res("F3", ok, out)
@@ -912,6 +926,10 @@ def rule_K3(cfg, planes, R):
             near[:, s:] |= e[:, :-s]
             near[:, :-s] |= e[:, s:]
         y, x, r, d = p["dmg_y"], p["dmg_x"], p["dmg_r"], p["dmg_d"]
+        cl = d >= -1.0                      # edge-damage clusters and background chips; delamination
+        y, x, r, d = y[cl], x[cl], r[cl], d[cl]   # spalls (d = -2, round G) follow K5/K6
+        if "dmg_k" in p:
+            p = dict(p, dmg_k=p["dmg_k"][cl])
         inb = (y >= 0) & (y < e.shape[0]) & (x >= 0) & (x < e.shape[1])
         edge_n += int(near[y[inb], x[inb]].sum())
         tot_n += int(inb.sum())
@@ -1056,7 +1074,32 @@ def series_presets(runs):
         for t in range(5):
             if not (b[t] > a[t] or (a[t] < 0.001 and b[t] < 0.001)):
                 bad.append("%s>=%s at T%d+" % (seq[i], seq[i + 1], t + 1))
-    return res("A4", not bad, {"coverage": {k: [round(x, 4) for x in cov[k]] for k in seq}, "bad": bad})
+    # the ground band: base excess (bottom 1 m over the wall mean, minus 1) rises without a jump
+    ex = {}
+    for cfg, planes in runs:
+        rs = []
+        for p in planes.values():
+            if not p.get("exposed", True) or p.get("kind") not in ("wall", "gable", "front"):
+                continue
+            hp = wm.height_profile(p["D"].astype(np.float64), p["ppm"], p.get("ground_row"), p.get("top_row"))
+            if hp and hp["base1m"] is not None and hp["mean"] > 1e-4:
+                rs.append(hp["base1m"] / hp["mean"] - 1.0)
+        if rs:
+            ex[cfg.get("preset")] = float(np.mean(rs))
+    steps = []
+    if all(k in ex for k in seq) and len(seq) >= 3:
+        span = ex[seq[-1]] - ex[seq[0]] if seq[0] != "new" else ex[seq[-1]]
+        prev = 0.0 if seq[0] == "new" else ex[seq[0]]
+        for i, k in enumerate(seq[1:]):
+            st = ex[k] - prev
+            steps.append(round(st / max(span, 1e-6), 3))
+            prev = ex[k]
+        if steps and steps[0] > 0.30:
+            bad.append("ground band: first step %.2f of the range (max 0.30)" % steps[0])
+        if any(s > 0.45 for s in steps):
+            bad.append("ground band: a step over 0.45 of the range")
+    return res("A4", not bad, {"coverage": {k: [round(x, 4) for x in cov[k]] for k in seq},
+                               "ground_excess": {k: round(v, 3) for k, v in ex.items()}, "ground_steps": steps, "bad": bad})
 
 
 def series_sweep(layer, runs):
@@ -1125,7 +1168,9 @@ def fresh(cfg):
 
 CONFIG_RULES = [rule_A0, rule_A1, rule_A2, rule_A3, rule_B1, rule_B2, rule_B3, rule_C1, rule_C2, rule_C3, rule_D1,
                 rule_E1, rule_F1, rule_F2, rule_F3, rule_F4, rule_G1, rule_G2, rule_G3, rule_G4, rule_H1, rule_H2,
-                rule_H3, rule_I1, rule_I2, rule_J1, rule_J2, rule_K1, rule_K3, rule_K4]
+                rule_H3, rule_I1, rule_I2, rule_J1, rule_J2, rule_K1, rule_K3, rule_K4,
+                gg.rule_G5, gp.rule_G6, gg.rule_H4, gg.rule_H5, gc.rule_I3,
+                gm.rule_M1, gm.rule_M2, gm.rule_M3, gm.rule_M4, gm.rule_M6, gm.rule_M7] + gk.RULES + gn.RULES
 
 
 LAYER_RULES = ("C2", "C3", "F2", "G1", "H2", "I1")
@@ -1181,9 +1226,16 @@ def main():
         if kind == "presets":
             out = [series_presets(runs)]
         elif kind.startswith("sweep:"):
-            out = series_sweep(kind.split(":", 1)[1], runs)
-            if kind.split(":", 1)[1] == "damage":
+            layer = kind.split(":", 1)[1]
+            out = series_sweep(layer, runs)
+            if layer == "damage":
                 out.append(series_damage(runs))
+            if layer == "bio":
+                out += [gm.series_growth(runs), gm.series_fronts(runs)]
+            vals = [(c.get("override") or {}).get(layer) for c, _ in runs]
+            for extra in (gg.series_even(layer, runs, vals), gg.series_top(layer, runs, vals)):
+                if extra is not None:
+                    out.append(extra)
         else:
             raise SystemExit("unknown series kind " + kind)
         s = summary(out, a.allow_na)

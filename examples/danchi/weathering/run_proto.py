@@ -66,6 +66,15 @@ def to_srgb8(lin):
 
 def src_map(plane, out):
     s = plane["tops"].copy()
+    if plane.get("bottoms") is not None:
+        s |= plane["bottoms"]                     # drip lines under ledges and slabs (G1)
+    cls = plane.get("cls")
+    if cls is not None:                           # the drip edge under any object above the wall
+        wall = np.isin(cls, (1, 2, 4, 5))
+        s[1:] |= wall[1:] & ~wall[:-1] & (cls[:-1] > 0)
+    for (y, x) in wf.joint_crossings(plane):      # crossing runs start where joints cross
+        if 0 <= y < s.shape[0] and 0 <= x < s.shape[1]:
+            s[max(0, y - 1):y + 2, max(0, x - 1):x + 2] = True
     for key in ("sill_ends", "corner_heads"):
         for (y, x) in plane.get(key, []):
             if 0 <= y < s.shape[0] and 0 <= x < s.shape[1]:
@@ -132,6 +141,22 @@ def run(out_dir, cfg, planes=None, preview=True, fixed_gains=None, bases=None):
                 arrs["dmg_a"] = dl["alpha"].astype(np.float16)          # break coverage (K4)
                 arrs["dmg_h"] = dl["depth"].astype(np.float16)          # break depth, m (relief)
         arrs["rgb"] = o["rgb"].astype(np.float16)                 # weathered albedo (previews)
+        if p["name"] in getattr(b, "wet", {}):
+            arrs["bio_w"] = b.wet[p["name"]]                         # where water stays (growth rules)
+        cs = getattr(b, "crk", {}).get(p["name"])
+        if cs is not None:                                           # cracks (K7-K11)
+            arrs["crk_w"] = cs.wmm.astype(np.float16)
+            arrs["crk_t"] = cs.typ
+            arrs["crk_o"] = cs.ori
+        mw = o["marks"].get("wear", [])
+        if mw:                                                       # edge chips (N3, N4)
+            arrs["wch_y"] = np.array([m["y"] for m in mw], np.int32)
+            arrs["wch_x"] = np.array([m["x"] for m in mw], np.int32)
+        if p.get("tops") is not None:
+            arrs["etop"] = (p["tops"] & p["edges"]).astype(np.uint8) + 2 * (p["bottoms"] & p["edges"]).astype(np.uint8)
+        ops = wf.plane_openings(p)
+        if ops:
+            arrs["openings"] = np.array(ops, np.int32)
         Fp = b.F[p["name"]]
         arrs["mat"] = getattr(Fp, "matresp", Fp.mat).astype(np.float16)   # the material response dirt follows (J2)
         arrs["base"] = bases[p["name"]].astype(np.float16)          # clean albedo (close-ups)

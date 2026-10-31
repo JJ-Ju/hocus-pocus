@@ -14,6 +14,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
 import real_planes as rpl  # noqa: E402
 import run_proto as rp  # noqa: E402
 import weather_measure as wm  # noqa: E402
+import weather_fields as wf  # noqa: E402
+import wx_noise as nz  # noqa: E402
 
 ROOT = os.environ.get("WX_DATA", os.path.join(os.path.dirname(os.path.abspath(__file__)), "data"))
 
@@ -69,7 +71,9 @@ def real_bases(planes, bases0, raw_codes=None):
                 flat[..., c] = np.where(miss, fill, flat[..., c])
         tex = rp.tile_rgb("spraymacro_basecolor.png", 3.6, ppm)
         H, W = m.shape
-        tt = tex[(np.arange(H) % tex.shape[0])[:, None], (np.arange(W) % tex.shape[1])[None, :]]
+        tt = nz.tile_blend(tex, (H, W), ("coat", p["name"]), tex.shape[0])     # same sampling as the dirt (J2)
+        lap = wf.lap_rule((H, W), ppm, p.get("ground_row"), ("lap", p["name"]))
+        tt = tt * (1.0 - 0.012 * lap)[..., None]                                # laps 0.4-0.7 % darker, clean
         o = np.where(surf[..., None], flat * tt, b)
         out[p["name"]] = o.astype(np.float32)
     return out

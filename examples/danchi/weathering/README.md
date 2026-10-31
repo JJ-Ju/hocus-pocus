@@ -31,6 +31,7 @@ python -I ../../../scripts/weathering/weather_gate.py check <out_dir> --json <ou
 ./runset_real.sh <tag>                  # the seven preset builds, four at a time, each gated
 ./sweeps_all.sh <tag> <gs,ga,k>         # streaks, damage, grime, stain-field sweeps at fixed gains
 ./sweep_grime_fine.sh <tag> <gs,ga,k>   # grime at 0.1-0.6, the range the rules accept
+python -I pipeline_g.py <tag> [N]       # round G: presets, then the six sweeps at Typical's gains, N builds at a time
 ```
 
 Run them from this folder. Builds go to `$WX_OUT` (default `./builds`, not committed); use the gains
@@ -47,6 +48,23 @@ places). `real_planes.py` turns the captures into planes with their features: to
 corner heads, fixings, shelter, flow starts at depth steps, and the construction joints on the
 solid walls. `run_proto.py` holds the build loop and the stand-in planes (`facade_synth.py`) used
 for fast iteration.
+
+## Accepted builds, round G
+
+Rulebook 1.4 (round G), 61 rules. The presets, the Typical seeds and each control sweep's steps listed as accepted passed every single-building rule; the accepted presets passed A4 together. A sweep is reviewed only when its accepted steps also pass its series rules (L1-L4, K2 for damage, M5 and M8 for growth); grime and growth did not. Rejected preset: Neglected (C3, D1).
+
+At Typical's solved gains (2.4478, 0.7312, 0.6851):
+
+| Control | Accepted steps | Rejected steps | Series |
+|---|---|---|---|
+| streaks | 0.25-1.0 | 0 (B2) | accepted |
+| damage | 0-0.75 | 1.0 (M1) | accepted |
+| grime | 0.2-0.5 | 0.1 (B2, B3, G5, I3); 0.6 (F3) | failed L3 (uneven cover steps): not reviewed |
+| stain fields | 0-0.75 | 1.0 (C3, G6) | accepted |
+| growth | 0-0.5 | 0.75 (M3); 1.0 (B2, C3, M1) | failed M8: not reviewed |
+| edges | 0-1.0 | none | accepted |
+
+Growth is time unattended: 3.7, 5.9, 10.2 and 22 years at 0.25-1.0. Damage carries cracks and rail rust with it.
 
 ## Accepted builds, round F
 

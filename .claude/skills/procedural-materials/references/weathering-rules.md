@@ -1,13 +1,13 @@
 # Weathering rules
 
-Numeric rules for building weathering, checked by `scripts/weathering/weather_gate.py`. A weathered building is accepted only when every binding rule passes; nothing is shown before that. Version: 1.2 (round F).
+Numeric rules for building weathering, checked by `scripts/weathering/weather_gate.py`. A weathered building is accepted only when every binding rule passes; nothing is shown before that. Version: 1.4 (round G).
 
 Numeric rules for building weathering, measured in facade space (metres) on a darkening map D = 1 - Y_weathered / Y_clean. A configuration is accepted only when every binding rule passes. Origins: U = the user's review notes (review 36), P = measured on the reference photos, L = building physics and the soiling literature, C = craft estimate (to recalibrate with picks).
 
 ## Measures
 
 - **D**: darkening of albedo luminance against the same surface with no weathering: 0 clean, 0.10 = 10 % darker, negative = lighter
-- **D_local**: the weathering's own local contrast: D_local = 1 - (1 - D) / ref, ref = the least weathered 10 cm patch within +-1 m (smoothed), on 4 cm block means. A uniform darkening of a whole wall gives 0 (it reads as a paint colour, not as weathering: the user, review 36); paint tones that differ from element to element do not count either. T1 is below photo noise and material texture, so the amount rules start at T2.
+- **D_local**: the weathering's own local contrast: D_local = 1 - (1 - D) / ref, ref = the least weathered 10 cm patch within +-1 m (smoothed), on 4 cm block means. A uniform darkening of a whole wall gives 0 (it reads as a paint colour, not as weathering: the user, review 36); paint tones that differ from element to element do not count either. T1 is below photo noise and material texture, so the amount rules start at T2. Arris rows and the edge layer's pixels are left out (the edge rules N1-N5 measure them).
 - **Opacity tiers** (lower bounds of D or D_local): T1 trace >= 0.02, T2 faint >= 0.05, T3 light >= 0.10, T4 medium >= 0.18, T5 heavy >= 0.30, T6 very heavy >= 0.45. each tier is about 1.6-2x the one below; T1 is near the threshold of seeing on a pale wall (about 1 L*), T4 is a clear stain, T6 a black crust
 - **Scale levels**: S1 16-32 m, S2 8-16 m, S3 4-8 m, S4 2-4 m, S5 1-2 m, S6 0.5-1 m, S7 0.25-0.5 m, S8 0.125-0.25 m. Groups: macro S1-S3, mid S4-S5, micro S6-S8. under 12.5 cm is the material's own texture (grain, pores, coat bumps): the material set and the tiling detail, checked by J rules on close crops
 - **Soiling clock E**: repaint cycle lerp(24, 7, upkeep) years; years since repaint min(age, cycle); E = years_since_repaint + 0.22 * (age - years_since_repaint). old stains ghost through new paint at 22 %; damage, rust depth, cracks and efflorescence follow age, not E
@@ -26,19 +26,19 @@ Numeric rules for building weathering, measured in facade space (metres) on a da
 
 ## Amount tables
 
-Tone (A0), mean D on the exposed painted walls, by E: E 0: 0.00-0.02; E 10.75: 0.12-0.28; E 14.5: 0.15-0.32; E 19.8: 0.22-0.42; E 27.1: 0.30-0.56.
+Tone (A0), mean D on the exposed painted walls, by E: E 0: 0.00-0.02; E 10.75: 0.08-0.18; E 14.5: 0.13-0.26; E 19.8: 0.19-0.38; E 27.1: 0.30-0.56.
 
 Coverage (A1), share of the exposed painted wall at or above each tier of D_local, by E:
 
 | Tier | E 0 | E 10.75 | E 14.5 | E 19.8 | E 27.1 |
 |---|---|---|---|---|---|
-| T2+ | 0-0.16 | 0.3-0.62 | 0.35-0.68 | 0.5-0.82 | 0.7-0.96 |
-| T3+ | 0-0.05 | 0.1-0.3 | 0.15-0.38 | 0.3-0.56 | 0.55-0.86 |
-| T4+ | 0-0.035 | 0.03-0.1 | 0.05-0.14 | 0.12-0.26 | 0.3-0.6 |
-| T5+ | 0-0.025 | 0.008-0.04 | 0.015-0.06 | 0.035-0.11 | 0.12-0.35 |
-| T6+ | 0-0.006 | 0-0.012 | 0.002-0.02 | 0.004-0.035 | 0.04-0.2 |
+| T2+ | 0-0.16 | 0.18-0.4 | 0.3-0.62 | 0.42-0.78 | 0.7-0.96 |
+| T3+ | 0-0.05 | 0.05-0.18 | 0.1-0.3 | 0.2-0.45 | 0.55-0.86 |
+| T4+ | 0-0.035 | 0.012-0.06 | 0.03-0.1 | 0.07-0.2 | 0.3-0.6 |
+| T5+ | 0-0.025 | 0.003-0.02 | 0.008-0.04 | 0.02-0.08 | 0.12-0.35 |
+| T6+ | 0-0.006 | 0-0.006 | 0-0.012 | 0.004-0.03 | 0.04-0.2 |
 
-A1: share of the exposed painted wall at or above each tier of D_local (T2+ ... T6+), by preset; interpolate in E. Anchors: U, round-7 'Light' (picked for a moderately kept block) measured T3+ 0.16, T4+ 0.057, T5+ 0.025; P, ordinary photo walls median T3+ 0.52, T4+ 0.09, T5+ 0.034 (range 0.08-0.66, 0.05-0.25, 0.02-0.12), heavily stained walls T3+ 0.88-0.98, T4+ 0.63-0.96; U, round-7 Neglected (0.49, 0.24, 0.087) was 'not heavy enough'. The New band allows the material's own variation. Round F: re-measured with D_local on the weathering alone; round-7 'Light' then reads 0.35 / 0.13 / 0.041 / 0.011 / 0.001 (inside Kept), round-7 'Medium' 0.64 / 0.44 / 0.17 / 0.039 / 0.004 (Worn's T5+ and T6+ lower bounds moved to 0.035 and 0.004 to hold it), round-7 Neglected 0.76 / 0.52 / 0.25 / 0.072 / 0.011 (still below Neglected: 'not heavy enough').
+A1: share of the exposed painted wall at or above each tier of D_local (T2+ ... T6+), by preset; interpolate in E. Anchors: U, round-7 'Light' (picked for a moderately kept block) measured T3+ 0.16, T4+ 0.057, T5+ 0.025; P, ordinary photo walls median T3+ 0.52, T4+ 0.09, T5+ 0.034 (range 0.08-0.66, 0.05-0.25, 0.02-0.12), heavily stained walls T3+ 0.88-0.98, T4+ 0.63-0.96; U, round-7 Neglected (0.49, 0.24, 0.087) was 'not heavy enough'. The New band allows the material's own variation. Round F: re-measured with D_local on the weathering alone; round-7 'Light' then reads 0.35 / 0.13 / 0.041 / 0.011 / 0.001 (inside Kept), round-7 'Medium' 0.64 / 0.44 / 0.17 / 0.039 / 0.004 (Worn's T5+ and T6+ lower bounds moved to 0.035 and 0.004 to hold it), round-7 Neglected 0.76 / 0.52 / 0.25 / 0.072 / 0.011 (still below Neglected: 'not heavy enough'). Round G: the user picked the Kept image as the default street block (35 years, upkeep 0.9) on the front and on the 1:1 top floors, so Typical takes Kept's round-F bands; Kept is about 0.6x; Worn between Typical and Neglected; Neglected unchanged ('about right').
 
 ## Rules
 
@@ -72,9 +72,9 @@ Origins: U the user's review notes, P measured on the reference photos, L buildi
 
 **A4. Presets order at every tier**
 
-- Measure: composite tier coverage across the presets new < kept < typical < worn < neglected
-- Pass: strictly increasing at T1+..T5+ (ties allowed only where both are below 0.001)
-- Origin: C
+- Measure: composite tier coverage across the presets new < kept < typical < worn < neglected; and the ground band: base excess (bottom 1 m over the wall mean, minus 1) per preset, as steps over its New-to-Neglected range
+- Pass: strictly increasing at T1+..T5+ (ties allowed only where both are below 0.001); ground band steps <= 0.45 of the range, the New-to-Kept step <= 0.30
+- Origin: C; U (round F: 'the jumps between the steps for the ground level could be more subtle')
 
 
 ### Opacity
@@ -153,9 +153,9 @@ Origins: U the user's review notes, P measured on the reference photos, L buildi
 
 **F3. Darker base**
 
-- Measure: mean D in the bottom 1 m of each wall over the wall mean
-- Pass: >= 1.30 when E >= 8
-- Origin: P (photo walls 1.3-2.0); L (splash, damp, soil)
+- Measure: mean D of the dirt (damage, cracks, crack repairs and edges left out) in the bottom 1 m of each wall over the wall mean
+- Pass: >= 1.15 when 8 <= E < 13; >= 1.30 when E >= 13
+- Origin: P (photo walls 1.3-2.0); L (splash, damp, soil); U (round F: the ground band should come in gently)
 
 **F4. North and damp faces grow more**
 
@@ -168,7 +168,7 @@ Origins: U the user's review notes, P measured on the reference photos, L buildi
 
 **G1. Streaks start at a feature**
 
-- Measure: share of streak marks whose top lies within 0.15 m below a source pixel (ledge drip line, sill end, opening corner, fixing, joint, chip, top edge)
+- Measure: share of streak marks whose top lies within 0.15 m below a source pixel (ledge and slab drip line, the drip edge under copings and roof props, joint crossings, sill end, opening corner, fixing, joint, chip, top edge)
 - Pass: >= 0.95
 - Origin: P (review 31: every streak in 17 photos starts at a feature); L
 
@@ -189,6 +189,18 @@ Origins: U the user's review notes, P measured on the reference photos, L buildi
 - Measure: share of the algae layer's darkening in the wet zone: the bottom 1.5 m, within 0.8 m below a water source (tops, sill ends, corner heads, fixings, joints, stain and streak marks), or in a joint
 - Pass: >= 60 % wherever algae covers >= 0.2 % of a plane at T2+
 - Origin: U ('growth and algae/mold stains from the water'); L (algae needs standing or running water; it starts at the foot, under drips and in joints)
+
+**G5. Seam crossings collect a little more**
+
+- Measure: where a horizontal and a vertical joint cross: mean D on the joint pixels within 4 cm of the crossing over the joint pixels 0.2-0.6 m from it, per plane
+- Pass: in [1.15, 2.0] wherever the streak amount is 0.2 or more
+- Origin: U (round F: 'the intersecting corners where seams cross could use a little more. Just a tiny adjustment, don't overdo it'); L (water meets and pauses where joints cross); round F measured 1.02-1.07
+
+**G6. No accidental lattice**
+
+- Measure: per plane, axis and map (soiling, stains, streaks, base, growth, D) on painted wall: the edge-energy profile's periodogram over its running median; the harmonic sum over the first 8 harmonics for periods of 16-600 px, the building's own rhythm (floor pitch, twice it, bay pitch, the 1.8 m scaffold lift, the peaks of the wall's feature map with its joints) left out; a layer is scanned on an axis only where it spans a third of it
+- Pass: the largest harmonic sum <= 9
+- Origin: U (round F: the grime reads as a grid); roundG/research/grid-breakup.md 5.1-5.2 (tile-free controls 4.0-7.9; round F's soiling 12.8 from the 3.6 m material tile; measured here 13.5-26 on round F's fronts)
 
 
 ### Separability
@@ -211,6 +223,18 @@ Origins: U the user's review notes, P measured on the reference photos, L buildi
 - Pass: median >= 0.03
 - Origin: U
 
+**H4. Long streaks, some near the whole height**
+
+- Measure: per wall of 3 storeys or more: the longest vertical run of the streak layer at T2+ (gaps under 0.6 m bridged: slabs, windows) as a share of the wall height; distinct runs of 3 m or more per 25 m of width
+- Pass: reach >= 0.35 + 0.40 x the streak amount; runs >= 1 + 3.5 x the amount per 25 m; from amount 0.25
+- Origin: U (round F: 'more long vertical streaks', 'some near-whole building long streaks', 'some areas channel water more than others'); round F reached 0.22-0.61 of the wall with 0.6-3.6 runs per 25 m
+
+**H5. Some streaks much darker (layering)**
+
+- Measure: streak-layer marks 0.3 m tall or more: the 90th percentile of their mean D over the median
+- Pass: >= 1.8 (20 marks or more, from amount 0.25)
+- Origin: U (round F: 'get darker (just some of them, not all, remember layering)'); round F measured 1.41-1.47; C (1.8)
+
 
 ### Colour
 
@@ -225,6 +249,12 @@ Origins: U the user's review notes, P measured on the reference photos, L buildi
 - Measure: number of layers covering >= 0.3 % of the wall at T2+ (or, for lightening layers, lighter than T1)
 - Pass: >= 3 at E >= 10, >= 5 at E >= 19, >= 7 at E >= 25 (soiling, streaks, stains, base, bio, rust, efflorescence, washed, fading, repaint, peeling, cracks)
 - Origin: U ('more varied wear, discoloration beyond just staining, growth and algae/mold stains')
+
+**I3. Weathering varies in colour like the reference walls**
+
+- Measure: weathered pixels (D_local >= T3 on 4 cm blocks, growth and rust left out) on painted wall: the spread of their Lab shift against clean, the share shifted by 1.5 or more, and the spread between marks of 0.5 m or more, per wall; from E 10
+- Pass: spread 0.9-4.0; non-neutral share 0.12-0.80; mark-to-mark spread >= 0.2 where there are three marks or more
+- Origin: U (round F: more colour variety, calibrated on the photos); P (five ordinary photo walls: spread 1.2-3.9 over a clean-wall noise of 0.65-0.99, so 1.0-3.8 above noise; non-neutral 0.21-0.75 over a noise of 0-0.13; marks 0.2-0.84); round F's builds 0.24-0.89
 
 
 ### Material
@@ -258,7 +288,7 @@ Origins: U the user's review notes, P measured on the reference photos, L buildi
 
 **K3. Edges first, clustered around a centre**
 
-- Measure: share of chips centred within 10 cm of an exposed edge; share of chip area inside hotspot clusters (the rest is background chipping); chip size against distance from its hotspot centre, within each hotspot (median over hotspots with 6 or more satellites)
+- Measure: share of chips centred within 10 cm of an exposed edge; share of chip area inside hotspot clusters (the rest is background chipping); chip size against distance from its hotspot centre, within each hotspot (median over hotspots with 6 or more satellites) (edge-damage clusters and background chips; delamination spalls follow K5 and K6)
 - Pass: >= 0.80; 0.70-0.90; Spearman rho <= -0.3
 - Origin: L; U (round B: damage radiates from a centre)
 
@@ -267,6 +297,48 @@ Origins: U the user's review notes, P measured on the reference photos, L buildi
 - Measure: on the break coverage map, radial profiles (16 rays) across the outline of every break of 3 px radius or more, plane cuts left out: the width of the 0.9 to 0.1 ramp; inside breaks of 4 cm radius and up, the relative std of the albedo's 1.5 px high-pass; their median depth
 - Pass: median ramp <= 2 px (4 cm at 50 px/m); texture >= 0.035; depth 0.8-4.5 cm
 - Origin: L (a fracture edge is sharp at millimetre scale; a spall goes to the cover concrete, 2-4 cm, and shows aggregate); lead review, round F: at amount 0.75 the large breaks read as soft smudges (ramp 4.25 px, no depth)
+
+**K5. Spalled area by amount**
+
+- Measure: share of the wall (paint and concrete) under a break (coverage >= 0.5)
+- Pass: 0.01-0.1 % at 0.25, 0.1-0.5 % at 0.5, 0.5-3 % at 0.75, 3-10 % at 1.0 (linear between)
+- Origin: U (round F: derelict at 1.0); L (roundG/research/cracks-edges-damage.md S1: 3.7-9.9 % at 75 years unmaintained); round F reached 0.54 % at 1.0
+
+**K6. Spalls start at edges**
+
+- Measure: spalls 30 mm across or more: share within 150 mm of an arris
+- Pass: >= 50 %
+- Origin: L (roundG/research/cracks-edges-damage.md S5: corners, slab noses, sills, parapet tops)
+
+**K7. Cracks from hairline to pattern cracks**
+
+- Measure: crack length per m2 of wall (width >= 0.05 mm), of cracks >= 0.3 mm, and the median width, pooled over exposed walls
+- Pass: length 0.2-0.6 / 0.5-1.2 / 1.0-2.0 / 1.5-3.5 m per m2 at 0.25 / 0.5 / 0.75 / 1.0; >= 0.3 mm 0.03-0.15 / 0.15-0.4 / 0.3-0.8 / 0.6-1.5; median 0.1-0.2 mm at 0.25 to 0.3-0.6 mm at 1.0 (linear between)
+- Origin: U (round F: 'cracks from hairline to pattern cracks'); L (roundG/research/cracks-edges-damage.md C1, C2, C4); round F had about 0 m per m2 (no opening corners reached the crack layer)
+
+**K8. Cracks run mostly vertical**
+
+- Measure: length-weighted crack orientation, pattern cracks left out
+- Pass: vertical 40-65 %, diagonal 20-40 %, horizontal 10-25 %
+- Origin: L (roundG/research/cracks-edges-damage.md C7)
+
+**K9. Diagonal cracks start at opening corners**
+
+- Measure: share of diagonal crack length within one opening width of an opening corner
+- Pass: >= 70 %
+- Origin: L (roundG/research/cracks-edges-damage.md C8: 45 deg cracks from window corners)
+
+**K10. Cracks read through what they carry**
+
+- Measure: median delta L* of the 1 px crack line against the wall around it, by width class (repaired cracks left out)
+- Pass: hairline (< 0.2 mm) <= 3; 0.2-0.5 mm 3-8; 0.5-1 mm 5-10; >= 1 mm 8-20
+- Origin: L (roundG/research/cracks-edges-damage.md C19 and 3.1: at 20 mm/px a crack shows through its halo, not its opening)
+
+**K11. Repaired cracks**
+
+- Measure: share of the length of cracks >= 0.3 mm under a repair stripe
+- Pass: 50-90 % at 0.25, 30-60 % at 0.5, 20-50 % at 0.75, 10-40 % at 1.0
+- Origin: L (roundG/research/cracks-edges-damage.md C23: U-cut and injected repairs on repainted danchi)
 
 
 ### Controls
@@ -282,6 +354,102 @@ Origins: U the user's review notes, P measured on the reference photos, L buildi
 - Measure: between sweep steps: share of the plane where |delta D| >= 0.01, and mean |delta D| there
 - Pass: each step changes >= 2 % of a plane by >= 0.01 (or half the layer's own T2+ area if that is smaller), with a mean change >= 0.02
 - Origin: U ('I can't see a difference')
+
+**L3. Each step of a control looks as big as the last**
+
+- Measure: per detail control over its steps above 0 (not damage, which K2 checks): the ratio between steps of the layer's mean D, and of its coverage at the frontier tier (the lowest tier under half the wall at the first step shown), while that coverage is under half the wall
+- Pass: largest ratio over smallest: <= 1.5 for the mean, <= 1.4 for the coverage
+- Origin: U (round F: stains 'the jump to 0.5 is pretty strong, but the jump to 0.75 and 1 feel smaller'; grime 'maybe 0.4 to 0.5 the jump is smaller than 0.3 to 0.4'); round F's stain sweep measured 1.88 and 1.71
+
+**L4. The control's top step is strong**
+
+- Measure: at a sweep's last step (1.0): the layer's share of the exposed walls at T2+ and at T4+
+- Pass: streaks: >= 0.035 at T2+ and >= 0.012 at T4+
+- Origin: U (round F: 'Even the last is too weak... 1.00/100% should be more intense'); round F's 1.0 measured 0.023 and 0.008
+
+
+### Growth
+
+**M1. Light growth is a tint, not grey**
+
+- Measure: growth pixels at T2-T3 (growth making most of the darkening) against clean: b* and a* shift per 0.1 of D; the share in a dull or rusty-yellow family (a* +0.3 or more, b* +3 or more per 0.1 D) and in the dirt band (b* <= +0.8)
+- Pass: b* +2.5 to +7.0 per 0.1 D; green family a* -3.0 to -0.4 per 0.1 D; yellow family 10-45 %; dirt band <= 10 %
+- Origin: U (round F: 'weaker growth should have a lighter green or very dull or rusty yellow look'); L (roundG/research/organic-growth.md O1: +4.4 to +5.5 b* and -1.5 to -1.9 a* per 0.1 D)
+
+**M2. Severe growth is dark green or rust brown**
+
+- Measure: the darkest growth (growth's own darkening >= 0.55, N, E and W walls; south walls grow moulds, O8): black share (C* < 8); of the rest, C* 10-26, hue 95-135 deg (green) or 40-75 deg (rust), and the darkest quarter's L*; from 2000 pixels
+- Pass: black <= 35 %; chroma band >= 75 %; hue band >= 75 %; 25th percentile of L* <= 50
+- Origin: U (round F: 'the visibly dark green/rust brown look that severe growth has'); L (roundG/research/organic-growth.md O2)
+
+**M3. Growth sits where water stays**
+
+- Measure: pooled over exposed walls: share of growth (T2+) in damp and wet zones (W2-W3, wetness >= 0.40) and in sunny open wall (W0, < 0.15)
+- Pass: >= 70 % in W2-W3 while growth covers under 5 %, >= 50 % at 5-20 %; W0 <= 10 %
+- Origin: U (round F: corners, divots, edges, below ledges); L (roundG/research/organic-growth.md O4)
+
+**M4. Plinth belt**
+
+- Measure: N, E and W walls: mean growth darkening in the bottom 0.3 m over the open wall (wetness < 0.4, not under another ledge or joint) 0.5-1.5 m above the foot; from 2 years of growth
+- Pass: >= 3.0
+- Origin: L (roundG/research/organic-growth.md O5: belt 5-30 cm, splash zone 30 cm)
+
+**M5. Time unattended adds area grown from the old patches**
+
+- Measure: the growth control's steps: growth area (T2+) ratio, the share of the added darkening on newly covered pixels, the share of old growth kept
+- Pass: area x >= 1.25 while W2-W3 are under 85 % covered; new share >= 50 %; kept >= 95 %
+- Origin: U (round F: 'algae and mold tend to grow outwards like tendrils or blobs, they don't merely get darker'); L (roundG/research/organic-growth.md O9)
+
+**M6. Ragged fronts, not smooth blobs**
+
+- Measure: growth patches (T2+) of 60 px or more on walls where growth covers 3 % or more: perimeter-area dimension (2 x the slope of log perimeter on log area)
+- Pass: 1.10-1.45
+- Origin: U ('tendrils or blobs'); L (roundG/research/organic-growth.md O12; box counting misread sparse patches, so the perimeter-area form)
+
+**M7. Onset by wetness class**
+
+- Measure: growth (T2+) cover of each wetness class's area at the build's years unattended (3.7, 5.9, 10.2, 22 years at growth amounts 0.25-1.0, log-linear between)
+- Pass: W3 >= 15 % from 1 year and >= 50 % from 3; W2 >= 10 % from 3 years and >= 30 % from 8; W1 >= 3 % from 8 years; W0 <= 5 % up to 15 years; no class over its ceiling (W0 0.30, W1 0.60, W2 0.90, W3 0.95) + 0.03
+- Origin: L (roundG/research/organic-growth.md O11 and 3.3: onset, time scale and ceiling per class from field timings)
+
+**M8. Fronts grow outward**
+
+- Measure: the growth control's steps: new growth (T2+) within 0.3 m of the previous step's growth (front growth) and farther away (new patches)
+- Pass: front growth >= 70 %; new patches 5-30 %
+- Origin: U ('grow outwards'); L (roundG/research/organic-growth.md O10)
+
+
+### Edges
+
+**N1. Edges show at 0.25**
+
+- Measure: the edge layer's mean |delta L*| on the 1 px edge row (painted wall)
+- Pass: 3-6 at 0.25, 4-8 at 0.5, 6-11 at 0.75, 7-14 at 1.0
+- Origin: U (round F: edge wear and discoloration visible at 0.25); L (roundG/research/cracks-edges-damage.md E9 and 5.5: at 20 mm/px visibility comes from the edge row, not a bevel)
+
+**N2. The edge band is broken at 0.25, near continuous at 1.0**
+
+- Measure: share of edge length with the edge layer's |delta L*| >= 2
+- Pass: 40-70 % at 0.25 to 85-100 % at 1.0 (linear between)
+- Origin: L (roundG/research/cracks-edges-damage.md E8)
+
+**N3. Visible chips**
+
+- Measure: chips 20 mm across or more per m of edge
+- Pass: 0.04-0.15 at 0.25 to 0.5-1.5 at 1.0 (linear between)
+- Origin: L (roundG/research/cracks-edges-damage.md E6)
+
+**N4. Chips cluster**
+
+- Measure: chip counts in 0.5 m windows along the edges: variance over mean (20 chips or more)
+- Pass: >= 1.2
+- Origin: L (roundG/research/cracks-edges-damage.md E5)
+
+**N5. Tops lighter, drip edges darker and warmer**
+
+- Measure: the edge layer's mean delta L* on top edges and on drip and lower edges; the b* shift on the drip edges
+- Pass: tops lighter (> 0); drip edges darker (< 0) with b* +1 to +4
+- Origin: L (roundG/research/cracks-edges-damage.md E9: tops chalked and rain-washed; drip edges dirt)
 
 ## Revisions
 
@@ -312,6 +480,20 @@ Each change to a rule after it was first written, with the evidence for it.
 - **K4**: new: breaks have a sharp outline, a rough exposed floor and depth. The round-F damage sweep passed every rule while its large breaks were soft blobs (a falloff over half the radius) and its sub-pixel chips a row of equal 1 px dots. Under K4 the generator draws breaks as jagged polygons stretched along their edge with a 1 px edge, recessed 1-4 cm, sub-pixel chips as area coverage.
 - **K3**: size against distance measured within each hotspot (median rho), was pooled over all. Hotspot sizes now follow a power law (references: most hotspots are runs of 0.5-3 cm bites, a few are shell breaks); pooled, a big hotspot's large far satellites against a small one's small near ones make a between-hotspot trend (rho -0.25 to -0.29) that hides the decline inside each (-0.74 to -0.81).
 - **L1**: for damage a step has some of the layer at any break area (was 0.2 % of the wall). Realistic chipping is sparse: at amount 0.25 the breaks cover 0.04 % of the facade (1.5 m2 on the building) and grow x3.6, x2.4, x2.2 per step (K2); the 0.2 % floor was set for continuous layers.
+- **A0, A1 (tone and coverage tables)**: Typical takes Kept's round-F bands; Kept about 0.6x; Worn between Typical and Neglected; Neglected unchanged. Round F: asked which image is the default street block (35 years, upkeep 0.9), the user picked Kept on the south front and on the 1:1 top floors; Neglected was 'about right'.
+- **F3**: 1.15 below E 13 (was 1.30 from E 8). Round F: 'the first jump from New to Kept has some excessive wear and ground level staining'; the photo walls (1.3-2.0) are older walls.
+- **A4**: adds the ground band's steps across the presets. Round F: 'the jumps between the steps for the ground level could be more subtle'.
+- **G5, H4, H5, L4**: new: seam crossings, long streaks and channels, a darker subset of streaks, a strong top step. Round-F review of the streaks ('even the last is too weak', 'more long vertical streaks', 'near-whole building long streaks', 'attention to intersecting corners'); every threshold sits between round F's measured values and the new generator's.
+- **L3**: new: even steps. Round F: the stain control's jumps shrank (x2.7, x1.8, x1.6 at T2+); the stain amount now adds sites on a perceptual curve (x2.8, x2.5, x2.4).
+- **M1-M8**: new family: organic growth. Round-F review of the growth (dark green and rust brown when severe, light green or dull yellow when weak, grows outward); bands from the growth research (O1-O12).
+- **N1-N5**: new family: edges. Round-F review: edge wear and discoloration visible at 0.25, as its own rule set; bands from the edges research (E5-E9).
+- **K5-K11**: new: spalled area, spall placement, crack density and widths, orientation, corner cracks, visibility, repairs. Round-F review: cracks from hairline to pattern cracks, spalls exposing aggregate, derelict at 1.0; bands from the damage research (S1, S5, C1-C23).
+- **I3**: new: colour variety. Round-F review: more colour variety, calibrated on the photo walls.
+- **G6**: new: no accidental lattice. Round-F review: the grime read as a grid; the 3.6 m material tile printed into the dirt.
+- **G1**: sources include the slab drip lines. The rule names ledge drip lines; the source map lacked them, so channel streaks below slabs counted as unsourced.
+- **K3**: measured on edge-damage clusters. Delamination spalls (round G) are spread by K5/K6, not clustered round a hotspot.
+- **F3**: measured on the dirt. At damage 1.0 spalls and cracks cover the whole wall and lift its mean; the rule is about splash and ground dirt.
+- **D_local**: arris rows and the edge layer left out. A chalked 1 px top arris raised the 'brightest 10 cm patch' reference, so every pixel near an edge read darker (T2+ 0.43 to 0.89 on one build).
 
 ## Running the gate
 
