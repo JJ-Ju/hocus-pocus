@@ -45,6 +45,13 @@ COL = {
     "bio_dry": (0.52, 0.42, 0.22),          # dry film: lighter, less chromatic, hue toward 90 deg (research 4)
     "bio_dry_g": (0.482, 0.431, 0.219),     # dry green film: L 71, hue 99 deg (from 103-115)
     "bio_dry_r": (0.566, 0.405, 0.220),     # dry rusty film: L 71, hue 81 deg (from 62-77)
+    "bio_Y1": (0.568, 0.403, 0.179),        # young yellow growth, lichen-like: L 71, a* +3, b* +31 (round H)
+    "bio_Y3": (0.412, 0.262, 0.090),        # established ochre-yellow: L 60, a* +5, b* +34
+    "bio_Y4": (0.221, 0.142, 0.053),        # old yellow growth, dark ochre-olive: L 46, a* +4, b* +26
+    "film_g": (0.078, 0.184, 0.063),        # dark green marks (mildew and algae in the run-off): L 46, a* -24, b* +22
+    "film_g_old": (0.036, 0.085, 0.033),    # older: darker green, L 32, a* -18, b* +15 (darkens with age)
+    "film_y": (0.558, 0.429, 0.157),        # yellow-ochre marks: L 72, a* -1, b* +36 (hue 92 deg: yellow, not rust)
+    "film_y_old": (0.452, 0.314, 0.103),    # older, deeper: L 64, a* +2, b* +36
     "rust": (0.24, 0.105, 0.042),
     "efflorescence": (0.78, 0.78, 0.75),
     "substrate": (0.51, 0.51, 0.495),
@@ -62,7 +69,7 @@ AUTO = {
     "streaks": [0.0, 0.30, 0.42, 0.62, 0.85],
     "stains": [0.0, 0.15, 0.25, 0.48, 0.85],         # Typical at the user's stain pick (round F)
     "base": [0.0, 0.15, 0.28, 0.55, 0.92],           # the ground band comes in gently (round F)
-    "bio": [0.0, 0.10, 0.20, 0.55, 0.85],            # growth: years unattended = bio_years(a): 1.5, 3, 6.6, 14
+    "bio": [0.0, 0.25, 0.40, 0.60, 0.85],            # growth: years unattended = bio_years(a): 3.1, 4.5, 7.1, 14 (round H: more green)
     "washed": [0.0, 0.08, 0.12, 0.22, 0.40],
     "film_k": [0.0, 0.55, 0.62, 0.85, 1.15],         # local contrast of the soiling film's water pattern
 }
@@ -80,10 +87,22 @@ AUTO_A = {
 RULES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "weather_rules.json")
 
 
+CLOCK_PHASE = 0.665         # share of its repaint cycle a building is through, on average (round H)
+CLOCK_KEEP = 0.17           # share of the dirt that each repaint leaves in the coat (round H)
+
+
 def clock(age, upkeep):
+    """The soiling clock: (R, E). The repaint cycle runs 7 years at upkeep 1 and 24 at 0. A building
+    is on average CLOCK_PHASE of the way through it, R years since the last repaint, and CLOCK_KEEP
+    of the dirt survives each repaint: E = R + CLOCK_KEEP x (age - R).
+
+    Round H: rounds F and G both had the user pick the next-cleaner preset as the 35-year default.
+    The old clock took R at the cycle's end with 0.22 kept, which made every age look one level too
+    weathered. The new constants put 35 years at upkeep 0.9 on the old Kept look (E 10.75), upkeep
+    0.5 on the old Typical (14.5) and 45 years at 0.12 on the old Worn (19.8), the user's rename."""
     cycle = 24.0 + (7.0 - 24.0) * upkeep
-    r = min(age, cycle)
-    return r, r + 0.22 * (age - r)
+    r = min(age, CLOCK_PHASE * cycle)
+    return r, r + CLOCK_KEEP * (age - r)
 
 
 def auto_amounts(cfg):
@@ -98,10 +117,8 @@ def auto_amounts(cfg):
     for k, v in cfg.get("override", {}).items():
         a[k] = v
     ov = cfg.get("override", {})
-    if "damage" in ov:                      # the damage control: cracks and rust with it (round G)
-        for k in ("cracks", "rust"):
-            if k not in ov:
-                a[k] = ov["damage"]
+    if "damage" in ov and "cracks" not in ov:   # the damage control carries the cracks (round G); rust is
+        a["cracks"] = ov["damage"]              # its own control from round H
     return R, E, a
 
 
@@ -913,6 +930,7 @@ FOOT_SPLASH = 0.8           # soiling added at the foot
 FOOT_DECAY = 1.0            # over which it fades (m)
 CH_MAIN_OP, CH_MAIN_W = 0.45, 0.5  # its opacity (no dark subset) and width factors
 B2_MARGIN = 0.025           # the solver's last check wants B2 this far inside its thresholds
+MATCH_TOL = (0.03, 0.05, 0.20)   # a matched seed's bands around the first seed: tone, T2+-T4+, T5+-T6+ (A5)
 J2_MIN = 0.255              # and J2 (a) at least this (the gate needs 0.25)
 CH_MID = 0.5                # share of ordinary channels starting at a floor line on wet walls (amount 0.4-0.55 ramp)
 CAP_WET = 0.0               # on wet walls (amount 0.4-0.55 ramp) runs stop short more often and shorter
@@ -937,6 +955,59 @@ LOAD_DECAY_M = 7.0          # metres of run-off over which the carried dirt fall
 CK_TL_EXP = 0.6             # the film pattern's strength follows the tone (load) to this power
 C_ANISO = (1.0, 1.0)        # the cause field's correlation (vertical, horizontal); 1.6 vertical was tried in T79
 HGT_RAIN = (0.80, 0.60, 2.0)   # driven rain on the tone: a + b x height ** c
+
+
+SOIL_LIGHT = (14.5, 1.0, 2.0)    # (E0, q, cap): under the Worn clock the coat and the grain keep their strength (round H)
+
+
+def light_grain(E):
+    """How much stronger the coat's texture and the dust grain are, relative to the film, under a
+    light load. The coat's micro-relief fills with dirt first, so on a lightly soiled wall the film
+    sits in the coat and the fine grain is set early: below the Worn clock E0, where the film gets
+    thick enough to bury the coat's texture, both keep their absolute strength, their relative
+    amplitude growing as (E0 / E) ** q, capped (Kept 2.0, Typical 1.35). 1 at E0 and above
+    (B3: a light film is not a flat tint; J2: it follows the material)."""
+    e0, q, cap = SOIL_LIGHT
+    if E >= e0:
+        return 1.0
+    return float(min(cap, (e0 / max(E, 1e-3)) ** q))
+
+
+FOOT_TEX = (0.45, 0.8)      # splash zone (round H, B2): reach variation along the wall, coat exponent of its texture
+FOOT_ALONG = 0.8            # the splash zone heavier along some stretches than others (S2-S4, log amplitude)
+FOOT_TEX_AMP = 0.8          # the texture's strength in the splash zone, relative (mean kept)
+FOOT_CORE = (0.25, 0.6, 0.9)   # the splash core: decay (m), strength, its specks' grain exponent; after the saturation
+FOOT_CORE_E = (12.0, 20.0)  # the splash zone's reach, texture and core: full up to this clock E, gone at the second
+
+
+def foot_gain(E):
+    """The splash zone's extra structure by the soiling clock: full on light and moderate walls,
+    where it stands out from the wall above; fading out on heavily soiled ones, where the lower
+    storey is dark already (and the darkest tier, A1 T6+, has no room)."""
+    a, b = FOOT_CORE_E
+    return float(np.clip((b - E) / (b - a), 0.0, 1.0))
+
+
+def foot_splash(plane, F, sh, E):
+    """The splash zone's reach and textures. Splash-back reaches higher in places (a ragged top,
+    S4-S6 along the wall) and sits in the coat: more where the coat is rough or thin, a texture
+    that follows the material (J2). Its core, the bottom 25 cm, is soil-splash specks and short
+    drips in that coat (the deposits' own grain). Both have mean 1, so the zone's average soiling
+    is unchanged by them and only its inside varies (B2: large marks have an inner pattern; at the
+    Typical clock the foot bands were most of B2's large marks)."""
+    ppm, W = plane["ppm"], sh[1]
+    a_r, g_c = FOOT_TEX
+    gain = foot_gain(E)
+    rag = nz.fbm((1, W), ppm, [4, 5, 6], F.key + ("footrag",))[0]
+    reach = FOOT_DECAY * np.clip(1.0 + a_r * gain * rag, 0.35, 2.2)[None, :]
+    m = plane["mask"]
+    mc = 1.0 + 0.35 * (F.mat - 1.0)
+    tex = (mc / max(float(mc[m].mean()), 1e-6)) ** g_c
+    tex = tex * np.exp(FOOT_ALONG * nz.fbm((1, W), ppm, [2, 3, 4], F.key + ("footalong",))[0])[None, :]   # heavier stretches
+    tex = tex / max(float(tex[m].mean()), 1e-6)
+    spk = tex * F.acctex ** FOOT_CORE[2]                   # the core: soil-splash specks and short drips in the coat
+    spk = spk / max(float(spk[m].mean()), 1e-6)
+    return reach.astype(F32), tex.astype(F32), spk.astype(F32), gain
 
 
 def soiling_field(plane, F, cfg, E):
@@ -978,24 +1049,32 @@ def soiling_field(plane, F, cfg, E):
     dirtwash = 1.0 + (1.5 * (1 - late) + 0.5) * F.chan * load / 0.55
     whitewash = 1.0 - 0.55 * late * F.chan * flow
     mac = F.macro ** 0.8
+    footw = None
     if plane.get("ground_row") is not None:                   # the splash zone is never cleaner than the wall
         hf = (foot_rows(plane)[None, :] - np.arange(sh[0])[:, None]) / plane["ppm"]
         wf_ = np.clip(1.0 - hf / 1.5, 0.0, 1.0)
         mac = mac * (1.0 - wf_) + np.maximum(mac, 1.0) * wf_
-        mac = mac * (1.0 + FOOT_SPLASH * np.exp(-np.clip(hf, 0.0, None) / FOOT_DECAY))   # splash and soil at the foot (F3)
+        reach, ftex, fspk, fg = foot_splash(plane, F, sh, E)
+        footw = np.exp(-np.clip(hf, 0.0, None) / reach)          # the splash zone: 1 at the foot, fading up
+        mac = mac * (1.0 + FOOT_SPLASH * footw)                   # splash and soil at the foot (F3), ragged reach
     tone = g * phys * mac                                      # smooth: sets the greying (A0)
     m = plane["mask"]
     tm = max(float(tone[m].mean()), 1e-6)
     tone = 1.8 * tm * np.tanh(tone / (1.8 * tm))               # stacked exposure factors saturate gently
+    if footw is not None and fg > 0:                           # the splash zone's texture and core, after the saturation (B2)
+        core = np.exp(-np.clip(hf, 0.0, None) / FOOT_CORE[0])    # soil splash and damp: darkest low down
+        tone = tone * (1.0 + fg * FOOT_TEX_AMP * footw * (ftex - 1.0)) * (1.0 + fg * FOOT_CORE[1] * core * fspk)
     mat = F.mat / max(float(F.mat[m].mean()), 1e-6)
     tn = tone / max(float(tone[m].mean()), 1e-6)
-    kg = 0.20 * np.clip(tn, 0.2, 5.0) ** -0.4                 # dust grain: a light film is grainy (B3)
+    lg = light_grain(E)
+    kg = 0.20 * np.clip(tn, 0.2, 5.0) ** -0.4 * lg            # dust grain: a light film is grainy (B3)
     # the material's response: coat strength and laps, a thin coat chalks and holds more dirt,
     # the joints hold dirt (grooves and the lip below)
     F.matresp = ((1.0 + 0.35 * (mat - 1.0)) * (1.0 + 0.06 * F.zc) * (1.0 + 1.6 * F.jd)).astype(F32)
     mc = 1.0 + 0.35 * (mat - 1.0)
     F.matcoat = (mc / max(float(mc[plane["mask"]].mean()), 1e-6)).astype(F32)   # the coat's own response, mean 1
-    tone = tone * (1.0 + kg * (F.grain - 1.0)) * F.matresp                    # grain, material: always
+    coat = (1.0 + 0.35 * (mat - 1.0)) * (1.0 + 0.06 * F.zc)
+    tone = tone * (1.0 + kg * (F.grain - 1.0)) * coat ** lg * (1.0 + 1.6 * F.jd)   # grain, coat (stronger on a light film), joints
     zm = (1.0 + 0.35 * (mat - 1.0)) * (1.0 + 0.06 * F.zc)
     zm = np.clip((zm - float(zm[m].mean())) / max(float(zm[m].std()), 1e-6), -2.5, 2.5)
     # water pattern, contrast solved (k); deposits follow the coat (rough or thin coat holds more)
@@ -1101,13 +1180,18 @@ def arrival_time(cost, T, n_iter=6, down=0.6, up=2.0):
 
 BIO_W = np.array([0.08, 0.27, 0.55, 0.85])      # class centres on the wetness map: W0 sunny, W1 shaded open, W2 damp, W3 wet
 BIO_EDGES = (0.15, 0.40, 0.70)                   # class edges
-BIO_TL = np.array([6.0, 3.0, 1.0, 0.3])          # onset (years), growth research 3.3
+BIO_TL = np.array([6.0, 3.5, 1.0, 0.3])          # onset (years), growth research 3.3; W1 3.0 -> 3.5 in round H (M3 at 5.7 y)
 BIO_TAU = np.array([40.0, 15.0, 5.0, 1.5])       # time scale (years)
 BIO_XMAX = np.array([0.30, 0.60, 0.90, 0.95])    # the most of a class's area ever covered
-BIO_STEPS = ([0.25, 0.5, 0.75, 1.0], [3.7, 5.9, 10.2, 22.0])   # the control: years at its steps (even steps, L3)
+BIO_STEPS = ([0.25, 0.5, 0.75, 1.0], [3.1, 5.7, 10.0, 22.0])   # the control: years at its steps (even steps, L3; round H)
 BIO_A0 = 0.5                # years a colony is faint before it shows (T2)
 BIO_NUC = (0.4, 90.0)       # nuclei per m2: a + b x wetness ** 3
-BIO_STAGGER = 0.0           # births after the onset, up to this share of the class time scale
+BIO_STAGGER = 0.6           # births after the onset, up to this share of the class time scale (round H: new patches, M8)
+BIO_STAGGER_P = 2.0         # and spread as uniform ** this (2: most early; 1: even)
+BIO_DARK = (2.5, 8.0)       # biomass-years over which wet-zone growth goes dark (round H, from 4-12: darkens with age, M9)
+BIO_YEL_Q = 0.80            # the yellow family: above this quantile of its own field, outside the rusty family (round H)
+BIO_SOUTH_GREY = 0.25       # south faces: share of the colour greyed toward mould (round G 0.5)
+BIO_SOUTH_FU = 0.35         # and the black-fungus share of the dark stage (round G 0.45)
 CH_TAIL = (1.6, 0.0)        # channel lengths: power-law exponent a0 - a1 x amount (from 3.5 m)
 RUN_DX = 0.05               # extra runs at a source: 0 = on top of the first, else this far apart (m)
 CAP_SHORT = 0.8             # share of runs reaching the next drip edge that stop short of it
@@ -1135,13 +1219,13 @@ BIO_INK = (0.60, 7.7, 13.2, 0.80, 1.0)   # ink stripes: strength, biomass ramp, 
 BIO_INK_PATH = True         # ink stripes on the streak paths (else on the run-off map)
 BIO_INK_P = (0.92, 9.0, 11.0, 0.12, 0.30)   # strength, biomass ramp, streak ramp (streaks smeared 0.3 m down)
 BIO_DRY_FAM = True          # dry films per family (green, rusty)
-BIO_RUST_Q = 0.58           # growth families: the rusty family above this quantile of the family field
+BIO_RUST_Q = 0.66           # growth families: the rusty family above this quantile of the family field (round H, from 0.58)
 
 
 def bio_years(a):
-    """Years unattended for the growth control: 3.7, 5.9, 10.2 and 22 years at 0.25-1.0 (log-linear
-    between), so each step adds about the same share of growth over the walls (L3, measured on the
-    round-G builds); linear from 0 below 0.25."""
+    """Years unattended for the growth control: 3.1, 5.7, 10 and 22 years at 0.25-1.0 (log-linear
+    between), so each step adds about the same share of growth over the walls (L3, emulated on the
+    round-H Typical with _tune_bio_h.py); linear from 0 below 0.25."""
     xs, ys = BIO_STEPS
     if a <= 0:
         return 0.0
@@ -1240,7 +1324,7 @@ def bio_arrival(plane, Wt, key):
         pick = r.choice(lam.size, size=n, p=(lam / lam.sum()).ravel())
         born = tl.ravel()[pick] * r.uniform(0.6, 1.4, n)
         if BIO_STAGGER > 0:                           # colonies keep arriving after the onset
-            born = born + BIO_STAGGER * tau.ravel()[pick] * r.random(n) ** 2
+            born = born + BIO_STAGGER * tau.ravel()[pick] * r.random(n) ** BIO_STAGGER_P
         Tf = T.ravel()
         np.minimum.at(Tf, pick, born)
         T = Tf.reshape(h2, w2)
@@ -1290,7 +1374,7 @@ def layer_bio(plane, F, cfg, a, key, stains=None, streaks=None, chips=None):
     Am = A * np.interp(Wt, BIO_W, [0.25, 0.4, 0.7, 1.0])   # biomass builds where water stays
     mott = np.clip(0.5 + 0.5 * nz.gfield((H, W_), 0.06 * ppm, key + ("bmott",)), 0, 1)   # mottled inside
     wetter = nz.smoothstep(0.30, 0.60, Wt)                 # dark crusts belong to damp and wet zones
-    old = nz.smoothstep(4.0, 12.0, Am) * wetter
+    old = nz.smoothstep(BIO_DARK[0], BIO_DARK[1], Am) * wetter
     amax = np.interp(Wt, BIO_W, [0.40, 0.55, 0.95, 1.0])   # biomass is limited by water: open wall stays a film
     alpha = (amax * (0.80 + 0.15 * old) * rho * ((0.6 + 0.4 * mott) * (1 - old) + (0.9 + 0.1 * mott) * old) * mask).astype(F32)
     # colour by age and family
@@ -1302,16 +1386,21 @@ def layer_bio(plane, F, cfg, a, key, stains=None, streaks=None, chips=None):
         foot = ((foot_rows(plane)[None, :] - np.arange(H)[:, None]) / ppm) < 0.3
     rust = np.where(foot, fam > np.quantile(fam, 0.85),
                     (fam > np.quantile(fam, BIO_RUST_Q)) | (conc & (fam > np.quantile(fam, 0.45))))
+    yel = ~rust & (nz.gfield((H, W_), 0.5 * ppm, key + ("byel",)) > norm_ppf(BIO_YEL_Q))   # yellow family, sharp-edged
     s0 = nz.smoothstep(0.0, 1.3, A)[..., None]
     s1 = nz.smoothstep(1.3, 4.8, Am)[..., None]
-    s2 = (nz.smoothstep(4.0, 12.0, Am) * wetter)[..., None]
-    C_ = {k_: np.array(COL["bio_" + k_], F32) for k_ in ("G1", "G2", "G2y", "G3", "G4", "G4r", "Tr", "Cy", "Fu")}
+    s2 = (nz.smoothstep(BIO_DARK[0], BIO_DARK[1], Am) * wetter)[..., None]
+    C_ = {k_: np.array(COL["bio_" + k_], F32) for k_ in ("G1", "G2", "G2y", "G3", "G4", "G4r", "Tr", "Cy", "Fu",
+                                                          "Y1", "Y3", "Y4")}
     green = C_["G1"] + (C_["G2"] - C_["G1"]) * s0
     green = green + (C_["G3"] - green) * s1
     green = green + (C_["G4"] - green) * s2
     rusty = C_["G2y"] + (C_["Tr"] - C_["G2y"]) * s1
     rusty = rusty + (C_["G4r"] - rusty) * s2
-    col = np.where(rust[..., None], rusty, green)
+    yellow = C_["G1"] + (C_["Y1"] - C_["G1"]) * s0          # lichen-like yellow: young yellow, ochre, dark ochre-olive
+    yellow = yellow + (C_["Y3"] - yellow) * s1
+    yellow = yellow + (C_["Y4"] - yellow) * s2
+    col = np.where(rust[..., None], rusty, np.where(yel[..., None], yellow, green))
     dry = (0.45 * nz.smoothstep(0.50, 0.20, Wt))[..., None]   # dry films stay lighter, hue toward yellow-olive
     if BIO_DRY_FAM:                                      # toward 90 deg from either side: green stays green-yellow
         dcol = np.where(rust[..., None], np.array(COL["bio_dry_r"], F32), np.array(COL["bio_dry_g"], F32))
@@ -1330,21 +1419,44 @@ def layer_bio(plane, F, cfg, a, key, stains=None, streaks=None, chips=None):
         ink = (BIO_INK[0] * nz.smoothstep(BIO_INK[1], BIO_INK[2], Am) * nz.smoothstep(BIO_INK[3], BIO_INK[4], run))[..., None]
     col = col + (C_["Cy"] - col) * ink
     if plane.get("orient") == "S":                     # moulds rather than green algae
-        col = col + (C_["Fu"] - col) * (0.45 * s2)
+        col = col + (C_["Fu"] - col) * (BIO_SOUTH_FU * s2)
         grey = col.mean(axis=-1, keepdims=True)
-        col = col + (grey - col) * 0.5
+        col = col + (grey - col) * BIO_SOUTH_GREY
     return alpha, col.astype(F32), [], Wt
 
 
+RUST_SHARE = ((0.25, 0.5, 0.75, 1.0), (0.05, 0.10, 0.20, 0.40))   # rusted share of the steel at the control's
+# steps, x2 a step (L3): ISO 4628-3 Ri3-4, Ri4, Ri4-5, Ri5 (round H: round G's 0.25-8 % over 0.25-0.75 read 'too little')
+RUST_RUN_P = (0.20, 0.80)    # chance of a run below a post: a0 + a1 x amount
+RUST_RUN_OP = 0.60           # run opacity x amount ** 0.5
+RUST_EDGE_RUNS = 1.6         # runs per m of rusted lower rail edge, x amount
+RUST_AGE = (0.2, 0.8)        # older rust: darker brown, from this share of the deepest rust at 0 to the most at 1
+
+
+def rust_share(a):
+    """Rusted share of the metal for rust amount a (log-linear between the RUST_SHARE steps)."""
+    xs, ys = RUST_SHARE
+    if a <= 0:
+        return 0.0
+    if a < xs[0]:
+        return float(ys[0] * (a / xs[0]) ** 2)
+    if a > xs[-1]:
+        return float(min(0.75, ys[-1] * a / xs[-1]))
+    return float(np.exp(np.interp(a, xs, np.log(ys))))
+
+
 def layer_rust(plane, F, cfg, a, key, spalls=None):
-    """Rust from fixings (a bloom and a run) and, where a spall shows its bar, a bleed from the
-    break's lowest rim down the wall."""
+    """Rust from fixings (a bloom and a run), where a spall shows its bar a bleed from the break's
+    lowest rim down the wall, and on the rails: rust by ISO grade from the metal's edges and lower
+    parts, older rust darker, with runs below the posts and the rusted lower edges (round H).
+    Returns alpha, colour (H, W, 3) and marks."""
     mask, ppm = plane["mask"], plane["ppm"]
     H, W = mask.shape
     acc = np.zeros((H, W), F32)
     marks = []
     if a <= 0:
         return acc, None, marks
+    oldw = np.zeros((H, W), F32)                        # weight of the old (dark) rust colour
     for (y, x, rm) in (spalls or []):
         r = nz.rng(*key, "spall", int(y), int(x))
         room = region_below(mask, y + 1, x, H)
@@ -1359,19 +1471,35 @@ def layer_rust(plane, F, cfg, a, key, spalls=None):
     # rails (round G, research X1): rust on the metal by ISO grade, and rust runs below posts
     cls = plane.get("cls")
     if cls is not None and a > 0:
-        metal = cls == 7
+        metal = plane["steel"] if plane.get("steel") is not None else cls == 7    # steel rusts; aluminium sashes do not
         if metal.any():
-            share = 0.0025 * (0.45 / 0.0025) ** ((a - 0.25) / 0.75)       # Ri1-2 at 0.25 ... Ri5 at 1.0
+            share = rust_share(a)
             from weather_measure import gauss
             inner = gauss(metal.astype(F32), 0.04 * ppm)                     # low at the metal's edges
-            low = np.zeros((H, W), F32)                                      # the metal's lower edges: water sits there
-            low[:-1] = (metal[:-1] & ~metal[1:]).astype(F32)
-            low = gauss(low, 0.12 * ppm)
+            low0 = np.zeros((H, W), bool)                                    # the metal's lower edges: water sits there
+            low0[:-1] = metal[:-1] & ~metal[1:]
+            low = gauss(low0.astype(F32), 0.12 * ppm)
             z = (0.7 * nz.gfield((H, W), 0.6, key + ("rail",)) + 0.5 * nz.gfield((H, W), 0.08 * ppm, key + ("rail2",))
                  + 1.6 * (1.0 - np.clip(inner * 2.0, 0, 1)) + 1.2 * np.clip(low / max(float(low.max()), 1e-6), 0, 1))
             thr = np.quantile(z[metal], 1.0 - min(0.95, share))
-            ra = np.clip(0.45 + 0.4 * nz.smoothstep(thr, thr + 1.0, z), 0, 0.85)       # speckled, denser inward
-            acc = np.maximum(acc, np.where(metal & (z > thr), ra, 0.0).astype(F32))
+            deep = nz.smoothstep(thr, thr + 1.2, z)
+            ra = np.clip(0.55 + 0.40 * deep, 0, 0.92)                         # speckled at its front, dense inward
+            rmask = metal & (z > thr)
+            acc = np.maximum(acc, np.where(rmask, ra, 0.0).astype(F32))
+            oldw = np.where(rmask, np.clip(RUST_AGE[0] + (RUST_AGE[1] - RUST_AGE[0]) * a, 0, 1) * deep, oldw).astype(F32)
+            ys_, xs_ = np.nonzero(low0 & rmask)                              # runs from the rusted lower edges
+            if ys_.size:
+                r = nz.rng(*key, "edge_runs")
+                n = r.poisson(RUST_EDGE_RUNS * a * ys_.size / ppm)
+                for j, i in enumerate(r.choice(ys_.size, size=min(int(n), ys_.size), replace=False)):
+                    yb, xc = int(ys_[i]) + 1, int(xs_[i])
+                    room = region_below(mask, yb, xc, H)
+                    if room > 0.04 * ppm and cls[min(yb, H - 1), xc] != 7:
+                        ok, info = stamp_run(acc, mask, ppm, xc, yb, min(room / ppm, r.uniform(0.1, 0.6) * (0.5 + a)),
+                                             r.uniform(0.008, 0.02), r.uniform(0.015, 0.04), 0.45 * a ** 0.5,
+                                             key + ("er", j), striate=0.3)
+                        if ok:
+                            marks.append(info)
             from weather_measure import label
             lab, n = label(metal)
             if n:
@@ -1387,17 +1515,19 @@ def layer_rust(plane, F, cfg, a, key, spalls=None):
                     if x1[i] - x0[i] > 0.12 * ppm:                    # posts: narrow uprights
                         continue
                     r = nz.rng(*key, "post", i)
-                    if r.random() > 0.10 + 0.9 * a:
+                    if r.random() > RUST_RUN_P[0] + RUST_RUN_P[1] * a:
                         continue
                     yb, xc = int(y1[i]) + 1, int((x0[i] + x1[i]) // 2)
                     room = region_below(mask, yb, xc, H)
                     if room > 0.05 * ppm:
-                        ok, info = stamp_run(acc, mask, ppm, xc, yb, min(room / ppm, r.uniform(0.3, 1.0) * (0.5 + a)),
+                        ok, info = stamp_run(acc, mask, ppm, xc, yb, min(room / ppm, r.uniform(0.3, 1.0) * (0.6 + a)),
                                              max(0.01, (x1[i] - x0[i] + 1) / ppm), 3.0 * max(0.01, (x1[i] - x0[i] + 1) / ppm),
-                                             0.45 * a ** 0.6, key + ("pr", i), striate=0.3)
+                                             RUST_RUN_OP * a ** 0.5, key + ("pr", i), striate=0.3)
                         if ok:
                             marks.append(info)
     for (y, x, kind) in plane.get("fixings", []):
+        if kind == "alu":                                # aluminium sash fixings do not rust (round H)
+            continue
         r = nz.rng(*key, "rust", x, y)
         if r.random() > 0.25 + 0.75 * a:
             continue
@@ -1408,7 +1538,9 @@ def layer_rust(plane, F, cfg, a, key, spalls=None):
                                  0.012, r.uniform(0.02, 0.05), 0.55 * a ** 0.6, key + ("rr", x, y), striate=0.2)
             if ok:
                 marks.append(info)
-    return np.clip(acc, 0, 0.9), None, marks
+    c0, c1 = np.array(COL["rust"], F32), np.array(COL["rust_bar"], F32)
+    col = (c0 + (c1 - c0) * oldw[..., None]).astype(F32)            # older rust on the metal is darker brown
+    return np.clip(acc, 0, 0.92), col, marks
 
 
 def layer_efflorescence(plane, F, cfg, a, key, cracks=None):
@@ -2124,14 +2256,124 @@ DIRT_MIX = {                            # (warm, soot, damp green) weights per l
 }
 
 
-def dirt_fields(plane, wet, key):
+# dirt families (round H, I4): each streak, stain and ground-band mark takes one colour family, dark
+# green (mildew and algae in the run-off), yellow-ochre or the ordinary dirt, from tall narrow cells
+# (a streak stays in one cell), so marks of different colours sit side by side with a sharp change
+# between them ('a little more dark green and yellow. Not blended smoothly, but coexisting'). Green
+# cells favour damp and sheltered wall; with the soiling clock the green ones darken and thicken
+# ('mold and mildew darken/intensify with age').
+FAM_CELL = (0.45, 5.0)        # family cells: width, height (m): most streaks stay in one cell
+FAM_WARP = 0.10               # cell edges warped by this much (m), so they are not straight
+FAM_P = {"green": (0.16, 0.30, 0.12), "yellow": (0.07, -0.04, -0.03)}   # cell share: a0 + a1 x damp + a2 x shelter
+FAM_AGE = (5.0, 20.0)         # E over which the green cells darken and grow (x 0.7 to 1.2)
+FAM_K = {"streaks": 0.92, "stains": 0.88, "base": 0.55}   # how fully a layer takes its cell's colour
+FAM_ALPHA = {"green": (1.40, 0.35), "yellow": (1.45, 0.10)}   # mark opacity x (a0 + a1 x age) in a family cell
+_PPF = np.linspace(-4.5, 4.5, 1801)
+_CDF = 0.5 * (1.0 + np.array([__import__("math").erf(x / np.sqrt(2.0)) for x in _PPF]))
+
+
+def norm_ppf(p):
+    """Inverse of the standard normal CDF (table, |error| < 0.003 inside +-4.5)."""
+    return np.interp(np.clip(p, _CDF[0], _CDF[-1]), _CDF, _PPF)
+
+
+def family_cells(plane, damp, shel, key, age):
+    """Green and yellow family weights (0-1) from jittered cells of FAM_CELL, edges warped by FAM_WARP
+    and softened over one pixel. Each cell's family is drawn once, its odds from the damp and the
+    shelter at its seed."""
+    mask, ppm = plane["mask"], plane["ppm"]
+    H, W = mask.shape
+    f = 2
+    h, w = (H + f - 1) // f, (W + f - 1) // f
+    cw, ch = FAM_CELL[0] * ppm, FAM_CELL[1] * ppm
+    ny, nx = int(H / ch) + 3, int(W / cw) + 3
+    r = nz.rng(*key, "famcells")
+    sy = (np.arange(ny)[:, None] - 1 + r.random((ny, nx))) * ch
+    sx = (np.arange(nx)[None, :] - 1 + r.random((ny, nx))) * cw
+    yy = (np.arange(h)[:, None] * f + 0.5) + FAM_WARP * ppm * nz.gfield((h, w), 0.25 * ppm / f, key + ("fwy",))
+    xx = (np.arange(w)[None, :] * f + 0.5) + FAM_WARP * ppm * nz.gfield((h, w), 0.25 * ppm / f, key + ("fwx",))
+    gy = np.clip(np.floor(yy / ch).astype(int) + 1, 1, ny - 2)
+    gx = np.clip(np.floor(xx / cw).astype(int) + 1, 1, nx - 2)
+    best = np.full((h, w), np.inf)
+    cid = np.zeros((h, w), np.int64)
+    for dy in (-1, 0, 1):
+        for dx in (-1, 0, 1):
+            iy, ix = gy + dy, gx + dx
+            d = ((yy - sy[iy, ix]) / ch) ** 2 + ((xx - sx[iy, ix]) / cw) ** 2
+            better = d < best
+            best = np.where(better, d, best)
+            cid = np.where(better, iy * nx + ix, cid)
+    cy_ = np.clip(sy.astype(int), 0, H - 1).ravel()
+    cx_ = np.clip(sx.astype(int), 0, W - 1).ravel()
+    dmp, shl = damp[cy_, cx_], shel[cy_, cx_]
+    grow = 0.7 + 0.5 * age
+    pg = np.clip((FAM_P["green"][0] + FAM_P["green"][1] * dmp + FAM_P["green"][2] * shl) * grow, 0, 0.8)
+    py = np.clip(FAM_P["yellow"][0] + FAM_P["yellow"][1] * dmp + FAM_P["yellow"][2] * shl, 0, 0.5)
+    u = r.random(ny * nx)
+    fam = np.where(u < pg, 1, np.where(u < pg + py, 2, 0))[cid]
+    from weather_measure import gauss
+
+    def up(m):
+        return np.repeat(np.repeat(m, f, 0), f, 1)[:H, :W]
+    g = np.clip(gauss(up((fam == 1).astype(F32)), 0.7), 0, 1)
+    y = np.clip(gauss(up((fam == 2).astype(F32)), 0.7), 0, 1)
+    return g.astype(F32), y.astype(F32)
+
+
+def dirt_fields(plane, wet, key, E=0.0):
     """The palette's fields for a plane: z, a colour field of 3 m and 0.8 m (std about 1: warm
-    where high, soot where low), and damp (0-1) from the growth wetness map."""
+    where high, soot where low), damp (0-1) from the growth wetness map, and the green and yellow
+    family weights of the marks with their age (0-1 over FAM_AGE)."""
     mask, ppm = plane["mask"], plane["ppm"]
     sh = mask.shape
     z = 0.75 * nz.gfield(sh, 3.0 * ppm, key + ("dz3",)) + 0.65 * nz.gfield(sh, 0.8 * ppm, key + ("dz08",))
     damp = np.zeros(sh, F32) if wet is None else nz.smoothstep(0.35, 0.70, wet.astype(F32))
-    return {"z": z.astype(F32), "damp": damp.astype(F32)}
+    out = {"z": z.astype(F32), "damp": damp.astype(F32)}
+    age = float(nz.smoothstep(FAM_AGE[0], FAM_AGE[1], float(E))) if E > 0 else 0.0
+    shel = plane.get("shelter")
+    shel = np.zeros(sh, F32) if shel is None else np.clip(np.asarray(shel, F32), 0, 1)
+    out["fam_g"], out["fam_y"] = family_cells(plane, damp, shel, key, age)
+    out["fam_age"] = age
+    return out
+
+
+FAM_HEAVY = (0.5, 0.35)       # streaks above this amount: the cells' boost and colour fade to this share at 1.0 (round H)
+
+
+def fam_heavy(name, amt):
+    """The colour cells' strength for a layer at its amount. Heavy streaking (above 0.5) runs so
+    many overlapping streaks that a cell's boost and colour would outweigh the dirt itself, past
+    the photo walls' colour spread (I3). The cells fade toward the plain dirt there; every preset
+    and the sweeps' lower steps keep 1."""
+    if name != "streaks" or amt is None or amt <= FAM_HEAVY[0]:
+        return 1.0
+    return float(np.interp(amt, [FAM_HEAVY[0], 1.0], [1.0, FAM_HEAVY[1]]))
+
+
+def family_alpha(name, tf, al, amt=None):
+    """A dirt layer's opacity in the family cells: green marks thicker (more with age), yellow ones
+    a little thicker so they hold their darkening in a lighter colour."""
+    if tf is None or name not in FAM_K or "fam_g" not in tf:
+        return al
+    k, age = FAM_K[name] * fam_heavy(name, amt), tf["fam_age"]
+    mg = 1.0 + (FAM_ALPHA["green"][0] - 1.0 + FAM_ALPHA["green"][1] * age) * k * tf["fam_g"]
+    my = 1.0 + (FAM_ALPHA["yellow"][0] - 1.0 + FAM_ALPHA["yellow"][1] * age) * k * tf["fam_y"]
+    return np.clip(al * mg * my, 0, 0.95).astype(F32)
+
+
+def dirt_patch(name, tf, col, amt=None):
+    """The layer colour with its cell families laid in (H, W, 3), or None."""
+    if tf is None or name not in FAM_K or "fam_g" not in tf:
+        return None
+    k, age = FAM_K[name] * fam_heavy(name, amt), tf["fam_age"]
+    g0, g1 = np.array(COL["film_g"], F32), np.array(COL["film_g_old"], F32)
+    y0, y1 = np.array(COL["film_y"], F32), np.array(COL["film_y_old"], F32)
+    g, y = g0 + (g1 - g0) * age, y0 + (y1 - y0) * (0.4 + 0.6 * age)
+    wg, wy = k * tf["fam_g"], k * tf["fam_y"]
+    col = np.asarray(col, F32)
+    if col.ndim == 1:
+        col = np.broadcast_to(col, wg.shape + (3,))
+    return (col * (1.0 - wg - wy)[..., None] + g * wg[..., None] + y * wy[..., None]).astype(F32)
 
 
 def dirt_tint(name, tf):
@@ -2177,7 +2419,7 @@ def composite(plane, base_rgb, L):
     for name in ("soiling", "stains", "streaks", "base", "bio", "rust", "cracks", "efflorescence"):
         if name not in L:
             continue
-        al = L[name]["alpha"]
+        al = family_alpha(name, L.get("_tint"), L[name]["alpha"], L[name].get("amount"))
         if "repaint" in L and name in ("soiling", "streaks", "stains"):
             al = al * (1.0 - 0.30 * L["repaint"]["alpha"])
         col = L[name].get("colour")
@@ -2186,6 +2428,9 @@ def composite(plane, base_rgb, L):
         tn = dirt_tint(name, L.get("_tint"))
         if tn is not None:
             col = np.asarray(col, F32) * tn
+        pc = dirt_patch(name, L.get("_tint"), col, L[name].get("amount"))
+        if pc is not None:
+            col = pc
         Lm[name] = 1 - luminance(_lerp(base_rgb, col, al)) / Y0
         An = _lerp(A, col, al)
         if name == "bio":                    # a biofilm tints a dirty wall but never brightens it
@@ -2224,6 +2469,10 @@ def composite(plane, base_rgb, L):
 # ---------------------------------------------------------------------------------------------
 # building and the budget solver
 
+ACCENT_HEAVY_E = 19.0       # from this soiling clock (Derelict), the accent search starts lower (round H)
+ACCENT_LO_HEAVY = 0.45      # its lower end there (0.6 elsewhere)
+
+
 class Builder:
     """Builds every plane for one configuration and solves two gains so that the composite
     coverage by tier lands in the A1 bands for the configuration's E: 'soiling' scales the film
@@ -2236,6 +2485,9 @@ class Builder:
         self.F = {p["name"]: PlaneFields(p, cfg) for p in planes}
         self.soil_field = {p["name"]: soiling_field(p, self.F[p["name"]], cfg, self.E) for p in planes}
         self.k = max(self.a["film_k"], 0.02)
+        self.match = cfg.get("match")             # another seed of the preset to match (A5, round H)
+        if self.match:
+            self.k = float(self.match["film_k"])
         self.fixed = {}
         self.accent_cache = {}
         self.bio_cache = {}
@@ -2260,8 +2512,8 @@ class Builder:
         sub, cav, mk, dep, tone, bar, spl = layer_damage(p, F, cfg, a["damage"], self.key("damage", p))
         L["damage"] = {"alpha": sub, "cavity": cav, "depth": dep.astype(np.float16), "tone": tone, "bar": bar}
         marks["damage"] = mk
-        al, _, _ = layer_rust(p, F, cfg, a["rust"], self.key("rust", p), spalls=spl)
-        L["rust"] = {"alpha": al}
+        al, colr, _ = layer_rust(p, F, cfg, a["rust"], self.key("rust", p), spalls=spl)
+        L["rust"] = {"alpha": al} if colr is None else {"alpha": al, "colour": colr}
         al, _, mkc, cs = layer_cracks(p, F, cfg, a["cracks"], self.key("cracks", p))
         L["cracks"] = {"alpha": al, "colour": COL["crack"]}
         L["crack_repair"] = {"alpha": (cs.rep != 0).astype(F32), "shift": cs.rep}
@@ -2300,7 +2552,7 @@ class Builder:
         _r, al, mks, al2, col, mkr = best
         L["stains"] = {"alpha": al}
         marks["stains"] = mks
-        L["streaks"] = {"alpha": al2, "colour": col}
+        L["streaks"] = {"alpha": al2, "colour": col, "amount": min(1.0, a["streaks"] * g)}
         marks["streaks"] = mkr
         if p["name"] not in self.bio_cache:
             if abs(g - 1.0) < 1e-3:
@@ -2339,7 +2591,7 @@ class Builder:
             tone, dev, ck = self.soil_field[n]
             soil = layer_soiling(film_of(tone, dev, self.k, ck), self.a["soiling"] * gs)
             if n not in self.tint:
-                self.tint[n] = dirt_fields(p, self.wet.get(n), self.key("dirt", p))
+                self.tint[n] = dirt_fields(p, self.wet.get(n), self.key("dirt", p), E=self.E)
             L = {}
             for k, v in list(Lf.items()) + list(La.items()) + [("soiling", {"alpha": soil}), ("_tint", self.tint[n])]:
                 if fast:
@@ -2391,6 +2643,10 @@ class Builder:
 
     def targets(self):
         R = self.rules
+        if self.match:                            # a seed of a preset aims at the first seed's coverage (A5)
+            c = self.match["coverage"]
+            tol = [MATCH_TOL[0]] + [MATCH_TOL[1]] * 3 + [MATCH_TOL[2]] * 2
+            return [(max(v * (1 - t), 1e-5), max(v * (1 + t), 2e-5)) for v, t in zip(c, tol)]
         bands = []
         lo = float(np.interp(self.E, R["tone"]["E"], [b[0] for b in R["tone"]["mean_D"]]))
         hi = float(np.interp(self.E, R["tone"]["E"], [b[1] for b in R["tone"]["mean_D"]]))
@@ -2417,7 +2673,7 @@ class Builder:
             return 1.0, 1.0, self.build(1.0, 1.0)
         tb = self.targets()
         ov = self.cfg.get("override", {})
-        k0 = max(self.a["film_k"], 0.02)
+        k0 = float(self.match["film_k"]) if self.match else max(self.a["film_k"], 0.02)
         self.bias = [1.0] * 6
         state = {"gs": 1.0, "ga": 1.0}
 
@@ -2479,7 +2735,7 @@ class Builder:
                     else:
                         hi = m
                 gs = float(np.exp(0.5 * (lo + hi)))
-            if "film_k" not in ov:
+            if "film_k" not in ov and not self.match:
                 def fk(kk):
                     c = cov(gs, ga, kk)
                     if log is not None:
@@ -2487,14 +2743,15 @@ class Builder:
                     return cost(c)
                 k = golden(fk, 0.4 * k0, 2.5 * k0, 6)
             else:
-                k = ov["film_k"]
+                k = self.k if self.match else ov["film_k"]
             if "streaks" not in ov and "stains" not in ov:
                 def fa(g):
                     c = cov(gs, g, k)
                     if log is not None:
                         log.append(("accent", g, c, cost(c)))
                     return cost(c)
-                ga = golden(fa, 0.6, 1.6, 5)
+                ga = golden(fa, ACCENT_LO_HEAVY if self.E >= ACCENT_HEAVY_E else 0.6, 1.6, 5)   # heavy presets may
+                                                                                    # take the marks lower (A1 T6+)
             self.k = k
             state["gs"], state["ga"] = gs, ga
 
@@ -2523,7 +2780,9 @@ class Builder:
         if m0 < B2_MARGIN:                  # B1-B3 at full resolution, B2 with a margin for the sweeps, J2 kept
             k_best = self.k
             best = (m0, k_best, ga, None)
-            for fk, fa in ((1.15, 1.0), (1.32, 1.0), (0.85, 1.0), (0.72, 1.0), (1.0, 1.12), (1.0, 0.9)):
+            tries = (((1.0, 1.05), (1.0, 0.95), (1.0, 1.10), (1.0, 0.90)) if self.match else   # a matched seed keeps k
+                     ((1.15, 1.0), (1.32, 1.0), (0.85, 1.0), (0.72, 1.0), (1.0, 1.12), (1.0, 0.9)))
+            for fk, fa in tries:
                 self.k = k_best * fk
                 o2 = self.build(gs, ga * fa)
                 c2 = self.coverage(o2)

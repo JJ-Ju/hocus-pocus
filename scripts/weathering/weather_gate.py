@@ -34,6 +34,7 @@ import gate_c as gc  # noqa: E402
 import gate_p as gp  # noqa: E402
 import gate_k as gk  # noqa: E402
 import gate_n as gn  # noqa: E402
+import gate_h as gh  # noqa: E402
 
 CLASSES = {0: "none", 1: "paint", 2: "coping", 3: "soffit", 4: "concrete", 5: "plinth", 6: "glass",
            7: "metal", 8: "prop", 9: "decal"}
@@ -1061,12 +1062,19 @@ def series_damage(runs):
 
 # --- L controls, A4 presets (series) ----------------------------------------------------------
 
+PRESET_ORDER = ["new", "kept", "typical", "worn", "derelict"]     # round H: the user's rename
+
+
 def series_presets(runs):
-    order = ["new", "kept", "typical", "worn", "neglected"]
-    cov = {}
+    """A4 (order at every tier, the ground band), A6 (even tone steps) and I5 (green marks darken
+    with age) over the presets."""
+    order = PRESET_ORDER
+    runs = sorted(runs, key=lambda r: order.index(r[0].get("preset")) if r[0].get("preset") in order else 99)
+    cov, tones = {}, {}
     for cfg, planes in runs:
         v = local_vals(planes)
         cov[cfg.get("preset")] = [float((v >= t).mean()) for t in wm.TIER_EDGES]
+        tones[cfg.get("preset")] = float(np.clip(exposed_vals(planes), -1, 1).mean())
     seq = [k for k in order if k in cov]
     bad = []
     for i in range(len(seq) - 1):
@@ -1098,8 +1106,9 @@ def series_presets(runs):
             bad.append("ground band: first step %.2f of the range (max 0.30)" % steps[0])
         if any(s > 0.45 for s in steps):
             bad.append("ground band: a step over 0.45 of the range")
-    return res("A4", not bad, {"coverage": {k: [round(x, 4) for x in cov[k]] for k in seq},
-                               "ground_excess": {k: round(v, 3) for k, v in ex.items()}, "ground_steps": steps, "bad": bad})
+    return [res("A4", not bad, {"coverage": {k: [round(x, 4) for x in cov[k]] for k in seq},
+                                "ground_excess": {k: round(v, 3) for k, v in ex.items()}, "ground_steps": steps, "bad": bad}),
+            gh.series_steps(tones, order), gh.series_green_age(runs)]
 
 
 def series_sweep(layer, runs):
@@ -1109,7 +1118,7 @@ def series_sweep(layer, runs):
     prev = None
     for cfg, planes in runs:
         use = key if all(key in p for p in planes.values()) else "D"
-        v = exposed_vals(planes, use)
+        v = gg._layer_vals(planes, key) if layer == "rust" else exposed_vals(planes, use)   # rust: paint and steel
         tiers.append([float((v >= t).mean()) for t in wm.TIER_EDGES[1:]])      # T2+..T6+
         lay.append(tiers[-1][0])
         tops.append(int(sum(1 for t in wm.TIER_EDGES if (v >= t).mean() >= 0.0005)))
@@ -1119,7 +1128,11 @@ def series_sweep(layer, runs):
                 q = prev.get(name)
                 if q is None:
                     continue
-                d = np.abs(painted(p) - painted(q))
+                if layer == "rust" and "steel" in p and "L_rust" in p and "L_rust" in q:   # rust shows on the steel too:
+                    dom = np.isin(p["cls"], PAINTED) | np.asarray(p["steel"]).astype(bool)  # the layer's own change there
+                    d = np.abs(np.where(dom, p["L_rust"].astype(np.float64), np.nan) - np.where(dom, q["L_rust"].astype(np.float64), np.nan))
+                else:
+                    d = np.abs(painted(p) - painted(q))
                 m = np.isfinite(d)
                 big = d[m] >= 0.01
                 sh.append(float(big.mean()))
@@ -1150,7 +1163,7 @@ def series_sweep(layer, runs):
                 or (heavy[i] > 0 and heavy[i + 1] >= 1.10 * heavy[i]))
     rises = sum(1 for i in range(len(tops) - 1) if up(i))      # top tier, frontier, or the heavier share up
     need_rises = (len(tops) - 1 + 1) // 2                     # once per two steps: 2 over a 5-step sweep
-    l1 = all(grow) and (layer == "damage" or rises >= need_rises)
+    l1 = all(grow) and (layer in ("damage", "rust") or rises >= need_rises)   # full contrast at any amount: K2, R2
     l2 = True
     for i, (sh, md) in enumerate(steps):
         need = min(0.02, 0.5 * lay[i + 1]) if lay[i + 1] > 0 else 0.02
@@ -1170,7 +1183,7 @@ CONFIG_RULES = [rule_A0, rule_A1, rule_A2, rule_A3, rule_B1, rule_B2, rule_B3, r
                 rule_E1, rule_F1, rule_F2, rule_F3, rule_F4, rule_G1, rule_G2, rule_G3, rule_G4, rule_H1, rule_H2,
                 rule_H3, rule_I1, rule_I2, rule_J1, rule_J2, rule_K1, rule_K3, rule_K4,
                 gg.rule_G5, gp.rule_G6, gg.rule_H4, gg.rule_H5, gc.rule_I3,
-                gm.rule_M1, gm.rule_M2, gm.rule_M3, gm.rule_M4, gm.rule_M6, gm.rule_M7] + gk.RULES + gn.RULES
+                gm.rule_M1, gm.rule_M2, gm.rule_M3, gm.rule_M4, gm.rule_M6, gm.rule_M7] + gk.RULES + gn.RULES + gh.RULES
 
 
 LAYER_RULES = ("C2", "C3", "F2", "G1", "H2", "I1")
@@ -1224,14 +1237,18 @@ def main():
         kind, dirs = a.args[0], a.args[1:]
         runs = [load_config(d) for d in dirs]
         if kind == "presets":
-            out = [series_presets(runs)]
+            out = series_presets(runs)
+        elif kind == "seeds":
+            out = [gh.series_seeds(runs, local_vals, exposed_vals)]
         elif kind.startswith("sweep:"):
             layer = kind.split(":", 1)[1]
             out = series_sweep(layer, runs)
             if layer == "damage":
                 out.append(series_damage(runs))
             if layer == "bio":
-                out += [gm.series_growth(runs), gm.series_fronts(runs)]
+                out += [gm.series_growth(runs), gm.series_fronts(runs), gh.series_growth_age(runs)]
+            if layer == "rust":
+                out.append(gh.series_rust(runs))
             vals = [(c.get("override") or {}).get(layer) for c, _ in runs]
             for extra in (gg.series_even(layer, runs, vals), gg.series_top(layer, runs, vals)):
                 if extra is not None:

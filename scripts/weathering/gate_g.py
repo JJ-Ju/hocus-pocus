@@ -158,7 +158,13 @@ def _layer_vals(planes, key):
         if p.get("exposed", True) and key in p:
             x = np.asarray(p[key], np.float64)
             cls = p.get("cls")
-            m = np.isfinite(p["D"]) & (np.isin(cls, (1, 2)) if cls is not None else True)
+            dom = np.isin(cls, (1, 2)) if cls is not None else np.ones(x.shape, bool)
+            if key == "L_rust" and "steel" in p:          # rust is measured on the steel too (round H), by the
+                dom = dom | np.asarray(p["steel"]).astype(bool)   # size of its change: on dark rails it lightens
+                m = np.isfinite(x) & dom
+                x = np.abs(x)
+            else:
+                m = np.isfinite(p["D"]) & dom
             v.append(np.nan_to_num(x[m]))
     return np.concatenate(v) if v else None
 

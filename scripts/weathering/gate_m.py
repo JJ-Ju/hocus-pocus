@@ -7,7 +7,7 @@ import numpy as np
 
 import weather_measure as wm
 
-BIO_STEPS = ([0.25, 0.5, 0.75, 1.0], [3.7, 5.9, 10.2, 22.0])   # as weather_fields.bio_years
+BIO_STEPS = ([0.25, 0.5, 0.75, 1.0], [3.1, 5.7, 10.0, 22.0])   # as weather_fields.bio_years (round H)
 BIO_EDGES = (0.15, 0.40, 0.70)               # wetness classes W0 | W1 | W2 | W3 (growth research 2.2)
 BIO_XMAX = (0.30, 0.60, 0.90, 0.95)          # class ceilings (research 3.3)
 O11 = [(3, 1.0, 0.15, None), (3, 3.0, 0.50, None), (2, 3.0, 0.10, None), (2, 8.0, 0.30, None),
@@ -111,28 +111,42 @@ def rule_M2(cfg, planes, R):
 
 
 def rule_M3(cfg, planes, R):
-    """O4: growth sits where water stays. Pooled over exposed planes, the share of growth (T2+) in
-    damp and wet zones (W2-W3, wetness >= 0.40): >= 70 % while growth covers under 5 %, >= 50 % at
-    5-20 %; sunny open wall (W0, wetness < 0.15) holds <= 10 %."""
-    n_g = n_m = n23 = n0 = 0
+    """O4: growth sits where water stays. Pooled over exposed planes: while growth (T2+) covers under
+    5 % of the wall, >= 70 % of it is in damp and wet zones (W2-W3, wetness >= 0.40); beyond that,
+    while W2-W3 are under 80 % covered, they are covered at >= 3x the rate of the open wall (W0-W1);
+    sunny open wall (W0, wetness < 0.15) holds <= 10 %.
+    Round H: round G's '>= 50 % at 5-20 % cover' could not hold on a facade whose W2-W3 zones are
+    5.6 % of the wall once growth passes twice that, since M7's onsets (same research) give the shaded
+    open wall 12 % by 10 years; the share became the ratio of cover rates, which does not depend on
+    how much of a facade is wet."""
+    n_g = n_m = n23 = n0 = a23 = 0
     for p in planes.values():
         if not p.get("exposed", True) or "L_bio" not in p or "bio_w" not in p:
             continue
         m = np.isfinite(p["D"])
         g = (np.nan_to_num(p["L_bio"]) >= wm.TIER_EDGES[1]) & m
         w = p["bio_w"].astype(np.float32)
+        wet = w >= BIO_EDGES[1]
         n_m += int(m.sum())
         n_g += int(g.sum())
-        n23 += int((g & (w >= BIO_EDGES[1])).sum())
+        n23 += int((g & wet).sum())
+        a23 += int((m & wet).sum())
         n0 += int((g & (w < BIO_EDGES[0])).sum())
     cov = n_g / max(n_m, 1)
     if n_g < 400:
         return res("M3", True, {"cover": round(cov, 4)}, "little growth")
     s23, s0 = n23 / n_g, n0 / n_g
-    need = 0.70 if cov < 0.05 else 0.50 if cov < 0.20 else None
-    ok = (need is None or s23 >= need) and s0 <= 0.10
-    return res("M3", ok, {"cover": round(cov, 4), "W2_W3_share": round(s23, 3), "need": need,
-                          "W0_share": round(s0, 3)})
+    c23 = n23 / max(a23, 1)
+    c01 = (n_g - n23) / max(n_m - a23, 1)
+    if cov < 0.05:
+        ok, need = s23 >= 0.70, "W2-W3 share >= 0.70"
+    elif c23 < 0.80:
+        ok, need = c23 >= 3.0 * c01, "W2-W3 cover >= 3x W0-W1 cover"
+    else:
+        ok, need = True, "W2-W3 near full"
+    ok = ok and s0 <= 0.10
+    return res("M3", ok, {"cover": round(cov, 4), "W2_W3_share": round(s23, 3), "W2_W3_cover": round(c23, 3),
+                          "W0_W1_cover": round(c01, 4), "need": need, "W0_share": round(s0, 3)})
 
 
 def _foot_rows(p):
@@ -306,7 +320,9 @@ def rule_M7(cfg, planes, R):
 
 def series_fronts(runs):
     """M8 (O10): fronts grow outward. Per step, new growth (T2+) within 0.3 m of the previous
-    step's growth is front growth, the rest new patches: front >= 70 %, new patches 5-30 %."""
+    step's growth is front growth, the rest new patches: front >= 70 %, new patches 5-30 %. A step
+    from a wall with no growth yet (under 400 px) has no fronts and is not judged (round H: round G
+    failed the step from 0 for that)."""
     stats, bad = [], []
     prev = None
     for cfg, planes in runs:
@@ -314,6 +330,7 @@ def series_fronts(runs):
                for n, p in planes.items() if p.get("exposed", True) and "L_bio" in p}
         if prev is not None:
             near = far = 0
+            had = sum(int(v[0].sum()) for v in prev.values())
             for n in cur:
                 if n not in prev:
                     continue
@@ -323,8 +340,8 @@ def series_fronts(runs):
                 near += int((new & z).sum())
                 far += int((new & ~z).sum())
             tot = near + far
-            st = {"new_px": tot, "front_share": round(near / max(tot, 1), 3)}
-            if tot >= 400 and not (st["front_share"] >= 0.70 and 0.05 <= 1 - st["front_share"] <= 0.30):
+            st = {"new_px": tot, "front_share": round(near / max(tot, 1), 3), "earlier_px": had}
+            if tot >= 400 and had >= 400 and not (st["front_share"] >= 0.70 and 0.05 <= 1 - st["front_share"] <= 0.30):
                 bad.append(len(stats))
             stats.append(st)
         prev = cur

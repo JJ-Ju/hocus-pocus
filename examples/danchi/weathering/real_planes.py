@@ -153,7 +153,8 @@ def build_plane(view, z, frame, plan, ppm=50, kind=None, wind_from=200.0, exposu
             x0, x1 = seg_x.min(), seg_x.max()
             for x in range(int(x0), int(x1) + 1, int(1.2 * ppm)):
                 j = np.argmin(np.abs(seg_x - x))
-                fixings.append((int(seg_y[j]) + 1, int(seg_x[j]), "post"))
+                steel = int(code[int(seg_y[j]), int(seg_x[j])]) in (7, 16)    # round H: aluminium does not rust
+                fixings.append((int(seg_y[j]) + 1, int(seg_x[j]), "post" if steel else "alu"))
     # frame rows
     top_y = frame["top_y"]
     row = lambda yv: int(round((top_y - yv) * ppm - 0.5))  # noqa: E731
@@ -185,7 +186,8 @@ def build_plane(view, z, frame, plan, ppm=50, kind=None, wind_from=200.0, exposu
          "mask": mask, "cls": cls, "exposed": True, "tops": exposed_top, "bottoms": bottoms, "edges": edges,
          "flow_start": start, "ground_row": ground_row, "top_row": top_row, "floor_rows": floor_rows,
          "bay_cols": bay_cols, "sill_ends": sill_ends, "corner_heads": corner_heads, "fixings": fixings,
-         "joints": [], "shelter": sh, "depth": depth, "decal": (code == 6) & mask}
+         "joints": [], "shelter": sh, "depth": depth, "decal": (code == 6) & mask,
+         "steel": np.isin(code, (7, 16))}          # rusting metal: steel rails and posts (not the aluminium sashes); off the paint mask
     if bay_kinds:
         p["bay_kinds"] = bay_kinds
     p["face_rain"] = (1 - 0.6 * exposure) + 1.5 * exposure * max(0.0, nwind)

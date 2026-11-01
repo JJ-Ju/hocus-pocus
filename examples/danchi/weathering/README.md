@@ -32,13 +32,14 @@ python -I ../../../scripts/weathering/weather_gate.py check <out_dir> --json <ou
 ./sweeps_all.sh <tag> <gs,ga,k>         # streaks, damage, grime, stain-field sweeps at fixed gains
 ./sweep_grime_fine.sh <tag> <gs,ga,k>   # grime at 0.1-0.6, the range the rules accept
 python -I pipeline_g.py <tag> [N]       # round G: presets, then the six sweeps at Typical's gains, N builds at a time
+python -I pipeline_h.py <tag> [N]       # round H: presets with matched seeds, then six sweeps (rust its own; no damage)
 ```
 
 Run them from this folder. Builds go to `$WX_OUT` (default `./builds`, not committed); use the gains
 Typical solved for (`meta.json`, `gains`) so a sweep changes only its control.
 
-Presets: `new` (0 years), `kept` (15 years, upkeep 0.85), `typical` (35 years, upkeep 0.9, the
-default), `worn` (35 years, upkeep 0.5), `neglected` (45 years, upkeep 0.12). A build writes one
+Presets: `new` (0 years), `kept` (10 years, upkeep 1.0), `typical` (35 years, upkeep 0.9, the
+default), `worn` (35 years, upkeep 0.5), `derelict` (45 years, upkeep 0.12). A build writes one
 `<plane>.npz` per facade plane (darkening, each layer's own map, classes, sources, edges, joints,
 the material field, clean and weathered albedo), `meta.json` (config, solved gains, coverage,
 targets), lit JPG previews, and 1 m close-ups at 1 mm per pixel (`closeup_<plane>_<spot>`).
@@ -48,6 +49,21 @@ places). `real_planes.py` turns the captures into planes with their features: to
 corner heads, fixings, shelter, flow starts at depth steps, and the construction joints on the
 solid walls. `run_proto.py` holds the build loop and the stand-in planes (`facade_synth.py`) used
 for fast iteration.
+
+## Accepted builds, round H
+
+Rulebook 1.5 (round H), 68 rules. The presets follow the user's rename through the soiling clock: Typical (35 years, upkeep 0.9) has round G's Kept look, Worn round G's Typical, Derelict (45 years, upkeep 0.12, was Neglected) round G's Worn, and Kept (10 years, upkeep 1.0) is new, halfway from New. Accepted presets: New, Kept, Typical, Worn, Derelict. Typical seeds 2-6 are matched to seed 1 (A5); accepted seeds: 1, 6 (rejected: seed 2 G6; seed 3 G6; seed 4 F1; seed 5 C3). Damage has no sweep this round (the user asked for the other areas first); rust is its own control.
+
+At Typical's solved gains (2.0538, 0.9861, 0.6411):
+
+| Control | Accepted steps | Rejected steps | Series |
+|---|---|---|---|
+| rust | 0-1 | none | accepted |
+| growth | 0-0.25 | 0.5 (M2); 0.75 (G5); 1.0 (B2, C3, E1, G5, M1) | accepted, but two steps: not reviewed |
+| stain fields | 0-0.5 | 0.75 (C3, E1, I3); 1.0 (A3, C3, D1, G6, I3) | accepted |
+| edges | 0-1 | none | accepted |
+| grime | 0.2-0.6 | 0.1 (B3, G5); 0.3 (B2) | failed L3: not reviewed |
+| streaks | 0.25-0.75 | 0 (B2); 1.0 (C3, H1) | accepted |
 
 ## Accepted builds, round G
 

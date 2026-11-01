@@ -1,6 +1,6 @@
 # Weathering rules
 
-Numeric rules for building weathering, checked by `scripts/weathering/weather_gate.py`. A weathered building is accepted only when every binding rule passes; nothing is shown before that. Version: 1.4 (round G).
+Numeric rules for building weathering, checked by `scripts/weathering/weather_gate.py`. A weathered building is accepted only when every binding rule passes; nothing is shown before that. Version: 1.5 (round H).
 
 Numeric rules for building weathering, measured in facade space (metres) on a darkening map D = 1 - Y_weathered / Y_clean. A configuration is accepted only when every binding rule passes. Origins: U = the user's review notes (review 36), P = measured on the reference photos, L = building physics and the soiling literature, C = craft estimate (to recalibrate with picks).
 
@@ -10,7 +10,7 @@ Numeric rules for building weathering, measured in facade space (metres) on a da
 - **D_local**: the weathering's own local contrast: D_local = 1 - (1 - D) / ref, ref = the least weathered 10 cm patch within +-1 m (smoothed), on 4 cm block means. A uniform darkening of a whole wall gives 0 (it reads as a paint colour, not as weathering: the user, review 36); paint tones that differ from element to element do not count either. T1 is below photo noise and material texture, so the amount rules start at T2. Arris rows and the edge layer's pixels are left out (the edge rules N1-N5 measure them).
 - **Opacity tiers** (lower bounds of D or D_local): T1 trace >= 0.02, T2 faint >= 0.05, T3 light >= 0.10, T4 medium >= 0.18, T5 heavy >= 0.30, T6 very heavy >= 0.45. each tier is about 1.6-2x the one below; T1 is near the threshold of seeing on a pale wall (about 1 L*), T4 is a clear stain, T6 a black crust
 - **Scale levels**: S1 16-32 m, S2 8-16 m, S3 4-8 m, S4 2-4 m, S5 1-2 m, S6 0.5-1 m, S7 0.25-0.5 m, S8 0.125-0.25 m. Groups: macro S1-S3, mid S4-S5, micro S6-S8. under 12.5 cm is the material's own texture (grain, pores, coat bumps): the material set and the tiling detail, checked by J rules on close crops
-- **Soiling clock E**: repaint cycle lerp(24, 7, upkeep) years; years since repaint min(age, cycle); E = years_since_repaint + 0.22 * (age - years_since_repaint). old stains ghost through new paint at 22 %; damage, rust depth, cracks and efflorescence follow age, not E
+- **Soiling clock E**: repaint cycle lerp(24, 7, upkeep) years; years since repaint min(age, 0.665 * cycle); E = years_since_repaint + 0.17 * (age - years_since_repaint). a building is on average two-thirds of the way through its repaint cycle, and 17 % of the dirt survives each repaint. Round H: rounds F and G both had the user pick the next-cleaner preset as the 35-year default; the old clock (the cycle's end, 22 % kept) made every age one level too weathered. Damage, cracks, rust, efflorescence, edges and fading follow age, not E
 - **Planes**: exposed painted faces visible in elevation: front plane (parapets, slab edges), the walls above the parapets, end walls (gables), the plinth; soffits and recesses are sheltered planes
 - **Layers**: soiling, streaks, stains, base, bio, rust, efflorescence, washed, fading, repaint, wear, damage, peeling, cracks
 
@@ -19,10 +19,10 @@ Numeric rules for building weathering, measured in facade space (metres) on a da
 | Preset | Age | Upkeep | E | Anchor |
 |---|---|---|---|---|
 | New | 0 | 1 | 0 |  |
-| Kept | 15 | 0.85 | 10.75 | U: round-7 'Light' picked at 10 m and 40 m for a moderately maintained block |
-| Typical (default) | 35 | 0.9 | 14.5 | U: grid pick, 35 years, upkeep 0.9, as the default for the game's streets |
-| Worn | 35 | 0.5 | 19.8 | U: round-7 'Medium' 'if we're pushing it for a more dystopian world' |
-| Neglected | 45 | 0.12 | 27.1 | U: round-7 Neglected 'not heavy enough': more varied wear, growth and algae, no clean sections or edges |
+| Kept | 10 | 1 | 5.56 | U (round G): 'something between New and Kept, which will become the new kept' |
+| Typical (default) | 35 | 0.9 | 10.75 | U (round G): round G's Kept picked as the default street block on the front and at 1:1; 'the current Kept becomes Typical' |
+| Worn | 35 | 0.5 | 14.5 | U (round G): 'current Typical becomes Worn' |
+| Derelict | 45 | 0.12 | 19.77 | U (round G): 'Worn currently is probably more like derelict levels of weathering... Worn becomes Derelict' |
 
 ## Amount tables
 
@@ -38,7 +38,7 @@ Coverage (A1), share of the exposed painted wall at or above each tier of D_loca
 | T5+ | 0-0.025 | 0.003-0.02 | 0.008-0.04 | 0.02-0.08 | 0.12-0.35 |
 | T6+ | 0-0.006 | 0-0.006 | 0-0.012 | 0.004-0.03 | 0.04-0.2 |
 
-A1: share of the exposed painted wall at or above each tier of D_local (T2+ ... T6+), by preset; interpolate in E. Anchors: U, round-7 'Light' (picked for a moderately kept block) measured T3+ 0.16, T4+ 0.057, T5+ 0.025; P, ordinary photo walls median T3+ 0.52, T4+ 0.09, T5+ 0.034 (range 0.08-0.66, 0.05-0.25, 0.02-0.12), heavily stained walls T3+ 0.88-0.98, T4+ 0.63-0.96; U, round-7 Neglected (0.49, 0.24, 0.087) was 'not heavy enough'. The New band allows the material's own variation. Round F: re-measured with D_local on the weathering alone; round-7 'Light' then reads 0.35 / 0.13 / 0.041 / 0.011 / 0.001 (inside Kept), round-7 'Medium' 0.64 / 0.44 / 0.17 / 0.039 / 0.004 (Worn's T5+ and T6+ lower bounds moved to 0.035 and 0.004 to hold it), round-7 Neglected 0.76 / 0.52 / 0.25 / 0.072 / 0.011 (still below Neglected: 'not heavy enough'). Round G: the user picked the Kept image as the default street block (35 years, upkeep 0.9) on the front and on the 1:1 top floors, so Typical takes Kept's round-F bands; Kept is about 0.6x; Worn between Typical and Neglected; Neglected unchanged ('about right').
+A1: share of the exposed painted wall at or above each tier of D_local (T2+ ... T6+), by preset; interpolate in E. Anchors: U, round-7 'Light' (picked for a moderately kept block) measured T3+ 0.16, T4+ 0.057, T5+ 0.025; P, ordinary photo walls median T3+ 0.52, T4+ 0.09, T5+ 0.034 (range 0.08-0.66, 0.05-0.25, 0.02-0.12), heavily stained walls T3+ 0.88-0.98, T4+ 0.63-0.96; U, round-7 Neglected (0.49, 0.24, 0.087) was 'not heavy enough'. The New band allows the material's own variation. Round F: re-measured with D_local on the weathering alone; round-7 'Light' then reads 0.35 / 0.13 / 0.041 / 0.011 / 0.001 (inside Kept), round-7 'Medium' 0.64 / 0.44 / 0.17 / 0.039 / 0.004 (Worn's T5+ and T6+ lower bounds moved to 0.035 and 0.004 to hold it), round-7 Neglected 0.76 / 0.52 / 0.25 / 0.072 / 0.011 (still below Neglected: 'not heavy enough'). Round G: the user picked the Kept image as the default street block (35 years, upkeep 0.9) on the front and on the 1:1 top floors, so Typical takes Kept's round-F bands; Kept is about 0.6x; Worn between Typical and Neglected; Neglected unchanged ('about right'). Round H: as the tone, the presets moved onto these anchors through the clock (the user's rename); the bands did not change.
 
 ## Rules
 
@@ -72,9 +72,21 @@ Origins: U the user's review notes, P measured on the reference photos, L buildi
 
 **A4. Presets order at every tier**
 
-- Measure: composite tier coverage across the presets new < kept < typical < worn < neglected; and the ground band: base excess (bottom 1 m over the wall mean, minus 1) per preset, as steps over its New-to-Neglected range
+- Measure: composite tier coverage across the presets new < kept < typical < worn < derelict; and the ground band: base excess (bottom 1 m over the wall mean, minus 1) per preset, as steps over its New-to-Derelict range
 - Pass: strictly increasing at T1+..T5+ (ties allowed only where both are below 0.001); ground band steps <= 0.45 of the range, the New-to-Kept step <= 0.30
 - Origin: C; U (round F: 'the jumps between the steps for the ground level could be more subtle')
+
+**A5. Seeds of a preset read as the same age**
+
+- Measure: the seeds of one preset: tone (A0), T3+ and T4+ of D_local, and the film contrast the solver used
+- Pass: each within its tolerance of the seeds' mean: tone 4 %, T3+ 7 %, T4+ 8 %, film contrast 2 %
+- Origin: U (round G: 'Seed 1 looks stronger, 2 and 3 look a little closer'; seed 1 measured T3+ 0.205 and T4+ 0.086 against 0.185-0.191 and 0.071-0.079, film contrast 0.69 against 0.61 and 0.50)
+
+**A6. The presets step evenly**
+
+- Measure: tone (A0) steps from New up the preset ladder
+- Pass: largest step over the smallest <= 2.2, every step > 0
+- Origin: U (round G: 'Yes, even steps' for a ladder measuring 1.9); C (the margin)
 
 
 ### Opacity
@@ -256,6 +268,18 @@ Origins: U the user's review notes, P measured on the reference photos, L buildi
 - Pass: spread 0.9-4.0; non-neutral share 0.12-0.80; mark-to-mark spread >= 0.2 where there are three marks or more
 - Origin: U (round F: more colour variety, calibrated on the photos); P (five ordinary photo walls: spread 1.2-3.9 over a clean-wall noise of 0.65-0.99, so 1.0-3.8 above noise; non-neutral 0.21-0.75 over a noise of 0-0.13; marks 0.2-0.84); round F's builds 0.24-0.89
 
+**I4. Dark green and yellow marks sit side by side**
+
+- Measure: mark pixels (streaks, stains and the ground band at T2+ on paint, growth and rust left out) against clean: the green family (hue 100-180 deg, a* -1 or less), the yellow family (hue 70-100 deg, b* +3 or more), and the olive in between (hue 105-130 deg, chroma 2 or more) that a smooth blend would make; from E 8
+- Pass: green >= 5 %, yellow >= 4 %, neither over 35 %; every wall with 5000 mark pixels has both (2 % each); olive <= 0.35 x the smaller family
+- Origin: U (round G: 'work in a little more dark green and yellow. Not blended smoothly, but coexisting'); C (shares)
+
+**I5. Green marks darken with age**
+
+- Measure: the green-family mark pixels across the presets at E 8 or more: their mean L* change and colour difference against clean
+- Pass: from each preset to the next older one: L* change down by 1.0 or more, colour difference up
+- Origin: U (round G: 'Remember what I said, mold and mildew darken/intensify with age')
+
 
 ### Material
 
@@ -346,7 +370,7 @@ Origins: U the user's review notes, P measured on the reference photos, L buildi
 **L1. A control widens coverage, not only opacity**
 
 - Measure: per detail control, between sweep steps of 0.25: the layer's coverage at T2+ and at its top tier
-- Pass: each step widens the layer's coverage by >= 1.25x at its intensity frontier, the lowest tier covering under half the wall at the step below; and the intensity rises at least once per two steps: the top tier reached moves up, the frontier moves up, or the share of the layer's area at T4+ grows by >= 10 % (not for damage: breaks are full contrast at any amount, K2 checks its steps). A step 'has some' of a layer at 0.2 % of the wall, or for damage at any break area: breaks are discrete
+- Pass: each step widens the layer's coverage by >= 1.25x at its intensity frontier, the lowest tier covering under half the wall at the step below; and the intensity rises at least once per two steps: the top tier reached moves up, the frontier moves up, or the share of the layer's area at T4+ grows by >= 10 % (not for damage or rust: breaks and rust on the steel are full contrast at any amount; K2 and R2 check their steps). A step 'has some' of a layer at 0.2 % of the wall, or for damage at any break area: breaks are discrete
 - Origin: U ('The intensity should not only increase the opacity, but also the amount of surface covered by various levels of intensity')
 
 **L2. Each step is visible**
@@ -384,8 +408,8 @@ Origins: U the user's review notes, P measured on the reference photos, L buildi
 
 **M3. Growth sits where water stays**
 
-- Measure: pooled over exposed walls: share of growth (T2+) in damp and wet zones (W2-W3, wetness >= 0.40) and in sunny open wall (W0, < 0.15)
-- Pass: >= 70 % in W2-W3 while growth covers under 5 %, >= 50 % at 5-20 %; W0 <= 10 %
+- Measure: pooled over exposed walls: share of growth (T2+) in damp and wet zones (W2-W3, wetness >= 0.40); the cover of W2-W3 and of the open wall (W0-W1); the share in sunny open wall (W0, < 0.15)
+- Pass: >= 70 % in W2-W3 while growth covers under 5 %; beyond that, while W2-W3 are under 80 % covered, their cover >= 3x the open wall's; W0 <= 10 %
 - Origin: U (round F: corners, divots, edges, below ledges); L (roundG/research/organic-growth.md O4)
 
 **M4. Plinth belt**
@@ -408,15 +432,21 @@ Origins: U the user's review notes, P measured on the reference photos, L buildi
 
 **M7. Onset by wetness class**
 
-- Measure: growth (T2+) cover of each wetness class's area at the build's years unattended (3.7, 5.9, 10.2, 22 years at growth amounts 0.25-1.0, log-linear between)
+- Measure: growth (T2+) cover of each wetness class's area at the build's years unattended (3.1, 5.7, 10, 22 years at growth amounts 0.25-1.0, log-linear between)
 - Pass: W3 >= 15 % from 1 year and >= 50 % from 3; W2 >= 10 % from 3 years and >= 30 % from 8; W1 >= 3 % from 8 years; W0 <= 5 % up to 15 years; no class over its ceiling (W0 0.30, W1 0.60, W2 0.90, W3 0.95) + 0.03
 - Origin: L (roundG/research/organic-growth.md O11 and 3.3: onset, time scale and ceiling per class from field timings)
 
 **M8. Fronts grow outward**
 
-- Measure: the growth control's steps: new growth (T2+) within 0.3 m of the previous step's growth (front growth) and farther away (new patches)
+- Measure: the growth control's steps: new growth (T2+) within 0.3 m of the previous step's growth (front growth) and farther away (new patches); a step from a wall with no growth yet (under 400 px) has no fronts and is not judged
 - Pass: front growth >= 70 %; new patches 5-30 %
 - Origin: U ('grow outwards'); L (roundG/research/organic-growth.md O10)
+
+**M9. Growth darkens and thickens with age**
+
+- Measure: the growth control's steps: the pixels that were growth (T2+) at the earlier step, at the later step
+- Pass: their L* down by 1.0 or more and their growth darkening up by 0.02 or more per step
+- Origin: U (round G: 'mold and mildew darken/intensify with age'; round F: 'dark green/rust brown' when severe); L (roundG/research/organic-growth.md O2)
 
 
 ### Edges
@@ -450,6 +480,21 @@ Origins: U the user's review notes, P measured on the reference photos, L buildi
 - Measure: the edge layer's mean delta L* on top edges and on drip and lower edges; the b* shift on the drip edges
 - Pass: tops lighter (> 0); drip edges darker (< 0) with b* +1 to +4
 - Origin: L (roundG/research/cracks-edges-damage.md E9: tops chalked and rain-washed; drip edges dirt)
+
+
+### Metal
+
+**R1. Rust on steel by grade**
+
+- Measure: the share of the steel (rails, posts; not aluminium sashes) where rust shows, a colour difference of 8 or more against clean (dE76; the rails' paint is darker than rust in places), against the rust amount
+- Pass: within 0.5-2x the grade share: 5 % at 0.25 (Ri3-4), 10 % at 0.5 (Ri4), 20 % at 0.75 (Ri4-5), 40 % at 1.0 (Ri5), log-linear between; under 0.1 only an upper limit
+- Origin: U (round G: 'High rust side looks a little weak'); L (ISO 4628-3 rust grades: Ri3 1 %, Ri4 8 %, Ri5 40-50 %)
+
+**R2. Each rust step shows**
+
+- Measure: the rust control's steps: rusted share of the steel (as R1), the steel's mean colour difference against clean, and the rust area on the paint below
+- Pass: per step: share x 1.5 or more (or +10 points), mean colour difference x 1.5 or more (or +2), paint area grows
+- Origin: U (round G: 'the rust growth needs to be stronger between steps too')
 
 ## Revisions
 
@@ -494,6 +539,25 @@ Each change to a rule after it was first written, with the evidence for it.
 - **K3**: measured on edge-damage clusters. Delamination spalls (round G) are spread by K5/K6, not clustered round a hotspot.
 - **F3**: measured on the dirt. At damage 1.0 spalls and cracks cover the whole wall and lift its mean; the rule is about splash and ground dirt.
 - **D_local**: arris rows and the edge layer left out. A chalked 1 px top arris raised the 'brightest 10 cm patch' reference, so every pixel near an edge read darker (T2+ 0.43 to 0.89 on one build).
+- **clock**: years since repaint 0.665 x the cycle (was the full cycle); 17 % kept (was 22 %). Round-G review: Kept picked as the 35-year default again, and 'the current Kept becomes Typical, current Typical becomes Worn, Worn becomes Derelict, and a milder level of wear becomes Kept'; the fit puts the three presets on the old anchors within 0.04 E.
+- **presets**: kept 10 years at upkeep 1.0 (E 5.56, halfway); neglected renamed derelict; worn and typical unchanged in age and upkeep. The user's rename; Kept halfway keeps the tone steps even (A6).
+- **A4**: order new < kept < typical < worn < derelict. The rename.
+- **A5**: new: seeds read as the same age. Round-G review: seed 1 looked stronger; the seeds' film contrast differed by 0.50-0.69.
+- **A6**: new: even preset steps. Round-G review called its ladder even; the new Kept must not crowd Typical.
+- **I4**: new: dark green and yellow mark families. Round-G review of the dirt colour.
+- **I5**: new: green marks darken with age. Round-G review: mould and mildew darken with age.
+- **M3**: beyond 5 % cover: W2-W3 cover >= 3x the open wall's (was a 50 % share of the growth). The share could not hold where wet zones are 5.6 % of the wall: at 10 years M7's onsets put 12 % on the shaded open wall (round G's growth 0.75: W2-W3 share 0.35, cover ratio 9).
+- **M8**: not judged from a wall with no growth yet. A front needs growth to grow from; round G failed its step from 0 on this.
+- **M9**: new: growth darkens and thickens with age. Round-G review.
+- **R1**: new family metal: rust by grade on steel. Round-G review: rust too little; round G's 0.25-8 % of the metal over 0.25-0.75.
+- **R2**: new: each rust step shows. Round-G review: rust growth stronger between steps.
+- **growth control**: years at 0.25-1.0: 3.1, 5.7, 10, 22 (were 3.7, 5.9, 10.2, 22); shaded open wall (W1) onset 3.5 years (was 3.0); colonies keep arriving up to 0.6 of a class's time scale after its onset (was 0). Emulated round-H growth sweep: M8 needs 5 % new patches per step (round G 3-5 %), M3 needs 70 % of young growth in W2-W3 (68 % at 5.9 years on the lighter Typical), L3 even steps (1.41 before, 1.30 after); M5, M7 and M9 kept.
+- **L1**: the intensity clause (the top tier, the frontier or the T4+ share rising once per two steps) is waived for rust, as for damage; R2 checks rust's steps. Round-H rust sweep: rust on the steel reaches T6 from its first step and T4+ is 85-90 % of it at every step, so its intensity cannot rise; its coverage still widens 1.9x per step (L1's widening clause holds).
+- **R2**: the steel's mean colour difference must rise x 1.5 or more (or +2) per step; was +2 only. Round-H rust sweep: the even schedule (5, 10, 20, 40 % of the steel) doubles the share and the mean colour difference at every step (1.07, 2.22, 4.68, 10.25) but adds only +1.15 at the first; a schedule steep enough for +2 there (5, 16, 32, 58 %) broke L3's even steps (ratios 2.99, 1.93, 1.75). The share clause already reads 'x 1.5 or +10 points'.
+- **soiling film (light load)**: under the Worn clock (E 14.5) the coat's texture and the dust grain keep their absolute strength: their relative amplitude x (14.5 / E), capped at 2 (Kept 2.0, Typical 1.35); the joints as before. Round-H Kept (E 5.6) failed B3 with 26 % of its soiling layer flat at 20 cm (17 % of D): a light film scaled from Typical's pattern was too even. A stronger grain alone fixed B3 but dropped J2 to 0.219, since grain is not the material; with the coat too, the rebuilt Kept has B3 0.011 (D) and 0.023 (soiling) and J2 0.297. The coat's micro-relief fills with dirt first and shows through a film until it is Worn-thick, which also lifts Typical's marginal J2 (seed 1 rebuilt: 0.256 to 0.291).
+- **solver (heavy presets)**: from clock E 19 the mark-gain search may go down to 0.45 (0.6 elsewhere). Round-H Derelict failed A1 with T6+ 0.0314 against 0.0299 at the 0.6 floor; its darkest tier is mostly soiling, growth and the ground band, so the marks give way (rebuilt at a gain of 0.47: T6+ 0.0290, every rule passing).
+- **splash zone**: the soiling's foot boost gets a ragged reach, a texture that follows the coat and varies along the wall (heavier stretches, log amplitude 0.8), and a dark core in the bottom 25 cm with soil-splash specks, applied after the tone's saturation; all of it fades out from clock E 12 to 20. Round-H B2: at the Typical clock the large (>= 2 m) marks are mostly foot bands, smooth because the boost was an exponential fade compressed by the saturation (inner CV 0.34-0.40; seed 1 passed at 0.414, seeds 2 and 3 failed at 0.377 and 0.385, grime 0.2 and 0.3 at 0.398; round G's Kept at the same clock 0.419). A grainy texture over the whole zone lifted seed 2's north front to 0.449 but cost J2 0.02; the coat texture, the along-wall variation and a grainy core only: 0.432 with J2 unchanged. Rebuilt Typical seed 1: 0.414 to 0.463; seeds 2 and 3 pass B2 (0.432, 0.414). Fading it out keeps Derelict's darkest tier (A1 T6+) in its band.
+- **colour cells (heavy streaking)**: above streak amount 0.5 the cells' opacity boost and colour for streaks fade toward the plain dirt, to 0.35 at 1.0; every preset and the sweeps' lower steps are unchanged. Round-H streak sweep: 0.75 and 1.0 failed I3 (gable colour spread 4.18 and 4.7 against the photo walls' 4.0) because the cells' boost (about 1.5x at Typical) multiplied many overlapping streaks; gable after 3.29 and 2.88. Rebuilt, 0.75 passes every rule; 1.0 still fails C3 and H1 (striped: heavy streaks dominate the lighter Typical).
 
 ## Running the gate
 

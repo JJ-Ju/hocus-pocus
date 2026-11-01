@@ -22,8 +22,8 @@ headless and write correct files.
 - [references/concrete.md](references/concrete.md) for concrete, bare or under a coat: the
   finish per element, the formwork module, the layer stack, recipes and the engine path;
 - [references/weathering-rules.md](references/weathering-rules.md) for weathering by number:
-  opacity tiers, scale levels, coverage by age and upkeep, growth by wetness class, cracks,
-  spalls and edges, and the gate in `scripts/weathering/`
+  opacity tiers, scale levels, coverage by age and upkeep, growth by wetness class, mark colour
+  families, rust by grade, cracks, spalls and edges, and the gate in `scripts/weathering/`
   that a weathered building passes before anyone reviews it.
 
 This file only summarises them. Only when the brief asks for a painted or anime-background look,

@@ -86,10 +86,18 @@ def main():
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--override", nargs="*", default=[])
     ap.add_argument("--gains")
+    ap.add_argument("--match", help="build dir of this preset's first seed: keep its film contrast, aim at its coverage (A5)")
     a = ap.parse_args()
     age, up = rp.PRESETS[a.preset]
     cfg = {"preset": a.preset, "age": age, "upkeep": up, "seed": a.seed, "grime": 0.5, "exposure": 0.6,
            "wind": 200.0, "override": {}, "gains": {}, "building": "round-7 danchi, real elevations"}
+    if a.match:
+        import json
+        m = json.load(open(os.path.join(a.match, "meta.json"), encoding="utf-8"))
+        if m["config"].get("preset") != a.preset:
+            raise SystemExit("--match %s is preset %s, not %s" % (a.match, m["config"].get("preset"), a.preset))
+        cfg["match"] = {"dir": a.match, "seed": m["config"].get("seed"), "film_k": m["gains"]["film_k"],
+                        "coverage": m["coverage"]}
     for o in a.override:
         k, v = o.split("=")
         cfg["override"][k] = float(v)

@@ -18,7 +18,9 @@ import weather_fields as wf  # noqa: E402
 import weather_measure as wm  # noqa: E402
 
 from weather_fields import TEXDIR as TEX  # noqa: E402
-PRESETS = {"new": (0, 1.0), "kept": (15, 0.85), "typical": (35, 0.9), "worn": (35, 0.5), "neglected": (45, 0.12)}
+# (age, upkeep). Round H: the user's rename. Kept is new, between New and Typical; Typical (35 years,
+# ordinary upkeep) has round G's Kept look, Worn round G's Typical, Derelict round G's Worn (soiling clock)
+PRESETS = {"new": (0, 1.0), "kept": (10, 1.0), "typical": (35, 0.9), "worn": (35, 0.5), "derelict": (45, 0.12)}
 PAINT = np.array([0.62, 0.60, 0.555])
 CONCRETE = np.array([0.30, 0.29, 0.27])
 COPING = np.array([0.58, 0.57, 0.53])
@@ -128,7 +130,8 @@ def run(out_dir, cfg, planes=None, preview=True, fixed_gains=None, bases=None):
         arrs = {"D": D, "Yc": wm.luminance(bases[p["name"]]).astype(np.float32), "cls": p["cls"],
                 "src": src_map(p, o), "edge": p["edges"]}
         for k, v in o["L"].items():
-            arrs["L_" + k] = np.where(p["mask"], v, np.nan).astype(np.float32)
+            m_ = p["mask"] | p["steel"] if (k == "rust" and p.get("steel") is not None) else p["mask"]   # rust on the steel too (R1, R2)
+            arrs["L_" + k] = np.where(m_, v, np.nan).astype(np.float32)
         dm = o["marks"].get("damage", [])
         if dm:
             arrs["dmg_y"] = np.array([m["y"] for m in dm], np.int32)
@@ -141,6 +144,11 @@ def run(out_dir, cfg, planes=None, preview=True, fixed_gains=None, bases=None):
                 arrs["dmg_a"] = dl["alpha"].astype(np.float16)          # break coverage (K4)
                 arrs["dmg_h"] = dl["depth"].astype(np.float16)          # break depth, m (relief)
         arrs["rgb"] = o["rgb"].astype(np.float16)                 # weathered albedo (previews)
+        tf = getattr(b, "tint", {}).get(p["name"])
+        if tf is not None and "fam_g" in tf:                         # mark colour families (I4): 1 green, 2 yellow
+            arrs["fam"] = ((tf["fam_g"] >= 0.5).astype(np.uint8) + 2 * (tf["fam_y"] >= 0.5).astype(np.uint8))
+        if p.get("steel") is not None:
+            arrs["steel"] = p["steel"].astype(np.uint8)              # rusting metal (R1-R3)
         if p["name"] in getattr(b, "wet", {}):
             arrs["bio_w"] = b.wet[p["name"]]                         # where water stays (growth rules)
         cs = getattr(b, "crk", {}).get(p["name"])
