@@ -50,7 +50,9 @@ def lit(rgb, cls, ppm, Ngeom=None, view="S", joint=None, relief=None):
         nx, ny, nz = nx / n, ny / n, nz / n
     if Ngeom is not None:
         # facing factor from the captured geometry normal (soffits, returns darker)
-        face = np.clip(-Ngeom[..., 2] if view == "S" else Ngeom[..., 2] if view == "N" else -Ngeom[..., 0], 0, 1)
+        # the capture's walls face +z on the south front, -z on the north, -x on the west gable (round I:
+        # the south and north previews had the sign the other way round, so their walls took no sun)
+        face = np.clip(Ngeom[..., 2] if view == "S" else -Ngeom[..., 2] if view == "N" else -Ngeom[..., 0], 0, 1)
         up = np.clip(Ngeom[..., 1], -1, 1)
     else:
         face = np.ones((H, W))

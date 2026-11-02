@@ -1,6 +1,6 @@
 {
  "name": "Facade weathering rules",
- "version": "1.5 (round H)",
+ "version": "1.6 (round I)",
  "about": "Numeric rules for building weathering, measured in facade space (metres) on a darkening map D = 1 - Y_weathered / Y_clean. A configuration is accepted only when every binding rule passes. Origins: U = the user's review notes (review 36), P = measured on the reference photos, L = building physics and the soiling literature, C = craft estimate (to recalibrate with picks).",
  "definitions": {
   "D": "darkening of albedo luminance against the same surface with no weathering: 0 clean, 0.10 = 10 % darker, negative = lighter",
@@ -148,9 +148,10 @@
   }
  },
  "coverage": {
-  "about": "A1: share of the exposed painted wall at or above each tier of D_local (T2+ ... T6+), by preset; interpolate in E. Anchors: U, round-7 'Light' (picked for a moderately kept block) measured T3+ 0.16, T4+ 0.057, T5+ 0.025; P, ordinary photo walls median T3+ 0.52, T4+ 0.09, T5+ 0.034 (range 0.08-0.66, 0.05-0.25, 0.02-0.12), heavily stained walls T3+ 0.88-0.98, T4+ 0.63-0.96; U, round-7 Neglected (0.49, 0.24, 0.087) was 'not heavy enough'. The New band allows the material's own variation. Round F: re-measured with D_local on the weathering alone; round-7 'Light' then reads 0.35 / 0.13 / 0.041 / 0.011 / 0.001 (inside Kept), round-7 'Medium' 0.64 / 0.44 / 0.17 / 0.039 / 0.004 (Worn's T5+ and T6+ lower bounds moved to 0.035 and 0.004 to hold it), round-7 Neglected 0.76 / 0.52 / 0.25 / 0.072 / 0.011 (still below Neglected: 'not heavy enough'). Round G: the user picked the Kept image as the default street block (35 years, upkeep 0.9) on the front and on the 1:1 top floors, so Typical takes Kept's round-F bands; Kept is about 0.6x; Worn between Typical and Neglected; Neglected unchanged ('about right'). Round H: as the tone, the presets moved onto these anchors through the clock (the user's rename); the bands did not change.",
+  "about": "A1: share of the exposed painted wall at or above each tier of D_local (T2+ ... T6+), by preset; interpolate in E. Anchors: U, round-7 'Light' (picked for a moderately kept block) measured T3+ 0.16, T4+ 0.057, T5+ 0.025; P, ordinary photo walls median T3+ 0.52, T4+ 0.09, T5+ 0.034 (range 0.08-0.66, 0.05-0.25, 0.02-0.12), heavily stained walls T3+ 0.88-0.98, T4+ 0.63-0.96; U, round-7 Neglected (0.49, 0.24, 0.087) was 'not heavy enough'. The New band allows the material's own variation. Round F: re-measured with D_local on the weathering alone; round-7 'Light' then reads 0.35 / 0.13 / 0.041 / 0.011 / 0.001 (inside Kept), round-7 'Medium' 0.64 / 0.44 / 0.17 / 0.039 / 0.004 (Worn's T5+ and T6+ lower bounds moved to 0.035 and 0.004 to hold it), round-7 Neglected 0.76 / 0.52 / 0.25 / 0.072 / 0.011 (still below Neglected: 'not heavy enough'). Round G: the user picked the Kept image as the default street block (35 years, upkeep 0.9) on the front and on the 1:1 top floors, so Typical takes Kept's round-F bands; Kept is about 0.6x; Worn between Typical and Neglected; Neglected unchanged ('about right'). Round H: as the tone, the presets moved onto these anchors through the clock (the user's rename); the bands did not change. Round I: an explicit Kept anchor (E 5.56) with lighter dark tiers (T4+ 0.004-0.030, T5+ 0.001-0.010, T6+ <= 0.003; the user: Kept 'a tiny bit too dirty, namely the darker stains look a little too dark'), and Derelict (E 19.8) raised to T2+ 0.50-0.85, T3+ 0.28-0.55, T4+ 0.10-0.26, T5+ 0.03-0.10, T6+ 0.006-0.04 ('Still looks too light ... the amount or spread of wear/weather/organic growth/damage').",
   "E": [
    0.0,
+   5.56,
    10.75,
    14.5,
    19.8,
@@ -162,6 +163,10 @@
     0.16
    ],
    [
+    0.08,
+    0.26
+   ],
+   [
     0.18,
     0.4
    ],
@@ -170,8 +175,8 @@
     0.62
    ],
    [
-    0.42,
-    0.78
+    0.5,
+    0.85
    ],
    [
     0.7,
@@ -184,6 +189,10 @@
     0.05
    ],
    [
+    0.02,
+    0.1
+   ],
+   [
     0.05,
     0.18
    ],
@@ -192,8 +201,8 @@
     0.3
    ],
    [
-    0.2,
-    0.45
+    0.28,
+    0.55
    ],
    [
     0.55,
@@ -206,6 +215,10 @@
     0.035
    ],
    [
+    0.004,
+    0.03
+   ],
+   [
     0.012,
     0.06
    ],
@@ -214,8 +227,8 @@
     0.1
    ],
    [
-    0.07,
-    0.2
+    0.1,
+    0.26
    ],
    [
     0.3,
@@ -228,6 +241,10 @@
     0.025
    ],
    [
+    0.001,
+    0.01
+   ],
+   [
     0.003,
     0.02
    ],
@@ -236,8 +253,8 @@
     0.04
    ],
    [
-    0.02,
-    0.08
+    0.03,
+    0.1
    ],
    [
     0.12,
@@ -251,6 +268,10 @@
    ],
    [
     0.0,
+    0.003
+   ],
+   [
+    0.0,
     0.006
    ],
    [
@@ -258,8 +279,8 @@
     0.012
    ],
    [
-    0.004,
-    0.03
+    0.006,
+    0.04
    ],
    [
     0.04,
@@ -443,9 +464,9 @@
    "id": "G1",
    "family": "placement",
    "title": "Streaks start at a feature",
-   "measure": "share of streak marks whose top lies within 0.15 m below a source pixel (ledge and slab drip line, the drip edge under copings and roof props, joint crossings, sill end, opening corner, fixing, joint, chip, top edge)",
+   "measure": "share of streak marks whose top lies within 0.15 m below a source pixel (ledge and slab drip line, the drip edge under copings and roof props, horizontal joints and grooves, joint crossings, sill end, opening corner, fixing, joint, chip, top edge)",
    "pass": ">= 0.95",
-   "origin": "P (review 31: every streak in 17 photos starts at a feature); L",
+   "origin": "P (review 31: every streak in 17 photos starts at a feature); L; U (round I: 'coming down from the horizontal grooves')",
    "binding": true
   },
   {
@@ -539,6 +560,15 @@
    "binding": true
   },
   {
+   "id": "H6",
+   "family": "separability",
+   "title": "Streaks gather in the vertical lines",
+   "measure": "streak pixels at T2+ on paint: the share within 0.3 m of a vertical joint, a bay division or a wall's end (from streak amount 0.15)",
+   "pass": ">= 40 %",
+   "origin": "U (round H: 'streaking will probably be most severe along the panel lines going down. They're natural channels where water gathers'); L (research weathering-water-layers V3; PCI: vertical recesses gather run-off)",
+   "binding": true
+  },
+  {
    "id": "I1",
    "family": "colour",
    "title": "Dirt shifts colour like real dirt",
@@ -568,19 +598,28 @@
   {
    "id": "I4",
    "family": "colour",
-   "title": "Dark green and yellow marks sit side by side",
-   "measure": "mark pixels (streaks, stains and the ground band at T2+ on paint, growth and rust left out) against clean: the green family (hue 100-180 deg, a* -1 or less), the yellow family (hue 70-100 deg, b* +3 or more), and the olive in between (hue 105-130 deg, chroma 2 or more) that a smooth blend would make; from E 8",
-   "pass": "green >= 5 %, yellow >= 4 %, neither over 35 %; every wall with 5000 mark pixels has both (2 % each); olive <= 0.35 x the smaller family",
-   "origin": "U (round G: 'work in a little more dark green and yellow. Not blended smoothly, but coexisting'); C (shares)",
+   "title": "Organic marks at different stages sit side by side",
+   "measure": "growth pixels on paint (growth at T1+) against clean, by the hue of their shift: the yellow stage (60-100 deg, b* +3 or more), the green stage (100-180 deg, a* -1 or less), the red-muddy stage (15-60 deg, a* +1.5 or more); from E 8",
+   "pass": "yellow and green each >= 5 %; from E 18 the red-muddy stage too",
+   "origin": "U (round H: 'keep it on a continuum, dark yellow to dark green to reddish/muddy'; round G: 'Not blended smoothly, but coexisting'); L (research weathering-water-layers: yellow first, green, then brown-black; red only with Trentepohlia)",
    "binding": true
   },
   {
    "id": "I5",
    "family": "colour",
-   "title": "Green marks darken with age",
-   "measure": "the green-family mark pixels across the presets at E 8 or more: their mean L* change and colour difference against clean",
-   "pass": "from each preset to the next older one: L* change down by 1.0 or more, colour difference up",
-   "origin": "U (round G: 'Remember what I said, mold and mildew darken/intensify with age')",
+   "title": "A place's organic colour only moves forward",
+   "measure": "between successive presets, the pixels with growth in both, staged as in I4: the share that goes back a stage; and the growth pixels' mean L* shift",
+   "pass": "8 % or fewer go back; from each preset at E 8 or more to the next, the mean L* shift falls by 1.0 or more",
+   "origin": "U (round H: 'the colors of the organic staining are flipping between levels ... a streak that looks dark gray, then turns yellow, then blackish'; round G: 'mold and mildew darken/intensify with age')",
+   "binding": true
+  },
+  {
+   "id": "I6",
+   "family": "colour",
+   "title": "Water and dirt marks keep the dirt palette",
+   "measure": "streak, stain and ground-band pixels at T2+ on paint, growth and rust left out: the share in the green stage (as I4)",
+   "pass": "<= 3 %",
+   "origin": "U (round H: 'make sure that the pure water staining isn't necessarily the same layer as the organic staining ... one is a growth from the other. Layering, remember layering')",
    "binding": true
   },
   {
@@ -737,12 +776,21 @@
    "binding": true
   },
   {
+   "id": "L5",
+   "family": "controls",
+   "title": "Marks grow in area with age",
+   "measure": "over the presets from Kept: the streak area at T2+ (m2) and the ground band's median height (the highest row of the ground-band layer at T1+, per column)",
+   "pass": "each step: streak area x 1.15 or more, the ground band 5 cm or more higher",
+   "origin": "U (round H: 'the increases in ... streaking and ground level wear/staining aren't expanding/increase size and surface area ... the bottom level dirt is getting more intense, but not really seeing a whole lot more of it'); L (research weathering-water-layers V4: x 1.3-1.6 area per step)",
+   "binding": true
+  },
+  {
    "id": "M1",
    "family": "growth",
    "title": "Light growth is a tint, not grey",
-   "measure": "growth pixels at T2-T3 (growth making most of the darkening) against clean: b* and a* shift per 0.1 of D; the share in a dull or rusty-yellow family (a* +0.3 or more, b* +3 or more per 0.1 D) and in the dirt band (b* <= +0.8)",
-   "pass": "b* +2.5 to +7.0 per 0.1 D; green family a* -3.0 to -0.4 per 0.1 D; yellow family 10-45 %; dirt band <= 10 %",
-   "origin": "U (round F: 'weaker growth should have a lighter green or very dull or rusty yellow look'); L (roundG/research/organic-growth.md O1: +4.4 to +5.5 b* and -1.5 to -1.9 a* per 0.1 D)",
+   "measure": "growth pixels at T2-T3 (growth making most of the darkening) against clean: b* shift per 0.1 of D; the share in the dirt band (b* <= +0.8)",
+   "pass": "b* +2.5 to +7.0 per 0.1 D; dirt band <= 10 %",
+   "origin": "U (round F: 'weaker growth should have a lighter green or very dull or rusty yellow look'); U (round H: the continuum starts at dark yellow, so the green and yellow family clauses of round G are dropped); L (roundG/research/organic-growth.md O1)",
    "binding": true
   },
   {
@@ -759,8 +807,8 @@
    "family": "growth",
    "title": "Growth sits where water stays",
    "measure": "pooled over exposed walls: share of growth (T2+) in damp and wet zones (W2-W3, wetness >= 0.40); the cover of W2-W3 and of the open wall (W0-W1); the share in sunny open wall (W0, < 0.15)",
-   "pass": ">= 70 % in W2-W3 while growth covers under 5 %; beyond that, while W2-W3 are under 80 % covered, their cover >= 3x the open wall's; W0 <= 10 %",
-   "origin": "U (round F: corners, divots, edges, below ledges); L (roundG/research/organic-growth.md O4)",
+   "pass": "while growth covers under 5 %: >= 70 % in W2-W3, from E 18 (Derelict) >= 50 %; beyond that, while W2-W3 are under 80 % covered, their cover >= 3x the open wall's; W0 <= 10 %",
+   "origin": "U (round F: corners, divots, edges, below ledges); L (roundG/research/organic-growth.md O4); U (round I: Derelict growth 'mostly in the same areas' - it spreads past the wet zones)",
    "binding": true
   },
   {
@@ -866,7 +914,7 @@
    "id": "R1",
    "family": "metal",
    "title": "Rust on steel by grade",
-   "measure": "the share of the steel (rails, posts; not aluminium sashes) where rust shows, a colour difference of 8 or more against clean (dE76; the rails' paint is darker than rust in places), against the rust amount",
+   "measure": "the share of the railing steel (rails, posts, balusters; not aluminium sashes, and not flat steel panels such as doors, which R3 judges) where rust shows, a colour difference of 8 or more against clean (dE76; the rails' paint is darker than rust in places), against the rust amount",
    "pass": "within 0.5-2x the grade share: 5 % at 0.25 (Ri3-4), 10 % at 0.5 (Ri4), 20 % at 0.75 (Ri4-5), 40 % at 1.0 (Ri5), log-linear between; under 0.1 only an upper limit",
    "origin": "U (round G: 'High rust side looks a little weak'); L (ISO 4628-3 rust grades: Ri3 1 %, Ri4 8 %, Ri5 40-50 %)",
    "binding": true
@@ -875,16 +923,80 @@
    "id": "R2",
    "family": "metal",
    "title": "Each rust step shows",
-   "measure": "the rust control's steps: rusted share of the steel (as R1), the steel's mean colour difference against clean, and the rust area on the paint below",
+   "measure": "the rust control's steps: rusted share of the railing steel (as R1), the steel's mean colour difference against clean, and the rust area on the paint below",
    "pass": "per step: share x 1.5 or more (or +10 points), mean colour difference x 1.5 or more (or +2), paint area grows",
    "origin": "U (round G: 'the rust growth needs to be stronger between steps too')",
+   "binding": true
+  },
+  {
+   "id": "R3",
+   "family": "metal",
+   "title": "Rust follows the water",
+   "measure": "rusted steel (colour difference 8 or more against clean, as R1) by part of the steel's geometry: post feet (the lowest 0.1 m of posts standing on paint), joints (uprights within 0.04 m of a rail), rails, uprights within 0.3 m below a rail, and the other upright faces; flat steel panels (doors, pipe-shaft doors: the steel fills 75 % or more of a 0.2 m window) are not railing steel: the rust on them, by where it sits in each panel",
+   "pass": "from rust 0.25: feet rusted >= 50 % (>= 80 % from 0.5); the rails' rusted share >= 3x the other faces'; the other faces hold <= 10 % of all rust up to 0.75 and <= 25 % at 1.0; on panels (200 rusted pixels or more), 60 % or more of the rust in each panel's bottom quarter",
+   "origin": "U (round H: 'Rust would probably build along the top, drip down a little, gather along the bottom railing, and then drip down the vertical columns ... I wouldn't just expect the rust to grow radially around the existing rust between steps, but ... grow along the surfaces most affected by water and following the water's flow'); L (research weathering-rust-water §1: feet and pockets first, then joints and welds where 50-90 % of attacks start (Knudsen 2023), the top rail's face (horizontal steel corrodes 2-3x faster, BRANZ), the bottom rail, upright faces last)",
+   "binding": true
+  },
+  {
+   "id": "R4",
+   "family": "metal",
+   "title": "Rust grows along the flow",
+   "measure": "the rust control's steps: the new rusted steel at each step that continues earlier rust along its member (0.3 m along a rail, 0.5 m down or 0.05 m up an upright) or starts at a foot or joint; new rust creeping more than 0.05 m above earlier rust on an upright; the mean length of the rusted rail segments",
+   "pass": "per step: >= 70 % continues or starts at a foot or joint; <= 10 % creeps up; the mean rusted rail segment x1.3 or more until the rails are 80 % rusted",
+   "origin": "U (round H: 'Rust would probably build along the top, drip down a little, gather along the bottom railing, and then drip down the vertical columns ... I wouldn't just expect the rust to grow radially around the existing rust between steps, but ... grow along the surfaces most affected by water and following the water's flow'); M (research §2: paint creep is 0.1-3.5 mm a year, under a pixel, so growth is new sites on the same wet lines and longer segments, not rings)",
+   "binding": true
+  },
+  {
+   "id": "R5",
+   "family": "metal",
+   "title": "Post feet stain the concrete",
+   "measure": "per post foot over paint: rust on the paint below (T2+, within 0.12 m of the post axis) reaching 0.1 m; its width in the top 0.04 m (the head) against the post width and its lowest quarter; the slab-edge face below the rails (found through the gap under the bottom rail) rusted in its top 0.05 m; parapet plates",
+   "pass": "stained feet >= 25 / 50 / 80 / 90 % at rust 0.25 / 0.5 / 0.75 / 1.0; head 1.5-4.5x the post width (median), the lowest quarter no wider than the head for >= 80 %; slab-edge cover 5-20 % at 0.5 and 20-50 % at 1.0; parapet plates: <= 30 % stained, each <= 0.2 m",
+   "origin": "U (round H: 'I'd also expect streaking on the concrete where the fence posts meet the concrete, following water and rain'); P (research §4: a halo 5-10 cm at the foot; copings under railings stained on 57 % of buildings in the Brunswick survey); M (photos: runs keep their width or narrow, the head 1.6-2.6x the tail)",
+   "binding": true
+  },
+  {
+   "id": "R6",
+   "family": "colour",
+   "title": "Rust colour follows age and density",
+   "measure": "rusted steel: median hue and chroma; between the rust control's steps, the median L* of rust already there against the new; stains below the feet: the head (top quarter) against the tail (lower half)",
+   "pass": "steel hue 40-75 deg, C* 10-35; old rust >= 4 L* darker than new (series); stain heads hue 48-62, tails 64-80, head L* >= 6 below the tail",
+   "origin": "M (research §6: fresh lepidocrocite L* about 56, weathering-steel patina 29-33, photo stains: heads L* 30-35 at 52-56 deg, tails 45-50 at 68-75 deg; diluting iron oxide lowers its chroma)",
+   "binding": true
+  },
+  {
+   "id": "T1",
+   "family": "texture",
+   "title": "Detail at game texel density",
+   "measure": "the detail tiles each layer is revealed against, and the coat: pixels per metre",
+   "pass": "detail tiles >= 1,000 px/m; the coat's detail >= 1,000 px/m; review close-ups at 1,000 px/m",
+   "origin": "U (round H: 'these textures are very, very low res'); L (research texturing-at-scale §2: 512-1,024 px/m street level)",
+   "binding": true
+  },
+  {
+   "id": "T2",
+   "family": "texture",
+   "title": "No tile period shows",
+   "measure": "on a 200 px/m composite of open wall (plain wall, no openings, frames or fixings), high-passed at 5 cm: the luminance correlation coefficient at each tile's period (along x and y) less the median of its ring at that radius",
+   "pass": "<= 0.15 at every tile period (plainly repeating tiles score about 0.98, hex-tiled detail about 0)",
+   "origin": "U (round H: 'tiling with distribution algorithms to avoid the grid pattern'); L (research tiling-and-distribution-algorithms)",
+   "binding": true
+  },
+  {
+   "id": "T3",
+   "family": "texture",
+   "title": "The fine composite keeps the coarse amounts",
+   "measure": "the fine composite box-filtered back to 50 px/m against the build's own albedo, over walls 2 cm or more from another surface: luminance ratio",
+   "pass": "mean within 1 +- 0.03; 5th and 95th percentiles within 0.85-1.15",
+   "origin": "I (the 68 rules measure the 50 px/m maps; the detail must not change what they measured)",
    "binding": true
   }
  ],
  "tone": {
-  "about": "A0: mean D against clean on the exposed painted walls (the overall greying of the paint), by preset. Origin U: the round-7 'Light' level, 0.24, was picked as right for a moderately maintained block; round-7 Neglected (0.56) was not too dark, it lacked variety. Interpolate in E. Round G: Typical centred on Kept's round-F tone (0.18), since the user picked the Kept image as the 35-year default; Kept about 0.12; Worn about 0.27; Neglected unchanged. Round H: the bands stay on their E anchors; the new clock moves the presets onto them (Typical at 10.75 has round G's Kept look, Worn at 14.5 round G's Typical, Derelict at 19.8 round G's Worn; 27.1 is beyond Derelict, no preset).",
+  "about": "A0: mean D against clean on the exposed painted walls (the overall greying of the paint), by preset. Origin U: the round-7 'Light' level, 0.24, was picked as right for a moderately maintained block; round-7 Neglected (0.56) was not too dark, it lacked variety. Interpolate in E. Round G: Typical centred on Kept's round-F tone (0.18), since the user picked the Kept image as the 35-year default; Kept about 0.12; Worn about 0.27; Neglected unchanged. Round H: the bands stay on their E anchors; the new clock moves the presets onto them (Typical at 10.75 has round G's Kept look, Worn at 14.5 round G's Typical, Derelict at 19.8 round G's Worn; 27.1 is beyond Derelict, no preset). Round I: Kept anchor 0.04-0.10; Derelict 0.22-0.42 (was 0.19-0.38).",
   "E": [
    0.0,
+   5.56,
    10.75,
    14.5,
    19.8,
@@ -896,6 +1008,10 @@
     0.02
    ],
    [
+    0.04,
+    0.1
+   ],
+   [
     0.08,
     0.18
    ],
@@ -904,8 +1020,8 @@
     0.26
    ],
    [
-    0.19,
-    0.38
+    0.22,
+    0.42
    ],
    [
     0.3,
@@ -1203,6 +1319,71 @@
    "rule": "colour cells (heavy streaking)",
    "change": "above streak amount 0.5 the cells' opacity boost and colour for streaks fade toward the plain dirt, to 0.35 at 1.0; every preset and the sweeps' lower steps are unchanged",
    "why": "round-H streak sweep: 0.75 and 1.0 failed I3 (gable colour spread 4.18 and 4.7 against the photo walls' 4.0) because the cells' boost (about 1.5x at Typical) multiplied many overlapping streaks; gable after 3.29 and 2.88. Rebuilt, 0.75 passes every rule; 1.0 still fails C3 and H1 (striped: heavy streaks dominate the lighter Typical)"
+  },
+  {
+   "rule": "A1, A0 (Kept, Derelict)",
+   "change": "an explicit Kept anchor at E 5.56 with lighter dark tiers; Derelict's bands and tone raised",
+   "why": "round-H review: Kept 'a tiny bit too dirty, namely the darker stains look a little too dark'; Derelict 'Still looks too light ... the amount or spread'. The solver held Derelict's mark gain at its 0.45 floor to stay inside the old T6+ band (research weathering-water-layers: spend the budget on area)"
+  },
+  {
+   "rule": "G1",
+   "change": "horizontal joints and grooves count as sources",
+   "why": "round-H review: panel streaks come 'from the horizontal grooves'; the floor lines and construction joints are drip features"
+  },
+  {
+   "rule": "H6 (new)",
+   "change": "streaks gather in the vertical lines",
+   "why": "round-H review: 'streaking will probably be most severe along the panel lines going down'"
+  },
+  {
+   "rule": "I4, I5 (rewritten), I6 (new)",
+   "change": "organic colour lives in the growth layer on one continuum (light tint, dark yellow, olive, dark green, muddy, reddish-muddy) by local age; water and dirt marks keep the dirt palette; a place only moves forward along the continuum",
+   "why": "round-H review: colours 'flipping between levels', 'keep it on a continuum', water staining and organic growth as separate layers ('one is a growth from the other'). The flips came from the colour cells' odds rising with the soiling clock (research weathering-water-layers §2)"
+  },
+  {
+   "rule": "L5 (new)",
+   "change": "marks grow in area with age",
+   "why": "round-H review: streaks and the ground band 'aren't expanding/increase size and surface area'. The solver's accent gain scaled the streak amount, so Worn's effective amount (0.26) fell below Typical's (0.30); from round I the amount sets the extent and the gain only the opacity"
+  },
+  {
+   "rule": "M1",
+   "change": "the green and yellow family clauses dropped; the tint and dirt-band clauses kept",
+   "why": "round I: young growth is a light yellow tint first, then dark yellow, then green (the user's continuum)"
+  },
+  {
+   "rule": "M3",
+   "change": "from E 18, 50 % of growth in W2-W3 while cover is under 5 %",
+   "why": "round-H review: Derelict's growth is 'mostly in the same areas'; research: north-wall growth spreads from about 2.5 % to 28 %"
+  },
+  {
+   "rule": "R3, R4 (new)",
+   "change": "rust follows the water on the rails and runs on the concrete below",
+   "why": "round-H review of the rails ('gather along the bottom railing ... drip down the vertical columns ... streaking on the concrete where the fence posts meet the concrete')"
+  },
+  {
+   "rule": "T1-T3 (new)",
+   "change": "the texture stage: detail at game texel density, no tile period, coarse amounts kept",
+   "why": "round-H review: 'these textures are very, very low res ... tiling with distribution algorithms ... trimsheets, stamps and decals'; research texturing-at-scale and tiling-and-distribution-algorithms"
+  },
+  {
+   "rule": "R3, R4 (rewritten), R5, R6 (new)",
+   "change": "the first round-I rust pair (wetness enrichment 1.8x, two concrete runs per 10 m) is replaced by the research's four rules: rust by part of the steel, growth along the members between steps, stains below the post feet with a head and a narrower tail, and colour by age and density",
+   "why": "the round-H rust answer asked for the topic to be researched ('Research this rust topic more'); docs/redesign/research/weathering-rust-water.md §7.2. The old R3 passed on rust that sat mostly on upright faces (40 % of all rust on them in the first round-I smoke build, Worn); the new R3 fails it."
+  },
+  {
+   "rule": "R1, R2, R3 (railing steel; panels)",
+   "change": "R1 and R2 count the railing steel R1 always named (rails, posts); flat steel panels are their own class, and R3 adds a clause for them: their rust sits in each panel's bottom quarter",
+   "why": "round I builds: the north front's steel is 74 % flat panels (the units' steel doors and pipe-shaft doors under the corridor slab), which held about half of all rust when every plane had to reach the same share. The generator now runs one rust clock for the building: sheltered doors rust 0.5-5 % while the south rails reach the grade (research weathering-rust-water §1: exposure and time of wetness decide)."
+  },
+  {
+   "rule": "T2 (text)",
+   "change": "the text now names the measure the gate and the large-scale-texturing skill use: the correlation coefficient's excess over its ring median, at most 0.15 (the text read 'over the median ... <= 1.5')",
+   "why": "the text and the check disagreed; the check is the stricter reading (a ratio of 1.5 would let a visible repeat through), so the text follows the check"
+  },
+  {
+   "rule": "T2, T3 (north window)",
+   "change": "the north front's open-wall check window moved to plain wall (x 2580-2780, y 730-930 at 50 px/m, 99.99 % wall)",
+   "why": "the old window (x 1260-1460, y 400-600) was 21 % windows, a downpipe and meter boxes repeating every storey; their spacing scored as a tile period (New: 0.16 at the coat detail's 0.6 m, 0.18 at the stain tile's 2.05 m, while the south front's plain window scored 0.001-0.012), against the rule's 'open wall'"
   }
  ]
 }

@@ -35,6 +35,8 @@ import gate_p as gp  # noqa: E402
 import gate_k as gk  # noqa: E402
 import gate_n as gn  # noqa: E402
 import gate_h as gh  # noqa: E402
+import gate_i as gi  # noqa: E402
+import gate_r as gr  # noqa: E402
 
 CLASSES = {0: "none", 1: "paint", 2: "coping", 3: "soffit", 4: "concrete", 5: "plinth", 6: "glass",
            7: "metal", 8: "prop", 9: "decal"}
@@ -1066,8 +1068,8 @@ PRESET_ORDER = ["new", "kept", "typical", "worn", "derelict"]     # round H: the
 
 
 def series_presets(runs):
-    """A4 (order at every tier, the ground band), A6 (even tone steps) and I5 (green marks darken
-    with age) over the presets."""
+    """A4 (order at every tier, the ground band), A6 (even tone steps), I5 (organic colour moves
+    forward along its continuum and darkens) and L5 (marks grow in area) over the presets."""
     order = PRESET_ORDER
     runs = sorted(runs, key=lambda r: order.index(r[0].get("preset")) if r[0].get("preset") in order else 99)
     cov, tones = {}, {}
@@ -1108,7 +1110,7 @@ def series_presets(runs):
             bad.append("ground band: a step over 0.45 of the range")
     return [res("A4", not bad, {"coverage": {k: [round(x, 4) for x in cov[k]] for k in seq},
                                 "ground_excess": {k: round(v, 3) for k, v in ex.items()}, "ground_steps": steps, "bad": bad}),
-            gh.series_steps(tones, order), gh.series_green_age(runs)]
+            gh.series_steps(tones, order), gi.series_stage(runs), gi.series_area(runs)]
 
 
 def series_sweep(layer, runs):
@@ -1183,7 +1185,7 @@ CONFIG_RULES = [rule_A0, rule_A1, rule_A2, rule_A3, rule_B1, rule_B2, rule_B3, r
                 rule_E1, rule_F1, rule_F2, rule_F3, rule_F4, rule_G1, rule_G2, rule_G3, rule_G4, rule_H1, rule_H2,
                 rule_H3, rule_I1, rule_I2, rule_J1, rule_J2, rule_K1, rule_K3, rule_K4,
                 gg.rule_G5, gp.rule_G6, gg.rule_H4, gg.rule_H5, gc.rule_I3,
-                gm.rule_M1, gm.rule_M2, gm.rule_M3, gm.rule_M4, gm.rule_M6, gm.rule_M7] + gk.RULES + gn.RULES + gh.RULES
+                gm.rule_M1, gm.rule_M2, gm.rule_M3, gm.rule_M4, gm.rule_M6, gm.rule_M7] + gk.RULES + gn.RULES + [gh.rule_R1] + gi.RULES + gr.RULES
 
 
 LAYER_RULES = ("C2", "C3", "F2", "G1", "H2", "I1")
@@ -1249,6 +1251,7 @@ def main():
                 out += [gm.series_growth(runs), gm.series_fronts(runs), gh.series_growth_age(runs)]
             if layer == "rust":
                 out.append(gh.series_rust(runs))
+                out += gr.series_rust_flow(runs)
             vals = [(c.get("override") or {}).get(layer) for c, _ in runs]
             for extra in (gg.series_even(layer, runs, vals), gg.series_top(layer, runs, vals)):
                 if extra is not None:

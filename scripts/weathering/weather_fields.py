@@ -67,9 +67,9 @@ AUTO_E = [0.0, 10.75, 14.5, 19.8, 27.1]
 AUTO = {
     "soiling": [0.0, 0.22, 0.30, 0.50, 0.80],        # Typical at the user's grime pick (round F)
     "streaks": [0.0, 0.30, 0.42, 0.62, 0.85],
-    "stains": [0.0, 0.15, 0.25, 0.48, 0.85],         # Typical at the user's stain pick (round F)
+    "stains": [0.0, 0.02, 0.08, 0.30, 0.60],         # round I: the user picked 0 stain fields at Typical (rounds G and H)
     "base": [0.0, 0.15, 0.28, 0.55, 0.92],           # the ground band comes in gently (round F)
-    "bio": [0.0, 0.25, 0.40, 0.60, 0.85],            # growth: years unattended = bio_years(a): 3.1, 4.5, 7.1, 14 (round H: more green)
+    "bio": [0.0, 0.25, 0.40, 0.72, 0.92],            # growth: years unattended = bio_years(a): 3.1, 4.5, 11, 18 (round I: Derelict spreads)
     "washed": [0.0, 0.08, 0.12, 0.22, 0.40],
     "film_k": [0.0, 0.55, 0.62, 0.85, 1.15],         # local contrast of the soiling film's water pattern
 }
@@ -364,13 +364,27 @@ def region_below(mask, row, col, max_px):
 # ---------------------------------------------------------------------------------------------
 # stamps (marks). Each returns (accepted, info); a mark that breaks its rule is not drawn.
 
+RUN_FIX = True              # round I (G1): runs stay on their paint segment; thin runs keep one connected trail
+RUN_THIN_PX = 1.0           # half-width (px) under which a run is drawn on the pixel grid
+
+
+def est_tail(u, est, L=None):
+    """A run's fade exponent: u for an ordinary run; a long established run (round I) maps the same draw
+    to EST_FADE, a slower fade, so it reads at its length (blended in over EST_FADE_L, m)."""
+    if not est or EST_FADE is None:
+        return u
+    slow = EST_FADE[0] + (u - 0.35) / 0.45 * (EST_FADE[1] - EST_FADE[0])
+    k = 1.0 if L is None else float(nz.smoothstep(EST_FADE_L[0], EST_FADE_L[1], L))
+    return u + (slow - u) * k
+
+
 def stamp_run(acc, mask, ppm, x0, y0, length_m, w0_m, w1_m, opacity, key, striate=0.35,
-              wobble_m=0.02, profile_p=0.6, tail=0.5):
+              wobble_m=0.02, profile_p=0.6, tail=0.5, lean_px=0.0):
     """One run (streak), darkest at its source and fading downward (F2), ragged edges, inner
     vertical striation, clipped to the surface, 'over' build-up."""
     H, W = acc.shape
     L = max(2, int(length_m * ppm))
-    half = max(w0_m, w1_m) * ppm * 0.5 + wobble_m * ppm + 2
+    half = max(w0_m, w1_m) * ppm * 0.5 + wobble_m * ppm + 2 + abs(lean_px)
     xa, xb = int(max(0, x0 - half - 2)), int(min(W, x0 + half + 3))
     ya, yb = int(max(0, y0)), int(min(H, y0 + L))
     if xb <= xa or yb <= ya:
@@ -384,18 +398,55 @@ def stamp_run(acc, mask, ppm, x0, y0, length_m, w0_m, w1_m, opacity, key, striat
     hw = 0.5 * ppm * (w0_m + (w1_m - w0_m) * np.clip(t, 0, 1) ** 0.7)
     edge_n = np.interp(np.arange(ya, yb), np.linspace(ya, yb, nwob * 2), r.normal(0, 1, nwob * 2))[:, None]
     hw = hw * (1.0 + 0.25 * edge_n)
-    dx = np.abs(xx - (x0 + wob[:, None])) / np.maximum(hw, 0.6)
+    cen = x0 + wob[:, None]
+    if lean_px:                                                    # round I (G1): leaves its source, then drifts aside
+        cen = cen + lean_px * nz.smoothstep(0.0, max(1.0, RUN_LEAN_M * ppm), yy - y0)
+    thin = hw < RUN_THIN_PX                                        # round I (G1): thin runs on the pixel grid
+    if RUN_FIX:
+        cen = np.where(thin, np.round(cen), cen)
+    dx = np.abs(xx - cen) / np.maximum(hw, 0.6)
     across = np.clip(1.0 - dx * dx, 0.0, 1.0) ** profile_p
     along = np.clip(1.0 - np.clip(t, 0, 1) ** tail, 0.0, 1.0)
     if striate > 0:
-        sw = r.normal(0, 1, (xb - xa,))
         k = max(1, int(0.015 * ppm))
-        sw = np.convolve(sw, np.ones(2 * k + 1) / (2 * k + 1), mode="same")
-        sw = sw / (sw.std() + 1e-9)
-        stria = np.clip(1.0 + striate * sw[None, :], 0.2, 1.8)
+        if RUN_FIX:                                                # striations move with the run, none on thin runs
+            nh = int(half) + 4
+            sw = r.normal(0, 1, (2 * nh + 1,))
+            sw = np.convolve(sw, np.ones(2 * k + 1) / (2 * k + 1), mode="same")
+            sw = sw / (sw.std() + 1e-9)
+            off = np.clip(xx - cen + nh, 0.0, 2 * nh - 1e-3)          # sub-pixel: no row-to-row jumps (G1)
+            i0 = np.floor(off).astype(np.int64)
+            fr = off - i0
+            swv = sw[i0] * (1.0 - fr) + sw[np.minimum(i0 + 1, 2 * nh)] * fr
+            st_k = striate * np.clip((hw - RUN_THIN_PX) / 2.0, 0.0, 1.0)
+            stria = np.clip(1.0 + st_k * swv, 0.2, 1.8)
+        else:
+            sw = r.normal(0, 1, (xb - xa,))
+            sw = np.convolve(sw, np.ones(2 * k + 1) / (2 * k + 1), mode="same")
+            sw = sw / (sw.std() + 1e-9)
+            stria = np.clip(1.0 + striate * sw[None, :], 0.2, 1.8)
     else:
         stria = 1.0
-    a = opacity * across * along * stria * mask[ya:yb, xa:xb]
+    m_ = mask[ya:yb, xa:xb]
+    a = opacity * across * along * stria * m_
+    if RUN_FIX:
+        # water stays on the paint it runs on: each row keeps the mask segment under the run's centre
+        # (the nearest one when the centre sits on a frame or pipe)
+        ww = xb - xa
+        cc = np.clip(np.round(cen[:, 0] - xa).astype(np.int64), 0, ww - 1)
+        ar = np.arange(ww)[None, :]
+        lft = np.maximum.accumulate(np.where(m_, ar, -1), axis=1)
+        rgt = np.minimum.accumulate(np.where(m_, ar, ww)[:, ::-1], axis=1)[:, ::-1]
+        rows = np.arange(m_.shape[0])
+        l_, r_ = lft[rows, cc], rgt[rows, cc]
+        pick = np.where(m_[rows, cc], cc, np.where((cc - l_ <= r_ - cc) & (l_ >= 0), l_, np.where(r_ < ww, r_, cc)))
+        brk = np.cumsum(~m_, axis=1)
+        a = a * (brk == brk[rows, pick][:, None])
+        # thin runs: bridge a sideways step so the trail stays 4-connected
+        st_ = thin[:, 0] if thin.ndim == 2 and thin.shape[1] == 1 else thin.any(axis=1)
+        step = np.flatnonzero(st_[1:] & (cc[1:] != cc[:-1])) + 1
+        if step.size:
+            a[step, cc[step - 1]] = np.maximum(a[step, cc[step - 1]], a[step, cc[step]] * m_[step, cc[step - 1]])
     a = np.clip(a, 0, 0.95)
     if a.max() < 0.01:
         return False, None
@@ -630,11 +681,21 @@ def channel_columns(plane, F, a, key):
         w[max(0, cols[-1] - e):cols[-1] + 1] *= 2.0
         return w * top_c
 
+    line = np.zeros(W, np.float64)                                   # round I: water gathers in the vertical lines
+    if jv is not None:
+        line = np.maximum(line, (jv[tr:gr].sum(axis=0) > 0.3 * (gr - tr)).astype(np.float64))
+    for c in plane.get("bay_cols") or []:
+        line[max(0, int(c) - int(0.15 * ppm)):min(W, int(c) + int(0.15 * ppm) + 1)] = 1.0
+    line[cols[0]:cols[0] + e] = 1.0
+    line[max(0, cols[-1] - e):cols[-1] + 1] = 1.0
+    for (_y, x_) in plane.get("corner_heads", []):
+        line[max(0, int(x_) - 2):min(W, int(x_) + 3)] = 1.0
+    lw = CH_LINE + (1.0 - CH_LINE) * line
     cw = wall[tr:gr].mean(axis=0).astype(np.float64)
-    w_main = weights(cw)                                             # the main path: solid wall (H4)
+    w_main = weights(cw) * lw                                        # the main path: solid wall (H4)
     if CH_MAIN_SOLID and (cw >= 0.95).any():
         w_main = np.where(cw >= 0.95, w_main, 0.0)                   # never across windows where solid wall exists
-    w = weights(mask[tr:gr].mean(axis=0).astype(np.float64))         # the rest: off the pier rhythm (G6)
+    w = weights(mask[tr:gr].mean(axis=0).astype(np.float64)) * lw    # the rest: on the lines first
     if w.max() <= 0:
         return []
     width_m = cols.size / ppm
@@ -675,11 +736,15 @@ def joint_crossings(plane):
     return out
 
 
-def layer_streaks(plane, F, cfg, a, key):
+def layer_streaks(plane, F, cfg, a, key, og=1.0):
     """Run-off streaks from features: low points along tops (fringe), sill ends (V fans), inside
     corners (wide), joints and fixings (narrow). Per source: power-law strength x cause field x
     driven rain x height (top floors 1.5-2.5x); lengths log-normal with a tail to the next catch;
-    1-3 overlapping runs for build-up; colour by cause."""
+    1-3 overlapping runs for build-up; colour by cause.
+
+    Round I: `a` is the preset's own amount and sets the extent (sources, lengths, widths, channel
+    count); the solver's gain `og` scales only the opacity, so a heavier preset's marks are larger,
+    not just darker."""
     mask, ppm = plane["mask"], plane["ppm"]
     H, W = mask.shape
     acc = np.zeros((H, W), F32)
@@ -689,7 +754,7 @@ def layer_streaks(plane, F, cfg, a, key):
         return acc, None, marks
     rain = plane.get("face_rain", 1.0)
     bias = 0.8 + 1.0 * cfg.get("exposure", 0.6)
-    omax = OMAX[0] + OMAX[1] * a
+    omax = (OMAX[0] + OMAX[1] * a) * og
     alpha = 1.75 - 0.25 * a                 # length tail: heavier with the amount, never below 1.5
     srcs = [(x, y, "top") for x, y in sources_along_tops(plane, key + ("tops",), TOP_DENS[0] + TOP_DENS[1] * a)]
     srcs += [(x, y, "sill") for (y, x) in plane.get("sill_ends", [])]
@@ -705,7 +770,7 @@ def layer_streaks(plane, F, cfg, a, key):
             continue
         hf = 1.0 + bias * hgt[yy, xx] ** 1.5
         s = np.exp(r.normal(0.0, 0.45)) * 0.75 * C[yy, xx] ** 1.6 * rain * hf
-        s *= {"sill": 1.6, "corner": 1.3, "joint": 0.45, "fixing": 0.6}.get(kind, 1.0)
+        s *= {"sill": 1.6, "corner": 1.3, "joint": 0.45, "fixing": 0.6, "top": TOP_K[0]}.get(kind, 1.0)
         if r.random() > 0.35 + 0.65 * hgt[yy, xx] ** 1.2:  # driven rain wets the upper storeys more
             continue
         if s < 0.25 and r.random() > a * hf / 2.0:        # weak sources show on dirtier, higher walls
@@ -716,8 +781,12 @@ def layer_streaks(plane, F, cfg, a, key):
             # power law N(>L) ~ L^-1.5: each octave down holds 2.8x the runs (C3), few reach the
             # next drip edge, so a cap (the parapet's foot) does not pile them up
             Lm = 0.07 * (1.0 + 0.5 * a) * hf ** 0.5 * s ** 0.3 * (1.0 + rj.pareto(alpha))
+            if kind == "top":                                # panel faces: short runs from the grooves
+                Lm *= TOP_K[1]
+            est_ = False
             if rj.random() < EST_SHARE[0] + EST_SHARE[1] * a:
                 Lm = 0.8 * (1.0 + rj.pareto(EST_TAIL))         # an established run: 0.8 m up, power law
+                est_ = True
             gw = CAP_WET * float(nz.smoothstep(0.40, 0.55, a))    # wetter walls: more and shorter stops (C3)
             if CAP_SHORT > 0 and Lm > room / ppm and rj.random() < CAP_SHORT + (0.95 - CAP_SHORT) * gw:
                 Lm = room / ppm * rj.uniform(0.35 - 0.10 * gw, 0.9 - 0.30 * gw)   # most runs stop short of the next drip edge
@@ -737,7 +806,7 @@ def layer_streaks(plane, F, cfg, a, key):
             op = omax * min(1.4, s) * rj.uniform(OP_LO, 1.0) * (0.75 if j else 1.0)
             op *= min(1.0, (Lm / 0.4) ** 0.4)               # a short drip is a little dirty water
             if rj.random() < 0.18 + 0.08 * a:                # layering: some runs much darker (round F)
-                op *= rj.uniform(DARK_K[0], DARK_K[1])
+                op *= rj.uniform(DARK_K[0], DARK_K[1]) * (1.0 + DARK_A * max(0.0, a - DARK_A0))
             if not j:
                 dx = 0.0
             elif RUN_DX:                                     # the film divides: rivulets a few cm apart
@@ -745,9 +814,9 @@ def layer_streaks(plane, F, cfg, a, key):
             else:
                 dx = rj.normal(0, 0.02 * ppm)
             target = damp if (plane.get("orient") == "N" and rj.random() < 0.4) else acc
-            ok, info = stamp_run(target, mask, ppm, x + dx, y + 1, Lm, w0, w1, op,
+            ok, info = stamp_run(target, mask, ppm, (x if RUN_LEAN else x + dx), y + 1, Lm, w0, w1, op,
                                  key + ("run", kind, x, y, j), striate=0.25 + 0.3 * rj.random(),
-                                 tail=rj.uniform(0.35, 0.8))
+                                 tail=est_tail(rj.uniform(0.35, 0.8), est_, Lm), lean_px=(dx if RUN_LEAN else 0.0))
             if ok:
                 info["kind"] = kind
                 marks.append(info)
@@ -763,27 +832,42 @@ def layer_streaks(plane, F, cfg, a, key):
         if rows.size == 0:
             continue
         u_len, u_op, u_dark, u_w, u_g = rc.random(), rc.uniform(0.7, 1.2), rc.random(), rc.uniform(0.06, 0.16), rc.uniform(1.4, 2.6)
-        u_w *= 1.0 + RUN_WA * a
-        n_str = 1 + int(rc.random() < 0.45) + int(rc.random() < 0.2)      # water films divide: 1-3 strands
-        offs = [0.0] + list(rc.uniform(0.03, 0.10, n_str - 1) * rc.choice([-1, 1], n_str - 1))
-        str_op = [1.0] + list(rc.uniform(0.35, 0.7, n_str - 1))
+        u_w *= CH_WA[0] + CH_WA[1] * a
+        u2, u3 = rc.random(), rc.random()
+        n_str = 1 + int(u2 < CH_STRANDS[0][0] + CH_STRANDS[0][1] * a) + int(u3 < CH_STRANDS[1][0] + CH_STRANDS[1][1] * a)
+        offs = [0.0] + list(rc.uniform(CH_STRAND_DX[0], CH_STRAND_DX[1], n_str - 1) * rc.choice([-1, 1], n_str - 1))
+        str_op = [1.0] + list(rc.uniform(0.5, 0.8, n_str - 1))
         Hw = (rows[-1] - rows[0]) / ppm
         if ci == 0 and CH_MAIN:              # the wall's main water path: most of its height (H4)
-            Lc = Hw * min(1.0, 0.5 + 0.5 * a + 0.25 * u_len)
+            Lc = Hw * min(1.0, 0.35 + 0.8 * a + 0.25 * u_len)
         else:                                # the rest by a power law from 3.5 m: more short than long (C3)
-            Lc = min(Hw, CH_CAP, 3.5 * max(u_len, 1e-6) ** (-1.0 / (CH_TAIL[0] - CH_TAIL[1] * min(a, 1.0))))
+            Lc = min(Hw, CH_CAP * (0.7 + 0.6 * a), (CH_GROW[0] + CH_GROW[1] * a) *
+                     3.5 * max(u_len, 1e-6) ** (-1.0 / (CH_TAIL[0] - CH_TAIL[1] * min(a, 1.0))))
         op0 = omax * u_op * (1.6 if u_dark < 0.20 + 0.25 * a else 1.0)
         if ci == 0 and CH_MAIN:              # the main path runs long but stays a film, not a stripe (H1)
-            op0 = max(omax * u_op * CH_MAIN_OP, CH_MAIN_MIN)   # but always visible down its length (H4)
+            op0 = max(omax * u_op * CH_MAIN_OP, CH_MAIN_MIN * og)   # but always visible down its length (H4)
             u_w = u_w * CH_MAIN_W
         target = damp if (plane.get("orient") == "N" and u_dark > 0.6) else acc
         fade = CH_MAIN_FADE if (ci == 0 and CH_MAIN) else 0.55     # the main path stays one run (C3)
         cuts = sorted(int(r_) for r_ in (plane.get("floor_rows") or []))    # water pauses in each floor joint
+        jh, tps, bts = plane.get("joint_h"), plane.get("tops"), plane.get("bottoms")
+        real = set()                             # round I (G1): rows where this column has a joint, an edge or a break
+        for c_ in cuts:
+            a0_, b0_ = max(0, c_ - 3), min(H, c_ + 4)
+            hit = not mask[a0_:b0_, x].all()
+            for mp in (jh, tps, bts):
+                if mp is not None and np.asarray(mp[a0_:b0_, x]).any():
+                    hit = True
+            if hit:
+                real.add(c_)
+        if CH_CUT_AT_JOINTS:
+            cuts = sorted(real)
         y, done, seg = int(rows[0]), 0.0, 0
         pm = CH_MID * float(nz.smoothstep(0.40, 0.55, a)) if ci > 0 else 0.0
         if pm > 0:                                       # wetter walls also shed water from the lower ledges (D1)
             rm = nz.rng(*key, "chanmid", x)
-            fl = [int(r_) for r_ in (plane.get("floor_rows") or []) if rows[0] + 2 * ppm < r_ < rows[-1] - 3 * ppm]
+            fl = [int(r_) for r_ in (plane.get("floor_rows") or []) if rows[0] + 2 * ppm < r_ < rows[-1] - 3 * ppm
+                  and (int(r_) in real or not CH_PART_AT_SOURCE)]          # round I (G1): from a ledge with a source
             if fl and rm.random() < pm:
                 below = rows[rows >= fl[int(rm.integers(len(fl)))]]
                 if below.size:
@@ -799,35 +883,54 @@ def layer_streaks(plane, F, cfg, a, key):
                 continue
             room_m = room
             nc = [c_ for c_ in cuts if c_ > y + 0.3 * ppm]
+            at_cut = None                                    # the cut this segment ends at (None: the surface ends)
             if nc:
+                if (nc[0] - y) / ppm < room:
+                    at_cut = nc[0]
                 room = min(room, (nc[0] - y) / ppm)
             Ls = min(room, Lc - done)
             t0, t1 = done / max(Lc, 1e-6), min(1.0, (done + Ls) / max(Lc, 1e-6))
             last = done + Ls >= Lc - 1e-6
-            Ld = Ls if last else min(room_m, Ls + 0.35)      # overlap into the next storey: one channel
+            ovl = CH_OVERLAP_REAL if (at_cut is not None and at_cut in real) else 0.35   # a joint interrupts (round I)
+            Ld = Ls if last else min(room_m, Ls + ovl)       # overlap into the next storey: one channel
+            p_part = CH_PARTIAL[0] + CH_PARTIAL[1] * a
+            src_next = (at_cut is None) or (at_cut in real) or not CH_PART_AT_SOURCE   # the next one restarts at a source
+            end_here = False
+            if ci > 0 and not last and p_part > 0:          # round I (C3): this storey's deposit may stop partway
+                rpt = nz.rng(*key, "chpart", x, seg)         # (its own stream: the other draws stay put)
+                if rpt.random() < p_part:
+                    if src_next:                             # the next storey's segment restarts at its source
+                        Ld = Ls * rpt.uniform(0.35, 0.7)
+                    elif Lc - done - Ls < CH_END_REM:        # no source below: near its end, the film runs out here
+                        Ld = Ls * rpt.uniform(0.35, 0.7)
+                        end_here = True
+            main_cont = bool(CH_MAIN_CONT) and ci == 0 and CH_MAIN and at_cut is not None and at_cut not in real
             beat = rc.uniform(0.8, 1.25)                     # each storey's run a little different
             for k_, (o_, so_) in enumerate(zip(offs, str_op)):
                 wk = 1.0 if k_ == 0 else 0.45
                 ok, info = stamp_run(target, mask, ppm, x + o_ * ppm, y, Ld, wk * u_w * (1 + (u_g - 1) * t0),
                                      wk * u_w * (1 + (u_g - 1) * t1), so_ * beat * op0 * (1.0 - fade * t0),
-                                     key + ("chan", x, seg, k_), striate=0.35, tail=0.6 if last else 2.5)
+                                     key + ("chan", x, seg, k_), striate=0.35,
+                                     tail=0.6 if last else (CH_MAIN_CONT if main_cont else 2.5))
                 if ok and k_ == 0:
                     info["kind"] = "channel"
                     marks.append(info)
             done += Ls + 1.0 / ppm
             y += max(1, int(round(Ls * ppm)) + 1)
             seg += 1
+            if end_here:
+                break
     # seam crossings: water collects where joints cross (a small head and a short run)
     for (y, x) in joint_crossings(plane):
         rx = nz.rng(*key, "jx", y, x)
         if rx.random() > 0.6 + 0.4 * a:
             continue
-        stamp_blob(acc, ppm, x, y, rx.uniform(0.03, 0.05), rx.uniform(0.25, 0.45) * (0.7 + 0.6 * a), key + ("jxb", y, x),
+        stamp_blob(acc, ppm, x, y, rx.uniform(0.03, 0.05), rx.uniform(0.25, 0.45) * (0.7 + 0.6 * a) * og, key + ("jxb", y, x),
                    ragged=0.4, hard=0.1)
         room = region_below(mask, y + 1, x, H) / ppm
         if room > 0.1:
             ok, info = stamp_run(acc, mask, ppm, x, y + 1, min(room, rx.uniform(0.08, 0.28)),
-                                 0.012, rx.uniform(0.025, 0.05), rx.uniform(0.25, 0.40) * (0.7 + 0.6 * a),
+                                 0.012, rx.uniform(0.025, 0.05), rx.uniform(0.25, 0.40) * (0.7 + 0.6 * a) * og,
                                  key + ("jxr", y, x), striate=0.2, tail=rx.uniform(0.4, 0.8))
             if ok:
                 info["kind"] = "jointx"
@@ -840,7 +943,7 @@ def layer_streaks(plane, F, cfg, a, key):
     return acc, col, marks
 
 
-def layer_stains(plane, F, cfg, a, key):
+def layer_stains(plane, F, cfg, a, key, og=1.0):
     """Water-spread stains as accumulation (round F: 'strength should basically indicate
     accumulation'): every stain event is about as strong at any amount; a higher amount adds
     sites and layers. A site gets up to four layers over the years, each a new event a little
@@ -884,7 +987,7 @@ def layer_stains(plane, F, cfg, a, key):
             size *= 0.5
         drop = float(np.clip(size * r.uniform(0.7, 2.0) * (1.5 if tall else 0.9), 0.08, room / ppm))
         width = float(np.clip(size * r.uniform(0.6, 1.6), 0.10, 0.8 if jnt else 4.5 if tall else 1.2 * drop + 0.1))
-        op = 0.34 * min(1.5, c) ** 0.5 * r.uniform(0.6, 1.1) * (0.85 + 0.3 * hgt[yy, xx])   # one event's strength
+        op = 0.34 * min(1.5, c) ** 0.5 * r.uniform(0.6, 1.1) * (0.85 + 0.3 * hgt[yy, xx]) * og   # one event's strength
         layers = []
         for j in range(4):                            # events at this site over the years
             rl = nz.rng(*key, "stl", x, y, j)
@@ -911,7 +1014,7 @@ def layer_stains(plane, F, cfg, a, key):
         for i, j in enumerate(pick):
             ri = nz.rng(*key, "smi", i)
             size = min(0.40, 0.04 * (1.0 + ri.pareto(1.5)))
-            op = 0.26 * ri.uniform(0.4, 1.0)
+            op = 0.26 * ri.uniform(0.4, 1.0) * og
             if ri.random() < 0.6:                       # a splash: irregular, no tail
                 res_ = stamp_blob(acc, ppm, xs[j], ys[j], 0.5 * size * ri.uniform(0.6, 1.3), op * 0.8,
                                   key + ("smb", i), ragged=0.55, hard=0.05)
@@ -930,6 +1033,7 @@ FOOT_SPLASH = 0.8           # soiling added at the foot
 FOOT_DECAY = 1.0            # over which it fades (m)
 CH_MAIN_OP, CH_MAIN_W = 0.45, 0.5  # its opacity (no dark subset) and width factors
 B2_MARGIN = 0.025           # the solver's last check wants B2 this far inside its thresholds
+A1_ZMAX = 0.97              # the solver keeps every tier this far inside its band (log scale)
 MATCH_TOL = (0.03, 0.05, 0.20)   # a matched seed's bands around the first seed: tone, T2+-T4+, T5+-T6+ (A5)
 J2_MIN = 0.255              # and J2 (a) at least this (the gate needs 0.25)
 CH_MID = 0.5                # share of ordinary channels starting at a floor line on wet walls (amount 0.4-0.55 ramp)
@@ -1110,6 +1214,11 @@ def layer_soiling(field, a):
     return (1.0 - np.exp(-0.40 * a * field)).astype(F32)
 
 
+BASE_H = 1.5                # the ground band's height scale (m)
+BASE_CAP = (0.30, 0.42)     # the splash band's opacity ceiling a0 + a1 x amount (round I: from 0.35 + 0.5 a, A1 T6+ at the foot)
+BASE_GROW = (0.25, 1.9)     # x (a0 + a1 x amount): Kept 0.35 m, Typical 0.5, Worn 0.7, Derelict 1.15 on the south front (round I, research V4: 0.7 + 0.5 a)
+
+
 def foot_rows(plane):
     """Per column: the foot of the painted wall (lowest painted row within 3 m of the ground; a
     plinth's top), or the ground row."""
@@ -1136,7 +1245,7 @@ def layer_base(plane, F, cfg, a, key):
     foot = foot_rows(plane)
     rows = np.arange(H)[:, None]
     north = {"N": 1.0, "E": 0.55, "W": 0.35, "S": 0.15}.get(plane.get("orient"), 0.4)
-    hb = 1.5 * (0.30 + 0.45 * cfg.get("exposure", 0.6)) * (0.7 + 0.5 * a) * (1.0 + 0.3 * north)   # damp faces taller
+    hb = BASE_H * (0.30 + 0.45 * cfg.get("exposure", 0.6)) * (BASE_GROW[0] + BASE_GROW[1] * a) * (1.0 + 0.3 * north)   # round I: rises with the amount
     rag = nz.fbm((1, W), ppm, [5, 6, 7], key + ("rag",))[0]
     along = np.exp(0.30 * nz.fbm((1, W), ppm, [2, 3, 4], key + ("along",))[0])
     top = hb * ppm * (1.0 + 0.50 * rag)
@@ -1145,12 +1254,12 @@ def layer_base(plane, F, cfg, a, key):
     band = np.where(t >= 0, np.clip(1.0 - t, 0, 1) ** 0.6, 1.0)                # below the foot: plinth
     acc = (1.05 * a ** 0.8 * (1.0 + 0.60 * north) * band * np.clip(F.patt, 0.2, 3) ** 1.4 * F.acctex ** 0.8 *
            along[None, :]).astype(F32)                                       # speckled, streaky splash
-    cap = 0.35 + 0.5 * a                                         # kept: peaks in T5; neglected: T6
+    cap = BASE_CAP[0] + BASE_CAP[1] * a                          # kept: peaks in T5
     acc = cap * np.tanh(acc / cap)
     r = nz.rng(*key, "spk")
     n = int(a * W / ppm * 60)
     xs = r.uniform(0, W, n)
-    ys = foot[np.clip(xs.astype(int), 0, W - 1)] - np.abs(r.exponential(0.25 * ppm, n))
+    ys = foot[np.clip(xs.astype(int), 0, W - 1)] - np.abs(r.exponential(0.30 * hb * ppm, n))
     for i in range(n):
         if 0 <= ys[i] < H:
             stamp_blob(acc, ppm, xs[i], ys[i], r.uniform(0.004, 0.02), 0.25 * a, key + ("spk", i), ragged=0.3)
@@ -1179,6 +1288,9 @@ def arrival_time(cost, T, n_iter=6, down=0.6, up=2.0):
 
 
 BIO_W = np.array([0.08, 0.27, 0.55, 0.85])      # class centres on the wetness map: W0 sunny, W1 shaded open, W2 damp, W3 wet
+BIO_AMAX = (0.40, 0.50, 0.70, 0.92)             # growth opacity ceiling by wetness class (round I: damp walls 0.70, the wettest
+                                                # cores 0.92: dense dark crusts only where water stays longest, A1 T5+/T6+)
+BIO_A = (0.80, 0.15)                            # growth opacity: a0 + a1 x old (young growth thinner than old crusts)
 BIO_EDGES = (0.15, 0.40, 0.70)                   # class edges
 BIO_TL = np.array([6.0, 3.5, 1.0, 0.3])          # onset (years), growth research 3.3; W1 3.0 -> 3.5 in round H (M3 at 5.7 y)
 BIO_TAU = np.array([40.0, 15.0, 5.0, 1.5])       # time scale (years)
@@ -1194,13 +1306,34 @@ BIO_SOUTH_GREY = 0.25       # south faces: share of the colour greyed toward mou
 BIO_SOUTH_FU = 0.35         # and the black-fungus share of the dark stage (round G 0.45)
 CH_TAIL = (1.6, 0.0)        # channel lengths: power-law exponent a0 - a1 x amount (from 3.5 m)
 RUN_DX = 0.05               # extra runs at a source: 0 = on top of the first, else this far apart (m)
+RUN_LEAN = True             # round I (G1): extra runs start at the source and drift to their offset (else start offset)
+RUN_LEAN_M = 0.15           # over this much of their length (m)
+DARK_A = 1.0                # round I (H5): darker runs x (1 + DARK_A x (amount - DARK_A0)) above DARK_A0
+DARK_A0 = 0.4
+BIO_BELT_VAR = (0.5, 1.0, 1.15)        # round I (C3): the splash belt's wetness along the wall: (least factor, scale m, most factor)
+BIO_SAT2 = (4.0, 0.08, 1.7, 2.2)             # round I (C3): (lead years, blob scale m, threshold, age years): colonies ahead of the front
 CAP_SHORT = 0.8             # share of runs reaching the next drip edge that stop short of it
 CH_N = (0.5, 10.0)          # channels per 25 m of wall: a0 + a1 x amount
 RUN3 = 0.6                  # chance of a third run at a source: this x amount
+EST_FADE_L = (1.1, 1.5)     # round I: ... for established runs this long (m) and longer; shorter ones fade as ordinary runs
+EST_FADE = (1.2, 2.5)          # round I (C3): established runs' fade exponent range (None: as ordinary runs, 0.35-0.8)
 EST_TAIL = 1.6              # established runs: power-law exponent of their length (from 0.8 m)
 ACC_GAMMA = 1.0             # contrast of the deposits' inner texture (B2)
 CH_MAIN_FADE = 0.2          # the main path's fade over its length (other channels 0.55)
-TOP_DENS = (0.5, 8.5)       # streak sources along tops per m: a0 + a1 x amount
+TOP_DENS = (0.4, 5.0)       # streak sources along tops (the horizontal grooves and drip edges) per m: a0 + a1 x amount (round I: 0.5, 8.5)
+TOP_K = (0.55, 0.6)         # runs from tops on the panel faces: strength and length factors (round I: 'minimal ... from the horizontal grooves')
+CH_LINE = 0.06              # channel weight off the vertical lines (joints, bay divisions, ends, inside corners), round I
+CH_GROW = (0.55, 0.90)      # channel length factor: a0 + a1 x amount (round I: streaks lengthen with age)
+CH_CUT_AT_JOINTS = False    # True: channel segments restart only at a real joint, edge or break (one long segment fades
+                            # out early: H4); round I keeps every storey cut and gates the partial stops instead
+CH_PART_AT_SOURCE = True    # a storey segment stops partway only where the next restarts at a source (G1)
+CH_OVERLAP_REAL = 0.10      # round I (C3): a segment's overlap past a real joint (m); 0.35 elsewhere: the groove interrupts
+CH_MAIN_CONT = 12.0         # round I (C3): the main path's fade exponent into a storey line with no joint (0: 2.5 as others)
+CH_END_REM = 0.0            # ... or, with no source below, where the channel had under this much left (m): it ends there
+CH_PARTIAL = (0.25, 0.30)   # chance a channel's storey segment stops partway: a0 + a1 x amount (round I, C3)
+CH_WA = (0.25, 4.0)         # channel width factor: a0 + a1 x amount (round I: x3 Kept to Derelict, research V4)
+CH_STRANDS = ((0.20, 0.40), (0.05, 0.25))   # chance of a second and third strand: a0 + a1 x amount
+CH_STRAND_DX = (0.012, 0.035)   # strands 1.2-3.5 cm off the channel's centre: they merge into one wet path
 EDGE_C0 = 0.48              # edge band continuity at 0.25 (x EDGE_G a step; N2 inside its band)
 EDGE_K = 1.3                # edge band contrast factor (N1 inside its band)
 EDGE_G = 1.27                # above 0.25: the edge band's continuity x this a step of 0.25 (L1)
@@ -1220,6 +1353,17 @@ BIO_INK_PATH = True         # ink stripes on the streak paths (else on the run-o
 BIO_INK_P = (0.92, 9.0, 11.0, 0.12, 0.30)   # strength, biomass ramp, streak ramp (streaks smeared 0.3 m down)
 BIO_DRY_FAM = True          # dry films per family (green, rusty)
 BIO_RUST_Q = 0.66           # growth families: the rusty family above this quantile of the family field (round H, from 0.58)
+# round I: organic marks on one continuum by local age, dark yellow -> dark green -> reddish-muddy
+# ('Try to keep it on a continuum'); a place's stage only grows with time, so no colour flips between
+# presets, and the stage jitter puts different stages side by side (I4)
+BIO_RAMP = ((0.00, (0.520, 0.440, 0.190)),   # first growth: a light yellow tint (M1: weak growth is a tint)
+            (0.18, (0.330, 0.228, 0.068)),   # dark yellow (ochre-olive): L 57, b* +34
+            (0.38, (0.190, 0.170, 0.050)),   # olive
+            (0.58, (0.067, 0.135, 0.024)),   # dark green: L 40, C* 37 (round I: more saturated, M2)
+            (0.80, (0.170, 0.100, 0.042)),   # dark brown (muddy): L 40, C* 23, hue 75 (no darker than the green: A1 T6+)
+            (1.00, (0.205, 0.090, 0.050)))   # reddish-muddy (Trentepohlia and soil): L 40, C* 24, hue 54
+BIO_STAGE = (0.0, 7.0, 0.22)    # stage = a0 + (1 - a0) x smoothstep(0, years, biomass-years) + jitter x this
+BIO_CONTINUUM = True
 
 
 def bio_years(a):
@@ -1264,6 +1408,11 @@ def bio_wetness(plane, F, stains=None, streaks=None, chips=None, key=("bw",)):
         hn = 0.06 * nz.gfield((8, W_), 0.5 * ppm, tuple(key) + ("bfoot",))[4]      # a ragged belt top
         h = np.clip((foot_rows(plane)[None, :] - np.arange(H)[:, None]) / ppm + hn[None, :], 0, None)
         wf = np.interp(h, [0.0, 0.08, 0.25, 0.60, 1.00], [0.95, 0.92, 0.70, 0.35, 0.0])   # belt top 0.05-0.3 m (O5)
+        if BIO_BELT_VAR is not None:                     # round I (C3): splash is strongest under drip points and in
+            lo_, sc_ = BIO_BELT_VAR[0], BIO_BELT_VAR[1]  # hollows, weaker between: the belt varies along the wall
+            hi_ = BIO_BELT_VAR[2] if len(BIO_BELT_VAR) > 2 else 1.0
+            bv = nz.gfield((8, W_), sc_ * ppm, tuple(key) + ("bbelt",))[4]
+            wf = np.minimum(wf * (lo_ + (hi_ - lo_) * nz.smoothstep(-0.6, 0.6, bv))[None, :], 0.98)
         w = np.maximum(w, (wf * o).astype(F32))
     run = np.zeros((H, W_), F32)
     wet = np.zeros((H, W_), F32)
@@ -1349,6 +1498,14 @@ def bio_arrival(plane, Wt, key):
     return Tfull
 
 
+def bio_ramp(stage):
+    """The organic continuum's colour at stage 0-1 (linear RGB, per pixel)."""
+    xs = np.array([k for k, _ in BIO_RAMP])
+    cs = np.array([c for _, c in BIO_RAMP], F32)
+    out = np.stack([np.interp(stage, xs, cs[:, i]) for i in range(3)], -1)
+    return out.astype(F32)
+
+
 def layer_bio(plane, F, cfg, a, key, stains=None, streaks=None, chips=None):
     """Organic growth as nucleation and outward growth (round G), timed by wetness class (the
     growth research): at amount a (years unattended, bio_years) growth covers {T <= years}, so a
@@ -1367,6 +1524,11 @@ def layer_bio(plane, F, cfg, a, key, stains=None, streaks=None, chips=None):
     ahead = (Tfull > t + BIO_A0 + 0.5) & (Tfull < t + BIO_A0 + 2.0)   # satellites: colonies ahead of a front
     sat = ahead & (nz.gfield((H, W_), 0.8, key + ("bsat",)) > 1.2)
     A = np.where(sat, 1.5, A)
+    if BIO_SAT2 is not None:                           # round I (C3): colonies seeded a few years ahead of the front
+        lead_, ell_, thr_, age_ = BIO_SAT2
+        ahead2 = (Tfull > t + BIO_A0) & (Tfull < t + BIO_A0 + lead_) & mask.astype(bool)
+        sat2 = ahead2 & (nz.gfield((H, W_), ell_ * ppm, key + ("bsat2",)) > thr_)
+        A = np.where(sat2, np.maximum(A, age_), A)
     rho = 1.0 - np.exp(-A / 1.0)
     u = 0.5 + 0.5 * np.tanh(nz.gfield((H, W_), 0.8, key + ("bspk",)))   # young fronts: colonies 2-4 cm
     keep = u < np.clip(0.4 + 0.6 * A, 0, 1)
@@ -1375,8 +1537,8 @@ def layer_bio(plane, F, cfg, a, key, stains=None, streaks=None, chips=None):
     mott = np.clip(0.5 + 0.5 * nz.gfield((H, W_), 0.06 * ppm, key + ("bmott",)), 0, 1)   # mottled inside
     wetter = nz.smoothstep(0.30, 0.60, Wt)                 # dark crusts belong to damp and wet zones
     old = nz.smoothstep(BIO_DARK[0], BIO_DARK[1], Am) * wetter
-    amax = np.interp(Wt, BIO_W, [0.40, 0.55, 0.95, 1.0])   # biomass is limited by water: open wall stays a film
-    alpha = (amax * (0.80 + 0.15 * old) * rho * ((0.6 + 0.4 * mott) * (1 - old) + (0.9 + 0.1 * mott) * old) * mask).astype(F32)
+    amax = np.interp(Wt, BIO_W, list(BIO_AMAX))   # biomass is limited by water: open wall stays a film
+    alpha = (amax * (BIO_A[0] + BIO_A[1] * old) * rho * ((0.6 + 0.4 * mott) * (1 - old) + (0.9 + 0.1 * mott) * old) * mask).astype(F32)
     # colour by age and family
     fam = nz.gfield((H, W_), 0.8 * ppm, key + ("bfam",))
     cls = plane.get("cls")
@@ -1401,6 +1563,10 @@ def layer_bio(plane, F, cfg, a, key, stains=None, streaks=None, chips=None):
     yellow = yellow + (C_["Y3"] - yellow) * s1
     yellow = yellow + (C_["Y4"] - yellow) * s2
     col = np.where(rust[..., None], rusty, np.where(yel[..., None], yellow, green))
+    if BIO_CONTINUUM:
+        jit = nz.gfield((H, W_), 0.6 * ppm, key + ("bstage",))
+        stage = np.clip(BIO_STAGE[0] + (1 - BIO_STAGE[0]) * nz.smoothstep(0.0, BIO_STAGE[1], Am) + BIO_STAGE[2] * jit, 0, 1)
+        col = bio_ramp(stage)
     dry = (0.45 * nz.smoothstep(0.50, 0.20, Wt))[..., None]   # dry films stay lighter, hue toward yellow-olive
     if BIO_DRY_FAM:                                      # toward 90 deg from either side: green stays green-yellow
         dcol = np.where(rust[..., None], np.array(COL["bio_dry_r"], F32), np.array(COL["bio_dry_g"], F32))
@@ -1445,7 +1611,104 @@ def rust_share(a):
     return float(np.exp(np.interp(a, xs, np.log(ys))))
 
 
-def layer_rust(plane, F, cfg, a, key, spalls=None):
+RUST_FLOW = "arrival"        # round I: rust by first arrival along the members from the wet parts (rust_flow.py,
+                             # research weathering-rust-water.md); True: the time-of-wetness score of the first round-I pass
+RUST_FLOW_K = (2.2, 0.55, 0.35)   # score: wetness, noise along the element, fine noise
+RUST_CONC = (0.35, 0.65, 0.55)    # runs on the concrete below rusted feet: chance a0 + a1 x amount, opacity x amount ** 0.5
+
+
+def rail_wetness(plane, metal):
+    """Time of wetness on the steel (0-1) and which pixels belong to horizontal rails. The bottom
+    rail holds water and debris (highest), the junctions where bars meet a rail are next, the top
+    rail's upper face holds water, and on the bars the water runs down, wetter toward the foot."""
+    ppm = plane["ppm"]
+    H, W = metal.shape
+    m = metal.astype(np.int32)
+    # horizontal runs: length of the steel run along each row
+    run = np.zeros((H, W), np.int32)
+    for y in range(H):
+        row = m[y]
+        if not row.any():
+            continue
+        d = np.diff(np.concatenate([[0], row, [0]]))
+        st_, en_ = np.flatnonzero(d == 1), np.flatnonzero(d == -1)
+        for a_, b_ in zip(st_, en_):
+            run[y, a_:b_] = b_ - a_
+    horiz = metal & (run >= int(0.30 * ppm))
+    vert = metal & ~horiz
+    tow = np.zeros((H, W), F32)
+    # a horizontal rail with bars above it is a bottom rail (collects); otherwise a top rail
+    above = np.zeros((H, W), bool)
+    for k in range(1, 4):
+        above[k:] |= vert[:-k]
+    below = np.zeros((H, W), bool)
+    for k in range(1, 4):
+        below[:-k] |= vert[k:]
+    lab_rows = horiz.copy()
+    bottom = horiz & above & ~below
+    top_face = horiz.copy()
+    top_face[1:] &= ~horiz[:-1]                         # the rail's upper face: no rail pixel above
+    tow = np.where(horiz, 0.55, tow)
+    tow = np.where(bottom, 0.85, tow)
+    tow = np.where(top_face, np.maximum(tow, 0.70), tow)
+    # bars: fraction down their run, junction boosts
+    vy = np.zeros((H, W), F32)
+    vl = np.ones((H, W), F32)
+    for x in range(W):
+        col = vert[:, x]
+        if not col.any():
+            continue
+        d = np.diff(np.concatenate([[0], col.astype(np.int8), [0]]))
+        st_, en_ = np.flatnonzero(d == 1), np.flatnonzero(d == -1)
+        for a_, b_ in zip(st_, en_):
+            n_ = b_ - a_
+            vy[a_:b_, x] = (np.arange(n_) + 0.5) / n_
+            vl[a_:b_, x] = n_
+    j = int(round(0.04 * ppm))
+    near_top = np.zeros((H, W), bool)                   # bar pixels within 4 cm below a rail
+    near_bot = np.zeros((H, W), bool)                   # and within 4 cm above one
+    for k in range(1, j + 2):
+        near_top[k:] |= horiz[:-k]
+        near_bot[:-k] |= horiz[k:]
+    tow = np.where(vert, 0.30 + 0.30 * vy, tow)
+    tow = np.where(vert & near_top, np.maximum(tow, 0.62), tow)    # drips from the top rail onto the bars
+    tow = np.where(vert & near_bot, np.maximum(tow, 0.88), tow)    # the bars' feet at the bottom rail
+    foot = vert & (vy > 1.0 - 2.0 / np.maximum(vl, 1))             # a bar's last pixels: an anchor or a foot
+    tow = np.where(foot, np.maximum(tow, 0.92), tow)
+    return (tow * metal).astype(F32), horiz
+
+
+def rust_runs_concrete(plane, metal, rmask, a, acc, key):
+    """Rust runs on the concrete below rusted steel that ends on it (post feet, bar feet, the bottom
+    rail over the slab edge), following the rain down the face."""
+    mask, ppm = plane["mask"], plane["ppm"]
+    H, W = mask.shape
+    cls = plane.get("cls")
+    out = []
+    ends = np.zeros((H, W), bool)
+    ends[:-1] = rmask[:-1] & ~metal[1:] & mask[1:] & np.isin(cls[1:], (1, 2))
+    ys, xs = np.nonzero(ends)
+    if not ys.size:
+        return out
+    r = nz.rng(*key, "conc_runs")
+    take = r.random(ys.size) < RUST_CONC[0] + RUST_CONC[1] * a
+    for j in np.flatnonzero(take):
+        rj = nz.rng(*key, "cr", int(ys[j]), int(xs[j]))
+        yb, xc = int(ys[j]) + 1, int(xs[j])
+        room = region_below(mask, yb, xc, H)
+        if room < 0.04 * ppm:
+            continue
+        ln = min(room / ppm, rj.uniform(0.12, 0.7) * (0.5 + 1.2 * a))
+        ok, info = stamp_run(acc, mask, ppm, xc, yb, ln, rj.uniform(0.008, 0.02), rj.uniform(0.02, 0.06),
+                             RUST_CONC[2] * a ** 0.5 * rj.uniform(0.6, 1.0), key + ("crr", int(ys[j]), int(xs[j])),
+                             striate=0.3, tail=rj.uniform(0.4, 0.8))
+        if ok:
+            info["kind"] = "rust_conc"
+            out.append(info)
+    return out
+
+
+def layer_rust(plane, F, cfg, a, key, spalls=None, flow=None):
     """Rust from fixings (a bloom and a run), where a spall shows its bar a bleed from the break's
     lowest rim down the wall, and on the rails: rust by ISO grade from the metal's edges and lower
     parts, older rust darker, with runs below the posts and the rusted lower edges (round H).
@@ -1470,23 +1733,46 @@ def layer_rust(plane, F, cfg, a, key, spalls=None):
             marks.append(info)
     # rails (round G, research X1): rust on the metal by ISO grade, and rust runs below posts
     cls = plane.get("cls")
-    if cls is not None and a > 0:
+    flow_col = None
+    if cls is not None and a > 0 and RUST_FLOW == "arrival":
+        metal = plane["steel"] if plane.get("steel") is not None else cls == 7
+        if metal.any():
+            import rust_flow as rfl
+            pre, Ts = flow if flow is not None else (None, None)          # the building's clock (Builder)
+            acc_r, flow_col, mk, _st = rfl.layer(plane, metal, a, rust_share(a), key, pre=pre, Ts=Ts)
+            marks.extend(mk)
+            # spall bleeds (acc so far, plain rust colour) under the flow layer
+            c_sp = np.array(COL["rust"], F32)
+            na = acc + acc_r * (1.0 - acc)
+            flow_col = ((c_sp[None, None, :] * (acc * (1.0 - acc_r))[..., None] + flow_col * acc_r[..., None])
+                        / np.maximum(na, 1e-6)[..., None]).astype(F32)
+            acc = na.astype(F32)
+    elif cls is not None and a > 0:
         metal = plane["steel"] if plane.get("steel") is not None else cls == 7    # steel rusts; aluminium sashes do not
         if metal.any():
             share = rust_share(a)
             from weather_measure import gauss
-            inner = gauss(metal.astype(F32), 0.04 * ppm)                     # low at the metal's edges
             low0 = np.zeros((H, W), bool)                                    # the metal's lower edges: water sits there
             low0[:-1] = metal[:-1] & ~metal[1:]
-            low = gauss(low0.astype(F32), 0.12 * ppm)
-            z = (0.7 * nz.gfield((H, W), 0.6, key + ("rail",)) + 0.5 * nz.gfield((H, W), 0.08 * ppm, key + ("rail2",))
-                 + 1.6 * (1.0 - np.clip(inner * 2.0, 0, 1)) + 1.2 * np.clip(low / max(float(low.max()), 1e-6), 0, 1))
+            if RUST_FLOW:                                                    # round I: rust follows the water
+                tow, horiz = rail_wetness(plane, metal)
+                along = np.where(horiz, nz.gfield((H, W), 0.03 * ppm, key + ("rail_h",), aniso=(1.0, 12.0)),
+                                 nz.gfield((H, W), 0.03 * ppm, key + ("rail_v",), aniso=(10.0, 1.0)))
+                z = RUST_FLOW_K[0] * tow + RUST_FLOW_K[1] * along + RUST_FLOW_K[2] * nz.gfield((H, W), 0.6, key + ("rail2",))
+            else:
+                inner = gauss(metal.astype(F32), 0.04 * ppm)                 # low at the metal's edges
+                low = gauss(low0.astype(F32), 0.12 * ppm)
+                z = (0.7 * nz.gfield((H, W), 0.6, key + ("rail",)) + 0.5 * nz.gfield((H, W), 0.08 * ppm, key + ("rail2",))
+                     + 1.6 * (1.0 - np.clip(inner * 2.0, 0, 1)) + 1.2 * np.clip(low / max(float(low.max()), 1e-6), 0, 1))
             thr = np.quantile(z[metal], 1.0 - min(0.95, share))
             deep = nz.smoothstep(thr, thr + 1.2, z)
             ra = np.clip(0.55 + 0.40 * deep, 0, 0.92)                         # speckled at its front, dense inward
             rmask = metal & (z > thr)
             acc = np.maximum(acc, np.where(rmask, ra, 0.0).astype(F32))
             oldw = np.where(rmask, np.clip(RUST_AGE[0] + (RUST_AGE[1] - RUST_AGE[0]) * a, 0, 1) * deep, oldw).astype(F32)
+            if RUST_FLOW:                                                    # runs onto the concrete below post feet and the bottom rail
+                for info in rust_runs_concrete(plane, metal, rmask, a, acc, key):
+                    marks.append(info)
             ys_, xs_ = np.nonzero(low0 & rmask)                              # runs from the rusted lower edges
             if ys_.size:
                 r = nz.rng(*key, "edge_runs")
@@ -1528,6 +1814,8 @@ def layer_rust(plane, F, cfg, a, key, spalls=None):
     for (y, x, kind) in plane.get("fixings", []):
         if kind == "alu":                                # aluminium sash fixings do not rust (round H)
             continue
+        if kind == "post" and RUST_FLOW == "arrival":     # the flow layer stains below the post feet
+            continue
         r = nz.rng(*key, "rust", x, y)
         if r.random() > 0.25 + 0.75 * a:
             continue
@@ -1540,6 +1828,8 @@ def layer_rust(plane, F, cfg, a, key, spalls=None):
                 marks.append(info)
     c0, c1 = np.array(COL["rust"], F32), np.array(COL["rust_bar"], F32)
     col = (c0 + (c1 - c0) * oldw[..., None]).astype(F32)            # older rust on the metal is darker brown
+    if flow_col is not None:
+        col = np.where((flow_col.sum(axis=-1) > 0)[..., None], flow_col, col).astype(F32)
     return np.clip(acc, 0, 0.92), col, marks
 
 
@@ -2248,11 +2538,11 @@ DIRT_TINT = {
     "soot": (0.677, 1.049, 2.017),      # black carbon (0.0, -1.0)
     "green": (0.416, 1.302, 0.020),     # damp, algae-tinted (-1.4, +1.2)
 }
-DIRT_MIX = {                            # (warm, soot, damp green) weights per layer
-    "soiling": (1.00, 0.75, 0.45),
-    "base": (0.90, 0.25, 0.40),
-    "stains": (0.90, 0.45, 0.60),
-    "streaks": (0.50, 0.90, 0.50),
+DIRT_MIX = {                            # (warm, soot, damp green) weights per layer; round I: damp water marks
+    "soiling": (1.00, 0.75, 0.15),      # are not green (growth is its own layer): green 0.45-0.60 -> 0.15
+    "base": (0.90, 0.25, 0.15),
+    "stains": (0.90, 0.45, 0.15),
+    "streaks": (0.50, 0.90, 0.15),
 }
 
 
@@ -2266,7 +2556,8 @@ FAM_CELL = (0.45, 5.0)        # family cells: width, height (m): most streaks st
 FAM_WARP = 0.10               # cell edges warped by this much (m), so they are not straight
 FAM_P = {"green": (0.16, 0.30, 0.12), "yellow": (0.07, -0.04, -0.03)}   # cell share: a0 + a1 x damp + a2 x shelter
 FAM_AGE = (5.0, 20.0)         # E over which the green cells darken and grow (x 0.7 to 1.2)
-FAM_K = {"streaks": 0.92, "stains": 0.88, "base": 0.55}   # how fully a layer takes its cell's colour
+FAM_K = {}                    # round I: no colour cells on water and dirt marks (organic colour is the growth layer's)
+FAM_K_H = {"streaks": 0.92, "stains": 0.88, "base": 0.55}   # round H's values
 FAM_ALPHA = {"green": (1.40, 0.35), "yellow": (1.45, 0.10)}   # mark opacity x (a0 + a1 x age) in a family cell
 _PPF = np.linspace(-4.5, 4.5, 1801)
 _CDF = 0.5 * (1.0 + np.array([__import__("math").erf(x / np.sqrt(2.0)) for x in _PPF]))
@@ -2394,10 +2685,13 @@ def dirt_tint(name, tf):
             + wg[..., None] * T["green"]).astype(F32)
 
 
-def composite(plane, base_rgb, L):
+def composite(plane, base_rgb, L, rec=None):
     """Apply the layers over the clean albedo. Returns weathered RGB, D, and L_<layer> maps (each
     layer alone over clean). On dark substrates, chips expose fresher concrete of the same tone
-    rather than a light colour (G2)."""
+    rather than a light colour (G2).
+
+    rec: a list that receives each step as (name, op, arrays) so the high-resolution compositor
+    (wx_hires.py, round I) can replay the stack at any texel density."""
     A = base_rgb.astype(F32).copy()
     Y0 = np.maximum(luminance(base_rgb), 1e-4).astype(F32)
     Lm = {}
@@ -2405,17 +2699,23 @@ def composite(plane, base_rgb, L):
         f = L["fading"]["alpha"]
         grey = luminance(A)[..., None]
         A = (A + (grey - A) * 0.18 * f[..., None]) * (1.0 + 0.035 * f[..., None])
+        if rec is not None:
+            rec.append(("fading", "fade", {"alpha": f}))
         Lm["fading"] = 1 - luminance(A) / Y0
     if "repaint" in L:
         m, d = L["repaint"]["alpha"], L["repaint"]["shift"]
         A2 = A * (1.0 + d * m)[..., None]
         Lm["repaint"] = 1 - luminance(A2) / Y0 - Lm.get("fading", 0)
         A = A2
+        if rec is not None:
+            rec.append(("repaint", "shift", {"alpha": m, "shift": d}))
     if "crack_repair" in L:                  # repaired cracks: a stripe of slightly different tone
         m, d = L["crack_repair"]["alpha"], L["crack_repair"]["shift"]
         A2 = A * (1.0 + d * m)[..., None]
         Lm["crack_repair"] = 1 - luminance(A2) / Y0 - (1 - luminance(A) / Y0)
         A = A2
+        if rec is not None:
+            rec.append(("crack_repair", "shift", {"alpha": m, "shift": d}))
     for name in ("soiling", "stains", "streaks", "base", "bio", "rust", "cracks", "efflorescence"):
         if name not in L:
             continue
@@ -2433,6 +2733,8 @@ def composite(plane, base_rgb, L):
             col = pc
         Lm[name] = 1 - luminance(_lerp(base_rgb, col, al)) / Y0
         An = _lerp(A, col, al)
+        if rec is not None:
+            rec.append((name, "lerp_dark" if name == "bio" else "lerp", {"alpha": al, "colour": col}))
         if name == "bio":                    # a biofilm tints a dirty wall but never brightens it
             Yn, Yo = luminance(An), luminance(A)
             An = np.where((Yn > Yo)[..., None], An * (Yo / np.maximum(Yn, 1e-6))[..., None], An).astype(F32)
@@ -2444,6 +2746,8 @@ def composite(plane, base_rgb, L):
             cw = COL["old_paint"] if cw is None else cw
             Lm[name] = 1 - luminance(_lerp(base_rgb, cw, al)) / Y0
             A = _lerp(A, cw, al)
+            if rec is not None:
+                rec.append((name, "lerp", {"alpha": al, "colour": cw}))
     if "damage" in L:
         sub, cav = L["damage"]["alpha"], L["damage"]["cavity"]
         cls = plane.get("cls")
@@ -2462,6 +2766,9 @@ def composite(plane, base_rgb, L):
             B2 = _lerp(B2, COL["rust_bar"], L["damage"]["bar"])
         Lm["damage"] = 1 - luminance(B2) / Y0
         A = A2
+        if rec is not None:
+            rec.append(("damage", "damage", {"alpha": sub, "colour": subcol, "cavity": cav,
+                                               "bar": L["damage"].get("bar")}))
     D = 1 - luminance(A) / Y0
     return A, D.astype(F32), {k: np.asarray(v, F32) for k, v in Lm.items()}
 
@@ -2499,6 +2806,24 @@ class Builder:
     def key(self, layer, p):
         return (self.cfg["seed"], layer, p["name"])
 
+    def _rust_clock(self):
+        """Round I: one rust clock for the building. Arrival times on every plane's steel once, cut at
+        the rust amount's share of all the railing steel, so sheltered or lee steel rusts less than
+        the exposed balcony rails instead of every plane reaching the same share."""
+        if getattr(self, "_rclock", None) is None:
+            import rust_flow as rfl
+            pre, states = {}, []
+            for q in self.planes:
+                metal = q.get("steel")
+                if metal is None or not np.asarray(metal).any():
+                    continue
+                pr = rfl.arrival_T(q, metal, self.key("rust", q))
+                pre[q["name"]] = pr
+                states.append((metal, pr))
+            a = self.a["rust"]
+            self._rclock = (pre, rfl.cut(states, rust_share(a)) if a > 0 else 0.0)
+        return self._rclock
+
     def _fixed_layers(self, p):
         """Layers the solver does not scale: base, bio (needs stains: computed with the accent
         layers), rust, cracks, efflorescence, wear, damage, repaint, fading."""
@@ -2512,7 +2837,11 @@ class Builder:
         sub, cav, mk, dep, tone, bar, spl = layer_damage(p, F, cfg, a["damage"], self.key("damage", p))
         L["damage"] = {"alpha": sub, "cavity": cav, "depth": dep.astype(np.float16), "tone": tone, "bar": bar}
         marks["damage"] = mk
-        al, colr, _ = layer_rust(p, F, cfg, a["rust"], self.key("rust", p), spalls=spl)
+        flow = None
+        if RUST_FLOW == "arrival":
+            pre, Ts = self._rust_clock()
+            flow = (pre.get(n), Ts)
+        al, colr, _ = layer_rust(p, F, cfg, a["rust"], self.key("rust", p), spalls=spl, flow=flow)
         L["rust"] = {"alpha": al} if colr is None else {"alpha": al, "colour": colr}
         al, _, mkc, cs = layer_cracks(p, F, cfg, a["cracks"], self.key("cracks", p))
         L["cracks"] = {"alpha": al, "colour": COL["crack"]}
@@ -2542,8 +2871,8 @@ class Builder:
         best = None
         for draw in range(5):
             sfx = ("draw", draw) if draw else ()
-            al, _, mks = layer_stains(p, F, cfg, min(1.0, a["stains"] * g), self.key("stains", p) + sfx)
-            al2, col, mkr = layer_streaks(p, F, cfg, min(1.0, a["streaks"] * g), self.key("streaks", p) + sfx)
+            al, _, mks = layer_stains(p, F, cfg, min(1.0, a["stains"]), self.key("stains", p) + sfx, og=g)
+            al2, col, mkr = layer_streaks(p, F, cfg, min(1.0, a["streaks"]), self.key("streaks", p) + sfx, og=g)
             ratio = flow_top_ratio(p, al + al2)
             if best is None or ratio > best[0]:
                 best = (ratio, al, mks, al2, col, mkr)
@@ -2552,14 +2881,14 @@ class Builder:
         _r, al, mks, al2, col, mkr = best
         L["stains"] = {"alpha": al}
         marks["stains"] = mks
-        L["streaks"] = {"alpha": al2, "colour": col, "amount": min(1.0, a["streaks"] * g)}
+        L["streaks"] = {"alpha": al2, "colour": col, "amount": min(1.0, a["streaks"])}
         marks["streaks"] = mkr
         if p["name"] not in self.bio_cache:
             if abs(g - 1.0) < 1e-3:
                 ref, ref2 = al, al2
             else:
                 ref = layer_stains(p, F, cfg, min(1.0, a["stains"]), self.key("stains", p))[0]
-                ref2 = layer_streaks(p, F, cfg, min(1.0, a["streaks"]), self.key("streaks", p))[0]
+                ref2 = layer_streaks(p, F, cfg, min(1.0, a["streaks"]), self.key("streaks", p))[0]   # the paths at gain 1
             dmg = self._fixed_layers(p)[0].get("damage", {}).get("alpha")
             alb, colb, _, wt = layer_bio(p, F, cfg, a["bio"], self.key("bio", p), stains=ref, streaks=ref2, chips=dmg)
             self.bio_cache[p["name"]] = (alb, colb)
@@ -2775,7 +3104,8 @@ class Builder:
         j0 = self._j2_corr(out)
         if log is not None:
             log.append(("j2", self.k, ga, j0))
-        ok0 = not (self._b2_fails() or self._b1_fails(c1) or b3 > 0.045) and j0 >= J2_MIN
+        ok0 = (not (self._b2_fails() or self._b1_fails(c1) or b3 > 0.045) and j0 >= J2_MIN
+               and max(abs(z) for z in zs(c1)) <= A1_ZMAX)          # round I: A1's tiers checked too
         m0 = self._b2_margin() if ok0 else -1.0
         if m0 < B2_MARGIN:                  # B1-B3 at full resolution, B2 with a margin for the sweeps, J2 kept
             k_best = self.k
@@ -2789,7 +3119,7 @@ class Builder:
                 b3 = self._b3_soiling(o2)
                 j2 = self._j2_corr(o2)
                 ok2 = (not self._b2_fails() and not self._b1_fails(c2) and b3 <= 0.045 and j2 >= J2_MIN and
-                       max(abs(z) for z in zs(c2)) <= 1.0)       # tone and tiers in band
+                       max(abs(z) for z in zs(c2)) <= A1_ZMAX)   # tone and tiers in band, with a margin
                 m2 = self._b2_margin() if ok2 else -1.0
                 if log is not None:
                     log.append(("b_check", self.k, ga * fa, c2, list(self._b2), self._b1_fails(c2), b3, m2, j2))

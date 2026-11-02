@@ -15,12 +15,17 @@ blend.
 **R1: reveal one layer against one height.** For dirt into recesses, chipped paint, moss:
 
 ```
-t = 1 - a*(1+w)            # a = layer amount 0..1 (cause mask, vertex colour)
-m = smoothstep(t, t+w, h)  # h = 0..1 height; use 1-h for things that fill low spots
-                           # w = transition width 0.02-0.2; small = sharp
+hw = min(w/2, a, 1-a)                # a = layer amount 0..1 (cause mask, vertex colour)
+m  = smoothstep(1-a-hw, 1-a+hw, h)   # h = height EQUALISED to a uniform 0..1 histogram;
+                                     # use 1-h for things that fill low spots
+                                     # w = transition width 0.02-0.6; small = sharp
 ```
 
-At a = 0 nothing shows; at a = 1 the layer covers everything; in between, high h shows first.
+At a = 0 nothing shows; at a = 1 the layer covers everything; in between, high h shows first, and
+the mean cover is exactly a (round I). The older form `t = 1 - a(1+w); m = smoothstep(t, t+w, h)` is
+biased: its mean cover is `a + w(a - 1/2)`, so a 10 % mask covers 6 %, and with an unequalised height
+any amount is off. When the mask is low-res (a facade mask at 25-50 px/m) and the layer has its own
+local opacity, use the edge rule in the `large-scale-texturing` skill.
 
 **R2: the "max height" trick for two or more layers with their own heights** (Mishkinis):
 

@@ -57,7 +57,9 @@ says when a simulation beats the rules and how to run one. Its recipes are not y
    its lowest rim point is where a streak starts.
 5. **Silhouette in geometry, the rest in the bake.** A break larger than a few centimetres at
    play distance, or one that changes the outline, is real geometry. Smaller nicks, pitting and
-   fine cracks go to a normal map baked from a damaged high-poly copy, or to edge decals.
+   fine cracks go to a normal map baked from a damaged high-poly copy, or to edge decals. On a
+   large asset, cracks, spall halos and chip runs are decals from one atlas, placed by the same
+   rules (see `large-scale-texturing`).
 6. **Modular pieces stay tileable.** No damage within a margin of a face that meets a
    neighbour, unless the damage is generated once and mirrored onto both sides. Check that the
    seam profile is unchanged.

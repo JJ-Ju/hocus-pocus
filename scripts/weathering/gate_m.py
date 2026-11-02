@@ -75,7 +75,9 @@ def rule_M1(cfg, planes, R):
     green = ~yel
     med_db = float(np.median(db))
     med_da = float(np.median(da[green])) if green.any() else 0.0
-    ok = 2.5 <= med_db <= 7.0 and -3.0 <= med_da <= -0.4 and 0.10 <= float(yel.mean()) <= 0.45 and float(dirt.mean()) <= 0.10
+    # round I: the continuum starts at a light yellow tint, so the green and yellow family clauses of
+    # round G are dropped (they are still reported)
+    ok = 2.5 <= med_db <= 7.0 and float(dirt.mean()) <= 0.10
     return res("M1", ok, {"px": int(n), "db_per_0.1D": round(med_db, 2), "da_green_per_0.1D": round(med_da, 2),
                           "yellow_share": round(float(yel.mean()), 3), "dirt_band_share": round(float(dirt.mean()), 3)})
 
@@ -139,7 +141,8 @@ def rule_M3(cfg, planes, R):
     c23 = n23 / max(a23, 1)
     c01 = (n_g - n23) / max(n_m - a23, 1)
     if cov < 0.05:
-        ok, need = s23 >= 0.70, "W2-W3 share >= 0.70"
+        lim = 0.50 if float(cfg.get("E", 0) or 0) >= 18.0 else 0.70     # round I: Derelict spreads past the wet zones
+        ok, need = s23 >= lim, "W2-W3 share >= %.2f" % lim
     elif c23 < 0.80:
         ok, need = c23 >= 3.0 * c01, "W2-W3 cover >= 3x W0-W1 cover"
     else:

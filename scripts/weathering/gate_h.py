@@ -217,6 +217,9 @@ def steel_rust(planes):
         if "steel" not in p or "L_rust" not in p or "labw" not in p or "labc" not in p:
             continue
         s = np.asarray(p["steel"]).astype(bool)
+        if "cls" in p:                            # round I: the railing steel R1 names (rails, posts); flat
+            import gate_r as _gr                  # panels (doors) are judged by R3's panel clause
+            s = s & ~_gr._geo(p)[1]["panel"]
         L = np.nan_to_num(np.asarray(p["L_rust"], np.float64))
         dE = np.sqrt(((p["labw"][s].astype(np.float64) - p["labc"][s].astype(np.float64)) ** 2).sum(axis=1))
         ns += int(s.sum())

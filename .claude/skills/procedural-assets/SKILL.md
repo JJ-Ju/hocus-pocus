@@ -11,11 +11,15 @@ Embark's THE FINALS buildings, Insomniac's trims, SideFX Labs, visual targets an
 corners) and what agents learned building skyscraper and housing-block generators with these
 tools.
 
-Two companion skills do the deep work at piece level:
+Three companion skills do the deep work at piece level:
 - **`procedural-mesh-damage`:** edge wear, chips, cracks and breaks in the geometry.
 - **`procedural-materials`:** detailed materials, trim sheets, atlases and textures.
+- **`large-scale-texturing`:** how a whole building or estate is textured at game fidelity:
+  tiling sets sampled without repetition, trims for lines, decals for marks, low-res masks for
+  where weathering goes (revealed against the tiling detail), budgets, and the engine-mirror
+  preview. Read it before Phase 6 (facade) and whenever a texture would be unique to one piece.
 
-**Load both companion skills with the Skill tool, and read these files before the phase that
+**Load the companion skills with the Skill tool, and read these files before the phase that
 needs them.** Most of the realism guidance lives in their references, not in their SKILL.md
 files. In the review-31 test, an agent that read only the SKILL.md files skipped the mesh
 damage and repeated the uniform streak fringe the references warn against.
@@ -27,6 +31,7 @@ damage and repeated the uniform streak fringe the references warn against.
 | Phase 3, golden piece: materials | `procedural-materials/references/realism.md`, `micro-noise.md` and `layering.md` |
 | Phase 4, golden bay; Phase 6, facade | `procedural-materials/references/weather-and-use.md`, plus the streak scripts (`streak_sources`, `streak_mask`, `micro_fields`) in `procedural-mesh-damage` |
 | Unique or hero pieces whose wear depends on flow or history | `procedural-mesh-damage/references/wear-simulation.md` (recipes not yet tested) |
+| Phase 6, facade and building texturing | `large-scale-texturing/SKILL.md` and its `references/texturing-at-scale.md`: never bake a facade's look into one unique low-res sheet |
 
 ## The idea: quality is built recursively, from the smallest piece up
 
@@ -181,8 +186,10 @@ Take the piece players see most, such as the window bay's frame and panel, all t
 5. **Imperfection:** the real tolerances, exaggerated a little: lippage, sag, a tilted pane,
    a door out of square, a bulge in thin sheet metal. Apply it in world space after assembly,
    or fade it to zero at the piece's seams, so snapping survives (see believability.md §2).
-6. **UVs and texture:** trim-sheet rows or tiling at the target texel density. Make its
-   materials with the `procedural-materials` skill.
+6. **UVs and texture:** trim-sheet rows or tiling at the target texel density (1,024 px/m street
+   level, 512 third person). Make its materials with the `procedural-materials` skill. Weathering
+   that depends on where the piece sits goes in facade masks and decals, revealed against the
+   piece's tiling detail (`large-scale-texturing`), not into the piece's own textures.
 7. **Review in context:** next to its neighbours in the skeleton, lit, at arm's length and at
    bay distance. Not alone in a void.
 

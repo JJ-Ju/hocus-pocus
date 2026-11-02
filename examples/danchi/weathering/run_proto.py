@@ -74,6 +74,10 @@ def src_map(plane, out):
     if cls is not None:                           # the drip edge under any object above the wall
         wall = np.isin(cls, (1, 2, 4, 5))
         s[1:] |= wall[1:] & ~wall[:-1] & (cls[:-1] > 0)
+        s[1:] |= wall[1:] & ~wall[:-1] & (cls[:-1] == 0)   # round I: and the wall's own top edge against the sky (G1's
+        s[0] |= wall[0]                                    # 'top edge'; a channel starting there has its source)
+    if plane.get("joint_h") is not None:          # round I: horizontal joints are grooves water leaves from
+        s |= plane["joint_h"].astype(bool)
     for (y, x) in wf.joint_crossings(plane):      # crossing runs start where joints cross
         if 0 <= y < s.shape[0] and 0 <= x < s.shape[1]:
             s[max(0, y - 1):y + 2, max(0, x - 1):x + 2] = True
@@ -96,6 +100,27 @@ def src_map(plane, out):
 
 def default_planes():
     return [fs.gable(), fs.front(side="S"), fs.front(side="N")]
+
+
+def save_steps(path, p, base, L):
+    """Each step of the composite as the high-resolution compositor replays it: name, operation,
+    alpha (float16) and colour (float16, per pixel or one value). Colours are smooth fields, so
+    they are kept at half resolution (25 px/m); alphas at full resolution."""
+    rec = []
+    wf.composite(p, base, L, rec=rec)
+    arrs = {"n": np.int32(len(rec))}
+    for i, (name, op, d) in enumerate(rec):
+        arrs["s%d_name" % i] = np.array(name)
+        arrs["s%d_op" % i] = np.array(op)
+        for k, v in d.items():
+            if v is None:
+                continue
+            v = np.asarray(v, np.float32)
+            if v.ndim == 3 and k == "colour":
+                v = 0.25 * (v[0::2, 0::2][:v.shape[0] // 2, :v.shape[1] // 2] + v[1::2, 0::2][:v.shape[0] // 2, :v.shape[1] // 2]
+                            + v[0::2, 1::2][:v.shape[0] // 2, :v.shape[1] // 2] + v[1::2, 1::2][:v.shape[0] // 2, :v.shape[1] // 2])
+            arrs["s%d_%s" % (i, k)] = v.astype(np.float16)
+    np.savez_compressed(path, **arrs)
 
 
 def run(out_dir, cfg, planes=None, preview=True, fixed_gains=None, bases=None):
@@ -173,6 +198,8 @@ def run(out_dir, cfg, planes=None, preview=True, fixed_gains=None, bases=None):
         arrs["labw"] = wm.linear_to_lab(o["rgb"]).astype(np.float32)
         arrs["labc"] = wm.linear_to_lab(bases[p["name"]]).astype(np.float32)
         np.savez_compressed(os.path.join(out_dir, p["name"] + ".npz"), **arrs)   # lossless: the gate reads the same numbers
+        if os.environ.get("WX_STEPS", "1") != "0":                     # the layer stack for the high-res compositor (round I)
+            save_steps(os.path.join(out_dir, "steps_" + p["name"] + ".npz"), p, bases[p["name"]], o["layers"])
         meta["planes"][p["name"]] = {k: p[k] for k in ("ppm", "orient", "kind", "exposed", "ground_row", "top_row") if k in p}
         meta["planes"][p["name"]]["floor_rows"] = [int(v) for v in p.get("floor_rows", [])]
         meta["planes"][p["name"]]["bay_cols"] = [int(v) for v in p.get("bay_cols", [])]

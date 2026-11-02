@@ -23,7 +23,9 @@ headless and write correct files.
   finish per element, the formwork module, the layer stack, recipes and the engine path;
 - [references/weathering-rules.md](references/weathering-rules.md) for weathering by number:
   opacity tiers, scale levels, coverage by age and upkeep, growth by wetness class, mark colour
-  families, rust by grade, cracks, spalls and edges, and the gate in `scripts/weathering/`
+  families, rust by grade that follows the water along the members (feet and joints first, runs
+  down the uprights, stains on the concrete below), cracks, spalls and edges, and the gate in
+  `scripts/weathering/`
   that a weathered building passes before anyone reviews it.
 
 This file only summarises them. Only when the brief asks for a painted or anime-background look,
@@ -32,6 +34,9 @@ profile switched on over the realistic material, with a Copernicus post in
 `scripts/build_anime_post.py`.
 
 Companion skills:
+- **`large-scale-texturing`:** for a whole building or estate: tiling sets without repetition,
+  trims, decals and low-res masks revealed against the tiling detail, budgets and the
+  engine-mirror preview. A facade's weathering never lives in one unique low-res sheet.
 - **`procedural-assets`:** where materials sit in a kit or generator, and trims versus tiling
   per piece.
 - **`procedural-mesh-damage`:** geometric chips and breaks that the material must answer,
@@ -195,7 +200,10 @@ across the whole facade, with only the streaks placed. Fixes, in order of effect
 6. **Dirt is a colour.** Lerp toward soot brown, green-black biofilm or rust orange, never a
    grey multiply.
 7. **No visible repeat.** Hex-tile the tiling maps (`mtlxhextiledimage`,
-   `mtlxhextilednormalmap`, COP `hextile`), and add a per-bay tint from an id primvar.
+   `mtlxhextilednormalmap`, COP `hextile`), and add a per-bay tint from an id primvar. Detail a
+   mask is revealed against needs the histogram-preserving blend and equalised mips, and
+   directional detail (rivulets, roller laps) is offset per band, never rotated (see
+   `large-scale-texturing/references/tiling-and-blending.md`).
 8. **Edges first, streaks from sources.** Weather and wear concentrate at arrises and corners.
    Every streak starts at a feature: a sill end, the low point of a top edge, a top with no
    drip, a fixing, the lower lip of a chip. It is full strength at the source, widens and

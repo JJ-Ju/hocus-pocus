@@ -121,6 +121,12 @@ Simulate against the assembled context, or every corner looks exposed. Under 1 s
 - seed it at paint breaks (chips), junctions and upward-facing members;
 - use the rust points as dirty sources for (a), so rust runs bleed downward;
 - `neighbours()` depends on topology, so remesh uniformly or use `pcfind`.
+- Neighbour growth spreads rust as rings around old rust, which a reviewer reads as wrong on
+  rails and frames: paint creep is 0.1-3.5 mm a year, so visible growth is new sites on the same
+  wet lines and runs downstream. On members (rails, posts, balusters) prefer first-arrival time
+  along the steel from the wet parts (feet, joints, the top rail's face), fastest downward and
+  slowest upward, and cut it at each step's rusted share: see
+  `docs/redesign/research/weathering-rust-water.md` and `scripts/weathering/rust_flow.py`.
 
 **(g) Peeling paint (Paquette 2002).** On a UV grid or a remesh:
 - fields: stress, crack strength (lowered by wetness, edges and rust), and adhesion;
