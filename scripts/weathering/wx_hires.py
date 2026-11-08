@@ -52,7 +52,7 @@ def load_capture(plane, box, ppm):
     z = np.load(fn)
     code = z["class_raw"].astype(np.int64)
     return {"cls": LUT[np.clip(code, 0, 255)], "steel": np.isin(code, (7, 16)), "albedo": z["albedo"][..., :3].astype(F32),
-            "N": z["N"].astype(F32)}
+            "N": z["N"].astype(F32), "depth": z["depth"].astype(np.float64) if "depth" in z.files else None}
 
 # how each layer is refined at high resolution: (mode, detail tile, cell or band m, width or k,
 # colour variation, share of the coat's receptivity in the detail)
@@ -85,7 +85,54 @@ ANAT_MARGIN_MM = (1.0, 4.0) # fresh rust margin width
 ANAT_HALO_MM = 6.0          # blister halo reach
 C_FRESH_MARGIN = np.array([0.30, 0.135, 0.045], F32)   # L* about 53, hue about 60 deg, C* about 40
 C_FLASH = np.array([0.24, 0.20, 0.17], F32)            # bare steel with a haze of flash rust (L* about 52)
+import rust_flow as _rf                                  # noqa: E402
+C_TARN = _rf.lab_to_lin((43.0, 1.5, 4.5)).astype(F32)       # round K: tarnished steel (L* 43)
+C_DARK_K = _rf.lab_to_lin(_rf.LAB_DARK).astype(F32)       # round K: old dark scale (rust_flow LAB_DARK)
+
+
+def nz_smooth(a, b, x):
+    t = np.clip((x - a) / max(b - a, 1e-6), 0.0, 1.0)
+    return t * t * (3.0 - 2.0 * t)
+C_TARN_DARK = _rf.lab_to_lin((34.0, 0.5, 0.5)).astype(F32)  # darker blue-grey scale
+C_TARN_BROWN = _rf.lab_to_lin((46.0, 5.0, 11.0)).astype(F32)   # a brown flash-rust haze
 RUN_PEAK_KEEP = 0.985
+# round K: runs drawn in each bar's own coordinates (across 0-1, along), so a run reads as a stripe down the bar
+# (the user, round J: "There's still no rust going DOWN the vertical slats"). The 50 px/m layer gives the run's
+# coverage (alpha) and opacity (peak): the stripe is coverage / opacity of the bar wide, at that opacity.
+RUN_MEMBER = True
+RUN_BAR_MAX_M = 0.06        # a row run of steel at most this wide is a bar (rails, panels: wider)
+RUN_WOB = (0.45, 0.13)      # the stripe centre's wobble wavelengths along the bar (m): gravity keeps runs straight
+RUN_WOB_K = 0.25            # and its amplitude, x the free room either side
+RUN_FIB = 0.35              # fibres: the opacity x (1 + this x the streak detail)
+RUN_EDGE_PX = 1.0           # the stripe's soft edge (px)
+RUN_RAG_MM = 1.2            # its edge ragged by this much (mm, the streak detail)
+BARE_OPAQUE = True          # round K: exposed steel is opaque; its amount is coverage
+STEEL_DETAIL_K = 3.0        # K: rust detail on steel at a third of the wall's scale (a 16 mm bar's front was a straight cut)
+DCORE = (0.35, 0.80, 0.85)  # K: dark old scale inside a rust patch beyond its fresh margin: weight up to the last value,
+DCORE_CELL = 0.04           # from rust age (the 50 px/m 'age') the first to the second, in blotches of this scale (m)
+RUN_TIDE = (1.5, 0.22)      # K: a run's edge darker where the film dries (px, darkening)
+# round K: exposed steel tarnished (the user: "a little darker, tarnished/worn"): a dull warm grey, darker
+# blue-grey scale in places, a brown flash-rust haze in others
+TARN = True
+TARN_OPACITY = 1.0          # K9: the coat is gone where metal shows (0.9 left 10 % of the white paint: L* 48.6, not 43)
+# round K: patterns tied to surfaces and grooves (the user, round J). Detail offsets per surface colour (the build's 'surf':
+# depth steps of 3 cm or more), so no pattern runs on from the balcony front to the wall behind it; at the panel joints
+# (20 mm grooves) the paint failure's flakes are offset per panel (they stop at the groove), take the lips first and the
+# floor last, the face under a horizontal groove more (water runs off the lower lip); chips along the lips, a crack and
+# dirt in the floor (research member-rust-and-geometry-aware-wear.md: lips 3-8x the open face's chips, the floor
+# 0.3-0.6x, a crack along 30-60 % of the joint at Worn-Derelict, 5-15 L* darker floor).
+SURF_FINE = True
+SURF_OFF = (41.7, 23.3)     # m: the detail's offset per surface colour (x, y) x the colour
+EXTRA = {}                  # (plane, key) -> an array a build lacks (the test loops: 'surf' for a round-J build)
+JOINT_HALF_M = 0.0105       # the groove's half-width (compose's profile)
+LIP_M = 0.004               # the lip: the face within this of the groove's edge
+GROOVE_BIAS = (1.6, 1.2, 0.8)   # the paint failure's detail: + lips, - floor, + the face under a horizontal groove (std)
+UNDER_M = 0.025             # that face: this far below the groove
+LIP_CHIP = (0.05, 0.35, 4.0)   # K9: (0.02, 0.25, 4.0) chipped 2 % of Typical's lips, under N6's 4 %;   # chips on the lips: the arris's share chipped, a0 + a1 x wear + a2 x the flaked share around
+FLOOR_CRACK = (3.0, 12.0, 0.85)  # the floor crack: years since repaint from-to, its share of the joint's length at most
+FLOOR_DIRT = 0.30           # the floor's albedo x (1 - this x the local soiling)
+PANEL_LAYERS = ("peeling", "wear")
+GROOVE_ZONES = True
 PITS_ON = True              # round J: the concrete's larger voids through the paint (wx_concrete 'pits'; J15: on)
 PEEL_EDGE_MM = 1.5          # round J: the paint's edge round a flake: a shadow line inside, a lifted lip outside
 PEEL_OPAQUE = True          # J19: flakes revealed at full opacity, their coverage the mask's alpha
@@ -360,7 +407,7 @@ def load_steps(d, plane):
     out = []
     for i in range(int(z["n"])):
         rec = {"name": str(z["s%d_name" % i]), "op": str(z["s%d_op" % i])}
-        for k in ("alpha", "colour", "shift", "cavity", "bar", "halo", "conc"):
+        for k in ("alpha", "colour", "shift", "cavity", "bar", "halo", "conc", "peak", "age", "sheen"):
             key = "s%d_%s" % (i, k)
             if key in z.files:
                 rec[k] = z[key].astype(F32)
@@ -414,6 +461,12 @@ def compose(d, plane, box, ppm, clean_only=False, layers=None, salt=7):
     # times the coat's detail under 2 cm (hex-tiled so the 3.6 m tile does not repeat)
     A = cap["albedo"] if cap is not None else nearest_up(base50, R.cy, R.cx).astype(F32)
     Aw = masked_up(base50, wall50, R.cy, R.cx)
+    sf50 = z["surf"] if "surf" in z.files else EXTRA.get((plane, "surf"))
+    surf_f = None
+    if SURF_FINE and sf50 is not None and cap is not None and cap.get("depth") is not None and "dep" in z.files:
+        surf_f = fine_surfaces(R, R.win(np.asarray(sf50)), R.win(z["dep"]), cap["depth"])
+        XX = XX + SURF_OFF[0] * np.maximum(surf_f, 0)
+        YY = YY + SURF_OFF[1] * np.maximum(surf_f, 0)
     co = coat_at(XX, YY, ppm, salt)
     A = np.where(wall[..., None], Aw * co["hp"], A)
     h, cav = co["h"], co["cav"]
@@ -427,14 +480,37 @@ def compose(d, plane, box, ppm, clean_only=False, layers=None, salt=7):
         co["rec"] = (co["rec"] + 1.5 * pt[..., 4]).astype(F32)   # dust settles in them first
     # joints: 20 mm rounded grooves 8 mm deep, centred on the joint pixel's centre line
     jj = np.zeros(cls.shape, bool)
+    jz = None
     if "joint" in z.files:
         jn = nearest_up(R.win(z["joint"]), R.cy, R.cx)
-        dv = np.abs(R.cx - np.round(R.cx))[None, :] / P50 * np.ones((R.H, 1))
-        dh = np.abs(R.cy - np.round(R.cy))[:, None] / P50 * np.ones((1, R.W))
-        dj = np.where((jn & 2) > 0, dv, 1.0)
-        dj = np.minimum(dj, np.where((jn & 1) > 0, dh, 1.0))
+        if GROOVE_ZONES:                         # round K: distances from the joint lines within 2 coarse px
+            j50 = R.win(z["joint"])
+            iy = np.clip(np.round(R.cy).astype(np.int64), 0, j50.shape[0] - 1)
+            ix = np.clip(np.round(R.cx).astype(np.int64), 0, j50.shape[1] - 1)
+            dh = np.ones((R.H, R.W))
+            sgn = np.zeros((R.H, R.W))           # > 0: below the horizontal joint's centre line
+            dv = np.ones((R.H, R.W))
+            for o in (0, -1, 1, -2, 2):
+                yy = np.clip(iy + o, 0, j50.shape[0] - 1)
+                d_ = np.abs(R.cy - yy)[:, None] / P50 * np.ones((1, R.W))
+                on_ = (j50[yy][:, ix] & 1) > 0
+                upd = on_ & (d_ < dh)
+                dh = np.where(upd, d_, dh)
+                sgn = np.where(upd, np.sign(R.cy - yy)[:, None] * np.ones((1, R.W)), sgn)
+                xx = np.clip(ix + o, 0, j50.shape[1] - 1)
+                d_ = np.abs(R.cx - xx)[None, :] / P50 * np.ones((R.H, 1))
+                on_ = (j50[iy][:, xx] & 2) > 0
+                dv = np.where(on_ & (d_ < dv), d_, dv)
+            dj = np.minimum(dh, dv)
+        else:
+            dv = np.abs(R.cx - np.round(R.cx))[None, :] / P50 * np.ones((R.H, 1))
+            dh = np.abs(R.cy - np.round(R.cy))[:, None] / P50 * np.ones((1, R.W))
+            dj = np.where((jn & 2) > 0, dv, 1.0)
+            dj = np.minimum(dj, np.where((jn & 1) > 0, dh, 1.0))
         prof = np.clip(1.0 - (dj / 0.0105) ** 2, 0, 1)
         jj = (prof > 0) & wall
+        if GROOVE_ZONES:
+            jz = groove_zones(R, jn, dv, dh, sgn, dj, prof, wall, z["joint"])       # round K
         h = np.where(wall, h - 0.008 * prof, h)
         h_extra = h_extra - np.where(wall, 0.008 * prof, 0.0)
         cav = np.where(wall, np.maximum(cav, 0.75 * prof), cav)
@@ -448,7 +524,9 @@ def compose(d, plane, box, ppm, clean_only=False, layers=None, salt=7):
         st50 = R.win(z["steel"]) > 0 if "steel" in z.files else R.win(cls50) == 7
         ext = {}
         A = replay(A, load_steps(d, plane), R, XX, YY, wall, cls, salt, layers=layers, rec=co["rec"],
-                   masks={"wall50": wall50, "steel50": st50, "steel": steel}, extra=ext)
+                   masks={"wall50": wall50, "steel50": st50, "steel": steel, "jz": jz}, extra=ext)
+        if jz is not None:                       # round K: the groove's floor (crack, dirt) and the lips' chips
+            A = groove_floor(A, d, plane, R, XX, YY, jz, ext, salt)
         if "h" in ext:                           # round J: the flakes sit a film's thickness below the paint
             h = np.where(wall, h + ext["h"], h)
             h_extra = h_extra + np.where(wall, ext["h"], 0.0)
@@ -471,6 +549,160 @@ def dist_upto(core, R_):
         sh = np.roll(np.roll(core, dy, 0), dx, 1)
         d = np.where(sh & (d > r), r, d).astype(np.int16)
     return d
+
+
+def fine_surfaces(R, s50, d50, dep_f):
+    """Round K: each fine pixel's surface colour: of its 3x3 coarse neighbours, the one whose depth is nearest the
+    capture's depth there (both from the same camera plane), so the boundary follows the fine geometry."""
+    H, W = dep_f.shape
+    iy = np.clip(np.round(R.cy).astype(np.int64), 0, s50.shape[0] - 1)
+    ix = np.clip(np.round(R.cx).astype(np.int64), 0, s50.shape[1] - 1)
+    best = np.full((H, W), np.inf)
+    out = np.full((H, W), -1, np.int16)
+    dep_f = np.nan_to_num(dep_f, nan=1e3, posinf=1e3)
+    for dy in (0, -1, 1):
+        yy = np.clip(iy + dy, 0, s50.shape[0] - 1)
+        for dx in (0, -1, 1):
+            xx = np.clip(ix + dx, 0, s50.shape[1] - 1)
+            s_ = s50[yy][:, xx]
+            e_ = np.abs(d50[yy][:, xx] - dep_f) + 1e-3 * (abs(dy) + abs(dx)) + np.where(s_ < 0, 1e6, 0.0)
+            upd = e_ < best
+            best = np.where(upd, e_, best)
+            out = np.where(upd, s_, out)
+    return out
+
+
+def groove_zones(R, jn, dv, dh, sgn, dj, prof, wall, jfull=None):
+    """Round K: the joint grooves' zones at the fine grid: lip (the face within LIP_M of the edge), floor, the face
+    under a horizontal groove, and a panel offset per side of each groove (from the joint lines' coarse positions:
+    the same in every crop)."""
+    ppm = R.ppm
+    lip = wall & (dj > JOINT_HALF_M) & (dj <= JOINT_HALF_M + LIP_M)
+    floor = wall & (dj < 0.7 * JOINT_HALF_M)
+    horiz = (dh <= dv) & (dh < 1.0)
+    under = wall & horiz & (sgn > 0) & (dj > JOINT_HALF_M) & (dj <= JOINT_HALF_M + UNDER_M)
+    # panels: split at each joint's centre line (the last joint row whose centre the pixel is below, the last joint
+    # column whose centre it is right of; coarse and absolute, so the same in every crop)
+    ycoarse = np.floor(R.cy + R.cy0 + 0.5).astype(np.int64)[:, None] * np.ones((1, R.W), np.int64)
+    xcoarse = np.floor(R.cx + R.cx0 + 0.5).astype(np.int64)[None, :] * np.ones((R.H, 1), np.int64)
+    below = (R.cy - np.round(R.cy))[:, None] * np.ones((1, R.W)) >= 0
+    right = (R.cx - np.round(R.cx))[None, :] * np.ones((R.H, 1)) >= 0
+    h0 = np.full((1, R.W), -1, np.int64)                  # the last joint above / left of the window, per column / row
+    v0 = np.full((R.H, 1), -1, np.int64)
+    if jfull is not None:
+        cols = np.clip(np.floor(R.cx + R.cx0 + 0.5).astype(np.int64), 0, jfull.shape[1] - 1)
+        rows = np.clip(np.floor(R.cy + R.cy0 + 0.5).astype(np.int64), 0, jfull.shape[0] - 1)
+        if R.cy0 > 0:
+            hj = (jfull[:R.cy0][:, cols] & 1) > 0
+            h0 = np.where(hj.any(axis=0), R.cy0 - 1 - np.argmax(hj[::-1], axis=0), -1)[None, :]
+        if R.cx0 > 0:
+            vj = (jfull[rows][:, :R.cx0] & 2) > 0
+            v0 = np.where(vj.any(axis=1), R.cx0 - 1 - np.argmax(vj[:, ::-1], axis=1), -1)[:, None]
+    hrow = np.maximum.accumulate(np.maximum(np.where(((jn & 1) > 0) & below, ycoarse, -1), np.where(np.arange(R.H)[:, None] == 0, h0, -1)), axis=0)
+    vcol = np.maximum.accumulate(np.maximum(np.where(((jn & 2) > 0) & right, xcoarse, -1), np.where(np.arange(R.W)[None, :] == 0, v0, -1)), axis=1)
+    ph = (np.sin(hrow * 12.9898 + vcol * 78.233) * 43758.5453) % 1.0
+    pv = (np.sin(hrow * 39.3468 + vcol * 11.135) * 24634.6345) % 1.0
+    under_w = (wall & horiz & (sgn > 0)) * np.clip(1.0 - (dj - JOINT_HALF_M) / UNDER_M, 0, 1) * (dj > JOINT_HALF_M - 0.002)
+    return {"lip": lip, "floor": floor, "under": under, "under_w": under_w.astype(F32), "dj": dj, "prof": prof,
+            "wall": wall.astype(F32), "pox": (17.0 * ph).astype(F32), "poy": (13.0 * pv).astype(F32)}
+
+
+def groove_bias(jz):
+    """Round K: the paint failure's detail bias at a groove (in the detail's std), smooth so flake edges stay curved:
+    a bump at the arris (lips first), a ramp down into the floor (last), a ramp on the face under a horizontal groove."""
+    dj = jz["dj"]
+    lip = np.exp(-0.5 * ((dj - JOINT_HALF_M - 0.5 * LIP_M) / (0.6 * LIP_M)) ** 2)
+    floor = np.clip((JOINT_HALF_M - dj) / (0.5 * JOINT_HALF_M), 0, 1)
+    under = jz["under_w"] if "under_w" in jz else jz["under"].astype(F32)
+    return (GROOVE_BIAS[0] * lip - GROOVE_BIAS[1] * floor + GROOVE_BIAS[2] * under) * jz["wall"]
+
+
+def groove_floor(A, d, plane, R, XX, YY, jz, ext, salt):
+    """Round K: in the groove: dirt in the floor (sealant bleed and run-off, by the local soiling), a hairline crack along
+    part of the joint (years since repaint), chips on the lips (by the local paint failure)."""
+    import json as _json
+    try:
+        cfg_ = _json.load(open(os.path.join(d, "meta.json"), encoding="utf-8"))["config"]
+        Rs = float(cfg_.get("R", 0.0))
+        import weather_fields as wf_
+        wear_ = float(wf_.auto_amounts(cfg_)[2].get("wear", 0.0))
+    except Exception:
+        Rs, wear_ = 0.0, 0.0
+    st = {s["name"]: s for s in load_steps(d, plane)} if FLOOR_DIRT > 0 or LIP_CHIP[1] > 0 else {}
+    soil = np.clip(bspline_up(R.win(st["soiling"]["alpha"]), R.cy, R.cx), 0, 1) if "soiling" in st else 0.0
+    peel = np.clip(bspline_up(R.win(st["peeling"]["alpha"]), R.cy, R.cx), 0, 1) if "peeling" in st else 0.0
+    fl = jz["floor"]
+    A = np.where(fl[..., None], A * (1.0 - FLOOR_DIRT * np.clip(soil * 2.0, 0, 1) * jz["prof"])[..., None], A).astype(F32)
+    ck = FLOOR_CRACK[2] * nz_smooth(FLOOR_CRACK[0], FLOOR_CRACK[1], Rs)
+    if ck > 0:
+        g = wd.hex_g(tile("crack"), XX, YY, 0.20, salt + 404, ppm_out=R.ppm)
+        along = wd.norm_cdf(wd.band_g(tile("streak"), YY, XX, 0.3, salt + 405, ppm_out=R.ppm))   # breaks along the joint
+        line = (jz["dj"] < 0.35e-3 + 0.25e-3 * np.clip(g, -2, 2)) & (along < ck) & fl
+        A = np.where(line[..., None], A * 0.35, A).astype(F32)
+        if ext is not None:
+            ext["groove_crack"] = line
+    reg = 0.0                                                   # the flaking around (0.5 m): lips 3-8x the open face
+    if "peeling" in st:
+        pr = _box_blur(np.asarray(R.win(st["peeling"]["alpha"]), np.float64), 12)
+        reg = np.clip(bspline_up(pr, R.cy, R.cx), 0, 1)
+    p_ = np.clip(LIP_CHIP[0] + LIP_CHIP[1] * wear_ + LIP_CHIP[2] * reg, 0, 0.5)
+    u = wd.norm_cdf(wd.hex_g(tile("chip"), XX * 8.0, YY * 8.0, 1.6, salt + 406, ppm_out=R.ppm / 8.0))
+    dl_ = (jz["dj"] - JOINT_HALF_M) / LIP_M                   # 0 at the arris, 1 at the lip's inner end
+    zone = (jz["dj"] > JOINT_HALF_M - 0.001) & (dl_ <= 1.0) & ~jz["floor"]
+    chip = zone & (u > 1.0 - 2.0 * p_ + 0.25 * np.clip(dl_, 0, 1))    # bites, deepest at the arris
+    if chip.any():
+        import weather_fields as wf_
+        oc = np.array(wf_.COL["old_coat"], F32)
+        A = np.where(chip[..., None], A + (oc - A) * 0.9, A).astype(F32)
+        if ext is not None:
+            ext["lip_chip"] = chip
+    if ext is not None:
+        ext["jz"] = {k: v for k, v in jz.items() if k in ("lip", "floor", "under", "dj", "wall")}
+    return A
+
+
+def bar_coords(st, ppm):
+    """Round K: each fine steel pixel in a bar (a row run of steel 2 px to RUN_BAR_MAX_M wide): its place across
+    the bar t (0-1), the run's width (px) and centre (px column). Returns (bar, t, wid, cx)."""
+    H, W = st.shape
+    d = np.diff(np.pad(st.astype(np.int8), ((0, 0), (1, 1))), axis=1)
+    xs = np.arange(W)[None, :]
+    start = np.maximum.accumulate(np.where(d[:, :-1] == 1, xs, -1), axis=1)
+    end = np.minimum.accumulate(np.where(d[:, 1:] == -1, xs, W)[:, ::-1], axis=1)[:, ::-1]
+    wid = end - start + 1
+    bar = st & (wid <= RUN_BAR_MAX_M * ppm) & (wid >= 2)
+    t = (xs - start + 0.5) / np.maximum(wid, 1)
+    return bar, t.astype(F32), wid, 0.5 * (start + end)
+
+
+def _run_member(A, a50, pk50, col, R, XX, YY, masks, salt, extra=None):
+    """Round K: a run as a stripe down each bar: coverage / opacity of the bar wide (the head covers it, the
+    tail narrows to a drip end), its centre wobbling along the bar, fibres in its opacity; on wider steel (posts
+    over RUN_BAR_MAX_M) a film. The mean over a bar's row is the 50 px/m coverage, as in the cover rule."""
+    st, st50 = masks["steel"], masks["steel50"]
+    cov = np.clip(np.where(st, masked_up(a50, st50, R.cy, R.cx), 0.0), 0, 1)
+    op = np.clip(np.where(st, masked_up(pk50, st50, R.cy, R.cx), 0.0), 0, 1)
+    bar, t, wid, cx = bar_coords(st, R.ppm)
+    xc_m = R.X[0] + (cx - 0.0) / R.ppm                   # the bar's centre (m, plane x)
+    wf_ = np.clip(cov / np.maximum(op, 1e-4), 0.0, 1.0)
+    amp = 0.5 * (1.0 - wf_) * RUN_WOB_K
+    c = 0.5 + amp * (0.6 * np.sin(2 * np.pi * YY / RUN_WOB[0] + 23.0 * xc_m)
+                     + 0.4 * np.sin(2 * np.pi * YY / RUN_WOB[1] + 41.0 * xc_m))
+    g = wd.band_g(tile("streak"), XX, YY, 0.12, salt, ppm_out=R.ppm)
+    g2 = wd.band_g(tile("streak"), XX, YY, 0.05, salt + 7, ppm_out=R.ppm)
+    e = (0.5 * wf_ - np.abs(t - c)) * wid + RUN_RAG_MM * 1e-3 * R.ppm * np.clip(g2, -2.5, 2.5) / 1.5
+    inside = np.clip(e / RUN_EDGE_PX + 0.5, 0.0, 1.0)
+    fib = np.clip(1.0 + RUN_FIB * g, 0.45, 1.3)
+    a = np.where(bar, op * fib * inside, np.where(st, cov * np.clip(1.0 + 0.5 * RUN_FIB * g, 0.6, 1.2), 0.0))
+    a = np.clip(a, 0.0, 0.95).astype(F32)
+    if extra is not None:                                 # the close-up check (R8c)
+        extra["run_af"] = a
+        extra["bar"] = bar
+    c_ = col * (1.0 + 0.08 * np.clip(g, -2, 2) / 2)[..., None]
+    if RUN_TIDE[1] > 0:                                   # K: the film dries at its edges, darker there
+        tide = np.clip(1.0 - np.maximum(e, 0.0) / RUN_TIDE[0], 0.0, 1.0) * (bar & (inside > 0.05)) * (wf_ < 0.97)
+        c_ = c_ * (1.0 - RUN_TIDE[1] * tide)[..., None]
+    return (A + (c_ - A) * a[..., None]).astype(F32)
 
 
 def replay(A, steps, R, XX, YY, wall, cls, salt, layers=None, rec=None, masks=None, extra=None):
@@ -500,6 +732,9 @@ def replay(A, steps, R, XX, YY, wall, cls, salt, layers=None, rec=None, masks=No
             col = bspline_up(R.win(col, half=True), hy, hx)
         elif col is not None:
             col = np.broadcast_to(col.astype(F32), A.shape)
+        if name == "rust_run" and RUN_MEMBER and masks is not None and "peak" in s:   # round K
+            A = _run_member(A, a50, R.win(s["peak"]), col, R, XX, YY, masks, salt + 11 * k, extra=extra)
+            continue
         mode, tname, cell, wk, cvar, rshare = REFINE.get(name, ("smooth", None, 0, 0, 0, 0))
         src = blur_coarse(a50) if mode == "film" else a50
         if masks is not None:
@@ -522,10 +757,20 @@ def replay(A, steps, R, XX, YY, wall, cls, salt, layers=None, rec=None, masks=No
             peak = bspline_up(local_max3(a50), R.cy, R.cx)
         g = None
         if mode in ("film", "cover", "band"):
+            jz_ = masks.get("jz") if masks is not None else None
+            XXg, YYg = XX, YY
+            if jz_ is not None and name in PANEL_LAYERS:          # K: flakes stop at the groove (offset per panel)
+                XXg, YYg = XX + jz_["pox"], YY + jz_["poy"]
             if mode == "band":
-                g = wd.band_g(tile(tname), XX, YY, cell, salt + 11 * k, ppm_out=R.ppm)
+                g = wd.band_g(tile(tname), XXg, YYg, cell, salt + 11 * k, ppm_out=R.ppm)
             else:
-                g = wd.hex_g(tile(tname), XX, YY, cell, salt + 11 * k, ppm_out=R.ppm)
+                g = wd.hex_g(tile(tname), XXg, YYg, cell, salt + 11 * k, ppm_out=R.ppm)
+            if jz_ is not None and name == "peeling":            # K: lips first, the floor last, the face under more
+                g = (g + groove_bias(jz_)).astype(F32)
+            if name in ("rust", "rust_bare") and masks is not None and STEEL_DETAIL_K > 1:   # K: finer on steel
+                kk_ = STEEL_DETAIL_K
+                g_st = wd.hex_g(tile(tname), XX * kk_, YY * kk_, cell * kk_, salt + 11 * k + 5, ppm_out=R.ppm / kk_)
+                g = np.where(masks["steel"], g_st, g)
             if rec is not None and rshare > 0:          # the coat's troughs take it first
                 g = np.where(wall, (rshare * rec + (1 - rshare) * g) / np.sqrt(rshare ** 2 + (1 - rshare) ** 2), g)
         if mode == "film":
@@ -543,6 +788,8 @@ def replay(A, steps, R, XX, YY, wall, cls, salt, layers=None, rec=None, masks=No
             peak = np.maximum(np.clip(peak, 1e-4, 1), a_up)
             if name == "peeling" and PEEL_OPAQUE:          # J19: paint is there or gone
                 peak = np.ones_like(a_up)
+            if name == "rust_bare" and BARE_OPAQUE:        # K: so is the paint on steel (30 % opaque chips read as
+                peak = np.ones_like(a_up)                  # light grey paint, not as exposed metal)
             u = wd.norm_cdf(g).astype(F32)
             a = wd.refine_cover(a_up, peak, u, wk)
             cmod = 1.0 + cvar * (u - 0.5) * 2.0
@@ -568,16 +815,34 @@ def replay(A, steps, R, XX, YY, wall, cls, salt, layers=None, rec=None, masks=No
             halo_ = st_ & ~core & ~metal_ & (dout <= Rp) & near_b
             hw = np.clip(1.0 - dout / max(Rp, 1), 0, 1) * 0.6
             A = (A * np.where(halo_[..., None], 1.0 - hw[..., None] * np.array([0.0, 0.03, 0.10], F32), 1.0)).astype(F32)
-            A = np.where(metal_[..., None], A + (C_FLASH - A) * 0.9, A).astype(F32)
+            if TARN:                                 # round K: tarnished, varied (n1, n2: the anatomy's own fields)
+                ct_ = C_TARN + (C_TARN_DARK - C_TARN) * np.clip((n1 - 0.55) / 0.3, 0, 1)[..., None]
+                ct_ = ct_ + (C_TARN_BROWN - ct_) * np.clip((n2 - 0.6) / 0.3, 0, 1)[..., None]
+                A = np.where(metal_[..., None], A + (ct_ - A) * TARN_OPACITY, A).astype(F32)
+            else:
+                A = np.where(metal_[..., None], A + (C_FLASH - A) * 0.9, A).astype(F32)
             wmar = (ANAT_MARGIN_MM[0] + (ANAT_MARGIN_MM[1] - ANAT_MARGIN_MM[0]) * n1) * mm
             margin_ = core & st_ & (din <= np.maximum(wmar, 1.0)) & (n2 > 0.35)
             if extra is not None:                         # J11: the rails close-up checks (R7 rims)
                 extra["rust_a"], extra["rim"] = a, (metal_ | halo_)
+                extra["metal"] = metal_                    # K: R7c's metal colour
                 extra["steel"] = st_                       # J28: R7c's perimeter on painted steel
             chips_ = np.where(dout <= Rp, 0.0, b_chip)
             A = (A + (b_col - A) * chips_[..., None]).astype(F32)
             bare_pending = None
             c = col * (cmod[..., None] if np.ndim(cmod) == 2 else cmod)
+            if DCORE and "age" in s:                      # K: old scale dark inside the patch, fresh at its edge
+                age_ = np.clip(masked_up(R.win(s["age"]), masks["steel50"], R.cy, R.cx), 0, 1)
+                n3 = wd.norm_cdf(wd.hex_g(tile("rust"), XX * 4.0, YY * 4.0, DCORE_CELL * 4.0, salt + 303, ppm_out=R.ppm / 4.0))
+                dk_ = (DCORE[2] * nz_smooth(DCORE[0], DCORE[1], age_) * np.clip((n3 - 0.30) / 0.35, 0, 1)
+                       * (core & st_ & ~margin_))
+                c = c + (C_DARK_K - c) * dk_[..., None]
+                if extra is not None:
+                    extra["rust_dark"] = dk_
+                    if "sheen" in s:                          # K7: the sheen inside the fine dark scale
+                        sh_ = np.clip(masked_up(R.win(s["sheen"]), masks["steel50"], R.cy, R.cx), 0, 1)
+                        extra["sheen"] = (np.clip((sh_ - 0.25) / 0.3, 0, 1) * np.clip((dk_ - 0.25) / 0.3, 0, 1)
+                                          * st_ * a).astype(F32)
             c = np.where(margin_[..., None], c + (C_FRESH_MARGIN - c) * 0.65, c)
             A = (A + (c - A) * a[..., None]).astype(F32)
             continue
@@ -688,7 +953,62 @@ def to_srgb8(lin):
     return (s * 255 + 0.5).astype(np.uint8)
 
 
-def lit(res, Ngeom=None, view="S"):
+# round K7: an optional sky reflection for the review's sheen toggle (research rust-blue-sheen.md section 5): split-sum
+# specular with Karis's EnvBRDFApprox; F0 0.04 everywhere, 0.08 under the sheen; roughness 0.86 on the coat and 0.88 on
+# rust, 0.55 under the sheen, 0.45 on painted steel; a stated clear sky: horizon 0.80 x (0.869, 1.009, 1.296) (9,000 K),
+# zenith 0.50 x (0.721, 1.004, 1.781) (20,000 K), linear in the sine of elevation; ground 0.30 neutral; the reflection
+# averaged toward the hemisphere's mean as roughness grows. The gates measure albedo; this is for review only.
+SKY_HOR = 0.80 * np.array([0.869, 1.009, 1.296], F32)
+SKY_ZEN = 0.50 * np.array([0.721, 1.004, 1.781], F32)
+SKY_GND = np.array([0.30, 0.30, 0.30], F32)
+
+
+def env_brdf(rough, nov):
+    c0 = np.array([-1.0, -0.0275, -0.572, 0.022])
+    c1 = np.array([1.0, 0.0425, 1.04, -0.04])
+    r = rough[..., None] * c0 + c1
+    a004 = np.minimum(r[..., 0] * r[..., 0], np.exp2(-9.28 * nov)) * r[..., 0] + r[..., 1]
+    return -1.04 * a004 + r[..., 2], 1.04 * a004 + r[..., 3]
+
+
+def sky_env(Rdir, rough):
+    """Radiance reflected along Rdir (y up), blurred toward the hemisphere mean with roughness."""
+    el = np.clip(Rdir[..., 1], -1, 1)
+    sky = SKY_HOR + (SKY_ZEN - SKY_HOR) * np.clip(el, 0, 1)[..., None]
+    sharp = np.where((el >= 0)[..., None], sky, SKY_GND)
+    mean = 0.5 * (0.5 * (SKY_HOR + SKY_ZEN)) + 0.5 * SKY_GND
+    w = np.clip(rough, 0, 1)[..., None] ** 2
+    return sharp + (mean - sharp) * w
+
+
+def spec_term(res, view="S", tilt_deg=0.0):
+    """The sky reflection (linear RGB) for a crop with captured normals: V toward the camera, tilted tilt_deg so the
+    view looks up (a player below the surface); F0 and roughness by class and the sheen."""
+    Nc = res.get("Ncap")
+    if Nc is None:
+        return None
+    Nb = Nc / np.maximum(np.linalg.norm(Nc, axis=-1, keepdims=True), 1e-6)
+    t = np.radians(tilt_deg)
+    vz = {"S": 1.0, "N": -1.0}.get(view, 0.0)
+    V = np.array([0.0 if view in ("S", "N") else -1.0, -np.sin(t), vz * np.cos(t) if view in ("S", "N") else 0.0])
+    V = V / np.linalg.norm(V)
+    nov = np.clip((Nb * V).sum(-1), 1e-3, 1.0)
+    Rdir = 2.0 * nov[..., None] * Nb - V
+    cls = res["cls"]
+    sheen = res.get("extra", {}).get("sheen")
+    sheen = np.zeros(cls.shape, F32) if sheen is None else sheen
+    steel = cls == 7
+    rust_a = res.get("extra", {}).get("rust_a")
+    rough = np.where(steel, 0.45, 0.86).astype(F32)
+    if rust_a is not None:
+        rough = np.where(steel, 0.45 + (0.88 - 0.45) * np.clip(rust_a, 0, 1), rough)
+    rough = rough + (0.55 - rough) * sheen
+    F0 = 0.04 + 0.04 * sheen
+    Aa, Bb = env_brdf(rough, nov)
+    return ((F0 * Aa + Bb)[..., None] * sky_env(Rdir, rough)).astype(F32)
+
+
+def lit(res, Ngeom=None, view="S", spec=False, tilt_deg=0.0):
     h, cav, A = res["height"], res["cav"], res["albedo"]
     R = res["region"]
     if "gx" in res:                                  # blended slopes (rows run down: y up is -row)
@@ -717,6 +1037,10 @@ def lit(res, Ngeom=None, view="S"):
         face, up = 1.0, 0.0
     shade = (0.45 + 0.15 * up) * (1.0 - 0.4 * cav) + 0.75 * sun * face
     out = A * shade[..., None]
+    if spec:                                     # K7: the review's sky-reflection toggle
+        sp = spec_term(res, view, tilt_deg)
+        if sp is not None:
+            out = out + sp * (1.0 - 0.4 * cav)[..., None]
     glass = res["cls"] == 6
     if glass.any():
         yy = np.linspace(0, 1, glass.shape[0], dtype=F32)[:, None]

@@ -14,7 +14,8 @@ import wx_noise as nz
 F32 = np.float32
 
 # research rule 2: wetness by part, the top rail's face = 1
-W_FOOT, W_JOINT, W_BOTTOM = 3.0, 2.0, 1.5     # bottom rail 1.5 (research 1.8): fed by a joint every 11 cm
+W_FOOT, W_JOINT, W_BOTTOM = 3.0, 2.0, 1.8     # K14: bottom rail at the research's 1.8 (round I's 1.5): fed by a
+                                               # joint every 11 cm, its rust spreads along it (R4: segments grow)
 W_TOP = (1.2, 1.0, 0.9)              # top rail: upper row, middle, lower row (the lower arris)
 W_UP = (0.8, 0.15, 0.35)             # uprights: 0.8 x exp(-d / 0.15 m) below a rail joint, at least 0.35
 # research rule 3 (softened again: top quarter / bottom quarter 1.8 rather than 2.7)
@@ -25,6 +26,8 @@ EXPO = (0.75, 1.35, 1.25, 1.15, 0.85)   # bottom quarter, top quarter, end bays,
 C_FOOT, C_JOINT, C_TOP, C_BOTTOM, C_LOWER, C_FACE = 0.050, 0.078, 0.036, 1.0, 0.50, 0.50   # feet 0.068 -> 0.05 (round I: R3 feet at 0.5)
 SEED_DX = {"top": (0.2, 0.4), "bottom": (0.3, 0.6), "lower": (0.5, 1.0), "face": (0.8, 1.6)}   # m between seeds
 SIG_SEED, SIG_PLACE, SIG_BAY = 0.35, 0.40, 0.20   # lognormal spread: per seed, smooth over the facade (1.5 m), per bay
+SIG_PLACE, SIG_BAY = 0.25, 0.12                    # K5: halved, so most balconies show the Ts at Typical (TrTrTr): at 0.40/0.20
+                                                   # the lowest tenth of balconies had 32 % of their Ts rusted (50 % now)
 # research rule 5: speed factors k
 K_ALONG, K_DOWN, K_UP, K_ACROSS = 1.0, 2.5, 0.3, 3.0
 V_SPREAD = 1.8                       # speed of spread against onset (calibrated, round I)
@@ -80,16 +83,55 @@ COLOUR_VAR = True              # dark intense patches and bright fresh wet rust 
 VAR_AGE, VAR_SCALE_M = 0.50, 0.05     # age offset amplitude, patch scale (m)
 LAB_RUN_HEAD, LAB_RUN_TAIL = (50.0, 22.0, 40.0), (66.0, 14.0, 34.0)   # J4: a thin iron-oxide film over white: orange (hue 61-68 deg, C* 36-46)
 LAB_DARK = (25.0, 10.0, 11.0)         # J2: thick old scale, dark brown-black (darker than LAB_WET's hue)
+DARK_NV = (-0.6, 0.4)                 # K11: the old-scale patches' noise threshold (was inline)
 DARK_K = 0.90                         # its weight where the age offset is high on old rust (J12: R9)
 DARK_WET, DARK_WET_SCALE_M = 1.0, 0.03    # J13: dark scale in patches at feet, joints, the bottom rail, rail tops
 DARK_WET_NV = (-2.5, -1.5)            # J17-J22: most wet-part rust (J14's (-1.0, 0.0) gave R9 dark 13.8 %)
 DARK_OPAQUE = True                    # J13: thick old scale hides the paint (opacity toward 1 where dark)
 LAB_BRIGHT = (56.0, 24.0, 40.0)       # fresh wet rust: brighter, more chroma (hue ~59 deg)
+LAB_BRIGHT = (52.0, 20.0, 34.0)       # K: C* 47 read as orange paint at 1:1; fresh lepidocrocite is 50-56, 18-22, 30-38
 BRIGHT_K, BRIGHT_SCALE_M = 1.0, 0.03     # J18: 0.8 gave R9 bright 7.2 % once dark grew
 BARE = True                    # bare steel where the paint flaked (J15: on by default)
 BARE_HALO = (0.0, 0.50)        # the ring around the rust: alpha a0 + a1 x amount (2 cm pixels, partly bare; J25)
 CHIP_P = (0.0, 0.006)           # chips: per-pixel chance on steel a0 + a1 x amount, x3 on top-rail tops and joints (J25)
 LAB_BARE = (55.0, 0.0, 2.5)    # bare steel: dull grey, a trace of flash rust (J2: 60 read as paint)
+# round K (the user, round J: "the underside corners, like the corners of the T should be where rust gathers
+# first from water pooling, rather than the top. The top would probably advance more with advanced wearing ...
+# TrTrTr"; "The rust for derelict should be running all the way down or almost all the way down. Also, needs
+# more horizontal rusting on the horizontal rails"; bare metal "a little darker, tarnished/worn")
+TJOINT = True                  # K1: the T (joint under the top rail and the rail's underside corners) starts first
+C_TJOINT, W_TJOINT = 0.020, 2.4    # its onset c and wetness: water held in the crevice and on the weld
+SIG_TJOINT = 0.25              # K6: the Ts start closer together (lowest tenth of balconies 57 -> 65 % of Ts at Typical)
+C_BJOINT = 0.060               # joints above the bottom rail: the bars' water collects on it
+C_TOP_K = 0.12                 # the top rail's upper face: late (the top advances with advanced wear)
+C_LOWER_K = 0.06               # K: seeds along every rail's drip line (rails with no bars below have no Ts)
+W_TOP_K = (0.8, 1.0, 1.7)      # top rail rows: upper, middle, lower (the drip line holds water longest)
+K_RAIL_DOWN, K_RAIL_UP = 1.5, 0.25   # K2: on a rail rust reaches the drip line fast and climbs to the top slowly
+RUN_K = True                   # K3: runs by length (a share of the bar below the source), not by decay
+RUN_FRAC = ((0.0, 0.0), (0.25, 0.08), (0.4, 0.30), (0.5, 0.50), (0.6, 0.82), (0.75, 0.95), (1.0, 1.0))
+RUN_AGEK = (0.60, 0.60)        # x (a0 + a1 x the source's rust age): older sources run further
+RUN_VAR_K = 0.35               # lognormal spread per bar
+RUN_OPH = (0.75, 0.15)         # opacity at the head: a0 + a1 x the source's rust age (a stain line, not a wash:
+RUN_OPT = 0.75                 # at the tail, x the head's                   the run fades by narrowing)
+RUN_WMIN = 0.40                # the stripe's width at the tail, x the bar (the head covers the bar)
+RUN_FADE = 0.15                # the last share of a run fades out (a drip end)
+RUN_HEAD_M = 0.03              # K: the run covers the bar for its first 3 cm (research member-rust: 2-5 cm), then a stripe
+RUN_W0 = 0.75                  # of this share of the bar, narrowing to RUN_WMIN
+LAB_RUN_HEAD_K, LAB_RUN_TAIL_K = (40.0, 20.0, 30.0), (52.0, 15.0, 33.0)   # K3: an iron-oxide stain, orange-brown
+BRIGHT_UV = (0.10, 0.35)       # K: fresh bright rust only at the fronts (young rust); the T, oldest, stays dark
+LAB_BARE_K = (43.0, 1.5, 4.5)  # K4: tarnished steel, darker than the old grey (was L* 55)
+if RUN_K:
+    LAB_RUN_HEAD, LAB_RUN_TAIL = LAB_RUN_HEAD_K, LAB_RUN_TAIL_K
+LAB_BARE = LAB_BARE_K
+DARK_SHARE = ((0.4, 0.0, 0.3), (0.5, 0.13), (0.75, 0.18), (1.0, 0.22))
+# K11: opaque dark scale's share of the rusted steel by rust amount, (amount, share[, min weight]): R9 wants 15-40 %
+# dark (L* <= 32), and plain old rust over the darker paints adds about 16 points; none below 0.4, weights under 0.3
+# never become scale
+DARK_SUB_MAX = 0.40           # weights under the cut darken the colour up to this weight, short of opaque scale
+SHEEN_ON = True                # K7: the sheen on dense dark scale (an F0/roughness mask for the engine, never albedo)
+SHEEN_SHARE = ((0.5, 0.0), (0.55, 0.01), (0.75, 0.05), (1.0, 0.10))   # its share of the rusted steel (R10: none below
+SHEEN_DARK = (0.70, 0.90)      # K9: only the darkest scale (a dark weight under 0.7 over white paint reads L* 33-37)
+SHEEN_PLACE = (1.0, 1.3, 0.4)  # 0.5, <= 2 % at 0.5, 2-8 % at 0.75, 4-15 % at 1.0); weight: wet parts, the hand zone, else
 C_BRIGHT, C_BARE, C_DARK = lab_to_lin(LAB_BRIGHT), lab_to_lin(LAB_BARE), lab_to_lin(LAB_DARK)
 C_RUN_HEAD, C_RUN_TAIL = lab_to_lin(LAB_RUN_HEAD), lab_to_lin(LAB_RUN_TAIL)
 C_HEAD, C_TAIL = lab_to_lin(LAB_HEAD), lab_to_lin(LAB_TAIL)
@@ -179,6 +221,21 @@ def members(plane, metal):
         near[k:] |= rail[:-k]
         near[:-k] |= rail[k:]
     joint = upr & near
+    # K1: joints under a top rail (the T) and above a bottom rail; the top rail's underside corners: its lower
+    # row within a pixel sideways of a bar hanging below it
+    near_t = np.zeros((H, W), bool)
+    near_b = np.zeros((H, W), bool)
+    for k in range(1, j + 1):
+        near_t[k:] |= top[:-k]
+        near_b[:-k] |= bottom[k:]
+    tjoint = joint & near_t
+    bjoint = joint & near_b & ~tjoint
+    below_up = np.zeros((H, W), bool)
+    below_up[:-1] = tjoint[1:]
+    side = below_up.copy()
+    side[:, 1:] |= below_up[:, :-1]
+    side[:, :-1] |= below_up[:, 1:]
+    tcorner = top & lower & side
     # feet: the lowest 0.1 m of an upright run that stands on paint
     paint = mask & (np.isin(cls, (1, 2)) if cls is not None else True)
     end = np.zeros((H, W), bool)
@@ -240,7 +297,8 @@ def members(plane, metal):
     p_face = panel & ~p_bot & ~p_corner & ~p_edge
     return {"rail": rail, "top": top, "bottom": bottom, "upper": upper, "lower": lower, "upright": upr,
             "other": other, "joint": joint, "foot": foot, "parapet": parapet, "depth": depth, "closed": full,
-            "panel": panel, "p_bot": p_bot, "p_corner": p_corner, "p_edge": p_edge, "p_face": p_face}
+            "panel": panel, "p_bot": p_bot, "p_corner": p_corner, "p_edge": p_edge, "p_face": p_face,
+            "tjoint": tjoint, "bjoint": bjoint, "tcorner": tcorner}
 
 
 def wetness(plane, metal, M):
@@ -251,11 +309,14 @@ def wetness(plane, metal, M):
     w[M["upright"] | M["other"]] = W_UP[2]
     d = np.where(np.isfinite(M["depth"]), M["depth"], 9.0)
     w = np.where(M["upright"], np.maximum(W_UP[2], W_UP[0] * np.exp(-d / W_UP[1])), w)
-    w = np.where(M["top"], W_TOP[1], w)
-    w = np.where(M["top"] & M["upper"], W_TOP[0], w)
-    w = np.where(M["top"] & M["lower"] & ~M["upper"], W_TOP[2], w)
+    wt = W_TOP_K if TJOINT else W_TOP
+    w = np.where(M["top"], wt[1], w)
+    w = np.where(M["top"] & M["upper"], wt[0], w)
+    w = np.where(M["top"] & M["lower"] & ~M["upper"], wt[2], w)
     w = np.where(M["bottom"], W_BOTTOM, w)
     w = np.where(M["joint"], W_JOINT, w)
+    if TJOINT and "tjoint" in M:                     # K1: the T holds water longest
+        w = np.where(M["tjoint"] | M["tcorner"], W_TJOINT, w)
     w = np.where(M["foot"], W_FOOT, w)
     if M["panel"].any():
         sh = plane.get("shelter")
@@ -304,18 +365,23 @@ def seeds(plane, metal, M, w, key):
     r = nz.rng(*key, "rseeds")
     from weather_measure import label
 
-    def put(m, c):
+    def put(m, c, sig=None):
         lab, n = label(m)
         if not n:
             return
-        u = np.exp(SIG_SEED * r.normal(size=n + 1)).astype(F32)
+        u = np.exp((SIG_SEED if sig is None else sig) * r.normal(size=n + 1)).astype(F32)
         ys, xs = np.nonzero(lab)
         ll = lab[ys, xs]
         t = c / np.maximum(w[ys, xs], 1e-3) * u[ll] * place[ys, xs]
         T0[ys, xs] = np.minimum(T0[ys, xs], t)
 
     put(M["foot"], C_FOOT)
-    put(M["joint"], C_JOINT)
+    if TJOINT and "tjoint" in M:                     # K1: one onset per T (the joint and its two underside corners),
+        put(M["tjoint"] | M["tcorner"], C_TJOINT, SIG_TJOINT)   # then the bottom joints; other joints as before
+        put(M["bjoint"], C_BJOINT)
+        put(M["joint"] & ~M["tjoint"] & ~M["bjoint"], C_JOINT)
+    else:
+        put(M["joint"], C_JOINT)
 
     def sparse(m, c, dx, along_rows=True):
         ys, xs = np.nonzero(m)
@@ -344,9 +410,9 @@ def seeds(plane, metal, M, w, key):
         sparse(M["p_bot"], C_PANEL[0], (0.15, 0.30))
         sparse(M["p_edge"], C_PANEL[2], (0.4, 0.8))
         sparse(M["p_face"], C_PANEL[3], (0.8, 1.6))
-    sparse(M["top"] & M["upper"], C_TOP, SEED_DX["top"])
+    sparse(M["top"] & M["upper"], C_TOP_K if TJOINT else C_TOP, SEED_DX["top"])
     sparse(M["bottom"] & M["upper"], C_BOTTOM, SEED_DX["bottom"])
-    sparse(M["rail"] & M["lower"], C_LOWER, SEED_DX["lower"])
+    sparse(M["rail"] & M["lower"], C_LOWER_K if TJOINT else C_LOWER, SEED_DX["lower"])
     sparse(M["upright"] & ~M["joint"] & ~M["foot"], C_FACE, SEED_DX["face"], along_rows=False)
     return T0
 
@@ -359,8 +425,8 @@ def arrival(metal, M, w, T0, ppm):
     ww = np.maximum(w, 1e-3)
     rail, pan = M["rail"], M["panel"]
     kh = np.where(rail, K_ALONG, np.where(pan, K_PANEL[0], K_ACROSS))
-    kd = np.where(rail, K_ACROSS, np.where(pan, K_PANEL[1], K_DOWN))
-    ku = np.where(rail, K_ACROSS, np.where(pan, K_PANEL[2], K_UP))
+    kd = np.where(rail, K_RAIL_DOWN if TJOINT else K_ACROSS, np.where(pan, K_PANEL[1], K_DOWN))
+    ku = np.where(rail, K_RAIL_UP if TJOINT else K_ACROSS, np.where(pan, K_PANEL[2], K_UP))
     ch = np.where(metal, dl / (V_SPREAD * ww * kh), inf).astype(F32)   # cost to enter a pixel sideways
     cd = np.where(metal, dl / (V_SPREAD * ww * kd), inf).astype(F32)   # entering from above (moving down)
     cu = np.where(metal, dl / (V_SPREAD * ww * ku), inf).astype(F32)   # entering from below (moving up)
@@ -526,6 +592,118 @@ def region_below(mask, row, col, max_px):
     return n
 
 
+SHEEN_ACC = (0.97, 0.99)       # K11: only on opaque scale (the rust's alpha), so it reads dark over any paint
+
+
+def _sheen(M, rust, uv, dark, bright, a, acc=None):
+    """K7: where dense dark scale carries the sky-reflecting sheen: the darkest old scale (dark weight over 0.5, rust age
+    over 0.55), at the wet parts (feet, joints, the bottom rail, rail tops) most, the top rail's upper row (the hand
+    zone) a little more, elsewhere less, never on bright fresh rust; the most likely pixels up to SHEEN_SHARE of the
+    rust (0 below rust 0.5). 0-1, the engine's F0/roughness mask."""
+    share = float(np.interp(a, [p_[0] for p_ in SHEEN_SHARE], [p_[1] for p_ in SHEEN_SHARE])) if a > SHEEN_SHARE[0][0] else 0.0
+    H, W = rust.shape
+    if share <= 0 or not rust.any():
+        return np.zeros((H, W), F32)
+    wet = M["foot"] | M["joint"] | M["bottom"] | (M["rail"] & M["upper"])
+    hand = M["top"] & M["upper"]
+    place = np.where(hand, SHEEN_PLACE[1], np.where(wet, SHEEN_PLACE[0], SHEEN_PLACE[2]))
+    cand = (nz.smoothstep(SHEEN_DARK[0], SHEEN_DARK[1], dark) * nz.smoothstep(0.55, 0.8, uv) * place
+            * (1.0 - np.clip(bright, 0, 1)) * rust).astype(F32)
+    if acc is not None:
+        cand = (cand * nz.smoothstep(SHEEN_ACC[0], SHEEN_ACC[1], acc)).astype(F32)
+    ppm_ = float(M.get("_ppm", 50.0))
+    cand = (cand * (1.0 + 0.25 * nz.gfield((H, W), 0.03 * ppm_ + 0.5, ("sheen", H, W)))).astype(F32)   # ties: patches
+    base_ = rust & ~M["panel"] if "panel" in M else rust      # K11: the share of the railing's rust, as R11 counts it
+    if acc is not None:
+        base_ = base_ & (acc >= 0.25)                          # (R1's rusted: dE 8 or more)
+    v = cand[base_] if base_.any() else cand[rust]
+    if not (v > 0).any():
+        return np.zeros((H, W), F32)
+    thr = float(np.quantile(v, 1.0 - share))
+    thr = max(thr, 1e-4)
+    return np.where(rust, np.clip((cand - thr) / max(0.15 * thr, 1e-4) + 0.5, 0, 1), 0.0).astype(F32)
+
+
+def run_frac(a):
+    """K3: a run's length as a share of the bar below its source, at rust amount a (before the per-bar spread
+    and the source's age)."""
+    return float(np.interp(a, [p_[0] for p_ in RUN_FRAC], [p_[1] for p_ in RUN_FRAC]))
+
+
+def _runs_k(S, M, rust, u, a, ppm, key):
+    """Round K: rust runs down the bars (the user, rounds I and J). From the lowest rusted pixel of a bar's
+    source (its joint, the rail above it, rust on its face) a run reaches run_frac(a) x (RUN_AGEK by the
+    source's rust age) x a per-bar spread of the bar's length below; the whole bar at Derelict for most bars.
+    Written as two maps so the fine stage can draw it as a stripe on the bar: run_a = opacity x width
+    (the bar's coverage at 50 px/m) and run_pk = opacity; run_t the distance along the run as a share of its
+    length (colour from the head to the tail), run_len the run's length (m) on its pixels."""
+    H, W = rust.shape
+    updn = M["upright"] | M["joint"]
+    rail = M["rail"]
+    from weather_measure import label
+    lab, n = label(updn)
+    rv = nz.rng(*key, "runk")
+    var = np.exp(RUN_VAR_K * rv.normal(size=n + 1)).astype(F32)
+    vpx = var[lab]
+    rem = np.zeros((H, W), np.int32)                     # bar pixels from here down (this one included)
+    rem[H - 1] = updn[H - 1].astype(np.int32)
+    for y in range(H - 2, -1, -1):
+        rem[y] = np.where(updn[y], rem[y + 1] + 1, 0)
+    frac = run_frac(a)
+    y0 = np.full(W, -1, np.int32)
+    L = np.zeros(W, F32)
+    oph = np.zeros(W, F32)
+    run_a = np.zeros((H, W), F32)
+    run_pk = np.zeros((H, W), F32)
+    run_t = np.zeros((H, W), F32)
+    run_len = np.zeros((H, W), F32)
+    for y in range(H):
+        on = updn[y]
+        src = on & (rust[y] | ((rail[y - 1] & rust[y - 1]) if y > 0 else False))
+        if src.any():
+            us = np.where(rust[y], u[y], u[y - 1] if y > 0 else 0.0)
+            Ln = (rem[y] - 1) * frac * (RUN_AGEK[0] + RUN_AGEK[1] * us) * vpx[y]
+            Ln = np.minimum(Ln, rem[y] - 1).astype(F32)
+            end_new = y + Ln
+            end_old = np.where(y0 >= 0, y0 + L, -1.0)
+            take = src & (end_new >= end_old)
+            y0 = np.where(take, y, y0)
+            L = np.where(take, Ln, L)
+            oph = np.where(take, RUN_OPH[0] + RUN_OPH[1] * us, oph).astype(F32)
+        y0 = np.where(on, y0, -1)
+        act = on & (y0 >= 0) & (L >= 1.0)
+        if not act.any():
+            continue
+        s = (y - y0).astype(F32)
+        t = np.where(act, s / np.maximum(L, 1.0), 2.0)
+        ok = act & (t <= 1.0)
+        op = oph * (1.0 - (1.0 - RUN_OPT) * t)
+        sm = s / ppm                                  # m below the source
+        wd = np.where(sm <= RUN_HEAD_M, 1.0, RUN_W0 - (RUN_W0 - RUN_WMIN) * np.clip(t, 0, 1) ** 0.8)
+        fade = np.clip((1.0 - t) / RUN_FADE, 0, 1)
+        run_pk[y] = np.where(ok, op, 0.0)
+        run_a[y] = np.where(ok, op * wd * fade, 0.0)
+        run_t[y] = np.where(ok, t, 0.0)
+        run_len[y] = np.where(ok, L / ppm, 0.0)
+    if RUNUP_COLLAR and M.get("bottom") is not None:     # the film pools on the bottom rail (J9)
+        bot = M["bottom"]
+        k_c = max(1, int(round(RUNUP_COLLAR[0] * ppm)))
+        near_bot = np.zeros((H, W), bool)
+        for s_ in range(1, k_c + 1):
+            near_bot[:-s_] |= bot[s_:]
+        rr_ = run_a > 0.05                                # K: only where a run comes down to it (within 0.12 m
+        reach_run = np.zeros((H, W), bool)               # above); round J tested the whole plane column, so every
+        for s_ in range(1, max(1, int(round(0.12 * ppm))) + 1):   # bar under a rusted bar on another storey had one
+            reach_run[s_:] |= rr_[:-s_]
+        reach = near_bot & updn & reach_run
+        cv = RUNUP_COLLAR[1] * (RUNUP_OP[0] + RUNUP_OP[1] * 0.5)
+        run_pk = np.where(reach, np.maximum(run_pk, cv), run_pk).astype(F32)
+        run_a = np.where(reach, np.maximum(run_a, cv), run_a).astype(F32)
+    S["run_a"], S["run_pk"], S["run_len"] = np.clip(run_a, 0, 0.92).astype(F32), np.clip(run_pk, 0, 0.92).astype(F32), run_len
+    tt = np.clip(run_t / 0.8, 0, 1)[..., None]
+    S["run_c"] = (C_RUN_HEAD + (C_RUN_TAIL - C_RUN_HEAD) * tt).astype(F32)
+
+
 def layer(plane, metal, a, share, key, pre=None, Ts=None):
     """The rust layer on the steel and the stains it drops on the paint below. pre: arrival_T's result;
     Ts: the building's rust time (cut). Returns alpha (H, W), colour (H, W, 3), marks, state."""
@@ -551,21 +729,37 @@ def layer(plane, metal, a, share, key, pre=None, Ts=None):
         uv = np.clip(u + VAR_AGE * nv, 0, 1).astype(F32)
         cv = rust_colour(uv, w)
         wet_ = 0.5 + 0.5 * nz.smoothstep(0.8, 2.0, w)
-        bright = (BRIGHT_K * nz.smoothstep(0.0, 1.0, nb) * (1.0 - nz.smoothstep(0.25, 0.75, uv)) * wet_)[..., None]
+        bu_ = BRIGHT_UV if TJOINT else (0.25, 0.75)
+        bright = (BRIGHT_K * nz.smoothstep(0.0, 1.0, nb) * (1.0 - nz.smoothstep(bu_[0], bu_[1], uv)) * wet_)[..., None]
         cv = cv + (C_BRIGHT - cv) * bright
-        dark = (DARK_K * nz.smoothstep(-0.6, 0.4, nv) * nz.smoothstep(0.25, 0.55, uv))[..., None]   # J2, J3, J12, J20, J22
+        dark = (DARK_K * nz.smoothstep(DARK_NV[0], DARK_NV[1], nv) * nz.smoothstep(0.25, 0.55, uv))[..., None]   # J2, J3, J12, J20, J22
         if DARK_WET > 0:                                # J13: water stays at feet, joints, bottom rail, rail tops
             wetp = (M["foot"] | M["joint"] | M["bottom"] | (M["rail"] & M["upper"])).astype(F32)
             nd = nz.gfield((H, W), DARK_WET_SCALE_M * ppm + 0.5, key + ("rdkw",))
             dw = DARK_WET * wetp * nz.smoothstep(DARK_WET_NV[0], DARK_WET_NV[1], nd) * nz.smoothstep(0.05, 0.25, uv)
             dark = np.maximum(dark, dw[..., None])
         dark = dark * (1.0 - bright / max(BRIGHT_K, 1e-6))        # J18: dark old scale does not cover fresh fronts
+        if DARK_SHARE is not None:                      # K11: opaque scale's coverage held to a share of the railing's
+            dw_ = dark[..., 0]                          # rust (R9: 15-40 %); weaker weights stay colour, not scale
+            sc_ = dw_ * (1.0 + 0.25 * nz.gfield((H, W), 0.03 * ppm + 0.5, key + ("dkq",)))
+            share_d = float(np.interp(a, [p_[0] for p_ in DARK_SHARE], [p_[1] for p_ in DARK_SHARE]))
+            base_d = rust & (acc >= 0.25)                # R9's rusted steel (dE 8 or more), panels too
+            thr_d = np.inf
+            if share_d > 0 and base_d.any():
+                thr_d = max(float(np.quantile(sc_[base_d], 1.0 - share_d)), DARK_SHARE[0][2])
+            keep_ = nz.smoothstep(0.92 * thr_d, 1.08 * thr_d, sc_) if np.isfinite(thr_d) else np.zeros((H, W), F32)
+            dark = np.where(keep_[..., None] > 0, dark * np.maximum(keep_, np.minimum(1.0, DARK_SUB_MAX / np.maximum(dw_, 1e-6)))[..., None],
+                            np.minimum(dark, DARK_SUB_MAX)).astype(F32)
         cv = cv + (C_DARK - cv) * dark
         if DARK_OPAQUE:
             acc = np.where(rust, acc + (1.0 - acc) * dark[..., 0], acc).astype(F32)
+        S["sheen"] = _sheen(M, rust, uv, dark[..., 0], bright[..., 0], a, acc) if SHEEN_ON else np.zeros((H, W), F32)
         col = np.where(rust[..., None], cv, 0).astype(F32)
+    acc_steel = acc.copy()                              # K11: the steel's own rust alpha (opaque where dark scale is)
     S["run_a"], S["run_c"] = np.zeros((H, W), F32), np.zeros((H, W, 3), F32)
-    if RUNUP and a > 0:                                 # round J: rust carried down the bars by the water
+    if RUN_K and a > 0:                                 # round K: runs by length, as a stripe on each bar
+        _runs_k(S, M, rust, u, a, ppm, key)
+    elif RUNUP and a > 0:                               # round J: rust carried down the bars by the water
         updn = M["upright"] | M["joint"]
         path = updn | M["rail"]                         # through rail crossings
         src = np.where(rust & updn, RUNUP_OP[0] + RUNUP_OP[1] * u, 0.0).astype(F32)
@@ -706,4 +900,5 @@ def layer(plane, metal, a, share, key, pre=None, Ts=None):
             if info:
                 info["kind"] = "rust_curtain"
                 marks.append(info)
-    return np.clip(acc, 0, 0.92).astype(F32), col, marks, S
+    cap = np.where(rust, np.maximum(acc_steel, 0.92), 0.92) if DARK_OPAQUE else 0.92   # K11: dark scale stays opaque
+    return np.clip(acc, 0, cap).astype(F32), col, marks, S

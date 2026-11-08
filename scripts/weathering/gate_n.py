@@ -39,13 +39,25 @@ def _lstar(Y):
     return 116 * f - 16
 
 
+def _arris(p):
+    """Round K: the edge mask without occlusion lines (a bottom whose pixel below is a nearer surface, the wall behind
+    a balcony front), as the generator's arrises() draws the edge layer."""
+    e = p["edge"].astype(bool)
+    if "dep" not in p or "etop" not in p:
+        return e
+    dep = np.asarray(p["dep"], np.float64)
+    bd = np.full(dep.shape, np.inf)
+    bd[:-1] = dep[1:]
+    return e & ~(((np.asarray(p["etop"]) & 2) > 0) & (bd < dep - 0.05))
+
+
 def _edges(p):
     """Edge-row pixels on painted wall (the wear layer is off dark substrates), and their tone
     change from the edge layer alone as delta L* (+ lighter)."""
     if "L_wear" not in p or "edge" not in p or "Yc" not in p:
         return None
     cls = p.get("cls")
-    e = p["edge"].astype(bool) & np.isfinite(p["D"])
+    e = _arris(p) & np.isfinite(p["D"])
     if cls is not None:
         e &= np.isin(cls, (1, 2))
     if e.sum() < 200:
@@ -95,7 +107,7 @@ def rule_N3(cfg, planes, R):
     for p in planes.values():
         if not p.get("exposed", True) or "edge" not in p:
             continue
-        L += p["edge"].astype(bool).sum() / p["ppm"]
+        L += _arris(p).sum() / p["ppm"]
         n += _chips(p)[0].size
     if L <= 0:
         return res("N3", None, None, "no edges")
@@ -112,7 +124,7 @@ def rule_N4(cfg, planes, R):
         if not p.get("exposed", True) or "edge" not in p:
             continue
         ys, xs = _chips(p)
-        e = p["edge"].astype(bool)
+        e = _arris(p)
         s = max(1, int(round(0.5 * p["ppm"])))
         H, W = e.shape
         h, w = H // s, W // s

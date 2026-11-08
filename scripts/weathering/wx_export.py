@@ -5,7 +5,8 @@ instead of one low-res sheet.
 Per plane, from the build's layer stack (steps_<plane>.npz) and planes (<plane>.npz):
   <plane>_M_hi.png   RGBA8 linear, 50 px/m: R streaks (run-off envelope; on steel: bare steel where the
                      paint flaked, which the material shades as metal), G stains + ground band (on steel:
-                     rust and its runs down the bars), B growth cover, A light layers (efflorescence)
+                     rust and its runs down the bars), B growth cover, A light layers (efflorescence; on steel:
+                     round K, the dense-scale sheen: F0 0.04 -> 0.08 and roughness -> 0.55 in the material, never albedo)
   <plane>_M_lo.png   RGBA8 linear, 25 px/m: R soiling film, G damp (where water stays), B coat tone
                      (0.5 = none: fading, repaint), A edge-wear amount (for the trims)
   <plane>_tint.png   RGB8 sRGB, 25 px/m: the dirt colour (film and marks)
@@ -137,7 +138,8 @@ def export(d, out):
         steel = z["steel"] > 0 if "steel" in z.files else np.zeros((H, W), bool)
         hi = np.dstack([np.where(steel, al("rust_bare"), al("streaks")),       # round J: bare steel in R on the steel
                         np.where(steel, np.maximum(al("rust"), al("rust_run")), np.maximum(al("stains"), al("base"))),
-                        al("bio"), al("efflorescence")])
+                        al("bio"), np.where(steel, st.get("rust", {}).get("sheen", np.zeros((H, W), np.float32)).astype(np.float32)
+                                            if "sheen" in st.get("rust", {}) else 0.0, al("efflorescence"))])   # K7: A on steel = sheen
         damp = z["bio_w"].astype(np.float32) if "bio_w" in z.files else np.zeros((H, W), np.float32)
         tone = 0.5 - 0.5 * al("fading") * 0.18
         if "repaint" in st:

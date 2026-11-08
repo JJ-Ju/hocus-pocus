@@ -34,6 +34,18 @@ R7CC = {"window": ("S_front", (1800, 1275, 1940, 1355), 1000.0), "patch_mm": 20.
         "edge_mm": 10.0,                                      # J28: patches with under 1 cm of edge on painted steel are left out
         "patches_share": 0.50}
 T2C = {"ppm": 200.0, "max_excess": 0.15}
+# round K: the player's 1:1 view (the rails at arm's length, 1,920 px/m): a run reads when a stripe 2 mm or more wide
+# differs from the clean paint by dE 15 or more (research member-rust-and-geometry-aware-wear.md); its head by 30; its hue
+# 50-80 deg (orange-brown to ochre, not pink)
+R8CC = {"window": ("S_front", (1840, 1284, 1890, 1340), 1920.0), "alpha": 0.3, "w_mm": 2.0, "dE": 15.0, "head_dE": 30.0,
+        "head_mm": 30.0, "hue": (50.0, 80.0), "gap_mm": 10.0, "min_mm": 30.0,
+        "a": (0.25, 0.5, 0.6, 0.75, 1.0), "bars": (0.30, 0.60, 0.80, 0.85, 0.85), "frac": (0.02, 0.25, 0.55, 0.70, 0.80),
+        "from": 0.2}
+R7MC = {"L": (38.0, 48.0), "a": (0.0, 4.0), "b": (2.0, 8.0), "min_px": 50}   # K: exposed steel, tarnished (research member-rust)
+# round K: grooves (the north walkway, 1:1): lips chip 3x the open face or more, the floor flakes 0.6x at most, a crack
+# along 30 % (Worn) / 60 % (Derelict) of the joint (research member-rust-and-geometry-aware-wear.md)
+N6C = {"window": ("N_front", (2600, 760, 2700, 816), 1920.0), "lip_x": 3.0, "lip_min": 0.04, "floor_x": 0.6, "floor_add": 0.02,
+       "crack": {"worn": 0.30, "derelict": 0.60}, "crack_max_early": 0.10, "early": ("new", "kept"), "open_m": 0.03}
 T3C = {"mean": 0.03, "p05": 0.85, "p95": 1.15, "erode_px": 1}
 
 
@@ -261,8 +273,122 @@ def rule_R7c(d, planes, rust_amount):
         return res("R7c", None, {"patches": 0}, "no rust patch of 2 cm or more in the window")
     shares = [hit[i] / tot[i] for i in big]
     ok_share = float(np.mean([s_ >= R7CC["rim_share"] for s_ in shares]))
-    return res("R7c", ok_share >= R7CC["patches_share"], {"patches": len(big), "with_rim": round(ok_share, 3),
-                                                         "median_rim_share": round(float(np.median(shares)), 3)})
+    v = {"patches": len(big), "with_rim": round(ok_share, 3), "median_rim_share": round(float(np.median(shares)), 3)}
+    ok = ok_share >= R7CC["patches_share"]
+    mt = ex.get("metal")                                   # K: the exposed metal tarnished (L* 38-48, a* 0-4, b* 2-8)
+    if mt is not None and mt.sum() >= R7MC["min_px"]:
+        Lm = _lab(r["albedo"])[mt]
+        md = [float(np.median(Lm[:, i])) for i in range(3)]
+        v["metal_Lab"] = [round(x_, 1) for x_ in md]
+        ok = ok and R7MC["L"][0] <= md[0] <= R7MC["L"][1] and R7MC["a"][0] <= md[1] <= R7MC["a"][1] and R7MC["b"][0] <= md[2] <= R7MC["b"][1]
+    return res("R7c", ok, v)
+
+
+def rule_R8c(d, planes, rust_amount):
+    """R8 at the player's 1:1 view (the rails at arm's length): bars whose run reads (a stripe >= 2 mm wide at dE >= 15
+    against the clean paint, from the T down, gaps under 1 cm crossed) for 3 cm or more: >= 30 / 60 / 80 / 85 / 85 % of
+    the bars at rust 0.25 / 0.5 / 0.6 / 0.75 / 1.0 (from rust 0.2), the median reading run (over the bars with one)
+    >= 2 / 25 / 55 / 70 / 80 % of its bar;
+    heads (the top 3 cm) dE >= 30; the runs' hue 50-80 deg."""
+    a = rust_amount
+    if a < R8CC["from"] - 1e-6:
+        return res("R8c", True, {"rust": a}, "applies from rust 0.2")
+    plane, box, ppm = R8CC["window"]
+    if plane not in planes:
+        return res("R8c", None, None, "no window plane")
+    r = wh.compose(d, plane, box, ppm)
+    ex = r.get("extra") or {}
+    if "run_af" not in ex:
+        return res("R8c", None, None, "no member runs in the window")
+    import weather_measure as wm
+    L1, L0 = _lab(r["albedo"]), _lab(r["clean"])
+    dE = np.sqrt(((L1 - L0) ** 2).sum(-1))
+    stripe = ex["bar"] & (ex["run_af"] >= R8CC["alpha"]) & (dE >= R8CC["dE"])
+    lab_, n = wm.label(ex["bar"])
+    wpx = R8CC["w_mm"] * ppm / 1000.0
+    gap = int(R8CC["gap_mm"] * ppm / 1000.0)
+    hpx = int(R8CC["head_mm"] * ppm / 1000.0)
+    fr, heads, hue_px, nb = [], [], [], 0
+    for i in range(1, n + 1):
+        ys, xs = np.nonzero(lab_ == i)
+        y0, y1 = int(ys.min()), int(ys.max())
+        if (y1 - y0) < 0.3 * ppm:
+            continue                                        # not a bar (a stub)
+        nb += 1
+        rows = np.zeros(y1 - y0 + 1, bool)
+        cnt = np.bincount(ys[stripe[ys, xs]] - y0, minlength=y1 - y0 + 1)
+        rows = cnt >= wpx
+        L = 0                                               # from the T down: the readable run, gaps under 1 cm crossed
+        y = 0
+        miss = 0
+        while y < rows.size:
+            if rows[y]:
+                L = y + 1
+                miss = 0
+            else:
+                miss += 1
+                if miss > gap:
+                    break
+            y += 1
+        f = L / max(rows.size, 1)
+        if L * 1000.0 / ppm >= R8CC["min_mm"]:
+            fr.append(f)
+            hm = stripe[y0:y0 + hpx][:, int(xs.min()):int(xs.max()) + 1]
+            if hm.sum() > 10:
+                heads.append(float(np.median(dE[y0:y0 + hpx][:, int(xs.min()):int(xs.max()) + 1][hm])))
+            hue_px.append(np.degrees(np.arctan2(L1[..., 2], L1[..., 1]))[y0:y0 + L][:, int(xs.min()):int(xs.max()) + 1][stripe[y0:y0 + L][:, int(xs.min()):int(xs.max()) + 1]])
+        else:
+            fr.append(0.0)
+    if nb == 0:
+        return res("R8c", None, None, "no bars in the window")
+    fr = np.array(fr)
+    reading = float((fr > 0).mean())
+    med = float(np.median(fr[fr > 0])) if (fr > 0).any() else 0.0     # over the bars whose run reads
+    hue = float(np.median(np.concatenate(hue_px))) if hue_px and sum(h.size for h in hue_px) else None
+    hd = float(np.median(heads)) if heads else None
+    keys = R8CC["a"]
+    need_bars = float(np.interp(a, keys, R8CC["bars"]))
+    need_fr = float(np.interp(a, keys, R8CC["frac"]))
+    ok = (reading >= need_bars and med >= need_fr and (hd is None or hd >= R8CC["head_dE"])
+          and (hue is None or R8CC["hue"][0] <= hue <= R8CC["hue"][1]))
+    return res("R8c", ok, {"rust": round(a, 3), "bars": nb, "reading": round(reading, 3), "need": round(need_bars, 2),
+                           "median_frac": round(med, 3), "need_frac": round(need_fr, 2),
+                           "head_dE": None if hd is None else round(hd, 1), "hue": None if hue is None else round(hue, 1)})
+
+
+def rule_N6(d, planes, preset):
+    """N6 at the 1:1 view of the north walkway's panel joint (a 20 mm groove): from Typical, the lips (4 mm outside the
+    groove's edge) chipped or flaked >= 3x the open face (3 cm or more from a groove; 4 % at least), the floor flaked
+    <= 0.6x the open face + 2 points; a crack along >= 30 % (Worn) / 60 % (Derelict) of the joint; New and Kept: the
+    crack on <= 10 %."""
+    plane, box, ppm = N6C["window"]
+    if plane not in planes:
+        return res("N6", None, None, "no window plane")
+    r = wh.compose(d, plane, box, ppm)
+    ex = r.get("extra") or {}
+    jz = ex.get("jz")
+    if jz is None:
+        return res("N6", None, None, "no grooves in the window")
+    wall = jz["wall"] > 0
+    lip, floor = jz["lip"], jz["floor"]
+    opn = wall & (jz["dj"] > N6C["open_m"])
+    fl = np.zeros(wall.shape, bool)
+    if "peel_a" in ex:
+        fl = np.clip(ex["peel_a"] / np.maximum(ex["peel_pk"], 1e-6), 0, 1) > 0.5
+    ch = ex.get("lip_chip", np.zeros(wall.shape, bool))
+    lip_sh = float((fl | ch)[lip].mean()) if lip.any() else 0.0
+    open_sh = float(fl[opn].mean()) if opn.any() else 0.0
+    floor_sh = float(fl[floor].mean()) if floor.any() else 0.0
+    ck = ex.get("groove_crack")
+    cols = floor.any(axis=0)
+    crack = float((np.asarray(ck).any(axis=0) & cols).sum() / max(cols.sum(), 1)) if ck is not None else 0.0
+    v = {"preset": preset, "lip": round(lip_sh, 4), "open": round(open_sh, 4), "floor": round(floor_sh, 4), "crack": round(crack, 3)}
+    if preset in N6C["early"]:                            # New and Kept: no crack yet (lips and floor not bound)
+        return res("N6", crack <= N6C["crack_max_early"], v)
+    ok = lip_sh >= max(N6C["lip_x"] * open_sh, N6C["lip_min"]) and floor_sh <= N6C["floor_x"] * open_sh + N6C["floor_add"]
+    if preset in N6C["crack"]:
+        ok = ok and crack >= N6C["crack"][preset]
+    return res("N6", ok, v)
 
 
 def check(d):
@@ -272,7 +398,8 @@ def check(d):
     ov = cfg.get("override") or {}
     rust = float(ov.get("rust", (meta.get("amounts") or {}).get("rust", 0)) or 0)
     return [rule_T0(), rule_T1(), rule_T2(d, planes), rule_T3(d, planes),
-            rule_P3c(d, planes, str(cfg.get("preset") or "")), rule_R7c(d, planes, rust)]
+            rule_P3c(d, planes, str(cfg.get("preset") or "")), rule_R7c(d, planes, rust),
+            rule_R8c(d, planes, rust), rule_N6(d, planes, str(cfg.get("preset") or ""))]
 
 
 if __name__ == "__main__":

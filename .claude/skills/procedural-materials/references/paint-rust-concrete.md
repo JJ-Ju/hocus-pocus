@@ -75,27 +75,51 @@ lifting it. Read from the inside out, a patch of 4 cm or more has:
 |---|---|---|---|
 | Core: old, dense rust | the patch | L* 28-36, hue 40-55°, C* 12-20; black magnetite about 25 underneath | 0.85-0.95, 0 |
 | Margin: fresh rust | 1-4 mm on the advancing side and along wet paths | L* 48-56, hue 55-70°, C* 28-40 | 0.75-0.85; 0.5-0.7 wet |
-| Exposed metal, primer or scale | 0.5-3 mm (the coatings note allows up to 3 cm of paint loss) on 30-70 % of the perimeter | grey steel with an orange haze of flash rust; red-oxide primer L* 36-44; mill scale near-black | steel 0.35-0.55 and metallic 1 |
+| Exposed metal, primer or scale | 0.5-3 mm (the coatings note allows up to 3 cm of paint loss) on 30-70 % of the perimeter | tarnished steel, oxide over metal: L* 38-48, a* 0 to +4, b* +2 to +8 (R7c); flash rust (L* 55-65, b* +20 to +28) only within 1-3 mm of chips under a year old; red-oxide primer L* 36-44; mill scale near-black | metallic 0.3-0.5 (60-80 % oxide), roughness 0.55-0.75 |
 | Blister halo | 2-8 mm | the paint, a little yellower | the paint's + 0.05 |
+| Dense scale (the sheen) | the oldest, darkest scale: 4-15 % of the rusted steel at the heaviest rust, none below rust 0.5 | unchanged: brown-black, never b* < 0 | F0 0.04 → 0.08 (UE Specular 1.0, Godot `SPECULAR` 0.71), roughness → 0.55, under a mask (R11) |
 
 Bare bright metal lasts only where something keeps rubbing it: the handrail's top in the hand zone
 (0.8-1.2 m), arris chips. Shares of the steel: 0.05-0.5 % at Typical, 0.3-2 % at Worn and
 Derelict (R7).
 
-**Runs down the uprights.** The top rail's water runs down each upright as a film and leaves rust
-stain below every rusted joint, member-wide, darkest at the head; it pools on the bottom rail and
-leaves a collar there. Median run 0.05-0.15 m at rust 0.5, 0.15-0.4 m at 0.75, 0.3-0.9 m at 1.0
-(R8). Draw runs as their own layer (stain on intact paint), so the corrosion rules count corrosion
-only. At 1 mm/px a run is a band-sampled vertical streak 2-6 mm across, keeping its source's
-opacity and narrowing down the bar.
+**The Ts first.** A railing's rust starts at the underside corners of each T, where a bar meets the
+rail above it: drops hang under the rail, the corner holds them (white enamel's contact angle,
+70-78°, is over the 45° limit at which a 90° corner drains), and the film at a weld toe is only
+50-70 % as thick as on the flat. Then it spreads sideways along the rail's drip line, then up its face; the rail's top
+comes last and only advances with heavy wear. Railing "TTTT" rusts as "TrTrTr" (R3's T clause, R10).
+The bottom rail collects every bar's water: it rusts from each bar's foot and spreads along the rail
+(wetness about 1.8 against the top rail's face at 1), so between steps its rusted stretches lengthen
+rather than new spots appearing (R4).
+
+**Runs down the bars.** The T's water runs down each bar and leaves rust stain below every rusted
+T: member-wide for 2-5 cm under the joint, then a stripe over 30-80 % of the bar's face with darker
+tide lines, ending in a drip or a collar where it pools on the bottom rail. Measure a run as a share
+of its bar: median 2-30 % at rust 0.25, 30-75 % at 0.5, 75-100 % at Derelict (rust 0.6: all or almost
+all the way down), 85-100 % at 1.0 (R8). Draw runs as their own layer (stain on intact paint), so
+the corrosion rules count corrosion only. A 16 mm bar is under one pixel of a 50 px/m facade mask,
+so draw the run in the bar's own space (across 0-1, along in metres) at the fine stage or in the
+engine, and judge it at the player's 1 m view: it must read at dE 15 or more over 2 mm of the
+bar's width (R8c). A mask-space run that passes at 50 px/m can be an invisible tint at 1:1.
 
 **Dark beside bright.** Thick old rust has an ochre outer and a dark inner layer; where the outer
 layer flakes, dark rust shows, and fresh breaks show orange. So 15-40 % of the rust is dark
-(L* 32 or less, at feet, joints, the bottom rail and rail tops) and 8-25 % bright (L* 46 or more and
-C* 30 or more, at fronts and new sites) (R9). Dark scale must be opaque: at 0.92 opacity over a cream
-coat, even L* 25 rust composites to about L* 35. And keep the dark scale off the fresh fronts, or it
-covers the bright rust that marks them. Wet rust darkens only 3-5 L*, but gains gloss: "bright
-wet rust" is fresh orange in the albedo plus lower roughness.
+(L* 32 or less, where water stays: feet, joints, the bottom rail, rail tops, the rails' drip line,
+the Ts' underside corners and the first 0.1 m of each bar below a T) and 8-25 % bright (L* 46 or
+more and C* 30 or more, at fronts and new sites) (R9). Dark scale must be opaque: at 0.92 opacity
+over a cream coat, even L* 25 rust composites to about L* 35, and a clip of the alpha anywhere
+downstream undoes the opacity set upstream, so check the composited L* after the last step. Hold the
+dark share by quantile over the rusted steel, not by noise thresholds, so it stays in band at every
+amount. And keep the dark scale off the fresh
+fronts, or it covers the bright rust that marks them. Wet rust darkens only 3-5 L*, but gains
+gloss: "bright wet rust" is fresh orange in the albedo plus lower roughness.
+
+**The blue sheen is a reflection, never a colour.** Compact goethite, magnetite and hematite reflect
+13-31 % at normal incidence against 4 % for paint, so the near-black scale mirrors the sky: a rough,
+steady blue-grey gloss on the oldest dense scale, whitening toward grazing angles; not a rainbow
+film. Bake it as a mask on the steel (the danchi export: `M_hi.A` on steel pixels) and raise F0 and
+lower roughness under it in the material. A preview without a reflection term shows dark surfaces
+5-7 L* darker and warmer than an engine will, so judge the sheen with a sky reflection on.
 
 ## The clean coat varies in colour, not only in value
 

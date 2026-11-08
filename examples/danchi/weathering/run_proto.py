@@ -102,6 +102,33 @@ def default_planes():
     return [fs.gable(), fs.front(side="S"), fs.front(side="N")]
 
 
+def half_colour(c, a=None):
+    """A colour field at half resolution (25 px/m). Round K: averaged over the layer's own pixels (alpha > 0)
+    and filled 4 rings outward from them, not over the zeros around a layer: the plain 2x2 mean halved the rust
+    colour on bars 1 px wide and darkened every patch's rim."""
+    c = np.asarray(c, np.float32)
+    H2, W2 = c.shape[0] // 2, c.shape[1] // 2
+    if a is None:
+        return 0.25 * sum(c[i::2, j::2][:H2, :W2] for i in (0, 1) for j in (0, 1))
+    w = (np.asarray(a, np.float32) > 0).astype(np.float32)
+    cs = sum(c[i::2, j::2][:H2, :W2] * w[i::2, j::2][:H2, :W2, None] for i in (0, 1) for j in (0, 1))
+    ws = sum(w[i::2, j::2][:H2, :W2] for i in (0, 1) for j in (0, 1))
+    out = np.where((ws > 0)[..., None], cs / np.maximum(ws, 1e-6)[..., None], 0.0)
+    hv = (ws > 0).astype(np.float32)
+    if hv.any() and not hv.all():
+        for _ in range(4):
+            s_ = np.zeros_like(out)
+            n_ = np.zeros_like(hv)
+            for dy in (-1, 0, 1):
+                for dx in (-1, 0, 1):
+                    s_ += np.roll(np.roll(out * hv[..., None], dy, 0), dx, 1)
+                    n_ += np.roll(np.roll(hv, dy, 0), dx, 1)
+            grow = (hv == 0) & (n_ > 0)
+            out = np.where(grow[..., None], s_ / np.maximum(n_, 1e-6)[..., None], out)
+            hv = np.maximum(hv, grow.astype(np.float32))
+    return out.astype(np.float32)
+
+
 def save_steps(path, p, base, L):
     """Each step of the composite as the high-resolution compositor replays it: name, operation,
     alpha (float16) and colour (float16, per pixel or one value). Colours are smooth fields, so
@@ -117,8 +144,7 @@ def save_steps(path, p, base, L):
                 continue
             v = np.asarray(v, np.float32)
             if v.ndim == 3 and k == "colour":
-                v = 0.25 * (v[0::2, 0::2][:v.shape[0] // 2, :v.shape[1] // 2] + v[1::2, 0::2][:v.shape[0] // 2, :v.shape[1] // 2]
-                            + v[0::2, 1::2][:v.shape[0] // 2, :v.shape[1] // 2] + v[1::2, 1::2][:v.shape[0] // 2, :v.shape[1] // 2])
+                v = half_colour(v, d.get("alpha"))
             arrs["s%d_%s" % (i, k)] = v.astype(np.float16)
     np.savez_compressed(path, **arrs)
 
@@ -142,6 +168,8 @@ def run(out_dir, cfg, planes=None, preview=True, fixed_gains=None, bases=None):
         if p.get("joint_h") is not None:
             f = f * mt.joint_tone(p["joint_h"], p["joint_v"])
         bases[p["name"]] = np.where(paint[..., None], bases[p["name"]] * f[..., None], bases[p["name"]]).astype(np.float32)
+        if getattr(mt, "TINT_ON", False):          # round J: the coat's chroma and warm/cool drift
+            bases[p["name"]] = mt.coat_tint(bases[p["name"]], paint, p["ppm"], ("coat", cfg.get("seed", 1), p["name"]))
     b = wf.Builder(planes, cfg, bases)
     log = []
     gs, ga, out = b.solve(log, fixed_gains=fixed_gains)
@@ -155,7 +183,7 @@ def run(out_dir, cfg, planes=None, preview=True, fixed_gains=None, bases=None):
         arrs = {"D": D, "Yc": wm.luminance(bases[p["name"]]).astype(np.float32), "cls": p["cls"],
                 "src": src_map(p, o), "edge": p["edges"]}
         for k, v in o["L"].items():
-            m_ = p["mask"] | p["steel"] if (k == "rust" and p.get("steel") is not None) else p["mask"]   # rust on the steel too (R1, R2)
+            m_ = p["mask"] | p["steel"] if (k in ("rust", "rust_run", "rust_bare") and p.get("steel") is not None) else p["mask"]   # rust on the steel too (R1, R2; round J runs, bare steel)
             arrs["L_" + k] = np.where(m_, v, np.nan).astype(np.float32)
         dm = o["marks"].get("damage", [])
         if dm:
@@ -195,6 +223,22 @@ def run(out_dir, cfg, planes=None, preview=True, fixed_gains=None, bases=None):
         arrs["base"] = bases[p["name"]].astype(np.float16)          # clean albedo (close-ups)
         if p.get("joint_h") is not None:
             arrs["joint"] = (p["joint_h"].astype(np.uint8) + 2 * p["joint_v"].astype(np.uint8))
+        fl_ = b.fixed.get(p["name"], ({}, {}))[0]                     # round J: the new layers' own amounts (P1-P3, R7-R9)
+        if "peeling" in fl_:
+            arrs["peel_a"] = fl_["peeling"]["alpha"].astype(np.float16)
+            if fl_["peeling"].get("conc") is not None:
+                arrs["peel_b"] = fl_["peeling"]["conc"].astype(np.float16)
+            if fl_["peeling"].get("halo") is not None:
+                arrs["peel_h"] = fl_["peeling"]["halo"].astype(np.float16)
+        for k_, n_ in (("rust_run", "run_a"), ("rust_bare", "bare_a")):
+            if k_ in fl_:
+                arrs[n_] = fl_[k_]["alpha"].astype(np.float16)
+        if "rust" in fl_ and fl_["rust"].get("sheen") is not None:   # round K: the sheen mask (R11)
+            arrs["sheen"] = np.asarray(fl_["rust"]["sheen"]).astype(np.float16)
+        if p.get("depth") is not None:
+            arrs["dep"] = np.nan_to_num(p["depth"], nan=1e3, posinf=1e3).astype(np.float32)   # inside corners, recesses (G7)
+            if getattr(wf, "SURF_ON", False):
+                arrs["surf"] = wf.surfaces(p).astype(np.int8)          # round K: surface colours (the fine stage's offsets)
         arrs["labw"] = wm.linear_to_lab(o["rgb"]).astype(np.float32)
         arrs["labc"] = wm.linear_to_lab(bases[p["name"]]).astype(np.float32)
         np.savez_compressed(os.path.join(out_dir, p["name"] + ".npz"), **arrs)   # lossless: the gate reads the same numbers

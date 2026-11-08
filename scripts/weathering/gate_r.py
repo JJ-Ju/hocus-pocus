@@ -9,7 +9,8 @@ import weather_measure as wm
 
 PAINTED = (1, 2)
 RUST_DE = 8.0                       # rust shows on the steel: colour difference 8 or more (as R1)
-R3C = {"a_min": 0.25, "feet": (0.5, 0.8), "rails_x": 3.0, "faces_max": (0.10, 0.25), "panel_low": 0.60, "panel_px": 200}
+R3C = {"a_min": 0.25, "feet": (0.4, 0.8), "rails_x": 3.0, "faces_max": (0.10, 0.25), "panel_low": 0.60, "panel_px": 200,
+       "ts": (0.6, 0.85), "ts_from": 0.2}   # the T clause from 0.2: Typical (0.228), where the user named it       # K: Ts (a bar under the top rail and the rail's underside corners) rusted, from 0.25 / 0.5
 R4C = {"along_m": 0.30, "down_m": 0.50, "up_m": 0.05, "share": 0.70, "creep_max": 0.10, "seg_x": 1.3, "rails_full": 0.80}
 R5C = {"stained": ((0.25, 0.5, 0.75, 1.0), (0.25, 0.5, 0.8, 0.9)), "reach_m": 0.10, "head": (1.5, 4.5),
        "cover": {0.5: (0.05, 0.20), 1.0: (0.20, 0.50)}, "cover_m": 0.05, "parapet": (0.30, 0.20), "win_m": 0.12}
@@ -61,15 +62,24 @@ def rule_R3(cfg, planes, R):
     from 0.5); the rails' rusted share 3x or more that of the other upright faces; those faces hold at
     most 10 % of all rust up to 0.75 and 25 % at 1.0."""
     a = _amount(cfg)
-    if a < R3C["a_min"]:
-        return res("R3", True, {"amount": a}, "under %.2f" % R3C["a_min"])
+    if a < R3C["ts_from"]:
+        return res("R3", True, {"amount": a}, "under %.2f" % R3C["ts_from"])
+    ts_only = a < R3C["a_min"]                         # 0.2-0.25: only the T clause binds
     n = {k: 0 for k in ("feet", "joints", "rails", "up03", "faces")}
     r = dict(n)
     tot_r = 0
     pan_r = pan_low = 0
+    t_n = t_r = 0
     for p in _planes(planes):
         st, M, _ = _geo(p)
         rust = _rusted(p, st)
+        if "tcorner" in M:                            # K: each T rusted anywhere (the joint or its corners)
+            labT, nT = wm.label(M["tjoint"] | M["tcorner"])
+            if nT:
+                hitT = np.zeros(nT + 1, bool)
+                np.logical_or.at(hitT, labT[labT > 0], rust[labT > 0])
+                t_n += nT
+                t_r += int(hitT[1:].sum())
         pr = rust & M["panel"]
         if pr.any():                                  # panels: rust in each panel's bottom quarter
             lab, nl = wm.label(M["panel"])
@@ -96,12 +106,20 @@ def rule_R3(cfg, planes, R):
     need_feet = R3C["feet"][1] if a >= 0.5 else R3C["feet"][0]
     faces_max = R3C["faces_max"][1] if a > 0.75 else R3C["faces_max"][0]
     ok = sh["feet"] >= need_feet and sh["rails"] >= R3C["rails_x"] * sh["faces"] and faces_of_all <= faces_max
+    if ts_only:
+        ok = True
+    ts_sh = t_r / t_n if t_n else None
+    need_ts = R3C["ts"][1] if a >= 0.5 else R3C["ts"][0]
+    if ts_sh is not None:
+        ok = ok and ts_sh >= need_ts
     low = pan_low / pan_r if pan_r else None
-    if pan_r >= R3C["panel_px"]:
+    if pan_r >= R3C["panel_px"] and not ts_only:
         ok &= low >= R3C["panel_low"]
     return res("R3", ok, {"amount": round(a, 3), "rusted_share": {k: round(v, 3) for k, v in sh.items()},
                           "faces_of_all_rust": round(faces_of_all, 3), "need_feet": need_feet, "faces_max": faces_max,
-                          "panel_rust_px": pan_r, "panel_bottom_quarter": None if low is None else round(low, 3)})
+                          "ts_rusted": None if ts_sh is None else round(ts_sh, 3), "need_ts": need_ts, "ts": t_n,
+                          "panel_rust_px": pan_r, "panel_bottom_quarter": None if low is None else round(low, 3),
+                          "binding": "T clause only (rust under %.2f)" % R3C["a_min"] if ts_only else "all"})
 
 
 def _foot_stains(p):
@@ -279,7 +297,7 @@ def _segments(rail_rust, rail):
 def series_rust_flow(runs):
     """R4 and R6 (series, round I): between rust steps, 70 % or more of the new rusted steel continues
     earlier rust along its member (0.3 m along a rail, 0.5 m down or 0.05 m up an upright) or starts at a
-    foot or joint; 10 % or less creeps up an upright more than 0.05 m above earlier rust; the mean rusted
+    foot or joint (round K: a T with the rail's underside corners beside it, as R3 counts it); 10 % or less creeps up an upright more than 0.05 m above earlier rust; the mean rusted
     rail segment grows x1.3 or more a step until the rails are 80 % rusted. R6: the rust already there at
     the last step is 4 or more L* darker than the new rust (medians)."""
     steps, bad4, bad6 = [], [], []
@@ -303,7 +321,8 @@ def series_rust_flow(runs):
                 new = r1 & ~r0
                 near = (M["rail"] & _hdilate(r0, int(R4C["along_m"] * ppm))) | \
                        (~M["rail"] & (_down(r0, int(R4C["down_m"] * ppm)) | _up(r0, int(R4C["up_m"] * ppm)) | _hdilate(r0, 1)))
-                cont = new & (near | M["foot"] | M["joint"])
+                start = M["foot"] | M["joint"] | M.get("tcorner", np.zeros_like(M["joint"]))   # K13: a T as R3 counts it
+                cont = new & (near | start)
                 below0 = _up(r0, int(1.0 * ppm))                 # earlier rust somewhere below, within 1 m
                 creep = new & M["upright"] & below0 & ~_up(r0, int(R4C["up_m"] * ppm)) & ~_down(r0, int(0.5 * ppm)) \
                     & ~M["joint"] & ~M["foot"]

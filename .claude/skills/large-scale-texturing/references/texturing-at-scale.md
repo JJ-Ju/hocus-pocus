@@ -43,7 +43,7 @@ Budget: ≤ 40 MB unique per building (10 MB on Godot Mobile), ≤ 128 MB shared
 
    | Texture | Density | R | G | B | A |
    |---|---|---|---|---|---|
-   | M_hi | 50 px/m | run-off (streak envelope) | stains, ground band (steel: rust) | growth | light layers (efflorescence, washed) |
+   | M_hi | 50 px/m | run-off (streak envelope; steel: bare metal) | stains, ground band (steel: rust and its runs) | growth | light layers (efflorescence, washed; steel: the dense-scale sheen, F0 and roughness only) |
    | M_lo | 25 px/m | soiling film | damp (roughness) | coat tone (0.5 = none) | edge wear (for trims) |
    | tint | 25 px/m | dirt colour (RGB, sRGB) | | | |
    | stage | 25 px/m | growth stage on its colour ramp | | | |

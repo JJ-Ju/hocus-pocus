@@ -544,7 +544,7 @@ def _polygon_sd(px, py, vx, vy):
 
 
 def stamp_break(sub, dep, tone, cav, ppm, xc, yc, r_m, depth_m, key, theta=0.0, bar=None, gk=None,
-                mask=None):
+                mask=None, region=None):
     """One break: concrete fractures along planes, so the outline is a polygon of 5-8 corners with
     a jagged line between them, stretched along the edge it broke from (the bar runs with the
     arris); alpha is the pixel's coverage (a 1 px edge, no falloff). The floor is recessed by
@@ -580,6 +580,8 @@ def stamp_break(sub, dep, tone, cav, ppm, xc, yc, r_m, depth_m, key, theta=0.0, 
     yy, xx = np.mgrid[ya:yb, xa:xb]
     sd = _polygon_sd(xx + 0.0, yy + 0.0, vx, vy)
     a = np.clip(sd + 0.5, 0.0, 1.0).astype(F32)
+    if region is not None:                              # round K: a break stays on the surface it starts on
+        a = (a * (region[0][ya:yb, xa:xb] == region[1])).astype(F32)
     if not a.any():
         return None
     from weather_measure import gauss
@@ -1132,6 +1134,8 @@ G7_REC = 0.60               # J12: recess faces (0.3 m or more behind the neares
 G7_R = 0.35                 # its reach (m), gaussian (J13; was exp(-d/0.2)): 0.6 over the strip, 0.045 at 0.55-0.7 m
 G7_WET = (0.88, 0.68)       # growth wetness at corner bottoms (1 m above a floor) and recess bottoms (0.3 m)
                             # (J22: recess bottoms 0.85 -> 0.68: thin bands raised M6 to 1.50 at Worn; G7 4.5-6.6x)
+PEEL_TOP_CAP = (18.0, 0.40)  # K11: from E 18, a wall's top edge flaked on at most this share of its length (F5:
+                             # 15-50 % at Derelict; the gable took 64 % with round K's per-surface noise)
 PEEL_TOPEDGE = 0.15         # the peeling score's weight within 0.1 m of the wall top (F5: 15-50 % of the edge at Derelict;
                             # J17: 0.25 gave the W gable 53 %)
                             # J14: 0.45 gave the W gable 61 % once PEEL_BASE fell to 0.07)
@@ -1761,6 +1765,8 @@ def layer_bio(plane, F, cfg, a, key, stains=None, streaks=None, chips=None):
 
 
 RUST_SHARE = ((0.25, 0.5, 0.75, 1.0), (0.05, 0.10, 0.20, 0.40))   # rusted share of the steel at the control's
+RUST_SHARE = ((0.25, 0.5, 0.75, 1.0), (0.065, 0.12, 0.22, 0.40))  # K6: 1.3 / 1.2 / 1.1 / 1x the grade (R1 allows 0.5-2x): the
+# Ts are 5.2 % of the railing steel, so at 5 % no more than about 80 % of them could rust at Typical (the user: TrTrTr)
 # steps, x2 a step (L3): ISO 4628-3 Ri3-4, Ri4, Ri4-5, Ri5 (round H: round G's 0.25-8 % over 0.25-0.75 read 'too little')
 RUST_RUN_P = (0.20, 0.80)    # chance of a run below a post: a0 + a1 x amount
 RUST_RUN_OP = 0.60           # run opacity x amount ** 0.5
@@ -1903,13 +1909,15 @@ def layer_rust(plane, F, cfg, a, key, spalls=None, flow=None):
     # rails (round G, research X1): rust on the metal by ISO grade, and rust runs below posts
     cls = plane.get("cls")
     flow_col = None
+    cap_r = None
     if cls is not None and a > 0 and RUST_FLOW == "arrival":
         metal = plane["steel"] if plane.get("steel") is not None else cls == 7
         if metal.any():
             import rust_flow as rfl
             pre, Ts = flow if flow is not None else (None, None)          # the building's clock (Builder)
             acc_r, flow_col, mk, _st = rfl.layer(plane, metal, a, rust_share(a), key, pre=pre, Ts=Ts)
-            plane["_rust_extra"] = {k_: _st.get(k_) for k_ in ("run_a", "run_c", "bare_a", "bare_c")}   # round J
+            cap_r = np.maximum(acc_r, 0.92).astype(F32)            # K11: the flow layer's opaque dark scale kept
+            plane["_rust_extra"] = {k_: _st.get(k_) for k_ in ("run_a", "run_c", "run_pk", "bare_a", "bare_c", "u", "sheen")}   # J; K: run_pk, u, sheen
             marks.extend(mk)
             # spall bleeds (acc so far, plain rust colour) under the flow layer
             c_sp = np.array(COL["rust"], F32)
@@ -2000,7 +2008,7 @@ def layer_rust(plane, F, cfg, a, key, spalls=None, flow=None):
     col = (c0 + (c1 - c0) * oldw[..., None]).astype(F32)            # older rust on the metal is darker brown
     if flow_col is not None:
         col = np.where((flow_col.sum(axis=-1) > 0)[..., None], flow_col, col).astype(F32)
-    return np.clip(acc, 0, 0.92), col, marks
+    return np.clip(acc, 0, cap_r if cap_r is not None else 0.92), col, marks
 
 
 def layer_efflorescence(plane, F, cfg, a, key, cracks=None):
@@ -2402,6 +2410,27 @@ def layer_cracks(plane, F, cfg, a, key):
     return np.clip(cs.acc, 0, 0.8) * mask, None, marks, cs
 
 
+ARRIS_ONLY = True          # round K: chips and edge wear on arrises only, never on a hidden wall's occlusion line
+
+
+def arrises(plane):
+    """Round K: the plane's edges without occlusion lines. A bottom whose pixel below is a nearer surface (the wall
+    behind a balcony front, where the front hides it) is not an arris: nothing chips or wears there."""
+    a_ = plane.get("_arris")
+    if a_ is None:
+        e = plane["edges"]
+        dep = plane.get("depth")
+        if not ARRIS_ONLY or dep is None or "bottoms" not in plane:
+            a_ = e
+        else:
+            H, W = e.shape
+            bd = np.full((H, W), np.inf)
+            bd[:-1] = dep[1:]
+            a_ = e & ~(plane["bottoms"] & (bd < dep - 0.05))
+        plane["_arris"] = a_
+    return a_
+
+
 def layer_wear(plane, F, cfg, a, key):
     """Edges (round G; research cracks-edges-damage 5.5): at the facade scale an arris reads through
     its 1 px edge row, not a bevel. Tops (copings, slab and sill tops) lighter: chalked and
@@ -2415,7 +2444,7 @@ def layer_wear(plane, F, cfg, a, key):
     H, W = mask.shape
     if a <= 0 or "edges" not in plane:
         return np.zeros((H, W), F32), None, []
-    e = plane["edges"] & mask
+    e = arrises(plane) & mask                            # round K: arrises, not occlusion lines
     cls = plane.get("cls")
     if cls is not None:
         e &= ~np.isin(cls, (4, 5, 6, 7))
@@ -2517,13 +2546,19 @@ def layer_damage(plane, F, cfg, a, key):
     marks = []
     if a <= 0 or "edges" not in plane:
         return sub, cav, marks, dep, tone, bar, spall_low
-    ys, xs = np.nonzero(plane["edges"])
+    edges_ = arrises(plane)                             # round K: not the hidden wall's occlusion lines
+    ys, xs = np.nonzero(edges_)
     if ys.size == 0:
         return sub, cav, marks, dep, tone, bar, spall_low
+    slab = None
+    if SURF_ON and plane.get("depth") is not None:     # round K: breaks confined to their surface
+        surfaces(plane)
+        slab = plane.get("surf_lab")
+    reg = (lambda yy_, xx_: (slab, int(slab[int(yy_), int(xx_)])) if slab is not None and slab[int(yy_), int(xx_)] > 0 else None)
     rmax = 0.045 * 2.0 ** (4.0 * a)
     rmax1 = 0.045 * 2.0 ** 4.0                       # at amount 1: fixes where satellites sit
     rmin = 0.006
-    edge_len = ys.size / ppm
+    edge_len = float(np.count_nonzero(plane["edges"])) / ppm   # K11: the calibrated count; placed on arrises only
     nhot = max(1, int(edge_len / 40.0 * (0.5 + 3.0 * a)))
     cw = F.C[ys, xs].astype(np.float64) ** 1.5
     # hotspots in a fixed order of priority: the ones at a lower amount are the first of those at a
@@ -2584,7 +2619,15 @@ def layer_damage(plane, F, cfg, a, key):
     extra = max(0.0, target - have) * wall_area
     if extra > 0 and a >= 0.4:
         from weather_measure import gauss
-        prox = gauss(plane["edges"].astype(F32), 0.15 * ppm)
+        if ARRIS_ONLY and slab is not None and plane.get("surf") is not None:
+            sf_ = plane["surf"]                         # round K: near an arris of the pixel's own surface (the
+            prox = np.zeros((H, W), F32)                # surface colours differ between neighbours, so a front's
+            for c_ in range(SURF_K):                    # arris does not raise the risk on the wall behind it)
+                m_ = sf_ == c_
+                if m_.any():
+                    prox = np.where(m_, gauss((edges_ & m_).astype(F32), 0.15 * ppm), prox).astype(F32)
+        else:
+            prox = gauss(edges_.astype(F32), 0.15 * ppm)
         prox = prox / max(float(prox.max()), 1e-6)
         barl = (np.abs(((np.arange(H)[:, None] + 3.0 * nz.gfield((H, W), 0.5 * ppm, key + ("barw",))) % (0.2 * ppm))
                        - 0.1 * ppm) < 0.02 * ppm).astype(F32)
@@ -2605,8 +2648,8 @@ def layer_damage(plane, F, cfg, a, key):
                     break
                 cy, cx = int(yy[j] * 3), int(xx[j] * 3)
                 res = stamp_break(sub, dep, tone, cav, ppm, cx, cy, r_m, chip_depth(r_m), key + ("del", k),
-                                  edge_angle(plane["edges"], cy, cx) if plane["edges"][max(0, cy - 4):cy + 5, max(0, cx - 4):cx + 5].any()
-                                  else (0.0 if rk.random() < 0.6 else np.pi / 2), bar=bar, gk=gk, mask=mask)
+                                  edge_angle(edges_, cy, cx) if edges_[max(0, cy - 4):cy + 5, max(0, cx - 4):cx + 5].any()
+                                  else (0.0 if rk.random() < 0.6 else np.pi / 2), bar=bar, gk=gk, mask=mask, region=reg(cy, cx))
                 if res is None:
                     continue
                 if res["low"] is not None:
@@ -2625,7 +2668,7 @@ def layer_damage(plane, F, cfg, a, key):
             sd.append(chip_depth(rk))
         else:
             res = stamp_break(sub, dep, tone, cav, ppm, cx, cy, rk, chip_depth(rk), key + ("chip",) + cid,
-                              edge_angle(plane["edges"], cy, cx), bar=bar, gk=gk, mask=mask)
+                              edge_angle(edges_, cy, cx), bar=bar, gk=gk, mask=mask, region=reg(cy, cx))
             if res is None:
                 continue
             if res["low"] is not None:
@@ -2882,6 +2925,82 @@ PEEL_AMAX = ((0.0, 0.5), (0.27, 0.55), (0.45, 0.8), (0.55, 1.0))   # J19: the mo
                             # by peel amount (Worn 0.27, Derelict 0.57): small separate flakes, then sheets
 
 
+# round K: patterns tied to surfaces (the user, round J: the balcony front and the wall 1-2 m behind it shared one
+# chipping pattern). A surface is a part of the painted mask with no depth step of SURF_STEP_M or more inside it; each
+# gets one of SURF_K independent fields, and surfaces touching across a step never share one (research
+# member-rust-and-geometry-aware-wear.md: IDs coloured over the adjacency graph, not 3D noise).
+SURF_ON = True
+SURF_K = 5
+SURF_STEP_M = 0.03
+
+
+def surfaces(plane):
+    """The plane's surface colours (int8, -1 off the painted mask), cached on the plane as 'surf'."""
+    if plane.get("surf") is not None:
+        return plane["surf"]
+    from weather_measure import label
+    m = np.asarray(plane["mask"], bool)
+    H, W = m.shape
+    dep = np.nan_to_num(np.asarray(plane.get("depth", np.zeros((H, W))), np.float64), nan=1e3, posinf=1e3, neginf=-1e3)
+    sv = np.zeros((H, W), bool)                          # a step between (y, x) and (y + 1, x)
+    sv[:-1] = m[:-1] & m[1:] & (np.abs(dep[1:] - dep[:-1]) >= SURF_STEP_M)
+    sh = np.zeros((H, W), bool)                          # between (y, x) and (y, x + 1)
+    sh[:, :-1] = m[:, :-1] & m[:, 1:] & (np.abs(dep[:, 1:] - dep[:, :-1]) >= SURF_STEP_M)
+    seam = np.zeros((H, W), bool)                        # the farther pixel of each step
+    seam[1:] |= sv[:-1] & (dep[1:] > dep[:-1])
+    seam[:-1] |= sv[:-1] & (dep[:-1] >= dep[1:])
+    seam[:, 1:] |= sh[:, :-1] & (dep[:, 1:] > dep[:, :-1])
+    seam[:, :-1] |= sh[:, :-1] & (dep[:, :-1] >= dep[:, 1:])
+    lab, n = label(m & ~seam, conn=4)
+    for _ in range(3):                                   # seam pixels join a same-depth 4-neighbour's surface
+        todo = m & (lab == 0)
+        if not todo.any():
+            break
+        for dy, dx in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+            nb = np.roll(np.roll(lab, dy, 0), dx, 1)
+            nd = np.roll(np.roll(dep, dy, 0), dx, 1)
+            ok = todo & (nb > 0) & (np.abs(nd - dep) < SURF_STEP_M) & (lab == 0)
+            lab = np.where(ok, nb, lab)
+    rest = m & (lab == 0)
+    if rest.any():                                       # isolated pixels: their own surfaces
+        l2, n2 = label(rest, conn=4)
+        lab = np.where(rest, l2 + n, lab)
+        n += n2
+    pairs = []                                           # surfaces touching across a step
+    for st, a_, b_ in ((sv, lab[:-1], lab[1:]), (sh, lab[:, :-1], lab[:, 1:])):
+        s_ = st[:-1] if st is sv else st[:, :-1]
+        p = np.stack([a_[s_], b_[s_]], 1)
+        pairs.append(p[(p[:, 0] > 0) & (p[:, 1] > 0) & (p[:, 0] != p[:, 1])])
+    pairs = np.unique(np.sort(np.concatenate(pairs), axis=1), axis=0) if pairs else np.zeros((0, 2), int)
+    nbr = [[] for _ in range(n + 1)]
+    for u_, v_ in pairs:
+        nbr[u_].append(v_)
+        nbr[v_].append(u_)
+    size = np.bincount(lab.ravel(), minlength=n + 1)
+    colour = np.full(n + 1, -1, np.int16)
+    for s_ in np.argsort(-size[1:]) + 1:                 # greedy, largest first
+        used = {int(colour[t]) for t in nbr[s_] if colour[t] >= 0}
+        free = [c for c in range(SURF_K) if c not in used]
+        colour[s_] = free[0] if free else int(np.argmin([sum(1 for t in nbr[s_] if colour[t] == c) for c in range(SURF_K)]))
+    surf = np.where(m, colour[lab], -1).astype(np.int8)
+    plane["surf"] = surf
+    plane["surf_lab"] = lab.astype(np.int32)             # the surfaces themselves (breaks stay on theirs)
+    return surf
+
+
+def surf_field(plane, make, key):
+    """make(key) -> a field (H, W). Round K: one independent field per surface colour, taken per pixel by the
+    plane's surface colours, so a pattern never runs on across a depth step (colour 0 keeps the old field)."""
+    out = make(key)
+    if not SURF_ON or plane.get("depth") is None:
+        return out
+    s = surfaces(plane)
+    for c in range(1, SURF_K):
+        if (s == c).any():
+            out = np.where(s == c, make(key + ("surf", c)), out)
+    return out
+
+
 def layer_peeling(plane, F, cfg, a, key, cracks=None, effl=None):
     """Paint failure exposing the concrete (round J). Water behind the film lifts it: along the water's
     channels, at cracks and joints, under efflorescence (salts push the film off), at the foot (rising
@@ -2932,8 +3051,9 @@ def layer_peeling(plane, F, cfg, a, key, cracks=None, effl=None):
     if ZONE_ON:                                           # J: the wall top's edge (F5): water through the cap
         dtop_ = plane_zones(plane)[0]
         ex = ex + PEEL_TOPEDGE * ((dtop_ >= 0) & (dtop_ <= 0.10)).astype(F32) * float(nz.smoothstep(8.0, 19.0, float(plane.get("_E", 0.0))))
-    defect = nz.fbm((H, W), ppm, [5, 6, 7], key + ("adh",))
-    fine = nz.gfield((H, W), 0.7, key + ("adhf",))
+    defect = surf_field(plane, lambda k_: nz.fbm((H, W), ppm, [5, 6, 7], k_), key + ("adh",))   # K: per surface
+    dtop_k = plane_zones(plane)[0] if (ZONE_ON and PEEL_TOP_CAP is not None) else None
+    fine = surf_field(plane, lambda k_: nz.gfield((H, W), 0.7, k_), key + ("adhf",))
     score = np.log(PEEL_BASE + ex) + PEEL_SIGMA * (0.8 * defect + 0.45 * fine) + 0.15 * float(plane.get("face_sun", 0.0))
     sm = score[mask]
     soft = PEEL_SOFT * float(sm.std())
@@ -2945,8 +3065,34 @@ def layer_peeling(plane, F, cfg, a, key, cracks=None, effl=None):
             lo = thr
         else:
             hi = thr
+    if dtop_k is not None and float(plane.get("_E", 0.0)) >= PEEL_TOP_CAP[0]:   # K11: F5's top edge, capped
+        top5 = mask & (dtop_k >= 0) & (dtop_k <= 0.05)
+        cols_t = top5.any(axis=0)
+        if cols_t.sum() >= 50:
+            ramp = (1.0 - nz.smoothstep(0.05, 0.15, dtop_k)) * (dtop_k >= 0) * mask
+            frac = lambda o_, t_: float(((np.clip((score + o_ * ramp - t_) / (2 * soft) + 0.5, 0, acap) * top5).max(axis=0)
+                                         [cols_t] > 0.3).mean())   # noqa: E731
+            for _it in range(2):
+                if frac(0.0, thr) <= PEEL_TOP_CAP[1]:
+                    break
+                o_lo, o_hi = -8.0 * float(sm.std()), 0.0
+                for _ in range(30):
+                    o_m = 0.5 * (o_lo + o_hi)
+                    if frac(o_m, thr) > PEEL_TOP_CAP[1]:
+                        o_hi = o_m
+                    else:
+                        o_lo = o_m
+                score = (score + o_lo * ramp).astype(F32)
+                sm = score[mask]
+                lo, hi = float(sm.min()) - 3 * soft, float(sm.max()) + 3 * soft
+                for _ in range(48):                       # the share kept: the threshold again
+                    thr = 0.5 * (lo + hi)
+                    if float(np.clip((sm - thr) / (2 * soft) + 0.5, 0, acap).mean()) > share:
+                        lo = thr
+                    else:
+                        hi = thr
     alpha = (np.clip((score - thr) / (2 * soft) + 0.5, 0, acap) * mask).astype(F32)
-    tone = np.clip(0.95 + 0.06 * nz.gfield((H, W), 0.15 * ppm, key + ("tone",)), 0.8, 1.1)
+    tone = np.clip(0.95 + 0.06 * surf_field(plane, lambda k_: nz.gfield((H, W), 0.15 * ppm, k_), key + ("tone",)), 0.8, 1.1)
     # J6: type b (to the concrete) is the deepest part of the failure, a share of the flaked area by amount
     d_ = (score - thr) / max(float(sm.std()), 1e-6)
     tb_share = float(np.interp(a, [p_[0] for p_ in PEEL_B_SHARE], [p_[1] for p_ in PEEL_B_SHARE]))
@@ -3022,7 +3168,14 @@ def composite(plane, base_rgb, L, rec=None):
         Lm[name] = 1 - luminance(_lerp(base_rgb, col, al)) / Y0
         An = _lerp(A, col, al)
         if rec is not None:
-            rec.append((name, "lerp_dark" if name == "bio" else "lerp", {"alpha": al, "colour": col}))
+            d_ = {"alpha": al, "colour": col}
+            if name == "rust_run" and L[name].get("peak") is not None:   # round K
+                d_["peak"] = L[name]["peak"]
+            if name == "rust" and L[name].get("age") is not None:        # round K
+                d_["age"] = L[name]["age"]
+            if name == "rust" and L[name].get("sheen") is not None:      # round K7
+                d_["sheen"] = L[name]["sheen"]
+            rec.append((name, "lerp_dark" if name == "bio" else "lerp", d_))
         if name == "bio":                    # a biofilm tints a dirty wall but never brightens it
             Yn, Yo = luminance(An), luminance(A)
             An = np.where((Yn > Yo)[..., None], An * (Yo / np.maximum(Yn, 1e-6))[..., None], An).astype(F32)
@@ -3146,8 +3299,14 @@ class Builder:
         al, colr, _ = layer_rust(p, F, cfg, a["rust"], self.key("rust", p), spalls=spl, flow=flow)
         L["rust"] = {"alpha": al} if colr is None else {"alpha": al, "colour": colr}
         ex = p.pop("_rust_extra", None) or {}                # round J: runs down the bars, bare steel
+        if ex.get("u") is not None:                          # K: the rust's age on the steel (the fine stage's dark scale)
+            L["rust"]["age"] = np.asarray(ex["u"], F32)
+        if ex.get("sheen") is not None:                      # K7: the sheen mask (material, not albedo)
+            L["rust"]["sheen"] = np.asarray(ex["sheen"], F32)
         if ex.get("run_a") is not None and np.asarray(ex["run_a"]).any():
             L["rust_run"] = {"alpha": ex["run_a"], "colour": ex["run_c"]}
+            if ex.get("run_pk") is not None:                 # round K: the runs' opacity (the fine stage's stripe)
+                L["rust_run"]["peak"] = ex["run_pk"]
         if ex.get("bare_a") is not None and np.asarray(ex["bare_a"]).any():
             L["rust_bare"] = {"alpha": ex["bare_a"], "colour": np.ascontiguousarray(ex["bare_c"])}
         al, _, mkc, cs = layer_cracks(p, F, cfg, a["cracks"], self.key("cracks", p))
@@ -3423,7 +3582,8 @@ class Builder:
             k_best = self.k
             best = (m0, k_best, ga, None)
             tries = (((1.0, 1.05), (1.0, 0.95), (1.0, 1.10), (1.0, 0.90)) if self.match else   # a matched seed keeps k
-                     ((1.15, 1.0), (1.32, 1.0), (0.85, 1.0), (0.72, 1.0), (1.0, 1.12), (1.0, 0.9)))
+                     ((1.15, 1.0), (1.32, 1.0), (0.85, 1.0), (0.72, 1.0), (1.0, 1.12), (1.0, 0.9),
+                      (1.2, 0.93), (1.4, 0.87), (1.6, 0.81)))   # K15: film for accent (B1's T5 between T4 and T6)
             for fk, fa in tries:
                 self.k = k_best * fk
                 o2 = self.build(gs, ga * fa)

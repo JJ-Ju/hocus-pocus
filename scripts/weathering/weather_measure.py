@@ -160,9 +160,9 @@ def flat_fraction(D, ppm, window_m=0.2, sd_min=0.005, footprint=TIER_EDGES[0]):
 # ---------------------------------------------------------------------------------------------
 # connected marks
 
-def label(binary):
-    """8-connected component labels, vectorised: row runs, overlaps between consecutive rows,
-    then min-label propagation with pointer jumping. Returns (labels, count); 0 = background."""
+def label(binary, conn=8):
+    """8-connected (or 4-connected, conn=4) component labels, vectorised: row runs, overlaps between
+    consecutive rows, then min-label propagation with pointer jumping. Returns (labels, count); 0 = background."""
     H, W = binary.shape
     b = np.zeros((H, W + 2), np.int8)
     b[:, 1:-1] = binary
@@ -177,8 +177,8 @@ def label(binary):
     ekey = re_.astype(np.int64) * K + ce
     idx = np.flatnonzero(rs > 0)
     prow = (rs[idx] - 1).astype(np.int64) * K
-    j0 = np.searchsorted(ekey, prow + cs[idx], side="left")
-    j1 = np.searchsorted(skey, prow + ce[idx], side="right")
+    j0 = np.searchsorted(ekey, prow + cs[idx], side="left" if conn == 8 else "right")   # 4: runs must share a column
+    j1 = np.searchsorted(skey, prow + ce[idx], side="right" if conn == 8 else "left")
     cnt = np.maximum(j1 - j0, 0)
     ii = np.repeat(idx, cnt)
     off = np.arange(cnt.sum()) - np.repeat(np.cumsum(cnt) - cnt, cnt)

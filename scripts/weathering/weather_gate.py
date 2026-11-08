@@ -39,6 +39,7 @@ import gate_h as gh  # noqa: E402
 import gate_i as gi  # noqa: E402
 import gate_r as gr  # noqa: E402
 import gate_j as gj  # noqa: E402
+import gate_rk as grk  # noqa: E402   (round K: R10, R11, P4)
 
 CLASSES = {0: "none", 1: "paint", 2: "coping", 3: "soffit", 4: "concrete", 5: "plinth", 6: "glass",
            7: "metal", 8: "prop", 9: "decal"}
@@ -1189,7 +1190,7 @@ CONFIG_RULES = [rule_A0, rule_A1, rule_A2, rule_A3, rule_B1, rule_B2, rule_B3, r
                 rule_E1, rule_F1, rule_F2, rule_F3, rule_F4, rule_G1, rule_G2, rule_G3, rule_G4, rule_H1, rule_H2,
                 rule_H3, rule_I1, rule_I2, rule_J1, rule_J2, rule_K1, rule_K3, rule_K4,
                 gg.rule_G5, gp.rule_G6, gg.rule_H4, gg.rule_H5, gc.rule_I3,
-                gm.rule_M1, gm.rule_M2, gm.rule_M3, gm.rule_M4, gm.rule_M6, gm.rule_M7] + gk.RULES + gn.RULES + [gh.rule_R1] + gi.RULES + gr.RULES + gj.RULES
+                gm.rule_M1, gm.rule_M2, gm.rule_M3, gm.rule_M4, gm.rule_M6, gm.rule_M7] + gk.RULES + gn.RULES + [gh.rule_R1] + gi.RULES + gr.RULES + gj.RULES + grk.RULES
 
 
 LAYER_RULES = ("C2", "C3", "F2", "G1", "H2", "I1")

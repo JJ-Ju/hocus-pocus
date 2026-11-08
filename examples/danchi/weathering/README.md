@@ -38,7 +38,12 @@ python -I render_review.py <jobs.json>  # review images: the engine-mirror compo
 python -I pipeline_j.py <tag> [N]       # round J: as round I, and every build's texture checks (batch_j.py) must pass too
 python -I ../../../scripts/weathering/weather_gate.py texture <out_dir> --json <out_dir>/texcheck.json   # T0-T3, P3, R7c
 python -I render_player_j.py <out_dir> <dir> [view ...]   # player views at 1:1: 1 m on 4K, 2 m and 8 m on 1080p
+python -I pipeline_k.py <tag> [N]       # round K: presets, and the rust sweep as soon as Typical's gains are solved
+python -I render_player_k.py <out_dir> <dir> [--spec view,...] [view ...]   # round K: player views; --spec adds the sheen's sky-reflection pair
 ```
+
+`pipeline_k.py` reads `real/<tag>_slots.txt`, when present, as the number of builds at once, so two pipelines can share
+the machine (four builds of about 10 GB each at most).
 
 Run them from this folder. Builds go to `$WX_OUT` (default `./builds`, not committed); use the gains
 Typical solved for (`meta.json`, `gains`) so a sweep changes only its control.
@@ -55,6 +60,28 @@ places). `real_planes.py` turns the captures into planes with their features: to
 corner heads, fixings, shelter, flow starts at depth steps, and the construction joints on the
 solid walls. `run_proto.py` holds the build loop and the stand-in planes (`facade_synth.py`) used
 for fast iteration.
+
+## Accepted builds, round K
+
+Rulebook 1.8 (round K), 94 rules. New this round: rust runs down the bars as a share of each bar (R8) and reads at the
+player's 1 m view (R8c), the Ts rust first at their underside corners (R3's T clause), the top rails rust along the drip
+line, then the face, then the top (R10), exposed metal is tarnished (R7c's colour clause), the sheen on dense dark scale
+is a material mask, never a colour (R11), flakes and breaks stay on their own surface across a depth step (P4) and the
+walkway groove's lips, floor and crack are respected (N6). Accepted presets: New, Kept, Typical, Worn, Derelict
+(pipeline 101, every one through the gate and the texture checks). Pipelines 99 and 100 found three bugs and two gaps,
+fixed before anything was shown (patches `_patch_k11.py`-`_patch_k15.py` in the round's scratch, recorded as
+revisions): the rust's alpha was clipped at 0.92, so round J's opaque dark scale never showed; the line where a balcony
+front hides the wall behind it counted as an arris, so chips were stamped on both; R4 did not count a T's corners as
+where rust starts; the bottom rail's wetness sat below the research's 1.8, so the rails' rust grew by new spots rather
+than lengthening (R4); and the gains solver could not trade accent for film when B1's T5 band was thin.
+
+At Typical's solved gains (1.9599,1.2530,0.7089):
+
+| Control | Accepted steps | Rejected steps | Series |
+|---|---|---|---|
+| rust | 0, 0.25, 0.5, 0.75, 1.0 | none | accepted (R4: the rails' mean rusted run 11 / 17 / 23 / 45 cm at 0.25 / 0.5 / 0.75 / 1.0) |
+
+The streak and growth controls were not swept this round; round J's results for them stand.
 
 ## Accepted builds, round J
 

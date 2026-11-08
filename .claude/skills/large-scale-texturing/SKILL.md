@@ -201,6 +201,22 @@ research index, `docs/redesign/research/README.md`); the export's size lint does
 - **A layer the gate measures but nothing ships.** Peeling, washed streaks, edge wear, breaks and
   black growth were measured and previewed while the export carried none of them; the carrier check
   catches that.
+- **Thin members need their own space.** A 16 mm bar is under one pixel of a 50 px/m facade mask, so
+  a rust run drawn in the mask faded to a tint by mid-bar, and a check counting the mask's alpha
+  passed it (danchi rounds I-J: "still no rust going DOWN the vertical slats"). Draw runs per bar in
+  its own coordinates (across 0-1, along in metres), at the fine stage and in the engine (member UVs,
+  per-instance values), and check them at the player's 1:1 view.
+- **Elevation noise crosses depth steps.** One 2D field over the elevation paints the same flakes on
+  a balcony front and on the wall 1.2 m behind it. Split the paint mask at depth steps into surfaces,
+  colour the surface graph so neighbours differ, and draw an independent field per colour; clip
+  breaks to the surface they start on (rule P4 tests it).
+- **Occlusion lines are not arrises.** An edge map that marks every bottom of a surface marks the
+  line where a nearer front hides the wall behind it; chips stamped there mirror the front's own
+  top arris across the step (danchi: 9-14 % of the edge pixels; breaks 13x likelier across a step).
+  Keep a bottom only when the pixel below is farther or empty.
+- **Projected masks give hidden surfaces the occluder's values.** A wall behind a railing samples
+  the railing's mask values at the same facade coordinates (rust, bare metal, the sheen), seen from
+  any angle but straight on. Give steel its own member space, or a back mask layer for hidden walls.
 
 ## Scripts
 

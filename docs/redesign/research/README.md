@@ -48,6 +48,14 @@ lint above, so research turns into checks instead of sentences.
 | `coatings-concrete-corrosion.md` | The physics behind round I's notes: concrete pits and aggregate, paint failure, painted-steel rust, tops and corners |
 | `research-to-practice-audit.md` | Which findings of the earlier notes never became a step, rule or check, ranked, with their actions |
 
+**Rust on thin members, the sheen, Decayed (round K, 2026-11-08)**
+
+| Note | What it covers |
+|---|---|
+| `member-rust-and-geometry-aware-wear.md` | Why runs never showed on 16 mm bars, the Ts first, tarnished metal; patterns keyed to surfaces, grooves |
+| `rust-blue-sheen.md` | Rust's blue sheen: dense dark scale reflecting the sky; F0 and roughness under a mask, the engine recipes, the preview |
+| `decayed-preset-evaluation.md` | A Decayed level past Derelict: real decay in numbers, a years-vacant control against a sixth preset, a staged plan |
+
 **Texturing at scale**
 
 | Note | What it covers |

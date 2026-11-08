@@ -51,6 +51,12 @@ STALE = [
     (r"Moss and lichen\W{0,4} grow only on damp, shaded tops",
      "moss on damp ledges, joints and wall feet; lichen on copings, bare concrete and sunnier faces",
      "docs/redesign/research/weathering-organic-growth.md"),
+    (r"[Mm]edian run\s*\n?\s*0\.05[–-]0\.15 m",
+     "runs measured as a share of the bar: median 2-30 / 30-75 / 75-100 / 85-100 % at rust 0.25 / 0.5 / 0.6 / 1.0",
+     "danchi rulebook 1.8 R8; docs/redesign/research/member-rust-and-geometry-aware-wear.md §1.3"),
+    (r"grey steel with an orange haze of\s*\n?\s*flash rust",
+     "exposed metal is tarnished: L* 38-48, a* 0 to +4, b* +2 to +8; flash rust only beside new chips",
+     "danchi rulebook 1.8 R7; docs/redesign/research/member-rust-and-geometry-aware-wear.md §1.5"),
 ]
 
 

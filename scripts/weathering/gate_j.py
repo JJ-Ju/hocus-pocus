@@ -172,11 +172,17 @@ def rule_P2(cfg, planes, R):
 # R7, R8, R9: rust
 
 R7C = {"bare": {"typical": (0.0005, 0.005), "worn": (0.003, 0.02), "derelict": (0.003, 0.02)}, "where": 0.60}
-R8C = {"a": (0.5, 0.75, 1.0), "below": (0.50, 0.70, 0.85), "median": ((0.05, 0.15), (0.15, 0.40), (0.30, 0.90)),
+R8C_J = {"a": (0.5, 0.75, 1.0), "below": (0.50, 0.70, 0.85), "median": ((0.05, 0.15), (0.15, 0.40), (0.30, 0.90)),
        "stained": ((0.03, 0.10), (0.10, 0.25), (0.25, 0.60)), "min_m": 0.05, "head": 1.3, "collar": 0.50,
        "alpha": 0.06}
+# round K (the user, round J: "The rust for derelict should be running all the way down or almost all the way down"):
+# runs measured as a share of the bar below each rusted T, from rust 0.25, at an alpha that reads (0.12: about dE 5 over
+# white paint; round J's 0.06 counted a faint tint as a run)
+R8C = {"a": (0.25, 0.5, 0.6, 0.75, 1.0), "below": (0.40, 0.70, 0.85, 0.90, 0.90),
+       "frac": ((0.02, 0.30), (0.30, 0.75), (0.75, 1.0), (0.80, 1.0), (0.85, 1.0)), "reach80": (0.0, 0.05, 0.45, 0.60, 0.75), "reach80_from": 0.5,
+       "min_m": 0.03, "alpha": 0.12, "head": 1.3, "collar": 0.50, "collar_reach_m": 0.12, "from": 0.2}
 R9C = {"dark_L": 32.0, "bright": (46.0, 30.0), "dark": (0.15, 0.40), "bright_share": (0.08, 0.25), "where": 0.60,
-       "spread": 14.0}
+       "spread": 14.0, "k_water": True, "collar_m": 0.10}
 
 
 def _steel_planes(planes):
@@ -239,7 +245,7 @@ def _bands_at(a, keys, vals):
     return lo
 
 
-def rule_R8(cfg, planes, R):
+def rule_R8_j(cfg, planes, R):
     """R8 (from rust 0.5): runs >= 5 cm below 50 / 70 / 85 % of rusted joints (rust 0.5 / 0.75 / 1.0);
     median run 0.05-0.15 / 0.15-0.4 / 0.3-0.9 m; stained share of upright length 3-10 / 10-25 / 25-60 %;
     the head darker than the tail (dE x 1.3); a collar above the bottom rail on >= 50 % of uprights
@@ -332,10 +338,25 @@ def rule_R8(cfg, planes, R):
                           "head_over_tail": None if hd is None else round(hd, 2), "collar": None if cs is None else round(cs, 3)})
 
 
+def _collar(M, st, p):
+    """Round K: the first R9C['collar_m'] of each bar below a T (the dense collar the T's water feeds)."""
+    ppm = float(p.get("ppm", 50))
+    k = max(1, int(round(R9C["collar_m"] * ppm)))
+    H, W = st.shape
+    out = np.zeros((H, W), bool)
+    run = np.full(W, -1, np.int32)
+    for y in range(H):
+        upj = (M["upright"][y] | M["joint"][y]) & ~M["foot"][y]
+        run = np.where(M["tjoint"][y], 0, np.where(upj & (run >= 0), run + 1, -1))
+        out[y] = (run > 0) & (run <= k)
+    return out
+
+
 def rule_R9(cfg, planes, R):
     """R9 (from rust 0.5): dark rust (L* <= 32) 15-40 % of the rust, >= 60 % of it at feet, joints, the
-    bottom rail and rail tops; bright rust (L* >= 46, C* >= 30) 8-25 %, >= 60 % of it within 2 cm of a
-    rust front; L* p90 - p10 >= 14."""
+    bottom rail and rail tops, and (round K) where the Ts' water stays: the rails' drip line, the Ts' underside
+    corners and the first 0.1 m of each bar below a T; bright rust (L* >= 46, C* >= 30) 8-25 %, >= 60 % of it
+    within 2 cm of a rust front; L* p90 - p10 >= 14."""
     a = _amount(cfg, "rust")
     if a < 0.5 - 1e-6:
         return res("R9", True, {"rust": a}, "applies from rust 0.5")
@@ -348,6 +369,8 @@ def rule_R9(cfg, planes, R):
         lab = p["labw"].astype(np.float64)
         L, C = lab[..., 0], np.hypot(lab[..., 1], lab[..., 2])
         wet_parts = (M["foot"] | M["joint"] | M["bottom"] | (M["rail"] & M["upper"])) & st
+        if R9C.get("k_water") and "tjoint" in M:          # round K: where water now stays (TrTrTr)
+            wet_parts = wet_parts | ((M["rail"] & M["lower"]) | M["tcorner"] | _collar(M, st, p)) & st
         er = rs & ~(np.roll(rs, 1, 0) & np.roll(rs, -1, 0) & np.roll(rs, 1, 1) & np.roll(rs, -1, 1))   # the front (edge)
         front = wm.gauss(er.astype(np.float32), 0.5) > 0.05
         dk = rs & (L <= R9C["dark_L"])
@@ -628,6 +651,92 @@ def rule_J3(cfg, planes, R):
                           "shadow_spots": round(spots, 4), "C_median": round(float(np.median(C)), 2),
                           "C_spread": round(float(np.percentile(C, 90) - np.percentile(C, 10)), 2),
                           "paint_small_m2": round(small, 1), "paint_dimples5_m2": round(dim5, 1)})
+
+
+def rule_R8(cfg, planes, R):
+    """R8 (round K): runs down the bars below rusted Ts, as a share of the bar below (from the T's lower end to the
+    bottom rail or the foot): from rust 0.2 a run of 3 cm or more (the run layer's alpha >= 0.12) below 40 / 70 / 85 /
+    90 / 90 % of rusted Ts at rust 0.25 / 0.5 / 0.6 / 0.75 / 1.0; the median run 2-30 / 30-75 / 75-100 / 80-100 /
+    85-100 % of its bar; runs reaching 80 % of their bar (from rust 0.5) >= 5 / 45 / 60 / 75 % at 0.5 / 0.6 / 0.75 / 1.0; the head darker than the tail
+    (dE x 1.3); a collar above the bottom rail on >= 50 % of bars whose run comes within 0.12 m of it."""
+    a = _amount(cfg, "rust")
+    if a < R8C["from"] - 1e-6:
+        return res("R8", True, {"rust": a}, "applies from rust 0.2")
+    fr, below, n_j, heads, tails, coll, n_c = [], 0, 0, [], [], 0, 0
+    for p in _steel_planes(planes):
+        if "run_a" not in p:
+            continue
+        st, M, _ = _geo(p)
+        if "tjoint" not in M:
+            continue
+        ppm = float(p.get("ppm", 50))
+        ra = np.nan_to_num(p["run_a"].astype(np.float32))
+        rs = _rusted(p, st)
+        updn = (M["upright"] | M["joint"]) & ~M["foot"]
+        on = (ra >= R8C["alpha"]) & (M["upright"] | M["joint"])
+        dE = np.sqrt(((p["labw"].astype(np.float64) - p["labc"].astype(np.float64)) ** 2).sum(-1)) if "labw" in p else None
+        H, W = st.shape
+        jr = M["tjoint"] & rs
+        bot = M["bottom"] & st
+        for x in np.flatnonzero(jr.any(axis=0)):
+            ys = np.flatnonzero(jr[:, x])
+            for y0 in ys[np.r_[True, np.diff(ys) > 1]]:
+                y = y0
+                while y + 1 < H and M["tjoint"][y + 1, x]:
+                    y += 1
+                y += 1                                       # below the whole T joint
+                seg = 0
+                while y + seg < H and updn[y + seg, x]:
+                    seg += 1                                 # the bar below (mask holes inside it included)
+                if seg < 0.3 * ppm:
+                    continue
+                n_j += 1
+                L = 0
+                while L < seg:
+                    if on[y + L, x]:
+                        L += 1
+                        continue
+                    h = 0
+                    while L + h < seg and h < 3 and not on[y + L + h, x]:
+                        h += 1
+                    if 0 < h <= 2 and L + h < seg and on[y + L + h, x]:
+                        L += h                               # a 1-2 px gap (a hole in the steel mask)
+                        continue
+                    break
+                fr.append(L / seg)
+                if L / ppm >= R8C["min_m"]:
+                    below += 1
+                    if dE is not None and L >= 4:
+                        q = max(1, L // 4)
+                        heads.append(float(dE[y:y + q, x].mean()))
+                        tails.append(float(dE[y + L - q:y + L, x].mean()))
+                if (seg - L) / ppm <= R8C["collar_reach_m"]:   # the run comes down to the bottom rail
+                    yb_ = np.flatnonzero(bot[y:, x])
+                    if yb_.size:
+                        n_c += 1
+                        yb0 = y + int(yb_[0])
+                        k_ = max(2, int(round(0.05 * ppm)))
+                        if (ra[max(0, yb0 - k_):yb0, x] >= R8C["alpha"]).sum() >= 1:
+                            coll += 1
+    if n_j == 0:
+        return res("R8", None, {"rust": a}, "no rusted Ts")
+    fr = np.array(fr)
+    share_below = below / n_j
+    med = float(np.median(fr))
+    r80 = float((fr >= 0.8).mean())
+    hd = (float(np.median(heads)) / max(float(np.median(tails)), 1e-6)) if heads else None
+    cs = coll / n_c if n_c else None
+    keys = R8C["a"]
+    b_below = _bands_at(a, keys, R8C["below"])
+    b_fr = _bands_at(a, keys, R8C["frac"])
+    b_80 = _bands_at(a, keys, R8C["reach80"]) if a >= R8C["reach80_from"] - 1e-6 else 0.0   # K10: from 0.5
+    ok = (share_below >= b_below and b_fr[0] <= med <= b_fr[1] + 1e-9 and r80 >= b_80
+          and (hd is None or hd >= R8C["head"]) and (cs is None or n_c < 10 or cs >= R8C["collar"]))
+    return res("R8", ok, {"rust": a, "ts": n_j, "runs_below_share": round(share_below, 3), "band_below": round(b_below, 2),
+                          "median_frac": round(med, 3), "band_frac": [round(b_fr[0], 3), round(b_fr[1], 3)],
+                          "reach80": round(r80, 3), "need_reach80": round(b_80, 3),
+                          "head_over_tail": None if hd is None else round(hd, 2), "collar": None if cs is None else round(cs, 3),
+                          "collar_n": n_c})
 
 
 RULES = [rule_P1, rule_P2, rule_R7, rule_R8, rule_R9, rule_F5, rule_G7, rule_J1b, rule_J3]
